@@ -12,26 +12,28 @@ use super::{Outcome, POST_BURST_SPREAD, POST_BURST_WAIT, TopSpeeds};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 use crate::flight::{self, Controls, FlightRules, Flyer, Turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+#[cfg(doc)]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
 use crate::traffic::ship_display;
 use crate::traffic::slot_word::{self, AtStep, SlotWord};
+#[cfg(doc)]
 use crate::traffic::spawn::glide_speed;
 
 /// `_HandleShip`'s flight of `npc` at its step by the `word` its low level
 /// left at its slot (see the module docs), with what it reads `at_step`,
 /// at `speeds`, under the flight rules, a hold at its gate that runs out
 /// owing its burst as the reading of
-/// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst) says
-/// (`flight`, `held_burst`), the wait a leaderless ship takes after its
-/// glide or burst rolled on `chance`. What became of it.
+/// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst) says, on
+/// double time's `second_pass` or not (`flight`, `held_burst`,
+/// `second_pass`), the wait a leaderless ship takes after its glide or
+/// burst rolled on `chance`. What became of it.
 ///
 /// An [`immobile`](Npc::immobile) ship's velocity is set to none before
 /// it flies and its move is undone after, as `_HandleShip` zeroes it and
@@ -41,10 +43,10 @@ pub fn step(
     word: &SlotWord,
     at_step: AtStep,
     speeds: TopSpeeds,
-    (flight, held_burst): (FlightRules, RuleSource),
+    (flight, held_burst, second_pass): (FlightRules, RuleSource, bool),
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    let by = (flight, held_burst);
+    let by = (flight, held_burst, second_pass);
     if !npc.immobile {
         return step_mobile(npc, word, at_step, speeds, by, chance);
     }
@@ -61,7 +63,7 @@ fn step_mobile(
     word: &SlotWord,
     at_step: AtStep,
     speeds: TopSpeeds,
-    (flight, held_burst): (FlightRules, RuleSource),
+    (flight, held_burst, second_pass): (FlightRules, RuleSource, bool),
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let inertia = word.inertia();
@@ -78,7 +80,7 @@ fn step_mobile(
         return Outcome::Flying;
     }
     let unthrust = at_step.unthrust();
-    let unsteered_by = (speeds, flight, held_burst);
+    let unsteered_by = (speeds, flight, held_burst, second_pass);
     if let Some(outcome) = unsteered(npc, &unthrust, unsteered_by, inertia, chance) {
         return outcome;
     }
@@ -118,7 +120,9 @@ pub(crate) fn plain_step(
 }
 
 /// Tick `tick` of `npc`'s glide in from hyperspace: along its heading at
-/// [`glide_speed`], ending as [`burst`] says.
+/// [`Npc::burst_speed`], from [`glide_speed`]'s top or from what it owes
+/// (see [`burst_word`](crate::traffic::burst_word)), ending as [`burst`]
+/// says.
 ///
 /// `_HandleShip` runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by
 /// low mode 10, @0x88114-0x88136) through the same negative-speed path as
@@ -133,14 +137,8 @@ fn glide(
     flown: Flown,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    if !burst(
-        npc,
-        glide_speed(tick),
-        glide_speed(tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::JumpingIn { tick: tick + 1 };
     }
 }
@@ -150,7 +148,8 @@ fn glide(
 /// destroyed (`_HandleShip` reads `_IsDisabled` once, @0x33846, for its
 /// drag @0x33950 and its drift @0x34424, so a stellar's defence ship
 /// breaking up still steers, [`Npc::active_not_disabled`]), gliding in from
-/// hyperspace (intact or disabled), bursting out of a gate, or holding
+/// hyperspace or bursting out of a gate (`_IsDisabled` or not, as the
+/// burst block has no disabled test, @0x34a54 → @0x34bc0), or holding
 /// its course after either (see the module docs of
 /// [`autopilot`](super)), on `handling` (its turn rate and top speed at
 /// its step, and the acceleration its inertialess adjustment reads) under
@@ -166,15 +165,22 @@ fn glide(
 /// What became of it, if it did. A disabled or breaking-up ship's speed
 /// along its heading slows with its velocity, inertialess or not
 /// (@0x3398f-0x339a1).
+///
+/// On double time's `second_pass` a ship whose wait has just run out
+/// ([`Mode::LeavingGate`] at tick 0) drifts as in its wait and doesn't
+/// start its burst: the pass runs no dispatch (@0x4402a), so its goal is
+/// still 0x15, which the next advance pass's dispatch turns into goal 8
+/// (@0x8dd61-0x8dd93; see the `last_wait_frame` module).
 pub(super) fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
-    (speeds, flight, held_burst): (TopSpeeds, FlightRules, RuleSource),
+    (speeds, flight, held_burst, second_pass): (TopSpeeds, FlightRules, RuleSource, bool),
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     let flown = Flown { handling, inertia };
     match (npc.mode, npc.active_not_disabled()) {
+        (Mode::LeavingGate { tick: 0 }, _) if second_pass => drift_in_wait(npc, flown),
         (Mode::EnteringGate { gate, ticks_left }, _) => {
             return Some(enter_gate(npc, gate, ticks_left, flown));
         }
@@ -182,8 +188,11 @@ pub(super) fn unsteered(
         (Mode::HeldAtGate { ticks_left }, _) => {
             hold_at_gate(npc, ticks_left, flown, held_burst);
         }
-        (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
+        (Mode::JumpingIn { tick }, false) if npc.is_disabled() => {
             glide(npc, tick, speeds, flown, chance);
+        }
+        (Mode::LeavingGate { tick }, false) if npc.is_disabled() => {
+            leave_gate(npc, tick, speeds, flown, chance);
         }
         (mode, false) => {
             match mode {
@@ -304,8 +313,11 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown, burst: RuleSource)
 }
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
-/// [`exit_speed`], ending as [`burst`] says. On its first tick it is out
-/// of its gate ([`Npc::emerges_from`] cleared, @0x8dd8a-0x8dd93).
+/// [`Npc::burst_speed`], from its emerge's [`exit_speed`] or, for a ship
+/// carrying its own word, from what it owes or 50 (see
+/// [`burst_word`](crate::traffic::burst_word)), ending as [`burst`] says.
+/// On its first tick it is out of its gate ([`Npc::emerges_from`]
+/// cleared, @0x8dd8a-0x8dd93).
 fn leave_gate(
     npc: &mut Npc,
     tick: u32,
@@ -318,14 +330,8 @@ fn leave_gate(
         // (`_HighLevelAIHandler` @0x8dd8a-0x8dd93).
         npc.emerges_from = None;
     }
-    if !burst(
-        npc,
-        exit_speed(npc.led_out, tick),
-        exit_speed(npc.led_out, tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::LeavingGate { tick: tick + 1 };
     }
 }
@@ -365,14 +371,22 @@ fn burst(
 /// heading at `speed`; an inertialess one, as `inertia` says, takes
 /// `speed` as its speed along its heading after its velocity has followed
 /// the last tick's at `handling`'s rate and it has moved
-/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0).
+/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0). A ship
+/// disabled or breaking up ([`disabled_drag`]) is dragged before its move
+/// (@0x33950-0x339a1), which the burst block doesn't test, and the block
+/// overwrites the dragged velocity after it: each move is its speed ×
+/// [`flight::DISABLED_DRAG`], its velocity left at its full speed.
 pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inertia: Inertia) {
     if let Inertia::Inertialess { .. } = inertia {
+        disabled_drag(npc);
         inertialess::drift(npc, handling);
         npc.speed = speed;
     } else {
-        npc.state.velocity = flight::facing(npc.state.heading) * speed;
+        let velocity = flight::facing(npc.state.heading) * speed;
+        npc.state.velocity = velocity;
+        disabled_drag(npc);
         npc.state.position = npc.state.position + npc.state.velocity;
+        npc.state.velocity = velocity;
     }
 }
 
@@ -380,7 +394,10 @@ pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inert
 /// `npc`'s velocity zeroed, as `inertia` says; with a lead (`speeds.lead`)
 /// it flies on, and with none it holds its course for
 /// [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)` ticks, rolled on
-/// `chance` ([`Mode::Coasting`]), its trigger released.
+/// `chance` ([`Mode::Coasting`]), its trigger released. The word it burst
+/// from is spent (`_AIMakeShipStopJumping`'s +0x34 = 0, @0x82eb0): it owes
+/// nothing ([`Npc::owed_burst`]) and carries no word of its own
+/// ([`Npc::bursts_own_word`]).
 pub(crate) fn after_burst(
     npc: &mut Npc,
     speeds: TopSpeeds,
@@ -390,6 +407,8 @@ pub(crate) fn after_burst(
     if let Inertia::Inertialess { .. } = inertia {
         npc.state.velocity = Vec2::ZERO;
     }
+    npc.owed_burst = None;
+    npc.bursts_own_word = false;
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
     } else {

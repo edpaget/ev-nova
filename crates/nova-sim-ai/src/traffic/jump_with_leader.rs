@@ -7,7 +7,12 @@
 //! leader's orders, the think throttle, the regroup draw, the disabled
 //! reset and its type's think, `_EscortAI` included. So
 //! [`Traffic::think_holding`] makes it no decision: its goal and target
-//! stay as its jump left them. Its high level and low level still run.
+//! stay as its jump left them. Its high level and low level still run,
+//! for a disabled ship too: the high level has no disabled test on the ship
+//! (@0x901e5), so it runs the hold, the fighter turn-back and goal 0xb's
+//! block, push included, and only the low level's sub blocks are gated
+//! (@0x8521e-0x85258). A follower it gives up then takes its reset on the
+//! next dispatch, off the jump path.
 //! Before them come two cancels ([`Traffic::cancel_jump_follows`],
 //! @0x900d5-0x901a3), each to goal 0, sub 0, target and travel stellar -1
 //! and +0x50 -1.0: a follower of the player's jump while the player is
@@ -20,8 +25,8 @@
 //!
 //! **Goal 0xb** is a ship following its leader's jump
 //! ([`Npc::follows_leaders_jump`]): sub 0xd's warp goal
-//! ([`WarpGoal::Follow`]) under a goal other than its own jump's, a
-//! flee's or the regroup pause's.
+//! ([`WarpGoal::Follow`]), or goal 0xb written under a wait, under a goal
+//! other than its own jump's, a flee's or the regroup pause's.
 //!
 //! **The high level's AI wait** (`_HighLevelAIHandler` @0x8d4b9-0x8d4d2):
 //! with +0x4c above 0 and a goal other than 0xa and 0xe, the high level
@@ -40,9 +45,26 @@
 //! ship the player leads while the player's +0x50 is above 0, its brake
 //! included ([`EscortAi`](crate::ai::EscortAi)). Its target goes, and right after
 //! the goals are taken ([`enter`]) it follows the jump (sub 0xd,
-//! [`Npc::follow_leaders_jump`]), or, an NPC's escort that flies
+//! [`Npc::enter_leaders_jump`]), or, an NPC's escort that flies
 //! inertialess ([`Npc::flies_inertialess`]), leaves its fleet to jump on
 //! its own ([`Npc::detach_for_own_jump`], +0x50 = 0).
+//!
+//! **An entry under a wait** ([`Npc::joins_leaders_jump`]). The entry
+//! writes goal 0xb (@0x83a92) and the wait gate then returns, so the sub
+//! stays until the wait ends: it isn't 4 or 0xd, so the ship is off the jump
+//! path, its think, regroup draw, disabled reset and swarm check all run,
+//! and `_AIIsShipJumping` reads false, so a stage it holds is zeroed as it
+//! faces its +0x68. Each think stays in goal 0xb's block, whether or not
+//! its lead still draws (@0x83be3), writing its target -1 and testing
+//! `_ShipIsInertialess`, and so reaches no order block and keeps its wait.
+//! When the wait ends the same think sets sub 0xd's warp goal, and that
+//! tick's check follows or gives up, as the high level does on that frame.
+//! A launched fighter in its glide meets this as its carrier jumps, and any
+//! ship the player leads under the player's warp stage, whose write
+//! (`_AIMakeShipJumpWithParent` @0x82bb6-0x82bf3) tests no goal
+//! ([`Npc::follow_player_jump`]). A ship that runs no think, in
+//! [`Mode::Coasting`] or [`Mode::EnteringGate`], meets the entry only by that
+//! write, its first think setting the warp goal after its wait.
 //!
 //! **The fighter turn-back** ([`turn_back`], `_HighLevelAIHandler`
 //! @0x8d575-0x8d625), after the hold and before the goal blocks: a
@@ -65,9 +87,11 @@ use crate::ai::leave::{self, Leg};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, dispatch_gate, sight, travel};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
+use crate::combat::hull::under_armour_line;
 use crate::flight::FlightRules;
 use crate::rulebook::RuleSource;
+#[cfg(doc)]
+use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
 #[cfg(doc)]
 use crate::traffic::warp_out;
@@ -76,12 +100,13 @@ use crate::traffic::{Traffic, World};
 
 impl Npc {
     /// Whether it is in goal 0xb, following its leader's jump: sub 0xd's
-    /// warp goal ([`WarpGoal::Follow`]) under a goal other than its own
+    /// warp goal ([`WarpGoal::Follow`]), or goal 0xb written under a wait
+    /// ([`Npc::joins_leaders_jump`]), under a goal other than its own
     /// jump's or a flee's (goals 2 and 3, which the hold writes) or the
     /// regroup pause's (0x13).
     #[must_use]
     pub fn follows_leaders_jump(&self) -> bool {
-        matches!(self.warp.goal, Some(WarpGoal::Follow(_)))
+        (matches!(self.warp.goal, Some(WarpGoal::Follow(_))) || self.joins_leaders_jump())
             && !matches!(
                 self.goal,
                 Goal::JumpOut | Goal::Flee(_) | Goal::Regroup { .. }
@@ -92,7 +117,9 @@ impl Npc {
     /// (`_HighLevelAIHandler` @0x8d4b9-0x8d4d2): +0x4c above 0 and a goal
     /// other than 0xa ([`Goal::flies_in_form`]) and 0xe ([`Goal::Drift`]).
     /// Goal 0xb ([`Npc::follows_leaders_jump`]) is neither, whatever goal
-    /// the engine keeps beside it.
+    /// the engine keeps beside it. A ship joining a jump counts any wait
+    /// it runs, as a ship held at its gate waits in its [`Mode`], so its
+    /// hold doesn't put it on sub 0xd early.
     #[must_use]
     pub fn high_level_waits(&self) -> bool {
         self.high_level_waits_under(self.goal)
@@ -102,16 +129,32 @@ impl Npc {
     /// `goal`, the goal its think writes ([`Npc::high_level_waits`]).
     #[must_use]
     pub fn high_level_waits_under(&self, goal: Goal) -> bool {
-        self.ai_wait > 0
+        (self.ai_wait > 0 || (self.joins_leaders_jump() && self.wait_running()))
             && (self.follows_leaders_jump() || !(goal.flies_in_form() || goal == Goal::Drift))
     }
 
-    /// It follows `leader`'s jump, sub 0xd ([`WarpGoal::Follow`]), letting
-    /// go of its target (`_EscortAI` @0x83a71, `_MakeEscortsHyperWithParent`
-    /// @0x3fd89-0x3fdd0): the entry's write and the player's warp stage's.
-    pub fn follow_leaders_jump(&mut self, leader: ShipRef) {
-        self.warp.goal = Some(WarpGoal::Follow(leader));
+    /// Whether goal 0xb is written while its high level waits, its old
+    /// substate standing (`_EscortAI` @0x83a92, the wait gate
+    /// @0x8d4b9-0x8d4d2; see the module docs). Reading the goal, it ends
+    /// the moment another goal is written, as the word would.
+    #[must_use]
+    pub fn joins_leaders_jump(&self) -> bool {
+        self.warp.joining && matches!(self.goal, Goal::Formation { .. } | Goal::Follow { .. })
+    }
+
+    /// It enters `leader`'s jump, letting go of its target (`_EscortAI`
+    /// @0x83a71, `_MakeEscortsHyperWithParent` @0x3fd89-0x3fdd0): the
+    /// entry's write and the player's warp stage's. Sub 0xd
+    /// ([`WarpGoal::Follow`]) with no wait; under one, goal 0xb alone, its
+    /// old substate standing ([`Npc::joins_leaders_jump`]). A ship already
+    /// on sub 0xd, in its 180 wait, keeps it.
+    pub fn enter_leaders_jump(&mut self, leader: ShipRef) {
         self.target = None;
+        let waits = self.wait_running();
+        self.warp.joining = waits && self.warp.goal.is_none();
+        if !waits {
+            self.warp.goal = Some(WarpGoal::Follow(leader));
+        }
     }
 
     /// It leaves its fleet to jump on its own: no leader, its class's AI
@@ -174,7 +217,7 @@ pub(super) fn enter(npcs: &mut [Npc], entering: &[usize], flight: FlightRules) {
     for (at, entry) in entries {
         let npc = &mut npcs[at];
         match entry {
-            Entry::Follow(leader) => npc.follow_leaders_jump(leader),
+            Entry::Follow(leader) => npc.enter_leaders_jump(leader),
             Entry::Detach => {
                 npc.detach_for_own_jump();
                 npc.warp.stage = 0.0;
@@ -204,12 +247,23 @@ fn entry(npc: &Npc, npcs: &[Npc], flight: FlightRules) -> Option<Entry> {
 
 /// Whether `npc`, a leader, is on its way out by its substate, as goal
 /// 0xb's NPC-parent test reads it (sub 1 or 4, @0x8defc-0x8df13): on its
-/// own jump (sub 4), or in goal 2 braking before it ([`Leg::Brake`]). A
-/// leader running out inside 1000 (sub 3), or itself following a jump
-/// (sub 0xd), is not, so its followers give it up.
+/// own jump (sub 4), in goal 2 braking before it ([`Leg::Brake`]), or
+/// left in sub 1 by any other goal's stop ([`Npc::stopping`]): the test
+/// reads no goal. A leader running out inside 1000 (sub 3), itself
+/// following a jump (sub 0xd), or settled below 0.35, whose low level wrote
+/// sub 0 (@0x85624), is not, so its followers give it up.
+///
+/// The stored sub is its last flight's, as a follower in a lower slot reads
+/// it. For one in a higher slot it is a tick late: a lag that crosses no
+/// boundary, as the follower's flight is the same either way until its next
+/// high level.
 #[must_use]
 pub fn leaves_by_substate(npc: &Npc) -> bool {
-    npc.warp.goal == Some(WarpGoal::Own) || brakes_for_jump(npc)
+    match npc.warp.goal {
+        Some(WarpGoal::Own) => true,
+        Some(WarpGoal::Follow(_)) => false,
+        None => brakes_for_jump(npc) || npc.stopping,
+    }
 }
 
 impl Traffic {
@@ -228,7 +282,10 @@ impl Traffic {
     /// below on the next. A ship cancelled makes no type's think that
     /// tick, as the jump path has skipped it.
     pub(crate) fn cancel_jump_follows(&mut self, world: &World, picked: &[bool]) {
-        let player = world.player.map(|player| player.condition);
+        let player = world.player.as_ref().is_some_and(|player| {
+            player.condition.disabled()
+                || under_armour_line(player.reserves.armor, &player.hull, world.disable, false)
+        });
         let cancels: Vec<bool> = self
             .npcs
             .iter()
@@ -248,21 +305,30 @@ impl Traffic {
     }
 }
 
-/// Whether `npc`'s jump is cancelled among `npcs`, the player in
-/// `player`'s condition when it is there: on the jump path in goal 0xb,
-/// following the player while the player is `_IsDisabled`
-/// (@0x900e3-0x9011e); or led by an NPC there and not `_IsDisabled` that
-/// attacks (goal 4, [`Goal::attacking`]) while its own stage is 1.0 or
-/// below (@0x90125-0x9019c). Its `_IsDisabled` reads ([`Condition::disabled`])
-/// never meet a stellar's defence ship breaking up: the lead is the player
-/// or a ship this one follows, and a defence ship leads none, spawning
-/// alone (`_SpawnStellarDefenseShip` @0x3d387, leader -1).
-fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
+/// Whether `npc`'s jump is cancelled among `npcs`, the player
+/// `player_disabled` or not: on the jump path in goal 0xb, following the
+/// player while the player is `_IsDisabled` (@0x900e3-0x9011e); or led by
+/// an NPC there and not `_IsDisabled` that attacks (goal 4,
+/// [`Goal::attacking`]) while its own stage is 1.0 or below
+/// (@0x90125-0x9019c).
+///
+/// The player's `_IsDisabled` skips branches 2 and 3 for slot 0 (+0x86 0,
+/// @0x2d1a-0x2d22 → @0x2d79), and branch 1, a Derelict government's hold
+/// (@0x2cf1-0x2d14), never holds the player, so branch 4 reads it alone:
+/// its armour line ([`under_armour_line`], @0x2d79-0x2e00), which armour 0
+/// meets while its condition is still intact, and so does a player
+/// destroyed with its armour gone; its caller reads the line or a
+/// disabled condition. The lead's read
+/// ([`Condition::disabled`](crate::combat::hull::Condition::disabled)) never
+/// meets a stellar's defence ship breaking up: the lead is a ship this one
+/// follows, and a defence ship leads none, spawning alone
+/// (`_SpawnStellarDefenseShip` @0x3d387, leader -1).
+fn cancelled(npc: &Npc, npcs: &[Npc], player_disabled: bool) -> bool {
     if !dispatch_gate::takes_jump_path(npc) || !npc.follows_leaders_jump() {
         return false;
     }
     if npc.warp.goal == Some(WarpGoal::Follow(ShipRef::Player)) {
-        return player.is_some_and(Condition::disabled);
+        return player_disabled;
     }
     npc.warp.stage <= 1.0
         && npc
@@ -317,9 +383,11 @@ mod tests {
     use crate::ai::{Behaviour, Surroundings};
     use crate::chance::{Chance, NeverFires};
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
+    use crate::traffic::cloak_situation::{Around, situation};
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{Npc, NpcId};
     use crate::traffic::warp_out::WarpGoal;
@@ -398,7 +466,7 @@ mod tests {
             (Goal::Flee(ShipRef::Player), false),
             (
                 Goal::Regroup {
-                    kept: crate::ai::regroup::Kept::Coast,
+                    kept: crate::ai::regroup::Kept::FollowsJump,
                 },
                 false,
             ),
@@ -534,6 +602,181 @@ mod tests {
         assert!(!keeps_following(|lead| lead.goal = Goal::Idle));
     }
 
+    /// A lead `setup` set, 3000 out, flown a tick; then a follower beside it
+    /// flown a tick: whether it still follows, and the lead's goal after.
+    fn follows_a_lead_flown_first(setup: impl Fn(&mut Npc)) -> (bool, Goal) {
+        let mut traffic = Traffic::with_interval(1);
+        // After the add, which seeds the berth's search timer.
+        let lead = traffic.add_npc(far(0));
+        setup(&mut traffic.npcs_mut()[0]);
+        let mut world = jumping_world(0.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        let mut follower = far(0);
+        follower.state.position = Vec2::new(3000.0, 100.0);
+        follower.leader = Some(lead);
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let follower = traffic.add_npc(follower);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        (
+            of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+            of(&traffic, lead).goal,
+        )
+    }
+
+    /// `setup`, then moving at 3 on an axis.
+    fn moving_at_3(setup: impl Fn(&mut Npc)) -> impl Fn(&mut Npc) {
+        move |lead| {
+            lead.state.velocity = Vec2::new(0.0, 3.0);
+            setup(lead);
+        }
+    }
+
+    #[test]
+    fn a_follower_keeps_following_and_pushes_a_lead_braking_in_any_goal_that_flies_sub_1() {
+        for (name, setup) in [
+            (
+                "a wait (@0x8f112)",
+                (|lead: &mut Npc| lead.goal = Goal::Wait) as fn(&mut Npc),
+            ),
+            ("a count wait (@0x8d48c)", |lead: &mut Npc| {
+                crate::traffic::fixture::count_waiting(lead, 50);
+            }),
+            // In goal 0xd: goal 4 cancels the follower first (@0x90125).
+            ("the lost-sight search (@0x8d822)", |lead: &mut Npc| {
+                lead.goal = Goal::Plunder {
+                    ship: ShipRef::Player,
+                    hopeless: false,
+                };
+                lead.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(50);
+            }),
+            ("a mine with no rock (@0x8f879)", |lead: &mut Npc| {
+                lead.goal = Goal::Mine;
+            }),
+        ] {
+            let (follows, goal) = follows_a_lead_flown_first(moving_at_3(setup));
+            assert!(follows, "{name}");
+            assert_eq!(goal, Goal::JumpOut, "{name}: pushed (@0x8def0)");
+        }
+    }
+
+    #[test]
+    fn a_follower_keeps_following_a_lead_on_a_flees_brake() {
+        // The far branch's sub 1 (@0x8e201), its attacker out of reach.
+        let mut traffic = Traffic::with_interval(1);
+        let foe = traffic.add_npc(far(0));
+        let (follows, goal) = {
+            let mut lead = far(0);
+            lead.state.position = Vec2::new(-3000.0, 0.0);
+            lead.state.velocity = Vec2::new(0.0, 3.0);
+            lead.class_fuel = 100;
+            lead.goal = Goal::Flee(ShipRef::Npc(foe));
+            lead.target = Some(ShipRef::Npc(foe));
+            let lead = traffic.add_npc(lead);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            assert!(of(&traffic, lead).stopping, "sub 1, a brake");
+            let mut follower = far(0);
+            follower.state.position = Vec2::new(-3000.0, 100.0);
+            follower.leader = Some(lead);
+            follower.goal = Goal::Follow { lead, guard: None };
+            follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+            let follower = traffic.add_npc(follower);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            (
+                of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+                of(&traffic, lead).goal,
+            )
+        };
+        assert!(follows);
+        assert_eq!(goal, Goal::JumpOut, "pushed (@0x8def0)");
+    }
+
+    #[test]
+    fn a_lead_settled_below_0_35_or_stopping_in_goal_0_gives_its_follower_up() {
+        // The settle writes sub 0 (@0x85624) in the lead's own dispatch, so
+        // no other ship reads its sub 1 at rest, though the push still lands.
+        for setup in [
+            (|lead: &mut Npc| lead.goal = Goal::Wait) as fn(&mut Npc),
+            |lead: &mut Npc| crate::traffic::fixture::count_waiting(lead, 50),
+        ] {
+            let (follows, goal) = follows_a_lead_flown_first(setup);
+            assert!(!follows, "at rest");
+            assert_eq!(goal, Goal::JumpOut, "pushed all the same");
+        }
+        let (follows, _) = follows_a_lead_flown_first(moving_at_3(|lead| lead.goal = Goal::Idle));
+        assert!(!follows, "goal 0 is sub 0 (@0x8fb09-0x8fb13)");
+    }
+
+    #[test]
+    fn a_lead_running_out_inside_1000_gives_up_a_follower_it_gave_no_sub_1() {
+        let (follows, _) = follows_a_lead_flown_first(|lead| {
+            lead.goal = Goal::JumpOut;
+            lead.state.position = Vec2::new(500.0, 0.0);
+            lead.state.velocity = Vec2::new(2.0, 0.0);
+        });
+        assert!(!follows, "sub 3");
+    }
+
+    #[test]
+    fn a_lead_that_took_a_wait_in_sub_1_keeps_it_until_its_low_level_reads_it_slow() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.goal = Goal::Wait;
+        let lead = traffic.add_npc(lead);
+        let world = jumping_world(0.0);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "sub 1");
+        traffic.npcs_mut()[0].ai_wait = 5;
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "no sub written (@0x8d4d2)");
+        traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, 0.2);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(!of(&traffic, lead).stopping, "the settle's 0 (@0x85624)");
+    }
+
+    #[test]
+    fn a_ship_coasting_in_sub_1_keeps_it_as_its_wait_runs() {
+        use crate::traffic::npc::Mode;
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.stopping = true;
+        lead.mode = Mode::Coasting { ticks_left: 9 };
+        let lead = traffic.add_npc(lead);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "+0x4c runs (@0x8d4d2)");
+    }
+
+    #[test]
+    fn a_flight_of_another_sub_clears_a_stop_and_a_ship_held_still_keeps_it() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.stopping = true;
+        let lead = traffic.add_npc(lead);
+        let world = jumping_world(0.0);
+        let still = std::collections::BTreeSet::from([lead]);
+        traffic.fly_holding(world, &still, &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "no flight, no sub written");
+        traffic.npcs_mut()[0].goal = Goal::Hold;
+        traffic.fly_tick(&world, &mut NeverFires);
+        assert!(!of(&traffic, lead).stopping, "a hold's sub isn't 1");
+    }
+
+    #[test]
+    fn a_stop_shows_on_a_leads_leave_unless_it_is_on_a_jump() {
+        let mut lead = far(1);
+        lead.stopping = true;
+        assert!(leaves_by_substate(&lead), "sub 1, whatever its goal");
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert!(!leaves_by_substate(&lead), "sub 0xd");
+        lead.warp.goal = Some(WarpGoal::Own);
+        lead.stopping = false;
+        assert!(leaves_by_substate(&lead), "sub 4");
+    }
+
     #[test]
     fn a_leaders_leave_reads_sub_4_or_goal_2s_brake() {
         let mut lead = far(1);
@@ -661,6 +904,89 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_escort_detached_inside_1000_runs_out_before_it_jumps() {
+        // `_EscortAI`'s detach writes goal 2, sub 4 (@0x83c11-0x83c43), and
+        // the same dispatch's high level writes sub 3 (@0x8fb1e). The lead,
+        // in the lower slot, flies goal 2's jump beyond 1000, which its own
+        // high level keeps on sub 4 (@0x8dd99-0x8de57).
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.position = Vec2::new(1500.0, 0.0);
+        lead.begin_own_jump();
+        let lead = traffic.add_npc(lead);
+        let mut escort = far(0);
+        escort.state.position = Vec2::new(500.0, 500.0);
+        escort.leader = Some(lead);
+        escort.stats.inertialess_hull = true;
+        let escort = traffic.add_npc(escort);
+        traffic.tick_in(
+            &crate::ai::FleetEscortAi::default(),
+            jumping_world(0.0),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.leader, None, "detached");
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!(ship.warp.goal, None, "off sub 4: it runs out");
+        assert_eq!(ship.warp.stage, 0.0);
+    }
+
+    #[test]
+    fn a_ship_taken_off_sub_4_by_its_brake_ends_its_stage_facing_it_and_jumps_later() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.state.velocity = Vec2::new(0.0, 3.0);
+        ship.begin_own_jump();
+        ship.warp.stage = 5.0;
+        ship.warp.aim = 90;
+        let id = traffic.add_npc(ship);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let flown = of(&traffic, id);
+        assert_eq!(flown.goal, Goal::JumpOut);
+        assert_eq!(flown.warp.goal, None, "sub 1");
+        assert_eq!(flown.warp.stage, 5.0, "it doesn't yet face its retro");
+        assert_eq!(flown.warp.aim, 0, "its +0x68, up");
+        let mut ticks = 0;
+        while of(&traffic, id).warp.stage > 0.0 {
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 200, "its stage ends");
+        }
+        assert_eq!(of(&traffic, id).warp.goal, None, "still braking");
+        while of(&traffic, id).warp.goal.is_none() {
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 2000, "it brakes to rest, and takes sub 4");
+        }
+        assert_eq!(of(&traffic, id).warp.goal, Some(WarpGoal::Own));
+    }
+
+    #[test]
+    fn a_run_out_under_way_ends_its_stage_facing_out_then_thrusts() {
+        // Goal 2's sub 3 inside 1000 (@0x8fb1e): its stage ends by the
+        // warp-out on its out bearing, its thrust skipped until it does.
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.state.position = Vec2::new(500.0, 0.0);
+        ship.state.heading = 0.0;
+        ship.begin_own_jump();
+        ship.warp.stage = 5.0;
+        ship.warp.aim = 0;
+        let id = traffic.add_npc(ship);
+        let mut ticks = 0;
+        while of(&traffic, id).warp.stage > 0.0 {
+            assert_eq!(of(&traffic, id).state.velocity, Vec2::ZERO, "no thrust");
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 200, "its stage ends");
+        }
+        assert_eq!(of(&traffic, id).warp.aim, 90, "out, by its stage's end");
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        assert!(of(&traffic, id).state.velocity.x > 0.0, "it runs out");
+    }
+
+    #[test]
     fn a_think_that_follows_a_jump_enters_it_in_the_same_tick() {
         let mut traffic = Traffic::with_interval(1);
         let mut lead = far(0);
@@ -726,6 +1052,641 @@ mod tests {
             assert_eq!(ship, None);
             assert!(target.is_some());
         }
+    }
+
+    // The push on a lead the player leads.
+
+    /// A carrier the player leads at `at`, on the player's jump, and its
+    /// fighter beside it on the carrier's, whose high level pushes it.
+    fn players_carrier(at: Vec2, velocity: Vec2) -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.position = at;
+        lead.state.velocity = velocity;
+        lead.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        lead.goal = Goal::Formation { guard: None };
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        let lead = traffic.add_npc(lead);
+        let mut fighter = far(0);
+        fighter.state.position = at + Vec2::new(0.0, 100.0);
+        fighter.leader = Some(lead);
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(lead),
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter.goal = Goal::Follow { lead, guard: None };
+        fighter.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let fighter = traffic.add_npc(fighter);
+        (traffic, lead, fighter)
+    }
+
+    /// `traffic` a tick on, the player braking (its stage at 1.0).
+    fn braking_tick(traffic: &mut Traffic) {
+        let mut world = jumping_world(1.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_is_pushed_and_flies_sub_0xd_on_as_its_fighter_gives_up() {
+        let (mut traffic, lead, fighter) =
+            players_carrier(Vec2::new(3000.0, 0.0), Vec2::new(0.0, 3.0));
+        braking_tick(&mut traffic);
+        let carrier = of(&traffic, lead);
+        assert_eq!(carrier.goal, Goal::JumpOut, "pushed (@0x8def0)");
+        assert_eq!(
+            carrier.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "its flight is still sub 0xd"
+        );
+        assert_eq!(carrier.state.velocity, Vec2::ZERO, "the player's, at rest");
+        assert_eq!(
+            of(&traffic, fighter).goal,
+            Goal::Idle,
+            "sub 0xd: it gives up"
+        );
+        assert_eq!(of(&traffic, fighter).warp.goal, None);
+    }
+
+    #[test]
+    fn through_the_players_brake_the_lead_flickers_and_its_fighter_follows_only_its_sub_1() {
+        // The player moves: sub 0xd holds the carrier at its velocity, so it
+        // brakes on the tick it drops the jump.
+        let (mut traffic, lead, fighter) =
+            players_carrier(Vec2::new(3000.0, 0.0), Vec2::new(0.0, 3.0));
+        let mut world = jumping_world(1.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        world.warp.player.velocity = Vec2::new(0.0, 3.0);
+        let tick = |traffic: &mut Traffic| {
+            traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+        };
+        let on_jump = Some(WarpGoal::Follow(ShipRef::Player));
+        tick(&mut traffic);
+        let (carrier, wing) = (of(&traffic, lead), of(&traffic, fighter));
+        assert_eq!((carrier.goal, carrier.warp.goal), (Goal::JumpOut, on_jump));
+        assert_eq!(wing.warp.goal, None, "1: it gives up over its lead's 0xd");
+        tick(&mut traffic);
+        let (carrier, wing) = (of(&traffic, lead), of(&traffic, fighter));
+        assert_eq!((carrier.goal, carrier.warp.goal), (Goal::JumpOut, None));
+        assert!(carrier.stopping, "2: goal 2's sub 1");
+        assert_eq!(
+            wing.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+            "2: it enters, and its lead's sub 1 keeps it"
+        );
+        tick(&mut traffic);
+        let carrier = of(&traffic, lead);
+        assert_eq!(carrier.warp.goal, on_jump, "3: `_EscortAI`'s entry");
+        assert_eq!(
+            carrier.goal,
+            Goal::JumpOut,
+            "3: and the fighter's push in the same tick"
+        );
+        assert_eq!(of(&traffic, fighter).warp.goal, None, "over sub 0xd again");
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_pushed_runs_out_inside_1000_and_jumps_at_rest() {
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(500.0, 0.0), Vec2::ZERO);
+        braking_tick(&mut traffic);
+        braking_tick(&mut traffic);
+        let ran = of(&traffic, lead);
+        assert_eq!((ran.goal, ran.warp.goal), (Goal::JumpOut, None), "sub 3");
+        assert!(ran.state.velocity.x > 0.0, "it thrusts out");
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(3000.0, 0.0), Vec2::ZERO);
+        braking_tick(&mut traffic);
+        braking_tick(&mut traffic);
+        let held = of(&traffic, lead);
+        assert_eq!(
+            (held.goal, held.warp.goal),
+            (Goal::JumpOut, Some(WarpGoal::Own)),
+            "sub 4"
+        );
+        braking_tick(&mut traffic);
+        let stage = of(&traffic, lead).warp.stage;
+        assert!(stage > 0.0, "its own stage: {stage}");
+        braking_tick(&mut traffic);
+        let back = of(&traffic, lead);
+        assert_eq!(
+            back.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "under way, the hold puts goal 0xb back (@0x8d54c)"
+        );
+        assert_eq!(back.warp.stage, stage, "its stage kept");
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_under_way_is_back_on_goal_0xb_at_its_next_hold() {
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(3000.0, 0.0), Vec2::ZERO);
+        traffic.npcs_mut()[0].warp.stage = 4.0;
+        braking_tick(&mut traffic);
+        assert_eq!(of(&traffic, lead).goal, Goal::JumpOut, "pushed");
+        braking_tick(&mut traffic);
+        let back = of(&traffic, lead);
+        assert_eq!(back.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(back.warp.stage, 4.0, "kept");
+    }
+
+    // An entry under a wait.
+
+    /// A lead on its own jump, moving, and its escort beside it 600 south,
+    /// `wait` of its AI wait running, targeting the player.
+    fn waiting_escort(wait: u32) -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.begin_own_jump();
+        let lead = traffic.add_npc(lead);
+        let mut escort = far(0);
+        escort.state.position = Vec2::new(3000.0, 600.0);
+        escort.state.velocity = Vec2::new(0.0, 2.0);
+        escort.leader = Some(lead);
+        escort.target = Some(ShipRef::Player);
+        escort.ai_wait = wait;
+        let escort = traffic.add_npc(escort);
+        (traffic, lead, escort)
+    }
+
+    /// `traffic` a tick on, every ship by `FleetEscortAi`.
+    fn fleet_tick(traffic: &mut Traffic) {
+        traffic.tick_in(
+            &crate::ai::FleetEscortAi::default(),
+            jumping_world(0.0),
+            &[],
+            &mut NeverFires,
+        );
+    }
+
+    #[test]
+    fn a_follower_entering_under_a_wait_keeps_its_old_substate() {
+        // Goal 0xb is written (@0x83a92) and the wait gate returns
+        // (@0x8d4b9-0x8d4d2), so no sub 0xd, and no stage or push.
+        let (mut traffic, lead, escort) = waiting_escort(50);
+        fleet_tick(&mut traffic);
+        let ship = of(&traffic, escort);
+        assert!(ship.joins_leaders_jump());
+        assert_eq!(ship.goal, Goal::Follow { lead, guard: None });
+        assert_eq!(ship.warp.goal, None, "off the jump path");
+        assert!(dispatch_gate::reaches_think(ship), "its think runs on");
+        assert_eq!(ship.warp.stage, 0.0, "no stage");
+        assert_eq!(ship.target, None);
+        assert_eq!(
+            ship.state.position,
+            Vec2::new(3000.0, 602.0),
+            "it moves on at its velocity, its glide untouched"
+        );
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, 2.0));
+        assert!(ship.high_level_waits());
+        assert!(ship.follows_leaders_jump(), "goal 0xb");
+        assert!(!ship.jumping(), "`_AIIsShipJumping` reads the sub");
+        assert_eq!(
+            crate::traffic::warp_out::pushes_leader(ship, false),
+            None,
+            "no push"
+        );
+    }
+
+    #[test]
+    fn a_follower_joining_a_jump_still_thinks_and_an_inertialess_one_detaches_under_the_wait() {
+        let (mut traffic, _, escort) = waiting_escort(50);
+        fleet_tick(&mut traffic);
+        assert!(of(&traffic, escort).joins_leaders_jump());
+        let at = traffic.npcs().iter().position(|npc| npc.id == escort);
+        traffic.npcs_mut()[at.expect("there")]
+            .stats
+            .inertialess_hull = true;
+        fleet_tick(&mut traffic);
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.leader, None, "detached (@0x83c11)");
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert!(!ship.joins_leaders_jump());
+    }
+
+    #[test]
+    fn at_its_waits_end_a_follower_follows_a_lead_that_still_leaves_in_that_tick() {
+        let (mut traffic, lead, escort) = waiting_escort(2);
+        fleet_tick(&mut traffic);
+        assert!(of(&traffic, escort).joins_leaders_jump());
+        fleet_tick(&mut traffic);
+        fleet_tick(&mut traffic);
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(lead))));
+        assert!(!ship.warp.joining);
+    }
+
+    #[test]
+    fn at_its_waits_end_a_follower_gives_up_a_lead_that_stopped_drawing_in_that_tick() {
+        let (mut traffic, lead, escort) = waiting_escort(1);
+        fleet_tick(&mut traffic);
+        assert!(of(&traffic, escort).joins_leaders_jump());
+        // The lead stops leaving: goal 0xb stands (@0x83be3), and the high
+        // level gives up (@0x8df31-0x8df49).
+        let at = traffic.npcs().iter().position(|npc| npc.id == lead);
+        let stopped = &mut traffic.npcs_mut()[at.expect("there")];
+        stopped.warp = crate::traffic::warp_out::Warp::default();
+        stopped.goal = Goal::Hold;
+        stopped.no_ai = true;
+        assert_eq!(of(&traffic, escort).ai_wait, 0, "the wait is out");
+        fleet_tick(&mut traffic);
+        let ship = of(&traffic, escort);
+        assert_eq!((ship.goal, ship.warp.goal), (Goal::Idle, None));
+        assert_eq!(ship.target, None);
+    }
+
+    #[test]
+    fn a_ship_joining_a_jump_waits_only_while_a_wait_runs_and_only_joining_reads_a_modes_wait() {
+        use crate::traffic::npc::Mode;
+        let mut joining = far(1);
+        joining.goal = Goal::Formation { guard: None };
+        joining.warp.joining = true;
+        assert!(joining.joins_leaders_jump());
+        assert!(!joining.high_level_waits(), "its wait is over");
+        joining.mode = Mode::HeldAtGate { ticks_left: 9 };
+        assert!(joining.high_level_waits(), "it waits in its mode");
+        let mut held = far(1);
+        held.mode = Mode::Coasting { ticks_left: 9 };
+        assert!(
+            !held.high_level_waits(),
+            "not joining: the flying wait alone"
+        );
+    }
+
+    #[test]
+    fn a_goal_written_over_the_entry_ends_it_and_the_next_think_runs_the_order_block() {
+        let (mut traffic, _, escort) = waiting_escort(50);
+        fleet_tick(&mut traffic);
+        let at = traffic.npcs().iter().position(|npc| npc.id == escort);
+        let hit = &mut traffic.npcs_mut()[at.expect("there")];
+        hit.goal = Goal::Attack(ShipRef::Player);
+        assert!(!hit.joins_leaders_jump(), "the goal word");
+        assert!(!hit.follows_leaders_jump());
+        hit.goal = Goal::Idle;
+        assert!(!hit.joins_leaders_jump(), "a reset");
+        // The next think takes the order block with the lead gone quiet.
+        let mut quiet = waiting_escort(50).0;
+        fleet_tick(&mut quiet);
+        let (lead, follower) = (quiet.npcs()[0].id, quiet.npcs()[1].id);
+        quiet.npcs_mut()[0].warp = crate::traffic::warp_out::Warp::default();
+        quiet.npcs_mut()[0].goal = Goal::Hold;
+        quiet.npcs_mut()[0].no_ai = true;
+        quiet.npcs_mut()[1].goal = Goal::Attack(ShipRef::Player);
+        quiet.npcs_mut()[1].warp.joining = true;
+        fleet_tick(&mut quiet);
+        let ship = of(&quiet, follower);
+        assert_eq!(ship.goal, Goal::Follow { lead, guard: None });
+        assert!(!ship.warp.joining, "no entry: the order block's formation");
+    }
+
+    /// The modes and goals `_AIMakeShipJumpWithParent` meets under a wait:
+    /// it tests no goal (@0x82bc7).
+    fn waits() -> Vec<(&'static str, Goal, crate::traffic::npc::Mode, u32)> {
+        use crate::traffic::npc::Mode;
+        vec![
+            ("a wait", Goal::Wait, Mode::Flying, 30),
+            ("a hold", Goal::Hold, Mode::Flying, 30),
+            ("a count wait", Goal::CountWait, Mode::Flying, 30),
+            (
+                "a gate arrival",
+                Goal::Idle,
+                Mode::Emerging { ticks_left: 30 },
+                0,
+            ),
+            (
+                "held at its gate",
+                Goal::Attack(ShipRef::Player),
+                Mode::HeldAtGate { ticks_left: 30 },
+                0,
+            ),
+            (
+                "holding its course",
+                Goal::Idle,
+                Mode::Coasting { ticks_left: 30 },
+                0,
+            ),
+            (
+                "entering a gate",
+                Goal::Idle,
+                Mode::EnteringGate {
+                    gate: crate::catalog::StellarId(128),
+                    ticks_left: 30,
+                },
+                0,
+            ),
+        ]
+    }
+
+    /// A ship the player leads, facing east, its jump's aim elsewhere.
+    fn players_ship(goal: Goal, mode: crate::traffic::npc::Mode, wait: u32) -> Npc {
+        let mut ship = far(0);
+        ship.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        ship.goal = goal;
+        ship.mode = mode;
+        ship.ai_wait = wait;
+        ship.warp.aim = 300;
+        ship
+    }
+
+    #[test]
+    fn the_players_warp_stage_writes_goal_0xb_under_any_wait_keeping_its_old_substate() {
+        for (name, goal, mode, wait) in waits() {
+            let mut ship = players_ship(goal, mode, wait);
+            ship.target = Some(ShipRef::Player);
+            ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+            assert!(ship.joins_leaders_jump(), "{name}");
+            assert!(ship.high_level_waits(), "{name}");
+            assert_eq!(ship.warp.goal, None, "{name}: its old substate");
+            assert_eq!(ship.warp.stage, 5.0, "{name}: copied");
+            assert_eq!(ship.warp.since, 7, "{name}");
+            assert_eq!(ship.target, None, "{name}");
+            assert_eq!(ship.goal, Goal::Formation { guard: None }, "{name}");
+            assert!(!ship.count_wait(), "{name}: a goal 0xb");
+            assert!(ship.follows_leaders_jump(), "{name}: busy reads this");
+            assert!(
+                situation(&ship, Around::default()).jumping,
+                "{name}: the cloak's jump term (@0x83505)"
+            );
+            assert!(!ship.jumping(), "{name}: sub unchanged (@0x82bf9)");
+        }
+    }
+
+    #[test]
+    fn a_stage_copied_under_a_wait_is_zeroed_as_it_faces_its_own_heading() {
+        // Sub 0xd isn't flown, so the warp-out reads the low level's default
+        // +0x68, its whole heading (@0x8522d), and it isn't jumping (@0x34a27).
+        for (name, goal, mode, wait) in waits() {
+            let mut traffic = Traffic::with_interval(1);
+            let mut ship = players_ship(goal, mode, wait);
+            ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+            assert_eq!(ship.warp.aim, 90, "{name}");
+            let id = traffic.add_npc(ship);
+            traffic.fly_holding(
+                jumping_world(5.0),
+                &std::collections::BTreeSet::new(),
+                &mut NeverFires,
+            );
+            assert_eq!(of(&traffic, id).warp.stage, 0.0, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_players_warp_stage_ends_a_gate_wait() {
+        use crate::traffic::npc::Mode;
+        let mut ship = players_ship(Goal::Idle, Mode::Emerging { ticks_left: 30 }, 0);
+        ship.emerges_from = Some(crate::catalog::StellarId(128));
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(ship.emerges_from, None);
+    }
+
+    #[test]
+    fn the_players_warp_stage_clears_an_own_jump_under_a_wait_and_starts_no_stage_of_its_own() {
+        let mut ship = players_ship(Goal::JumpOut, crate::traffic::npc::Mode::Flying, 30);
+        ship.warp.goal = Some(WarpGoal::Own);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.warp.goal, None);
+        assert!(ship.joins_leaders_jump());
+        assert!(!ship.jumping());
+    }
+
+    #[test]
+    fn a_ship_on_sub_0xd_in_its_180_wait_keeps_it() {
+        let mut ship = players_ship(Goal::Idle, crate::traffic::npc::Mode::Flying, 180);
+        ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert!(!ship.warp.joining);
+        let mut led = far(0);
+        led.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(4))));
+        led.ai_wait = 180;
+        led.enter_leaders_jump(ShipRef::Npc(NpcId(4)));
+        assert_eq!(
+            led.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(NpcId(4))))
+        );
+        assert!(!led.warp.joining);
+    }
+
+    #[test]
+    fn with_no_wait_the_players_warp_stage_puts_it_straight_on_sub_0xd_over_its_goal() {
+        let mut ship = players_ship(Goal::Wait, crate::traffic::npc::Mode::Flying, 0);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(ship.goal, Goal::Wait, "the hold's own write, later");
+        assert!(!ship.warp.joining);
+        assert_eq!(ship.warp.aim, 300, "sub 0xd's own, in its flight");
+    }
+
+    #[test]
+    fn after_a_coast_its_first_think_sets_the_jump() {
+        use crate::traffic::npc::Mode;
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = players_ship(Goal::Idle, Mode::Coasting { ticks_left: 1 }, 0);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        let id = traffic.add_npc(ship);
+        let mut world = jumping_world(5.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+        assert_eq!(of(&traffic, id).warp.goal, None, "its coast runs no think");
+        traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+        assert_eq!(
+            of(&traffic, id).warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player))
+        );
+    }
+
+    #[test]
+    fn a_ship_joining_a_jump_reads_as_jumping_to_the_cloak_think() {
+        let (mut traffic, _, escort) = waiting_escort(50);
+        fleet_tick(&mut traffic);
+        let ship = of(&traffic, escort);
+        let cloak = situation(ship, Around::default());
+        assert!(cloak.jumping, "(@0x83505)");
+        assert!(!cloak.travelling, "goal 0xb isn't 0xa");
+    }
+
+    // The player's stage over a glide in or a burst out.
+
+    #[test]
+    fn the_players_stage_over_a_glide_or_a_burst_takes_it_off_its_path() {
+        // `_MakeEscortsHyperWithParent` copies +0x50 with no goal test
+        // (@0x3fd9a-0x3fd9e): over -999.0, so `_AIDispatch` no longer sends
+        // it to goal 8 (@0x8fcf5), and goal 0xb's block writes sub 0xd.
+        use crate::traffic::emerge::exit_speed;
+        use crate::traffic::npc::Mode;
+        use crate::traffic::spawn::glide_speed;
+        for (mode, speed) in [
+            (Mode::JumpingIn { tick: 4 }, glide_speed(4)),
+            (Mode::LeavingGate { tick: 4 }, exit_speed(false, 4)),
+        ] {
+            for (reading, owed) in [(RuleSource::Engine, Some(speed)), (RuleSource::Bible, None)] {
+                let mut ship = players_ship(Goal::Idle, mode, 0);
+                ship.state.velocity = Vec2::new(20.0, 0.0);
+                ship.emerges_from = Some(crate::catalog::StellarId(128));
+                ship.follow_player_jump(5.0, 7, reading);
+                assert_eq!(ship.mode, Mode::Flying, "{mode:?}");
+                assert_eq!(ship.emerges_from, None, "{mode:?}");
+                assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+                assert_eq!(ship.warp.stage, 5.0);
+                assert!(ship.jumping(), "{mode:?}");
+                assert!(dispatch_gate::takes_jump_path(&ship), "{mode:?}");
+                assert_eq!(ship.state.velocity, Vec2::new(20.0, 0.0), "kept");
+                assert_eq!(ship.owed_burst, owed, "{mode:?} {reading:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_burst_on_its_first_tick_is_a_gate_wait_the_players_stage_ends() {
+        // Goal 0x15 still (@0x8dd8a), +0x4c just out: held one tick.
+        use crate::traffic::npc::Mode;
+        let mut ship = players_ship(Goal::Idle, Mode::LeavingGate { tick: 0 }, 0);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert!(ship.joins_leaders_jump());
+    }
+
+    // A disabled ship on the jump path.
+
+    const BREAKING_UP: Condition = Condition::Dying {
+        ticks_left: 300,
+        starting: false,
+    };
+
+    /// A lead `setup` set, and its follower on its jump, `condition`, moving
+    /// east at 2.
+    fn disabled_follower(
+        condition: Condition,
+        setup: impl Fn(&mut Npc),
+    ) -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        setup(&mut lead);
+        let lead = traffic.add_npc(lead);
+        let mut follower = far(0);
+        follower.state.position = Vec2::new(3000.0, 300.0);
+        follower.state.velocity = Vec2::new(2.0, 0.0);
+        follower.leader = Some(lead);
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.target = Some(ShipRef::Player);
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        follower.condition = condition;
+        let follower = traffic.add_npc(follower);
+        (traffic, lead, follower)
+    }
+
+    #[test]
+    fn a_disabled_follower_gives_up_a_lead_that_stops_leaving_and_is_reset_the_next_tick() {
+        // The jump path reaches the high level, which has no disabled test
+        // (@0x8fd83-0x8fd9a, @0x901e5).
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, follower) = disabled_follower(condition, |_| {});
+            let world = jumping_world(0.0);
+            traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+            let ship = of(&traffic, follower);
+            assert_eq!(
+                (ship.goal, ship.target, ship.warp.goal),
+                (Goal::Idle, None, None),
+                "{condition:?}"
+            );
+            assert_eq!(ship.leader, Some(lead), "not reset yet");
+            traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+            assert_eq!(of(&traffic, follower).leader, None, "{condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_pushes_its_lead() {
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, _) = disabled_follower(condition, |_| {});
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            assert_eq!(of(&traffic, lead).goal, Goal::JumpOut, "{condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_under_a_lead_still_leaving_keeps_sub_0xd_and_flies_none_of_it() {
+        // The low level's sub blocks are gated (@0x8524e-0x85258).
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, follower) = disabled_follower(condition, Npc::begin_own_jump);
+            traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, 4.0);
+            traffic.npcs_mut()[0].warp.stage = 0.5;
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            let ship = of(&traffic, follower);
+            assert_eq!(
+                ship.warp.goal,
+                Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+                "{condition:?}"
+            );
+            assert_eq!(ship.warp.stage, 0.0, "no stage started: {condition:?}");
+            assert_ne!(
+                ship.state.velocity,
+                Vec2::new(0.0, 4.0),
+                "no copy of its lead's: {condition:?}"
+            );
+            assert!(ship.state.velocity.x > 0.0, "it drifts: {condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_with_no_leader_there_takes_its_own_jump_and_flies_none_of_it() {
+        // @0x8df54: goal 2, sub 4, its low level gated.
+        let (mut traffic, _, follower) = disabled_follower(Condition::Disabled, |_| {});
+        traffic.npcs_mut().iter_mut().for_each(|npc| {
+            if npc.id == follower {
+                npc.leader = None;
+                npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(77))));
+            }
+        });
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let ship = of(&traffic, follower);
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!(ship.warp.stage, 0.0, "sub 4 is gated");
+    }
+
+    #[test]
+    fn a_disabled_fighter_that_cannot_jump_turns_back() {
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let mut traffic = Traffic::with_interval(1);
+            let mut carrier = far(0);
+            carrier.begin_own_jump();
+            let carrier = traffic.add_npc(carrier);
+            let mut fighter = fighter_on_jump(ShipRef::Npc(carrier), true);
+            fighter.leader = Some(carrier);
+            fighter.warp.stage = 0.0;
+            fighter.condition = condition;
+            let fighter = traffic.add_npc(fighter);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            let ship = of(&traffic, fighter);
+            assert_eq!(
+                ship.goal,
+                Goal::Dock(ShipRef::Npc(carrier)),
+                "{condition:?}"
+            );
+            assert_eq!(ship.warp.goal, None);
+        }
+    }
+
+    #[test]
+    fn a_disabled_ship_off_the_jump_path_runs_no_high_level() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.condition = Condition::Disabled;
+        ship.warp.stage = 3.0;
+        ship.warp.aim = 90;
+        ship.goal = Goal::Attack(ShipRef::Player);
+        let id = traffic.add_npc(ship);
+        traffic.fly_holding(
+            jumping_world(0.0),
+            &std::collections::BTreeSet::new(),
+            &mut NeverFires,
+        );
+        assert_eq!(of(&traffic, id).warp.stage, 3.0, "no hold");
     }
 
     // The fighter turn-back.
@@ -870,7 +1831,7 @@ mod tests {
         paused.state.position = Vec2::new(3000.0, 300.0);
         paused.leader = Some(successor);
         paused.goal = Goal::Regroup {
-            kept: Kept::Formation { guard: None },
+            kept: Kept::FollowsJump,
         };
         paused.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(successor)));
         let paused = traffic.add_npc(paused);
@@ -931,22 +1892,43 @@ mod tests {
 
     #[test]
     fn a_follower_of_the_players_jump_is_cancelled_while_the_player_is_disabled() {
+        // `_IsDisabled` of slot 0 reads its armour line alone (branch 4,
+        // @0x2d79-0x2e00): armour 0 counts while still intact, and so does
+        // a player destroyed with its armour gone (@0x900e3-0x9011e).
         use crate::combat::hull::Condition;
-        let npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
-        for (player, cancels) in [
-            (Some(Condition::Disabled), true),
-            (
-                Some(Condition::Dying {
-                    ticks_left: 3,
-                    starting: false,
-                }),
-                true,
-            ),
-            (Some(Condition::Intact), false),
-            (None, false),
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        for (condition, armor, cancels) in [
+            (Condition::Disabled, 100.0, true),
+            (dying, 0.0, true),
+            (Condition::Intact, 0.0, true),
+            (Condition::Destroyed, 0.0, true),
+            (Condition::Destroyed, 100.0, false),
+            (Condition::Intact, 100.0, false),
         ] {
-            assert_eq!(cancelled(&npcs[1], &npcs, player), cancels, "{player:?}");
+            let mut player = crate::ai::fixture::player(0.0, 0.0);
+            player.condition = condition;
+            player.reserves.armor.now = armor;
+            let mut traffic = Traffic::with_interval(1);
+            traffic.npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
+            let world = World {
+                player: Some(player),
+                ..World::new(&[])
+            };
+            traffic.cancel_jump_follows(&world, &[true; 64]);
+            let follower = &traffic.npcs[1];
+            assert_eq!(
+                follower.warp.goal.is_none(),
+                cancels,
+                "{condition:?} {armor}"
+            );
         }
+        let mut traffic = Traffic::with_interval(1);
+        traffic.npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
+        traffic.cancel_jump_follows(&World::new(&[]), &[true; 64]);
+        assert!(traffic.npcs[1].warp.goal.is_some(), "no player here");
     }
 
     #[test]
@@ -956,27 +1938,27 @@ mod tests {
         let attacking = Goal::Attack(ShipRef::Player);
         for (stage, cancels) in [(-1.0, true), (0.0, true), (1.0, true), (1.5, false)] {
             let npcs = on_leaders_jump(lead, stage, attacking, Condition::Intact);
-            assert_eq!(cancelled(&npcs[1], &npcs, None), cancels, "{stage}");
+            assert_eq!(cancelled(&npcs[1], &npcs, false), cancels, "{stage}");
         }
         let npcs = on_leaders_jump(lead, 0.0, Goal::Snipe(ShipRef::Player), Condition::Intact);
-        assert!(cancelled(&npcs[1], &npcs, None), "goal 4 standing off");
+        assert!(cancelled(&npcs[1], &npcs, false), "goal 4 standing off");
         let npcs = on_leaders_jump(lead, 0.0, Goal::JumpOut, Condition::Intact);
-        assert!(!cancelled(&npcs[1], &npcs, None), "not attacking");
+        assert!(!cancelled(&npcs[1], &npcs, false), "not attacking");
         let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Disabled);
         assert!(
-            !cancelled(&npcs[1], &npcs, None),
+            !cancelled(&npcs[1], &npcs, false),
             "a disabled lead (@0x9015b)"
         );
         let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Intact);
-        assert!(!cancelled(&npcs[1], &npcs[1..], None), "a lead not there");
+        assert!(!cancelled(&npcs[1], &npcs[1..], false), "a lead not there");
         let mut paused = npcs.clone();
         paused[1].goal = Goal::Regroup {
-            kept: crate::ai::regroup::Kept::Coast,
+            kept: crate::ai::regroup::Kept::FollowsJump,
         };
-        assert!(!cancelled(&paused[1], &paused, None), "not goal 0xb");
+        assert!(!cancelled(&paused[1], &paused, false), "not goal 0xb");
         let mut hulk = npcs;
         hulk[1].no_ai = true;
-        assert!(!cancelled(&hulk[1], &hulk, None), "no jump path");
+        assert!(!cancelled(&hulk[1], &hulk, true), "no jump path");
     }
 
     #[test]

@@ -105,14 +105,17 @@ pub struct FlightRules {
     pub npc_formation: NpcFormation,
 }
 
-/// How an escort keeps formation, by [`RuleKey::FormationFlight`].
+/// How an escort keeps formation, a fighter returns to its carrier and an
+/// inspector closes on its ship, by [`RuleKey::FormationFlight`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FormationFlight {
     /// The original's goal 0xa and its substates, measured from the
-    /// leader.
+    /// leader; goal 5's subs 0xb and 1; and goal 7's sub 9.
     #[default]
     Original,
-    /// The port's earlier formation, measured from the slot.
+    /// The port's earlier formation, measured from the slot; its braking
+    /// approach to a carrier, with no sight of it read; and its follow of
+    /// an inspected ship.
     Earlier,
 }
 

@@ -12,8 +12,10 @@
 //! Landing, taking off, each change made in the spaceport
 //! ([`Session::transact`]) and a Strict Play pilot's rescue from the
 //! escape pod ([`Session::rescue_if_due`]) make a save due
-//! ([`Session::take_save_due`]): whoever saves the pilot takes it after
-//! each input and saves then.
+//! ([`Session::take_save_now`]): whoever saves the pilot takes it after
+//! each input and saves then. Other changes make one due too; in flight,
+//! by default, only the take-off's and the rescue's are written then, the
+//! rest held for the next landing (see the `in_flight_save` module).
 //! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system, on the land key's second
@@ -460,17 +462,20 @@ mod carrier_lead;
 mod chart;
 mod chart_ownership;
 mod class_orders;
+mod class_table;
 mod clearance;
 mod cloaks;
 mod collision_order;
 mod combat_rating;
 mod comm_calls;
+mod command_word;
 mod control;
 mod course;
 mod crons;
 mod deadly_stellars;
 mod derelicts;
 mod description;
+mod disabled_mission_escorts;
 mod display_step;
 mod dock_tail;
 mod dominated_stellars;
@@ -528,6 +533,7 @@ mod hire;
 mod hooks;
 mod hover;
 mod iff_scramblers;
+mod in_flight_save;
 mod inertialess;
 mod intro;
 mod ionization;
@@ -548,6 +554,7 @@ mod launch_frame;
 mod load_reset;
 #[cfg(test)]
 mod load_rules;
+mod loaded_berths;
 mod lost_lead;
 mod lost_target;
 mod map;
@@ -577,8 +584,12 @@ mod operator_moves;
 mod outbox;
 mod outfits;
 mod owners_unset;
+#[cfg(test)]
+mod pd_parent;
 mod person_offers;
 mod persons;
+#[cfg(test)]
+mod pick_at_breakup;
 mod pilot_panel;
 mod pirate_plunder;
 mod planet_comm;
@@ -630,6 +641,8 @@ mod shot_slots;
 #[cfg(test)]
 mod slot_search;
 mod slot_visibility;
+#[cfg(test)]
+mod slot_voice;
 mod smoke_frame;
 mod space;
 mod spawn_availability;
@@ -1169,6 +1182,11 @@ impl Session {
     ///   the system from the stellar alone; the engine's saved system is
     ///   its own, and refusing the pilot would strand one a removed
     ///   plug-in's system held.
+    /// - An escort or carried fighter whose ship class has no record is
+    ///   dropped from the fleet, as `_LoadPilotData` spawns none for it and
+    ///   sets the flag (@0x759f9-0x75a15, @0x75b02-0x75b1e), so the next
+    ///   save leaves it out (see the `loaded_berths` module, which also
+    ///   packs the rest into berths in their saved order).
     ///
     /// A pilot saved with a course flies as [`RuleKey::LoadedCourse`]
     /// reads: by the engine with none, by the other reading with the
@@ -1282,6 +1300,8 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
+        // A saved escort of no class spawns none (see `loaded_berths`).
+        load_repaired |= loaded_berths::drop_unknown_classes(&mut pilot, &ships);
         let lives: BTreeMap<StellarId, crate::catalog::StellarLife> = catalog
             .stellar_lives()
             .into_iter()
@@ -1358,6 +1378,9 @@ impl Session {
             run: MissionRun::new(),
         }
         .with_rules(*rules);
+        // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
+        // see the `class_table` module).
+        session.space.seed_class_orders(&session.pilot);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
@@ -1413,8 +1436,9 @@ impl Session {
     }
 
     /// Whether the load had to fall back because the save references data
-    /// the catalog lacks: a stellar no system lists, or a system that no
-    /// longer exists (see [`Session::load`]). It stands for
+    /// the catalog lacks: a stellar no system lists, a system that no
+    /// longer exists, or an escort's ship class with no record (see
+    /// [`Session::load`]). It stands for
     /// `_LoadPilotData`'s -0x2e result (@0x7648b-0x76498), on which
     /// `_MainScreenChoice` shows `STR#` 140 #52 (@0x1a840-0x1a85b).
     #[must_use]
@@ -1536,24 +1560,7 @@ impl Session {
         self.space
             .combat
             .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
-        self.space
-            .traffic
-            .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
-        self.space
-            .traffic
-            .set_reused_slot_heading(rules.source_for(RuleKey::ReusedSlotHeading));
-        self.space
-            .traffic
-            .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
-        self.space
-            .traffic
-            .set_reused_slot_blink_timer(rules.source_for(RuleKey::ReusedSlotBlinkTimer));
-        self.space
-            .traffic
-            .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
-        self.space
-            .traffic
-            .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        self.space.read_reused_slot_rules(&rules);
         self.chart.read_rescue_rule(&rules);
         self.setup.rules = rules;
         self
@@ -2570,8 +2577,11 @@ impl Session {
     /// [`Fate::Destroyed`] for it and counting it lost when it is a
     /// mission's special ship, drawing on `chance` (see the
     /// `mission_ships` module), as it goes. A mission escort among them
-    /// has already left the formation, and the rest re-formed, as it
-    /// started to break up ([`Session::lose_dying_mission_escorts`]).
+    /// has already left the formation as its dispatch's reset or its
+    /// dying branch dropped it (see the `disabled_mission_escorts` module);
+    /// one destroyed with neither between, its slot inactive, leaves the
+    /// rest to re-form at the next pass's head
+    /// ([`Session::reform_on_swarm_change`]).
     fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
         let destroyed: Vec<NpcId> = self
             .space
@@ -4209,7 +4219,9 @@ impl Session {
         // module).
         self.reset_stellar_frames(None);
         self.out.sounds.push(SimSound::TookOff);
-        self.out.save_due = true;
+        // Written in flight: the original's take-off save (@0x6354b; see
+        // the `in_flight_save` module).
+        self.out.save_now();
         self.run.raise(StoryEvent::TookOff { stellar });
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
@@ -5014,7 +5026,9 @@ impl Session {
 
     /// Whether the pilot should be saved: it has landed, taken off,
     /// changed in the spaceport or, playing strictly, been rescued from the
-    /// escape pod since this was last taken. Taking it clears it.
+    /// escape pod since this was last taken, written now or held (see
+    /// [`Session::take_save_now`]). Taking it clears it.
+    #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn take_save_due(&mut self) -> bool {
         self.out.take_save_due()
     }
@@ -5657,7 +5671,8 @@ impl Session {
     /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
     /// the ships that held it as it was boarded defending none either
     /// (@0x896b6-0x89704; see the `stellar_defence` module), with no swarm
-    /// leader or formation parent (`_AISetup` @0x9478f), and then as
+    /// leader or formation parent and holding no order word, as `_AISetup`
+    /// writes -1 on every capture (@0x9478f, @0x7f40c), and then as
     /// [`Session::fleet_up`] says: a mission's special ship keeps its mark
     /// and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
@@ -5685,6 +5700,7 @@ impl Session {
         npc.cloak = crate::cloak::Cloak::default();
         npc.defends = None;
         npc.clear_swarm_words();
+        npc.order_word = crate::fleet::OrderWord::NONE;
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).
@@ -5731,6 +5747,8 @@ impl Session {
             wage: None,
             person,
             mark: None,
+            voice: None,
+            berth: None,
         };
         // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
         // so its slot's.
@@ -6121,6 +6139,7 @@ impl Outbox {
     /// changed in the spaceport or, playing strictly, been rescued from the
     /// escape pod since this was last taken. Taking it clears it.
     fn take_save_due(&mut self) -> bool {
+        self.save_in_flight = false;
         std::mem::take(&mut self.save_due)
     }
 
@@ -10629,6 +10648,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -17117,8 +17138,8 @@ pub(super) mod tests {
         session.populate(&catalog, &mut Draws::of(&[0]));
         assert_eq!(session.npcs(), []);
         // An arrival, then the gate: 1 of planet 128 and the gate, planet
-        // 129 being 2000 out.
-        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1]);
+        // 129 being 2000 out; then its voice.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1, 0]);
         work_with(
             &mut session,
             &catalog,
@@ -17127,7 +17148,7 @@ pub(super) mod tests {
             Rules::default(),
             &mut chance,
         );
-        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3]);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3, 2]);
         let npc = &session.npcs()[0];
         assert!(npc.emerging(), "{:?}", npc.mode);
         assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));
@@ -21000,6 +21021,16 @@ pub(super) mod tests {
             Rules::default(),
             &mut NeverFires,
         );
+        assert!(session.npcs()[0].emerging(), "its wait just out");
+        assert_eq!(fates(&session), [], "not seen with its goal still 0x15");
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(!session.npcs()[0].emerging(), "bursting out");
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.run.story.watched.is_empty(), "forgotten once seen");
@@ -24379,7 +24410,13 @@ pub(super) mod tests {
         };
         assert!(fires(|_| {}), "not warping, it fires");
         assert!(
-            !fires(|session| session.space.traffic.npcs_mut()[0].follow_player_jump(2.0, 0)),
+            !fires(
+                |session| session.space.traffic.npcs_mut()[0].follow_player_jump(
+                    2.0,
+                    0,
+                    RuleSource::Engine
+                )
+            ),
             "following the player's jump"
         );
     }
@@ -25864,6 +25901,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -25885,6 +25924,8 @@ pub(super) mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];
@@ -26483,6 +26524,8 @@ pub(super) mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];
@@ -26505,6 +26548,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         let fleet = |escorts: usize, fighters: usize| {
             let mut fleet = vec![escort(false); escorts];
@@ -26581,6 +26626,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -26612,7 +26659,7 @@ pub(super) mod tests {
             take(&mut session, Take::Capture, &[10, 1]).0,
             Taken::Escorted
         );
-        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(session.pilot().escorts(), [joined_escort(&session)]);
         assert_joined_in_place(&session);
         assert_eq!(
             session.npcs()[0].pick,
@@ -26631,6 +26678,14 @@ pub(super) mod tests {
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());
+    }
+
+    /// The trader's record once NPC 0 has joined the fleet, at its berth.
+    fn joined_escort(session: &Session) -> Escort {
+        Escort {
+            berth: session.space.npc(NpcId(0)).map(|npc| npc.berth),
+            ..trader_escort()
+        }
     }
 
     /// The trader, NPC 0, has joined the fleet where it is: intact, its
@@ -26694,7 +26749,7 @@ pub(super) mod tests {
         );
         assert_eq!(session.npcs()[1].leader, Some(NpcId(7)), "another's escort");
         session.space.traffic.npcs_mut()[1].leader = None;
-        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(session.pilot().escorts(), [joined_escort(&session)]);
         assert_joined_in_place(&session);
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
@@ -27055,6 +27110,8 @@ pub(super) mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: Some(1),
             }],
             "the old ship, stock and full"
         );
@@ -29090,6 +29147,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }];
         session.populate(catalog, &mut NeverFires);
         session.hold_fire(true, false);

@@ -103,13 +103,13 @@ pub const MINER_BITS: u16 = 0x0003;
 
 /// Whether `_AIDispatch` sends `npc` to `_MinerAI` in place of its type's
 /// think (@0x8ff64-0x8ff96): a `shïp` `Flags3` & 3 and leader +0x9a -1,
-/// which the player's escorts and fighters, mission escorts and an NPC
-/// carrier's fighters never have.
+/// which the player's escorts and fighters, mission escorts, let go or not
+/// ([`Npc::thinks_as_escort`]), and an NPC carrier's fighters never have.
 #[must_use]
 pub fn thinks_for(npc: &Npc) -> bool {
     npc.miner & MINER_BITS != 0
         && npc.leader.is_none()
-        && !npc.escorts_player()
+        && !npc.thinks_as_escort()
         && npc.carrier.is_none()
 }
 

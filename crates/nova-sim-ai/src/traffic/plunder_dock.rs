@@ -38,7 +38,10 @@
 //!   ([`swarm_low_level::slot_place`]). Both fire nothing: they end in
 //!   `_AIEscortFireUnprovoked`, which does nothing for AI type 4 or below.
 //!   An escort keeping formation flies them too
-//!   ([`formation_flight`](crate::traffic::formation_flight)).
+//!   ([`formation_flight`](crate::traffic::formation_flight)), as a
+//!   returning fighter flies sub 0xb
+//!   ([`return_flight`](crate::traffic::return_flight)) and an inspector
+//!   flies sub 9 ([`autopilot`](crate::traffic::autopilot)).
 //! - **Dock** (sub 0xf, [`DockSub::Dock`]), while it is intact
 //!   (`_LowLevelAIHandler`'s -0x32d flag, `!_IsDisabled`, @0x85240):
 //!   - **Matching** while its velocity differs from the victim's by

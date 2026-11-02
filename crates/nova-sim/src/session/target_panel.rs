@@ -296,6 +296,8 @@ mod tests {
             wage,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 

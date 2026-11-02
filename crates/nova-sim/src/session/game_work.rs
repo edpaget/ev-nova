@@ -48,9 +48,11 @@
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
 //!    inactive, its flight (the traffic's fly half, one NPC at a time),
-//!    reloads, regeneration, fire and death timer's tick,
-//!    a dying NPC's escape pods and escape-ship roll (see the
-//!    `npc_escape` module), then its display (@0x444ad), which starts its
+//!    reloads, regeneration, fire and death timer's tick, a dying NPC's
+//!    dying branch, a mission escort it still is leaving the formation
+//!    (see the `mission_escorts` module), and its escape pods and
+//!    escape-ship roll (see the `npc_escape` module), then its display
+//!    (@0x444ad), which starts its
 //!    breakup's countdown or explodes it, its shockwave reaching the
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
@@ -704,7 +706,8 @@ impl Session {
     /// `rules`, drawing on `chance`: each NPC's exit cursors kept for its
     /// berth; the fighters launched from bays put in the system (see the
     /// `fighters` module); the words the pass's stray beams stepped; the
-    /// fleet kept in step; the escorts whose ship is gone lost; the NPCs'
+    /// fleet kept in step; the escorts whose ship is gone lost (a dying
+    /// mission escort leaves at its own step, in the ship loop); the NPCs'
     /// self-repair; each NPC a deadly stellar killed vanished or destroyed
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
@@ -729,7 +732,6 @@ impl Session {
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
-        self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
         self.space

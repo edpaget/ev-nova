@@ -14,7 +14,6 @@ use super::{FOLLOW_DISTANCE, Readings, SWARM_THRUST, TopSpeeds, hand_off, within
 use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
 use crate::ai::{Goal, fire, fire::Manoeuvre};
-use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::combat::armament::Arsenal;
@@ -27,6 +26,7 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing::{self, LANDING_SPEED, TypeWidth};
 use crate::rulebook::RuleSource;
+use crate::traffic::dock_flight;
 use crate::traffic::formation_flight;
 use crate::traffic::gate_entry;
 use crate::traffic::held_burst::{Flight, Word};
@@ -36,6 +36,7 @@ use crate::traffic::leave_flight;
 use crate::traffic::mine_flight;
 use crate::traffic::npc::Npc;
 use crate::traffic::pod_flight;
+use crate::traffic::return_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::slot_word::{Cap, SlotWord};
 use crate::traffic::snipe;
@@ -71,13 +72,20 @@ pub fn low_level(
 ) -> (SlotWord, Option<Outcome>) {
     let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
+    // The stop's own flight sets it again. While a wait runs the high level
+    // writes no sub (@0x8d4b9-0x8d4d2), and the low level's settle alone
+    // ends a sub 1 (@0x85624): under an AI wait the wait's stop below runs
+    // that settle itself, so it reads the bit first.
+    if !npc.wait_running() || (!inertialess::moving(npc.state.velocity) && !npc.ai_wait_flies()) {
+        npc.stopping = false;
+    }
     let quarry = (other, other_disabled, beside);
     let rules = (flight, readings, weapons);
     match decide(
         npc,
         (sites, type_widths),
         quarry,
-        &handling,
+        (&handling, speeds.own),
         inertia,
         rules,
         chance,
@@ -93,7 +101,7 @@ fn decide(
     npc: &mut Npc,
     (sites, type_widths): (&[LandingSite], &BTreeMap<StellarId, TypeWidth>),
     (other, other_disabled, beside): (Option<&ShipState>, bool, Beside),
-    handling: &Handling,
+    (handling, top): (&Handling, f32),
     inertia: Inertia,
     (flight, readings, weapons): (FlightRules, Readings, &Arsenal),
     chance: &mut (impl Chance + ?Sized),
@@ -101,11 +109,20 @@ fn decide(
     if pod_flight::is_pod(npc) {
         return Ok(pod_flight::flight(npc));
     }
-    if !super::step::steered(npc) || (npc.ai_wait > 0 && !npc.count_wait()) {
-        // The head's word (@0x851f1, @0x8522d). While +0x4c runs, the high
-        // level's wait gate returns before state 1 runs (@0x8d4b9-0x8d4d2),
-        // so a landing ship keeps its goal through the wait and hands a
-        // gate off only after it.
+    if !super::step::steered(npc) {
+        // The head's word (@0x851f1, @0x8522d).
+        return Ok(none(npc));
+    }
+    if npc.ai_wait_flies() {
+        // The head's word too. While +0x4c runs, the high level's wait gate
+        // returns before state 1 runs (@0x8d4b9-0x8d4d2), so a landing ship
+        // keeps its goal through the wait and hands a gate off only after
+        // it, and a sub 1 it stored stands, the low level cutting it as
+        // ever, though `_HandleShip` skips its turn and thrust
+        // (@0x34a54-0x34a72).
+        if npc.stopping {
+            leave_flight::stop_under_wait(npc, handling, inertia);
+        }
         return Ok(none(npc));
     }
     hand_off(npc, sites);
@@ -122,7 +139,17 @@ fn decide(
         Goal::AttackStellar(_) => {
             return stellar_attack::low_level(npc, sites, weapons, handling, inertia);
         }
-        Goal::Inspect(_) => follow_or_brake(npc, handling, other, inertia),
+        Goal::Inspect(_) => match (other, flight.formation_flight) {
+            // Sub 9 (`_HighLevelAIHandler` @0x8f1ed): it writes +0x34 as it
+            // thrusts (@0x878e4), so an owed burst drops.
+            (Some(target), FormationFlight::Original) => {
+                formation_flight::steer(npc, target, false, None, None, handling)
+            }
+            // Goal 7's gone let-go writes goal 0, then the tail sub 0
+            // (@0x8f158 → @0x8f3a5-0x8f3ae, @0x8fb09-0x8fb13).
+            (None, FormationFlight::Original) => none(npc),
+            (_, FormationFlight::Earlier) => follow_or_brake(npc, handling, other, inertia),
+        },
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
@@ -147,10 +174,12 @@ fn decide(
                     snipe::fly(npc, None, handling, readings.snipe_lead, weapons);
                 Flight::writes(controls, wanted, Cap::Slot)
             }
-            // A paused fight with +0x70 -1 skips sub 5's block (@0x85c70):
-            // no thrust (@0x851f1), its heading truncated (@0x8522d).
-            None if beside.paused => none(npc),
-            None => braking(npc, handling, inertia),
+            // The flee block's -1 (@0x8dff6 → @0x8e228), the attack block's
+            // gone target and slot test (@0x8e714, @0x8e731) and goal 0xd's
+            // (@0x8eb3c, @0x8eb5f) write goal 0, and the tail sub 0
+            // (@0x8fb09-0x8fb13): it coasts, no thrust (@0x851f1), its
+            // heading truncated (@0x8522d).
+            None => none(npc),
         },
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
@@ -158,7 +187,14 @@ fn decide(
             formation_flight::fly(npc, other, beside, handling, flight, inertia)
         }
         Goal::Formation { .. } | Goal::Follow { .. } => formation(npc, other, handling, inertia),
-        Goal::Dock(_) => dock(npc, other, handling, inertia),
+        Goal::Dock(_) => {
+            let by = dock_flight::By {
+                top,
+                word: readings.held_burst,
+                unpulled: false,
+            };
+            dock(npc, other, beside, (handling, inertia, flight), by)
+        }
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
         // is a wait (state 6, @0x8f101). The regroup pause flies its kept
         // substate's goal in its place (`Npc::fly_as_flown`, which the
@@ -168,14 +204,13 @@ fn decide(
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), handling, weapons)
             .unwrap_or_else(|| braking(npc, handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, handling),
-        Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(npc, handling, inertia)
-        }
-        // A drift moves on with no turn or thrust (its wait above), as
-        // does an assister its docking doesn't fly: sub 0xb with no target
-        // does nothing (@0x87345-0x87351). +0x68 is the low level's
-        // default, so its heading is truncated (@0x8522d).
-        Goal::Hold | Goal::Drift | Goal::Assist(_) => none(npc),
+        Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => braking(npc, handling, inertia),
+        // Goal 0 flies sub 0 (the high level's tail, @0x8fb09-0x8fb13), the
+        // head's word alone. A drift moves on with no turn or thrust (its
+        // wait above), as does an assister its docking doesn't fly: sub 0xb
+        // with no target does nothing (@0x87345-0x87351). +0x68 is the low
+        // level's default, so its heading is truncated (@0x8522d).
+        Goal::Idle | Goal::Hold | Goal::Drift | Goal::Assist(_) => none(npc),
     })
 }
 
@@ -416,39 +451,66 @@ fn formation(
     Flight::writes(controls, wanted, Cap::Step)
 }
 
-/// How `npc` flies back to its carrier at `carrier` (see the module docs
-/// of [`autopilot`](super)), as `inertia` says: the flight outside its
-/// dock window, or braking with no carrier there; inside it, sub 8's
-/// turn and thrust ([`dock_in`]), pulled toward the carrier first
-/// ([`pull_in`]) while outside its reach. It never docks here: its low
-/// level docks it at its slot of the AI loop ([`docks_now`](super::docks_now)),
-/// before this, so one still here within reach has no bay, and stays out,
-/// unpulled.
+/// How `npc` flies back to its carrier at `carrier`, with `beside` its
+/// sight of it and its swarm lead (see the module docs of
+/// [`autopilot`](super)), on `handling` as `inertia` says under `flight`,
+/// sub 8's word as `by` says: by the original's formation flight,
+/// [`return_flight`]'s substate, a stop with its carrier unseen and sub
+/// 0xb outside its dock window; by the earlier, the rejoin outside its
+/// window; braking with no carrier there; inside it, sub 8
+/// ([`dock_flight::fly`]). It never docks here: its low level docks it at
+/// its slot of the AI loop ([`docks_now`](super::docks_now)), before this,
+/// so one still here within reach has no bay, and flies sub 8 unpulled.
+///
+/// The brake with no carrier stands in for one tick: goal 5's block reads
+/// the carrier's record unchecked (no +0xb8 test in @0x8ebd7-0x8ed15), so
+/// with its slot just freed the original flies sub 0xb or 8 at the freed
+/// record's place until the next frame's parent check. The slot reads no
+/// gone record, so it brakes that tick instead: a lag of one tick's
+/// motion that crosses no boundary the player sees.
 fn dock(
     npc: &mut Npc,
     carrier: Option<&ShipState>,
-    handling: &Handling,
-    inertia: Inertia,
+    beside: Beside,
+    (handling, inertia, flight): (&Handling, Inertia, FlightRules),
+    by: dock_flight::By,
 ) -> Flight {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
         return braking(npc, handling, inertia);
     };
     let off = carrier.position - npc.state.position;
-    if !within_reach(off, dock.window) {
-        let (controls, wanted) = rejoin(
-            &npc.state,
-            handling,
-            carrier.position,
-            carrier.velocity,
-            inertia,
-        );
-        return Flight::writes(controls, wanted, Cap::Step);
+    match flight.formation_flight {
+        FormationFlight::Original => {
+            let at = npc.state.position;
+            match return_flight::sub(at, carrier.position, dock.window, beside.leader_seen) {
+                return_flight::Sub::Stop => return braking(npc, handling, inertia),
+                return_flight::Sub::Close => {
+                    return return_flight::close(npc, carrier, beside, handling);
+                }
+                return_flight::Sub::Dock => {}
+            }
+        }
+        FormationFlight::Earlier if !within_reach(off, dock.window) => {
+            let (controls, wanted) = rejoin(
+                &npc.state,
+                handling,
+                carrier.position,
+                carrier.velocity,
+                inertia,
+            );
+            return Flight::writes(controls, wanted, Cap::Step);
+        }
+        FormationFlight::Earlier => {}
     }
-    let flight = dock_in(&npc.state, carrier, handling);
-    if !within_reach(off, dock.reach) {
-        pull_in(npc, carrier, handling);
-    }
-    flight
+    dock_flight::fly(
+        npc,
+        carrier,
+        handling,
+        dock_flight::By {
+            unpulled: within_reach(off, dock.reach),
+            ..by
+        },
+    )
 }
 
 /// Flies back to `to`, which moves at `velocity`: within
@@ -473,46 +535,6 @@ fn rejoin(
             inertia,
         )
     }
-}
-
-/// Sub 8 of a ship at `state` docking with a carrier at `carrier`, inside
-/// its dock window (see the module docs of [`autopilot`](super)): it wants
-/// the carrier's table bearing, thrusting while off it by less than its
-/// turn rate and [`DOCK_TURN_SLACK`], whole degrees, strictly, by its
-/// heading at the slot, writing +0x34 = 0 (@0x87ef8-0x87eff).
-fn dock_in(state: &ShipState, carrier: &ShipState, handling: &Handling) -> Flight {
-    // +0x68, the table's bearing of the carrier (@0x87e81-0x87e9d).
-    let wanted = trig::intercept_angle(state.position, carrier.position);
-    // Off it by less than a turn and the slack, strictly, by its heading
-    // before `_HandleShip` turns it (@0x87ea9-0x87ee4), its turn rate read
-    // at the slot (@0x87eb6).
-    let thrust = fire::off_by(state.heading, wanted) < handling.turn_rate + DOCK_TURN_SLACK;
-    let controls = Controls {
-        thrust,
-        ..Controls::default()
-    };
-    Flight::writes(controls, wanted, Cap::Step)
-}
-
-/// `npc`, docking, is pulled towards a carrier at `carrier` on each axis
-/// farther off than [`FORMATION_NUDGE`] ticks' acceleration
-/// (@0x87ff9 onward), at its slot: none for a fighter with no bay within
-/// its carrier's reach, whose call skips it (@0x88111).
-fn pull_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling) {
-    let pull = handling.accel * FORMATION_NUDGE;
-    let towards = |at: f32, to: f32| {
-        let off = to - at;
-        if off.abs() > pull {
-            at + off.signum() * pull
-        } else {
-            at
-        }
-    };
-    let at = npc.state.position;
-    npc.state.position = Vec2::new(
-        towards(at.x, carrier.position.x),
-        towards(at.y, carrier.position.y),
-    );
 }
 
 /// Whether a ship at `state`, turning on `handling`, can land on `site`

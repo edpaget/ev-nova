@@ -215,6 +215,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -319,6 +321,7 @@ mod tests {
             session.pilot().escorts().last(),
             Some(&Escort {
                 reserves,
+                berth: session.space.npc(hired).map(|npc| npc.berth),
                 ..fleet()[0]
             }),
             "hired at its wage, defending"

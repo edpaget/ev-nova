@@ -20,6 +20,8 @@
 //! - **The variant.** Each ship's +0xc922, rolled as `_LaunchFighter`,
 //!   `_DoShipCapture`, `_AIShipCapturedByPlayer` and `_EscortAI` roll it
 //!   ([`roll_variant`]): Rand(2), or the variant the government forces.
+//!   Most spawns write none and hold their slot's word (see
+//!   `nova_sim_ai::traffic::berth_voices`).
 //!   Even voice counts split by it, as only sets 4-6 do in stock: variant
 //!   0 picks the even clips and 1 the odd ones ([`VoiceTable::pick`]).
 //! - **The channel** ([`VoiceChannel`]): `_SpeakVoiceMessage` stores one

@@ -12,8 +12,11 @@
 //! [`fly_npc`](crate::traffic::Traffic::fly_npc)), then takes its step:
 //! its reloads, regeneration (@0x34424), fire (@0x34ffd) and death timer
 //! (@0x35083); then, for a dying NPC, `_HandleShip`'s dying block
-//! (@0x35080-0x3557b): its escape pods and escape-ship roll (see the
-//! `npc_escape` module); then its display, which may make its final
+//! (@0x35080-0x3557b): its dying branch, which takes a mission escort it
+//! still is out of the formation once its timer is set
+//! ([`Session::lose_dying_mission_escort`], @0x350a8-0x35134), then its
+//! escape pods and escape-ship roll (see the `npc_escape` module); then
+//! its display, which may make its final
 //! explosion ([`Combat::handle_npc`]; for a dying NPC
 //! [`Combat::step_npc`], the dying block, then [`Combat::display_npc`]).
 //! So:
@@ -197,6 +200,8 @@ impl Session {
                 },
             );
             self.step_stray_words(chance);
+            // Its dying branch (@0x350a8-0x35134), before its pods.
+            self.lose_dying_mission_escort(id, was);
             self.npc_escape(was, at_step, chance);
             self.land_phase(
                 behaviour,
@@ -359,6 +364,10 @@ mod tests {
     }
 
     const WRECKED: Vec2 = Vec2::new(600.0, 0.0);
+
+    /// Beyond 1000 of the centre, where goal 2's block keeps a ship at rest
+    /// on sub 4 (@0x8dd99-0x8de57).
+    const OUTSIDE: Vec2 = Vec2::new(1600.0, 0.0);
 
     #[test]
     fn a_later_slot_is_moved_by_a_wrecks_push_in_the_explosion_pass() {
@@ -536,9 +545,9 @@ mod tests {
             let mut session = facing_an_npc(&catalog, 180);
             let shooter = &mut session.space.traffic.npcs_mut()[0];
             shooter.berth = 2;
-            shooter.state.position = WRECKED;
+            shooter.state.position = OUTSIDE;
             let shooter = shooter.id;
-            let target = place(&mut session, 3, WRECKED + Vec2::new(0.0, -40.0), Vec2::ZERO);
+            let target = place(&mut session, 3, OUTSIDE + Vec2::new(0.0, -40.0), Vec2::ZERO);
             if jumps {
                 let runner = session.space.npc_mut(target).expect("there");
                 runner.goal = Goal::JumpOut;
@@ -592,7 +601,7 @@ mod tests {
         let follower = place(&mut session, 5, Vec2::new(-900.0, 50.0), Vec2::ZERO);
         let npc = session.space.npc_mut(follower).expect("there");
         npc.leader = Some(leader);
-        npc.follow_leaders_jump(ShipRef::Npc(leader));
+        npc.enter_leaders_jump(ShipRef::Npc(leader));
         npc.target = Some(ShipRef::Npc(runner));
         let reads = ReadsGone::default();
         pass(&mut session, &catalog, &reads);
@@ -796,7 +805,7 @@ mod tests {
         // every slot's `_HandleShip`.
         let catalog = armed();
         let mut session = empty(&catalog);
-        let leaving = place(&mut session, 3, WRECKED, Vec2::ZERO);
+        let leaving = place(&mut session, 3, OUTSIDE, Vec2::ZERO);
         let runner = session.space.npc_mut(leaving).expect("there");
         runner.goal = Goal::JumpOut;
         runner.begin_own_jump();

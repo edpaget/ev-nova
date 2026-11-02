@@ -80,7 +80,6 @@ impl Traffic {
         self.open_leaders = warp_out::leaders(&self.npcs);
         self.left_in_dispatch.clear();
         self.slot_outcomes.clear();
-        self.followed.clear();
     }
 
     /// The high level's and low level's work at the slot of each NPC
@@ -154,9 +153,12 @@ impl Traffic {
     /// fighter's turn-back, in `world` (`_HighLevelAIHandler`
     /// @0x8d513-0x8d56b and @0x8d575-0x8d625; [`warp_out::hold_stage`],
     /// [`jump_with_leader::turn_back`]), before its low level: none for a
-    /// disabled ship, nor past its AI wait (see `jump_with_leader`). A
-    /// stellar's defence ship breaking up is not disabled (@0x2d6f), but it
-    /// holds no warp and no carrier, so neither changes it. A fighter
+    /// disabled ship off the jump path, whose reset comes first; on the
+    /// jump path it runs, as the high level has no disabled test
+    /// (@0x8fd83-0x8fd9a, @0x901e5); and none past its AI wait (see
+    /// `jump_with_leader`). A stellar's defence ship breaking up is not
+    /// disabled (@0x2d6f), but it holds no warp and no carrier, so neither
+    /// changes it. A fighter
     /// turning back reads its carrier's slot. The high level's slot test
     /// comes first (@0x8d4e4-0x8d50d): a target whose slot is inactive is
     /// none, which the hold's goal reads ([`Traffic::slot_test`]). A ship
@@ -170,7 +172,12 @@ impl Traffic {
     /// berth is the same.
     fn hold_and_turn_back(&mut self, index: usize, world: &World) {
         let npc = &self.npcs[index];
-        if npc.condition != Condition::Intact || npc.high_level_waits() {
+        let high_level =
+            npc.condition == Condition::Intact || crate::ai::dispatch_gate::takes_jump_path(npc);
+        // The wait exit reads the wait a gate mode's count keeps too
+        // (`handler_head::waits_out`, @0x8d4b9-0x8d4d2).
+        let waits = npc.high_level_waits() || crate::ai::handler_head::waits_out(npc, npc.goal);
+        if !high_level || waits {
             return;
         }
         if !regroup::paused(npc) {
@@ -214,13 +221,20 @@ impl Traffic {
     /// How the NPC at `index` leaves at its slot in `world`, if it does:
     /// a flying, intact ship on its own jump whose clock has run out, or a
     /// fighter out of its AI wait within its carrier's reach with a bay for
-    /// it (not in `no_bay`).
+    /// it (not in `no_bay`) that sees its carrier: one that can't takes sub
+    /// 1 over sub 8 (@0x8ed00, [`return_flight`](super::return_flight)) by
+    /// the engine's reading of
+    /// [`RuleKey::FormationFlight`](crate::RuleKey::FormationFlight), and
+    /// the port's earlier formation reads no sight.
     fn leaves(&mut self, index: usize, world: &World, no_bay: &NoBay) -> Option<Outcome> {
+        // Sub 4's block reads the substate, not the goal: the regroup
+        // pause's kept own jump runs it too, by the goal it flies.
+        let own_jump = self.npcs[index].fly_as_flown(|npc| npc.jumping());
         let npc = &self.npcs[index];
         if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
             return None;
         }
-        if npc.warp.goal == Some(WarpGoal::Own) && npc.jumping() {
+        if npc.warp.goal == Some(WarpGoal::Own) && own_jump {
             let npc = &mut self.npcs[index];
             return warp_out::own_jump(npc, world.warp.duration()).then_some(Outcome::JumpedOut);
         }
@@ -229,6 +243,11 @@ impl Traffic {
         };
         let waiting = npc.ai_wait > 0 && !npc.count_wait();
         if waiting || npc.jumping() || no_bay.contains(&npc.id) {
+            return None;
+        }
+        let blind = world.flight.formation_flight == crate::flight::FormationFlight::Original
+            && !self.sees_leader_at_slot(npc, world);
+        if blind {
             return None;
         }
         let carrier = match ship {
@@ -445,7 +464,7 @@ mod tests {
         let on_a_jump = |npc: &mut Npc| {
             npc.class_fuel = 300;
             npc.leader = Some(NpcId(0));
-            npc.follow_leaders_jump(ShipRef::Npc(NpcId(0)));
+            npc.enter_leaders_jump(ShipRef::Npc(NpcId(0)));
         };
         assert!(stays(&on_a_jump), "on its leader's jump");
     }
@@ -532,7 +551,7 @@ mod tests {
         let mut follower = ship(0, TRADERS, AiType::WimpyTrader, 2000.0, 50.0);
         follower.leader = Some(leader);
         follower.goal = Goal::Idle;
-        follower.follow_leaders_jump(ShipRef::Npc(leader));
+        follower.enter_leaders_jump(ShipRef::Npc(leader));
         traffic.add_npc_at(follower, berth)
     }
 

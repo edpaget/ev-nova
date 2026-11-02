@@ -158,6 +158,8 @@ impl Session {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
             |former| former.rejoined(npc.reserves),
         );
@@ -270,6 +272,7 @@ mod tests {
                 wage: Some(30),
                 order: None,
                 reserves: npc.reserves,
+                berth: Some(npc.berth),
                 ..trader_escort()
             }],
             "its wage kept, its standing order cleared"

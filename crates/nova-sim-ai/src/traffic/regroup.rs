@@ -22,20 +22,20 @@
 //! at its head thinks its cloak still paused.
 //!
 //! **What it flies and fires.** `_LowLevelAIHandler` runs its kept
-//! substate: the fly half flies its kept substate's goal
-//! ([`Npc::fly_as_flown`]), and its trigger and target come from the
+//! substate, sub 0, 4 or 0xd ([`regroup`](crate::ai::regroup) says why no
+//! other reaches the pause): the fly half flies its kept substate's goal
+//! ([`Npc::fly_as_flown`]). In sub 0 its trigger and target come from the
 //! behaviour's [`gate_wait`](crate::ai::Behaviour::gate_wait) ([`fresh`]),
 //! settled against the launch room, a find kept as its pick, as a
-//! decision's trigger is. A paused fight's frame is worked out afresh each
-//! tick from where its target is, as the low level reads its target each
-//! frame, the high level's stored frame being stale.
+//! decision's trigger is. Subs 4 and 0xd take the jump path, firing
+//! nothing.
 //!
 //! None of this plays a sound.
 
 use super::Traffic;
 use super::npc::Npc;
 use crate::ai::regroup::Kept;
-use crate::ai::{Goal, dispatch_gate};
+use crate::ai::{Behaviour, GateWait, Goal, Surroundings, dispatch_gate};
 use crate::chance::Chance;
 
 /// The range of the pause's release draw, `trunc(100.0 / _gSpeedMult)` at
@@ -45,8 +45,7 @@ pub const RELEASE_DRAW: u32 = 100;
 impl Traffic {
     /// Each NPC `picked` picks (one flag an NPC) in the regroup pause that
     /// passes the dispatch's gates draws its release, rolling on `chance`:
-    /// released, it idles (see the module docs); held, its fight's frame is
-    /// worked out afresh.
+    /// released, it idles (see the module docs).
     pub(crate) fn release_regroups(
         &mut self,
         picked: &[bool],
@@ -59,13 +58,6 @@ impl Traffic {
         {
             if chance.below(RELEASE_DRAW) == 0 {
                 npc.goal = Goal::Idle;
-            } else if matches!(
-                npc.goal,
-                Goal::Regroup {
-                    kept: Kept::Attack(_) | Kept::Snipe(_)
-                }
-            ) {
-                npc.pursuit.frame = None;
             }
         }
     }
@@ -75,6 +67,21 @@ impl Traffic {
 #[must_use]
 pub(super) fn paused(npc: &Npc) -> bool {
     matches!(npc.goal, Goal::Regroup { .. })
+}
+
+/// What a held `npc` holds on one tick (see the module docs): its gate
+/// wait's in sub 0, as `behaviour` says among `around`; none on the jump
+/// path.
+pub(super) fn held_fire(
+    behaviour: &(impl Behaviour + ?Sized),
+    npc: &Npc,
+    around: &Surroundings,
+) -> GateWait {
+    if matches!(npc.goal, Goal::Regroup { kept: Kept::Coast }) {
+        behaviour.gate_wait(npc, around)
+    } else {
+        GateWait::default()
+    }
 }
 
 /// Whether each of `npcs` took its trigger this tick: each whose decision
@@ -93,23 +100,22 @@ pub(super) fn fresh(npcs: &[Npc], due: &[bool], picked: &[bool]) -> Vec<bool> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::BTreeSet;
 
     use super::*;
-    use crate::ai::pursuit::Frame;
-    use crate::ai::{Behaviour, GateWait, Surroundings};
     use crate::catalog::WeaponId;
     use crate::chance::NeverFires;
     use crate::cloak::Cloak;
     use crate::combat::ShipRef;
     use crate::combat::armament::Trigger;
-    use crate::escort::KEEP_FORMATION;
-    use crate::flight::{FlightRules, ShipState};
+    use crate::escort::FORMATION_NUDGE;
+    use crate::flight::FlightRules;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::World;
+    use crate::traffic::emerge::exit_speed;
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{Mode, NpcId};
+    use crate::traffic::ship_display::Thrust;
     use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
 
@@ -208,67 +214,20 @@ mod tests {
         assert_eq!(held.cloak, uncloaking, "no device: its think uncloaks it");
     }
 
-    /// A frame worked out under `goal`, running nothing.
-    fn frame_of(goal: Goal) -> Frame {
-        Frame {
-            goal,
-            bodies: [None; 2],
-            speed_cap: None,
-        }
-    }
-
-    /// The frame a ship paused keeping `kept`, holding `frame`, holds after
-    /// its release draw comes up `draw`.
-    fn frame_after(kept: Kept, frame: Frame, draw: u32) -> Option<Frame> {
-        let mut traffic = Traffic::with_interval(1);
-        let mut ship = paused_with(kept);
-        ship.pursuit.frame = Some(frame);
-        let id = traffic.add_npc(ship);
-        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, draw);
-        traffic.release_regroups(&[true], &mut chance);
-        assert_eq!(chance.times_asked(RELEASE_DRAW), 1);
-        of(&traffic, id).pursuit.frame
-    }
-
-    #[test]
-    fn held_a_fight_drops_its_stale_frame_and_the_rest_keep_theirs() {
-        let foe = ShipRef::Player;
-        let fight = frame_of(Goal::Attack(foe));
-        for kept in [Kept::Attack(foe), Kept::Snipe(foe)] {
-            assert_eq!(frame_after(kept, fight, 99), None, "{kept:?}");
-        }
-        let flying = frame_of(Goal::Hold);
-        for kept in [
-            Kept::Formation { guard: Some(foe) },
-            Kept::Coast,
-            Kept::Stop,
-        ] {
-            assert_eq!(frame_after(kept, flying, 99), Some(flying), "{kept:?}");
-        }
-    }
-
-    #[test]
-    fn released_its_frame_is_left_to_its_think() {
-        let foe = ShipRef::Player;
-        let fight = frame_of(Goal::Attack(foe));
-        for kept in [Kept::Attack(foe), Kept::Snipe(foe), Kept::Coast] {
-            assert_eq!(frame_after(kept, fight, 0), Some(fight), "{kept:?}");
-        }
-    }
-
     #[test]
     fn a_paused_ship_past_the_dispatchs_gates_draws_nothing() {
-        let mut jumping = paused_with(Kept::Stop);
+        let mut jumping = paused_with(Kept::OwnJump);
         jumping.warp.goal = Some(WarpGoal::Own);
         let gliding = Npc {
             mode: Mode::JumpingIn { tick: 0 },
-            ..paused_with(Kept::Stop)
+            ..paused_with(Kept::Coast)
         };
         for ship in [jumping, gliding] {
             let mut traffic = Traffic::with_interval(1);
             let id = traffic.add_npc(ship);
             let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
-            traffic.think_holding(&Recording::default(), World::new(&[]), &[], &mut chance);
+            // A warp sound of some length: its sub 4 runs at its slot.
+            traffic.think_holding(&Recording::default(), warp_world(), &[], &mut chance);
             assert_eq!(chance.times_asked(RELEASE_DRAW), 0);
             assert!(paused(of(&traffic, id)));
         }
@@ -292,9 +251,7 @@ mod tests {
     #[test]
     fn held_it_fires_what_its_gate_wait_holds_keeping_the_find_as_its_pick() {
         let mut traffic = Traffic::with_interval(1);
-        let mut held = paused_with(Kept::Formation {
-            guard: Some(ShipRef::Player),
-        });
+        let mut held = paused_with(Kept::Coast);
         held.target = Some(ShipRef::Player);
         let id = traffic.add_npc(held);
         traffic.think_holding(&Recording::default(), World::new(&[]), &[], &mut NeverFires);
@@ -327,35 +284,6 @@ mod tests {
     // What it flies.
 
     #[test]
-    fn a_kept_formation_keeps_its_slot_in_its_new_leads_formation() {
-        let mut traffic = Traffic::with_interval(1);
-        let mut lead = ship(0.0, 0.0);
-        lead.goal = Goal::Hold;
-        lead.state.velocity = Vec2::new(2.0, 0.0);
-        let lead_id = traffic.add_npc(lead);
-        let mut follower = paused_with(Kept::Formation { guard: None });
-        follower.leader = Some(lead_id);
-        let id = traffic.add_npc(follower);
-        traffic.form_fleets(&World::new(&[]), &BTreeSet::new());
-        let slot = of(&traffic, id).fleet_slot.expect("a slot");
-        let lead_state = of(&traffic, lead_id).state;
-        let follower = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
-        let follower = follower.expect("there");
-        follower.state = ShipState {
-            position: slot.position(&lead_state),
-            ..lead_state
-        };
-        ticked(&mut traffic, &Recording::default(), 60);
-        let lead = of(&traffic, lead_id).state;
-        let follower = of(&traffic, id);
-        assert!(paused(follower));
-        let off = slot.position(&lead) - follower.state.position;
-        assert!(off.length() < 1.0, "{off:?}");
-        assert!(follower.keeps_close_formation(Some(&lead), true, FlightRules::default()));
-        assert!(off.length() < KEEP_FORMATION);
-    }
-
-    #[test]
     fn a_kept_coast_moves_on_with_no_turn_or_thrust() {
         let mut traffic = Traffic::with_interval(1);
         let mut coasting = paused_with(Kept::Coast);
@@ -369,120 +297,187 @@ mod tests {
         assert_eq!(state.position, Vec2::new(1.0, 2.0));
     }
 
-    #[test]
-    fn a_kept_stop_brakes() {
-        let mut traffic = Traffic::with_interval(1);
-        let mut stopping = paused_with(Kept::Stop);
-        stopping.state.velocity = Vec2::new(2.0, 0.0);
-        stopping.state.heading = 270.0;
-        let id = traffic.add_npc(stopping);
-        ticked(&mut traffic, &Recording::default(), 1);
-        assert!(of(&traffic, id).state.velocity.x < 2.0);
-    }
+    // In its gate.
 
-    /// Keeps every goal and target.
-    #[derive(Debug)]
-    struct Keeps;
-
-    impl Behaviour for Keeps {
-        fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
-            npc.goal
+    /// A ship paused coasting (sub 0) where it waited in its gate, led out
+    /// as `led_out` says, `ticks_left` of its wait left.
+    fn paused_in_gate(ticks_left: u32, led_out: bool) -> Npc {
+        Npc {
+            mode: Mode::HeldAtGate { ticks_left },
+            led_out,
+            ..paused_with(Kept::Coast)
         }
     }
 
-    /// A fight paused in slot 2 at the centre, heading 90.6 and moving
-    /// east, at a ship 1000 north in slot 4, which it targets: the
-    /// traffic, the fighter and its target.
-    fn paused_fight() -> (Traffic, NpcId, NpcId) {
-        let mut traffic = Traffic::with_interval(1);
-        let target = traffic.add_npc_at(ship(0.0, -1000.0), 4);
-        let mut fighter = paused_with(Kept::Attack(ShipRef::Npc(target)));
-        fighter.target = Some(ShipRef::Npc(target));
-        fighter.state.heading = 90.6;
-        fighter.state.velocity = Vec2::new(1.0, 0.0);
-        let fighter = traffic.add_npc_at(fighter, 2);
-        (traffic, fighter, target)
-    }
-
     #[test]
-    fn a_paused_fight_steers_at_its_gone_targets_record_on_the_tick_after_it_went() {
-        // No high level clears +0x70 in the pause (@0x9002d → @0x900c6 →
-        // @0x901ea), so sub 5 steers at the freed slot's record
-        // (@0x85c70-0x85cfb), with no AI wait to hold its turn and thrust.
-        // Its `_HandleShip` came before the target's display, so it holds
-        // the slot at its next think.
-        let (mut there, fighter, _) = paused_fight();
-        ticked(&mut there, &Keeps, 1);
-        let (mut gone, fighter_gone, target) = paused_fight();
-        gone.remove_destroyed(target);
-        ticked(&mut gone, &Keeps, 1);
-        assert_eq!(fighter, fighter_gone);
-        let flown = of(&gone, fighter).state;
-        assert_eq!(flown, of(&there, fighter).state, "as at the ship itself");
-        let (mut unrecorded, _, target) = paused_fight();
-        unrecorded.remove(target);
-        ticked(&mut unrecorded, &Keeps, 1);
-        assert_ne!(flown, of(&unrecorded, fighter).state, "with no record");
-    }
-
-    #[test]
-    fn a_paused_formation_approaches_its_gone_guards_record_on_the_tick_after_it_went() {
-        // Subs 9 and 0xb steer at +0x70 while it is set (@0x876a8-0x876e3),
-        // the kept formation's guard, read by the record in the pause.
-        let paused_formation = || {
+    fn paused_in_its_gate_it_never_bursts_and_owes_its_burst_once_its_wait_is_out() {
+        for led_out in [false, true] {
             let mut traffic = Traffic::with_interval(1);
-            let lead = traffic.add_npc_at(ship(0.0, 0.0), 1);
-            // East of it, where its lead is north: it turns either way.
-            let guard = traffic.add_npc_at(ship(2000.0, 3000.0), 5);
-            let mut follower = paused_with(Kept::Formation {
-                guard: Some(ShipRef::Npc(guard)),
-            });
-            follower.leader = Some(lead);
-            follower.target = Some(ShipRef::Npc(guard));
-            follower.state.position = Vec2::new(0.0, 3000.0);
-            follower.state.heading = 45.0;
-            let follower = traffic.add_npc_at(follower, 3);
-            (traffic, follower, guard)
-        };
-        let (mut there, follower, _) = paused_formation();
-        ticked(&mut there, &Keeps, 1);
-        let (mut gone, _, guard) = paused_formation();
-        gone.remove_destroyed(guard);
-        ticked(&mut gone, &Keeps, 1);
-        let flown = of(&gone, follower).state;
-        assert_eq!(flown, of(&there, follower).state, "as at the guard itself");
-        let (mut unrecorded, _, guard) = paused_formation();
-        unrecorded.remove(guard);
-        ticked(&mut unrecorded, &Keeps, 1);
-        assert_ne!(flown, of(&unrecorded, follower).state, "at its lead");
+            let id = traffic.add_npc(paused_in_gate(3, led_out));
+            let behaviour = Recording::default();
+            for _ in 0..6 {
+                ticked(&mut traffic, &behaviour, 1);
+                assert!(
+                    !matches!(of(&traffic, id).mode, Mode::LeavingGate { .. }),
+                    "no burst"
+                );
+            }
+            let out = of(&traffic, id);
+            assert_eq!(out.mode, Mode::Flying);
+            assert!(paused(out), "still paused");
+            assert_eq!(out.owed_burst, Some(exit_speed(led_out, 0)));
+            assert_eq!(out.state.position, Vec2::ZERO, "at its gate");
+            assert!(behaviour.decided.borrow().is_empty());
+        }
     }
 
     #[test]
-    fn a_paused_fight_with_no_target_coasts_its_heading_truncated() {
-        // After `_HandleShip`'s let-go, +0x70 -1: sub 5 skips its block
-        // (@0x85c70), its thrust zeroed (@0x851f1) and its wanted heading
-        // its whole heading (@0x8522d).
-        let (mut traffic, fighter, target) = paused_fight();
-        traffic.remove_destroyed(target);
-        traffic.let_go_at_step(fighter, true);
-        ticked(&mut traffic, &Keeps, 1);
-        let after = of(&traffic, fighter);
-        assert!(paused(after), "still a fight's pause");
-        assert_eq!(after.state.velocity, Vec2::new(1.0, 0.0), "no thrust");
-        assert_eq!(after.state.heading, 90.0);
-        assert_eq!(after.state.position, Vec2::new(1.0, 0.0));
-    }
-
-    #[test]
-    fn a_kept_attack_closes_on_its_target() {
+    fn released_in_its_gate_it_decides_in_the_same_tick() {
         let mut traffic = Traffic::with_interval(1);
-        let target = traffic.add_npc(ship(0.0, -1000.0));
-        let mut attacker = paused_with(Kept::Attack(ShipRef::Npc(target)));
-        attacker.target = Some(ShipRef::Npc(target));
-        let id = traffic.add_npc(attacker);
-        ticked(&mut traffic, &Recording::default(), 30);
-        let off = of(&traffic, target).state.position - of(&traffic, id).state.position;
-        assert!(off.length() < 950.0, "{off:?}");
-        assert!(paused(of(&traffic, id)));
+        let id = traffic.add_npc(paused_in_gate(30, false));
+        let behaviour = Recording::default();
+        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
+        traffic.tick_in(&behaviour, World::new(&[]), &[], &mut chance);
+        assert_eq!(of(&traffic, id).goal, Goal::Idle);
+        assert_eq!(*behaviour.decided.borrow(), [id]);
+    }
+
+    // On the jump path.
+
+    /// A world of no stellars whose warp sound runs 364 Mac ticks.
+    fn warp_world() -> World<'static> {
+        let mut world = World::new(&[]);
+        world.warp.durations = [364, 252];
+        world
+    }
+
+    /// A lead at the centre at stage 0, facing east, moving east at 2 and
+    /// glowing, and a follower paused on its jump at (300, 400), facing
+    /// north at rest.
+    fn following_a_lead() -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = ship(0.0, 0.0);
+        lead.goal = Goal::Hold;
+        lead.state.velocity = Vec2::new(2.0, 0.0);
+        lead.state.heading = 90.0;
+        lead.display.glow = 20;
+        let lead = traffic.add_npc(lead);
+        let mut follower = paused_with(Kept::FollowsJump);
+        follower.state.position = Vec2::new(300.0, 400.0);
+        follower.leader = Some(lead);
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let id = traffic.add_npc(follower);
+        (traffic, lead, id)
+    }
+
+    /// The nudge `AIMaintainFormation` gives `npc` toward its slot on each
+    /// axis: its thrust's.
+    fn nudge(npc: &Npc) -> f32 {
+        FlightRules::default().handling(npc.stats.handling).accel * FORMATION_NUDGE
+    }
+
+    #[test]
+    fn a_kept_follow_takes_its_leads_velocity_and_heading_with_no_thrust_and_is_nudged() {
+        let (mut traffic, lead, id) = following_a_lead();
+        let behaviour = Recording::default();
+        ticked(&mut traffic, &behaviour, 1);
+        let lead_velocity = of(&traffic, lead).state.velocity;
+        let follower = of(&traffic, id);
+        assert_eq!(follower.state.velocity, lead_velocity);
+        assert_eq!(
+            follower.state.heading,
+            FlightRules::default()
+                .handling(follower.stats.handling)
+                .turn_rate,
+            "turning by its turn"
+        );
+        // Its slot is well off on both axes.
+        let slot = follower.parent_word().expect("a slot");
+        let step = nudge(follower);
+        let off = follower.state.position - (Vec2::new(300.0, 400.0) + lead_velocity);
+        let towards = |at: f32, to: f32| if at < to { step } else { -step };
+        assert!((off.x - towards(300.0, slot.x)).abs() < 1e-3, "{off:?}");
+        assert!((off.y - towards(400.0, slot.y)).abs() < 1e-3, "{off:?}");
+        assert_eq!(follower.display.drive.thrust, Thrust::None);
+        assert!(!follower.close_form, "sub 0xd isn't 0xc (@0x82f54)");
+        assert!(paused(follower));
+        assert_eq!(follower.display.glow, 19, "the lead's 20, faded");
+        ticked(&mut traffic, &behaviour, 60);
+        let follower = of(&traffic, id);
+        assert_eq!(follower.state.heading, 90.0, "the lead's heading");
+        assert_eq!(follower.warp.stage, 0.0, "the lead's isn't over 1.0");
+        assert_eq!(follower.display.drive.thrust, Thrust::None);
+    }
+
+    #[test]
+    fn a_kept_follow_sends_its_lead_nowhere() {
+        // The push (@0x8dedf-0x8def0) is goal 0xb's: on the jump path goal
+        // 0x13 runs the high level's head, never that block.
+        let (mut traffic, lead, _) = following_a_lead();
+        ticked(&mut traffic, &Recording::default(), 3);
+        assert_eq!(of(&traffic, lead).goal, Goal::Hold);
+    }
+
+    #[test]
+    fn double_times_second_pass_nudges_a_kept_follow_not() {
+        let (mut traffic, _, id) = following_a_lead();
+        ticked(&mut traffic, &Recording::default(), 1);
+        let before = of(&traffic, id).state;
+        traffic.move_in(World::new(&[]), &mut NeverFires);
+        let after = of(&traffic, id).state;
+        assert_eq!(after.position, before.position + before.velocity);
+    }
+
+    #[test]
+    fn a_kept_own_jump_turns_outward_and_never_leaves() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut own = paused_with(Kept::OwnJump);
+        own.state.position = Vec2::new(30_000.0, 0.0);
+        own.state.velocity = Vec2::new(0.0, 1.0);
+        own.warp.goal = Some(WarpGoal::Own);
+        let id = traffic.add_npc(own);
+        // A release draw of 0 would release it.
+        let mut chance = Draws::of(&[0; 16]).keyed(RELEASE_DRAW, 0);
+        let behaviour = Recording::default();
+        for tick in 0..300 {
+            traffic.tick_in(&behaviour, warp_world(), &[], &mut chance);
+            assert!(traffic.departed().is_empty(), "tick {tick}");
+            let ship = of(&traffic, id);
+            assert!(ship.warp.since <= 1, "tick {tick}: {}", ship.warp.since);
+            assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.0), "tick {tick}");
+        }
+        assert_eq!(chance.times_asked(RELEASE_DRAW), 0, "no release draw");
+        let ship = of(&traffic, id);
+        assert_eq!(
+            ship.goal,
+            Goal::Regroup {
+                kept: Kept::OwnJump
+            }
+        );
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own));
+        assert_eq!(ship.warp.stage, 0.0, "the warp-out's not-jumping write");
+        assert_eq!(ship.state.heading, 90.0, "outward");
+        assert_eq!(ship.state.position.y, 300.0);
+        assert_eq!(ship.display.drive.thrust, Thrust::None);
+    }
+
+    #[test]
+    fn on_the_jump_path_it_fires_nothing_whatever_its_gate_wait_holds() {
+        for (kept, warp) in [
+            (Kept::FollowsJump, WarpGoal::Follow(ShipRef::Player)),
+            (Kept::OwnJump, WarpGoal::Own),
+        ] {
+            let mut traffic = Traffic::with_interval(1);
+            let mut held = paused_with(kept);
+            held.warp.goal = Some(warp);
+            held.target = Some(ShipRef::Player);
+            held.trigger = MARKED;
+            let id = traffic.add_npc(held);
+            // A warp sound of some length: its sub 4 runs at its slot.
+            traffic.think_holding(&Recording::default(), warp_world(), &[], &mut NeverFires);
+            let held = of(&traffic, id);
+            assert_eq!(held.trigger, Trigger::default(), "{kept:?}");
+            assert_eq!(held.target, Some(ShipRef::Player), "{kept:?}");
+        }
     }
 }

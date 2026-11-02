@@ -184,7 +184,8 @@ fn flights() -> Vec<Row> {
         // Sub 1's brake, its retro heading 0, a full brake (@0x85492).
         Row {
             name: "sub 1",
-            npc: ship(Goal::Idle, Vec2::ZERO, Vec2::new(0.0, 3.0)),
+            // A wait's stop (@0x8f101): goal 0 flies sub 0, no brake.
+            npc: ship(Goal::Wait, Vec2::ZERO, Vec2::new(0.0, 3.0)),
             other: None,
             beside: Beside::default(),
             sites: Vec::new(),
@@ -306,7 +307,7 @@ fn flown(row: &Row, off: i16, at_slot: f32, at_step: f32) -> (bool, [Vec2; 2], f
         .flying_handling(speeds.own, FlightRules::default())
         .accel;
     let at_step = AtStep::of_npc(&npc, 1.0, FlightRules::default(), adjust);
-    let by = (FlightRules::default(), RuleSource::Engine);
+    let by = (FlightRules::default(), RuleSource::Engine, false);
     autopilot::step(&mut npc, &word, at_step, speeds, by, &mut NeverFires);
     (
         word.thrusts(),

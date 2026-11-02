@@ -58,8 +58,8 @@
 use super::autopilot::{self, Beside, Readings, TopSpeeds};
 use super::npc::Npc;
 use super::slot_word::SlotWord;
-use super::warp_out::{self, WarpGoal};
-use super::{Traffic, World, regroup};
+use super::warp_out;
+use super::{Traffic, World};
 use crate::ai::mine_orders;
 use crate::ai::sight;
 use crate::ai::{Goal, Surroundings, swarm};
@@ -88,9 +88,10 @@ impl Traffic {
         world: &World,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let npc = &self.npcs[index];
-        let id = npc.id;
-        if warp_out::flies_jump(npc, self.keeps_formation_at_slot(npc, world)) {
+        let id = self.npcs[index].id;
+        // By the goal it flies, as its step's warp-out reads it: the regroup
+        // pause's kept own jump is the warp-out's too.
+        if self.npcs[index].fly_as_flown(|npc| warp_out::flies_jump(npc)) {
             self.keep_head_word(index, world);
             return;
         }
@@ -150,7 +151,6 @@ impl Traffic {
             swarm,
             rock: world.mining_rock,
             scoop_box: mine_orders::nearest_box(npc.state.position, world.boxes),
-            paused: regroup::paused(npc),
             ..self.guard_at_slot(&flown, seen, world)
         };
         (other, other_disabled, beside)
@@ -202,28 +202,6 @@ impl Traffic {
         let inertia = Inertia::of(npc, None, true, world.flight);
         let head = SlotWord::none(npc, &handling, inertia);
         self.keep_word(index, head);
-    }
-
-    /// Whether `npc` keeps formation on its leader's jump at its slot in
-    /// `world`, so the autopilot flies it rather than the warp-out: as its
-    /// sub 0xd found this tick ([`dispatch_follow`](super::dispatch_follow)),
-    /// or by its leader's stage as it stands.
-    fn keeps_formation_at_slot(&self, npc: &Npc, world: &World) -> bool {
-        if let Some(&formation) = self.followed.get(&npc.id) {
-            return formation;
-        }
-        match npc.warp.goal {
-            Some(WarpGoal::Follow(ShipRef::Player)) => world.warp.player.stage <= 1.0,
-            Some(WarpGoal::Follow(ShipRef::Npc(_))) => npc
-                .leader
-                .and_then(|lead| {
-                    (self.npcs.iter())
-                        .chain(&self.left_in_dispatch)
-                        .find(|ship| ship.id == lead)
-                })
-                .is_some_and(|leader| leader.warp.stage <= 1.0),
-            _ => false,
-        }
     }
 
     /// Where `ship` is for `reader`'s low level at its slot in `world`: the
@@ -283,30 +261,39 @@ impl Traffic {
     }
 
     /// Whether `npc` sees its leader at its slot in `world`
-    /// (`_ShipVisibleToShip(leader, ship)` @0x8ed5f), a leader that left at
-    /// its slot of this tick's loop seen as it left: `_ShipVisibleToShip`
-    /// tests no +0xb8 (@0x971c-0x97fe).
-    fn sees_leader_at_slot(&self, npc: &Npc, world: &World) -> bool {
+    /// (`_ShipVisibleToShip(leader, ship)` @0x8ed5f), or, returning to its
+    /// carrier ([`Goal::Dock`]), its carrier (@0x8ed00), read after the
+    /// turn-back, which comes first in the one high level (@0x8d608): a
+    /// leader that left at its slot of this tick's loop seen as it left, as
+    /// `_ShipVisibleToShip` tests no +0xb8 (@0x971c-0x97fe).
+    pub(super) fn sees_leader_at_slot(&self, npc: &Npc, world: &World) -> bool {
         let player = world.player;
-        if self.left_in_dispatch.is_empty() {
-            return sight::sees_leader(npc, &self.npcs, player.as_ref());
+        let with_left: Vec<Npc>;
+        let npcs: &[Npc] = if self.left_in_dispatch.is_empty() {
+            &self.npcs
+        } else {
+            with_left = (self.npcs.iter())
+                .chain(&self.left_in_dispatch)
+                .cloned()
+                .collect();
+            &with_left
+        };
+        if let Goal::Dock(carrier) = npc.goal {
+            return world.around(npcs).sees(npc, carrier);
         }
-        let with_left: Vec<Npc> = (self.npcs.iter())
-            .chain(&self.left_in_dispatch)
-            .cloned()
-            .collect();
-        sight::sees_leader(npc, &with_left, player.as_ref())
+        sight::sees_leader(npc, npcs, player.as_ref())
     }
 
     /// What `npc`'s flight reads of its guard and its leader at its slot in
     /// `world`, its leader seen as `seen` says ([`Beside`]): its guard while
     /// it keeps formation ([`Goal::Formation`]) or keeps with a lead
-    /// ([`Goal::Follow`]), and its sight of its leader; neither for any
-    /// other goal. The coast and the inertia
+    /// ([`Goal::Follow`]), and its sight of its leader, or of its carrier
+    /// in [`Goal::Dock`]; neither for any other goal. The coast and the inertia
     /// ([`Inertia::of`]) read the same sight.
     fn guard_at_slot(&self, npc: &Npc, seen: bool, world: &World) -> Beside {
         let (guard, leader_seen) = match npc.goal {
             Goal::Formation { guard } | Goal::Follow { guard, .. } => (guard, seen),
+            Goal::Dock(_) => (None, seen),
             _ => (None, true),
         };
         Beside {
@@ -389,44 +376,6 @@ mod tests {
         let mut traffic = Traffic::with_interval(1);
         let attacker = off_its_target(&mut traffic);
         assert_eq!(traffic.word_of(attacker), None);
-    }
-
-    #[test]
-    fn a_follower_keeps_formation_at_its_slot_as_its_sub_0xd_found_or_by_its_leaders_stage() {
-        use crate::traffic::warp_out::WarpGoal;
-        let world_at = |stage: f32| {
-            let mut world = World::new(&[]);
-            world.warp.player.stage = stage;
-            world
-        };
-        let mut traffic = Traffic::with_interval(1);
-        let lead = traffic.add_npc_at(ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0), 1);
-        let mut follower = ship(0, TRADERS, AiType::WimpyTrader, 50.0, 0.0);
-        follower.leader = Some(lead);
-        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
-        let follower = traffic.add_npc_at(follower, 2);
-        let keeps = |traffic: &Traffic, world: &World| {
-            let npc = of(traffic, follower);
-            traffic.keeps_formation_at_slot(npc, world)
-        };
-        assert!(keeps(&traffic, &world_at(1.0)), "the player's stage at 1");
-        assert!(!keeps(&traffic, &world_at(2.0)));
-        traffic.npcs_mut()[1].warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        traffic.npcs_mut()[0].warp.stage = 1.0;
-        assert!(keeps(&traffic, &world_at(5.0)), "its leader's stage at 1");
-        traffic.npcs_mut()[0].warp.stage = 2.0;
-        assert!(!keeps(&traffic, &world_at(5.0)));
-        // A leader that left at its slot this tick, by its record.
-        let mut left = traffic.npcs()[0].clone();
-        left.warp.stage = 1.0;
-        traffic.npcs.remove(0);
-        traffic.left_in_dispatch.push(left);
-        assert!(keeps(&traffic, &world_at(5.0)));
-        traffic.followed.insert(follower, false);
-        assert!(!keeps(&traffic, &world_at(5.0)), "as its sub 0xd found");
-        traffic.npcs_mut()[0].warp.goal = Some(WarpGoal::Own);
-        traffic.followed.clear();
-        assert!(!keeps(&traffic, &world_at(1.0)), "on its own jump");
     }
 
     #[test]

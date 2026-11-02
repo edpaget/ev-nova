@@ -81,9 +81,15 @@
 //! the hulk instead. In the pod, each other NPC the player leads is
 //! released (+0x9a = -1, @0x6f71d-0x6f732): a hired or captured escort
 //! and a launched fighter leave the fleet, and a mission escort the
-//! formation, each deciding afresh. A pilot's escort with no NPC in the
-//! system has no counterpart in the original, where every escort is a ship
-//! in a slot: it is dropped with the rest.
+//! formation, each deciding afresh. A mission escort let go while the
+//! player broke up (`Npc::mission_let_go`, see
+//! [`dying_player_escorts`](super::dying_player_escorts)) has parent -1
+//! and stays, for its next dispatch to lead it again; so does a disabled
+//! one, whose reset wrote its parent -1 (see
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts)), led
+//! again once whole. A pilot's escort
+//! with no NPC in the system has no counterpart in the original, where
+//! every escort is a ship in a slot: it is dropped with the rest.
 //!
 //! The walk writes +0x9a alone, so a launched fighter is still AI type 5
 //! as it leaves. Its think that same frame (`_DoPlayGameWork` runs
@@ -405,7 +411,7 @@ impl Session {
     /// carrier, deciding afresh ([`Session::release_led`]), as its think
     /// that frame takes `_EscortAI`'s lost-parent branch (see the module
     /// docs).
-    fn release_for_the_pod(&mut self, id: NpcId) {
+    pub(super) fn release_for_the_pod(&mut self, id: NpcId) {
         if let Some(mark) = self.space.npc_mut(id).and_then(|npc| npc.mission.as_mut()) {
             mark.formation = None;
         }
@@ -551,11 +557,15 @@ impl PlayerShip {
             swarm_leader: None,
             owed_burst: None,
             fled_hopeless: None,
+            bursts_own_word: false,
+            fires_on_burst_end: false,
             close_form: false,
+            stopping: false,
             fleet_slot: None,
             form_parent: None,
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
+            ordered_by_lead: false,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
@@ -567,6 +577,8 @@ impl PlayerShip {
             // AI type -1 (@0x6f31f).
             no_ai: true,
             kept_escort_ai: false,
+            mission_let_go: false,
+            mission_dropped: false,
             defends: None,
         };
         hulk.independent();
@@ -1658,6 +1670,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -1751,6 +1765,78 @@ mod tests {
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
         assert_eq!(session.space.escorts.fleet, []);
+    }
+
+    #[test]
+    fn the_pod_leaves_a_mission_escort_let_go_and_its_next_dispatch_leads_it_again() {
+        // +0x9a -1, so the walk's `== 0` fails (@0x6f71d), where a hit after
+        // the AI loop (@0x44385) leaves parent 0 and the walk releases it.
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 4));
+        let mission = session.space.traffic.add_npc(Npc {
+            mission: Some(MissionMark {
+                slot: 0,
+                behav: ShipBehav::EscortPlayer,
+                formation: Some(FormationSlot::default()),
+                order: None,
+            }),
+            mission_let_go: true,
+            ..npc(0, ShipStats::default())
+        });
+        session.ship.condition = Condition::Disabled;
+        eject_check(&mut session, true);
+        assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
+        let left = session.space.npc(mission).expect("here");
+        assert!(
+            left.mission.is_some_and(|mark| mark.formation.is_some()),
+            "not released"
+        );
+        assert!(left.mission_let_go);
+        fight(&mut session, &catalog, false);
+        assert!(session.space.npc(mission).expect("here").mission_escort());
+    }
+
+    #[test]
+    fn the_pod_leaves_a_disabled_mission_escort_and_once_whole_it_is_led_again() {
+        // Its reset's +0x9a -1 (@0x8feda) fails the walk's `== 0`
+        // (@0x6f71d); the re-lead once whole (@0x8fc03-0x8fc22).
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 4));
+        let mut disabled = Npc {
+            mission: Some(MissionMark {
+                slot: 0,
+                behav: ShipBehav::EscortPlayer,
+                formation: Some(FormationSlot::default()),
+                order: None,
+            }),
+            condition: Condition::Disabled,
+            ..npc(0, ShipStats::default())
+        };
+        disabled.reserves.armor.now = 1.0;
+        let mission = session.space.traffic.add_npc(disabled);
+        fight(&mut session, &catalog, false);
+        assert!(!session.space.npc(mission).expect("here").escorts_player());
+        session.ship.condition = Condition::Disabled;
+        eject_check(&mut session, true);
+        assert!(in_the_pod(&session));
+        let left = session.space.npc(mission).expect("here");
+        assert!(
+            left.mission.is_some_and(|mark| mark.formation.is_some()),
+            "not released: its mark and slot kept"
+        );
+        let whole = session.space.npc_mut(mission).expect("here");
+        whole.condition = Condition::Intact;
+        whole.reserves.armor.now = whole.reserves.armor.max;
+        fight(&mut session, &catalog, false);
+        assert!(session.space.npc(mission).expect("here").mission_escort());
     }
 
     #[test]

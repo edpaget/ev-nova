@@ -20,7 +20,11 @@
 //! ([`BraveTrader`](crate::ai::brave::BraveTrader), `_BraveTraderAI`
 //! @0x8b616-0x8b68d): a provoked trader attacks a gone attacker within 1250
 //! on both axes, or flees it beyond, and the high level then ends that
-//! fight ([`fight_on_gone`](crate::traffic::provocation::fight_on_gone)).
+//! fight: the attack at its slot test, keeping the provocation
+//! ([`handler_head::slot_test`](crate::ai::handler_head::slot_test),
+//! @0x8e263 → @0x8e731), and the flight in its flee block, zeroing it
+//! ([`with_flight_end`](crate::traffic::provocation::with_flight_end),
+//! @0x8dff6 → @0x8e228-0x8e23d).
 //!
 //! [`Traffic`](crate::traffic::Traffic) keeps the gone ships in
 //! [`GoneShips`], one record a slot: each departure and destruction is
@@ -314,9 +318,7 @@ impl Traffic {
     /// The ship `newcomer` takes its slot: every ship still holding that slot
     /// finds it active at its next slot test, so its target is now the new
     /// ship, friend or not, and a fight on the old ship moves to it
-    /// ([`Goal::with_quarry`](crate::ai::Goal::with_quarry)), a fight or
-    /// a guard the regroup pause keeps too
-    /// ([`Goal::kept_quarry`](crate::ai::Goal::kept_quarry)). A spawn
+    /// ([`Goal::with_quarry`](crate::ai::Goal::with_quarry)). A spawn
     /// rewrites the slot and leaves every other ship's +0x70, +0x6c and
     /// +0x9a (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and the engine's
     /// numbers, unlike the slots, are never used again.
@@ -386,7 +388,7 @@ impl Traffic {
             for npc in self.npcs.iter_mut().filter(|npc| holds(npc)) {
                 npc.target = Some(new);
                 let goal = npc.goal;
-                if [goal.quarry(), goal.inspecting(), goal.kept_quarry()].contains(&Some(old)) {
+                if [goal.quarry(), goal.inspecting()].contains(&Some(old)) {
                     npc.goal = goal.with_quarry(new);
                 }
             }
@@ -511,7 +513,7 @@ mod tests {
 
     mod in_traffic {
         use super::*;
-        use crate::ai::fixture::{PIRATES, TRADERS, player, ship};
+        use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, player, ship};
         use crate::ai::{CommCall, Goal, NovaAi};
         use crate::catalog::{DudeId, GovtId, SystemId};
         use crate::chance::NeverFires;
@@ -616,9 +618,11 @@ mod tests {
          {
             // A wimpy trader provoked by the player far off runs out,
             // begins its warp out on its first tick (see `leave_flight`)
-            // and is gone once its warp stage ends (see `warp_out`).
+            // and is gone once its warp stage ends (see `warp_out`). It is
+            // of no ally's government, or the attack block's ally drop
+            // would take the trader's attack first (@0x8e277-0x8e2e4).
             let mut traffic = Traffic::new();
-            let mut runner = ship(0, TRADERS, AiType::WimpyTrader, 0.0, -1001.0);
+            let mut runner = ship(0, NEUTRAL, AiType::WimpyTrader, 0.0, -1001.0);
             runner.goal = Goal::Flee(ShipRef::Player);
             runner.provoked = 10.0;
             runner.target = Some(ShipRef::Player);
@@ -1057,37 +1061,6 @@ mod tests {
             traffic.remove_destroyed(wreck);
             traffic.retarget(SpawnTable::default(), &BTreeSet::new(), Leave::Dropped);
             assert_eq!(traffic.gone.ships(), []);
-        }
-
-        #[test]
-        fn a_slot_taken_again_moves_a_paused_fight_onto_the_newcomer() {
-            // The pause keeps its substate and +0x70 (@0x9002d → @0x901ea),
-            // which a spawn leaves (@0x3c8b1-0x3c90b): its low level now
-            // reads the newcomer, a kept formation's guard too
-            // (@0x876a8-0x876e3).
-            use crate::ai::regroup::Kept;
-            let old = ShipRef::Npc(NpcId(0));
-            for kept in [
-                Kept::Attack(old),
-                Kept::Snipe(old),
-                Kept::Formation { guard: Some(old) },
-            ] {
-                let mut traffic = Traffic::new();
-                let wreck = in_slot(&mut traffic, 4);
-                let holder = aiming_at(&mut traffic, 2, old);
-                traffic.npcs[1].goal = Goal::Regroup { kept };
-                traffic.remove_destroyed(wreck);
-                let new = ShipRef::Npc(in_slot(&mut traffic, 4));
-                let after = trader_of(&traffic, holder);
-                assert_eq!(after.target, Some(new), "{kept:?}");
-                assert_eq!(
-                    after.goal,
-                    Goal::Regroup {
-                        kept: kept.with_quarry(new)
-                    },
-                    "{kept:?}"
-                );
-            }
         }
 
         #[test]

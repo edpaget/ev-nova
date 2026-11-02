@@ -31,12 +31,16 @@
 //! The sites that ask it narrow it as the original does:
 //! [`Npc::is_players`] for the hired escorts and fighters,
 //! [`Npc::mission_escort`] for the mission escorts. A disabled mission
-//! escort that has joined stays led, as the original leaves a disabled
-//! ship's leader as it was (@0x8fc0c); a hired escort disabled or
-//! released leaves the fleet and is no longer led. A ship the player
-//! leads that starts to break up is no longer led, as `_HandleShip`'s
-//! dying branch (@0x350ab-0x3512b) clears its leader, and a trader among
-//! them takes its share of the fleet's cargo as it goes (see
+//! escort that has joined is not led from its first dispatch disabled to
+//! its first dispatch whole, as the disabled reset writes its parent -1
+//! and the re-lead skips a disabled ship (@0x8feda, @0x8fc0c; see
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts)); a
+//! hired escort disabled or released leaves the fleet and is no longer
+//! led. A ship the player leads that starts to break up is no longer
+//! led, as `_DamageShip` clears a hired one's leader, and the disabled
+//! reset or `_HandleShip`'s dying branch (@0x350ab-0x3512b) a mission
+//! escort's; a trader among them takes its share of the fleet's cargo
+//! as it goes, a mission escort only where no reset came first (see
 //! [`escorts`](super::escorts) and
 //! [`mission_escorts`](super::mission_escorts)). Every ship the player
 //! leads flies at its top speed × the led speed, as the player does: 1.5
@@ -393,6 +397,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -998,8 +1004,9 @@ mod tests {
     #[test]
     fn a_ship_entering_a_layer_is_drawn_over_the_ships_in_it() {
         let (mut session, hired, [m0, m1], traffic) = laid_out();
-        // A mission escort disabled stays led, but is drawn with the
-        // disabled; repaired, it enters the escorts' layer on top.
+        // A mission escort disabled is drawn with the disabled, the layer
+        // chosen before its parent; repaired, it enters the escorts' layer
+        // on top.
         crate::fixture::disable(&mut session, m0);
         combat_tick(&mut session);
         assert_eq!(drawn(&session)[0], Some(m0));

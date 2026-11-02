@@ -69,14 +69,14 @@ use crate::geometry::Vec2;
 
 /// The place `_AIMaintainFormation(ship, 0)` nudges `npc` toward under
 /// `flight` (see the module docs): its [`Npc::slot_place`] while it holds a
-/// parent, none else, or on an NPC parent by the other reading of
+/// parent, the 0 of a never-used slot with no word, none else, or on an
+/// NPC parent by the other reading of
 /// [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation).
 #[must_use]
 pub(crate) fn slot_place(npc: &Npc, flight: FlightRules) -> Option<Vec2> {
     let parent = npc.form_parent?;
     (parent == 0 || flight.npc_formation == NpcFormation::Original)
-        .then_some(npc.slot_place)
-        .flatten()
+        .then(|| npc.slot_place.unwrap_or(Vec2::ZERO))
 }
 
 /// Whether a body of `manoeuvre` is a block with the swarm branch: subs
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn a_frame_kept_through_the_regroup_pause_runs_no_branch() {
         // No high level is due at all here, where a wait's is due and skips.
-        for kept in [Kept::Coast, Kept::Formation { guard: None }] {
+        for kept in [Kept::Coast, Kept::FollowsJump] {
             assert_a_kept_frame_runs_no_branch(|ship| {
                 ship.goal = Goal::Regroup { kept };
             });

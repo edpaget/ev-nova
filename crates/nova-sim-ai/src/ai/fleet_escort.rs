@@ -96,11 +96,16 @@
 //! turret at the guard, with its point defence. A gun-only escort fires
 //! nothing, keeping its gun find as its pick. Attacking, it fires as any
 //! ship does ([`fire::trigger`]), launching its fighters (the high level's
-//! launch is every type's); holding, it runs its point defence alone.
+//! launch is every type's); holding, it runs its point defence alone. Idle
+//! (goal 0: its lead lost, or an attack the high level dropped), sub 0
+//! fires [`escort::unprovoked`] at the target the frame ends with
+//! (@0x8521e-0x85236): an ally drop keeps its target, so it fires its
+//! turret at that ally, where a fleet or gone-target drop clears it first.
 //!
 //! **Its target** is what it attacks, or its guard unless
 //! [`escort::unprovoked`] drops it; holding or docking, none; a kept goal
-//! or the lost-parent branch writes none, so it keeps the one it had. In
+//! or the lost-parent branch writes none, so it keeps the one it had,
+//! unless idle sub 0's [`escort::unprovoked`] drops it. In
 //! its gate it fires unprovoked ([`escort::fire_unprovoked`], substate 0,
 //! @0x85236), and a hit makes it take its attacker as any ship does
 //! ([`react::victim`]), which its next think keeps by its order as any
@@ -116,8 +121,11 @@
 //! inertialess. It copies the lead's travel stellar (@0x83a77-0x83a7c,
 //! [`travel::copied`]). The order word is still written under a lead that
 //! is the player's escort; no order block runs, so its AI wait is kept.
-//! Defend, Attack and formation write +0x50 = -1.0 beside +0x4c,
-//! whoever the parent ([`Decision::ends_wait`]).
+//! Once goal 0xb is written under a wait
+//! ([`Npc::joins_leaders_jump`](crate::traffic::npc::Npc::joins_leaders_jump))
+//! it stays in that block until the wait ends, whether or not its lead
+//! still draws. Defend, Attack and formation write +0x50 = -1.0 beside
+//! +0x4c, whoever the parent ([`Decision::ends_wait`]).
 //!
 //! **Not built here**, each a later phase's:
 //! - formation flight on slots, steering at the guard: phase 6's; until
@@ -130,7 +138,6 @@
 //! player sees.
 
 use crate::ai::fire::FireRules;
-use crate::ai::regroup::Kept;
 use crate::ai::{
     Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, out_of_ammo, react,
     travel,
@@ -154,25 +161,29 @@ pub struct FleetEscortAi {
 /// The order `npc` follows under its NPC parent among `around`
 /// (`_EscortAI` @0x83b36-0x83b7f): under a lead that is the player's
 /// escort, the lead's Defend or Attack while its goal isn't 0xa
-/// ([`Goal::flies_in_form`]), else Return (3), which docks a fighter;
-/// under any other lead, its stored word ([`Npc::order_word`]), which its
+/// ([`Goal::flies_in_form`], and not the goal the engine keeps beside goal
+/// 0xb, [`Npc::follows_leaders_jump`]), else Return (3), which docks a
+/// fighter; under any other lead, its stored word ([`Npc::order_word`]), which its
 /// lead issues ([`escort_orders`](crate::ai::escort_orders)).
 ///
-/// The lead's order is the one after the lead's own out-of-ammunition
-/// fallback ([`out_of_ammo::escort_order`], @0x83b56): an escort carrier
-/// fully dry keeps formation, so it sends its fighters home. The original
-/// reads the word the lead's last think left; this works it out from the
-/// lead's state at the fighter's think. The lag is at most one think
-/// interval and crosses no boundary the player sees.
+/// The lead's order is the word it holds ([`Npc::order_word`], @0x83b56),
+/// which its own out-of-ammunition fallback may have written, read raw:
+/// -1 and every word but 1 and 2 give Return (@0x83b5d-0x83b7f), so an
+/// escort carrier fully dry sends its fighters home. A lead that hasn't
+/// thought yet, or isn't thinking (gliding in, in its gate, on the jump
+/// path), gives the word it holds for as long as that lasts. A lead in a
+/// lower slot than its fighter thinks in the same pass in the original, so
+/// the fighter reads this tick's word there and last tick's here, as every
+/// think reads the tick's start: a lag no frame shows.
 #[must_use]
 pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     let Some(lead) = players_escort_lead(npc, around) else {
         return npc.order_word.order();
     };
-    Some(match out_of_ammo::escort_order(lead, lead.escort_order()) {
-        Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !lead.goal.flies_in_form() => {
-            order
-        }
+    // Goal 0xb is not 0xa, whatever goal the engine keeps beside it.
+    let in_form = lead.goal.flies_in_form() && !lead.follows_leaders_jump();
+    Some(match lead.order_word.order() {
+        Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !in_form => order,
         _ => EscortOrder::Dock,
     })
 }
@@ -212,9 +223,10 @@ pub fn decide_by(
     let fallback = out_of_ammo::escort_word(npc, order);
     let order = fallback.map_or(order, OrderWord::order);
     let writes = fallback.or_else(|| lead.escorts_player().then(|| OrderWord::of(order)));
-    if jump_with_leader::draws_followers(lead) {
-        // The entry (@0x839fd-0x83a92), then goal 0xb's block
-        // (@0x83be3): no order block runs.
+    if jump_with_leader::draws_followers(lead) || npc.joins_leaders_jump() {
+        // The entry (@0x839fd-0x83a92), then goal 0xb's block (@0x83be3),
+        // which runs whether or not the lead still draws, as a ship that
+        // entered under a wait keeps its goal: no order block runs.
         return Decision {
             goal: Goal::Follow {
                 lead: lead.id,
@@ -314,8 +326,8 @@ impl Behaviour for FleetEscortAi {
     /// on the same guard) kept as its pick, and the low level's
     /// [`escort::unprovoked`] fired, with its point defence; a disabled
     /// escort runs no think (`_AIDispatch` @0x8fece-0x8ff13). Holding, its
-    /// point defence (`_AIFireTurret` with no target, @0x83e74). Anything
-    /// else, nothing.
+    /// point defence (`_AIFireTurret` with no target, @0x83e74). Idle, sub
+    /// 0's [`escort::unprovoked`] at its target. Anything else, nothing.
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
             Goal::Attack(_) | Goal::Snipe(_) => fire::trigger(npc, around, self.fire),
@@ -337,48 +349,37 @@ impl Behaviour for FleetEscortAi {
                 }
             }
             Goal::Wait => escort::hold_trigger(npc),
+            // Goal 0's sub 0 calls it every frame on the target the frame
+            // ends with (@0x8521e-0x85236).
+            Goal::Idle => escort::unprovoked(npc, npc.target, around, self.fire).trigger,
             _ => Trigger::default(),
         }
     }
 
-    /// What it attacks; in formation its guard, unless
-    /// [`escort::unprovoked`] drops it (+0x70 = -1, @0x80e9d); holding,
-    /// docking or keeping formation with no guard, none; idle (its lead
-    /// lost) or keeping a count wait or an assist, the target it has, as
-    /// those branches write none.
+    /// What it attacks; in formation its guard, and idle the target it has
+    /// (the lost-parent branch writes none), unless [`escort::unprovoked`]
+    /// drops it (+0x70 = -1, @0x80e9d); holding, docking or keeping
+    /// formation with no guard, none; keeping a count wait or an assist,
+    /// the target it has, as those branches write none.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Attack(ship) | Goal::Snipe(ship) => Some(ship),
             Goal::Follow { guard, .. } => {
                 guard.filter(|_| !escort::unprovoked(npc, guard, around, self.fire).drops_target)
             }
-            Goal::Idle | Goal::CountWait | Goal::Assist(_) => npc.target,
+            Goal::Idle => npc
+                .target
+                .filter(|_| !escort::unprovoked(npc, npc.target, around, self.fire).drops_target),
+            Goal::CountWait | Goal::Assist(_) => npc.target,
             _ => None,
         }
     }
 
     /// [`escort::fire_unprovoked`], as for every escort or fighter (AI type
-    /// above 4, @0x80e59). In the regroup pause it fires the substate it
-    /// kept ([`regroup`](crate::ai::regroup)): a fight's passes at its
-    /// target without the high level's launch
-    /// ([`fire::low_level_trigger`]), else unprovoked (subs 0, 1, 9, 0xb
-    /// and 0xc).
+    /// above 4, @0x80e59), a wait and the regroup pause's sub 0 alike
+    /// ([`regroup`](crate::ai::regroup)).
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        match npc.goal {
-            Goal::Regroup {
-                kept: Kept::Attack(_) | Kept::Snipe(_),
-            } => {
-                let flying = Npc {
-                    goal: npc.flown_goal(),
-                    ..npc.clone()
-                };
-                GateWait {
-                    trigger: fire::low_level_trigger(&flying, around, self.fire),
-                    drops_target: false,
-                }
-            }
-            _ => escort::fire_unprovoked(npc, around, self.fire),
-        }
+        escort::fire_unprovoked(npc, around, self.fire)
     }
 
     /// [`react::victim`]: `_DamageShip`'s reaction block reads no AI type,
@@ -672,6 +673,29 @@ mod tests {
     }
 
     #[test]
+    fn an_escort_joining_a_jump_under_a_wait_stays_on_goal_0xbs_block_though_its_lead_stopped() {
+        // Goal 0xb's block runs whether or not the lead still draws
+        // (@0x83be3), and the lost parent comes first.
+        let mut joining = targeting(escort(), n(3));
+        joining.goal = follow(None);
+        joining.warp.joining = true;
+        let npcs = [
+            lead(Goal::Hold),
+            joining.clone(),
+            raider(3, 0.0, 100.0, n(1)),
+        ];
+        let (decision, _) = decided_with(&npcs, Some(EscortOrder::Attack), (0.0, 5000.0), &[0]);
+        assert_eq!(decision.goal, follow(None));
+        assert!(decision.follows_jump);
+        assert!(decision.clears_target);
+        assert!(!decision.ends_wait);
+        let alone = [raider(3, 0.0, 100.0, n(1)), joining];
+        let (lost, _) = decided_with(&alone, Some(EscortOrder::Attack), (0.0, 5000.0), &[0]);
+        assert!(lost.leaves_fleet, "its parent is gone");
+        assert!(!lost.follows_jump);
+    }
+
+    #[test]
     fn a_fighter_of_the_players_escort_on_its_jump_follows_and_still_writes_its_order() {
         // The order word (@0x83b36-0x83b7f) runs after the entry.
         let mut first = lead(Goal::Formation { guard: None });
@@ -680,6 +704,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(EscortOrder::Attack),
         });
+        first.order_word = OrderWord::of(Some(EscortOrder::Attack));
         let npcs = [first, fighter(n(1)), raider(3, 0.0, 100.0, n(1))];
         let govts = govts(0, 0);
         let around = Surroundings {
@@ -689,7 +714,41 @@ mod tests {
         let decision = FleetEscortAi::default().decision(&npcs[1], &around, &mut Draws::of(&[0]));
         assert_eq!(decision.goal, follow(None));
         assert!(decision.follows_jump);
-        assert_eq!(decision.order_word, Some(OrderWord(3)), "Return: in form");
+        assert_eq!(
+            decision.order_word,
+            Some(OrderWord::of(Some(EscortOrder::Attack))),
+            "goal 0xb isn't 0xa (@0x83b66)"
+        );
+    }
+
+    #[test]
+    fn a_lead_in_goal_0xb_hands_down_its_defend_or_attack_whatever_goal_it_keeps_beside() {
+        // The read tests its lead's goal against 0xa (@0x83b66), and the
+        // goal the engine keeps beside goal 0xb flies in form.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            for beside in [
+                Goal::Formation { guard: None },
+                Goal::Follow {
+                    lead: NpcId(9),
+                    guard: None,
+                },
+            ] {
+                let mut escort = lead(beside);
+                escort.escort = Some(crate::escort::EscortDuty {
+                    formation: crate::escort::FormationSlot::default(),
+                    order: Some(order),
+                });
+                escort.order_word = OrderWord::of(Some(order));
+                escort.warp.goal =
+                    Some(crate::traffic::warp_out::WarpGoal::Follow(ShipRef::Player));
+                let npcs = [escort, fighter(n(1))];
+                assert_eq!(
+                    order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+                    Some(order),
+                    "{beside:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1112,6 +1171,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order,
         });
+        escort.order_word = OrderWord::of(order);
         let npcs = [escort, fighter(n(1))];
         order_of(&npcs[1], &Surroundings::new(&[], &npcs))
     }
@@ -1181,6 +1241,7 @@ mod tests {
                 formation: crate::escort::FormationSlot::default(),
                 order: Some(order),
             });
+            first.order_word = OrderWord::of(Some(order));
         }
         let mut second = if fighter {
             self::fighter(n(1))
@@ -1324,6 +1385,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(order),
         });
+        first.order_word = OrderWord::of(Some(order));
         first
     }
 
@@ -1346,31 +1408,52 @@ mod tests {
         assert_eq!(decision.order_word, Some(OrderWord(3)));
     }
 
+    /// The order a fighter of the lead takes, the lead the player's escort
+    /// following `order` and holding `word`.
+    fn order_under_word(order: EscortOrder, word: i16) -> Option<EscortOrder> {
+        let mut first = players_escort(order);
+        first.order_word = OrderWord(word);
+        let npcs = [first, fighter(n(1)), raider(3, 0.0, 500.0, n(1))];
+        order_of(&npcs[1], &Surroundings::new(&[], &npcs))
+    }
+
     #[test]
-    fn a_fighter_of_a_players_escort_out_of_ammunition_returns_home() {
-        // The fighter reads its lead's word (@0x83b56), which the lead's
-        // fallback wrote: 0 for an escort fully dry, so Return (@0x83b7f).
+    fn a_fighter_reads_its_leads_word_not_its_leads_order() {
+        // @0x83b56 reads the lead's +0xc90a raw: a lead run dry has written
+        // 0 (@0x83bda), one that hasn't thought holds -1, and either sends
+        // the fighter home under its Attack (@0x83b5d-0x83b7f).
         for order in [EscortOrder::Defend, EscortOrder::Attack] {
-            let order_with = |left: AmmoLeft| {
-                let npcs = [
-                    short(players_escort(order), left),
-                    fighter(n(1)),
-                    raider(3, 0.0, 500.0, n(1)),
-                ];
-                order_of(&npcs[1], &Surroundings::new(&[], &npcs))
-            };
-            assert_eq!(
-                order_with(AmmoLeft::Dry),
-                Some(EscortOrder::Dock),
-                "{order:?}"
-            );
-            assert_eq!(
-                order_with(AmmoLeft::OnlyUnlimited),
-                Some(order),
-                "{order:?}: unlimited weapons left"
-            );
-            assert_eq!(order_with(AmmoLeft::Armed), Some(order), "{order:?}");
+            for word in [-1, 0, 3, 4, 7] {
+                assert_eq!(
+                    order_under_word(order, word),
+                    Some(EscortOrder::Dock),
+                    "{order:?} {word}"
+                );
+            }
         }
+        assert_eq!(
+            order_under_word(EscortOrder::Hold, 2),
+            Some(EscortOrder::Attack),
+            "the word, its order changed since"
+        );
+        assert_eq!(
+            order_under_word(EscortOrder::Attack, 1),
+            Some(EscortOrder::Defend)
+        );
+    }
+
+    #[test]
+    fn a_fighter_ignores_its_leads_ammunition_until_its_lead_writes_the_word() {
+        // The word the lead's last think left, however dry it is now.
+        let npcs = [
+            short(players_escort(EscortOrder::Attack), AmmoLeft::Dry),
+            fighter(n(1)),
+            raider(3, 0.0, 500.0, n(1)),
+        ];
+        assert_eq!(
+            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+            Some(EscortOrder::Attack)
+        );
     }
 
     #[test]
@@ -1470,6 +1553,32 @@ mod tests {
     }
 
     #[test]
+    fn a_gun_only_escort_keeps_its_gun_find_at_a_guard_bursting_out_but_not_at_one_in_its_gate() {
+        let mut gunner = escort();
+        gunner.armament = Armament::new([(gun(), 1)]);
+        let at_guard = |mode: Mode| {
+            let mut guard = raider(3, 0.0, -50.0, n(1));
+            guard.mode = mode;
+            let npcs = [lead(Goal::Idle), gunner.clone(), guard];
+            command(&npcs, follow(Some(n(3))))
+        };
+        assert_eq!(
+            at_guard(Mode::LeavingGate { tick: 1 }),
+            (
+                Trigger {
+                    keep: Some(WeaponId(141)),
+                    ..DEFENCE
+                },
+                Some(n(3))
+            )
+        );
+        assert_eq!(
+            at_guard(Mode::Emerging { ticks_left: 5 }),
+            (DEFENCE, Some(n(3)))
+        );
+    }
+
+    #[test]
     fn in_formation_it_drops_a_guard_disabled_or_gone_and_fires_nothing() {
         let mut down = raider(3, 0.0, -50.0, n(1));
         down.condition = Condition::Disabled;
@@ -1507,9 +1616,9 @@ mod tests {
         assert_eq!(command(&npcs, Goal::Snipe(n(3))).1, Some(n(3)));
     }
 
-    /// What `npcs[1]` holds in the regroup pause, keeping `kept`, its
+    /// What `npcs[1]` holds in the regroup pause, coasting (sub 0), its
     /// target `target`, the player at (0, 5000).
-    fn paused(npcs: &[Npc], kept: Kept, target: Option<ShipRef>) -> GateWait {
+    fn paused(npcs: &[Npc], target: Option<ShipRef>) -> GateWait {
         let govts = govts(0, 0);
         let around = Surroundings {
             player: Some(player(0.0, 5000.0)),
@@ -1517,80 +1626,28 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         let mut npc = npcs[1].clone();
-        npc.goal = Goal::Regroup { kept };
+        npc.goal = Goal::Regroup {
+            kept: crate::ai::regroup::Kept::Coast,
+        };
         npc.target = target;
         FleetEscortAi::default().gate_wait(&npc, &around)
     }
 
     #[test]
-    fn paused_in_a_kept_fight_it_fires_its_passes_at_its_target_launching_nothing() {
-        // The pause skips `_HighLevelAIHandler` and its `_AILaunchFighter`
-        // (@0x8e6fa); `_LowLevelAIHandler` runs the fight's substate.
+    fn paused_in_sub_0_it_fires_unprovoked_at_its_target() {
         let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
-        let govts = govts(0, 0);
-        let around = Surroundings {
-            player: Some(player(0.0, 5000.0)),
-            govts: &govts,
-            ..Surroundings::new(&[], &npcs)
-        };
-        for (kept, goal) in [
-            (Kept::Attack(n(3)), Goal::Attack(n(3))),
-            (Kept::Snipe(n(3)), Goal::Snipe(n(3))),
-        ] {
-            let mut fighting = npcs[1].clone();
-            fighting.goal = goal;
-            fighting.target = Some(n(3));
-            let full = fire::trigger(&fighting, &around, FireRules::default());
-            let wait = paused(&npcs, kept, Some(n(3)));
-            assert_eq!(
-                wait,
-                GateWait {
-                    trigger: Trigger {
-                        bays: false,
-                        ..full
-                    },
-                    drops_target: false,
-                },
-                "{kept:?}"
-            );
-            assert!(wait.trigger.only.is_some(), "{kept:?}: its passes fire");
-        }
-        assert!(
-            fire::trigger(
-                &Npc {
-                    goal: Goal::Attack(n(3)),
-                    ..npcs[1].clone()
-                },
-                &around,
-                FireRules::default()
-            )
-            .bays,
-            "the high level's launch, which the pause skips"
+        assert_eq!(
+            paused(&npcs, Some(n(3))),
+            GateWait {
+                trigger: fired(140),
+                drops_target: false
+            }
         );
-    }
-
-    #[test]
-    fn paused_in_any_other_substate_it_fires_unprovoked_at_its_target() {
-        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
-        for kept in [
-            Kept::Formation { guard: Some(n(3)) },
-            Kept::Coast,
-            Kept::Stop,
-        ] {
-            assert_eq!(
-                paused(&npcs, kept, Some(n(3))),
-                GateWait {
-                    trigger: fired(140),
-                    drops_target: false
-                },
-                "{kept:?}"
-            );
-        }
         let mut down = raider(3, 0.0, -50.0, n(1));
         down.condition = Condition::Disabled;
         let npcs = [lead(Goal::Idle), escort(), down];
         assert_eq!(
-            paused(&npcs, Kept::Formation { guard: Some(n(3)) }, Some(n(3))),
+            paused(&npcs, Some(n(3))),
             GateWait {
                 trigger: Trigger::default(),
                 drops_target: true
@@ -1600,7 +1657,7 @@ mod tests {
     }
 
     #[test]
-    fn holding_it_runs_its_point_defence_and_docking_or_idle_nothing() {
+    fn holding_it_runs_its_point_defence_and_docking_nothing() {
         let npcs = [
             lead(Goal::Idle),
             targeting(escort(), n(3)),
@@ -1609,13 +1666,37 @@ mod tests {
         assert_eq!(command(&npcs, Goal::Wait), (DEFENCE, None));
         assert_eq!(command(&npcs, Goal::Dock(n(1))), (Trigger::default(), None));
         assert_eq!(
-            command(&npcs, Goal::Idle),
-            (Trigger::default(), Some(n(3))),
-            "the lost-parent branch writes no target"
-        );
-        assert_eq!(
             command(&npcs, Goal::CountWait),
             (Trigger::default(), Some(n(3)))
+        );
+    }
+
+    #[test]
+    fn idle_it_fires_unprovoked_at_its_target_on_sub_0_keeping_it() {
+        // Goal 0's sub 0 calls `_AIEscortFireUnprovoked` every frame
+        // (@0x8521e-0x85236); the lost-parent branch writes no target.
+        let npcs = [
+            lead(Goal::Idle),
+            targeting(escort(), n(3)),
+            raider(3, 0.0, -50.0, n(1)),
+        ];
+        assert_eq!(command(&npcs, Goal::Idle), (fired(140), Some(n(3))));
+    }
+
+    #[test]
+    fn idle_it_drops_a_target_disabled_or_gone_and_fires_nothing() {
+        // +0x70 = -1 (@0x80e9d).
+        let mut down = raider(3, 0.0, -50.0, n(1));
+        down.condition = Condition::Disabled;
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3)), down];
+        assert_eq!(command(&npcs, Goal::Idle), (Trigger::default(), None));
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3))];
+        assert_eq!(command(&npcs, Goal::Idle), (Trigger::default(), None));
+        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
+        assert_eq!(
+            command(&npcs, Goal::Idle),
+            (Trigger::default(), None),
+            "no target"
         );
     }
 

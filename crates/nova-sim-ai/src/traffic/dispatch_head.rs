@@ -18,7 +18,10 @@
 //! 3. the escort orders, a leader's own on its frame (frame % 8 == slot
 //!    >> 3, @0x8fdb3-0x8fde9; [`escort_orders`]);
 //! 4. the regroup pause's draws (@0x8fe73-0x8febb; [`regroup`]);
-//! 5. the disabled reset (@0x8fece-0x8ff13; [`disabled_reset`]).
+//! 5. the disabled reset (@0x8fece-0x8ff13; [`disabled_reset`]);
+//! 6. a gate wait run out turned out of goal 0x15, its target dropped,
+//!    which the high level does in this dispatch (@0x8dd61-0x8dd93;
+//!    [`last_wait_frame`]).
 //!
 //! [`Traffic::dispatch_heads`] runs them at the head of each run of the
 //! loop ([`Traffic::think_run`]), for the ships the run picks, pass by
@@ -42,6 +45,7 @@
 //! sound; the regroup draws are the only draws.
 //!
 //! [`disabled_reset`]: super::disabled_reset
+//! [`last_wait_frame`]: super::last_wait_frame
 //! [`escort_orders`]: super::escort_orders
 //! [`regroup`]: super::regroup
 
@@ -84,6 +88,7 @@ impl Traffic {
         self.issue_escort_orders(world, &rest);
         self.release_regroups(&rest, chance);
         self.reset_disabled(world.npc_escort_ai, &rest);
+        self.turn_out_of_waits(&rest);
         jump_path
     }
 
@@ -241,7 +246,7 @@ mod tests {
         let mut ship = ship();
         ship.leader = Some(leader);
         ship.goal = Goal::Idle;
-        ship.follow_leaders_jump(ShipRef::Npc(leader));
+        ship.enter_leaders_jump(ShipRef::Npc(leader));
         traffic.add_npc_at(ship, berth)
     }
 

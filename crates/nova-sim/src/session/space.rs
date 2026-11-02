@@ -204,15 +204,33 @@ pub(super) struct Escorts {
     /// placed: the original's +0xc4 (set by `_IssueNewEscortCommand`
     /// @0x66190, cleared by every placement, @0x3c6ff, @0x3d546, @0x3d9c2),
     /// which the class orders' bookkeeping reads (see the `class_orders`
-    /// module). Kept by number: every placement, respawn and launch makes
-    /// a new NPC, so it starts unmarked, and a capture or a release keeps
-    /// the number, as the original keeps the slot's byte. Never saved.
+    /// module). `_AIIssueEscortOrders` sets the same byte (@0x89b71), which
+    /// the traffic keeps as [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead),
+    /// as it can't reach this set. Kept by number: every placement, respawn
+    /// and launch makes a new NPC, so it starts unmarked, and a capture or a
+    /// release keeps the number, as the original keeps the slot's byte.
+    /// Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
 
 impl Space {
+    /// The traffic's rules of a reused slot and a spawn's animation, as
+    /// `rules` reads them (see `Session::with_rules`).
+    pub(super) fn read_reused_slot_rules(&mut self, rules: &crate::rulebook::Rulebook) {
+        use crate::rulebook::RuleKey;
+        let traffic = &mut self.traffic;
+        traffic.set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
+        traffic.set_reused_slot_heading(rules.source_for(RuleKey::ReusedSlotHeading));
+        traffic.set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
+        traffic.set_reused_slot_blink_timer(rules.source_for(RuleKey::ReusedSlotBlinkTimer));
+        traffic
+            .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
+        traffic.set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        traffic.set_reused_slot_voice(rules.source_for(RuleKey::ReusedSlotVoice));
+    }
+
     /// The system's contents as a session starts or loads: an empty
     /// system, to be populated on the first traffic tick in flight.
     pub(super) fn new() -> Self {

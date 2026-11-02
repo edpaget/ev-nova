@@ -35,8 +35,9 @@
 //! and not at all for [`HopelessFlee::Plunder`]
 //! ([`reinforcements::with_high_level_call`](super::reinforcements::with_high_level_call)).
 //!
-//! The other callers of [`state4_attack`](super::odds::state4_attack)
-//! never flee: the interceptor's goal 4 ([`held_attack`](super::held_attack)),
+//! The other ships that reach the state-4 block
+//! ([`attack_drop::attack_block`](super::attack_drop::attack_block)) never
+//! flee there: the interceptor's goal 4 ([`held_attack`](super::held_attack)),
 //! the warship's [`hunt`](super::warship::hunt), the interceptor's
 //! re-pick and the pirate's attack fly ships of AI type 3 or 4, which
 //! snipe a hopeless chase (@0x8e60a). A bribe writes AI type 1

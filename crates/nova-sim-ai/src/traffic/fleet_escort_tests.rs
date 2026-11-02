@@ -11,8 +11,8 @@
 //! formation as the lead cruises (`_AICalcFormationPositions`, goal 0xa),
 //! or, by the other reading of `npc_formation`, follows within 100 of it.
 //! Its lead disabled, the heaviest escort leads in its place and the other
-//! pauses, keeping formation on it, until a draw releases it to its kept
-//! order (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13). Its lead
+//! pauses coasting (sub 0) until a draw releases it to its kept order
+//! (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13). Its lead
 //! leaving by hyperspace draws it onto the lead's jump (`_EscortAI`
 //! @0x839fd-0x83a92): it follows (sub 0xd), takes its own leave once its
 //! stage starts, and departs; a lead turning to attack cancels an early
@@ -31,7 +31,7 @@ use crate::combat::armament::Armament;
 use crate::combat::weapon::WeaponSpec;
 use crate::escort::{FORMATION_NUDGE, FORMATION_SLACK};
 use crate::fleet::OrderWord;
-use crate::flight::{FlightRules, NpcFormation};
+use crate::flight::{FlightRules, NpcFormation, ShipState};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::stats::ShipStats;
@@ -329,7 +329,7 @@ fn npc(traffic: &Traffic, id: NpcId) -> &Npc {
 }
 
 #[test]
-fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_in_formation_then_takes_up_its_order()
+fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_coasting_then_takes_up_its_order()
  {
     let mut traffic = cruising_fleet();
     let govts = govts();
@@ -365,33 +365,24 @@ fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_
     assert_eq!(heavy.goal, Goal::Hold, "its lead's hold, taken over");
     let light = npc(&traffic, LIGHT);
     assert_eq!(light.leader, Some(HEAVY));
-    assert_eq!(
-        light.goal,
-        Goal::Regroup {
-            kept: Kept::Formation { guard: None }
-        }
-    );
-    let flight = FlightRules::default();
-    let thrust = flight.handling(ShipStats::new(FAST, &[]).handling).accel;
-    let slack = FORMATION_SLACK + FORMATION_NUDGE * thrust;
+    assert_eq!(light.goal, Goal::Regroup { kept: Kept::Coast });
+    let coasting = light.state;
     for tick in 0..150 {
+        let before = npc(&traffic, LIGHT).state.position;
         traffic.tick_in(&NovaAi::default(), world, &[], &mut held());
         let light = npc(&traffic, LIGHT);
         assert!(
             matches!(light.goal, Goal::Regroup { .. }),
             "tick {tick}: still paused"
         );
-        if tick >= 100 {
-            let slot = light
-                .fleet_slot
-                .expect("a slot in its new lead's formation")
-                .position(&npc(&traffic, HEAVY).state);
-            let off = light.state.position - slot;
-            assert!(
-                off.x.abs() <= slack && off.y.abs() <= slack,
-                "tick {tick}: {off:?} off its slot on the heavy escort"
-            );
-        }
+        assert_eq!(
+            light.state,
+            ShipState {
+                position: before + coasting.velocity,
+                ..coasting
+            },
+            "tick {tick}: no thrust or turn"
+        );
     }
     let mut releasing = Draws::of(&[0; 64]).keyed(RELEASE_DRAW, 0);
     traffic.tick_in(&NovaAi::default(), world, &[], &mut releasing);
@@ -552,18 +543,24 @@ fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
 #[test]
 fn an_inertialess_fleet_escort_leaves_its_fleet_to_jump_on_its_own() {
     use crate::traffic::warp_out::WarpGoal;
-    let mut traffic = leaving_fleet(true);
-    // Out of close formation, which no ship flies inertialess.
-    traffic
-        .npcs_mut()
-        .iter_mut()
-        .find(|npc| npc.id == ESCORT)
-        .expect("there")
-        .state
-        .position = Vec2::new(3000.0, 600.0);
-    jump_tick(&mut traffic);
-    let escort = npc(&traffic, ESCORT);
-    assert_eq!(escort.leader, None, "+0x9a -1 (@0x83c11)");
-    assert_eq!(escort.goal, Goal::JumpOut);
-    assert_eq!(escort.warp.goal, Some(WarpGoal::Own));
+    for (velocity, sub) in [
+        (Vec2::ZERO, Some(WarpGoal::Own)),
+        // Goal 2's block, in the same dispatch: sub 1 (@0x8de49).
+        (Vec2::new(2.0, 0.0), None),
+    ] {
+        let mut traffic = leaving_fleet(true);
+        // Out of close formation, which no ship flies inertialess.
+        let escort = traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == ESCORT)
+            .expect("there");
+        escort.state.position = Vec2::new(3000.0, 600.0);
+        escort.state.velocity = velocity;
+        jump_tick(&mut traffic);
+        let escort = npc(&traffic, ESCORT);
+        assert_eq!(escort.leader, None, "+0x9a -1 (@0x83c11)");
+        assert_eq!(escort.goal, Goal::JumpOut);
+        assert_eq!(escort.warp.goal, sub, "{velocity:?}");
+    }
 }

@@ -438,7 +438,7 @@ impl ExitCursors {
 /// | -1 | +0xc8fc, the fold set | [`StrayWord::FoldSet`] |
 /// | 4 | +0xc906, an NPC's swarm leader | [`StrayWord::SwarmLeader`] |
 /// | 5 | +0xc908, an NPC's crew pods left / the player's pod countdown | [`StrayWord::Pods`] |
-/// | 6 | +0xc90a, the order word of a ship an NPC leads | [`StrayWord::Order`] |
+/// | 6 | +0xc90a, an NPC's order word | [`StrayWord::Order`] |
 ///
 /// Every other `ExitType` outside 0-3 lands on a word the engine doesn't
 /// model in that form (the fold direction, frame counters,
@@ -455,8 +455,8 @@ pub enum StrayWord {
     /// 5: +0xc908, which the session steps: an NPC's crew pods left, or the
     /// player's escape-pod countdown (-1 while flying).
     Pods,
-    /// 6: +0xc90a, which the session steps: the order word of a ship an
-    /// NPC leads (`nova_sim_combat::fleet::OrderWord`).
+    /// 6: +0xc90a, which the session steps: an NPC's order word
+    /// (`nova_sim_combat::fleet::OrderWord`), the player's stepping nothing.
     Order,
 }
 

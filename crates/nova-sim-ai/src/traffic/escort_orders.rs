@@ -4,8 +4,10 @@
 //! by that ship's class
 //! ([`Npc::order_word`](super::npc::Npc::order_word)), whatever the led
 //! ship's condition or mode, as `_AIIssueEscortOrders` tests neither
-//! (@0x89b10-0x89b84). Each leader issues at the head of its own slot's
-//! run, before its decision ([`dispatch_head`](super::dispatch_head)).
+//! (@0x89b10-0x89b84). Each order sets the ship's mark too
+//! ([`Npc::ordered_by_lead`](super::npc::Npc::ordered_by_lead), +0xc4,
+//! @0x89b71). Each leader issues at the head of its own slot's run, before
+//! its decision ([`dispatch_head`](super::dispatch_head)).
 //!
 //! **Ordering.** The original issues at each leader's own `_AIDispatch`,
 //! in slot order, so a ship in a lower slot than its leader thinks on the
@@ -54,6 +56,7 @@ impl Traffic {
                 .filter(|npc| npc.leader == Some(id) && !npc.escorts_player())
             {
                 npc.order_word = for_class(table, npc.class);
+                npc.ordered_by_lead = true;
             }
         }
     }
@@ -175,6 +178,31 @@ mod tests {
     }
 
     #[test]
+    fn an_order_issued_sets_the_ships_mark_and_a_ship_no_order_reached_stays_clear() {
+        // @0x89b71, beside the word, in the same loop.
+        let mut other = led(EscortClass::Fighter);
+        other.leader = Some(NpcId(5));
+        let mut players = led(EscortClass::Fighter);
+        players.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let mut traffic = traffic([leader(), led(EscortClass::Freighter), other, players]);
+        let marks = |traffic: &Traffic| -> Vec<bool> {
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.ordered_by_lead)
+                .collect()
+        };
+        assert_eq!(marks(&traffic), [false; 4], "no spawn sets it");
+        issue(&mut traffic, 1);
+        assert_eq!(marks(&traffic), [false; 4], "off its frame");
+        issue(&mut traffic, 0);
+        assert_eq!(marks(&traffic), [false, true, false, false]);
+    }
+
+    #[test]
     fn a_leader_gliding_in_issues_nothing() {
         let mut gliding = leader();
         gliding.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
@@ -252,6 +280,7 @@ mod tests {
             formation: FormationSlot::default(),
             order: Some(crate::escort::EscortOrder::Defend),
         });
+        carrier.order_word = OrderWord(1);
         let mut fighter = led(EscortClass::Fighter);
         fighter.carrier = Some(Carrier {
             ship: ShipRef::Npc(NpcId(0)),

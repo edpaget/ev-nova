@@ -2,7 +2,8 @@
 //! (`_InterceptorAI` @0x8d404-0x8d43a, see
 //! [`interceptor`](crate::ai::interceptor)): the state-7 block's reach
 //! reads the re-picked target (@0x8f11e), so a re-pick away from the
-//! player within its reach scans nothing.
+//! player within its reach scans nothing; and of a pick looked over in
+//! its own think ([`Decision::looked_over`], @0x8f11e-0x8f394).
 
 use super::on_line::OnLine;
 use super::{Traffic, World};
@@ -28,19 +29,60 @@ impl Behaviour for Fixed {
     }
 }
 
-/// What a traffic of one interceptor inspecting the player 50 off puts
-/// on the line when its decision is `decision`.
-fn on_line_after(decision: Decision) -> Vec<OnLine> {
+/// A traffic of one interceptor with goal `goal`, the player 50 off, after
+/// a tick whose decision is `decision`: what it put on the line, and the
+/// ship it remembers inspecting.
+fn after_tick(goal: Goal, decision: Decision) -> (Vec<OnLine>, Option<ShipRef>) {
     let mut traffic = Traffic::with_interval(1);
     let mut cop = npc(1, ShipStats::new(FAST, &[]));
-    cop.goal = Goal::Inspect(ShipRef::Player);
+    cop.goal = goal;
     traffic.npcs = vec![cop];
     let world = World {
         player: Some(crate::ai::fixture::player(50.0, 0.0)),
         ..World::new(&[])
     };
     traffic.tick_in(&Fixed(decision), world, &[], &mut Draws::of(&[]));
-    traffic.take_on_line()
+    (traffic.take_on_line(), traffic.npcs()[0].inspected)
+}
+
+/// What a traffic of one interceptor inspecting the player 50 off puts
+/// on the line when its decision is `decision`.
+fn on_line_after(decision: Decision) -> Vec<OnLine> {
+    after_tick(Goal::Inspect(ShipRef::Player), decision).0
+}
+
+/// A pick of `ship` the think looked over at once.
+fn looked_over(ship: ShipRef) -> Decision {
+    Decision {
+        goal: Goal::Idle,
+        clears_target: true,
+        looked_over: Some(ship),
+        ..Decision::default()
+    }
+}
+
+#[test]
+fn a_pick_of_the_player_within_reach_scans_that_tick() {
+    let (line, inspected) = after_tick(Goal::Idle, looked_over(ShipRef::Player));
+    assert_eq!(line, [OnLine::Scan(NpcId(1))], "@0x8f38a");
+    assert_eq!(inspected, Some(ShipRef::Player));
+}
+
+#[test]
+fn a_pick_of_an_npc_within_reach_records_it_and_scans_nothing() {
+    let other = ShipRef::Npc(NpcId(5));
+    let (line, inspected) = after_tick(Goal::Idle, looked_over(other));
+    assert_eq!(line, []);
+    assert_eq!(inspected, Some(other));
+}
+
+#[test]
+fn a_kept_inspection_of_the_player_within_reach_still_scans_beside_a_fresh_pick_within_reach() {
+    // The original does these on two frames: the kept one, then the pick.
+    let other = ShipRef::Npc(NpcId(5));
+    let (line, inspected) = after_tick(Goal::Inspect(ShipRef::Player), looked_over(other));
+    assert_eq!(line, [OnLine::Scan(NpcId(1))]);
+    assert_eq!(inspected, Some(other));
 }
 
 #[test]

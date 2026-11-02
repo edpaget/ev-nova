@@ -10,7 +10,8 @@
 //! 1. the sounds ([`FlightEvent::Sound`]), the messages
 //!    ([`FlightEvent::Message`]) and the session events
 //!    ([`FlightEvent::Session`]);
-//! 2. the save due ([`FlightEvent::SaveDue`]) and the hold's expiry
+//! 2. the save due ([`FlightEvent::SaveDue`]) when it is written now
+//!    ([`Session::take_save_now`]: held in flight, by default) and the hold's expiry
 //!    ([`FlightEvent::HoldExpired`]), each once when set;
 //! 3. the diagnostics ([`FlightEvent::Diagnostic`]): the fight's, then the
 //!    session's own reports;
@@ -53,7 +54,7 @@ impl Session {
         into.extend(self.take_sounds().into_iter().map(FlightEvent::Sound));
         into.extend(self.take_messages().into_iter().map(FlightEvent::Message));
         into.extend(self.take_events().into_iter().map(FlightEvent::Session));
-        if self.take_save_due() {
+        if self.take_save_now() {
             into.push(FlightEvent::SaveDue);
         }
         if self.take_hold_expired() {
@@ -481,7 +482,7 @@ mod tests {
         };
         session.out.reports.report(diagnostic);
         session.out.hold_expiry_due = true;
-        session.out.save_due = true;
+        session.out.save_now();
         session.out.emit(SessionEvent::ShipChanged);
         let message = SimMessage::Buoy("Hi.".to_owned());
         session.space.say(&mut session.out, message.clone());
@@ -541,7 +542,7 @@ mod tests {
     fn a_second_drain_adds_nothing_and_keeps_what_was_there() {
         let mut session = started();
         session.out.sounds.push(SimSound::Refused);
-        session.out.save_due = true;
+        session.out.save_now();
         let mut into = vec![FlightEvent::HoldExpired];
         session.drain_events(&mut into);
         assert_eq!(

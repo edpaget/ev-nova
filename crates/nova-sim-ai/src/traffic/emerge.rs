@@ -90,7 +90,11 @@
 //!   the ship at its gate instead ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)):
 //!   seen and deciding, but unsteered and firing only that point defence
 //!   until its wait is out, then owing its burst by the engine's reading
-//!   (see [`held_burst`](crate::traffic::held_burst)).
+//!   (see [`held_burst`](crate::traffic::held_burst)). So does any other
+//!   write of a goal over goal 0x15: a lead lost
+//!   ([`succession`](crate::traffic::succession)) or the disabled reset
+//!   ([`disabled_reset`](crate::traffic::disabled_reset),
+//!   [`Npc::leaves_gate_goal`](crate::traffic::npc::Npc::leaves_gate_goal)).
 //!
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.

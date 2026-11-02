@@ -39,6 +39,7 @@ use super::warp_out::{self, FollowStep, LeaderWarp, WarpGoal};
 use super::{Traffic, World, regroup};
 use crate::ai::Goal;
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 
 impl Traffic {
     /// Goal 0xb's block, its push, and sub 0xd's step of the NPC at
@@ -46,13 +47,9 @@ impl Traffic {
     /// whether it detached from its leader there.
     pub(super) fn follow_in_dispatch(&mut self, index: usize, world: &World, still: bool) -> bool {
         let npc = &self.npcs[index];
-        let id = npc.id;
-        self.followed.remove(&id);
         let paused = regroup::paused(npc);
-        if let Some(lead) = warp_out::pushes_leader(npc, paused) {
-            self.push_out(lead);
-        }
-        let npc = &self.npcs[index];
+        // The check reads the leader's stored substate, which the push's
+        // goal 2 doesn't write: its view is taken first.
         let leader = match npc.warp.goal {
             Some(WarpGoal::Follow(ShipRef::Player)) => Some((true, world.warp.player)),
             Some(WarpGoal::Follow(ShipRef::Npc(_))) => (npc.leader)
@@ -60,16 +57,19 @@ impl Traffic {
                 .map(|view| (false, view)),
             _ => None,
         };
+        if let Some(lead) = warp_out::pushes_leader(npc, paused) {
+            self.push_out(lead);
+        }
         let npc = &mut self.npcs[index];
         let Some((player, leader)) = warp_out::goal_block(npc, leader, paused) else {
             return false;
         };
-        if still {
+        // A disabled ship's sub 0xd is gated (@0x8524e-0x85258): `_HandleShip`
+        // drifts it.
+        if still || npc.condition != Condition::Intact {
             return false;
         }
-        let step = warp_out::follow_jump(npc, leader, player);
-        self.followed.insert(id, step == FollowStep::Formation);
-        step == FollowStep::Detached
+        warp_out::sub_0xd(npc, leader, player, world) == FollowStep::Detached
     }
 
     /// The warp NPC `lead` shows its followers at this point of the AI
@@ -83,14 +83,14 @@ impl Traffic {
     }
 
     /// Goal 0xb's push of NPC `lead` onto goal 2 (@0x8def0): live, or on
-    /// its slot's record, but not on a ship the player leads (see
+    /// its slot's record, a ship the player leads too (see
     /// [`warp_out::pushes_leader`]).
     fn push_out(&mut self, lead: NpcId) {
         let ship = match self.npcs.iter_mut().find(|npc| npc.id == lead) {
             Some(npc) => Some(npc),
             None => self.gone.ship_mut(lead),
         };
-        if let Some(npc) = ship.filter(|npc| !npc.escorts_player()) {
+        if let Some(npc) = ship {
             npc.goal = Goal::JumpOut;
         }
     }
@@ -175,7 +175,7 @@ mod tests {
         let mut follower = ship(0, TRADERS, AiType::WimpyTrader, 2000.0, 50.0);
         follower.leader = Some(leader);
         follower.goal = Goal::Idle;
-        follower.follow_leaders_jump(ShipRef::Npc(leader));
+        follower.enter_leaders_jump(ShipRef::Npc(leader));
         follower.warp.stage = stage;
         traffic.add_npc_at(follower, berth)
     }
@@ -201,22 +201,6 @@ mod tests {
         traffic.think_holding(&reads, world(), &[], &mut NeverFires);
         assert_eq!(reads.own(leader), Goal::Idle, "its think came first");
         assert_eq!(of(&traffic, leader).goal, Goal::JumpOut, "pushed after");
-    }
-
-    #[test]
-    fn a_leader_the_player_leads_is_not_pushed() {
-        // Its own next hold would put it back on goal 0xb (@0x8d542-0x8d54c).
-        let mut traffic = Traffic::with_interval(1);
-        let mut lead = ship(0, TRADERS, AiType::Warship, 0.0, 0.0);
-        lead.escort = Some(crate::escort::EscortDuty {
-            formation: crate::escort::FormationSlot::default(),
-            order: None,
-        });
-        let leader = traffic.add_npc_at(lead, 3);
-        following(&mut traffic, leader, 2, 0.0);
-        let reads = Reads::of(leader);
-        traffic.think_holding(&reads, world(), &[], &mut NeverFires);
-        assert_ne!(reads.own(leader), Goal::JumpOut);
     }
 
     /// A ship in slot `berth` well into its own warp: stage 5 and facing
@@ -258,30 +242,6 @@ mod tests {
         // Sub 4's block comes first in the low level (@0x8585b): no sub 4
         // step that frame.
         assert_eq!(of(&traffic, follower).warp.stage, 30.5);
-    }
-
-    #[test]
-    fn a_follower_keeping_formation_at_its_slot_is_flown_by_its_goal() {
-        // Sub 0xd's formation branch takes its leader's velocity and leaves
-        // the flight to its goal's (@0x85a0b-0x85a51): an idle follower
-        // brakes, where a jump's flight wouldn't thrust.
-        let mut traffic = Traffic::with_interval(1);
-        let mut lead = ship(0, TRADERS, AiType::Warship, 0.0, 0.0);
-        lead.goal = Goal::JumpOut;
-        lead.begin_own_jump();
-        lead.state.velocity = Vec2::new(3.0, 0.0);
-        lead.state.heading = 270.0;
-        let leader = traffic.add_npc_at(lead, 5);
-        let follower = following(&mut traffic, leader, 2, 0.0);
-        let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == follower);
-        npc.expect("there").state.heading = 270.0;
-        traffic.tick_in(&Reads::of(leader), world(), &[], &mut NeverFires);
-        let npc = of(&traffic, follower);
-        assert!(
-            npc.state.velocity.x < 3.0,
-            "braking: {:?}",
-            npc.state.velocity
-        );
     }
 
     #[test]

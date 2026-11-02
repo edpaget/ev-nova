@@ -110,6 +110,8 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             };
             3
         ];

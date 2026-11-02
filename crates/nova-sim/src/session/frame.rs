@@ -1083,7 +1083,7 @@ pub(super) mod tests {
         session
             .out
             .emit(crate::session::SessionEvent::GalaxyChanged);
-        session.out.save_due = true;
+        session.out.save_now();
         session.out.hold_expiry_due = true;
         session.out.texts_queued += 1;
         let before = filled(&session);

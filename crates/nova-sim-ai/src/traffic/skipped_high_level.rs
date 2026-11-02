@@ -17,13 +17,10 @@
 //!
 //! What it changes on screen (see the phase's step-1 findings):
 //!
-//! - **The regroup pause** has no AI wait, so its kept fight (subs 5, 6,
-//!   7, 0x10, 0x11) and its kept formation's approach and close at its
-//!   guard (subs 9 and 0xb) turn and thrust at the record, drawn. On the
-//!   frames after the let-go, +0x70 -1, a kept fight's sub 5 skips its
-//!   block (@0x85c70): it coasts, its thrust zeroed (@0x851f1) and its
-//!   heading truncated (@0x8522d), where it braked before
-//!   ([`autopilot`](super::autopilot)'s [`Beside::paused`]).
+//! - **The regroup pause** has no AI wait, but none of the substates that
+//!   reach it reads +0x70 ([`regroup`](crate::ai::regroup): sub 0's coast
+//!   and the jump path's subs 4 and 0xd), so the note changes nothing
+//!   drawn there.
 //! - **The AI wait** holds the turn, thrust and fire (`_HandleShip`
 //!   @0x3443f-0x34454, @0x34a54-0x34a72; the autopilot's position step),
 //!   and the next unwaited frame's low level rewrites +0x68 and +0x30
@@ -32,8 +29,6 @@
 //!   not +0x70 (see [`repair_dock`](super::repair_dock)).
 //!
 //! Nothing here plays a sound or draws a random number.
-//!
-//! [`Beside::paused`]: super::autopilot::Beside::paused
 
 use std::collections::BTreeMap;
 
@@ -123,9 +118,7 @@ mod tests {
     #[test]
     fn a_ship_whose_high_level_is_skipped_reads_the_record_it_holds() {
         let attack = Goal::Attack(ShipRef::Npc(NpcId(7)));
-        let paused = Goal::Regroup {
-            kept: Kept::Attack(ShipRef::Npc(NpcId(7))),
-        };
+        let paused = Goal::Regroup { kept: Kept::Coast };
         let npcs = [
             holder(1, 1, attack, 5),
             holder(2, 2, paused, 0),

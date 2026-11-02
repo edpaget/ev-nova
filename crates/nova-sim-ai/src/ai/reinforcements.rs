@@ -50,7 +50,7 @@
 //!   where the original stops fleeing instead
 //!   ([`flee_drop`](super::flee_drop));
 //! - **attacking or sniping** (state 4) a ship here to be fought
-//!   ([`Surroundings::live`], the target gates @0x8e267-0x8e3f6), the ship
+//!   ([`Surroundings::standing`], the target gates @0x8e267-0x8e3f6), the ship
 //!   itself intact (`_IsDisabled` @0x8e6eb), after its fighters launch
 //!   (@0x8e6fa-0x8e70d).
 //!
@@ -74,7 +74,7 @@ pub fn high_level_calls(npc: &Npc, goal: Goal, around: &Surroundings) -> bool {
             within_reach(npc, from, around) && !flees_a_stranger_ally(npc, from, around)
         }
         Goal::Attack(target) | Goal::Snipe(target) => {
-            npc.active_not_disabled() && around.live(target)
+            npc.active_not_disabled() && around.standing(target)
         }
         _ => false,
     }
@@ -311,7 +311,7 @@ mod tests {
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, Mode};
 
     /// A trader at the centre and a ship of `govt` at (`x`, `y`) from it.
     fn pair(govt: GovtId, x: f32, y: f32) -> [Npc; 2] {
@@ -418,6 +418,22 @@ mod tests {
         dying[1].condition = Condition::Destroyed;
         assert!(!calls(&dying, Goal::Attack(n(2))), "its target gone");
         assert!(!calls(&npcs[..1], Goal::Attack(n(2))), "its target gone");
+        // The target gates read the slot and `_IsDying` (@0x8e3df, @0x8e3ef),
+        // and neither arrival nor sight.
+        for mode in [
+            Mode::JumpingIn { tick: 1 },
+            Mode::Emerging { ticks_left: 5 },
+        ] {
+            let mut arriving = npcs.clone();
+            arriving[1].mode = mode;
+            assert!(calls(&arriving, Goal::Attack(n(2))), "{mode:?}");
+        }
+        let mut breaking_up = npcs.clone();
+        breaking_up[1].condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(!calls(&breaking_up, Goal::Attack(n(2))), "@0x8e3ef");
     }
 
     #[test]

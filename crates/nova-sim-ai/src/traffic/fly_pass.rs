@@ -124,11 +124,6 @@ pub struct FlyPass {
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
     /// Each leader's slot, the ships that left in the AI loop among them.
     leader_berths: BTreeMap<NpcId, u32>,
-    /// Each follower whose sub 0xd ran at its slot of the AI loop this
-    /// tick (the traffic's `dispatch_follow`), and whether it kept
-    /// formation, so its goal's flight flies it: none on double time's
-    /// second pass, whose followers are flown by their leader's stage.
-    followed: BTreeMap<NpcId, bool>,
     /// The ships a tractor's hold may name, as the half began, each freed
     /// slot by its record; a ship freed at its step of the half by its
     /// record from there on, and one launched into a berth since as it
@@ -216,13 +211,10 @@ impl Traffic {
         } else {
             leaders.clone()
         };
-        let (followed, slot_outcomes) = if think {
-            (
-                self.followed.clone(),
-                std::mem::take(&mut self.slot_outcomes),
-            )
+        let slot_outcomes = if think {
+            std::mem::take(&mut self.slot_outcomes)
         } else {
-            (BTreeMap::new(), BTreeMap::new())
+            BTreeMap::new()
         };
         let holders = tractor_hold::Holders::of(world, &self.npcs).and_gone(self.gone.ships());
         let paused = self
@@ -244,7 +236,6 @@ impl Traffic {
             leaders,
             open_leaders,
             leader_berths,
-            followed,
             holders,
             paused,
             step_writes: (Vec::new(), Vec::new()),
@@ -338,7 +329,7 @@ impl Traffic {
         let wanted = slot_word::spawn_heading(&pass.headings, npc.berth);
         let spawned = SlotWord::spawned(npc, wanted, &handling, world.flight);
         let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, handling.accel);
-        let by = (world.flight, world.held_burst);
+        let by = (world.flight, world.held_burst, !pass.think);
         autopilot::step(npc, &spawned, at_step, speeds, by, chance);
     }
 
@@ -440,10 +431,13 @@ fn fly_flown(
         let wanted = slot_word::spawn_heading(&pass.headings, npc.berth);
         SlotWord::spawned(npc, wanted, &handling, world.flight)
     });
-    // What it owed of a gate burst before its flight.
-    let owed = npc.owed_burst;
+    // Whether its flight bursts, which alone ends a burst: a word changed
+    // with no burst, as sub 0xd's 1.0 on its jump or sub 8's word outside
+    // its window, does not (@0x34a84).
+    npc.display.drive.burst = false;
     let outcome = fly_steered(npc, pass, world, (&kept, adjust), speeds, &mut *chance);
-    if held_burst::settle(npc, owed, speeds, kept.inertia(), &mut *chance) {
+    let burst = npc.display.drive.burst;
+    if held_burst::settle(npc, burst, speeds, kept.inertia(), &mut *chance) {
         pass.step_writes.0.push(npc.id);
     }
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
@@ -486,21 +480,19 @@ fn fly_steered(
 ) -> Outcome {
     // The goal it holds, not the one it flies (see `fly_one`).
     let paused = pass.paused.contains(&npc.id);
-    // Goal 0xb's block and sub 0xd ran at its slot of the AI loop (the
-    // traffic's `dispatch_follow`).
-    let formation = pass.followed.get(&npc.id).copied();
-    let by = (formation, paused);
     // A flight that ended at its slot flies nothing, not even a jump begun
     // there, whose warp-out would read an aim its leaves wrote before it.
     let outcome = if let Some(&ended) = pass.slot_outcomes.get(&npc.id) {
         ended
-    } else if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, by, adjust) {
-        // `_HandleShip`'s warp-out writes +0x68 (@0x347ba).
+    } else if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, paused, adjust) {
+        // `_HandleShip`'s warp-out writes +0x68 (@0x347ba). Its jump ends
+        // no burst of the word's (@0x34a84): sub 0xd's 1.0 is no burst.
         pass.step_writes.1.push((npc.berth, npc.warp.aim));
+        npc.display.drive.burst = false;
         return outcome;
     } else {
         let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust);
-        let rules = (world.flight, world.held_burst);
+        let rules = (world.flight, world.held_burst, !pass.think);
         autopilot::step(npc, kept, at_step, speeds, rules, &mut *chance)
     };
     let jumping = npc.jumping() && !paused;
@@ -1337,6 +1329,110 @@ mod tests {
             seen(&mut player_escort(near, false, false), false),
             "uncloaked"
         );
+    }
+
+    /// NPC 5, a fighter returning to `carrier`, 400 off the centre.
+    fn returning_to(carrier: ShipRef) -> Npc {
+        let mut fighter = at(5, 400.0, 0.0);
+        fighter.goal = Goal::Dock(carrier);
+        fighter.carrier = Some(Carrier {
+            ship: carrier,
+            window: 100.0,
+            reach: 30.0,
+        });
+        fighter
+    }
+
+    /// Whether `traffic`'s fighter, NPC 5, sees its carrier as its low
+    /// level reads it at its slot in `world`.
+    fn fighter_sees(traffic: &mut Traffic, world: &World) -> bool {
+        let index = traffic.npcs.iter().position(|npc| npc.id == NpcId(5));
+        traffic
+            .reads_at_slot(index.expect("there"), world)
+            .2
+            .leader_seen
+    }
+
+    /// NPC 2, cloaked at the centre, a carrier its fighters can't see.
+    fn cloaked_carrier() -> Npc {
+        let mut carrier = at(2, 0.0, 0.0);
+        carrier.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        carrier
+    }
+
+    #[test]
+    fn a_fighter_reads_its_sight_of_its_carrier_as_the_half_began() {
+        // The player's fighter, its carrier the player, against a cloak.
+        let mut player_fighter = Traffic {
+            npcs: vec![returning_to(ShipRef::Player)],
+            ..Traffic::default()
+        };
+        assert!(!fighter_sees(&mut player_fighter, &with_player(true)));
+        assert!(fighter_sees(&mut player_fighter, &with_player(false)));
+        // An NPC's, led by the carrier.
+        let world = World::new(&[]);
+        let mut npc_fighter = Traffic {
+            npcs: vec![cloaked_carrier(), returning_to(ShipRef::Npc(NpcId(2)))],
+            ..Traffic::default()
+        };
+        npc_fighter.npcs[1].leader = Some(NpcId(2));
+        assert!(!fighter_sees(&mut npc_fighter, &world));
+        // A player's escort's: its carrier is not its leader, the player.
+        let mut escorts = Traffic {
+            npcs: vec![cloaked_carrier(), returning_to(ShipRef::Npc(NpcId(2)))],
+            ..Traffic::default()
+        };
+        escorts.npcs[1].escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        assert_eq!(escorts.npcs[1].leader_ref(), Some(ShipRef::Player));
+        assert!(!fighter_sees(&mut escorts, &with_player(false)));
+        // Another goal reads no carrier.
+        escorts.npcs[1].goal = Goal::JumpOut;
+        assert!(fighter_sees(&mut escorts, &with_player(false)));
+    }
+
+    #[test]
+    fn a_fighter_turned_back_this_tick_reads_its_carriers_sight() {
+        // Following its leader's jump with no fuel for it, it turns back
+        // first (@0x8d608), and the sight (@0x8ed00) reads the carrier.
+        // Read before it, it would be the player's sight, its leader's.
+        let carrier = ShipRef::Npc(NpcId(2));
+        let mut fighter = returning_to(carrier);
+        fighter.goal = Goal::Formation { guard: None };
+        fighter.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        fighter.warp.goal = Some(super::warp_out::WarpGoal::Follow(carrier));
+        fighter.class_fuel = 0;
+        let mut traffic = Traffic {
+            npcs: vec![cloaked_carrier(), fighter],
+            ..Traffic::default()
+        };
+        // Its slot's turn-back, then its low level's read.
+        let world = with_player(false);
+        traffic.open_dispatch();
+        traffic.leave_in_dispatch(
+            &world,
+            &|_| true,
+            &crate::traffic::NoBay::new(),
+            &mut NeverFires,
+        );
+        assert_eq!(traffic.npcs[1].goal, Goal::Dock(carrier));
+        assert!(!fighter_sees(&mut traffic, &world));
     }
 
     #[test]

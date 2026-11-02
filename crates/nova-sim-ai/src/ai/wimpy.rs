@@ -10,9 +10,9 @@
 //! but 0, as its idle block runs on goal 0 alone (@0x8b06c): a plunder, a
 //! fight on a ship still here, a mine, a scoop or a stellar attack, a lost
 //! lead's that the succession copied included ([`trader_keep`]). Goal 4's
-//! high level then flies a kept attack in the same frame: one on a ship
-//! breaking up ends, and a hopeless chase is fled
-//! ([`trader_keep::high_level`]).
+//! high level then flies a kept attack in the same frame, as it does every
+//! type's ([`attack_drop`](super::attack_drop)): one on a ship breaking up
+//! ends, and a hopeless chase is fled.
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
@@ -25,7 +25,6 @@ use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
-use crate::traffic::provocation::attack_breaking_up;
 
 /// Nova's wimpy trader (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,25 +48,16 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 }
 
 impl Behaviour for WimpyTrader {
-    /// Its think's goal ([`think`]) as goal 4's high level takes it
-    /// ([`trader_keep::high_level`]), an attack on a ship breaking up
-    /// ended with its target and provocation ([`trader_keep::ends_attack`],
-    /// [`attack_breaking_up`]), with a distress call when the think flees
-    /// ([`when_fleeing`]), and its idle block's pick written to its travel
-    /// stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef).
+    /// Its think's goal ([`think`]), with a distress call when the think
+    /// flees ([`when_fleeing`]), and its idle block's pick written to its
+    /// travel stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef). The
+    /// high level, which `NovaAi` runs after it, takes a kept attack
+    /// ([`attack_drop`](super::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
-        let ended = trader_keep::ends_attack(thought, around);
         Decision {
-            goal: if ended {
-                Goal::Idle
-            } else {
-                trader_keep::high_level(npc, thought, around)
-            },
+            goal: thought,
             comm_call: when_fleeing(thought),
-            clears_target: ended,
-            hopeless_flee: trader_keep::hopeless_flee(npc, thought, around).filter(|_| !ended),
-            forgets_provocation: attack_breaking_up(npc, thought, around),
             travel: idle_block::pick_write(npc, around, thought),
             ..Decision::default()
         }
@@ -404,6 +394,15 @@ mod tests {
         WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
     }
 
+    /// [`decision_among`] through Nova's AI: the think, then the high
+    /// level.
+    fn flown_among(npcs: &[Npc]) -> Decision {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -1000.0), 0);
+        crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
     #[test]
     fn an_unprovoked_wimpy_trader_keeps_a_plunder_of_a_disabled_or_intact_ship_or_one_gone() {
         // Its idle block runs on goal 0 alone (@0x8b06c), and unprovoked
@@ -444,15 +443,13 @@ mod tests {
             } else {
                 goal
             };
-            assert_eq!(
-                decision_among(&keeping(goal, Condition::Intact)).goal,
-                goal_now,
-                "{goal:?}"
-            );
+            let npcs = keeping(goal, Condition::Intact);
+            assert_eq!(decision_among(&npcs).goal, goal, "{goal:?}: the think");
+            assert_eq!(flown_among(&npcs).goal, goal_now, "{goal:?}");
         }
         let npcs = keeping(Goal::Attack(n(2)), Condition::Intact);
         assert_eq!(
-            decision_among(&npcs[..1]).goal,
+            flown_among(&npcs[..1]).goal,
             Goal::Land(StellarId(128)),
             "a fight on a ship gone idles (@0x8e263 → @0x8e731)"
         );
@@ -510,7 +507,13 @@ mod tests {
             ticks_left: 3,
             starting: false,
         };
-        let decision = decision_among(&keeping(Goal::Attack(n(2)), dying));
+        let npcs = keeping(Goal::Attack(n(2)), dying);
+        assert_eq!(
+            decision_among(&npcs).goal,
+            Goal::Attack(n(2)),
+            "the think's"
+        );
+        let decision = flown_among(&npcs);
         assert_eq!(decision.goal, Goal::Idle);
         assert!(decision.clears_target);
         assert!(decision.forgets_provocation);
@@ -525,7 +528,7 @@ mod tests {
         npcs[0].hull.mass = 100.0;
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = crate::geometry::Vec2::new(0.0, 1.0);
-        let decision = decision_among(&npcs);
+        let decision = flown_among(&npcs);
         assert_eq!(decision.goal, Goal::Flee(n(2)));
         assert_eq!(
             decision.hopeless_flee,
@@ -535,7 +538,7 @@ mod tests {
         assert_eq!(decision.comm_call, None, "the think saw goal 4");
         npcs[0].goal = decision.goal;
         assert_eq!(
-            decision_among(&npcs).hopeless_flee,
+            flown_among(&npcs).hopeless_flee,
             None,
             "a flight kept is no hopeless chase"
         );

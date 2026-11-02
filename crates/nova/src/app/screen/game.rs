@@ -87,7 +87,8 @@ impl AppScreen {
     }
 
     /// Leaves play for the main menu keeping the pilot: puts it away
-    /// (saved, or a strict pilot dying deleted, [`AppScreen::put_away_pilot`])
+    /// (saved when landed, or a strict pilot dying deleted,
+    /// [`AppScreen::put_away_pilot`])
     /// before anything can show the menu or list the pilots, shows the
     /// menu, drops the spaceport and every dialog over flight, and holds
     /// the flight as the game in progress, as `_EnterGameFromMainScreen`

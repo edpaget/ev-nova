@@ -39,9 +39,10 @@
 //!   `Holds`, takes it out of the formation keeping its mark, gives it its
 //!   class's `InherentAI` and the release's resets, and sends it off
 //!   ([`Session::release_mission_escort`]);
-//! - a `ShipBehav` 0 one still hunts the player
+//! - a `ShipBehav` 0 one still turns on the player each think
 //!   (`_HighLevelAIHandler` @0x8d628-0x8d6ea, after `_EscortAI`
-//!   @0x901e5).
+//!   @0x901e5), though the attack block drops that attack at once, as its
+//!   +0x9a is the player (`nova_sim_ai::ai::attack_drop`).
 //!
 //! Use As My Ship leaves the captured slot inactive with its mark set
 //! (`_DoShipCapture` @0x41a46); every reader of the mark tests the active
@@ -204,6 +205,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -287,7 +290,15 @@ mod tests {
         assert_eq!(session.can_hire_escorts(), can_hire);
         let saved = crate::save::encode(session.pilot());
         let loaded = crate::save::decode(&saved).expect("loads");
-        assert_eq!(loaded.escorts(), [hired()], "_WritePilotData @0x72683");
+        let hired_berth = session.space.npc(hired_id).map(|npc| npc.berth);
+        assert_eq!(
+            loaded.escorts(),
+            [Escort {
+                berth: hired_berth,
+                ..hired()
+            }],
+            "_WritePilotData @0x72683"
+        );
     }
 
     #[test]
@@ -392,7 +403,9 @@ mod tests {
     }
 
     #[test]
-    fn a_captured_attack_player_mission_escort_still_hunts_the_player() {
+    fn a_captured_attack_player_mission_escort_keeps_its_mark_through_the_ticks() {
+        // Wiring only: what its hunt and the attack block then make of it
+        // is `nova_sim_ai`'s.
         let mut catalog = goal_catalog(0, 0);
         catalog.missions[0].ships.behav = 0;
         let (mut session, id) = captured(&catalog);
@@ -423,10 +436,10 @@ mod tests {
         }
         let npc = session.space.npc(id).expect("here");
         assert_eq!(
-            npc.goal,
-            Goal::Attack(crate::combat::ShipRef::Player),
-            "_HighLevelAIHandler @0x8d628-0x8d6ea"
+            npc.mission.map(|mark| mark.behav),
+            Some(ShipBehav::AttackPlayer)
         );
+        assert!(npc.mission_escort());
     }
 
     /// Mission 140, in flight and failed, both its ships captured for

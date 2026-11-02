@@ -8,8 +8,9 @@
 //! It runs after the type's think (`_AIDispatch` @0x901e5) and the
 //! `ShipBehav` 0 mission hunt (@0x8d628-0x8d6e9), on the goal they leave:
 //! an attack or snipe (state 4) or a plunder (0xd), with a target. Like
-//! the rest of the handler it is skipped while the ship's AI wait runs
-//! ([`Npc::ai_wait`], @0x8d4b9-0x8d4d2). It asks whether the ship sees
+//! the rest of the handler it is never reached by a ship that waits out at
+//! the handler's head ([`handler_head::skips`](crate::ai::handler_head::skips),
+//! @0x8d4b9-0x8d4d2), which `NovaAi` asks first. It asks whether the ship sees
 //! its target ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8d738).
 //!
 //! - Seen, the search timer (+0xc90c, [`Npc::lost_sight`]) is cleared
@@ -131,9 +132,6 @@ pub fn after_think(
     around: &Surroundings,
     chance: &mut dyn Chance,
 ) -> Decision {
-    if npc.ai_wait > 0 {
-        return decision;
-    }
     let Some(target) = decision
         .goal
         .attacking()
@@ -389,14 +387,6 @@ mod tests {
             let decision = lost(&warship, of(goal), &mut Draws::of(&[]));
             assert_eq!(decision, of(goal), "{goal:?}");
         }
-    }
-
-    #[test]
-    fn a_ship_whose_ai_wait_runs_skips_the_block() {
-        let mut warship = hunter(AiType::Warship, SearchTimer::Searching(5));
-        warship.ai_wait = 3;
-        let decision = lost(&warship, of(Goal::Attack(n(2))), &mut Draws::of(&[]));
-        assert_eq!(decision, of(Goal::Attack(n(2))), "@0x8d4b9-0x8d4d2");
     }
 
     #[test]

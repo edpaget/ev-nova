@@ -159,8 +159,7 @@ pub struct Target {
     pub ship: ShipRef,
     /// Its ship type.
     pub ship_type: ShipId,
-    /// Its fleet: the lead it escorts, or itself, which point defence
-    /// reads.
+    /// Its fleet: the root of its chain of leads, or itself.
     pub fleet: ShipRef,
     /// Its leader, government and `düde`, which the hit rules read.
     pub ties: Ties,

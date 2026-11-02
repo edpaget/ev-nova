@@ -24,12 +24,16 @@
 //! fighter recall and the hiring room, which read the pilot's escorts or
 //! the session's fleet, all leave it out, as the original leaves out
 //! every marked ship there. A ship disabled before it joins does not join
-//! until it is intact again; one disabled once joined keeps its place, as
-//! the original leaves a disabled ship's leader as it was (@0x8fc0c), and
-//! its `_HandleShip` releases only an unmarked disabled escort
-//! (@0x339a6). One that repairs itself (see
-//! [`self_repair`](super::self_repair)) resumes as a mission escort: it
-//! never left, so it never rejoins as a hired one. A person swapped for a ship of a `ShipGoal` 3 mission of
+//! until it is intact again. One disabled once joined is a stranger from
+//! its first dispatch disabled to its first dispatch whole, its mark and
+//! slot kept: the disabled reset writes its parent -1 and the re-lead
+//! skips a disabled ship (@0x8feda, @0x8fc0c; see the
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts) module),
+//! so it leaves the formation and rejoins it once whole. Its `_HandleShip`
+//! releases only an unmarked disabled escort (@0x339a6). One that repairs
+//! itself (see [`self_repair`](super::self_repair)) resumes as a mission
+//! escort at the next pass's re-lead: it never left its mission, so it
+//! never rejoins as a hired one. A person swapped for a ship of a `ShipGoal` 3 mission of
 //! another `ShipBehav` never joins: the swap's `_AIMakeEscortFlyInForm`
 //! (@0x62509) follows its leader, which `_GenericRandomShipSpawn` left at
 //! -1 (@0x3c9cd), so it never forms on the player.
@@ -90,24 +94,39 @@
 //! only loses its mark. A mission escort breaking up leaves the formation
 //! without losing its mark (see Death).
 //!
-//! **Death.** A mission escort that starts to break up (or is destroyed
-//! outright) leaves the formation on that tick, before its wreck is
-//! taken out ([`Session::lose_dying_mission_escorts`]), as
-//! `_HandleShip`'s dying branch (@0x350ab-0x3512b) clears its leader and
-//! sets its AI type to its ship type's `InherentAI`. Its mark stays, so
-//! it is still its mission's ship lost when it goes, and the rest
-//! re-form at once. A trader (`InherentAI` 2 or less) first takes its
-//! share of the fleet's cargo (`_DestroyPartialFleetCargo`,
-//! [`Session::lose_cargo_share`]): as its `Holds` are never in the
-//! fleet's, it takes its `Holds` over the player's ship's and the hired
-//! traders', at most all of it, by the engine, and over those with its
-//! own by the other reading of
-//! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare). A
-//! disabled mission escort keeps its place and takes nothing.
+//! **Death.** `_HandleShip`'s dying branch (@0x350a8-0x35134) runs from
+//! the pass after the display that set the death timer
+//! (@0x35083-0x3508b), and for a mission escort with parent 0 (@0x350ab)
+//! clears its leader and sets its AI type to its ship type's `InherentAI`
+//! ([`Session::lose_dying_mission_escort`], at the ship's step of the ship
+//! loop). An advance pass's dispatch resets a ship breaking up before
+//! that, so the branch finds a mission escort only in double time's
+//! second pass or on the jump or the glide path; otherwise the reset has
+//! dropped it already, and it takes nothing (see the
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts) module).
+//! Either way its mark stays, so it is still its mission's ship lost when
+//! it goes, and the rest re-form. A trader (`InherentAI` 2 or less) the
+//! branch reaches first takes its share of the fleet's cargo
+//! (`_DestroyPartialFleetCargo`, [`Session::lose_cargo_share`]): as its
+//! `Holds` are never in the fleet's, it takes its `Holds` over the
+//! player's ship's and the hired traders', at most all of it, by the
+//! engine, and over those with its own by the other reading of
+//! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare). A deadly
+//! stellar's kill, by its other reading, takes the ship out of the
+//! formation at once ([`Session::lose_dying_mission_escorts`]). A disabled
+//! mission escort takes nothing.
+//!
+//! **The player's death.** While the player breaks up, a `ShipBehav` 1
+//! ship is let go between its think and the next dispatch
+//! ([`Npc::mission_let_go`], see
+//! [`dying_player_escorts`](super::dying_player_escorts)): to every reader
+//! it is a stranger, so a pod leaves it, its mission's end only clears its
+//! mark, and its break-up takes no share, and it is led again once the
+//! player is whole. A mission's ship captured for an escort, of a
+//! `ShipBehav` other than 1 or 2, is freed for good.
 
 use super::{Session, Space, Statics};
 use crate::ai::{Goal, travel};
-use crate::catalog::ShipId;
 use crate::combat::hull::Condition;
 use crate::escort::{EscortClass, FormationSlot};
 use crate::mission::ships::ShipBehav;
@@ -167,18 +186,28 @@ impl Session {
         }
     }
 
-    /// Every mission escort breaking up or destroyed leaves the formation
-    /// at once, as `_HandleShip`'s dying branch (@0x350ab-0x3512b) clears
-    /// its leader and sets its AI type to its ship type's `InherentAI`
-    /// (@0x35118-0x3512b) on the first tick it is dying. Its mark stays,
-    /// so it is still counted as its mission's ship lost when it goes, and
-    /// it does not leave the system. A trader (`InherentAI` 2 or less)
-    /// first takes its share of the fleet's cargo
-    /// ([`Session::lose_cargo_share`], @0x350d9-0x350f4): the original
-    /// tests its AI type 6 and no mark, and its `Holds` are never in the
-    /// fleet's, a marked ship's never being (@0xced9). The rest re-form.
+    /// `_HandleShip`'s dying branch (@0x350a8-0x35134) for NPC `id`, its
+    /// condition `was` as the pass began: once its display has set its
+    /// death timer (@0x35083-0x3508b), a mission escort it still is (its
+    /// parent 0, @0x350ab) leaves the formation ([`Session::lose_mission_escort`])
+    /// and the rest re-form. An advance pass's dispatch has reset a ship
+    /// breaking up first (see the `disabled_mission_escorts` module), so
+    /// it is one only in double time's second pass, or on the jump or the
+    /// glide path. The ship loop runs it at the NPC's step.
+    pub(super) fn lose_dying_mission_escort(&mut self, id: NpcId, was: Condition) {
+        let timed = matches!(was, Condition::Dying { ticks_left, .. } if ticks_left > 0);
+        if timed && self.space.npc(id).is_some_and(Npc::mission_escort) {
+            self.lose_mission_escort(id);
+            self.reform();
+        }
+    }
+
+    /// Every mission escort a deadly stellar destroyed leaves the
+    /// formation ([`Session::lose_mission_escort`]), and the rest re-form:
+    /// the stellar's other reading of the kill (see the `deadly_stellars`
+    /// module).
     pub(super) fn lose_dying_mission_escorts(&mut self) {
-        let dying: Vec<(NpcId, ShipId)> = self
+        let dying: Vec<NpcId> = self
             .space
             .traffic
             .npcs()
@@ -190,26 +219,42 @@ impl Session {
                         Condition::Dying { .. } | Condition::Destroyed
                     )
             })
-            .map(|npc| (npc.id, npc.ship))
+            .map(|npc| npc.id)
             .collect();
-        for &(id, ship) in &dying {
-            let inherent = self
-                .statics
-                .ship_record(ship)
-                .map(|record| AiType::from_raw(record.inherent_ai));
-            if let Some(npc) = self.space.npc_mut(id) {
-                if let Some(mark) = &mut npc.mission {
-                    mark.formation = None;
-                }
-                if let Some(ai_type) = inherent {
-                    npc.ai_type = ai_type;
-                }
-            }
-            self.lose_cargo_share(ship, id);
+        for &id in &dying {
+            self.lose_mission_escort(id);
         }
         if !dying.is_empty() {
             self.reform();
         }
+    }
+
+    /// Mission escort NPC `id`, dying, leaves the formation, as
+    /// `_HandleShip`'s dying branch (@0x350ab-0x3512b) clears its leader
+    /// and sets its AI type to its ship type's `InherentAI`
+    /// (@0x35118-0x3512b). Its mark stays, so it is still counted as its
+    /// mission's ship lost when it goes, and it does not leave the system.
+    /// A trader (`InherentAI` 2 or less) first takes its share of the
+    /// fleet's cargo ([`Session::lose_cargo_share`], @0x350d9-0x350f4):
+    /// the original tests its AI type 6 and no mark, and its `Holds` are
+    /// never in the fleet's, a marked ship's never being (@0xced9).
+    fn lose_mission_escort(&mut self, id: NpcId) {
+        let Some(ship) = self.space.npc(id).map(|npc| npc.ship) else {
+            return;
+        };
+        let inherent = self
+            .statics
+            .ship_record(ship)
+            .map(|record| AiType::from_raw(record.inherent_ai));
+        if let Some(npc) = self.space.npc_mut(id) {
+            if let Some(mark) = &mut npc.mission {
+                mark.formation = None;
+            }
+            if let Some(ai_type) = inherent {
+                npc.ai_type = ai_type;
+            }
+        }
+        self.lose_cargo_share(ship, id);
     }
 }
 
@@ -229,7 +274,19 @@ impl Space {
             return false;
         };
         npc.mission = None;
-        if escort {
+        if npc.mission_let_go {
+            // `_EscortAI` has written +0x88 already, and with +0x9a -1 the
+            // slot-freed branch clears only the mark (@0x8fc3a-0x8fc4b).
+            npc.mission_let_go = false;
+            npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
+        } else if npc.mission_dropped {
+            // The disabled reset's +0x9a -1: only the mark goes, and +0x88
+            // stays the re-lead's 6 until its first think whole, where
+            // `_EscortAI`'s lost parent writes its `InherentAI` (@0x83c4a).
+            npc.mission_dropped = false;
+            npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
+            npc.kept_escort_ai = true;
+        } else if escort {
             leave_formation(npc, inherent);
         }
         escort
@@ -286,7 +343,7 @@ pub(super) mod tests {
     }
 
     /// The mission escorts in the system, in order.
-    fn mission_escorts(session: &Session) -> Vec<&Npc> {
+    pub(in crate::session) fn mission_escorts(session: &Session) -> Vec<&Npc> {
         session
             .npcs()
             .iter()
@@ -397,15 +454,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_mission_escort_stays_joined_while_marked_and_while_disabled() {
+    fn a_mission_escort_leaves_while_disabled_and_rejoins_once_whole() {
+        // The reset's +0x9a -1 (@0x8feda), and the re-lead once whole
+        // (@0x8fc03-0x8fc22, skipped while disabled @0x8fc0c).
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         ticks(&mut session, &catalog, 5);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
-        session.space.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.condition = Condition::Disabled;
+        npc.reserves.armor.now = 1.0;
         ticks(&mut session, &catalog, 5);
-        assert_eq!(slots(&session), [(2, 3), (3, 3)], "keeps its place");
+        assert_eq!(slots(&session), [(2, 2)], "the other alone");
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.condition = Condition::Intact;
+        npc.reserves.armor.now = npc.reserves.armor.max;
+        tick(&mut session, &catalog);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)], "rejoined");
     }
 
     #[test]
@@ -587,6 +653,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -702,25 +770,22 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         session.space.traffic.npcs_mut()[0].condition = Condition::Destroyed;
-        work_with(
-            &mut session,
-            &catalog,
-            Controls::default(),
-            &Passive,
-            crate::combat::Rules::default(),
-            &mut NeverFires,
-        );
+        let pass = |session: &mut Session| {
+            work_with(
+                session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
+        };
+        pass(&mut session);
         assert_eq!(session.npcs().len(), 1);
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
-        // The next pass finds it gone (`Session::reform_on_swarm_change`).
-        work_with(
-            &mut session,
-            &catalog,
-            Controls::default(),
-            &Passive,
-            crate::combat::Rules::default(),
-            &mut NeverFires,
-        );
+        // The next pass's head re-forms, as the original's next
+        // `_HandlePlayer` calc leaves the inactive slot out (@0x6f1cb).
+        pass(&mut session);
         assert_eq!(slots(&session), [(2, 2)]);
     }
 
@@ -746,13 +811,28 @@ pub(super) mod tests {
         session
     }
 
-    /// The first mission escort's armour goes to 0, and the fight ticks:
-    /// it starts to break up, for 5 ticks. Its NPC.
-    fn break_up(session: &mut Session) -> NpcId {
+    /// The first mission escort's armour goes to 0 after the pass's
+    /// dispatch, and an advance pass's fight ticks: it starts to break up,
+    /// for 5 ticks, its display setting the timer. Its NPC.
+    fn start_breakup(session: &mut Session) -> NpcId {
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.reserves.armor.now = 0.0;
         npc.hull.death_delay = 5;
         let id = npc.id;
+        advance(session);
+        let npc = session.space.npc(id).expect("breaking up");
+        assert!(matches!(
+            npc.condition,
+            Condition::Dying {
+                ticks_left: 1..,
+                ..
+            }
+        ));
+        id
+    }
+
+    /// An advance pass by a passive AI.
+    fn advance(session: &mut Session) {
         work_with(
             session,
             &crate::testkit::catalog(),
@@ -761,9 +841,76 @@ pub(super) mod tests {
             crate::combat::Rules::default(),
             &mut NeverFires,
         );
-        let npc = session.space.npc(id).expect("breaking up");
-        assert!(matches!(npc.condition, Condition::Dying { .. }));
+    }
+
+    /// The breakup started ([`start_breakup`]), then double time's second
+    /// pass, which runs no dispatch, so its `_HandleShip`'s dying branch
+    /// finds the parent the re-lead gave it (@0x350ab). Its NPC.
+    fn break_up(session: &mut Session) -> NpcId {
+        let id = start_breakup(session);
+        session.tick_again(
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
         id
+    }
+
+    #[test]
+    fn a_dying_mission_escort_behind_an_advance_dispatch_takes_no_share_and_keeps_its_ai() {
+        // The pass's dispatch resets a ship breaking up (`_IsDisabled`,
+        // @0x8feda) before its `_HandleShip` (@0x350ab): parent -1.
+        let mut session = laden(1, RuleSource::Engine);
+        let ai_type = session.space.traffic.npcs()[0].ai_type;
+        let id = start_breakup(&mut session);
+        advance(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 9), (OPALS, 3)]),
+            "nothing destroyed"
+        );
+        let npc = session.space.npc(id).expect("breaking up");
+        assert_eq!(npc.ai_type, ai_type);
+        assert!(!npc.mission_escort());
+        assert!(npc.mission.is_some(), "still its mission's ship");
+    }
+
+    #[test]
+    fn a_dying_mission_escort_on_the_players_jump_takes_its_share_on_an_advance_pass() {
+        // The jump path skips the reset (@0x8fd83-0x8fd9a).
+        let mut session = laden(1, RuleSource::Engine);
+        let id = start_breakup(&mut session);
+        session.space.npc_mut(id).expect("breaking up").warp.goal = Some(
+            crate::traffic::warp_out::WarpGoal::Follow(crate::combat::ShipRef::Player),
+        );
+        advance(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "its 10 of the player's 20"
+        );
+    }
+
+    #[test]
+    fn a_mission_escort_breaking_up_while_let_go_takes_no_cargo_share() {
+        // `_HandleShip`'s dying branch tests parent 0 (@0x350ab): no share
+        // and no AI write.
+        let mut session = laden(1, RuleSource::Engine);
+        session.ship.condition = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        tick(&mut session, &ships_catalog(escorting(-1, 0)));
+        let ai_type = session.space.traffic.npcs()[0].ai_type;
+        assert!(session.space.traffic.npcs()[0].mission_let_go);
+        let id = break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 9), (OPALS, 3)]),
+            "nothing destroyed"
+        );
+        assert_eq!(session.space.npc(id).expect("here").ai_type, ai_type);
     }
 
     #[test]
@@ -951,7 +1098,9 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert_eq!(session.pilot.cargo, BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
-        assert!(session.npcs()[0].mission_escort());
+        let disabled = &session.npcs()[0];
+        assert!(!disabled.mission_escort(), "dropped by its reset");
+        assert!(disabled.mission.is_some());
     }
 
     #[test]
@@ -1001,6 +1150,17 @@ pub(super) mod tests {
         assert!(
             (npc.reserves.armor.now - crate::self_repair::repaired_armor(max, false)).abs() < 1e-4
         );
+        assert!(!npc.mission_escort(), "its reset came before the repair");
+        // The next pass's re-lead (@0x8fc03-0x8fc22).
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
+        let npc = session.space.npc(id).expect("here");
         assert!(npc.mission_escort(), "resumes as a mission escort");
         assert_eq!(npc.escort, None);
         assert!(session.pilot().escorts().is_empty(), "never a hired escort");
@@ -1012,7 +1172,7 @@ pub(super) mod tests {
 
     /// [`ships_catalog`] of `ships`, its ship 200 of `InherentAI` 1, a
     /// wimpy trader, where the düde's `AIType` is 3, a warship.
-    fn inherent_catalog(ships: MissionShip) -> FakePilotCatalog {
+    pub(in crate::session) fn inherent_catalog(ships: MissionShip) -> FakePilotCatalog {
         let mut catalog = ships_catalog(ships);
         catalog.ship_records[1].inherent_ai = 1;
         catalog
@@ -1029,7 +1189,7 @@ pub(super) mod tests {
 
     /// Each released mission escort among `ids`: unmarked, its ship type's
     /// AI, leaving by a jump.
-    fn assert_released(session: &Session, ids: &[NpcId]) {
+    pub(in crate::session) fn assert_released(session: &Session, ids: &[NpcId]) {
         let released = of(session, ids);
         assert_eq!(released.len(), ids.len(), "still here as they leave");
         for npc in released {
@@ -1047,7 +1207,9 @@ pub(super) mod tests {
 
     /// A session of `catalog` in flight with mission 140's two escorts
     /// and a hired escort in formation: the mission escorts' NPCs.
-    fn flying_with_escorts(catalog: &FakePilotCatalog) -> (Session, Vec<NpcId>) {
+    pub(in crate::session) fn flying_with_escorts(
+        catalog: &FakePilotCatalog,
+    ) -> (Session, Vec<NpcId>) {
         let mut session = accepted(catalog);
         session.pilot.escorts.push(hired());
         take_off(&mut session, catalog);
@@ -1060,7 +1222,7 @@ pub(super) mod tests {
     }
 
     /// The hired escort's slot and formation size.
-    fn hired_slot(session: &Session) -> (u8, u8) {
+    pub(in crate::session) fn hired_slot(session: &Session) -> (u8, u8) {
         let id = session.space.escorts.fleet[0].expect("placed");
         let duty = session
             .space
@@ -1507,7 +1669,9 @@ pub(super) mod tests {
             .get(0)
             .and_then(|active| active.failed);
         assert!(failed.is_some(), "an escort goal fails");
-        assert!(session.npcs()[0].mission_escort(), "the disabled one stays");
+        let disabled = &session.npcs()[0];
+        assert!(disabled.mission.is_some(), "the disabled one stays marked");
+        assert!(!disabled.mission_escort(), "but not led");
     }
 
     #[test]
@@ -1597,6 +1761,7 @@ pub(super) mod tests {
         let mut session = accepted(catalog);
         take_off(&mut session, catalog);
         assert_eq!(mission_escorts(&session).len(), 2);
+        crate::testkit::words_of_orders(&mut session);
         session
     }
 
@@ -1717,7 +1882,10 @@ pub(super) mod tests {
     // @0x56392).
 
     /// The menu row of `class`.
-    fn row(session: &Session, class: EscortClass) -> crate::escort::ClassRow {
+    pub(in crate::session) fn row(
+        session: &Session,
+        class: EscortClass,
+    ) -> crate::escort::ClassRow {
         session
             .space
             .escort_rows()

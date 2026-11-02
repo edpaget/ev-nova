@@ -306,8 +306,8 @@ fn a_missile_a_beam_downs_before_its_first_move_is_still_tested() {
 #[test]
 fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
     // B's missile at A, which A's beam downs; C, A's escort, defends A's
-    // missiles too (`defence::choose` reads the defender's fleet), and its
-    // ready beam takes the missile while it is live.
+    // missiles too (`defence::choose` reads the defender's parent, +0x9a),
+    // and its ready beam takes the missile while it is live.
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = arena(&arsenal, &govts, Rules::default());
     let scene = || {
@@ -323,6 +323,7 @@ fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
         combat.shots[0].aimed_at = Some(A);
         let mut escort = Ship::at(3, 0.0, -50.0).armed(pd_beam());
         escort.fleet = A;
+        escort.leader = Some(A);
         escort.trigger = QUIET;
         let ships = [
             Ship::at(1, 0.0, 0.0).armed(pd_beam()),

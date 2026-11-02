@@ -160,6 +160,8 @@ mod tests {
             wage: Some(100),
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         session.set_escorts(vec![escort]);
         let held = session.pilot().escorts();

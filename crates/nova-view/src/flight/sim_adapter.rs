@@ -36,6 +36,7 @@
 //! [`SessionFlight::enter_game`], [`SessionFlight::open_saved`]),
 //! saving ([`SessionFlight::may_save`], [`SessionFlight::is_dying`],
 //! [`SessionFlight::deletes_pilot_on_ending_play`],
+//! [`SessionFlight::saves_on_ending_play`],
 //! [`SessionFlight::load_repaired`], [`SessionFlight::loaded_after_movie`])
 //! and the pilot the app saves and names ([`SessionFlight::pilot`]). The
 //! app reaches them through `FlightView::sim`. `SessionFlight::transact`,
@@ -351,6 +352,15 @@ impl<C> SessionFlight<C> {
     #[must_use]
     pub fn may_save(&self) -> bool {
         self.session().is_ok_and(Session::may_save)
+    }
+
+    /// Whether ending play now saves the pilot
+    /// (`nova_sim::Session::saves_on_ending_play`): it may be saved, and it
+    /// is landed or the `in_flight_save` rule's other reading saves it in
+    /// flight too. Never without a session.
+    #[must_use]
+    pub fn saves_on_ending_play(&self) -> bool {
+        self.session().is_ok_and(Session::saves_on_ending_play)
     }
 
     /// Whether the pilot is dying, as `_IsDying` (@0x253d) says: its ship
@@ -940,6 +950,7 @@ mod tests {
         assert!(!flight.may_save());
         assert!(!flight.is_dying());
         assert!(!flight.deletes_pilot_on_ending_play());
+        assert!(!flight.saves_on_ending_play());
         assert!(!flight.load_repaired());
         assert_eq!(flight.loaded_after_movie(), None);
         assert_eq!(flight.screen(ScreenAsk::Shops), ScreenAnswer::Nothing);
@@ -1061,6 +1072,21 @@ mod tests {
         );
         assert_eq!(flight.load_repaired(), session.load_repaired());
         assert_eq!(flight.loaded_after_movie(), session.loaded_after_movie());
+    }
+
+    #[test]
+    fn whether_ending_play_saves_is_the_sessions_under_either_reading() {
+        let catalog = shared();
+        for source in nova_sim::RuleSource::ALL {
+            let rules = Rulebook::default().with_override(nova_sim::RuleKey::InFlightSave, source);
+            let flight = SessionFlight::start_ruled(&catalog, &rules);
+            let session = flight.session().expect("started");
+            assert_eq!(
+                flight.saves_on_ending_play(),
+                session.saves_on_ending_play(),
+                "{source:?}"
+            );
+        }
     }
 
     #[test]

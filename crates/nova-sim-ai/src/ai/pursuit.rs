@@ -1377,6 +1377,20 @@ mod tests {
     }
 
     #[test]
+    fn a_hopeless_chases_flight_flees_close_at_any_distance() {
+        // Goal 3 on sub 5 from the attack block (@0x8e625-0x8e62e): the
+        // state-3 block's reach test isn't run that frame.
+        let npc = Npc {
+            fled_hopeless: Some(crate::ai::hopeless_flee::HopelessFlee::Attack),
+            ..fighter(Goal::Flee(ShipRef::Player), 0.0)
+        };
+        for off in [Vec2::new(251.0, 0.0), Vec2::new(0.0, -3000.0)] {
+            let fled = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+            assert_eq!(bodies(&fled), [Manoeuvre::Flee], "{off:?}");
+        }
+    }
+
+    #[test]
     fn a_stand_off_afterburner_ship_backing_away_rushes_in_the_same_tick() {
         let mut npc = burning(fighter(AT_PLAYER, 0.0));
         npc.hull.stands_off = true;

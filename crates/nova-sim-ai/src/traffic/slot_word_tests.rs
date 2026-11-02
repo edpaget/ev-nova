@@ -453,12 +453,13 @@ fn on_the_second_pass_a_slot_cap_stays_the_advance_slots_top_speed() {
 fn a_burst_settled_on_the_advance_pass_thrusts_nothing_on_the_second() {
     // `_AIMakeShipStopJumping` (@0x82eb3-0x82eb6) zeroes +0x30 and +0x34
     // as the burst ends: the second pass, with no low level, thrusts
-    // nothing. Sub 1's brake bursts an owed burst out (@0x8551e); a ship
-    // with a lead flies on after it (@0x34d5c).
+    // nothing. A wait's sub 1 brake bursts an owed burst out (@0x8551e;
+    // goal 0's sub 0 writes no +0x30); a ship with a lead flies on after
+    // it (@0x34d5c).
     let mut traffic = Traffic::with_interval(1);
     let lead = traffic.add_npc_at(ship(0, TRADERS, AiType::WimpyTrader, 0.0, 3000.0), 1);
     let mut braking = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
-    braking.goal = Goal::Idle;
+    braking.goal = Goal::Wait;
     braking.leader = Some(lead);
     braking.state.velocity = Vec2::new(0.0, 3.0);
     braking.state.heading = 0.0;
@@ -540,6 +541,7 @@ fn a_flight_ended_at_its_slot_still_settles_its_warp_under_way_at_its_step() {
         stage: 3.0,
         since: 200,
         goal: None,
+        joining: false,
     };
     let (traffic, runner, at_slot) = jump_begun_at_slot(under_way);
     let stepped = of(&traffic, runner);
@@ -740,7 +742,10 @@ fn on_the_second_pass_a_close_formation_escort_takes_no_glow_copy() {
 fn on_the_second_pass_a_docking_fighter_is_neither_pulled_nor_docked_and_thrusts_only_by_its_word()
 {
     // Sub 8's pull (@0x87ff9) and dock (@0x87f0b-0x87fef) run at its slot;
-    // the second pass flies its word (@0x87e74-0x880b8).
+    // the second pass flies its word (@0x87e74-0x880b8). Facing its
+    // carrier, its word bursts it at its pull, which ends within its cap
+    // and zeroes +0x30 (@0x82eb3-0x82eb6): the second pass thrusts
+    // nothing.
     let mut traffic = Traffic::with_interval(1);
     let carrier = traffic.add_npc_at(ship(0, TRADERS, AiType::WimpyTrader, 0.0, -50.0), 1);
     let mut fighter = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
@@ -758,14 +763,13 @@ fn on_the_second_pass_a_docking_fighter_is_neither_pulled_nor_docked_and_thrusts
     assert_ne!(pulled, Vec2::ZERO, "pulled at its slot");
     traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
     let advanced = of(&traffic, fighter).state;
-    let accel = charged(of(&traffic, fighter), 0.0).accel;
     traffic.move_in(world, &mut NeverFires);
     let again = of(&traffic, fighter).state;
     assert!(
         traffic.npcs().iter().any(|npc| npc.id == fighter),
         "not docked"
     );
-    assert_eq!(again.velocity, advanced.velocity + Vec2::new(0.0, -accel));
+    assert_eq!(again.velocity, advanced.velocity);
     assert_eq!(
         again.position,
         advanced.position + again.velocity,
