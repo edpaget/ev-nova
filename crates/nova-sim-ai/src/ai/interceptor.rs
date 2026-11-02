@@ -285,11 +285,24 @@ impl Behaviour for Interceptor {
         // Goal 4's own drops write their provocation (`held_attack`); only
         // a think left with nothing to fight meets @0x8e714 here.
         let patrols = hunt.goal.is_none();
+        // The 0x0040 word wrote +0x70 -1 and goal 0 (@0x8cbc0): its gate
+        // runs from there.
+        let dropped;
+        let patroller = if hunt.dropped_target {
+            dropped = Npc {
+                goal: Goal::Idle,
+                target: None,
+                ..npc.clone()
+            };
+            &dropped
+        } else {
+            npc
+        };
         let decision = hunt.or(|| {
-            let (goal, call) = self.patrol(npc, around, chance);
+            let (goal, call) = self.patrol(patroller, around, chance);
             comm_call = call;
-            stops = out_of_ammo::stops(npc, goal);
-            out_of_ammo::after_patrol(npc, goal)
+            stops = out_of_ammo::stops(patroller, goal);
+            out_of_ammo::after_patrol(patroller, goal)
         });
         let decision = lost_sight::after_inspection(
             npc,
@@ -1545,6 +1558,31 @@ mod tests {
     }
 
     #[test]
+    fn an_interceptor_whose_word_drops_its_target_runs_its_gate_from_goal_0() {
+        // The 0x0040 word writes +0x70 -1 and goal 0 (@0x8cbc0), so with
+        // nothing picked the gate opens (@0x8cc6d) and nothing it held is
+        // read again (@0x8cc93): a waiting interceptor threatening the
+        // player inspects it.
+        let mut threat = police();
+        threat.goal = Goal::Wait;
+        threat.target = Some(P);
+        let decision = decision_by(
+            crate::govt::NEVER_ATTACKS_PLAYER,
+            &[threat],
+            Condition::Intact,
+            0,
+            &[0; 4],
+        );
+        assert!(decision.dropped_target);
+        assert!(decision.clears_target);
+        assert_eq!(
+            decision.goal,
+            Goal::Inspect(P),
+            "its inspection, not its wait"
+        );
+    }
+
+    #[test]
     fn a_provoked_interceptor_takes_its_governments_word_and_is_provoked_by_it() {
         let mut provoked = police();
         provoked.goal = Goal::Attack(n(2));
@@ -1619,16 +1657,20 @@ mod tests {
             decision_by(ALWAYS, &[busy, pirate], Condition::Disabled, 0, &[0]),
             Decision {
                 comm_call: Some(CommCall::PreScan),
+                clears_target: true,
                 ..turned(Goal::Inspect(P))
             },
-            "the word lets a disabled player go: on to an inspection"
+            "the word lets a disabled player go, +0x70 -1 (@0x8d33a): on to an inspection"
         );
         let mut held = police();
         held.goal = Goal::Hold;
         assert_eq!(
             decision_by(ALWAYS, &[held], Condition::Disabled, 0, &[]),
-            turned(Goal::Hold),
-            "held, the word lets a disabled player go"
+            Decision {
+                clears_target: true,
+                ..turned(Goal::Hold)
+            },
+            "held, the word lets a disabled player go, +0x70 -1"
         );
         assert_eq!(
             decision_by(0, &[police()], intact, -10, &[]),

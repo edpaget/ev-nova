@@ -319,9 +319,9 @@ pub struct Npc {
     /// The ship it targets (+0x70), as it last decided, until its step's
     /// slot test lets go of one whose slot is inactive
     /// ([`Traffic::let_go_at_step`](super::Traffic::let_go_at_step)). An
-    /// idle interceptor keeps the ally goal 4's drop spared
+    /// idle warship or interceptor keeps the ally goal 4's drop spared
     /// ([`held_attack`](crate::ai::held_attack), @0x8e2d2), searching
-    /// nothing while it holds it.
+    /// nothing while it holds it, and threatening it ([`Npc::fought`]).
     pub target: Option<ShipRef>,
     /// Its provocation (the original's +0x96): the nominal damage of the
     /// hits it answered while it fights, each mass and energy arg above
@@ -1041,18 +1041,20 @@ impl Npc {
     }
 
     /// The ship the threat tests read as the one it fights: its goal's
-    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) the
-    /// target it holds. The original's tests read +0x70 and spare none of
-    /// state 6 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
-    /// `_ExtendedIsThreatToShip` @0x81a27), and a trader's stop keeps it
-    /// (@0x8d803-0x8d80f; see
-    /// [`trader_target`](crate::ai::lost_sight::trader_target)). In the
-    /// other goals that leave the quarry none, +0x70 is -1 or the state is
-    /// one the tests spare.
+    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) or
+    /// idle ([`Goal::Idle`], state 0) the target it holds. The original's
+    /// tests read +0x70 and spare neither state (`_IsThreatToPlayer`
+    /// @0x7f536-0x7f56b, `_ExtendedIsThreatToShip` @0x81a27); a trader's
+    /// stop keeps it (@0x8d803-0x8d80f; see
+    /// [`trader_target`](crate::ai::lost_sight::trader_target)), and so does
+    /// goal 4's ally drop for a warship or interceptor it idles
+    /// (@0x8e2d2, [`held_attack`](crate::ai::held_attack)), so such a ship
+    /// threatens the ally it spared. Any other goal that leaves the quarry
+    /// none is read by its quarry alone.
     #[must_use]
     pub fn fought(&self) -> Option<ShipRef> {
         match self.goal {
-            Goal::Wait => self.target,
+            Goal::Wait | Goal::Idle => self.target,
             goal => goal.quarry(),
         }
     }
@@ -2125,9 +2127,26 @@ mod tests {
             ..on_player.clone()
         };
         assert!(
-            !idle.threatens_player_or_led(led),
-            "an idle ship by its quarry alone"
+            idle.threatens_player_or_led(led),
+            "state 0 spared by neither: an idle ship by the target it kept"
         );
+        assert!(
+            !Npc {
+                target: None,
+                ..idle
+            }
+            .threatens_player_or_led(led)
+        );
+        let kept = Npc {
+            goal: Goal::Idle,
+            target: Some(ShipRef::Npc(asker)),
+            ..crate::traffic::fixture::npc(4, ShipStats::default())
+        };
+        assert!(
+            kept.threatens_npc_among(asker, &npcs),
+            "the ally drop's kept +0x70"
+        );
+        assert!(kept.threatens(ShipRef::Npc(asker)));
         let inspecting = Npc {
             goal: Goal::Inspect(ShipRef::Npc(asker)),
             target: Some(ShipRef::Npc(asker)),

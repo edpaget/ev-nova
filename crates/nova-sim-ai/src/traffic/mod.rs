@@ -336,6 +336,8 @@ pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
 pub mod warp_out;
+#[cfg(test)]
+mod warship_ally_tests;
 pub mod weigh;
 #[cfg(test)]
 mod window_tests;
