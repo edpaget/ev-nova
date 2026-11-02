@@ -154,7 +154,9 @@ fn a_ship_whose_target_is_seen_again_flies_its_fight() {
 #[test]
 fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
     // The AI wait skips the whole handler (@0x8d4b9-0x8d4d2), the
-    // search's stop with it: its pursuit and docking stand.
+    // search's stop with it: its docking stands, and the low level runs
+    // the rush it kept with no high level (@0x8d4d2 → @0x901f4,
+    // `waiting_pursuit`), keeping it outside the stay box.
     let mut traffic = attacker(SearchTimer::Searching(10));
     let kept = Pursuit {
         kept: Some(Kept::Rush),
@@ -170,7 +172,13 @@ fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
     tick(&mut traffic, &attack(None));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.lost_sight, SearchTimer::Searching(10));
-    assert_eq!(ship.pursuit, kept);
+    assert_eq!(ship.pursuit.kept, kept.kept);
+    let last = ship.pursuit.frame.and_then(|frame| frame.last());
+    assert_eq!(
+        last.map(|body| body.manoeuvre),
+        Some(crate::ai::fire::Manoeuvre::Rush),
+        "sub 0x11's block"
+    );
     assert_eq!(ship.docking, docking);
 }
 

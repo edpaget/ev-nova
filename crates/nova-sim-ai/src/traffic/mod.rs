@@ -1777,7 +1777,11 @@ impl Traffic {
     /// after the goal and before the passes and the flight read its frame.
     /// Each takes its step's pursuit: a drop to goal 0 keeps none, as the
     /// handler's tail writes sub 0 on every goal-0 frame (@0x8fb09-0x8fb13).
-    /// Each whose pursuit ran then runs its frame's swarm branch
+    /// One whose high level its AI wait skips runs the fight sub its last
+    /// frame left, with no high level
+    /// ([`waiting_pursuit::under_wait`](crate::ai::waiting_pursuit::under_wait)),
+    /// as the low level runs after the head's return (@0x8d4d2 →
+    /// @0x901f4). Each whose pursuit ran then runs its frame's swarm branch
     /// ([`swarm_low_level`]).
     fn pursue(&mut self, world: &World, due: &[bool], chance: &mut (impl Chance + ?Sized)) {
         let around = world.around(&self.npcs);
@@ -1785,7 +1789,7 @@ impl Traffic {
             approach_lead: world.approach_lead,
             inertial_dampener: world.flight.inertial_dampener,
         };
-        let steps: Vec<Option<(HighLevel, Pursuit)>> = self
+        let steps: Vec<Option<(HighLevel, Option<Pursuit>)>> = self
             .npcs
             .iter()
             .zip(due)
@@ -1796,10 +1800,15 @@ impl Traffic {
                         _ if lost_sight::searching(npc) => HighLevel::Stops,
                         high => high,
                     };
-                    let pursuit = if high == HighLevel::Fights {
-                        pursuit::step(npc, &around, rules, &mut *chance)
-                    } else {
-                        Pursuit::default()
+                    let pursuit = match high {
+                        HighLevel::Fights => Some(pursuit::step(npc, &around, rules, &mut *chance)),
+                        HighLevel::Skipped => crate::ai::waiting_pursuit::under_wait(
+                            npc,
+                            &around,
+                            rules,
+                            &mut *chance,
+                        ),
+                        _ => Some(Pursuit::default()),
                     };
                     (high, pursuit)
                 })
@@ -1807,15 +1816,12 @@ impl Traffic {
             .collect();
         let ran: Vec<bool> = steps
             .iter()
-            .map(|step| step.is_some_and(|(high, _)| high != HighLevel::Skipped))
+            .map(|step| step.is_some_and(|(_, pursuit)| pursuit.is_some()))
             .collect();
         for (npc, step) in self.npcs.iter_mut().zip(steps) {
-            let Some((high, pursuit)) = step else {
+            let Some((high, Some(pursuit))) = step else {
                 continue;
             };
-            if high == HighLevel::Skipped {
-                continue;
-            }
             plunder::take_high_level(npc, high);
             npc.pursuit = pursuit;
         }

@@ -326,3 +326,75 @@ fn a_pirate_turned_out_of_its_entry_into_the_count_wait_waits_120_once() {
     assert_eq!(ship.ai_wait, BOARD_WAIT - 11, "one wait, counting down");
     assert_eq!(ship.mode, Mode::Flying);
 }
+
+/// An inertialess fighter at the centre attacking the player 200 to its
+/// right, breaking off along 135 from a frame of its break-off, its AI
+/// wait at `wait`.
+fn breaking_off(wait: u32) -> (Traffic, NpcId) {
+    use crate::ai::fire::Manoeuvre;
+    use crate::ai::pursuit::{Body, Frame, Kept, Pursuit};
+    let mut traffic = Traffic::with_interval(1);
+    let mut npc = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
+    npc.stats = crate::stats::ShipStats::new(
+        crate::handling::ShipFields {
+            flags2: crate::stats::INERTIALESS_HULL,
+            ..nova_sim_base::fixture::FAST
+        },
+        &[],
+    );
+    npc.goal = Goal::Attack(ShipRef::Player);
+    npc.target = Some(ShipRef::Player);
+    npc.ai_wait = wait;
+    npc.pursuit = Pursuit {
+        kept: Some(Kept::BreakOff { heading: 135 }),
+        frame: Some(Frame {
+            goal: npc.goal,
+            bodies: [
+                Some(Body {
+                    manoeuvre: Manoeuvre::BreakOff,
+                    heading: 135,
+                }),
+                None,
+            ],
+            speed_cap: None,
+        }),
+    };
+    let id = traffic.add_npc_at(npc, 1);
+    (traffic, id)
+}
+
+#[test]
+fn an_inertialess_ship_under_its_ai_wait_leaves_its_break_off_beyond_165() {
+    // `_LowLevelAIHandler` runs after the high level's head return
+    // (@0x8d4d2 → @0x901f4), so sub 0x10's exit beyond 165 on an axis
+    // (@0x864c6-0x86513) is reached.
+    use crate::ai::fire::Manoeuvre;
+    let attack = Decision {
+        goal: Goal::Attack(ShipRef::Player),
+        ..Decision::default()
+    };
+    let world = World {
+        player: Some(crate::ai::fixture::player(200.0, 0.0)),
+        ..World::new(&[])
+    };
+    let (mut waiting, id) = breaking_off(50);
+    waiting.tick_in(&Deciding(attack), world, &[], &mut NeverFires);
+    let ship = of(&waiting, id);
+    assert_eq!(ship.pursuit.kept, None, "dropped back to dogfight");
+    let bodies: Vec<Manoeuvre> = ship
+        .pursuit
+        .frame
+        .iter()
+        .flat_map(|frame| frame.iter().map(|body| body.manoeuvre))
+        .collect();
+    assert_eq!(bodies, [Manoeuvre::BreakOff]);
+    // With no wait the high level runs first: outside the dogfight box it
+    // approaches (@0x8e68d-0x8e697).
+    let (mut unwaited, id) = breaking_off(0);
+    unwaited.tick_in(&Deciding(attack), world, &[], &mut NeverFires);
+    let last = of(&unwaited, id)
+        .pursuit
+        .frame
+        .and_then(|frame| frame.last());
+    assert_eq!(last.map(|body| body.manoeuvre), Some(Manoeuvre::Approach));
+}

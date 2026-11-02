@@ -602,6 +602,24 @@ pub fn step(
     let Some(start) = high_level(npc, &at, disabled, swarm) else {
         return Pursuit::default();
     };
+    chain(npc, around, rules, chance, (ship, at), start)
+}
+
+/// `npc`'s low-level chain among `around`, by `rules`, rolling on
+/// `chance` (see the module docs): its frame at `ship`, at `at`, from the
+/// substate `start`, and the pursuit it keeps. [`step`] runs it from the
+/// high level's substate; under an AI wait it runs from the substate the
+/// last frame left, with no high level
+/// ([`waiting_pursuit`](super::waiting_pursuit)).
+pub(crate) fn chain(
+    npc: &Npc,
+    around: &Surroundings,
+    rules: PursuitRules,
+    chance: &mut (impl Chance + ?Sized),
+    (ship, at): (ShipRef, ShipState),
+    start: Start,
+) -> Pursuit {
+    let swarm = swarm::lead(npc, around);
     // A fight is never close formation: no leader.
     let inertialess = npc.hull_inertialess(rules.inertial_dampener);
     let looks = Looks::of(

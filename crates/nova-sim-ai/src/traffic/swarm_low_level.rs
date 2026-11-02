@@ -41,8 +41,10 @@
 //!   [`swarm::lead`] gives none there.
 //! - **When.** It is low level, so it runs in `_AIDispatch`, on the advance
 //!   pass alone: [`Traffic::pursue`] calls it at its end, for each ship
-//!   whose pursuit ran this tick, and double time's second pass runs
-//!   neither (see [`Traffic::move_in`]). So the fire after it reads the
+//!   whose pursuit ran this tick, under an AI wait too, where the low level
+//!   runs the sub the last frame left with no high level
+//!   ([`waiting_pursuit`](crate::ai::waiting_pursuit)), and double time's
+//!   second pass runs neither (see [`Traffic::move_in`]). So the fire after it reads the
 //!   nudged position, as the original's does, and an
 //!   [`immobile`](Npc::immobile) ship's undo of its move doesn't eat it.
 //!
@@ -542,10 +544,23 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_kept_from_the_last_tick_runs_no_branch_under_an_ai_wait() {
-        // The engine's pursuit runs nothing under a wait, where the
-        // original's low level runs on (see the phase's left-out items).
-        assert_a_kept_frame_runs_no_branch(|ship| ship.ai_wait = 50);
+    fn a_frame_kept_from_the_last_tick_runs_its_branch_under_an_ai_wait() {
+        // The low level runs after the high level's head return (@0x8d4d2 →
+        // @0x901f4, `waiting_pursuit`): the kept [Approach] frame holds sub
+        // 7, whose block runs again and nudges once more
+        // (rdm:phase/play-feel-9/phase-1-waiting-ships-run-their-per-type-ai).
+        let (mut traffic, id) = traffic(|_, _| {});
+        let world = world(FAR_PLAYER);
+        think_in(&mut traffic, &world);
+        let place = of(&traffic, id).slot_place.expect("a place");
+        assert_branched(&traffic, id, place, 1, GlowCopy::Swarm(GLOW));
+        let ship = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+        let ship = ship.expect("there");
+        ship.ai_wait = 50;
+        ship.display.drive.glow = GlowCopy::None;
+        think_in(&mut traffic, &world);
+        assert_eq!(bodies(&traffic, id), [Manoeuvre::Approach], "sub 7 again");
+        assert_branched(&traffic, id, place, 2, GlowCopy::Swarm(GLOW));
     }
 
     #[test]

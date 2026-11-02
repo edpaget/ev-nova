@@ -94,6 +94,7 @@ pub mod threatened;
 pub mod trader_keep;
 pub mod travel;
 pub mod wait;
+pub mod waiting_pursuit;
 pub mod warship;
 pub mod wimpy;
 
