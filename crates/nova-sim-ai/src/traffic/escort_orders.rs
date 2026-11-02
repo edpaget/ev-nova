@@ -4,7 +4,13 @@
 //! by that ship's class
 //! ([`Npc::order_word`](super::npc::Npc::order_word)), whatever the led
 //! ship's condition or mode, as `_AIIssueEscortOrders` tests neither
-//! (@0x89b10-0x89b84). Each order sets the ship's mark too
+//! (@0x89b10-0x89b84). It writes only a ship of AI type above 4
+//! ([`Npc::original_ai_type`](super::npc::Npc::original_ai_type),
+//! `cmpw $4, 0x88` @0x89b39, after the parent compare @0x89b30), so a
+//! bribed one (+0x88 1, `_DoCommDialog` @0x961f8) takes neither the word
+//! nor the mark, and a leader whose only followers are bribed has no
+//! escorts ([`has_escorts`]) and issues nothing. Each order sets the
+//! ship's mark too
 //! ([`Npc::ordered_by_lead`](super::npc::Npc::ordered_by_lead), +0xc4,
 //! @0x89b71). Each leader issues at the head of its own slot's run, before
 //! its decision ([`dispatch_head`](super::dispatch_head)).
@@ -50,11 +56,9 @@ impl Traffic {
             .map(|leader| (leader.id, orders(leader, &around, world.escort_order_reach)))
             .collect();
         for (id, table) in tables {
-            for npc in self
-                .npcs
-                .iter_mut()
-                .filter(|npc| npc.leader == Some(id) && !npc.escorts_player())
-            {
+            for npc in self.npcs.iter_mut().filter(|npc| {
+                npc.leader == Some(id) && npc.original_ai_type() > 4 && !npc.escorts_player()
+            }) {
                 npc.order_word = for_class(table, npc.class);
                 npc.ordered_by_lead = true;
             }
@@ -200,6 +204,34 @@ mod tests {
         assert_eq!(marks(&traffic), [false; 4], "off its frame");
         issue(&mut traffic, 0);
         assert_eq!(marks(&traffic), [false, true, false, false]);
+    }
+
+    #[test]
+    fn a_bribed_ship_its_leader_leads_takes_no_order_word_nor_mark() {
+        // The parent compare (@0x89b30) and then `cmpw $4, 0x88`
+        // (@0x89b39), ahead of the word (@0x89b68) and the mark
+        // (@0x89b71); the bribe's word is 1 (`_DoCommDialog` @0x961f8).
+        let mut bribed = led(EscortClass::Fighter);
+        bribed.take_bribe();
+        let mut traffic = traffic([leader(), led(EscortClass::Fighter), bribed]);
+        issue(&mut traffic, 0);
+        assert_eq!(words(&traffic), [-1, 2, -1]);
+        let marks: Vec<bool> = traffic
+            .npcs()
+            .iter()
+            .map(|npc| npc.ordered_by_lead)
+            .collect();
+        assert_eq!(marks, [false, true, false]);
+    }
+
+    #[test]
+    fn a_leader_whose_only_follower_is_bribed_issues_nothing() {
+        // No +0xc0 (@0x440d8), so no orders.
+        let mut bribed = led(EscortClass::Fighter);
+        bribed.take_bribe();
+        let mut traffic = traffic([leader(), bribed]);
+        issue(&mut traffic, 0);
+        assert_eq!(words(&traffic), [-1, -1]);
     }
 
     #[test]
