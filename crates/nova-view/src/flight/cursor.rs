@@ -38,6 +38,13 @@
 //! branch (@0x3837f-0x383e1), which blends at min(28, fade), is left out:
 //! the engine renders one way.
 //!
+//! `_HideCursorSprite` (@0x81d6-0x8202), which the original calls before
+//! each dialog over flight, is [`HoverCursor::hide`]: it hides the sprite
+//! and zeroes `_cursorAlpha`, the fade (@0x81f7-0x81fc), leaving the last
+//! mouse point and the stamp alone. Its skip when the sprite failed to load
+//! (@0x81dc-0x81e5) is left out: with no sheet the cursor never draws and
+//! nothing reads its fade, so zeroing it anyway can't be seen.
+//!
 //! Time is counted in `_TickCount`s, sixtieths of a second, two to a
 //! flight step, as the original's 30 frames a second count them.
 
@@ -76,12 +83,26 @@ pub struct HoverCursor {
     keyed: bool,
     /// Whether a mouse button is down.
     button: bool,
+    /// Where the pointer was when the cursor was last hidden
+    /// ([`HoverCursor::hide`]), until the next pointer: `_HandleMouse`
+    /// counts a frame as a move only when the mouse is somewhere else than
+    /// the last point it read (`0x3b5280`, @0x3801c-0x3803b).
+    hidden_at: Option<Point>,
 }
 
 impl HoverCursor {
     /// The pointer moved to `at`, or pressed a button there: the cursor
-    /// shows whole, and the mouse is no longer resting.
+    /// shows whole, and the mouse is no longer resting. The first pointer
+    /// after a [`HoverCursor::hide`] at the point it was hidden at is no
+    /// move: the cursor stays hidden, as `_HandleMouse` compares the mouse
+    /// with the last point it read (@0x3801c-0x3803b) and the app resyncs
+    /// flight's pointer at its unchanged point when a dialog closes. Only
+    /// that first one is compared: later pointers, at any point, are moves.
     pub fn pointer(&mut self, at: Point) {
+        if self.hidden_at.take() == Some(at) {
+            self.at = Some(at);
+            return;
+        }
         self.at = Some(at);
         self.fade = FADE_LEVELS;
         self.moved_at = self.clock;
@@ -104,6 +125,19 @@ impl HoverCursor {
     pub fn left(&mut self) {
         self.at = None;
         self.button = false;
+    }
+
+    /// The sprite is hidden under a dialog, as `_HideCursorSprite`
+    /// (@0x81d6-0x8202) hides it and zeroes `_cursorAlpha` (@0x81f7-0x81fc):
+    /// [`HoverCursor::left`], and the fade drops to 0, keeping the point
+    /// the mouse was last read at, so a pointer there after the dialog is
+    /// no move ([`HoverCursor::pointer`]).
+    pub fn hide(&mut self) {
+        if self.at.is_some() {
+            self.hidden_at = self.at;
+        }
+        self.left();
+        self.fade = 0;
     }
 
     /// Where the pointer is while the cursor shows: `None` when it is
@@ -477,5 +511,80 @@ mod tests {
         assert_eq!(drawn(&cursor, &looks(Some(Ok(sheet())))), []);
         cursor.pointer(Point::new(5.0, 6.0));
         assert_eq!(cursor.shown_at(), Some(Point::new(5.0, 6.0)));
+    }
+
+    fn other() -> Point {
+        Point::new(5.0, 6.0)
+    }
+
+    #[test]
+    fn hiding_zeroes_the_fade_and_hides_the_cursor() {
+        let mut cursor = moved();
+        cursor.button(true);
+        cursor.hide();
+        assert_eq!(cursor.fade(), 0);
+        assert_eq!(cursor.shown_at(), None);
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), 0, "the held button counts as let go");
+    }
+
+    #[test]
+    fn a_pointer_at_the_hidden_point_is_not_a_move() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.pointer(at());
+        assert_eq!(cursor.fade(), 0);
+        assert_eq!(cursor.shown_at(), None);
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), 0);
+        cursor.pointer(other());
+        assert_eq!(cursor.fade(), FADE_LEVELS);
+        assert_eq!(cursor.shown_at(), Some(other()));
+    }
+
+    #[test]
+    fn a_pointer_elsewhere_after_hiding_shows_it_whole() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.pointer(other());
+        assert_eq!(cursor.fade(), FADE_LEVELS);
+    }
+
+    #[test]
+    fn a_button_pressed_after_hiding_shows_it_whole() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.pointer(at());
+        cursor.button(true);
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), FADE_LEVELS);
+        assert_eq!(cursor.shown_at(), Some(at()));
+    }
+
+    #[test]
+    fn hiding_twice_keeps_the_point_first_hidden() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.hide();
+        cursor.pointer(at());
+        assert_eq!(cursor.shown_at(), None);
+    }
+
+    #[test]
+    fn only_the_first_point_after_a_hide_is_compared() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.pointer(at());
+        cursor.pointer(at());
+        assert_eq!(cursor.shown_at(), Some(at()), "a second move shows it");
+    }
+
+    #[test]
+    fn leaving_the_window_keeps_the_fade() {
+        let mut cursor = moved();
+        cursor.left();
+        assert_eq!(cursor.fade(), FADE_LEVELS);
+        cursor.pointer(at());
+        assert_eq!(cursor.shown_at(), Some(at()));
     }
 }
