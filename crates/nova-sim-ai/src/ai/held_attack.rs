@@ -127,7 +127,7 @@
 //!
 //! Nothing here plays a sound or draws a random number.
 
-use crate::ai::interceptor::{gate_closed, searches_nothing};
+use crate::ai::interceptor::{search_shut, searches_nothing};
 use crate::ai::warship::{Hunt, HuntTarget, Retreat, keeps, releases_blessed, retreats};
 use crate::ai::{Goal, Surroundings, fire, out_of_ammo};
 use crate::combat::ShipRef;
@@ -188,8 +188,8 @@ pub fn interceptor_attack(
 /// it attacks or snipes at; and nothing to fight, searching nothing, idle
 /// with a target it kept ([`searches_nothing`]), holding it while its
 /// slot is active and losing it otherwise (@0x8cca7-0x8ccb8), or behind a
-/// closed gate ([`gate_closed`]). None leaves it the hunt's own path: an
-/// inspection this think ends.
+/// closed gate or under its wait ([`search_shut`]). None leaves it the
+/// hunt's own path: an inspection this think ends.
 #[must_use]
 pub fn interceptor_hunt(
     npc: &Npc,
@@ -221,7 +221,7 @@ pub fn interceptor_hunt(
             ..Hunt::default()
         });
     }
-    gate_closed(npc, around).then(Hunt::default)
+    search_shut(npc, around).then(Hunt::default)
 }
 
 /// What a warship `npc` does with goal 4 on `ship` among `around`,

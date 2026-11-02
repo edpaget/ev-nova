@@ -79,6 +79,14 @@
 //!   keeps the goal, a lost lead's that the succession copied included,
 //!   with a hostile player in view though it is. Only provocation or its
 //!   government's word lifts it.
+//! - **Under a wait** the block is shut too: it runs only with +0x4c at
+//!   most 0 (@0x8cc6d-0x8cc8d → @0x8d13f, [`search_shut`]), so an
+//!   interceptor holding its course, entering a gate or flying out its AI
+//!   wait keeps its goal and searches, inspects and patrols nothing, as
+//!   `_AIDispatch` runs its think through the wait
+//!   ([`waiting_think`](crate::traffic::waiting_think)). Its provoked
+//!   branch, its government's word, its retreats and its out-of-ammo
+//!   flight still run.
 //! - **Goal 4** ([`held_attack`](super::held_attack)): provoked with a
 //!   target, any goal but 3, 7, 9 and 0xf becomes goal 4 on it
 //!   (@0x8cbf6-0x8cc31), an idle or patrolling one's too, and goal 4 closes
@@ -227,6 +235,18 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
         | Goal::Follow { .. }
         | Goal::Formation { .. } => false,
     }
+}
+
+/// Whether `npc`'s search, inspection and patrol are shut among `around`:
+/// its goal closes the gate ([`gate_closed`]), or its wait runs. The block
+/// runs only with +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f), the wait a
+/// ship holding its course or entering a gate runs in its mode too
+/// ([`Npc::wait_running`]), so under a wait it answers only a provoker
+/// (@0x8cbf6-0x8cc31), its government's word (@0x8cb66-0x8cb9d), its
+/// retreats and its out-of-ammo flight (@0x8d391).
+#[must_use]
+pub fn search_shut(npc: &Npc, around: &Surroundings) -> bool {
+    gate_closed(npc, around) || npc.wait_running()
 }
 
 /// Whether `npc`, behind `_InterceptorAI`'s open gate, searches, inspects
@@ -390,12 +410,13 @@ impl Interceptor {
         if inspection_holds(npc, around) {
             return (npc.goal, None);
         }
-        if gate_closed(npc, around) || searches_nothing(npc) {
+        if search_shut(npc, around) || searches_nothing(npc) {
             // The patrol and inspect block needs goal 1 or below, or
-            // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
-            // holds, a waiting one (state 6) waits, and a leaving,
-            // plundering or drifting one keeps at it. Inside the gate a
-            // kept +0x70 skips it too (@0x8cc93-0x8ccc9 → @0x8d13f).
+            // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d), and no wait
+            // (@0x8cc7f-0x8cc8d): a held ship holds, a waiting one (state
+            // 6) waits, and a leaving, plundering or drifting one keeps at
+            // it. Inside the gate a kept +0x70 skips it too
+            // (@0x8cc93-0x8ccc9 → @0x8d13f).
             return (super::kept(npc, around).unwrap_or(npc.goal), None);
         }
         match inspect(npc, around, chance) {
@@ -566,6 +587,91 @@ mod tests {
         provoked.target = Some(n(2));
         let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
         assert_eq!(decided(&[provoked, neutral], 0, &[]), Goal::Attack(n(2)));
+    }
+
+    /// `npc` waiting each way a wait runs: holding its course, entering a
+    /// gate, and flying with its AI wait (+0x4c) above 0.
+    fn waiting_each_way(npc: &Npc) -> [Npc; 3] {
+        [
+            Npc {
+                mode: Mode::Coasting { ticks_left: 5 },
+                ..npc.clone()
+            },
+            Npc {
+                mode: Mode::EnteringGate {
+                    gate: StellarId(128),
+                    ticks_left: 5,
+                },
+                ..npc.clone()
+            },
+            Npc {
+                ai_wait: 5,
+                ..npc.clone()
+            },
+        ]
+    }
+
+    #[test]
+    fn a_waiting_interceptor_searches_inspects_and_patrols_nothing() {
+        // Its search, inspection and patrol need goal 1 or below, or 0x14,
+        // and +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f).
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        for goal in [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+        ] {
+            let mut trader_cop = police();
+            trader_cop.govt = Some(TRADERS);
+            trader_cop.goal = goal;
+            assert_eq!(
+                decided(&[trader_cop.clone(), pirate.clone()], 0, &[0; 8]),
+                Goal::Attack(n(2)),
+                "{goal:?}: unwaited, it searches"
+            );
+            for waiting in waiting_each_way(&trader_cop) {
+                let (decided, asked) = decided_by(
+                    &govts(0, 0),
+                    &[waiting.clone(), pirate.clone()],
+                    (0.0, -1000.0),
+                    0,
+                    &[0; 8],
+                );
+                assert_eq!(decided, goal, "{goal:?} {:?}: no search", waiting.mode);
+                assert!(asked.is_empty(), "{goal:?} {:?}: no pick", waiting.mode);
+            }
+            // With no one to fight it inspects the player, or patrols.
+            let mut cop = police();
+            cop.goal = goal;
+            for waiting in waiting_each_way(&cop) {
+                let (decided, asked) = decided_by(
+                    &govts(0, 0),
+                    std::slice::from_ref(&waiting),
+                    (0.0, -1000.0),
+                    0,
+                    &[0; 8],
+                );
+                assert_eq!(decided, goal, "{goal:?} {:?}: no inspection", waiting.mode);
+                assert!(asked.is_empty(), "{goal:?} {:?}", waiting.mode);
+            }
+        }
+    }
+
+    #[test]
+    fn a_provoked_waiting_interceptor_still_turns_on_its_provoker() {
+        // Its provoked branch comes before the gate (@0x8cbf6-0x8cc31).
+        let mut provoked = police();
+        provoked.provoked = 1.0;
+        provoked.target = Some(n(2));
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for waiting in waiting_each_way(&provoked) {
+            assert_eq!(
+                decided(&[waiting.clone(), neutral.clone()], 0, &[]),
+                Goal::Attack(n(2)),
+                "{:?}",
+                waiting.mode
+            );
+        }
     }
 
     /// The interceptor (its government's `flags`) attacking a pirate of
