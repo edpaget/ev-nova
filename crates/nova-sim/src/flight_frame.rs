@@ -1637,8 +1637,9 @@ pub struct StepRun {
     /// what the original draws (`_PlayGame` @0x45d96-0x45e82 between
     /// @0x45bc8 and @0x45f31): the frame the view shows for this step.
     /// `None` in single time, whose frame is the flight as it stands, and
-    /// when a rescue settled on the step, as the view lays itself out
-    /// afresh.
+    /// when a rescue settled on the step's advance pass. A rescue on the
+    /// second pass keeps it, the pod where the first pass left it, as the
+    /// original fades out over that frame (`_FadeScreenOut` @0x68de3).
     pub between_passes: Option<Box<FlightFrame>>,
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.

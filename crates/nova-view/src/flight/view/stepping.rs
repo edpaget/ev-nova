@@ -356,7 +356,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// ([`FlightView::relay_last_line`]). A pass whose ship tick brought
     /// the escape pod's rescue, which ends the stepping there, then
     /// begins the rescue's screen over `pod`, the frame the pod showed as
-    /// the tick began ([`FlightView::pod_frame`], the `rescue` module),
+    /// the tick began ([`FlightView::pod_frame`], the `rescue` module), or,
+    /// for a rescue on double time's second pass, the frame between its
+    /// passes ([`FlightView::pod_frame_between_passes`]), the lines that
+    /// pass held relayed after it,
     /// its repaint reading the message line those lines left, which lays
     /// the view out afresh where the rescue put the ship once it has faded
     /// out. Last the sheets of a system the session populated afresh are
@@ -375,6 +378,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         self.relay_messages();
         self.relay_last_line();
         if rescued {
+            // A rescue on double time's second pass fades out over the
+            // frame between its passes, its lines under the first text.
+            let pod = match self.pod_frame_between_passes() {
+                Some(between) => {
+                    self.relay_held_lines();
+                    Some(between)
+                }
+                None => pod,
+            };
             self.begin_rescue(pod);
         }
         // The session may have populated its system afresh.

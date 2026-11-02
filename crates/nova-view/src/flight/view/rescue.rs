@@ -7,7 +7,16 @@
 //!   run as any others, their lines said, and the screen begins over the
 //!   frame the pod showed last, drawn as their tick began
 //!   ([`FlightView::pod_frame`]): its scene and HUD, the cursor sprite
-//!   included, with what the repaint under the texts reads of the pod.
+//!   included, with what the repaint under the texts reads of the pod. A
+//!   rescue on double time's second pass fades over the frame between its
+//!   passes instead ([`FlightView::pod_frame_between_passes`]), the
+//!   frame's lines on it: the original's `_HandlePlayer` reaches the
+//!   pod's countdown on either pass (@0x68ddd), after the frame's draw
+//!   (@0x45dff-0x45e82), and `_FadeScreenOut` flushes and fades the screen
+//!   as that draw left it (@0x5358, @0x68de3). The lines the second pass
+//!   held are said after it, so the repaint under an `OnAbort`'s first
+//!   text draws the last of them, as `_RefreshSAT`'s `_RedrawComm` draws
+//!   the slot. The hold goes as the black begins, before the layout.
 //! - **The message line.** The repaint under a text an `OnAbort` queued
 //!   draws the message the slot holds as the rescue begins, as
 //!   `_RefreshSAT`'s `_RedrawComm` (@0x6c24, @0x6db6) redraws it; then
@@ -133,6 +142,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.draw_fades(&mut scene);
         }
         Some(self.pod_frame_drawing(scene))
+    }
+
+    /// The frame between double time's passes, drawn after the steps
+    /// when a rescue on the second pass left it held, for the rescue to
+    /// fade out over in place of the frame drawn as the tick began (see
+    /// the module docs). It is drawn at the hold's target, alpha 1, so
+    /// neither the rescue's place nor the tick's alpha moves the pod, and
+    /// read while the frame drawn still shows the pod. None without a hold
+    /// or out of the pod.
+    pub(super) fn pod_frame_between_passes(&mut self) -> Option<PodFrame> {
+        if !self.holding_between_passes()
+            || !matches!(self.drawn().fate, PlayerFate::Ejected { .. })
+        {
+            return None;
+        }
+        let alpha = std::mem::replace(&mut self.alpha, 1.0);
+        let mut scene = DrawList::new();
+        if self.draw_flight(&mut scene, || self.failure.clone().unwrap_or_default()) {
+            self.draw_fades(&mut scene);
+        }
+        let pod = self.pod_frame_drawing(scene);
+        self.alpha = alpha;
+        Some(pod)
     }
 
     /// [`PodFrame`] of the frame drawn, over `scene`.
@@ -373,7 +405,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                 RescueStage::Black => {
                     // Laid out in the system the rescue took the pod to,
                     // from where it put the ship; the course map looking
-                    // there too (`_HandlePlayer` @0x68fab).
+                    // there too (`_HandlePlayer` @0x68fab). A second
+                    // pass's frame between goes first, so whatever the
+                    // catch-up seats, every repaint reads the rescue.
+                    self.drop_between_passes();
                     self.catch_up();
                     self.map.recentre();
                     if let Some(later) = self.rescue_later.take() {

@@ -80,9 +80,13 @@
 //! put the ship (@0x68fab). The pass is not reported, and its quotes and
 //! fight events wait for the next frame's take; its comm and its last
 //! line are taken all the same, on either pass, so a note shows before
-//! the `dësc` opens. A rescue on the second pass reports no frame between
-//! the passes, as the view shows the new layout at once, and folds the
-//! lines that pass held back into its streams at once.
+//! the `dësc` opens. A rescue on the second pass still reports the frame
+//! between the passes, the pod where the first pass left it, and holds
+//! that pass's lines: the original's `_HandlePlayer` reaches the pod's
+//! countdown on either pass (@0x68ddd), and its `_FadeScreenOut` flushes
+//! and fades the screen as frame n's draw left it (@0x5358, @0x53a4), so
+//! the view fades out over that frame and shows the lines under the
+//! rescue's first text.
 
 use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
@@ -202,10 +206,7 @@ impl Session {
         #[cfg(test)]
         self.raise_test_second_pass_lines();
         if self.rescue_if_due(catalog, &mut *collab.chance) {
-            for line in self.close_second_pass() {
-                self.out.raise(line);
-            }
-            run.between_passes = None;
+            run.second_pass_lines = self.close_second_pass();
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
             run.rescue_texts = self.ship.fate.rescue_texts.take();
@@ -823,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rescue_on_the_second_pass_ends_the_stepping_with_its_comm_taken() {
+    fn a_rescue_on_the_second_pass_reports_the_frame_between_and_holds_its_lines() {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         let input = StepInput {
@@ -839,7 +840,16 @@ mod tests {
         assert!(report.stopped);
         let run = &report.steps[0];
         assert_eq!(run.passes.len(), 1, "the advance pass alone");
-        assert_eq!(run.between_passes, None, "the view lays out afresh");
+        let between = run.between_passes.as_ref().expect("the pod drawn");
+        assert_eq!(
+            between.player().position,
+            run.passes[0].player_position,
+            "where the first pass left the pod"
+        );
+        assert!(
+            matches!(between.fate, crate::PlayerFate::Ejected { .. }),
+            "not yet rescued"
+        );
         let player = session.player();
         assert_eq!(
             run.rescued,
@@ -861,12 +871,14 @@ mod tests {
             Some(13999),
             "rescued on the second pass"
         );
-        assert_eq!(report.steps[0].comm, [repaired()], "taken with its step");
+        assert_eq!(report.steps[0].comm, [], "held");
         assert_eq!(
-            report.steps[0].last_line,
-            Some(RaisedLine::Comm(repaired()))
+            report.steps[0].second_pass_lines,
+            [RaisedLine::Comm(repaired())],
+            "for the frame after"
         );
-        assert_eq!(copy.take_comm(), [], "none held for the next take");
+        assert_eq!(report.steps[0].last_line, None, "the first pass's");
+        assert_eq!(copy.take_comm(), [], "none left for the next take");
     }
 
     /// An ally's note that it has repaired the player.

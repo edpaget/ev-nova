@@ -10,7 +10,9 @@ use std::time::Duration;
 use super::faked_hud::barred;
 use super::*;
 use crate::flight::rescue_screen::RESCUE_FADE_FOR;
-use nova_sim::flight_frame::{FlightEvent, RescueTexts, ShipPlace, StepReport, StepRun};
+use nova_sim::flight_frame::{
+    FlightEvent, PassReport, RaisedLine, RescueTexts, ShipPlace, StepReport, StepRun,
+};
 use nova_sim::{MissionTextKind, PlayerFate, SessionEvent, TextBar};
 
 /// The pod's system's `BkgndColor`.
@@ -617,4 +619,138 @@ fn black(alpha: u8) -> DrawList {
         },
     );
     list
+}
+
+// A rescue on double time's second pass.
+
+/// The pod as double time's first pass left it, moved on from its place
+/// as the tick began.
+fn pod_between_passes() -> FlightFrame {
+    let mut frame = in_the_pod().frame;
+    frame.ships[0].position = Vec2::new(30.0, -20.0);
+    frame.double_time = true;
+    frame
+}
+
+/// A double-time step whose first pass left the pod as
+/// [`pod_between_passes`] and said `first`, and whose second pass held
+/// `held`, rescued or not.
+fn doubled_pod_step(rescued: bool, first: Option<&str>, held: Vec<RaisedLine>) -> StepReport {
+    let note = |ship: &str| nova_sim::CommNote {
+        from: NpcId(0),
+        comm_name: "Ally".to_owned(),
+        ship_name: ship.to_owned(),
+        done: nova_sim::Help::Repair,
+    };
+    let first = first.map(note);
+    let passes = vec![PassReport {
+        ships: pod_between_passes().ships,
+        player_position: Vec2::new(30.0, -20.0),
+        double_time: true,
+        ..PassReport::default()
+    }];
+    StepReport {
+        steps: vec![StepRun {
+            before: vec![(ShipRef::Player, ShipPlace::default())],
+            comm: first.iter().cloned().collect(),
+            last_line: first.map(RaisedLine::Comm),
+            between_passes: Some(Box::new(pod_between_passes())),
+            second_pass_lines: held,
+            rescued: rescued.then_some(ShipPlace {
+                position: Vec2::new(50.0, 50.0),
+                heading: 90.0,
+            }),
+            passes: if rescued {
+                passes
+            } else {
+                vec![passes[0].clone(), PassReport::default()]
+            },
+            ..StepRun::default()
+        }],
+        stopped: rescued,
+    }
+}
+
+/// A pod view ticked through a double-time step whose second pass
+/// rescues it, the first pass having said `first` and the second `held`.
+fn rescued_on_the_second_pass(first: Option<&str>, held: Vec<RaisedLine>) -> Faked {
+    let mut view = in_the_pod();
+    view.tick(TICK);
+    view.sim.queue_report_telling(
+        doubled_pod_step(true, first, held),
+        rescued_frame(),
+        vec![
+            FlightEvent::Session(SessionEvent::SystemChanged),
+            FlightEvent::RescueDesc(rescued(13999)),
+            FlightEvent::MissionShown {
+                shown: briefed(),
+                bar: None,
+            },
+        ],
+    );
+    view.tick(TICK);
+    view
+}
+
+#[test]
+fn a_second_pass_rescue_fades_out_over_the_frame_between_its_passes() {
+    let mut twin = in_the_pod();
+    twin.tick(TICK);
+    let tick_start = drawn(&twin);
+    twin.sim.queue_report_showing(
+        doubled_pod_step(false, None, Vec::new()),
+        twin.frame.clone(),
+    );
+    twin.tick(TICK);
+    twin.alpha = 1.0;
+    let between = drawn(&twin);
+    assert_ne!(between, tick_start, "the pod moved between the passes");
+    let view = rescued_on_the_second_pass(None, Vec::new());
+    assert_eq!(
+        drawn(&view),
+        between,
+        "the frame between, not the tick's start"
+    );
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+}
+
+#[test]
+fn a_second_pass_rescue_lays_out_at_the_black_and_gives_its_desc_after() {
+    let mut view = rescued_on_the_second_pass(None, Vec::new());
+    assert_eq!(view.drawn(), &pod_between_passes(), "drawn until the black");
+    ticks(&mut view, RESCUE_FADE_FOR.saturating_sub(ms(1)));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    assert_eq!(view.take_rescue_desc(), None);
+    ticks(&mut view, ms(1));
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(
+        view.drawn(),
+        &rescued_frame(),
+        "the rescued frame from the black"
+    );
+    ticks(&mut view, RESCUE_FADE_FOR.saturating_sub(ms(1)));
+    assert_eq!(view.take_rescue_desc(), None);
+    ticks(&mut view, ms(1));
+    assert_eq!(view.take_rescue_desc(), Some(rescued(13999)));
+}
+
+#[test]
+fn a_second_pass_rescues_line_shows_under_its_first_text_not_on_the_pod_frame() {
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    let mut view = rescued_on_the_second_pass(Some("Shuttle"), held);
+    let pod = texts(&drawn(&view));
+    assert!(
+        pod.iter().any(|text| text.contains("Shuttle")),
+        "the first pass's line: {pod:?}"
+    );
+    assert!(!pod.contains(&NO_ACTIVE_MISSIONS.to_owned()), "{pod:?}");
+    assert_eq!(view.message(), None, "_ResetPlayer (@0x1d904)");
+    let list = under_the_first_text(&mut view);
+    assert!(
+        list.iter()
+            .any(|command| *command == message_drawn(NO_ACTIVE_MISSIONS)),
+        "the second pass's line under the abort's text"
+    );
+    ticks(&mut view, 2 * RESCUE_FADE_FOR);
+    assert!(!texts(&drawn(&view)).contains(&NO_ACTIVE_MISSIONS.to_owned()));
 }
