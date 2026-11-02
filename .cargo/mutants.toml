@@ -733,4 +733,10 @@ exclude_re = [
     # Whether a follower's berth is below its parent's: a berth holds one
     # ship and a ship is never its own follower, so the two never tie.
     "nova-sim-ai/src/traffic/fleet_formation\\.rs:[0-9]+:[0-9]+: replace < with <= in written$",
+    # A hit's cut at exactly 20.0 writes 20.0 again, and a NaN fails both
+    # compares, so `>=` cuts to the same wait.
+    "nova-sim-ai/src/traffic/autopilot\\.rs:[0-9]+:[0-9]+: replace > with >= in cut$",
+    # A stray of exactly none eased is `max(-0.5 × g, 0)`, none again, and a
+    # NaN fails both compares, so `>=` eases to the same stray.
+    "nova-sim-ai/src/traffic/weigh\\.rs:[0-9]+:[0-9]+: replace > with >= in Traffic::ease_stray$",
 ]
