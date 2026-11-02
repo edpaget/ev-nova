@@ -386,7 +386,12 @@ mod tests {
     ) -> (Controls, Handling) {
         let kept = super::keep(npc, leader, slot, handling, flight);
         let wanted = kept.wanted.expect("sub 0xc wants a heading");
-        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        let turn = crate::flight::turn_to(
+            &mut npc.state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         (
             Controls {
                 turn,
@@ -708,7 +713,12 @@ mod tests {
             &handling,
             FlightRules::default(),
         );
-        crate::flight::turned(ship.state.heading, controls.turn, rate)
+        crate::flight::turned(
+            ship.state.heading,
+            controls.turn,
+            rate,
+            crate::speed_mult::SpeedMult::FULL,
+        )
     }
 
     #[test]

@@ -17,10 +17,13 @@
 //! **The bank and glow** ([`bank_and_glow`], `_HandleShip`
 //! @0x34d93-0x34fcb, after its flight):
 //!
-//! - `shän` `Flags` 0x0001: the bank (+0xc8e4) moves a frame toward ±8
-//!   turning, and a frame back toward 0 not turning, 0 within a frame of it
+//! - `shän` `Flags` 0x0001: the bank (+0xc8e4) moves by the frame's gain
+//!   toward ±8 turning while short of it (`_gSpeedMult` @0x34dda,
+//!   @0x34e03), and by the gain back toward 0 not turning, 0 within the
+//!   gain of it (@0x34e2f), each compare and add in doubles, narrowed
 //!   (8.0 @0xdd044, -8.0 @0xdd68c); the flag (+0xc8f8) is 1 past 4, -1
-//!   below -4, else 0 (@0xdd680, @0xdd690). A banked ship of 0x0002 too
+//!   below -4, else 0 (@0xdd680, @0xdd690), compares the gain doesn't
+//!   scale. A banked ship of 0x0002 too
 //!   raises its glow by 2 while it is 23 or less (@0x34eb3-0x34ee5).
 //! - Thrusting, a ship of 0x0001 sets its flag to its turn itself
 //!   (@0x34f3d-0x34f4a); then a rush raises the glow (+0xc8d4) by 1 while
@@ -104,13 +107,13 @@ use crate::chance::Chance;
 use crate::combat::armament::Fold;
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
-    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, SPEED_MULT, ShipFrames,
-    UNFOLDS_TO_FIRE,
+    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, ShipFrames, UNFOLDS_TO_FIRE,
 };
 use crate::flight::Flyer;
 use crate::flight::{Controls, FlightRules, Turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::Traffic;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::spawn::{Entry, NewShip};
@@ -358,8 +361,14 @@ pub fn held(npc: &Npc) -> bool {
 /// `_HandleShip`'s bank and glow for `npc` after its flight, `held` by its
 /// AI wait as the tick began ([`held`]), its government derelict when
 /// `derelict`, its close-formation leader's glow `leader_glow` (see the
-/// module docs). Its drive is spent.
-pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Option<i16>) {
+/// module docs), its bank at the frame's `gain`. Its drive is spent.
+pub fn bank_and_glow(
+    npc: &mut Npc,
+    held: bool,
+    derelict: bool,
+    leader_glow: Option<i16>,
+    gain: SpeedMult,
+) {
     let spec = npc.hull.frames;
     let drive = std::mem::take(&mut npc.display.drive);
     let display = &mut npc.display;
@@ -371,7 +380,7 @@ pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Opt
         fade(&mut display.glow);
     } else {
         if spec.has(BANKS) {
-            bank(&mut display.frames, drive.turn);
+            bank(&mut display.frames, drive.turn, gain);
             if display.frames.flag != 0 && spec.has(FOLDS) && display.glow <= GLOW_RISES_TO {
                 display.glow += BANK_GLOW;
             }
@@ -400,26 +409,29 @@ pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Opt
     }
 }
 
-/// `frames`' bank and flag a frame on, turning `turn` (see the module
-/// docs).
-fn bank(frames: &mut ShipFrames, turn: i8) {
+/// `frames`' bank and flag a frame on, turning `turn`, at the frame's
+/// `gain` (see the module docs): turning, the bank gains ±`gain` while
+/// short of ±8; not turning, a bank at or past ±`gain`, compared in
+/// doubles, moves `gain` toward 0, and any nearer is 0.
+fn bank(frames: &mut ShipFrames, turn: i8, gain: SpeedMult) {
     let bank = &mut frames.bank;
     match turn {
         1.. => {
             if *bank < BANK_MOST {
-                *bank += SPEED_MULT;
+                *bank = gain.add_times(*bank, 1.0);
             }
         }
         ..0 => {
             if *bank > -BANK_MOST {
-                *bank -= SPEED_MULT;
+                *bank = gain.add_times(*bank, -1.0);
             }
         }
         0 => {
-            if *bank >= SPEED_MULT {
-                *bank -= SPEED_MULT;
-            } else if *bank <= -SPEED_MULT {
-                *bank += SPEED_MULT;
+            let g = gain.get();
+            if f64::from(*bank) >= g {
+                *bank = gain.add_times(*bank, -1.0);
+            } else if f64::from(*bank) <= -g {
+                *bank = gain.add_times(*bank, 1.0);
             } else {
                 *bank = 0.0;
             }
@@ -641,7 +653,7 @@ mod tests {
             thrust,
             ..Drive::default()
         };
-        bank_and_glow(ship, false, false, None);
+        bank_and_glow(ship, false, false, None, crate::speed_mult::SpeedMult::FULL);
     }
 
     #[test]
@@ -697,6 +709,44 @@ mod tests {
     }
 
     #[test]
+    fn at_a_gain_below_1_a_ship_banks_by_the_gain_and_levels_within_it() {
+        let half = SpeedMult::new(0.5);
+        let banked = |bank: f32, turn: i8, gain: SpeedMult| {
+            let mut frames = ShipFrames {
+                bank,
+                ..ShipFrames::default()
+            };
+            super::bank(&mut frames, turn, gain);
+            (frames.bank, frames.flag)
+        };
+        assert_eq!(banked(0.0, 1, half), (0.5, 0), "right");
+        assert_eq!(
+            banked(7.75, 1, half),
+            (8.25, 1),
+            "short of 8: on by the gain"
+        );
+        assert_eq!(banked(8.0, 1, half), (8.0, 1), "at 8: held");
+        assert_eq!(banked(0.0, -1, half), (-0.5, 0), "left");
+        assert_eq!(banked(4.25, 0, half), (3.75, 0), "level from 0.5 up");
+        assert_eq!(banked(0.5, 0, half), (0.0, 0), "at the gain: down by it");
+        assert_eq!(banked(-0.5, 0, half), (0.0, 0));
+        assert_eq!(banked(-4.75, 0, half), (-4.25, -1), "the flag at -4");
+        assert_eq!(banked(0.25, 0, half), (0.0, 0), "within the gain: 0");
+        assert_eq!(banked(-0.25, 0, half), (0.0, 0));
+        assert_eq!(banked(3.0, 1, SpeedMult::ZERO), (3.0, 0), "no gain: held");
+        assert_eq!(banked(3.0, 0, SpeedMult::ZERO), (3.0, 0), "not levelled");
+        assert_eq!(banked(0.0, 0, SpeedMult::ZERO), (0.0, 0));
+    }
+
+    #[test]
+    fn at_half_gain_a_banking_ship_flown_banks_half_a_frame() {
+        let mut ship = folding(BANKS, 3);
+        ship.display.drive.turn = 1;
+        bank_and_glow(&mut ship, false, false, None, SpeedMult::new(0.5));
+        assert_eq!(ship.display.frames.bank, 0.5);
+    }
+
+    #[test]
     fn a_ship_that_does_not_bank_keeps_no_bank() {
         let mut ship = folding(0, 3);
         flown(&mut ship, 1, Thrust::Plain);
@@ -729,7 +779,13 @@ mod tests {
             thrust: Thrust::Rush,
             ..Drive::default()
         };
-        bank_and_glow(&mut ship, true, false, None);
+        bank_and_glow(
+            &mut ship,
+            true,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(
             (ship.display.frames.bank, ship.display.frames.flag),
             (6.0, 1)
@@ -737,7 +793,13 @@ mod tests {
         assert_eq!(ship.display.glow, 9);
         assert_eq!(ship.display.drive, Drive::default(), "spent");
         ship.display.glow = 0;
-        bank_and_glow(&mut ship, true, false, None);
+        bank_and_glow(
+            &mut ship,
+            true,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 0);
     }
 
@@ -815,7 +877,13 @@ mod tests {
     fn a_derelict_governments_ship_holds_its_glow_at_0() {
         let mut ship = ship_of_glow(0, 20);
         ship.display.drive.thrust = Thrust::Rush;
-        bank_and_glow(&mut ship, false, true, None);
+        bank_and_glow(
+            &mut ship,
+            false,
+            true,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 0);
     }
 
@@ -823,13 +891,31 @@ mod tests {
     fn a_ship_in_close_formation_takes_its_leaders_glow_before_its_own_step() {
         let mut ship = ship_of_glow(0, 3);
         ship.display.drive.glow = GlowCopy::Leader;
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 19, "the leader's, then coasting");
         ship.display.glow = 3;
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 2, "out of formation: its own");
         ship.display.drive.glow = GlowCopy::Leader;
-        bank_and_glow(&mut ship, false, false, None);
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 1, "with no leader's glow, its own");
     }
 
@@ -837,7 +923,13 @@ mod tests {
     fn a_ship_closing_with_a_swarm_leader_takes_its_glow_before_its_own_step() {
         let mut ship = ship_of_glow(0, 3);
         ship.display.drive.glow = GlowCopy::Swarm(12);
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 11, "the swarm leader's, then coasting");
     }
 

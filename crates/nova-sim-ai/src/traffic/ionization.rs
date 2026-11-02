@@ -91,18 +91,15 @@ impl Npc {
     }
 }
 
-/// `npc`'s frame's ion block, at top speed `top_speed` (see the module
-/// docs): a charge above none sheds its class's rate, unfloored, and its
-/// velocity is pulled toward the top speed lowered by the charge left;
-/// one at or below none is cleared. What it took off is kept in the ion's
-/// `shed`, for the fight's lockout ([`Ion::as_block_found`]).
+/// `npc`'s frame's ion block, at top speed `top_speed` and the frame's
+/// `gain` (see the module docs, `_gSpeedMult` @0x342de): a charge above
+/// none sheds its class's rate × the gain, unfloored, and its velocity is
+/// pulled toward the top speed lowered by the charge left, by the pull ×
+/// the gain; one at or below none is cleared. What it took off is kept in
+/// the ion's `shed`, for the fight's lockout ([`Ion::as_block_found`]).
 ///
 /// [`Ion::as_block_found`]: crate::combat::ion::Ion::as_block_found
-///
-/// At full gain until `_HandleShip` reads the frame's
-/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-pub fn deionize(npc: &mut Npc, top_speed: f32) {
-    let gain = crate::speed_mult::SpeedMult::FULL;
+pub fn deionize(npc: &mut Npc, top_speed: f32, gain: crate::speed_mult::SpeedMult) {
     let rate = npc.stats.ion.rate(Flyer::Npc);
     let found = npc.ion.charge;
     let Some(charge) = crate::ionization::deionize(found, rate, gain) else {
@@ -149,30 +146,51 @@ mod tests {
     #[test]
     fn an_ionized_npc_sheds_its_class_rate_and_dips_below_none_for_a_tick() {
         let mut ship = charged(1.0);
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(ship.ion.charge, 0.5);
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(ship.ion.charge, 0.0);
         ship.ion.charge = 0.25;
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(ship.ion.charge, -0.25);
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(ship.ion.charge, 0.0);
+    }
+
+    #[test]
+    fn at_half_gain_an_ionized_npc_sheds_and_is_pulled_half() {
+        let half = crate::speed_mult::SpeedMult::new(0.5);
+        let mut ship = charged(3.0);
+        deionize(&mut ship, 6.0, half);
+        assert_eq!(
+            (ship.ion.charge, ship.ion.shed),
+            (2.75, 0.25),
+            "half its 0.5"
+        );
+        assert_eq!(ship.ion.as_block_found(), 3.0);
+        let mut pulled = charged(200.5);
+        pulled.state.velocity = Vec2::new(6.0, -6.0);
+        deionize(&mut pulled, 6.0, half);
+        let cap = lowered_top(6.0, pulled.ion_factor());
+        let expected = pull(Vec2::new(6.0, -6.0), cap, half);
+        assert_eq!(pulled.state.velocity, expected);
+        let by_half = |v: f64| (v - 0.0125) as f32;
+        assert_eq!(expected, Vec2::new(by_half(6.0), -by_half(6.0)));
     }
 
     #[test]
     fn the_block_records_what_it_took_off_the_charge() {
         let mut ship = charged(3.0);
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!((ship.ion.charge, ship.ion.shed), (2.5, 0.5));
         assert_eq!(ship.ion.as_block_found(), 3.0);
         // A charge at or below none is cleared: the whole of it is shed.
         let mut cleared = charged(-0.5);
-        deionize(&mut cleared, 6.0);
+        deionize(&mut cleared, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!((cleared.ion.charge, cleared.ion.shed), (0.0, -0.5));
         let mut none = charged(0.0);
         none.ion.shed = 7.0;
-        deionize(&mut none, 6.0);
+        deionize(&mut none, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!((none.ion.charge, none.ion.shed), (0.0, 0.0));
     }
 
@@ -180,11 +198,11 @@ mod tests {
     fn a_disabled_or_warping_npc_sheds_too() {
         let mut disabled = charged(10.0);
         disabled.condition = Condition::Disabled;
-        deionize(&mut disabled, 6.0);
+        deionize(&mut disabled, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(disabled.ion.charge, 9.5);
         let mut warping = charged(10.0);
         warping.warp.stage = 3.0;
-        deionize(&mut warping, 6.0);
+        deionize(&mut warping, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(warping.ion.charge, 9.5);
     }
 
@@ -192,16 +210,16 @@ mod tests {
     fn an_npc_past_its_lowered_top_is_pulled_back_on_each_axis() {
         let mut ship = charged(200.5);
         ship.state.velocity = Vec2::new(6.0, -6.0);
-        deionize(&mut ship, 6.0);
+        deionize(&mut ship, 6.0, crate::speed_mult::SpeedMult::FULL);
         let pulled = |v: f64| (v - 0.025) as f32;
         assert_eq!(ship.state.velocity, Vec2::new(pulled(6.0), -pulled(6.0)));
         let mut slow = charged(200.5);
         slow.state.velocity = Vec2::new(1.0, -1.0);
-        deionize(&mut slow, 6.0);
+        deionize(&mut slow, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(slow.state.velocity, Vec2::new(1.0, -1.0), "within 3");
         let mut clear = charged(0.0);
         clear.state.velocity = Vec2::new(6.0, -6.0);
-        deionize(&mut clear, 6.0);
+        deionize(&mut clear, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(clear.state.velocity, Vec2::new(6.0, -6.0), "no charge");
     }
 
@@ -415,7 +433,7 @@ mod tests {
         let bare = charged(200.0);
         assert_eq!(carrying.ion_factor(), 0.5);
         assert_eq!(carrying.ionized_handling(), bare.ionized_handling());
-        deionize(&mut carrying, 6.0);
+        deionize(&mut carrying, 6.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(carrying.ion.charge, 199.5);
     }
 }

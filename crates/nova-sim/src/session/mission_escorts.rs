@@ -1238,6 +1238,8 @@ pub(super) mod tests {
     fn aborted_in_flight_a_mission_escort_takes_its_ships_ai_and_leaves() {
         let catalog = inherent_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         assert_eq!(hired_slot(&session), (2, 4));
         tick(&mut session, &catalog);
         assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));

@@ -1294,18 +1294,13 @@ impl Npc {
             }
     }
 
-    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`], then
-    /// holds it between none and its capacity, every tick whatever its
-    /// condition, disabled and breaking up included (`_HandleShip`
-    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC), at full
-    /// gain until `_HandleShip` reads the frame's
-    /// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-    pub fn regenerate_fuel(&mut self) {
-        crate::fuel::regenerate(
-            &mut self.reserves.fuel,
-            self.stats.fuel_regen,
-            crate::speed_mult::SpeedMult::FULL,
-        );
+    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`] × the
+    /// frame's `gain` (`_gSpeedMult` @0x3532b), then holds it between none
+    /// and its capacity, every tick whatever its condition, disabled and
+    /// breaking up included (`_HandleShip` @0x35305-0x35374,
+    /// `_ShipFuelGenRate` @0x2ffb for an NPC).
+    pub fn regenerate_fuel(&mut self, gain: crate::speed_mult::SpeedMult) {
+        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen, gain);
     }
 
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c) under `reserves`
@@ -1892,23 +1887,30 @@ mod tests {
     #[test]
     fn an_npc_regenerates_fuel_at_its_rate_up_to_its_capacity() {
         let mut npc = fuelled(0.5, 298.0);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 298.5);
         for _ in 0..10 {
-            npc.regenerate_fuel();
+            npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         }
         assert_eq!(npc.reserves.fuel.now, 300.0, "up to its capacity");
     }
 
     #[test]
+    fn at_half_gain_an_npc_regenerates_half_its_rate() {
+        let mut npc = fuelled(0.5, 298.0);
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::new(0.5));
+        assert_eq!(npc.reserves.fuel.now, 298.25);
+    }
+
+    #[test]
     fn an_npcs_fuel_is_held_to_its_capacity_and_above_none_every_tick() {
         let mut npc = fuelled(0.0, 310.0);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 300.0, "clamped with no rate");
         let mut npc = fuelled(-0.5, 0.7);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert!((npc.reserves.fuel.now - 0.2).abs() < 1e-6);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 0.0, "a drain stops at none");
     }
 
@@ -1923,7 +1925,7 @@ mod tests {
         ] {
             let mut npc = fuelled(0.5, 100.0);
             npc.condition = condition;
-            npc.regenerate_fuel();
+            npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
             assert_eq!(npc.reserves.fuel.now, 100.5, "{condition:?}");
         }
     }

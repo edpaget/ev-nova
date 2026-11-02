@@ -15,9 +15,8 @@
 //!    sub 1, stops by thresholds of its own:
 //!    rdm:phase/play-feel-2/phase-15-brake-leaves-sub-thrust-drift.)
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
-//!    its velocity, × the frame's gain for the player
-//!    ([`SpeedMult`]; an NPC's [`step`] runs at full gain until
-//!    `_HandleShip` reads it). By default ([`SpeedCap::PerAxis`], the original's), as
+//!    its velocity, × the frame's gain ([`SpeedMult`]): `_HandlePlayer`'s
+//!    for the player, `_HandleShip`'s for an NPC. By default ([`SpeedCap::PerAxis`], the original's), as
 //!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
 //!    each axis only while that axis is short of the top speed's share
 //!    along the heading, and along the heading's whole degree, as the
@@ -314,26 +313,20 @@ pub struct ShipState {
 
 /// Advances `state`, `flyer`'s ship, one tick under `controls`, flying as
 /// `handling` allows under `rules` (see the module docs): an NPC's tick,
-/// at full gain until `_HandleShip` reads the frame's
-/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
+/// its turn ([`turned`]), thrust and move ([`advance`]) each at the
+/// frame's `gain`, as `_HandleShip` reads `_gSpeedMult` (@0x344b8,
+/// @0x34b85, @0x3427e).
 pub fn step(
     state: &mut ShipState,
     handling: &Handling,
     controls: Controls,
     rules: FlightRules,
     flyer: Flyer,
+    gain: SpeedMult,
 ) {
-    state.heading = turned(state.heading, controls.turn, handling.turn_rate);
+    state.heading = turned(state.heading, controls.turn, handling.turn_rate, gain);
     let caps = Caps::top(handling.max_speed);
-    advance(
-        state,
-        handling,
-        controls.thrust,
-        caps,
-        rules,
-        flyer,
-        SpeedMult::FULL,
-    );
+    advance(state, handling, controls.thrust, caps, rules, flyer, gain);
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying
@@ -427,17 +420,28 @@ pub fn moved(position: Vec2, velocity: Vec2, gain: SpeedMult) -> Vec2 {
 /// reverse never turns an inertialess ship; thrust adds a tick's
 /// [`THRUST`] to its speed and reverse is the AI's brake, [`BRAKE`]
 /// (`_LowLevelAIHandler` substate 1, @0x853d7-0x85403); then
-/// [`inertialess_advance`]. At full gain until `_HandleShip` reads the
-/// frame's (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain);
-/// the brake reads no gain there.
+/// [`inertialess_advance`], each at the frame's `gain`. The low level
+/// writes the brake into the thrust word +0x30 with no load of the gain
+/// (`BRAKE` × `_ShipAccelRate` @0x853e3-0x853fe), and `_HandleShip`'s one
+/// multiply of that word by `_gSpeedMult` (@0x34b4a, read @0x34b3b) steps
+/// the speed by it at the gain, as it steps a thrust.
 pub fn inertialess_step(
     state: &mut ShipState,
     speed: &mut f32,
     handling: &Handling,
     controls: Controls,
     rules: FlightRules,
+    gain: SpeedMult,
 ) {
-    inertialess_step_with(state, speed, handling, controls, handling.accel, rules);
+    inertialess_step_with(
+        state,
+        speed,
+        handling,
+        controls,
+        handling.accel,
+        rules,
+        gain,
+    );
 }
 
 /// [`inertialess_step`], its velocity pulled toward heading x speed by
@@ -445,7 +449,7 @@ pub fn inertialess_step(
 /// ticks rather than its thrust's acceleration: `_HandleShip`'s `_AdjustInertialessShipVelocity` reads its
 /// own `_ShipAccelRate` at the ship's step (@0x334e1), while the thrust is
 /// the word its low level left at its slot (see
-/// [`inertialess_advance`]).
+/// [`inertialess_advance`]), at the frame's `gain`.
 pub fn inertialess_step_with(
     state: &mut ShipState,
     speed: &mut f32,
@@ -453,8 +457,9 @@ pub fn inertialess_step_with(
     controls: Controls,
     adjust_accel: f32,
     rules: FlightRules,
+    gain: SpeedMult,
 ) {
-    state.heading = turned(state.heading, controls.turn, handling.turn_rate);
+    state.heading = turned(state.heading, controls.turn, handling.turn_rate, gain);
     let thrust = if controls.thrust {
         THRUST
     } else if controls.reverse {
@@ -467,16 +472,7 @@ pub fn inertialess_step_with(
         thrust,
         adjust_accel,
     };
-    inertialess_advance(
-        state,
-        speed,
-        handling,
-        by,
-        caps,
-        rules,
-        Flyer::Npc,
-        SpeedMult::FULL,
-    );
+    inertialess_advance(state, speed, handling, by, caps, rules, Flyer::Npc, gain);
 }
 
 /// Advances the player's inertialess ship, `state`, holding `speed` along
@@ -596,12 +592,14 @@ pub fn inertialess_advance(
 }
 
 /// `heading` turned a tick by the turn keys, `turn`, at `rate` degrees a
-/// tick: an NPC's turn, kept within `[0, 360)` ([`normalized`]).
+/// tick × the frame's `gain`: an NPC's turn, (double)heading ∓ rate × g
+/// narrowed, as `_HandleShip` turns it (@0x344b8-0x3458e), kept within
+/// `[0, 360)` ([`normalized`]).
 #[must_use]
-pub fn turned(heading: f32, turn: Turn, rate: f32) -> f32 {
+pub fn turned(heading: f32, turn: Turn, rate: f32, gain: SpeedMult) -> f32 {
     match turn {
-        Turn::Left => normalized(heading - rate),
-        Turn::Right => normalized(heading + rate),
+        Turn::Left => normalized(gain.add_times(heading, -rate)),
+        Turn::Right => normalized(gain.add_times(heading, rate)),
         Turn::None => heading,
     }
 }
@@ -623,18 +621,20 @@ pub fn turn_toward(from: f32, to: f32, rate: f32) -> f32 {
 const HALF_TURN: f32 = 180.0;
 
 /// `_HandleShip`'s turn of an NPC at `state` to the heading its substate
-/// wants (+0x68, `wanted`), turning at `rate` (`_ShipTurnRate`,
-/// @0x34460-0x3458e): more than `rate` off it, in whole degrees
-/// (`_AngularDifference` of the two truncated), it turns by `rate`, to
-/// the left when the way round to it is more than half a turn; otherwise
-/// `state` is put on it, which reads as no turn. The low level wants the
+/// wants (+0x68, `wanted`), turning at `rate` (`_ShipTurnRate`) × the
+/// frame's `gain` (@0x34460-0x3458e, the gain read @0x344b8): more than
+/// that off it, in whole degrees (`_AngularDifference` of the two
+/// truncated, [`turns_onto`]), it turns ([`turned`]), to the left when
+/// the way round to it is more than half a turn; otherwise `state` is put
+/// on it, which reads as no turn. At no gain it never turns, and is put
+/// on it only when it is exactly on it. The low level wants the
 /// ship's whole heading unless a substate says otherwise (@0x8522d), so
 /// a substate that turns nowhere still has its heading truncated.
 ///
 /// The caller skips it while the ship's AI wait runs, but for a count
 /// wait (@0x3443f-0x34454).
-pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
-    if !turns_onto(state.heading, wanted, rate) {
+pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32, gain: SpeedMult) -> Turn {
+    if !turns_onto(state.heading, wanted, rate, gain) {
         let mut way = f32::from(wanted) - state.heading;
         if way >= 360.0 {
             way -= 360.0;
@@ -653,15 +653,16 @@ pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
 }
 
 /// Whether [`turn_to`] puts a ship heading `heading` on `wanted` this tick
-/// at `rate`: it is off it by no more than `rate`, in whole degrees
-/// (@0x34460-0x3458e). A low level that thrusts once its turn puts it on
+/// at `rate` × the frame's `gain`: it is off it by no more than that, in
+/// whole degrees, `!((double)off > (double)rate × g)` (`ucomisd`,
+/// @0x344b5-0x344d9). A low level that thrusts once its turn puts it on
 /// its heading reads it at its slot, before `_HandleShip` turns it.
 #[must_use]
-pub fn turns_onto(heading: f32, wanted: i16, rate: f32) -> bool {
+pub fn turns_onto(heading: f32, wanted: i16, rate: f32, gain: SpeedMult) -> bool {
     let off = trig::angular_difference(wanted, trig::whole(heading));
-    // × `_gSpeedMult`, 1.0, in doubles: a NaN rate puts it on.
+    // In doubles: a NaN rate puts it on.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    let on = !(f64::from(off) > f64::from(rate));
+    let on = !(f64::from(off) > f64::from(rate) * gain.get());
     on
 }
 
@@ -772,6 +773,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 Flyer::Npc,
+                SpeedMult::FULL,
             );
         }
         state
@@ -877,7 +879,7 @@ mod tests {
                 heading,
                 ..ShipState::default()
             };
-            let turn = turn_to(&mut state, wanted, rate);
+            let turn = turn_to(&mut state, wanted, rate, SpeedMult::FULL);
             (turn, state.heading)
         };
         assert_eq!(turned(10.0, 20, 3.0), (Turn::Right, 10.0));
@@ -938,12 +940,12 @@ mod tests {
 
     #[test]
     fn a_turn_by_the_keys_wraps_within_0_to_360() {
-        assert_eq!(turned(90.0, Turn::Left, 3.0), 87.0);
-        assert_eq!(turned(359.0, Turn::Right, 3.0), 2.0);
-        assert_eq!(turned(1.0, Turn::Left, 3.0), 358.0);
-        assert_eq!(turned(90.0, Turn::None, 3.0), 90.0);
+        assert_eq!(turned(90.0, Turn::Left, 3.0, SpeedMult::FULL), 87.0);
+        assert_eq!(turned(359.0, Turn::Right, 3.0, SpeedMult::FULL), 2.0);
+        assert_eq!(turned(1.0, Turn::Left, 3.0, SpeedMult::FULL), 358.0);
+        assert_eq!(turned(90.0, Turn::None, 3.0, SpeedMult::FULL), 90.0);
         assert_eq!(
-            turned(2.0, Turn::Left, 2.000_000_2),
+            turned(2.0, Turn::Left, 2.000_000_2, SpeedMult::FULL),
             0.0,
             "a hair past north rounds to 360, which wraps"
         );
@@ -962,6 +964,7 @@ mod tests {
             turning(Turn::Left),
             FlightRules::default(),
             Flyer::Player,
+            SpeedMult::FULL,
         );
         assert!((0.0..360.0).contains(&state.heading), "{state:?}");
     }
@@ -1051,7 +1054,14 @@ mod tests {
             for flyer in FLYERS {
                 for rules in [FlightRules::default(), CIRCLE] {
                     let mut state = moving(velocity, 0.0);
-                    step(&mut state, &at_top, Controls::default(), rules, flyer);
+                    step(
+                        &mut state,
+                        &at_top,
+                        Controls::default(),
+                        rules,
+                        flyer,
+                        SpeedMult::FULL,
+                    );
                     assert_eq!(state.velocity, velocity, "{flyer:?} {rules:?}");
                 }
             }
@@ -1063,7 +1073,7 @@ mod tests {
         for flyer in FLYERS {
             let mut state = heading(0.0);
             for _ in 0..100 {
-                step(&mut state, &SHIP, THRUST, CIRCLE, flyer);
+                step(&mut state, &SHIP, THRUST, CIRCLE, flyer, SpeedMult::FULL);
                 assert!(state.velocity.length() <= SHIP.max_speed, "{state:?}");
             }
             assert_eq!(state.velocity, Vec2::new(0.0, -3.0), "{flyer:?}");
@@ -1084,7 +1094,7 @@ mod tests {
             // While the heading is within a few turns of the velocity,
             // thrust holds the ship at its top speed.
             for _ in 0..10 {
-                step(&mut state, &SHIP, carving, CIRCLE, flyer);
+                step(&mut state, &SHIP, carving, CIRCLE, flyer, SpeedMult::FULL);
                 let speed = state.velocity.length();
                 assert!((speed - SHIP.max_speed).abs() < 1e-5, "{speed}: {state:?}");
             }
@@ -1092,7 +1102,7 @@ mod tests {
             // Thrusting further round slows it, and nothing speeds it past
             // the cap.
             for _ in 0..60 {
-                step(&mut state, &SHIP, carving, CIRCLE, flyer);
+                step(&mut state, &SHIP, carving, CIRCLE, flyer, SpeedMult::FULL);
                 assert!(
                     state.velocity.length() <= SHIP.max_speed + 1e-5,
                     "{state:?}"
@@ -1113,7 +1123,7 @@ mod tests {
         flyer: Flyer,
     ) -> ShipState {
         for _ in 0..ticks {
-            step(&mut state, &SHIP, controls, rules, flyer);
+            step(&mut state, &SHIP, controls, rules, flyer, SpeedMult::FULL);
         }
         state
     }
@@ -1217,13 +1227,21 @@ mod tests {
                 carving,
                 FlightRules::default(),
                 Flyer::Player,
+                SpeedMult::FULL,
             );
             assert!(
                 player.velocity.x.abs() <= 3.0 && player.velocity.y.abs() <= 3.0,
                 "{player:?}"
             );
             let before = npc.velocity;
-            step(&mut npc, &SHIP, carving, FlightRules::default(), Flyer::Npc);
+            step(
+                &mut npc,
+                &SHIP,
+                carving,
+                FlightRules::default(),
+                Flyer::Npc,
+                SpeedMult::FULL,
+            );
             let share = facing(npc.heading) * SHIP.max_speed;
             for (now, was, top) in [
                 (npc.velocity.x, before.x, share.x),
@@ -1292,6 +1310,7 @@ mod tests {
             },
             FlightRules::default(),
             Flyer::Player,
+            SpeedMult::FULL,
         );
         assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
     }
@@ -1365,6 +1384,7 @@ mod tests {
             right,
             FlightRules::default(),
             Flyer::Npc,
+            SpeedMult::FULL,
         );
         assert_eq!(npc.heading, 92.5);
         let full = FlightRules {
@@ -1633,6 +1653,7 @@ mod tests {
                     &QUARTER,
                     left,
                     FlightRules::default(),
+                    SpeedMult::FULL,
                 ),
                 Flyer::Player => inertialess_player_step(
                     &mut state,
@@ -1658,6 +1679,7 @@ mod tests {
                     &QUARTER,
                     Controls::default(),
                     FlightRules::default(),
+                    SpeedMult::FULL,
                 );
             }
             assert!(
@@ -1672,6 +1694,7 @@ mod tests {
                 &QUARTER,
                 Controls::default(),
                 FlightRules::default(),
+                SpeedMult::FULL,
             );
             assert!(near(state.position - at, Vec2::new(0.0, -3.0)), "no drift");
         }
@@ -1688,6 +1711,7 @@ mod tests {
                 &SHIP,
                 turning(turn),
                 FlightRules::default(),
+                SpeedMult::FULL,
             );
             assert_eq!(state.heading, turned, "{turn:?}");
         }
@@ -1703,6 +1727,7 @@ mod tests {
             &SHIP,
             Controls::default(),
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!(near(state.velocity, Vec2::new(2.6, -0.4)), "{state:?}");
         assert!(
@@ -1722,6 +1747,7 @@ mod tests {
                 &SHIP,
                 Controls::default(),
                 FlightRules::default(),
+                SpeedMult::FULL,
             );
         }
         assert_eq!(speed, 2.0);
@@ -1738,6 +1764,7 @@ mod tests {
             &SHIP,
             THRUST,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!((speed - 0.1).abs() < 1e-6, "{speed}");
         assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
@@ -1748,6 +1775,7 @@ mod tests {
                 &SHIP,
                 THRUST,
                 FlightRules::default(),
+                SpeedMult::FULL,
             );
         }
         assert_eq!(speed, 3.0, "up to the top speed");
@@ -1767,6 +1795,7 @@ mod tests {
             THRUST,
             0.05,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!((speed - 2.1).abs() < 1e-6, "{speed}");
         assert!(near(state.velocity, Vec2::new(0.8, -0.2)), "{state:?}");
@@ -1779,6 +1808,7 @@ mod tests {
             &SHIP,
             THRUST,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!(near(state.velocity, Vec2::new(0.6, -0.4)), "{state:?}");
     }
@@ -1793,6 +1823,7 @@ mod tests {
             &SHIP,
             REVERSE,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 0.0, "reverse turns no inertialess ship");
         assert!((speed - 1.95).abs() < 1e-6, "{speed}");
@@ -1878,6 +1909,7 @@ mod tests {
             &SHIP,
             Controls::default(),
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(fast, 5.0);
         assert!(near(npc.velocity, Vec2::new(5.0, 0.0)), "{npc:?}");
@@ -1887,7 +1919,14 @@ mod tests {
     fn under_the_circle_an_inertialess_ship_is_held_to_its_top_speed() {
         let mut state = moving(Vec2::new(3.0, 3.0), 90.0);
         let mut speed = 3.0;
-        inertialess_step(&mut state, &mut speed, &SHIP, Controls::default(), CIRCLE);
+        inertialess_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            Controls::default(),
+            CIRCLE,
+            SpeedMult::FULL,
+        );
         assert!((state.velocity.length() - 3.0).abs() < 1e-5, "{state:?}");
         let mut player = moving(Vec2::new(3.0, 3.0), 90.0);
         let mut speed = 3.0;
@@ -2106,5 +2145,97 @@ mod tests {
             HALF,
         );
         assert_eq!(aimed.heading, 89.0, "the auto-turn too");
+    }
+
+    // An NPC's turn and flight at the frame's gain (`_HandleShip`).
+
+    #[test]
+    fn at_half_gain_an_npc_is_on_its_heading_only_within_half_a_turn() {
+        assert!(turns_onto(10.0, 11, 3.0, HALF), "1 off, within 1.5");
+        assert!(!turns_onto(10.0, 12, 3.0, HALF), "2 off, beyond 1.5");
+        assert!(turns_onto(10.0, 12, 3.0, SpeedMult::FULL));
+        assert!(turns_onto(10.4, 10, 3.0, SpeedMult::ZERO), "exactly on");
+        assert!(!turns_onto(10.0, 11, 3.0, SpeedMult::ZERO));
+        assert!(
+            turns_onto(10.0, 90, f32::NAN, HALF),
+            "a NaN rate puts it on"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_an_npc_turns_while_more_than_half_a_turn_off_and_snaps_within() {
+        let turned = |heading: f32, wanted: i16, gain: SpeedMult| {
+            let mut state = ShipState {
+                heading,
+                ..ShipState::default()
+            };
+            let turn = turn_to(&mut state, wanted, 3.0, gain);
+            (turn, state.heading)
+        };
+        assert_eq!(turned(10.0, 12, HALF), (Turn::Right, 10.0));
+        assert_eq!(turned(12.0, 10, HALF), (Turn::Left, 12.0));
+        assert_eq!(turned(10.0, 11, HALF), (Turn::None, 11.0));
+        assert_eq!(turned(10.0, 11, SpeedMult::ZERO), (Turn::Right, 10.0));
+        assert_eq!(
+            turned(10.6, 10, SpeedMult::ZERO),
+            (Turn::None, 10.0),
+            "at no gain it snaps only when exactly on"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_turn_by_the_keys_turns_half_the_rate() {
+        assert_eq!(turned(90.0, Turn::Left, 3.0, HALF), 88.5);
+        assert_eq!(turned(90.0, Turn::Right, 3.0, HALF), 91.5);
+        assert_eq!(turned(90.0, Turn::Right, 3.0, SpeedMult::ZERO), 90.0);
+        assert_eq!(turned(1.0, Turn::Left, 3.0, HALF), 359.5, "across 0");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertial_npcs_step_turns_thrusts_and_moves_half() {
+        let mut state = heading(90.0);
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Right,
+            ..Controls::default()
+        };
+        let rules = FlightRules::default();
+        step(&mut state, &SHIP, controls, rules, Flyer::Npc, HALF);
+        let mut expected = heading(91.5);
+        advance(&mut expected, &SHIP, true, TOP, rules, Flyer::Npc, HALF);
+        assert_eq!(state, expected);
+        assert!((state.velocity.length() - 0.05).abs() < 1e-6, "{state:?}");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_npc_thrusts_and_brakes_half_and_follows_at_half_its_rate() {
+        let rules = FlightRules::default();
+        let start = moving(Vec2::new(1.0, 0.0), 90.0);
+        for (controls, by) in [(THRUST, crate::inertialess::THRUST), (REVERSE, BRAKE)] {
+            let mut state = start;
+            let mut speed = 1.0;
+            inertialess_step(&mut state, &mut speed, &SHIP, controls, rules, HALF);
+            let kept = step_speed(1.0, by, SHIP.accel, SHIP.max_speed, HALF);
+            assert_eq!(speed, kept, "{controls:?}");
+            let followed = adjust_velocity(start.velocity, 90.0, kept, adjust_rate(0.1, HALF));
+            assert_eq!(state.velocity, followed, "{controls:?}");
+            assert_eq!(state.position, moved(start.position, followed, HALF));
+        }
+        let mut speed = 1.0;
+        let mut state = start;
+        inertialess_step(&mut state, &mut speed, &SHIP, REVERSE, rules, HALF);
+        assert!((speed - 0.975).abs() < 1e-6, "half a brake: {speed}");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_npc_follows_by_its_own_adjust_accel() {
+        let rules = FlightRules::default();
+        let mut state = moving(Vec2::new(1.0, 0.0), 90.0);
+        let mut speed = 2.0;
+        let controls = turning(Turn::Left);
+        inertialess_step_with(&mut state, &mut speed, &SHIP, controls, 0.4, rules, HALF);
+        assert_eq!(state.heading, 88.5, "half a turn");
+        let followed = adjust_velocity(Vec2::new(1.0, 0.0), 88.5, 2.0, adjust_rate(0.4, HALF));
+        assert_eq!(state.velocity, followed);
     }
 }

@@ -53,7 +53,8 @@ use crate::flight;
 use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
-use crate::inertialess::{ADJUST_RATE, BRAKE, adjust_velocity};
+use crate::inertialess::{BRAKE, adjust_rate, adjust_velocity};
+use crate::speed_mult::SpeedMult;
 use crate::traffic::autopilot::ALIGNED;
 use crate::traffic::npc::Npc;
 use crate::trig;
@@ -194,18 +195,20 @@ pub fn match_speed(
     (controls, wanted)
 }
 
-/// One tick of an inertialess `npc` whose controls nothing reads: its
-/// velocity follows its speed at `handling`'s rate
-/// ([`adjust_velocity`]), and it moves.
-pub fn drift(npc: &mut Npc, handling: &Handling) {
+/// One tick of an inertialess `npc` whose controls nothing reads, at the
+/// frame's `gain`: its velocity follows its speed at `handling`'s rate ×
+/// the gain ([`adjust_velocity`], [`adjust_rate`],
+/// `_AdjustInertialessShipVelocity` @0x3425f), and it moves its velocity
+/// × the gain ([`flight::moved`](crate::flight::moved), @0x3427e).
+pub fn drift(npc: &mut Npc, handling: &Handling, gain: SpeedMult) {
     let state = &mut npc.state;
     state.velocity = adjust_velocity(
         state.velocity,
         state.heading,
         npc.speed,
-        handling.accel * ADJUST_RATE,
+        adjust_rate(handling.accel, gain),
     );
-    state.position = state.position + state.velocity;
+    state.position = crate::flight::moved(state.position, state.velocity, gain);
 }
 
 #[cfg(test)]
@@ -300,8 +303,31 @@ mod tests {
         desired: Vec2,
     ) -> Controls {
         let (controls, wanted) = super::match_speed(state, speed, handling, desired);
-        let turn = crate::flight::turn_to(state, wanted, handling.turn_rate);
+        let turn = crate::flight::turn_to(
+            state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         Controls { turn, ..controls }
+    }
+
+    #[test]
+    fn at_half_gain_a_drift_follows_at_half_the_rate_and_moves_half() {
+        let half = SpeedMult::new(0.5);
+        let mut drifting = npc(RAVEN, Goal::Idle, at(0.0, 0.0, 1.0, 0.0, 90.0), 3.0);
+        let handling = Handling {
+            max_speed: 6.0,
+            accel: 0.2,
+            turn_rate: 4.0,
+        };
+        drift(&mut drifting, &handling, half);
+        let followed = adjust_velocity(Vec2::new(1.0, 0.0), 90.0, 3.0, adjust_rate(0.2, half));
+        // Toward (3, 0) by 0.2 × 4 × 0.5 on each axis.
+        assert!(near(followed, Vec2::new(1.4, 0.0)), "{followed:?}");
+        assert_eq!(drifting.state.velocity, followed);
+        let moved = crate::flight::moved(Vec2::ZERO, followed, half);
+        assert_eq!(drifting.state.position, moved);
     }
 
     #[test]
@@ -981,6 +1007,7 @@ mod tests {
             &handling,
             controls,
             FlightRules::default(),
+            crate::speed_mult::SpeedMult::FULL,
         );
         (controls.turn, state.heading)
     }

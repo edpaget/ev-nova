@@ -106,6 +106,7 @@ use crate::chance::Chance;
 use crate::flight::{self, Controls, FlightRules};
 use crate::handling::Handling;
 use crate::inertialess::BRAKE;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::autopilot::{self, TopSpeeds};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
@@ -239,13 +240,15 @@ impl Flight {
 /// ([`burst`]), marking that it did
 /// ([`Drive::burst`](ship_display::Drive::burst)); under one that doesn't, it flies keeping what it owes
 /// ([`autopilot::plain_step`]); under [`Word::Writes`] it flies as ever,
-/// its thrust ([`writes_thrust`]) dropping what it owes (F8).
+/// its thrust ([`writes_thrust`]) dropping what it owes (F8). Each at the
+/// frame's `gain`.
 pub(crate) fn step(
     npc: &mut Npc,
     handling: &Handling,
     controls: Controls,
     flight: FlightRules,
     (inertia, word, adjust): (Inertia, Word, f32),
+    gain: SpeedMult,
 ) {
     match (word, npc.owed_burst) {
         (Word::Keeps { thrust }, Some(speed)) if thrust > 0.0 => {
@@ -256,16 +259,17 @@ pub(crate) fn step(
                 flight,
                 (inertia, adjust),
                 (speed, thrust),
+                gain,
             );
         }
         (Word::Keeps { .. }, _) => {
-            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust));
+            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust), gain);
         }
         (Word::Writes, _) => {
             if writes_thrust(controls, inertia) {
                 npc.owed_burst = None;
             }
-            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust));
+            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust), gain);
         }
     }
 }
@@ -275,7 +279,9 @@ pub(crate) fn step(
 /// `controls` on `handling` under `flight`, as `inertia` says, then moves
 /// along its new heading at `speed` in place of its thrust
 /// ([`autopilot::burst_motion`], an inertialess one's velocity pulled by
-/// `adjust`), and owes `thrust` less.
+/// `adjust`), and owes `thrust` less. Its turn and move are at the
+/// frame's `gain`; what it owes grows by the whole word, as the burst
+/// block's add reads no gain (@0x34c5b).
 fn burst(
     npc: &mut Npc,
     handling: &Handling,
@@ -283,14 +289,16 @@ fn burst(
     flight: FlightRules,
     (inertia, adjust): (Inertia, f32),
     (speed, thrust): (f32, f32),
+    gain: SpeedMult,
 ) {
     ship_display::record(npc, handling, controls, flight);
-    npc.state.heading = flight::turned(npc.state.heading, controls.turn, handling.turn_rate);
+    let rate = handling.turn_rate;
+    npc.state.heading = flight::turned(npc.state.heading, controls.turn, rate, gain);
     let pulled = Handling {
         accel: adjust,
         ..*handling
     };
-    autopilot::burst_motion(npc, speed, &pulled, inertia);
+    autopilot::burst_motion(npc, speed, &pulled, inertia, gain);
     npc.owed_burst = Some(speed - thrust);
     npc.display.drive.burst = true;
 }
@@ -410,6 +418,7 @@ mod tests {
             controls,
             FlightRules::default(),
             (Inertia::Inertial, Word::Keeps { thrust: 0.25 }, flown.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         let heading = 90.0 + flown.turn_rate;
         assert_eq!(npc.state.heading, heading);
@@ -437,13 +446,18 @@ mod tests {
         };
         let mut drifted = npc.clone();
         drifted.state.heading = 90.0 - flown.turn_rate;
-        crate::traffic::inertialess::drift(&mut drifted, &flown);
+        crate::traffic::inertialess::drift(
+            &mut drifted,
+            &flown,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         step(
             &mut npc,
             &flown,
             controls,
             FlightRules::default(),
             (INERTIALESS, Word::Keeps { thrust: 0.5 }, flown.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(npc.state.heading, 90.0 - flown.turn_rate);
         assert_eq!(npc.speed, 30.0, "+0x48 = |+0x34|");
@@ -468,6 +482,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 (inertia, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             step(
                 &mut npc,
@@ -475,6 +490,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 (inertia, Word::Keeps { thrust: 0.0 }, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             assert_eq!(npc.owed_burst, Some(30.0), "{inertia:?}: kept");
             assert_eq!(npc.state, plain.state, "{inertia:?}");
@@ -497,6 +513,7 @@ mod tests {
             controls,
             FlightRules::default(),
             (Inertia::Inertial, flown.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         step(
             &mut npc,
@@ -504,6 +521,7 @@ mod tests {
             controls,
             FlightRules::default(),
             (Inertia::Inertial, Word::Keeps { thrust: 0.3 }, flown.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(npc.state, plain.state);
         assert_eq!(npc.owed_burst, None);
@@ -533,6 +551,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 (inertia, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             step(
                 &mut npc,
@@ -540,6 +559,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 (inertia, Word::Writes, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             assert_eq!(npc.owed_burst, None, "{inertia:?} {controls:?}");
             assert_eq!(npc.state, plain.state, "{inertia:?} {controls:?}");
@@ -557,6 +577,7 @@ mod tests {
                 controls,
                 FlightRules::default(),
                 (inertia, Word::Writes, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             assert_eq!(npc.owed_burst, Some(30.0), "{inertia:?} {controls:?}");
         }
@@ -779,6 +800,7 @@ mod tests {
             controls,
             FlightRules::default(),
             (Inertia::Inertial, keeps, flown.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert!(npc.display.drive.burst, "it burst");
         let burst = npc.display.drive.burst;
@@ -806,6 +828,7 @@ mod tests {
                 thrust,
                 FlightRules::default(),
                 (Inertia::Inertial, word, flown.accel),
+                crate::speed_mult::SpeedMult::FULL,
             );
             assert!(!npc.display.drive.burst, "{owed:?} {word:?}");
         }
@@ -871,13 +894,18 @@ mod tests {
             accel: 0.01,
             ..flown
         };
-        crate::traffic::inertialess::drift(&mut drifted, &pulled);
+        crate::traffic::inertialess::drift(
+            &mut drifted,
+            &pulled,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         step(
             &mut npc,
             &flown,
             Controls::default(),
             FlightRules::default(),
             (INERTIALESS, Word::Keeps { thrust: 0.5 }, 0.01),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert!(close(npc.state.velocity, drifted.state.velocity));
         assert!(

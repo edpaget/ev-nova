@@ -644,8 +644,15 @@ pub(super) fn approach_brake(
         return (Controls::default(), trig::whole(state.heading));
     }
     let retro = snipe::retro(state.velocity);
-    // Put on its retro heading this tick, before this tick's thrust.
-    let facing_back = flight::turns_onto(state.heading, retro, handling.turn_rate);
+    // Put on its retro heading this tick, before this tick's thrust. The
+    // engine's own planner for the other reading of `NpcLanding`, with no
+    // counterpart in the original, reads the turn at full gain.
+    let facing_back = flight::turns_onto(
+        state.heading,
+        retro,
+        handling.turn_rate,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     let controls = Controls {
         thrust: facing_back && speed > handling.accel / 2.0,
         ..Controls::default()

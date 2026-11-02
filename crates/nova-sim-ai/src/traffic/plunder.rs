@@ -339,7 +339,13 @@ pub(crate) fn fly_docking(
     let own = npc.top_speed(led_speed);
     let (flown, outcome) = dock_low_level(npc, victim, own, flight, swarm, chance)?;
     let adjust = npc.flying_handling(own, flight).accel;
-    let at_step = slot_word::AtStep::of_npc(npc, led_speed, flight, adjust);
+    let at_step = slot_word::AtStep::of_npc(
+        npc,
+        led_speed,
+        flight,
+        adjust,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     slot_word::handle_ship(npc, &flown, at_step, flight);
     Some(outcome)
 }

@@ -272,6 +272,8 @@ mod tests {
     fn a_led_ship_holds_at_the_gate_then_bursts_at_15() {
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         let heading = session.ship.player.heading;

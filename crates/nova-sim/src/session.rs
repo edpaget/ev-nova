@@ -583,6 +583,7 @@ mod news;
 #[cfg(test)]
 mod npc_destinations;
 mod npc_escape;
+mod npc_gain;
 mod npc_kinds;
 mod operator_moves;
 mod outbox;
@@ -2053,6 +2054,9 @@ impl Session {
             // Every stellar the system lists, shown or not, which a fleet
             // may come out of (see the `npc_destinations` module).
             listed: &self.chart.listed,
+            // The entry flies no ship (`Traffic::enter_with`), so its
+            // gain moves nothing; it reads the frame's all the same.
+            speed_mult: self.speed_mult(),
             // No tractor's step: the entry flies no ship. No stellar
             // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)
@@ -2164,8 +2168,10 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim, the gates' widths and asteroid slot 0. The
-    /// advance pass's think and flight ([`Session::game_work`]), the gate
+    /// the fight's shots aim, the gates' widths, asteroid slot 0 and the
+    /// frame's gain ([`Session::speed_mult`]), which `_HandleShip` reads as
+    /// it flies each NPC (see the `npc_gain` module). The advance pass's
+    /// think and flight ([`Session::game_work`]), the gate
     /// exit's arrivals pass ([`Session::gate_exit_pass`]) and double
     /// time's second pass (see the `double_time` module) step the traffic
     /// in it. The pilot's defence ships left are lent to the traffic for
@@ -2249,6 +2255,7 @@ impl Session {
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
             slot_stellars: &self.statics.slot_stellars,
+            speed_mult: self.speed_mult(),
         };
         let stepped = f(&mut self.space.traffic, world);
         self.lend_defence_ships();
@@ -2352,6 +2359,9 @@ impl Session {
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
             slot_stellars: &self.statics.slot_stellars,
+            // It flies no ship: only a pass's traffic flies
+            // (`Session::step_traffic`).
+            speed_mult: self.speed_mult(),
         }
     }
 

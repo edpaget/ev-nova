@@ -765,7 +765,12 @@ mod tests {
     /// `controls` with the turn `_HandleShip` takes from `state` toward
     /// `wanted` on `handling` ([`flight::turn_to`]).
     fn turned(state: &ShipState, controls: Controls, wanted: i16, handling: &Handling) -> Controls {
-        let turn = flight::turn_to(&mut state.clone(), wanted, handling.turn_rate);
+        let turn = flight::turn_to(
+            &mut state.clone(),
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         Controls { turn, ..controls }
     }
 
@@ -1458,6 +1463,7 @@ mod tests {
             controls,
             flight,
             (Inertia::Inertial, handling.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(ship.display.drive.turn, -1);
         assert_eq!(ship.display.drive.thrust, ship_display::Thrust::Plain);

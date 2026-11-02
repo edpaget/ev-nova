@@ -5732,6 +5732,8 @@ pub(super) mod tests {
         });
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         ticks(&mut session, &catalog, 199);
         assert_eq!(marked(&session), [0, 0]);
         assert!(

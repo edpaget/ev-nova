@@ -191,7 +191,7 @@ fn an_inertialess_ship_drags_its_velocity_and_speed_and_takes_the_burst_as_its_s
                 let mut moved = npc.clone();
                 flight::drag(&mut moved.state);
                 moved.speed *= DISABLED_DRAG;
-                inertialess::drift(&mut moved, &flown);
+                inertialess::drift(&mut moved, &flown, crate::speed_mult::SpeedMult::FULL);
                 fly(&mut npc, ALONE);
                 assert_eq!(npc.speed, speed, "{mode:?}: +0x48 follows the burst");
                 assert_eq!(npc.state.heading, HEADING);

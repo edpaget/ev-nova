@@ -73,6 +73,7 @@ use crate::ai::Goal;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::flight::NpcFormation;
+use crate::speed_mult::SpeedMult;
 
 /// Which pass's fly half a [`FlyPass`] is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +130,9 @@ pub struct FlyPass {
     /// record from there on, and one launched into a berth since as it
     /// stands (see [`tractor_hold`]).
     holders: tractor_hold::Holders,
+    /// The frame's gain as the half began ([`World::speed_mult`]), which
+    /// its end reads ([`Traffic::end_fly`], which gets no world).
+    gain: SpeedMult,
     /// The NPCs in the regroup pause as the half began, whose warp-out
     /// reads the pause's (see [`warp_out::fly_jump`]).
     paused: BTreeSet<NpcId>,
@@ -240,6 +244,7 @@ impl Traffic {
             paused,
             step_writes: (Vec::new(), Vec::new()),
             first: self.first_class,
+            gain: world.speed_mult,
         }
     }
 
@@ -328,7 +333,13 @@ impl Traffic {
         let handling = npc.flying_handling(speeds.own, world.flight);
         let wanted = slot_word::spawn_heading(&pass.headings, npc.berth);
         let spawned = SlotWord::spawned(npc, wanted, &handling, world.flight);
-        let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, handling.accel);
+        let at_step = AtStep::of_npc(
+            npc,
+            world.led_speed,
+            world.flight,
+            handling.accel,
+            world.speed_mult,
+        );
         let by = (world.flight, world.held_burst, !pass.think);
         autopilot::step(npc, &spawned, at_step, speeds, by, chance);
     }
@@ -340,7 +351,9 @@ impl Traffic {
     pub fn end_fly(&mut self, pass: FlyPass) {
         let half = pass.half;
         plunder::count_down(&mut self.npcs);
-        self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
+        for npc in &mut self.npcs {
+            npc.regenerate_fuel(pass.gain);
+        }
         if half == FlyHalf::Advance {
             self.departed.extend(std::mem::take(&mut self.freed));
             // The display pass (`_DoPlayGameWork` @0x444ad) follows the
@@ -421,7 +434,7 @@ fn fly_flown(
     // before the step's ion block (@0x342b2-0x34421).
     let adjust = npc.flying_handling(speeds.own, world.flight).accel;
     // Its ion block, the move's other side (see the `ionization` module).
-    ionization::deionize(npc, speeds.own);
+    ionization::deionize(npc, speeds.own, world.speed_mult);
     tractor_hold::pull(npc, &pass.holders, world.tractor_step);
     ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
     let held = ship_display::held(npc);
@@ -440,7 +453,8 @@ fn fly_flown(
     if held_burst::settle(npc, burst, speeds, kept.inertia(), &mut *chance) {
         pass.step_writes.0.push(npc.id);
     }
-    ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
+    let glow = leader_glow(pass, npc, world);
+    ship_display::bank_and_glow(npc, held, derelict, glow, world.speed_mult);
     // The release and lapse come after the turn, thrust, glow and fire,
     // which read the hold (@0x353ba-0x35449, see `tractor_hold`).
     tractor_hold::release(npc, &pass.holders, pass.think);
@@ -491,12 +505,13 @@ fn fly_steered(
         npc.display.drive.burst = false;
         return outcome;
     } else {
-        let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust);
+        let gain = world.speed_mult;
+        let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust, gain);
         let rules = (world.flight, world.held_burst, !pass.think);
         autopilot::step(npc, kept, at_step, speeds, rules, &mut *chance)
     };
     let jumping = npc.jumping() && !paused;
-    warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
+    warp_out::settle(npc, &pass.leaders, &world.warp, jumping, world.speed_mult);
     outcome
 }
 
@@ -1674,7 +1689,11 @@ mod tests {
             .handling(expected.as_ref().expect("here").stats.handling);
         let turn = launched_turn(&world, &traffic, id);
         expected.as_mut().expect("here").state.heading = 45.0 + turn;
-        crate::traffic::inertialess::drift(expected.as_mut().expect("here"), &handling);
+        crate::traffic::inertialess::drift(
+            expected.as_mut().expect("here"),
+            &handling,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         traffic.coast_npc(&pass, id, &world, &mut NeverFires);
         let coasted = traffic.npcs().iter().find(|npc| npc.id == id).cloned();
         assert_eq!(
@@ -1714,5 +1733,142 @@ mod tests {
             heading: 45.0 + turn,
         };
         assert_eq!(coasted.state, still, "unmoved, its velocity gone");
+    }
+
+    // The frame's gain, `World::speed_mult`, as the fly half hands it on.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// A world at `gain` whose warp sound lasts 364 Mac ticks.
+    fn at_gain(gain: SpeedMult) -> World<'static> {
+        World {
+            speed_mult: gain,
+            warp: warp_out::WarpWorld {
+                durations: [364, 252],
+                ..warp_out::WarpWorld::default()
+            },
+            ..World::new(&[])
+        }
+    }
+
+    /// NPC 1 at the centre moving (2, 0), facing east.
+    fn mover() -> Npc {
+        let mut mover = at(1, 0.0, 0.0);
+        mover.state.velocity = Vec2::new(2.0, 0.0);
+        mover.state.heading = 90.0;
+        mover
+    }
+
+    /// `npc` alone, once a whole fly half in `world` has flown it.
+    fn flown_alone(npc: Npc, world: &World) -> Npc {
+        let mut traffic = Traffic {
+            npcs: vec![npc],
+            ..Traffic::default()
+        };
+        traffic.fly_every(world, &BTreeSet::new(), FlyHalf::Advance, &mut NeverFires);
+        traffic.npcs[0].clone()
+    }
+
+    /// `npc` on its own jump, its stage under way on its own clock and
+    /// facing its aim east.
+    fn jumping(mut npc: Npc) -> Npc {
+        npc.begin_own_jump();
+        npc.warp.stage = 3.0;
+        npc.warp.since = 100;
+        npc.warp.aim = 90;
+        npc
+    }
+
+    #[test]
+    fn a_fly_half_keeps_the_gain_its_world_began_it_at() {
+        let mut traffic = Traffic::default();
+        let pass = traffic.begin_fly(&at_gain(HALF), &BTreeSet::new(), FlyHalf::Advance);
+        assert_eq!(pass.gain, HALF);
+    }
+
+    #[test]
+    fn at_half_gain_a_flying_npc_moves_half_its_velocity() {
+        let flown = flown_alone(mover(), &at_gain(HALF));
+        assert_eq!(flown.state.position, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn at_half_gain_a_jumping_npc_moves_and_warps_out_half() {
+        let world = at_gain(HALF);
+        let flown = flown_alone(jumping(mover()), &world);
+        let mut expected = jumping(mover());
+        warp_out::fly_jump(&mut expected, &BTreeMap::new(), &world, false, 0.0);
+        assert_eq!(flown.state.position, expected.state.position);
+        let full = flown_alone(jumping(mover()), &at_gain(SpeedMult::FULL));
+        assert_ne!(flown.state.position, full.state.position);
+    }
+
+    #[test]
+    fn at_half_gain_a_coasting_npc_under_way_is_settled_at_half() {
+        let world = at_gain(HALF);
+        let mut coasting = jumping(mover());
+        coasting.mode = Mode::Coasting { ticks_left: 5 };
+        let flown = flown_alone(coasting.clone(), &world);
+        let mut expected = coasting;
+        expected.state.position = Vec2::new(1.0, 0.0);
+        warp_out::settle(&mut expected, &BTreeMap::new(), &world.warp, true, HALF);
+        assert_eq!(flown.state.position, expected.state.position);
+        assert_ne!(expected.state.position, Vec2::new(1.0, 0.0), "it warped");
+    }
+
+    #[test]
+    fn at_half_gain_an_ionized_npc_sheds_half_its_rate() {
+        let mut ionized = mover();
+        ionized.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                ionize_max: 400,
+                deionize: 50,
+                ..FAST
+            },
+            &[],
+        );
+        ionized.ion.charge = 3.0;
+        let mut expected = ionized.clone();
+        ionization::deionize(&mut expected, 6.0, HALF);
+        let flown = flown_alone(ionized, &at_gain(HALF));
+        assert_eq!(flown.ion.charge, expected.ion.charge);
+        assert_eq!(flown.ion.charge, 2.75);
+    }
+
+    #[test]
+    fn at_half_gain_a_banking_npc_banks_half_a_frame() {
+        let mut banking = mover();
+        banking.hull.frames = crate::combat::ship_frames::FrameSpec {
+            flags: crate::combat::ship_frames::BANKS,
+            base_sets: 3,
+            ..crate::combat::ship_frames::FrameSpec::NONE
+        };
+        // Its spawn's word wants the berth's 0: it turns left.
+        let flown = flown_alone(banking, &at_gain(HALF));
+        assert_eq!(flown.display.frames.bank, -0.5);
+    }
+
+    #[test]
+    fn at_half_gain_a_fly_halfs_end_regenerates_half_an_npcs_fuel() {
+        let mut fuelled = mover();
+        fuelled.stats.fuel_regen = 0.5;
+        fuelled.reserves.fuel.now = 100.0;
+        let flown = flown_alone(fuelled, &at_gain(HALF));
+        assert_eq!(flown.reserves.fuel.now, 100.25);
+    }
+
+    #[test]
+    fn at_half_gain_a_ship_launched_after_the_half_began_coasts_at_half() {
+        let world = at_gain(HALF);
+        let (mut traffic, pass, id) = launched_mid_half(&world, false);
+        let turn = launched_turn(&world, &traffic, id);
+        traffic.coast_npc(&pass, id, &world, &mut NeverFires);
+        let coasted = traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("here");
+        assert_eq!(coasted.state.position, Vec2::new(101.5, 99.0));
+        assert_eq!(coasted.state.heading, HALF.add_times(45.0, turn));
     }
 }

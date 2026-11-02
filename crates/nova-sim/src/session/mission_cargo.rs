@@ -2258,6 +2258,8 @@ mod tests {
         // AC2, in hyperspace.
         let catalog = contraband_catalog(500);
         let mut session = smuggler(&catalog, 1, 0, 1200);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         bound_east(&mut session, 90.0);
         session.begin_jump().expect("jumps");
         let _ = session.take_sounds();

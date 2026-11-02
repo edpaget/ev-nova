@@ -1357,7 +1357,7 @@ mod tests {
         });
         let held = ship.own_handling();
         assert!(held.max_speed < ship.class_handling().max_speed, "held");
-        let at_step = AtStep::of_npc(&ship, 1.5, flight, 0.0);
+        let at_step = AtStep::of_npc(&ship, 1.5, flight, 0.0, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(at_step.top_speed, held.max_speed * 1.5);
         let ionized = ship.flying_handling(held.max_speed, flight);
         assert!(

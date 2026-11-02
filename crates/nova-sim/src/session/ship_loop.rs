@@ -152,7 +152,7 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) -> BTreeSet<NpcId> {
-        self.space.traffic.ease_stray();
+        self.space.traffic.ease_stray(self.speed_mult());
         let again_marks = matches!(motion, Motion::Again)
             .then(|| self.space.mission_marks())
             .filter(|_| !self.space.traffic_due);

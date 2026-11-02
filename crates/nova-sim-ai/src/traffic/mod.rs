@@ -246,6 +246,8 @@ mod goal_0_fire_tests;
 mod goal_0_tests;
 pub mod gone;
 #[cfg(test)]
+mod handle_ship_gain_tests;
+#[cfg(test)]
 mod handle_turn_tests;
 pub mod held_burst;
 #[cfg(test)]
@@ -391,6 +393,7 @@ use crate::govt::Governments;
 use crate::landing::TypeWidth;
 use crate::rulebook::RuleSource;
 use crate::skill::random_skill_level;
+use crate::speed_mult::SpeedMult;
 use autopilot::{Outcome, TopSpeeds};
 use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
@@ -842,6 +845,12 @@ pub struct World<'a> {
     /// one the system doesn't list ([`World::flown_among`], see
     /// [`slot_stellars`]). [`World::new`] gives none.
     pub slot_stellars: &'a [LandingSite],
+    /// The frame's gain, `_gSpeedMult`, which `_HandleShip` reads as it
+    /// flies each NPC: its move, turn, thrust, ion block, cloak's shield
+    /// upkeep, bank, AI wait and fuel. The session gives it
+    /// (`nova_sim::Session::speed_mult`); [`World::new`] gives
+    /// [`SpeedMult::FULL`].
+    pub speed_mult: SpeedMult,
 }
 
 /// Nova's disable rule, a world's default.
@@ -862,8 +871,9 @@ impl<'a> World<'a> {
     /// no government marked by an IFF scrambler, Nova's disable rule,
     /// no player's warp under way with warp sounds of no length, no
     /// tractor's pull, no weapon records
-    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)), frame 0 and no stellar
-    /// shots can shoot down ([`NO_DESTROYABLE`](crate::ai::NO_DESTROYABLE)).
+    /// ([`NO_WEAPONS`](crate::ai::NO_WEAPONS)), frame 0, no stellar
+    /// shots can shoot down ([`NO_DESTROYABLE`](crate::ai::NO_DESTROYABLE))
+    /// and a full frame's gain.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -914,6 +924,7 @@ impl<'a> World<'a> {
             landed_leaves: RuleSource::Engine,
             destroyable: bare.destroyable,
             slot_stellars: &[],
+            speed_mult: SpeedMult::FULL,
         }
     }
 
@@ -2061,8 +2072,9 @@ impl Traffic {
     /// cloaked turns on its fade, so it reads as it did before the think.
     /// The fade steps at the ship's display step
     /// ([`Traffic::step_fades`]). Then each that was cloaked pays its
-    /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204),
-    /// even one the hold just uncloaked. Whether it can cloak reads
+    /// cloak's shield upkeep ([`cloak::drain_shield`], @0x341af-0x34204)
+    /// at the frame's gain ([`World::speed_mult`], @0x341d5), even one the
+    /// hold just uncloaked. Whether it can cloak reads
     /// [`World::cloak_reserves`]; whether the hold keeps a ship riding its
     /// leader's area cloak, [`World::area_cloak_hold`]
     /// ([`area_cloak::holds`](crate::area_cloak::holds)). The ride is the
@@ -2095,9 +2107,8 @@ impl Traffic {
                 let keeps = crate::area_cloak::holds(able, ride, world.area_cloak_hold);
                 cloak::hold(&mut npc.cloak, keeps);
                 let usage = npc.cloak_gear.shield_usage;
-                // At full gain until `_HandleShip` reads the frame's
-                // (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-                let gain = crate::speed_mult::SpeedMult::FULL;
+                // At the frame's gain (@0x341d5).
+                let gain = world.speed_mult;
                 cloak::drain_shield(&mut npc.reserves.shield.now, usage, true, gain);
             }
         }
