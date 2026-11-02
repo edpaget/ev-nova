@@ -38,6 +38,11 @@
 //!   bound to land that an NPC's hit gave a target lands on, holding the
 //!   target, one holding holds, and one waiting waits. Its target is the reaction's
 //!   (`_DamageShip` @0x3be5d), which [`PirateWarship::target`] keeps.
+//!   A successor that copied a lost interceptor lead's goal 7 holds the
+//!   inspected ship in +0x70 ([`Npc::slot_target`]): so it keeps the
+//!   inspection while that ship is in its slot, which goal 7's high level
+//!   flies and ends ([`inspect_high`](super::inspect_high)), and the head
+//!   drop takes one breaking up or gone, with the same think's search.
 //! - **The classification** (@0x8c5e1-0x8c743), of the ship it found or
 //!   the target an attack or plunder holds (the reaction's write included):
 //!   the player, a former escort (+0xc8de, [`Npc::former`]) or a ship whose
@@ -206,9 +211,11 @@ pub fn think(
     if matches!(npc.goal, Goal::CountWait) {
         return of(npc.goal);
     }
-    let dropped = npc.target.is_some_and(|ship| gone_or_dying(ship, around));
+    // +0x70, which names the ship of a lost lead's goal 7 too.
+    let held = npc.slot_target();
+    let dropped = held.is_some_and(|ship| gone_or_dying(ship, around));
     let goal = if dropped { Goal::Idle } else { npc.goal };
-    let kept = npc.target.filter(|_| !dropped && goal != Goal::Idle);
+    let kept = held.filter(|_| !dropped && goal != Goal::Idle);
     let (target, found) = if let Some(ship) = kept {
         if !matches!(
             goal,
@@ -838,6 +845,34 @@ mod tests {
         jumping.mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
         let npcs = [holding(plunder(n(2)), Some(n(2))), jumping];
         assert_eq!(decided(&npcs), plundered(n(2)), "a ship jumping in stays");
+    }
+
+    #[test]
+    fn a_pirate_keeps_a_copied_inspection_with_no_target() {
+        // A lost interceptor lead's goal 7 names its ship in +0x70
+        // (`Npc::slot_target`): with it in its slot, neither inactive
+        // (@0x8c315) nor breaking up (@0x8c321), only goals 4 and 0xd act
+        // (@0x8c5e8), so goal 7 stands, with no search though a ship to
+        // plunder is in view.
+        let npcs = [holding(Goal::Inspect(n(2)), None), trader(2, 300.0)];
+        assert_eq!(decided(&npcs), only(Goal::Inspect(n(2))));
+        let npcs = [holding(Goal::Inspect(P), None), trader(2, 300.0)];
+        assert_eq!(decided(&npcs), only(Goal::Inspect(P)), "the player's");
+    }
+
+    #[test]
+    fn a_pirate_drops_a_copied_inspection_of_a_ship_breaking_up_or_gone_and_searches() {
+        // +0x70 -1 and goal 0 (@0x8c32a-0x8c330), then the same think's
+        // search (@0x8c35d).
+        let mut dying = trader(2, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let npcs = [holding(Goal::Inspect(n(2)), None), dying, wreck(3, 400.0)];
+        assert_eq!(decided(&npcs), found_wreck(n(2)), "the nearest still");
+        let gone = [holding(Goal::Inspect(n(9)), None), wreck(3, 400.0)];
+        assert_eq!(decided(&gone), found_wreck(n(3)));
     }
 
     #[test]

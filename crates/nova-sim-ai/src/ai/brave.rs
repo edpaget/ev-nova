@@ -91,7 +91,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if let Some(gone) = around.held_gone(npc).filter(|_| npc.provoked > 0.0) {
         return fight(ShipRef::Npc(gone.id), Some(gone.state.position));
     }
-    let breaking_up = npc.target.filter(|&attacker| {
+    let breaking_up = npc.slot_target().filter(|&attacker| {
         npc.provoked > 0.0 && matches!(around.condition_of(attacker), Some(Condition::Dying { .. }))
     });
     match breaking_up {
@@ -243,6 +243,34 @@ mod tests {
         assert_eq!(decided(&calm), Goal::Inspect(ShipRef::Player));
         assert_eq!(decided(&inspecting(0.0, 0.0)), Goal::Attack(n(2)));
         assert_eq!(decided(&inspecting(1251.0, 0.0)), Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_provoked_brave_trader_with_a_copied_inspection_fights_or_flees_the_inspected_ship() {
+        // Its provoked branch reads +0x70 (@0x8b616), the inspected ship of
+        // a lost lead's goal 7 (`Npc::slot_target`).
+        let copied = |x, y| {
+            let mut npcs = provoked(x, y);
+            npcs[0].goal = Goal::Inspect(n(2));
+            npcs[0].target = None;
+            npcs
+        };
+        assert_eq!(decided(&copied(0.0, 300.0)), Goal::Attack(n(2)));
+        assert_eq!(decided(&copied(1251.0, 0.0)), Goal::Flee(n(2)));
+        let dying = |x, y| {
+            let mut npcs = copied(x, y);
+            npcs[1].condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            };
+            npcs
+        };
+        assert_eq!(
+            decided(&dying(0.0, 300.0)),
+            Goal::Idle,
+            "fought, and ended by the high level (@0x8e3ef)"
+        );
+        assert_eq!(decided(&dying(1251.0, 0.0)), Goal::Flee(n(2)));
     }
 
     #[test]

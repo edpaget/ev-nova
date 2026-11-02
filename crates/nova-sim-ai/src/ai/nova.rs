@@ -707,6 +707,28 @@ mod tests {
     }
 
     #[test]
+    fn a_pirate_successor_keeping_a_copied_inspection_ends_it_within_reach() {
+        // `_PirateWarshipAI` keeps goal 7 on a +0x70 in its slot
+        // (@0x8c5e8), and the state-7 block ends it within reach: goal 0,
+        // +0x70 -1 (@0x8f391). Beyond reach it flies on.
+        use crate::ai::fixture::{POLICE, TRADERS, around, n, ship, sites};
+        let govts = crate::ai::fixture::govts(0, PLUNDERS);
+        let sites = sites();
+        let mut pirate = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        pirate.goal = Goal::Inspect(n(2));
+        for (x, goal) in [(60.0, Goal::Idle), (600.0, Goal::Inspect(n(2)))] {
+            let mut trader = ship(2, TRADERS, AiType::WimpyTrader, x, -60.0);
+            trader.hull.crew = 1;
+            trader.hull.inherent_ai = 2;
+            let npcs = [pirate.clone(), trader];
+            let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]));
+            assert_eq!(decision.goal, goal, "{x}");
+            assert_eq!(decision.clears_target, goal == Goal::Idle, "{x}");
+        }
+    }
+
+    #[test]
     fn each_ai_type_is_routed_to_its_own_behaviour() {
         let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
         let ai = TYPES

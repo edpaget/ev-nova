@@ -300,8 +300,15 @@ fn a_pirate_successor_of_a_trader_lead_whose_pick_failed_picks() {
 #[test]
 fn a_pirate_successor_of_a_patrolling_interceptor_lead_leaves_without_picking() {
     // The patrol heads off (@0x8d132): the successor copies goal 1 and its
-    // stellar, and its idle block reads it set (@0x8c472-0x8c477).
-    let successor = successor_after(of_type(AiType::Interceptor, 4), &sites());
+    // stellar, and its idle block reads it set (@0x8c472-0x8c477). The
+    // lead has looked its follower over already (+0x90), so it patrols
+    // rather than inspect it: a successor that copied goal 7 on itself
+    // would end it within its own reach (@0x8f391).
+    let lead = Npc {
+        inspected: Some(ShipRef::Npc(FOLLOWER)),
+        ..of_type(AiType::Interceptor, 4)
+    };
+    let successor = successor_after(lead, &sites());
     assert!(
         matches!(successor.goal, Goal::Land(_) | Goal::JumpOut),
         "{:?}",

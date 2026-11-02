@@ -1040,6 +1040,22 @@ impl Npc {
         )
     }
 
+    /// The ship its slot's +0x70 names: its target, or with none the ship
+    /// it inspects. The original keeps goal 7's ship in +0x70 alone
+    /// (`_InterceptorAI` @0x8ca2f, @0x8ce42), where the engine keeps it in
+    /// the goal ([`Goal::Inspect`]) and leaves [`Npc::target`] as the
+    /// inspector's think wrote it, none: so a successor that copied a lost
+    /// interceptor lead's inspection (`traffic::succession`, which copies
+    /// the lead's target too) holds no target, where the original's holds
+    /// the inspected ship. The thinks that read +0x70 with a copied goal 7
+    /// read this: the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
+    /// the pirate's ([`pirate::think`](crate::ai::pirate::think)) and the
+    /// defence ship's ([`defence_ship::think`](crate::ai::defence_ship::think)).
+    #[must_use]
+    pub fn slot_target(&self) -> Option<ShipRef> {
+        self.target.or(self.goal.inspecting())
+    }
+
     /// The ship the threat tests read as the one it fights: its goal's
     /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) or
     /// idle ([`Goal::Idle`], state 0) the target it holds. The original's
@@ -2097,6 +2113,28 @@ mod tests {
                 "{quarry:?}"
             );
         }
+    }
+
+    #[test]
+    fn its_slot_target_is_its_target_or_the_ship_it_inspects() {
+        // +0x70 names the ship goal 7 is about (`_InterceptorAI` @0x8ca2f),
+        // which the engine keeps in the goal.
+        let npc = |goal, target| Npc {
+            goal,
+            target,
+            ..crate::traffic::fixture::npc(1, ShipStats::default())
+        };
+        let trader = ShipRef::Npc(NpcId(2));
+        let hitter = ShipRef::Npc(NpcId(3));
+        assert_eq!(npc(Goal::Inspect(trader), None).slot_target(), Some(trader));
+        assert_eq!(
+            npc(Goal::Inspect(trader), Some(hitter)).slot_target(),
+            Some(hitter),
+            "a hit's since"
+        );
+        assert_eq!(npc(Goal::Idle, Some(hitter)).slot_target(), Some(hitter));
+        assert_eq!(npc(Goal::Attack(trader), None).slot_target(), None);
+        assert_eq!(npc(Goal::Idle, None).slot_target(), None);
     }
 
     #[test]

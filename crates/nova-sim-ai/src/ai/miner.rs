@@ -18,7 +18,11 @@
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
 //!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
-//!   [`call_for_help`](crate::ai::call_for_help)).
+//!   [`call_for_help`](crate::ai::call_for_help)). The target is +0x70,
+//!   which names the inspected ship of a goal 7 a successor copied from a
+//!   lost interceptor lead ([`Npc::slot_target`]), so it flees that ship.
+//!   Unprovoked, the tests below write a goal every think, so a copied
+//!   goal 7 never survives it.
 //! - **[`MINES`]**, unless already leaving (state 2, [`Goal::JumpOut`]):
 //!   with asteroid slot 0 live ([`Surroundings::mining_rock`]) state 16,
 //!   [`Goal::Mine`]; without, state 6, [`Goal::Wait`], its target and
@@ -901,6 +905,47 @@ mod tests {
             Goal::Mine,
             "its attacker gone, it decides as unprovoked"
         );
+    }
+
+    #[test]
+    fn a_provoked_miner_with_a_copied_inspection_flees_the_inspected_ship() {
+        // Its provoked branch reads +0x70 (@0x8b254-0x8b265), the inspected
+        // ship of a lost lead's goal 7 (`Npc::slot_target`).
+        let mut provoked = miner(MINER_BITS, true);
+        provoked.provoked = 5.0;
+        provoked.goal = Goal::Inspect(n(2));
+        let npcs = [provoked, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(decide(&npcs[0], &around), Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_miner_overwrites_a_copied_inspection_every_think() {
+        // Unprovoked, its `Flags3` writes a goal every think: mine 0x10
+        // (@0x8b2ba), wait 6 (@0x8b2c5-0x8b2d1), scoop 0x11 (@0x8b33b) or
+        // the shuttle's (@0x8b35f-0x8b463).
+        let inspecting = |bits, can_scoop| Npc {
+            goal: Goal::Inspect(n(2)),
+            ..miner(bits, can_scoop)
+        };
+        let sites = stellars();
+        assert_eq!(
+            deciding(&inspecting(MINES, false), &sites, Some(rock())),
+            Goal::Mine
+        );
+        assert_eq!(
+            deciding(&inspecting(MINES, false), &sites, None),
+            Goal::Wait
+        );
+        for (bits, can_scoop) in [(SCOOPS, true), (MINES, false), (MINER_BITS, true)] {
+            for rock in [Some(rock()), None] {
+                let goal = deciding(&inspecting(bits, can_scoop), &sites, rock);
+                assert!(
+                    !matches!(goal, Goal::Inspect(_)),
+                    "{bits:#x} {can_scoop} {rock:?}: {goal:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -26,7 +26,16 @@
 //!    (+0x6c = −1) (@0x7f906-0x7f90d): a defender that landed is up
 //!    again the next think, as it keeps its slot.
 //! 5. **The keep test** (@0x7f901-0x7f942): a target it no longer sees is
-//!    dropped. The original asks `_ShipVisibleToShip(&ships[64], ship)`
+//!    dropped. The target is +0x70, which names the ship of an inspection
+//!    a successor copied from a lost interceptor lead
+//!    ([`Npc::slot_target`]): one of the player it sees is kept, goal 7
+//!    and all, one of an NPC moves to the candidate or idles with none
+//!    (step 7), and one unseen gives way to the candidate or its stellar
+//!    (step 6). A defence ship can be led only once a ship holding a
+//!    plunder takes it into its fleet ([`plunder`](crate::traffic::plunder)),
+//!    a plunder whose holder may be an interceptor successor
+//!    ([`plunder_high`](super::plunder_high)) that later inspects; no stock
+//!    fleet leads one. The original asks `_ShipVisibleToShip(&ships[64], ship)`
 //!    (@0x7f915-0x7f928): the compiler folded the loop index left at 64
 //!    into 0x325000, one slot past the 64-slot table, a read that can't
 //!    be replicated. This takes the intended reading, the defender's own
@@ -48,6 +57,7 @@ use crate::ai::{Behaviour, Decision, Goal, Surroundings};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::traffic::npc::Npc;
 
@@ -121,7 +131,11 @@ pub fn think(npc: &Npc, stellar: StellarId, around: &Surroundings) -> Option<Thi
     }
     let best = candidate(npc, around);
     let mut goal = npc.goal;
-    let mut target = npc.target.filter(|&kept| around.sees(npc, kept));
+    // +0x70, which names the ship of a lost lead's goal 7 too; the step's
+    // slot test let go of one gone (@0x33865-0x33888).
+    let mut target = npc.slot_target().filter(|&kept| {
+        around.condition_of(kept).is_some_and(Condition::active) && around.sees(npc, kept)
+    });
     if target.is_none() {
         if let Some(ship) = best {
             target = Some(ship);
@@ -269,6 +283,41 @@ mod tests {
         assert_eq!(nearest(at, &within, Some(DEFENCE_RADIUS_SQ)), Some(n(2)));
         assert_eq!(nearest(at, &past, Some(DEFENCE_RADIUS_SQ)), None);
         assert_eq!(nearest(at, &past, None), Some(n(2)), "the second pass");
+    }
+
+    #[test]
+    fn a_defence_ship_keeps_an_inspection_of_the_player_and_moves_one_of_an_npc_to_its_candidate() {
+        // A copied goal 7 names its ship in +0x70 (`Npc::slot_target`):
+        // one of the player is kept (@0x7f97c-0x7f99f), one of an NPC is
+        // swapped for the candidate, its goal kept (@0x7f9a5-0x7f9ac), or
+        // with none dropped (@0x7f9b2-0x7f9c4); one unseen gives way to the
+        // candidate or the stellar (@0x7f915-0x7f971).
+        let inspecting = |ship| Npc {
+            goal: Goal::Inspect(ship),
+            ..defender(1)
+        };
+        let trader = || ship(2, TRADERS, AiType::WimpyTrader, 300.0, 0.0);
+        let npcs = [inspecting(ShipRef::Player), escort(3, 100.0)];
+        let (goal, target, _) = thinks(&npcs, Some(200.0));
+        assert_eq!(
+            (goal, target),
+            (Goal::Inspect(ShipRef::Player), Some(ShipRef::Player))
+        );
+        let npcs = [inspecting(n(2)), trader(), escort(3, 100.0)];
+        let (goal, target, _) = thinks(&npcs, None);
+        assert_eq!((goal, target), (Goal::Inspect(n(3)), Some(n(3))));
+        let npcs = [inspecting(n(2)), trader()];
+        let (goal, target, _) = thinks(&npcs, None);
+        assert_eq!((goal, target), (Goal::Idle, None), "no candidate");
+        let unseen = crate::ai::fixture::cloaked(trader());
+        let npcs = [inspecting(n(2)), unseen, escort(3, 100.0)];
+        let (goal, target, _) = thinks(&npcs, None);
+        assert_eq!((goal, target), (Goal::Attack(n(3)), Some(n(3))), "unseen");
+        let npcs = [inspecting(n(9)), escort(3, 100.0)];
+        let (goal, target, _) = thinks(&npcs, None);
+        assert_eq!((goal, target), (Goal::Attack(n(3)), Some(n(3))), "gone");
+        let (goal, target, _) = thinks(&npcs[..1], None);
+        assert_eq!((goal, target), (Goal::Land(EARTH), None), "gone, none");
     }
 
     #[test]

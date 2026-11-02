@@ -22,7 +22,12 @@
 //!    the stellar; no warship think runs.
 //! 5. **Otherwise** (@0x8c293-0x8c2c5): a ship in goal 0x12 drops it (goal
 //!    and sub-goal 0, target and travel stellar -1), and then the
-//!    warship's think runs, whatever the ship's own type. A landing or a
+//!    warship's think runs, whatever the ship's own type. So a goal 7 a
+//!    successor copied from a lost interceptor lead is kept, provoked or
+//!    not, as the warship keeps it (`_WarshipAI` @0x8bb2d, @0x8be10), and
+//!    goal 7's high level ends it ([`inspect_high`](super::inspect_high));
+//!    with an enemy stellar and a planet gun, step 4 takes goal 0x12
+//!    first. A landing or a
 //!    gate entry the warship keeps flies to the travel stellar the scan
 //!    left, as the high level reads +0x6c for goals 1 and 0x14 (@0x8d8c9,
 //!    @0x8daea, @0x8db70): a landing on an enemy gate is entered, by the
@@ -457,6 +462,49 @@ mod tests {
             ..Surroundings::new(sites, &npcs)
         };
         DeathStar { warship }.decision(npc, &around, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn a_stellar_attacker_with_no_stellar_to_attack_keeps_a_copied_inspection_provoked_or_not() {
+        // With nothing to attack it tail-calls `_WarshipAI` (@0x8c2c5),
+        // which keeps goal 7 provoked or not (@0x8bb2d, @0x8be10); with an
+        // enemy stellar and a planet gun it takes goal 0x12 first
+        // (@0x8c26f).
+        let warship: Rc<dyn Behaviour> = Rc::new(crate::ai::Warship::default());
+        let decide = |npc: &Npc, sites: &[LandingSite], arsenal: &Arsenal| {
+            let govts: Governments = govts(0, 0);
+            let destroyable = destroyable();
+            let npcs = [npc.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                weapons: arsenal,
+                destroyable: &destroyable,
+                ..Surroundings::new(sites, &npcs)
+            };
+            DeathStar {
+                warship: warship.clone(),
+            }
+            .decision(npc, &around, &mut Draws::of(&[0; 4]))
+        };
+        let gun = planet_gun(130, -1);
+        let mut inspecting = attacker(&[gun]);
+        inspecting.ai_type = AiType::Warship;
+        inspecting.goal = Goal::Inspect(ShipRef::Npc(crate::traffic::npc::NpcId(2)));
+        for (provoked, target) in [(0.0, None), (5.0, Some(ShipRef::Player))] {
+            let npc = Npc {
+                target,
+                provoked,
+                ..inspecting.clone()
+            };
+            let decision = decide(&npc, &[], &arsenal(&[gun], &[(130, 1)]));
+            assert_eq!(decision.goal, inspecting.goal, "provoked {provoked}");
+            let decision = decide(&npc, &sites(), &arsenal(&[gun], &[(130, 1)]));
+            assert_eq!(
+                decision.goal,
+                Goal::AttackStellar(StellarId(131)),
+                "provoked {provoked}"
+            );
+        }
     }
 
     #[test]

@@ -59,14 +59,22 @@
 //!    marking pass runs before the dispatch, and that think decides what
 //!    it keeps of the copy: a trader keeps a copied fight, plunder, count
 //!    wait or inspection unprovoked ([`trader_keep`](crate::ai::trader_keep)),
-//!    a warship an inspection, which goal 7's high level ends whatever the
-//!    type ([`inspect_high`](crate::ai::inspect_high)), an
+//!    a warship or a pirate an inspection, provoked or not, which goal 7's
+//!    high level ends whatever the type ([`inspect_high`](crate::ai::inspect_high)), an
 //!    interceptor any goal behind its gate
 //!    ([`gate_closed`](crate::ai::interceptor::gate_closed)), and goal
 //!    0xd's high level then flies a plunder whoever holds it
 //!    ([`plunder_high`](crate::ai::plunder_high)): a pirate fleet's Pirate
 //!    Viper or Thunderhead successor (`InherentAI` 4) docks with its lost
 //!    lead's victim and plunders it.
+//!
+//!    A copied inspection carries no target: an inspecting interceptor's
+//!    is none ([`Interceptor`](crate::ai::Interceptor)'s target is its
+//!    goal's quarry), where the original's +0x70 holds the inspected
+//!    ship. So the thinks that read +0x70 read [`Npc::slot_target`], the
+//!    target or the inspected ship: the provoked branches flee or fight
+//!    that ship, the pirate keeps the inspection or drops it, and the
+//!    defence ship keeps one of the player and moves one of an NPC.
 //! 4. **Another leads** (@0x89479-0x894af, [`Npc::follow_successor`]): its
 //!    parent is the successor; a fighter (AI type 5) becomes an escort (6,
 //!    @0x89480-0x89491), so off its carrier with its class's capacities;

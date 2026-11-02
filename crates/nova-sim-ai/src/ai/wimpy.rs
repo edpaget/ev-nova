@@ -237,6 +237,24 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_wimpy_trader_with_a_copied_inspection_flees_the_inspected_ship() {
+        // Its provoked branch reads +0x70 (@0x8b1ac), which names the ship
+        // a lost lead's goal 7 is about: the copy brings no target here
+        // (`Npc::slot_target`).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Inspect(n(2));
+        trader.provoked = 10.0;
+        let npcs = [trader, ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0)];
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        assert_eq!(
+            WimpyTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Goal::Flee(n(2))
+        );
+    }
+
+    #[test]
     fn a_provoked_held_wimpy_trader_flees() {
         let govts = govts(0, 0);
         let sites = sites();

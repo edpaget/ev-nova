@@ -225,3 +225,41 @@ fn an_inspection_of_the_player_moved_away_within_its_reach_scans_nothing() {
         "no scan of the player: {line:?}"
     );
 }
+
+#[test]
+fn a_pirate_successor_keeps_its_leads_inspection() {
+    // Its lead an interceptor of a plundering government, the successor
+    // thinks as `_PirateWarshipAI`, which keeps goal 7 on +0x70, the ship
+    // it is about (@0x8c315-0x8c330, @0x8c5e8; `Npc::slot_target`), with
+    // no search though that ship is one to plunder; goal 7's high level
+    // flies the approach and lets it go within reach (@0x8f391). The
+    // trader sits off-axis, as the approach settles about 104 off when it
+    // comes straight on.
+    let govts = govts(0, crate::govt::PLUNDERS);
+    let mut trader = ship(0, TRADERS, AiType::WimpyTrader, 700.0, -600.0);
+    trader.hull.crew = 1;
+    trader.hull.inherent_ai = 2;
+    let (mut traffic, lead, follower, inspected) = fleet_of(AiType::Warship, Some(trader));
+    destroy(&mut traffic, lead);
+    tick(&mut traffic, &govts);
+    let successor = of(&traffic, follower);
+    assert_eq!(successor.leader, None);
+    assert_eq!(successor.goal, Goal::Inspect(inspected));
+    let mut ended = None;
+    for at in 0..600 {
+        let ShipRef::Npc(id) = inspected else {
+            unreachable!("an NPC is inspected");
+        };
+        let off = of(&traffic, id).state.position - of(&traffic, follower).state.position;
+        tick(&mut traffic, &govts);
+        let now = of(&traffic, follower);
+        if now.goal != Goal::Inspect(inspected) {
+            ended = Some((at, within_reach(off), now.goal, now.target));
+            break;
+        }
+    }
+    let (at, near, goal, target) = ended.expect("it closes in and lets it go");
+    assert!(at > 10, "it flies the approach first, ending at tick {at}");
+    assert!(near, "it ended within reach");
+    assert_eq!((goal, target), (Goal::Idle, None));
+}

@@ -1318,10 +1318,14 @@ pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
 }
 
 /// The ship that provoked `npc`, its target since the hit, while it is
-/// provoked and that ship is live among `around`.
+/// provoked and that ship is live among `around`. The provoked branches
+/// read +0x70 (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI` @0x8b616,
+/// `_MinerAI` @0x8b254), so this reads its [`Npc::slot_target`]: a
+/// successor still provoked from before that holds a copied inspection
+/// and no target flees or fights the inspected ship.
 #[must_use]
 pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-    npc.target
+    npc.slot_target()
         .filter(|&attacker| npc.provoked > 0.0 && around.live(attacker))
 }
 
