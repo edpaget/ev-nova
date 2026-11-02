@@ -609,6 +609,8 @@ mod refuel_dock;
 mod reinforcements;
 mod repair_dock;
 mod rescue;
+#[cfg(test)]
+mod reused_slot_heading;
 mod sabotage;
 mod saved_opening;
 mod screen;
