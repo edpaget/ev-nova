@@ -813,8 +813,9 @@ pub mod fixture {
 
     /// Checks the port's contract against `player`, starting `file`:
     ///
-    /// 1. Stopping or presenting before anything started does nothing
-    ///    harmful, and draws nothing.
+    /// 1. Stopping or presenting before `file` started does nothing
+    ///    harmful, and shows no new frame (one left by a movie played
+    ///    before may still draw).
     /// 2. If `file` can't start, advancing says it isn't playing, and
     ///    drawing a frame draws nothing.
     /// 3. If it starts, its size is not zero either way; drawing a frame
@@ -832,11 +833,10 @@ pub mod fixture {
     pub fn check_contract(player: &impl MoviePlayer, file: &str) -> Result<(), String> {
         player.stop();
         let rect = Bounds::at(Point::new(0.0, 0.0), 64.0, 48.0);
+        let before = shown(player, rect);
         player.present();
-        let mut list = DrawList::new();
-        player.draw_frame(rect, &mut list);
-        if !list.is_empty() {
-            return Err(format!("a present before {file} started drew a frame"));
+        if shown(player, rect) != before {
+            return Err(format!("a present before {file} started showed a frame"));
         }
         let Some((width, height)) = player.start(file) else {
             if player.advance(STEP) {
