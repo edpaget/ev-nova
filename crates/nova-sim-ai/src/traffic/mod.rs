@@ -2061,7 +2061,6 @@ impl Traffic {
                 attacking: attacking.map(|state| state.position - npc.state.position),
                 leader: leader.map(|(_, cloak, _)| cloak),
                 leader_area: leader.is_some_and(|(_, _, area)| area),
-                mining_rock: world.mining_rock.is_some(),
                 cloak_on_reload: world.cloak_on_reload,
             };
             let situation = cloak_situation::situation(npc, around);
@@ -3103,6 +3102,8 @@ impl Traffic {
                 bursts_own_word: false,
                 fires_on_burst_end: false,
                 close_form: false,
+                // The spawn zeroes the sub-goal +0xc8ca: order 1's reading.
+                mine_order: crate::ai::mine_orders::MineOrder::Stop,
                 stopping: false,
                 fleet_slot: None,
                 form_parent: None,

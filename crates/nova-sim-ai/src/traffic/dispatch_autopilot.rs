@@ -29,8 +29,9 @@
 //!   pause.
 //! - It writes there what the low level writes: the word, kept per ship
 //!   ([`Traffic::keep_word`]), the berth's last heading with it, the
-//!   high level's sub-goal +0xc8ca as close formation reads it
-//!   ([`Npc::close_form`]), and the direct writes of each flight (see
+//!   high level's sub-goal +0xc8ca as close formation and the mining
+//!   order read it ([`Npc::close_form`], [`Npc::mine_order`]), and the
+//!   direct writes of each flight (see
 //!   [`autopilot::low_level`]). So a higher slot's think reads them that
 //!   tick, and a lower one's as the tick began.
 //! - A ship whose flight is `_HandleShip`'s own (a gate's waits, glide and
@@ -116,6 +117,13 @@ impl Traffic {
             // sight and cloak think (`_HighLevelAIHandler` writes +0xc8ca).
             npc.close_form =
                 npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
+            // And goal 0x10's order, from where the flight starts (state 16
+            // @0x8f832-0x8f903): order 1 in any other goal.
+            npc.mine_order = if npc.goal == Goal::Mine {
+                mine_orders::order(npc, beside.rock.as_ref())
+            } else {
+                mine_orders::MineOrder::Stop
+            };
             let quarry = (other.as_ref(), other_disabled, beside);
             let sites = world.flown_among(npc.goal);
             autopilot::low_level(npc, sites, world.type_widths, quarry, speeds, rules, chance)
@@ -395,6 +403,51 @@ mod tests {
         let word = traffic.word_of(runner).expect("kept");
         assert_eq!(word.wanted(), Some(90));
         assert!(!word.thrusts());
+    }
+
+    #[test]
+    fn the_low_level_stores_the_order_its_high_level_gave_a_miner() {
+        use crate::ai::mine_orders::MineOrder;
+        use crate::geometry::Vec2;
+        use nova_sim_combat::asteroid::Asteroid;
+        // `_HighLevelAIHandler` writes the sub-goal +0xc8ca (@0x901e5) that
+        // the next think's terms read (@0x834d6, @0x835e9-0x835fb), from
+        // where the ship stood before its flight: a box of 120 here.
+        let rock = Asteroid {
+            position: Vec2::new(1000.0, 0.0),
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            spin: 0.0,
+            strength: 30,
+            kind: 0,
+        };
+        let stored = |goal: Goal, x: f32, rock: Option<Asteroid>| {
+            let mut traffic = Traffic::with_interval(1);
+            let mut miner = ship(0, TRADERS, AiType::WimpyTrader, x, 0.0);
+            miner.goal = goal;
+            miner.hull.class_turn = 2.0;
+            miner.mine_order = MineOrder::Chase;
+            let miner = traffic.add_npc_at(miner, 2);
+            let world = World {
+                mining_rock: rock,
+                ..World::new(&[])
+            };
+            traffic.autopilot_in_dispatch(0, &world, &mut NeverFires);
+            of(&traffic, miner).mine_order
+        };
+        assert_eq!(stored(Goal::Mine, 0.0, Some(rock)), MineOrder::Chase);
+        assert_eq!(stored(Goal::Mine, 880.0, Some(rock)), MineOrder::Kill);
+        assert_eq!(stored(Goal::Mine, 0.0, None), MineOrder::Stop, "no rock");
+        assert_eq!(
+            stored(Goal::Idle, 0.0, Some(rock)),
+            MineOrder::Stop,
+            "not goal 0x10"
+        );
+        assert_eq!(
+            stored(Goal::Scoop, 0.0, Some(rock)),
+            MineOrder::Stop,
+            "goal 0x11"
+        );
     }
 
     #[test]

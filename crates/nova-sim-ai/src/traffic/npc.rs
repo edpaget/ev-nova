@@ -803,6 +803,18 @@ pub struct Npc {
     /// Sight and the cloak think read it, as they run before the frame's
     /// flight (see `nova_sim_combat::area_cloak`). Never saved.
     pub close_form: bool,
+    /// The order its last flight's high level gave it under goal 0x10
+    /// ([`mine_orders::order`](crate::ai::mine_orders::order)): the stored
+    /// sub-goal +0xc8ca that `_AIHandleCloaking` reads (@0x834d6,
+    /// @0x835e9-0x835fb), [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop)
+    /// in any other goal. The autopilot's low level writes it where it
+    /// writes [`Npc::close_form`], from where the flight starts, so the
+    /// think reads last tick's order as the original's does (it runs at
+    /// @0x8fcaa, before the high level's write @0x901e5). An NPC held
+    /// still, or whose flight a fly half never reaches (a docking's, which
+    /// flies no mining), keeps it; only [`Goal::Mine`](crate::ai::Goal::Mine)
+    /// reads it. Stop at every spawn. Never saved.
+    pub mine_order: crate::ai::mine_orders::MineOrder,
     /// Whether its last flight left it in sub 1: the stored +0xc8ca == 1
     /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
     /// it. The stop's brake sets it, moving 0.35 or more on an axis; the

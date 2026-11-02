@@ -22,7 +22,7 @@
 use crate::ai::Goal;
 use crate::ai::regroup::Kept;
 use crate::area_cloak;
-use crate::cloak::{self, Cloak, MineOrder};
+use crate::cloak::{self, Cloak};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
@@ -43,8 +43,6 @@ pub struct Around {
     /// ([`CloakGear::area`](crate::cloak::CloakGear::area), or the
     /// player's [`PlayerSide::area_cloak`](crate::ai::PlayerSide::area_cloak)).
     pub leader_area: bool,
-    /// Whether the system's asteroid slot 0 holds a rock.
-    pub mining_rock: bool,
     /// How the `cloak_on_reload` rule reads a reloading weapon
     /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
     pub cloak_on_reload: RuleSource,
@@ -66,12 +64,14 @@ pub struct Around {
 ///   (goal 0xa: [`Goal::Follow`], [`Goal::Formation`] or [`Goal::Hold`])
 ///   is [`travelling`](cloak::Situation::travelling).
 /// - [`Goal::Idle`] is [`idle`](cloak::Situation::idle).
-/// - [`Goal::Mine`] mines on order 1 ([`MineOrder::Stop`]) while slot 0
-///   is empty (`_HighLevelAIHandler` @0x8f879). With a rock there the
-///   original chases (0x13) or closes on it (0x14), orders the engine
-///   doesn't fly until rdm:phase/asteroids/phase-5-ai-mining, so it
-///   reads no mining at all: reading it as either would hold a stock
-///   Zephyr's cloak (missions 603 and 604) for good or never.
+/// - [`Goal::Mine`] (goal 0x10) mines on the order its last flight stored
+///   ([`Npc::mine_order`], the sub-goal +0xc8ca the terms read at
+///   @0x834d6 and @0x835e9-0x835fb): order 1
+///   ([`MineOrder::Stop`](cloak::MineOrder::Stop)) with slot 0 empty,
+///   0x13 ([`MineOrder::Chase`](cloak::MineOrder::Chase)) outside the
+///   box, 0x14 ([`MineOrder::Close`](cloak::MineOrder::Close)) inside it.
+///   [`Goal::Scoop`] (goal 0x11) mines on nothing, as no term tests goal
+///   0x11.
 /// - Its last flight kept close formation ([`Npc::close_form`], the
 ///   stored sub-goal 0xc, which the parent rule reads directly at
 ///   @0x83633-0x8366d: the think runs before the high level writes it,
@@ -128,7 +128,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
             )
         ),
         idle: goal == Some(Goal::Idle),
-        mining: (goal == Some(Goal::Mine) && !around.mining_rock).then_some(MineOrder::Stop),
+        mining: (goal == Some(Goal::Mine)).then(|| npc.mine_order.into()),
         close_to_cloaked_parent,
         area_cloak: area_cloak::rides(npc.close_form, leader_cloaked, around.leader_area),
     }
@@ -167,6 +167,7 @@ mod tests {
     use crate::ai::Goal;
     use crate::catalog::StellarId;
     use crate::cloak::FADE_FULL;
+    use crate::cloak::MineOrder;
     use crate::combat::ShipRef;
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -401,13 +402,21 @@ mod tests {
     }
 
     #[test]
-    fn a_miner_with_a_rock_in_slot_0_reads_no_order_yet() {
-        let miner = npc(Goal::Mine, FLYING);
-        let rock = Around {
-            mining_rock: true,
-            ..Around::default()
+    fn a_miner_reads_the_order_its_last_flight_stored() {
+        use crate::ai::mine_orders::MineOrder as Flown;
+        let mining = |goal: Goal, order: Flown| {
+            let miner = Npc {
+                mine_order: order,
+                ..npc(goal, FLYING)
+            };
+            situation(&miner, Around::default()).mining
         };
-        assert_eq!(situation(&miner, rock).mining, None);
+        assert_eq!(mining(Goal::Mine, Flown::Stop), Some(MineOrder::Stop));
+        assert_eq!(mining(Goal::Mine, Flown::Chase), Some(MineOrder::Chase));
+        assert_eq!(mining(Goal::Mine, Flown::Kill), Some(MineOrder::Close));
+        // Goal 0x11 (order 0x15): no term tests it.
+        assert_eq!(mining(Goal::Scoop, Flown::Chase), None, "scoop");
+        assert_eq!(mining(Goal::Idle, Flown::Chase), None, "not goal 0x10");
     }
 
     #[test]

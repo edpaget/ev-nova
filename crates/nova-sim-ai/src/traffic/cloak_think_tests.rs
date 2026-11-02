@@ -6,7 +6,7 @@
 use super::{Traffic, World};
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::{Chance, NeverFires};
-use crate::cloak::{CLOAK_JUMPING, CLOAK_PRESSING, Cloak, CloakGear, FADE_FULL};
+use crate::cloak::{CLOAK_JUMPING, CLOAK_PRESSING, CLOAK_RETREATING, Cloak, CloakGear, FADE_FULL};
 use crate::geometry::Vec2;
 use crate::stats::ShipStats;
 use crate::traffic::fixture::npc;
@@ -81,39 +81,91 @@ fn a_cloaked_ship_with_nothing_to_keep_it_uncloaks_in_its_glide() {
     assert_eq!(gliding.direction, -1);
 }
 
-/// The cloak, after one think half, of a cloaked miner pressing on
-/// (`Flags2` [`CLOAK_PRESSING`]) in a world whose slot-0 rock is `rock`.
-fn mining_thought(rock: Option<Asteroid>) -> Cloak {
+/// Asteroid slot 0, still at (1000, 0).
+const SLOT_0: Asteroid = Asteroid {
+    position: Vec2::new(1000.0, 0.0),
+    velocity: Vec2::ZERO,
+    frame: 0.0,
+    spin: 0.0,
+    strength: 30,
+    kind: 2,
+};
+
+/// A miner on goal 0x10 at (`x`, 0), its class turn 2 (a box of 120),
+/// with a cloak, `Flags2` `flags2` and its cloak at `start`, and the fuel
+/// and shield `_ShipCanCloak` asks of a held cloak.
+fn miner(x: f32, flags2: u16, start: Cloak) -> Npc {
     let mut ship = npc(1, ShipStats::default());
     ship.goal = Goal::Mine;
-    ship.cloak = CLOAKED;
+    ship.hull.class_turn = 2.0;
+    ship.state.position = Vec2::new(x, 0.0);
+    ship.reserves.fuel.now = 100.0;
+    ship.reserves.shield.now = 100.0;
+    ship.cloak = start;
     ship.cloak_gear = CloakGear {
         device: true,
-        flags2: CLOAK_PRESSING,
+        flags2,
         ..CloakGear::default()
     };
+    ship
+}
+
+/// The cloak of `miner` after a fly half and a think half
+/// ([`fly_then_think`]) in a world whose slot-0 rock is `rock`.
+fn mining_thought(miner: Npc, rock: Option<Asteroid>) -> Cloak {
     let mut traffic = Traffic::with_interval(1);
-    traffic.npcs = vec![ship];
+    traffic.npcs = vec![miner];
     let world = World {
         mining_rock: rock,
         ..World::new(&[])
     };
-    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    fly_then_think(&mut traffic, &world);
     traffic.npcs()[0].cloak
 }
 
 #[test]
-fn a_cloaked_pressing_miner_keeps_its_cloak_until_the_world_shows_it_a_rock() {
-    assert_eq!(mining_thought(None), CLOAKED, "no rock: MineOrder::Stop");
-    let rock = Asteroid {
-        position: Vec2::new(40.0, -20.0),
-        velocity: Vec2::ZERO,
-        frame: 0.0,
-        spin: 0.0,
-        strength: 30,
-        kind: 2,
+fn a_cloaked_miner_chasing_slot_0_stays_cloaked_and_uncloaks_inside_the_box() {
+    // The Zephyr's AI-cloak bits (`shïp` 375/376 `Flags2` 0x5282): 0x0200
+    // cloaks on goal 0x10 sub 0x13 (@0x834d6), 0x1000 keeps a cloaked
+    // miner's cloak on any sub but 0x14 (@0x835dd-0x835fd).
+    let zephyr = CLOAK_RETREATING | CLOAK_PRESSING;
+    assert_eq!(
+        mining_thought(miner(0.0, zephyr, CLOAKED), Some(SLOT_0)),
+        CLOAKED,
+        "chasing (0x13)"
+    );
+    assert_eq!(
+        mining_thought(miner(0.0, CLOAK_RETREATING, Cloak::default()), Some(SLOT_0)),
+        CLOAKING,
+        "0x0200 cloaks on the chase"
+    );
+    assert_eq!(
+        mining_thought(miner(900.0, zephyr, CLOAKED), Some(SLOT_0)).direction,
+        -1,
+        "inside the box (0x14)"
+    );
+    assert_eq!(
+        mining_thought(miner(0.0, zephyr, CLOAKED), None),
+        CLOAKED,
+        "no rock: order 1, which 0x1000 keeps"
+    );
+}
+
+#[test]
+fn a_miners_cloak_think_reads_the_order_its_last_flight_stored() {
+    // The think runs at the dispatch's head (@0x8fcaa), before the high
+    // level writes the sub-goal (@0x901e5): last tick's chase stands
+    // though the ship now sits inside the box.
+    let mut chased = miner(900.0, CLOAK_RETREATING | CLOAK_PRESSING, CLOAKED);
+    chased.mine_order = crate::ai::mine_orders::MineOrder::Chase;
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![chased];
+    let world = World {
+        mining_rock: Some(SLOT_0),
+        ..World::new(&[])
     };
-    assert_eq!(mining_thought(Some(rock)).direction, -1, "a live rock");
+    traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+    assert_eq!(traffic.npcs()[0].cloak, CLOAKED, "on last tick's chase");
 }
 
 /// The cloak, after a fly half and a think half ([`fly_then_think`]), of
@@ -312,6 +364,81 @@ fn a_fleet_escort_takes_no_parent_rule_from_a_cloaked_leader_it_cannot_see() {
         led_thought(emerging, true, false),
         Cloak::default(),
         "unseen"
+    );
+}
+
+/// NPC 1, with a cloak and no AI-cloak bit, keeping slot 0 of NPC 2's
+/// fleet at `at` on goal 0xa, made by `make`, beside NPC 2 at the centre
+/// with its cloak `leader_cloak`; no player. Its cloak after a fly half
+/// and a think half ([`fly_then_think`]) by `flight`.
+fn npc_led_thought(
+    at: Vec2,
+    leader_cloak: Cloak,
+    flight: crate::flight::FlightRules,
+    make: fn(&mut Npc),
+) -> Cloak {
+    use crate::escort::FormationSlot;
+    use crate::traffic::npc::NpcId;
+    let mut ship = npc(1, ShipStats::default());
+    ship.cloak_gear = CloakGear {
+        device: true,
+        ..CloakGear::default()
+    };
+    ship.leader = Some(NpcId(2));
+    ship.fleet_slot = Some(FormationSlot {
+        slot: 0,
+        ships: 1,
+        spacing: 30.0,
+    });
+    ship.goal = Goal::Follow {
+        lead: NpcId(2),
+        guard: None,
+    };
+    ship.state.position = at;
+    make(&mut ship);
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship, leader_npc(leader_cloak)];
+    let world = World {
+        flight,
+        ..World::new(&[])
+    };
+    fly_then_think(&mut traffic, &world);
+    traffic.npcs()[0].cloak
+}
+
+#[test]
+fn an_npc_escort_in_close_formation_cloaks_with_its_cloaked_npc_leader() {
+    // `_AIHandleCloaking` @0x83633-0x8366d: AI type above 4, its parent
+    // +0x9a an NPC, sub-goal 0xc and the parent `_ShipIsCloaked` jump
+    // straight to `_DoShipCloak` (@0x83675), whatever the flag says.
+    use crate::flight::{FlightRules, NpcFormation};
+    let rules = FlightRules::default();
+    let thought = npc_led_thought;
+    let none: fn(&mut Npc) = |_| {};
+    assert_eq!(thought(Vec2::ZERO, CLOAKED, rules, none), CLOAKING);
+    assert_eq!(
+        thought(Vec2::ZERO, Cloak::default(), rules, none),
+        Cloak::default(),
+        "the leader uncloaked"
+    );
+    assert_eq!(
+        thought(Vec2::new(5000.0, 5000.0), CLOAKED, rules, none),
+        Cloak::default(),
+        "out of close formation"
+    );
+    let earlier = FlightRules {
+        npc_formation: NpcFormation::Earlier,
+        ..rules
+    };
+    assert_eq!(
+        thought(Vec2::ZERO, CLOAKED, earlier, none),
+        Cloak::default(),
+        "the earlier follow keeps no close formation"
+    );
+    assert_eq!(
+        thought(Vec2::ZERO, CLOAKED, rules, Npc::take_bribe),
+        Cloak::default(),
+        "bribed: +0x88 1 fails `cmpw $4` @0x83633"
     );
 }
 
