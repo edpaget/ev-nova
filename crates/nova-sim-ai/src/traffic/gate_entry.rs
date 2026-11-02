@@ -38,7 +38,7 @@
 //! - **The release** (@0x8dc94-0x8dd58): every other ship, active, whose
 //!   leader (+0x9a) is this one has its leader cleared, takes this ship's
 //!   AI type capped at 3 ([`released_ai_type`]), clears the stellar it
-//!   defends (+0x8c) and its target (+0x70), sets its provocation (+0x96)
+//!   defends (+0x8c, @0x8dd08) and its target (+0x70), sets its provocation (+0x96)
 //!   to -1 ([`RELEASED_PROVOCATION`]),
 //!   and heads for this gate with goal 0x14 and sub-goal 0. Disabled
 //!   followers are not skipped. While +0x4c is above 0
@@ -115,8 +115,6 @@
 //!   it defends).
 //! - **The 16-bit wraps** of dx and dy (`cwtl` @0x8dbb3, @0x8dbd5) and of
 //!   the reach (@0x8dbfa): wider numbers are kept.
-//! - **The release's +0x8c = -1** (@0x8dd08), never reached: the
-//!   ships released are led by this one, and a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
 //! - **Ships 1-63 only** (@0x8dc97-0x8dd58). The engine takes every NPC.
 //! - **The 16-bit blit** (+0xb0/+0xb4, @0x2c010-0x2c05c). It is drawn as
 //!   an alpha fade, as the emerge's is.

@@ -340,7 +340,10 @@ impl Session {
     /// follows its jump ([`Npc::follow_player_jump`]), a glide or burst it
     /// cuts short owing its rest as the rulebook reads
     /// [`RuleKey::HeldGateBurst`]. Its test of +0x8c,
-    /// the stellar a ship defends, always holds: a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
+    /// the stellar a ship defends, always holds: no ship the player leads
+    /// defends a stellar. A defence ship spawns with no leader (-1), a
+    /// pirate's take leaves it led by the pirate, and the player's capture
+    /// clears its +0x8c.
     ///
     /// [`Npc::follow_player_jump`]: crate::traffic::npc::Npc::follow_player_jump
     fn make_escorts_hyper(&mut self) {

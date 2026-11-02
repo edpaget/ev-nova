@@ -439,10 +439,13 @@ pub struct Npc {
     /// The stellar it defends, the original's ship +0x8c: set only by
     /// the defence fleet's spawn (`_SpawnStellarDefenseShip` @0x3d387, see
     /// [`stellar_defence`](crate::traffic::stellar_defence)), and cleared
-    /// by a capture, a pirate taking it into its fleet and the disabled
-    /// reset, as it is for the ships that held a ship as the player
-    /// captured it (`_AIShipCapturedByPlayer` @0x896b6-0x89704); none for
-    /// every other ship.
+    /// by a capture, by a release at its lead's gate (@0x8dd08) and by the
+    /// disabled reset, as it is for the ships that held a ship as the
+    /// player captured it (`_AIShipCapturedByPlayer` @0x896b6-0x89704). A
+    /// pirate's plunder clears only the pirate's own +0x8c (@0x8c791,
+    /// @0x86f67): a ship the pirate takes into its fleet keeps its own
+    /// (`_AIPlunderShipContents` writes none, @0x83fab-0x84a23), led by the
+    /// pirate. None for every other ship.
     pub defends: Option<StellarId>,
     /// Its cloak: how far it has faded, and which way (see
     /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked

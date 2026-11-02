@@ -58,8 +58,12 @@
 //!   itself never answers and adds no stray provocation;
 //! - a hit by a defender sharing the victim's leader (@0x3b68e-0x3b6ec)
 //!   clears the flag, as the same-leader row clears it for any ship of
-//!   that leader. A defender has no leader, as its spawn writes -1 and a
-//!   capture or a pirate's take clears its +0x8c, so it never arises.
+//!   that leader. It arises for a defence ship a pirate took into its
+//!   fleet (the take leaves its +0x8c) hitting another ship of the same
+//!   pirate. The same-leader row already clears the flag for it, as this
+//!   case's condition is a subset of that row's and nothing between the
+//!   two sets the flag again, so the engine reads no `defends` here
+//!   (`a_defence_ships_own_hit_and_a_defending_fleetmates_go_unanswered`).
 //!
 //! Left out:
 //!
