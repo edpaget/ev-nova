@@ -1,7 +1,8 @@
 //! The walks of the fight's phases that stop after each direct hit, kept
-//! on the [`Combat`] between their stretches (rdm play-feel-9 phase 10,
-//! see [`hit_turns`](super::hit_turns)): `_HandleBeams`' beam loop
-//! ([`BeamWalk`]) and the collision passes ([`HitWalk`]).
+//! on the [`Combat`] between their stretches (rdm play-feel-9 phases 10
+//! and 11, see [`hit_turns`](super::hit_turns)): `_HandleBeams`' beam loop
+//! ([`BeamWalk`]), the collision passes ([`HitWalk`]) and `_HandleShot`'s
+//! slot loop ([`ShotWalk`]).
 //!
 //! A walk opens at its phase's first stretch and is taken up again at
 //! each later one, among the fighters lent afresh. What it keeps across a
@@ -20,6 +21,10 @@
 //!   answer reorders); where contact meets each ship; where it stopped;
 //!   and what of the hit it stopped after is still to come: its blast
 //!   and, in the proximity pass, its sub-munitions ([`Pending`]).
+//! - **`_HandleShot`**: the next slot to visit, and nothing else. The
+//!   shots stay in [`Combat::shots`] across a stop, so an answer's
+//!   [`Combat::targeted_damage`] misses none; the lineup and the slot
+//!   records ([`Combat::note_slots`]) are read afresh at each stretch.
 //!
 //! On resume a walk reads its ships afresh from the fighters
 //! ([`Lineup::new`]) and finds each by [`ShipRef`], never by its place
@@ -60,6 +65,16 @@ pub(super) enum Walk {
     Beams(BeamWalk),
     /// The collision passes.
     Hits(Box<HitWalk>),
+    /// `_HandleShot`'s slot loop.
+    Shots(ShotWalk),
+}
+
+/// `_HandleShot`'s slot loop under way (`Combat::fly_shots_in_turn`),
+/// stopped after a missile lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ShotWalk {
+    /// The next slot to visit.
+    pub(super) next: usize,
 }
 
 /// `_HandleBeams`' beam loop under way (`Combat::close_tick_in_turn`).
@@ -162,7 +177,7 @@ impl Combat {
     ///
     /// All three run in [`Combat::resolve`]. A shot whose move spent it
     /// meets only the asteroids it touches and point defence, and is kept
-    /// for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
+    /// for its end of life in `_HandleShot` ([`Combat::shot_stretch`]).
     /// Point defence's [`CombatEvent::ShotDown`](super::CombatEvent::ShotDown)
     /// follows the contact passes' events.
     ///

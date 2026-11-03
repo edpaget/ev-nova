@@ -348,16 +348,7 @@ impl Session {
         };
         // `_HandleShot` (@0x44385), its guidance reading the field
         // before `_HandleAsteroids` moves it.
-        let spots = self.space.asteroid_spots();
-        self.land_phase(
-            behaviour,
-            pass,
-            rules,
-            chance,
-            |combat, fighters, arena, chance| {
-                combat.fly_shots_in(fighters, arena, &spots, chance);
-            },
-        );
+        self.shots_phase(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
         // The ship loop: `_HandleShip` (@0x44483) and `_HandleShipDisplay`
         // (@0x444ad), slot by slot.
@@ -720,6 +711,30 @@ impl Session {
         self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
         self.strike_stellars(&stellars, rules.law, chance);
         self.space.settle_asteroid_remains(&mut *chance);
+    }
+
+    /// The fight's `_HandleShot` on `pass` by `rules`, drawing on `chance`
+    /// ([`Combat::fly_shots_in_turn`]), its guidance lent where each
+    /// asteroid slot's asteroid is as the collision passes left the field,
+    /// before `_HandleAsteroids` moves it (see the `asteroids` module):
+    /// each missile lock settled and answered before the next slot's visit,
+    /// as `_DamageShip`'s reaction block runs in the lock (@0x35855), the
+    /// fighters lent afresh after it (see the `hit_turns` module); then the
+    /// last stretch's hits settled ([`Session::settle_landed`]).
+    pub(super) fn shots_phase(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        pass: GamePass,
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
+        let spots = self.space.asteroid_spots();
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
+            combat.fly_shots_in_turn(fighters, arena, &spots, chance)
+        });
+        let (was, player_was) = turns.last();
+        self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
     }
 
     /// What a pass's fight leaves, settled once after its last phase, by

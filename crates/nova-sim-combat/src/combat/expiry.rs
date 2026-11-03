@@ -28,12 +28,28 @@
 //! comes before the explosion's. Neither the lock nor the blast makes a
 //! sound of its own.
 //!
-//! Here [`Combat::handle_shots`] walks the slots the same way, landing each
+//! Here [`Combat::shot_stretch`] walks the slots the same way, landing each
 //! blast and each lock at its visit.
+//!
+//! **It stops after each missile lock** (rdm play-feel-9 phase 11, see
+//! [`hit_turns`](super::hit_turns)): the lock's `_DamageShip` (@0x35855,
+//! real and intended) is `_HandleShot`'s one answered hit, whose reaction
+//! a later slot's visit reads: its sub-munitions' disable-only flag, from
+//! their owner's goal (`_SpawnShot` @0x3ea1b), and their seek, from its
+//! mining (@0x3f3cf, then @0x44a68); and a homing shot's sight of a ship
+//! whose cloak the answer flipped (`_ShipVisibleToShip` @0x9749-0x9784).
+//! So the walk stops just after a lock lands, and resumes at the next
+//! slot among the ships lent afresh ([`ShotWalk`]). The lock is the
+//! visit's last landing: the spin ran before it, in the move, and the
+//! original's spin after the lock reads only the shot. The end-of-life
+//! blasts (@0x36106) are no real hit, never answered, so it runs through
+//! them.
 
+use super::hit_turns::Stretch;
 use super::lineup::Lineup;
 use super::planet_type::BlastKind;
 use super::projectile::Guide;
+use super::walk::{ShotWalk, Walk};
 use super::{Combat, Fighter, Landed, ShipRef, Sides, blasted, lock};
 use crate::chance::Chance;
 use crate::combat::CombatEvent;
@@ -71,29 +87,41 @@ impl Combat {
     ///   freed (@0x3617c);
     /// - any other shot flies a tick ([`Shot::step`]), homing among the
     ///   ships where they are now, with each ship's jamming and sight as
-    ///   the hits so far left them
-    ///   ([`Sight`](super::projectile::Sight)), and runs a spinning
+    ///   the hits so far, and the answers to the locks before it, left
+    ///   them ([`Sight`](super::projectile::Sight)), and runs a spinning
     ///   shot's spin timer in its slot (`ShotSlots::spin_pass`,
     ///   @0x35879-0x358c4); then its missile lock, if it makes one
     ///   ([`lock`]), lands at once (@0x35855), reading the target where it
-    ///   is now. A homing shot reads the `asteroids`, by slot, where they
+    ///   is now, and the stretch stops there ([`Stretch::Answer`]), its
+    ///   walk kept to resume at the next slot ([`ShotWalk`]). A homing
+    ///   shot reads the `asteroids`, by slot, where they
     ///   are as `_HandleShot` meets them, which `_HandleAsteroids` moves
     ///   only after the ship loop (see
     ///   [`asteroid_seek`](super::asteroid_seek)).
     ///
     /// Each ship a visit's landing strikes settles its condition at once
     /// (`Combat::settle_struck`), and is read again whole for the visits
-    /// after it ([`Lineup::refresh`]). A sub-munition released into a slot
-    /// below the visit is not visited again this loop, so it sits out the
-    /// tick's moves; one released above it is visited later and moves.
-    pub(super) fn handle_shots(
+    /// after it ([`Lineup::refresh`]); after a lock, the next stretch
+    /// reads every ship afresh from the fighters lent. A sub-munition
+    /// released into a slot below the visit is not visited again this
+    /// loop, so it sits out the tick's moves; one released above it is
+    /// visited later and moves. It runs to the loop's end
+    /// ([`Stretch::Done`]) when no lock is left to make.
+    pub(super) fn shot_stretch(
         &mut self,
         fighters: &mut [Fighter],
         (govts, arsenal): (&Governments, &Arsenal),
         rule: &dyn DisableRule,
         asteroids: &[Option<Vec2>],
         chance: &mut dyn Chance,
-    ) {
+    ) -> Stretch {
+        let mut visit = match self.walk.take() {
+            Some(Walk::Shots(walk)) => walk.next,
+            other => {
+                debug_assert!(other.is_none(), "a phase began amid {other:?}");
+                0
+            }
+        };
         // Every ship where it is, which the ends of life, the moves and the
         // locks all meet.
         let now_at: Vec<Vec2> = fighters
@@ -101,7 +129,6 @@ impl Combat {
             .map(|fighter| fighter.state.position)
             .collect();
         let mut lineup = Lineup::new(fighters, &now_at, govts, self.hit_readings());
-        let mut visit = 0;
         while visit < self.slot_bound() {
             if self.slots.is_held(visit) {
                 self.slots.free(visit);
@@ -119,11 +146,16 @@ impl Combat {
                     let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
                         lock(&self.shots[index], &sides).into_iter().collect();
-                    self.land_at_visit(fighters, locked, &mut lineup, rule);
+                    if !locked.is_empty() {
+                        self.land_at_visit(fighters, locked, &mut lineup, rule);
+                        self.walk = Some(Walk::Shots(ShotWalk { next: visit + 1 }));
+                        return Stretch::Answer;
+                    }
                 }
             }
             visit += 1;
         }
+        Stretch::Done
     }
 
     /// One past the highest slot held or holding a shot in flight.
@@ -136,7 +168,7 @@ impl Combat {
     /// The shot in flight at `index` flies a tick among the ships of
     /// `lineup` where they are now and the `asteroids`, by slot, drawing on
     /// `chance`, and runs its slot's spin timer if it spins (see
-    /// [`Combat::handle_shots`]).
+    /// [`Combat::shot_stretch`]).
     fn move_shot(
         &mut self,
         index: usize,
@@ -179,7 +211,7 @@ impl Combat {
         lineup.refresh(fighters, &struck, rule);
     }
 
-    /// `shot`'s end of life among `sides` (see [`Combat::handle_shots`]):
+    /// `shot`'s end of life among `sides` (see [`Combat::shot_stretch`]):
     /// its sub-munitions released, then its explosion or fizzle. Gives
     /// its blast's hits, to land.
     fn end_life(

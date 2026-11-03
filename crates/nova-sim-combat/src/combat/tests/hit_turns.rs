@@ -6,6 +6,7 @@
 use super::collision_walk::{D, fly};
 use super::escort_lost_in_place::{cluster_seeking, seekers_of};
 use super::plunder_fire::spared;
+use super::shot_visits::{homing_at_e, locking_on, spent, sub_targets};
 use super::*;
 use crate::combat::hit_turns::{self, HitTurns, Stretch, StretchFn, run_in_turn};
 
@@ -531,4 +532,260 @@ fn a_walk_keeps_its_order_across_its_stops() {
     let mut keeper = Keeper::of(vec![Ship::at(1, 0.0, 0.0)], turning_about);
     keeper.test_hits();
     assert_eq!((keeper.lends, keeper.answers), (1, 0), "no hit, no stop");
+}
+
+impl Keeper {
+    /// `_HandleShot`, each missile lock answered before the next slot's
+    /// visit.
+    pub(super) fn fly_shots(&mut self) {
+        run_in_turn(self, |combat, fighters, arena, chance| {
+            combat.fly_shots_in_turn(fighters, arena, &[], chance)
+        });
+    }
+}
+
+/// The player's missile in slot 0 makes its lock on P (A) at this visit
+/// (@0x35855); P's spent seeking shell, released on its expiry, sits in
+/// slot 1 at (40, -100), 60 pixels from X (B) at (100, -100). The keeper
+/// after `_HandleShot`, its lock answered by `rewrite`.
+fn locked_before_a_spent_shell(p: Ship, rewrite: Rewrite) -> Keeper {
+    let (cluster, arsenal) = cluster_seeking();
+    let ships = vec![player_at(0.0, 300.0), p, Ship::at(2, 100.0, -100.0)];
+    let mut keeper = Keeper::of(ships, rewrite);
+    keeper.arsenal = arsenal;
+    keeper.combat.put_in_flight(locking_on(A));
+    keeper.combat.put_in_flight(Shot {
+        firer: A,
+        fleet: A,
+        firer_slot: Some(Slot::Berth(1)),
+        ..spent(cluster, Vec2::new(40.0, -100.0))
+    });
+    keeper.fly_shots();
+    keeper
+}
+
+/// P (A) at (-300, 0), plundering X (B).
+fn plunderer_of_x() -> Ship {
+    Ship {
+        plundering: true,
+        ..Ship::at(1, -300.0, 0.0).targeting(B)
+    }
+}
+
+/// The disable-only flags of the seeking shell's sub-munitions.
+fn released_disable_only(keeper: &Keeper) -> Vec<bool> {
+    keeper
+        .combat
+        .shots()
+        .iter()
+        .filter(|shot| shot.weapon.id == WeaponId(148))
+        .map(|shot| shot.disable_only)
+        .collect()
+}
+
+#[test]
+fn a_later_slots_sub_munitions_read_their_owner_as_the_locks_answer_left_it() {
+    // The lock's `_DamageShip` (@0x35855) answers before slot 1's end of
+    // life releases (@0x35f49), each `_SpawnShot` reading its owner's
+    // goal for the disable-only byte (`_AIIsShipAttemptingDisable`
+    // @0x3ea1b).
+    let keeper = locked_before_a_spent_shell(plunderer_of_x(), turning);
+    let locks: Vec<(ShipRef, Option<ShipRef>, bool)> = keeper
+        .answered
+        .iter()
+        .map(|answered| {
+            (
+                answered.strike.ship,
+                answered.strike.by,
+                answered.strike.lock,
+            )
+        })
+        .collect();
+    assert_eq!(locks, [(A, Some(ShipRef::Player), true)]);
+    assert_eq!(released_disable_only(&keeper), [false, false]);
+    assert_eq!((keeper.lends, keeper.answers), (2, 1));
+    let keeper = locked_before_a_spent_shell(plunderer_of_x(), silent);
+    assert_eq!(released_disable_only(&keeper), [true, true], "P plunders");
+}
+
+#[test]
+fn a_later_slots_sub_munitions_seek_by_their_owners_mining_as_the_locks_answer_left_it() {
+    // Their seek (`_FindNearestValidShotTarget` @0x3f3cf) asks
+    // `_ShotCanHitShip`, which reads the owner's mining (@0x44a68).
+    let miner = || Ship {
+        mining: true,
+        ..Ship::at(1, -300.0, 0.0)
+    };
+    let keeper = locked_before_a_spent_shell(miner(), turning);
+    assert_eq!(sub_targets(&keeper.combat), [Some(B), Some(B)]);
+    let keeper = locked_before_a_spent_shell(miner(), silent);
+    assert_eq!(sub_targets(&keeper.combat), [None, None], "P mines");
+}
+
+/// A rewrite that uncloaks the ship a lock struck, as the cloak when hit
+/// flips its direction (`_DoShipCloak` @0xdf01).
+fn uncloaking(strike: &Strike, ships: &mut [Ship]) {
+    if !strike.lock {
+        return;
+    }
+    if let Some(ship) = ships.iter_mut().find(|ship| ship.id == strike.ship) {
+        ship.cloaked = false;
+    }
+}
+
+/// The player's missile in slot 0 locking on E (C), cloaked, at
+/// (0, -100), and its homing missile in slot 1 chasing E: the second's
+/// heading after `_HandleShot`, the lock answered by `rewrite`.
+fn chasing_a_cloak_after_a_lock(rewrite: Rewrite) -> f32 {
+    let e = Ship {
+        cloaked: true,
+        ..Ship::at(3, 0.0, -100.0)
+    };
+    let ships = vec![player_at(0.0, 300.0), Ship::at(2, 100.0, -100.0), e];
+    let mut keeper = Keeper::of(ships, rewrite);
+    keeper.combat.put_in_flight(locking_on(C));
+    keeper.combat.put_in_flight(homing_at_e());
+    keeper.fly_shots();
+    assert_eq!(keeper.answered_strikes(), [(C, Some(ShipRef::Player))]);
+    keeper
+        .combat
+        .shots()
+        .iter()
+        .find(|shot| shot.slot == 1)
+        .expect("the chaser flies on")
+        .heading
+}
+
+#[test]
+fn a_later_slots_missile_sees_a_ship_as_the_locks_answer_left_its_cloak() {
+    // `_HandleShotGuidance` reads the target's fade against the cloak's
+    // direction (`_ShipVisibleToShip` @0x9749-0x9784), which the cloak
+    // when hit flips in the lock's answer.
+    let heading = chasing_a_cloak_after_a_lock(uncloaking);
+    assert!((heading - 90.0).abs() > 1.0, "seen, it turns: {heading}");
+    assert_eq!(
+        chasing_a_cloak_after_a_lock(silent),
+        90.0,
+        "unseen, it holds its heading"
+    );
+}
+
+#[test]
+fn handle_shot_stops_after_each_lock_and_nowhere_else() {
+    let ships = || {
+        vec![
+            player_at(0.0, 300.0),
+            Ship::at(1, -300.0, 0.0),
+            Ship::at(2, 100.0, -100.0),
+        ]
+    };
+    let mut keeper = Keeper::of(ships(), silent);
+    keeper.combat.put_in_flight(locking_on(A));
+    keeper
+        .combat
+        .put_in_flight(spent(blaster(), Vec2::new(0.0, 0.0)));
+    keeper.combat.put_in_flight(locking_on(B));
+    keeper.fly_shots();
+    assert_eq!((keeper.lends, keeper.answers), (3, 2), "two locks");
+    assert_eq!(
+        keeper.answered_strikes(),
+        [(A, Some(ShipRef::Player)), (B, Some(ShipRef::Player))]
+    );
+    assert_eq!(keeper.combat.walk, None, "the walk ran to its end");
+    let mut keeper = Keeper::of(ships(), silent);
+    keeper
+        .combat
+        .put_in_flight(spent(blaster(), Vec2::new(0.0, 0.0)));
+    keeper.fly_shots();
+    assert_eq!((keeper.lends, keeper.answers), (1, 0), "no lock, no stop");
+}
+
+/// A held slot 0, the player's missile in slot 1 locking on A, and its
+/// spent shell in slot 2: the keeper after `_HandleShot`, in turn when
+/// `in_turn`, else as one whole phase.
+fn locked_after_a_held_slot(in_turn: bool) -> Keeper {
+    let ships = vec![player_at(0.0, 300.0), Ship::at(1, -300.0, 0.0)];
+    let mut keeper = Keeper::of(ships, silent);
+    keeper.combat.slots.hold(0);
+    keeper.combat.put_in_flight(locking_on(A));
+    keeper
+        .combat
+        .put_in_flight(spent(blaster(), Vec2::new(0.0, 0.0)));
+    assert_eq!(
+        keeper
+            .combat
+            .shots()
+            .iter()
+            .map(|shot| shot.slot)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    if in_turn {
+        keeper.fly_shots();
+    } else {
+        keeper.run(|combat, fighters, arena, chance| combat.fly_shots(fighters, arena, chance));
+    }
+    keeper
+}
+
+#[test]
+fn the_stretch_after_a_lock_resumes_at_the_next_slot() {
+    let keeper = locked_after_a_held_slot(true);
+    let whole = locked_after_a_held_slot(false);
+    assert_eq!(
+        keeper.answered_strikes(),
+        [(A, Some(ShipRef::Player))],
+        "one lock"
+    );
+    assert_eq!(keeper.combat.shots(), whole.combat.shots(), "one step each");
+    assert_eq!(
+        keeper.combat.shots().len(),
+        1,
+        "the spent shell's slot freed"
+    );
+    assert!(!keeper.combat.slots.is_held(0), "the held slot stays freed");
+}
+
+/// The player armed with a one-at-a-time missile of reload 30, its
+/// missile in slot 0 locking on A, and, when `spent_after`, a spent
+/// one-at-a-time shell of its in slot 1, which its visit frees: the
+/// player's reload after `_HandleShot`, in turn, and as one whole phase.
+fn held_reloads(spent_after: bool) -> [f32; 2] {
+    let single = WeaponRecord {
+        reload: 30,
+        flags3: 0x0004,
+        ..missile()
+    };
+    [true, false].map(|in_turn| {
+        let ships = vec![
+            player_at(0.0, 300.0).armed(single),
+            Ship::at(1, -300.0, 0.0),
+        ];
+        let mut keeper = Keeper::of(ships, silent);
+        let shot = if spent_after {
+            spent(single, Vec2::new(0.0, 0.0))
+        } else {
+            Shot {
+                weapon: WeaponSpec::new(&single),
+                ..locking_on(A)
+            }
+        };
+        keeper.combat.put_in_flight(locking_on(A));
+        keeper.combat.put_in_flight(shot);
+        if in_turn {
+            keeper.fly_shots();
+            assert_eq!(keeper.answers, 1 + usize::from(!spent_after));
+        } else {
+            keeper.run(|combat, fighters, arena, chance| combat.fly_shots(fighters, arena, chance));
+        }
+        keeper.ship(ShipRef::Player).armament.mounts()[0].reload
+    })
+}
+
+#[test]
+fn a_one_at_a_time_shots_reload_is_held_once_as_the_last_stretch_ends() {
+    // `_HandleShot` holds each one-at-a-time shot's firer's reload
+    // (@0x35c09); in turn, it holds it as the whole phase does.
+    assert_eq!(held_reloads(false), [30.0, 30.0], "still flying, held");
+    assert_eq!(held_reloads(true), [0.0, 0.0], "spent after the stop");
 }

@@ -207,8 +207,8 @@
 //!    point defence on the next tick, and under the caps it finds the
 //!    slots of the shots the collision passes ended, and of the spent
 //!    ones, still held ([`Combat::shot_room`]).
-//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) visits the shot
-//!    slots in order ([`Combat::handle_shots`]), freeing each slot held
+//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots_in_turn`]) visits the shot
+//!    slots in order ([`Combat::shot_stretch`]), freeing each slot held
 //!    since its last pass at its visit, and doing all of each slot's work
 //!    there, so every later visit reads what an earlier one landed. Each
 //!    shot whose last move spent its life comes to its end of life where
@@ -1368,7 +1368,7 @@ pub struct Combat {
     /// The original's shot slots ([`shot_slots`]). Each shot that leaves
     /// the table holds its slot until the next `_HandleShot` visits it
     /// (see [`Combat::shot_room`]): from the late part of a tick (step 7)
-    /// to the next tick's `_HandleShot` ([`Combat::fly_shots`]), the
+    /// to the next tick's `_HandleShot` ([`Combat::fly_shots_in_turn`]), the
     /// missiles point-defence beams downed; from the collision passes on,
     /// those and the passes' own ends, as each is ended. Those point
     /// defence ended are also kept in `hidden` until a proximity pass
@@ -1795,7 +1795,7 @@ impl Combat {
     ///   tick's point-defence beams downed still held;
     /// - an NPC's point defence finds those and every shot the collision
     ///   passes ended still held, and a spent shot still in the table;
-    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots`]), finds
+    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots_in_turn`]), finds
     ///   them all freed, the spent shots' too, and a shot of no life is
     ///   freed by the `_HandleShot` that first visits it, so it holds none.
     ///
@@ -2691,7 +2691,7 @@ impl Combat {
     /// no boundary the player sees. The hits compound in the order they
     /// land: the hit pass's in its walk's order ([`collision`]), then
     /// `_HandleShot`'s, the blasts and locks slot by slot
-    /// ([`Combat::handle_shots`]), then beams.
+    /// ([`Combat::shot_stretch`]), then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -3467,7 +3467,7 @@ const LOCK_HIT: Hit = Hit {
 /// The original locks in `_HandleShot`, after the move and before the
 /// next frame's collision passes test that move; here too it is made
 /// right after the shot's move and lands at its own visit, between the
-/// other slots' ends of life ([`Combat::handle_shots`]), before the NPCs
+/// other slots' ends of life ([`Combat::shot_stretch`]), before the NPCs
 /// fire. The original's target sets +0x70 then, in `_DamageShip`'s
 /// reaction block; the session answers the strike after the shot step
 /// (`nova_sim::Session::game_work`).

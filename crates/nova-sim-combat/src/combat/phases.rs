@@ -319,23 +319,65 @@ impl Combat {
     }
 
     /// Step 5, `_HandleShot` (@0x44385) for each shot slot in turn
-    /// ([`Combat::handle_shots`]), among `fighters`, drawing on `chance`:
-    /// at each slot's visit a held slot is freed, a shot its last move
-    /// spent comes to its end of life (@0x36195), its sub-munitions
-    /// released and then its blast landed, and any other shot flies a tick
-    /// and lands its missile lock ([`Strike::lock`](super::Strike::lock),
-    /// @0x35855). Each ship struck settles its condition as in the
-    /// collision passes, so every later visit reads what the earlier ones
-    /// landed, an escort's cleared leader included. Then each
-    /// one-at-a-time shot holds its firer's reload (`Combat::hold_reloads`,
-    /// @0x35c09).
+    /// ([`Combat::shot_stretch`]), one stretch of it
+    /// ([`hit_turns`](super::hit_turns)), among `fighters`, drawing on
+    /// `chance`: at each slot's visit a held slot is freed, a shot its
+    /// last move spent comes to its end of life (@0x36195), its
+    /// sub-munitions released and then its blast landed, and any other
+    /// shot flies a tick and lands its missile lock
+    /// ([`Strike::lock`](super::Strike::lock), @0x35855). Each ship struck
+    /// settles its condition as in the collision passes, so every later
+    /// visit reads what the earlier ones landed, an escort's cleared leader
+    /// included. It stops just after each lock ([`Stretch::Answer`]), the
+    /// one hit of `_HandleShot` that is answered, its walk kept to resume
+    /// at the next slot among the ships lent afresh, so a later slot's
+    /// sub-munitions read their owner's plunder and mining, and a homing
+    /// shot its target's cloak, as the lock's answer left them; or it runs
+    /// to the loop's end ([`Stretch::Done`]), where each one-at-a-time
+    /// shot holds its firer's reload (`Combat::hold_reloads`, @0x35c09).
     ///
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
     /// have already tested and let it go (`Combat::proximity_pass`).
     ///
-    /// It lends the guidance no asteroids: it is [`Combat::fly_shots_in`]
-    /// with none.
+    /// The guidance is lent where each asteroid slot's asteroid is, by
+    /// slot, as `_HandleShot` meets them: a homing `Seeker` 0x0002 shot may
+    /// lock onto one, and a locked one steers at its slot's
+    /// ([`asteroid_seek`](super::asteroid_seek)).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Starting another phase mid-walk is a logic
+    /// error: a debug assertion catches it, and in release the walk is
+    /// dropped.
+    pub fn fly_shots_in_turn(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        asteroids: &[Option<Vec2>],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Stretch {
+        self.field = arena.field;
+        self.note_slots(fighters);
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let terms = (arena.govts, arena.arsenal);
+        let stretch = self.shot_stretch(fighters, terms, arena.rules.disable, asteroids, chance);
+        if stretch == Stretch::Done {
+            self.hold_reloads(fighters);
+        }
+        stretch
+    }
+
+    /// The whole of `_HandleShot` ([`Combat::fly_shots_in_turn`]) among
+    /// the same `fighters`, lending the guidance no asteroids, with nothing
+    /// answered between its stretches: each ship struck settles its
+    /// condition, and it stops after each missile lock.
+    ///
+    /// Kept for this crate's and nova-sim's tests of `_HandleShot` alone,
+    /// which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
@@ -345,10 +387,13 @@ impl Combat {
         self.fly_shots_in(fighters, arena, &[], chance);
     }
 
-    /// [`Combat::fly_shots`] with the guidance lent where each asteroid
-    /// slot's asteroid is, by slot, as `_HandleShot` meets them: a homing
-    /// `Seeker` 0x0002 shot may lock onto one, and a locked one steers at
-    /// its slot's ([`asteroid_seek`](super::asteroid_seek)).
+    /// The whole of `_HandleShot` ([`Combat::fly_shots_in_turn`]) among
+    /// the same `fighters`, the guidance lent the `asteroids`, by slot,
+    /// with nothing answered between its stretches.
+    ///
+    /// Kept for this crate's and nova-sim's tests of `_HandleShot` alone,
+    /// which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn fly_shots_in(
         &mut self,
         fighters: &mut [Fighter],
@@ -356,13 +401,7 @@ impl Combat {
         asteroids: &[Option<Vec2>],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = arena.field;
-        self.note_slots(fighters);
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        let terms = (arena.govts, arena.arsenal);
-        self.handle_shots(fighters, terms, arena.rules.disable, asteroids, chance);
-        self.hold_reloads(fighters);
+        while self.fly_shots_in_turn(fighters, arena, asteroids, &mut *chance) == Stretch::Answer {}
     }
 
     /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to

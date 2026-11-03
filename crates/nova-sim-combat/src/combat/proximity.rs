@@ -141,7 +141,7 @@ impl Combat {
 
     /// The turn of the shot in flight at `index`. One whose move spent it
     /// is not tested (@0x371ea), and waits for its end of life in
-    /// `_HandleShot` ([`Combat::handle_shots`]); nor is one that has not
+    /// `_HandleShot` ([`Combat::shot_stretch`]); nor is one that has not
     /// moved, a sub-munition released in the pass among them, whose life
     /// is still its `Count` (@0x3720e-0x3721e). Otherwise a planet-type
     /// shot meeting a stellar on its move strikes it

@@ -36,7 +36,7 @@ use crate::govt::Governments;
 /// is), and where the loop's other tests meet them (`seen`: contact meets
 /// the player where it stood as the last tick closed, `Combat::hit_stretch`;
 /// `_HandleShot`'s moves and locks meet every ship where it is,
-/// `Combat::handle_shots`). Each ship a landing strikes is read again
+/// `Combat::shot_stretch`). Each ship a landing strikes is read again
 /// after it ([`Lineup::refresh`]).
 pub(super) struct Lineup<'a> {
     /// Each ship where the blasts and fuses meet it: where it is.
