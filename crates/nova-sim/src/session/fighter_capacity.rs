@@ -320,3 +320,45 @@ fn an_npc_carriers_fighter_captured_is_an_escort_holding_its_classs_bribed_or_no
         }
     }
 }
+
+#[test]
+fn a_bribed_lost_fighters_rejoin_writes_five_over_the_bribe_and_holds_a_fighters_again() {
+    // The bribe's 1 (`_DoCommDialog` @0x961f8) holds its class's; the
+    // rejoin's 5 (@0x33b32, `fall_in`'s `Npc::overwrite_bribe` and
+    // `Session::enlist`'s carrier) gives a fighter's back.
+    let catalog = self_repairing();
+    for (capacity, (shield, armor)) in [(RuleSource::Engine, SCALED), (RuleSource::Bible, CLASS)] {
+        let mut session = players_launched(&catalog, capacity);
+        let id = fleet_npcs(&session)[0].id;
+        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
+        work(&mut session, &catalog, Controls::default());
+        assert!(session.pilot().escorts().is_empty(), "lost");
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.take_bribe();
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::BRIBED_AI
+        );
+        assert_eq!((gauges(npc)[0].1, gauges(npc)[1].1), CLASS, "{capacity:?}");
+        assert_eq!(npc.shield_recharge(capacity), 0.125, "{capacity:?}");
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
+        assert_eq!(session.pilot().escorts().len(), 1, "rejoined");
+        let npc = session.space.npc(id).expect("there");
+        assert!(!npc.spared, "{capacity:?}: the bribe overwritten");
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::FIGHTER_AI,
+            "{capacity:?}"
+        );
+        assert_eq!(
+            (gauges(npc)[0].1, gauges(npc)[1].1),
+            (shield, armor),
+            "{capacity:?}"
+        );
+        assert_eq!(
+            npc.shield_recharge(capacity),
+            fighter_capacity(0.125, capacity),
+            "{capacity:?}"
+        );
+    }
+}
