@@ -154,7 +154,7 @@ impl Space {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{
         GovtId, GovtRecord, LandingSite, ShipRecord, SystemId, WeaponId, WeaponRecord,
@@ -176,7 +176,7 @@ mod tests {
 
     const FEDERATION: GovtId = GovtId(128);
     const TRADERS: GovtId = GovtId(140);
-    const GUN: WeaponId = WeaponId(196);
+    pub(in crate::session) const GUN: WeaponId = WeaponId(196);
 
     /// A turret of `Reload` `reload`, 10 pixels a tick for 40 ticks:
     /// reaching 400 pixels.
@@ -194,7 +194,11 @@ mod tests {
     /// `base` with the Federation (class 1, `CrimeTol` 6) governing system
     /// 130 and at war with the traders (140, class 2), and `stellars` of
     /// 130 each the Federation's, armed with [`turret`] of `reload`.
-    fn gunned(mut base: FakePilotCatalog, stellars: &[i16], reload: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn gunned(
+        mut base: FakePilotCatalog,
+        stellars: &[i16],
+        reload: i16,
+    ) -> FakePilotCatalog {
         base.govts = vec![
             GovtRecord {
                 classes: [1, -1, -1, -1],
@@ -236,7 +240,7 @@ mod tests {
 
     /// `catalog`'s session with the player at rest 100 to the right of
     /// stellar 128, its record in system 130 `record`.
-    fn beside_128(catalog: &FakePilotCatalog, record: i16) -> Session {
+    pub(in crate::session) fn beside_128(catalog: &FakePilotCatalog, record: i16) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         place_player(&mut session, record);
         session

@@ -20,10 +20,6 @@ use super::shot_frame::{self, FrameRule};
 use super::weapon::{Guidance, WeaponSpec};
 use super::{Combat, CombatEvent, Fighter, FireSound, STELLAR_GUN_PRIORITY, ShipRef};
 
-/// What a ready gun's reload loses a tick: `_gSpeedMult`, 1.0
-/// (@0x2f5a1-0x2f5b2).
-const SPEED_MULT: f32 = 1.0;
-
 /// The `spöb` `Flags2` bit that holds a stellar's fire until a defence
 /// ship of it is in the system, and then turns it on the player and the
 /// ships the player leads directly, whatever their standing
@@ -35,7 +31,7 @@ pub const GUARDED_BY_DEFENDERS: u16 = 0x0200;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GunTimer {
     /// The ticks until it may fire again: it fires once this is 0 or
-    /// below.
+    /// below, and each pass before then takes the frame's gain off it.
     pub reload: f32,
     /// The shots fired in its burst so far.
     pub burst: u32,
@@ -269,8 +265,10 @@ impl Combat {
 
     /// Each of `guns` with a weapon in `arsenal`, among `marks`:
     ///
-    /// - while its reload is above 0 it loses a tick and does nothing
-    ///   else (@0x2efee-0x2eff9, @0x2f5a1-0x2f5b2), threat or none;
+    /// - while its reload is not 0 or below (above 0, or a NaN) it loses
+    ///   the frame's gain ([`Field::speed_mult`](super::Field::speed_mult),
+    ///   `_gSpeedMult`) and does nothing else (@0x2efee-0x2eff9,
+    ///   @0x2f5a1-0x2f5b2), threat or none;
     /// - once ready it picks its target ([`pick`]); with none, nothing
     ///   happens and it stays ready;
     /// - with no free shot slot ([`Combat::seat`]), nothing happens either
@@ -279,8 +277,9 @@ impl Combat {
     ///   weapon's `Reload`, and a bursting weapon counts the shot, the
     ///   reload becoming `BurstReload` once the count reaches
     ///   `BurstCount` (`_WeaponBurstInterval(weapon, 1)` @0x831c), the
-    ///   count back to 0 (@0x2f4be-0x2f545). So with `Reload` R it fires
-    ///   every R + 1 ticks.
+    ///   count back to 0 (@0x2f4be-0x2f545), unscaled. So with `Reload` R
+    ///   it fires every R + 1 passes at full gain, and every ⌈R / g⌉ + 1
+    ///   at a gain g.
     /// - Each shot raises [`CombatEvent::StellarFired`] (@0x2f553-0x2f59a).
     fn guns_fire(
         &mut self,
@@ -294,8 +293,13 @@ impl Combat {
             let Some(spec) = arsenal.weapon(gun.weapon).copied() else {
                 continue;
             };
-            if gun.timer.reload > 0.0 {
-                gun.timer.reload -= SPEED_MULT;
+            // Ready once the reload is 0 or below (`ucomiss reload, 0` /
+            // `jb` to the countdown @0x2efee-0x2eff9): a NaN reload counts
+            // down. The countdown takes the frame's gain, in doubles
+            // (`_gSpeedMult` @0x2f5a1-0x2f5b2).
+            let ready = gun.timer.reload <= 0.0;
+            if !ready {
+                gun.timer.reload = self.field.speed_mult.add_times(gun.timer.reload, -1.0);
                 continue;
             }
             let Some(target) = pick(gun, &spec, marks, govts) else {
@@ -430,6 +434,7 @@ mod tests {
     use crate::combat::{MAX_SHOTS, NpcId};
     use crate::govt::XENOPHOBIC;
     use crate::rulebook::RuleSource;
+    use crate::speed_mult::SpeedMult;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::{govt, weapon};
 
@@ -1166,6 +1171,124 @@ mod tests {
             assert_eq!(combat.shots()[0].miss_roll, roll, "{reading:?}");
             assert_eq!(combat.slots.roll(0), Some(3), "{reading:?}: none written");
         }
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// A fight in a field at `gain`.
+    fn at_gain(gain: SpeedMult) -> Combat {
+        let mut combat = Combat::default();
+        combat.field.speed_mult = gain;
+        combat
+    }
+
+    /// A gun reloading for `reload`.
+    fn reloading(reload: f32) -> StellarGun {
+        StellarGun {
+            timer: GunTimer { reload, burst: 0 },
+            ..gun()
+        }
+    }
+
+    #[test]
+    fn a_reload_counts_down_by_the_gain() {
+        for (gain, left) in [(HALF, 2.5), (SpeedMult::ZERO, 3.0)] {
+            let mut guns = [reloading(3.0)];
+            fire(
+                &mut at_gain(gain),
+                &mut guns,
+                &[],
+                turret(),
+                &mut NeverFires,
+            );
+            assert_eq!(guns[0].timer.reload, left, "{gain:?}");
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_gun_fires_on_the_pass_its_reload_first_reaches_0() {
+        let mut combat = at_gain(HALF);
+        let mut guns = [gun()];
+        let marks = [pirate(1, 100.0, 0.0)];
+        let mut fired = Vec::new();
+        for pass in 0..15 {
+            let before = combat.shots().len();
+            fire(&mut combat, &mut guns, &marks, turret(), &mut NeverFires);
+            if combat.shots().len() > before {
+                fired.push(pass);
+            }
+        }
+        assert_eq!(fired, [0, 7, 14], "Reload 3: every 2 × 3 + 1 passes");
+    }
+
+    #[test]
+    fn the_reload_a_shot_writes_is_the_weapons_unscaled() {
+        let mut guns = [gun()];
+        let marks = [pirate(1, 100.0, 0.0)];
+        fire(
+            &mut at_gain(HALF),
+            &mut guns,
+            &marks,
+            turret(),
+            &mut NeverFires,
+        );
+        assert_eq!(guns[0].timer.reload, 3.0, "Reload 3, whatever the gain");
+    }
+
+    #[test]
+    fn a_nan_reload_counts_down_and_never_fires() {
+        let mut combat = Combat::default();
+        let mut guns = [reloading(f32::NAN)];
+        let marks = [pirate(1, 100.0, 0.0)];
+        for _ in 0..3 {
+            fire(&mut combat, &mut guns, &marks, turret(), &mut NeverFires);
+        }
+        assert!(combat.shots().is_empty());
+        assert!(guns[0].timer.reload.is_nan());
+    }
+
+    #[test]
+    fn a_default_field_counts_a_reload_down_as_a_full_gain_field() {
+        let mut default = [reloading(3.0)];
+        fire(
+            &mut Combat::default(),
+            &mut default,
+            &[],
+            turret(),
+            &mut NeverFires,
+        );
+        let mut full = [reloading(3.0)];
+        fire(
+            &mut at_gain(SpeedMult::FULL),
+            &mut full,
+            &[],
+            turret(),
+            &mut NeverFires,
+        );
+        assert_eq!(default[0].timer, full[0].timer);
+    }
+
+    #[test]
+    fn fire_stellar_guns_counts_down_by_its_arenas_gain() {
+        let arsenal = arsenal_of(turret());
+        let govts = govts();
+        let reloaded = |gain| {
+            let arena = Arena {
+                pass: crate::combat::GamePass::Advance { double_time: false },
+                arsenal: &arsenal,
+                govts: &govts,
+                rules: crate::combat::Rules::default(),
+                field: crate::combat::Field {
+                    speed_mult: gain,
+                    ..crate::combat::Field::default()
+                },
+            };
+            let mut guns = [reloading(3.0)];
+            Combat::default().fire_stellar_guns(&[], arena, &mut guns, &mut NeverFires);
+            guns[0].timer.reload
+        };
+        assert_eq!(reloaded(HALF), 2.5);
+        assert_eq!(reloaded(SpeedMult::FULL), 2.0);
     }
 
     #[test]

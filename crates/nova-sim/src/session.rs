@@ -488,6 +488,7 @@ mod double_time;
 mod drift_blast;
 mod dying_player_escorts;
 mod edit;
+mod effects_gain;
 mod eject;
 mod entry;
 mod escort_arrival;
