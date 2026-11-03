@@ -257,10 +257,17 @@ impl Session {
     /// [`PlayerShip::auto_eject_fires`], or the chord held) and the player
     /// can: an escape pod or ship, a free ship slot and a record of the
     /// class it flies. Whether it ejected.
-    fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
+    pub(super) fn try_eject(
+        &mut self,
+        auto: bool,
+        hulk: Condition,
+        chance: &mut dyn Chance,
+    ) -> bool {
         let armed = auto || (self.ship.fate.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
-            || !(has_escape_pod(&self.pilot.outfits, &self.statics.outfits)
+            // `_HasEscapePod` reads the outfit counts (see the
+            // `held_readers` module).
+            || !(has_escape_pod(&self.ship.counted_outfits(&self.pilot), &self.statics.outfits)
                 || self.escape_ship().is_some())
             || self.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM
         {
@@ -465,7 +472,9 @@ impl PlayerShip {
             .unwrap_or(self.condition);
         matches!(condition, Condition::Dying { ticks_left, .. }
             if auto_eject_armed(ticks_left, self.fit.hull.death_delay))
-            && has_auto_eject(&pilot.outfits, &statics.outfits)
+            // `_HasAutoEject` reads the outfit counts (see the
+            // `held_readers` module).
+            && has_auto_eject(&self.counted_outfits(pilot), &statics.outfits)
     }
 
     /// Holds the eject chord, Command and the eject key down together, or

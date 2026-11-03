@@ -32,9 +32,10 @@
 //! government it fights as (class +0x9f4, [`ShipRecord::combat_govt`](crate::catalog::ShipRecord::combat_govt)),
 //! which the enemy-class roll and the player's friend strength read.
 
+use std::collections::BTreeMap;
+
 use super::{Session, Setup, Space, Statics};
-use crate::catalog::{GovtId, outfit_mods};
-use crate::pilot::Pilot;
+use crate::catalog::{GovtId, OutfitId, outfit_mods};
 use crate::rulebook::{RuleKey, RuleSource};
 
 /// An owned outfit's `ModType` that marks governments as the IFF
@@ -48,14 +49,20 @@ pub const NO_CLASS: i16 = -1;
 impl Session {}
 
 impl Space {
-    /// The reset's IFF marks (@0xc69c-0xc6f1): set by each owned
-    /// `ModType` 48 outfit, on top of those set before by the engine's
-    /// reading of [`RuleKey::IffScrambler`], in place of them by the other.
-    pub(super) fn reset_iff_scramblers(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+    /// The reset's IFF marks (@0xc69c-0xc6f1): set by each `ModType` 48
+    /// outfit of the outfit counts `counted` (see the `held_readers`
+    /// module), on top of those set before by the engine's reading of
+    /// [`RuleKey::IffScrambler`], in place of them by the other.
+    pub(super) fn reset_iff_scramblers(
+        &mut self,
+        counted: &BTreeMap<OutfitId, u16>,
+        statics: &Statics,
+        setup: &Setup,
+    ) {
         if setup.rules.source_for(RuleKey::IffScrambler) == RuleSource::Bible {
             self.iff_marked.clear();
         }
-        for owned in outfit_mods(&pilot.outfits, &statics.outfits) {
+        for owned in outfit_mods(counted, &statics.outfits) {
             if owned.mod_type != IFF_SCRAMBLER || owned.mod_val == NO_CLASS {
                 continue;
             }

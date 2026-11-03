@@ -99,8 +99,13 @@ impl Session {
     /// The bomb outfits go off (`_HandlePlayer` @0x696a7-0x69a0a; see the
     /// module docs' **Bomb outfits**), `rule` saying when the player is
     /// disabled, each bomb's damage drawn on `chance`.
-    fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
-        for bomb in bombs(&self.pilot.outfits, &self.statics.outfits) {
+    pub(super) fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
+        // The loop reads the outfit counts (@0x696b8; see the
+        // `held_readers` module).
+        for bomb in bombs(
+            &self.ship.counted_outfits(&self.pilot),
+            &self.statics.outfits,
+        ) {
             self.space.say(
                 &mut self.out,
                 SimMessage::BombExploded {
@@ -113,7 +118,12 @@ impl Session {
                     .combat
                     .explode(self.ship.player.position, explosion);
             }
-            self.pilot.outfits.remove(&bomb.outfit);
+            // It zeroes the bomb's count; a part a purchase still holds in
+            // the weapon array stays there, for the next fold.
+            match self.ship.held_stock.get(&bomb.outfit) {
+                Some(&held) => self.pilot.outfits.insert(bomb.outfit, held),
+                None => self.pilot.outfits.remove(&bomb.outfit),
+            };
             bomb_goes_off(&mut self.pilot.reserves, &self.ship.fit.hull, rule, chance);
         }
         self.reset_precalced();
@@ -126,7 +136,10 @@ impl Session {
         reserves.armor.now = -1.0;
         reserves.shield.now = -1.0;
         self.mode.end_jump();
-        let outfit = kill_notice(&self.pilot.outfits, &self.statics.outfits);
+        let outfit = kill_notice(
+            &self.ship.counted_outfits(&self.pilot),
+            &self.statics.outfits,
+        );
         self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
         // With none named, the `l33t` mode says its own (@0x69623-0x6963e).
         self.space.say(
@@ -145,19 +158,18 @@ impl PlayerShip {
     /// owns, gated on the flag the last refresh cached
     /// ([`death_descs`](crate::sabotage::death_descs)).
     #[must_use]
-    fn sabotage_death_descs(&self, pilot: &Pilot, statics: &Statics) -> Vec<i16> {
+    pub(super) fn sabotage_death_descs(&self, pilot: &Pilot, statics: &Statics) -> Vec<i16> {
         crate::sabotage::death_descs(
             self.latches.sabotage.flag(),
-            &pilot.outfits,
+            &self.counted_outfits(pilot),
             &statics.outfits,
         )
     }
 
     /// The sabotage clock's part of the refresh (see the module docs).
     pub(super) fn refresh_sabotage(&mut self, pilot: &Pilot, statics: &Statics) {
-        self.latches
-            .sabotage
-            .refresh(&pilot.outfits, &statics.outfits);
+        let counted = self.counted_outfits(pilot);
+        self.latches.sabotage.refresh(&counted, &statics.outfits);
     }
 }
 

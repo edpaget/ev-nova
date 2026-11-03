@@ -421,4 +421,154 @@ mod tests {
         );
         assert_eq!([folded, at_once], [held + 100, held + 100]);
     }
+
+    // The gear readers.
+
+    use crate::catalog::GovtId as Govt;
+    use crate::cloak::{MOD_CLOAK, MOD_SCANNER, SCAN_SCREEN};
+    use crate::combat::hull::Condition;
+    use crate::combat::jamming::JAMMING_MOD;
+    use crate::escape::{MOD_AUTO_EJECT, MOD_ESCAPE_POD};
+    use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_IFF};
+    use crate::murk::MOD_MURK;
+    use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
+    use crate::scoop::MOD_ASTEROID_SCOOP;
+    use crate::self_repair::MOD_REPAIR;
+    use crate::session::iff_scramblers::IFF_SCRAMBLER;
+    use crate::session::reinforcements::{EVERY_GOVERNMENT, INHIBITOR};
+
+    /// A gear reader: its name, the second mod the held launcher is given, and
+    /// what the reader answers of a session, read on a copy where the
+    /// reading would change it.
+    type Gear<'a> = (&'static str, (i16, i16), &'a dyn Fn(&Session) -> String);
+
+    /// A copy of `session` dying, its death timer unset.
+    fn dying(session: &Session) -> Session {
+        let mut probe = session.clone();
+        probe.ship.condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        probe
+    }
+
+    #[test]
+    fn the_gear_readers_leave_a_held_outfits_later_mods_out_until_the_landing() {
+        let class = 7;
+        let gears: [Gear; 15] = [
+            ("_HasCloak", (MOD_CLOAK, 0), &|session| {
+                format!(
+                    "{:?}",
+                    session.ship.cloak_gear(&session.pilot, &session.statics)
+                )
+            }),
+            (
+                "_ShipCanSeeCloakedShips",
+                (MOD_SCANNER, SCAN_SCREEN),
+                &|session| format!("{:?}", session.scanner()),
+            ),
+            ("_ShipHasIFF", (MOD_IFF, 0), &|session| {
+                format!("{:?}", session.radar_gear())
+            }),
+            (
+                "_ShipAntiInterference",
+                (MOD_ANTI_INTERFERENCE, -20),
+                &|session| session.interference().to_string(),
+            ),
+            ("_PlayerEffectiveMurk", (MOD_MURK, 15), &|session| {
+                session.effective_murk().to_string()
+            }),
+            ("the IFF scrambler", (IFF_SCRAMBLER, class), &|session| {
+                session.space.iff_marked.contains(&Govt(128)).to_string()
+            }),
+            ("the inhibitor", (INHIBITOR, EVERY_GOVERNMENT), &|session| {
+                session.space.reinforcements.every_government.to_string()
+            }),
+            ("_ShipCanSelfRepair", (MOD_REPAIR, 0), &|session| {
+                let mut probe = session.clone();
+                probe.ship.condition = Condition::Disabled;
+                probe.player_repair_tick(crate::Rules::default(), &mut Draws::of(&[0]));
+                format!("{:?}", probe.ship.condition)
+            }),
+            ("_ShipCanScoop", (MOD_ASTEROID_SCOOP, 0), &|session| {
+                session
+                    .ship
+                    .player_scoops(&session.pilot, &session.statics)
+                    .to_string()
+            }),
+            ("_HasEscapePod", (MOD_ESCAPE_POD, 0), &|session| {
+                let mut probe = dying(session);
+                let hulk = probe.ship.condition;
+                probe.try_eject(true, hulk, &mut NeverFires).to_string()
+            }),
+            ("_HasAutoEject", (MOD_AUTO_EJECT, 0), &|session| {
+                let probe = dying(session);
+                probe
+                    .ship
+                    .auto_eject_fires(&probe.pilot, &probe.statics)
+                    .to_string()
+            }),
+            ("the sabotage flag", (SABOTAGE_BOMB, 1), &|session| {
+                format!("{:?}", session.ship.latches.sabotage.flag())
+            }),
+            ("the bombs", (SABOTAGE_BOMB, 1), &|session| {
+                let mut probe = session.clone();
+                let _ = probe.take_messages();
+                probe.sabotage_bombs(&crate::NovaDisable, &mut NeverFires);
+                format!("{:?}", probe.take_messages())
+            }),
+            ("the kill outfit", (SABOTAGE_KILL, 5000), &|session| {
+                let mut probe = session.clone();
+                let _ = probe.take_messages();
+                probe.sabotage_kill();
+                let descs = probe
+                    .ship
+                    .sabotage_death_descs(&probe.pilot, &probe.statics);
+                format!("{:?} {descs:?}", probe.take_messages())
+            }),
+            ("_ShipECM", (JAMMING_MOD, 40), &|session| {
+                format!("{:?}", session.player_jamming())
+            }),
+        ];
+        for (name, second, read) in gears {
+            let edit = |mut catalog: FakePilotCatalog| {
+                catalog.govts.push(GovtRecord {
+                    classes: [class, -1, -1, -1],
+                    ..govt(128)
+                });
+                catalog
+            };
+            let read = |session: &mut Session| read(session);
+            let catalog = edit(stocked());
+            let [plain, ..] = readings(&catalog, take_off(&catalog), stay, read);
+            // The launcher, as ship 128 stocks none: an IFF scrambler or an
+            // inhibitor the start's guns held would stay marked.
+            let catalog = edit(with_outfit(stocked(), LAUNCHER, |record| {
+                record.mods[1] = second;
+            }));
+            let [held, folded, at_once] =
+                readings(&catalog, take_off(&catalog), relaunch(&catalog), read);
+            assert_eq!(held, plain, "{name}: held out");
+            assert_ne!(folded, plain, "{name}: folded");
+            assert_eq!(at_once, folded, "{name}: at once");
+        }
+    }
+
+    #[test]
+    fn a_bomb_going_off_leaves_its_held_part_in_the_weapon_array() {
+        let catalog = with_outfit(stocked(), LAUNCHER, |record| {
+            record.mods[1] = (SABOTAGE_BOMB, 1);
+        });
+        let left = |session: &mut Session| {
+            *session.pilot.outfits.entry(LAUNCHER).or_default() += 1;
+            session.sabotage_bombs(&crate::NovaDisable, &mut NeverFires);
+            session.pilot.owned(LAUNCHER)
+        };
+        let [engine, _, other] = readings(&catalog, take_off(&catalog), stay, left);
+        assert_eq!(
+            engine, 1,
+            "the counts' one zeroed, the held one kept (@0x696b8)"
+        );
+        assert_eq!(other, 0);
+    }
 }

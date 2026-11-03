@@ -209,9 +209,11 @@ impl PlayerShip {
     /// hold the step just filled, or passes over one it just freed room
     /// for, until the next reset. The engine reads the hold as it is.
     #[must_use]
-    fn player_scoops(&self, pilot: &Pilot, statics: &Statics) -> bool {
+    pub(super) fn player_scoops(&self, pilot: &Pilot, statics: &Statics) -> bool {
         crate::scoop::player_scoops(
-            has_asteroid_scoop(&pilot.outfits, &statics.outfits),
+            // `_ShipCanScoop` reads the outfit counts (see the
+            // `held_readers` module).
+            has_asteroid_scoop(&self.counted_outfits(pilot), &statics.outfits),
             self.capacity(pilot, statics),
             pilot.total_cargo(),
         )

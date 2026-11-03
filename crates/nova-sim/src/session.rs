@@ -2500,9 +2500,11 @@ impl Session {
             .statics
             .ship_record(self.pilot.ship)
             .and_then(|record| record.inherent_govt);
+        // `_ShipECM` reads the outfit counts (@0x3aff-0x3d48; see the
+        // `held_readers` module).
         Jamming::of_player(
             self.statics.govts.inh_jam(class_govt),
-            &self.pilot.outfits,
+            &self.ship.counted_outfits(&self.pilot),
             &self.statics.outfits,
         )
     }
