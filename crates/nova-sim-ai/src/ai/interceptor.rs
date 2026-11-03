@@ -276,8 +276,9 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
 /// its goal closes the gate ([`gate_closed`]), or its wait runs. The block
 /// runs only with +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f), the wait a
 /// ship holding its course, entering a gate or held at its gate
-/// ([`Mode::HeldAtGate`], the emerge's +0x4c running on) runs in its mode
-/// too ([`Npc::wait_running`]), so under a wait it answers only a provoker
+/// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate), the
+/// emerge's +0x4c running on) runs in its mode too
+/// ([`Npc::wait_running`]), so under a wait it answers only a provoker
 /// (@0x8cbf6-0x8cc31), its government's word (@0x8cb66-0x8cb9d), its
 /// retreats and its out-of-ammo flight (@0x8d391). A hold made on a wait
 /// already out (`HeldAtGate { ticks_left: 0.0 }`) carries goal 4, 0x13 or
