@@ -8,7 +8,7 @@
 //! what it was as an escort ([`Npc::former`](crate::traffic::npc::Npc::former), @0x33bdb), and every
 //! disabled NPC whose class carries a repair system
 //! ([`Npc::self_repair`](crate::traffic::npc::Npc::self_repair)) draws
-//! `Rand(`[`repair_odds`](crate::self_repair::repair_odds)`)` at the frame's
+//! `Rand(`[`repair_odds`]`)` at the frame's
 //! gain ([`Session::speed_mult`]), `Rand(500)` at full gain. On 0, with armour above 0
 //! and not breaking up, its armour goes to
 //! [`repaired_armor`](crate::self_repair::repaired_armor) and its
