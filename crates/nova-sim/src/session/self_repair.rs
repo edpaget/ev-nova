@@ -34,7 +34,14 @@
 //! its record back at the end of the fleet with its reserves, its
 //! shield none (+0x54), its own target let go (+0x6c, +0x70), keeping
 //! formation by its standing order as it was, and a fighter carried by
-//! the player again. It keeps its berth, the formation re-forms, and a
+//! the player again. A fighter lost to the fleet took its class's word
+//! (`_DamageShip` @0x3b0d7) and left its carrier, so it repaired to its
+//! class's share (`_ShipArmorCapacity` @0x33a73, @0x33aaa); its rejoin
+//! writes 5 (@0x33b32), and it holds a fighter's capacities again
+//! ([`Npc::take_carrier`](crate::traffic::npc::Npc::take_carrier)), keeping
+//! that share, its condition decided again against them as `_IsDisabled`
+//! reads it live. Any other kind rejoins writing 6 (@0x33b51) and holds its
+//! class's. It keeps its berth, the formation re-forms, and a
 //! save is due. The player's target is kept, though the original redraws
 //! the target panel when it is this ship (@0x33ad9-0x33af5; the engine
 //! draws the panel every frame). The player is told "Fighter repaired." or
@@ -98,6 +105,10 @@ impl Session {
         self.repair_hull(id, rules.disable);
         if let Some(former) = self.space.npc_mut(id).and_then(|npc| npc.former.take()) {
             self.rejoin(id, former);
+            // A fighter's rejoin writes 5 (@0x33b32), so its capacities
+            // are a fighter's again and `_IsDisabled` reads the armour it
+            // repaired to against them.
+            self.decide_condition(id, rules.disable);
         }
     }
 
@@ -438,7 +449,11 @@ mod tests {
         let mut session = flying(&catalog);
         let fighter = placed(&session)[2];
         disable(&mut session, fighter);
-        session.space.npc_mut(fighter).expect("here").carrier = None;
+        assert_eq!(
+            session.space.npc(fighter).expect("here").carrier,
+            None,
+            "lost, it left its carrier"
+        );
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         let record = session.pilot().escorts().last().expect("rejoined");
         assert!(record.carried);

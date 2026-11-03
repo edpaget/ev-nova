@@ -318,7 +318,7 @@ mod tests {
             ((2, 4), vec![(3, 4), (4, 4)])
         );
         let npc = session.space.npc(id).expect("there");
-        assert!(npc.carrier.is_some(), "kept for its capacities");
+        assert_eq!(npc.carrier, None, "its class's word (@0x3b0d7), no fighter");
         assert_eq!(npc.original_ai_type(), 3, "its class's, not AI 5");
         session.space.traffic.remove(id);
         session.reform_on_swarm_change();

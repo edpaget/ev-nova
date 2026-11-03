@@ -737,12 +737,16 @@ impl Session {
     }
 
     /// Escort NPC `id` leaves the fleet, as [`Session::dismiss`] says but
-    /// making no save due; whether it was in the fleet. A holding escort
-    /// ([`Goal::Wait`]) takes goal 0, as `_EscortAI` writes goal and sub 0
-    /// for a ship of AI type above 4 whose leader is gone
-    /// (@0x83917-0x8397b): `_DamageShip`'s leader clear (@0x3afdd) keeps
-    /// its type. Without it, a disabled holding escort the fleet lost and
-    /// later repaired would wait for good.
+    /// making no save due; whether it was in the fleet. A ship of the
+    /// player's lost or released here takes its class's word
+    /// (`_DamageShip` @0x3b0d7 on a hit that disables it, the releases'
+    /// `InherentAI`), so it leaves its carrier
+    /// ([`Npc::leave_carrier`](crate::traffic::npc::Npc::leave_carrier))
+    /// and holds its class's capacities. A holding escort
+    /// ([`Goal::Wait`]) takes goal 0, as `_AIDispatch`'s disabled reset
+    /// writes it (@0x8ff01, sub @0x8ff0a); `_EscortAI` no longer runs for
+    /// it, its word its class's. Without it, a disabled holding escort the
+    /// fleet lost and later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
         let Some(index) = self.space.fleet_index(id) else {
             return false;
@@ -753,6 +757,7 @@ impl Session {
         }
         if let Some(npc) = self.space.npc_mut(id) {
             npc.escort = None;
+            npc.leave_carrier();
             if npc.goal == Goal::Wait {
                 npc.goal = Goal::Idle;
             }
