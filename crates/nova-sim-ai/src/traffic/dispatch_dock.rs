@@ -544,5 +544,34 @@ mod tests {
             (twice - (once - thrust)).abs() < 1e-5,
             "thrust alone, undamped: {twice}"
         );
+        // And it still turns and moves: thrown off the heading the advance
+        // pass left, it turns back toward it and moves by its velocity.
+        let mut turning = Traffic::with_interval(1);
+        let [_, pirate, ..] = docking(&mut turning, at(100.0, 50.0, 0.0, 3.0));
+        turning.tick_in(&reads, World::new(&[]), &[], &mut NeverFires);
+        let ship = (turning.npcs_mut().iter_mut())
+            .find(|npc| npc.id == pirate)
+            .expect("there");
+        let wanted = ship.state.heading;
+        ship.state.heading = (wanted + 90.0).rem_euclid(360.0);
+        let advanced = ship.state;
+        turning.move_in(World::new(&[]), &mut NeverFires);
+        let after = of(&turning, pirate).state;
+        let off = |h: f32| {
+            let d = (h - wanted).rem_euclid(360.0);
+            d.min(360.0 - d)
+        };
+        assert!(
+            off(after.heading) < off(advanced.heading),
+            "it turns toward {wanted}: {} from {}",
+            after.heading,
+            advanced.heading
+        );
+        assert_eq!(
+            after.position,
+            advanced.position + after.velocity,
+            "it moves"
+        );
+        assert_ne!(after.position, advanced.position, "it moved");
     }
 }

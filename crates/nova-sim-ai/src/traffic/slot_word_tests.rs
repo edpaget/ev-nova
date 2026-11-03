@@ -688,9 +688,10 @@ fn on_the_second_pass_a_miners_0x14_ease_and_nudge_and_0x15_brake_dont_run() {
             "{goal:?}: at its slot"
         );
         traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
-        let advanced = of(&traffic, miner).state;
+        let (wanted, advanced) = set_off_course(&mut traffic, miner);
         traffic.move_in(world, &mut NeverFires);
         let again = of(&traffic, miner).state;
+        assert_turned_and_moved(of(&traffic, miner), wanted, advanced);
         assert_eq!(
             again.velocity, advanced.velocity,
             "{goal:?}: no brake or ease"
