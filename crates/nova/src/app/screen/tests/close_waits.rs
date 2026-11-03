@@ -256,3 +256,10 @@ fn an_answer_showing_a_movie_with_i_held_as_it_closes_keeps_the_offer_until_is_r
     screen.input(&key(MISSION_INFO_KEY, false));
     assert_eq!(screen.showing(), Showing::Flight);
 }
+
+#[test]
+fn losing_focus_leaves_an_unanswered_offer_over_flight_open() {
+    let mut screen = offered_over_flight();
+    screen.release_keys();
+    assert_eq!(screen.showing(), Showing::Offer);
+}
