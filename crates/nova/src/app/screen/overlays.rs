@@ -16,7 +16,7 @@ use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
 use nova_view::ui::player_info::{
-    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
+    BackgroundSizes, PLAYER_INFO_DIALOG, PLAYER_INFO_KEY, PlayerInfoScreen, YES_NO_DIALOG,
 };
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
@@ -544,13 +544,14 @@ impl AppScreen {
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
             // The offer dialog left drawn under them is disposed of
-            // (`DisposeDialogNoFlash` @0xa361e).
+            // (`DisposeDialogNoFlash` @0xa361e), once I is let go.
             if self.offer.as_ref().is_some_and(OfferDialog::answered) {
-                self.offer = None;
-            }
-            self.fade_once_dialogs_close();
-            for input in &left {
-                let _ = self.rerouted_input(input);
+                self.dispose_offer(left);
+            } else {
+                self.fade_once_dialogs_close();
+                for input in &left {
+                    let _ = self.rerouted_input(input);
+                }
             }
         }
     }
@@ -620,7 +621,8 @@ impl AppScreen {
                 self.data.button_style(),
                 BackgroundSizes::read(&self.data),
             )
-            .with_focus_ring(self.dialog_focus_ring()),
+            .with_focus_ring(self.dialog_focus_ring())
+            .with_key_held(self.live.is_down(PLAYER_INFO_KEY)),
         );
     }
 
@@ -641,6 +643,7 @@ impl AppScreen {
             flight.jettison_all();
         }
         if closed {
+            let replay = screen.take_replay();
             self.player_info = None;
             self.let_go_of_keys();
             if let Some(flight) = &mut self.flight {
@@ -649,6 +652,7 @@ impl AppScreen {
                 }
                 flight.close_info_dialog();
             }
+            self.replay_wait_keys(replay);
         }
         ScreenAction::None
     }
@@ -707,6 +711,9 @@ impl AppScreen {
     /// The offer dialog's input, then what it asked for
     /// ([`AppScreen::settle_offer`]).
     pub(super) fn offer_input(&mut self, input: &Input) -> ScreenAction {
+        if self.offer_wait_input(input) {
+            return ScreenAction::None;
+        }
         if let Some(dialog) = &mut self.offer {
             dialog.input(input);
         }
@@ -767,18 +774,15 @@ impl AppScreen {
                 .is_ok_and(|shown| shown.offer_hidden),
         };
         if hidden {
-            self.offer = None;
+            dialog.hide();
         }
         self.show_mission_texts();
         if self.missions.is_none() {
-            self.offer = None;
             // What its replay queued after the answering key reaches
             // flight, the answer's `FlushEvents` flushing only mouse
             // events (@0xa2da2-0xa2dde); a text it shows flushes it
             // (@0x5ae67).
-            for input in &left {
-                let _ = self.rerouted_input(input);
-            }
+            self.dispose_offer(left);
         }
     }
 

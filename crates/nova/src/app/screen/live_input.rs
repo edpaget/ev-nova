@@ -110,6 +110,11 @@ impl LiveInput {
         }
     }
 
+    /// Whether `key` is physically down, as live input has told.
+    pub(super) fn is_down(&self, key: Key) -> bool {
+        self.keys.contains(&key)
+    }
+
     /// Forgets everything down: the input is lost, and the releases may
     /// never come. What was down before flight's input went away stays,
     /// as a latched key down then read its latch set, whatever happened
@@ -319,6 +324,17 @@ mod tests {
         live.settle(FlightInput::Back);
         live.poll();
         assert_eq!(down_before(&live), [], "the next poll's");
+    }
+
+    #[test]
+    fn is_down_reads_what_is_down() {
+        let mut live = LiveInput::default();
+        assert!(!live.is_down(Key::Up));
+        live.note(&key(Key::Up, true));
+        assert!(live.is_down(Key::Up));
+        assert!(!live.is_down(Key::Down));
+        live.note(&key(Key::Up, false));
+        assert!(!live.is_down(Key::Up));
     }
 
     #[test]

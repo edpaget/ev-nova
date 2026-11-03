@@ -1,6 +1,7 @@
-//! The keys typed while a map over a screen waits for M's release,
-//! replayed to the screen under it as the map closes. All addresses are
-//! in `EV Nova.app`'s `EV Nova` (i386).
+//! The keys typed while a close waits for its key's release, replayed to
+//! the screen under it as the wait ends: the map's for M, the player info
+//! screen's for P and a mission offer's for I (the `close_waits` module).
+//! All addresses are in `EV Nova.app`'s `EV Nova` (i386).
 //!
 //! `_DoSystemMap`'s wait reads no events and its closing flush keeps keys
 //! (@0x13a2e-0x13a46, @0x13c44-0x13c53), so they reach whoever reads the
@@ -81,9 +82,27 @@ impl AppScreen {
             .as_mut()
             .map(FlightView::take_map_replay)
             .unwrap_or_default();
+        self.replay_wait_keys(replay);
+    }
+
+    /// Replays what a wait left, `replay`, as the module docs say. With
+    /// flight showing and nothing in front, nothing reads the queue: what
+    /// is still down goes to flight's held keys, and the rest is dropped.
+    pub(super) fn replay_wait_keys(&mut self, replay: Vec<Input>) {
+        if replay.is_empty() {
+            return;
+        }
         let mut still_down = HashSet::new();
         for input in &replay {
             note_down(&mut still_down, input);
+        }
+        if self.showing() == Showing::Flight {
+            if let Some(flight) = &mut self.flight {
+                for key in still_down {
+                    flight.hold_live_key(key);
+                }
+            }
+            return;
         }
         let mut keys = replay.into_iter();
         let mut down = HashSet::new();

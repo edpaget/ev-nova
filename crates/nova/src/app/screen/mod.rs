@@ -384,6 +384,7 @@ mod background;
 mod build;
 mod capture_naming;
 mod christening;
+mod close_waits;
 mod defection;
 mod entry;
 mod escort_dialog;
@@ -697,6 +698,11 @@ pub struct AppScreen {
     /// it, it is neither ticked nor given input, so its movie waits for
     /// theirs (`_PlayQTMovie` is modal).
     offer: Option<OfferDialog>,
+    /// What the answered offer's replay queued after its answering key,
+    /// kept while its disposal waits for I's release (the `close_waits`
+    /// module). It belongs with no sub-state of the router's: it outlives
+    /// the offer's answer and its mission dialogs both.
+    offer_left: Vec<Input>,
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
     missions: Option<MissionDialogs>,

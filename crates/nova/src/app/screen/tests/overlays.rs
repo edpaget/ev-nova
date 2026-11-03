@@ -1110,6 +1110,7 @@ fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
     let store = MemoryPilots::new();
     let check = |screen: &mut AppScreen, what: &str| {
         screen.input(&key(PLAYER_INFO_KEY, true));
+        screen.input(&key(PLAYER_INFO_KEY, false));
         let open = spaceport(screen).player_info().expect(what);
         assert_eq!(open.problem(), None, "{what}");
         assert_eq!(screen.showing(), Showing::Spaceport, "{what}");
@@ -1216,6 +1217,7 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
     assert_eq!(pilot(&screen).held(FOOD), 10);
     let writes = store.writes();
     screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, false));
     click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
     click_player_info(&mut screen, PlayerInfoButton::Jettison);
     screen.input(&key(Key::Enter, true));
@@ -1231,6 +1233,7 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
     assert_eq!(pilot(&screen).held(FOOD), 3, "the cash left buys 3");
     past_the_takeoff_grace(&mut screen);
     screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, false));
     click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
     click_player_info(&mut screen, PlayerInfoButton::Jettison);
     screen.input(&key(Key::Enter, true));

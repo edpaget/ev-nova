@@ -592,12 +592,10 @@ impl BarScreen {
         self.offering.as_mut()?.take_choice()
     }
 
-    /// Lets go of its offer dialog answered and left drawn, if any
-    /// ([`SpaceportView::release_answered_offer`](super::SpaceportView::release_answered_offer)).
-    pub fn release_answered_offer(&mut self) {
-        if let Some(offering) = &mut self.offering {
-            offering.release_answered();
-        }
+    /// Its offers, if it offers missions (the spaceport view's
+    /// `close_keys` module).
+    pub(crate) fn offering_mut(&mut self) -> Option<&mut VenueOffers> {
+        self.offering.as_mut()
     }
 
     /// Tells its offer dialog open whether the mission info screen lists a
