@@ -730,12 +730,48 @@ fn on_the_second_pass_a_close_formation_escort_takes_no_glow_copy() {
     traffic.tick_in(&Keeps, world, &[], &mut NeverFires);
     let copied = of(&traffic, escort).display.glow;
     assert_eq!(copied, 8, "the player's 9, faded a step");
+    let (wanted, advanced) = set_off_course(&mut traffic, escort);
     traffic.move_in(world, &mut NeverFires);
     assert_eq!(
         of(&traffic, escort).display.glow,
         copied - 1,
         "faded, no copy"
     );
+    assert_turned_and_moved(of(&traffic, escort), wanted, advanced);
+}
+
+/// How far heading `a` is from heading `b`, round the shorter way.
+fn off_by(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+/// Sets `id`'s heading 90 off the heading the advance pass left it (the
+/// heading it wants) and its velocity to 1 down: that heading, and its
+/// state as set.
+fn set_off_course(traffic: &mut Traffic, id: NpcId) -> (f32, ShipState) {
+    let npc = of_mut(traffic, id);
+    let wanted = npc.state.heading;
+    npc.state.heading = (wanted + 90.0).rem_euclid(360.0);
+    npc.state.velocity = Vec2::new(0.0, 1.0);
+    (wanted, npc.state)
+}
+
+/// Asserts the second pass turned `npc` from `advanced` toward `wanted`
+/// and moved it by its velocity.
+fn assert_turned_and_moved(npc: &Npc, wanted: f32, advanced: ShipState) {
+    assert!(
+        off_by(npc.state.heading, wanted) < off_by(advanced.heading, wanted),
+        "it turns toward {wanted}: {} from {}",
+        npc.state.heading,
+        advanced.heading
+    );
+    assert_eq!(
+        npc.state.position,
+        advanced.position + npc.state.velocity,
+        "it moves, by its velocity as stepped"
+    );
+    assert_ne!(npc.state.position, advanced.position, "it moved");
 }
 
 /// Adds a swarm leader at berth 5, glowing 9 and drifting, and points
@@ -750,25 +786,19 @@ fn swarm_led(traffic: &mut Traffic, swarmer: NpcId) {
 
 /// Runs `traffic`'s advance pass then its second, asserting `id` takes
 /// its swarm leader's 9 on the first (copied, then stepped by a frame) and
-/// no copy on the second, its glow set to 20 and its velocity to 1 down
-/// between them, while it still moves by its velocity.
+/// no copy on the second, its glow set to 20 and its course thrown off
+/// ([`set_off_course`]) between them, while it still turns and moves.
 fn swarm_copy_only_on_the_advance_pass(mut traffic: Traffic, world: &World<'_>, id: NpcId) {
     traffic.tick_in(&Keeps, *world, &[], &mut NeverFires);
     let copied = of(&traffic, id).display.glow;
     assert!((copied - 9).abs() <= 1, "copied: {copied}");
     of_mut(&mut traffic, id).display.glow = 20;
-    of_mut(&mut traffic, id).state.velocity = Vec2::new(0.0, 1.0);
-    let advanced = of(&traffic, id).state;
+    let (wanted, advanced) = set_off_course(&mut traffic, id);
     traffic.move_in(*world, &mut NeverFires);
     let npc = of(&traffic, id);
     let glow = npc.display.glow;
     assert!((glow - 20).abs() <= 2, "stepped, no copy: {glow}");
-    assert_eq!(
-        npc.state.position,
-        advanced.position + npc.state.velocity,
-        "it still moves, by its velocity as stepped"
-    );
-    assert_ne!(npc.state.position, advanced.position, "it moved");
+    assert_turned_and_moved(npc, wanted, advanced);
 }
 
 #[test]
