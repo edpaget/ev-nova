@@ -747,7 +747,7 @@ use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
     CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE, EscortCrew,
-    HeldRounds, MARINES, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
+    HeldRounds, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
     TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
 use crate::captured_loadout::{Captured, captured_outfits};
@@ -5546,11 +5546,7 @@ impl Session {
                         .map_or(0, |record| record.inherent_ai),
                 })
                 .collect(),
-            marines: outfit_mods(&self.pilot.outfits, &self.statics.outfits)
-                .into_iter()
-                .filter(|outfit| outfit.mod_type == MARINES)
-                .map(|outfit| (outfit.mod_val, outfit.count))
-                .collect(),
+            marines: self.ship.marines(&self.pilot, &self.statics),
             target_crew: i32::from(self.statics.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
             derelict: self.statics.govts.derelict(npc.govt),
@@ -25972,6 +25968,26 @@ pub(super) mod tests {
             [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt))),
             [-5, -5, 0, 0]
         );
+    }
+
+    #[test]
+    fn the_capture_odds_leave_a_held_stock_marines_outfit_out() {
+        // `_SetPlunderValues` reads the outfit counts (@0x926cb-0x9271a),
+        // which a purchase's held top-up is not in yet.
+        let mut catalog = boardable();
+        catalog.outfits.push(outfit(320, &[(25, 1)]));
+        let odds = |owned: u16, held: u16| {
+            let mut session = alongside(&catalog);
+            session.pilot.outfits.insert(OutfitId(320), owned);
+            session.ship.held_stock.insert(OutfitId(320), held);
+            let opened = board_by(&mut session, &NovaLaw::default());
+            let Ok(Boarding::Opened(view)) = opened else {
+                panic!("{opened:?}");
+            };
+            view.odds
+        };
+        assert_ne!(odds(2, 0), odds(1, 0), "the marines are an input");
+        assert_eq!(odds(2, 1), odds(1, 0));
     }
 
     #[test]

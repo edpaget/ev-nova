@@ -46,7 +46,7 @@ use crate::ai::plunder_contents;
 use crate::ai::plunder_contents::{
     Marines, Side, Taken, Victim, cargo_line, credits_taken, roll_odds, steal,
 };
-use crate::catalog::outfit_mods;
+use crate::catalog::MARINES;
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::market::Good;
@@ -125,9 +125,10 @@ impl Session {
                 .ship_record(self.pilot.ship)
                 .map_or(0, |record| i32::from(record.strength)),
             marines: Marines::owned(
-                outfit_mods(&self.pilot.outfits, &self.statics.outfits)
+                self.ship
+                    .marines(&self.pilot, &self.statics)
                     .into_iter()
-                    .map(|outfit| (outfit.mod_type, outfit.mod_val, outfit.count)),
+                    .map(|(value, count)| (MARINES, value, count)),
             ),
         };
         let odds = roll_odds(attacker, defender, chance);
@@ -411,6 +412,24 @@ mod tests {
             cash_after(&catalog, &[(261, 4)]),
             10_000 - taken_from(0, defence, 0)
         );
+    }
+
+    #[test]
+    fn a_held_stock_marines_outfit_is_left_out_of_the_players_side() {
+        // `_AIPlunderShipContents` reads the outfit counts
+        // (@0x841bd-0x84204), which a purchase's held top-up is not in yet.
+        let mut catalog = catalog_of(vec![]);
+        catalog.outfits.push(outfit(260, &[(MARINES, 1)]));
+        let (mut session, pirate) = plundering(&catalog, 0);
+        session.pilot.outfits.insert(OutfitId(260), 3);
+        session.ship.held_stock.insert(OutfitId(260), 2);
+        answer(&mut session, pirate, 0);
+        let one = Marines::owned([(MARINES, 1, 1)]);
+        assert_ne!(
+            taken_from(0, one, 0),
+            taken_from(0, Marines::owned([(MARINES, 1, 3)]), 0)
+        );
+        assert_eq!(session.pilot.cash, 10_000 - taken_from(0, one, 0));
     }
 
     #[test]

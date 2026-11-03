@@ -13,6 +13,25 @@
 //! `PlayerShip::counted_outfits`, the held part left out; a site that
 //! models a read of the array keeps `Pilot::outfits`.
 
+use super::{PlayerShip, Statics};
+use crate::catalog::{MARINES, outfit_mods};
+use crate::pilot::Pilot;
+
+impl PlayerShip {
+    /// Each marines outfit (`ModType` [`MARINES`]) in the outfit counts:
+    /// its `ModVal`, and how many. A pirate's plunder of the player
+    /// (`_AIPlunderShipContents` @0x841bd-0x84204, @0x84345-0x84388) and
+    /// the boarding's odds (`_SetPlunderValues` @0x926cb-0x9271a) read
+    /// them, a purchase's held stock left out.
+    pub(super) fn marines(&self, pilot: &Pilot, statics: &Statics) -> Vec<(i16, u16)> {
+        outfit_mods(&self.counted_outfits(pilot), &statics.outfits)
+            .into_iter()
+            .filter(|outfit| outfit.mod_type == MARINES)
+            .map(|outfit| (outfit.mod_val, outfit.count))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -307,5 +326,22 @@ mod tests {
         let [engine, _, other] = readings(&catalog, owned_one_more, stay, scan);
         assert_eq!(engine, Some(true), "one in the counts (@0x7f10e)");
         assert_eq!(other, Some(false), "two owned");
+    }
+
+    // The marines.
+
+    use crate::catalog::MARINES;
+
+    #[test]
+    fn the_marines_leave_a_held_outfits_out_until_the_fold() {
+        let catalog = with_outfit(stocked(), LAUNCHER, |record| record.mods[1] = (MARINES, 3));
+        let marines =
+            |session: &mut Session| session.ship.marines(&session.pilot, &session.statics);
+        assert_eq!(
+            readings(&catalog, take_off(&catalog), relaunch(&catalog), marines),
+            [vec![], vec![(3, 1)], vec![(3, 1)]],
+            "_AIPlunderShipContents @0x841bd-0x84204 and _SetPlunderValues \
+             @0x926cb-0x9271a read the counts"
+        );
     }
 }
