@@ -5,18 +5,23 @@
 //! `_ShipShieldRechargeRate` @0x2b96-0x2bac), as the rulebook's
 //! [`RuleKey::FighterCapacity`](crate::RuleKey::FighterCapacity) reads.
 //!
-//! The engine's stand-in for AI type 5 is a ship with a
-//! [`carrier`](Npc::carrier): one a bay launched, the player's or an NPC
-//! carrier's, or one that rejoined the player's fleet as a fighter. Its
+//! Those readers test the word +0x88 alone, no carrier and no parent.
+//! The engine's AI type 5 is [`Npc::original_ai_type`] ==
+//! [`FIGHTER_AI`]: a ship with a [`carrier`](Npc::carrier), one a bay
+//! launched, the player's or an NPC carrier's, or one that rejoined the
+//! player's fleet as a fighter, unless a bribe's 1 stands over it
+//! ([`Npc::take_bribe`], `_DoCommDialog` @0x961f8, the carrier kept). Its
 //! [`stats`](Npc::stats) keep its class's values; the most its shield and
 //! armour gauges hold ([`Npc::reserves`]) is what every reader of the
 //! capacities reads (the disable threshold, the self-repair, damage, the
 //! target panel, the odds, capture and plunder), while its shield
-//! recharge ([`Npc::shield_recharge`]) reads the carrier each tick. So
-//! the carrier and the gauges' most change together: a ship becomes a
-//! fighter only through [`Npc::take_carrier`] and stops being one only
-//! through [`Npc::leave_carrier`], each holding the capacities
-//! ([`Npc::hold_capacities`]). The original works the capacity out at each read
+//! recharge ([`Npc::shield_recharge`]) reads the word each tick. So every
+//! write of the word holds the capacities again
+//! ([`Npc::hold_capacities`]): [`Npc::take_carrier`];
+//! [`Npc::leave_carrier`], which `Session::unfleet` (a lost or released
+//! escort taking its class's `InherentAI`, `_DamageShip` @0x3b0d7), the
+//! releases, a pirate's take and the player's capture (6) call; and
+//! [`Npc::take_bribe`]. The original works the capacity out at each read
 //! and keeps the shield and armour it holds (+0x54, +0x58) as they are, so
 //! a change keeps what the gauges hold now: a fighter that leaves its
 //! carrier may hold more than its class's until it is hit, as only the
@@ -25,11 +30,12 @@
 use crate::bay::{Carrier, fighter_capacity};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::original_ai_type::FIGHTER_AI;
 
 impl Npc {
     /// Sets the most its shield and armour gauges hold: by `reading` of
     /// [`RuleKey::FighterCapacity`](crate::RuleKey::FighterCapacity) for a
-    /// fighter (one with a carrier), else its class's (see the module
+    /// fighter (one whose word is 5), else its class's (see the module
     /// docs). What the gauges hold now is kept.
     pub fn hold_capacities(&mut self, reading: RuleSource) {
         let reading = self.capacity_reading(reading);
@@ -55,16 +61,16 @@ impl Npc {
 
     /// The shield points it recharges each tick: its class's, scaled by
     /// `reading` of [`RuleKey::FighterCapacity`](crate::RuleKey::FighterCapacity)
-    /// while it is a fighter (see the module docs).
+    /// while it is a fighter, its word 5 (see the module docs).
     #[must_use]
     pub fn shield_recharge(&self, reading: RuleSource) -> f32 {
         fighter_capacity(self.stats.shield_regen, self.capacity_reading(reading))
     }
 
-    /// `reading` for a fighter; the class's own (the other reading) for
-    /// any other ship.
+    /// `reading` for a fighter (one whose word is 5); the class's own (the
+    /// other reading) for any other ship.
     fn capacity_reading(&self, reading: RuleSource) -> RuleSource {
-        if self.carrier.is_some() {
+        if self.original_ai_type() == FIGHTER_AI {
             reading
         } else {
             RuleSource::Bible
@@ -169,6 +175,33 @@ mod tests {
         assert_eq!(fighter.carrier, None);
         assert_eq!(gauges(&fighter), [(39.0, 30.0), (20.0, 45.0)]);
         assert_eq!(fighter.shield_recharge(RuleSource::Engine), 0.125);
+    }
+
+    #[test]
+    fn a_bribed_fighter_holds_its_classs_capacities_and_recharge() {
+        // The bribe writes 1 over +0x88 keeping the carrier (`_DoCommDialog`
+        // @0x961f8), and the readers test the word alone (@0x2a91,
+        // @0x2b96, @0x2cbc).
+        for reading in RuleSource::ALL {
+            let mut fighter = Npc {
+                carrier: Some(Carrier {
+                    ship: ShipRef::Npc(crate::traffic::npc::NpcId(7)),
+                    window: 100.0,
+                    reach: 40.0,
+                }),
+                ..ship()
+            };
+            fighter.hold_capacities(reading);
+            fighter.reserves.shield.now = 35.0;
+            fighter.take_bribe();
+            assert!(fighter.carrier.is_some(), "{reading:?}: kept");
+            assert_eq!(
+                gauges(&fighter),
+                [(35.0, 30.0), (20.0, 45.0)],
+                "{reading:?}"
+            );
+            assert_eq!(fighter.shield_recharge(reading), 0.125, "{reading:?}");
+        }
     }
 
     #[test]

@@ -87,6 +87,7 @@
 
 use super::npc::{AiType, Npc};
 use crate::ai::miner;
+use crate::rulebook::RuleSource;
 
 /// The original's AI type word of a ship with no AI (+0x88 -1).
 pub const NO_AI: i16 = -1;
@@ -153,10 +154,12 @@ impl Npc {
 
     /// The bribe (`_DoCommDialog` @0x961f8): +0x88 = [`BRIBED_AI`], kept
     /// over its leader or carrier ([`Npc::spared`]), as
-    /// [`AiType::WimpyTrader`].
+    /// [`AiType::WimpyTrader`]. A fighter is one no longer, and holds its
+    /// class's capacities (see the `fighter_capacity` module).
     pub fn take_bribe(&mut self) {
         self.spared = true;
         self.ai_type = AiType::WimpyTrader;
+        self.hold_capacities(RuleSource::Bible);
     }
 
     /// A write of +0x88 over the bribe's word, which was its only state:
