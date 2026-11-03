@@ -51,14 +51,16 @@
 //!     [`THRUST_SLACK`]; with the difference at most [`DAMP_BELOW`] on
 //!     either axis, it is cut to [`DAMPING`] of itself and the velocity set
 //!     to the victim's plus it (@0x86c08-0x86cb2). An inertialess ship
-//!     matching instead takes a tick's acceleration off its speed
-//!     ([`Npc::speed`]), down to none and not capped at its top speed, with
-//!     no thrust or damping (@0x86aaa-0x86b38), wanting its own whole
+//!     matching instead takes the frame's gain times its acceleration
+//!     off its speed ([`Npc::speed`]) in doubles (@0x86af3), set to none
+//!     only below none, so a NaN stands, and not capped at its top speed,
+//!     with no thrust or damping (@0x86aaa-0x86b38), wanting its own whole
 //!     heading (the low level's default +0x68, @0x8522d); its velocity
 //!     follows its heading at that speed as it flies.
 //!   - **Aligned** (@0x86cb7): it wants the victim's heading and takes its
-//!     velocity. Outside [`DOCKED_BOX`] on either axis it creeps a pixel a
-//!     tick towards it, its speed zeroed, inertialess or not
+//!     velocity. Outside [`DOCKED_BOX`] on either axis it creeps the frame's
+//!     gain in pixels towards it (a pixel a full frame, [`CREEP`],
+//!     @0x87057), its speed zeroed, inertialess or not
 //!     (@0x8700f-0x87095, @0x8702d). Inside, its speed is left alone:
 //!     while its AI wait is above [`DOCK_WAIT`] it holds; above none, under
 //!     goal 0xd it plunders its nav ([`DockOutcome::Completed`],

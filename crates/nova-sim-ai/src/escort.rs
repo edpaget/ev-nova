@@ -283,7 +283,12 @@ pub const APPROACH_FORMATION: f32 = 600.0;
 pub const FORMATION_SLACK: f32 = 8.0;
 /// How many ticks' acceleration the nudge back to the slot is (10.0
 /// @0xdd65c): the whole of it, which can carry it past the slot; by the
-/// port's earlier formation, at most that, never past it.
+/// port's earlier formation, at most that, never past it. Two routines
+/// read it, differently: `_AIMaintainFormation` multiplies the float
+/// `_ShipAccelRate` by it as a float (`mulss`), then the frame's gain in
+/// doubles (`traffic::formation_flight::nudge`, @0x84fab); sub 8's dock
+/// pull widens it to the double 10.0 (0xdd0b0) in one double product with
+/// the gain (`traffic::dock_flight`, @0x88004).
 pub const FORMATION_NUDGE: f32 = 10.0;
 
 /// The share of the widest sprite the formation is spaced by (0.6

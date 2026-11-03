@@ -30,18 +30,24 @@
 //!   searches, its travel stellar cleared on each frame (+0x6c -1,
 //!   @0x8d833, [`TravelWrite::Clear`]; see [`travel`](crate::ai::travel)):
 //!   an unset timer is set to `Rand(100)+100` (@0x8d83b-0x8d852),
-//!   a set one counts down a tick (@0x8d85f-0x8d876), and one run out drops
-//!   the target (target -1, state and sub 0, timer -1, @0x8d884-0x8d8a6).
+//!   a set one counts down by the frame's gain, `(float)((double)t - g)`
+//!   ([`Surroundings::speed_mult`], @0x8d85f-0x8d876), and one no longer
+//!   above none drops the target (target -1, state and sub 0, timer -1,
+//!   @0x8d884-0x8d8a6). The compare is the original's give-up arm on the
+//!   new count (`0 < t` searches on, `ucomiss`/`jb`), so a NaN searches
+//!   on.
 //!   A timer the ship took from its slot ([`SearchTimer::Carried`]: no
 //!   spawn writes +0xc90c, see
 //!   [`berth_search`](crate::traffic::berth_search)) counts down the same
 //!   way with no roll, so a never-used slot's 0 drops the target on the
-//!   first tick out of sight.
+//!   first frame out of sight, at any gain.
 //!   Each path ends the handler for the frame (the jump to @0x8fb47,
 //!   [`ends_high_level`]), so the state-4 block's call for reinforcements
 //!   and the flee drop do not run; `_LowLevelAIHandler` still flies sub
-//!   1, a stop (see [`searching`]). It holds N = 100..=199 ticks: set on
-//!   tick 0, N-k after tick k, dropped on tick N.
+//!   1, a stop (see [`searching`]). At a full frame's gain it holds N =
+//!   100..=199 frames: set on frame 0, N-k after frame k, dropped on frame
+//!   N; at half a frame's, twice as many. The timer is a float, as the
+//!   original's +0xc90c is, whole as the roll sets it (`cvtsi2ss`).
 //!
 //! The type's other words in its think (its turn on the player, its call
 //! on the message line, its own call for reinforcements) stand: the think
@@ -76,10 +82,12 @@ use crate::combat::hull::Condition;
 use crate::traffic::ai_wait;
 use crate::traffic::npc::Npc;
 
-/// The fewest ticks a search lasts (`Rand(100)+100`, @0x8d84b).
+/// The fewest frames a search lasts at a full frame's gain
+/// (`Rand(100)+100`, @0x8d84b): the range of the roll, whole, unscaled.
 pub const SEARCH_TICKS: u32 = 100;
 
-/// A ship's search timer, the original's +0xc90c ([`Npc::lost_sight`]).
+/// A ship's search timer, the original's float +0xc90c
+/// ([`Npc::lost_sight`]), counted down by the frame's gain.
 ///
 /// Only the lost-sight block writes it, and no spawn does: a ship takes the
 /// timer its slot's last ship left (see
@@ -91,7 +99,8 @@ pub enum SearchTimer {
     Unset,
     /// A count the ship took from its slot without searching: a never-used
     /// slot's 0 (the zero fill of `_NewPtr`, `_InitArrays` @0x1b7a1), or
-    /// the ticks left of the search its last ship broke off. A loss of
+    /// the frames left of the search its last ship broke off, a fraction
+    /// carried as it stands. A loss of
     /// sight counts it down with no roll, so 0 gives up at once.
     Carried(f32),
     /// A search under way, with this many frames left.
@@ -116,7 +125,7 @@ pub enum LostSight {
     /// The target is seen: the timer is cleared (-1, @0x8d8ae).
     Seen,
     /// The target is unseen: the search goes on, with this many frames
-    /// left after this one.
+    /// left after this one, the frame's gain taken off.
     Searching(f32),
     /// The search ran out: the target is dropped and the timer cleared
     /// (-1, @0x8d89c).

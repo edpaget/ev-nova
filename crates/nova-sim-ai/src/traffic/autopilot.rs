@@ -143,7 +143,8 @@
 //!   [`DOCK_TURN_SLACK`] of it, by the engine's reading of
 //!   [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst) bursts
 //!   along its heading at its pull ([`FORMATION_NUDGE`] ticks'
-//!   acceleration) where by the other it thrusts; and each axis at least
+//!   acceleration times the frame's gain, [`Readings::speed_mult`]) where
+//!   by the other it thrusts; and each axis at least
 //!   the pull off is pulled that much towards the carrier. A fighter still
 //!   there within reach, one with no bay for it, goes on steering and
 //!   thrusting at the carrier, with no pull and no burst, and retries next

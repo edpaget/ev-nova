@@ -70,10 +70,13 @@
 //!     whole degrees, and onto it otherwise. So it steps a degree a
 //!     frame while it is close to its leader's heading.
 //! - **The nudge** ([`maintain`], `_AIMaintainFormation(ship, 0)`): the
-//!   nudge is [`FORMATION_NUDGE`] times its `_ShipAccelRate`, the thrust
-//!   it flies by (ionized, under the thrust divisor), cut to (1 − f) with
-//!   an ion charge above none, f its ionization factor held to
-//!   [`ION_HOLD`]. Each axis [`FORMATION_SLACK`] or more off its slot,
+//!   nudge ([`nudge`]) is [`FORMATION_NUDGE`] times its `_ShipAccelRate`,
+//!   the thrust it flies by (ionized, under the thrust divisor), cut to
+//!   (1 − f) with an ion charge above none, f its ionization factor held
+//!   to [`ION_HOLD`], then times the frame's gain in doubles (@0x84fab,
+//!   the autopilot's `Readings::speed_mult`, or the dispatch's
+//!   `World::speed_mult` for sub 0xd and the swarm branches). The snap,
+//!   the slack and the guards read no gain. Each axis [`FORMATION_SLACK`] or more off its slot,
 //!   inclusive, moves by the whole nudge toward it, which can carry it
 //!   past. Nothing moves while its warp stage runs. The nudge comes
 //!   before `_HandleShip`'s move, so it is nudged, then moves. Double

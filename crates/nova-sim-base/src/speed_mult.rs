@@ -93,7 +93,17 @@
 //! `display` and `Traffic::step_fades`; in the view, through the pass's
 //! `PassReport::speed_mult` (the flash and the glow); and in `nova_sim`'s
 //! session, through `Session::speed_mult` at each ship's display and
-//! each `_PrepareAllSprites`.
+//! each `_PrepareAllSprites`. `_LowLevelAIHandler`'s,
+//! `_HighLevelAIHandler`'s, `_AIDispatch`'s and `_AIMaintainFormation`'s
+//! readers (rdm:phase/play-feel-8/phase-25-ai-reads-the-gain) are in
+//! `nova_sim_ai`'s traffic: the dispatch, through the pass's
+//! `World::speed_mult` (an own jump's stage, the pods' waits, the regroup
+//! draw and the drift); the low level, through `Readings::speed_mult`
+//! (the formation nudge, the dock pull, an inertialess plunderer's match,
+//! the dock creep and the mining steps); and the think, through
+//! `Surroundings::speed_mult` (the lost-sight timer and the mining fire's
+//! hold); and in `nova_sim`'s session, through `Session::speed_mult` in
+//! each think run's `World`.
 //!
 //! # Its writers
 //!
