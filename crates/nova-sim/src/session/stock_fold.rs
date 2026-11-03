@@ -84,29 +84,76 @@ pub(super) fn folds_stock(op: &SetOp) -> bool {
     }
 }
 
+/// The purchase every held-stock test starts from, shared with the
+/// `held_readers` tests.
+#[cfg(test)]
+pub(super) mod fixture {
+    use crate::catalog::{OutfitId, OutfitRecord, ShipId};
+    use crate::chance::NeverFires;
+    use crate::outfitter::OutfitFlags;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::session::Session;
+    use crate::session::tests::{NEW, outfitted, shipbuying, stock_weapons};
+    use crate::testkit::{FakePilotCatalog, outfit};
+
+    /// The first ship, which [`stock_weapons`] stocks with two guns.
+    pub(in crate::session) const OLD: ShipId = ShipId(128);
+
+    /// A persistent outfit, which the engine's trade-in leaves out, so
+    /// granting it adds nothing to the trade-in.
+    pub(in crate::session) const LICENCE: OutfitId = OutfitId(340);
+
+    /// [`stock_weapons`] over [`shipbuying`], with [`LICENCE`].
+    pub(in crate::session) fn stocked() -> FakePilotCatalog {
+        let mut catalog = stock_weapons(shipbuying());
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(LICENCE.0, &[])
+        });
+        catalog
+    }
+
+    /// A session landed at `catalog`'s shipyard by `rules`, rich enough
+    /// for two purchases, having bought ship 129.
+    pub(in crate::session) fn bought(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+        let mut session = outfitted(catalog).with_rules(rules);
+        session.pilot.cash = 100_000;
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        session
+    }
+
+    /// The trade-in `session`'s shipyard shows.
+    pub(in crate::session) fn trade_in(session: &mut Session) -> i64 {
+        session
+            .shipyard(&mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
+    }
+
+    /// The default rules with the other reading of `purchase_stock_fold`.
+    pub(in crate::session) fn at_once() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::PurchaseStockFold, RuleSource::Bible)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::catalog::{OutfitId, OutfitRecord, ShipId, ShipRecord};
+    use crate::catalog::{OutfitId, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::{Script, SetOp};
     use crate::outfitter::OutfitFlags;
-    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::rulebook::Rulebook;
     use crate::session::ship_change::ClassChange;
-    use crate::session::tests::{
-        GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted, shipbuying, stock_weapons,
-    };
+    use crate::session::tests::{GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted};
     use crate::session::{ReservePolicy, Session};
     use crate::shipyard::ShipRefusal;
-    use crate::testkit::{FAST, FakePilotCatalog, land_now, outfit, ship};
+    use crate::testkit::{FAST, FakePilotCatalog, land_now, ship};
 
-    /// The first ship, which [`stock_weapons`] stocks with two guns.
-    const OLD: ShipId = ShipId(128);
-
-    /// A persistent outfit, which the engine's trade-in leaves out, so
-    /// granting it adds nothing to the trade-in.
-    const LICENCE: OutfitId = OutfitId(340);
+    use super::fixture::{LICENCE, OLD, at_once, bought, stocked, trade_in};
 
     /// The trade-in of ship 129 (17,500 credits) with its tank (1000)
     /// alone: a quarter of the hull and half the tank, 4375 + 500 = 4875,
@@ -118,42 +165,8 @@ mod tests {
     /// 6575, rounded down to ten by the flux.
     const WITH_STOCK: i64 = 6570;
 
-    /// [`stock_weapons`] over [`shipbuying`], with [`LICENCE`].
-    fn stocked() -> FakePilotCatalog {
-        let mut catalog = stock_weapons(shipbuying());
-        catalog.outfits.push(OutfitRecord {
-            flags: OutfitFlags::PERSISTENT,
-            ..outfit(LICENCE.0, &[])
-        });
-        catalog
-    }
-
-    /// A session landed at `catalog`'s shipyard by `rules`, rich enough
-    /// for two purchases, having bought ship 129.
-    fn bought(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
-        let mut session = outfitted(catalog).with_rules(rules);
-        session.pilot.cash = 100_000;
-        session
-            .buy_ship(NEW, "Kestrel", &mut NeverFires)
-            .expect("bought");
-        session
-    }
-
-    /// The trade-in `session`'s shipyard shows.
-    fn trade_in(session: &mut Session) -> i64 {
-        session
-            .shipyard(&mut NeverFires)
-            .expect("a shipyard")
-            .trade_in
-    }
-
     /// A named step a stay can take after a purchase.
     type Step<'a> = (&'static str, &'a dyn Fn(&mut Session));
-
-    /// The default rules with the other reading of `purchase_stock_fold`.
-    fn at_once() -> Rulebook {
-        Rulebook::default().with_override(RuleKey::PurchaseStockFold, RuleSource::Bible)
-    }
 
     #[test]
     fn the_trade_in_counts_stock_weapons_and_rounds_as_the_original_does() {

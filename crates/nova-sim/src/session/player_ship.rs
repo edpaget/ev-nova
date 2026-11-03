@@ -319,17 +319,30 @@ impl PlayerShip {
         self.held_stock.clear();
     }
 
-    /// `pilot` with the outfit counts the original reads while the stock
-    /// top-up is held: its outfits less [`held_stock`](Self::held_stock)
-    /// ([`shipyard::outfit_counts`]), borrowed as it is when nothing is
-    /// held.
-    pub(super) fn counted<'p>(&self, pilot: &'p Pilot) -> Cow<'p, Pilot> {
+    /// The outfit counts the original reads (`*0x3b51a8`) while the stock
+    /// top-up is held: `pilot`'s outfits less
+    /// [`held_stock`](Self::held_stock) ([`shipyard::outfit_counts`]),
+    /// borrowed as they are when nothing is held. Every reader of the
+    /// counts takes them (see the `held_readers` module).
+    pub(super) fn counted_outfits<'p>(&self, pilot: &'p Pilot) -> Cow<'p, BTreeMap<OutfitId, u16>> {
         if self.held_stock.is_empty() {
-            return Cow::Borrowed(pilot);
+            return Cow::Borrowed(&pilot.outfits);
         }
-        let mut counted = pilot.clone();
-        counted.outfits = shipyard::outfit_counts(&pilot.outfits, &self.held_stock);
-        Cow::Owned(counted)
+        Cow::Owned(shipyard::outfit_counts(&pilot.outfits, &self.held_stock))
+    }
+
+    /// `pilot` with the outfit counts the original reads while the stock
+    /// top-up is held ([`counted_outfits`](Self::counted_outfits)),
+    /// borrowed as it is when nothing is held.
+    pub(super) fn counted<'p>(&self, pilot: &'p Pilot) -> Cow<'p, Pilot> {
+        match self.counted_outfits(pilot) {
+            Cow::Borrowed(_) => Cow::Borrowed(pilot),
+            Cow::Owned(outfits) => {
+                let mut counted = pilot.clone();
+                counted.outfits = outfits;
+                Cow::Owned(counted)
+            }
+        }
     }
 
     /// The dock request's tail's writes to the player's ship, run by a

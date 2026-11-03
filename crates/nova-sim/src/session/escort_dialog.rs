@@ -89,6 +89,7 @@ impl Session {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.ship.fit.armament,
+            held: &self.ship.held_stock,
         };
         let gate = Gate {
             control_bits: &*self.setup.control_bits.0,

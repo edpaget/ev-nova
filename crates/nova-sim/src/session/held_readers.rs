@@ -1,0 +1,130 @@
+//! The readers of the outfit counts outside the shipyard, and whether
+//! each leaves a purchase's held stock out.
+//!
+//! The original keeps two stores: the outfit counts (`*0x3b51a8`) and
+//! the weapon array (the player's slot +0xc8, rounds +0xd0). A purchase
+//! tops the array up to its stock weapons and `AmmoLoad`, and only the
+//! next `_ShipStatsToSystemInfo` folds that top-up into the counts (see
+//! the `stock_fold` module). In the port both stores are one map,
+//! `Pilot::outfits`, which holds the top-up at once; by the engine reading
+//! of [`RuleKey::PurchaseStockFold`](crate::rulebook::RuleKey::PurchaseStockFold)
+//! `PlayerShip::held_stock` records the part still held in the array
+//! alone. A site that models a read of the counts takes
+//! `PlayerShip::counted_outfits`, the held part left out; a site that
+//! models a read of the array keeps `Pilot::outfits`.
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+    use std::collections::BTreeMap;
+
+    use crate::catalog::{ShipId, ShipRecord};
+    use crate::chance::NeverFires;
+    use crate::control::{PilotFacts, Test};
+    use crate::landing::StellarFlags;
+    use crate::rulebook::Rulebook;
+    use crate::session::Session;
+    use crate::session::tests::{GUN, LAUNCHER, ROCKETS, TANK};
+    use crate::testkit::{FAST, FakePilotCatalog, ship};
+
+    use super::super::stock_fold::fixture::{at_once, bought, stocked};
+
+    /// The three answers every reader is pinned by: (a) by the engine,
+    /// after the purchase; (b) by the engine, after `fold` runs; (c) by
+    /// the other reading, after the purchase.
+    fn readings<T>(
+        catalog: &FakePilotCatalog,
+        setup: impl Fn(&mut Session),
+        fold: impl Fn(&mut Session),
+        read: impl Fn(&mut Session) -> T,
+    ) -> [T; 3] {
+        let mut held = bought(catalog, Rulebook::default());
+        setup(&mut held);
+        let a = read(&mut held);
+        fold(&mut held);
+        let b = read(&mut held);
+        let mut at_once = bought(catalog, at_once());
+        setup(&mut at_once);
+        let c = read(&mut at_once);
+        [a, b, c]
+    }
+
+    /// The outfitter's fold (@0x5bb57), for the readers of a stay.
+    fn outfitter(session: &mut Session) {
+        session.open_outfitter();
+        session.close_outfitter();
+    }
+
+    /// Nothing between the purchase and the read.
+    fn stay(_: &mut Session) {}
+
+    #[test]
+    fn the_counted_outfits_leave_the_held_stock_out_by_the_engine() {
+        let catalog = stocked();
+        let session = bought(&catalog, Rulebook::default());
+        let counted = session.ship.counted_outfits(&session.pilot);
+        assert!(matches!(counted, Cow::Owned(_)));
+        assert_eq!(*counted, BTreeMap::from([(TANK, 1)]));
+        let mut session = session;
+        session.ship.held_stock = BTreeMap::from([(GUN, 5), (LAUNCHER, 0), (ROCKETS, 19)]);
+        assert_eq!(
+            *session.ship.counted_outfits(&session.pilot),
+            BTreeMap::from([(TANK, 1), (LAUNCHER, 1), (ROCKETS, 1)]),
+            "the held part out, saturating at none"
+        );
+    }
+
+    #[test]
+    fn the_counted_outfits_are_the_pilots_own_with_nothing_held() {
+        let catalog = stocked();
+        let session = bought(&catalog, at_once());
+        let counted = session.ship.counted_outfits(&session.pilot);
+        assert!(matches!(counted, Cow::Borrowed(_)));
+        assert_eq!(*counted, session.pilot.outfits);
+        assert_eq!(counted.get(&GUN), Some(&1));
+    }
+
+    #[test]
+    fn an_o_test_leaves_a_held_outfit_out_until_the_fold() {
+        let catalog = stocked();
+        assert_eq!(
+            readings(&catalog, stay, outfitter, |session| session.has_outfit(GUN)),
+            [false, true, true]
+        );
+    }
+
+    /// A for-hire class whose `Availability` is `o` of the held gun.
+    const GUNNED: ShipId = ShipId(131);
+
+    /// [`stocked`] with planet 128 a bar too, hiring out [`GUNNED`] every
+    /// day.
+    fn hiring() -> FakePilotCatalog {
+        let mut catalog = stocked();
+        catalog.sites[0].1[0].flags |= StellarFlags::BAR;
+        catalog.ship_records.push(ShipRecord {
+            availability: Test::parse("o305"),
+            hire_random: 100,
+            ..ship(GUNNED.0, FAST)
+        });
+        catalog
+    }
+
+    /// Whether the bar lets [`GUNNED`] be hired.
+    fn gunned_for_hire(session: &mut Session) -> bool {
+        session
+            .escorts_for_hire(&mut NeverFires)
+            .expect("a bar")
+            .row(GUNNED)
+            .is_some_and(|row| row.hire.is_ok())
+    }
+
+    #[test]
+    fn the_hire_screens_availability_leaves_a_held_outfit_out_until_it_closes() {
+        let catalog = hiring();
+        assert_eq!(
+            readings(&catalog, stay, Session::close_hire, gunned_for_hire),
+            [false, true, true],
+            "_DoBarDialog folds as the hire screen closes (@0x49235)"
+        );
+    }
+}

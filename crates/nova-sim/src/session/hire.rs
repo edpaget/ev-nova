@@ -179,6 +179,7 @@ impl Session {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.ship.fit.armament,
+            held: &self.ship.held_stock,
         };
         let bar = Bar {
             ships: &self.statics.ships,

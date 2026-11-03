@@ -535,6 +535,7 @@ mod gravity;
 mod hail;
 mod hail_advice;
 mod held_jettison;
+mod held_readers;
 mod hire;
 mod hit_turns;
 mod hooks;
@@ -2045,6 +2046,7 @@ impl Session {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.ship.fit.armament,
+            held: &self.ship.held_stock,
         };
         let world = World {
             govts: &self.statics.govts,
@@ -2194,6 +2196,7 @@ impl Session {
             pilot: &self.pilot,
             ammo_outfits: &self.statics.ammo_outfits,
             armament: &self.ship.fit.armament,
+            held: &self.ship.held_stock,
         };
         let targeted = self.space.combat.targeted_damage();
         let type_widths = self.gate_type_widths();

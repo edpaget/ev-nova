@@ -41,7 +41,7 @@
 //! `OnCapture` and `OnRetire`) run through [`Session::run_set`] where
 //! the original runs them: see the `hooks` module.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
@@ -67,6 +67,11 @@ pub(crate) struct Facts<'a> {
     pub(crate) ammo_outfits: &'a [(WeaponId, OutfitId)],
     /// The player's weapons, its fighter bays among them.
     pub(crate) armament: &'a Armament,
+    /// The part of the pilot's outfits a purchase's stock top-up still
+    /// holds in the weapon array alone (`PlayerShip::held_stock`), which
+    /// the outfit counts an `o` test reads leave out (see the
+    /// `held_readers` module).
+    pub(crate) held: &'a BTreeMap<OutfitId, u16>,
 }
 
 /// Whether a `P` test passes: always, the engine taking the game as
@@ -84,14 +89,15 @@ impl Facts<'_> {
         lowest_ammo_outfit(self.ammo_outfits, bay)
     }
 
-    /// The outfits an `o` test counts: each the pilot owns one of or
-    /// more, and each carried fighter's dock outfit
-    /// ([`Facts::docks_into`]).
+    /// The outfits an `o` test counts: each the outfit counts hold one
+    /// of or more, the pilot's outfits less [`Facts::held`] (`_GetToken`
+    /// @0x14a95-0x14a9a), and each carried fighter's dock outfit
+    /// ([`Facts::docks_into`], @0x14aab).
     pub(super) fn counted_outfits(&self) -> impl Iterator<Item = OutfitId> + '_ {
         let owned = self
             .pilot
             .outfits()
-            .filter(|&(_, count)| count > 0)
+            .filter(|&(id, count)| count > self.held.get(&id).copied().unwrap_or(0))
             .map(|(id, _)| id);
         let docked = self
             .pilot
@@ -344,6 +350,7 @@ impl PlayerShip {
             pilot,
             ammo_outfits: &statics.ammo_outfits,
             armament: &self.fit.armament,
+            held: &self.held_stock,
         }
     }
 }
