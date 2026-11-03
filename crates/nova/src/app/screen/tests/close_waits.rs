@@ -184,3 +184,24 @@ fn losing_focus_while_an_offer_over_flight_waits_for_i_resumes_flight() {
     screen.release_keys();
     assert_eq!(screen.showing(), Showing::Flight);
 }
+
+#[test]
+fn losing_focus_while_the_player_info_over_flight_waits_for_p_closes_it() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::PlayerInfo, "waiting");
+    screen.release_keys();
+    assert_eq!(screen.showing(), Showing::Flight);
+}
+
+#[test]
+fn losing_focus_while_the_ports_player_info_waits_for_p_closes_it() {
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    screen.release_keys();
+    assert!(spaceport(&screen).player_info().is_none());
+}

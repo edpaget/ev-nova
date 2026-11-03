@@ -637,12 +637,23 @@ impl AppScreen {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
         let jettison = screen.take_jettison();
-        let closed = screen.closed();
-        let laid_out = screen.problem().is_none();
         if jettison && let Some(flight) = &mut self.flight {
             flight.jettison_all();
         }
-        if closed {
+        self.drop_closed_player_info();
+        ScreenAction::None
+    }
+
+    /// Drops the player info screen over flight once it has closed: the
+    /// screen below lets go of its keys, the status bar is redrawn if it
+    /// was laid out, flight is told of the close, and what its wait left
+    /// is replayed.
+    pub(super) fn drop_closed_player_info(&mut self) {
+        let Some(screen) = self.player_info.as_mut().filter(|screen| screen.closed()) else {
+            return;
+        };
+        let laid_out = screen.problem().is_none();
+        {
             let replay = screen.take_replay();
             self.player_info = None;
             self.let_go_of_keys();
@@ -654,7 +665,6 @@ impl AppScreen {
             }
             self.replay_wait_keys(replay);
         }
-        ScreenAction::None
     }
 
     /// Opens what a board made in flight's tick, the Board key held

@@ -78,9 +78,12 @@ impl AppScreen {
     }
 
     /// Settles the waits that letting go of the keys ended (a wait ended
-    /// by losing focus drops its queue): an offer over flight disposed of
+    /// by losing focus drops its queue): the player info screen over
+    /// flight closed ([`AppScreen::drop_closed_player_info`]), and an
+    /// offer over flight disposed of
     /// goes as [`AppScreen::dispose_offer`] says.
     pub(super) fn settle_released_waits(&mut self) {
+        self.drop_closed_player_info();
         if self
             .offer
             .as_ref()
