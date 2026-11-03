@@ -62,8 +62,18 @@
 //! shows the next tab, or with Shift held the previous one, wrapping
 //! (@0x53b14-0x53b80). Return, Enter, Escape and P (a press) close it
 //! (@0x53b86-0x53bb6). The original closes on any key pressed while P
-//! is held; P is the only one it can be held for here, as the screen
-//! opens on P's press.
+//! is held; that stays press-only by the user's decision (2026-10-23),
+//! so P's own press is the only held-P close here.
+//!
+//! Every close waits while P is down (@0x5a6aa-0x5a6d4): the screen
+//! stays drawn and inert, takes nothing but the wait's keys
+//! ([`PlayerInfoScreen::waiting`]), and closes on P's release; a close
+//! with P up is immediate, and a P press always waits. The rest follows
+//! on the release: `_RefreshSAT` (@0x5a725), and a `FlushEvents(7, 0)`
+//! (@0x5a739) that keeps the keys typed meanwhile for the next reader
+//! ([`PlayerInfoScreen::take_replay`], the `key_wait` module). A
+//! jettison's yes jettisons at once (`_JettisonCargo` @0x5a679 runs
+//! before the wait). Losing focus counts as P's release.
 //!
 //! **Sounds.** None: `_TrackPlayerInfoButtons` and `_DrawButton` play
 //! nothing, and the Yes/No dialog is the system's, so the buttons'
@@ -79,6 +89,7 @@ use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix}
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
+use super::key_wait::KeyWait;
 use super::text_box::TextBox;
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -575,6 +586,9 @@ pub struct PlayerInfoScreen {
     backwards: bool,
     jettison: bool,
     closed: bool,
+    /// The close's wait for [`PLAYER_INFO_KEY`]'s release
+    /// (@0x5a6aa-0x5a6d4).
+    wait: KeyWait,
 }
 
 impl PlayerInfoScreen {
@@ -606,6 +620,35 @@ impl PlayerInfoScreen {
             backwards: false,
             jettison: false,
             closed: false,
+            wait: KeyWait::new(PLAYER_INFO_KEY, false),
+        }
+    }
+
+    /// The screen opened with [`PLAYER_INFO_KEY`] down or up, as `held`
+    /// says: a close made while it is down waits for its release.
+    #[must_use]
+    pub fn with_key_held(mut self, held: bool) -> Self {
+        self.wait = KeyWait::new(PLAYER_INFO_KEY, held);
+        self
+    }
+
+    /// Whether a close waits for [`PLAYER_INFO_KEY`]'s release: the
+    /// screen stays drawn and takes no input but the wait's.
+    #[must_use]
+    pub fn waiting(&self) -> bool {
+        self.wait.waiting()
+    }
+
+    /// The keys typed during the close's wait, for whoever reads input
+    /// next, once (the `key_wait` module).
+    pub fn take_replay(&mut self) -> Vec<Input> {
+        self.wait.take_replay()
+    }
+
+    /// Closes now, or once [`PLAYER_INFO_KEY`] is let go if it is down.
+    fn close(&mut self) {
+        if self.wait.close() {
+            self.closed = true;
         }
     }
 
@@ -693,7 +736,7 @@ impl PlayerInfoScreen {
     /// Chooses `button` (@0x5a5ea-0x5a679).
     fn choose(&mut self, button: PlayerInfoButton) {
         match button {
-            PlayerInfoButton::Done => self.closed = true,
+            PlayerInfoButton::Done => self.close(),
             PlayerInfoButton::Tab(tab) => self.tab = tab,
             PlayerInfoButton::Jettison if self.jettison_shown() => self.ask(),
             PlayerInfoButton::Jettison => {}
@@ -724,7 +767,7 @@ impl PlayerInfoScreen {
             Some(DialogEvent::Item(YES_ITEM)) => {
                 self.confirm = None;
                 self.jettison = true;
-                self.closed = true;
+                self.close();
             }
             Some(DialogEvent::Item(NO_ITEM)) => self.confirm = None,
             _ => {}
@@ -840,6 +883,13 @@ impl Screen for PlayerInfoScreen {
     /// changes the tab, Return, Enter, Escape and P close, and a click
     /// goes to the buttons. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.wait.waiting() {
+            if self.wait.input(input) {
+                self.closed = true;
+            }
+            return ScreenAction::None;
+        }
+        self.wait.note(input);
         if let Input::Key {
             key: BACKWARDS_KEY,
             pressed,
@@ -868,7 +918,7 @@ impl Screen for PlayerInfoScreen {
                 key: Key::Enter | Key::Escape | PLAYER_INFO_KEY,
                 pressed: true,
                 repeat: false,
-            } => self.closed = true,
+            } => self.close(),
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
             _ => {}
         }
@@ -926,6 +976,9 @@ impl Screen for PlayerInfoScreen {
 
     fn release_keys(&mut self) {
         self.backwards = false;
+        if self.wait.release() {
+            self.closed = true;
+        }
     }
 }
 
@@ -1804,11 +1857,162 @@ mod tests {
             screen.input(&key(closing, false, false));
             assert!(!screen.closed(), "{closing:?}: a repeat or release");
             screen.input(&press(closing));
+            if closing == PLAYER_INFO_KEY {
+                assert!(screen.waiting(), "P's press waits for its release");
+                screen.input(&release(closing));
+            }
             assert!(screen.closed(), "{closing:?}");
         }
         let mut screen = screen();
         screen.input(&press(Key::Char('x')));
         assert!(!screen.closed(), "another key");
+    }
+
+    fn release(key_released: Key) -> Input {
+        key(key_released, false, false)
+    }
+
+    /// [`screen`] opened on P's press, P still down.
+    fn held() -> PlayerInfoScreen {
+        screen().with_key_held(true)
+    }
+
+    /// A way of closing the screen.
+    type Close = fn(&mut PlayerInfoScreen);
+
+    #[test]
+    fn opened_with_p_down_every_close_waits_for_ps_release() {
+        let closes: [(&str, Close); 5] = [
+            ("Return", |s| {
+                s.input(&press(Key::Enter));
+            }),
+            ("Escape", |s| {
+                s.input(&press(Key::Escape));
+            }),
+            ("P", |s| {
+                s.input(&press(PLAYER_INFO_KEY));
+            }),
+            ("Done", |s| click_button(s, PlayerInfoButton::Done)),
+            ("Return after a repeat", |s| {
+                s.input(&key(PLAYER_INFO_KEY, true, true));
+                s.input(&press(Key::Enter));
+            }),
+        ];
+        for (name, close) in closes {
+            let mut screen = held();
+            let before = drawn(&screen);
+            close(&mut screen);
+            assert!(!screen.closed(), "{name}");
+            assert!(screen.waiting(), "{name}");
+            assert_eq!(drawn(&screen), before, "{name}: drawn as it was");
+            screen.input(&release(PLAYER_INFO_KEY));
+            assert!(screen.closed(), "{name}: on P's release");
+            assert!(!screen.waiting(), "{name}");
+        }
+    }
+
+    #[test]
+    fn while_it_waits_tab_clicks_and_jettison_do_nothing() {
+        let mut screen = held();
+        screen.input(&press(Key::Tab));
+        screen.input(&press(Key::Enter));
+        assert_eq!(screen.tab(), Tab::Cargo);
+        screen.input(&press(Key::Tab));
+        click_button(&mut screen, PlayerInfoButton::Tab(Tab::Honors));
+        click_button(&mut screen, PlayerInfoButton::Jettison);
+        click_button(&mut screen, PlayerInfoButton::Done);
+        assert_eq!(screen.tab(), Tab::Cargo);
+        assert!(!screen.confirm_open());
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn while_it_waits_a_repeat_or_second_press_of_p_doesnt_close_it() {
+        let mut screen = held();
+        screen.input(&press(Key::Enter));
+        screen.input(&key(PLAYER_INFO_KEY, true, true));
+        screen.input(&press(PLAYER_INFO_KEY));
+        assert!(!screen.closed());
+        screen.input(&release(PLAYER_INFO_KEY));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn opened_with_p_up_return_escape_and_done_close_at_once() {
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = screen();
+            screen.input(&press(close));
+            assert!(screen.closed(), "{close:?}");
+            assert!(!screen.waiting());
+        }
+        let mut screen = screen();
+        click_button(&mut screen, PlayerInfoButton::Done);
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn p_let_go_and_pressed_again_closes_on_the_press_and_waits() {
+        let mut screen = held();
+        screen.input(&release(PLAYER_INFO_KEY));
+        assert!(!screen.closed());
+        screen.input(&press(PLAYER_INFO_KEY));
+        assert!(screen.waiting());
+        screen.input(&release(PLAYER_INFO_KEY));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn let_go_of_p_return_closes_at_once() {
+        let mut screen = held();
+        screen.input(&release(PLAYER_INFO_KEY));
+        screen.input(&press(Key::Enter));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn a_jettisons_yes_with_p_down_jettisons_at_once_and_closes_on_the_release() {
+        let mut screen = held();
+        screen.input(&press(Key::Tab));
+        click_button(&mut screen, PlayerInfoButton::Jettison);
+        screen.input(&press(Key::Enter));
+        assert!(screen.take_jettison(), "before the wait");
+        assert!(!screen.closed());
+        screen.input(&release(PLAYER_INFO_KEY));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn losing_focus_during_the_wait_closes_it_with_nothing_to_replay() {
+        let mut screen = held();
+        screen.input(&press(Key::Enter));
+        screen.input(&press(Key::Char('x')));
+        screen.release_keys();
+        assert!(screen.closed());
+        assert_eq!(screen.take_replay(), []);
+    }
+
+    #[test]
+    fn losing_focus_with_no_wait_leaves_it_open() {
+        let mut screen = held();
+        screen.release_keys();
+        assert!(!screen.closed());
+        screen.input(&press(Key::Enter));
+        assert!(screen.closed(), "P counts as let go");
+    }
+
+    #[test]
+    fn the_keys_typed_during_the_wait_come_back_once() {
+        let mut screen = held();
+        screen.input(&press(Key::Enter));
+        screen.input(&press(Key::Escape));
+        screen.input(&release(Key::Escape));
+        screen.input(&press(PLAYER_INFO_KEY));
+        screen.input(&release(PLAYER_INFO_KEY));
+        assert_eq!(
+            screen.take_replay(),
+            [press(Key::Escape), release(Key::Escape)]
+        );
+        assert_eq!(screen.take_replay(), []);
     }
 
     #[test]
@@ -1933,6 +2137,7 @@ mod tests {
         assert!(!screen.closed());
         screen.input(&press(PLAYER_INFO_KEY));
         assert!(!screen.closed(), "the question takes P too");
+        screen.input(&release(PLAYER_INFO_KEY));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Cargo, "and Tab");
         screen.input(&press(Key::Enter));
@@ -2164,6 +2369,7 @@ mod tests {
             let mut screen = screen();
             assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
             screen.input(&press(closing));
+            screen.input(&release(closing));
             assert!(screen.closed(), "{closing:?}");
             assert_eq!(screen.take_sounds(), Vec::<Sound>::new(), "{closing:?}");
         }

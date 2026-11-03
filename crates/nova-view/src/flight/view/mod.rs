@@ -1566,7 +1566,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     map_closing: bool,
     /// What a map over a screen has taken during its wait
     /// (`FlightView::closing_input`).
-    wait_keys: map_wait::WaitKeys,
+    wait_keys: crate::ui::key_wait::WaitKeys,
     /// What the map's wait left for the screen under it, until it is taken
     /// ([`FlightView::take_map_replay`]).
     map_replay: Vec<crate::Input>,

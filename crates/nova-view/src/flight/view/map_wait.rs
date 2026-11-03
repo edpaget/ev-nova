@@ -34,7 +34,8 @@
 //! - **A screen reads the queue.** Every screen's loop takes it through
 //!   `_MyModalDialog` (@0x5999a), and no caller flushes between
 //!   `_DoSystemMap` and that loop. So over a screen the view keeps what the
-//!   wait takes ([`WaitKeys`]) and hands it to the router at the close
+//!   wait takes (the `ui::key_wait` module's `WaitKeys`, waiting for M)
+//!   and hands it to the router at the close
 //!   ([`FlightView::take_map_replay`]), which gives it to the screen.
 //!
 //! Left out:
@@ -60,11 +61,9 @@
 use super::dialog_map::MapOpening;
 use super::{
     AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS,
-    FlightView, JETTISON_KEY, LAND_KEY, MAP_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
+    FlightView, JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
 };
 use crate::flight::sim_port::FlightSim;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Input, Key};
 
 /// The keys `_HandlePlayer` acts on the moment they read down, with no
@@ -124,70 +123,6 @@ pub(super) const OWN_LATCH_KEYS: [Key; 2] = [LAND_KEY, BOARD_KEY];
 /// [`OWN_LATCH_KEYS`].
 pub(super) fn reads_live(key: Key) -> bool {
     UNLATCHED_KEYS.contains(&key) || OWN_LATCH_KEYS.contains(&key)
-}
-
-/// The keys typed while a map over a screen waits, for the screen under
-/// it: the original's queue of key-downs, auto-keys and key-ups, less what
-/// can't reach a screen.
-#[derive(Clone, Debug, Default)]
-pub(super) struct WaitKeys {
-    keys: Vec<Input>,
-}
-
-impl WaitKeys {
-    /// Takes `input` if it is a key the queue keeps, repeats included, in
-    /// order. M's own never queues, as it is down throughout, and the
-    /// router ran Caps Lock's double time on its press. A release goes in
-    /// only behind something of its key, a press or a repeat: otherwise
-    /// the screen never saw that key. So what is queued says whether a key
-    /// it saw is still down.
-    pub(super) fn take(&mut self, input: &Input) {
-        let Input::Key { key, pressed, .. } = *input else {
-            return;
-        };
-        if key == MAP_KEY || key == Key::CapsLock {
-            return;
-        }
-        if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
-            self.keys.push(*input);
-        }
-    }
-
-    /// Drops all that was taken.
-    pub(super) fn clear(&mut self) {
-        self.keys.clear();
-    }
-
-    /// What the wait leaves for the screen under the map, in order, the
-    /// queue emptied. The filters read [`PLAYER_INFO_KEY`] and
-    /// [`MISSION_INFO_KEY`] live (`_PortFilter` @0x4f171-0x4f1c5 and its
-    /// kin), so one already let go does nothing, and goes with its repeats
-    /// and release; one still down stays.
-    pub(super) fn finish(&mut self) -> Vec<Input> {
-        let mut keys = std::mem::take(&mut self.keys);
-        for live in [PLAYER_INFO_KEY, MISSION_INFO_KEY] {
-            let let_go = keys.iter().rposition(|input| is_release_of(input, live));
-            if let Some(let_go) = let_go {
-                keys = keys
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(at, input)| *at > let_go || !is_key(input, live))
-                    .map(|(_, input)| input)
-                    .collect();
-            }
-        }
-        keys
-    }
-}
-
-/// Whether `input` is a release of `key`.
-fn is_release_of(input: &Input, key: Key) -> bool {
-    matches!(*input, Input::Key { key: k, pressed: false, .. } if k == key)
-}
-
-/// Whether `input` is anything of `key`.
-fn is_key(input: &Input, key: Key) -> bool {
-    matches!(*input, Input::Key { key: k, .. } if k == key)
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -270,138 +205,5 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// nothing from a wait that focus ended.
     pub fn take_map_replay(&mut self) -> Vec<Input> {
         std::mem::take(&mut self.map_replay)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{MouseButton, Point};
-
-    fn press(key: Key) -> Input {
-        Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        }
-    }
-
-    fn repeat(key: Key) -> Input {
-        Input::Key {
-            key,
-            pressed: true,
-            repeat: true,
-        }
-    }
-
-    fn release(key: Key) -> Input {
-        Input::Key {
-            key,
-            pressed: false,
-            repeat: false,
-        }
-    }
-
-    /// What the wait leaves after taking `inputs`.
-    fn left_by(inputs: &[Input]) -> Vec<Input> {
-        let mut queue = WaitKeys::default();
-        for input in inputs {
-            queue.take(input);
-        }
-        queue.finish()
-    }
-
-    const A: Key = Key::Char('a');
-    const B: Key = Key::Char('b');
-
-    #[test]
-    fn it_keeps_keys_and_repeats_in_order() {
-        let keys = [
-            press(A),
-            repeat(A),
-            press(B),
-            release(A),
-            release(B),
-            press(Key::Enter),
-        ];
-        assert_eq!(left_by(&keys), keys);
-    }
-
-    #[test]
-    fn it_takes_neither_m_nor_caps_lock() {
-        // The router ran Caps Lock's double time on its press.
-        for key in [MAP_KEY, Key::CapsLock] {
-            let keys = [press(key), repeat(key), release(key)];
-            assert_eq!(left_by(&keys), [], "{key:?}");
-        }
-    }
-
-    #[test]
-    fn it_takes_no_pointer_input_and_no_text() {
-        let at = Point::new(1.0, 2.0);
-        let inputs = [
-            Input::PointerMoved(at),
-            Input::PointerLeft,
-            Input::PointerMovedOutside(at),
-            Input::PointerButton {
-                button: MouseButton::Left,
-                pressed: true,
-                at,
-            },
-            Input::Text('a'),
-        ];
-        assert_eq!(left_by(&inputs), []);
-    }
-
-    #[test]
-    fn it_drops_the_release_of_a_key_whose_press_it_never_took() {
-        assert_eq!(left_by(&[release(A), press(B)]), [press(B)]);
-        assert_eq!(left_by(&[press(B), release(A)]), [press(B)]);
-    }
-
-    #[test]
-    fn it_keeps_a_repeat_with_no_press_as_an_auto_key_stays_queued() {
-        assert_eq!(left_by(&[repeat(A)]), [repeat(A)]);
-    }
-
-    #[test]
-    fn it_keeps_the_release_of_a_key_it_holds_only_repeats_of() {
-        let keys = [repeat(A), release(A)];
-        assert_eq!(left_by(&keys), keys);
-    }
-
-    #[test]
-    fn it_drops_a_live_key_already_let_go_with_its_repeats() {
-        for key in [PLAYER_INFO_KEY, MISSION_INFO_KEY] {
-            let keys = [press(key), press(A), repeat(key), release(key), release(A)];
-            assert_eq!(left_by(&keys), [press(A), release(A)], "{key:?}");
-        }
-    }
-
-    #[test]
-    fn it_keeps_a_live_key_still_down() {
-        for key in [PLAYER_INFO_KEY, MISSION_INFO_KEY] {
-            let keys = [press(key), repeat(key)];
-            assert_eq!(left_by(&keys), keys, "{key:?}");
-            // Tapped first, the tap goes and the last press stays.
-            let tapped = [press(key), release(key), press(key)];
-            assert_eq!(left_by(&tapped), [press(key)], "{key:?}");
-        }
-    }
-
-    #[test]
-    fn clear_drops_what_was_taken() {
-        let mut queue = WaitKeys::default();
-        queue.take(&press(A));
-        queue.clear();
-        assert_eq!(queue.finish(), []);
-    }
-
-    #[test]
-    fn finish_leaves_it_empty() {
-        let mut queue = WaitKeys::default();
-        queue.take(&press(A));
-        assert_eq!(queue.finish().len(), 1);
-        assert_eq!(queue.finish(), []);
     }
 }
