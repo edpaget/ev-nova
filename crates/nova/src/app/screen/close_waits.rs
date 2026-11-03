@@ -77,6 +77,20 @@ impl AppScreen {
         true
     }
 
+    /// Settles the waits that letting go of the keys ended (a wait ended
+    /// by losing focus drops its queue): an offer over flight disposed of
+    /// goes as [`AppScreen::dispose_offer`] says.
+    pub(super) fn settle_released_waits(&mut self) {
+        if self
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.answered() && offer.disposed())
+        {
+            let left = std::mem::take(&mut self.offer_left);
+            self.finish_offer(&left, Vec::new());
+        }
+    }
+
     /// The end of an offer's close: the offer dropped, the death's fade
     /// begun if due, `left` rerouted and `replay` replayed.
     fn finish_offer(&mut self, left: &[Input], replay: Vec<Input>) {

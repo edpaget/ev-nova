@@ -174,3 +174,13 @@ fn a_key_typed_during_a_player_info_wait_over_an_offer_reaches_the_offer() {
     screen.input(&key(PLAYER_INFO_KEY, false));
     assert_ne!(screen.showing(), Showing::Offer, "the Return answered it");
 }
+
+#[test]
+fn losing_focus_while_an_offer_over_flight_waits_for_i_resumes_flight() {
+    let mut screen = offered_over_flight();
+    screen.input(&key(MISSION_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Offer, "waiting");
+    screen.release_keys();
+    assert_eq!(screen.showing(), Showing::Flight);
+}

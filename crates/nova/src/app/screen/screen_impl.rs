@@ -304,6 +304,7 @@ impl Screen for AppScreen {
         self.live.forget();
         self.tell_close_keys();
         self.let_go_of_keys();
+        self.settle_released_waits();
         self.hold_let_go();
         self.quit_on_held_chords();
     }
