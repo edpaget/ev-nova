@@ -3687,6 +3687,19 @@ mod tests {
     }
 
     #[test]
+    fn a_stretch_as_wide_or_as_high_as_a_page_is_resampled() {
+        for (w, h) in [(64.0, 3.0), (3.0, 64.0)] {
+            let mut list = DrawList::new();
+            list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), w, h);
+            let mut renderer = renderer(two_by_two_images());
+            let mut gpu = RecordingGpu::new();
+            renderer.render(&list, &viewport(), &mut gpu);
+            assert_eq!(uploads(&gpu.calls).len(), 2, "{w} x {h}: resampled");
+            assert_ne!(all_quads(gpu.submits()[0])[0].uv, uv(0, 0, 2, 2));
+        }
+    }
+
+    #[test]
     fn a_stretch_too_big_for_a_page_draws_from_the_pictures_own_entry() {
         let mut list = DrawList::new();
         list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 65.0, 3.0);

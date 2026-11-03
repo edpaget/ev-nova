@@ -842,7 +842,7 @@ fn picture_bar_template() -> DialogTemplate {
 
 /// [`PastTheHoldsDialogs`], with the picture variants of the offer
 /// (1020) and the bar (1021) too.
-struct PictureDialogs;
+pub(super) struct PictureDialogs;
 
 impl DialogResources for PictureDialogs {
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
@@ -981,7 +981,7 @@ impl DialogResources for NoTextDialogs {
 /// The router over [`briefing_person_offer_data`] with `dialogs`, in
 /// the developer's flight, the tank half full, hailing the merchant:
 /// its offer open.
-fn hailing_briefer(dialogs: Rc<dyn DialogResources>) -> AppScreen {
+pub(super) fn hailing_briefer(dialogs: Rc<dyn DialogResources>) -> AppScreen {
     let mut screen = AppScreen::new(briefing_person_offer_data())
         .with_dialogs(dialogs, Rc::new(MonoMetrics))
         .with_behaviour(Rc::new(Idle));

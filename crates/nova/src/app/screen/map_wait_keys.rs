@@ -139,7 +139,7 @@ impl AppScreen {
 }
 
 /// Notes in `down` a key `input` presses or lets go of.
-fn note_down(down: &mut HashSet<Key>, input: &Input) {
+pub(super) fn note_down(down: &mut HashSet<Key>, input: &Input) {
     if let Input::Key { key, pressed, .. } = *input {
         if pressed {
             down.insert(key);

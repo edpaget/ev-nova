@@ -245,3 +245,49 @@ fn a_key_pressed_after_a_held_chord_and_let_go_of_with_the_window_isnt_left_down
     assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
     assert!(!screen.take_quit());
 }
+
+/// Over flight's offer, released off its buttons, the offer stays in
+/// front and takes the held Command-comma, greyed there. What follows it
+/// replays: Command down again, then Return, which accepts and shows the
+/// brief, a text that flushes the rest as it opens (`_ShowTextDialog`
+/// @0x5ae67). Command's queued release still goes.
+#[test]
+fn a_press_replayed_before_a_flush_still_gets_its_queued_release() {
+    let mut screen = super::missions::hailing_briefer(Rc::new(super::missions::PictureDialogs));
+    let at = flight_accept(&screen);
+    screen.input(&left(true, at));
+    chord(&mut screen, PREFERENCES_KEY);
+    screen.input(&command(false));
+    screen.input(&command(true));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&command(false));
+    screen.input(&left(false, OFF));
+    assert_eq!(screen.showing(), Showing::MissionText, "the brief");
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::None,
+        "Command let go of"
+    );
+}
+
+/// As [`a_press_replayed_before_a_flush_still_gets_its_queued_release`],
+/// but the keys are let go of with the window before Command's release:
+/// the let-go still runs past the flush.
+#[test]
+fn a_let_go_after_a_flush_still_lets_go_of_the_presses_replayed() {
+    let mut screen = super::missions::hailing_briefer(Rc::new(super::missions::PictureDialogs));
+    let at = flight_accept(&screen);
+    screen.input(&left(true, at));
+    chord(&mut screen, PREFERENCES_KEY);
+    screen.input(&command(false));
+    screen.input(&command(true));
+    screen.input(&key(Key::Enter, true));
+    screen.release_keys();
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::MissionText, "the brief");
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::None,
+        "Command let go of"
+    );
+}
