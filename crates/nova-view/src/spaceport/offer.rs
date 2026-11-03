@@ -685,6 +685,12 @@ impl Screen for OfferDialog {
         self.before.as_ref().is_some_and(MovieStage::hides_cursor)
     }
 
+    /// The laid-out dialog's readout ([`Dialog::holds_back_keys`]): false
+    /// with no layout.
+    fn holds_back_keys(&self) -> bool {
+        self.laid.as_ref().is_ok_and(Dialog::holds_back_keys)
+    }
+
     /// The plain dialog draws its frame under its items. The picture
     /// variant draws [`PICTURE_FRAME`] stretched over the dialog, as
     /// `_SingleMissionDialogUpdate` fills the port with it, then the
@@ -1053,6 +1059,15 @@ impl VenueOffers {
         }
     }
 
+    /// Whether keys typed now would come after keys held back here: the
+    /// open dialog's ([`OfferDialog`]'s [`Screen::holds_back_keys`]), or
+    /// what its answer left until its holder runs it
+    /// ([`VenueOffers::take_unclaimed`]). Never the answered dialog's, which
+    /// takes no input.
+    pub(crate) fn holds_back_keys(&self) -> bool {
+        self.dialog.as_ref().is_some_and(Screen::holds_back_keys) || !self.unclaimed.is_empty()
+    }
+
     /// Cancels the offer dialog's pointer, if it is open: whether it was.
     pub(crate) fn cancel_pointer(&mut self) -> bool {
         self.dialog
@@ -1299,6 +1314,70 @@ mod tests {
                 at,
             });
         }
+    }
+
+    fn press_item(dialog: &mut OfferDialog, number: usize, pressed: bool) {
+        let at = dialog
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center();
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+
+    #[test]
+    fn a_click_on_accept_holds_back_keys_until_its_release_answers() {
+        let mut dialog = offer();
+        assert!(!dialog.holds_back_keys(), "before the press");
+        press_item(&mut dialog, ACCEPT_ITEM, true);
+        assert!(dialog.holds_back_keys(), "during it");
+        dialog.input(&key(Key::Char('z')));
+        press_item(&mut dialog, ACCEPT_ITEM, false);
+        assert!(dialog.answered());
+        assert!(!dialog.holds_back_keys(), "answered");
+    }
+
+    #[test]
+    fn an_offer_with_no_layout_holds_back_no_keys() {
+        let dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("I'm in", None),
+            ButtonStyle::STOCK,
+        );
+        assert!(!dialog.holds_back_keys());
+    }
+
+    #[test]
+    fn venue_offers_hold_back_keys_for_their_open_dialog_and_what_its_answer_left() {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        assert!(!offers.holds_back_keys(), "nothing open");
+        opened(&mut offers);
+        let at = offers
+            .dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(ACCEPT_ITEM))
+            .expect("Accept")
+            .center();
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        offers.input(&left(true), &mut Vec::new());
+        assert!(offers.holds_back_keys(), "during the press");
+        offers.input(&key(Key::Char('z')), &mut Vec::new());
+        offers.input(&left(false), &mut Vec::new());
+        assert!(offers.dialog().is_none(), "answered");
+        assert!(offers.holds_back_keys(), "Z waits for its holder");
+        offers.take_choice();
+        assert!(offers.holds_back_keys(), "until its holder runs it");
+        assert_eq!(offers.take_unclaimed(), [key(Key::Char('z'))]);
+        assert!(!offers.holds_back_keys(), "once it has");
     }
 
     #[test]

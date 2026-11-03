@@ -39,6 +39,16 @@
 //! only keys and that one press, and a key can't start a hold, so a replay
 //! never nests.
 //!
+//! The menu chords wait too. The original's Command-Q and Command-comma
+//! are key-downs that wait in the queue with the rest, until
+//! `_MyModalDialog`'s `WaitNextEvent` (@0x5999a) hands them to the menu.
+//! The router (`nova::app`) takes them before the dialog sees them, so it
+//! holds its own chords while the screen in front reads
+//! [`Screen::holds_back_keys`](crate::Screen::holds_back_keys) true: from
+//! the press until the replay of what it held back has run
+//! ([`Dialog::holds_back_keys`](super::Dialog::holds_back_keys)). Then it
+//! acts on them, and what was typed after them, in order.
+//!
 //! Its rest after a key that closes the dialog or opens a screen is the
 //! host's to place, as the original's queued events reach whatever reads
 //! events next. The map, player info and mission info each flush the queue
@@ -90,6 +100,12 @@ impl HeldKeys {
     /// A tick: what an abandoned press held back is the replay.
     pub(super) fn tick(&mut self) {
         self.replay.append(&mut self.pending);
+    }
+
+    /// Whether some held-back keys are still to replay: an abandoned press's,
+    /// until the tick, or a replay not yet taken.
+    pub(super) fn waiting(&self) -> bool {
+        !(self.pending.is_empty() && self.replay.is_empty())
     }
 
     /// The replay, once.
@@ -240,6 +256,64 @@ mod tests {
         assert_eq!(keys.take_replay(), []);
         keys.tick();
         assert_eq!(keys.take_replay(), [key(Key::End, true)]);
+    }
+
+    #[test]
+    fn a_click_holds_back_keys_from_its_press_until_its_replay_is_taken() {
+        let mut dialog = dialog();
+        let at = okay(&dialog);
+        assert!(!dialog.holds_back_keys(), "before the press");
+        dialog.input(&left(true, at));
+        assert!(dialog.holds_back_keys(), "during the press");
+        dialog.input(&key(Key::Escape, true));
+        dialog.input(&left(false, at));
+        assert!(dialog.holds_back_keys(), "until the replay is taken");
+        dialog.take_replay();
+        assert!(!dialog.holds_back_keys(), "after it");
+    }
+
+    #[test]
+    fn a_click_that_held_nothing_holds_back_nothing_once_released() {
+        let mut dialog = dialog();
+        let at = okay(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&left(false, at));
+        assert!(!dialog.holds_back_keys());
+    }
+
+    #[test]
+    fn a_cancelled_click_holds_back_keys_until_its_tick_and_the_replay() {
+        let mut dialog = dialog();
+        dialog.input(&left(true, okay(&dialog)));
+        dialog.input(&key(Key::Enter, true));
+        dialog.cancel_pointer();
+        assert!(dialog.holds_back_keys(), "until the tick");
+        dialog.tick(std::time::Duration::ZERO);
+        assert!(dialog.holds_back_keys(), "until the replay is taken");
+        dialog.take_replay();
+        assert!(!dialog.holds_back_keys());
+    }
+
+    #[test]
+    fn a_dialog_whose_keys_act_at_once_never_holds_them_back() {
+        let mut dialog = Dialog::new(
+            &DialogTemplate {
+                bounds: rect(0.0, 0.0, 200.0, 120.0),
+                placement: Placement::Fixed,
+                items: vec![ItemTemplate {
+                    bounds: rect(10.0, 90.0, 60.0, 25.0),
+                    enabled: true,
+                    kind: ItemSpec::User,
+                }],
+            },
+            &[(1, Role::Button("Okay".into()))],
+            Rc::new(MonoMetrics),
+        );
+        let at = dialog.item_bounds(1).expect("Okay").center();
+        dialog.input(&left(true, at));
+        assert!(!dialog.holds_back_keys());
+        dialog.input(&key(Key::Escape, true));
+        assert!(!dialog.holds_back_keys());
     }
 
     #[test]

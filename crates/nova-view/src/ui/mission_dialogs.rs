@@ -701,6 +701,12 @@ impl Screen for MissionDialogs {
     fn hides_pointer(&self) -> bool {
         matches!(self.texts.front(), Some(Stage::Movie(movie)) if movie.hides_cursor())
     }
+
+    /// The text in front's readout ([`DescDialog`]'s
+    /// [`Screen::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        matches!(self.texts.front(), Some(Stage::Text(text)) if text.holds_back_keys())
+    }
 }
 
 #[cfg(test)]
@@ -1002,6 +1008,19 @@ mod tests {
             .item_bounds(DONE_ITEM)
             .expect("Done")
             .center()
+    }
+
+    #[test]
+    fn the_text_in_front_holds_back_keys_from_a_click_to_its_release() {
+        let mut dialogs = dialogs();
+        assert!(!dialogs.holds_back_keys(), "nothing open");
+        dialogs.show_texts(vec![brief(128, "one")]);
+        assert!(!dialogs.holds_back_keys(), "before the press");
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        assert!(dialogs.holds_back_keys(), "during it");
+        dialogs.input(&left(false, at));
+        assert!(!dialogs.holds_back_keys(), "after the release");
     }
 
     #[test]

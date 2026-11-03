@@ -963,6 +963,13 @@ impl Screen for TradeScreen {
         self.quantity.release_keys();
     }
 
+    /// The offers' readout ([`VenueOffers::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.offering
+            .as_ref()
+            .is_some_and(VenueOffers::holds_back_keys)
+    }
+
     /// The quantity dialog's and the offer's sounds, in order. The
     /// buttons are silent under the pointer, as `_TrackTradeButtons`
     /// @0x294cd plays nothing.
@@ -2636,6 +2643,35 @@ mod tests {
     /// The trade center, its offers given.
     fn offering() -> TradeScreen {
         screen().with_offers(offer_templates())
+    }
+
+    /// Wiring: the exchange reads its offers' readout
+    /// ([`VenueOffers::holds_back_keys`]), from a click held on the offer's
+    /// Accept until what the answer left has run on the next tick.
+    #[test]
+    fn the_exchange_holds_back_keys_for_its_offers_held_click() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        assert!(!screen.holds_back_keys(), "before the press");
+        let [press, held, release] = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false,
+            },
+        );
+        screen.input(&press);
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&held);
+        screen.input(&release);
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(
+            screen.holds_back_keys(),
+            "the Escape waits for the next tick"
+        );
+        screen.tick(Duration::ZERO);
+        assert!(!screen.holds_back_keys(), "it has run");
     }
 
     /// Wiring: the exchange runs what the offer's answer left, an Escape

@@ -616,6 +616,15 @@ impl Dialog {
         self.held_keys.is_some() && self.pressing()
     }
 
+    /// Whether keys typed now would come after keys the dialog holds back:
+    /// it [`holds`](Self::holds) them, or keeps some for its replay
+    /// (abandoned until the next tick, or released and not yet taken). See
+    /// the `held_keys` module.
+    #[must_use]
+    pub fn holds_back_keys(&self) -> bool {
+        self.holds() || self.held_keys.as_ref().is_some_and(|keys| keys.waiting())
+    }
+
     /// Whether a press is held on an arrow, or a click tracked on an item.
     fn pressing(&self) -> bool {
         self.hold.is_some() || self.tracked.is_some()

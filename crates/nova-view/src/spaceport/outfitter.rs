@@ -1442,6 +1442,16 @@ impl Screen for OutfitterScreen {
         self.quantity.release_keys();
     }
 
+    /// The alert's readout ([`ModalHost::holds_back_keys`]), or the offers'
+    /// ([`VenueOffers::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.alert.holds_back_keys()
+            || self
+                .offering
+                .as_ref()
+                .is_some_and(VenueOffers::holds_back_keys)
+    }
+
     /// The quantity dialog's and the alert's sounds, in order. The
     /// buttons are silent under the pointer, as `_TrackOutfitButtons`
     /// @0x2a029 plays nothing.
@@ -4304,6 +4314,35 @@ mod tests {
         counting_screen().with_offers(offer_templates())
     }
 
+    /// Wiring: the outfitter reads its offers' readout
+    /// ([`VenueOffers::holds_back_keys`]), from a click held on the offer's
+    /// Accept until what the answer left has run on the next tick.
+    #[test]
+    fn the_outfitter_holds_back_keys_for_its_offers_held_click() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        assert!(!screen.holds_back_keys(), "before the press");
+        let [press, held, release] = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false,
+            },
+        );
+        screen.input(&press);
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&held);
+        screen.input(&release);
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(
+            screen.holds_back_keys(),
+            "the Escape waits for the next tick"
+        );
+        screen.tick(Duration::ZERO);
+        assert!(!screen.holds_back_keys(), "it has run");
+    }
+
     /// Wiring: the outfitter runs what the offer's answer left, an Escape
     /// held back by the click that accepts, through its own input on its
     /// next tick ([`VenueOffers::take_unclaimed`]). When it is dropped
@@ -4744,6 +4783,25 @@ mod tests {
             .item_bounds(number)
             .expect("an item")
             .center()
+    }
+
+    /// Wiring: the outfitter reads its alert's readout
+    /// ([`ModalHost::holds_back_keys`]) while a click is held on its Done.
+    #[test]
+    fn the_outfitter_holds_back_keys_for_its_alerts_held_click() {
+        let mut screen = alerting(RAISED);
+        assert!(!screen.holds_back_keys(), "before the press");
+        let at = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&left(true));
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&left(false));
+        assert!(screen.alert_dialog().is_none(), "Done closed it");
+        assert!(!screen.holds_back_keys(), "after the release");
     }
 
     #[test]

@@ -148,6 +148,13 @@ impl<T, D: Modal> ModalHost<T, D> {
         true
     }
 
+    /// Whether keys typed now would come after keys the open dialog holds
+    /// back ([`Screen::holds_back_keys`]); false with none open.
+    #[must_use]
+    pub fn holds_back_keys(&self) -> bool {
+        self.dialog().is_some_and(Screen::holds_back_keys)
+    }
+
     /// Lets go of the keys held in the open dialog.
     pub fn release_keys(&mut self) {
         if let Some((_, dialog)) = &mut self.open {
@@ -480,6 +487,19 @@ mod tests {
         host.input(&key(Key::Enter), &mut Vec::new());
         host.input(&key(Key::Char('b')), &mut Vec::new());
         host.cancel_pointer();
+    }
+
+    #[test]
+    fn the_host_holds_back_keys_while_its_open_dialog_does() {
+        let mut host: ModalHost<(), DescDialog> = ModalHost::default();
+        assert!(!host.holds_back_keys(), "nothing open");
+        host.open((), desc());
+        assert!(!host.holds_back_keys(), "before the press");
+        cancelled_with_a_return(&mut host);
+        assert!(host.holds_back_keys(), "until the tick runs the Return");
+        host.tick(Duration::ZERO);
+        assert!(!host.is_open());
+        assert!(!host.holds_back_keys(), "closed");
     }
 
     #[test]

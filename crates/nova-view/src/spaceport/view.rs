@@ -2381,6 +2381,23 @@ impl Screen for SpaceportView {
         self.dialogs.as_ref().is_some_and(Screen::hides_pointer)
             || self.offer_dialog().is_some_and(Screen::hides_pointer)
     }
+
+    /// The mission texts', the spaceport's offers' and the open screen's
+    /// readouts: that screen's covers its offers and the outfitter's alert.
+    fn holds_back_keys(&self) -> bool {
+        self.dialogs.as_ref().is_some_and(Screen::holds_back_keys)
+            || self
+                .missioning
+                .as_ref()
+                .is_some_and(|missioning| missioning.landing.holds_back_keys())
+            || match &self.open {
+                Some(Open::Bar(screen)) => screen.holds_back_keys(),
+                Some(Open::Trade(screen)) => screen.holds_back_keys(),
+                Some(Open::Outfitter(screen)) => screen.holds_back_keys(),
+                Some(Open::Shipyard(screen)) => screen.holds_back_keys(),
+                _ => false,
+            }
+    }
 }
 
 impl SpaceportView {
@@ -2600,6 +2617,7 @@ impl SpaceportView {
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
     mod flushing_layers;
+    mod held_keys;
     mod overlay_pointer;
     mod ship_movies;
 

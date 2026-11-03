@@ -527,6 +527,11 @@ impl Screen for DescDialog {
         self.dialog.cancel_pointer();
     }
 
+    /// The dialog's readout ([`Dialog::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.dialog.holds_back_keys()
+    }
+
     /// Letting go of the keys while a press holds them abandons the press,
     /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
     fn release_keys(&mut self) {
@@ -1514,6 +1519,18 @@ mod tests {
         desc.tick(TICK * 3);
         release_on(&mut desc, SCROLL_UP_ITEM);
         assert_eq!(desc.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_click_on_done_holds_back_keys_until_its_release_has_replayed_them() {
+        let mut desc = desc();
+        assert!(!desc.holds_back_keys(), "before the press");
+        press_on(&mut desc, DONE_ITEM);
+        assert!(desc.holds_back_keys(), "during it");
+        desc.input(&key(Key::Escape));
+        assert!(desc.holds_back_keys(), "with a key held back");
+        release_on(&mut desc, DONE_ITEM);
+        assert!(!desc.holds_back_keys(), "the release ran the replay");
     }
 
     #[test]
