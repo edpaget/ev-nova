@@ -3668,6 +3668,7 @@ mod tests {
     mod stellar_hazards;
     mod strike_terms;
     mod tick_phases;
+    mod turn_reads;
     mod weapon_glow;
     mod wrap_carry;
 

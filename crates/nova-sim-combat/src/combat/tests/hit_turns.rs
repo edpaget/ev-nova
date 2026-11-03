@@ -12,15 +12,15 @@ use crate::combat::hit_turns::{self, HitTurns, Stretch, StretchFn, run_in_turn};
 /// What the fake keeper's answer saw of one strike: the strike, each
 /// ship's armour as it was answered, and how many shots were in flight.
 #[derive(Clone, Debug, PartialEq)]
-struct Answered {
-    strike: Strike,
-    armour: Vec<(ShipRef, f32)>,
-    in_flight: usize,
+pub(super) struct Answered {
+    pub(super) strike: Strike,
+    pub(super) armour: Vec<(ShipRef, f32)>,
+    pub(super) in_flight: usize,
 }
 
 impl Answered {
     /// The armour of `ship` as the strike was answered.
-    fn armour_of(&self, ship: ShipRef) -> f32 {
+    pub(super) fn armour_of(&self, ship: ShipRef) -> f32 {
         self.armour
             .iter()
             .find(|&&(armoured, _)| armoured == ship)
@@ -29,43 +29,46 @@ impl Answered {
 }
 
 /// How the fake keeper answers one strike: a rewrite of the ships.
-type Rewrite = fn(&Strike, &mut [Ship]);
+pub(super) type Rewrite = fn(&Strike, &mut [Ship]);
 
 /// The default rewrite: the player's direct hit on an NPC turns it on the
 /// player, as the reaction block does (`_AIMakeShipAttackPlayer`
-/// @0x89d4d, goal 0xd to 4 @0x89d3e).
-fn turning(strike: &Strike, ships: &mut [Ship]) {
+/// @0x89d4d): its target the player, and its goal 4 (@0x89d3e), which is
+/// neither plundering (0xd) nor docked nor mining.
+pub(super) fn turning(strike: &Strike, ships: &mut [Ship]) {
     if !strike.direct || strike.by != Some(ShipRef::Player) {
         return;
     }
     if let Some(ship) = ships.iter_mut().find(|ship| ship.id == strike.ship) {
         ship.target = Some(ShipRef::Player);
         ship.plundering = false;
+        ship.docked = false;
+        ship.mining = false;
         ship.attacking = Some(ShipRef::Player);
     }
 }
 
 /// A rewrite that answers nothing.
-fn silent(_: &Strike, _: &mut [Ship]) {}
+pub(super) fn silent(_: &Strike, _: &mut [Ship]) {}
 
 /// A fake keeper of the test ships: it lends each stretch fighters built
 /// afresh from its ships, and at each answer sets the velocities the
 /// stretch's pushes left and answers each strike with its rewrite,
 /// recording what it saw.
-struct Keeper {
-    combat: Combat,
-    ships: Vec<Ship>,
-    arsenal: Arsenal,
-    govts: Governments,
-    rewrite: Rewrite,
-    lends: usize,
-    answers: usize,
-    answered: Vec<Answered>,
+pub(super) struct Keeper {
+    pub(super) combat: Combat,
+    pub(super) ships: Vec<Ship>,
+    pub(super) arsenal: Arsenal,
+    pub(super) govts: Governments,
+    pub(super) rewrite: Rewrite,
+    pub(super) lends: usize,
+    pub(super) answers: usize,
+    pub(super) answered: Vec<Answered>,
 }
 
 impl Keeper {
     /// A keeper of `ships`, answering by `rewrite`.
-    fn of(ships: Vec<Ship>, rewrite: Rewrite) -> Self {
+    pub(super) fn of(ships: Vec<Ship>, rewrite: Rewrite) -> Self {
         Self {
             combat: Combat::default(),
             ships,
@@ -79,7 +82,7 @@ impl Keeper {
     }
 
     /// The ship `id` among its ships.
-    fn ship(&self, id: ShipRef) -> &Ship {
+    pub(super) fn ship(&self, id: ShipRef) -> &Ship {
         self.ships
             .iter()
             .find(|ship| ship.id == id)
@@ -197,7 +200,7 @@ fn the_fake_keeper_keeps_the_contract() {
 
 impl Keeper {
     /// The ships struck in the answers, as (ship hit, by), in order.
-    fn answered_strikes(&self) -> Vec<(ShipRef, Option<ShipRef>)> {
+    pub(super) fn answered_strikes(&self) -> Vec<(ShipRef, Option<ShipRef>)> {
         self.answered
             .iter()
             .map(|answered| (answered.strike.ship, answered.strike.by))
@@ -206,7 +209,7 @@ impl Keeper {
 
     /// Runs `phase` once on its ships, nothing answered: a phase that sets
     /// a test up.
-    fn run(
+    pub(super) fn run(
         &mut self,
         mut phase: impl FnMut(&mut Combat, &mut [Fighter], Arena<'_>, &mut dyn Chance),
     ) {
@@ -217,7 +220,7 @@ impl Keeper {
     }
 
     /// The collision passes, each direct hit answered before the next.
-    fn test_hits(&mut self) {
+    pub(super) fn test_hits(&mut self) {
         run_in_turn(self, |combat, fighters, arena, chance| {
             combat.test_hits_in_turn(fighters, arena, Scenery::default(), chance)
         });
@@ -225,7 +228,7 @@ impl Keeper {
 
     /// `_HandleBeams` and the late steps, each beam's hit answered before
     /// the next.
-    fn close_tick(&mut self) {
+    pub(super) fn close_tick(&mut self) {
         run_in_turn(self, |combat, fighters, arena, chance| {
             combat.close_tick_in_turn(fighters, arena, &mut [], None, chance)
         });
@@ -233,7 +236,7 @@ impl Keeper {
 }
 
 /// The player at (`x`, `y`), facing right.
-fn player_at(x: f32, y: f32) -> Ship {
+pub(super) fn player_at(x: f32, y: f32) -> Ship {
     Ship {
         id: ShipRef::Player,
         fleet: ShipRef::Player,
@@ -243,7 +246,7 @@ fn player_at(x: f32, y: f32) -> Ship {
 }
 
 /// A beam of 200 pixels and three ticks doing `mass` and `energy` a tick.
-fn ray(mass: i16, energy: i16) -> WeaponRecord {
+pub(super) fn ray(mass: i16, energy: i16) -> WeaponRecord {
     WeaponRecord {
         mass_dmg: mass,
         energy_dmg: energy,
@@ -252,7 +255,7 @@ fn ray(mass: i16, energy: i16) -> WeaponRecord {
 }
 
 /// A shell that would destroy a ship of 10 shield and 30 armour.
-fn shell() -> WeaponRecord {
+pub(super) fn shell() -> WeaponRecord {
     WeaponRecord {
         mass_dmg: 50,
         energy_dmg: 50,
@@ -262,7 +265,7 @@ fn shell() -> WeaponRecord {
 
 /// `ship` walked first in the contact passes: below every test ship in
 /// its layer.
-fn walked_first(ship: Ship) -> Ship {
+pub(super) fn walked_first(ship: Ship) -> Ship {
     Ship {
         sprite: Some(SpriteRank {
             layer: ShipLayer::Ships,
@@ -274,7 +277,12 @@ fn walked_first(ship: Ship) -> Ship {
 
 /// `record`'s shot by `firer` whose last move, from 10 to the left, ended
 /// on (`x`, `y`).
-fn ending_on(combat: &mut Combat, (record, firer): (WeaponRecord, ShipRef), x: f32, y: f32) {
+pub(super) fn ending_on(
+    combat: &mut Combat,
+    (record, firer): (WeaponRecord, ShipRef),
+    x: f32,
+    y: f32,
+) {
     let to = Vec2::new(x, y);
     fly(
         combat,
