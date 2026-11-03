@@ -212,6 +212,7 @@ fn a_change_of_ship_keeps_the_players_exit_cursors_by_the_engine_and_resets_them
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
@@ -239,6 +240,7 @@ fn a_change_of_ship_puts_the_players_fold_set_back_to_0_by_either_reading() {
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship(), ShipId(129));

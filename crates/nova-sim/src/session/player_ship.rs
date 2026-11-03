@@ -25,7 +25,7 @@ use crate::shipyard;
 use crate::stats::ShipStats;
 use crate::warp;
 
-use super::{ship_display, warp_stage};
+use super::{Statics, ship_display, warp_stage};
 
 /// The player's ship, in `Session`'s former field order, then its parts.
 #[derive(Clone, Debug, PartialEq)]
@@ -313,10 +313,27 @@ impl PlayerShip {
         }
     }
 
-    /// `_ShipStatsToSystemInfo`'s fold: the stock top-up held in the
-    /// weapon array becomes owned outfits, so nothing is held any more.
-    pub(super) fn fold_stock(&mut self) {
+    /// `_ShipStatsToSystemInfo`'s fold (@0xcaee-0xcce7): the stock top-up
+    /// held in the weapon array becomes owned outfits, so nothing is held
+    /// any more. The stats are worked out again over the counts it
+    /// leaves, and each reserve's most moves to the new stats' with
+    /// nothing gained or held down, as the fold writes no reserve. With
+    /// nothing held, it changes nothing.
+    pub(super) fn fold_stock(&mut self, pilot: &mut Pilot, statics: &Statics) {
+        if self.held_stock.is_empty() {
+            return;
+        }
         self.held_stock.clear();
+        let stats = self.current_stats(pilot, statics);
+        let reserves = &mut pilot.reserves;
+        for (gauge, max) in [
+            (&mut reserves.shield, stats.shield),
+            (&mut reserves.armor, stats.armor),
+            (&mut reserves.fuel, stats.fuel),
+        ] {
+            gauge.max = max;
+        }
+        self.fit.stats = stats;
     }
 
     /// The outfit counts the original reads (`*0x3b51a8`) while the stock

@@ -281,6 +281,10 @@ pub(super) struct ClassChange {
     pub(super) outfits: BTreeMap<OutfitId, u16>,
     /// How the refit treats a shield or armour above the new most.
     pub(super) reserves: ReservePolicy,
+    /// The part of `outfits` the new weapon array holds alone, out of the
+    /// outfit counts until the next fold: a purchase's stock top-up
+    /// (see the `stock_fold` module), none for any other change.
+    pub(super) held: BTreeMap<OutfitId, u16>,
 }
 
 impl ClassChange {
@@ -290,11 +294,15 @@ impl ClassChange {
     /// @0x5f00d); until then, holding keeps the old ship's within the new
     /// most. The original leaves them unclamped while `OnPurchase` runs
     /// (`_SystemInfoToShipStats` clamps no reserve), which only a
-    /// set-operator observer could see; that is not modelled.
-    pub(super) fn bought(outfits: BTreeMap<OutfitId, u16>) -> Self {
+    /// set-operator observer could see; that is not modelled. The stock
+    /// top-up `held` stays out of the outfit counts, so the refit's stats
+    /// and the fill after `OnPurchase` leave it out (see the `stock_fold`
+    /// module).
+    pub(super) fn bought(outfits: BTreeMap<OutfitId, u16>, held: BTreeMap<OutfitId, u16>) -> Self {
         Self {
             outfits,
             reserves: ReservePolicy::Hold,
+            held,
         }
     }
 }
@@ -390,9 +398,10 @@ impl Session {
         before_class: impl FnOnce(&mut Self),
     ) {
         self.pilot.outfits = change.outfits;
-        // A change of class rewrites the weapon array, so no stock top-up
-        // is held any more (see the `stock_fold` module).
-        self.ship.fold_stock();
+        // A change of class rewrites the weapon array, so no earlier stock
+        // top-up is held any more; a purchase's own is held from here,
+        // before the refit reads the counts (see the `stock_fold` module).
+        self.ship.held_stock = change.held;
         before_class(self);
         self.pilot.ship = ship.id;
         self.ship.fit.fields = ship.fields;
@@ -474,6 +483,7 @@ impl Session {
                 &self.statics.outfits,
             ),
             reserves: ReservePolicy::reading(rules.reserves),
+            held: BTreeMap::new(),
         };
         self.become_class(&record, change, |_| {});
         self.ship.bump_armor(&mut self.pilot, &self.setup);
@@ -850,6 +860,7 @@ mod tests {
         let change = ClassChange {
             outfits: outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         let mut seen = None;
         session.become_class(&record(&session, 129), change, |s| {
@@ -886,6 +897,7 @@ mod tests {
         let change = ClassChange {
             outfits: outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record(&session, 129), change, |_| {});
         assert_eq!(session.ship(), ShipId(129));
@@ -916,6 +928,7 @@ mod tests {
         let change = ClassChange {
             outfits: BTreeMap::new(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record(&session, 129), change, |s| {
             assert_eq!(s.take_events(), [], "not before the class is taken");
@@ -947,6 +960,7 @@ mod tests {
             let change = ClassChange {
                 outfits: BTreeMap::new(),
                 reserves,
+                held: BTreeMap::new(),
             };
             session.become_class(&record(&session, 130), change, |_| {});
             let now = session.reserves();
@@ -958,14 +972,14 @@ mod tests {
     #[test]
     fn a_purchases_class_change_holds_the_reserves() {
         let outfits = owned(&[(LICENCE, 1)]);
-        let change = ClassChange::bought(outfits.clone());
+        let change = ClassChange::bought(outfits.clone(), BTreeMap::new());
         assert_eq!(change.outfits, outfits);
         assert_eq!(change.reserves, ReservePolicy::Hold);
         let catalog = changing();
         let mut session = session(&catalog);
         session.become_class(
             &record(&session, 130),
-            ClassChange::bought(BTreeMap::new()),
+            ClassChange::bought(BTreeMap::new(), BTreeMap::new()),
             |_| {},
         );
         let now = session.reserves();

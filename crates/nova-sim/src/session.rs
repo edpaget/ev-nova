@@ -4097,7 +4097,7 @@ impl Session {
         }
         // `_PlayerLandOnStellar`'s fold and reset (@0x63211; see the
         // `stock_fold` and `precalced` modules), before the port opens.
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
         // An inhabited stellar runs `_DoAutoRefuel` instead of the beep
         // (`_PlayerLandOnStellar` @0x632c5), before the port dialog (see
@@ -4460,7 +4460,7 @@ impl Session {
     pub(crate) fn open_outfitter(&mut self) {
         self.port.open_outfit_visit(&self.pilot);
         // `_ShipStatsToSystemInfo` @0x5bb57 (see the `stock_fold` module).
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
     }
 
@@ -4489,7 +4489,7 @@ impl Session {
     /// is this one, after it.
     pub(crate) fn close_hire(&mut self) {
         // `_ShipStatsToSystemInfo` @0x49235 (see the `stock_fold` module).
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
     }
 
@@ -5057,7 +5057,11 @@ impl Session {
             },
             quote,
         );
-        self.become_class(&record, ClassChange::bought(outfits), |session| {
+        // The top-up sits in the weapon array alone until the next fold,
+        // by the engine reading of `purchase_stock_fold`, so the new
+        // class's stats leave it out; an `OnPurchase` set operator folds
+        // it, as it runs after the top-up (@0x5f00d).
+        self.become_class(&record, ClassChange::bought(outfits, held), |session| {
             settlement.settle(&mut session.pilot);
             if !paint_last {
                 session.pilot.paint = None;
@@ -5068,10 +5072,6 @@ impl Session {
         // module): their trims are the purchase rule's, already made.
         self.reset_precalced_for(precalced::ResetCause::Purchase);
         self.port.ship_redraws.insert(ship);
-        // The top-up sits in the weapon array alone until the next fold,
-        // by the engine reading of `purchase_stock_fold`; an `OnPurchase`
-        // set operator folds it, as it runs after the top-up (@0x5f00d).
-        self.ship.held_stock = held;
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         // No secondary is selected on the new ship (`_DoShipyardDialog`
         // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
@@ -6004,6 +6004,7 @@ impl Session {
         let takeover = ClassChange {
             outfits,
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         // The player takes the captured ship's paint, or none
         // (`_DoShipCapture` @0x41728-0x4175e): after `OnRetire` and
@@ -6246,11 +6247,14 @@ impl PlayerShip {
         pilot::merged(&self.fit.defaults, &self.fit.stock)
     }
 
-    /// The ship's stats with the outfits the pilot owns.
+    /// The ship's stats with the outfits the pilot owns, read from the
+    /// outfit counts as the `_Ship*` readers do (e.g. `_ShipMaxSpeed`
+    /// @0x374a-0x37a1), so a purchase's held stock is left out until its
+    /// fold (see the `held_readers` module).
     fn current_stats(&self, pilot: &Pilot, statics: &Statics) -> ShipStats {
         ShipStats::for_player(
             self.fit.fields,
-            &outfit_mods(&pilot.outfits, &statics.outfits),
+            &outfit_mods(&self.counted_outfits(pilot), &statics.outfits),
         )
     }
 

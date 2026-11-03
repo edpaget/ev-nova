@@ -32,6 +32,8 @@ impl PlayerShip {
     }
 }
 
+// The stats compare exact sums of whole mod values.
+#[allow(clippy::float_cmp)]
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
@@ -343,5 +345,53 @@ mod tests {
             "_AIPlunderShipContents @0x841bd-0x84204 and _SetPlunderValues \
              @0x926cb-0x9271a read the counts"
         );
+    }
+
+    // The stats.
+
+    use crate::stats::{MORE_SHIELD, MORE_SPEED};
+
+    /// [`stocked`] with the held gun given a second mod of `mod_type`.
+    fn second_mod(mod_type: i16, mod_val: i16) -> FakePilotCatalog {
+        with_outfit(stocked(), GUN, |record| {
+            record.mods[1] = (mod_type, mod_val);
+        })
+    }
+
+    #[test]
+    fn the_stats_leave_a_held_outfits_later_mods_out_until_the_fold() {
+        let speed = |session: &mut Session| session.stats().handling.max_speed;
+        let [plain, ..] = readings(&stocked(), take_off(&stocked()), stay, speed);
+        let catalog = second_mod(MORE_SPEED, 300);
+        let [held, folded, at_once] =
+            readings(&catalog, take_off(&catalog), relaunch(&catalog), speed);
+        assert_eq!(held, plain, "_ShipMaxSpeed @0x374a-0x37a1 reads the counts");
+        assert!(folded > plain, "{folded} > {plain}");
+        assert_eq!(at_once, folded);
+        let shield = |session: &mut Session| session.stats().shield;
+        let catalog = second_mod(MORE_SHIELD, 50);
+        let [held, folded, at_once] = readings(&catalog, stay, outfitter, shield);
+        assert_eq!([folded - held, at_once - held], [50.0, 50.0]);
+    }
+
+    #[test]
+    fn the_purchase_fills_the_shield_to_the_stats_without_the_held_part() {
+        let catalog = second_mod(MORE_SHIELD, 50);
+        let class = |session: &mut Session| session.reserves().shield;
+        let [held, _, at_once] = readings(&catalog, stay, stay, class);
+        assert_eq!(held.now, held.max, "full");
+        assert_eq!(at_once.now - held.now, 50.0, "class + 50 at once");
+        assert_eq!(at_once.max, at_once.now);
+    }
+
+    #[test]
+    fn the_fold_raises_the_most_of_each_reserve_and_nothing_held() {
+        let catalog = second_mod(MORE_SHIELD, 50);
+        let mut session = bought(&catalog, Rulebook::default());
+        let before = session.reserves().shield;
+        outfitter(&mut session);
+        let after = session.reserves().shield;
+        assert_eq!(after.max - before.max, 50.0, "the new most");
+        assert_eq!(after.now, before.now, "no gain: the fold writes no reserve");
     }
 }

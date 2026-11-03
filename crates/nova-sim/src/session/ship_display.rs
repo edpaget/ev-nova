@@ -810,6 +810,7 @@ pub(in crate::session) mod tests {
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: std::collections::BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         let fold = session.ship.fit.armament.fold();

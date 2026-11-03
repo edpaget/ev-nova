@@ -447,6 +447,7 @@ impl Session {
         let change = ClassChange {
             outfits,
             reserves: super::ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         self.become_class(record, change, |_| {});
     }

@@ -240,6 +240,7 @@ mod tests {
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: std::collections::BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.hull().frames, raw(&session, 129).loaded(STILL));

@@ -151,6 +151,7 @@ mod tests {
     use crate::session::tests::{GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted};
     use crate::session::{ReservePolicy, Session};
     use crate::shipyard::ShipRefusal;
+    use crate::stats::MORE_SPEED;
     use crate::testkit::{FAST, FakePilotCatalog, land_now, ship};
 
     use super::fixture::{LICENCE, OLD, at_once, bought, stocked, trade_in};
@@ -205,9 +206,22 @@ mod tests {
         assert_eq!(session.ship.held_stock, BTreeMap::from([(GUN, 2)]));
     }
 
+    // The speeds compare exact sums of whole mod values.
+    #[allow(clippy::float_cmp)]
     #[test]
     fn the_stock_is_folded_by_the_outfitter_player_info_hire_screen_a_set_operator_or_a_landing() {
-        let catalog = stocked();
+        // The held gun speeds the ship up past its first mod, so the speed
+        // shows whether the fold worked the stats out again.
+        let mut catalog = stocked();
+        for record in &mut catalog.outfits {
+            if record.id == GUN {
+                record.mods[1] = (MORE_SPEED, 300);
+            }
+        }
+        let speed = |session: &Session| session.stats().handling.max_speed;
+        let folded = speed(&bought(&catalog, at_once()));
+        let held = speed(&bought(&catalog, Rulebook::default()));
+        assert!(folded > held, "{folded} > {held}");
         let script = |session: &mut Session, text: &str| {
             session.run_script(&Script::parse(text), &mut NeverFires);
         };
@@ -234,6 +248,7 @@ mod tests {
             let mut session = bought(&catalog, Rulebook::default());
             run(&mut session);
             assert_eq!(session.ship.held_stock, BTreeMap::new(), "{fold}");
+            assert_eq!(speed(&session), folded, "{fold}");
             assert_eq!(trade_in(&mut session), WITH_STOCK, "{fold}");
             let report = session
                 .buy_ship(OLD, "Kestrel", &mut NeverFires)
@@ -273,6 +288,7 @@ mod tests {
         for (stay, run) in stays {
             let mut session = bought(&catalog, Rulebook::default());
             run(&mut session);
+            assert_eq!(speed(&session), held, "{stay}");
             assert_eq!(trade_in(&mut session), WITHOUT_STOCK, "{stay}");
         }
     }
@@ -303,6 +319,7 @@ mod tests {
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship.held_stock, BTreeMap::new());
