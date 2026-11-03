@@ -231,7 +231,7 @@ mod tests {
         pass(&mut session, &catalog);
         assert!(session.npcs()[0].cloak.is_cloaked(), "cloaked");
         assert!(
-            session.chart.target_fly_in.expand() > 0.0,
+            session.chart.target_fly_in.expand(crate::SpeedMult::FULL) > 0.0,
             "still flying in"
         );
         pass(&mut session, &catalog);

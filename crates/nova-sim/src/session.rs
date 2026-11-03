@@ -1734,7 +1734,7 @@ impl Session {
             self.red_alert.step(frame);
         }
         self.tutorial_tick(frame);
-        self.chart.brackets_tick();
+        self.chart.brackets_tick(self.speed_mult());
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's

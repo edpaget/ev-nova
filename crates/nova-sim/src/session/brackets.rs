@@ -3,8 +3,9 @@
 //! frames.
 //!
 //! - **Each flight pass** ([`Session::game_work`]), the jump's and a destroyed
-//!   player's too, steps each fly-in while there is a target and settles
-//!   it while there is none, as `_HandleNavTargetSprites` (@0x2fcaf) and
+//!   player's too, steps each fly-in at the frame's gain
+//!   ([`Session::speed_mult`]) while there is a target and settles it
+//!   while there is none, as `_HandleNavTargetSprites` (@0x2fcaf) and
 //!   `_HandleWeapTargetSprites` (@0x2ff1a) do on every pass. A landed
 //!   tick doesn't: landing keeps the stellar selected, and the take-off
 //!   lets go of it before the first flight tick.
@@ -25,6 +26,7 @@
 //! brackets.
 
 use super::{Chart, Session};
+use crate::SpeedMult;
 use crate::brackets::{self, NavBrackets, TargetBrackets};
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
@@ -43,7 +45,7 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn nav_brackets(&self) -> Option<NavBrackets> {
-        self.chart.nav_brackets()
+        self.chart.nav_brackets(self.next_speed_mult())
     }
 
     /// The brackets round the ship target, if there is one, in the frames
@@ -55,7 +57,7 @@ impl Session {
         let leader = npc.leader.and_then(|id| self.space.npc(id));
         Some(TargetBrackets {
             npc: npc.id,
-            expand: self.chart.target_fly_in.expand(),
+            expand: self.chart.target_fly_in.expand(self.next_speed_mult()),
             standing: brackets::standing(npc, leader, self.npcs()),
         })
     }
@@ -94,27 +96,31 @@ impl Chart {
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
     /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76, @0x2fd58),
     /// by its `Flags2` or at run time ([`crate::domination::dominated`]).
+    ///
+    /// A fresh pick is drawn stepped once at `next`, the gain the next
+    /// step's passes run at ([`FlyIn::expand`](crate::brackets::FlyIn::expand)).
     #[must_use]
-    pub(super) fn nav_brackets(&self) -> Option<NavBrackets> {
+    pub(super) fn nav_brackets(&self, next: SpeedMult) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
         let site = self.listed.iter().find(|site| site.id == stellar);
         Some(NavBrackets {
             stellar,
             position: site.map_or(Vec2::ZERO, |site| site.position),
-            expand: self.nav_fly_in.expand(),
+            expand: self.nav_fly_in.expand(next),
             dominated: site.is_some_and(crate::domination::dominated),
         })
     }
 
-    /// The brackets' part of a flight tick (see the module docs).
-    pub(super) fn brackets_tick(&mut self) {
+    /// The brackets' part of a flight pass at the frame's `gain` (see the
+    /// module docs).
+    pub(super) fn brackets_tick(&mut self, gain: SpeedMult) {
         if self.nav_target().is_some() {
-            self.nav_fly_in.step();
+            self.nav_fly_in.step(gain);
         } else {
             self.nav_fly_in.settle();
         }
         if self.target.is_some() {
-            self.target_fly_in.step();
+            self.target_fly_in.step(gain);
         } else {
             self.target_fly_in.settle();
         }
@@ -276,6 +282,7 @@ mod tests {
         let mut session = session(&catalog);
         assert_eq!(crate::testkit::land_now(&mut session), Ok(StellarId(128)));
         session.take_off(&catalog, &mut crate::chance::NeverFires);
+        session.at_gain(SpeedMult::FULL);
         assert_eq!(
             session.nav_mode(),
             crate::navigation::NavMode::Stellar(None)
@@ -420,6 +427,94 @@ mod tests {
         assert_eq!(session.target_brackets(), None);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.chart.target_fly_in, FlyIn::default());
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// A fly-in started and stepped once at full gain, no longer fresh.
+    fn flying_in() -> FlyIn {
+        let mut fly_in = FlyIn::default();
+        fly_in.start();
+        fly_in.step(SpeedMult::FULL);
+        fly_in
+    }
+
+    /// `fly_in` after a step at `gain`.
+    fn stepped(mut fly_in: FlyIn, gain: SpeedMult) -> FlyIn {
+        fly_in.step(gain);
+        fly_in
+    }
+
+    /// A session with stellar 131 selected and a ship targeted, both
+    /// flying in, its next pass at half gain.
+    fn both_flying_in() -> Session {
+        let mut session = session(&three_stellars());
+        session.select_stellar(StellarPick::Slot(0));
+        ship_at(&mut session, Vec2::new(50.0, 0.0));
+        session.select_target(TargetPick::Next);
+        session.chart.nav_fly_in = flying_in();
+        session.chart.target_fly_in = flying_in();
+        session.at_gain(HALF);
+        session
+    }
+
+    #[test]
+    fn a_pass_steps_both_fly_ins_at_the_frames_gain() {
+        let mut session = both_flying_in();
+        work(&mut session, &three_stellars(), Controls::default());
+        let expected = stepped(flying_in(), HALF);
+        assert_eq!(session.chart.nav_fly_in, expected);
+        assert_eq!(session.chart.target_fly_in, expected);
+        assert_ne!(
+            expected,
+            stepped(flying_in(), SpeedMult::FULL),
+            "the gain shows"
+        );
+    }
+
+    #[test]
+    fn the_brackets_tick_steps_the_nav_fly_in_at_its_gain() {
+        let mut session = both_flying_in();
+        session.chart.target = None;
+        session.chart.brackets_tick(HALF);
+        assert_eq!(session.chart.nav_fly_in, stepped(flying_in(), HALF));
+        assert_eq!(session.chart.target_fly_in, FlyIn::default(), "no target");
+    }
+
+    #[test]
+    fn the_brackets_tick_steps_the_target_fly_in_at_its_gain() {
+        let mut session = both_flying_in();
+        session.chart.nav_fly_in = FlyIn::default();
+        session.chart.nav = crate::navigation::NavMode::Stellar(None);
+        assert_eq!(session.chart.nav_target(), None);
+        session.chart.brackets_tick(HALF);
+        assert_eq!(session.chart.target_fly_in, stepped(flying_in(), HALF));
+    }
+
+    #[test]
+    fn a_fresh_target_pick_is_drawn_stepped_at_the_next_gain() {
+        let mut session = session(&three_stellars());
+        ship_at(&mut session, Vec2::new(50.0, 0.0));
+        session.at_gain(HALF);
+        session.select_target(TargetPick::Next);
+        let mut fresh = FlyIn::default();
+        fresh.start();
+        assert_eq!(target_expand(&session), fresh.expand(HALF));
+        assert_ne!(
+            fresh.expand(HALF),
+            fresh.expand(SpeedMult::FULL),
+            "the gain shows"
+        );
+    }
+
+    #[test]
+    fn a_fresh_nav_pick_is_drawn_stepped_at_the_next_gain() {
+        let mut session = session(&three_stellars());
+        session.at_gain(HALF);
+        session.select_stellar(StellarPick::Slot(0));
+        let mut fresh = FlyIn::default();
+        fresh.start();
+        assert_eq!(nav_expand(&session), fresh.expand(HALF));
     }
 
     #[test]
