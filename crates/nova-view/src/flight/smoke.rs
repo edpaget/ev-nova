@@ -105,7 +105,7 @@ pub fn smoke_frame(kind: u8, age: f32) -> Option<u8> {
     if age < 0.0 {
         return None;
     }
-    // A puff ages a quarter a tick: its index is small.
+    // A puff ages a quarter a pass at most: its index is small.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let whole = age.trunc() as u32;
     let index = if kind >= 2 { whole / 2 } else { whole };

@@ -103,7 +103,21 @@
 //! the dock creep and the mining steps); and the think, through
 //! `Surroundings::speed_mult` (the lost-sight timer and the mining fire's
 //! hold); and in `nova_sim`'s session, through `Session::speed_mult` in
-//! each think run's `World`.
+//! each think run's `World`. The readers of `_HandleExplods`,
+//! `_HandleSmoke`, `_HandleBoxes`, `_HandleAsteroids`,
+//! `_HandleEscapePods`, both bracket routines, `_HandleStellarWeapons`,
+//! `_HandleReinforcements` and `_ShipCanSelfRepair`
+//! (rdm:phase/play-feel-8/phase-26-effects-read-the-gain) are in
+//! `nova_sim_combat`, the stellar guns' reload through the pass's
+//! `Field::speed_mult`, and the asteroids' drift and spin
+//! (`Asteroids::step`) and the self-repair draw
+//! (`self_repair::repair_odds`) as values; in `nova_sim_ai`, the boxes'
+//! drift, spin and life (`CargoBoxes::step`), the fly-ins
+//! (`FlyIn::step`, `FlyIn::expand`) and the reinforcement timer
+//! (`reinforcements::tick`), as values; in the view, through the pass's
+//! `PassReport::speed_mult` (the explosions, the smoke and the escape
+//! pods); and in `nova_sim`'s session, through `Session::speed_mult`,
+//! and `Session::next_speed_mult` for a fresh fly-in's first draw.
 //!
 //! # Its writers
 //!
