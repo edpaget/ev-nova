@@ -184,7 +184,7 @@ fn a_lost_fighter_repairing_itself_reaches_its_share_of_its_scaled_armour() {
         session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
         work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "lost");
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
         let npc = session.space.npc(id).expect("there");
         assert_eq!(
             npc.reserves.armor.now,
@@ -213,7 +213,7 @@ fn a_fighter_rejoining_with_no_carrier_holds_its_scaled_capacities_again() {
         work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "lost");
         session.space.npc_mut(id).expect("out").leave_carrier();
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
         let npc = session.space.npc(id).expect("there");
         assert!(npc.carrier.is_some(), "{capacity:?}: carried again");
         assert_eq!(

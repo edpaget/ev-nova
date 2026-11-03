@@ -3,17 +3,28 @@
 //! [`self_repair`](crate::self_repair), `_HandleShip`'s disabled branch
 //! (@0x33a3b-0x33bde).
 //!
-//! **Each fight tick**, after the escorts lost to it have left the fleet
-//! ([`Session::lose_escorts`]), every NPC that is not disabled forgets
-//! what it was as an escort ([`Npc::former`](crate::traffic::npc::Npc::former), @0x33bdb), and every
+//! **At each NPC's turn of the ship loop** ([`Session::ship_loop`]),
+//! after its slot test (@0x33865) and before its move (@0x34274), as
+//! `_HandleShip` runs it (@0x33950-0x33bdb): an NPC that is intact forgets
+//! what it was as an escort ([`Npc::former`](crate::traffic::npc::Npc::former), @0x33bdb), and a
 //! disabled NPC whose class carries a repair system
 //! ([`Npc::self_repair`](crate::traffic::npc::Npc::self_repair)) draws `Rand(500)`. On 0, with armour above 0
 //! and not breaking up, its armour goes to
 //! [`repaired_armor`](crate::self_repair::repaired_armor) and its
-//! condition is decided again at once, so no frame shows it disabled: it
-//! is intact unless the fight's [`DisableRule`](crate::combat::hull::DisableRule)
+//! condition is decided again at once, so it flies and fights that turn
+//! as a whole ship: it is intact unless the fight's [`DisableRule`](crate::combat::hull::DisableRule)
 //! still disables it, or it is a mission's ship held disabled (as
-//! `_IsDisabled` holds it).
+//! `_IsDisabled` holds it). The escorts lost to a hit have left the fleet
+//! at the hit's settle, before the turn ([`Session::lose_escorts`]).
+//!
+//! So a ship disabled before its turn (in the collision passes, at a
+//! board, in `_HandleShot` or at an earlier slot's step) may repair in
+//! the same pass, but one disabled later (at a later slot's step, or by
+//! `_HandleBeams` @0x4453d, after the loop) only at its turn of the next
+//! pass, after that pass's dispatch has read it disabled: it is drawn
+//! disabled for at least that frame. Both passes run the ship loop, so
+//! double time's second pass repairs too, as `_DoPlayGameWork(0)` runs
+//! `_HandleShip`.
 //!
 //! **Rejoining** (@0x33afc-0x33bd9). A repaired ship that remembers being
 //! the player's escort rejoins the fleet as what it was
@@ -42,10 +53,6 @@
 //! A repaired ship that remembers nothing (traffic carrying the gear, or
 //! a disabled mission escort, which never left its formation) only gets
 //! its armour back; a mission escort resumes as one.
-//!
-//! The original repairs in its ships' turn of the frame, after the damage
-//! that disabled them; here it is the fight tick's last step for the
-//! NPCs, before the frame is drawn.
 
 use super::Session;
 use crate::chance::Chance;
@@ -58,32 +65,36 @@ use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
 
 impl Session {
-    /// Each disabled NPC with the gear may repair itself, and a former
-    /// escort among them rejoin, drawing on `chance`; every other NPC
-    /// forgets being an escort (see the module docs).
-    pub(super) fn self_repair(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
-        let mut disabled = Vec::new();
-        for npc in self.space.traffic.npcs_mut() {
-            match npc.condition {
-                Condition::Intact => npc.former = None,
-                Condition::Disabled if npc.self_repair => disabled.push(npc.id),
-                _ => {}
+    /// NPC `id`'s self-repair at its own turn of the ship loop
+    /// ([`Session::ship_loop`]), drawing on `chance`: disabled with the
+    /// gear, it may repair itself, and rejoin the fleet if it was an
+    /// escort; intact, it forgets being an escort (see the module docs).
+    pub(super) fn repair_at_turn(
+        &mut self,
+        id: NpcId,
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let Some(npc) = self.space.npc_mut(id) else {
+            return;
+        };
+        match npc.condition {
+            Condition::Intact => {
+                npc.former = None;
+                return;
             }
+            Condition::Disabled if npc.self_repair => {}
+            _ => return,
         }
-        for id in disabled {
-            let Some(npc) = self.space.npc(id) else {
-                continue;
-            };
-            // The gear is tested before the draw, so that a ship without
-            // it draws nothing.
-            let drawn = chance.below(REPAIR_ODDS);
-            if !can_self_repair(drawn, npc.condition, npc.reserves.armor.now, true) {
-                continue;
-            }
-            self.repair_hull(id, rules.disable);
-            if let Some(former) = self.space.npc_mut(id).and_then(|npc| npc.former.take()) {
-                self.rejoin(id, former);
-            }
+        // The gear is tested before the draw, so that a ship without it
+        // draws nothing.
+        let drawn = chance.below(REPAIR_ODDS);
+        if !can_self_repair(drawn, npc.condition, npc.reserves.armor.now, true) {
+            return;
+        }
+        self.repair_hull(id, rules.disable);
+        if let Some(former) = self.space.npc_mut(id).and_then(|npc| npc.former.take()) {
+            self.rejoin(id, former);
         }
     }
 
@@ -131,6 +142,10 @@ impl Session {
         self.out.sounds.push(SimSound::EscortRepaired);
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod at_turn;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -468,7 +483,7 @@ mod tests {
         let npc = session.space.npc_mut(hired).expect("here");
         npc.reserves.armor.max = 40_000.0;
         npc.reserves.armor.now = 100.0;
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        session.repair_at_turn(hired, Rules::default(), &mut Draws::of(&[0]));
         let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.reserves.armor.now, repaired_armor(40_000.0, false));
         assert_eq!(npc.condition, Condition::Disabled, "below a third");
@@ -500,7 +515,7 @@ mod tests {
             .reserves
             .armor
             .now = 0.0;
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        session.repair_at_turn(hired, Rules::default(), &mut Draws::of(&[0]));
         assert!(!session.is_escort(hired));
         assert_eq!(
             session.space.npc(hired).expect("here").reserves.armor.now,
@@ -514,13 +529,11 @@ mod tests {
         let mut session = flying(&catalog);
         let hired = placed(&session)[0];
         disable(&mut session, hired);
-        session
-            .space
-            .npc_mut(hired)
-            .expect("here")
-            .reserves
-            .armor
-            .now = 45.0;
+        // Whole again, as its armour's regeneration at its last step would
+        // leave it, so its turn reads it intact.
+        let npc = session.space.npc_mut(hired).expect("here");
+        npc.reserves.armor.now = 45.0;
+        npc.condition = Condition::Intact;
         assert_eq!(fight(&mut session, &[]), Vec::<u32>::new());
         let npc = session.space.npc(hired).expect("here");
         assert_eq!(npc.condition, Condition::Intact);

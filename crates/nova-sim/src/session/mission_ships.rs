@@ -5701,7 +5701,10 @@ pub(super) mod tests {
             npc.self_repair = true;
         }
         let mut chance = crate::testkit::Draws::of(&[0, 0]);
-        session.self_repair(crate::combat::Rules::default(), &mut chance);
+        let ids: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+        for id in ids {
+            session.repair_at_turn(id, crate::combat::Rules::default(), &mut chance);
+        }
         assert_eq!(chance.asked, [crate::self_repair::REPAIR_ODDS; 2]);
         assert_eq!(conditions(&session), [Condition::Disabled; 2], "held");
         for npc in session.npcs() {

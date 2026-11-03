@@ -50,7 +50,7 @@
 //!    [`Session::shots_phase`]).
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
-//!    inactive, its flight (the traffic's fly half, one NPC at a time),
+//!    inactive, its self-repair (see the `self_repair` module), its flight (the traffic's fly half, one NPC at a time),
 //!    reloads, regeneration, fire and death timer's tick, a dying NPC's
 //!    dying branch, a mission escort it still is leaving the formation
 //!    (see the `mission_escorts` module), and its escape pods and
@@ -380,7 +380,7 @@ impl Session {
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
         self.beams_phase(behaviour, pass, rules, chance);
-        self.fight_tail(rules, chance);
+        self.fight_tail(chance);
     }
 
     /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
@@ -748,18 +748,18 @@ impl Session {
     /// berth; the fighters launched from bays put in the system (see the
     /// `fighters` module); the words the pass's stray beams stepped; the
     /// fleet kept in step; the escorts whose ship is gone lost (a dying
-    /// mission escort leaves at its own step, in the ship loop); the NPCs'
-    /// self-repair; each NPC a deadly stellar killed vanished or destroyed
+    /// mission escort leaves at its own step, in the ship loop); each NPC
+    /// a deadly stellar killed vanished or destroyed
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
     /// fighters orphaned; a target gone let go; the stellars seen; the
     /// ships laid out and their frames displayed (see the `ship_display`
     /// module); and the heading each ship is drawn at noted, which its
     /// next tick's shots leave from.
-    /// Each dying NPC's escape pods and escape-ship roll ran before it, in
-    /// its own turn of the ship loop ([`Session::ship_loop`]; see the
+    /// Each NPC's self-repair, and each dying NPC's escape pods and
+    /// escape-ship roll, ran before it, in its own turn of the ship loop ([`Session::ship_loop`]; see the
     /// `npc_escape` module).
-    pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn fight_tail(&mut self, chance: &mut dyn Chance) {
         self.space.traffic.keep_berth_exits();
         let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
@@ -773,7 +773,6 @@ impl Session {
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
-        self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
         self.space
             .lose_leads(self.setup.rules.source_for(crate::RuleKey::NpcEscortAi));

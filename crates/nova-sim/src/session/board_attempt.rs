@@ -32,9 +32,11 @@
 //! but not direct ([`Strike::direct`]): `_DoGoodSamaritan` writes only goal
 //! 4 and the target on the ships its gates pass (@0x82891-0x82ba8), so the
 //! ship boarded and its lead draw no hit's reaction, cut no wait and ask
-//! no quote; they answer as Samaritans or not at all. The ship boarded is
-//! still disabled when the call is answered, as its condition is settled
-//! by the fight after the traffic answers, so it never answers its own.
+//! no quote; they answer as Samaritans or not at all. The ship boarded
+//! answers its own call too, disabled as it is, as the loop tests no
+//! slot's condition; `_AIDispatch`'s disabled reset wipes the write at
+//! that pass's dispatch (the traffic's `disabled_reset`), before its turn
+//! of the ship loop could repair it.
 //!
 //! **A failed mission's ship** takes the pickup or assist path as any
 //! mission's ship does, as neither tests whether the mission failed

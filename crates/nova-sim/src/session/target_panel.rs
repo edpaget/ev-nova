@@ -344,7 +344,16 @@ mod tests {
         for npc in intact.space.traffic.npcs_mut() {
             npc.condition = Condition::Intact;
         }
-        intact.self_repair(Rules::default(), &mut NeverFires);
+        let ids: Vec<_> = intact
+            .space
+            .traffic
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .collect();
+        for id in ids {
+            intact.repair_at_turn(id, Rules::default(), &mut NeverFires);
+        }
         assert_eq!(tags(&intact), [None; 2]);
 
         let mut released = former(

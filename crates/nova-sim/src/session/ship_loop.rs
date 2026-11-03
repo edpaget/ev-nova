@@ -6,8 +6,10 @@
 //! **Each NPC in slot order** first runs `_HandleShip`'s slot test
 //! (@0x33865-0x33888,
 //! [`let_go_at_step`](crate::traffic::Traffic::let_go_at_step)): a target
-//! whose slot is inactive is let go, whatever else the pass does. Then it
-//! flies (its position step @0x34274-0x342aa,
+//! whose slot is inactive is let go, whatever else the pass does. Then its
+//! self-repair (@0x33950-0x33bdb, [`Session::repair_at_turn`], see the
+//! `self_repair` module): disabled, it may repair itself and fly and
+//! fight the turn whole. Then it flies (its position step @0x34274-0x342aa,
 //! after `_AdjustInertialessShipVelocity` @0x3425f; the traffic's
 //! [`fly_npc`](crate::traffic::Traffic::fly_npc)), then takes its step:
 //! its reloads, regeneration (@0x34424), fire (@0x34ffd) and death timer
@@ -101,7 +103,8 @@ impl Session {
     /// every NPC's stray provocation eases (@0x35374-0x353b2); then, slot
     /// by slot, each NPC lets go of a target whose slot is inactive
     /// ([`Traffic::let_go_at_step`](crate::traffic::Traffic::let_go_at_step)),
-    /// flies and takes its step, a dying one running its
+    /// may repair itself ([`Session::repair_at_turn`]), flies and takes its
+    /// step, a dying one running its
     /// escape pods and escape-ship roll against its condition as the pass
     /// `start`ed (see the `npc_escape` module), the words the pass's stray
     /// beams stepped settled first, between its step and its display;
@@ -165,6 +168,9 @@ impl Session {
             // (@0x34274). No flight reads the target (see the module docs).
             let player_active = self.ship.condition.active();
             self.space.traffic.let_go_at_step(id, player_active);
+            // Its self-repair (@0x33950-0x33bdb), between the two, so a
+            // ship repaired flies and fights its turn whole.
+            self.repair_at_turn(id, rules, &mut *chance);
             if let Some(fly) = fly.as_mut() {
                 self.fly_in_loop(fly, id, chance);
             }
