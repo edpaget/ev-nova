@@ -738,6 +738,72 @@ fn on_the_second_pass_a_close_formation_escort_takes_no_glow_copy() {
     );
 }
 
+/// Adds a swarm leader at berth 5, glowing 9 and drifting, and points
+/// `swarmer` at it.
+fn swarm_led(traffic: &mut Traffic, swarmer: NpcId) {
+    let mut leader = ship(0, TRADERS, AiType::Warship, -900.0, 0.0);
+    leader.goal = Goal::Drift;
+    leader.display.glow = 9;
+    traffic.add_npc_at(leader, 5);
+    of_mut(traffic, swarmer).swarm_leader = Some(5);
+}
+
+/// Runs `traffic`'s advance pass then its second, asserting `id` takes
+/// its swarm leader's 9 on the first (copied, then stepped by a frame) and
+/// no copy on the second, its glow set to 20 and its velocity to 1 down
+/// between them, while it still moves by its velocity.
+fn swarm_copy_only_on_the_advance_pass(mut traffic: Traffic, world: &World<'_>, id: NpcId) {
+    traffic.tick_in(&Keeps, *world, &[], &mut NeverFires);
+    let copied = of(&traffic, id).display.glow;
+    assert!((copied - 9).abs() <= 1, "copied: {copied}");
+    of_mut(&mut traffic, id).display.glow = 20;
+    of_mut(&mut traffic, id).state.velocity = Vec2::new(0.0, 1.0);
+    let advanced = of(&traffic, id).state;
+    traffic.move_in(*world, &mut NeverFires);
+    let npc = of(&traffic, id);
+    let glow = npc.display.glow;
+    assert!((glow - 20).abs() <= 2, "stepped, no copy: {glow}");
+    assert_eq!(
+        npc.state.position,
+        advanced.position + npc.state.velocity,
+        "it still moves, by its velocity as stepped"
+    );
+    assert_ne!(npc.state.position, advanced.position, "it moved");
+}
+
+#[test]
+fn on_the_second_pass_a_closing_escort_with_a_swarm_leader_takes_no_glow_copy() {
+    // Sub 0xb's swarm branch (@0x87364-0x873a3) is its low level's.
+    let (mut traffic, world, escort) = close_escort();
+    // 400 off the player: inside 600, outside 300, so closing.
+    of_mut(&mut traffic, escort).state.position = Vec2::new(400.0, 0.0);
+    swarm_led(&mut traffic, escort);
+    swarm_copy_only_on_the_advance_pass(traffic, &world, escort);
+}
+
+#[test]
+fn on_the_second_pass_a_closing_docker_with_a_swarm_leader_takes_no_glow_copy() {
+    use crate::combat::hull::Condition;
+    use crate::traffic::plunder_dock::{DockSub, Docking};
+    let mut traffic = Traffic::with_interval(1);
+    let mut victim = ship(0, TRADERS, AiType::WimpyTrader, 100.0, 0.0);
+    victim.condition = Condition::Disabled;
+    let victim = traffic.add_npc_at(victim, 2);
+    let mut pirate = ship(0, PIRATES, AiType::Warship, 100.0, 400.0);
+    pirate.goal = Goal::Plunder {
+        ship: ShipRef::Npc(victim),
+        hopeless: false,
+    };
+    pirate.target = Some(ShipRef::Npc(victim));
+    pirate.docking = Some(Docking {
+        ship: ShipRef::Npc(victim),
+        sub: DockSub::Close,
+    });
+    let pirate = traffic.add_npc_at(pirate, 3);
+    swarm_led(&mut traffic, pirate);
+    swarm_copy_only_on_the_advance_pass(traffic, &World::new(&[]), pirate);
+}
+
 #[test]
 fn on_the_second_pass_a_docking_fighter_is_neither_pulled_nor_docked_and_thrusts_only_by_its_word()
 {
