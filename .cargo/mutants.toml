@@ -744,4 +744,8 @@ exclude_re = [
     # A stray of exactly none eased is `max(-0.5 × g, 0)`, none again, and a
     # NaN fails both compares, so `>=` eases to the same stray.
     "nova-sim-ai/src/traffic/weigh\\.rs:[0-9]+:[0-9]+: replace > with >= in Traffic::ease_stray$",
+    # A fly-in's clamp at exactly 0.0 writes 0.0 again: the step that
+    # lands on 0 (`e + −60 × g`) gives +0.0, never −0.0, and a NaN fails
+    # both compares, so `<=` clamps to the same expand.
+    "nova-sim-ai/src/brackets\\.rs:[0-9]+:[0-9]+: replace < with <= in FlyIn::step$",
 ]

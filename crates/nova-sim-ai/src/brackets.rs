@@ -316,6 +316,14 @@ mod tests {
     }
 
     #[test]
+    fn a_settled_fly_in_takes_no_step_even_at_a_nan_gain() {
+        // `ucomiss 0, e` / `jbe` skips the step at 0, so no gain reaches it.
+        let mut settled = FlyIn::default();
+        settled.step(SpeedMult::new(f64::NAN));
+        assert_eq!(settled.expand(SpeedMult::FULL), 0.0);
+    }
+
+    #[test]
     fn a_full_gain_step_drops_a_start_by_fly_in_step() {
         let mut fly_in = FlyIn::default();
         fly_in.start();
