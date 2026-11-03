@@ -36,7 +36,7 @@ fn shooting_by(catalog: FakeCatalog, rules: &Rulebook) -> Faked {
 }
 
 /// [`shooting_by`] Nova's rules.
-fn shooting(catalog: FakeCatalog) -> Faked {
+pub(super) fn shooting(catalog: FakeCatalog) -> Faked {
     shooting_by(catalog, &Rulebook::default())
 }
 
@@ -44,7 +44,7 @@ fn shooting(catalog: FakeCatalog) -> Faked {
 /// ticks after the one it is fired on: 20 pixels a tick up from the
 /// player, one more visit old than the frames it has flown, of the
 /// [`armed`] blaster's `Count` and `Falloff`, none.
-fn blaster_shot(tick: u32) -> FrameShot {
+pub(super) fn blaster_shot(tick: u32) -> FrameShot {
     let flown = 20.0 * f32::from(u16::try_from(tick + 1).expect("a short life"));
     let (life, fade) = at_full_gain(0, 0, tick + 1);
     FrameShot {
@@ -71,7 +71,12 @@ fn blaster_shot_in(view: &Faked, tick: u32) -> FrameShot {
 /// Runs a frame of `view` whose one step's pass holds `shots`, on a
 /// smoke frame or not, raising `combat`, and leaves its frame showing
 /// them.
-fn pass_with(view: &mut Faked, shots: Vec<FrameShot>, smoke_frame: bool, combat: Vec<CombatEvent>) {
+pub(super) fn pass_with(
+    view: &mut Faked,
+    shots: Vec<FrameShot>,
+    smoke_frame: bool,
+    combat: Vec<CombatEvent>,
+) {
     let frame = FlightFrame {
         shots: shots.clone(),
         ..view.frame.clone()

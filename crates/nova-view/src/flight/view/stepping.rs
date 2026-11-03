@@ -329,14 +329,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
             let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
             self.effects.hear_step(&dying, &scene, &self.looks, chance)
         };
-        self.effects.show_step(&breakups, &scene, &self.looks);
+        // The pass's gain, `_gSpeedMult`: `_HandleExplods`' for the
+        // explosions (@0x2f655, @0x2f811), `_HandleEscapePods`' for the
+        // pods (@0x39e92, @0x39ebe, @0x39fcc), a new pod's first step among
+        // them, and `_HandleShipDisplay`'s for the flashes (@0x2c964) and
+        // the glows (@0x2c7ed). The shot looks read it from `pass` for
+        // `_HandleSmoke` (@0x2e3d6).
+        let gain = pass.speed_mult;
+        self.effects.show_step(&breakups, &scene, &self.looks, gain);
         let shown = (&mut self.effects, &mut self.flashes);
         let sheets = (&self.sheet, &self.npc_sheets);
         let fight = (pass.combat.as_slice(), pass.ships.as_slice());
         let looks = (&self.looks, sheets);
-        // The pass's gain, `_HandleShipDisplay`'s `_gSpeedMult` for the
-        // flashes (@0x2c964) and the glows (@0x2c7ed).
-        let gain = pass.speed_mult;
         let heard_at = (was_heard, gain);
         let lit = show_combat(fight, &scene, shown, looks, heard_at, chance);
         let (player, sheets) = (&self.sheet, &self.npc_sheets);

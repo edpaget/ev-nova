@@ -2058,9 +2058,9 @@ fn show_combat(
             }
         }
         if heard {
-            effects.show_event(event, scene, looks, chance);
+            effects.show_event(event, scene, looks, gain, chance);
         } else {
-            effects.apply(event, scene, looks, chance);
+            effects.apply(event, scene, looks, gain, chance);
         }
     }
     step_flashes(flashes, ships, sheets, gain);

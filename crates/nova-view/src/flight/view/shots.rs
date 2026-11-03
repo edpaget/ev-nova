@@ -65,7 +65,7 @@ impl ShotLooks {
                 self.smoke.spawn(shot.position, kind, sheet, caps);
             }
         }
-        self.smoke.step();
+        self.smoke.step(pass.speed_mult);
         let lightning = |id| looks.weapon(id).is_some_and(|look| look.li_density > 0);
         if pass.beam_weapons.iter().any(|&weapon| lightning(weapon)) {
             self.lightning = StepRolls::draw(chance);

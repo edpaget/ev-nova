@@ -198,21 +198,31 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// arrival's answer carries them ([`Answer::Arrived`]), a crön's `Y`
     /// on its days among them, in the scene just laid out, so they are on
     /// the arrival's first frame: the original keeps its explod table
-    /// through the arrival (only `_ResetPlayer` empties it, @0x1d7fb), and
-    /// its `_PrepareAllSprites` advances them once (@0x6c59c,
-    /// `_HandleExplods` @0x3a7ce) before the frame's own pass, which the
-    /// steps' order from spawn to draw stands for. A `Y`'s carries no
-    /// sound of its own (see
-    /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
+    /// through the arrival (only `_ResetPlayer` empties it, @0x1d7fb).
+    /// The jump's explorations and days run inside the arrival pass's
+    /// `_HandlePlayer` (@0x43e19), and that pass goes on to its own
+    /// `_HandleExplods` (@0x444e1), which advances them once before the
+    /// frame is drawn. The view stepped that pass
+    /// ([`FlightView::step_effects`]) before the arrival made them, so the
+    /// one step here stands for it, at that pass's gain: the frame the
+    /// catch-up refilled holds it
+    /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult)),
+    /// as an arrival writes no gain. The arrival's `_PrepareAllSprites`
+    /// (@0x6c59c, `_HandleExplods` @0x3a7ce) advances nothing, as it runs
+    /// under the frozen flag `*0x3b523c` (set @0x3a765-0x3a773), which
+    /// `_HandleExplods` reads before the delay's countdown (@0x2f629) and
+    /// the frame's step (@0x2f7eb). A `Y`'s carries no sound of its own
+    /// (see [`Effects::apply`](crate::flight::effects::Effects::apply)).
     fn show_arrival_explosions(&mut self, combat: &[CombatEvent]) {
         let player = self.player_place().position;
         let scene = self.presentation.scene(player);
         let chance = &mut self.effects_chance;
+        let gain = self.frame.speed_mult;
         for event in combat {
-            self.effects.apply(event, &scene, &self.looks, chance);
+            self.effects.apply(event, &scene, &self.looks, gain, chance);
         }
         if !combat.is_empty() {
-            self.effects.step(&[], &scene, &self.looks, chance);
+            self.effects.step(&[], &scene, &self.looks, gain, chance);
         }
     }
 }

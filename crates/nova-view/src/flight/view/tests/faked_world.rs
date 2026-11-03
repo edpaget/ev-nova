@@ -73,7 +73,8 @@ pub(super) fn raise(view: &mut Faked, events: &[CombatEvent]) {
     let scene = view.presentation.scene(view.frame.player().position);
     let mut chance = view.effects_chance.clone();
     for event in events {
-        view.effects.apply(event, &scene, &view.looks, &mut chance);
+        view.effects
+            .apply(event, &scene, &view.looks, SpeedMult::FULL, &mut chance);
     }
 }
 

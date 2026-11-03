@@ -52,7 +52,13 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
         explosion,
         size: hellhound.blast_radius,
     };
-    effects.apply(&event, &scene, &looks, &mut NeverFires);
+    effects.apply(
+        &event,
+        &scene,
+        &looks,
+        nova_sim::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     let count = |boom| {
         effects
             .explosions()
@@ -192,7 +198,13 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         at: Vec2::new(40.0, 0.0),
         velocity: Vec2::new(1.0, 0.0),
     };
-    effects.apply(&event, &scene, &looks, &mut NeverFires);
+    effects.apply(
+        &event,
+        &scene,
+        &looks,
+        nova_sim::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     let heard: Vec<i16> = effects
         .take_sounds()
         .iter()
