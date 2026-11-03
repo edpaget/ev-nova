@@ -74,6 +74,14 @@ mod tests {
         land_now(session).expect("lands");
     }
 
+    /// A landing's fold and a take-off again, for the readers in flight.
+    fn relaunch(catalog: &FakePilotCatalog) -> impl Fn(&mut Session) + '_ {
+        move |session| {
+            land(session);
+            take_off(catalog)(session);
+        }
+    }
+
     /// `catalog` with `edit` made to outfit `id`'s record.
     fn with_outfit(
         mut catalog: FakePilotCatalog,
@@ -233,5 +241,71 @@ mod tests {
             [true, false, false],
             "_ActivateCron @0x38681 on a jump's days"
         );
+    }
+
+    // The scan.
+
+    use crate::SimMessage;
+    use crate::catalog::{GovtId, GovtRecord, Penalties};
+    use crate::legal::NovaLaw;
+    use crate::testkit::{Draws, govt, npc};
+    use crate::traffic::npc::AiType;
+
+    /// [`stocked`] with the gun masked 0x0004 and the planet's
+    /// government, 128, scanning for it without a fine.
+    fn smuggling() -> FakePilotCatalog {
+        let mut catalog = with_outfit(stocked(), GUN, |record| record.scan_mask = 0x0004);
+        catalog.govts = vec![GovtRecord {
+            penalties: Penalties {
+                smuggle: 5,
+                ..Penalties::default()
+            },
+            scan_mask: 0x0004,
+            news_pic: -1,
+            ..govt(128)
+        }];
+        catalog
+    }
+
+    /// Whether an interceptor of government 128 beside the player finds
+    /// the gun: `Some(one)` when it does.
+    fn scan(session: &mut Session) -> Option<bool> {
+        let mut police = npc(0, session.stats());
+        police.govt = Some(GovtId(128));
+        police.ai_type = AiType::Interceptor;
+        police.ship = ShipId(129);
+        police.state.position = session.ship.player.position;
+        let id = session.space.traffic.add_npc(police);
+        let _ = session.take_messages();
+        session.scanned_by(id, &NovaLaw::default(), &mut Draws::of(&[0]));
+        session
+            .take_messages()
+            .into_iter()
+            .find_map(|message| match message {
+                SimMessage::IllegalOutfit { outfit, one, .. } if outfit == GUN => Some(one),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn a_scan_in_flight_leaves_a_held_outfit_out_until_the_landing() {
+        let catalog = smuggling();
+        assert_eq!(
+            readings(&catalog, take_off(&catalog), relaunch(&catalog), scan),
+            [None, Some(true), Some(true)],
+            "_ScanPlayer @0x7efd1-0x7eff6 reads the counts"
+        );
+    }
+
+    #[test]
+    fn a_scan_counts_one_of_an_outfit_owned_once_beside_a_held_one() {
+        let catalog = smuggling();
+        let owned_one_more = |session: &mut Session| {
+            take_off(&catalog)(session);
+            *session.pilot.outfits.entry(GUN).or_default() += 1;
+        };
+        let [engine, _, other] = readings(&catalog, owned_one_more, stay, scan);
+        assert_eq!(engine, Some(true), "one in the counts (@0x7f10e)");
+        assert_eq!(other, Some(false), "two owned");
     }
 }
