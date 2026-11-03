@@ -38,7 +38,8 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. each intact NPC answers the fight's strikes since the last tick
+//! 1. each NPC whose slot is active, disabled too, answers the fight's
+//!    strikes since the last tick
 //!    ([`Behaviour::react`]), one still coming in too unless the
 //!    [`World::arrival_hits`] say otherwise: the ship it targets, its
 //!    provocation, and any goal it takes at once; one hit in its gate has
@@ -710,7 +711,7 @@ pub struct World<'a> {
     /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
     pub defence_reserve: u32,
     /// Which ships answer a hit ([`Traffic::tick_in`]'s reactions): every
-    /// intact one by the engine, as `_DamageShip` has it, or only those
+    /// active one by the engine, as `_DamageShip` has it, or only those
     /// that have arrived ([`Npc::arrived`]) by the other reading
     /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
     pub arrival_hits: RuleSource,
@@ -2193,8 +2194,8 @@ impl Traffic {
         );
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was
-    /// answered ([`Strike::answered`]), as `behaviour` says, now, as
+    /// Each NPC whose slot is active answers each of `strikes` in `world`
+    /// that was answered ([`Strike::answered`]), as `behaviour` says, now, as
     /// [`Traffic::tick_in`]'s step 2 does (see
     /// `nova_sim::Session::answer_strikes`). The strikes are answered one
     /// at a time, in the order they landed, each reading the NPCs as the
@@ -2214,8 +2215,8 @@ impl Traffic {
         self.react(behaviour, world, strikes);
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was
-    /// answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
+    /// Each NPC whose slot is active answers each of `strikes` in `world`
+    /// that was answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
     /// [`weigh_strikes`](Traffic::weigh_strikes), which a blast's or a
     /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
     /// flag skips the whole reaction block, @0x3baea), as `behaviour`
@@ -5762,11 +5763,13 @@ mod tests {
     }
 
     /// Who reacts to a strike on NPC 0, by `arrival_hits`, among a flying
-    /// ship, a disabled one, and ships jumping in, holding their course,
-    /// waiting in a gate, held at it and bursting out of it.
+    /// ship, a disabled one, ships jumping in, holding their course,
+    /// waiting in a gate, held at it and bursting out of it, and one
+    /// destroyed (its slot inactive).
     fn reacting(arrival_hits: RuleSource) -> Vec<String> {
-        let mut traffic = populated(7, 1);
+        let mut traffic = populated(8, 1);
         traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[7].condition = Condition::Destroyed;
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
         traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
         traffic.npcs[4].mode = Mode::Emerging { ticks_left: 30 };
@@ -5788,13 +5791,16 @@ mod tests {
     }
 
     #[test]
-    fn every_intact_npc_answers_a_strike_by_the_engine() {
+    fn every_active_npc_answers_a_strike_by_the_engine() {
         // `_DamageShip` drops a reaction only while +0x50 is above 0, a
-        // ship jumping out (@0x3b46a, weighed by the answer flag).
+        // ship jumping out (@0x3b46a, weighed by the answer flag). Its
+        // reaction block and `_DoGoodSamaritan`'s loop test no condition
+        // (@0x3bb7a-0x3bcf6, @0x82891-0x82ba8), so a disabled ship
+        // answers too; an inactive slot does not.
         assert_eq!(World::new(&[]).arrival_hits, RuleSource::Engine);
         assert_eq!(
             reacting(RuleSource::Engine),
-            [0, 2, 3, 4, 5, 6].map(|id| format!("react {id} Npc(NpcId(0))"))
+            [0, 1, 2, 3, 4, 5, 6].map(|id| format!("react {id} Npc(NpcId(0))"))
         );
     }
 
@@ -5820,10 +5826,10 @@ mod tests {
     }
 
     #[test]
-    fn only_an_arrived_intact_npc_answers_a_strike_by_the_other_reading() {
+    fn only_an_arrived_active_npc_answers_a_strike_by_the_other_reading() {
         assert_eq!(
             reacting(RuleSource::Bible),
-            [0, 3, 5].map(|id| format!("react {id} Npc(NpcId(0))"))
+            [0, 1, 3, 5].map(|id| format!("react {id} Npc(NpcId(0))"))
         );
     }
 

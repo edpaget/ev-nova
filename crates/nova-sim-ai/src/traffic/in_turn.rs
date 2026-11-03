@@ -83,7 +83,9 @@ impl Traffic {
         }
     }
 
-    /// Each intact NPC answers `strike` in `world`, if it was answered
+    /// Each NPC whose slot is active (disabled or breaking up too, as
+    /// `_DamageShip`'s reaction block and `_DoGoodSamaritan`'s loop test
+    /// no condition) answers `strike` in `world`, if it was answered
     /// ([`Strike::answered`]), as `behaviour` says, against the NPCs as
     /// they stand and the headings they `wanted` as the pass began, the
     /// quote gate reading `view`: one strike's turn of `Traffic::react`
@@ -112,7 +114,7 @@ impl Traffic {
                         RuleSource::Engine => true,
                         RuleSource::Bible => npc.arrived(),
                     };
-                    (answers && npc.active_not_disabled())
+                    (answers && npc.condition.active())
                         .then(|| behaviour.react(npc, strike, &around))
                 })
                 .collect()
@@ -382,8 +384,9 @@ mod tests {
     fn a_victim_that_does_not_answer_still_holds_the_grudge() {
         // The grudge's test (@0x3be83-0x3beb3) reads neither the victim's
         // arrival nor its condition: a ship still in its gate, by the other
-        // reading of arrival hits, or a disabled one, answers nothing but
-        // its person still holds the grudge.
+        // reading of arrival hits, answers nothing but its person still
+        // holds the grudge. A disabled one holds it and answers too, as
+        // the reaction block tests no condition (@0x3bb7a-0x3bcf6).
         let by_player = strike(n(1), ShipRef::Player);
         let mut waiting = ship(1, 0.0, 0.0);
         waiting.mode = Mode::Emerging { ticks_left: 60 };
@@ -391,17 +394,16 @@ mod tests {
             arrival_hits: RuleSource::Bible,
             ..World::new(&[])
         };
+        let (taken, ships) = grudges_in(&world, vec![waiting], &[by_player]);
+        assert_eq!(taken, [NpcId(1)], "not arrived");
+        assert_eq!(ships[0].target, None, "not arrived: not answered");
+        assert_eq!(ships[0].provoked, 0.0, "not arrived: not answered");
         let mut disabled = ship(1, 0.0, 0.0);
         disabled.condition = Condition::Disabled;
-        for (why, world, victim) in [
-            ("not arrived", world, waiting),
-            ("disabled", World::new(&[]), disabled),
-        ] {
-            let (taken, ships) = grudges_in(&world, vec![victim], &[by_player]);
-            assert_eq!(taken, [NpcId(1)], "{why}");
-            assert_eq!(ships[0].target, None, "{why}: not answered");
-            assert_eq!(ships[0].provoked, 0.0, "{why}: not answered");
-        }
+        let (taken, ships) = grudges_in(&World::new(&[]), vec![disabled], &[by_player]);
+        assert_eq!(taken, [NpcId(1)], "disabled");
+        assert_eq!(ships[0].target, Some(ShipRef::Player), "disabled: answered");
+        assert_eq!(ships[0].provoked, 24.0, "disabled: answered");
     }
 
     #[test]
@@ -646,8 +648,8 @@ mod tests {
         fn the_hook_may_change_the_ship_before_its_reaction_reads_it() {
             // The hook runs between the flag and the reaction, as
             // `_DamageShip` cloaks a ship (@0x3bb95-0x3bbdd) before it
-            // answers: a ship the hook takes out of the fight answers
-            // nothing.
+            // answers: a ship the hook takes out of the fight (its slot
+            // no longer active) answers nothing.
             let govts = govts(0, 0);
             let mut traffic = traffic_of(vec![warship(1, TRADERS, 0.0, 0.0)]);
             let mut strikes = [unweighed(strike(n(1), ShipRef::Player))];
@@ -656,11 +658,130 @@ mod tests {
                 &world(&govts),
                 &mut strikes,
                 &mut Draws::of(&[]),
-                &mut |npc, _| npc.condition = Condition::Disabled,
+                &mut |npc, _| npc.condition = Condition::Destroyed,
             );
             assert!(strikes[0].answered);
             assert_eq!(traffic.npcs[0].target, None);
             assert_eq!(traffic.npcs[0].provoked, 0.0);
+        }
+
+        /// The NPCs once the traffic of `npcs` has answered the weighed
+        /// `strikes` ([`Traffic::answer`]), and the attack quotes it queued.
+        fn answered_by(npcs: Vec<Npc>, strikes: &[Strike]) -> (Vec<Npc>, Vec<NpcId>) {
+            let govts = govts(0, 0);
+            let mut traffic = traffic_of(npcs);
+            traffic.answer(&NovaAi::default(), &world(&govts), strikes);
+            let quotes = traffic.take_attack_quotes();
+            (traffic.npcs, quotes)
+        }
+
+        /// `npc` in `condition`.
+        fn in_condition(npc: Npc, condition: Condition) -> Npc {
+            Npc { condition, ..npc }
+        }
+
+        const BREAKING_UP: Condition = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+
+        #[test]
+        fn a_disabled_or_breaking_up_warship_or_interceptor_takes_a_samaritans_write() {
+            // `_DoGoodSamaritan`'s loop (@0x82891-0x82ba8) tests no slot's
+            // condition: goal 4 (@0x82b82) and the player (@0x82b97). Only
+            // an inactive slot is left out.
+            for ai_type in [AiType::Warship, AiType::Interceptor] {
+                for condition in [Condition::Disabled, BREAKING_UP] {
+                    let w = in_condition(
+                        crate::ai::fixture::ship(2, TRADERS, ai_type, 3000.0, 0.0),
+                        condition,
+                    );
+                    let (npcs, _) = answered_by(
+                        vec![warship(1, TRADERS, 0.0, 0.0), w],
+                        &[strike(n(1), ShipRef::Player)],
+                    );
+                    let why = format!("{ai_type:?} {condition:?}");
+                    assert_eq!(npcs[1].goal, Goal::Attack(ShipRef::Player), "{why}");
+                    assert_eq!(npcs[1].target, Some(ShipRef::Player), "{why}");
+                }
+            }
+            let gone = in_condition(warship(2, TRADERS, 3000.0, 0.0), Condition::Destroyed);
+            let (npcs, _) = answered_by(
+                vec![warship(1, TRADERS, 0.0, 0.0), gone],
+                &[strike(n(1), ShipRef::Player)],
+            );
+            assert_eq!(npcs[1].goal, Goal::Idle, "destroyed");
+            assert_eq!(npcs[1].target, None, "destroyed");
+        }
+
+        #[test]
+        fn a_disabled_victim_of_the_players_hit_turns_on_it_with_no_quote() {
+            // `_DamageShip`'s reaction block tests no condition
+            // (@0x3bb7a-0x3bcf6, the wait cut @0x3be6e-0x3be7c), and
+            // `_AIMakeShipAttackPlayer` writes goal 4 and +0x6c = -1
+            // whatever the ship's (@0x89cf2-0x89d4d); only its hail quote
+            // asks `_IsDisabled` (@0x89c94).
+            let mut victim = ship(1, 0.0, 0.0);
+            victim.condition = Condition::Disabled;
+            victim.ai_wait = 300;
+            victim.travel = Some(crate::catalog::StellarId(128));
+            victim.person = Some(crate::traffic::npc::NpcPerson {
+                id: nova_sim_catalog::catalog::PersonId(151),
+                flags: crate::traffic::QUOTE_ON_ATTACK,
+                coward: 0,
+                comm_quote: -1,
+                hail_quote: 8,
+                mission: false,
+                portrait: None,
+                invincible: false,
+                grudge: false,
+                quoted: false,
+                quoted_at: None,
+                zero_fuel: false,
+            });
+            let by_player = [strike(n(1), ShipRef::Player)];
+            let (npcs, quotes) = answered_by(vec![victim.clone()], &by_player);
+            assert_eq!(npcs[0].target, Some(ShipRef::Player));
+            assert_eq!(npcs[0].provoked, 24.0);
+            assert_eq!(npcs[0].goal, Goal::Attack(ShipRef::Player));
+            assert_eq!(npcs[0].travel, None);
+            assert_eq!(npcs[0].ai_wait, crate::traffic::autopilot::HIT_WAIT);
+            assert_eq!(quotes, [], "disabled, no hail quote");
+            let (_, quotes) =
+                answered_by(vec![in_condition(victim, Condition::Intact)], &by_player);
+            assert_eq!(quotes, [NpcId(1)], "intact, it says it");
+        }
+
+        #[test]
+        fn a_disabled_lead_of_an_escort_an_npc_hits_takes_the_target_and_the_provocation() {
+            // The lead's part (@0x3bcfa-0x3bd79) tests no condition.
+            let lead = in_condition(warship(1, TRADERS, 0.0, 0.0), Condition::Disabled);
+            let mut escort = warship(2, TRADERS, 50.0, 0.0);
+            escort.leader = Some(NpcId(1));
+            let (npcs, _) = answered_by(
+                vec![lead, escort, warship(3, PIRATES, 100.0, 0.0)],
+                &[strike(n(2), n(3))],
+            );
+            assert_eq!(npcs[0].target, Some(n(3)));
+            assert_eq!(npcs[0].provoked, 24.0);
+            assert_eq!(npcs[0].goal, Goal::Idle, "the block writes no lead's goal");
+        }
+
+        #[test]
+        fn a_disabled_warship_boarded_takes_its_own_samaritans_write() {
+            // The boarding's call (`_HandlePlayerBoardAttempt`), intended
+            // but not direct: the loop (@0x82891-0x82ba8) skips no slot,
+            // the ship boarded among them.
+            let boarded = in_condition(warship(1, TRADERS, 0.0, 0.0), Condition::Disabled);
+            let call = Strike {
+                direct: false,
+                damage: 0.0,
+                ..strike(n(1), ShipRef::Player)
+            };
+            let (npcs, _) = answered_by(vec![boarded], &[call]);
+            assert_eq!(npcs[0].goal, Goal::Attack(ShipRef::Player));
+            assert_eq!(npcs[0].target, Some(ShipRef::Player));
+            assert_eq!(npcs[0].provoked, 0.0, "no victim's reaction");
         }
 
         #[test]
