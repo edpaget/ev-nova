@@ -457,13 +457,26 @@ mod tests {
 
     #[test]
     fn the_fold_raises_the_most_of_each_reserve_and_nothing_held() {
-        let catalog = second_mod(MORE_SHIELD, 50);
-        let mut session = bought(&catalog, Rulebook::default());
-        let before = session.reserves().shield;
-        outfitter(&mut session);
-        let after = session.reserves().shield;
-        assert_eq!(after.max - before.max, 50.0, "the new most");
-        assert_eq!(after.now, before.now, "no gain: the fold writes no reserve");
+        use crate::reserves::{Gauge, Reserves};
+        use crate::stats::{MORE_ARMOR, MORE_FUEL};
+        type Pick = fn(&Reserves) -> Gauge;
+        let gauges: [(&str, i16, Pick); 3] = [
+            ("shield", MORE_SHIELD, |reserves| reserves.shield),
+            ("armour", MORE_ARMOR, |reserves| reserves.armor),
+            ("fuel", MORE_FUEL, |reserves| reserves.fuel),
+        ];
+        for (name, mod_type, gauge) in gauges {
+            let catalog = second_mod(mod_type, 50);
+            let mut session = bought(&catalog, Rulebook::default());
+            let before = gauge(&session.reserves());
+            outfitter(&mut session);
+            let after = gauge(&session.reserves());
+            assert_eq!(after.max - before.max, 50.0, "{name}: the new most");
+            assert_eq!(
+                after.now, before.now,
+                "{name}: no gain, the fold writes no reserve"
+            );
+        }
     }
 
     // The capture's fuel.
