@@ -306,6 +306,7 @@ pub fn dock_low_level(
     own: f32,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
+    gain: SpeedMult,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<(SlotWord, DockOutcome)> {
     npc.docking?;
@@ -318,7 +319,7 @@ pub fn dock_low_level(
     };
     let handling = npc.flying_handling(own, flight);
     Some(plunder_dock::low_level(
-        npc, victim, &handling, flight, swarm, chance,
+        npc, victim, &handling, flight, swarm, gain, chance,
     ))
 }
 
@@ -339,7 +340,15 @@ pub(crate) fn fly_docking(
 ) -> Option<DockOutcome> {
     let chance = &mut crate::chance::NeverFires;
     let own = npc.top_speed(led_speed);
-    let (flown, outcome) = dock_low_level(npc, victim, own, flight, swarm, chance)?;
+    let (flown, outcome) = dock_low_level(
+        npc,
+        victim,
+        own,
+        flight,
+        swarm,
+        crate::speed_mult::SpeedMult::FULL,
+        chance,
+    )?;
     let adjust = npc.flying_handling(own, flight).accel;
     let at_step = slot_word::AtStep::of_npc(
         npc,
@@ -1908,5 +1917,40 @@ mod tests {
                 "{reading:?}"
             );
         }
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_matching_pirates_low_level_sheds_by_its_dock_at_half_gain() {
+        let victim = ShipState::default();
+        let mut raven = pirate(1);
+        raven.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        raven.state.position = Vec2::new(50.0, 0.0);
+        raven.state.velocity = Vec2::new(0.0, 2.0);
+        raven.speed = 1.0;
+        raven.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let flight = FlightRules::default();
+        let own = raven.top_speed(1.0);
+        let shed = |gain: SpeedMult| {
+            let mut ship = raven.clone();
+            let chance = &mut crate::chance::NeverFires;
+            dock_low_level(&mut ship, Some(&victim), own, flight, None, gain, chance);
+            ship.speed
+        };
+        let mut docked = raven.clone();
+        let handling = raven.flying_handling(own, flight);
+        let chance = &mut crate::chance::NeverFires;
+        let half = SpeedMult::new(0.5);
+        plunder_dock::low_level(&mut docked, &victim, &handling, flight, None, half, chance);
+        assert_eq!(shed(half), docked.speed);
+        assert_ne!(shed(half), shed(SpeedMult::FULL));
     }
 }

@@ -47,6 +47,7 @@ use crate::flight;
 use crate::flight::Controls;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::Npc;
 use crate::traffic::slot_word::Cap;
@@ -54,14 +55,16 @@ use crate::trig;
 use nova_sim_combat::asteroid::Asteroid;
 
 /// `npc`'s flight in [`Goal::Mine`] with `rock` in slot 0, on `handling`,
-/// its lead by the global records `weapons`: order 0x13 or 0x14 (see the
-/// module docs); none for order 1, which the autopilot flies as its stop.
-/// Order 0x14's hold moves the ship at its slot.
+/// its lead by the global records `weapons`, at the frame's `gain`: order
+/// 0x13 or 0x14 (see the module docs); none for order 1, which the
+/// autopilot flies as its stop. Order 0x14's hold moves the ship at its
+/// slot, by a step the gain scales ([`mine_orders::kill_step`]).
 pub(crate) fn mine(
     npc: &mut Npc,
     rock: Option<&Asteroid>,
     handling: &Handling,
     weapons: &Arsenal,
+    gain: SpeedMult,
 ) -> Option<Flight> {
     let rock = rock?;
     Some(match mine_orders::order(npc, Some(rock)) {
@@ -71,7 +74,8 @@ pub(crate) fn mine(
             steer(npc, wanted, handling, true)
         }
         MineOrder::Kill => {
-            mine_orders::hold(&mut npc.state, rock, mine_orders::kill_step(handling.accel));
+            let step = mine_orders::kill_step(handling.accel, gain);
+            mine_orders::hold(&mut npc.state, rock, step);
             let pick = npc.pick.and_then(|pick| weapons.weapon(pick));
             let wanted = mine_orders::kill_heading(&npc.state, rock, pick);
             steer(npc, wanted, handling, false)
@@ -80,10 +84,16 @@ pub(crate) fn mine(
 }
 
 /// `npc`'s flight in [`Goal::Scoop`], the box it steers to at
-/// `scoop_box`, if any, on `handling`: order 0x15, or order 0 with no box
-/// (see the module docs). Order 0x15's brake cuts the velocity at its
-/// slot.
-pub(crate) fn scoop(npc: &mut Npc, scoop_box: Option<Vec2>, handling: &Handling) -> Flight {
+/// `scoop_box`, if any, on `handling`, at the frame's `gain`: order 0x15,
+/// or order 0 with no box (see the module docs). Order 0x15's brake cuts
+/// the velocity at its slot, by a step the gain scales
+/// ([`mine_orders::scoop_brake_step`]).
+pub(crate) fn scoop(
+    npc: &mut Npc,
+    scoop_box: Option<Vec2>,
+    handling: &Handling,
+    gain: SpeedMult,
+) -> Flight {
     let Some(at) = scoop_box else {
         // Order 0: the low level's own whole heading, no thrust.
         let wanted = trig::whole(npc.state.heading);
@@ -92,7 +102,7 @@ pub(crate) fn scoop(npc: &mut Npc, scoop_box: Option<Vec2>, handling: &Handling)
     let wanted = trig::intercept_angle(npc.state.position, at);
     let flight = steer(npc, wanted, handling, true);
     if !flight.controls.thrust {
-        let step = mine_orders::scoop_brake_step(handling.accel);
+        let step = mine_orders::scoop_brake_step(handling.accel, gain);
         npc.state.velocity = mine_orders::brake(npc.state.velocity, step);
     }
     flight
@@ -216,7 +226,7 @@ mod tests {
     fn the_hold_eases_the_velocity_nudges_into_the_band_and_moves() {
         let slot0 = rock(0.0, 0.0, 1.0, -0.5);
         let mut held = miner(Goal::Mine, at(50.0, 100.0, 3.0, -0.5, 0.0));
-        let step = mine_orders::kill_step(handling(&held).accel);
+        let step = mine_orders::kill_step(handling(&held).accel, SpeedMult::FULL);
         flown(&mut held, mining(slot0));
         // vx eased by a step; vy snapped; x pushed out of 80 by a step,
         // then the move by the eased velocity.
@@ -280,6 +290,67 @@ mod tests {
         }
     }
 
+    /// `npc` flown a tick by the autopilot with `beside` at `gain`.
+    fn flown_at(npc: &mut Npc, beside: Beside, gain: SpeedMult) {
+        let speeds = TopSpeeds::own_of(npc);
+        let readings = Readings {
+            speed_mult: gain,
+            ..Readings::default()
+        };
+        let rules = FlightRules::default();
+        let chance = &mut Draws::of(&[]);
+        autopilot::fly(
+            npc,
+            &[],
+            &BTreeMap::new(),
+            None,
+            false,
+            beside,
+            speeds,
+            rules,
+            readings,
+            &Arsenal::EMPTY,
+            chance,
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_killing_miner_holds_by_the_kill_step_at_half_gain() {
+        let half = SpeedMult::new(0.5);
+        let slot0 = rock(0.0, 0.0, 1.0, -0.5);
+        let start = miner(Goal::Mine, at(50.0, 100.0, 3.0, -0.5, 0.0));
+        let held_at = |gain| {
+            let mut ship = start.clone();
+            flown_at(&mut ship, mining(slot0), gain);
+            ship.state.velocity
+        };
+        let mut state = start.state;
+        mine_orders::hold(
+            &mut state,
+            &slot0,
+            mine_orders::kill_step(handling(&start).accel, half),
+        );
+        assert_eq!(held_at(half), state.velocity);
+        assert_ne!(held_at(half), held_at(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_a_coasting_scooper_brakes_by_the_brake_step_at_half_gain() {
+        let half = SpeedMult::new(0.5);
+        let start = miner(Goal::Scoop, at(0.0, 0.0, 2.0, -2.0, 250.0));
+        let braked_at = |gain| {
+            let mut ship = start.clone();
+            flown_at(&mut ship, scooping(Some(Vec2::new(500.0, 0.0))), gain);
+            ship.state.velocity
+        };
+        let step = mine_orders::scoop_brake_step(handling(&start).accel, half);
+        assert_eq!(
+            braked_at(half),
+            mine_orders::brake(start.state.velocity, step)
+        );
+        assert_ne!(braked_at(half), braked_at(SpeedMult::FULL));
+    }
+
     fn scooping(at_box: Option<Vec2>) -> Beside {
         Beside {
             scoop_box: at_box,
@@ -298,7 +369,7 @@ mod tests {
     #[test]
     fn the_scoop_off_its_heading_brakes_both_axes_and_turns() {
         let mut off = miner(Goal::Scoop, at(0.0, 0.0, 2.0, -2.0, 250.0));
-        let step = mine_orders::scoop_brake_step(handling(&off).accel);
+        let step = mine_orders::scoop_brake_step(handling(&off).accel, SpeedMult::FULL);
         let turn = handling(&off).turn_rate;
         flown(&mut off, scooping(Some(Vec2::new(500.0, 0.0))));
         assert_eq!(off.state.velocity, Vec2::new(2.0 - step, -2.0 + step));

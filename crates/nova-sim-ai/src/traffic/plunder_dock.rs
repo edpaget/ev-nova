@@ -121,6 +121,7 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::ai_wait;
 use crate::traffic::formation_flight;
 use crate::traffic::held_burst::Flight;
@@ -168,8 +169,9 @@ pub const DAMPING: f64 = 0.95;
 /// How near the victim, on each axis, it is docked (the float 3.0
 /// @0xdd664).
 pub const DOCKED_BOX: f32 = 3.0;
-/// How far a tick it creeps towards the victim outside that, in pixels
-/// (`_Accel` by the frame, @0x87057-0x87095).
+/// How far it creeps towards the victim outside that on a full frame, in
+/// pixels: `_Accel` by the frame's gain, `(float)g` (@0x87057-0x87095), so
+/// this × the gain.
 pub const CREEP: f32 = 1.0;
 /// The least of the dock's wait, and the wait above which it holds
 /// (+0x4c = `Rand(80)` + 100 @0x86fcf-0x86fea; the float 100.0 @0xdd060).
@@ -303,8 +305,8 @@ pub enum DockOutcome {
 /// `npc`'s low level of its docking with a victim at `victim`, on
 /// `handling` under `flight` (an inertialess ship as the autopilot flies
 /// one, see [`inertialess`](crate::traffic::inertialess)), with `swarm`
-/// its swarm lead, rolling a dock's wait on `chance` (see the module
-/// docs): its writes to its own velocity, speed and place (matching, the
+/// its swarm lead, at the frame's `gain`, rolling a dock's wait on
+/// `chance` (see the module docs): its writes to its own velocity, speed and place (matching, the
 /// creep, the start), the word it leaves `_HandleShip`
 /// ([`slot_word::handle_ship`]), and what became of the docking. It runs
 /// at the ship's own slot of `_AIDispatch`'s loop (the traffic's
@@ -315,6 +317,7 @@ pub fn low_level(
     handling: &Handling,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
+    gain: SpeedMult,
     chance: &mut (impl Chance + ?Sized),
 ) -> (SlotWord, DockOutcome) {
     // A plunderer holds no formation goal, so the sight is moot.
@@ -330,14 +333,14 @@ pub fn low_level(
             (controls, flown, wanted, DockOutcome::Flying)
         }
         DockSub::Dock => {
-            let (controls, wanted, outcome) = dock(npc, victim, handling, inertia, chance);
+            let (controls, wanted, outcome) = dock(npc, victim, handling, inertia, gain, chance);
             (controls, *handling, wanted, outcome)
         }
         sub => {
             let close = sub == DockSub::Close;
             if close {
                 let slot = swarm_low_level::slot_place(npc, flight);
-                swarm_branch(npc, swarm, slot, handling);
+                swarm_branch(npc, swarm, slot, handling, gain);
             }
             let (controls, flown, wanted) = approach(npc, victim, handling, close);
             (controls, flown, wanted, DockOutcome::Flying)
@@ -362,8 +365,8 @@ pub fn low_level(
 /// @0x867e0-0x86818, @0x87364-0x873a3, @0x8660b-0x8663d): with a swarm
 /// leader (+0xc906 above 0, tested signed, `testw; jle`,
 /// [`Npc::swarm_leader`]), `npc` is nudged toward its formation slot at
-/// `slot`, when it has one, by its thrust on `handling`
-/// (`_AIMaintainFormation(ship, 0)`, [`formation_flight::maintain`]), and
+/// `slot`, when it has one, by its thrust on `handling` at the frame's
+/// `gain` (`_AIMaintainFormation(ship, 0)`, [`formation_flight::maintain`]), and
 /// takes the glow of its swarm leader, `swarm`'s, when that ship is there
 /// (the original reads whatever ship holds the slot). Nothing with a word
 /// of 0 or none. Sub 0xb runs it before it steers (see
@@ -373,12 +376,13 @@ pub(crate) fn swarm_branch(
     swarm: Option<SwarmLead>,
     slot: Option<Vec2>,
     handling: &Handling,
+    gain: SpeedMult,
 ) {
     if npc.swarm_leader.is_none_or(|word| word == 0) {
         return;
     }
     if let Some(slot) = slot {
-        formation_flight::maintain(npc, slot, handling, false);
+        formation_flight::maintain(npc, slot, handling, false, gain);
     }
     if let Some(lead) = swarm {
         npc.display.drive.glow = GlowCopy::Swarm(lead.glow);
@@ -466,7 +470,8 @@ pub(crate) fn mismatched(gap: Vec2) -> bool {
 }
 
 /// Sub 0xf (see the module docs) of a docking with the ship at `victim`,
-/// flown as `inertia` says, rolling a dock's wait on `chance`: the
+/// flown as `inertia` says, at the frame's `gain`, rolling a dock's wait
+/// on `chance`: the
 /// controls but the turn, the heading it wants (+0x68, which `_HandleShip`
 /// turns it to, [`flight::turn_to`]), and what became of the docking, its
 /// velocity and speed set as the substate sets them. Its completion and
@@ -477,16 +482,17 @@ fn dock(
     victim: &ShipState,
     handling: &Handling,
     inertia: Inertia,
+    gain: SpeedMult,
     chance: &mut (impl Chance + ?Sized),
 ) -> (Controls, i16, DockOutcome) {
     let mismatched = mismatched(npc.state.velocity - victim.velocity);
     if mismatched && matches!(inertia, Inertia::Inertialess { .. }) {
-        // A tick's acceleration off its speed, down to none and not capped
-        // at its top speed, in doubles (@0x86aee-0x86b33); no thrust, cap
+        // The gain's share of its acceleration off its speed in doubles,
+        // narrowed, then none when below none, so a NaN stands
+        // (@0x86aee-0x86b33); not capped at its top speed; no thrust, cap
         // or heading (@0x86ac8-0x86acd).
-        #[allow(clippy::cast_possible_truncation)]
-        let speed = (f64::from(npc.speed) - f64::from(handling.accel)).max(0.0) as f32;
-        npc.speed = speed;
+        let speed = gain.add_times(npc.speed, -handling.accel);
+        npc.speed = if speed < 0.0 { 0.0 } else { speed };
         // The low level's own whole heading (@0x8522d).
         let wanted = trig::whole(npc.state.heading);
         return (Controls::default(), wanted, DockOutcome::Flying);
@@ -507,7 +513,8 @@ fn dock(
         // The creep zeroes +0x48 for any ship (@0x8702d).
         npc.speed = 0.0;
         let towards = trig::intercept_angle(npc.state.position, victim.position);
-        npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * CREEP;
+        let creep = gain.times(CREEP);
+        npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * creep;
         return (controls, wanted, DockOutcome::Flying);
     }
     // The wait as floats (@0x86d4f-0x86d6d): above 100.0 (or NaN) it
@@ -642,7 +649,15 @@ mod tests {
         swarm: Option<SwarmLead>,
     ) -> DockOutcome {
         let chance = &mut nova_sim_base::chance::NeverFires;
-        let (flown, outcome) = low_level(ship, victim, handling, flight, swarm, chance);
+        let (flown, outcome) = low_level(
+            ship,
+            victim,
+            handling,
+            flight,
+            swarm,
+            SpeedMult::FULL,
+            chance,
+        );
         handle_ship(ship, &flown, AtStep::of(handling), flight);
         outcome
     }
@@ -663,6 +678,7 @@ mod tests {
                 &HANDLING,
                 FlightRules::default(),
                 None,
+                SpeedMult::FULL,
                 chance,
             )
             .1
@@ -685,7 +701,15 @@ mod tests {
         let mut ship = pirate(at(50.0, 0.0, 0.0, 3.0, 0.0), DockSub::Dock);
         let chance = &mut nova_sim_base::chance::NeverFires;
         let flight = FlightRules::default();
-        let (flown, _) = low_level(&mut ship, &victim, &HANDLING, flight, None, chance);
+        let (flown, _) = low_level(
+            &mut ship,
+            &victim,
+            &HANDLING,
+            flight,
+            None,
+            SpeedMult::FULL,
+            chance,
+        );
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 2.85), "damped");
         assert_eq!(ship.state.position, Vec2::new(50.0, 0.0), "not moved");
         handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
@@ -933,8 +957,15 @@ mod tests {
             let mut ship = pirate(at(3.0, -3.0, 0.5, 0.0, 0.0), DockSub::Dock);
             let mut chance = Scripted::rolling(&[roll]);
             let flight = FlightRules::default();
-            let (flown, outcome) =
-                low_level(&mut ship, &victim, &HANDLING, flight, None, &mut chance);
+            let (flown, outcome) = low_level(
+                &mut ship,
+                &victim,
+                &HANDLING,
+                flight,
+                None,
+                SpeedMult::FULL,
+                &mut chance,
+            );
             assert_eq!(outcome, DockOutcome::Started, "inside 3, matched, no wait");
             assert_eq!(chance.sides_asked, [DOCK_WAIT_SPREAD]);
             assert_eq!(ship.ai_wait, wait);
@@ -1349,7 +1380,7 @@ mod tests {
         let top = ship.stats.handling.max_speed;
         let slot = ship.flying_handling(top, flight);
         let chance = &mut nova_sim_base::chance::NeverFires;
-        let (flown, _) = low_level(ship, &victim, &slot, flight, None, chance);
+        let (flown, _) = low_level(ship, &victim, &slot, flight, None, SpeedMult::FULL, chance);
         ship.ion.charge -= shed;
         let step = ship.flying_handling(top, flight);
         handle_ship(ship, &flown, AtStep::of(&step), flight);
@@ -1416,7 +1447,15 @@ mod tests {
         let chance = &mut nova_sim_base::chance::NeverFires;
         let mut thrust = |ship: Npc, victim: ShipState, top_speed: f32| {
             let mut ship = ship;
-            let (flown, _) = low_level(&mut ship, &victim, &HANDLING, flight, None, chance);
+            let (flown, _) = low_level(
+                &mut ship,
+                &victim,
+                &HANDLING,
+                flight,
+                None,
+                SpeedMult::FULL,
+                chance,
+            );
             let at_step = AtStep {
                 top_speed,
                 ..AtStep::of(&HANDLING)
@@ -1462,7 +1501,15 @@ mod tests {
         // slot's 4 and above its step's 2.
         let mut ship = inertialess(pirate(at(500.0, 0.0, 0.0, 3.0, 0.0), DockSub::Stop));
         ship.speed = 3.0;
-        let (flown, _) = low_level(&mut ship, &far, &HANDLING, flight, None, chance);
+        let (flown, _) = low_level(
+            &mut ship,
+            &far,
+            &HANDLING,
+            flight,
+            None,
+            SpeedMult::FULL,
+            chance,
+        );
         let at_step = AtStep {
             top_speed: 2.0,
             ..AtStep::of(&HANDLING)
@@ -1487,6 +1534,7 @@ mod tests {
             &HANDLING,
             flight,
             None,
+            SpeedMult::FULL,
             &mut nova_sim_base::chance::NeverFires,
         );
         assert_eq!((&ship, outcome), (&before, DockOutcome::Flying));
@@ -1496,5 +1544,140 @@ mod tests {
         handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
         assert_eq!(ship.state.heading, 0.0);
         assert_eq!(ship.state.velocity, Vec2::new(1.0, 0.0));
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Sub 0xf of `ship` docking with `victim` at `gain`, as its low
+    /// level flies it, rolling 0: what became of it.
+    fn docked_at(ship: &mut Npc, victim: &ShipState, gain: SpeedMult) -> DockOutcome {
+        let inertia = Inertia::of(ship, Some(victim), true, FlightRules::default());
+        let chance = &mut Scripted::rolling(&[0]);
+        dock(ship, victim, &HANDLING, inertia, gain, chance).2
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_pirate_matching_sheds_half_its_acceleration_floored_at_none() {
+        // (float)((double)speed - (double)accel × g), 0 when below it
+        // (@0x86af3-0x86b33).
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let shed = |speed: f32, gain: SpeedMult| {
+            let mut ship = inertialess(pirate(at(50.0, 0.0, 0.0, 2.0, 90.0), DockSub::Dock));
+            ship.speed = speed;
+            assert_eq!(docked_at(&mut ship, &victim, gain), DockOutcome::Flying);
+            ship.speed
+        };
+        assert_eq!(shed(1.0, HALF), 0.75, "half of 0.5");
+        assert_eq!(shed(1.0, SpeedMult::ZERO), 1.0, "none");
+        assert_eq!(shed(0.2, HALF), 0.0, "floored");
+        assert_eq!(shed(1.0, SpeedMult::FULL), 0.5);
+    }
+
+    #[test]
+    fn an_inertialess_pirate_matching_keeps_a_nan_speed() {
+        // `ucomiss` / `jbe` (@0x86b2a-0x86b33): 0 > NaN is false, so the
+        // speed stands.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = inertialess(pirate(at(50.0, 0.0, 0.0, 2.0, 90.0), DockSub::Dock));
+        ship.speed = f32::NAN;
+        docked_at(&mut ship, &victim, HALF);
+        assert!(ship.speed.is_nan());
+    }
+
+    #[test]
+    fn at_half_gain_an_aligned_pirate_creeps_half_a_pixel_and_none_at_no_gain() {
+        // `_Accel(angle, (float)g)` (@0x87057).
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let crept = |gain: SpeedMult| {
+            let mut ship = pirate(at(0.0, 10.0, 0.0, 0.0, 0.0), DockSub::Dock);
+            ship.speed = 2.0;
+            assert_eq!(docked_at(&mut ship, &victim, gain), DockOutcome::Flying);
+            assert_eq!(ship.speed, 0.0, "zeroed at any gain (@0x8702d)");
+            ship.state.position
+        };
+        let towards = flight::facing(f32::from(trig::intercept_angle(
+            Vec2::new(0.0, 10.0),
+            Vec2::ZERO,
+        )));
+        assert_eq!(crept(HALF), Vec2::new(0.0, 10.0) + towards * 0.5);
+        assert_eq!(crept(SpeedMult::ZERO), Vec2::new(0.0, 10.0));
+    }
+
+    #[test]
+    fn at_no_gain_a_pirate_inside_the_docked_box_still_starts_its_dock() {
+        // The 3.0 box is unscaled.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = pirate(at(3.0, -3.0, 0.0, 0.0, 0.0), DockSub::Dock);
+        ship.speed = 2.0;
+        assert_eq!(
+            docked_at(&mut ship, &victim, SpeedMult::ZERO),
+            DockOutcome::Started
+        );
+        assert_eq!(ship.speed, 2.0);
+    }
+
+    #[test]
+    fn one_dock_at_full_gain_creeps_exactly_creep() {
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = pirate(at(0.0, 10.0, 0.0, 0.0, 0.0), DockSub::Dock);
+        docked_at(&mut ship, &victim, SpeedMult::FULL);
+        assert_eq!(ship.state.position, Vec2::new(0.0, 10.0 - CREEP));
+    }
+
+    #[test]
+    fn through_its_low_level_at_half_gain_a_pirate_creeps_half() {
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let creep = |gain: SpeedMult| {
+            let mut ship = pirate(at(0.0, 10.0, 0.0, 0.0, 0.0), DockSub::Dock);
+            let chance = &mut Scripted::rolling(&[0]);
+            let flight = FlightRules::default();
+            low_level(&mut ship, &victim, &HANDLING, flight, None, gain, chance);
+            ship.state.position
+        };
+        let mut docker = pirate(at(0.0, 10.0, 0.0, 0.0, 0.0), DockSub::Dock);
+        docked_at(&mut docker, &victim, HALF);
+        assert_eq!(creep(HALF), docker.state.position);
+        assert_ne!(creep(HALF), creep(SpeedMult::FULL));
+    }
+
+    /// A pirate closing (sub 0xb) with a swarm leader, its parent's place
+    /// at (500, 500).
+    fn closing_in_a_swarm() -> Npc {
+        let mut ship = pirate(at(50.0, -50.0, 0.0, 0.0, 90.0), DockSub::Close);
+        ship.swarm_leader = Some(4);
+        ship.form_parent = Some(4);
+        ship.slot_place = Some(Vec2::new(500.0, 500.0));
+        ship
+    }
+
+    #[test]
+    fn at_half_gain_a_closing_pirates_low_level_runs_its_swarm_branch_at_half_gain() {
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let flight = FlightRules::default();
+        let closed = |gain: SpeedMult| {
+            let mut ship = closing_in_a_swarm();
+            let chance = &mut nova_sim_base::chance::NeverFires;
+            low_level(&mut ship, &victim, &HANDLING, flight, None, gain, chance);
+            ship.state.position
+        };
+        let mut branched = closing_in_a_swarm();
+        let slot = swarm_low_level::slot_place(&branched, flight);
+        swarm_branch(&mut branched, None, slot, &HANDLING, HALF);
+        assert_eq!(closed(HALF), branched.state.position);
+        assert_ne!(closed(HALF), closed(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_the_swarm_branch_nudges_by_maintain_at_half_gain() {
+        let slot = Vec2::new(500.0, 500.0);
+        let branched = |gain: SpeedMult| {
+            let mut ship = closing_in_a_swarm();
+            swarm_branch(&mut ship, None, Some(slot), &HANDLING, gain);
+            ship.state.position
+        };
+        let mut maintained = closing_in_a_swarm();
+        formation_flight::maintain(&mut maintained, slot, &HANDLING, false, HALF);
+        assert_eq!(branched(HALF), maintained.state.position);
+        assert_ne!(branched(HALF), branched(SpeedMult::FULL));
     }
 }

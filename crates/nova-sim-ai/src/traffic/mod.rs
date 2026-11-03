@@ -184,6 +184,8 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+#[cfg(test)]
+mod ai_gain_tests;
 pub mod ai_wait;
 pub mod approach_flight;
 #[cfg(test)]
@@ -989,6 +991,7 @@ impl<'a> World<'a> {
             player_travel: self.warp.player.travel,
             destroyable: self.destroyable,
             slot_stellars: self.slot_stellars,
+            speed_mult: self.speed_mult,
         }
     }
 }

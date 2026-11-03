@@ -37,7 +37,9 @@
 //! - the clock guard restamps a stamp later than `TickCount`
 //!   (@0x858b6-0x858de), which a count of ticks since the stamp never
 //!   meets;
-//! - +0x50 grows by `_gSpeedMult`, 1.0 (@0x858e4-0x858f9);
+//! - +0x50 grows by `_gSpeedMult`, the frame's gain, in doubles
+//!   (@0x858e4-0x858f9); sub-goal 0xd's own stage grows by the float 1.0
+//!   whatever the gain (@0x85c35-0x85c5a, [`follow_jump`]);
 //! - once t ≥ d / w on its own clock and its class's warp factor, it is
 //!   gone ([`npc_warped_out`]): +0x50 = 0, +0xb8 = 0, +0x74 = −1
 //!   (@0x859ae-0x859bf). A mission ship's record +0x30 and +0x6 are
@@ -400,14 +402,16 @@ pub fn follow_check(leader: Option<(bool, LeaderWarp)>) -> FollowCheck {
 }
 
 /// One advance pass of sub-goal 4 for `npc` (see the module docs), its
-/// warp sound's duration `duration`: whether it is gone.
-pub fn own_jump(npc: &mut Npc, duration: u32) -> bool {
+/// warp sound's duration `duration`, at the frame's `gain`: whether it is
+/// gone. Its stage grows by the gain (@0x858e4-0x858f9); the gone test
+/// reads its clock, not its stage, so the gain doesn't move it.
+pub fn own_jump(npc: &mut Npc, duration: u32, gain: SpeedMult) -> bool {
     npc.warp.aim = intercept_angle(Vec2::ZERO, npc.state.position);
     if npc.warp.stage <= 0.0 {
         npc.warp.stage = 1.0;
         npc.warp.stamp();
     }
-    npc.warp.stage += 1.0;
+    npc.warp.stage = gain.add_times(npc.warp.stage, 1.0);
     if npc_warped_out(mac_ticks(npc.warp.since), npc.stats.warp_factor, duration) {
         npc.warp = Warp::default();
         return true;
@@ -833,7 +837,7 @@ pub(crate) fn sub_0xd(
                 let handling = npc
                     .ionization()
                     .slows(world.flight.handling(npc.own_handling()));
-                formation_flight::maintain(npc, slot, &handling, false);
+                formation_flight::maintain(npc, slot, &handling, false, world.speed_mult);
             }
         }
         FollowStep::Waiting | FollowStep::Detached | FollowStep::Warping => {}
@@ -1423,12 +1427,12 @@ mod tests {
         let mut ship = ship();
         ship.state.position = Vec2::new(0.0, -2000.0);
         ship.begin_own_jump();
-        assert!(!own_jump(&mut ship, 364));
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL));
         assert_eq!(ship.warp.aim, 0, "straight up, out");
         assert_eq!(ship.warp.stage, 2.0, "1.0, then 1.0 more");
         assert_eq!(ship.warp.since, 0, "stamped");
         ship.warp.tick_clock();
-        assert!(!own_jump(&mut ship, 364));
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL));
         assert_eq!(ship.warp.stage, 3.0);
         assert_eq!(ship.warp.since, 1, "not restamped");
     }
@@ -1437,12 +1441,12 @@ mod tests {
     fn its_own_jump_is_gone_once_t_reaches_d_over_w() {
         let mut ship = ship();
         ship.begin_own_jump();
-        own_jump(&mut ship, 364);
+        own_jump(&mut ship, 364, SpeedMult::FULL);
         // 364 / 1.3 = 280 Mac ticks: 140 ticks.
         ship.warp.since = 139;
-        assert!(!own_jump(&mut ship, 364), "278 Mac ticks");
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL), "278 Mac ticks");
         ship.warp.since = 140;
-        assert!(own_jump(&mut ship, 364), "280");
+        assert!(own_jump(&mut ship, 364, SpeedMult::FULL), "280");
         assert_eq!(ship.warp, Warp::default(), "+0x50 = 0");
     }
 
@@ -1692,6 +1696,52 @@ mod tests {
     }
 
     const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_its_own_jump_starts_at_1_and_grows_half() {
+        let mut ship = ship();
+        ship.state.position = Vec2::new(0.0, -2000.0);
+        ship.begin_own_jump();
+        assert!(!own_jump(&mut ship, 364, HALF));
+        assert_eq!(ship.warp.stage, 1.5, "1.0, then half more");
+        assert!(!own_jump(&mut ship, 364, HALF));
+        assert_eq!(ship.warp.stage, 2.0);
+        let mut still = self::ship();
+        still.begin_own_jump();
+        assert!(!own_jump(&mut still, 364, SpeedMult::ZERO));
+        assert_eq!(still.warp.stage, 1.0, "no gain: the start's 1.0 alone");
+    }
+
+    #[test]
+    fn at_half_gain_its_own_jump_is_gone_on_its_clock_as_at_full_gain() {
+        // The gone test reads `TickCount` since the stamp (@0x858fe-0x8595e),
+        // not the stage.
+        for gain in [HALF, SpeedMult::ZERO, SpeedMult::FULL] {
+            let mut ship = ship();
+            ship.begin_own_jump();
+            own_jump(&mut ship, 364, gain);
+            ship.warp.since = 139;
+            assert!(!own_jump(&mut ship, 364, gain), "278 Mac ticks");
+            ship.warp.since = 140;
+            assert!(own_jump(&mut ship, 364, gain), "280 at {gain:?}");
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_followers_stage_grows_1_while_its_leaders_own_jump_grows_half() {
+        // Sub 0xd adds the float 1.0 (@0x85c35-0x85c5a), a constant; sub
+        // 4 adds the gain (@0x858e4-0x858f9).
+        let mut lead = ship();
+        lead.begin_own_jump();
+        own_jump(&mut lead, 364, HALF);
+        let lead_before = lead.warp.stage;
+        own_jump(&mut lead, 364, HALF);
+        assert_eq!(lead.warp.stage - lead_before, 0.5, "half");
+        let mut follower = ship();
+        follower.warp.stage = 1.0;
+        follow_jump(&mut follower, leader(), false);
+        assert_eq!(follower.warp.stage, 2.0, "a whole 1.0");
+    }
 
     #[test]
     fn at_half_gain_the_warp_out_moves_half_its_v_and_still_glows_3_higher() {
@@ -2289,7 +2339,10 @@ mod tests {
             assert_eq!(ship.warp.stage, 3.0, "{think}: no step");
         }
         let mut ship = warping(3.0, 1000);
-        assert!(own_jump(&mut ship, world.warp.duration()), "its step's");
+        assert!(
+            own_jump(&mut ship, world.warp.duration(), SpeedMult::FULL),
+            "its step's"
+        );
     }
 
     #[test]
@@ -2797,6 +2850,50 @@ mod tests {
             Vec2::new(2000.0, 0.0),
             "no place in the formation, no nudge"
         );
+    }
+
+    #[test]
+    fn at_half_gain_sub_0xd_nudges_a_follower_in_formation_by_maintain_at_half_gain() {
+        let lead = NpcId(4);
+        let (ship, views) = off_the_pause(lead, Goal::Follow { lead, guard: None });
+        let leader = views[&lead];
+        let world_at = |gain: SpeedMult| crate::traffic::World {
+            speed_mult: gain,
+            ..in_world(world())
+        };
+        let stepped = |gain: SpeedMult| {
+            let mut ship = ship.clone();
+            assert_eq!(
+                sub_0xd(&mut ship, leader, false, &world_at(gain)),
+                FollowStep::Formation
+            );
+            ship.state.position
+        };
+        let world = world_at(HALF);
+        let mut maintained = ship.clone();
+        follow_jump(&mut maintained, leader, false);
+        let goal = maintained.warp.goal.expect("following");
+        let slot = jump_slot(&maintained, goal, &world).expect("a slot");
+        let handling =
+            (maintained.ionization()).slows(world.flight.handling(maintained.own_handling()));
+        formation_flight::maintain(&mut maintained, slot, &handling, false, HALF);
+        assert_eq!(stepped(HALF), maintained.state.position);
+        assert_ne!(stepped(HALF), stepped(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_sub_0xd_still_grows_a_warping_followers_stage_by_1() {
+        let mut ship = ship();
+        ship.warp.stage = 1.0;
+        let world = crate::traffic::World {
+            speed_mult: HALF,
+            ..in_world(world())
+        };
+        assert_eq!(
+            sub_0xd(&mut ship, leader(), false, &world),
+            FollowStep::Warping
+        );
+        assert_eq!(ship.warp.stage, 2.0, "the float 1.0 (@0x85c35-0x85c5a)");
     }
 
     #[test]

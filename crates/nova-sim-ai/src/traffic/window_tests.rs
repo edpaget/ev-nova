@@ -403,8 +403,15 @@ fn a_docking_ships_window_reads_the_turn_rate_at_its_slot_too() {
     };
     let rules = FlightRules::default();
     let handling = pirate.flying_handling(pirate.stats.handling.max_speed, rules);
-    let (word, _) =
-        plunder_dock::low_level(&mut pirate, &far, &handling, rules, None, &mut NeverFires);
+    let (word, _) = plunder_dock::low_level(
+        &mut pirate,
+        &far,
+        &handling,
+        rules,
+        None,
+        crate::speed_mult::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     assert!(!word.thrusts());
     pirate.ion.charge = 0.0;
     let at_step = AtStep::of_npc(

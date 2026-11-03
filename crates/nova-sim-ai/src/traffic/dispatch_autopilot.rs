@@ -108,6 +108,7 @@ impl Traffic {
             jump_fuel: world.npc_jump_fuel,
             held_burst: world.held_burst,
             npc_landing: world.npc_landing,
+            speed_mult: world.speed_mult,
         };
         let rules = (world.flight, readings, world.weapons);
         let npc = &mut self.npcs[index];

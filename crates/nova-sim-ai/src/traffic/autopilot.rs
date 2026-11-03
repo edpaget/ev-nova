@@ -359,6 +359,7 @@ use crate::landing::TypeWidth;
 #[cfg(doc)]
 use crate::landing::{self, LANDING_SPEED};
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 #[cfg(doc)]
 use crate::traffic::emerge::exit_speed;
 #[cfg(doc)]
@@ -414,8 +415,9 @@ pub const POST_BURST_SPREAD: u32 = 30;
 /// @0xdd668) when the victim answers the hit (@0x3be6e-0x3be7c).
 pub const HIT_WAIT: f32 = 20.0;
 
-/// The readings of the disputed rules the autopilot flies by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The readings of the disputed rules the autopilot flies by, and the
+/// frame's gain.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Readings {
     /// Where a moving sniper with a last gun turns as it brakes
     /// ([`snipe::fly`],
@@ -438,6 +440,27 @@ pub struct Readings {
     /// (`gate_entry::approach`), braking by its stopping distance by the
     /// other.
     pub npc_landing: RuleSource,
+    /// The frame's gain, `_gSpeedMult`, which `_LowLevelAIHandler` and
+    /// `_AIMaintainFormation` read: the formation nudge
+    /// ([`formation_flight::nudge`]), the dock pull
+    /// ([`dock_flight`](crate::traffic::dock_flight)) and the mining
+    /// steps ([`mine_flight`](crate::traffic::mine_flight)). The dispatch
+    /// gives [`World::speed_mult`](crate::traffic::World::speed_mult);
+    /// [`Readings::default`] gives [`SpeedMult::FULL`].
+    pub speed_mult: SpeedMult,
+}
+
+impl Default for Readings {
+    /// The engine's reading of every rule, at a full frame's gain.
+    fn default() -> Self {
+        Self {
+            snipe_lead: RuleSource::default(),
+            jump_fuel: RuleSource::default(),
+            held_burst: RuleSource::default(),
+            npc_landing: RuleSource::default(),
+            speed_mult: SpeedMult::FULL,
+        }
+    }
 }
 
 /// What a flight reads beside the ship its goal is about: its swarm lead;

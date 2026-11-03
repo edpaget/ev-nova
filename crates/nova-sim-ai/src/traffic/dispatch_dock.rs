@@ -101,8 +101,9 @@ impl Traffic {
         let own = npc.top_speed(world.led_speed);
         let npc = &mut self.npcs[index];
         let flight = world.flight;
+        let gain = world.speed_mult;
         let Some((flown, outcome)) =
-            plunder::dock_low_level(npc, victim.as_ref(), own, flight, swarm, chance)
+            plunder::dock_low_level(npc, victim.as_ref(), own, flight, swarm, gain, chance)
         else {
             return false;
         };
@@ -164,7 +165,7 @@ mod tests {
     use crate::traffic::NoBay;
     use crate::traffic::npc::{AiType, Npc, NpcId};
     use crate::traffic::on_line::OnLine;
-    use crate::traffic::plunder::PirateEvent;
+    use crate::traffic::plunder::{self, PirateEvent};
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::{Traffic, World};
     use nova_sim_base::fixture::Draws;
@@ -544,5 +545,37 @@ mod tests {
             (twice - (once - thrust)).abs() < 1e-5,
             "thrust alone, undamped: {twice}"
         );
+    }
+
+    #[test]
+    fn at_half_gain_a_creeping_pirate_at_its_slot_creeps_by_its_dock_at_half_gain() {
+        let creeping = at(100.0, 10.0, 0.0, 0.0);
+        let mut traffic = Traffic::with_interval(1);
+        let [_, pirate, victim, _] = docking(&mut traffic, creeping);
+        let before = of(&traffic, pirate).clone();
+        let victim = of(&traffic, victim).state;
+        let world = World {
+            speed_mult: crate::speed_mult::SpeedMult::new(0.5),
+            ..World::new(&[])
+        };
+        traffic.think_holding(&Reads::of(pirate), world, &[], &mut NeverFires);
+        let docked = |gain| {
+            let mut npc = before.clone();
+            let own = npc.top_speed(1.0);
+            let flight = crate::flight::FlightRules::default();
+            plunder::dock_low_level(
+                &mut npc,
+                Some(&victim),
+                own,
+                flight,
+                None,
+                gain,
+                &mut NeverFires,
+            );
+            npc.state.position
+        };
+        let half = crate::speed_mult::SpeedMult::new(0.5);
+        assert_eq!(of(&traffic, pirate).state.position, docked(half));
+        assert_ne!(docked(half), docked(crate::speed_mult::SpeedMult::FULL));
     }
 }

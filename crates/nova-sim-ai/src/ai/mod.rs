@@ -114,6 +114,7 @@ use crate::handling::Handling;
 use crate::landing::is_landable as landable;
 use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::destination;
 use crate::traffic::gone::GoneShip;
 use crate::traffic::npc::{Npc, NpcId};
@@ -793,6 +794,12 @@ pub struct Surroundings<'a> {
     /// a goal naming one the system doesn't list is still flown
     /// ([`kept`]). [`Surroundings::new`] gives none.
     pub slot_stellars: &'a [LandingSite],
+    /// The frame's gain, `_gSpeedMult`, which `_HighLevelAIHandler`'s
+    /// lost-sight timer counts down by ([`lost_sight::after_think`],
+    /// @0x8d85f) and a miner's fire predicts order 0x14's hold by
+    /// ([`fire_untargeted`]): [`World::speed_mult`](crate::traffic::World::speed_mult).
+    /// [`Surroundings::new`] gives [`SpeedMult::FULL`].
+    pub speed_mult: SpeedMult,
 }
 
 /// No government marked by an IFF scrambler.
@@ -813,8 +820,8 @@ impl<'a> Surroundings<'a> {
     /// a fighter, the engine's [`hit_focus`](Surroundings::hit_focus), no
     /// pass's [`wanted`](Surroundings::wanted) headings, the engine's jump
     /// fuel and cached odds, a led speed of 1, no weapon records
-    /// ([`NO_WEAPONS`]) and no stellar shots can shoot down
-    /// ([`NO_DESTROYABLE`]).
+    /// ([`NO_WEAPONS`]), no stellar shots can shoot down
+    /// ([`NO_DESTROYABLE`]) and a full frame's gain.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -844,6 +851,7 @@ impl<'a> Surroundings<'a> {
             player_travel: None,
             destroyable: &NO_DESTROYABLE,
             slot_stellars: &[],
+            speed_mult: SpeedMult::FULL,
         }
     }
 

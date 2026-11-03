@@ -237,7 +237,8 @@ impl Traffic {
         }
         if npc.warp.goal == Some(WarpGoal::Own) && own_jump {
             let npc = &mut self.npcs[index];
-            return warp_out::own_jump(npc, world.warp.duration()).then_some(Outcome::JumpedOut);
+            let gone = warp_out::own_jump(npc, world.warp.duration(), world.speed_mult);
+            return gone.then_some(Outcome::JumpedOut);
         }
         let (Goal::Dock(ship), Some(dock)) = (npc.goal, npc.carrier) else {
             return None;
