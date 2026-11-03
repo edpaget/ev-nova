@@ -246,6 +246,22 @@ fn a_key_pressed_after_a_held_chord_and_let_go_of_with_the_window_isnt_left_down
     assert!(!screen.take_quit());
 }
 
+/// A held Command-Q whose click answers an offer that shows a text: the
+/// text flushes the queue as it opens (`_ShowTextDialog` @0x5ae67), so
+/// the chord's key-down is dropped and nothing quits.
+#[test]
+fn an_answer_that_shows_a_text_drops_the_held_command_q() {
+    let mut screen = super::missions::hailing_briefer(Rc::new(super::missions::PictureDialogs));
+    let at = flight_accept(&screen);
+    screen.input(&left(true, at));
+    assert_eq!(chord(&mut screen, Key::Char('q')), [ScreenAction::None; 3]);
+    screen.input(&command(false));
+    assert_eq!(screen.input(&left(false, at)), ScreenAction::None);
+    screen.tick(TICK);
+    assert!(!screen.take_quit(), "flushed");
+    assert_eq!(screen.showing(), Showing::MissionText, "the brief");
+}
+
 /// Over flight's offer, released off its buttons, the offer stays in
 /// front and takes the held Command-comma, greyed there. What follows it
 /// replays: Command down again, then Return, which accepts and shows the
