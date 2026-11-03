@@ -456,8 +456,11 @@ impl<S: ImageSource> Renderer<S> {
         (width, height): (f32, f32),
         gpu: &mut impl Gpu,
     ) -> Option<Placed> {
-        let page = self.atlas.page_size() as f32;
-        if width.fract() != 0.0 || height.fract() != 0.0 || width > page || height > page {
+        if width.fract() != 0.0 || height.fract() != 0.0 {
+            return None;
+        }
+        // Bigger than a page, the atlas would refuse it.
+        if width.max(height) > self.atlas.page_size() as f32 {
             return None;
         }
         let size = (width as u32, height as u32);
