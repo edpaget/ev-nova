@@ -84,7 +84,8 @@ impl Session {
         {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
-            // The reset after each round (@0x93dcb).
+            // The reset after each round (@0x93dcb). It holds no stock
+            // top-up: the Ammo press folded it (@0x93cc9).
             self.reset_precalced();
         }
         self.ship.refit(

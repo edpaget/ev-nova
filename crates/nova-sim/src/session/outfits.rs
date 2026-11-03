@@ -325,20 +325,19 @@ impl PlayerShip {
         setup: &Setup,
         record: &OutfitRecord,
     ) -> Option<AtMax> {
+        // `_HasMaxOfItem` reads the outfit counts (@0x45c7 on), a
+        // purchase's held stock left out (see the `held_readers` module).
+        let counted = self.counted_outfits(pilot);
         self.with_room(pilot, statics, setup, |room| {
-            has_max_of_item(&ItemFacts::of(
-                record,
-                &pilot.outfits,
-                &statics.outfits,
-                room,
-            ))
+            has_max_of_item(&ItemFacts::of(record, &counted, &statics.outfits, room))
         })
     }
 
-    /// `record` as a grant sees it on the pilot's ship: its `Max` as the
-    /// `ModType` 27 outfits owned raise it, and whether it is at its
-    /// maximum ([`at_max`](Self::at_max)) as the pick's `_HasMaxOfItem`
-    /// reads it (@0x93119, @0x93192).
+    /// `record` as a grant sees it on the pilot's ship: how many the
+    /// outfit counts hold, its `Max` as their `ModType` 27 outfits raise
+    /// it, and whether it is at its maximum ([`at_max`](Self::at_max)) as
+    /// the pick's `_HasMaxOfItem` reads it (@0x93119, @0x93192), a
+    /// purchase's held stock left out (see the `held_readers` module).
     pub(super) fn grant_stock(
         &self,
         pilot: &Pilot,
@@ -346,13 +345,14 @@ impl PlayerShip {
         setup: &Setup,
         record: &OutfitRecord,
     ) -> GrantStock {
+        let counted = self.counted_outfits(pilot);
         GrantStock {
             outfit: record.id,
             item_class: record.item_class,
             mass: record.mass,
             unit_mass: unit_mass(record, self.fit.fields.mass, &setup.rules),
-            owned: pilot.owned(record.id),
-            max: clamp_i16(super::raised_max_of(pilot, statics, setup, record)),
+            owned: counted.get(&record.id).copied().unwrap_or(0),
+            max: clamp_i16(super::raised_max_of(&counted, statics, setup, record)),
             at_max: self.at_max(pilot, statics, setup, record).is_some(),
         }
     }

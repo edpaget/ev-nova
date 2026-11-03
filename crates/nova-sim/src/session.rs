@@ -5447,10 +5447,13 @@ impl Session {
             self.setup.outfit_rules().grant_max,
             chance,
         )?;
-        // The dialog's reset once an outfit is picked, before its count
-        // is fitted to the free mass (`_DoPlunderDialog` @0x931d9; see the
-        // `precalced` module): it trims only the cargo, so the free mass
-        // the count was fitted to stands.
+        // The dialog's fold and reset once an outfit is picked, before its
+        // count is fitted to the free mass (`_DoPlunderDialog` @0x931d9;
+        // see the `stock_fold` and `precalced` modules): the fold moves a
+        // held top-up into the counts the free mass already read, and the
+        // reset trims only the cargo, so the free mass the count was
+        // fitted to stands.
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
         if granted.count == 0 {
             return None;
@@ -5637,9 +5640,11 @@ impl Session {
                 (Taken::Credits(credits), CREDITS_GROWTH)
             }
             Take::Ammo => {
-                // The ammunition button's reset (`_DoPlunderDialog`
-                // @0x93cc9; see the `precalced` module), before it looks
-                // for rounds on board.
+                // The ammunition button's fold and reset
+                // (`_DoPlunderDialog` @0x93cc9; see the `stock_fold` and
+                // `precalced` modules), before it looks for rounds on
+                // board.
+                self.ship.fold_stock(&mut self.pilot, &self.statics);
                 self.reset_precalced();
                 let Some(offer) = plunder.ammo else {
                     return self.space.refuse_take(&mut self.out, aboard);
@@ -7125,13 +7130,19 @@ fn led_speed(pilot: &Pilot, setup: &Setup) -> f32 {
     top_speed::led_speed(&setup.rules, pilot.strict_play())
 }
 
-/// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
-/// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
-/// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
-fn raised_max_of(pilot: &Pilot, statics: &Statics, setup: &Setup, record: &OutfitRecord) -> i64 {
+/// `record`'s `Max` as the `ModType` 27 outfits of the outfit counts
+/// `counted` raise it, as the boarding's calls of `_HasMaxOfItem` read it
+/// (`_DoPlunderDialog` @0x93119, @0x93192, @0x93d9f; see
+/// [`outfitter::raised_max`]).
+fn raised_max_of(
+    counted: &BTreeMap<OutfitId, u16>,
+    statics: &Statics,
+    setup: &Setup,
+    record: &OutfitRecord,
+) -> i64 {
     outfitter::raised_max(
         record,
-        &pilot.outfits,
+        counted,
         &statics.outfits,
         setup.rules.source_for(RuleKey::RaisedMax),
     )

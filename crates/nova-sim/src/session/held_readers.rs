@@ -571,4 +571,87 @@ mod tests {
         );
         assert_eq!(other, 0);
     }
+
+    // The plunder dialog: its grant pick and its folds.
+
+    use crate::board::{NovaBoarding, Take};
+    use crate::session::tests::{
+        ACE_DRAWS, aboard, alongside_ace, board_drawing, boardable, granting, take,
+    };
+
+    #[test]
+    fn the_grant_pick_leaves_a_held_outfit_out_of_its_count_and_max() {
+        let catalog = with_outfit(stocked(), GUN, |record| record.max = 1);
+        let pick = |session: &mut Session| {
+            let record = (session.statics.outfits.iter())
+                .find(|record| record.id == GUN)
+                .cloned()
+                .expect("the gun");
+            let stock =
+                session
+                    .ship
+                    .grant_stock(&session.pilot, &session.statics, &session.setup, &record);
+            (stock.owned, stock.at_max)
+        };
+        assert_eq!(
+            readings(&catalog, stay, outfitter, pick),
+            [(0, false), (1, true), (1, true)],
+            "_HasMaxOfItem @0x93119, @0x93192 reads the counts"
+        );
+    }
+
+    /// The booster [`granting`] grants, held to a `Max` of 1.
+    const BOOSTER: OutfitId = OutfitId(200);
+
+    /// [`alongside_ace`] in [`granting`] with the booster's `Max` 1, the
+    /// player owning one, and `held` of it held.
+    fn boarding_with(held: BTreeMap<OutfitId, u16>) -> Session {
+        let catalog = with_outfit(granting(), BOOSTER, |record| record.max = 1);
+        let mut session = alongside_ace(&catalog);
+        session.pilot.outfits.insert(BOOSTER, 1);
+        session.pilot.outfits.insert(TANK, 1);
+        session.ship.held_stock = held;
+        session
+    }
+
+    #[test]
+    fn a_grant_picks_a_held_outfit_and_folds_once_it_has_picked() {
+        let mut session = boarding_with(BTreeMap::from([(BOOSTER, 1)]));
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok(), "{boarded:?}");
+        assert_eq!(
+            session.take_grant().map(|granted| granted.outfit),
+            Some(BOOSTER),
+            "not at its Max in the counts (@0x93119)"
+        );
+        assert_eq!(
+            session.ship.held_stock,
+            BTreeMap::new(),
+            "folded (@0x931d9)"
+        );
+    }
+
+    #[test]
+    fn a_grant_that_picks_nothing_leaves_the_stock_held() {
+        let held = BTreeMap::from([(TANK, 1)]);
+        let mut session = boarding_with(held.clone());
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok(), "{boarded:?}");
+        assert_eq!(session.take_grant(), None, "the booster at its Max");
+        assert_eq!(session.ship.held_stock, held, "no pick, no fold (@0x93441)");
+    }
+
+    #[test]
+    fn the_ammo_press_folds_the_stock() {
+        let catalog = boardable();
+        let pressed = |press: Take| {
+            let mut session = aboard(&catalog);
+            session.pilot.outfits.insert(TANK, 1);
+            session.ship.held_stock = BTreeMap::from([(TANK, 1)]);
+            let _ = take(&mut session, press, &[0; 8]);
+            session.ship.held_stock.is_empty()
+        };
+        assert!(pressed(Take::Ammo), "_DoPlunderDialog @0x93cc9");
+        assert!(!pressed(Take::Credits), "no fold of its own");
+    }
 }
