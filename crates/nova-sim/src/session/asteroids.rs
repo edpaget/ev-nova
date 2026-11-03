@@ -127,8 +127,9 @@ impl Session {
     /// asteroid spawned at the field's edge, on the ring
     /// [`RuleKey::AsteroidRespawnRing`] says, slot 0 refilled while miners
     /// are active (`_HandleAsteroids` @0x361b5-0x3624b, see the `mining`
-    /// module), and every asteroid stepped and culled in the play area
-    /// (see the module docs). Nothing while
+    /// module), and every asteroid stepped at the frame's gain
+    /// ([`Session::speed_mult`]) and culled in the play area (see the
+    /// module docs). Nothing while
     /// landed; on a frame a kill holds through, the field is emptied.
     pub(crate) fn tick_asteroids(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.asteroid_pass(
@@ -173,9 +174,13 @@ impl Session {
         if self.space.miners_active() {
             self.space.asteroids.refill_slot_0();
         }
-        self.space
-            .asteroids
-            .step(&self.statics.asteroid_types, player, self.space.play_area);
+        let gain = self.speed_mult();
+        self.space.asteroids.step(
+            &self.statics.asteroid_types,
+            player,
+            self.space.play_area,
+            gain,
+        );
     }
 
     /// Places the field of a session started or loaded in flight, once,
@@ -583,6 +588,34 @@ mod tests {
         let second = *session.asteroids().next().expect("still there");
         assert_eq!(second.position, first.position + first.velocity);
         assert!((second.frame - 1.4).abs() < 1e-5, "{second:?}");
+    }
+
+    #[test]
+    fn a_pass_steps_the_asteroids_at_the_frames_gain() {
+        let catalog = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 1, 0x0001)],
+            ..rocky(catalog())
+        };
+        let mut session = flying(&catalog);
+        pass(&mut session, &catalog, &mut near());
+        let half = crate::SpeedMult::new(0.5);
+        session.at_gain(half);
+        let before = session.space.asteroids.clone();
+        let player = session.player().position;
+        let stepped = |gain| {
+            let mut field = before.clone();
+            field.step(
+                &session.statics.asteroid_types,
+                player,
+                session.space.play_area,
+                gain,
+            );
+            field.iter().copied().collect::<Vec<_>>()
+        };
+        let (expected, full) = (stepped(half), stepped(crate::SpeedMult::FULL));
+        session.tick_asteroids(&mut Last);
+        assert_eq!(session.asteroids().copied().collect::<Vec<_>>(), expected);
+        assert_ne!(expected, full, "the gain shows");
     }
 
     #[test]

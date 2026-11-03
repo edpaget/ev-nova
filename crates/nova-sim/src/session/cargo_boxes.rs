@@ -5,6 +5,7 @@
 //! landing. They are never saved.
 
 use super::{PlayerShip, Session, Space, Statics};
+use crate::SpeedMult;
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -190,7 +191,7 @@ impl Session {
     /// ([`Session::scoop_boxes`]), then the boxes step.
     pub(super) fn scoop_after_display(&mut self, stood: Vec2) {
         self.scoop_boxes(stood);
-        self.space.boxes_tick();
+        self.space.boxes_tick(self.speed_mult());
     }
 }
 
@@ -224,11 +225,13 @@ impl Space {
         self.boxes.boxes()
     }
 
-    /// Steps the cargo boxes one tick (see
-    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every flight tick, whatever the player's
-    /// state, as `_DoPlayGameWork` runs `_HandleBoxes` (@0x444f0).
-    pub(super) fn boxes_tick(&mut self) {
-        self.boxes.step();
+    /// Steps the cargo boxes a pass at the frame's `gain` (see
+    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every
+    /// flight pass, whatever the player's state, as `_DoPlayGameWork` runs
+    /// `_HandleBoxes` (@0x444f0), which reads `_gSpeedMult` (@0x2e000,
+    /// 0x2e06c).
+    pub(super) fn boxes_tick(&mut self, gain: SpeedMult) {
+        self.boxes.step(gain);
     }
 
     /// Clears the cargo boxes. The original sets `_killBoxes` and the
@@ -1220,6 +1223,47 @@ mod tests {
         }
     }
 
+    /// [`scooper`] with a box well clear of the ship, its next pass at
+    /// half gain.
+    fn boxed_at_half(catalog: &FakePilotCatalog) -> Session {
+        let mut session = scooper(catalog, 0);
+        let far = session.player().position + Vec2::new(500.0, 0.0);
+        session
+            .space
+            .boxes
+            .spawn_scoopable(far, Some(2), 1, &mut NeverFires);
+        session.at_gain(SpeedMult::new(0.5));
+        session
+    }
+
+    #[test]
+    fn a_pass_steps_the_boxes_at_the_frames_gain() {
+        let catalog = scoopable();
+        let mut session = boxed_at_half(&catalog);
+        let before = session.space.boxes.clone();
+        work(&mut session, &catalog, Controls::default());
+        let mut expected = before.clone();
+        expected.step(SpeedMult::new(0.5));
+        assert_eq!(session.cargo_boxes(), expected.boxes());
+        let mut full = before;
+        full.step(SpeedMult::FULL);
+        assert_ne!(expected, full, "the gain shows");
+    }
+
+    #[test]
+    fn the_boxes_tick_steps_the_boxes_at_its_gain() {
+        let catalog = scoopable();
+        let session = boxed_at_half(&catalog);
+        let mut ticked = session.space.clone();
+        ticked.boxes_tick(SpeedMult::new(0.5));
+        let mut expected = session.space.boxes.clone();
+        expected.step(SpeedMult::new(0.5));
+        assert_eq!(ticked.cargo_boxes(), expected.boxes());
+        let mut full = session.space.boxes.clone();
+        full.step(SpeedMult::FULL);
+        assert_ne!(expected, full, "the gain shows");
+    }
+
     #[test]
     fn the_second_pass_steps_a_box_the_ship_does_not_touch_once() {
         let catalog = scoopable();
@@ -1231,7 +1275,7 @@ mod tests {
             .spawn_scoopable(far, Some(2), 1, &mut NeverFires);
         let before = session.cargo_boxes().to_vec();
         let mut stepped = session.space.clone();
-        stepped.boxes_tick();
+        stepped.boxes_tick(SpeedMult::FULL);
         again(&mut session, Controls::default());
         assert_eq!(session.cargo_boxes(), stepped.cargo_boxes());
         assert_ne!(session.cargo_boxes(), before.as_slice(), "it stepped");
