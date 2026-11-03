@@ -155,7 +155,9 @@ impl Session {
 
 impl PlayerShip {
     /// The `Contribute` bits the player holds, as they stand
-    /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]).
+    /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]),
+    /// its outfits read from the outfit counts (@0x7730-0x775f), so a
+    /// purchase's held stock is left out (see the `held_readers` module).
     pub(super) fn contributed(&self, pilot: &Pilot, statics: &Statics) -> u64 {
         let by = Contributors {
             ship: self.fit.fields.contribute,
@@ -163,7 +165,7 @@ impl PlayerShip {
             crons: &statics.crons,
             ranks: &statics.ranks,
         };
-        wares::contributed(&by, pilot)
+        wares::contributed(&by, &self.counted(pilot))
     }
 }
 

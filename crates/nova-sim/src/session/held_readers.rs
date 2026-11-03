@@ -18,14 +18,17 @@ mod tests {
     use std::borrow::Cow;
     use std::collections::BTreeMap;
 
-    use crate::catalog::{ShipId, ShipRecord};
+    use crate::catalog::{CronId, CronRecord, OutfitId, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::{PilotFacts, Test};
+    use crate::cron::CronRefusal;
     use crate::landing::StellarFlags;
     use crate::rulebook::Rulebook;
+    use crate::rules::Verdict;
     use crate::session::Session;
     use crate::session::tests::{GUN, LAUNCHER, ROCKETS, TANK};
-    use crate::testkit::{FAST, FakePilotCatalog, ship};
+    use crate::shipyard::ShipFlags3;
+    use crate::testkit::{FAST, FakePilotCatalog, cron, land_now, ship};
 
     use super::super::stock_fold::fixture::{at_once, bought, stocked};
 
@@ -57,6 +60,44 @@ mod tests {
 
     /// Nothing between the purchase and the read.
     fn stay(_: &mut Session) {}
+
+    /// The take-off, for the readers in flight: the held part survives
+    /// it, as no in-flight code folds.
+    fn take_off(catalog: &FakePilotCatalog) -> impl Fn(&mut Session) + '_ {
+        |session| {
+            session.take_off(catalog, &mut NeverFires);
+        }
+    }
+
+    /// A landing's fold (@0x63211), for the readers in flight.
+    fn land(session: &mut Session) {
+        land_now(session).expect("lands");
+    }
+
+    /// `catalog` with `edit` made to outfit `id`'s record.
+    fn with_outfit(
+        mut catalog: FakePilotCatalog,
+        id: OutfitId,
+        edit: impl FnOnce(&mut crate::catalog::OutfitRecord),
+    ) -> FakePilotCatalog {
+        let record = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == id)
+            .expect("listed");
+        edit(record);
+        catalog
+    }
+
+    #[test]
+    fn the_held_stock_survives_a_take_off() {
+        let catalog = stocked();
+        let mut session = bought(&catalog, Rulebook::default());
+        let held = session.ship.held_stock.clone();
+        take_off(&catalog)(&mut session);
+        assert_eq!(session.ship.held_stock, held);
+        assert_ne!(held, BTreeMap::new());
+    }
 
     #[test]
     fn the_counted_outfits_leave_the_held_stock_out_by_the_engine() {
@@ -125,6 +166,72 @@ mod tests {
             readings(&catalog, stay, Session::close_hire, gunned_for_hire),
             [false, true, true],
             "_DoBarDialog folds as the hire screen closes (@0x49235)"
+        );
+    }
+
+    /// The `Contribute` bit [`licensed`] gives the held gun.
+    const GUN_BIT: u64 = 0x8;
+
+    /// [`stocked`] with the gun contributing [`GUN_BIT`].
+    fn licensed() -> FakePilotCatalog {
+        with_outfit(stocked(), GUN, |record| record.contribute = GUN_BIT)
+    }
+
+    #[test]
+    fn the_contributed_bits_leave_a_held_outfits_out_until_the_fold() {
+        let catalog = licensed();
+        let contributes = |session: &mut Session| {
+            session.ship.contributed(&session.pilot, &session.statics) & GUN_BIT != 0
+        };
+        assert_eq!(
+            readings(&catalog, stay, outfitter, contributes),
+            [false, true, true],
+            "_GetPlayerContributeBits @0x7730-0x775f reads the counts"
+        );
+    }
+
+    #[test]
+    fn the_hire_screens_require_leaves_a_held_outfits_bits_out_until_it_closes() {
+        let mut catalog = licensed();
+        catalog.sites[0].1[0].flags |= StellarFlags::BAR;
+        catalog.ship_records.push(ShipRecord {
+            require: GUN_BIT,
+            flags3: ShipFlags3::HIDE_UNLESS_REQUIRED,
+            hire_random: 100,
+            ..ship(GUNNED.0, FAST)
+        });
+        let listed = |session: &mut Session| {
+            session
+                .escorts_for_hire(&mut NeverFires)
+                .expect("a bar")
+                .row(GUNNED)
+                .is_some()
+        };
+        assert_eq!(
+            readings(&catalog, stay, Session::close_hire, listed),
+            [false, true, true],
+            "_SetupPortAvailableShipTypes @0xbd09, before @0x49235 folds"
+        );
+    }
+
+    #[test]
+    fn a_crons_require_in_flight_leaves_a_held_outfits_bits_out_until_the_landing() {
+        let mut catalog = licensed();
+        catalog.crons.push(CronRecord {
+            require: GUN_BIT,
+            ..cron(128)
+        });
+        let required = |session: &mut Session| {
+            session
+                .cron_refusals(CronId(128))
+                .expect("a crön")
+                .iter()
+                .any(|(_, verdict)| *verdict == Verdict::Refuses(CronRefusal::Require))
+        };
+        assert_eq!(
+            readings(&catalog, take_off(&catalog), land, required),
+            [true, false, false],
+            "_ActivateCron @0x38681 on a jump's days"
         );
     }
 }
