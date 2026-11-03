@@ -387,7 +387,10 @@ fn announcing() -> (i16, f32) {
         countdown: 0,
     };
     let tick = (1..TIME)
-        .find(|_| reinforcements::tick(&mut clock, Some(fleet), true) == Some(Event::Announce))
+        .find(|_| {
+            reinforcements::tick(&mut clock, Some(fleet), true, crate::SpeedMult::FULL)
+                == Some(Event::Announce)
+        })
         .expect("announced before it arrives");
     (tick, clock.timer)
 }
@@ -1152,4 +1155,52 @@ fn a_frames_announcement_comes_after_its_held_distress_call() {
         [SimSound::CallForHelp, SimSound::ReinforcementsApproaching]
     );
     assert_eq!(timer(&session), left);
+}
+
+// The frame's gain (`_HandleReinforcements`' `_gSpeedMult` @0x39097).
+
+/// A flight whose Federation fleet was called and is on its way, its
+/// next pass at `gain`: the session and its catalog.
+fn coming_at(gain: crate::SpeedMult) -> (FakePilotCatalog, Session) {
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let warship = fight(&mut session, FED, 100.0);
+    session.call_for_reinforcements(warship, false, None);
+    assert!(timer(&session) > 0.0, "coming");
+    session.at_gain(gain);
+    (catalog, session)
+}
+
+/// `clock` after one `reinforcements::tick` of `session`'s fleet at
+/// `gain`.
+fn ticked_at(session: &Session, mut clock: Clock, gain: crate::SpeedMult) -> Clock {
+    let fleet = session.space.traffic.reinforcement_fleet();
+    reinforcements::tick(&mut clock, fleet, true, gain);
+    clock
+}
+
+#[test]
+fn the_clock_ticks_at_the_frames_gain() {
+    let half = crate::SpeedMult::new(0.5);
+    let (_, mut session) = coming_at(half);
+    let before = session.clock_here();
+    session.tick_reinforcements(&mut NeverFires);
+    let expected = ticked_at(&session, before, half);
+    assert_eq!(session.clock_here(), expected);
+    assert_ne!(
+        expected,
+        ticked_at(&session, before, crate::SpeedMult::FULL),
+        "the gain shows"
+    );
+}
+
+#[test]
+fn a_held_tick_settles_at_the_frames_gain() {
+    let half = crate::SpeedMult::new(0.5);
+    let (_, mut session) = coming_at(half);
+    let before = session.clock_here();
+    session.space.reinforcements_held = true;
+    session.settle_line_queue(Rules::default().law, &mut NeverFires);
+    assert!(!session.space.reinforcements_held, "spent");
+    assert_eq!(session.clock_here(), ticked_at(&session, before, half));
 }

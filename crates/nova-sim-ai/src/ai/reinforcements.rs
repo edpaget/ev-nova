@@ -4,15 +4,15 @@
 //! @0x39048-0x392c3, [`tick`]) and the daily countdown before it can be
 //! called again (`_IncrementGameTime` @0xb724-0xb759, [`day`]).
 //!
-//! Each system keeps a [`Clock`]: a timer (`sÿst` runtime +0xc8, a float
-//! in the original, whole ticks here, as the frame scale is 1) and a
-//! countdown in days (+0xc4). The timer runs while a called fleet is on
+//! Each system keeps a [`Clock`]: a timer (`sÿst` runtime +0xc8, a float,
+//! as the original keeps it) and a countdown in days (+0xc4). The timer runs while a called fleet is on
 //! its way; the countdown keeps the fleet from being called again.
 //!
 //! - **The call** ([`call`], gates in the original's order). The ship has
 //!   a government (@0x7f5be); its system has a fleet (@0x7f5e1); the
-//!   timer is not running (≤ 0, @0x7f5f9) and the countdown is 0
-//!   (@0x7f607); the ship's odds are above 0 (@0x7f614); the fleet's
+//!   timer is not running (not above 0, `ucomiss 0, t` / `ja`
+//!   @0x7f5f9, so a NaN timer lets the call through) and the countdown is
+//!   0 (@0x7f607); the ship's odds are above 0 (@0x7f614); the fleet's
 //!   government is allied with the ship's (`_GovtAllies` @0x7f63d); and
 //!   the odds are above half the **fleet** government's `MaxOdds`, or the
 //!   call is forced (@0x7f64e-0x7f6b0). Then an inhibitor (the global one,
@@ -20,18 +20,21 @@
 //!   the countdown 1, and nothing comes ([`Called::Marked`],
 //!   @0x7f6b2-0x7f6ef); otherwise the timer starts at the system's
 //!   `ReinfTime` ([`Called::Coming`], @0x7f6fc-0x7f70c).
-//! - **The clock** ([`tick`]), once a frame on the player's system: with
-//!   a fleet and the timer running, the timer goes down by one first
-//!   (@0x39097-0x390a8). At 0 or below the fleet arrives
+//! - **The clock** ([`tick`]), once a pass on the player's system: with
+//!   a fleet and the timer running, the timer goes down by the frame's
+//!   gain first, in doubles (`_gSpeedMult` @0x39097-0x390a8), the gain
+//!   the session's, handed in as a value. At 0 or below the fleet arrives
 //!   ([`Event::Arrive`], @0x390c2-0x390e0), the timer reads -1
 //!   ([`ARRIVED`], @0x390e9) and the countdown is the interval. Before
 //!   that, on the first frame the timer is below a quarter of
 //!   `ReinfTime` (strictly, @0x390fb-0x39116) while the countdown is 0
 //!   (@0x3911c), the fleet is announced ([`Event::Announce`]) when its
 //!   government has a name (@0x3914d), and the countdown is the interval
-//!   either way (@0x39291-0x392b0). So `ReinfTime` 1 to 4 arrive
-//!   unannounced, and a `ReinfTime` of 0 or less never arrives: the call
-//!   leaves the timer not running.
+//!   either way (@0x39291-0x392b0). The quarter and the countdown are
+//!   unscaled. So at full gain `ReinfTime` 1 to 4 arrive unannounced
+//!   (at half gain a `ReinfTime` of 4 is announced at 0.5), and a
+//!   `ReinfTime` of 0 or less never arrives: the call leaves the timer
+//!   not running.
 //! - **The interval** is the system's `ReinfIntrval`, and 1 when that is
 //!   0 or less (@0x39294-0x392b0; the load has already made it so,
 //!   `SystemReinforcements`).
@@ -63,6 +66,7 @@ use crate::ai::flee_drop::{flees_a_stranger_ally, within_reach};
 use crate::ai::hopeless_flee::HopelessFlee;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::catalog::GovtId;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::npc::Npc;
 
 /// Whether `_HighLevelAIHandler` calls for reinforcements after `npc`'s
@@ -149,7 +153,8 @@ pub const ARRIVED: f32 = -1.0;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Clock {
     /// The ticks until a called fleet arrives (+0xc8), a float as the
-    /// original keeps it; 0 or below when none is coming.
+    /// original keeps it, which each pass takes the frame's gain off; 0 or
+    /// below when none is coming.
     pub timer: f32,
     /// The days until the fleet can be called again (+0xc4).
     pub countdown: u16,
@@ -157,8 +162,9 @@ pub struct Clock {
 
 impl Clock {
     /// Whether a called fleet is on its way: the timer is above 0, as the
-    /// doubling of `MaxOdds` reads it (`_WarshipAI` @0x8bd9d,
-    /// `_InterceptorAI` @0x8d24b).
+    /// doubling of `MaxOdds` reads it (`ucomiss 0, t` / `jbe`, `_WarshipAI`
+    /// @0x8bd9d, `_InterceptorAI` @0x8d24b), so a NaN timer is not
+    /// coming.
     #[must_use]
     pub fn coming(self) -> bool {
         self.timer > 0.0
@@ -277,13 +283,22 @@ pub enum Event {
     Arrive,
 }
 
-/// A frame of `clock` on the player's system, whose fleet is `fleet`
-/// (if any) and whose government is `named` or not: what it brings (see
-/// the module docs).
-pub fn tick(clock: &mut Clock, fleet: Option<Fleet>, named: bool) -> Option<Event> {
+/// A pass of `clock` on the player's system at the frame's `gain`, whose
+/// fleet is `fleet` (if any) and whose government is `named` or not: what
+/// it brings (see the module docs). Each compare is the original's taken
+/// arm, so a NaN timer neither runs, arrives nor is announced: running on
+/// `timer > 0` (`ucomiss 0, t` / `jbe` @0x3908e-0x39091), arrived on
+/// `timer <= 0` (`jb` @0x390bd-0x390c0), announced on `quarter > timer`
+/// (`ucomisd` / `jbe` @0x39112-0x39116) with the countdown 0.
+pub fn tick(
+    clock: &mut Clock,
+    fleet: Option<Fleet>,
+    named: bool,
+    gain: SpeedMult,
+) -> Option<Event> {
     let fleet = fleet?;
     if clock.timer > 0.0 {
-        clock.timer -= 1.0;
+        clock.timer = gain.add_times(clock.timer, -1.0);
     } else {
         return None;
     }
@@ -620,9 +635,136 @@ mod tests {
         let mut clock = Clock::default();
         clock.answer(Called::Coming(i32::from(time)));
         let events = (1..=ticks)
-            .filter_map(|frame| tick(&mut clock, Some(fleet), named).map(|event| (frame, event)))
+            .filter_map(|frame| {
+                tick(&mut clock, Some(fleet), named, SpeedMult::FULL).map(|event| (frame, event))
+            })
             .collect();
         (events, clock)
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// [`run`] at `gain`: each event by its pass, and the clock left.
+    fn run_at(time: i16, ticks: u32, gain: SpeedMult) -> (Vec<(u32, Event)>, Clock) {
+        let fleet = Fleet { time, ..FLEET };
+        let mut clock = Clock::default();
+        clock.answer(Called::Coming(i32::from(time)));
+        let events = (1..=ticks)
+            .filter_map(|pass| tick(&mut clock, Some(fleet), true, gain).map(|event| (pass, event)))
+            .collect();
+        (events, clock)
+    }
+
+    #[test]
+    fn a_timer_counts_down_by_the_gain() {
+        let mut clock = Clock {
+            timer: 900.0,
+            countdown: 0,
+        };
+        assert_eq!(tick(&mut clock, Some(FLEET), true, HALF), None);
+        assert_eq!(clock.timer, 899.5);
+    }
+
+    #[test]
+    fn at_half_gain_the_fleet_is_announced_and_arrives_on_twice_as_many_passes() {
+        let (events, clock) = run_at(900, 1800, HALF);
+        assert_eq!(
+            events,
+            [(1351, Event::Announce), (1800, Event::Arrive)],
+            "the timer 224.5 < 225 on pass 1351, 0.0 on pass 1800"
+        );
+        assert_eq!(
+            clock,
+            Clock {
+                timer: ARRIVED,
+                countdown: 2
+            }
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_reinf_time_of_4_is_announced_before_it_arrives() {
+        assert_eq!(
+            run_at(4, 4, SpeedMult::FULL).0,
+            [(4, Event::Arrive)],
+            "3, 2, 1, 0: never below the quarter's 1.0 before 0"
+        );
+        assert_eq!(
+            run_at(4, 8, HALF).0,
+            [(7, Event::Announce), (8, Event::Arrive)],
+            "0.5 < 1.0 on pass 7, 0.0 on pass 8"
+        );
+    }
+
+    #[test]
+    fn at_zero_gain_the_timer_stands_and_nothing_arrives() {
+        let (events, clock) = run_at(4, 10, SpeedMult::ZERO);
+        assert_eq!(events, []);
+        assert_eq!(
+            clock,
+            Clock {
+                timer: 4.0,
+                countdown: 0
+            }
+        );
+    }
+
+    #[test]
+    fn the_quarter_and_the_countdown_are_unscaled() {
+        // Announced at the same timer, below 25, and the countdown set
+        // to the interval, whatever the gain.
+        for gain in [SpeedMult::FULL, HALF, SpeedMult::new(0.25)] {
+            let fleet = Fleet { time: 100, ..FLEET };
+            let mut clock = Clock::default();
+            clock.answer(Called::Coming(100));
+            let mut before = clock.timer;
+            while tick(&mut clock, Some(fleet), true, gain) != Some(Event::Announce) {
+                before = clock.timer;
+            }
+            assert!(
+                before >= 25.0 && clock.timer < 25.0,
+                "{gain:?} {before} {clock:?}"
+            );
+            assert_eq!(clock.countdown, 2, "{gain:?}");
+        }
+    }
+
+    #[test]
+    fn a_nan_timer_neither_arrives_nor_is_announced() {
+        let mut clock = Clock {
+            timer: f32::NAN,
+            countdown: 0,
+        };
+        assert_eq!(tick(&mut clock, Some(FLEET), true, SpeedMult::FULL), None);
+        assert!(clock.timer.is_nan());
+        assert_eq!(clock.countdown, 0);
+        assert!(!clock.coming(), "a NaN timer is not coming");
+    }
+
+    #[test]
+    fn a_timer_a_pass_leaves_nan_is_not_announced() {
+        // Running at 5, a NaN gain leaves it NaN past the arrival's test:
+        // the quarter's `jbe` skips the announcement.
+        let mut clock = Clock {
+            timer: 5.0,
+            countdown: 0,
+        };
+        let gain = SpeedMult::new(f64::NAN);
+        assert_eq!(tick(&mut clock, Some(FLEET), true, gain), None);
+        assert!(clock.timer.is_nan());
+        assert_eq!(clock.countdown, 0, "the countdown unset");
+    }
+
+    #[test]
+    fn a_nan_timer_does_not_hold_a_call() {
+        let facts = ReinforcementFacts {
+            clock: Clock {
+                timer: f32::NAN,
+                countdown: 0,
+            },
+            ..facts()
+        };
+        assert_eq!(call(&facts), Called::Coming(900));
     }
 
     #[test]
@@ -699,14 +841,14 @@ mod tests {
             timer: 10.0,
             countdown: 0,
         };
-        assert_eq!(tick(&mut clock, None, true), None);
+        assert_eq!(tick(&mut clock, None, true, SpeedMult::FULL), None);
         assert_eq!(clock.timer, 10.0, "no fleet: the timer stands");
         for timer in [0.0, ARRIVED] {
             let mut idle = Clock {
                 timer,
                 countdown: 0,
             };
-            assert_eq!(tick(&mut idle, Some(FLEET), true), None);
+            assert_eq!(tick(&mut idle, Some(FLEET), true, SpeedMult::FULL), None);
             assert_eq!(
                 idle,
                 Clock {
@@ -724,7 +866,7 @@ mod tests {
             countdown: 1,
         };
         let fleet = Fleet { time: 100, ..FLEET };
-        assert_eq!(tick(&mut clock, Some(fleet), true), None);
+        assert_eq!(tick(&mut clock, Some(fleet), true, SpeedMult::FULL), None);
         assert_eq!(
             clock,
             Clock {

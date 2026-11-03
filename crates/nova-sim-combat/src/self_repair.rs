@@ -10,10 +10,12 @@
 //! `oütf` 437, Repair Droids, is one, and no `shïp` carries it, so only
 //! plug-ins make an NPC repair itself.
 //!
-//! **The draw.** Each tick a disabled ship with the gear draws
-//! `Rand(`[`REPAIR_ODDS`]`)` and repairs itself on 0 ([`can_self_repair`]):
-//! the original's n is 500 over the frame's length in 30 Hz ticks
-//! (`*0x3b511c`), which is 1 at the engine's fixed rate. A ship breaking
+//! **The draw.** Each pass a disabled ship with the gear draws
+//! `Rand(`[`repair_odds`]`)` and repairs itself on 0 ([`can_self_repair`]):
+//! the original's n is 500 over the frame's gain (`_gSpeedMult`
+//! `*0x3b511c`, @0x913c), 500 itself at a gain of none, and the session
+//! hands the gain in as a value. The armour tests after it are
+//! unscaled. A ship breaking
 //! up, or one with no armour, never does. The engine tests the gear before
 //! it draws, so a ship without it draws nothing.
 //!
@@ -43,10 +45,31 @@ use crate::message::SimMessage;
 use crate::reserves::Reserves;
 use crate::speed_mult::SpeedMult;
 
+/// The range of a disabled ship's repair draw at the frame's `gain`
+/// (`_ShipCanSelfRepair` @0x913c-0x916f): `trunc(500.0 / g)` while g >
+/// 0.0 (`ucomisd g, 0.0` / `jbe`, @0x9148-0x9150), the compare the
+/// original's taken arm, so a NaN gain draws [`REPAIR_ODDS`]'s range as a
+/// gain of none does. The original's 16-bit range (`cwtl` of the
+/// truncation, a tiny gain's 0x80000000 made 0, @0x915e-0x9162) isn't
+/// replicated: a range past `u32::MAX` saturates.
+#[must_use]
+pub fn repair_odds(gain: SpeedMult) -> u32 {
+    let g = gain.get();
+    if g > 0.0 {
+        // Whole and above 0; `as` saturates past u32::MAX.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let range = (f64::from(REPAIR_ODDS) / g).trunc() as u32;
+        range
+    } else {
+        REPAIR_ODDS
+    }
+}
+
 /// The `ModType` of a repair system (the Bible's 49, 0x31).
 pub const MOD_REPAIR: i16 = 49;
-/// The sides of the draw a disabled ship makes each tick: it repairs
-/// itself on 0 (500.0 @0xdd120 over a frame of one tick).
+/// The sides of the draw a disabled ship makes a pass at full gain, and at
+/// a gain of none: it repairs itself on 0 (500.0 @0xdd120). At a gain g
+/// the range is [`repair_odds`].
 pub const REPAIR_ODDS: u32 = 500;
 /// The share of what it holds a tough hull's armour is repaired to (0.1
 /// @0xdd110).
@@ -230,6 +253,35 @@ mod tests {
     use crate::fleet::EscortOrder;
     use crate::reserves::Gauge;
     use nova_sim_catalog::fixture::outfit;
+
+    #[test]
+    fn the_repair_draws_range_is_500_over_the_gain() {
+        assert_eq!(repair_odds(SpeedMult::new(0.5)), 1000);
+        assert_eq!(repair_odds(SpeedMult::new(0.25)), 2000);
+        assert_eq!(repair_odds(SpeedMult::new(0.3)), 1666, "truncated");
+    }
+
+    #[test]
+    fn with_no_gain_or_a_nan_one_the_range_is_500() {
+        for gain in [SpeedMult::ZERO, SpeedMult::new(f64::NAN)] {
+            assert_eq!(repair_odds(gain), REPAIR_ODDS, "{gain:?}");
+        }
+        assert_eq!(
+            repair_odds(SpeedMult::SETTLED),
+            REPAIR_ODDS,
+            "trunc(500.000…1)"
+        );
+    }
+
+    #[test]
+    fn a_tiny_gain_saturates_the_range() {
+        assert_eq!(repair_odds(SpeedMult::new(1e-300)), u32::MAX);
+    }
+
+    #[test]
+    fn the_full_gain_range_is_repair_odds() {
+        assert_eq!(repair_odds(SpeedMult::FULL), REPAIR_ODDS);
+    }
 
     /// Repair Droids (437), a repair system in its third slot; a shield
     /// booster (300) with none.

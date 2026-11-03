@@ -219,7 +219,8 @@ mod tests {
 
     #[test]
     fn by_the_other_reading_the_tail_displays_an_arrival_at_the_sessions_gain() {
-        use crate::session::reinforcements::tests::{FED, TIME, fight, flying, reinforced};
+        use crate::ai::reinforcements::{self, Clock, Event};
+        use crate::session::reinforcements::tests::{FED, fight, flying, reinforced, timer};
         // The second pass's `_HandleReinforcements` (@0x44504) brings the
         // fleet in after the ship loop; by the other reading of
         // `UndisplayedShips` the tail steps each once.
@@ -246,7 +247,24 @@ mod tests {
         let warship = fight(&mut session, FED, 100.0);
         session.call_for_reinforcements(warship, false, None);
         session.at_gain(HALF);
-        for _ in 0..TIME - 1 {
+        // The passes before the one the fleet arrives on, at the gain the
+        // clock counts by (nova-sim-ai's `reinforcements::tick`).
+        let fleet = session.space.traffic.reinforcement_fleet();
+        // A call starts the timer with the countdown at 0 (its gate).
+        let mut clock = Clock {
+            timer: timer(&session),
+            countdown: 0,
+        };
+        let arrives = |clock: Clock| {
+            let mut next = clock;
+            reinforcements::tick(&mut next, fleet, true, HALF) == Some(Event::Arrive)
+        };
+        let mut before_arrival = 0;
+        while !arrives(clock) {
+            reinforcements::tick(&mut clock, fleet, true, HALF);
+            before_arrival += 1;
+        }
+        for _ in 0..before_arrival {
             work(&mut session, &catalog, Controls::default());
         }
         let before = session.npcs().len();

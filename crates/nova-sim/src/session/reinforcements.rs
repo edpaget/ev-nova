@@ -173,8 +173,9 @@ impl Session {
         }
     }
 
-    /// A frame of the player's system's reinforcement clock
-    /// (`_HandleReinforcements`, see the module docs), drawing the
+    /// A pass of the player's system's reinforcement clock at the frame's
+    /// gain ([`Session::speed_mult`]; `_HandleReinforcements`, see the
+    /// module docs), drawing the
     /// arriving fleet on `chance`: in flight, a jump's frames included,
     /// once the system is set up.
     pub(super) fn tick_reinforcements(&mut self, chance: &mut (impl Chance + ?Sized)) {
@@ -188,7 +189,7 @@ impl Session {
             .map(|record| record.medium_name.clone())
             .unwrap_or_default();
         let mut clock = self.clock_here();
-        let event = reinforcements::tick(&mut clock, fleet, !name.is_empty());
+        let event = reinforcements::tick(&mut clock, fleet, !name.is_empty(), self.speed_mult());
         self.space.set_clock_here(&mut self.pilot, clock);
         match event {
             Some(Event::Announce) => {
