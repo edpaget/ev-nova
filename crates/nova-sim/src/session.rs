@@ -435,6 +435,7 @@
 
 mod afterburner;
 mod afterburner_roll;
+mod ai_gain;
 mod answer_flag;
 mod apply;
 mod arrival_system;
