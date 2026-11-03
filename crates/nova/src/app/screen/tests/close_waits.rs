@@ -272,3 +272,30 @@ fn losing_focus_keeps_an_answered_offer_drawn_under_its_after_movie() {
     screen.release_keys();
     assert!(screen.offer().is_some(), "still under the movie");
 }
+
+#[test]
+fn an_unlatched_key_down_as_the_player_infos_wait_ends_thrusts_in_flight() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    let still = ship(&screen);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    screen.input(&key(Key::Up, true));
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 3);
+    assert_ne!(ship(&screen), still, "thrust");
+}
+
+#[test]
+fn an_unlatched_key_down_as_an_offers_wait_ends_thrusts_in_flight() {
+    let mut screen = offered_over_flight();
+    let still = ship(&screen);
+    screen.input(&key(MISSION_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    screen.input(&key(Key::Up, true));
+    screen.input(&key(MISSION_INFO_KEY, false));
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 3);
+    assert_ne!(ship(&screen), still, "thrust");
+}

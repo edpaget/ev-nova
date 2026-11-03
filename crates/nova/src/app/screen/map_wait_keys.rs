@@ -86,23 +86,17 @@ impl AppScreen {
     }
 
     /// Replays what a wait left, `replay`, as the module docs say. With
-    /// flight showing and nothing in front, nothing reads the queue: what
-    /// is still down goes to flight's held keys, and the rest is dropped.
+    /// flight showing and nothing in front, nothing reads the queue, and
+    /// it is dropped: what is still down of it is physically down too, so
+    /// the router already handed it back to flight as the last dialog
+    /// closed (`live_input`).
     pub(super) fn replay_wait_keys(&mut self, replay: Vec<Input>) {
-        if replay.is_empty() {
+        if replay.is_empty() || self.showing() == Showing::Flight {
             return;
         }
         let mut still_down = HashSet::new();
         for input in &replay {
             note_down(&mut still_down, input);
-        }
-        if self.showing() == Showing::Flight {
-            if let Some(flight) = &mut self.flight {
-                for key in still_down {
-                    flight.hold_live_key(key);
-                }
-            }
-            return;
         }
         let mut keys = replay.into_iter();
         let mut down = HashSet::new();
