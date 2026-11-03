@@ -434,10 +434,14 @@ impl Session {
     /// weapons and ammunition fitted (see the module docs), holding its
     /// reserves to the new most until the caller sets them. The eject
     /// passes the class's defaults; the rescue, which adds none, passes
-    /// none.
+    /// none. The carry reads the outfit counts (@0x6f7b5-0x6f7db) before
+    /// the weapon array is cleared (@0x6f7dd-0x6f7fc), so a purchase's
+    /// held stock is lost, a persistent outfit too (see the
+    /// `held_readers` module); the rescue's holds none, as the eject's
+    /// change of class folded it.
     pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
         let mut outfits = carried_outfits(
-            &self.pilot.outfits,
+            &self.ship.counted_outfits(&self.pilot),
             OutfitCarry::Persistent {
                 mask: OutfitFlags::PERSISTENT,
             },

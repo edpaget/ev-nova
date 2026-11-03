@@ -654,4 +654,30 @@ mod tests {
         assert!(pressed(Take::Ammo), "_DoPlunderDialog @0x93cc9");
         assert!(!pressed(Take::Credits), "no fold of its own");
     }
+
+    // The eject's carry.
+
+    #[test]
+    fn the_eject_does_not_carry_a_held_persistent_stock_outfit() {
+        use crate::outfitter::OutfitFlags;
+        let catalog = with_outfit(stocked(), LAUNCHER, |record| {
+            record.flags = OutfitFlags::PERSISTENT;
+        });
+        let carried = |session: &mut Session| {
+            let record = session
+                .statics
+                .ship_record(ShipId(128))
+                .cloned()
+                .expect("ship 128");
+            let mut probe = session.clone();
+            probe.board_class(&record, &BTreeMap::new());
+            probe.pilot.owned(LAUNCHER)
+        };
+        assert_eq!(
+            readings(&catalog, take_off(&catalog), relaunch(&catalog), carried),
+            [0, 1, 1],
+            "the counts zeroed but for the persistent (@0x6f7b5-0x6f7db), then the \
+             weapon array (@0x6f7dd-0x6f7fc)"
+        );
+    }
 }
