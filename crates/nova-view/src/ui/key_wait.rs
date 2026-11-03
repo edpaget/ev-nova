@@ -7,8 +7,11 @@
 //! Each loop spins on its key's `_KeyCheck` with the dialog still drawn,
 //! reading no events, so what is typed meanwhile stays queued for the
 //! next reader, and the closing `FlushEvents(7, 0)` drops only null,
-//! mouse-down and mouse-up events. [`WaitKeys`] is that queue, and
-//! [`KeyWait`] the rule: a close made with the key up completes at once,
+//! mouse-down and mouse-up events. [`WaitKeys`] is that queue, shared by
+//! all three, and [`KeyWait`] the rule, which only the player info screen
+//! and the offer use for now: the map keeps its own copy in `FlightView`
+//! (`map_key_held`, `map_closing`, `map_replay`), until the
+//! `map-close-on-key-wait` task moves it onto [`KeyWait`]. The rule: a close made with the key up completes at once,
 //! one made with it down waits for its release. The close itself still
 //! acts on its press: only the dialog's disposal and what follows it wait,
 //! so no key acts on a hold or a repeat.
