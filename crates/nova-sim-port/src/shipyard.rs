@@ -254,15 +254,17 @@
 //! into owned outfits. By the engine reading of
 //! [`RuleKey::PurchaseStockFold`](crate::RuleKey::PurchaseStockFold), what
 //! the top-up added ([`Purchase::held`]) stays out of the outfit counts the
-//! shipyard reads ([`outfit_counts`]: the trade-in, the carry and
-//! `Require`) until the next fold: the outfitter opening (@0x5bb57), the
+//! shipyard reads ([`outfit_counts`]: the trade-in, the carry, `Require`
+//! and the holds the purchase's own cargo trim reads, `_SystemInfoToShipStats`
+//! @0x5ee99 and `_DestroyPartialFleetCargo` @0x5ef9f) until the next fold: the outfitter opening (@0x5bb57), the
 //! player info (@0x5a06a), the hire screen closing (@0x49235), a
 //! `G`/`D`/`C`/`E`/`H` set operator (@0x15439, @0x15466, @0x154b3) or a
 //! landing (@0x63211). A second purchase before then trades in without it
 //! and clears the weapon array (@0x5edba-0x5ee19), so it is lost unpaid. The
 //! armament and the status bar read the array, so they count it at once.
 //! By the other reading the top-up is owned at once. The session keeps the
-//! held part (`nova_sim::Session::buy_ship`).
+//! held part (`nova_sim::Session::buy_ship`), and its readers of the
+//! outfit counts outside the shipyard leave it out too.
 //!
 //! The evidence for the trade-in: the Bible's `Cost` says "the cost of the
 //! new ship minus 25% of the original cost of your current ship and
@@ -1894,7 +1896,11 @@ pub fn purchase(sale: &Sale, quote: Quote) -> Purchase {
         before: &before,
         after: &outfits,
     });
-    let stats = ShipStats::new(sale.new.fields, &outfit_mods(&outfits, sale.records));
+    // The holds the cargo is trimmed to come from the outfit counts
+    // (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo`
+    // @0x5ef9f), which leave the held top-up out.
+    let counted = outfit_counts(&outfits, &held);
+    let stats = ShipStats::new(sale.new.fields, &outfit_mods(&counted, sale.records));
     let refitted = Refitted { sale, stats };
     let (cargo, left_behind) = cargo_kept().of(&refitted);
     let cash = cash_after().of(&Settled {
@@ -3831,6 +3837,31 @@ mod tests {
             bought.outfits,
             map(&[(140, 1), (201, 20), (205, 1), (207, 1)])
         );
+    }
+
+    #[test]
+    fn by_the_engine_the_purchases_cargo_trim_leaves_a_held_stock_outfits_holds_out() {
+        // `_SystemInfoToShipStats` @0x5ee99 and `_DestroyPartialFleetCargo`
+        // @0x5ef9f read the holds from the outfit counts, which the stock
+        // top-up is not in yet.
+        let records = [outfit(208, &[(MOD_WEAPON, 128), (MORE_CARGO, 20)])];
+        let fits = [StockFit {
+            outfit: OutfitId(208),
+            mod_type: MOD_WEAPON,
+            weapon: WeaponId(128),
+            count: 1,
+        }];
+        let kept = |fold| {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::PurchaseCargo, RuleSource::Bible)
+                .with_override(RuleKey::PurchaseStockFold, fold);
+            let mut pilot = pilot();
+            pilot.cargo = BTreeMap::from([(FOOD, 30)]);
+            buy_stocked(&mut pilot, &heavy(), &fits, &records, rules);
+            pilot.held(FOOD)
+        };
+        assert_eq!(kept(RuleSource::Engine), 15, "the hull's 15 alone");
+        assert_eq!(kept(RuleSource::Bible), 30, "15 and the gun's 20");
     }
 
     #[test]
