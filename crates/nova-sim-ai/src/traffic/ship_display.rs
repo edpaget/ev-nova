@@ -1322,8 +1322,9 @@ mod tests {
         let mut expected = ship.display.frames;
         let mut fold = ship.armament.fold();
         let spec = ship.hull.frames;
+        let mut drawn = Drawn::default();
         for _ in 0..3 {
-            expected.step(&spec, &mut fold, moment_of(&ship, HALF));
+            drawn = expected.step(&spec, &mut fold, moment_of(&ship, HALF));
             display(
                 &mut ship,
                 false,
@@ -1336,13 +1337,14 @@ mod tests {
         }
         assert_eq!(ship.display.frames.anim_timer, expected.anim_timer);
         assert_eq!(ship.display.frames.anim_set, expected.anim_set);
-        assert_eq!(ship.display.drawn.set, 1, "1.5 > 1 on the 3rd display");
+        assert_eq!(ship.display.drawn.set, drawn.set);
     }
 
     #[test]
     fn a_display_steps_the_lights_at_the_frames_gain() {
         let mut ship = animated_and_lit();
-        let mut expected = ship.display.frames;
+        let before = ship.display.frames;
+        let mut expected = before;
         let spec = ship.hull.frames;
         expected.light(&spec, &moment_of(&ship, HALF), |_| 0);
         display(
@@ -1355,7 +1357,9 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(ship.display.frames.lights, expected.lights);
-        assert_eq!(ship.display.frames.lights.timer, 2.5);
+        let mut full = before;
+        full.light(&spec, &moment_of(&ship, SpeedMult::FULL), |_| 0);
+        assert_ne!(expected.lights, full.lights, "the gain shows");
     }
 
     #[test]

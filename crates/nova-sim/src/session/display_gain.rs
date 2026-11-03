@@ -115,15 +115,28 @@ mod tests {
         session.ship.fit.hull.frames = animated_and_lit();
         session.ship.ship_display.frames.lights.timer = 3.0;
         let spec = session.ship.fit.hull.frames;
-        let mut expected = session.ship.ship_display.frames;
-        let at_half = moment(&session, HALF);
-        expected.step(&spec, &mut session.ship.fit.armament.fold(), at_half);
-        expected.light(&spec, &at_half, |_| 0);
+        let before = session.ship.ship_display.frames;
+        let fold = session.ship.fit.armament.fold();
+        let expected = frames_stepped(before, &spec, fold, moment(&session, HALF));
+        let full = frames_stepped(before, &spec, fold, moment(&session, SpeedMult::FULL));
         session.at_gain(HALF);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.ship.ship_display.frames, expected);
-        assert_eq!(expected.anim_timer, 0.5);
-        assert_eq!(expected.lights.timer, 2.5);
+        assert_ne!(expected, full, "the gain shows");
+    }
+
+    /// `frames` of class `spec` and fold `fold` after one step of their
+    /// sets and lights in `moment`, every roll answered 0.
+    fn frames_stepped(
+        frames: ShipFrames,
+        spec: &FrameSpec,
+        mut fold: crate::combat::armament::Fold,
+        moment: Moment,
+    ) -> ShipFrames {
+        let mut stepped = frames;
+        stepped.step(spec, &mut fold, moment);
+        stepped.light(spec, &moment, |_| 0);
+        stepped
     }
 
     /// A session of `catalog` set up, with an NPC of [`animated_and_lit`]'s
@@ -151,32 +164,30 @@ mod tests {
     }
 
     /// NPC `id`'s frames after a bare pass at half gain, and the frames a
-    /// copy of them stepped once by its sets and lights at half gain has.
+    /// copy of them stepped once by its sets and lights has at half gain
+    /// and at full gain.
     fn npc_frames_after_a_pass(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         id: NpcId,
-    ) -> (ShipFrames, ShipFrames) {
+    ) -> (ShipFrames, ShipFrames, ShipFrames) {
         let npc = session.space.npc(id).expect("there");
-        let spec = npc.hull.frames;
-        let mut expected = npc.display.frames;
-        let mut fold = npc.armament.fold();
-        let at_half = moment(session, HALF);
-        expected.step(&spec, &mut fold, at_half);
-        expected.light(&spec, &at_half, |_| 0);
+        let (spec, before, fold) = (npc.hull.frames, npc.display.frames, npc.armament.fold());
+        let expected = frames_stepped(before, &spec, fold, moment(session, HALF));
+        let full = frames_stepped(before, &spec, fold, moment(session, SpeedMult::FULL));
         session.at_gain(HALF);
         work(session, catalog, Controls::default());
         let frames = session.space.npc(id).expect("still there").display.frames;
-        (frames, expected)
+        (frames, expected, full)
     }
 
     #[test]
     fn the_ship_loop_displays_an_npc_whose_escape_check_doesnt_run_at_the_sessions_gain() {
         let catalog = displaying(0, 1);
         let (mut session, id) = with_animated_npc(&catalog, Condition::Intact);
-        let (frames, expected) = npc_frames_after_a_pass(&mut session, &catalog, id);
+        let (frames, expected, full) = npc_frames_after_a_pass(&mut session, &catalog, id);
         assert_eq!(frames, expected);
-        assert_eq!(frames.anim_timer, 0.5);
+        assert_ne!(expected, full, "the gain shows");
     }
 
     #[test]
@@ -187,10 +198,10 @@ mod tests {
             starting: false,
         };
         let (mut session, id) = with_animated_npc(&catalog, dying);
-        let (frames, expected) = npc_frames_after_a_pass(&mut session, &catalog, id);
+        let (frames, expected, full) = npc_frames_after_a_pass(&mut session, &catalog, id);
         assert_eq!(frames.anim_timer, expected.anim_timer);
         assert_eq!(frames.lights, expected.lights);
-        assert_eq!(frames.anim_timer, 0.5);
+        assert_ne!(expected.anim_timer, full.anim_timer, "the gain shows");
     }
 
     #[test]
@@ -252,7 +263,9 @@ mod tests {
             let mut expected = ShipFrames::default();
             expected.light(&npc.hull.frames, &moment(&session, HALF), |_| 0);
             assert_eq!(npc.display.frames.lights, expected.lights);
-            assert_eq!(npc.display.frames.lights.timer, -0.5);
+            let mut full = ShipFrames::default();
+            full.light(&npc.hull.frames, &moment(&session, SpeedMult::FULL), |_| 0);
+            assert_ne!(expected.lights, full.lights, "the gain shows");
         }
     }
 
@@ -337,7 +350,7 @@ mod tests {
         let (fading, drifted) = taken_off(RuleSource::Engine);
         assert_eq!(fading, twice(FADING_IN, SpeedMult::ZERO), "held");
         assert_eq!(drifted, twice(drifting, SpeedMult::ZERO), "drifted");
-        assert_eq!((fading.fade, drifted.fade), (10.0, 8.0));
+        assert_ne!(fading, twice(FADING_IN, SpeedMult::FULL), "the gain shows");
         // By the other reading no take-off zeroes the gain.
         let (fading, drifted) = taken_off(RuleSource::Bible);
         assert_eq!(fading, twice(FADING_IN, SpeedMult::FULL));

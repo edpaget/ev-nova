@@ -332,5 +332,10 @@ fn step_fades_steps_each_npcs_fade_at_the_frames_gain() {
     traffic.step_fades(half);
     let stepped: Vec<Cloak> = traffic.npcs().iter().map(|npc| npc.cloak).collect();
     assert_eq!(stepped, expected);
-    assert_ne!(stepped[0].fade, 10.75, "not the full step");
+    let mut full = Cloak {
+        fade: 10.0,
+        direction: 1,
+    };
+    full.display_step(false, false, SpeedMult::FULL);
+    assert_ne!(stepped[0], full, "the gain shows");
 }

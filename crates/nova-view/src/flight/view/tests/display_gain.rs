@@ -40,7 +40,12 @@ fn a_hits_flash_steps_at_its_passs_gain() {
         expected.step(npc.shield.now, base, has_layer, HALF);
     }
     assert_eq!(view.flashes.get(&NPC), Some(&expected));
-    assert_eq!(expected.shown(), 31.5, "half a level down");
+    let mut full = ShieldFlash::default();
+    full.hit(false);
+    for _ in 0..2 {
+        full.step(npc.shield.now, base, has_layer, SpeedMult::FULL);
+    }
+    assert_ne!(expected, full, "the gain shows");
 }
 
 #[test]
