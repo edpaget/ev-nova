@@ -289,3 +289,34 @@ fn a_lost_escorts_rejoin_reads_six_and_holds_its_classs_capacities() {
         assert_eq!((gauges(npc)[0].1, gauges(npc)[1].1), CLASS, "{capacity:?}");
     }
 }
+
+#[test]
+fn an_npc_carriers_fighter_captured_is_an_escort_holding_its_classs_bribed_or_not() {
+    // The capture writes 6 (`_DoPlunderDialog` @0x9461f), over a bribe's 1
+    // too: no fighter, so its class's capacities.
+    let catalog = carrying();
+    for capacity in RuleSource::ALL {
+        for bribed in [false, true] {
+            let (mut session, _, _) = raided_by_rules(&catalog, by(capacity));
+            fight(&mut session, &catalog, &raiding_ai());
+            let id = vipers(&session)[0].id;
+            if bribed {
+                session.space.npc_mut(id).expect("out").take_bribe();
+            }
+            session.fleet_up(id, None);
+            let npc = session.space.npc(id).expect("there");
+            assert!(session.is_escort(id), "{capacity:?} bribed {bribed}");
+            assert_eq!(npc.carrier, None, "{capacity:?} bribed {bribed}");
+            assert_eq!(
+                npc.original_ai_type(),
+                crate::traffic::original_ai_type::ESCORT_AI,
+                "{capacity:?} bribed {bribed}"
+            );
+            assert_eq!(
+                (gauges(npc)[0].1, gauges(npc)[1].1),
+                CLASS,
+                "{capacity:?} bribed {bribed}"
+            );
+        }
+    }
+}

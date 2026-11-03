@@ -1235,12 +1235,19 @@ pub(super) fn reset_released(npc: &mut Npc) {
 /// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
 /// known, no longer a former escort, of no leader but the player, keeping
 /// formation with no target of its own, its travel stellar the player's slot
-/// (+0x6c = +0x9a, 0, @0x89bac). Its +0x88 = 6 overwrites a bribe
-/// ([`Npc::overwrite_bribe`]; `_DoPlunderDialog` @0x9461f).
+/// (+0x6c = +0x9a, 0, @0x89bac). Its +0x88 = 6, or the rejoin's 5,
+/// replaces any carrier's word and overwrites a bribe
+/// ([`Npc::leave_carrier`], [`Npc::overwrite_bribe`]; `_DoPlunderDialog`
+/// @0x9461f): the carrier comes back only through [`Session::enlist`] for
+/// a carried record, so a captured NPC carrier's fighter is an escort
+/// holding its class's capacities.
 pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.independent();
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
+    }
+    if npc.carrier.is_some() {
+        npc.leave_carrier();
     }
     npc.overwrite_bribe();
     npc.former = None;
