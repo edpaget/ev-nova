@@ -5,6 +5,7 @@
 //! `spaceport::offer::close`).
 
 use super::map_wait_keys::{offered_docked, offered_over_flight};
+use super::missions::holding_and_offered_in_flight;
 use super::*;
 use nova_view::ui::mission_info::MISSION_INFO_KEY;
 use nova_view::ui::player_info::PLAYER_INFO_KEY;
@@ -204,4 +205,54 @@ fn losing_focus_while_the_ports_player_info_waits_for_p_closes_it() {
     tap(&mut screen, Key::Enter);
     screen.release_keys();
     assert!(spaceport(&screen).player_info().is_none());
+}
+
+#[test]
+fn a_key_held_back_by_an_accepting_click_with_i_down_is_rerouted_on_is_release() {
+    let mut screen = offered_over_flight();
+    screen.input(&key(MISSION_INFO_KEY, true));
+    let at = screen
+        .offer()
+        .and_then(OfferDialog::dialog)
+        .and_then(|dialog| dialog.item_bounds(1))
+        .expect("accept")
+        .center();
+    let left = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    screen.input(&left(true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&left(false));
+    assert!(
+        screen.offer().is_some_and(OfferDialog::answered),
+        "accepted"
+    );
+    assert_eq!(screen.showing(), Showing::Offer, "P not rerouted yet");
+    screen.input(&key(MISSION_INFO_KEY, false));
+    assert_eq!(
+        screen.showing(),
+        Showing::PlayerInfo,
+        "P rerouted after the release"
+    );
+}
+
+#[test]
+fn an_answer_showing_a_movie_with_i_held_as_it_closes_keeps_the_offer_until_is_release() {
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    // I opens the mission info over the offer; Escape closes it, I down.
+    screen.input(&key(MISSION_INFO_KEY, true));
+    assert_eq!(screen.showing(), Showing::MissionInfo);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Offer);
+    tap(&mut screen, Key::Char('n'));
+    assert!(screen.missions.is_some(), "the after-movie plays");
+    for _ in 0..10 {
+        screen.tick(Duration::from_millis(16));
+    }
+    assert!(screen.missions.is_none(), "the after-movie closed");
+    assert_eq!(screen.showing(), Showing::Offer, "waiting for I");
+    screen.input(&key(MISSION_INFO_KEY, false));
+    assert_eq!(screen.showing(), Showing::Flight);
 }
