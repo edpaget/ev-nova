@@ -52,7 +52,8 @@ pub struct Span {
 #[must_use]
 pub fn rows(src: u32, dst: u32) -> Vec<Span> {
     let (s, d) = (i64::from(src), i64::from(dst));
-    let exact_shrink = src > dst && dst > 0 && src.is_multiple_of(dst);
+    // `is_multiple_of(0)` holds only for 0, which `src > dst` rules out.
+    let exact_shrink = src > dst && src.is_multiple_of(dst);
     let mut error = if exact_shrink { -(s - 1) } else { -(s >> 1) };
     let mut next = 0;
     let mut map = Vec::with_capacity(usize::try_from(dst).unwrap_or(0));
@@ -151,10 +152,11 @@ pub fn differs(src: (u32, u32), dst: (u32, u32)) -> bool {
 }
 
 /// Whether `map` shows each of `src` source indices `dst / src` times in
-/// turn.
+/// turn. An axis of none kept at none shows nothing, so nothing other
+/// (`is_multiple_of(0)` holds only for 0, and the empty map divides by
+/// nothing).
 fn repeats_alike(map: &[Span], src: u32, dst: u32) -> bool {
-    src > 0
-        && dst.is_multiple_of(src)
+    dst.is_multiple_of(src)
         && map.iter().zip(0..).all(|(span, d): (&Span, u32)| {
             *span
                 == Span {
@@ -290,6 +292,24 @@ mod tests {
         assert_eq!(columns(5, 2), [span(0, 3), span(3, 2)]);
         assert_eq!(columns(649, 648)[323], span(323, 2));
         assert!(differs((5, 1), (2, 1)));
+    }
+
+    /// `FixRatio(121, 195)` is 40665, odd, so the error starts at 20332,
+    /// and at column 111 the add lands on 0x10000 exactly: the 16-bit add
+    /// carries with no column read yet, so `AverageH32` copies one column
+    /// (`@1to1`) rather than merging two.
+    #[test]
+    fn a_shrinks_carry_onto_the_16_bit_boundary_copies_one_column() {
+        let span = |first, count| Span { first, count };
+        assert_eq!(
+            columns(195, 121)[110..113],
+            [span(177, 2), span(179, 1), span(180, 2)]
+        );
+    }
+
+    #[test]
+    fn a_zero_wide_axis_kept_at_zero_shows_nothing_other() {
+        assert!(!differs((0, 2), (0, 4)));
     }
 
     #[test]

@@ -748,4 +748,15 @@ exclude_re = [
     # lands on 0 (`e + −60 × g`) gives +0.0, never −0.0, and a NaN fails
     # both compares, so `<=` clamps to the same expand.
     "nova-sim-ai/src/brackets\\.rs:[0-9]+:[0-9]+: replace < with <= in FlyIn::step$",
+    # QuickDraw's stretch. Each is pinned by its column, since the same
+    # description names other comparisons in the function that are caught.
+    # - `rows`' `src > dst` (exact shrink): at `src == dst` either start,
+    #   `-(src - 1)` or `-(src >> 1)`, maps each row to itself.
+    # - `rows`' `next < src`: never what ends a fetch. Before the fetch for
+    #   destination row j the error needs `k > (j·s − e0) / d` rows read, and
+    #   `j·s − e0 ≤ dst·s − 1 < src·d`, so the break comes by `k ≤ src`.
+    # - `columns`' `src < dst`: `src == dst` returns the identity above it.
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
 ]
