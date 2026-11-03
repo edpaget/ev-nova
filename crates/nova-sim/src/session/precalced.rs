@@ -58,9 +58,10 @@
 //!
 //! The `_ShipStatsToSystemInfo` sites a landed stay reaches (the landing,
 //! the player info, the outfitter opening and the hire screen closing),
-//! and `G`, `D`, `C`, `E` and `H`, also fold a bought ship's stock top-up
-//! into the outfit counts, clearing `PlayerShip::held_stock`, just before
-//! their reset (see the [`stock_fold`](super::stock_fold) module).
+//! `G`, `D`, `C`, `E` and `H`, and the plunder dialog's grant pick
+//! (@0x931d9) and Ammo press (@0x93cc9), also fold a bought ship's stock
+//! top-up into the outfit counts, clearing `PlayerShip::held_stock`, just
+//! before their reset (see the [`stock_fold`](super::stock_fold) module).
 //!
 //! *Ordering against the original.* The original runs a take-off's, a
 //! gate exit's and an arrival's story work (the days, the explorations,

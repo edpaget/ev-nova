@@ -97,7 +97,11 @@ pub(super) struct PlayerShip {
     /// The part of the outfits owned that a purchase's stock top-up still
     /// holds in the weapon array alone, by the engine reading of
     /// [`RuleKey::PurchaseStockFold`](crate::rulebook::RuleKey::PurchaseStockFold),
-    /// until the next fold (see the `stock_fold` module). Never saved: the
+    /// until the next fold (see the `stock_fold` module). Every reader of
+    /// the outfit counts leaves it out
+    /// ([`counted_outfits`](Self::counted_outfits); see the
+    /// `held_readers` module), and the readers of the weapon array count
+    /// it. Never saved: the
     /// original never saves between a purchase and its fold
     /// (`_SavePilotFile` @0x1935f, @0x6354b, @0x692c4), so a load treats the
     /// top-up as owned, as a landing's fold would.

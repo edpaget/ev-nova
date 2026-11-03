@@ -11,7 +11,78 @@
 //! `PlayerShip::held_stock` records the part still held in the array
 //! alone. A site that models a read of the counts takes
 //! `PlayerShip::counted_outfits`, the held part left out; a site that
-//! models a read of the array keeps `Pilot::outfits`.
+//! models a read of the array keeps `Pilot::outfits`. A reader on another
+//! sub-state (`Chart`, `Space`) or a free helper is handed the counted map
+//! by its `Session` caller. By the other reading nothing is held, so every
+//! reader counts the top-up at once.
+//!
+//! # The readers of the counts, the held part left out
+//!
+//! | Original | Reads `*0x3b51a8` at | Here |
+//! |---|---|---|
+//! | `_GetPlayerContributeBits` (the hire screen's `Require` @0xbd09, @0x4f833; the mission offers @0x9b50b; the crons @0x3850d, @0x38681, @0x3883f; the landing request @0x67964) | @0x7730-0x775f | `PlayerShip::contributed` |
+//! | `_GetToken`'s `o` (the hire screen @0xbd52, @0x4f901; the mission offers @0x9b4c8; the crons; the system's setup @0x43356; a person's spawn @0x40b66; a disaster @0x41b2c; the escort dialog @0x95335) | @0x14a95-0x14a9a | `control::Facts::held`, filled by `PlayerShip::facts`, the traffic's facts, the hire screen's and the escort dialog's |
+//! | `_ScanPlayer` | @0x7efd1-0x7eff6, @0x7f103-0x7f10e | `Session::scanned_by` |
+//! | `_AIPlunderShipContents`'s marines for a player victim | @0x841bd-0x84204, @0x84345-0x84388 | `PlayerShip::marines`, for `Session::plundered_by` |
+//! | `_SetPlunderValues`' marines | @0x926cb-0x9271a | `PlayerShip::marines`, for `Session::capture_crew` |
+//! | the `_Ship*` stat readers (e.g. `_ShipMaxSpeed`, cached in `*0x3b5058` until `_ResetPlayerPrecalcedValues`) | @0x374a, and each reader's own | `PlayerShip::current_stats`, so `fit.stats` and the purchase's fill |
+//! | `_ShipFuelCapacity`, for Use As My Ship's captured class | @0x2f75 (called @0x41786) | `PlayerShip::capture_fuel` |
+//! | `_HasCloak`, `_HasAreaCloak`, `_CloakShieldUsage`, `_CloakFuelUsage`, `_CloakZeroesShields`, `_ShipDecloaksWhenHit`, `_ShipCloakVisibleOnRadar` | @0x960c, @0x3d7f, @0x404d, @0x3e42, @0x3eb7, @0x3f82, @0x410f | `PlayerShip::cloak_gear` |
+//! | `_ShipCanSeeCloakedShips`, `_ShipCanTargetCloakedShips` | @0x41db, @0x2497 | the `scanner` helper of the `cloaks` module |
+//! | `_HasIFF`, `_HasDensityScanner`, `_ShipAntiInterference` | @0x4387, @0x42ff, @0x5f50 | the `radar_gear` helper and `Chart::interference` |
+//! | `_PlayerEffectiveMurk` | @0x6fa3 | `Chart::effective_murk` |
+//! | `_ResetPlayerPrecalcedValues`' inhibitors and IFF scramblers | @0xc578 | `Space::reset_inhibitors`, `Space::reset_iff_scramblers` |
+//! | `_ShipCanSelfRepair` | @0x91ae | `Session::player_repair_tick` |
+//! | `_ShipCanScoop` | @0x75de | `PlayerShip::player_scoops` |
+//! | `_HasEscapePod`, `_HasAutoEject` | @0xb873, @0x3a2b | `Session::try_eject`, `PlayerShip::auto_eject_fires` |
+//! | `_ShipECM` | @0x3bbb | `Session::player_jamming` |
+//! | the sabotage loops in `_HandlePlayer` and the reset's flag | @0x68748, @0x693a9, @0x696b8, @0xc578 | `Session::sabotage_bombs`, `Session::sabotage_kill`, `PlayerShip::sabotage_death_descs`, `PlayerShip::refresh_sabotage` |
+//! | `_HasMaxOfItem`, for the plunder dialog's grant pick | @0x45c7 on (called @0x93119, @0x93192) | `PlayerShip::grant_stock`, `PlayerShip::at_max` and `raised_max_of` |
+//! | the eject's carry | @0x6f7b5-0x6f7db | `Session::board_class` |
+//! | the purchase's own cargo trim (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0x5ef9f) | @0xca6c, @0xcd6a | `nova_sim::shipyard::purchase` |
+//! | the shipyard's trade-in, carry and `Require` | (see the `stock_fold` module) | `PlayerShip::counted` |
+//!
+//! A held outfit is a stock weapon or its ammunition, so its first mod
+//! (`ModType` 1 or 3) is the weapon array's: only its later mods are left
+//! out of what these readers give. A bomb that goes off zeroes its count
+//! (@0x696b8) and leaves a held part in the weapon array for the next fold.
+//!
+//! # The readers of the weapon array, the top-up counted
+//!
+//! These keep `Pilot::outfits`:
+//!
+//! - the armament (`PlayerShip::refit`'s `Arsenal::player`), firing and the
+//!   fighter bays (`_FirePlayerWeapon` @0x62cf0 reads +0xc8 and +0xd0);
+//! - the rounds the status line and the bays count (`outfit_rounds`), and
+//!   the secondary's `carries` and `launches`;
+//! - the plunder dialog's ammunition offer and take (`_PlayerCanUseAmmoType`
+//!   @0x5896 over +0xc8, @0x924c5-0x92513);
+//! - Use As My Ship's carry (`_DoShipCapture` clears the array weapons no
+//!   persistent outfit backs, @0x41849-0x418d6, and its fold @0x419fd puts a
+//!   held persistent weapon back, so `Pilot::outfits` already matches).
+//!
+//! # Readers no purchase reaches before its fold
+//!
+//! These read the counts, but only after a fold, so they need no code:
+//!
+//! - `_ShipFreeMass` (@0xb481): the outfitter's callers run after
+//!   @0x5bb57, and the plunder dialog's after @0x931d9 and @0x93cc9, so
+//!   the boarding grant's, `G`'s, the ammo take's and the outfitter's free
+//!   mass read the full map;
+//! - the player info (`_SetupPlayerInfoText`, `_PlayerInfoDialogUpdate`,
+//!   after @0x5a06a), with its Honors (`Session::pilot_info_ranks`);
+//! - the outfitter (`_OutfitFilter`, `_OutfitDialogUpdate`,
+//!   `_CanBuyOutfitItem`, `_CanBuyFighter`, after @0x5bb57);
+//! - `_GrantOutfitItem` and `_EvalSetExp`'s own reads, after the set
+//!   operator's fold;
+//! - `_DoAutoRefuel` (@0x41bd5), after the landing's fold (@0x632c5 after
+//!   @0x63211);
+//! - `_WritePilotData` (@0x723fc): no save comes between a purchase and its
+//!   fold, and `_LoadPilotData`, `_DoNewPilot` and `_ResetPlayer` hold
+//!   nothing;
+//! - the pod's other change of ship (@0x6eef4-0x6f077), which zeroes every
+//!   count and the array;
+//! - `_DumpPilotLog` (@0x74b2f), a debug log.
 
 use super::{PlayerShip, Statics};
 use crate::catalog::{MARINES, outfit_mods};

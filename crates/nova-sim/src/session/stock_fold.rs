@@ -17,8 +17,12 @@
 //! `PlayerShip::held_stock` records the part of it a purchase's top-up
 //! still holds in the array alone ([`shipyard::Purchase::held`]), and
 //! `PlayerShip::counted` takes it out for the shipyard's readers
-//! ([`shipyard::outfit_counts`]). The fold, `PlayerShip::fold_stock`,
-//! forgets it. By the other reading nothing is held. The held part is
+//! ([`shipyard::outfit_counts`]), as every other reader of the counts does
+//! (`PlayerShip::counted_outfits`; see the `held_readers` module). The
+//! fold, `PlayerShip::fold_stock`, forgets it and works the stats out
+//! again over the counts it leaves, moving each reserve's most and
+//! gaining nothing, as `_ShipStatsToSystemInfo` writes no reserve. By the
+//! other reading nothing is held. The held part is
 //! never saved: the original saves only at the new pilot (@0x1935f), a
 //! landing after its fold (@0x6354b) and the rescue (@0x692c4), so a load
 //! treats the top-up as owned, as a landing's fold would. The port's save
@@ -26,8 +30,8 @@
 //!
 //! # Fold sites
 //!
-//! Every caller of `_ShipStatsToSystemInfo` a landed stay can reach
-//! between two purchases calls `PlayerShip::fold_stock` at the original's
+//! Every caller of `_ShipStatsToSystemInfo` the port reaches between a
+//! purchase and its fold calls `PlayerShip::fold_stock` at the original's
 //! point:
 //!
 //! | Site | Original | Here |
@@ -38,6 +42,8 @@
 //! | `G` and `D` of an ID of 128-639 | `_EvalSetExp` @0x15424/@0x15439, @0x15452/@0x15466 | `Session::apply_op` |
 //! | `C`, `E` and `H` of an ID of 128-895 | `_EvalSetExp` @0x1549d/@0x154b3 (`E`/`H` again @0x15622) | `Session::apply_op` |
 //! | a landing | `_PlayerLandOnStellar` @0x63211 | the landing's reset |
+//! | the plunder dialog's grant, once an outfit is picked | `_DoPlunderDialog` @0x931d9 | `Session::grant` |
+//! | the plunder dialog's Ammo press | `_DoPlunderDialog` @0x93cc9 | `Session::plunder` |
 //! | any change of class | the weapon array rewritten | `Session::become_class` |
 //!
 //! A set operator folds whether or not it changes anything, and `C`, `E`
@@ -45,19 +51,16 @@
 //! purchase's own `OnPurchase` runs after the top-up (@0x5f00d), so one
 //! holding such an operator folds it.
 //!
-//! The rest need no code: the new pilot (@0x18f48) holds nothing yet, and
-//! the ship display (@0x2dc3c), `_HandleShip` (@0x33a28), Use As My Ship
-//! (@0x419fd), the eject (@0x6f8bb), the pod's ship (@0x6f077) and the
-//! plunder dialog (@0x931d9, @0x93cc9, @0x93dcb) run in flight. Those
-//! either change the class, which folds, or are followed by a landing,
-//! which folds before any shipyard can read the held part, so folding
-//! later changes nothing the player can see.
+//! The rest need no code. The new pilot (@0x18f48) holds nothing yet. The
+//! ship display's fold (@0x2dc3c) and `_HandleShip`'s (@0x33a28) sit on
+//! branches that cannot run (see the `player_led` module). Use As My Ship
+//! (@0x419fd), the eject (@0x6f8bb) and the pod's ship (@0x6f077) change
+//! the class, which folds. The plunder dialog's reset after each round
+//! taken (@0x93dcb) comes after the Ammo press's fold, so nothing is held
+//! by then.
 //!
-//! Readers outside the shipyard (the hire screen's `Require`, an `o`
-//! test, `_ShipFreeMass`, a pirate's plunder, `_ScanPlayer` and the
-//! `_Ship*` stat readers past a held outfit's first mod) still read the
-//! counts with the top-up: they are
-//! rdm:phase/play-feel-5-followups/phase-17-held-stock-outside-shipyard.
+//! The readers of the outfit counts outside the shipyard, and where each
+//! takes them, are the `held_readers` module's.
 
 use std::ops::RangeInclusive;
 
