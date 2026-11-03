@@ -500,11 +500,12 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::combat::jamming::JAMMING_MOD;
     use crate::escape::{MOD_AUTO_EJECT, MOD_ESCAPE_POD};
-    use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_IFF};
+    use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_DENSITY_SCANNER, MOD_IFF};
     use crate::murk::MOD_MURK;
     use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
     use crate::scoop::MOD_ASTEROID_SCOOP;
     use crate::self_repair::MOD_REPAIR;
+    use crate::session::frame::tests::filled;
     use crate::session::iff_scramblers::IFF_SCRAMBLER;
     use crate::session::reinforcements::{EVERY_GOVERNMENT, INHIBITOR};
 
@@ -526,7 +527,7 @@ mod tests {
     #[test]
     fn the_gear_readers_leave_a_held_outfits_later_mods_out_until_the_landing() {
         let class = 7;
-        let gears: [Gear; 15] = [
+        let gears: [Gear; 16] = [
             ("_HasCloak", (MOD_CLOAK, 0), &|session| {
                 format!(
                     "{:?}",
@@ -538,13 +539,16 @@ mod tests {
                 (MOD_SCANNER, SCAN_SCREEN),
                 &|session| format!("{:?}", session.scanner()),
             ),
-            ("_ShipHasIFF", (MOD_IFF, 0), &|session| {
-                format!("{:?}", session.radar_gear())
+            ("_HasIFF", (MOD_IFF, 0), &|session| {
+                format!("{:?}", filled(session).hud.radar_gear)
+            }),
+            ("_HasDensityScanner", (MOD_DENSITY_SCANNER, 0), &|session| {
+                format!("{:?}", filled(session).hud.radar_gear)
             }),
             (
                 "_ShipAntiInterference",
                 (MOD_ANTI_INTERFERENCE, -20),
-                &|session| session.interference().to_string(),
+                &|session| filled(session).hud.interference.to_string(),
             ),
             ("_PlayerEffectiveMurk", (MOD_MURK, 15), &|session| {
                 session.effective_murk().to_string()
