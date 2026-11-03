@@ -55,6 +55,7 @@ impl Session {
             system_background,
             murk_colour,
             double_time,
+            speed_mult,
             hyper_gamma,
             traffic_ships,
             hud,
@@ -102,6 +103,7 @@ impl Session {
         *system_background = self.system_background();
         *murk_colour = self.murk_colour();
         *double_time = self.double_time();
+        *speed_mult = self.next_speed_mult();
         *hyper_gamma = self.hyper_gamma();
         *traffic_ships = self.traffic_ships();
         self.fill_hud(hud);
@@ -242,7 +244,7 @@ pub(super) mod tests {
             frames: FrameSpec::NONE,
             shown: ShipDrawn::Hidden,
             cloak: CloakShown::Hidden,
-            gate: GateFade::Entering { ticks_left: 99 },
+            gate: GateFade::Entering { ticks_left: 99.0 },
             hover: HoverPlace::Unplaced,
             framed: Some(ShipId(999)),
             on_radar: true,
@@ -287,8 +289,10 @@ pub(super) mod tests {
                 position: Vec2::new(9.0, 9.0),
                 velocity: Vec2::new(9.0, 9.0),
                 heading: 9.0,
-                age: 9,
-                spin_timer: 9,
+                // A shot of `Count` 99 and `Falloff` 9, 9 frames old.
+                life: crate::combat::shot_fade::at_full_gain(99, 9, 9).0,
+                fade: crate::combat::shot_fade::at_full_gain(99, 9, 9).1,
+                frame: Some(9),
                 layer: ShotLayer::OverShips,
             }],
             beams: vec![FrameBeam {
@@ -308,7 +312,7 @@ pub(super) mod tests {
             asteroids: vec![FrameAsteroid {
                 position: Vec2::new(9.0, 9.0),
                 velocity: Vec2::new(9.0, 9.0),
-                frame: 9.0,
+                frame: 9,
                 kind: 9,
             }],
             stellars: vec![FrameStellar {
@@ -333,6 +337,7 @@ pub(super) mod tests {
             system_background: Some(0x99),
             murk_colour: 0x99,
             double_time: true,
+            speed_mult: crate::SpeedMult::new(0.5),
             hyper_gamma: 9.0,
             traffic_ships: vec![ShipId(999)],
             hud: stale_hud(),
@@ -674,11 +679,50 @@ pub(super) mod tests {
         let drawn: Vec<FrameShot> = session
             .shots_drawn()
             .into_iter()
-            .map(FrameShot::of)
+            .map(|shot| FrameShot::of(shot, None))
             .collect();
         assert_eq!(frame.shots, drawn);
         assert_eq!(frame.shots[1].id, session.shots()[0].id, "over the ships");
         assert_eq!(frame.shots[1].layer, ShotLayer::OverShips);
+    }
+
+    /// The blaster's `Graphic`, 0, as the contact passes read its sheet.
+    const BLASTER_SHOT: crate::catalog::MaskSheet = crate::catalog::MaskSheet::Shot(0);
+
+    /// `catalog`'s session started and firing until a shot is in flight.
+    fn one_shot_out(catalog: &crate::testkit::FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.hold_trigger(crate::session::tests::FIRE);
+        while session.shots().is_empty() {
+            crate::testkit::work(&mut session, catalog, crate::flight::Controls::default());
+        }
+        session
+    }
+
+    #[test]
+    fn a_fill_shows_each_shot_at_the_frame_the_contact_passes_touch_it_by() {
+        let one: &[&str] = &["#"];
+        let catalog = crate::testkit::FakePilotCatalog {
+            rle_sheets: vec![(BLASTER_SHOT, nova_sim_base::fixture::rle::sheet(&[one; 4]))],
+            ..crate::session::tests::armed()
+        };
+        let mut session = one_shot_out(&catalog);
+        session.space.combat.shots_mut()[0].heading = 200.0;
+        let sheet = session
+            .space
+            .sprite_masks
+            .sheet(BLASTER_SHOT)
+            .expect("read");
+        let touched = session.shots()[0].frame_on(sheet);
+        assert!(touched.is_some_and(|frame| frame > 0), "{touched:?}");
+        assert_eq!(filled(&session).shots[0].frame, touched);
+    }
+
+    #[test]
+    fn a_shot_whose_sheet_was_not_read_shows_no_frame() {
+        let catalog = crate::session::tests::armed();
+        let session = one_shot_out(&catalog);
+        assert_eq!(filled(&session).shots[0].frame, None);
     }
 
     #[test]
@@ -726,13 +770,13 @@ pub(super) mod tests {
         let frame = filled(&session);
         let spawned = &session.cargo_boxes()[0];
         assert_ne!(spawned.velocity, spawned.position);
-        assert_ne!(spawned.frame, spawned.graphic);
+        assert_ne!(spawned.drawn_frame(), spawned.graphic);
         assert_eq!(
             frame.cargo_boxes,
             [FrameBox {
                 position: Vec2::new(30.0, -40.0),
                 velocity: spawned.velocity,
-                frame: spawned.frame,
+                frame: spawned.drawn_frame(),
                 fade: spawned.fade(),
                 graphic: 5,
             }]
@@ -757,7 +801,7 @@ pub(super) mod tests {
             [FrameAsteroid {
                 position: Vec2::new(10.0, 20.0),
                 velocity: Vec2::new(1.0, -1.0),
-                frame: 3.5,
+                frame: 3,
                 kind: 2,
             }]
         );

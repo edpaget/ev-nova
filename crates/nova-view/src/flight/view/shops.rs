@@ -198,19 +198,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::CloseHire);
     }
 
-    /// Presses the jettison key: with Command held, jettisons the cargo,
-    /// and with Option (Alt) too, all but the mission cargo
-    /// ([`FlightCommand::Jettison`], `nova_sim::Session::jettison_cargo`),
-    /// saying what the flight says went. Its key's
-    /// gate is asked by the key, before the press reaches it
-    /// (`Screen::input`'s filter).
+    /// Presses the jettison key: with Command held, notes the tap, all
+    /// unless Option (Alt) is down too. The chord jettisons on every pass
+    /// it is held, with no latch (`_HandlePlayer` @0x6fd54-0x6fda1), so
+    /// the step does it ([`StepInput::jettison`](nova_sim::flight_frame::StepInput::jettison),
+    /// `nova_sim::Session::hold_jettison`), and its messages and sound
+    /// come through the step's relay. The tap makes a Command-K let go
+    /// before the next step still jettison once on it, as a pass would
+    /// read it down, as the slot block counts a tap. The press's jettison
+    /// moves to the next step: no frame is drawn between them, so the move
+    /// crosses no boundary the player sees. Its key's gate is asked by the
+    /// key, before the press reaches it (`Screen::input`'s filter).
     pub(super) fn jettison(&mut self) {
         if !self.held.contains(&Key::Command) {
             return;
         }
-        let all = !self.held.contains(&Key::Alt);
-        self.send(FlightCommand::Jettison { all });
-        self.say_messages();
+        self.jettison_tapped = Some(!self.held.contains(&Key::Alt));
     }
 
     /// Whether the pilot flying has seen the intro screen, as the kept
@@ -470,7 +473,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         if assigned == Assigned::MyShip {
             // Where the new ship is, in the frame the assignment leaves,
             // before the catch-up that follows it.
-            self.between_passes = None;
+            self.drop_between_passes();
             self.previous = self.player_place();
             self.alpha = 0.0;
         }

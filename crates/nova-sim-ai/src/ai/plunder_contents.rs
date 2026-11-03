@@ -76,10 +76,10 @@ pub const CAPTURED_ARMOR_SHARE: f64 = 0.66;
 /// think as its captor's escort ends it (`_EscortAI`'s formation block,
 /// +0x4c = -1.0 @0x83ea8-0x83eb0; see
 /// [`fleet_escort`](crate::ai::fleet_escort)).
-pub const CAPTURED_WAIT: u32 = 150;
+pub const CAPTURED_WAIT: f32 = 150.0;
 /// The AI wait a pirate takes as it plunders, its hold before it drifts
 /// off (+0x4c = 100.0 @0x8c772, @0x86f4e).
-pub const PLUNDER_HOLD: u32 = 100;
+pub const PLUNDER_HOLD: f32 = 100.0;
 
 /// The crew and defence one side's marines give (`ModType` [`MARINES`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

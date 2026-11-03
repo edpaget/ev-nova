@@ -1,7 +1,9 @@
 //! [`FlightView`]'s player info screen and the main screen's pilot panel,
 //! over the [`FlightSim`] port: the player info key's press and the
 //! screen's opening are commands ([`FlightCommand::PressPlayerInfo`],
-//! [`FlightCommand::OpenPlayerInfo`], whose answer carries the screen),
+//! [`FlightCommand::OpenPlayerInfo`], whose answer carries the screen,
+//! and [`FlightCommand::CloseInfoDialog`], the player info's or the
+//! mission info's close),
 //! and the view marks the screen with its own cheats setting; the pilot
 //! panel is the flight's answer to its screen ask
 //! ([`ScreenAsk::PilotPanel`]), kept until the flight next changes
@@ -77,6 +79,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// The player info or mission info dialog over flight closed
+    /// ([`FlightCommand::CloseInfoDialog`],
+    /// `nova_sim::Session::close_info_dialog`): told at every close,
+    /// whatever opened it, as the flight settles the gain's zero an
+    /// opening owes after anything that ran under the dialog.
+    pub fn close_info_dialog(&mut self) {
+        self.send(FlightCommand::CloseInfoDialog);
+    }
+
     /// `info` marked with the cheats setting ([`FlightOverlays::cheats`](super::FlightOverlays::cheats)),
     /// which the flight leaves off.
     fn marked(&self, info: PlayerInfo) -> PlayerInfo {
@@ -90,12 +101,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// outside a jump, its [`PlayerCommand`] taken: when the flight takes
     /// the press too ([`FlightView::press_player_info`]), asks the router
     /// for the player info screen, letting go of the flight keys
-    /// (`_HandlePlayer` @0x702bf-0x703c9); when it refuses, with its beep,
-    /// nothing more.
+    /// (`_HandlePlayer` @0x702bf-0x703c9), its close latched by
+    /// `_SetAllKeyCmdFlags` (@0x70393, [`FlightView::let_go_into_dialog`]);
+    /// when it refuses, with its beep, nothing more, as the refusal jumps
+    /// past the site (@0x7039a-0x703bd).
     pub(super) fn ask_player_info(&mut self) -> ScreenAction {
         if self.press_player_info() {
             self.pending_player_info = true;
-            self.let_go_of_input();
+            self.let_go_into_dialog();
         }
         ScreenAction::None
     }

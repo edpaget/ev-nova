@@ -153,6 +153,7 @@ use crate::combat::{ShipRef, Strike};
 #[cfg(doc)]
 use crate::govt::PLUNDERS;
 use crate::rulebook::RuleSource;
+use crate::traffic::ai_wait;
 use crate::traffic::npc::Npc;
 use crate::traffic::plunder_dock::DockSub;
 
@@ -363,7 +364,7 @@ fn fought(npc: &Npc, target: ShipRef, docked: Option<ShipRef>, around: &Surround
 /// (`cmpl $0xf0004` @0x8c74c, nav @0x8c758, +0x4c @0x8c75f).
 fn docked_victim(npc: &Npc) -> Option<ShipRef> {
     npc.docking
-        .filter(|docking| docking.sub == DockSub::Dock && npc.ai_wait == 0)
+        .filter(|docking| docking.sub == DockSub::Dock && !ai_wait::running(npc.ai_wait))
         .map(|docking| docking.ship)
 }
 
@@ -1210,7 +1211,7 @@ mod tests {
     #[test]
     fn its_count_wait_is_kept_whatever_became_of_the_victim() {
         let wait = Goal::CountWait;
-        for ai_wait in [0, 1, 120] {
+        for ai_wait in [0.0, 1.0, 120.0] {
             let waiting = |target| Npc {
                 ai_wait,
                 ..holding(wait, target)
@@ -1316,7 +1317,7 @@ mod tests {
         let mut kin = warship_class(2, 300.0);
         kin.govt = Some(PIRATES);
         let mut waiting = holding(Goal::Attack(n(2)), Some(n(2)));
-        waiting.ai_wait = 30;
+        waiting.ai_wait = 30.0;
         assert_eq!(decided(&[waiting, kin]), only(Goal::Attack(n(2))));
     }
 
@@ -1329,7 +1330,7 @@ mod tests {
         fleeing.state.velocity = Vec2::new(0.0, 1.0);
         let mut heavy = holding(Goal::Attack(n(2)), Some(n(2)));
         heavy.hull.mass = 100.0;
-        heavy.ai_wait = 30;
+        heavy.ai_wait = 30.0;
         assert_eq!(
             decided(&[heavy.clone(), fleeing]),
             only(Goal::Attack(n(2))),
@@ -1353,7 +1354,7 @@ mod tests {
         fleeing.state.velocity = Vec2::new(0.0, 1.0);
         let mut heavy = holding(plunder(n(2)), Some(n(2)));
         heavy.hull.mass = 100.0;
-        heavy.ai_wait = 30;
+        heavy.ai_wait = 30.0;
         assert_eq!(decided(&[heavy, fleeing]), only(plunder(n(2))));
     }
 
@@ -1369,7 +1370,7 @@ mod tests {
             starting: false,
         };
         let mut waiting = holding(Goal::Attack(n(2)), Some(n(2)));
-        waiting.ai_wait = 30;
+        waiting.ai_wait = 30.0;
         // A destroying weapon passes the think's disabled-warship drop.
         waiting.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
@@ -1389,7 +1390,7 @@ mod tests {
             "the high level skipped under the wait"
         );
         let mut free = npcs.clone();
-        free[0].ai_wait = 0;
+        free[0].ai_wait = 0.0;
         let around = crate::ai::fixture::around(&sites, &free, &govts, (0.0, -5000.0), 0);
         let thought = fought(&free[0], n(2), None, &around);
         assert!(!crate::ai::handler_head::skips(&free[0], &thought));
@@ -1437,7 +1438,7 @@ mod tests {
             ai.trigger(&npcs[0], &around)
         };
         let waiting = Npc {
-            ai_wait: 9,
+            ai_wait: 9.0,
             ..armed(Goal::CountWait)
         };
         assert_eq!(fired(waiting), Trigger::default());
@@ -1510,7 +1511,7 @@ mod tests {
                 ship,
                 sub: DockSub::Dock,
             }),
-            ai_wait: wait,
+            ai_wait: crate::traffic::ai_wait::ticks(wait),
             ..npc
         }
     }
@@ -1618,7 +1619,7 @@ mod tests {
         // returns first while +0x4c runs (@0x8d4b9-0x8d4d2).
         let plundering = holding(plunder(n(2)), Some(n(2)));
         let waiting = Npc {
-            ai_wait: 1,
+            ai_wait: 1.0,
             ..plundering.clone()
         };
         for ship in [trader(2, 300.0), wreck(2, 300.0)] {

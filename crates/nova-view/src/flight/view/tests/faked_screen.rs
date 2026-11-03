@@ -213,6 +213,84 @@ fn cancelling_the_pointer_abandons_a_drag_on_the_open_map() {
     assert!(view.map_open());
 }
 
+#[test]
+fn a_held_move_outside_the_game_drags_ms_widened_map_as_a_move_inside() {
+    let open = || {
+        let mut view = in_flight();
+        view.set_widened_size((1365.0, 768.0));
+        tap(&mut view, MAP);
+        view
+    };
+    let (mut outside, mut inside) = (open(), open());
+    let offset = outside.map_offset();
+    assert!(offset.x > 0.0, "widened: the map is moved right");
+    let start = outside.course_map().place().expect("in flight").scroll();
+    let empty = Point::new(250.0 + offset.x, 150.0);
+    for view in [&mut outside, &mut inside] {
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: empty,
+        });
+    }
+    outside.input(&Input::PointerLeft);
+    let past = Point::new(-30.0, -20.0);
+    outside.input(&Input::PointerMovedOutside(past));
+    inside.input(&Input::PointerMoved(past));
+    let scroll = outside.course_map().place().expect("in flight").scroll();
+    assert_ne!(scroll, start, "dragged past the edge");
+    assert_eq!(
+        scroll,
+        inside.course_map().place().expect("in flight").scroll(),
+        "translated into the map's frame as a move inside is"
+    );
+}
+
+#[test]
+fn hiding_the_cursor_abandons_a_drag_on_the_open_map() {
+    let mut view = in_flight();
+    tap(&mut view, MAP);
+    let empty = Point::new(250.0, 150.0);
+    let left = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at: empty,
+    };
+    view.input(&left(true));
+    view.hide_cursor();
+    let place = view.course_map().place().expect("in flight").scroll();
+    let from = sent_count(&view);
+    view.input(&Input::PointerMoved(Point::new(300.0, 150.0)));
+    view.input(&left(false));
+    assert_eq!(
+        view.course_map().place().expect("in flight").scroll(),
+        place,
+        "no drag"
+    );
+    assert_eq!(sent_since(&view, from), [], "no click on the map");
+    assert!(view.map_open());
+}
+
+#[test]
+fn the_map_hides_flights_cursor_until_the_pointer_moves() {
+    // `_HandlePlayer` hides the sprite before `_DoSystemMap` (@0x6a826),
+    // and nothing writes `_cursorAlpha` again before `_HandleMouse`.
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    tap(&mut view, MAP);
+    assert!(view.map_open());
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(view.cursor_at(), None, "a same-point move after the map");
+    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(view.cursor_at(), Some(other));
+}
+
 // The jump's filter.
 
 #[test]
@@ -389,17 +467,16 @@ fn hail_is_refused_silently_through_a_jump() {
 
 #[test]
 fn command_k_jettisons_through_a_jump() {
+    // Its block reads no +0x50 (@0x6fd54-0x6fdaf): a tap during the jump
+    // is the next step's.
     for mut view in faked_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         view.input(&key(Key::Command, true));
         tap(&mut view, JETTISON_KEY);
         view.input(&key(Key::Command, false));
-        assert_eq!(
-            sent_since(&view, from),
-            [FlightCommand::Jettison { all: true }],
-            "{stage}"
-        );
+        assert_eq!(sent_since(&view, from), [], "{stage}: no command");
+        assert_eq!(view.jettison_tapped, Some(true), "{stage}");
     }
 }
 
@@ -768,6 +845,33 @@ fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
     view.input(&Input::PointerMoved(other));
     assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
     assert_eq!(view.cursor_at(), Some(other));
+}
+
+#[test]
+fn hiding_the_cursor_keeps_it_hidden_at_the_same_point() {
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.hide_cursor();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    assert_eq!(view.cursor_at(), None);
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+}
+
+#[test]
+fn cancelling_the_pointer_still_shows_the_cursor_on_a_same_point_move() {
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.cancel_pointer();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    assert_eq!(view.cursor_at(), Some(NOWHERE));
 }
 
 #[test]

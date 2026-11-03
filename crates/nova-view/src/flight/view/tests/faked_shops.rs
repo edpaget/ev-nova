@@ -1128,28 +1128,27 @@ fn closing_the_hire_screen_or_the_outfitter_sends_its_close() {
 // The jettison.
 
 /// Holds Command (and Option, when `option`) as the jettison key is
-/// pressed, then lets go of them.
-fn jettison_key(view: &mut Faked, option: bool) {
+/// pressed, then lets go of them: what the next step is given of it.
+fn jettison_key(view: &mut Faked, option: bool) -> Option<bool> {
     view.held.insert(Key::Command);
     if option {
         view.held.insert(Key::Alt);
     }
     view.jettison();
     view.held.clear();
+    view.tick(TICK);
+    view.sim.inputs().last().expect("a step").jettison
 }
 
+// The chord jettisons on every pass it is down, with no latch
+// (`_HandlePlayer` @0x6fd54-0x6fda1): the press sends nothing, and the
+// next step jettisons, what it says coming through the step.
+
 #[test]
-fn command_k_jettisons_everything_and_says_what_the_flight_said() {
+fn command_k_jettisons_everything_on_the_next_step() {
     let mut view = faked(in_sol());
-    view.sim
-        .queue_event(FlightEvent::Message(SimMessage::MissionFailed));
-    view.sim.queue_answer(Answer::Done);
-    jettison_key(&mut view, false);
-    assert_eq!(
-        sent_but_lines(&view),
-        [FlightCommand::Jettison { all: true }]
-    );
-    faked_lasts(&mut view, MISSION_FAILED, SimMessage::MissionFailed.ticks());
+    assert_eq!(jettison_key(&mut view, false), Some(true));
+    assert_eq!(sent_but_lines(&view), [], "no command");
     assert_eq!(JETTISON_KEY, Key::Char('k'));
     assert_eq!(MISSION_FAILED, "Mission failed.");
     assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
@@ -1158,13 +1157,8 @@ fn command_k_jettisons_everything_and_says_what_the_flight_said() {
 #[test]
 fn command_option_k_keeps_the_mission_cargo() {
     let mut view = faked(in_sol());
-    view.sim.queue_answer(Answer::Done);
-    jettison_key(&mut view, true);
-    assert_eq!(
-        sent_but_lines(&view),
-        [FlightCommand::Jettison { all: false }]
-    );
-    assert_eq!(view.message(), None, "nothing said");
+    assert_eq!(jettison_key(&mut view, true), Some(false));
+    assert_eq!(sent_but_lines(&view), [], "no command");
     assert_eq!(
         NON_MISSION_CARGO_JETTISONED,
         "Non-mission cargo jettisoned."
@@ -1178,6 +1172,8 @@ fn k_without_command_jettisons_nothing() {
     view.held.insert(Key::Alt);
     view.jettison();
     assert_eq!(sent(&view), [], "K alone, then Option-K");
+    view.tick(TICK);
+    assert_eq!(view.sim.inputs().last().expect("a step").jettison, None);
 }
 
 #[test]
@@ -1212,8 +1208,7 @@ fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_soun
         ];
     });
     view.sim.queue_answer_showing(Answer::Done, dropped);
-    view.held.insert(Key::Command);
-    view.jettison();
+    view.jettison_all();
     assert_eq!(
         view.drained_sounds(),
         [Sound::Sim(nova_sim::SimSound::CargoJettisoned)],

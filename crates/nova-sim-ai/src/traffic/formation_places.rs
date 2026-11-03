@@ -325,7 +325,7 @@ mod tests {
 
     fn pod(parent: &mut Npc) {
         parent.ship = ESCAPE_POD_SHIP;
-        parent.mode = Mode::Adrift { ticks_left: 100 };
+        parent.mode = Mode::Adrift { ticks_left: 100.0 };
     }
 
     #[test]
@@ -366,7 +366,7 @@ mod tests {
         let (mut traffic, lead, followers) = fleet(&[ABOVE]);
         let there = of_mut(&mut traffic, lead);
         there.goal = Goal::Drift;
-        there.ai_wait = 10;
+        there.ai_wait = 10.0;
         let start = there.state;
         think(&mut traffic);
         let lead = of(&traffic, lead);

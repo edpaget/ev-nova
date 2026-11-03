@@ -164,8 +164,8 @@ mod tests {
         let traffic = &mut last.space.traffic;
         traffic.write_berth_voice(1, VoiceVariant::Odd);
         traffic.write_berth_voice(2, VoiceVariant::Even);
-        traffic.write_berth_search(1, SearchTimer::Searching(40));
-        traffic.write_berth_search(2, SearchTimer::Searching(9));
+        traffic.write_berth_search(1, SearchTimer::Searching(40.0));
+        traffic.write_berth_search(2, SearchTimer::Searching(9.0));
         let escorts = vec![saved(MEDIUM, Some(6)), saved(MEDIUM_EVEN, Some(3))];
         let mut session = Session::fly(&catalog, pilot(&catalog, 0, escorts))
             .expect("flies")
@@ -178,11 +178,11 @@ mod tests {
         assert_eq!(
             words,
             [
-                (MEDIUM, Some(VoiceVariant::Even), SearchTimer::Carried(9)),
+                (MEDIUM, Some(VoiceVariant::Even), SearchTimer::Carried(9.0)),
                 (
                     MEDIUM_EVEN,
                     Some(VoiceVariant::Odd),
-                    SearchTimer::Carried(40)
+                    SearchTimer::Carried(40.0)
                 ),
             ]
         );

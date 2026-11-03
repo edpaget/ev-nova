@@ -14,7 +14,8 @@
 //!   `BlastRadius`, the blast over slots 0-63, `_DamageShip` @0x36106 and
 //!   `_IonizeShip` @0x3612d on each ship it reaches) or a fizzle
 //!   (`_SpawnExplod` @0x36175); then its slot is freed (@0x3617c);
-//! - any other shot loses a tick of life (@0x35686-0x356a3), steers and
+//! - any other shot loses the frame's gain of its life (@0x35686-0x356a3),
+//!   steers and
 //!   moves (`_HandleShotGuidance` @0x356d0, @0x356d5-0x3570f), then makes
 //!   its missile lock (@0x35717-0x35861, `_DamageShip` @0x35855), its spin
 //!   (@0x35879-0x358c4), its frames and its trail.
@@ -85,16 +86,19 @@ impl Combat {
     ///   it fizzles;
     ///   its blast's hits land at once ([`Combat::land`]), and its slot is
     ///   freed (@0x3617c);
-    /// - any other shot flies a tick ([`Shot::step`]), homing among the
+    /// - any other shot flies a visit at the fight's
+    ///   [`Field::speed_mult`](super::Field::speed_mult) ([`Shot::step`]),
+    ///   by the fight's decay reading, homing among the
     ///   ships where they are now, with each ship's jamming and sight as
     ///   the hits so far, and the answers to the locks before it, left
-    ///   them ([`Sight`](super::projectile::Sight)), and runs a spinning
-    ///   shot's spin timer in its slot (`ShotSlots::spin_pass`,
-    ///   @0x35879-0x358c4); then its missile lock, if it makes one
-    ///   ([`lock`]), lands at once (@0x35855), reading the target where it
-    ///   is now, and the stretch stops there ([`Stretch::Answer`]), its
-    ///   walk kept to resume at the next slot ([`ShotWalk`]). A homing
-    ///   shot reads the `asteroids`, by slot, where they
+    ///   them ([`Sight`](super::projectile::Sight)), and its slot keeps a
+    ///   spinning shot's spin timer as the visit left it
+    ///   (`ShotSlots::keep_spin`, @0x35879-0x358c4); then its missile
+    ///   lock, if it makes one at the frame's gain ([`lock`]), lands at
+    ///   once (@0x35855), reading the target where it is now, and the
+    ///   stretch stops there ([`Stretch::Answer`]), its walk kept to
+    ///   resume at the next slot ([`ShotWalk`]). A homing shot reads the
+    ///   `asteroids`, by slot, where they
     ///   are as `_HandleShot` meets them, which `_HandleAsteroids` moves
     ///   only after the ship loop (see
     ///   [`asteroid_seek`](super::asteroid_seek)).
@@ -145,7 +149,9 @@ impl Combat {
                     self.move_shot(index, &lineup, asteroids, chance);
                     let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
-                        lock(&self.shots[index], &sides).into_iter().collect();
+                        lock(&self.shots[index], &sides, self.field.speed_mult)
+                            .into_iter()
+                            .collect();
                     if !locked.is_empty() {
                         self.land_at_visit(fighters, locked, &mut lineup, rule);
                         self.walk = Some(Walk::Shots(ShotWalk { next: visit + 1 }));
@@ -165,10 +171,10 @@ impl Combat {
         held.max(flying).map_or(0, |slot| slot + 1)
     }
 
-    /// The shot in flight at `index` flies a tick among the ships of
-    /// `lineup` where they are now and the `asteroids`, by slot, drawing on
-    /// `chance`, and runs its slot's spin timer if it spins (see
-    /// [`Combat::shot_stretch`]).
+    /// The shot in flight at `index` flies a visit at the frame's gain
+    /// among the ships of `lineup` where they are now and the `asteroids`,
+    /// by slot, drawing on `chance`, and its slot keeps the spin timer the
+    /// visit left if it spins (see [`Combat::shot_stretch`]).
     fn move_shot(
         &mut self,
         index: usize,
@@ -182,12 +188,14 @@ impl Combat {
             frame: self.field.frame,
             lock_angle: self.lock_angle,
             bomb_heading_wrap: self.bomb_heading_wrap,
+            speed_mult: self.field.speed_mult,
+            decay_step: self.decay,
             ..Guide::among(&lineup.seen)
         };
         let shot = &mut self.shots[index];
         shot.step(&guide, chance);
         if shot.weapon.spins() {
-            self.slots.spin_pass(shot.slot, shot.weapon.beam_width);
+            self.slots.keep_spin(shot.slot, shot.spin_timer);
         }
     }
 

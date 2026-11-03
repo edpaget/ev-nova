@@ -83,13 +83,13 @@ fn a_coasting_warship_takes_an_enemy_in_sight_as_its_target_through_its_wait() {
     let govts = govts(0, 0);
     let velocity = Vec2::new(4.0, -3.0);
     let (mut traffic, warship, trader) =
-        warship_and_enemy(Mode::Coasting { ticks_left: 20 }, Goal::Idle, velocity);
+        warship_and_enemy(Mode::Coasting { ticks_left: 20.0 }, Goal::Idle, velocity);
     let start = of(&traffic, warship).state;
     traffic.tick_in(&NovaAi::default(), world(&[], &govts), &[], &mut NeverFires);
     let ship = of(&traffic, warship);
     assert_eq!(ship.goal, Goal::Attack(n(trader.0)), "_WarshipAI @0x8b875");
     assert_eq!(ship.target, Some(n(trader.0)));
-    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 19 });
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 19.0 });
     assert_eq!(
         ship.state.position,
         start.position + velocity,
@@ -117,7 +117,7 @@ fn a_warship_entering_a_gate_takes_an_enemy_in_sight_and_still_leaves() {
     let sites = [gate()];
     let entering = Mode::EnteringGate {
         gate: GATE,
-        ticks_left: 4,
+        ticks_left: 4.0,
     };
     let (mut traffic, warship, trader) =
         warship_and_enemy(entering, Goal::EnterGate(GATE), Vec2::ZERO);
@@ -179,7 +179,7 @@ fn a_pirate_entering_a_gate_that_finds_a_ship_to_plunder_stays() {
     pirate.goal = Goal::EnterGate(GATE);
     pirate.mode = Mode::EnteringGate {
         gate: GATE,
-        ticks_left: 4,
+        ticks_left: 4.0,
     };
     let pirate = traffic.add_npc_at(pirate, 1);
     traffic.tick_in(
@@ -196,7 +196,7 @@ fn a_pirate_entering_a_gate_that_finds_a_ship_to_plunder_stays() {
             hopeless: false
         }
     );
-    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 3 });
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 3.0 });
     for _ in 0..3 {
         assert_eq!(of(&traffic, pirate).state.position, Vec2::ZERO, "held");
         traffic.tick_in(
@@ -268,11 +268,11 @@ fn a_think_ending_a_coasting_or_entering_ships_wait_flies_it_that_tick() {
     };
     let sites = [gate()];
     for (mode, goal) in [
-        (Mode::Coasting { ticks_left: 30 }, Goal::Idle),
+        (Mode::Coasting { ticks_left: 30.0 }, Goal::Idle),
         (
             Mode::EnteringGate {
                 gate: GATE,
-                ticks_left: 4,
+                ticks_left: 4.0,
             },
             Goal::EnterGate(GATE),
         ),
@@ -318,7 +318,7 @@ fn a_pirate_turned_out_of_its_entry_into_the_count_wait_waits_120_once() {
     let (mut traffic, id) = waiting(
         Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 4,
+            ticks_left: 4.0,
         },
         Goal::EnterGate(GATE),
     );
@@ -336,7 +336,7 @@ fn a_pirate_turned_out_of_its_entry_into_the_count_wait_waits_120_once() {
         assert_eq!(traffic.departed(), []);
     }
     let ship = of(&traffic, id);
-    assert_eq!(ship.ai_wait, BOARD_WAIT - 11, "one wait, counting down");
+    assert_eq!(ship.ai_wait, BOARD_WAIT - 11.0, "one wait, counting down");
     assert_eq!(ship.mode, Mode::Flying);
 }
 
@@ -355,7 +355,7 @@ fn a_ship_held_at_its_gate_taking_the_count_wait_leaves_its_hold_owing_its_burst
         (RuleSource::Bible, None),
     ] {
         let (mut traffic, id) = waiting(
-            Mode::HeldAtGate { ticks_left: 40 },
+            Mode::HeldAtGate { ticks_left: 40.0 },
             Goal::Attack(ShipRef::Player),
         );
         let world = World {
@@ -377,7 +377,7 @@ fn a_ship_held_at_its_gate_taking_the_count_wait_leaves_its_hold_owing_its_burst
 /// An inertialess fighter at the centre attacking the player 200 to its
 /// right, breaking off along 135 from a frame of its break-off, its AI
 /// wait at `wait`.
-fn breaking_off(wait: u32) -> (Traffic, NpcId) {
+fn breaking_off(wait: f32) -> (Traffic, NpcId) {
     use crate::ai::fire::Manoeuvre;
     use crate::ai::pursuit::{Body, Frame, Kept, Pursuit};
     let mut traffic = Traffic::with_interval(1);
@@ -424,7 +424,7 @@ fn an_inertialess_ship_under_its_ai_wait_leaves_its_break_off_beyond_165() {
         player: Some(crate::ai::fixture::player(200.0, 0.0)),
         ..World::new(&[])
     };
-    let (mut waiting, id) = breaking_off(50);
+    let (mut waiting, id) = breaking_off(50.0);
     waiting.tick_in(&Deciding(attack), world, &[], &mut NeverFires);
     let ship = of(&waiting, id);
     assert_eq!(ship.pursuit.kept, None, "dropped back to dogfight");
@@ -437,7 +437,7 @@ fn an_inertialess_ship_under_its_ai_wait_leaves_its_break_off_beyond_165() {
     assert_eq!(bodies, [Manoeuvre::BreakOff]);
     // With no wait the high level runs first: outside the dogfight box it
     // approaches (@0x8e68d-0x8e697).
-    let (mut unwaited, id) = breaking_off(0);
+    let (mut unwaited, id) = breaking_off(0.0);
     unwaited.tick_in(&Deciding(attack), world, &[], &mut NeverFires);
     let last = of(&unwaited, id)
         .pursuit

@@ -50,8 +50,8 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
-use crate::spaceport::credits::{TON, TONS, comma_number};
-use crate::spaceport::shipyard::{LABEL_COLOR as MED_GREY, NONE};
+use crate::spaceport::credits::{OF, TON, TONS, comma_number};
+use crate::spaceport::shipyard::{ENERGY_LABEL, LABEL_COLOR as MED_GREY, NONE};
 use crate::spaceport::trade::LIGHT_GREY;
 use crate::text::TextMetrics;
 
@@ -89,10 +89,6 @@ pub const ODDS_LABEL: &str = "Capture Odds:";
 /// `_creditsString` (#33) with its first letter upper-cased, then ":"
 /// (@0x929de-0x92a46).
 pub const CREDITS_LABEL: &str = "Credits:";
-/// `_fuelString[4]`, #7.
-pub const ENERGY_LABEL: &str = "Energy:";
-/// `STR#` 2002 #391.
-pub const OF: &str = "of";
 /// The labels' colour: `_rgbLightGrey` (@0x92970, @0x92ce9, @0x92d86).
 pub const LABEL_COLOR: Color = LIGHT_GREY;
 /// [`NONE`]'s colour: `_rgbMedGrey` (@0x92b44).

@@ -232,6 +232,7 @@ mod tests {
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;
+    use nova_sim::SpeedMult;
 
     /// `dësc` `id` as the rescue loaded it.
     fn rescued(id: i16) -> LoadedDesc {
@@ -296,13 +297,19 @@ mod tests {
     #[test]
     fn the_stellar_passes_are_taken_in_order_across_receives_once() {
         let mut inbox = received(vec![
-            FlightEvent::StellarPass(StellarPass::Entry),
-            FlightEvent::StellarPass(StellarPass::Ticked),
+            FlightEvent::StellarPass(StellarPass::entry(SpeedMult::FULL)),
+            FlightEvent::StellarPass(StellarPass::ticked(SpeedMult::FULL)),
         ]);
-        inbox.receive(vec![FlightEvent::StellarPass(StellarPass::Still)]);
+        inbox.receive(vec![FlightEvent::StellarPass(StellarPass::ticked(
+            SpeedMult::ZERO,
+        ))]);
         assert_eq!(
             inbox.take_stellar_passes(),
-            [StellarPass::Entry, StellarPass::Ticked, StellarPass::Still]
+            [
+                StellarPass::entry(SpeedMult::FULL),
+                StellarPass::ticked(SpeedMult::FULL),
+                StellarPass::ticked(SpeedMult::ZERO)
+            ]
         );
         assert_eq!(inbox.take_stellar_passes(), []);
     }

@@ -78,11 +78,11 @@ fn tick(traffic: &mut Traffic, behaviour: &Fixed) {
 #[test]
 fn a_searching_decision_sets_the_timer_and_seen_or_gave_up_clears_it() {
     let mut traffic = attacker(SearchTimer::Unset);
-    tick(&mut traffic, &attack(Some(LostSight::Searching(150))));
-    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(150));
+    tick(&mut traffic, &attack(Some(LostSight::Searching(150.0))));
+    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(150.0));
     tick(&mut traffic, &attack(Some(LostSight::Seen)));
     assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Unset);
-    let mut traffic = attacker(SearchTimer::Searching(1));
+    let mut traffic = attacker(SearchTimer::Searching(1.0));
     let gave_up = Fixed(Decision {
         goal: Goal::Idle,
         clears_target: true,
@@ -95,13 +95,13 @@ fn a_searching_decision_sets_the_timer_and_seen_or_gave_up_clears_it() {
 
 #[test]
 fn a_decision_without_the_block_leaves_the_timer_as_it_was() {
-    let mut traffic = attacker(SearchTimer::Searching(40));
+    let mut traffic = attacker(SearchTimer::Searching(40.0));
     let fleeing = Fixed(Decision {
         goal: Goal::Flee(ShipRef::Player),
         ..Decision::default()
     });
     tick(&mut traffic, &fleeing);
-    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(40));
+    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(40.0));
 }
 
 #[test]
@@ -109,9 +109,9 @@ fn a_searching_ship_brakes_as_a_waiting_one_does() {
     let moving = |traffic: &mut Traffic| {
         traffic.npcs[0].state.velocity = Vec2::new(-1.5, 2.0);
     };
-    let mut searching = attacker(SearchTimer::Searching(10));
+    let mut searching = attacker(SearchTimer::Searching(10.0));
     moving(&mut searching);
-    tick(&mut searching, &attack(Some(LostSight::Searching(9))));
+    tick(&mut searching, &attack(Some(LostSight::Searching(9.0))));
     let mut waiting = attacker(SearchTimer::Unset);
     moving(&mut waiting);
     let wait = Fixed(Decision {
@@ -126,7 +126,7 @@ fn a_searching_ship_brakes_as_a_waiting_one_does() {
 
 #[test]
 fn a_search_drops_a_kept_pursuit_and_a_docking() {
-    let mut traffic = attacker(SearchTimer::Searching(10));
+    let mut traffic = attacker(SearchTimer::Searching(10.0));
     traffic.npcs[0].pursuit = Pursuit {
         kept: Some(Kept::Rush),
         frame: None,
@@ -135,7 +135,7 @@ fn a_search_drops_a_kept_pursuit_and_a_docking() {
         ship: ShipRef::Player,
         sub: DockSub::Approach,
     });
-    tick(&mut traffic, &attack(Some(LostSight::Searching(9))));
+    tick(&mut traffic, &attack(Some(LostSight::Searching(9.0))));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.pursuit, Pursuit::default());
     assert_eq!(ship.docking, None);
@@ -143,7 +143,7 @@ fn a_search_drops_a_kept_pursuit_and_a_docking() {
 
 #[test]
 fn a_ship_whose_target_is_seen_again_flies_its_fight() {
-    let mut traffic = attacker(SearchTimer::Searching(10));
+    let mut traffic = attacker(SearchTimer::Searching(10.0));
     tick(&mut traffic, &attack(Some(LostSight::Seen)));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.lost_sight, SearchTimer::Unset);
@@ -157,7 +157,7 @@ fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
     // search's stop with it: its docking stands, and the low level runs
     // the rush it kept with no high level (@0x8d4d2 → @0x901f4,
     // `waiting_pursuit`), keeping it outside the stay box.
-    let mut traffic = attacker(SearchTimer::Searching(10));
+    let mut traffic = attacker(SearchTimer::Searching(10.0));
     let kept = Pursuit {
         kept: Some(Kept::Rush),
         frame: None,
@@ -168,10 +168,10 @@ fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
     });
     traffic.npcs[0].pursuit = kept;
     traffic.npcs[0].docking = docking;
-    traffic.npcs[0].ai_wait = 5;
+    traffic.npcs[0].ai_wait = 5.0;
     tick(&mut traffic, &attack(None));
     let ship = &traffic.npcs()[0];
-    assert_eq!(ship.lost_sight, SearchTimer::Searching(10));
+    assert_eq!(ship.lost_sight, SearchTimer::Searching(10.0));
     assert_eq!(ship.pursuit.kept, kept.kept);
     let last = ship.pursuit.frame.and_then(|frame| frame.last());
     assert_eq!(
@@ -199,12 +199,12 @@ fn a_new_ship_takes_its_berths_last_search_timer() {
     let mut traffic = Traffic::with_interval(1);
     traffic.add_npc_at(npc(1, ShipStats::new(FAST, &[])), 4);
     traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
-    tick(&mut traffic, &attack(Some(LostSight::Searching(40))));
-    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(40));
+    tick(&mut traffic, &attack(Some(LostSight::Searching(40.0))));
+    assert_eq!(traffic.npcs()[0].lost_sight, SearchTimer::Searching(40.0));
     traffic.npcs.clear();
     assert_eq!(
         brought_in(&mut traffic, 4),
-        SearchTimer::Carried(40),
+        SearchTimer::Carried(40.0),
         "the count, with no search under way"
     );
     let mut seen = Traffic::with_interval(1);
@@ -218,12 +218,12 @@ fn a_new_ship_takes_its_berths_last_search_timer() {
 #[test]
 fn a_ship_in_a_fresh_berth_starts_with_a_zero_timer() {
     let mut traffic = Traffic::with_interval(1);
-    assert_eq!(brought_in(&mut traffic, 9), SearchTimer::Carried(0));
+    assert_eq!(brought_in(&mut traffic, 9), SearchTimer::Carried(0.0));
     let id = traffic.add_npc(npc(1, ShipStats::new(FAST, &[])));
     let added = traffic.npcs().iter().find(|ship| ship.id == id);
     assert_eq!(
         added.map(|ship| ship.lost_sight),
-        Some(SearchTimer::Carried(0))
+        Some(SearchTimer::Carried(0.0))
     );
 }
 
@@ -237,7 +237,7 @@ fn by_the_other_reading_every_new_ship_starts_unset() {
     );
     traffic.add_npc_at(npc(1, ShipStats::new(FAST, &[])), 4);
     traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
-    tick(&mut traffic, &attack(Some(LostSight::Searching(40))));
+    tick(&mut traffic, &attack(Some(LostSight::Searching(40.0))));
     traffic.npcs.clear();
     assert_eq!(brought_in(&mut traffic, 4), SearchTimer::Unset);
     assert_eq!(brought_in(&mut traffic, 9), SearchTimer::Unset);

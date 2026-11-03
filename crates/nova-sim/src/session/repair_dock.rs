@@ -447,7 +447,7 @@ mod tests {
         npc.berth = 3;
         npc.goal = Goal::Assist(Help::Repair);
         npc.target = Some(ShipRef::Npc(patient));
-        npc.ai_wait = 50;
+        npc.ai_wait = 50.0;
         npc.state.position = template.state.position + Vec2::new(1.0, 1.0);
         npc.docking = Some(Docking {
             ship: ShipRef::Npc(patient),

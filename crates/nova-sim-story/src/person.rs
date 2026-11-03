@@ -1305,7 +1305,7 @@ mod tests {
         };
         assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
         let coasting = Npc {
-            mode: Mode::Coasting { ticks_left: 30 },
+            mode: Mode::Coasting { ticks_left: 30.0 },
             ..intact.clone()
         };
         assert_eq!(

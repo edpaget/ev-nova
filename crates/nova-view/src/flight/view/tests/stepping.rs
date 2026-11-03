@@ -22,7 +22,7 @@ use crate::system::camera::{Anchor, Camera};
 use super::*;
 
 /// The NPC the reports carry, beside the player.
-const NPC: ShipRef = ShipRef::Npc(NpcId(0));
+pub(super) const NPC: ShipRef = ShipRef::Npc(NpcId(0));
 
 /// Where a frame's steps draw the ship: the original's play area centre.
 fn anchor() -> Anchor {
@@ -46,20 +46,20 @@ fn stepping_by(catalog: FakeCatalog, rules: &Rulebook) -> Faked {
 }
 
 /// [`stepping_by`] Nova's rules.
-fn stepping(catalog: FakeCatalog) -> Faked {
+pub(super) fn stepping(catalog: FakeCatalog) -> Faked {
     stepping_by(catalog, &Rulebook::default())
 }
 
 /// Runs a frame of `view` whose flight reports `report`, asked for as
 /// many steps as it holds: whether the rescue ended it.
-fn frame(view: &mut Faked, report: StepReport) -> bool {
+pub(super) fn frame(view: &mut Faked, report: StepReport) -> bool {
     let steps = u32::try_from(report.steps.len()).expect("a frame's steps");
     view.sim.queue_report(report);
     view.step_frame(steps, anchor())
 }
 
 /// A frame of one step of `passes`.
-fn one_step(passes: Vec<PassReport>) -> StepReport {
+pub(super) fn one_step(passes: Vec<PassReport>) -> StepReport {
     StepReport {
         steps: vec![step(passes)],
         stopped: false,
@@ -116,7 +116,7 @@ fn the_npc(at: Vec2) -> FrameShip {
 
 /// A pass of the player at the origin and [`NPC`] 100 above it, raising
 /// `combat`.
-fn fight(combat: Vec<CombatEvent>) -> PassReport {
+pub(super) fn fight(combat: Vec<CombatEvent>) -> PassReport {
     PassReport {
         ships: vec![the_player(Vec2::ZERO), the_npc(Vec2::new(0.0, -100.0))],
         combat,
@@ -125,7 +125,7 @@ fn fight(combat: Vec<CombatEvent>) -> PassReport {
 }
 
 /// A hit on `ship`, shown `late` or not.
-fn hit(ship: ShipRef, late: bool) -> CombatEvent {
+pub(super) fn hit(ship: ShipRef, late: bool) -> CombatEvent {
     CombatEvent::Hit {
         ship,
         weapon: Some(BLASTER),
@@ -155,6 +155,31 @@ fn flash(view: &Faked, ship: ShipRef) -> Option<f32> {
 }
 
 // The input.
+
+#[test]
+fn a_step_after_a_third_of_a_second_without_one_is_held() {
+    let mut view = stepping(catalog());
+    view.tick(Duration::from_millis(200));
+    view.tick(Duration::from_millis(133));
+    view.tick(Duration::from_millis(1));
+    let held: Vec<bool> = view.sim.inputs().iter().map(|input| input.held).collect();
+    assert_eq!(held, [false, false, true], "333 ms is short of the 334");
+}
+
+#[test]
+fn steady_steps_are_not_held() {
+    let mut view = stepping(catalog());
+    for _ in 0..31 {
+        view.sim.queue_report(one_step(Vec::new()));
+    }
+    view.tick(Duration::from_millis(400));
+    for _ in 0..30 {
+        view.tick(Duration::from_millis(17));
+    }
+    let held: Vec<bool> = view.sim.inputs().iter().map(|input| input.held).collect();
+    assert!(held[0], "the first, after 400 ms");
+    assert!(held[1..].iter().all(|&held| !held), "{held:?}");
+}
 
 #[test]
 fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
@@ -189,6 +214,9 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
             double_time_key: true,
             hyperspace_effects: true,
             land_key: true,
+            dock_try: false,
+            jettison: None,
+            held: false,
         }
     );
     assert_eq!(
@@ -216,6 +244,59 @@ fn command_and_minus_hold_the_self_destruct_and_command_and_x_the_eject() {
         let input = held(keys);
         assert!(!input.self_destruct && !input.eject, "{keys:?}");
     }
+}
+
+#[test]
+fn the_step_input_carries_the_held_jettison_chord_while_taken() {
+    // `_HandlePlayer`'s Command-K block has no latch (@0x6fd54-0x6fda1):
+    // Command and K down jettison on every pass, `!Option` all.
+    let mut view = stepping(catalog());
+    view.held.extend([Key::Command, JETTISON_KEY]);
+    assert_eq!(view.step_input(anchor()).jettison, Some(true));
+    view.held.insert(Key::Alt);
+    assert_eq!(view.step_input(anchor()).jettison, Some(false), "Option");
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Jettison));
+    assert_eq!(view.step_input(anchor()).jettison, None, "refused");
+}
+
+#[test]
+fn k_without_command_carries_nothing() {
+    let mut view = stepping(catalog());
+    view.held.insert(JETTISON_KEY);
+    assert_eq!(view.step_input(anchor()).jettison, None);
+    view.held.insert(Key::Alt);
+    assert_eq!(view.step_input(anchor()).jettison, None);
+}
+
+#[test]
+fn a_command_k_tapped_between_steps_jettisons_on_the_next_step_once() {
+    // A pass would have read it down, as the slot block counts a tap.
+    let mut view = stepping(catalog());
+    view.input(&key(Key::Command, true));
+    view.input(&key(JETTISON_KEY, true));
+    view.input(&key(JETTISON_KEY, false));
+    view.input(&key(Key::Command, false));
+    assert_eq!(sent(&view), [], "the press sends nothing");
+    assert_eq!(view.step_input(anchor()).jettison, Some(true), "the tap");
+    frame(&mut view, one_step(Vec::new()));
+    assert_eq!(
+        view.sim.inputs().last().map(|input| input.jettison),
+        Some(Some(true))
+    );
+    assert_eq!(view.step_input(anchor()).jettison, None, "once");
+}
+
+#[test]
+fn the_step_input_carries_ls_latch_as_the_dock_try() {
+    // `_dockTryFlag` (0xdee34) holds the approach back (@0x6a970).
+    let mut view = stepping(catalog());
+    assert!(!view.step_input(anchor()).dock_try);
+    super::faded_keys::requests(&mut view);
+    view.press_land();
+    let input = view.step_input(anchor());
+    assert!(input.dock_try, "set by the request");
+    view.held.insert(LAND_KEY);
+    assert!(view.step_input(anchor()).land_key);
 }
 
 #[test]
@@ -447,6 +528,48 @@ fn a_ship_breaking_up_goes_off_about_where_the_pass_left_it() {
 }
 
 #[test]
+fn a_breakup_on_a_held_second_pass_is_heard_on_its_frame_and_goes_off_the_frame_after() {
+    // NPC 129 is 40 pixels across: its puff goes off within 10 of it.
+    let (asked, effects_chance) = scripted(&[0, 3, 15, 0]);
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.effects_chance = effects_chance;
+    let breaking = FrameShip {
+        condition: Condition::Dying {
+            ticks_left: 18,
+            starting: false,
+        },
+        breakup: Some(Explosion {
+            boom: BoomId(128),
+            extra: false,
+        }),
+        ..the_npc(Vec2::new(30.0, -100.0))
+    };
+    let second = PassReport {
+        ships: vec![the_player(Vec2::new(10.0, 10.0)), breaking],
+        player_position: Vec2::new(10.0, 10.0),
+        ..PassReport::default()
+    };
+    frame(&mut view, doubled(fight(vec![]), second, sol()));
+    assert_eq!(asked.borrow().asked, [1, 20, 20, 4], "rolled on its frame");
+    let heard = combat_heard(&mut view);
+    assert_eq!(
+        heard
+            .iter()
+            .map(|sound| (sound.sound, sound.offset))
+            .collect::<Vec<_>>(),
+        [(nova_sim::SoundId(302), (13, -105))],
+        "heard from where the held pass left the player"
+    );
+    assert_eq!(view.effects.explosions(), [], "not yet shown");
+    frame(&mut view, stopped());
+    let explosions = view.effects.explosions();
+    assert_eq!(explosions.len(), 1);
+    assert_eq!(explosions[0].at, Point::new(23.0, -95.0), "where it rolled");
+    assert_eq!(asked.borrow().asked.len(), 4, "not rolled again");
+    assert_eq!(combat_heard(&mut view), [], "not heard again");
+}
+
+#[test]
 fn a_ships_weapon_glow_lights_on_its_pass_and_falls_by_its_classs_decay() {
     let mut view = stepping(armed(1, &[BLASTER]));
     let lit = CombatEvent::WeaponGlow {
@@ -490,8 +613,9 @@ fn an_npcs_weapon_glow_falls_by_its_own_classs_decay() {
     );
 }
 
-/// A view firing the player's looped beam, of a 3-tick sound, by `rules`.
-fn firing_looped(rules: &Rulebook) -> Faked {
+/// A view whose player's looped beam has a 3-tick sound, by `rules`, and
+/// the beam fired.
+fn looped_beam(rules: &Rulebook) -> (Faked, CombatEvent) {
     let mut catalog = armed(0, &[UNDER]);
     catalog.looks[4].1 = Ok(WeaponLook {
         flags: weapons::LOOPED_SOUND,
@@ -499,13 +623,18 @@ fn firing_looped(rules: &Rulebook) -> Faked {
         sound_ticks: Some(3),
         ..WeaponLook::default()
     });
-    let mut view = stepping_by(catalog, rules);
     let fired = CombatEvent::Fired {
         ship: ShipRef::Player,
         weapon: UNDER,
         at: Vec2::ZERO,
         sound: Some(FireSound::at(nova_sim::combat::PLAYER_FIRE_PRIORITY)),
     };
+    (stepping_by(catalog, rules), fired)
+}
+
+/// A view firing the player's looped beam, of a 3-tick sound, by `rules`.
+fn firing_looped(rules: &Rulebook) -> Faked {
+    let (mut view, fired) = looped_beam(rules);
     for _ in 0..4 {
         frame(&mut view, one_step(vec![fight(vec![fired])]));
     }
@@ -569,6 +698,64 @@ fn a_detonation_on_the_second_pass_is_shown_the_frame_after() {
     assert_eq!(view.effects.explosions().len(), 0, "held with its pass");
     frame(&mut view, one_step(vec![fight(vec![])]));
     assert_eq!(view.effects.explosions().len(), 1);
+}
+
+/// The sounds among `heard` of `snd ` `id`.
+fn of_sound(heard: &[CombatSound], id: i16) -> usize {
+    heard
+        .iter()
+        .filter(|sound| sound.sound == nova_sim::SoundId(id))
+        .count()
+}
+
+#[test]
+fn a_detonation_on_the_second_pass_is_heard_on_its_frame_and_shown_the_frame_after() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    frame(
+        &mut view,
+        doubled(fight(vec![]), fight(vec![detonation()]), sol()),
+    );
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        1,
+        "heard on its frame"
+    );
+    assert_eq!(view.effects.explosions().len(), 0, "shown with its pass");
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.effects.explosions().len(), 1);
+    assert_eq!(combat_heard(&mut view), [], "not heard again");
+}
+
+#[test]
+fn a_weapon_fired_on_a_held_second_pass_is_heard_on_its_frame() {
+    let rules = Rulebook::default().with_override(RuleKey::LoopedSoundWait, RuleSource::Bible);
+    let (mut view, fired) = looped_beam(&rules);
+    frame(&mut view, doubled(fight(vec![]), fight(vec![fired]), sol()));
+    let mut heard = vec![combat_heard(&mut view).len()];
+    for _ in 0..3 {
+        frame(&mut view, one_step(vec![fight(vec![fired])]));
+        heard.push(combat_heard(&mut view).len());
+    }
+    assert_eq!(heard, [1, 0, 0, 1], "its 3 ticks counted from its pass");
+}
+
+#[test]
+fn a_held_pass_dropped_by_a_layout_was_heard() {
+    let mut view = held_a_blast_and_a_wrap();
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        1,
+        "heard on its frame"
+    );
+    super::faked_screen::warp_ends(&mut view);
+    view.arrive();
+    frame(&mut view, stopped());
+    assert_eq!(view.effects.explosions().len(), 0, "never shown");
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        0,
+        "nor heard again"
+    );
 }
 
 // A double-time frame, drawn between its passes.
@@ -841,24 +1028,6 @@ fn shooting(id: u32, smoke_frame: bool) -> PassReport {
 }
 
 #[test]
-fn a_spinning_shot_draws_its_start_once_on_the_effects_chance() {
-    let catalog = blaster_looking(|look| {
-        look.flags = crate::flight::weapons::SPINS;
-        look.beam_width = 1;
-    });
-    let (effects, effects_chance) = scripted(&[20, 13]);
-    let mut view = stepping(catalog);
-    view.effects_chance = effects_chance;
-    // It lives only through the first pass of a double-time step.
-    frame(&mut view, one_step(vec![shooting(7, false), fight(vec![])]));
-    assert_eq!(effects.borrow().asked, [36], "Rand(36), once");
-    frame(&mut view, one_step(vec![shooting(8, false)]));
-    assert_eq!(view.shot_looks.spin_starts.start(ShotId(8)), 13);
-    frame(&mut view, one_step(vec![shooting(8, false)]));
-    assert_eq!(effects.borrow().asked, [36, 36], "drawn once a shot");
-}
-
-#[test]
 fn a_shot_in_flight_trails_each_pass_and_smokes_on_a_smoke_frame() {
     let catalog = blaster_looking(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;
@@ -881,7 +1050,8 @@ fn a_shot_in_flight_trails_each_pass_and_smokes_on_a_smoke_frame() {
     assert_eq!(puffs(&view), 2, "a puff each smoke-frame pass");
     let newest = view.effects.particles()[8];
     let start = crate::flight::trails::trail_start(Vec2::new(0.0, -50.0), 0.0, 0);
-    assert_eq!(newest.at, Point::new(start.x, start.y));
+    let start = crate::flight::particle::Fixed::spawned(Point::new(start.x, start.y));
+    assert_eq!(newest.at, start, "unmoved, on its whole pixel");
 }
 
 #[test]
@@ -1070,20 +1240,20 @@ fn a_star_of_factor_0_stays_fixed_in_world_units() {
 // it (see the `stepping` module).
 
 /// Where the ship stood as it wrapped.
-const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
+pub(super) const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
 
 /// What the wrap added.
-const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
+pub(super) const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
 
 /// The ship's move a pass.
-const MOVE: Vec2 = Vec2::new(8.0, -4.0);
+pub(super) const MOVE: Vec2 = Vec2::new(8.0, -4.0);
 
-fn wrap() -> PlayerWrap {
+pub(super) fn wrap() -> PlayerWrap {
     PlayerWrap::of(STOOD).expect("past the edge")
 }
 
 /// A pass that ended with the ship at `at`, `wrap` run at its head.
-fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
+pub(super) fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
     PassReport {
         ships: vec![the_player(at)],
         player_position: at,
@@ -1093,7 +1263,7 @@ fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
 }
 
 /// The ship's place before a step, at `at`.
-fn place(at: Vec2) -> ShipPlace {
+pub(super) fn place(at: Vec2) -> ShipPlace {
     ShipPlace {
         position: at,
         ..ShipPlace::default()
@@ -1352,7 +1522,7 @@ fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
             .iter()
             .map(|puff| puff.at)
             .collect(),
-        view.effects.particles()[0].at,
+        view.effects.particles()[0].at.point(),
     )
 }
 
@@ -1501,7 +1671,7 @@ fn raised(view: &mut Faked, messages: Vec<SimMessage>, report: StepReport) {
     }
     let steps = u32::try_from(report.steps.len()).expect("a frame's steps");
     view.sim.queue_report(report);
-    view.run_steps(steps);
+    view.run_steps(steps, None);
 }
 
 #[test]

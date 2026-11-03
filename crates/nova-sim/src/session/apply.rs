@@ -124,7 +124,10 @@ impl Session {
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
     ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]),
-    ///   [`FlightCommand::SwitchedOut`] ([`Session::switched_out`]), and the
+    ///   [`FlightCommand::SwitchedOut`] ([`Session::switched_out`]),
+    ///   [`FlightCommand::SwitchedIn`] ([`Session::switch_in`]),
+    ///   [`FlightCommand::CloseInfoDialog`] ([`Session::close_info_dialog`]),
+    ///   and the
     ///   nav's saves and restores: [`Session::save_port_nav`],
     ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
@@ -208,6 +211,14 @@ impl Session {
                 self.switched_out();
                 Answer::Done
             }
+            FlightCommand::SwitchedIn => {
+                self.switch_in();
+                Answer::Done
+            }
+            FlightCommand::CloseInfoDialog => {
+                self.close_info_dialog();
+                Answer::Done
+            }
             FlightCommand::Jump
             | FlightCommand::Land
             | FlightCommand::OpenHypergate
@@ -282,7 +293,7 @@ fn done_if(ran: bool) -> Answer {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::flight_frame::MapClick;
@@ -299,7 +310,7 @@ mod tests {
     /// Runs `command` on `session` as the adapter does once the view has
     /// shared no catalog, drawing on a chance that never fires: the
     /// commands that read none.
-    pub(super) fn apply(session: &mut Session, command: FlightCommand) -> Answer {
+    pub(in crate::session) fn apply(session: &mut Session, command: FlightCommand) -> Answer {
         session.apply(
             command,
             &mut ApplyCollaborators {
@@ -320,7 +331,7 @@ mod tests {
     }
 
     /// A session flying a jump to Alpha Centauri, its sounds so far taken.
-    pub(super) fn jumping() -> Session {
+    pub(in crate::session) fn jumping() -> Session {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");

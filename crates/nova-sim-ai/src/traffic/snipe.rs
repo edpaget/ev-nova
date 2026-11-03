@@ -224,7 +224,12 @@ mod tests {
         weapons: &Arsenal,
     ) -> Controls {
         let (controls, wanted) = super::fly(npc, target, handling, lead, weapons);
-        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        let turn = crate::flight::turn_to(
+            &mut npc.state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         Controls { turn, ..controls }
     }
 

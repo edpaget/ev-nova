@@ -41,7 +41,7 @@
 //! The range plays no sound. Its "Creating Pilot..." (#275, @0x17e37-0x17e6f)
 //! is left out: the engine creates and saves a pilot inside one input, so
 //! no frame is drawn while the original's `_creatingPilotFile` is set
-//! (rdm:phase/main-screen-fidelity/phase-5-pilot-panel-left-outs).
+//! (rdm:phase/front-end/phase-4-pilot-panel-left-outs).
 
 use std::rc::Rc;
 

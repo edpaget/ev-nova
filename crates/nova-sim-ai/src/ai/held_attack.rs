@@ -76,7 +76,7 @@
 //! - **The provoked branch** (@0x8bb0c-0x8bb44): +0x96 above 0, +0x70 set
 //!   and +0x50 at or below 0 make any goal but 7 or 3 goal 4, with no ally
 //!   or fleet test. Its +0x50 gate is
-//!   rdm:phase/escort-fleet-fidelity-followups-followups/phase-3-hunt-warp-and-wait-gates's.
+//!   rdm:phase/npc-ai/phase-12-hunt-warp-and-wait-gates's.
 //! - **Goals 1, 0x14 and 2** (@0x8bb56-0x8bba2): +0x70 set gives goal 4
 //!   (@0x8bba2), -1 the search (@0x8bb96), each with +0x50 at or below 0;
 //!   with it above, neither (@0x8bb75-0x8bb7c, @0x8bb8a-0x8bb91), and so

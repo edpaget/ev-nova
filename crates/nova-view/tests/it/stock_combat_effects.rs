@@ -10,6 +10,7 @@
 use crate::common;
 
 use nova_data::GameData;
+use nova_sim::combat::shot_fade::at_full_gain;
 use nova_sim::combat::weapon::WeaponSpec;
 use nova_sim::{
     BoomId, CombatCatalog, CombatEvent, NeverFires, NpcId, RuleSource, ShipId, ShipRef, Vec2,
@@ -17,6 +18,7 @@ use nova_sim::{
 };
 use nova_view::flight::Looks;
 use nova_view::flight::ShipSprites;
+use nova_view::flight::WeaponLook;
 use nova_view::flight::effects::{Effects, LoopedSounds, Scene};
 use nova_view::flight::lightning::{StepRolls, zig_zag};
 use nova_view::flight::murk::SeenMurk;
@@ -50,7 +52,13 @@ fn the_stock_hellhounds_explosion_scatters_5_small_and_23_large_extras() {
         explosion,
         size: hellhound.blast_radius,
     };
-    effects.apply(&event, &scene, &looks, &mut NeverFires);
+    effects.apply(
+        &event,
+        &scene,
+        &looks,
+        nova_sim::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     let count = |boom| {
         effects
             .explosions()
@@ -71,6 +79,14 @@ fn stock_looks(data: &GameData, ids: &[i16]) -> Looks {
     Looks::read(data, ids.iter().copied().map(WeaponId))
 }
 
+/// How a shot of `look` is drawn `age` full frames old
+/// ([`at_full_gain`]), by `rule`.
+fn shade_at(look: &WeaponLook, age: u32, rule: RuleSource) -> ShotShade {
+    let count = u32::try_from(look.count).expect("a Count");
+    let (life, fade) = at_full_gain(count, look.shot_falloff, age);
+    shot_shade(look, fade, life, rule)
+}
+
 #[test]
 fn stock_weapon_156_trails_and_fades_by_its_look() {
     let Some(dir) = common::nova_data() else {
@@ -86,9 +102,9 @@ fn stock_weapon_156_trails_and_fades_by_its_look() {
     assert_eq!(look.part_life, (10, 24));
     assert_eq!(look.part_color, 0x0010_40FF);
     let engine = RuleSource::Engine;
-    assert_eq!(shot_shade(look, 78, engine), ShotShade::Opaque);
-    assert_eq!(shot_shade(look, 79, engine), ShotShade::Additive(32));
-    assert_eq!(shot_shade(look, 95, engine), ShotShade::Additive(4));
+    assert_eq!(shade_at(look, 78, engine), ShotShade::Opaque);
+    assert_eq!(shade_at(look, 79, engine), ShotShade::Additive(32));
+    assert_eq!(shade_at(look, 95, engine), ShotShade::Additive(4));
 }
 
 #[test]
@@ -102,14 +118,14 @@ fn a_stock_143_is_opaque_before_its_fade_by_the_engine_and_added_by_the_other_re
     assert_eq!((look.count, look.shot_falloff), (50, 2));
     // Life 40 at age 10: before its window; life 20 at age 30: 11 ticks
     // into it, 32 − 22.
-    assert_eq!(shot_shade(look, 10, RuleSource::Engine), ShotShade::Opaque);
+    assert_eq!(shade_at(look, 10, RuleSource::Engine), ShotShade::Opaque);
     assert_eq!(
-        shot_shade(look, 10, RuleSource::Bible),
+        shade_at(look, 10, RuleSource::Bible),
         ShotShade::Additive(32)
     );
     for rule in [RuleSource::Engine, RuleSource::Bible] {
         assert_eq!(
-            shot_shade(look, 30, rule),
+            shade_at(look, 30, rule),
             ShotShade::Additive(10),
             "{rule:?}"
         );
@@ -182,7 +198,13 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
         at: Vec2::new(40.0, 0.0),
         velocity: Vec2::new(1.0, 0.0),
     };
-    effects.apply(&event, &scene, &looks, &mut NeverFires);
+    effects.apply(
+        &event,
+        &scene,
+        &looks,
+        nova_sim::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     let heard: Vec<i16> = effects
         .take_sounds()
         .iter()

@@ -468,6 +468,14 @@ impl TradeScreen {
         }
     }
 
+    /// Tells its offer dialog open whether the mission info screen lists a
+    /// mission ([`SpaceportView::set_offer_missions_listed`](super::SpaceportView::set_offer_missions_listed)).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_missions_listed(listed);
+        }
+    }
+
     /// Its offers play their movies as `movies` says.
     pub fn set_offer_movies(&mut self, movies: Movies) {
         if let Some(offering) = &mut self.offering {
@@ -479,6 +487,19 @@ impl TradeScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
         }
     }
 
@@ -885,6 +906,7 @@ impl Screen for TradeScreen {
     /// The wait for the next offer runs down, the quantity dialog
     /// covering the trade center while it is open.
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         let covered = self.quantity.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
@@ -939,6 +961,13 @@ impl Screen for TradeScreen {
     fn release_keys(&mut self) {
         self.backwards = false;
         self.quantity.release_keys();
+    }
+
+    /// The offers' readout ([`VenueOffers::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.offering
+            .as_ref()
+            .is_some_and(VenueOffers::holds_back_keys)
     }
 
     /// The quantity dialog's and the offer's sounds, in order. The
@@ -2614,6 +2643,56 @@ mod tests {
     /// The trade center, its offers given.
     fn offering() -> TradeScreen {
         screen().with_offers(offer_templates())
+    }
+
+    /// Wiring: the exchange reads its offers' readout
+    /// ([`VenueOffers::holds_back_keys`]), from a click held on the offer's
+    /// Accept until what the answer left has run on the next tick.
+    #[test]
+    fn the_exchange_holds_back_keys_for_its_offers_held_click() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        assert!(!screen.holds_back_keys(), "before the press");
+        let [press, held, release] = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false,
+            },
+        );
+        screen.input(&press);
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&held);
+        screen.input(&release);
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(
+            screen.holds_back_keys(),
+            "the Escape waits for the next tick"
+        );
+        screen.tick(Duration::ZERO);
+        assert!(!screen.holds_back_keys(), "it has run");
+    }
+
+    /// Wiring: the exchange runs what the offer's answer left, an Escape
+    /// held back by the click that accepts, through its own input on its
+    /// next tick ([`VenueOffers::take_unclaimed`]). When it is dropped
+    /// instead is the offers' rule, pinned in `offer`.
+    #[test]
+    fn a_key_queued_after_the_offers_answer_reaches_the_exchange_on_its_next_tick() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let click = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            key(Key::Escape, true, false),
+        );
+        for input in &click {
+            screen.input(input);
+        }
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(!screen.closed(), "the Escape waits for the next tick");
+        screen.tick(Duration::ZERO);
+        assert!(screen.closed());
     }
 
     #[test]

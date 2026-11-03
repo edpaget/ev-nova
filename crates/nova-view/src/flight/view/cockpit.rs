@@ -3,6 +3,8 @@
 //! (its HUD and target parts). The world itself is drawn from the kept
 //! frame (the `drawing` and `world` modules).
 
+use std::collections::HashSet;
+
 use nova_sim::PlayerCommand;
 #[cfg(doc)]
 use nova_sim::Session;
@@ -15,8 +17,10 @@ use crate::flight::escorts::{
     EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
 };
 use crate::flight::floating::{self, Hit};
+use crate::flight::hud::NavDisplay;
 use crate::flight::hud::{self, HudState, StatusBar};
-use crate::flight::target::{self};
+use crate::flight::radar::RadarScene;
+use crate::flight::target::{self, TargetPanel};
 
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::MapMarks;
@@ -257,7 +261,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
     /// pass argument, and nothing gates the fade (@0x6df4a-0x6e052) on the
     /// pass. Ours drops one a step, the re-show after the step's drop:
-    /// rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders.
+    /// rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders.
     pub(super) fn update_escort_menu(&mut self, steps: u32) {
         let flying = self.frame.hud.escorts_flying;
         let cleared = self
@@ -340,8 +344,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.hud.escort_rows
     }
 
-    /// Draws the status bar's target panel ([`FlightView::target_shown`])
-    /// and secondary weapon line, of `frame`'s target and secondary
+    /// Draws the status bar's target panel, showing `shown`, and the
+    /// secondary weapon line, of `frame`'s secondary
     /// ([`FrameHud::secondary`](nova_sim::flight_frame::FrameHud::secondary), [`FrameHud::secondary_line_count`](nova_sim::flight_frame::FrameHud::secondary_line_count)). The
     /// weapon line follows every frame: the original redraws it
     /// (`_statusRedraw[3]`) on every event that changes it, so drawing it
@@ -350,12 +354,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         &self,
         list: &mut DrawList,
         (bar, view_width): (&StatusBar, f32),
-        frame: &FlightFrame,
+        (frame, shown): (&FlightFrame, Option<&TargetPanel>),
     ) {
         let origin = hud::bar_origin(bar, view_width);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let shown = self.target_shown(frame);
-        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
+        target::draw_target_panel(list, &bar.layout, origin, shown, metrics);
         let line = frame.hud.secondary.map(|id| {
             let look = self.looks.weapon(id);
             let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
@@ -389,26 +392,62 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area
     /// ([`FrameHud::cargo`](nova_sim::flight_frame::FrameHud::cargo)), the fuel gauge left out while the player is
-    /// disabled, then the target panel and the secondary weapon's line.
+    /// disabled, then the target panel as shown
+    /// ([`FlightView::target_shown`]) and the secondary weapon's line.
     pub(super) fn draw_bar(
         &self,
         list: &mut DrawList,
         (bar, view_width): (&StatusBar, f32),
         frame: &FlightFrame,
     ) {
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let radar = self.radar_shown(frame);
-        let state = HudState {
+        let target = self.target_shown(frame);
+        let parts = BarParts {
             radar: &radar,
-            blink_on: self.hud_cadence.blink_on(),
             reserves: self.reserves_shown(frame),
             nav: self.nav_shown(frame),
+            target: target.as_ref().as_ref(),
+        };
+        self.draw_bar_of(list, (bar, view_width), frame, parts);
+    }
+
+    /// Draws `bar` against the right edge of a view `view_width` wide,
+    /// showing `parts` and the rest of `frame`'s HUD: the cargo area, the
+    /// fuel gauge left out while the player is disabled, and the
+    /// secondary weapon's line.
+    pub(super) fn draw_bar_of(
+        &self,
+        list: &mut DrawList,
+        (bar, view_width): (&StatusBar, f32),
+        frame: &FlightFrame,
+        parts: BarParts<'_>,
+    ) {
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        let state = HudState {
+            radar: parts.radar,
+            blink_on: self.hud_cadence.blink_on(),
+            reserves: parts.reserves,
+            nav: parts.nav,
             cargo: Some(&frame.hud.cargo),
             disabled: frame.player().condition == Condition::Disabled,
         };
         hud::draw(list, bar, &state, metrics, view_width);
-        self.draw_combat_hud(list, (bar, view_width), frame);
+        self.draw_combat_hud(list, (bar, view_width), (frame, parts.target));
     }
+}
+
+/// What a status bar shows that is read apart from the frame it draws
+/// ([`FlightView::draw_bar_of`]): the radar, the gauges, the nav area and
+/// the target panel.
+pub(super) struct BarParts<'a> {
+    /// What the radar shows.
+    pub(super) radar: &'a RadarScene,
+    /// The shield, armour and fuel.
+    pub(super) reserves: Reserves,
+    /// What the nav area shows.
+    pub(super) nav: NavDisplay,
+    /// What the target panel shows, if anything.
+    pub(super) target: Option<&'a TargetPanel>,
 }
 
 /// The nav keys, the stellar slot keys and the floating map, over the
@@ -418,9 +457,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Tracks a flight key `input` presses or lets go of as held. A repeat
-    /// of L or I is no fresh down: they act on being held (the
-    /// `faded_keys` module), so one taken for a press would read again
-    /// once a refusal let go of the key.
+    /// holds a key too, as a repeat is the first flight sees of a key
+    /// whose press went elsewhere, such as one down as focus comes back:
+    /// the original polls `GetKeys` and reads such a key down. Two
+    /// exceptions:
+    ///
+    /// - A repeat of L or I is no fresh down: they act on being held (the
+    ///   `faded_keys` module), so one taken for a press would read again
+    ///   once a refusal let go of the key.
+    /// - A repeat of a key a `_SetAllKeyCmdFlags` site latched while it
+    ///   was down ([`FlightView::latched_down`]) is dropped: its latch
+    ///   waits for the release, the key reading down meanwhile past it
+    ///   ([`FlightView::reads_down`]). That release, or a fresh press,
+    ///   which the OS sends only after a release, ends the wait.
     pub(super) fn track_held(&mut self, input: &Input) {
         if let Input::Key {
             key,
@@ -430,6 +479,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
             && FLIGHT_KEYS.contains(&key)
             && !(repeat && matches!(key, LAND_KEY | MISSION_INFO_KEY))
         {
+            if repeat {
+                if self.latched_down.contains(&key) {
+                    return;
+                }
+            } else {
+                self.latched_down.remove(&key);
+            }
+            if !pressed {
+                self.after_poll.retain(|kept| *kept != key);
+            }
             if pressed {
                 self.held.insert(key);
             } else {
@@ -443,27 +502,43 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`Screen::release_keys`](crate::Screen::release_keys), so their
     /// releases will never reach it. The one place that does: the
     /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
-    /// @0x3803b), and ours has only the events flight is given. The
-    /// paths that keep the input in flight (a gate's exit, the course map
-    /// opened over a screen) clear `held` alone, as their releases still
-    /// come here, and the course map opened in flight keeps the keys read
-    /// with no latch ([`FlightView::open_map_as`]).
+    /// @0x3803b), and ours has only the events flight is given. So the
+    /// router, which sees the input under the dialog, gives back what is
+    /// still down as the last dialog over flight closes
+    /// ([`FlightView::take_back_live_input`]); a path that misses it
+    /// leaves the keys let go, never stuck down. The paths that keep the
+    /// input in flight (a gate's exit, the course map opened over a
+    /// screen) let go of `held` alone, as their releases still come here,
+    /// and the course map opened in flight and a gate's exit keep the
+    /// keys read with no latch, B and L among them
+    /// ([`FlightView::open_map_as`], `FlightView::came_through`). The
+    /// latched keys flight saw down are forgotten too, as their releases
+    /// go elsewhere: the next hand-back says again which are down. The
+    /// latches themselves are left as they are, as a dialog runs no pass. It marks no `_SetAllKeyCmdFlags` site,
+    /// so a dialog it alone opens closes by the latches as they were
+    /// (the `dialog_latch` module); a site's dialog opens through
+    /// [`FlightView::let_go_into_dialog`].
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
+        self.latched_down.clear();
+        self.after_poll.clear();
         self.faded_keys.forget();
         self.cursor.button(false);
     }
 
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
-    /// Board and jump keys, with those held down, in its order: Option-\`
-    /// and the Nav Off / Hyperspace Mode block
+    /// Board and jump keys, with those read down, a latched one held past
+    /// a close included ([`FlightView::reads_down`]), in its order:
+    /// Option-\` and the Nav Off / Hyperspace Mode block
     /// ([`FlightView::nav_keys_frame`]), Hyper Select
     /// ([`FlightView::select_frame`]), then the stellar slot keys
     /// ([`FlightView::slot_keys_frame`]), the first two while the flight
     /// takes their command: the head of
-    /// [`FlightView::held_keys_frame`]'s frame.
+    /// [`FlightView::held_keys_frame`]'s frame. So a latched key holds
+    /// the latch it shares: a latched H keeps a fresh \` from acting
+    /// (@0x69ae6), a latched slot key a fresh one from picking (@0x69e15).
     pub(super) fn nav_held_frame(&mut self) {
-        let down = |key: Key| self.held.contains(&key);
+        let down = |key: Key| self.reads_down(key);
         let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
         let select = down(HYPER_SELECT_KEY);
         if self.takes(PlayerCommand::Nav) {
@@ -498,7 +573,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // The 5 alone goes too: the block picks nothing with it.
         if slot_block::is_block_key(key) {
             let menu_open = self.escort_menu.is_open();
-            self.slot_block.press(key, &self.held, menu_open);
+            let down: HashSet<Key> = self.keys_down().collect();
+            self.slot_block
+                .press(key, |key| down.contains(&key), menu_open);
         } else if key == NAV_OFF_KEY {
             self.press_nav_block(key);
         }
@@ -512,7 +589,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn slot_keys_frame(&mut self) {
         let polled = self.slot_block_polled();
         let menu_open = self.escort_menu.is_open();
-        if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
+        let down: HashSet<Key> = self.keys_down().collect();
+        let picked = self
+            .slot_block
+            .frame(|key| down.contains(&key), menu_open, polled);
+        if let Some(pick) = picked {
             self.select_stellar(pick);
         }
     }
@@ -535,8 +616,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[cfg(any(test, feature = "fixture"))]
     pub fn input_queued(&self) -> bool {
         let menu_open = self.escort_menu.is_open();
-        self.slot_block
-            .queued(&self.held, menu_open, self.slot_block_polled())
+        self.slot_block.queued(
+            |down| self.reads_down(down),
+            menu_open,
+            self.slot_block_polled(),
+        )
     }
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
@@ -571,12 +655,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// without Option for H). Then the block runs with the key down
     /// ([`FlightView::nav_keys_frame`]).
     fn press_nav_block(&mut self, key: Key) {
-        let down = |held: Key| key == held || self.held.contains(&held);
+        let down = |read: Key| key == read || self.reads_down(read);
         let option = self.held.contains(&Key::Alt);
         let others = if key == NAV_OFF_KEY {
-            self.held.contains(&HYPERSPACE_MODE_KEY)
+            self.reads_down(HYPERSPACE_MODE_KEY)
         } else {
-            self.held.contains(&NAV_OFF_KEY) && !option
+            self.reads_down(NAV_OFF_KEY) && !option
         };
         let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
         if !others {
@@ -701,15 +785,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// takes its command; then hidden once more than 500 ticks have
     /// passed since it was last shown (@0x30262-0x30285). It runs once a
     /// frame, not once a pass: double time's second pass would only show
-    /// it again at the same tick.
+    /// it again at the same tick. H and `\` held past a close's latch
+    /// still show it, as the latched branches do (@0x69b8e-0x69ba3,
+    /// @0x69cdd-0x69ce7).
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
         let mode_3 = matches!(self.frame.nav_mode, NavMode::Hyperspace(_));
-        let h =
-            self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
-        let backslash = self.held.contains(&HYPER_SELECT_KEY)
-            && mode_3
-            && self.takes(PlayerCommand::SelectSystem);
+        let h = self.reads_down(HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
+        let backslash =
+            self.reads_down(HYPER_SELECT_KEY) && mode_3 && self.takes(PlayerCommand::SelectSystem);
         if h || backslash {
             self.show_floating_map();
         }
@@ -755,8 +839,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// A zoom key's press: while the floating map is up and no key the
-    /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`,
+    /// flight reads is down (`_quickKeyCheckResult` and the modifiers,
+    /// @0x70f4e-0x70fb5), a latched one held past a close included, as
+    /// `_QuickKeyCheck` sets the result for any key it reads down
+    /// (@0xa145-0xa14c), `-` steps it out and `=` or keypad `+` in. A `-`,
     /// X or K held alone doesn't count: `_HandlePlayer` checks each only
     /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
     /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One
@@ -764,9 +850,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        let holds = self.held.iter().any(|&held| {
-            self.slot_key_polled(held, true).unwrap_or(!matches!(
-                held,
+        let holds = self.keys_down().any(|down| {
+            self.slot_key_polled(down, true).unwrap_or(!matches!(
+                down,
                 SELF_DESTRUCT_KEY | EJECT_KEY | JETTISON_KEY
             ))
         });
@@ -799,7 +885,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         let menu_open = self.escort_menu.is_open();
         let block = !self.jump_under_way()
-            && slot_block::block_polls(key, |down| self.held.contains(&down), menu_open);
+            && slot_block::block_polls(key, |down| self.reads_down(down), menu_open);
         Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
     }
 

@@ -71,6 +71,8 @@ use crate::session::{
 };
 use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
+use crate::speed_mult::SpeedMult;
+use crate::sprite_mask::RleSheet;
 use crate::status_cargo::StatusCargo;
 use crate::story::DrawnSheet;
 use crate::target_panel::{TargetStatus, TargetTag};
@@ -200,6 +202,10 @@ pub struct FlightFrame {
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
+    /// The gain the next step will run at, `_gSpeedMult` after its
+    /// adjustment, which the view steps the stellars by between steps
+    /// (see `Session`'s `time_adjustment` module).
+    pub speed_mult: SpeedMult,
     /// The jump's `_hyperGamma`
     /// ([`Session::hyper_gamma`](crate::Session::hyper_gamma)).
     pub hyper_gamma: f32,
@@ -290,6 +296,7 @@ impl Default for FlightFrame {
             system_background: None,
             murk_colour: 0,
             double_time: false,
+            speed_mult: SpeedMult::FULL,
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),
             hud: FrameHud::default(),
@@ -875,6 +882,10 @@ pub enum FlightCommand {
     /// does (@0x4f3a3-0x4f3e0;
     /// [`Session::switched_out`](crate::Session::switched_out)). Not an ask.
     SwitchedOut,
+    /// The app was switched back in: the gain full, the next frame held,
+    /// as `_SwitchedIn` sets `_gSpeedMult` (@0x513e1-0x513ec;
+    /// [`Session::switch_in`](crate::Session::switch_in)). Not an ask.
+    SwitchedIn,
     /// Return (`ackComm`) cleared the message line: the session's for a
     /// tick while a line shows
     /// ([`Session::comm_acknowledged`](crate::Session::comm_acknowledged)).
@@ -1020,6 +1031,12 @@ pub enum FlightCommand {
     PressFaded(FadedPress),
     /// The player info dialog opens (`Session::open_player_info`).
     OpenPlayerInfo,
+    /// The player info or mission info dialog over flight closes: the
+    /// gain's zero its opening owes, after whatever ran under the dialog
+    /// ([`Session::close_info_dialog`](crate::Session::close_info_dialog)).
+    /// Sent at every close, whatever opened the dialog: the session knows
+    /// which openings owe one.
+    CloseInfoDialog,
     /// Jettison the cargo, `all` of it or all but the mission cargo
     /// ([`Session::jettison_cargo`](crate::Session::jettison_cargo)).
     Jettison {
@@ -1131,8 +1148,9 @@ impl FlightCommand {
     ///   message line's ([`FlightCommand::CommShown`],
     ///   [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
     ///   the dialogs' presses: the comm dialog's answers, haggles and
-    ///   close, the plunder dialog's takes and its letting go, and the
-    ///   escort dialog's buttons; and the spaceport's: the shops', the
+    ///   close, the plunder dialog's takes and its letting go, the
+    ///   escort dialog's buttons, and the info dialogs' close
+    ///   ([`FlightCommand::CloseInfoDialog`]); and the spaceport's: the shops', the
     ///   bar's and the mission screens', which run docked where no key
     ///   gates them. [`FlightCommand::Jettison`] is `None` too: its key's
     ///   press is gated by the key, and the player info's Jettison by no
@@ -1185,6 +1203,7 @@ impl FlightCommand {
             | Self::EndPlay
             | Self::CommShown(_)
             | Self::SwitchedOut
+            | Self::SwitchedIn
             | Self::CommAcknowledged
             | Self::CommTicked
             | Self::AnswerHail(_)
@@ -1222,6 +1241,7 @@ impl FlightCommand {
             | Self::NameCapture(_)
             | Self::MarkIntroSeen
             | Self::OpenPlayerInfo
+            | Self::CloseInfoDialog
             | Self::SetWindowWidth(_)
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
@@ -1318,7 +1338,8 @@ pub enum Answer {
         /// Whether the player is told.
         told: bool,
     },
-    /// What a [`FlightCommand::Land`] did, when it was not refused.
+    /// What a [`FlightCommand::Land`] did, when it was not refused: always
+    /// a dock request made, which sets L's latch `_dockTryFlag`.
     LandPress(LandPress),
     /// Why a [`FlightCommand::Land`] was refused, and what gate the
     /// stellar it names is, if any
@@ -1330,6 +1351,12 @@ pub enum Answer {
         /// The gate the refusal's stellar is, if it names one and it is a
         /// gate.
         gate: Option<GateKind>,
+        /// Whether the press made a dock request all the same, which sets
+        /// L's latch `_dockTryFlag` (@0x6a953): its pick found a stellar
+        /// and the request refused it. Not for a press refused before the
+        /// pick or whose pick found nothing
+        /// ([`Session::land_requesting`](crate::Session::land_requesting)).
+        requested: bool,
     },
     /// The links a [`FlightCommand::OpenHypergate`] offers.
     Offered(Vec<SystemId>),
@@ -1568,9 +1595,22 @@ pub struct StepInput {
     /// The Hyperspace Effects preference
     /// ([`Session::set_hyperspace_effects`](crate::Session::set_hyperspace_effects)).
     pub hyperspace_effects: bool,
-    /// The land key
+    /// The land key held, which L's pass reads to pick a stellar
     /// ([`Session::set_land_key`](crate::Session::set_land_key)).
     pub land_key: bool,
+    /// L's latch, `_dockTryFlag` (0xdee34), set by a dock request and
+    /// cleared on a pass L is up: it holds the dock approach back
+    /// ([`Session::set_dock_try`](crate::Session::set_dock_try)).
+    pub dock_try: bool,
+    /// The jettison chord, Command and K, while it is down: `Some(all)`,
+    /// `all` unless Option is down too, jettisoning on every pass
+    /// ([`Session::hold_jettison`](crate::Session::hold_jettison)).
+    pub jettison: Option<bool>,
+    /// Whether the view went 334 ms or more of the wall time it was handed
+    /// without a step: the next frame keeps the gain, as
+    /// `_HandleTimeAdjustment` leaves it after a frame that long (see
+    /// `Session`'s `time_adjustment` module).
+    pub held: bool,
 }
 
 /// What a frame's fixed steps reported
@@ -1612,16 +1652,33 @@ pub struct StepRun {
     /// what the original draws (`_PlayGame` @0x45d96-0x45e82 between
     /// @0x45bc8 and @0x45f31): the frame the view shows for this step.
     /// `None` in single time, whose frame is the flight as it stands, and
-    /// when a rescue settled on the step, as the view lays itself out
-    /// afresh.
+    /// when a rescue settled on the step's advance pass. A rescue on the
+    /// second pass keeps it, the pod where the first pass left it, as the
+    /// original fades out over that frame (`_FadeScreenOut` @0x68de3).
     pub between_passes: Option<Box<FlightFrame>>,
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
+    /// Where the texts that rescue queued fell against its writes
+    /// ([`RescueTexts`]), with [`StepRun::rescued`].
+    pub rescue_texts: Option<RescueTexts>,
     /// The line the step raised last, whatever its kind: what
     /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
-    /// when it raised none.
+    /// when it raised none. On a step that holds second-pass lines
+    /// ([`StepRun::second_pass_lines`]), the slot as the first pass left
+    /// it.
     pub last_line: Option<RaisedLine>,
+    /// The lines double time's second pass raised, in the order raised,
+    /// every kind in one list. They are kept off the step's comm, its
+    /// second pass's quotes, the drained messages and its last line,
+    /// because the original shows them on the next frame: `_DisplayComm`
+    /// fills the slot at once (@0x9024b-0x90265), but into the background
+    /// and work frames, which reach the screen only at the next frame's
+    /// draw (`_FloaterDrawCallback` @0x38b52-0x38b90, `_QDFlushPortBuffer`
+    /// @0x45e82). Only the frame's last step holds them: an earlier step's
+    /// are folded back into its own streams as the next step begins.
+    /// Empty in single time.
+    pub second_pass_lines: Vec<RaisedLine>,
     /// Whether `_HandlePlayer`'s class-order bookkeeping cleared an escort
     /// class's kept order on this step's passes (@0x6e37d, @0x6e43f), each
     /// clear showing the escort menu in full again, unstamped, while it
@@ -1687,6 +1744,10 @@ pub struct PassReport {
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
+    /// The gain the pass ran at, `_gSpeedMult`
+    /// ([`Session::speed_mult`](crate::Session::speed_mult)): both of
+    /// double time's passes run at one.
+    pub speed_mult: SpeedMult,
     /// The quotes the pass said, in order.
     pub quotes: Vec<PersonQuote>,
     /// The wrap of the player at the pass's head, if it ran, which the
@@ -1808,6 +1869,25 @@ impl FrameShip {
     }
 }
 
+/// Where the escape pod's rescue's texts fell against its writes, by
+/// the session's count of texts queued
+/// ([`Session::texts_queued`](crate::Session::texts_queued)), which a
+/// text's [`TextBar::texts`] compares with: the first text the rescue
+/// shows takes `_ShowTextDialog`'s faded branch, whose repaint reads the
+/// state as it was queued (`nova_view::flight::rescue_screen`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RescueTexts {
+    /// The count as `_ResetPlayer(0)` ran (@0x68f2f): a text at or below
+    /// it was queued by an `OnAbort` (@0x68f0d), before the reset.
+    pub reset: u64,
+    /// The count as the pod was moved (`_DeleteAllComputerShips`
+    /// @0x68f69): a text above [`RescueTexts::reset`] and at or below
+    /// this was queued by ship 128's `OnPurchase` (@0x68f55), in the
+    /// pod's system after the reset; one above it by the days
+    /// (@0x6912a), in the new system.
+    pub moved: u64,
+}
+
 /// Where a ship is and which way it faces: what the view draws a ship
 /// between two steps from ([`StepRun::before`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1830,19 +1910,21 @@ impl From<ShipState> for ShipPlace {
 /// An NPC's fade at a gate: what tints and washes it as it comes out of
 /// a hypergate or wormhole, or enters one to leave (the NPC's
 /// `traffic::npc::Mode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GateFade {
     /// At no gate.
     None,
-    /// Waiting at the gate it comes out of, for this many more ticks.
+    /// Waiting at the gate it comes out of, for this much more of its
+    /// wait.
     Emerging {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames: a float, counted down by the frame's
+        /// gain (`nova_sim_ai`'s `traffic::ai_wait`).
+        ticks_left: f32,
     },
-    /// Entering a gate to leave, for this many more ticks.
+    /// Entering a gate to leave, for this much more of its wait.
     Entering {
-        /// The ticks of the entry left.
-        ticks_left: u32,
+        /// The wait left, in frames, as [`GateFade::Emerging`]'s.
+        ticks_left: f32,
     },
 }
 
@@ -1877,26 +1959,35 @@ pub struct FrameShot {
     pub velocity: Vec2,
     /// Which way it faces, in degrees.
     pub heading: f32,
-    /// How many steps it has flown.
-    pub age: u32,
-    /// Its spin's timer (`Shot::spin_timer`).
-    pub spin_timer: u32,
+    /// Its life ([`Shot::life`]): its weapon's `Count` at launch, less
+    /// the frame's gain at each visit, which the view's fade-out window
+    /// reads.
+    pub life: f32,
+    /// The fade its last visit read ([`Shot::fade_shown`]), which the view
+    /// shades it by: 0 before its first visit.
+    pub fade: f32,
+    /// The frame it shows on its weapon's sheet ([`Shot::frame_on`]), as
+    /// the view draws it and the contact passes touch it; none where the
+    /// simulation read no sheet of frames for its `Graphic`.
+    pub frame: Option<u16>,
     /// The sprite layer it is drawn in.
     pub layer: ShotLayer,
 }
 
 impl FrameShot {
-    /// `shot`'s record.
+    /// `shot`'s record, at the frame it shows on `sheet`, its weapon
+    /// `Graphic`'s as the contact passes read it, if read.
     #[must_use]
-    pub fn of(shot: &Shot) -> Self {
+    pub fn of(shot: &Shot, sheet: Option<&RleSheet>) -> Self {
         Self {
             id: shot.id,
             weapon: shot.weapon.id,
             position: shot.position,
             velocity: shot.velocity,
             heading: shot.heading,
-            age: shot.age,
-            spin_timer: shot.spin_timer,
+            life: shot.life,
+            fade: shot.fade_shown,
+            frame: sheet.and_then(|sheet| shot.frame_on(sheet)),
             layer: shot.layer,
         }
     }
@@ -1953,7 +2044,7 @@ impl FrameBox {
         Self {
             position: cargo_box.position,
             velocity: cargo_box.velocity,
-            frame: cargo_box.frame,
+            frame: cargo_box.drawn_frame(),
             fade: cargo_box.fade(),
             graphic: cargo_box.graphic,
         }
@@ -1967,8 +2058,10 @@ pub struct FrameAsteroid {
     pub position: Vec2,
     /// How fast it moves, per step.
     pub velocity: Vec2,
-    /// The frame it is on, whole part drawn.
-    pub frame: f32,
+    /// The frame it shows, its frame's whole part
+    /// ([`Asteroid::shown_frame`]), as the view draws it and the contact
+    /// passes touch it.
+    pub frame: u16,
     /// Its kind.
     pub kind: u8,
 }
@@ -1980,7 +2073,7 @@ impl FrameAsteroid {
         Self {
             position: asteroid.position,
             velocity: asteroid.velocity,
-            frame: asteroid.frame,
+            frame: asteroid.shown_frame(),
             kind: asteroid.kind,
         }
     }
@@ -2253,6 +2346,7 @@ mod tests {
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
             (C::PressPlayerInfo, Some(PlayerCommand::PlayerInfo)),
             (C::OpenPlayerInfo, None),
+            (C::CloseInfoDialog, None),
             (C::SetWindowWidth(1024), None),
             (C::SetDoubleTimeKey(true), None),
             (C::SetSoundQuiet(true), None),
@@ -2328,20 +2422,20 @@ mod tests {
     #[test]
     fn an_npcs_gate_fade_follows_its_mode() {
         assert_eq!(
-            GateFade::of(&Mode::Emerging { ticks_left: 7 }),
-            GateFade::Emerging { ticks_left: 7 }
+            GateFade::of(&Mode::Emerging { ticks_left: 7.0 }),
+            GateFade::Emerging { ticks_left: 7.0 }
         );
         let entering = Mode::EnteringGate {
             gate: StellarId(130),
-            ticks_left: 5,
+            ticks_left: 5.0,
         };
         assert_eq!(
             GateFade::of(&entering),
-            GateFade::Entering { ticks_left: 5 }
+            GateFade::Entering { ticks_left: 5.0 }
         );
         assert_eq!(GateFade::of(&Mode::Flying), GateFade::None);
-        assert!(GateFade::Entering { ticks_left: 0 }.at_gate());
-        assert!(GateFade::Emerging { ticks_left: 0 }.at_gate());
+        assert!(GateFade::Entering { ticks_left: 0.0 }.at_gate());
+        assert!(GateFade::Emerging { ticks_left: 0.0 }.at_gate());
         assert!(!GateFade::None.at_gate());
     }
 
@@ -2444,5 +2538,34 @@ mod tests {
             npcs: vec![(NpcId(1), square(1.0))],
         };
         assert!(!npc_only.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_shot_visited_at_half_gain_carries_its_life_and_the_fade_its_visit_read() {
+        use crate::combat::projectile::Guide;
+        let weapon = crate::combat::weapon::WeaponSpec {
+            falloff: -6,
+            lifetime: 100,
+            ..crate::combat::weapon::WeaponSpec::new(&nova_sim_catalog::fixture::weapon(128))
+        };
+        let mut shot = Shot::launch(
+            weapon,
+            ShipRef::Player,
+            ShipRef::Player,
+            &crate::flight::ShipState::default(),
+            0.0,
+        );
+        let guide = Guide {
+            speed_mult: crate::SpeedMult::new(0.5),
+            ..Guide::among(&[])
+        };
+        for _ in 0..2 {
+            shot.step(&guide, &mut crate::NeverFires);
+        }
+        let carried = FrameShot::of(&shot, None);
+        assert_eq!((carried.life, carried.fade), (shot.life, shot.fade_shown));
+        assert_eq!(carried.fade, 3.0, "half of 6 read on the 2nd visit");
+        assert_eq!(carried.life, 99.0);
     }
 }

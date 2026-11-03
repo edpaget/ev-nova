@@ -250,7 +250,7 @@ fn point_defence_meets_a_missile_each_side_of_the_reach_where_their_sprites_stoo
 fn fuse_set_off(rock_at: Vec2, wraps: bool) -> bool {
     let mut combat = Combat::default();
     shot_with_a_fuse_to(&mut combat, off(-100.0), 30);
-    combat.shots[0].age = 3;
+    combat.shots[0].set_age(3);
     if wraps {
         combat.carry(&wrap(), none_left());
     }
@@ -288,7 +288,7 @@ fn stellars_struck(stellar: Vec2) -> Vec<StellarStrike> {
         (at, at),
         None,
     );
-    combat.shots[0].age = 3;
+    combat.shots[0].set_age(3);
     combat.carry(&wrap(), none_left());
     let mut stellars = [StellarTarget {
         stellar: StellarId(128),

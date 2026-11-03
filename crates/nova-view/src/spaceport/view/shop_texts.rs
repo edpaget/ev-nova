@@ -5,7 +5,8 @@
 //! listed (@0x5bbf2), and its sale alerts, #207 and the #208-#212
 //! sentences (@0x5c7a0, @0x5ca3f, @0x5ce5a); the shipyard's #223, nothing
 //! listed, and #224, nothing for hire (@0x5e8da); and the report of the
-//! escorts sold and upgraded (`_DoEscortLand` @0x407e8). The after-check
+//! escorts sold and upgraded (`_DoEscortLand` @0x407e8) and an escort's
+//! defection at take-off (`_DoEscortPayment` @0x40301). The after-check
 //! (@0x5b40b-0x5b44f) runs whatever the third argument says, so each plays
 //! the after-movie (`Flags` 0x0001) of the last `dësc` loaded, which
 //! whoever flies the ship reads as it answers
@@ -14,7 +15,8 @@
 //! [`SpaceportView::show_text`], [`SpaceportView::set_opened_outfitter`],
 //! [`SpaceportView::set_opened_shipyard`], [`SpaceportView::open_hire`]
 //! and [`SpaceportView::alert_outfit`]. A movie handed in without its
-//! after flag never plays: only an after-movie is read there.
+//! after flag never plays: only an after-movie is read there
+//! ([`DescShown::str_movie`]), as flight's texts read it.
 //!
 //! Each text goes through the spaceport's mission dialogs, so the movie
 //! plays once its Done closes it, and what waits on the text waits through
@@ -25,16 +27,13 @@
 //! closes once the movie has ended, as the original leaves its loop
 //! (@0x5da33) only after `_ShowTextDialog` returns.
 
-use nova_sim::{DescMovie, MissionShown};
+use nova_sim::MissionShown;
 
 use super::{Open, SpaceportView};
 #[cfg(doc)]
 use crate::spaceport::outfitter::OutfitterScreen;
-
-/// `after`, if it is an after-movie: the only kind a `STR#` text plays.
-pub(super) fn after_movie(after: Option<DescMovie>) -> Option<DescMovie> {
-    after.filter(|movie| movie.after)
-}
+#[cfg(doc)]
+use crate::ui::mission_dialogs::DescShown;
 
 impl SpaceportView {
     /// Queues the sale alert's after-movie on the mission dialogs once the
@@ -253,6 +252,37 @@ mod tests {
         view.input(&key(Key::Escape));
         assert!(view.open_outfitter().is_none(), "with no movie, at once");
         assert!(view.take_outfitter_closed());
+    }
+
+    /// The alert closed by the keys a cancelled press on its Done held
+    /// back, run as the spaceport ticks.
+    #[test]
+    fn an_outfitter_left_with_nothing_listed_closes_as_a_tick_closes_its_alert() {
+        for (on, movie) in [(false, None), (true, after("After.mov"))] {
+            let (mut view, player) = alerted(on, movie);
+            view.outfit_ordered(Reselection::Leave);
+            let done = view
+                .open_outfitter()
+                .and_then(|open| open.alert_dialog())
+                .and_then(|alert| alert.dialog().item_bounds(crate::ui::desc::DONE_ITEM))
+                .expect("Done")
+                .center();
+            view.input(&crate::input::Input::PointerButton {
+                button: crate::input::MouseButton::Left,
+                pressed: true,
+                at: done,
+            });
+            view.input(&key(Key::Enter));
+            view.cancel_pointer();
+            assert!(view.open_outfitter().is_some(), "the alert waits");
+            view.tick(ms(0));
+            if on {
+                assert_eq!(started(&player), ["After.mov"], "its movie first");
+                play_out(&mut view);
+            }
+            assert!(view.open_outfitter().is_none(), "movies {on}");
+            assert!(view.take_outfitter_closed());
+        }
     }
 
     #[test]

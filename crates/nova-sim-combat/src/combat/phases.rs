@@ -84,7 +84,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            lockout.reload_one(fighter);
+            lockout.reload_one(fighter, arena.field.speed_mult);
         }
     }
 
@@ -138,6 +138,7 @@ impl Combat {
             stellars,
             mut asteroids,
             hazards,
+            contact,
         } = scenery;
         loop {
             let scenery = Scenery {
@@ -147,6 +148,7 @@ impl Combat {
                     types: field.types,
                 }),
                 hazards,
+                contact,
             };
             if self.test_hits_in_turn(fighters, arena, scenery, &mut *chance) == Stretch::Done {
                 break;
@@ -207,7 +209,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            regenerate_player(fighter, rule);
+            regenerate_player(fighter, rule, arena.field.speed_mult);
         }
     }
 
@@ -287,11 +289,14 @@ impl Combat {
             .target
             .is_none_or(|target| fighters.iter().all(|other| other.ship != target));
         let fighter = &mut fighters[index];
-        self.ion_lockout.reload_one(fighter);
+        // Its reloads and regeneration at the frame's gain (@0x338b3,
+        // @0x345da, @0x3464c).
+        let gain = arena.field.speed_mult;
+        self.ion_lockout.reload_one(fighter, gain);
         if idle {
             fighter.armament.hold_idle_bays();
         }
-        regenerate(fighter, arena.rules.disable);
+        regenerate(fighter, arena.rules.disable, gain);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);
         fighters[index].condition.count_down();
@@ -324,17 +329,18 @@ impl Combat {
     /// `chance`: at each slot's visit a held slot is freed, a shot its
     /// last move spent comes to its end of life (@0x36195), its
     /// sub-munitions released and then its blast landed, and any other
-    /// shot flies a tick and lands its missile lock
-    /// ([`Strike::lock`](super::Strike::lock), @0x35855). Each ship struck
-    /// settles its condition as in the collision passes, so every later
-    /// visit reads what the earlier ones landed, an escort's cleared leader
-    /// included. It stops just after each lock ([`Stretch::Answer`]), the
-    /// one hit of `_HandleShot` that is answered, its walk kept to resume
-    /// at the next slot among the ships lent afresh, so a later slot's
-    /// sub-munitions read their owner's plunder and mining, and a homing
-    /// shot its target's cloak, as the lock's answer left them; or it runs
-    /// to the loop's end ([`Stretch::Done`]), where each one-at-a-time
-    /// shot holds its firer's reload (`Combat::hold_reloads`, @0x35c09).
+    /// shot flies a visit at the frame's gain ([`Field::speed_mult`]) and
+    /// lands its missile lock ([`Strike::lock`](super::Strike::lock),
+    /// @0x35855). Each ship struck settles its condition as in the
+    /// collision passes, so every later visit reads what the earlier ones
+    /// landed, an escort's cleared leader included. It stops just after
+    /// each lock ([`Stretch::Answer`]), the one hit of `_HandleShot` that
+    /// is answered, its walk kept to resume at the next slot among the
+    /// ships lent afresh, so a later slot's sub-munitions read their
+    /// owner's plunder and mining, and a homing shot its target's cloak,
+    /// as the lock's answer left them; or it runs to the loop's end
+    /// ([`Stretch::Done`]), where each one-at-a-time shot holds its
+    /// firer's reload (`Combat::hold_reloads`, @0x35c09).
     ///
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes

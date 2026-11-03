@@ -8,8 +8,10 @@
 //! ([`OfferPrompt`]); a mission that cannot be refused shows the one
 //! button of item 6 in their place, labelled to accept. The stock items
 //! are all disabled, so the dialog enables its buttons itself. Items 4, 5
-//! and 7 (the map, player info and mission info) lie outside it, and the
-//! arrows of items 9 and 10 are not drawn: Up and Down scroll the text.
+//! and 7 (the map, player info and mission info) lie outside it. The
+//! scroll arrows, items 9 and 10, are drawn and tracked as the text
+//! dialog's are, and the text scrolls by pixels, a partial line cut at the
+//! box ([`offer_arrows`](super::offer_arrows)).
 //!
 //! The dialog shrinks 1016 to its text as the original does, after
 //! `_CenterWindow` has placed it at its stock size (@0xa23fd,
@@ -18,7 +20,8 @@
 //! @0xa25d1), measured as the text box sets the text. Items 1, 2 and 6 and
 //! the text box's bottom come up by `d`, and the arrows of items 9 and 10
 //! stay where they are, unlike "Desc Dialog"'s, so a dialog shrunk far
-//! enough leaves them outside it. The window's top then becomes
+//! enough leaves them outside it, and one shrunk less never draws them, its
+//! text always fitting its box. The window's top then becomes
 //! `trunc(top + 0.3 × d)` (`MoveWindow` @0xa2640), the sum truncated and
 //! not the product. All of it happens before the dialog shows
 //! (`ShowWindowNoFlash` @0xa2c81), so the player sees the final place only.
@@ -50,10 +53,30 @@
 //! texts the answer shows
 //! ([`MissionShown::Movie`](nova_sim::MissionShown::Movie)).
 //!
+//! Keys pressed while a press is held on an arrow, or a click tracked on a
+//! button or an arrow, wait for the release (`_SingleMissionFilter`'s held
+//! loops and `_TrackSingleMissionButtons` @0x28188 read no events), the
+//! map, player info and mission info keys, the labels' letters and the page
+//! keys among them. The release runs them in order through the dialog's
+//! own input, within the same input, so a key that answers answers by the
+//! input that let go, and a press its holder cancels runs them on the next
+//! tick. What they queued after the answering key is left for what shows
+//! next ([`OfferDialog::take_unclaimed`]), as the answer's `FlushEvents`
+//! flush only mouse events; after M, P or I it goes with that screen's
+//! flush. M and P always open theirs where an offer can hold keys (the
+//! course map opens unasked, and the player info screen is refused only in
+//! a jump or while the ship breaks up, under no offer); I opens nothing,
+//! and so flushes nothing, with no mission listed
+//! ([`OfferDialog::set_missions_listed`]). See the `held_keys` module.
+//!
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
 //! refused, the refuse label's refuses, unless both start with the same
-//! letter. Escape does nothing. The choice is taken once
+//! letter. Escape does nothing. Up and Down scroll the text 10 px, repeats
+//! included, and Home, End, Page Up and Page Down as the text dialog's do
+//! (`ui::desc`'s `page_key`), on the press alone by the user's
+//! standing decision, though the filter reads auto-key too
+//! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
 //! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
@@ -62,7 +85,9 @@
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
-//! stays open under it. The original then reloads the offer's `dësc`
+//! stays open under it. With no active mission that isn't hidden it
+//! asks for nothing and does nothing else (@0xa32c1-0xa32ee), as its
+//! holder tells it ([`OfferDialog::set_missions_listed`]). The original then reloads the offer's `dësc`
 //! (`_LoadDescription` @0xa335c), which redraws what the info screen
 //! covered and leaves its movie the last loaded again: the spaceport asks
 //! for that reload as the screen closes
@@ -106,6 +131,7 @@ use std::time::Duration;
 
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
+use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -118,7 +144,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_key, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
@@ -248,6 +274,13 @@ pub struct OfferDialog {
     picture: Option<i16>,
     /// The movie played before the dialog, until it ends.
     before: Option<MovieStage>,
+    /// What a replay queued after the key that answered it, until taken
+    /// ([`OfferDialog::take_unclaimed`]).
+    unclaimed: Vec<Input>,
+    /// Whether the mission info screen lists a mission, so that
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// opens it ([`OfferDialog::set_missions_listed`]).
+    missions_listed: bool,
 }
 
 impl OfferDialog {
@@ -294,6 +327,7 @@ impl OfferDialog {
                     backing: None,
                 },
             )];
+            roles.extend(arrow_roles());
             match &prompt.labels.refuse {
                 Some(refuse) => roles.extend([
                     (ACCEPT_ITEM, accept),
@@ -309,7 +343,9 @@ impl OfferDialog {
             let dialog = Dialog::new(&template, &roles, metrics)
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(None)
-                .with_cancel(None);
+                .with_cancel(None)
+                .with_pixel_scroll()
+                .with_held_keys();
             if picture.is_some() {
                 dialog
             } else {
@@ -324,7 +360,30 @@ impl OfferDialog {
             asks: OfferAsks::default(),
             picture,
             before: None,
+            unclaimed: Vec::new(),
+            missions_listed: true,
         }
+    }
+
+    /// This dialog told whether the mission info screen lists a mission
+    /// ([`OfferDialog::set_missions_listed`]).
+    #[must_use]
+    pub fn with_missions_listed(mut self, listed: bool) -> Self {
+        self.set_missions_listed(listed);
+        self
+    }
+
+    /// Tells the dialog whether the mission info screen lists a mission:
+    /// an active one that isn't hidden. With none, `_OfferOneMission`'s
+    /// arm for [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// does nothing (the count @0xa32c1-0xa32ee), so the key asks for
+    /// nothing, flushes nothing, and the offer takes the next event, a key
+    /// held back by a press among them. Its holder says so as the dialog
+    /// opens and after an abort from the mission info screen over it, the
+    /// only change to the missions while the offer is open. Listed until
+    /// told otherwise.
+    pub fn set_missions_listed(&mut self, listed: bool) {
+        self.missions_listed = listed;
     }
 
     /// This dialog with its buttons taking the keyboard focus as `ring`
@@ -379,6 +438,63 @@ impl OfferDialog {
             self.before = None;
             for input in &replay {
                 self.dialog_input(input);
+            }
+            self.run_replay();
+        }
+    }
+
+    /// What a replay queued after the key that answered the offer, once:
+    /// its holder gives it to what shows next, as the answer's
+    /// `FlushEvents` calls flush only mouse events (event codes passed as
+    /// masks, @0xa2da2-0xa2dde, @0xa2f70-0xa2fac; the refusal flushes
+    /// nothing). A text the answer shows flushes it as it opens (@0x5ae67).
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// An accept's `FlushEvents(3, 0)`, `(5, 0)`, `(1, 0)` and `(2, 0)`
+    /// flush mouse-downs and mouse-ups, their codes read as masks
+    /// (@0xa2da2-0xa2dde, @0xa2f70-0xa2fac), so a press left after it goes;
+    /// a refusal flushes nothing (@0xa2e65-0xa2f09).
+    fn flush_answers_mouse(&mut self) {
+        if self.choice == Some(OfferChoice::Accept) {
+            self.unclaimed
+                .retain(|input| !matches!(input, Input::PointerButton { .. }));
+        }
+    }
+
+    /// Whether a key has asked for the map, player info or mission info,
+    /// and not been taken.
+    fn asked(&self) -> bool {
+        let asks = self.asks;
+        asks.map || asks.player_info || asks.mission_info
+    }
+
+    /// Runs what the dialog held back through [`Self::dialog_input`], in
+    /// order, until a key answers the offer, whose rest is left for what
+    /// shows next ([`Self::take_unclaimed`]), or asks for the map, player
+    /// info or mission info, whose rest that screen's flush drops
+    /// (`_DoSystemMap` @0x1257b, `_DoPlayerInfoDialog` @0x5a544,
+    /// `_DoMissionInfoDialog` @0x9e287). Each asks only for a screen that
+    /// opens, so the flush always follows: an I with no mission listed
+    /// asks nothing, and the replay runs on past it.
+    fn run_replay(&mut self) {
+        let asked = self.asked();
+        let Ok(dialog) = &mut self.laid else {
+            return;
+        };
+        let mut replay = dialog.take_replay().into_iter();
+        while let Some(input) = replay.next() {
+            // A click's release can answer before the keys it held back.
+            if self.answered {
+                self.unclaimed.push(input);
+                self.unclaimed.extend(replay);
+                self.flush_answers_mouse();
+                return;
+            }
+            self.dialog_input(&input);
+            if self.asked() && !asked {
+                return;
             }
         }
     }
@@ -464,10 +580,19 @@ impl OfferDialog {
 }
 
 impl OfferDialog {
-    /// The dialog's input: Return, Enter and the labels' letters choose;
-    /// everything else goes to the dialog. Once answered it takes nothing.
+    /// The dialog's input, its replay aside: Return, Enter and the labels'
+    /// letters choose; everything else goes to the dialog. While the dialog
+    /// holds its keys, everything goes straight to it. Once answered it
+    /// takes nothing.
     fn dialog_input(&mut self, input: &Input) {
         if self.answered {
+            return;
+        }
+        if let Ok(dialog) = &mut self.laid
+            && dialog.holds()
+        {
+            let event = dialog.input(input);
+            self.choose_from(event);
             return;
         }
         if is_map_press(input) {
@@ -479,7 +604,7 @@ impl OfferDialog {
             return;
         }
         if is_mission_info_press(input) {
-            self.asks.mission_info = true;
+            self.asks.mission_info |= self.missions_listed;
             return;
         }
         if let Input::Key {
@@ -495,7 +620,18 @@ impl OfferDialog {
         let Ok(dialog) = &mut self.laid else {
             return;
         };
+        if dialog
+            .scroll_text_mut()
+            .is_some_and(|text| page_key(text, input))
+        {
+            return;
+        }
         let event = dialog.input(input);
+        self.choose_from(event);
+    }
+
+    /// Chooses what the dialog's `event` activated, if anything.
+    fn choose_from(&mut self, event: Option<DialogEvent>) {
         match event {
             Some(DialogEvent::Item(ACCEPT_ITEM | SINGLE_ITEM)) => self.choose(OfferChoice::Accept),
             Some(DialogEvent::Item(REFUSE_ITEM)) => self.choose(OfferChoice::Refuse),
@@ -508,6 +644,16 @@ impl Screen for OfferDialog {
     /// The movie before the dialog takes every input until it ends.
     /// Then Return, Enter and the labels' letters choose; everything else
     /// goes to the dialog. Once answered it takes nothing. It never quits.
+    ///
+    /// While a press is held on an arrow or a click tracked on a button or
+    /// an arrow, keys wait for the release, as `_SingleMissionFilter`'s held
+    /// loops and `_TrackSingleMissionButtons` read no events
+    /// (@0x99060-0x991e6, @0x28188): the map, player info and mission info
+    /// keys, the labels' letters and the page keys too. The release runs
+    /// them in order, within the same input, so a key that answers answers
+    /// by the input that let go; what they queued after it is left for what
+    /// shows next ([`OfferDialog::take_unclaimed`]). See the `held_keys`
+    /// module.
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.begin_movie();
         if let Some(stage) = &mut self.before {
@@ -515,22 +661,34 @@ impl Screen for OfferDialog {
             self.settle_movie();
         } else {
             self.dialog_input(input);
+            self.run_replay();
         }
         ScreenAction::None
     }
 
     /// The movie before the dialog begins, if it has not, and moves on.
+    /// Once no movie plays, the dialog ticks: a press held on an arrow
+    /// scrolls a pixel a Mac tick ([`Dialog::tick`]).
     fn tick(&mut self, dt: Duration) {
         self.begin_movie();
         if let Some(stage) = &mut self.before {
             stage.tick(dt);
             self.settle_movie();
+        } else if let Ok(dialog) = &mut self.laid {
+            dialog.tick(dt);
+            self.run_replay();
         }
     }
 
     /// While a cinematic movie hides the cursor.
     fn hides_pointer(&self) -> bool {
         self.before.as_ref().is_some_and(MovieStage::hides_cursor)
+    }
+
+    /// The laid-out dialog's readout ([`Dialog::holds_back_keys`]): false
+    /// with no layout.
+    fn holds_back_keys(&self) -> bool {
+        self.laid.as_ref().is_ok_and(Dialog::holds_back_keys)
     }
 
     /// The plain dialog draws its frame under its items. The picture
@@ -566,11 +724,22 @@ impl Screen for OfferDialog {
         }
     }
 
+    /// Abandons a press, whose held keys run on the next tick.
     fn cancel_pointer(&mut self) {
         if self.before.is_some() {
             return;
         }
         if let Ok(dialog) = &mut self.laid {
+            dialog.cancel_pointer();
+        }
+    }
+
+    /// Letting go of the keys while a press holds them abandons the press,
+    /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
+    fn release_keys(&mut self) {
+        if let Ok(dialog) = &mut self.laid
+            && dialog.holds()
+        {
             dialog.cancel_pointer();
         }
     }
@@ -608,6 +777,9 @@ pub(crate) struct VenueOffers {
     /// Whether the timer restarted since this was last taken, and wants
     /// a new gap.
     restarted: bool,
+    /// What the answered dialog's replay queued after its answering key
+    /// ([`OfferDialog::take_unclaimed`]), until taken.
+    unclaimed: Vec<Input>,
 }
 
 impl VenueOffers {
@@ -627,6 +799,7 @@ impl VenueOffers {
             focus_ring: FocusRing::default(),
             since_ask: Duration::ZERO,
             restarted: false,
+            unclaimed: Vec::new(),
         }
     }
 
@@ -706,6 +879,14 @@ impl VenueOffers {
         self.dialog
             .as_mut()
             .is_some_and(OfferDialog::take_player_info_request)
+    }
+
+    /// Tells the offer dialog open whether the mission info screen lists
+    /// a mission ([`OfferDialog::set_missions_listed`]).
+    pub(crate) fn set_missions_listed(&mut self, listed: bool) {
+        if let Some(dialog) = &mut self.dialog {
+            dialog.set_missions_listed(listed);
+        }
     }
 
     /// Whether the offer dialog open asked for the mission info screen
@@ -788,12 +969,26 @@ impl VenueOffers {
         self.sounds.extend(dialog.take_sounds());
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
+            self.unclaimed = dialog.take_unclaimed();
             let hidden = choice == OfferChoice::Accept && dialog.prompt().labels.refuse.is_some();
             let answered = self.dialog.take();
             if !hidden {
                 self.answered = answered;
             }
         }
+    }
+
+    /// What the answered dialog's replay queued after the key that answered
+    /// it, once its choice has been taken, and so acted on: the venue runs
+    /// it through its own input as its next tick begins, the answer's own
+    /// `FlushEvents` flushing only mouse events (@0xa2da2-0xa2dde). A tick
+    /// covered before then drops it ([`VenueOffers::tick`]). Nothing while
+    /// the choice waits to be taken.
+    pub(crate) fn take_unclaimed(&mut self) -> Vec<Input> {
+        if self.choice.is_some() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.unclaimed)
     }
 
     /// Lets go of the offer dialog answered and left drawn, if any: its
@@ -816,8 +1011,16 @@ impl VenueOffers {
     /// other reading only while nothing does.
     /// The offer dialog open ticks too, its movie moving on, unless
     /// something covers it ([`VenueOffers::tick_dialog`]).
+    ///
+    /// Covered, it drops what the answer left once its choice has been
+    /// taken ([`VenueOffers::take_unclaimed`]): what covers the venue then
+    /// is a text the answer shows, or an info screen, and each flushes the
+    /// queue as it opens (`_ShowTextDialog` @0x5ae67, `_DoMissionInfoDialog`
+    /// @0x9e287, `_DoPlayerInfoDialog` @0x5a544).
     pub(crate) fn tick(&mut self, dt: Duration, covered: bool) {
-        if !covered {
+        if covered {
+            drop(self.take_unclaimed());
+        } else {
             self.tick_dialog(dt);
         }
         let covered = covered || self.dialog.is_some();
@@ -837,8 +1040,9 @@ impl VenueOffers {
 
     /// Ticks the offer dialog, if it is open: its movie begins or moves
     /// on, and the keys pressed under a movie that ends can answer it, on
-    /// that tick. Its holder ticks it only while nothing covers it.
-    pub(crate) fn tick_dialog(&mut self, dt: Duration) {
+    /// that tick. [`VenueOffers::tick`] ticks it only while nothing covers
+    /// it.
+    fn tick_dialog(&mut self, dt: Duration) {
         if let Some(dialog) = &mut self.dialog {
             dialog.tick(dt);
             self.settle_dialog();
@@ -855,12 +1059,41 @@ impl VenueOffers {
         }
     }
 
+    /// Whether keys typed now would come after keys held back here: the
+    /// open dialog's ([`OfferDialog`]'s [`Screen::holds_back_keys`]), or
+    /// what its answer left until its holder runs it
+    /// ([`VenueOffers::take_unclaimed`]) while it holds an event the
+    /// original queues ([`queues_an_event`]). Never the answered dialog's,
+    /// which takes no input.
+    pub(crate) fn holds_back_keys(&self) -> bool {
+        self.dialog.as_ref().is_some_and(Screen::holds_back_keys)
+            || self.unclaimed.iter().any(queues_an_event)
+    }
+
     /// Cancels the offer dialog's pointer, if it is open: whether it was.
     pub(crate) fn cancel_pointer(&mut self) -> bool {
         self.dialog
             .as_mut()
             .map(OfferDialog::cancel_pointer)
             .is_some()
+    }
+}
+
+/// Whether the original's event queue holds an event for `input`: not
+/// for a key's release, as the system event mask leaves out key-ups by
+/// default and the game never sets it (no `SetEventMask` in `EV Nova`),
+/// nor for a modifier going down, which the classic event model has no
+/// event for.
+fn queues_an_event(input: &Input) -> bool {
+    match *input {
+        Input::Key { key, pressed, .. } => {
+            pressed
+                && !matches!(
+                    key,
+                    Key::Alt | Key::Control | Key::Shift | Key::Command | Key::CapsLock
+                )
+        }
+        _ => true,
     }
 }
 
@@ -895,6 +1128,64 @@ pub(crate) mod fixture {
         }
     }
 
+    /// Stock `DLOG` 1016, 441 x 317 and centred, with its ten disabled
+    /// user items as `DITL` 1016 has them, 4, 5 and 7 parked outside it.
+    pub(crate) fn stock_1016() -> DialogTemplate {
+        stock(
+            (441.0, 317.0),
+            [
+                (225.0, 285.0, 99.0, 25.0),
+                (117.0, 285.0, 99.0, 25.0),
+                (12.0, 9.0, 415.0, 267.0),
+                (150.0, 323.0, 32.0, 32.0),
+                (197.0, 326.0, 32.0, 32.0),
+                (173.0, 285.0, 99.0, 25.0),
+                (172.0, 337.0, 32.0, 32.0),
+                (272.0, 345.0, 23.0, 23.0),
+                (340.0, 287.0, 23.0, 23.0),
+                (373.0, 287.0, 23.0, 23.0),
+            ],
+        )
+    }
+
+    /// Stock `DLOG` 1020's shape, 651 x 244 and centred: its buttons, text,
+    /// picture and arrows where `DITL` 1020 has them, 4, 5 and 7 parked
+    /// outside it.
+    pub(crate) fn stock_1020() -> DialogTemplate {
+        stock(
+            (651.0, 244.0),
+            [
+                (221.0, 213.0, 99.0, 25.0),
+                (115.0, 213.0, 99.0, 25.0),
+                (13.0, 7.0, 413.0, 200.0),
+                (150.0, 300.0, 32.0, 32.0),
+                (197.0, 300.0, 32.0, 32.0),
+                (170.0, 213.0, 99.0, 25.0),
+                (172.0, 340.0, 32.0, 32.0),
+                (441.0, 7.0, 200.0, 200.0),
+                (340.0, 214.0, 23.0, 23.0),
+                (373.0, 214.0, 23.0, 23.0),
+            ],
+        )
+    }
+
+    /// A centred dialog `size` big with disabled user items at `items`.
+    fn stock((width, height): (f32, f32), items: [(f32, f32, f32, f32); 10]) -> DialogTemplate {
+        let rect = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
+        DialogTemplate {
+            bounds: rect(40.0, 40.0, width, height),
+            placement: Placement::Center,
+            items: items
+                .into_iter()
+                .map(|(x, y, w, h)| ItemTemplate {
+                    bounds: rect(x, y, w, h),
+                    enabled: false,
+                    kind: ItemSpec::User,
+                })
+                .collect(),
+        }
+    }
+
     /// [`template`] as the offer dialog, with no picture variant.
     pub(crate) fn templates() -> super::OfferTemplates {
         super::OfferTemplates {
@@ -915,6 +1206,26 @@ pub(crate) mod fixture {
             },
             movie: None,
         }
+    }
+
+    /// A click on `dialog`'s accept button (item 1) with `held` pressed
+    /// while the click is held: the press, `held` and the release, which
+    /// accepts and leaves `held` for what shows next.
+    pub(crate) fn accept_click_holding(
+        dialog: &super::OfferDialog,
+        held: crate::input::Input,
+    ) -> [crate::input::Input; 3] {
+        let at = dialog
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(super::ACCEPT_ITEM))
+            .expect("the accept button")
+            .center();
+        let left = |pressed| crate::input::Input::PointerButton {
+            button: crate::input::MouseButton::Left,
+            pressed,
+            at,
+        };
+        [left(true), held, left(false)]
     }
 }
 
@@ -938,33 +1249,9 @@ mod tests {
         Bounds::at(Point::new(x, y), w, h)
     }
 
-    /// Stock `DLOG` 1016, 441 x 317 and centred, with its ten disabled
-    /// user items as `DITL` 1016 has them, 4, 5 and 7 parked outside it.
+    /// Stock `DLOG` 1016 ([`fixture::stock_1016`]).
     fn template() -> DialogTemplate {
-        let items = [
-            (225.0, 285.0, 99.0, 25.0),
-            (117.0, 285.0, 99.0, 25.0),
-            (12.0, 9.0, 415.0, 267.0),
-            (150.0, 323.0, 32.0, 32.0),
-            (197.0, 326.0, 32.0, 32.0),
-            (173.0, 285.0, 99.0, 25.0),
-            (172.0, 337.0, 32.0, 32.0),
-            (272.0, 345.0, 23.0, 23.0),
-            (340.0, 287.0, 23.0, 23.0),
-            (373.0, 287.0, 23.0, 23.0),
-        ];
-        DialogTemplate {
-            bounds: rect(40.0, 40.0, 441.0, 317.0),
-            placement: Placement::Center,
-            items: items
-                .into_iter()
-                .map(|(x, y, w, h)| ItemTemplate {
-                    bounds: rect(x, y, w, h),
-                    enabled: false,
-                    kind: ItemSpec::User,
-                })
-                .collect(),
-        }
+        fixture::stock_1016()
     }
 
     /// Where the dialog goes: (1024 - 441) / 2 and (768 - 317) / 2,
@@ -1046,6 +1333,96 @@ mod tests {
                 pressed,
                 at,
             });
+        }
+    }
+
+    fn press_item(dialog: &mut OfferDialog, number: usize, pressed: bool) {
+        let at = dialog
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center();
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+
+    #[test]
+    fn a_click_on_accept_holds_back_keys_until_its_release_answers() {
+        let mut dialog = offer();
+        assert!(!dialog.holds_back_keys(), "before the press");
+        press_item(&mut dialog, ACCEPT_ITEM, true);
+        assert!(dialog.holds_back_keys(), "during it");
+        dialog.input(&key(Key::Char('z')));
+        press_item(&mut dialog, ACCEPT_ITEM, false);
+        assert!(dialog.answered());
+        assert!(!dialog.holds_back_keys(), "answered");
+    }
+
+    #[test]
+    fn an_offer_with_no_layout_holds_back_no_keys() {
+        let dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("I'm in", None),
+            ButtonStyle::STOCK,
+        );
+        assert!(!dialog.holds_back_keys());
+    }
+
+    #[test]
+    fn venue_offers_hold_back_keys_for_their_open_dialog_and_what_its_answer_left() {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        assert!(!offers.holds_back_keys(), "nothing open");
+        opened(&mut offers);
+        let at = offers
+            .dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(ACCEPT_ITEM))
+            .expect("Accept")
+            .center();
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        offers.input(&left(true), &mut Vec::new());
+        assert!(offers.holds_back_keys(), "during the press");
+        offers.input(&key(Key::Char('z')), &mut Vec::new());
+        offers.input(&left(false), &mut Vec::new());
+        assert!(offers.dialog().is_none(), "answered");
+        assert!(offers.holds_back_keys(), "Z waits for its holder");
+        offers.take_choice();
+        assert!(offers.holds_back_keys(), "until its holder runs it");
+        assert_eq!(offers.take_unclaimed(), [key(Key::Char('z'))]);
+        assert!(!offers.holds_back_keys(), "once it has");
+    }
+
+    #[test]
+    fn modifiers_and_releases_left_by_an_answer_hold_back_nothing() {
+        let released = Input::Key {
+            key: Key::Char('z'),
+            pressed: false,
+            repeat: false,
+        };
+        let modifiers = [
+            Key::Alt,
+            Key::Control,
+            Key::Shift,
+            Key::Command,
+            Key::CapsLock,
+        ];
+        for left in modifiers.map(key).into_iter().chain([released]) {
+            let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+            opened(&mut offers);
+            let click = fixture::accept_click_holding(offers.dialog().expect("open"), left);
+            for input in &click {
+                offers.input(input, &mut Vec::new());
+            }
+            assert!(offers.dialog().is_none(), "{left:?}: answered");
+            assert!(!offers.holds_back_keys(), "{left:?}");
         }
     }
 
@@ -1170,13 +1547,7 @@ mod tests {
             ..prompt("Yes", Some("No"))
         });
         dialog.input(&key(Key::Down));
-        assert_eq!(
-            dialog
-                .dialog()
-                .and_then(|laid| laid.text(TEXT_ITEM))
-                .map(crate::ui::ScrollText::first),
-            Some(1)
-        );
+        assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
         assert!(!dialog.answered());
     }
 
@@ -1187,11 +1558,11 @@ mod tests {
         Point::new(at.x - laid.bounds().min.x, at.y - laid.bounds().min.y)
     }
 
-    fn first_line(dialog: &OfferDialog) -> Option<usize> {
+    fn scrolled(dialog: &OfferDialog) -> Option<f32> {
         dialog
             .dialog()
             .and_then(|laid| laid.text(TEXT_ITEM))
-            .map(crate::ui::ScrollText::first)
+            .map(crate::ui::ScrollText::offset)
     }
 
     fn long(accept: &str, refuse: Option<&str>) -> OfferPrompt {
@@ -1240,14 +1611,14 @@ mod tests {
         assert_eq!(laid.bounds(), Bounds::at(ORIGIN, 441.0, 317.0));
         assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 285.0));
         dialog.input(&key(Key::Down));
-        assert_eq!(first_line(&dialog), Some(1));
+        assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
     }
 
     #[test]
     fn a_shrunk_text_has_nothing_to_scroll() {
         let mut dialog = offer();
         dialog.input(&key(Key::Down));
-        assert_eq!(first_line(&dialog), Some(0));
+        assert_eq!(scrolled(&dialog), Some(0.0));
     }
 
     #[test]
@@ -1920,6 +2291,27 @@ mod tests {
         assert!(offers.dialog().is_some(), "still open");
     }
 
+    /// `_OfferOneMission`'s I arm counts the active missions that aren't
+    /// hidden and, with none, does nothing (@0xa32c1-0xa32ee): I is still
+    /// read before the labels' letters, so it doesn't choose I'm in.
+    #[test]
+    fn with_no_mission_listed_the_mission_info_key_asks_and_chooses_nothing() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut dialog = offer().with_missions_listed(false);
+        dialog.input(&key(i));
+        assert!(!dialog.take_info_request());
+        assert_eq!(dialog.take_choice(), None);
+        dialog.set_missions_listed(true);
+        dialog.input(&key(i));
+        assert!(dialog.take_info_request(), "listed again after an abort");
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        offers.set_missions_listed(false);
+        offers.input(&key(i), &mut Vec::new());
+        assert!(!offers.take_info_request(), "told through the venue");
+        assert_eq!(offers.take_choice(), None);
+    }
+
     #[test]
     fn the_map_key_asks_for_the_map_before_the_labels_letters_on_a_press() {
         let m = crate::flight::view::MAP_KEY;
@@ -2161,6 +2553,56 @@ mod tests {
         );
         offers.tick(TICK, false);
         assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
+    }
+
+    /// Offers whose dialog was accepted by a click on its accept button,
+    /// an Escape pressed while the click was held, the choice not taken.
+    fn accepted_with_an_escape_left() -> VenueOffers {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        let click = fixture::accept_click_holding(offers.dialog().expect("open"), key(Key::Escape));
+        for input in &click {
+            offers.input(input, &mut Vec::new());
+        }
+        assert!(offers.dialog().is_none(), "accepted");
+        offers
+    }
+
+    /// The answer's `FlushEvents` flush only mouse events (@0xa2da2-0xa2dde),
+    /// so the Escape goes to the venue once the answer has been acted on.
+    #[test]
+    fn what_the_answer_left_goes_to_the_venue_once_its_choice_is_taken() {
+        let mut offers = accepted_with_an_escape_left();
+        assert_eq!(
+            offers.take_unclaimed(),
+            [],
+            "not before the choice is taken"
+        );
+        offers.tick(TICK, true);
+        assert!(offers.take_choice().is_some());
+        assert_eq!(
+            offers.take_unclaimed(),
+            [key(Key::Escape)],
+            "a cover before the answer was acted on drops nothing"
+        );
+        assert_eq!(offers.take_unclaimed(), [], "once");
+    }
+
+    /// A text the answer shows flushes the queue as it opens (@0x5ae67).
+    #[test]
+    fn a_tick_covered_once_the_choice_is_taken_drops_what_the_answer_left() {
+        let mut offers = accepted_with_an_escape_left();
+        assert!(offers.take_choice().is_some());
+        offers.tick(TICK, true);
+        assert_eq!(offers.take_unclaimed(), []);
+        let mut offers = accepted_with_an_escape_left();
+        assert!(offers.take_choice().is_some());
+        offers.tick(TICK, false);
+        assert_eq!(
+            offers.take_unclaimed(),
+            [key(Key::Escape)],
+            "an uncovered tick keeps it"
+        );
     }
 
     /// Answers `offers`' open dialog with `key`, taking the choice.

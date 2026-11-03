@@ -13,8 +13,10 @@
 
 //! **Which ships.** The player, then each NPC in turn, that is neither
 //! destroyed nor breaking up, does not resist ([`resists_deadly`]) and
-//! touches the stellar ([`touches`]). A ship killed by one stellar is gone
-//! for the later ones.
+//! touches the stellar: by the two sprites' pixel masks, as
+//! `_SWRLECollision` walks them (see the `deadly_masks` module), or, where
+//! either can't be read, by their discs ([`touches`]). A ship killed by
+//! one stellar is gone for the later ones.
 //!
 //! **The kill** (@0x39da4-0x39e1f), made by the fight's tick between its
 //! shots and its beams ([`stellar_hazards`](crate::combat::stellar_hazards)):
@@ -873,6 +875,7 @@ pub(super) mod tests {
                 session.player_fires(pass, Rules::default(), chance);
                 session.beams_phase(
                     &crate::ai::NovaAi::default(),
+                    None,
                     pass,
                     Rules::default(),
                     chance,

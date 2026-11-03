@@ -200,7 +200,7 @@ fn an_escape_pods_thrust_is_its_slot_accel() {
     let mut traffic = Traffic::with_interval(1);
     let mut pod = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
     pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-    pod.mode = Mode::Adrift { ticks_left: 10 };
+    pod.mode = Mode::Adrift { ticks_left: 10.0 };
     pod.stats.ion.class_capacity = 400.0;
     pod.stats.ion.class_rate = 100.0;
     pod.ion.charge = 300.0;
@@ -281,7 +281,7 @@ struct Watch {
 impl Behaviour for Watch {
     fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
         if let Some(watched) = around.npcs.iter().find(|ship| ship.id == self.watched) {
-            let seen = (npc.id, watched.goal, watched.ai_wait > 0);
+            let seen = (npc.id, watched.goal, watched.ai_wait > 0.0);
             self.seen.borrow_mut().push(seen);
         }
         npc.goal
@@ -329,7 +329,7 @@ fn under_its_ai_wait_its_low_level_leaves_the_heads_word() {
     // the wait (@0x34a54-0x34a72).
     let mut traffic = Traffic::with_interval(1);
     let attacker = attacking(&mut traffic, 0.0);
-    of_mut(&mut traffic, attacker).ai_wait = 5;
+    of_mut(&mut traffic, attacker).ai_wait = 5.0;
     of_mut(&mut traffic, attacker).state.heading = 33.6;
     traffic.think_holding(&Keeps, World::new(&[]), &[], &mut NeverFires);
     let word = traffic.word_of(attacker).expect("kept");
@@ -661,7 +661,7 @@ fn on_the_second_pass_a_miners_0x14_ease_and_nudge_and_0x15_brake_dont_run() {
         position: Vec2::new(2000.0, 0.0),
         velocity: Vec2::ZERO,
         life: 100.0,
-        frame: 0,
+        frame: 0.0,
         spin: 0,
         graphic: 1,
         scoopable: true,
@@ -902,4 +902,130 @@ fn the_inertialess_adjustment_reads_its_accel_at_the_step_before_the_shed() {
     assert_eq!(npc.speed, slot, "the slot's +0x30");
     let pulled = adjust_velocity(Vec2::new(1.0, 0.0), 0.0, slot, hit * ADJUST_RATE);
     assert_eq!(npc.state.velocity, pulled);
+}
+
+// The frame's gain at the ship's step ([`AtStep::gain`]).
+
+mod gain {
+    use super::super::held_burst::{Flight, Word};
+    use super::super::inertialess::Inertia;
+    use super::super::slot_word::{AtStep, Cap, SlotWord, handle_ship};
+    use crate::flight::{Controls, FlightRules, Flyer, ShipState};
+    use crate::geometry::Vec2;
+    use crate::handling::Handling;
+    use crate::speed_mult::SpeedMult;
+    use crate::stats::ShipStats;
+    use crate::traffic::fixture::npc;
+    use crate::traffic::npc::Npc;
+    use nova_sim_base::fixture::FAST;
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Top speed 6, thrust 0.2, 4 degrees a tick.
+    const HANDLING: Handling = Handling {
+        max_speed: 6.0,
+        accel: 0.2,
+        turn_rate: 4.0,
+    };
+
+    /// A ship of [`FAST`] at the centre moving (2, 0), heading `heading`.
+    fn ship(heading: f32) -> Npc {
+        let mut ship = npc(1, ShipStats::new(FAST, &[]));
+        ship.state = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(2.0, 0.0),
+            heading,
+        };
+        ship
+    }
+
+    /// A word wanting `wanted`, thrusting as `thrust` says, on
+    /// [`HANDLING`].
+    fn word(wanted: i16, thrust: bool) -> SlotWord {
+        let controls = Controls {
+            thrust,
+            ..Controls::default()
+        };
+        SlotWord::of(
+            Flight::writes(controls, wanted, Cap::Step),
+            &HANDLING,
+            Inertia::Inertial,
+        )
+    }
+
+    /// `npc` flown at `gain` by `word` ([`handle_ship`]).
+    fn flown(mut npc: Npc, word: &SlotWord, gain: SpeedMult) -> Npc {
+        let at_step = AtStep::of(&HANDLING).at_gain(gain);
+        handle_ship(&mut npc, word, at_step, FlightRules::default());
+        npc
+    }
+
+    #[test]
+    fn a_step_reads_the_gain_it_is_given_and_a_slots_handling_a_full_one() {
+        assert_eq!(AtStep::of(&HANDLING).gain, SpeedMult::FULL);
+        assert_eq!(AtStep::of(&HANDLING).at_gain(HALF).gain, HALF);
+        let ship = ship(90.0);
+        let rules = FlightRules::default();
+        assert_eq!(AtStep::of_npc(&ship, 1.0, rules, 0.2, HALF).gain, HALF);
+    }
+
+    #[test]
+    fn at_half_gain_a_waiting_ship_moves_half_its_velocity() {
+        let mut waiting = ship(90.0);
+        waiting.ai_wait = 5.0;
+        let moved = flown(waiting, &word(180, true), HALF);
+        assert_eq!(moved.state.position, Vec2::new(1.0, 0.0));
+        assert_eq!(moved.state.heading, 90.0, "no turn in its wait");
+    }
+
+    #[test]
+    fn at_half_gain_a_ship_turns_while_more_than_half_its_rate_off_and_never_snaps_at_none() {
+        // 2 off, within half its 4: on it.
+        assert_eq!(
+            flown(ship(90.0), &word(92, false), HALF).state.heading,
+            92.0
+        );
+        // 3 off: it turns by 2.
+        assert_eq!(
+            flown(ship(90.0), &word(93, false), HALF).state.heading,
+            92.0
+        );
+        assert_eq!(
+            flown(ship(90.0), &word(87, false), HALF).state.heading,
+            88.0
+        );
+        let held = flown(ship(90.5), &word(91, false), SpeedMult::ZERO);
+        assert_eq!(held.state.heading, 90.5, "no turn and no snap at none");
+    }
+
+    #[test]
+    fn at_half_gain_a_thrusting_word_thrusts_half_an_accel_and_moves_half() {
+        let thrusting = flown(ship(90.0), &word(90, true), HALF);
+        let mut expected = ship(90.0).state;
+        let controls = Controls {
+            thrust: true,
+            ..Controls::default()
+        };
+        let rules = FlightRules::default();
+        crate::flight::step(&mut expected, &HANDLING, controls, rules, Flyer::Npc, HALF);
+        assert_eq!(thrusting.state, expected);
+    }
+
+    #[test]
+    fn at_half_gain_a_snipers_inertialess_brake_takes_half_an_accel_off() {
+        let mut sniper = ship(90.0);
+        sniper.speed = 3.0;
+        let braking = SlotWord::of(
+            Flight {
+                speed_off: true,
+                ..Flight::writes(Controls::default(), 90, Cap::Slot).doing(Word::Keeps {
+                    thrust: HANDLING.accel,
+                })
+            },
+            &HANDLING,
+            Inertia::Inertialess { speed: 3.0 },
+        );
+        let braked = flown(sniper, &braking, HALF);
+        assert!((braked.speed - 2.9).abs() < 1e-6, "{}", braked.speed);
+    }
 }

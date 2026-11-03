@@ -14,7 +14,7 @@ use crate::{Diagnostic, Sound};
 
 use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, Wording, comm_message,
-    message_text, pay_said,
+    message_text, pay_notes_message,
 };
 use nova_sim::flight_frame::{FlightCommand, RaisedLine};
 
@@ -90,10 +90,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The escape pod's rescue's `dësc`, once, after the rescue
     /// ([`FlightEvent::RescueDesc`]): as the flight loaded it, first in the
     /// rescue (`_HandlePlayer` @0x68e90), its text taken in. The router
-    /// shows that text over flight without loading it again.
+    /// shows that text over flight without loading it again. While the
+    /// rescue's screen fades out and shows black, none: it is due once
+    /// the black is over (the `rescue` module).
     ///
     /// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
     pub fn take_rescue_desc(&mut self) -> Option<nova_sim::flight_frame::LoadedDesc> {
+        if self.rescue_holds_desc() {
+            return None;
+        }
         self.drain().take_rescue_desc()
     }
 
@@ -119,8 +124,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::clear_message`], [`FlightView::cut_message`],
     /// [`FlightView::acknowledge_message`] or
     /// [`FlightView::blank_message`], so the flight's line stays in step
-    /// with the slot.
+    /// with the slot. Each of them but `relay` first relays the lines a
+    /// double-time frame's second pass held
+    /// ([`FlightView::relay_held_lines`]), as the original drew them
+    /// before any write that comes after the frame (see the
+    /// `between_passes` module).
     pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.relay_held_lines();
         self.relay(text, ticks);
         self.send(FlightCommand::CommShown(ticks));
     }
@@ -130,6 +140,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x6dedb-0x6df29): it shows an empty line for 1 tick, the
     /// flight's line too.
     pub(super) fn clear_message(&mut self, text: &str) {
+        self.relay_held_lines();
         if self
             .message
             .as_ref()
@@ -146,6 +157,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// 0 as it turns the readout on, which empties the line at once, and
     /// 1 as it turns it off, which keeps the text for that tick.
     pub(super) fn cut_message(&mut self, ticks: u16) {
+        self.relay_held_lines();
         let now = crate::time::ticks(self.elapsed);
         match &mut self.message {
             // A line already run out stays gone.
@@ -163,6 +175,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `nova_sim::Session::comm_acknowledged`, `_HandlePlayer`
     /// @0x6dd22-0x6dd65).
     pub(super) fn acknowledge_message(&mut self) {
+        self.relay_held_lines();
         self.message = None;
         self.send(FlightCommand::CommAcknowledged);
     }
@@ -173,6 +186,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// that 0; and an arrival, whose own line the flight raised and the
     /// view shows next ([`FlightView::say_for`]).
     pub(super) fn blank_message(&mut self) {
+        self.relay_held_lines();
         self.message = None;
     }
 
@@ -285,12 +299,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// relayed, not set again. The line the steps raised last is relayed
     /// again after the messages ([`FlightView::relay_last_line`]).
     pub(super) fn relay_comm_and_quotes(&mut self, notes: &[CommNote], quotes: Vec<PersonQuote>) {
-        for note in notes {
-            self.relay(comm_message(note), note.ticks());
+        let lines = notes.iter().cloned().map(RaisedLine::Comm);
+        for line in lines.chain(quotes.into_iter().map(RaisedLine::Quote)) {
+            self.relay_line(line);
         }
-        for quote in quotes {
-            let ticks = quote.ticks();
-            self.relay(quote.text, ticks);
+    }
+
+    /// Relays `line`, worded ([`FlightView::said_of`]), if it has words.
+    pub(super) fn relay_line(&mut self, line: RaisedLine) {
+        if let Some((text, ticks)) = self.said_of(line) {
+            self.relay(text, ticks);
+        }
+    }
+
+    /// The words `line` shows, with its own ticks: a message as
+    /// [`FlightView::word`] words it, none for an arrival's lead, which
+    /// waits for its arrival; a comm note as [`comm_message`] words it; a
+    /// quote by its text.
+    ///
+    /// The match is exhaustive on purpose: the view words every kind of
+    /// line, so a new kind must not compile until it is handled here.
+    pub(super) fn said_of(&mut self, line: RaisedLine) -> Option<(String, u16)> {
+        match line {
+            RaisedLine::Message(message) => self.word(vec![message]).pop(),
+            RaisedLine::Comm(note) => Some((comm_message(&note), note.ticks())),
+            RaisedLine::Quote(quote) => {
+                let ticks = quote.ticks();
+                Some((quote.text, ticks))
+            }
         }
     }
 
@@ -301,10 +337,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// line shows the last raised, whatever its kind, for its own ticks.
     /// A message raised last needs nothing: the messages are relayed
     /// last already, and wording it again would roll the dock request's
-    /// picks a second time.
-    ///
-    /// The match is exhaustive on purpose: the view words every kind of
-    /// line, so a new kind must not compile until it is handled here.
+    /// picks a second time. Every other kind is worded by
+    /// [`FlightView::said_of`].
     ///
     /// [`StepRun::last_line`]: nova_sim::flight_frame::StepRun::last_line
     pub(super) fn relay_last_line(&mut self) {
@@ -315,12 +349,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .rev()
             .find_map(|run| run.last_line.clone());
         match last {
-            Some(RaisedLine::Comm(note)) => self.relay(comm_message(&note), note.ticks()),
-            Some(RaisedLine::Quote(quote)) => {
-                let ticks = quote.ticks();
-                self.relay(quote.text, ticks);
-            }
             Some(RaisedLine::Message(_)) | None => {}
+            Some(line) => self.relay_line(line),
         }
     }
 
@@ -355,17 +385,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What an arrival says after its line: the fighters abandoned
-    /// ([`FlightView::fighters_said`]) and the escorts that defected unpaid
-    /// ([`pay_said`]), and the flight's messages, which the arrival words
-    /// ([`FlightEvent::PayNote`], [`FlightEvent::Message`]).
+    /// ([`FlightView::fighters_said`]), and the flight's messages, which
+    /// the arrival words ([`FlightEvent::Message`]). The escorts that
+    /// defected unpaid stay for [`FlightView::take_defections`].
+    ///
+    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    pub(super) fn arrival_outputs(&mut self) -> (Said, Vec<SimMessage>) {
+        let fighters = self.fighters_said();
+        (fighters, self.drain().take_messages())
+    }
+
+    /// The defection messages of the escorts that left for want of pay
+    /// since this was last taken, in order, each once
+    /// ([`FlightEvent::PayNote`], worded by
+    /// [`defection_message`](super::defection_message)): at an arrival,
+    /// at a take-off, or as the router settles the escorts on a leave
+    /// ([`FlightView::land_escorts`]). They are not said on the message
+    /// line: whoever shows texts shows each in "Desc Dialog", as
+    /// `_DoEscortPayment` shows it with `_ShowTextDialog(0, 0, 0)`
+    /// (@0x40301).
     ///
     /// [`FlightEvent::PayNote`]: nova_sim::flight_frame::FlightEvent::PayNote
-    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
-    pub(super) fn arrival_outputs(&mut self) -> (Said, Said, Vec<SimMessage>) {
-        let fighters = self.fighters_said();
-        let inbox = self.drain();
-        let pay = pay_said(&inbox.take_pay_notes());
-        (fighters, pay, inbox.take_messages())
+    pub fn take_defections(&mut self) -> Vec<String> {
+        pay_notes_message(&self.drain().take_pay_notes())
     }
 
     /// The message the last take-off left on, a held `Q`'s, said for
@@ -381,16 +423,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .collect()
     }
 
-    /// What a take-off says and shows: the escorts that defected for want
-    /// of its pay ([`pay_said`]), the flight's messages, which the
+    /// What a take-off says and shows: the flight's messages, which the
     /// take-off words, and the nav as the take-off began
-    /// ([`FlightEvent::TakeoffNav`]).
+    /// ([`FlightEvent::TakeoffNav`]). The escorts that defected for want
+    /// of its pay stay for [`FlightView::take_defections`].
     ///
     /// [`FlightEvent::TakeoffNav`]: nova_sim::flight_frame::FlightEvent::TakeoffNav
-    pub(super) fn takeoff_outputs(&mut self) -> (Said, Vec<SimMessage>, Option<NavMode>) {
+    pub(super) fn takeoff_outputs(&mut self) -> (Vec<SimMessage>, Option<NavMode>) {
         let inbox = self.drain();
-        let pay = pay_said(&inbox.take_pay_notes());
-        (pay, inbox.take_messages(), inbox.take_takeoff_nav())
+        (inbox.take_messages(), inbox.take_takeoff_nav())
     }
 
     /// The flight's sounds (thrust, landing, taking off and jumping),

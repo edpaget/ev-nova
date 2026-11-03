@@ -208,7 +208,7 @@ mod tests {
         npc.goal = goal;
         npc.berth = 2;
         npc.state.position = AT;
-        npc.ai_wait = 50;
+        npc.ai_wait = 50.0;
         npc.pursuit = Pursuit {
             kept,
             frame: Some(frame(goal, bodies)),
@@ -284,7 +284,7 @@ mod tests {
         gone.goal = Goal::Attack(ShipRef::Npc(NpcId(9)));
         assert_eq!(run_at_player(&gone, Vec2::new(200.0, 0.0)), None);
         let unwaited = Npc {
-            ai_wait: 0,
+            ai_wait: 0.0,
             ..waiting(AT_PLAYER, BREAKING, &[Manoeuvre::BreakOff], true)
         };
         assert_eq!(

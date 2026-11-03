@@ -142,9 +142,11 @@ pub(super) struct TakeOffWindow {
 }
 
 impl Chart {
-    /// Opens a take-off's window (see the module docs).
+    /// Opens a take-off's window (see the module docs), keeping one
+    /// already open: the escorts' landing opens it before the escort days
+    /// (see the `escort_land` module), and the take-off goes on in it.
     pub(super) fn open_take_off_window(&mut self) {
-        self.take_off_window = Some(TakeOffWindow::default());
+        self.take_off_window.get_or_insert_default();
     }
 
     /// Notes that the take-off's placement has run.
@@ -331,6 +333,53 @@ mod tests {
         assert_eq!(session.player().position, Vec2::ZERO);
         assert_eq!(session.player_speed(), 0.0);
         assert_eq!(session.pilot().stellar, None);
+    }
+
+    #[test]
+    fn an_escort_days_m_of_a_leave_the_router_prepared_is_a_take_off_move() {
+        let catalog = moving(Vec::new(), vec![scripted(128, 1, "M133", "")]);
+        let (session, seen) = watching_entries(flown(&catalog, Rulebook::default()), 601, 133);
+        let mut session = landed(session, &catalog);
+        let landed_at = session.landed().expect("landed");
+        session.port.stay.escorts_changed = 2;
+        let _ = session.land_escorts(&catalog, &mut NeverFires);
+        assert_eq!(session.landed(), Some(landed_at), "still landed");
+        assert_eq!(session.system(), SystemId(133), "moved at its operator");
+        assert_eq!(session.chart.pending_move, None, "no docked entry owed");
+        // The router's settling while the report holds the leave.
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        let _ = session
+            .leave_port(&catalog, &mut NeverFires)
+            .expect("leaves");
+        assert_eq!(session.system(), SystemId(133));
+        assert_eq!(session.player().position, FIRST_150, "before the placement");
+        assert_eq!(seen.seen(), [], "no enter-system hook");
+        assert_eq!(session.npcs().len(), 2, "133's traffic, once");
+        assert_eq!(session.pilot().stellar, Some(StellarId(150)));
+        assert_eq!(session.chart.pending_move, None);
+    }
+
+    #[test]
+    fn the_escorts_landing_completes_a_docked_moves_entry_before_its_window() {
+        let catalog = moving(Vec::new(), Vec::new());
+        let mut session = landed(flown(&catalog, Rulebook::default()), &catalog);
+        session.run_set(&SetExpr::parse("M133").expect("parses"), &mut NeverFires);
+        assert!(session.chart.pending_move.is_some(), "owed");
+        let _ = session.land_escorts(&catalog, &mut NeverFires);
+        assert_eq!(session.chart.pending_move, None, "completed");
+        assert_eq!(session.pilot().stellar, Some(StellarId(150)));
+        assert!(
+            session.chart.in_take_off_window(),
+            "the window opens after it"
+        );
+        assert_eq!(
+            session
+                .chart
+                .take_off_window
+                .and_then(|window| window.moved),
+            None,
+            "the docked move is not the take-off's"
+        );
     }
 
     #[test]

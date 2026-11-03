@@ -5,11 +5,15 @@
 //! landing. They are never saved.
 
 use super::{PlayerShip, Session, Space, Statics};
+use crate::SpeedMult;
 use crate::cargo_box::{CargoBox, escort_share};
 use crate::chance::Chance;
+use crate::geometry::Vec2;
 use crate::market::Good;
 use crate::pilot::Pilot;
-use crate::scoop::{Haul, Scooper, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop};
+use crate::scoop::{
+    Haul, Scooper, Scooping, has_asteroid_scoop, haul, npc_in_ship_layer, npc_scoop,
+};
 use crate::ship_layer::disabled;
 
 impl Session {
@@ -92,21 +96,35 @@ impl Session {
     ///    boxes that expired last step are gone. No frame is drawn in
     ///    between, so the player never sees the difference.
     /// 2. The player, unless disabled or breaking up (the player is never
-    ///    led, so that alone is its layer test), takes each box its disc
-    ///    touches while its scoop flag holds ([`Session::player_scoops`]),
+    ///    led, so that alone is its layer test), takes each box it touches
+    ///    while its scoop flag holds ([`Session::player_scoops`]),
     ///    testing the flag again before each, as the original recomputes
     ///    it after each scoop: a hold with a ton free takes one box. Each
     ///    box adds its [`haul`] and resets the precalced values
     ///    (@0x371ac), an empty one's included.
     /// 3. Then each NPC, in NPC order, that is scooping
     ///    ([`Npc::is_scooping`](crate::traffic::npc::Npc::is_scooping))
-    ///    and in the ship layer ([`npc_in_ship_layer`]) takes every box
-    ///    its disc touches ([`npc_scoop`]).
+    ///    and in the ship layer ([`npc_in_ship_layer`]) takes every box it
+    ///    touches ([`npc_scoop`]).
     ///
-    /// *Ordering against the original.* The positions tested are those at
-    /// this point of the pass, before this pass's player move and after
-    /// the last traffic tick; a pass's difference in when an overlap is
-    /// caught crosses no boundary the player sees. On the player's wrap's
+    /// A ship touches a box by their placed masks, the ship's first
+    /// (`_SWRLECollision` @0x3710c, [`Scooping::touches`]), laid out from
+    /// the player standing at `stood`, its own frame the one this pass's
+    /// turn gave it on the set its display this pass stepped, each NPC's
+    /// the set its last display drew (see the `contact_masks` module), or
+    /// else by its disc.
+    ///
+    /// It runs after the player's display step, as collision pass 1 runs
+    /// after `_HandleShipDisplay` (@0x43e29): the eject check and the
+    /// display's settle come first, so a player its display disables,
+    /// breaks up or destroys takes no box that pass. A pass the escape
+    /// pod's rescue ends (@0x68ddd, before the collision passes) scoops
+    /// nothing and steps no box; the landing clears the boxes anyway.
+    ///
+    /// *Ordering against the original.* The places tested are the
+    /// player's before this pass's move, every other ship's after the last
+    /// traffic tick and every box's before it steps, as the last frame
+    /// placed their sprites. On the player's wrap's
     /// pass the test reads the moved places where the original's reads the
     /// last pass's sprites: only a miner and a box either side of the
     /// wrap's reach differ, 15,000 pixels off screen, and they then stand
@@ -115,18 +133,28 @@ impl Session {
     /// follows `SpriteWorld`'s layer history. There is no sound and no
     /// message, and the HUD's cargo area is drawn afresh each frame, so
     /// the status redraw flag (@0x37199) needs no counterpart.
-    pub(super) fn scoop_boxes(&mut self) {
+    pub(super) fn scoop_boxes(&mut self, stood: Vec2) {
         if !self.space.boxes.any_scoopable() {
             return;
         }
+        let masks = self.scoop_masks(stood);
+        let sheets = self.space.sprite_masks.box_sheets();
+        let walk = self.mask_walk();
         // The player defends no stellar.
         if !disabled(self.ship.condition, false) {
+            let scooping = Scooping {
+                mask: masks.player.as_ref(),
+                sheets: Some(&sheets),
+                camera: stood,
+                walk,
+                ..Scooping::disc(stood, self.ship.fit.hull.hit_radius)
+            };
             while self.player_scoops() {
-                let Some(taken) = self.space.boxes.take_touching(
-                    self.ship.player.position,
-                    self.ship.fit.hull.hit_radius,
-                    &self.statics.box_frames,
-                ) else {
+                let Some(taken) = self
+                    .space
+                    .boxes
+                    .take_touching(&scooping, &self.statics.box_frames)
+                else {
                     break;
                 };
                 let good = match haul(taken.contents, Scooper::Player) {
@@ -142,17 +170,28 @@ impl Session {
             }
         }
         let (boxes, frames) = (&mut self.space.boxes, &self.statics.box_frames);
-        for npc in self.space.traffic.npcs_mut() {
+        for (npc, mask) in self.space.traffic.npcs_mut().iter_mut().zip(&masks.npcs) {
             if npc.is_scooping() && npc_in_ship_layer(npc) {
-                npc_scoop(
-                    boxes,
-                    frames,
-                    npc.state.position,
-                    npc.hull.hit_radius,
-                    &mut npc.cargo,
-                );
+                let scooping = Scooping {
+                    mask: mask.as_ref(),
+                    sheets: Some(&sheets),
+                    camera: stood,
+                    walk,
+                    ..Scooping::disc(npc.state.position, npc.hull.hit_radius)
+                };
+                npc_scoop(boxes, frames, &scooping, &mut npc.cargo);
             }
         }
+    }
+
+    /// `_ShipCollisionHandler`'s scoop branch and `_HandleBoxes`' step, after
+    /// this pass's player move and the player's display step, the player
+    /// having stood at `stood` before the move (see the `contact_masks`
+    /// module): the boxes the ships touch are scooped
+    /// ([`Session::scoop_boxes`]), then the boxes step.
+    pub(super) fn scoop_after_display(&mut self, stood: Vec2) {
+        self.scoop_boxes(stood);
+        self.space.boxes_tick(self.speed_mult());
     }
 }
 
@@ -186,11 +225,13 @@ impl Space {
         self.boxes.boxes()
     }
 
-    /// Steps the cargo boxes one tick (see
-    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every flight tick, whatever the player's
-    /// state, as `_DoPlayGameWork` runs `_HandleBoxes` (@0x444f0).
-    pub(super) fn boxes_tick(&mut self) {
-        self.boxes.step();
+    /// Steps the cargo boxes a pass at the frame's `gain` (see
+    /// [`CargoBoxes::step`](crate::cargo_box::CargoBoxes::step)): every
+    /// flight pass, whatever the player's state, as `_DoPlayGameWork` runs
+    /// `_HandleBoxes` (@0x444f0), which reads `_gSpeedMult` (@0x2e000,
+    /// 0x2e06c).
+    pub(super) fn boxes_tick(&mut self, gain: SpeedMult) {
+        self.boxes.step(gain);
     }
 
     /// Clears the cargo boxes. The original sets `_killBoxes` and the
@@ -224,8 +265,8 @@ mod tests {
     use crate::session::tests::{at_gate, gated};
     use crate::stats::ShipStats;
     use crate::testkit::{
-        FAST, FakePilotCatalog, Scripted, begin_jump_now, carrying, catalog, fly_out, hull,
-        land_now, mission, npc, outfit, ship,
+        FAST, FakePilotCatalog, Passive, Scripted, begin_jump_now, carrying, catalog, fly_out,
+        hull, land_now, mission, npc, outfit, ship,
     };
     use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Npc, NpcHold};
@@ -292,7 +333,7 @@ mod tests {
             // back: the draws' first outcomes.
             assert!((made.position - Vec2::new(0.0, 20.0)).length() < 1e-5);
             assert!((made.velocity - Vec2::new(0.0, 0.3)).length() < 1e-6);
-            assert_eq!((made.life, made.frame, made.spin), (180.0, 0, -1));
+            assert_eq!((made.life, made.frame, made.spin), (180.0, 0.0, -1));
         }
     }
 
@@ -456,7 +497,7 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         let made = session.cargo_boxes()[0];
         assert!((made.position - Vec2::new(0.0, 20.3)).length() < 1e-5);
-        assert_eq!((made.life, made.frame), (179.0, 35));
+        assert_eq!((made.life, made.frame), (179.0, 35.0));
         for _ in 0..180 {
             work(&mut session, &catalog, Controls::default());
         }
@@ -613,6 +654,75 @@ mod tests {
         assert_eq!(session.cargo_boxes()[0].contents, Some(3));
     }
 
+    /// A frame `side` square drawn where `drawn` says.
+    fn square(side: u32, drawn: impl Fn(u32, u32) -> bool) -> crate::sprite_mask::RleSheet {
+        let rows: Vec<String> = (0..side)
+            .map(|y| {
+                (0..side)
+                    .map(|x| if drawn(x, y) { '#' } else { '.' })
+                    .collect()
+            })
+            .collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        nova_sim_base::fixture::rle::sheet(&[&rows])
+    }
+
+    /// A 36-frame sheet of 20 square, only frame `drawn` drawn.
+    fn drawn_only_on(drawn: u16) -> crate::sprite_mask::RleSheet {
+        let frames: Vec<crate::sprite_mask::RleSheet> = (0..36)
+            .map(|frame| square(20, |_, _| frame == drawn))
+            .collect();
+        let mut words = frames[0].clone();
+        words.words.clear();
+        words.starts.clear();
+        for frame in &frames {
+            words.starts.push(Some(words.words.len()));
+            words.words.extend(&frame.words);
+        }
+        words
+    }
+
+    #[test]
+    fn the_scoop_takes_a_box_by_the_players_frame_after_its_turn() {
+        use crate::catalog::MaskSheet;
+        use crate::flight::Turn;
+        let turning = Controls {
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        // The rotation this pass's turn gives the player.
+        let mut catalog = scoopable();
+        let probe = scooper(&catalog, 0);
+        let turned = {
+            let mut ahead = probe.clone();
+            work(&mut ahead, &catalog, turning);
+            ahead
+                .ship
+                .fit
+                .hull
+                .frames
+                .rotation(ahead.ship.player.heading)
+        };
+        let before = probe
+            .ship
+            .fit
+            .hull
+            .frames
+            .rotation(probe.ship.player.heading);
+        assert_ne!(turned, before);
+        let base = probe.statics.arsenal.sprite_base(probe.pilot.ship);
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(base), drawn_only_on(turned)),
+            (MaskSheet::CargoBox(1), square(8, |_, _| true)),
+        ];
+        for (controls, taken) in [(Controls::default(), false), (turning, true)] {
+            let mut session = probe.clone();
+            drop_on_ship(&mut session, Some(2));
+            work(&mut session, &catalog, controls);
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{controls:?}");
+        }
+    }
+
     /// Ticks `session` once with a scoopable commodity box on its ship,
     /// and asserts that the box stays and the cargo is unchanged.
     fn assert_no_scoop(mut session: Session) {
@@ -641,10 +751,26 @@ mod tests {
 
     #[test]
     fn a_disabled_player_takes_no_box() {
+        // The scoop (@0x43e46-0x43e70) reads `_IsDisabled` after the
+        // player's display (@0x43e29) settles its condition from its
+        // armour, so the player is disabled by the rule, not by a poke the
+        // settle would undo.
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
         session.ship.condition = Condition::Disabled;
-        assert_no_scoop(session);
+        let before = held(&session);
+        drop_on_ship(&mut session, Some(2));
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Peaceful,
+            crate::session::tests::DISABLING,
+            &mut NeverFires,
+        );
+        assert_eq!(session.ship.condition, Condition::Disabled);
+        assert_eq!(held(&session), before);
+        assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
     }
 
     #[test]
@@ -886,5 +1012,341 @@ mod tests {
             NpcHold::default()
         );
         assert!(session.cargo_boxes().is_empty());
+    }
+
+    /// A sheet of 36 frames `side` square, each drawn wholly as `mark`.
+    fn whole_frames(side: usize, mark: char) -> crate::sprite_mask::RleSheet {
+        let row: String = std::iter::repeat_n(mark, side).collect();
+        let rows: Vec<&str> = vec![row.as_str(); side];
+        let frames: Vec<&[&str]> = vec![rows.as_slice(); 36];
+        nova_sim_base::fixture::rle::sheet(&frames)
+    }
+
+    /// [`scoopable`] holding the player's sheet `player`, the NPC's (its
+    /// sprite base `npc_base`) `npc`, and box graphic 1's 8 square solid.
+    fn masked(
+        player: crate::sprite_mask::RleSheet,
+        npc: Option<(ShipId, crate::sprite_mask::RleSheet)>,
+        base: ShipId,
+    ) -> FakePilotCatalog {
+        use crate::catalog::MaskSheet;
+        let mut catalog = framed();
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(base), player),
+            (MaskSheet::CargoBox(1), whole_frames(8, '#')),
+        ];
+        if let Some((npc_base, sheet)) = npc {
+            catalog.rle_sheets.push((MaskSheet::Ship(npc_base), sheet));
+        }
+        catalog
+    }
+
+    /// The player's sprite base in `catalog`'s session.
+    fn player_base(catalog: &FakePilotCatalog) -> ShipId {
+        let session = flying(catalog, 0);
+        session.statics.arsenal.sprite_base(session.pilot.ship)
+    }
+
+    #[test]
+    fn the_scoop_lays_its_masks_out_from_where_the_player_stood_before_its_move() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        let mut session = scooper(&catalog, 0);
+        let stood = Vec2::new(300.0, 200.0);
+        session.ship.player.position = stood;
+        drop_on_ship(&mut session, Some(2));
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(
+            held(&session),
+            [(Good::Commodity(2), 1)],
+            "taken at its place"
+        );
+        // Moved on since, its own mask still sits at the centre.
+        session.ship.player.position = stood + Vec2::new(50.0, 0.0);
+        let own = session.scoop_masks(stood).player.expect("its sheet");
+        assert_eq!(
+            own.rect,
+            crate::sprite_mask::MaskRect::placed((-2, -2), (4, 4))
+        );
+    }
+
+    #[test]
+    fn the_scoop_meets_the_player_by_the_set_its_display_this_pass_steps() {
+        use crate::catalog::{ShipDisplay, ShipExits};
+        // `_ShipCollisionHandler`'s scoop branch (@0x3710c) runs in the
+        // collision passes, after the player's display (@0x43e29) stepped
+        // its set. An animated class of two sets, `AnimDelay` 0, so its set
+        // steps at every display: set 0 drawn nowhere, set 1 solid.
+        let base = player_base(&scoopable());
+        let empty: Vec<&str> = vec!["...."; 4];
+        let solid: Vec<&str> = vec!["####"; 4];
+        let mut frames: Vec<&[&str]> = vec![empty.as_slice(); 36];
+        frames.extend(vec![solid.as_slice(); 36]);
+        let mut catalog = masked(nova_sim_base::fixture::rle::sheet(&frames), None, base);
+        let hull = catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == base)
+            .expect("the player's hull");
+        hull.display = Some(ShipDisplay {
+            flags: crate::combat::ship_frames::ANIMATED,
+            base_sets: 2,
+            anim_delay: 0,
+            ..ShipDisplay::default()
+        });
+        hull.exits = Some(ShipExits {
+            frames: 36,
+            ..ShipExits::default()
+        });
+        for (set, taken) in [(0, true), (1, false)] {
+            let mut session = scooper(&catalog, 0);
+            session.ship.ship_display.frames.anim_set = set;
+            session.ship.ship_display.drawn.set = set.cast_unsigned();
+            drop_on_ship(&mut session, Some(2));
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(session.player_drawn().set, 1 - set.cast_unsigned());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "from set {set}");
+        }
+    }
+
+    #[test]
+    fn the_scoops_masks_are_walked_by_the_rle_collision_walk() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(20, 'r'), None, base);
+        let drawn = Rulebook::default().with_override(RuleKey::RleCollisionWalk, RuleSource::Bible);
+        for (rules, taken) in [(Rulebook::default(), false), (drawn, true)] {
+            let mut session = scooper(&catalog, 0).with_rules(rules);
+            drop_on_ship(&mut session, Some(2));
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(
+                session.cargo_boxes().is_empty(),
+                taken,
+                "a run never touches"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_a_box_by_the_masks_laid_out_from_the_player() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let npc_at = Vec2::new(300.0, 0.0);
+        let npc_base = |catalog: &FakePilotCatalog| {
+            let mut session = flying(catalog, 0);
+            let id = session.space.traffic.add_npc(scooping_npc(npc_at));
+            let ship = session.space.npc(id).expect("here").ship;
+            session.statics.arsenal.sprite_base(ship)
+        };
+        let plain = scoopable();
+        let (base, npc) = (player_base(&plain), npc_base(&framed()));
+        for (mark, rules, on_point) in [
+            ('#', Rulebook::default(), true),
+            ('r', Rulebook::default(), false),
+            (
+                'r',
+                Rulebook::default().with_override(RuleKey::RleCollisionWalk, RuleSource::Bible),
+                true,
+            ),
+        ] {
+            // The player owns no scoop; its sheet is the NPC's if they share
+            // a sprite base.
+            let catalog = if npc == base {
+                masked(whole_frames(20, mark), None, base)
+            } else {
+                masked(
+                    whole_frames(1, '.'),
+                    Some((npc, whole_frames(20, mark))),
+                    base,
+                )
+            };
+            let mut session = flying(&catalog, 0).with_rules(rules);
+            session.ship.player.position = Vec2::new(100.0, 50.0);
+            let id = session.space.traffic.add_npc(scooping_npc(npc_at));
+            let boxes = &mut session.space.boxes;
+            // On its point: the box's frame up and left of it, over the NPC.
+            boxes.spawn_scoopable(npc_at, Some(2), 1, &mut NeverFires);
+            // 25 right: its 8-square frame clear of the NPC's 20, though
+            // graphic 1's 40-square frame for the disc is over it.
+            boxes.spawn_scoopable(npc_at + Vec2::new(25.0, 0.0), Some(3), 1, &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
+            let hold = session.space.npc(id).expect("here").cargo;
+            assert_eq!(hold.tons(2), u32::from(on_point), "{mark} {rules:?}");
+            assert_eq!(hold.tons(3), 0, "the masks, not the disc: {mark}");
+        }
+    }
+
+    // Double time's second pass (`Session::tick_again`) scoops and steps
+    // the boxes after its own move, as the advance pass does.
+
+    /// Runs double time's second pass on `session` under `controls`.
+    fn again(session: &mut Session, controls: Controls) {
+        session.tick_again(controls, &Passive, Rules::default(), &mut NeverFires);
+    }
+
+    /// [`scooper`] holding nothing in double time, its sheets read in
+    /// `catalog` by an advance pass under no controls, box graphic 1's
+    /// too, as that pass reads it for a box in space (the
+    /// `sprite_sheets` module): the second pass reads no catalog.
+    fn doubling(catalog: &FakePilotCatalog) -> Session {
+        let mut session = scooper(catalog, 0);
+        session.set_double_time_key(true);
+        work(&mut session, catalog, Controls::default());
+        session
+            .space
+            .sprite_masks
+            .load(catalog, crate::catalog::MaskSheet::CargoBox(1));
+        assert!(session.double_time());
+        session
+    }
+
+    #[test]
+    fn the_second_pass_scoops_a_box_on_the_ship_by_the_masks() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        // 12 right, the box's 8-square frame is clear of the player's 4,
+        // though graphic 1's 40-square frame for the disc is over it.
+        for (right, taken) in [(0.0, true), (12.0, false)] {
+            let mut session = doubling(&catalog);
+            let at = session.player().position + Vec2::new(right, 0.0);
+            session
+                .space
+                .boxes
+                .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+            again(&mut session, Controls::default());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{right}");
+            let hold: &[(Good, u32)] = if taken {
+                &[(Good::Commodity(2), 1)]
+            } else {
+                &[]
+            };
+            assert_eq!(held(&session), hold, "{right}");
+        }
+    }
+
+    /// [`scooper`] with a box well clear of the ship, its next pass at
+    /// half gain.
+    fn boxed_at_half(catalog: &FakePilotCatalog) -> Session {
+        let mut session = scooper(catalog, 0);
+        let far = session.player().position + Vec2::new(500.0, 0.0);
+        session
+            .space
+            .boxes
+            .spawn_scoopable(far, Some(2), 1, &mut NeverFires);
+        session.at_gain(SpeedMult::new(0.5));
+        session
+    }
+
+    #[test]
+    fn a_pass_steps_the_boxes_at_the_frames_gain() {
+        let catalog = scoopable();
+        let mut session = boxed_at_half(&catalog);
+        let before = session.space.boxes.clone();
+        work(&mut session, &catalog, Controls::default());
+        let mut expected = before.clone();
+        expected.step(SpeedMult::new(0.5));
+        assert_eq!(session.cargo_boxes(), expected.boxes());
+        let mut full = before;
+        full.step(SpeedMult::FULL);
+        assert_ne!(expected, full, "the gain shows");
+    }
+
+    #[test]
+    fn the_boxes_tick_steps_the_boxes_at_its_gain() {
+        let catalog = scoopable();
+        let session = boxed_at_half(&catalog);
+        let mut ticked = session.space.clone();
+        ticked.boxes_tick(SpeedMult::new(0.5));
+        let mut expected = session.space.boxes.clone();
+        expected.step(SpeedMult::new(0.5));
+        assert_eq!(ticked.cargo_boxes(), expected.boxes());
+        let mut full = session.space.boxes.clone();
+        full.step(SpeedMult::FULL);
+        assert_ne!(expected, full, "the gain shows");
+    }
+
+    #[test]
+    fn the_second_pass_steps_a_box_the_ship_does_not_touch_once() {
+        let catalog = scoopable();
+        let mut session = doubling(&catalog);
+        let far = session.player().position + Vec2::new(500.0, 0.0);
+        session
+            .space
+            .boxes
+            .spawn_scoopable(far, Some(2), 1, &mut NeverFires);
+        let before = session.cargo_boxes().to_vec();
+        let mut stepped = session.space.clone();
+        stepped.boxes_tick(SpeedMult::FULL);
+        again(&mut session, Controls::default());
+        assert_eq!(session.cargo_boxes(), stepped.cargo_boxes());
+        assert_ne!(session.cargo_boxes(), before.as_slice(), "it stepped");
+    }
+
+    #[test]
+    fn the_second_pass_scoops_by_the_players_frame_after_its_own_turn() {
+        use crate::catalog::MaskSheet;
+        use crate::flight::Turn;
+        let turning = Controls {
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        let mut catalog = scoopable();
+        let mut probe = scooper(&catalog, 0);
+        probe.set_double_time_key(true);
+        let rotation = |session: &Session| {
+            let ship = &session.ship;
+            ship.fit.hull.frames.rotation(ship.player.heading)
+        };
+        // The rotations the second pass leaves, by its turn or none.
+        let (still, turned) = {
+            let mut ahead = probe.clone();
+            work(&mut ahead, &catalog, Controls::default());
+            let mut turning_ahead = ahead.clone();
+            again(&mut ahead, Controls::default());
+            again(&mut turning_ahead, turning);
+            (rotation(&ahead), rotation(&turning_ahead))
+        };
+        assert_ne!(turned, still);
+        let base = probe.statics.arsenal.sprite_base(probe.pilot.ship);
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(base), drawn_only_on(turned)),
+            (MaskSheet::CargoBox(1), square(8, |_, _| true)),
+        ];
+        for (controls, taken) in [(Controls::default(), false), (turning, true)] {
+            let mut session = probe.clone();
+            work(&mut session, &catalog, Controls::default());
+            session
+                .space
+                .sprite_masks
+                .load(&catalog, MaskSheet::CargoBox(1));
+            drop_on_ship(&mut session, Some(2));
+            again(&mut session, controls);
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{controls:?}");
+        }
+    }
+
+    #[test]
+    fn the_second_pass_lays_its_masks_out_from_where_the_player_stood_before_its_move() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        let mut moving = doubling(&catalog);
+        moving.ship.player.velocity = Vec2::new(-20.0, 0.0);
+        let stood = moving.player().position;
+        let moved_to = {
+            let mut ahead = moving.clone();
+            again(&mut ahead, Controls::default());
+            ahead.player().position
+        };
+        // A box's 8-square frame runs up and left of its point, so one where
+        // the player moved to is clear of its 4 square at the centre.
+        assert!(moved_to.x < stood.x - 2.0, "{stood:?} {moved_to:?}");
+        for (at, taken) in [(stood, true), (moved_to, false)] {
+            let mut session = moving.clone();
+            session
+                .space
+                .boxes
+                .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+            again(&mut session, Controls::default());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{at:?}");
+        }
     }
 }

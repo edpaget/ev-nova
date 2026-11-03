@@ -142,8 +142,10 @@ fn decide(
         Goal::Inspect(_) => match (other, flight.formation_flight) {
             // Sub 9 (`_HighLevelAIHandler` @0x8f1ed): it writes +0x34 as it
             // thrusts (@0x878e4), so an owed burst drops.
+            // Not closing, it runs no swarm branch, so reads no gain.
             (Some(target), FormationFlight::Original) => {
-                formation_flight::steer(npc, target, false, None, None, handling)
+                let gain = readings.speed_mult;
+                formation_flight::steer(npc, target, false, None, None, handling, gain)
             }
             // Goal 7's gone let-go writes goal 0, then the tail sub 0
             // (@0x8f158 → @0x8f3a5-0x8f3ae, @0x8fb09-0x8fb13).
@@ -184,7 +186,8 @@ fn decide(
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
         {
-            formation_flight::fly(npc, other, beside, handling, flight, inertia)
+            let gain = readings.speed_mult;
+            formation_flight::fly(npc, other, beside, handling, flight, inertia, gain)
         }
         Goal::Formation { .. } | Goal::Follow { .. } => formation(npc, other, handling, inertia),
         Goal::Dock(_) => {
@@ -192,6 +195,7 @@ fn decide(
                 top,
                 word: readings.held_burst,
                 unpulled: false,
+                gain: readings.speed_mult,
             };
             dock(npc, other, beside, (handling, inertia, flight), by)
         }
@@ -201,9 +205,12 @@ fn decide(
         // dispatch runs), so it reaches here only flown by itself: a stop.
         // State 16 flies order 1, a stop, with slot 0 empty, else order
         // 0x13 or 0x14; state 17 flies order 0x15.
-        Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), handling, weapons)
-            .unwrap_or_else(|| braking(npc, handling, inertia)),
-        Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, handling),
+        Goal::Mine => {
+            let gain = readings.speed_mult;
+            mine_flight::mine(npc, beside.rock.as_ref(), handling, weapons, gain)
+                .unwrap_or_else(|| braking(npc, handling, inertia))
+        }
+        Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, handling, readings.speed_mult),
         Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => braking(npc, handling, inertia),
         // Goal 0 flies sub 0 (the high level's tail, @0x8fb09-0x8fb13), the
         // head's word alone. A drift moves on with no turn or thrust (its
@@ -485,7 +492,7 @@ fn dock(
             match return_flight::sub(at, carrier.position, dock.window, beside.leader_seen) {
                 return_flight::Sub::Stop => return braking(npc, handling, inertia),
                 return_flight::Sub::Close => {
-                    return return_flight::close(npc, carrier, beside, handling);
+                    return return_flight::close(npc, carrier, beside, handling, by.gain);
                 }
                 return_flight::Sub::Dock => {}
             }
@@ -644,8 +651,15 @@ pub(super) fn approach_brake(
         return (Controls::default(), trig::whole(state.heading));
     }
     let retro = snipe::retro(state.velocity);
-    // Put on its retro heading this tick, before this tick's thrust.
-    let facing_back = flight::turns_onto(state.heading, retro, handling.turn_rate);
+    // Put on its retro heading this tick, before this tick's thrust. The
+    // engine's own planner for the other reading of `NpcLanding`, with no
+    // counterpart in the original, reads the turn at full gain.
+    let facing_back = flight::turns_onto(
+        state.heading,
+        retro,
+        handling.turn_rate,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     let controls = Controls {
         thrust: facing_back && speed > handling.accel / 2.0,
         ..Controls::default()

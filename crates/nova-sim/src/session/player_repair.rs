@@ -15,9 +15,12 @@
 //!
 //! **Each pass that runs `_HandlePlayer`'s work before the fight** (both
 //! passes in double time, see the `double_time` module),
-//! [`Session::player_repair_tick`] first counts the inhibit down a tick
-//! (@0x68b09-0x68b2c). Then, while the player is disabled and the inhibit
-//! does not hold (@0x68b30-0x68b40), it draws `Rand(`[`REPAIR_ODDS`]`)` and
+//! [`Session::player_repair_tick`] first counts the inhibit down the
+//! frame's gain ([`Session::speed_mult`], @0x68b09-0x68b2c), so it holds
+//! 300 full frames, and longer through a ramp. Then, while the player is disabled and the inhibit
+//! does not hold (@0x68b30-0x68b40), it draws
+//! `Rand(`[`repair_odds`]`)` at the frame's gain, `Rand(500)` at full
+//! gain ([`REPAIR_ODDS`](crate::self_repair::REPAIR_ODDS)), and
 //! repairs on 0, when the player is not breaking up, its armour is above
 //! 0 and it owns a repair system ([`can_self_repair`], [`has_gear`] over
 //! the outfits it owns, @0x919f-0x91e3). The draw comes before the gear
@@ -53,19 +56,20 @@ use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::hull::Condition;
 use crate::message::SimMessage;
-use crate::self_repair::{REPAIR_ODDS, RepairInhibit, can_self_repair, has_gear, repaired_armor};
+use crate::self_repair::{RepairInhibit, can_self_repair, has_gear, repair_odds, repaired_armor};
 use crate::sound::SimSound;
 
 impl Session {
-    /// Counts the repair inhibit down a tick, then lets a disabled player
-    /// whose inhibit has run out repair itself, drawing on `chance`, its
-    /// condition decided again by `rules` (see the module docs).
+    /// Counts the repair inhibit down the frame's gain, then lets a
+    /// disabled player whose inhibit has run out repair itself, drawing on
+    /// `chance`, its condition decided again by `rules` (see the module
+    /// docs).
     pub(super) fn player_repair_tick(&mut self, rules: Rules, chance: &mut dyn Chance) {
-        self.ship.repair_inhibit.tick();
+        self.ship.repair_inhibit.tick(self.speed_mult());
         if self.ship.condition != Condition::Disabled || self.ship.repair_inhibit.holds() {
             return;
         }
-        let drawn = chance.below(REPAIR_ODDS);
+        let drawn = chance.below(repair_odds(self.speed_mult()));
         let gear = has_gear(&self.pilot.outfits, &self.statics.outfits);
         let armor = &mut self.pilot.reserves.armor;
         if !can_self_repair(drawn, self.ship.condition, armor.now, gear) {
@@ -111,6 +115,7 @@ mod tests {
     use crate::combat::hull::{DisableRule, HullSpec, TOUGH};
     use crate::flight::Controls;
     use crate::reserves::Gauge;
+    use crate::self_repair::REPAIR_ODDS;
     use crate::self_repair::{MOD_REPAIR, REPAIR_INHIBIT_TICKS};
     use crate::session::tests::{DISABLING, Firing, armed, facing_an_npc};
     use crate::testkit::{Draws, FakePilotCatalog, catalog, hull, outfit};
@@ -174,6 +179,19 @@ mod tests {
         assert_eq!(session.ship.condition, Condition::Intact);
         assert_eq!(session.take_messages(), [SimMessage::PropulsionRepaired]);
         assert_eq!(session.take_sounds(), [SimSound::PropulsionRepaired]);
+    }
+
+    #[test]
+    fn a_disabled_player_draws_the_range_at_the_frames_gain() {
+        let catalog = repairing(0);
+        let mut session = disabled(&catalog, true);
+        let half = crate::SpeedMult::new(0.5);
+        session.at_gain(half);
+        assert_eq!(
+            tick_on(&mut session, Rules::default(), &[1]),
+            [repair_odds(half)]
+        );
+        assert_ne!(repair_odds(half), REPAIR_ODDS, "the gain shows");
     }
 
     #[test]
@@ -456,5 +474,26 @@ mod tests {
             &mut NeverFires,
         );
         assert_eq!(armor(&session), before + 1.0, "on the 301st");
+    }
+
+    #[test]
+    fn at_half_gain_the_inhibit_counts_down_half_a_frame_a_pass() {
+        let catalog = repairing(0);
+        let mut session = disabled(&catalog, true);
+        session.ship.arm_repair_inhibit();
+        session.at_gain(crate::SpeedMult::new(0.5));
+        let mut chance = Draws::of(&[0]);
+        for tick in 0..REPAIR_INHIBIT_TICKS * 2 {
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut chance,
+            );
+            assert!(chance.asked.is_empty(), "tick {tick}");
+        }
+        assert!(session.ship.repair_inhibit.holds(), "on none, still held");
     }
 }

@@ -16,6 +16,8 @@ use crate::flight::{self, Controls, FlightRules, Flyer, Turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
+use crate::traffic::ai_wait;
 #[cfg(doc)]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::inertialess::{self, Inertia};
@@ -25,6 +27,10 @@ use crate::traffic::ship_display;
 use crate::traffic::slot_word::{self, AtStep, SlotWord};
 #[cfg(doc)]
 use crate::traffic::spawn::glide_speed;
+
+/// The wait below which a ship entering a gate is gone: the float 1.0
+/// `_HandleShipDisplay` frees its slot under (0xdd068, @0x2c066).
+const GATE_GONE_BELOW: f32 = 1.0;
 
 /// `_HandleShip`'s flight of `npc` at its step by the `word` its low level
 /// left at its slot (see the module docs), with what it reads `at_step`,
@@ -72,7 +78,7 @@ fn step_mobile(
         // turn skipped while its wait runs (@0x3443f-0x34446).
         let turn = match word.wanted() {
             Some(wanted) if pod_flight::turns(npc) => {
-                flight::turn_to(&mut npc.state, wanted, at_step.turn_rate)
+                flight::turn_to(&mut npc.state, wanted, at_step.turn_rate, at_step.gain)
             }
             _ => Turn::None,
         };
@@ -81,7 +87,12 @@ fn step_mobile(
     }
     let unthrust = at_step.unthrust();
     let unsteered_by = (speeds, flight, held_burst, second_pass);
-    if let Some(outcome) = unsteered(npc, &unthrust, unsteered_by, inertia, chance) {
+    let flown = Flown {
+        handling: &unthrust,
+        inertia,
+        gain: at_step.gain,
+    };
+    if let Some(outcome) = unsteered(npc, flown, unsteered_by, chance) {
         return outcome;
     }
     slot_word::handle_ship(npc, word, at_step, flight);
@@ -90,9 +101,10 @@ fn step_mobile(
 
 /// Flies `npc` one tick under `controls` as `inertia` says, an inertialess
 /// one's velocity pulled by `adjust` (`_AdjustInertialessShipVelocity`'s
-/// own `_ShipAccelRate`, @0x334e1): an inertial ship's [`flight::step`],
-/// an inertialess one's [`flight::inertialess_step_with`] (see
-/// [`inertialess`]), its drive recorded ([`ship_display::record`]). What it
+/// own `_ShipAccelRate`, @0x334e1), at the frame's `gain`: an inertial
+/// ship's [`flight::step`], an inertialess one's
+/// [`flight::inertialess_step_with`] (see [`inertialess`]), its drive
+/// recorded ([`ship_display::record`]). What it
 /// owes of a gate burst is left: a flight whose substate writes the burst
 /// word +0x34 flies by [`held_burst::step`](crate::traffic::held_burst::step)
 /// under `Word::Writes`, which drops it.
@@ -102,10 +114,13 @@ pub(crate) fn plain_step(
     controls: Controls,
     flight: FlightRules,
     (inertia, adjust): (Inertia, f32),
+    gain: SpeedMult,
 ) {
     ship_display::record(npc, handling, controls, flight);
     match inertia {
-        Inertia::Inertial => flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc),
+        Inertia::Inertial => {
+            flight::step(&mut npc.state, handling, controls, flight, Flyer::Npc, gain);
+        }
         Inertia::Inertialess { .. } => {
             flight::inertialess_step_with(
                 &mut npc.state,
@@ -114,6 +129,7 @@ pub(crate) fn plain_step(
                 controls,
                 adjust,
                 flight,
+                gain,
             );
         }
     }
@@ -153,7 +169,8 @@ fn glide(
 /// its course after either (see the module docs of
 /// [`autopilot`](super)), on `handling` (its turn rate and top speed at
 /// its step, and the acceleration its inertialess adjustment reads) under
-/// `flight`, as `inertia` says, its burst ending at `speeds`'
+/// `flight`, as `flown` says (its handling, whether it is inertialess and
+/// the frame's gain), its burst ending at `speeds`'
 /// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`; a
 /// hold at its gate that runs out owes its burst as `held_burst` reads
 /// ([`Npc::end_wait`]).
@@ -173,12 +190,10 @@ fn glide(
 /// (@0x8dd61-0x8dd93; see the `last_wait_frame` module).
 pub(super) fn unsteered(
     npc: &mut Npc,
-    handling: &Handling,
+    flown: Flown,
     (speeds, flight, held_burst, second_pass): (TopSpeeds, FlightRules, RuleSource, bool),
-    inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
-    let flown = Flown { handling, inertia };
     match (npc.mode, npc.active_not_disabled()) {
         (Mode::LeavingGate { tick: 0 }, _) if second_pass => drift_in_wait(npc, flown),
         (Mode::EnteringGate { gate, ticks_left }, _) => {
@@ -202,17 +217,18 @@ pub(super) fn unsteered(
                 }
                 // `_HandleShip` counts +0x4c down for a disabled ship too
                 // (@0x34424 → @0x34679 → @0x34a54 → @0x35026).
-                Mode::Coasting { ticks_left } => count_down(npc, ticks_left),
+                Mode::Coasting { ticks_left } => count_down(npc, ticks_left, flown.gain),
                 _ => {}
             }
             disabled_drag(npc);
             // No thrust: it writes neither word.
             plain_step(
                 npc,
-                handling,
+                flown.handling,
                 Controls::default(),
                 flight,
-                (inertia, handling.accel),
+                (flown.inertia, flown.handling.accel),
+                flown.gain,
             );
         }
         (Mode::JumpingIn { tick }, true) => {
@@ -239,14 +255,16 @@ pub(super) fn steered(npc: &Npc) -> bool {
 
 /// One tick of `npc` entering `gate`, `ticks_left` of its wait left
 /// (see [`gate_entry`](crate::traffic::gate_entry)): still, whatever its
-/// condition and goal, as `_HandleShip` counts +0x4c down for every ship
-/// and the fade reads only the sub-goal; and gone once the wait is out. An
-/// inertialess ship's velocity follows its speed meanwhile, as `flown`
-/// says ([`inertialess::drift`]).
-fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> Outcome {
+/// condition and goal, as `_HandleShip` counts +0x4c down by the frame's
+/// gain for every ship ([`ai_wait::counted_down`]) and the fade reads
+/// only the sub-goal; and gone once the wait is below 1.0, as
+/// `_HandleShipDisplay` frees its slot (`1.0 > +0x4c`, @0x2c066-0x2c07f)
+/// after that frame's count-down. An inertialess ship's velocity follows
+/// its speed meanwhile, as `flown` says ([`inertialess::drift`]).
+fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: f32, flown: Flown) -> Outcome {
     flown.hold(npc);
-    let left = ticks_left.saturating_sub(1);
-    if left == 0 {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    if left < GATE_GONE_BELOW {
         return Outcome::EnteredGate(gate);
     }
     npc.mode = Mode::EnteringGate {
@@ -275,22 +293,24 @@ pub(super) fn disabled_drag(npc: &mut Npc) {
 /// @0x3aa7d, its +0x50 -1.0 there) sets it drifting.
 fn drift_in_wait(npc: &mut Npc, flown: Flown) {
     disabled_drag(npc);
-    position_step(npc, flown.handling, flown.inertia);
+    position_step(npc, flown.handling, flown.inertia, flown.gain);
 }
 
 /// One tick of `npc`'s wait at the gate it comes out of, `ticks_left` of
 /// it left: moving on its velocity ([`drift_in_wait`]), and bursting out
 /// once it is over, its trigger (the point defence it may hold while it
 /// waits) released, as the burst's sub-goal 0xa makes no
-/// `_AIEscortFireUnprovoked` call (@0x8f3d9).
-fn wait_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown) {
+/// `_AIEscortFireUnprovoked` call (@0x8f3d9). The wait counts down by the
+/// frame's gain ([`ai_wait::counted_down`]) and is over once it no longer
+/// runs.
+fn wait_at_gate(npc: &mut Npc, ticks_left: f32, flown: Flown) {
     drift_in_wait(npc, flown);
-    let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    npc.mode = if ai_wait::running(left) {
+        Mode::Emerging { ticks_left: left }
+    } else {
         npc.trigger = Trigger::default();
         Mode::LeavingGate { tick: 0 }
-    } else {
-        Mode::Emerging { ticks_left: left }
     };
 }
 
@@ -301,14 +321,15 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown) {
 /// steering, thrust and fire while it runs (@0x34a54-0x34a72); and
 /// flying its goal once the wait is out, from the next tick, owing its
 /// gate burst as `burst` reads ([`Npc::end_wait`]), as the original flies
-/// it on the frame after +0x4c reaches 0.
-fn hold_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown, burst: RuleSource) {
+/// it on the frame after +0x4c no longer runs. It counts down by the
+/// frame's gain ([`ai_wait::counted_down`]).
+fn hold_at_gate(npc: &mut Npc, ticks_left: f32, flown: Flown, burst: RuleSource) {
     drift_in_wait(npc, flown);
-    let left = ticks_left.saturating_sub(1);
-    if left == 0 {
-        npc.end_wait(burst);
-    } else {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    if ai_wait::running(left) {
         npc.mode = Mode::HeldAtGate { ticks_left: left };
+    } else {
+        npc.end_wait(burst);
     }
 }
 
@@ -359,7 +380,7 @@ fn burst(
     flown: Flown,
     chance: &mut (impl Chance + ?Sized),
 ) -> bool {
-    burst_motion(npc, speed, flown.handling, flown.inertia);
+    burst_motion(npc, speed, flown.handling, flown.inertia, flown.gain);
     if next > speeds.burst_cap() {
         return false;
     }
@@ -368,24 +389,37 @@ fn burst(
 }
 
 /// A burst's move (`_HandleShip` @0x34bc0-0x34c2a): `npc` moves along its
-/// heading at `speed`; an inertialess one, as `inertia` says, takes
-/// `speed` as its speed along its heading after its velocity has followed
-/// the last tick's at `handling`'s rate and it has moved
-/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0). A ship
-/// disabled or breaking up ([`disabled_drag`]) is dragged before its move
-/// (@0x33950-0x339a1), which the burst block doesn't test, and the block
-/// overwrites the dragged velocity after it: each move is its speed ×
-/// [`flight::DISABLED_DRAG`], its velocity left at its full speed.
-pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inertia: Inertia) {
+/// heading at `speed` × the frame's `gain`; an inertialess one, as
+/// `inertia` says, takes `speed` as its speed along its heading after its
+/// velocity has followed the last tick's at `handling`'s rate and it has
+/// moved ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0). A
+/// ship disabled or breaking up ([`disabled_drag`]) is dragged before its
+/// move (@0x33950-0x339a1, a drag the gain doesn't scale), which the
+/// burst block doesn't test, and the block overwrites the dragged
+/// velocity after it: each move is its speed × [`flight::DISABLED_DRAG`],
+/// its velocity left at its full speed.
+///
+/// The burst block itself moves nothing and reads no gain: it sets the
+/// speed or velocity (@0x34bdf-0x34c2a) and grows the word unscaled
+/// (@0x34c5b), and the ship moves by it at the next frame's move
+/// (@0x3427e), which reads the gain. So the move here is at the gain,
+/// and the speed it sets is not.
+pub(crate) fn burst_motion(
+    npc: &mut Npc,
+    speed: f32,
+    handling: &Handling,
+    inertia: Inertia,
+    gain: SpeedMult,
+) {
     if let Inertia::Inertialess { .. } = inertia {
         disabled_drag(npc);
-        inertialess::drift(npc, handling);
+        inertialess::drift(npc, handling, gain);
         npc.speed = speed;
     } else {
         let velocity = flight::facing(npc.state.heading) * speed;
         npc.state.velocity = velocity;
         disabled_drag(npc);
-        npc.state.position = npc.state.position + npc.state.velocity;
+        npc.state.position = flight::moved(npc.state.position, npc.state.velocity, gain);
         npc.state.velocity = velocity;
     }
 }
@@ -414,7 +448,7 @@ pub(crate) fn after_burst(
     } else {
         npc.trigger = Trigger::default();
         Mode::Coasting {
-            ticks_left: POST_BURST_WAIT + chance.below(POST_BURST_SPREAD),
+            ticks_left: POST_BURST_WAIT + ai_wait::ticks(chance.below(POST_BURST_SPREAD)),
         }
     };
 }
@@ -426,31 +460,36 @@ pub(crate) fn after_burst(
 /// first (@0x34274-0x342aa), and flies once the wait is over
 /// (@0x3501f-0x35048). An inertialess ship's velocity follows its speed
 /// as it moves (@0x3425f; [`inertialess::drift`]).
-fn coast(npc: &mut Npc, ticks_left: u32, flown: Flown) {
-    position_step(npc, flown.handling, flown.inertia);
-    count_down(npc, ticks_left);
+fn coast(npc: &mut Npc, ticks_left: f32, flown: Flown) {
+    position_step(npc, flown.handling, flown.inertia, flown.gain);
+    count_down(npc, ticks_left, flown.gain);
 }
 
 /// `_HandleShip`'s move alone (@0x34274-0x342aa), with neither turn nor
-/// thrust: `npc` moves by its velocity, an inertialess one's velocity
-/// following its speed at `handling`'s rate first (@0x3425f,
+/// thrust: `npc` moves by its velocity × the frame's `gain`
+/// ([`flight::moved`], the gain read @0x3427e), an inertialess one's
+/// velocity following its speed at `handling`'s rate first (@0x3425f,
 /// [`inertialess::drift`]): the acceleration its adjustment reads at its
 /// step ([`AtStep::unthrust`]).
-pub(crate) fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+pub(crate) fn position_step(npc: &mut Npc, handling: &Handling, inertia: Inertia, gain: SpeedMult) {
     match inertia {
-        Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
-        Inertia::Inertialess { .. } => inertialess::drift(npc, handling),
+        Inertia::Inertial => {
+            npc.state.position = flight::moved(npc.state.position, npc.state.velocity, gain);
+        }
+        Inertia::Inertialess { .. } => inertialess::drift(npc, handling, gain),
     }
 }
 
-/// What a ship with no say in its flight flies on: its handling, and
-/// whether it is inertialess.
+/// What a ship with no say in its flight flies on: its handling, whether
+/// it is inertialess, and the frame's gain ([`AtStep::gain`]).
 #[derive(Clone, Copy)]
-struct Flown<'a> {
+pub(super) struct Flown<'a> {
     /// Its handling.
     handling: &'a Handling,
     /// Whether it is inertialess.
     inertia: Inertia,
+    /// The frame's gain.
+    gain: SpeedMult,
 }
 
 impl Flown<'_> {
@@ -460,18 +499,315 @@ impl Flown<'_> {
     fn hold(self, npc: &mut Npc) {
         match self.inertia {
             Inertia::Inertial => npc.state.velocity = Vec2::ZERO,
-            Inertia::Inertialess { .. } => inertialess::drift(npc, self.handling),
+            Inertia::Inertialess { .. } => inertialess::drift(npc, self.handling, self.gain),
         }
     }
 }
 
-/// Counts `npc`'s wait on its course down a tick from `ticks_left`
-/// (@0x35026-0x35048): it flies once the wait is out.
-fn count_down(npc: &mut Npc, ticks_left: u32) {
-    let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
-        Mode::Flying
-    } else {
+/// Counts `npc`'s wait on its course down from `ticks_left` by the
+/// frame's `gain` (@0x35026-0x35048, [`ai_wait::counted_down`]): it flies
+/// once the wait no longer runs.
+fn count_down(npc: &mut Npc, ticks_left: f32, gain: SpeedMult) {
+    let left = ai_wait::counted_down(ticks_left, gain);
+    npc.mode = if ai_wait::running(left) {
         Mode::Coasting { ticks_left: left }
+    } else {
+        Mode::Flying
     };
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use crate::chance::NeverFires;
+    use crate::combat::hull::Condition;
+    use crate::flight::{DISABLED_DRAG, ShipState, facing, moved};
+    use crate::inertialess::{adjust_rate, adjust_velocity};
+    use crate::stats::ShipStats;
+    use crate::traffic::fixture::npc;
+    use crate::traffic::held_burst::Flight;
+    use crate::traffic::slot_word::Cap;
+    use nova_sim_base::fixture::FAST;
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Top speed 6, thrust 0.2, 4 degrees a tick.
+    const HANDLING: Handling = Handling {
+        max_speed: 6.0,
+        accel: 0.2,
+        turn_rate: 4.0,
+    };
+
+    /// Speeds with a lead, so a burst that ends takes no wait.
+    const LED: TopSpeeds = TopSpeeds {
+        own: 6.0,
+        lead: Some(9.0),
+    };
+
+    /// A ship of [`FAST`] at the centre moving at `velocity`, facing east,
+    /// in `mode`.
+    fn ship(velocity: Vec2, mode: Mode) -> Npc {
+        let mut ship = npc(1, ShipStats::new(FAST, &[]));
+        ship.state = ShipState {
+            position: Vec2::ZERO,
+            velocity,
+            heading: 90.0,
+        };
+        ship.mode = mode;
+        ship
+    }
+
+    /// [`step`] of `npc` on [`HANDLING`] at half gain, its word wanting
+    /// nothing, as `inertia` says.
+    fn step_at_half(npc: &mut Npc, inertia: Inertia) -> Outcome {
+        let word = SlotWord::none(npc, &HANDLING, inertia);
+        let at_step = AtStep::of(&HANDLING).at_gain(HALF);
+        let by = (FlightRules::default(), RuleSource::Engine, false);
+        step(npc, &word, at_step, LED, by, &mut NeverFires)
+    }
+
+    #[test]
+    fn at_half_gain_a_move_alone_takes_half_the_velocity_either_inertia() {
+        let mut inertial = ship(Vec2::new(2.0, 4.0), Mode::Flying);
+        position_step(&mut inertial, &HANDLING, Inertia::Inertial, HALF);
+        assert_eq!(inertial.state.position, Vec2::new(1.0, 2.0));
+        let mut inertialess = ship(Vec2::ZERO, Mode::Flying);
+        inertialess.speed = 3.0;
+        let speed = Inertia::Inertialess { speed: 3.0 };
+        position_step(&mut inertialess, &HANDLING, speed, HALF);
+        let followed = adjust_velocity(Vec2::ZERO, 90.0, 3.0, adjust_rate(0.2, HALF));
+        assert_eq!(inertialess.state.velocity, followed);
+        assert_eq!(
+            inertialess.state.position,
+            moved(Vec2::ZERO, followed, HALF)
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_burst_moves_half_its_speed_and_keeps_the_whole_speed() {
+        let mut inertial = ship(Vec2::ZERO, Mode::Flying);
+        burst_motion(&mut inertial, 10.0, &HANDLING, Inertia::Inertial, HALF);
+        let along = facing(90.0) * 10.0;
+        assert_eq!(inertial.state.position, moved(Vec2::ZERO, along, HALF));
+        assert_eq!(inertial.state.velocity, along, "the velocity it set");
+        let mut inertialess = ship(Vec2::ZERO, Mode::Flying);
+        inertialess.speed = 3.0;
+        let speed = Inertia::Inertialess { speed: 3.0 };
+        burst_motion(&mut inertialess, 10.0, &HANDLING, speed, HALF);
+        let followed = adjust_velocity(Vec2::ZERO, 90.0, 3.0, adjust_rate(0.2, HALF));
+        assert_eq!(
+            inertialess.state.position,
+            moved(Vec2::ZERO, followed, HALF)
+        );
+        assert_eq!(inertialess.speed, 10.0, "the speed it set, unscaled");
+    }
+
+    #[test]
+    fn at_half_gain_a_disabled_burst_moves_half_its_dragged_speed() {
+        let mut disabled = ship(Vec2::ZERO, Mode::Flying);
+        disabled.condition = Condition::Disabled;
+        burst_motion(&mut disabled, 10.0, &HANDLING, Inertia::Inertial, HALF);
+        let along = facing(90.0) * 10.0;
+        let dragged = along * DISABLED_DRAG;
+        assert_eq!(disabled.state.position, moved(Vec2::ZERO, dragged, HALF));
+        assert_eq!(disabled.state.velocity, along, "the drag isn't the gain's");
+    }
+
+    #[test]
+    fn at_half_gain_a_plain_step_turns_thrusts_and_moves_half_either_inertia() {
+        let controls = Controls {
+            thrust: true,
+            turn: Turn::Right,
+            ..Controls::default()
+        };
+        let rules = FlightRules::default();
+        let mut inertial = ship(Vec2::new(1.0, 0.0), Mode::Flying);
+        let by = (Inertia::Inertial, HANDLING.accel);
+        plain_step(&mut inertial, &HANDLING, controls, rules, by, HALF);
+        let mut expected = ship(Vec2::new(1.0, 0.0), Mode::Flying).state;
+        flight::step(&mut expected, &HANDLING, controls, rules, Flyer::Npc, HALF);
+        assert_eq!(inertial.state, expected);
+        assert_eq!(inertial.state.heading, 92.0, "half a turn");
+        let mut inertialess = ship(Vec2::new(1.0, 0.0), Mode::Flying);
+        inertialess.speed = 1.0;
+        let by = (Inertia::Inertialess { speed: 1.0 }, 0.4);
+        plain_step(&mut inertialess, &HANDLING, controls, rules, by, HALF);
+        let mut expected = ship(Vec2::new(1.0, 0.0), Mode::Flying).state;
+        let mut speed = 1.0;
+        flight::inertialess_step_with(
+            &mut expected,
+            &mut speed,
+            &HANDLING,
+            controls,
+            0.4,
+            rules,
+            HALF,
+        );
+        assert_eq!((inertialess.state, inertialess.speed), (expected, speed));
+        assert_eq!(inertialess.state.heading, 92.0, "half a turn");
+    }
+
+    #[test]
+    fn at_half_gain_a_coasting_ship_moves_half_its_velocity() {
+        let mut coasting = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5.0 });
+        step_at_half(&mut coasting, Inertia::Inertial);
+        assert_eq!(coasting.state.position, Vec2::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn at_half_gain_a_disabled_coasting_ship_drifts_half_its_dragged_velocity() {
+        let mut disabled = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5.0 });
+        disabled.condition = Condition::Disabled;
+        step_at_half(&mut disabled, Inertia::Inertial);
+        let dragged = Vec2::new(2.0, 0.0) * DISABLED_DRAG;
+        assert_eq!(disabled.state.position, moved(Vec2::ZERO, dragged, HALF));
+    }
+
+    #[test]
+    fn at_half_gain_a_ship_emerging_or_held_at_its_gate_drifts_half() {
+        for mode in [
+            Mode::Emerging { ticks_left: 5.0 },
+            Mode::HeldAtGate { ticks_left: 5.0 },
+        ] {
+            let mut waiting = ship(Vec2::new(2.0, 0.0), mode);
+            step_at_half(&mut waiting, Inertia::Inertial);
+            assert_eq!(waiting.state.position, Vec2::new(1.0, 0.0), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_glide_and_a_gate_burst_move_half_their_speed() {
+        for (mode, tick) in [
+            (Mode::JumpingIn { tick: 0 }, 0),
+            (Mode::LeavingGate { tick: 1 }, 1),
+        ] {
+            let mut bursting = ship(Vec2::ZERO, mode);
+            let speed = bursting.burst_speed(tick);
+            step_at_half(&mut bursting, Inertia::Inertial);
+            let along = facing(90.0) * speed;
+            assert_eq!(
+                bursting.state.position,
+                moved(Vec2::ZERO, along, HALF),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_ship_entering_a_gate_is_held_at_half_a_follow() {
+        let gate = StellarId(300);
+        let mode = Mode::EnteringGate {
+            gate,
+            ticks_left: 5.0,
+        };
+        let mut entering = ship(Vec2::ZERO, mode);
+        entering.speed = 3.0;
+        step_at_half(&mut entering, Inertia::Inertialess { speed: 3.0 });
+        let followed = adjust_velocity(Vec2::ZERO, 90.0, 3.0, adjust_rate(0.2, HALF));
+        assert_eq!(entering.state.velocity, followed);
+        assert_eq!(entering.state.position, moved(Vec2::ZERO, followed, HALF));
+    }
+
+    #[test]
+    fn at_half_gain_a_pod_turns_and_steps_at_half_its_rate() {
+        let mut pod = ship(Vec2::ZERO, Mode::Adrift { ticks_left: 0.0 });
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        pod.state.heading = 90.5;
+        // 3 whole degrees off 93: beyond half its 4, so it turns by 2.
+        let word = SlotWord::of(
+            Flight::writes(Controls::default(), 93, Cap::Step),
+            &HANDLING,
+            Inertia::Inertial,
+        );
+        let at_step = AtStep::of(&HANDLING).at_gain(HALF);
+        let by = (FlightRules::default(), RuleSource::Engine, false);
+        step(&mut pod, &word, at_step, LED, by, &mut NeverFires);
+        assert_eq!(pod.state.heading, 92.5);
+    }
+
+    // The AI wait, counted down by the frame's gain.
+
+    /// The mode and outcome of a ship of `condition` in `mode` after a
+    /// step at half gain.
+    fn waited(mode: Mode, condition: Condition) -> (Mode, Outcome) {
+        let mut ship = ship(Vec2::ZERO, mode);
+        ship.condition = condition;
+        let outcome = step_at_half(&mut ship, Inertia::Inertial);
+        (ship.mode, outcome)
+    }
+
+    #[test]
+    fn at_half_gain_a_wait_at_or_out_of_a_gate_drops_half_a_frame_and_ends_once_out() {
+        let intact = Condition::Intact;
+        assert_eq!(
+            waited(Mode::Emerging { ticks_left: 0.75 }, intact).0,
+            Mode::Emerging { ticks_left: 0.25 }
+        );
+        assert_eq!(
+            waited(Mode::Emerging { ticks_left: 0.25 }, intact).0,
+            Mode::LeavingGate { tick: 0 },
+            "-0.25: out"
+        );
+        assert_eq!(
+            waited(Mode::HeldAtGate { ticks_left: 0.75 }, intact).0,
+            Mode::HeldAtGate { ticks_left: 0.25 }
+        );
+        assert_eq!(
+            waited(Mode::HeldAtGate { ticks_left: 0.25 }, intact).0,
+            Mode::Flying
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_wait_on_course_drops_half_a_frame_and_ends_once_out_intact_or_not() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert_eq!(
+                waited(Mode::Coasting { ticks_left: 0.75 }, condition).0,
+                Mode::Coasting { ticks_left: 0.25 },
+                "{condition:?}"
+            );
+            assert_eq!(
+                waited(Mode::Coasting { ticks_left: 0.25 }, condition).0,
+                Mode::Flying,
+                "{condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_ship_entering_a_gate_drops_half_a_frame_and_is_gone_below_1() {
+        let gate = StellarId(300);
+        let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
+        assert_eq!(
+            waited(entering(1.5), Condition::Intact),
+            (entering(1.0), Outcome::Flying),
+            "at 1.0: still there"
+        );
+        assert_eq!(
+            waited(entering(1.25), Condition::Intact).1,
+            Outcome::EnteredGate(gate),
+            "0.75: gone, though its wait still runs"
+        );
+    }
+
+    #[test]
+    fn a_ship_held_on_the_frame_its_wait_ran_out_flies_its_goal_on_the_next_step_at_any_gain() {
+        // Its +0x4c is already out (@0x3502a), so the hold ends at once.
+        for gain in [
+            HALF,
+            SpeedMult::new(0.25),
+            SpeedMult::SETTLED,
+            SpeedMult::FULL,
+        ] {
+            let mut held = ship(Vec2::ZERO, Mode::LeavingGate { tick: 0 });
+            held.leaves_gate_goal();
+            assert!(matches!(held.mode, Mode::HeldAtGate { .. }), "{gain:?}");
+            let word = SlotWord::none(&held, &HANDLING, Inertia::Inertial);
+            let at_step = AtStep::of(&HANDLING).at_gain(gain);
+            let by = (FlightRules::default(), RuleSource::Engine, false);
+            step(&mut held, &word, at_step, LED, by, &mut NeverFires);
+            assert_eq!(held.mode, Mode::Flying, "{gain:?}");
+        }
+    }
 }

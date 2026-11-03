@@ -48,6 +48,21 @@ impl AppScreen {
         self.movies.set_view(self.movie_view());
     }
 
+    /// Hides flight's cursor, if flight is built, with a zero fade
+    /// ([`FlightView::hide_cursor`]), as the original calls
+    /// `_HideCursorSprite` before each dialog over flight: the comm
+    /// (`_HandlePlayerCommunication` @0x62561, @0x625c1, the escort dialog
+    /// inside it @0x95742), the planet comm (@0x62035), the offer
+    /// (@0x6225a, @0x658d6), the plunder (`_HandlePlayerBoardAttempt`
+    /// @0x659d0, @0x65f1d), a text (`_HandlePlayer` @0x687a0, and the
+    /// mission cargo pickup's @0x65311), the player info (@0x70343) and the
+    /// mission info (@0x704d4).
+    pub(super) fn hide_flight_cursor(&mut self) {
+        if let Some(flight) = &mut self.flight {
+            flight.hide_cursor();
+        }
+    }
+
     /// Shows flight, building it the first time, and remembers the side to
     /// go back to.
     pub(super) fn enter_flight(&mut self) {
@@ -441,9 +456,12 @@ impl AppScreen {
             .flight
             .as_mut()
             .and_then(FlightView::take_mission_info_request)
-            && let Some(missions) = self.flight_missions()
+            && self.flight_missions().is_some()
         {
-            missions.open_info(info);
+            self.hide_flight_cursor();
+            if let Some(missions) = &mut self.missions {
+                missions.open_info(info);
+            }
             self.load_flight_info_text();
         }
     }
@@ -488,29 +506,41 @@ impl AppScreen {
     ///
     /// What was pressed under the last movie is dropped: flight reads its
     /// keys as held, and the router lets go of them as the dialogs open.
+    /// What the last text's replay queued after its closing key
+    /// ([`MissionDialogs::take_left`]) goes on to what shows next, the
+    /// offer under them or flight, whose loop latches a key-down it reads:
+    /// past the router's own handlers, which ran on it live
+    /// ([`AppScreen::rerouted_input`]).
     pub(super) fn drop_closed_missions(&mut self) {
         self.tell_faded_in();
         if let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) {
             for _ in 0..missions.take_texts_closed() {
                 flight.close_mission_text();
             }
-            // The mission info's close over a person's offer loads the
-            // offer's `dësc` again (`_OfferOneMission` @0xa335c), as the
-            // port's does; the port-only `PortDialogUpdate`
+            // The mission info's close tells flight, whatever opened it
+            // (`FlightView::close_info_dialog`): an opening flight's own I
+            // made owes the gain's zero. Its close over a person's offer
+            // loads the offer's `dësc` again (`_OfferOneMission` @0xa335c),
+            // as the port's does; the port-only `PortDialogUpdate`
             // (@0xa3377-0xa33d1) has nothing to do over flight. Taken
             // whatever opened it, so a close of flight's own I never
             // reaches a later offer.
-            if missions.take_info_closed()
+            let info_closed = missions.take_info_closed();
+            if info_closed {
+                flight.close_info_dialog();
+            }
+            if info_closed
                 && let Some(offer) = self.offer.as_ref().filter(|offer| !offer.answered())
             {
                 flight.reload_offer_desc(offer.prompt().mission);
-                self.release_keys();
+                self.let_go_of_keys();
             }
         }
         if let Some(missions) = &mut self.missions
             && !missions.is_open()
         {
             missions.take_unclaimed();
+            let left = missions.take_left();
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
             // The offer dialog left drawn under them is disposed of
@@ -519,12 +549,15 @@ impl AppScreen {
                 self.offer = None;
             }
             self.fade_once_dialogs_close();
+            for input in &left {
+                let _ = self.rerouted_input(input);
+            }
         }
     }
 
     /// The input of the mission dialogs over flight: an Abort on the
     /// mission info screen goes through flight, and the screen shows the
-    /// missions left. Its close, laid out, redraws the whole status bar
+    /// missions left, the offer under it told whether any is listed. Its close, laid out, redraws the whole status bar
     /// ([`FlightView::refresh_status`]), as `_DoMissionInfoDialog` ends in
     /// `_RefreshSAT` (@0x9e769). They are dropped once nothing is open.
     pub(super) fn missions_input(&mut self, input: &Input) -> ScreenAction {
@@ -536,7 +569,11 @@ impl AppScreen {
             return ScreenAction::None;
         }
         let missions = self.missions.as_mut().expect("open");
-        abort_and_refresh(missions, self.flight.as_mut());
+        if let Some(listed) = abort_and_refresh(missions, self.flight.as_mut())
+            && let Some(offer) = &mut self.offer
+        {
+            offer.set_missions_listed(listed);
+        }
         self.load_flight_info_text();
         if self
             .missions
@@ -556,7 +593,9 @@ impl AppScreen {
     /// first; nothing opens in a jump or while the ship breaks up): laid out by
     /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
     /// saying why not, over the game data's background pictures
-    /// ([`BackgroundSizes::read`]). The screen below lets go of its keys. With no
+    /// ([`BackgroundSizes::read`]). Flight's cursor hides, as
+    /// `_HandlePlayer` hides its sprite before `_DoPlayerInfoDialog`
+    /// (@0x70343). The screen below lets go of its keys. With no
     /// dialogs, nothing opens, as the mission info does not.
     fn open_flight_player_info(&mut self) {
         let Some(dialogs) = &self.dialogs else {
@@ -570,8 +609,9 @@ impl AppScreen {
             .dialog_template(PLAYER_INFO_DIALOG)
             .map(|template| (template, Rc::clone(&dialogs.metrics)));
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
-        self.cancel_pointer();
-        self.release_keys();
+        self.hide_flight_cursor();
+        self.cancel_screen_pointer();
+        self.let_go_of_keys();
         self.player_info = Some(
             PlayerInfoScreen::new(
                 layout,
@@ -588,7 +628,9 @@ impl AppScreen {
     /// jettisons everything through flight. Once it closes, the screen
     /// below lets go of its keys, and, laid out, it redraws the whole
     /// status bar ([`FlightView::refresh_status`]), as
-    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725).
+    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725); then flight
+    /// is told of the close ([`FlightView::close_info_dialog`]), whose
+    /// opening owes the gain's zero once the dialog returns (@0x70357).
     pub(super) fn player_info_input(&mut self, input: &Input) -> ScreenAction {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
@@ -600,9 +642,12 @@ impl AppScreen {
         }
         if closed {
             self.player_info = None;
-            self.release_keys();
-            if laid_out && let Some(flight) = &mut self.flight {
-                flight.refresh_status();
+            self.let_go_of_keys();
+            if let Some(flight) = &mut self.flight {
+                if laid_out {
+                    flight.refresh_status();
+                }
+                flight.close_info_dialog();
             }
         }
         ScreenAction::None
@@ -630,12 +675,14 @@ impl AppScreen {
     /// `_HandlePlayerBoardAttempt` hide its sprite (@0x6225a, @0x658d6).
     /// Only the pointer is cancelled here: flight's `hold_offer` has
     /// already let go of its keys. The original keeps reading them live
-    /// over the offer's close
-    /// (rdm:phase/play-feel-7-fidelity/phase-2-flight-keys-still-down-after-a-dialog).
+    /// over the offer's close, so the router hands back what is still
+    /// down as the last dialog over flight closes (see `live_input`,
+    /// rdm:phase/play-feel-8/phase-3-keys-live-across-a-dialog). The
+    /// dialog is told whether the mission info screen lists a mission
+    /// ([`OfferDialog::with_missions_listed`]), and again after an abort
+    /// ([`AppScreen::missions_input`]).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
-        if let Some(flight) = &mut self.flight {
-            flight.cancel_pointer();
-        }
+        self.hide_flight_cursor();
         let layout = match (&self.dialogs, self.metrics()) {
             (Some(dialogs), Some(metrics)) => OfferTemplates {
                 plain: dialogs.resources.dialog_template(OFFER_DIALOG),
@@ -645,10 +692,15 @@ impl AppScreen {
             .map(|template| (template, metrics)),
             _ => Err(NO_INTERFACE.to_owned()),
         };
+        let listed = self
+            .flight
+            .as_mut()
+            .is_some_and(|flight| !flight.mission_info().rows.is_empty());
         self.offer = Some(
             OfferDialog::new(layout, prompt, self.data.button_style())
                 .with_focus_ring(self.dialog_focus_ring())
-                .with_movies(&self.movies),
+                .with_movies(&self.movies)
+                .with_missions_listed(listed),
         );
     }
 
@@ -702,6 +754,7 @@ impl AppScreen {
         };
         let mission = dialog.prompt().mission;
         let two_buttons = dialog.prompt().labels.refuse.is_some();
+        let left = dialog.take_unclaimed();
         self.sounds.extend(dialog.take_sounds());
         let flight = self.flight.as_mut().expect(ENTERED);
         let hidden = match choice {
@@ -719,6 +772,13 @@ impl AppScreen {
         self.show_mission_texts();
         if self.missions.is_none() {
             self.offer = None;
+            // What its replay queued after the answering key reaches
+            // flight, the answer's `FlushEvents` flushing only mouse
+            // events (@0xa2da2-0xa2dde); a text it shows flushes it
+            // (@0x5ae67).
+            for input in &left {
+                let _ = self.rerouted_input(input);
+            }
         }
     }
 
@@ -740,7 +800,7 @@ impl AppScreen {
         if let Some(dialog) = &mut self.offer {
             dialog.cancel_pointer();
         }
-        self.release_keys();
+        self.let_go_of_keys();
         if let Some(missions) = self.flight_missions() {
             missions.open_info_with_map(info, false);
         }
@@ -753,7 +813,7 @@ impl AppScreen {
     /// the keys held let go. Its input goes to the map before them
     /// ([`AppScreen::flight_dialog_map_input`]).
     fn open_flight_dialog_map(&mut self, opener: MapOpener) {
-        self.release_keys();
+        self.let_go_of_keys();
         if let Some(flight) = &mut self.flight {
             flight.open_dialog_map(opener);
         }
@@ -762,8 +822,11 @@ impl AppScreen {
     /// Opens the comm dialog on `view` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the hail is hung up, with a warning.
+    /// the hail is hung up, with a warning. Flight's cursor hides first,
+    /// as `_HandlePlayerCommunication` hides its sprite before
+    /// `_DoCommDialog` (@0x62561, @0x625c1).
     fn open_comm(&mut self, view: &HailView) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.hang_up();
@@ -895,8 +958,11 @@ impl AppScreen {
     /// Opens the plunder dialog on `shown` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the boarding is let go silently, with a warning.
+    /// the boarding is let go silently, with a warning. Flight's cursor
+    /// hides first, as `_HandlePlayerBoardAttempt` hides its sprite before
+    /// `_DoPlunderDialog` (@0x659d0, @0x65f1d).
     fn open_plunder(&mut self, shown: &PlunderShown) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.let_go_of_boarding();

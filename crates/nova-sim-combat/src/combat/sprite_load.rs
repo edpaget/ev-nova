@@ -142,6 +142,7 @@ mod tests {
         disabled: false,
         key_aboard: false,
         rules: DisplayRules::ENGINE,
+        gain: crate::speed_mult::SpeedMult::FULL,
     };
 
     /// A class of `flags`, `sets` base sets and `alt_sets` alt sets, its

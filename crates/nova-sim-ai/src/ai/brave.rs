@@ -598,9 +598,9 @@ mod tests {
         // The handler jumps out at its head while +0x4c runs (@0x8d4b9
         // -0x8d4d2 → 0x8fb47), the think having run first (@0x901e5).
         let mut waiting = provoked(100.0, 0.0);
-        waiting[0].ai_wait = 3;
+        waiting[0].ai_wait = 3.0;
         let mut held = provoked(100.0, 0.0);
-        held[0].mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        held[0].mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20.0 };
         for npcs in [waiting, held] {
             let decision = decided_on_dying(npcs);
             assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");

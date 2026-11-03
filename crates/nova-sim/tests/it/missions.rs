@@ -344,6 +344,9 @@ fn fly_to_140(session: &mut Session, courier: &Courier) {
     session
         .take_off(courier, &mut NeverFires)
         .expect("takes off");
+    // The integer days' full gain, not the take-off's zero, which would
+    // hold every bare pass still.
+    session.switch_in();
     let _ = session.settle_script(courier, &mut NeverFires);
     session.plot_course(SystemId(131)).expect("a route");
     session.begin_jump().expect("out past the no-jump zone");

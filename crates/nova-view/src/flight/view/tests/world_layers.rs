@@ -484,14 +484,14 @@ fn a_shield_flash_shows_from_the_frame_after_its_hit_until_it_runs_out() {
     flash.hit(false);
     assert_eq!(view.shield_flash(ShipRef::Player), None, "not stepped yet");
     let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
-    flash.step(100.0, 100.0, true);
+    flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
     let shown = view.shield_flash(ShipRef::Player).expect("shown");
     assert!(shown > 0.0, "{shown}");
     let flash = view.flashes.get_mut(&ShipRef::Player).expect("hit");
     while !flash.spent() {
-        flash.step(100.0, 100.0, true);
+        flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
     }
-    flash.step(100.0, 100.0, true);
+    flash.step(100.0, 100.0, true, nova_sim::SpeedMult::FULL);
     assert_eq!(view.shield_flash(ShipRef::Player), None, "run out");
 }
 

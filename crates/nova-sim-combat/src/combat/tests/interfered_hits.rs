@@ -39,7 +39,7 @@ fn interfered_into_c(
     );
     let shot = &mut combat.shots_mut()[0];
     assert_eq!((shot.jam, shot.target), (Jam::Interfered, Some(C)));
-    shot.age = 1;
+    shot.set_age(1);
     shot.moved_from = Some(from);
     shot.position = to;
     walk(&mut combat, &mut ships)
@@ -98,7 +98,7 @@ fn an_interfered_seeking_sub_munition_finds_and_hits_a_ship() {
     handle_in(&mut combat, &mut ships, &arsenal, field);
     let sub = &mut combat.shots_mut()[0];
     assert_eq!((sub.jam, sub.target), (Jam::Interfered, Some(B)));
-    sub.age = 1;
+    sub.set_age(1);
     sub.moved_from = Some(Vec2::new(0.0, 330.0));
     sub.position = Vec2::new(0.0, 348.0);
     assert_eq!(walk(&mut combat, &mut ships), [(B, Some(A))]);

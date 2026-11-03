@@ -106,7 +106,8 @@
 //!   escort menu's timeout and the HUD cadence do. It runs through a
 //!   jump's warp and fade, so `\` shows the map during a jump and its
 //!   fade goes on. It stops where flight time stops: while the course map
-//!   or a dialog over paused flight is open, and in the spaceport. The
+//!   or a dialog over paused flight is open, under the escape pod's
+//!   rescue, and in the spaceport. The
 //!   original's `TickCount()` runs on through all of them, so a map shown
 //!   less than 150 ticks before one of those pauses shows the rest of its
 //!   fade after it, where the original would usually have run it out.

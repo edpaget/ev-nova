@@ -66,7 +66,10 @@ fn a_ship_repairing_the_disabled_player_docks_and_boards_it_and_repairs_it_after
             [PirateEvent::PlayerDockedWith { pirate: HELPER }],
             "the start boards the player"
         );
-        assert_eq!(helper(&traffic).ai_wait, 99 + u32::from(roll));
+        assert_eq!(
+            helper(&traffic).ai_wait,
+            99.0 + crate::traffic::ai_wait::ticks(u32::from(roll))
+        );
         for at in 1..repair_tick {
             tick(&mut traffic, &recording, Condition::Disabled, &[]);
             assert_eq!(traffic.take_pirate_events(), [], "{roll}: tick {at}");
@@ -83,7 +86,7 @@ fn a_ship_repairing_the_disabled_player_docks_and_boards_it_and_repairs_it_after
         );
         let done = helper(&traffic);
         assert_eq!(done.goal, Goal::Drift);
-        assert_eq!(done.ai_wait, REPAIR_HOLD - 1);
+        assert_eq!(done.ai_wait, REPAIR_HOLD - 1.0);
         assert_eq!((done.target, done.docking), (None, None));
     }
 }
@@ -213,7 +216,7 @@ fn every_unprovoked_assister_flies_its_high_level_a_repairer_and_a_refueller_ali
 #[test]
 fn a_repairer_coasting_or_disabled_flies_no_high_level() {
     let mut coasting = repairing(1000.0, 0.0);
-    coasting.npcs[0].mode = Mode::Coasting { ticks_left: 30 };
+    coasting.npcs[0].mode = Mode::Coasting { ticks_left: 30.0 };
     let mut disabled = repairing(1000.0, 0.0);
     disabled.npcs[0].condition = Condition::Disabled;
     // A disabled one is reset to goal 0 by its dispatch (@0x8fece).
@@ -390,7 +393,7 @@ fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves
     let mut traffic = repairing(2.0, 0.0);
     let recording = Recording::default();
     tick(&mut traffic, &recording, Condition::Disabled, &[79]);
-    assert_eq!(helper(&traffic).ai_wait, 178, "docked");
+    assert_eq!(helper(&traffic).ai_wait, 178.0, "docked");
     let _ = traffic.take_pirate_events();
     tick_struck(
         &mut traffic,
@@ -403,11 +406,11 @@ fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves
     assert_eq!(turned.goal, Goal::Attack(ShipRef::Player));
     assert_eq!(
         turned.ai_wait,
-        crate::traffic::autopilot::HIT_WAIT - 1,
+        crate::traffic::autopilot::HIT_WAIT - 1.0,
         "cut to 20, then a tick off"
     );
     let mut ticks = 1;
-    while helper(&traffic).ai_wait > 0 {
+    while helper(&traffic).ai_wait > 0.0 {
         assert_eq!(
             helper(&traffic).docking.map(|docking| docking.sub),
             Some(DockSub::Dock),
@@ -417,7 +420,10 @@ fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves
         assert_eq!(traffic.take_pirate_events(), [], "no repair, tick {ticks}");
         ticks += 1;
     }
-    assert_eq!(ticks, crate::traffic::autopilot::HIT_WAIT);
+    assert_eq!(
+        crate::traffic::ai_wait::ticks(ticks),
+        crate::traffic::autopilot::HIT_WAIT
+    );
     tick(&mut traffic, &recording, Condition::Disabled, &[]);
     assert_eq!(
         helper(&traffic).docking,
@@ -444,7 +450,7 @@ fn a_miner_docked_with_the_player_that_drops_the_help_creeps_on_through_its_dock
         ship: ShipRef::Player,
         sub: DockSub::Dock,
     });
-    miner.ai_wait = 150;
+    miner.ai_wait = 150.0;
     let rock = nova_sim_combat::asteroid::Asteroid {
         position: Vec2::new(200.0, 200.0),
         velocity: Vec2::ZERO,
@@ -465,7 +471,7 @@ fn a_miner_docked_with_the_player_that_drops_the_help_creeps_on_through_its_dock
         }
     };
     let mut step = 0;
-    while helper(&traffic).ai_wait > 0 {
+    while helper(&traffic).ai_wait > 0.0 {
         let world = drifting(step);
         let velocity = world.player.as_ref().expect("here").state.velocity;
         traffic.tick_in(
@@ -570,7 +576,7 @@ fn a_repairer_closes_and_docks_on_its_gone_patients_record() {
         "no high level docks it"
     );
     let (mut docked, recording) = repairing_npc(2.0, 1);
-    assert_eq!(helper(&docked).ai_wait, 99, "its dock started");
+    assert_eq!(helper(&docked).ai_wait, 99.0, "its dock started");
     docked.remove_destroyed(NpcId(2));
     tick(&mut docked, &recording, Condition::Intact, &[]);
     assert_eq!(
@@ -600,7 +606,7 @@ fn a_repairer_starts_its_dock_on_its_gone_patients_record() {
     tick(&mut traffic, &Recording::default(), Condition::Intact, &[0]);
     assert_eq!(
         helper(&traffic).ai_wait,
-        99,
+        99.0,
         "Rand(80) of 0 + 100, a tick off"
     );
 }

@@ -292,6 +292,14 @@ fn a_key_that_opens_nothing_keeps_the_button_held() {
     assert_eq!(faked_cursor_alpha(&view), WHOLE, "restamped");
 }
 
+/// The pointer moves once the map has closed: the map hid the cursor with
+/// a zero fade (`_HideCursorSprite` before `_DoSystemMap`, @0x6a826), so
+/// only a move (`_HandleMouse` @0x3801c-0x3806d) shows it whole again, for
+/// what follows to fade.
+fn moved_after_the_map(view: &mut Faked) {
+    view.input(&Input::PointerMoved(Point::new(60.0, 420.0)));
+}
+
 #[test]
 fn a_map_opened_with_the_button_down_still_takes_its_release_for_the_cursor() {
     let mut view = in_flight();
@@ -305,6 +313,7 @@ fn a_map_opened_with_the_button_down_still_takes_its_release_for_the_cursor() {
     });
     tap(&mut view, MAP_KEY);
     assert!(!view.map_open());
+    moved_after_the_map(&mut view);
     fades_with_no_release(&mut view);
 }
 
@@ -315,6 +324,7 @@ fn a_key_typed_into_the_map_latches_no_fade_for_after_it_closes() {
     view.open_map();
     tap(&mut view, NEAREST_KEY);
     view.close_map();
+    moved_after_the_map(&mut view);
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), WHOLE);
 }
@@ -327,6 +337,7 @@ fn the_m_that_opens_the_map_fades_once_on_the_first_step_after_it_closes() {
     assert!(view.map_open(), "opened");
     tap(&mut view, MAP_KEY);
     assert!(!view.map_open(), "closed");
+    moved_after_the_map(&mut view);
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), ONE);
     view.tick(TICK);
@@ -387,4 +398,78 @@ fn p_refused_in_a_jump_with_the_map_open_is_left_to_the_map() {
     view.open_map();
     view.input(&key(PLAYER_INFO_KEY, true));
     assert!(!view.holds_keys());
+}
+
+// A latched key held past a site's close: `_QuickKeyCheck` (@0xa0f5)
+// still reads it down, and every latched block sets `_keyPressedThisFrame`
+// (*0x3b5550) before testing its latch, so it fades the cursor while its
+// command waits for its release.
+
+/// The cursor's alpha two ticks after a site's close hands back `k` held,
+/// under `fades`.
+fn alpha_latched(fades: KeyFades, k: Key) -> Option<u8> {
+    let mut view = showing(fades);
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [k], [], false);
+    ticked(&mut view, 2);
+    faked_cursor_alpha(&view)
+}
+
+#[test]
+fn a_jump_key_held_across_an_offers_close_fades_the_cursor_without_jumping_until_pressed_again() {
+    // J's block sets the byte (@0x6b113) before its latch (@0x6b86d), which
+    // the offer's `_SetAllKeyCmdFlags` (@0x622ac) set.
+    let mut view = showing(KeyFades::EVERY);
+    view.sim
+        .queue_answer(Answer::Hailed(nova_sim::Hailed::Offer(VenueOffer::Prompt(
+            super::faked_hail::prompt("Help?"),
+        ))));
+    view.hail();
+    assert!(view.take_offer().is_some(), "the offer");
+    let _ = super::live_keys::back(&mut view, [JUMP_KEY], [], false);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    view.tick(TICK);
+    assert_eq!(faked_cursor_alpha(&view), TWO, "faded by J");
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::Jump),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(sent(&view)[from..].contains(&FlightCommand::Jump));
+}
+
+#[test]
+fn every_latched_key_held_across_a_close_fades_by_its_gate() {
+    let gates = FadeKey::ALL
+        .into_iter()
+        .map(|gate| KeyFades::EVERY.refusing(gate))
+        .chain([KeyFades::EVERY]);
+    let fades: Vec<KeyFades> = gates.collect();
+    let mut checked = 0;
+    for k in FLIGHT_KEYS {
+        let mut view = showing(KeyFades::EVERY);
+        super::live_keys::dialog_opens(&mut view);
+        let _ = super::live_keys::back(&mut view, [k], [], false);
+        if !view.latched_down.contains(&k) {
+            continue;
+        }
+        checked += 1;
+        for &fade in &fades {
+            assert_eq!(
+                alpha_latched(fade, k),
+                alpha_holding(fade, &[k]),
+                "{k:?} under {fade:?}"
+            );
+        }
+    }
+    assert!(checked > 10, "the latched keys: {checked}");
+    assert_eq!(alpha_latched(KeyFades::EVERY, JUMP_KEY), TWO);
+    assert_eq!(
+        alpha_latched(KeyFades::EVERY, STELLAR_SLOT_KEYS[1][0]),
+        TWO,
+        "a slot key, polled by its block"
+    );
 }

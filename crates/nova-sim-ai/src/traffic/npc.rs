@@ -24,6 +24,7 @@ use crate::rulebook::RuleSource;
 use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 use crate::traffic::ShipBehav;
+use crate::traffic::ai_wait;
 use crate::traffic::formation_flight;
 use crate::traffic::plunder_dock::Docking;
 use crate::traffic::ship_display::NpcDisplay;
@@ -74,7 +75,7 @@ impl AiType {
 /// Whether an NPC is still coming out of hyperspace, or of a hypergate or
 /// wormhole (see [`emerge`](crate::traffic::emerge)), or entering one to
 /// leave (see [`gate_entry`](crate::traffic::gate_entry)).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
     /// Gliding in from hyperspace, on this tick of the glide (from 0), at
     /// [`Npc::burst_speed`]: from 50, as
@@ -118,8 +119,8 @@ pub enum Mode {
     /// else 50, not the emerge's 30 or 15 ([`Npc::bursts_own_word`], see
     /// [`succession`](crate::traffic::succession)).
     Emerging {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames ([`ai_wait`](crate::traffic::ai_wait)).
+        ticks_left: f32,
     },
     /// Held where it waited in its gate, for this many more ticks, once
     /// another goal was written over its goal 0x15
@@ -144,8 +145,8 @@ pub enum Mode {
     /// An escort's Defend, Attack or formation think ends it at once
     /// ([`Npc::end_wait`], `_EscortAI`'s +0x4c = -1.0).
     HeldAtGate {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames ([`ai_wait`](crate::traffic::ai_wait)).
+        ticks_left: f32,
     },
     /// Bursting out of the gate along its heading, on this tick of the
     /// burst (from 0), at [`Npc::burst_speed`]: as
@@ -182,8 +183,8 @@ pub enum Mode {
     /// ([`Npc::ends_gate_entry`]); one not intact drifts instead, its wait
     /// counting down all the same.
     Coasting {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames ([`ai_wait`](crate::traffic::ai_wait)).
+        ticks_left: f32,
     },
     /// Entering `gate`, the hypergate or wormhole it leaves the system
     /// through, for this many more ticks: the original's sub-goal 0x17,
@@ -203,18 +204,20 @@ pub enum Mode {
     EnteringGate {
         /// The gate it enters.
         gate: StellarId,
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames ([`ai_wait`](crate::traffic::ai_wait)).
+        ticks_left: f32,
     },
     /// An escape pod (class 0x2ff, `ESCAPE_POD_SHIP`) adrift, its AI wait
-    /// +0x4c this many ticks yet: `_AIDispatch` flies it at full thrust
-    /// along its heading and counts the wait down, and frees its slot once
-    /// it is below 0 (@0x8fb62-0x8fbba; see
+    /// +0x4c, a float, this many frames yet: `_AIDispatch` flies it at
+    /// full thrust along its heading and counts the wait down by the
+    /// frame's gain, and frees its slot once it is below 0
+    /// (@0x8fb62-0x8fbba; see
     /// [`pod_flight`](crate::traffic::pod_flight)). A pod in any other
     /// mode has a wait of none, as every spawner leaves +0x4c at 0.
     Adrift {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The frames of the wait left, a float the frame's gain counts
+        /// down.
+        ticks_left: f32,
     },
     /// Flying under its own controls.
     Flying,
@@ -658,8 +661,10 @@ pub struct Npc {
     /// flies, its high level is skipped but for a drift, a hold or a count
     /// wait, and the ship moves on at its velocity with no turn or thrust
     /// but in its count wait, where it brakes. A hit's answer cuts it to
-    /// 20. None as it spawns. Never saved.
-    pub ai_wait: u32,
+    /// 20. A float, counted down by the frame's gain (see the
+    /// [`ai_wait`](crate::traffic::ai_wait) module). None as it spawns.
+    /// Never saved.
+    pub ai_wait: f32,
     /// The docking it flies with a disabled ship it plunders, its sub-goal
     /// and nav kept from tick to tick (see
     /// [`plunder_dock`](crate::traffic::plunder_dock)): none as it spawns,
@@ -1331,12 +1336,13 @@ impl Npc {
             }
     }
 
-    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`], then
-    /// holds it between none and its capacity, every tick whatever its
-    /// condition, disabled and breaking up included (`_HandleShip`
-    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC).
-    pub fn regenerate_fuel(&mut self) {
-        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen);
+    /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`] × the
+    /// frame's `gain` (`_gSpeedMult` @0x3532b), then holds it between none
+    /// and its capacity, every tick whatever its condition, disabled and
+    /// breaking up included (`_HandleShip` @0x35305-0x35374,
+    /// `_ShipFuelGenRate` @0x2ffb for an NPC).
+    pub fn regenerate_fuel(&mut self, gain: crate::speed_mult::SpeedMult) {
+        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen, gain);
     }
 
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c) under `reserves`
@@ -1403,7 +1409,7 @@ impl Npc {
     pub fn threatens_player_or_led(&self, led: impl Fn(NpcId) -> bool) -> bool {
         self.active_not_disabled()
             && self.mode == Mode::Flying
-            && self.ai_wait == 0
+            && !ai_wait::running(self.ai_wait)
             && match self.fought() {
                 Some(ShipRef::Player) => true,
                 Some(ShipRef::Npc(id)) => led(id),
@@ -1556,7 +1562,7 @@ impl Npc {
                 | Mode::HeldAtGate { .. }
                 | Mode::Coasting { .. }
                 | Mode::EnteringGate { .. }
-        ) || self.ai_wait > 0
+        ) || ai_wait::running(self.ai_wait)
     }
 
     /// Whether it is in its count wait, goal 0x16 ([`Goal::CountWait`]):
@@ -1575,7 +1581,7 @@ impl Npc {
     /// skips its turn and thrust (@0x34a54-0x34a72).
     #[must_use]
     pub fn ai_wait_flies(&self) -> bool {
-        self.ai_wait > 0 && !self.count_wait()
+        ai_wait::running(self.ai_wait) && !self.count_wait()
     }
 
     /// Cuts its velocity and its speed along its heading (+0x48,
@@ -1600,8 +1606,9 @@ impl Npc {
     /// bursting out, or in or at a gate keeps its own glide or wait, which
     /// the original's write would overwrite; a disabled ship is boarded
     /// in flight, so none is. A wait of none leaves it as it is.
-    pub fn wait_on_course(&mut self, ticks_left: u32) {
-        if ticks_left > 0 && matches!(self.mode, Mode::Flying | Mode::Coasting { .. }) {
+    pub fn wait_on_course(&mut self, ticks_left: f32) {
+        if ai_wait::running(ticks_left) && matches!(self.mode, Mode::Flying | Mode::Coasting { .. })
+        {
             self.mode = Mode::Coasting { ticks_left };
         }
     }
@@ -1637,7 +1644,7 @@ impl Npc {
     ///
     /// The caller places it, gives it its heading and decides
     /// [`Npc::led_out`].
-    pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: u32) {
+    pub fn emerge_from_gate(&mut self, gate: StellarId, ticks_left: f32) {
         self.mode = Mode::Emerging { ticks_left };
         self.emerges_from = Some(gate);
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
@@ -1713,8 +1720,8 @@ impl Npc {
     /// (@0x89d3e-0x89d4d), keeping sub-goal 0 and the burst word +0x34
     /// its emerge set, which it owes as the hold ends ([`Npc::end_wait`]).
     /// A ship whose wait has just run out, its goal still 0x15
-    /// ([`Mode::LeavingGate`] at tick 0), is held too, for the one tick
-    /// [`Npc::leaves_gate_goal`] gives it; its caller holds it only before
+    /// ([`Mode::LeavingGate`] at tick 0), is held too, on the wait already
+    /// out that [`Npc::leaves_gate_goal`] gives it; its caller holds it only before
     /// the pass's dispatch turns it out (see the `last_wait_frame` module).
     /// A ship not waiting in a gate is left as it is.
     pub fn hold_at_gate(&mut self) {
@@ -1735,8 +1742,9 @@ impl Npc {
     /// the succession's writes ([`succession`](super::succession)) and the
     /// disabled reset ([`disabled_reset`](super::disabled_reset)) make such
     /// a write. On the frame its wait ran out ([`Mode::LeavingGate`] at
-    /// tick 0, goal 0x15 still) it is held one tick, which the fly half's
-    /// step ends at once ([`Npc::end_wait`]); the player's hit reaches it
+    /// tick 0, goal 0x15 still) it is held on a wait already out (+0x4c ≤
+    /// 0.0), which the fly half's next step ends at once whatever the
+    /// frame's gain ([`Npc::end_wait`]); the player's hit reaches it
     /// there before the pass's dispatch, or in double time's second pass
     /// (see the `last_wait_frame` module). That tick it drifts where the
     /// original steers from the dispatch, a one-tick lag no player sees.
@@ -1744,7 +1752,7 @@ impl Npc {
     pub fn leaves_gate_goal(&mut self) {
         match self.mode {
             Mode::Emerging { ticks_left } => self.mode = Mode::HeldAtGate { ticks_left },
-            Mode::LeavingGate { tick: 0 } => self.mode = Mode::HeldAtGate { ticks_left: 1 },
+            Mode::LeavingGate { tick: 0 } => self.mode = Mode::HeldAtGate { ticks_left: 0.0 },
             _ => return,
         }
         self.emerges_from = None;
@@ -1805,7 +1813,7 @@ impl Npc {
     /// left: a ship gliding in, waiting in its gate or bursting out of it
     /// runs no think.
     pub fn end_wait(&mut self, burst: RuleSource) {
-        self.ai_wait = 0;
+        self.ai_wait = 0.0;
         match self.mode {
             Mode::HeldAtGate { .. } => {
                 let word = self.burst_word();
@@ -1935,23 +1943,30 @@ mod tests {
     #[test]
     fn an_npc_regenerates_fuel_at_its_rate_up_to_its_capacity() {
         let mut npc = fuelled(0.5, 298.0);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 298.5);
         for _ in 0..10 {
-            npc.regenerate_fuel();
+            npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         }
         assert_eq!(npc.reserves.fuel.now, 300.0, "up to its capacity");
     }
 
     #[test]
+    fn at_half_gain_an_npc_regenerates_half_its_rate() {
+        let mut npc = fuelled(0.5, 298.0);
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::new(0.5));
+        assert_eq!(npc.reserves.fuel.now, 298.25);
+    }
+
+    #[test]
     fn an_npcs_fuel_is_held_to_its_capacity_and_above_none_every_tick() {
         let mut npc = fuelled(0.0, 310.0);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 300.0, "clamped with no rate");
         let mut npc = fuelled(-0.5, 0.7);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert!((npc.reserves.fuel.now - 0.2).abs() < 1e-6);
-        npc.regenerate_fuel();
+        npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npc.reserves.fuel.now, 0.0, "a drain stops at none");
     }
 
@@ -1966,7 +1981,7 @@ mod tests {
         ] {
             let mut npc = fuelled(0.5, 100.0);
             npc.condition = condition;
-            npc.regenerate_fuel();
+            npc.regenerate_fuel(crate::speed_mult::SpeedMult::FULL);
             assert_eq!(npc.reserves.fuel.now, 100.5, "{condition:?}");
         }
     }
@@ -2337,7 +2352,7 @@ mod tests {
             }
             for mode in [
                 Mode::JumpingIn { tick: 0 },
-                Mode::Coasting { ticks_left: 30 },
+                Mode::Coasting { ticks_left: 30.0 },
             ] {
                 let arriving = Npc {
                     mode,
@@ -2418,8 +2433,8 @@ mod tests {
         }
         for mode in [
             Mode::JumpingIn { tick: 0 },
-            Mode::Emerging { ticks_left: 2 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 2.0 },
+            Mode::Coasting { ticks_left: 30.0 },
         ] {
             let arriving = Npc {
                 mode,
@@ -2480,7 +2495,7 @@ mod tests {
                 assert!(!downed.threatens_player_among(&npcs), "{condition:?}");
             }
             let emerging = Npc {
-                mode: Mode::Emerging { ticks_left: 2 },
+                mode: Mode::Emerging { ticks_left: 2.0 },
                 ..attacking(quarry)
             };
             assert!(!emerging.threatens_player_among(&npcs), "{quarry:?}");
@@ -2658,8 +2673,8 @@ mod tests {
             }
             for mode in [
                 Mode::JumpingIn { tick: 0 },
-                Mode::Emerging { ticks_left: 2 },
-                Mode::Coasting { ticks_left: 30 },
+                Mode::Emerging { ticks_left: 2.0 },
+                Mode::Coasting { ticks_left: 30.0 },
             ] {
                 let arriving = Npc {
                     mode,
@@ -2705,14 +2720,14 @@ mod tests {
         assert!(!npc.emerging());
         npc.mode = Mode::JumpingIn { tick: 0 };
         assert!(!npc.emerging());
-        npc.mode = Mode::Emerging { ticks_left: 2 };
+        npc.mode = Mode::Emerging { ticks_left: 2.0 };
         assert!(npc.emerging());
         assert!(!npc.threatens_player(), "while it emerges");
         npc.mode = Mode::LeavingGate { tick: 0 };
         assert!(npc.emerging(), "its wait just out, its goal still 0x15");
         npc.mode = Mode::LeavingGate { tick: 1 };
         assert!(!npc.emerging(), "goal 8");
-        npc.mode = Mode::HeldAtGate { ticks_left: 2 };
+        npc.mode = Mode::HeldAtGate { ticks_left: 2.0 };
         assert!(!npc.emerging(), "goal 4");
     }
 
@@ -2786,7 +2801,7 @@ mod tests {
         };
         // Waiting, or its wait just run out (goal still 0x15).
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
         ] {
             assert!(
@@ -2817,7 +2832,7 @@ mod tests {
         for mode in [
             Mode::LeavingGate { tick: 1 },
             Mode::LeavingGate { tick: 2 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Coasting { ticks_left: 30.0 },
             Mode::Flying,
             Mode::JumpingIn { tick: 0 },
         ] {
@@ -2828,7 +2843,7 @@ mod tests {
         }
         let unmarked = Npc {
             emerges_from: None,
-            ..ship(Mode::Emerging { ticks_left: 3 }, Condition::Intact)
+            ..ship(Mode::Emerging { ticks_left: 3.0 }, Condition::Intact)
         };
         assert!(!unmarked.holds_gate_open(gate));
     }
@@ -2851,8 +2866,8 @@ mod tests {
             led_out: true,
             ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
-        npc.emerge_from_gate(StellarId(310), 40);
-        assert_eq!(npc.mode, Mode::Emerging { ticks_left: 40 });
+        npc.emerge_from_gate(StellarId(310), 40.0);
+        assert_eq!(npc.mode, Mode::Emerging { ticks_left: 40.0 });
         assert_eq!(npc.emerges_from, Some(StellarId(310)));
         assert_eq!(npc.target, None);
         assert_eq!(npc.trigger, Trigger::default());
@@ -2867,7 +2882,7 @@ mod tests {
         let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
         npc.reserves.fuel.max = 300.0;
         npc.reserves.fuel.now = 0.0;
-        npc.emerge_from_gate(StellarId(310), 40);
+        npc.emerge_from_gate(StellarId(310), 40.0);
         assert_eq!(
             npc.visited,
             Some(StellarId(310)),
@@ -2875,7 +2890,7 @@ mod tests {
         );
         npc.reserves.fuel.max = 0.0;
         npc.visited = Some(StellarId(128));
-        npc.emerge_from_gate(StellarId(310), 40);
+        npc.emerge_from_gate(StellarId(310), 40.0);
         assert_eq!(npc.visited, None, "no tank: -2, never visited");
         assert_eq!(Npc::gate_visit(StellarId(311), 1.0), Some(StellarId(311)));
         assert_eq!(Npc::gate_visit(StellarId(311), 0.0), None);
@@ -2889,7 +2904,7 @@ mod tests {
         // `_IsThreatToPlayer` tests (@0x7f518).
         let gate = StellarId(128);
         let held = Npc {
-            mode: Mode::HeldAtGate { ticks_left: 12 },
+            mode: Mode::HeldAtGate { ticks_left: 12.0 },
             goal: Goal::Attack(ShipRef::Player),
             emerges_from: Some(gate),
             ..crate::traffic::fixture::npc(1, ShipStats::default())
@@ -2904,14 +2919,14 @@ mod tests {
     #[test]
     fn a_ship_held_at_its_gate_keeps_its_wait_leaves_its_gate_and_attacks_the_player() {
         let mut npc = Npc {
-            mode: Mode::Emerging { ticks_left: 17 },
+            mode: Mode::Emerging { ticks_left: 17.0 },
             emerges_from: Some(StellarId(310)),
             target: Some(ShipRef::Player),
             provoked: 4.0,
             ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         npc.hold_at_gate();
-        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 17 });
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 17.0 });
         assert_eq!(npc.emerges_from, None, "+0x6c = -1 (@0x89d47)");
         assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(npc.target, Some(ShipRef::Player));
@@ -2930,12 +2945,12 @@ mod tests {
     fn leaving_goal_0x15_keeps_the_wait_and_lets_go_of_the_gate() {
         for (mode, held) in [
             (
-                Mode::Emerging { ticks_left: 30 },
-                Mode::HeldAtGate { ticks_left: 30 },
+                Mode::Emerging { ticks_left: 30.0 },
+                Mode::HeldAtGate { ticks_left: 30.0 },
             ),
             (
                 Mode::LeavingGate { tick: 0 },
-                Mode::HeldAtGate { ticks_left: 1 },
+                Mode::HeldAtGate { ticks_left: 0.0 },
             ),
         ] {
             let mut npc = Npc {
@@ -2955,9 +2970,9 @@ mod tests {
         for mode in [
             Mode::Flying,
             Mode::JumpingIn { tick: 0 },
-            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 1 },
-            Mode::Coasting { ticks_left: 3 },
+            Mode::Coasting { ticks_left: 3.0 },
         ] {
             let mut npc = Npc {
                 mode,
@@ -2976,12 +2991,12 @@ mod tests {
             (Mode::Flying, 0.0, false),
             (Mode::Flying, 1.0, false),
             (Mode::Flying, -1.0, true),
-            (Mode::Emerging { ticks_left: 3 }, 0.0, true),
-            (Mode::HeldAtGate { ticks_left: 3 }, 0.0, true),
+            (Mode::Emerging { ticks_left: 3.0 }, 0.0, true),
+            (Mode::HeldAtGate { ticks_left: 3.0 }, 0.0, true),
             (Mode::LeavingGate { tick: 0 }, 0.0, true),
             (Mode::LeavingGate { tick: 1 }, 0.0, false),
             (Mode::JumpingIn { tick: 0 }, 0.0, false),
-            (Mode::Coasting { ticks_left: 3 }, 0.0, false),
+            (Mode::Coasting { ticks_left: 3.0 }, 0.0, false),
         ] {
             let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
             npc.mode = mode;
@@ -2995,24 +3010,24 @@ mod tests {
         // `_EscortAI`'s +0x4c = -1.0 (@0x83c73, @0x83d6a, @0x83eb0): the
         // hold is that wait, so it flies at once.
         let mut held = Npc {
-            mode: Mode::HeldAtGate { ticks_left: 15 },
-            ai_wait: 30,
+            mode: Mode::HeldAtGate { ticks_left: 15.0 },
+            ai_wait: 30.0,
             goal: Goal::Attack(ShipRef::Player),
             ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
         held.end_wait(RuleSource::Engine);
-        assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0));
+        assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0.0));
         assert!(!held.wait_running());
         // Waiting in its gate (goal 0x15) it runs no type think
         // (@0x8ff18-0x8ff20), so no think ends that wait.
-        for mode in [Mode::Emerging { ticks_left: 15 }, Mode::Flying] {
+        for mode in [Mode::Emerging { ticks_left: 15.0 }, Mode::Flying] {
             let mut npc = Npc {
                 mode,
-                ai_wait: 30,
+                ai_wait: 30.0,
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
             npc.end_wait(RuleSource::Engine);
-            assert_eq!((npc.mode, npc.ai_wait), (mode, 0), "{mode:?}");
+            assert_eq!((npc.mode, npc.ai_wait), (mode, 0.0), "{mode:?}");
             assert_eq!(npc.owed_burst, None, "{mode:?}: no hold, no burst");
         }
     }
@@ -3023,20 +3038,20 @@ mod tests {
         // @0x82de9): the coast and the entry are that wait, and the high
         // level runs in the same dispatch, writing its goal's own sub.
         for mode in [
-            Mode::Coasting { ticks_left: 9 },
+            Mode::Coasting { ticks_left: 9.0 },
             Mode::EnteringGate {
                 gate: StellarId(300),
-                ticks_left: 9,
+                ticks_left: 9.0,
             },
         ] {
             let mut npc = Npc {
                 mode,
-                ai_wait: 30,
+                ai_wait: 30.0,
                 owed_burst: Some(12.0),
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
             npc.end_wait(RuleSource::Engine);
-            assert_eq!((npc.mode, npc.ai_wait), (Mode::Flying, 0), "{mode:?}");
+            assert_eq!((npc.mode, npc.ai_wait), (Mode::Flying, 0.0), "{mode:?}");
             assert!(!npc.wait_running(), "{mode:?}");
             assert_eq!(npc.owed_burst, Some(12.0), "{mode:?}: what it owed");
         }
@@ -3048,7 +3063,7 @@ mod tests {
         // player leads it (@0x895aa-0x895bd): nothing writes it while
         // +0x4c runs (`_LowLevelAIHandler` @0x851e9-0x8520d).
         let held = |led_out| Npc {
-            mode: Mode::HeldAtGate { ticks_left: 15 },
+            mode: Mode::HeldAtGate { ticks_left: 15.0 },
             goal: Goal::Attack(ShipRef::Player),
             led_out,
             ..crate::traffic::fixture::npc(1, ShipStats::default())
@@ -3072,7 +3087,7 @@ mod tests {
             owed_burst: Some(12.0),
             ..crate::traffic::fixture::npc(1, ShipStats::default())
         };
-        npc.emerge_from_gate(StellarId(310), 40);
+        npc.emerge_from_gate(StellarId(310), 40.0);
         assert_eq!(npc.owed_burst, None);
     }
 
@@ -3100,16 +3115,16 @@ mod tests {
             (Mode::LeavingGate { tick: 1 }, true),
             (Mode::LeavingGate { tick: 9 }, true),
             (Mode::LeavingGate { tick: 0 }, false),
-            (Mode::Emerging { ticks_left: 5 }, false),
-            (Mode::HeldAtGate { ticks_left: 5 }, false),
+            (Mode::Emerging { ticks_left: 5.0 }, false),
+            (Mode::HeldAtGate { ticks_left: 5.0 }, false),
             (
                 Mode::EnteringGate {
                     gate,
-                    ticks_left: 5,
+                    ticks_left: 5.0,
                 },
                 false,
             ),
-            (Mode::Coasting { ticks_left: 5 }, false),
+            (Mode::Coasting { ticks_left: 5.0 }, false),
             (Mode::Flying, false),
         ] {
             let npc = Npc { mode, ..plain(1) };
@@ -3134,16 +3149,16 @@ mod tests {
             (Mode::JumpingIn { tick: 7 }, true),
             (Mode::LeavingGate { tick: 1 }, true),
             (Mode::LeavingGate { tick: 0 }, false),
-            (Mode::Emerging { ticks_left: 5 }, false),
-            (Mode::HeldAtGate { ticks_left: 5 }, false),
+            (Mode::Emerging { ticks_left: 5.0 }, false),
+            (Mode::HeldAtGate { ticks_left: 5.0 }, false),
             (
                 Mode::EnteringGate {
                     gate,
-                    ticks_left: 5,
+                    ticks_left: 5.0,
                 },
                 false,
             ),
-            (Mode::Coasting { ticks_left: 5 }, false),
+            (Mode::Coasting { ticks_left: 5.0 }, false),
             (Mode::Flying, false),
         ] {
             let npc = Npc { mode, ..plain(1) };
@@ -3186,9 +3201,9 @@ mod tests {
             "the hit's target, set before `_AIMakeShipAttackPlayer`"
         );
         for mode in [
-            Mode::HeldAtGate { ticks_left: 20 },
-            Mode::Coasting { ticks_left: 30 },
-            Mode::Emerging { ticks_left: 60 },
+            Mode::HeldAtGate { ticks_left: 20.0 },
+            Mode::Coasting { ticks_left: 30.0 },
+            Mode::Emerging { ticks_left: 60.0 },
         ] {
             for npc in [&attacking, &targeting] {
                 let waiting = Npc {
@@ -3351,12 +3366,12 @@ mod tests {
             "led by the player (@0x81b9f)"
         );
         for mode in [
-            Mode::Emerging { ticks_left: 60 },
-            Mode::HeldAtGate { ticks_left: 20 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 60.0 },
+            Mode::HeldAtGate { ticks_left: 20.0 },
+            Mode::Coasting { ticks_left: 30.0 },
             Mode::EnteringGate {
                 gate: StellarId(300),
-                ticks_left: 4,
+                ticks_left: 4.0,
             },
         ] {
             let waiting = Npc {
@@ -3422,13 +3437,13 @@ mod tests {
         // its wait (+0x4c) runs, and the next frame clears the target.
         let waiting = Npc {
             goal: Goal::CountWait,
-            ai_wait: 20,
+            ai_wait: 20.0,
             target: Some(ShipRef::Player),
             ..plain(1)
         };
         assert!(!waiting.threatens_player_extended(&[], true));
         let done = Npc {
-            ai_wait: 0,
+            ai_wait: 0.0,
             ..waiting
         };
         assert!(done.threatens_player_extended(&[], true), "its wait is out");
@@ -3436,7 +3451,7 @@ mod tests {
 
     #[test]
     fn a_count_wait_runs_its_wait_while_ticks_are_left_and_is_always_a_count_wait() {
-        for (ticks_left, running) in [(0, false), (1, true), (120, true)] {
+        for (ticks_left, running) in [(0.0, false), (1.0, true), (120.0, true)] {
             let waiting = Npc {
                 goal: Goal::CountWait,
                 ai_wait: ticks_left,
@@ -3448,7 +3463,7 @@ mod tests {
         assert!(!plain(1).count_wait());
         assert!(!plain(1).wait_running());
         let coasting = Npc {
-            mode: Mode::Coasting { ticks_left: 3 },
+            mode: Mode::Coasting { ticks_left: 3.0 },
             ..plain(1)
         };
         assert!(coasting.wait_running() && !coasting.count_wait());
@@ -3458,22 +3473,34 @@ mod tests {
     fn only_an_ai_wait_that_isnt_a_count_wait_flies_the_wait() {
         let waiting = |goal: Goal, ai_wait: u32| Npc {
             goal,
-            ai_wait,
+            ai_wait: crate::traffic::ai_wait::ticks(ai_wait),
             ..plain(1)
         };
         assert!(waiting(Goal::Wait, 1).ai_wait_flies());
         assert!(!waiting(Goal::Wait, 0).ai_wait_flies(), "none left");
         assert!(!waiting(Goal::CountWait, 5).ai_wait_flies(), "goal 0x16");
         let coasting = Npc {
-            mode: Mode::Coasting { ticks_left: 3 },
+            mode: Mode::Coasting { ticks_left: 3.0 },
             ..plain(1)
         };
         assert!(!coasting.ai_wait_flies(), "a mode wait");
     }
 
     #[test]
+    fn a_fractional_ai_wait_runs_above_none_and_not_at_or_below_it() {
+        for (ai_wait, running) in [(0.25, true), (-0.25, false), (0.0, false)] {
+            let waiting = Npc {
+                ai_wait,
+                ..plain(1)
+            };
+            assert_eq!(waiting.wait_running(), running, "{ai_wait}");
+            assert_eq!(waiting.ai_wait_flies(), running, "{ai_wait}");
+        }
+    }
+
+    #[test]
     fn a_flying_ships_ai_wait_runs_its_wait_while_any_is_left() {
-        for (ai_wait, running) in [(0, false), (1, true), (150, true)] {
+        for (ai_wait, running) in [(0.0, false), (1.0, true), (150.0, true)] {
             let waiting = Npc {
                 ai_wait,
                 ..plain(1)
@@ -3491,7 +3518,7 @@ mod tests {
         };
         assert!(attacking.threatens_player_or_led(|_| false));
         let waiting = Npc {
-            ai_wait: 1,
+            ai_wait: 1.0,
             ..attacking
         };
         assert!(!waiting.threatens_player_or_led(|_| false), "@0x7f518");
@@ -3637,7 +3664,7 @@ mod tests {
         assert!(
             threat(
                 &Npc {
-                    mode: Mode::Coasting { ticks_left: 30 },
+                    mode: Mode::Coasting { ticks_left: 30.0 },
                     ..lead.clone()
                 },
                 &wing
@@ -3645,7 +3672,7 @@ mod tests {
             "the lead's own wait is not read"
         );
         let waiting_wing = Npc {
-            mode: Mode::Coasting { ticks_left: 30 },
+            mode: Mode::Coasting { ticks_left: 30.0 },
             ..wing.clone()
         };
         assert!(!threat(&lead, &waiting_wing), "its escort's wait runs");
@@ -3857,34 +3884,34 @@ mod tests {
 
     #[test]
     fn a_wait_on_course_holds_a_flying_or_coasting_ship_and_leaves_any_other_mode() {
-        for mode in [Mode::Flying, Mode::Coasting { ticks_left: 7 }] {
+        for mode in [Mode::Flying, Mode::Coasting { ticks_left: 7.0 }] {
             let mut ship = Npc {
                 mode,
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
-            ship.wait_on_course(100);
-            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 100 }, "{mode:?}");
+            ship.wait_on_course(100.0);
+            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 100.0 }, "{mode:?}");
             assert!(ship.wait_running(), "{mode:?}");
         }
         for mode in [
             Mode::JumpingIn { tick: 3 },
             Mode::LeavingGate { tick: 3 },
-            Mode::Emerging { ticks_left: 7 },
-            Mode::HeldAtGate { ticks_left: 7 },
+            Mode::Emerging { ticks_left: 7.0 },
+            Mode::HeldAtGate { ticks_left: 7.0 },
             Mode::EnteringGate {
                 gate: StellarId(300),
-                ticks_left: 7,
+                ticks_left: 7.0,
             },
         ] {
             let mut ship = Npc {
                 mode,
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
-            ship.wait_on_course(100);
+            ship.wait_on_course(100.0);
             assert_eq!(ship.mode, mode, "its own glide or wait stands");
         }
         let mut idle = crate::traffic::fixture::npc(1, ShipStats::default());
-        idle.wait_on_course(0);
+        idle.wait_on_course(0.0);
         assert_eq!(idle.mode, Mode::Flying, "no wait");
     }
 }

@@ -144,7 +144,7 @@ fn closing_fast_it_never_brakes_and_still_enters_in_16_ticks() {
     }
     assert_eq!(npc.state.velocity, Vec2::ZERO, "stopped dead in the box");
     // The tick it reached the box was the first of 16.
-    for _ in 2..gate_entry::ENTRY_TICKS {
+    for _ in 2..crate::traffic::ai_wait::frames(gate_entry::ENTRY_TICKS) {
         assert_eq!(fly(&mut npc), Outcome::Flying);
     }
     assert_eq!(fly(&mut npc), Outcome::EnteredGate(GATE));

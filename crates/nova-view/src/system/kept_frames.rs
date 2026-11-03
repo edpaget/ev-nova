@@ -30,7 +30,7 @@ use super::scene::SystemScene;
 
 /// Each stellar's animation state as the scene that last showed it left
 /// it, by `spöb` ID.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeptFrames {
     frames: BTreeMap<StellarId, Frames>,
     /// Whether the flight has taken off or come out of a gate since it

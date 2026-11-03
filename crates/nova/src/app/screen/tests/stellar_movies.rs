@@ -96,6 +96,20 @@ fn a_key_pressed_under_the_landings_movie_reaches_the_spaceport_once_it_runs_out
 }
 
 #[test]
+fn caps_lock_pressed_under_the_landings_movie_toggles_double_time_once() {
+    let (mut screen, _) = filmed_port(0, Prefs::default());
+    land_twice(&mut screen);
+    screen.input(&key(Key::CapsLock, true));
+    screen.input(&key(Key::CapsLock, false));
+    assert!(flight(&screen).double_time(), "on as it is pressed");
+    for _ in 0..2 {
+        screen.tick(Duration::from_millis(16));
+    }
+    assert_eq!(screen.showing(), Showing::Spaceport, "the movie is over");
+    assert!(flight(&screen).double_time(), "on, not toggled back");
+}
+
+#[test]
 fn a_cinematic_landing_movie_hides_the_pointer_once_its_fade_out_is_over() {
     let (mut screen, _) = filmed_port(0x0004, Prefs::default());
     land_twice(&mut screen);

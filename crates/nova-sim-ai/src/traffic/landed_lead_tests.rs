@@ -148,8 +148,8 @@ fn land(traffic: &mut Traffic, from: i16) -> i16 {
 fn a_fleet_lead_that_lands_keeps_its_escorts_through_its_wait() {
     let mut traffic = fleet();
     let mut frame = land(&mut traffic, 0);
-    assert!(npc(&traffic, LEAD).ai_wait > 0, "it waits");
-    while npc(&traffic, LEAD).ai_wait > 0 {
+    assert!(npc(&traffic, LEAD).ai_wait > 0.0, "it waits");
+    while npc(&traffic, LEAD).ai_wait > 0.0 {
         tick(&mut traffic, frame, |_| {});
         assert_eq!(traffic.departed(), [], "frame {frame}");
         let lead = npc(&traffic, LEAD);
@@ -194,7 +194,7 @@ fn a_waiting_lead_orders_its_escorts_to_return() {
             }
         }
     }
-    assert!(npc(&traffic, LEAD).ai_wait > 0, "still waiting");
+    assert!(npc(&traffic, LEAD).ai_wait > 0.0, "still waiting");
 }
 
 #[test]
@@ -219,7 +219,7 @@ fn a_landed_carrier_recalls_its_fighters() {
     );
     let mut docked = Vec::new();
     let mut recalled = false;
-    while npc(&traffic, LEAD).ai_wait > 0 && docked.is_empty() {
+    while npc(&traffic, LEAD).ai_wait > 0.0 && docked.is_empty() {
         tick(&mut traffic, frame, |_| {});
         docked.extend(traffic.departed().iter().copied());
         if let Some(fighter) = traffic.npcs().iter().find(|npc| npc.id == id) {
@@ -254,7 +254,7 @@ fn a_landed_carrier_recalls_its_fighters() {
 fn once_its_wait_is_out_the_lead_jumps_and_its_escorts_follow() {
     let mut traffic = fleet();
     let mut frame = land(&mut traffic, 0);
-    while npc(&traffic, LEAD).ai_wait > 0 {
+    while npc(&traffic, LEAD).ai_wait > 0.0 {
         tick(&mut traffic, frame, |_| {});
         frame += 1;
     }

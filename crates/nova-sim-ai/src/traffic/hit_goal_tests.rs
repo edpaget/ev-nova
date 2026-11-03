@@ -137,7 +137,7 @@ fn a_hit_by_no_ship_provokes_and_cuts_the_victims_wait_but_not_its_leads() {
     // `testw si; jne 0x3be6e` (@0x3bd7e) reaches the wait cut for any
     // source but slot 0, so a hit by no ship (-1) cuts the victim's; the
     // lead's part has no cut.
-    let held = Mode::Coasting { ticks_left: 100 };
+    let held = Mode::Coasting { ticks_left: 100.0 };
     let mut lead = ship(1, AiType::Warship, 0.0, Goal::Idle);
     lead.mode = held;
     let mut escort = ship(2, AiType::Warship, 50.0, Goal::Idle);

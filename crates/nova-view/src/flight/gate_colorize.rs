@@ -74,7 +74,7 @@ pub fn gate_colorize(gate: GateFade) -> Option<Colorize> {
 mod tests {
     use super::*;
 
-    fn entering(ticks_left: u32) -> GateFade {
+    fn entering(ticks_left: f32) -> GateFade {
         GateFade::Entering { ticks_left }
     }
 
@@ -84,14 +84,21 @@ mod tests {
 
     #[test]
     fn entering_a_gate_washes_it_white_from_16_ticks_out_and_fully_from_8() {
-        let levels: Vec<_> = [16, 12, 8, 0].iter().map(|&t| level(entering(t))).collect();
+        let levels: Vec<_> = [16.0, 12.0, 8.0, 0.0]
+            .iter()
+            .map(|&t| level(entering(t)))
+            .collect();
         assert_eq!(levels, [Some(0), Some(16), Some(32), Some(32)]);
     }
 
     #[test]
     fn emerging_it_is_hidden_then_unwashed_by_4_a_tick() {
-        assert_eq!(level(GateFade::Emerging { ticks_left: 17 }), None, "hidden");
-        let levels: Vec<_> = [16, 8, 4, 1, 0]
+        assert_eq!(
+            level(GateFade::Emerging { ticks_left: 17.0 }),
+            None,
+            "hidden"
+        );
+        let levels: Vec<_> = [16.0, 8.0, 4.0, 1.0, 0.0]
             .iter()
             .map(|&ticks_left| level(GateFade::Emerging { ticks_left }))
             .collect();
@@ -105,7 +112,7 @@ mod tests {
 
     #[test]
     fn the_wash_is_white() {
-        let colorize = gate_colorize(GateFade::Emerging { ticks_left: 3 }).expect("washed");
+        let colorize = gate_colorize(GateFade::Emerging { ticks_left: 3.0 }).expect("washed");
         assert_eq!(colorize.rgb5, [31, 31, 31]);
     }
 }

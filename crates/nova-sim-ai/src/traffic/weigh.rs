@@ -7,6 +7,7 @@ use super::{Traffic, World};
 use crate::ai::answer_flag::{self, FlagRules, STRAY_EASE};
 use crate::chance::Chance;
 use crate::combat::{ShipRef, Strike};
+use crate::speed_mult::SpeedMult;
 
 impl World<'_> {
     /// The answer flag's readings in this world.
@@ -67,14 +68,16 @@ impl Traffic {
         }
     }
 
-    /// Eases every NPC's stray provocation by [`STRAY_EASE`] while it is
-    /// above none, to no lower than none, as `_HandleShip` does each frame
-    /// (@0x35374-0x353b2) after the collision passes and the shots. It is
-    /// never below none (every weight is none or more), so the original's
-    /// test that it is above none is the floor's.
-    pub fn ease_stray(&mut self) {
+    /// Eases every NPC's stray provocation by [`STRAY_EASE`] × the frame's
+    /// `gain` while it is above none, to no lower than none, as
+    /// `_HandleShip` does each frame (@0x35374-0x353b2, `_gSpeedMult`
+    /// @0x35384) after the collision passes and the shots: in doubles,
+    /// narrowed, its mask turning a NaN into none.
+    pub fn ease_stray(&mut self, gain: SpeedMult) {
         for npc in &mut self.npcs {
-            npc.stray = (npc.stray - STRAY_EASE).max(0.0);
+            if npc.stray > 0.0 {
+                npc.stray = gain.add_times(npc.stray, -STRAY_EASE).max(0.0);
+            }
         }
     }
 }
@@ -228,6 +231,27 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_stray_provocation_eases_a_quarter_to_0_and_at_none_holds() {
+        let half = SpeedMult::new(0.5);
+        let mut traffic = of(vec![
+            ship(1, NEUTRAL, AiType::Warship, 0.0, 0.0),
+            ship(2, NEUTRAL, AiType::Warship, 0.0, 0.0),
+        ]);
+        traffic.npcs[0].stray = 0.375;
+        traffic.npcs[1].stray = 0.0;
+        traffic.ease_stray(half);
+        assert_eq!(strays(&traffic), [0.125, 0.0]);
+        traffic.ease_stray(half);
+        assert_eq!(strays(&traffic), [0.0, 0.0], "floored at none");
+        traffic.npcs[0].stray = 1.0;
+        traffic.ease_stray(SpeedMult::ZERO);
+        assert_eq!(strays(&traffic), [1.0, 0.0], "no gain: no ease");
+        traffic.npcs[0].stray = f32::NAN;
+        traffic.ease_stray(half);
+        assert!(traffic.npcs[0].stray.is_nan(), "a NaN is not above none");
+    }
+
+    #[test]
     fn stray_provocation_eases_half_a_tick_to_0() {
         let mut traffic = of(vec![
             ship(1, NEUTRAL, AiType::Warship, 0.0, 0.0),
@@ -235,11 +259,11 @@ mod tests {
         ]);
         traffic.npcs[0].stray = 1.25;
         traffic.npcs[1].stray = 0.0;
-        traffic.ease_stray();
+        traffic.ease_stray(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(strays(&traffic), [0.75, 0.0]);
-        traffic.ease_stray();
+        traffic.ease_stray(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(strays(&traffic), [0.25, 0.0]);
-        traffic.ease_stray();
+        traffic.ease_stray(crate::speed_mult::SpeedMult::FULL);
         assert_eq!(strays(&traffic), [0.0, 0.0], "floored at none");
         assert_eq!(STRAY_EASE, 0.5);
     }

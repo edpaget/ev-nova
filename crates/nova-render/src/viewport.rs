@@ -207,11 +207,30 @@ impl Viewport {
     #[must_use]
     pub fn window_to_logical(&self, px: (f64, f64)) -> Option<Point> {
         let (rect, _) = self.content()?;
-        let (across, down) = self.axis_scales;
         let x = px.0 - f64::from(rect.x);
         let y = px.1 - f64::from(rect.y);
         let inside = (0.0..f64::from(rect.w)).contains(&x) && (0.0..f64::from(rect.h)).contains(&y);
-        inside.then(|| Point::new((x / f64::from(across)) as f32, (y / f64::from(down)) as f32))
+        inside
+            .then(|| self.window_to_logical_unbounded(px))
+            .flatten()
+    }
+
+    /// The logical point window pixel position `px` maps to by the same
+    /// scales and offset as [`Viewport::window_to_logical`], with no test
+    /// that it is inside the content: a pixel in a bar, or off the window,
+    /// maps past the logical space's edges. `None` only when the window
+    /// has no area. A drag that follows the pointer anywhere reads it, as
+    /// the original's map does (`_DoSystemMap`'s `_GetMouse` loop).
+    #[must_use]
+    pub fn window_to_logical_unbounded(&self, px: (f64, f64)) -> Option<Point> {
+        let (rect, _) = self.content()?;
+        let (across, down) = self.axis_scales;
+        let x = px.0 - f64::from(rect.x);
+        let y = px.1 - f64::from(rect.y);
+        Some(Point::new(
+            (x / f64::from(across)) as f32,
+            (y / f64::from(down)) as f32,
+        ))
     }
 }
 
@@ -362,6 +381,73 @@ mod tests {
     fn nothing_maps_in_a_zero_area_window() {
         let viewport = Viewport::new(LOGICAL, (0, 0), 1.0);
         assert_eq!(viewport.window_to_logical((0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn a_pillar_pixel_maps_past_the_side_edges_unbounded() {
+        let pillar = Viewport::new(LOGICAL, (1280, 768), 1.0);
+        assert_eq!(
+            pillar.window_to_logical_unbounded((28.0, 10.0)),
+            Some(Point::new(-100.0, 10.0))
+        );
+        assert_eq!(
+            pillar.window_to_logical_unbounded((1200.0, 10.0)),
+            Some(Point::new(1072.0, 10.0))
+        );
+    }
+
+    #[test]
+    fn a_letterbox_bar_pixel_maps_past_the_top_unbounded() {
+        let letter = Viewport::new(LOGICAL, (1024, 1024), 1.0);
+        assert_eq!(
+            letter.window_to_logical_unbounded((10.0, 28.0)),
+            Some(Point::new(10.0, -100.0))
+        );
+        assert_eq!(
+            letter.window_to_logical_unbounded((10.0, 1000.0)),
+            Some(Point::new(10.0, 872.0))
+        );
+    }
+
+    #[test]
+    fn an_off_window_pixel_maps_past_the_edges_unbounded() {
+        let viewport = Viewport::new(LOGICAL, (1024, 768), 1.0);
+        assert_eq!(
+            viewport.window_to_logical_unbounded((-40.0, 900.0)),
+            Some(Point::new(-40.0, 900.0))
+        );
+    }
+
+    #[test]
+    fn a_retina_window_divides_by_the_axis_scales_unbounded() {
+        let retina = Viewport::new(LOGICAL, (2560, 1536), 2.0);
+        assert_eq!(
+            retina.window_to_logical_unbounded((56.0, -20.0)),
+            Some(Point::new(-100.0, -10.0))
+        );
+        let wide = Viewport::for_shape(ViewShape::Widened, (1920, 1080), 1.0);
+        let (across, down) = wide.axis_scales().expect("scales");
+        assert_eq!(
+            wide.window_to_logical_unbounded((-f64::from(across) * 10.0, f64::from(down) * 800.0)),
+            Some(Point::new(-10.0, 800.0))
+        );
+    }
+
+    #[test]
+    fn nothing_maps_unbounded_in_a_zero_area_window() {
+        let viewport = Viewport::new(LOGICAL, (0, 0), 1.0);
+        assert_eq!(viewport.window_to_logical_unbounded((-5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn an_inside_pixel_maps_unbounded_as_it_maps_bounded() {
+        let pillar = Viewport::new(LOGICAL, (1280, 768), 1.0);
+        for px in [(128.0, 0.0), (640.5, 384.25), (1151.5, 767.5)] {
+            assert_eq!(
+                pillar.window_to_logical_unbounded(px),
+                pillar.window_to_logical(px)
+            );
+        }
     }
 
     #[test]

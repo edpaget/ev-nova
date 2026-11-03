@@ -66,18 +66,13 @@ pub struct StellarSpritePool {
 
 /// Where a sprite of `frame` (width, height) whose owner is at `owner` is
 /// placed while the player is at `player`: its top left's offset from
-/// the player, each axis truncated toward zero less half the frame's side,
-/// halved as an integer.
+/// the player by the standard rule
+/// ([`Placement::Standard`](nova_sim_base::sprite_place::Placement::Standard)),
+/// each axis truncated toward zero less half the frame's side, halved as
+/// an integer.
 #[must_use]
 pub fn offset(owner: Vec2, player: Vec2, frame: (u32, u32)) -> (i32, i32) {
-    // A screen offset is far within an `i32`, and the original truncates.
-    #[allow(clippy::cast_possible_truncation)]
-    let trunc = |delta: f32| delta.trunc() as i32;
-    let half = |side: u32| i32::try_from(side / 2).unwrap_or(i32::MAX);
-    (
-        trunc(owner.x - player.x) - half(frame.0),
-        trunc(owner.y - player.y) - half(frame.1),
-    )
+    nova_sim_base::sprite_place::Placement::Standard.top_left(owner - player, frame)
 }
 
 impl StellarSpritePool {
@@ -230,10 +225,13 @@ mod tests {
     }
 
     #[test]
-    fn an_offset_truncates_toward_zero_and_halves_the_frame_as_integers() {
-        let player = Vec2::new(10.0, 10.0);
-        assert_eq!(offset(Vec2::new(110.7, 9.5), player, (31, 20)), (85, -10));
-        assert_eq!(offset(Vec2::new(9.5, 10.0), player, (1, 3)), (0, -1));
-        assert_eq!(offset(Vec2::new(-90.9, 210.9), player, (0, 0)), (-100, 200));
+    fn an_offset_is_the_standard_rule_of_the_owners_offset_from_the_player() {
+        use nova_sim_base::sprite_place::Placement;
+        let (owner, player) = (Vec2::new(110.7, 9.5), Vec2::new(10.0, 10.0));
+        assert_eq!(
+            offset(owner, player, (31, 20)),
+            Placement::Standard.top_left(owner - player, (31, 20))
+        );
+        assert_eq!(offset(owner, player, (31, 20)), (85, -10));
     }
 }

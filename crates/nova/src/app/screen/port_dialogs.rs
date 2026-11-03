@@ -271,18 +271,25 @@ impl MissionInfoHolder for MissionDialogs {
 }
 
 /// An Abort `holder`'s mission info screen asked for frees the slot
-/// through `flight`, and the screen shows the missions left, closing once
-/// nothing is left; a refusal (greyed) changes nothing. Flight is needed
-/// only once an Abort was asked for.
+/// through `flight`, and the screen shows the missions left as the
+/// `mission_info_rebuild` rule reads them
+/// ([`FlightView::mission_info_after_abort`]), closing once nothing is
+/// left. A refused abort leaves the screen as it is, as
+/// `_DoMissionInfoDialog` skips the rebuild (@0x9e583-0x9e587). Flight is
+/// needed only once an Abort was asked for. After one that went through,
+/// whether any shown mission is still listed, for an offer under the
+/// screen; `None` when nothing changed.
 pub(super) fn abort_and_refresh(
     holder: &mut impl MissionInfoHolder,
     flight: Option<&mut FlightView<Rc<GameData>>>,
-) {
-    if let Some(slot) = holder.take_abort() {
-        let flight = flight.expect(ENTERED);
-        let _ = flight.abort_mission(slot);
-        holder.set_info(flight.mission_info());
-    }
+) -> Option<bool> {
+    let slot = holder.take_abort()?;
+    let flight = flight.expect(ENTERED);
+    flight.abort_mission(slot).ok()?;
+    let info = flight.mission_info_after_abort();
+    let listed = !info.rows.is_empty();
+    holder.set_info(info);
+    Some(listed)
 }
 
 /// The text `holder`'s mission info screen has shown selected, loaded

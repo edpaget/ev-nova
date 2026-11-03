@@ -92,6 +92,35 @@ fn each_port_screens_map_opens_in_silence() {
 }
 
 #[test]
+fn a_held_move_outside_the_game_drags_a_port_screens_map_as_a_move_inside() {
+    let open = || {
+        let mut view = faked_docked();
+        view.open_port_screen_map(PortScreen::Spaceport);
+        view
+    };
+    let (mut outside, mut inside) = (open(), open());
+    let start = outside.course_map().place().expect("in flight").scroll();
+    let empty = Point::new(250.0, 150.0);
+    for view in [&mut outside, &mut inside] {
+        view.port_map_input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: empty,
+        });
+    }
+    outside.port_map_input(&Input::PointerLeft);
+    let past = Point::new(-30.0, 800.0);
+    outside.port_map_input(&Input::PointerMovedOutside(past));
+    inside.port_map_input(&Input::PointerMoved(past));
+    let scroll = outside.course_map().place().expect("in flight").scroll();
+    assert_ne!(scroll, start, "dragged past the edge");
+    assert_eq!(
+        scroll,
+        inside.course_map().place().expect("in flight").scroll()
+    );
+}
+
+#[test]
 fn each_port_screens_map_closes_in_silence() {
     for screen in SCREENS {
         let mut view = faked_docked();

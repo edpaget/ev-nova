@@ -84,7 +84,8 @@ impl Session {
             self.ship.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        let Some(flag) = self.ship.latches.sabotage.tick(dying, chance) else {
+        let gain = self.speed_mult();
+        let Some(flag) = self.ship.latches.sabotage.tick(dying, gain, chance) else {
             return;
         };
         self.out.sounds.push(SimSound::OnboardExplosion);
@@ -301,6 +302,8 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut Draws::of(&[]))
             .expect("takes off");
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         fight(&mut session, &[10]);
         fight(&mut session, &[]);
         assert_eq!(
@@ -763,5 +766,15 @@ pub(super) mod tests {
         fight(&mut session, &[]);
         assert_eq!(session.pilot.outfits.get(&OutfitId(BOMB)), None, "gone off");
         assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn at_half_gain_the_clock_counts_half_a_frame_a_pass() {
+        let catalog = sabotaged();
+        let mut session = flown(&catalog, &[(KILL, 1)]);
+        session.at_gain(crate::SpeedMult::new(0.5));
+        fight(&mut session, &[50]);
+        fight(&mut session, &[]);
+        assert_eq!(session.ship.latches.sabotage.counter(), 51.0);
     }
 }

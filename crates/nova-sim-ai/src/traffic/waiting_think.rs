@@ -109,6 +109,7 @@ impl Npc {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::ai::Goal;
@@ -151,20 +152,20 @@ mod tests {
     fn a_ship_flying_held_coasting_or_entering_decides() {
         for mode in [
             Mode::Flying,
-            Mode::HeldAtGate { ticks_left: 3 },
-            Mode::Coasting { ticks_left: 3 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
+            Mode::Coasting { ticks_left: 3.0 },
             Mode::EnteringGate {
                 gate: GATE,
-                ticks_left: 3,
+                ticks_left: 3.0,
             },
         ] {
             assert!(decides_in(mode), "{mode:?}");
         }
         for mode in [
             Mode::JumpingIn { tick: 3 },
-            Mode::Emerging { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 3 },
-            Mode::Adrift { ticks_left: 3 },
+            Mode::Adrift { ticks_left: 3.0 },
         ] {
             assert!(!decides_in(mode), "{mode:?}: goal 8, 0x15 or a pod");
         }
@@ -174,26 +175,26 @@ mod tests {
     fn a_sub_written_over_a_gate_entry_ends_it_and_drops_the_kept_pursuit() {
         let mut entering = in_mode(Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 7,
+            ticks_left: 7.0,
         });
         entering.takes_sub_write();
-        assert_eq!(entering.mode, Mode::Coasting { ticks_left: 7 });
+        assert_eq!(entering.mode, Mode::Coasting { ticks_left: 7.0 });
         assert_eq!(entering.pursuit, Pursuit::default());
-        let mut coasting = in_mode(Mode::Coasting { ticks_left: 7 });
+        let mut coasting = in_mode(Mode::Coasting { ticks_left: 7.0 });
         coasting.takes_sub_write();
-        assert_eq!(coasting.mode, Mode::Coasting { ticks_left: 7 });
+        assert_eq!(coasting.mode, Mode::Coasting { ticks_left: 7.0 });
         assert_eq!(coasting.pursuit, Pursuit::default());
     }
 
     #[test]
     fn the_count_wait_over_a_coasting_entering_or_held_ships_wait_is_its_only_wait() {
         for mode in [
-            Mode::Coasting { ticks_left: 9 },
+            Mode::Coasting { ticks_left: 9.0 },
             Mode::EnteringGate {
                 gate: GATE,
-                ticks_left: 9,
+                ticks_left: 9.0,
             },
-            Mode::HeldAtGate { ticks_left: 9 },
+            Mode::HeldAtGate { ticks_left: 9.0 },
             Mode::Flying,
         ] {
             for (burst, owed) in [(RuleSource::Engine, Some(30.0)), (RuleSource::Bible, None)] {
@@ -217,7 +218,7 @@ mod tests {
         // The entry's sub 0 (@0x8c6fe) is the count wait's own.
         let mut entering = in_mode(Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 9,
+            ticks_left: 9.0,
         });
         entering.takes_count_wait(RuleSource::Engine);
         assert_eq!(

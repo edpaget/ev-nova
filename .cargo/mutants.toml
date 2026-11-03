@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # An inertialess plunderer's matched speed floored at none: `<=` also
+    # sets a speed of exactly none to 0.0. A 0.0 stays 0.0; only a -0.0,
+    # which needs a -0.0 speed already and no gain or acceleration, would
+    # become 0.0, and every speed the engine writes is 0.0 or above.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:[0-9]+:[0-9]+: replace < with <= in floored$",
     # A button exactly two caps wide: its overlapping caps meet, and
     # `three_slice` gives the same two caps with no middle.
     "nova-view/src/ui/button\\.rs:[0-9]+:[0-9]+: replace < with <= in Button::draw$",
@@ -707,7 +712,51 @@ exclude_re = [
     # contour as closed whether or not the path closes it, so dropping the
     # close changes no coverage.
     "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
+    # A run-length token's op shifted into the top byte and its count
+    # masked to the 24 below: their bits are disjoint, so `^` packs the
+    # same word.
+    "nova-data/src/graphics/rle_words\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in token$",
+    "nova-sim-base/src/fixture/rle\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in token$",
+    # `_SWRLECollision`'s overlap test, kept as the original's early
+    # return: over an empty or inverted overlap neither walk can read both
+    # sides drawing (no row, or the first's width at or below 0 holds the
+    # side ahead still), so loosening it touches nothing more.
+    "nova-sim-base/src/sprite_mask\\.rs:[0-9]+:[0-9]+: replace (&& with \\|\\||< with <=) in MaskRect::overlap$",
+    # The merge's end of a row once either side read the next line start
+    # (@0xc0e79-0xc0e88): that side stands at the width, not drawing, so
+    # going on only walks the other to the width; the walk of each later
+    # row starts from its line start either way.
+    "nova-sim-base/src/sprite_mask\\.rs:[0-9]+:[0-9]+: replace \\|\\| with && in original_walk$",
+    # The page keys' gates (@0x51ff4, @0x52095, @0x98ef0, @0x98f43): with
+    # "can scroll up" clear the text is at its start, and with "can scroll
+    # down" clear it is at its end (it fits, End cleared it, or a try
+    # failed there), so the scroll the open gate lets through moves
+    # nothing, keeps a wheel's leftover and leaves both flags as they were.
+    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_key$",
+    # The trait's default, already an empty list.
+    "nova-view/src/spaceport/modal\\.rs:[0-9]+:[0-9]+: replace Modal::take_unclaimed -> Vec<Input> with vec!\\[\\]$",
     # Whether a follower's berth is below its parent's: a berth holds one
     # ship and a ship is never its own follower, so the two never tie.
     "nova-sim-ai/src/traffic/fleet_formation\\.rs:[0-9]+:[0-9]+: replace < with <= in written$",
+    # A hit's cut at exactly 20.0 writes 20.0 again, and a NaN fails both
+    # compares, so `>=` cuts to the same wait.
+    "nova-sim-ai/src/traffic/autopilot\\.rs:[0-9]+:[0-9]+: replace > with >= in cut$",
+    # A stray of exactly none eased is `max(-0.5 × g, 0)`, none again, and a
+    # NaN fails both compares, so `>=` eases to the same stray.
+    "nova-sim-ai/src/traffic/weigh\\.rs:[0-9]+:[0-9]+: replace > with >= in Traffic::ease_stray$",
+    # A fly-in's clamp at exactly 0.0 writes 0.0 again: the step that
+    # lands on 0 (`e + −60 × g`) gives +0.0, never −0.0, and a NaN fails
+    # both compares, so `<=` clamps to the same expand.
+    "nova-sim-ai/src/brackets\\.rs:[0-9]+:[0-9]+: replace < with <= in FlyIn::step$",
+    # QuickDraw's stretch. Each is pinned by its column, since the same
+    # description names other comparisons in the function that are caught.
+    # - `rows`' `src > dst` (exact shrink): at `src == dst` either start,
+    #   `-(src - 1)` or `-(src >> 1)`, maps each row to itself.
+    # - `rows`' `next < src`: never what ends a fetch. Before the fetch for
+    #   destination row j the error needs `k > (j·s − e0) / d` rows read, and
+    #   `j·s − e0 ≤ dst·s − 1 < src·d`, so the break comes by `k ≤ src`.
+    # - `columns`' `src < dst`: `src == dst` returns the identity above it.
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
+    "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
 ]

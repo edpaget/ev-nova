@@ -37,6 +37,7 @@ impl Space {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::super::tests::{FIRE, armed, facing_an_npc};
     use super::super::*;
@@ -226,9 +227,14 @@ mod tests {
         session.hold_trigger(FIRE);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.shots().len(), 1);
-        assert_eq!(session.shots()[0].spin_timer, 2, "the slot's leftover");
+        let visited = crate::combat::spin_timer::pass(2.0, 9, crate::SpeedMult::FULL).0;
+        assert_eq!(
+            session.shots()[0].spin_timer,
+            visited,
+            "the slot's leftover, run its first visit"
+        );
         let left = session.slot_sprites().shots.spin(0);
-        assert!(left >= 2, "{left}");
+        assert!(left >= 2.0, "{left}");
         let next = Session::start(&catalog)
             .expect("starts")
             .with_slot_sprites(session.slot_sprites().clone());

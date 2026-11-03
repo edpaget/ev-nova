@@ -23,6 +23,20 @@
 //! - The box is scaled down to fit the window's width, then its height,
 //!   keeping its shape, each side truncated (@0x55cb8-0x55d5d), and centred
 //!   in it by `_CenterRect` (@0x55d76, @0xc93dd), each half truncated.
+//! - **Servicing.** The movie runs on its own clock from `StartMovie`
+//!   (@0x55ddb), which nothing in the loop pauses, but its frame is shown
+//!   (`MoviesTask` @0x55e14) only on the loop's first pass and then once
+//!   the tick count is more than 6 past the last service's (@0x55df3-0x55dfd):
+//!   7 ticks apart, about 8.6 frames a second whatever the movie's rate,
+//!   the frames due in between skipped. The end (`IsMovieDone` @0x55de6)
+//!   and the skip keys are read on every pass, so neither waits for a
+//!   service, and the tick the movie ends on shows nothing new
+//!   ([`MoviePlayer::advance`] every tick, [`MoviePlayer::present`] at a
+//!   service). Left out: in the background the service's `WaitNextEvent`
+//!   sleeps 30 ticks (@0x55e19-0x55e4e), unreachable while the router
+//!   pauses the movie away (rdm:phase/play-feel-6-followups/phase-1-synchronous-loops-before-switch-out);
+//!   and the first gap may be 6 or 7 ticks as `StartMovie` fell mid-tick,
+//!   which the stage, counting from its first playing tick, can't see.
 //! - **The loop** (@0x55de0-0x55e9f) ends as the movie ends, or when the
 //!   mouse button, Space, Return or keypad Enter is down (`Button`,
 //!   `KeyCheck` 0x31, 0x24 and 0x4c): the movie stops and the queued mouse
@@ -67,17 +81,23 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, MouseButton};
 use crate::system::camera::VIEW_SIZE;
+use crate::time::sixtieths;
 
-/// A movie file's frames: opened, decoded and drawn (`NewMovieFromDataRef`,
-/// `MoviesTask`). It decides nothing of how the original plays a movie.
+/// A movie file's frames: opened (`NewMovieFromDataRef`), clocked
+/// (`IsMovieDone`), shown (`MoviesTask`) and drawn. It decides nothing of how the original plays a movie.
 pub trait MoviePlayer {
     /// Opens and starts `file`, a bare file name: its frames' natural size
     /// in pixels, or `None` when it cannot play (no such file, or nothing
     /// to decode it).
     fn start(&self, file: &str) -> Option<(u32, u32)>;
-    /// Moves the movie on by `dt`: whether it is still playing
-    /// (`IsMovieDone`).
+    /// Moves the movie's clock on by `dt`: whether it is still playing
+    /// (`IsMovieDone`). It changes nothing drawn: the frame shown stays
+    /// until [`MoviePlayer::present`].
     fn advance(&self, dt: Duration) -> bool;
+    /// Shows the frame due at the movie's clock now, skipping any before it
+    /// (`MoviesTask`); nothing before a start, after a stop or once the
+    /// movie has ended.
+    fn present(&self);
     /// Stops the movie and lets it go (`StopMovie`, `DisposeMovie`).
     fn stop(&self);
     /// Draws the current frame stretched into `rect`, through
@@ -222,6 +242,38 @@ impl Movies {
 /// `_FadeScreenOut` and `_FadeScreenIn` (@0x5399, @0x542d).
 pub const MOVIE_FADE_FOR: Duration = DEATH_FADE_FOR;
 
+/// When `_PlayQTMovie`'s loop services the running movie with
+/// `MoviesTask` (@0x55dd6-0x55e14): at once on its first pass (`%ebx`, the
+/// tick of the last service, starts at 0), then only once the tick count
+/// is more than 6 past the last service's, so 7 ticks apart in its busy
+/// loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Service {
+    /// The display time since the movie started playing.
+    elapsed: Duration,
+    /// The 60 Hz tick of the last service, or none before the first.
+    last: Option<u128>,
+}
+
+impl Service {
+    /// How many ticks a service must pass, `TickCount > last + 6` (`jbe`
+    /// @0x55dfd).
+    const GAP: u128 = 6;
+
+    /// Moves on by `dt`: whether the movie is serviced now, which notes
+    /// it. Time is counted in whole Mac ticks ([`sixtieths`]), whose
+    /// truncated period counts seven 60 Hz display frames as seven ticks.
+    fn passed(&mut self, dt: Duration) -> bool {
+        self.elapsed = self.elapsed.saturating_add(dt);
+        let ticks = sixtieths(self.elapsed);
+        let due = self.last.is_none_or(|last| ticks > last + Self::GAP);
+        if due {
+            self.last = Some(ticks);
+        }
+        due
+    }
+}
+
 /// Where a movie stands.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
@@ -231,8 +283,8 @@ enum Phase {
     FadingOut(ScreenFade),
     /// Cinematic: the screen fading in on the black window.
     FadingIn(ScreenFade),
-    /// The movie running.
-    Playing,
+    /// The movie running, serviced as [`Service`] says.
+    Playing(Service),
     /// Cinematic: the stopped movie fading out to black.
     ClosingOut(ScreenFade),
     /// Cinematic: the screen fading in on what is beneath.
@@ -408,7 +460,7 @@ impl MovieStage {
         self.phase = match (self.movie.cinematic, faded) {
             (true, false) => Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR)),
             (true, true) => Phase::FadingIn(ScreenFade::from_black(MOVIE_FADE_FOR)),
-            (false, _) => Phase::Playing,
+            (false, _) => Phase::Playing(Service::default()),
         };
     }
 
@@ -430,7 +482,7 @@ impl MovieStage {
     pub fn hides_cursor(&self) -> bool {
         matches!(
             self.phase,
-            Phase::FadingIn(_) | Phase::Playing | Phase::ClosingOut(_)
+            Phase::FadingIn(_) | Phase::Playing(_) | Phase::ClosingOut(_)
         ) && self.movie.cinematic
     }
 
@@ -466,12 +518,15 @@ impl MovieStage {
             Phase::FadingIn(fade) => {
                 fade.advance(dt);
                 if fade.done() {
-                    self.phase = Phase::Playing;
+                    self.phase = Phase::Playing(Service::default());
                 }
             }
-            Phase::Playing => {
+            Phase::Playing(service) => {
+                let due = service.passed(dt);
                 if !self.player.advance(dt) {
                     self.close();
+                } else if due {
+                    self.player.present();
                 }
             }
             Phase::ClosingOut(fade) => {
@@ -497,7 +552,7 @@ impl MovieStage {
         if self.phase == Phase::Ended {
             return;
         }
-        if self.phase == Phase::Playing && skips_a_movie(input) {
+        if matches!(self.phase, Phase::Playing(_)) && skips_a_movie(input) {
             self.replay.clear();
             self.close();
             return;
@@ -542,7 +597,7 @@ impl MovieStage {
                 fill_rect(list, whole, Color::BLACK);
                 fade.draw_over(list, whole);
             }
-            Phase::Playing => self.draw_movie(list),
+            Phase::Playing(_) => self.draw_movie(list),
             Phase::ClosingOut(fade) => {
                 self.draw_movie(list);
                 fade.draw_over(list, whole);
@@ -565,8 +620,8 @@ pub mod fixture {
     //! [`MockMoviePlayer`] plays movies of a set size for a set number of
     //! advances, or refuses to start one, and logs every call. It draws
     //! through [`DrawCommand::MovieFrame`] as a real player does, from a
-    //! [`MovieScreen`] of its own: a 1x1 frame of [`FRAME`], a new one each
-    //! advance. [`check_contract`] runs against it here and against
+    //! [`MovieScreen`] of its own: a 1x1 frame of [`FRAME`], a new one as
+    //! it starts and each present while it runs. [`check_contract`] runs against it here and against
     //! `nova`'s `NoMoviePlayer`, which plays nothing, and the decoder's
     //! player. The contract decodes nothing: it says how a player that
     //! can't start behaves, that one that starts draws its frame through
@@ -596,6 +651,8 @@ pub mod fixture {
         Start(String),
         /// `advance`.
         Advance,
+        /// `present`.
+        Present,
         /// `stop`.
         Stop,
         /// `draw_frame(rect)`.
@@ -611,6 +668,8 @@ pub mod fixture {
         size: Option<(u32, u32)>,
         advances: u32,
         advanced: RefCell<u32>,
+        /// Whether a movie is started, not stopped and not ended.
+        running: RefCell<bool>,
         screen: RefCell<MovieScreen>,
         pub log: RefCell<Vec<Call>>,
         /// How far each advance went, in order.
@@ -626,6 +685,7 @@ pub mod fixture {
                 size: Some(size),
                 advances,
                 advanced: RefCell::new(0),
+                running: RefCell::new(false),
                 screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
                 steps: RefCell::new(Vec::new()),
@@ -639,19 +699,20 @@ pub mod fixture {
                 size: None,
                 advances: 0,
                 advanced: RefCell::new(0),
+                running: RefCell::new(false),
                 screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
                 steps: RefCell::new(Vec::new()),
             })
         }
 
-        /// The calls, `Draw`s left out.
+        /// The calls, `Draw`s and `Present`s left out.
         #[must_use]
         pub fn calls(&self) -> Vec<Call> {
             self.log
                 .borrow()
                 .iter()
-                .filter(|call| !matches!(call, Call::Draw(_)))
+                .filter(|call| !matches!(call, Call::Draw(_) | Call::Present))
                 .cloned()
                 .collect()
         }
@@ -660,6 +721,23 @@ pub mod fixture {
         #[must_use]
         pub fn advanced_by(&self) -> Vec<Duration> {
             self.steps.borrow().clone()
+        }
+
+        /// For each `present`, how many advances came before it since the
+        /// last start: the tick of the movie's it fell on, counting from 1.
+        #[must_use]
+        pub fn presented(&self) -> Vec<usize> {
+            let mut advances = 0;
+            let mut presented = Vec::new();
+            for call in self.log.borrow().iter() {
+                match call {
+                    Call::Start(_) => advances = 0,
+                    Call::Advance => advances += 1,
+                    Call::Present => presented.push(advances),
+                    Call::Stop | Call::Draw(_) => {}
+                }
+            }
+            presented
         }
 
         /// The rects of the frames drawn.
@@ -688,6 +766,7 @@ pub mod fixture {
         fn start(&self, file: &str) -> Option<(u32, u32)> {
             self.log.borrow_mut().push(Call::Start(file.to_owned()));
             *self.advanced.borrow_mut() = 0;
+            *self.running.borrow_mut() = self.size.is_some();
             if self.size.is_some() {
                 self.show_next();
             }
@@ -697,16 +776,26 @@ pub mod fixture {
         fn advance(&self, dt: Duration) -> bool {
             self.log.borrow_mut().push(Call::Advance);
             self.steps.borrow_mut().push(dt);
-            if self.size.is_some() {
-                self.show_next();
-            }
             let mut advanced = self.advanced.borrow_mut();
             *advanced += 1;
-            *advanced < self.advances
+            let playing = *advanced < self.advances;
+            if !playing {
+                *self.running.borrow_mut() = false;
+            }
+            playing
+        }
+
+        /// Shows a new frame while a movie runs.
+        fn present(&self) {
+            self.log.borrow_mut().push(Call::Present);
+            if *self.running.borrow() {
+                self.show_next();
+            }
         }
 
         fn stop(&self) {
             self.log.borrow_mut().push(Call::Stop);
+            *self.running.borrow_mut() = false;
         }
 
         /// Draws the frame shown last stretched into `rect`
@@ -722,14 +811,18 @@ pub mod fixture {
 
     /// Checks the port's contract against `player`, starting `file`:
     ///
-    /// 1. Stopping before anything started does nothing harmful.
+    /// 1. Stopping or presenting before `file` started does nothing
+    ///    harmful, and shows no new frame (one left by a movie played
+    ///    before may still draw).
     /// 2. If `file` can't start, advancing says it isn't playing, and
     ///    drawing a frame draws nothing.
     /// 3. If it starts, its size is not zero either way; drawing a frame
     ///    then draws at least one [`DrawCommand::MovieFrame`], each inside
-    ///    the rect given; advancing says
-    ///    it's playing until, within [`MAX_ADVANCES`], it says it isn't,
-    ///    and it stays that way; stopping it then is harmless; and
+    ///    the rect given; advancing alone leaves the frame drawn as it
+    ///    was, and presenting after it still draws inside the rect;
+    ///    advancing says it's playing until, within [`MAX_ADVANCES`], it
+    ///    says it isn't, and it stays that way; stopping it then is
+    ///    harmless, and presenting after the stop shows no new frame; and
     ///    starting it again plays it as long again.
     ///
     /// # Errors
@@ -738,6 +831,11 @@ pub mod fixture {
     pub fn check_contract(player: &impl MoviePlayer, file: &str) -> Result<(), String> {
         player.stop();
         let rect = Bounds::at(Point::new(0.0, 0.0), 64.0, 48.0);
+        let before = shown(player, rect);
+        player.present();
+        if shown(player, rect) != before {
+            return Err(format!("a present before {file} started showed a frame"));
+        }
         let Some((width, height)) = player.start(file) else {
             if player.advance(STEP) {
                 return Err(format!("{file} didn't start, but advancing says it plays"));
@@ -754,13 +852,31 @@ pub mod fixture {
             return Err(format!("{file} started at a size of {width} x {height}"));
         }
         drew_a_frame(player, file, rect)?;
-        let length = played(player, file)?;
+        let before = shown(player, rect);
+        let playing = player.advance(STEP);
+        if shown(player, rect) != before {
+            return Err(format!("{file} showed a new frame on an advance alone"));
+        }
+        player.present();
+        drew_a_frame(player, file, rect)?;
+        let length = if playing {
+            played(player, file)? + 1
+        } else {
+            1
+        };
         for _ in 0..3 {
             if player.advance(STEP) {
                 return Err(format!("{file} played again after it ended"));
             }
         }
         player.stop();
+        let stopped = shown(player, rect);
+        player.present();
+        if shown(player, rect) != stopped {
+            return Err(format!(
+                "{file} showed a new frame on a present after its stop"
+            ));
+        }
         if player.start(file).is_none() {
             return Err(format!("{file} didn't start a second time"));
         }
@@ -802,6 +918,16 @@ pub mod fixture {
         }
     }
 
+    /// The generation of the first frame `player` draws into `rect`.
+    fn shown(player: &impl MoviePlayer, rect: Bounds) -> Option<u64> {
+        let mut list = DrawList::new();
+        player.draw_frame(rect, &mut list);
+        list.iter().find_map(|command| match command {
+            DrawCommand::MovieFrame { frame, .. } => Some(frame.generation()),
+            _ => None,
+        })
+    }
+
     /// How many advances the started movie plays for, the last included.
     fn played(player: &impl MoviePlayer, file: &str) -> Result<u32, String> {
         for advances in 1..=MAX_ADVANCES {
@@ -833,7 +959,7 @@ pub mod fixture {
         }
 
         #[test]
-        fn the_mocks_frame_moves_on_with_each_advance() {
+        fn the_mocks_frame_moves_on_with_each_present() {
             let player = MockMoviePlayer::playing((640, 480), 5);
             let rect = Bounds::at(Point::new(1.0, 2.0), 64.0, 48.0);
             assert_eq!(frames(&player, rect), [], "nothing before it starts");
@@ -842,6 +968,7 @@ pub mod fixture {
             assert_eq!(area, rect);
             assert_eq!(first.image().pixels(), [FRAME.r, FRAME.g, FRAME.b, FRAME.a]);
             player.advance(STEP);
+            player.present();
             let [(second, _)] = frames(&player, rect).try_into().expect("one frame");
             assert_eq!(second.stream(), first.stream());
             assert_ne!(second.generation(), first.generation());
@@ -849,6 +976,58 @@ pub mod fixture {
             let [(stopped, _)] = frames(&player, rect).try_into().expect("one frame");
             assert_eq!(stopped, second, "the stopped movie's last frame stays");
             assert_eq!(player.drawn(), [rect; 4], "every draw logged, drawn or not");
+        }
+
+        #[test]
+        fn an_advance_alone_keeps_the_mocks_frame() {
+            let player = MockMoviePlayer::playing((640, 480), 5);
+            let rect = Bounds::at(Point::new(1.0, 2.0), 64.0, 48.0);
+            player.start("Race.mov");
+            let [(before, _)] = frames(&player, rect).try_into().expect("one frame");
+            player.advance(STEP);
+            let [(after, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(after.generation(), before.generation());
+        }
+
+        #[test]
+        fn the_mock_presents_nothing_new_unless_running_and_logs_each_present() {
+            let player = MockMoviePlayer::playing((640, 480), 2);
+            let rect = Bounds::at(Point::new(1.0, 2.0), 64.0, 48.0);
+            player.present();
+            assert_eq!(frames(&player, rect), [], "nothing before a start");
+            player.start("Race.mov");
+            player.advance(STEP);
+            player.present();
+            let [(shown, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert!(!player.advance(STEP), "ended");
+            player.present();
+            let [(ended, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(ended.generation(), shown.generation(), "nothing once ended");
+            player.start("Race.mov");
+            player.stop();
+            player.present();
+            let [(stopped, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_ne!(
+                stopped.generation(),
+                shown.generation(),
+                "the restart showed one"
+            );
+            player.present();
+            let [(still, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(
+                still.generation(),
+                stopped.generation(),
+                "nothing after a stop"
+            );
+            assert_eq!(
+                player.presented(),
+                [0, 1, 2, 0, 0],
+                "advances since the start"
+            );
+            assert!(
+                !player.calls().contains(&Call::Present),
+                "calls leave them out"
+            );
         }
 
         #[test]
@@ -890,6 +1069,9 @@ pub mod fixture {
             ShortensTheSecondPlay,
             DrawsNoFrame,
             DrawsOutsideRect,
+            ShowsOnAdvance,
+            PresentsBeforeStart,
+            PresentsAfterStop,
         }
 
         struct Broken {
@@ -912,6 +1094,9 @@ pub mod fixture {
 
             fn advance(&self, dt: Duration) -> bool {
                 let playing = self.inner.advance(dt);
+                if matches!(self.flaw, Flaw::ShowsOnAdvance) {
+                    self.inner.show_next();
+                }
                 if !playing {
                     self.ended.set(self.ended.get() + 1);
                 }
@@ -923,13 +1108,23 @@ pub mod fixture {
                 }
             }
 
+            fn present(&self) {
+                match self.flaw {
+                    Flaw::PresentsBeforeStart => self.inner.show_next(),
+                    Flaw::PresentsAfterStop if self.starts.get() > 0 => self.inner.show_next(),
+                    _ => self.inner.present(),
+                }
+            }
+
             fn stop(&self) {
                 self.inner.stop();
             }
 
             fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
                 match self.flaw {
-                    Flaw::DrawsWithoutStarting => fill_rect(list, rect, FRAME),
+                    Flaw::DrawsWithoutStarting if self.starts.get() > 0 => {
+                        fill_rect(list, rect, FRAME);
+                    }
                     Flaw::DrawsNoFrame => {}
                     Flaw::DrawsOutsideRect => {
                         let mut drawn = DrawList::new();
@@ -980,6 +1175,18 @@ pub mod fixture {
                 (playing(), Flaw::ShortensTheSecondPlay, "a second start"),
                 (playing(), Flaw::DrawsNoFrame, "drew no frame"),
                 (playing(), Flaw::DrawsOutsideRect, "outside its rect"),
+                (playing(), Flaw::ShowsOnAdvance, "on an advance alone"),
+                (
+                    playing(),
+                    Flaw::PresentsBeforeStart,
+                    "before Race.mov started",
+                ),
+                (
+                    MockMoviePlayer::refusing(),
+                    Flaw::PresentsBeforeStart,
+                    "before Race.mov started",
+                ),
+                (playing(), Flaw::PresentsAfterStop, "after its stop"),
             ] {
                 let error = broken(inner, flaw);
                 assert!(error.contains(clause), "{clause}: {error}");
@@ -1360,6 +1567,109 @@ mod tests {
                 Call::Stop,
             ]
         );
+    }
+
+    /// One display frame at 60 Hz, rounded up and down.
+    const SIXTIETHS: [Duration; 2] = [
+        Duration::from_nanos(16_666_667),
+        Duration::from_nanos(16_666_666),
+    ];
+
+    #[test]
+    fn a_movies_frames_update_every_seventh_tick_at_sixty_hertz() {
+        for frame in SIXTIETHS {
+            let player = MockMoviePlayer::playing((160, 120), 100);
+            let mut stage = staged(&player, 0);
+            stage.begin();
+            for _ in 0..50 {
+                stage.tick(frame);
+            }
+            let presented = player.presented();
+            assert_eq!(
+                presented,
+                [1, 8, 15, 22, 29, 36, 43, 50],
+                "TickCount > last + 6 (@0x55df3-0x55dfd), {frame:?}"
+            );
+            assert!(
+                presented.windows(2).all(|pair| pair[1] - pair[0] >= 7),
+                "never sooner than 6 ticks apart"
+            );
+        }
+    }
+
+    #[test]
+    fn display_frames_shorter_than_a_tick_count_whole_ticks_passed() {
+        let player = MockMoviePlayer::playing((160, 120), 100);
+        let mut stage = staged(&player, 0);
+        stage.begin();
+        for _ in 0..25 {
+            stage.tick(Duration::from_millis(10));
+        }
+        assert_eq!(
+            player.presented(),
+            [1, 12, 24],
+            "0.6 ticks a frame: ticks 0, 7 and 14, rounded down"
+        );
+    }
+
+    #[test]
+    fn the_clock_runs_between_services() {
+        let player = MockMoviePlayer::playing((160, 120), 100);
+        let mut stage = staged(&player, 0);
+        stage.begin();
+        for _ in 0..10 {
+            stage.tick(SIXTIETHS[0]);
+        }
+        assert_eq!(player.advanced_by(), [SIXTIETHS[0]; 10], "every tick");
+    }
+
+    #[test]
+    fn a_movie_ends_on_the_tick_its_clock_does_not_at_the_next_service() {
+        let player = MockMoviePlayer::playing((160, 120), 4);
+        let mut stage = staged(&player, 0);
+        stage.begin();
+        for _ in 0..3 {
+            stage.tick(SIXTIETHS[0]);
+        }
+        assert!(!stage.ended());
+        stage.tick(SIXTIETHS[0]);
+        assert!(stage.ended(), "IsMovieDone on every pass (@0x55de6)");
+        assert_eq!(player.calls().last(), Some(&Call::Stop));
+        assert_eq!(player.presented(), [1], "none on the ending tick");
+    }
+
+    #[test]
+    fn coarse_display_frames_service_only_once_more_than_six_ticks_passed() {
+        let player = MockMoviePlayer::playing((160, 120), 100);
+        let mut stage = staged(&player, 0);
+        stage.begin();
+        for _ in 0..6 {
+            stage.tick(TICK);
+        }
+        assert_eq!(player.presented(), [1, 3, 5], "12 <= 6 + 6 waits (jbe)");
+    }
+
+    #[test]
+    fn the_first_playing_tick_presents_at_once_and_no_fade_presents() {
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut stage = staged(&player, 0x0004);
+        stage.begin();
+        run(&mut stage, MOVIE_FADE_FOR * 2);
+        assert_eq!(
+            player.presented(),
+            Vec::<usize>::new(),
+            "nothing during the fades"
+        );
+        stage.tick(SIXTIETHS[0]);
+        assert_eq!(
+            player.presented(),
+            [1],
+            "%ebx = 0 (@0x55dd6) serves at once"
+        );
+        stage.tick(SIXTIETHS[0]);
+        run(&mut stage, MOVIE_FADE_FOR * 2);
+        assert!(stage.ended());
+        assert_eq!(player.presented(), [1], "nothing while it closes");
     }
 
     #[test]

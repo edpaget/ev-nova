@@ -549,8 +549,8 @@ mod tests {
             holding.ai_wait = ai_wait;
             holding
         };
-        let holding = session.space.traffic.add_npc_at(holder(50), 1);
-        let thinking = session.space.traffic.add_npc_at(holder(0), 2);
+        let holding = session.space.traffic.add_npc_at(holder(50.0), 1);
+        let thinking = session.space.traffic.add_npc_at(holder(0.0), 2);
         session.space.traffic.remove_destroyed(wreck);
         let script = Scripted {
             carrier,
@@ -1277,7 +1277,7 @@ mod tests {
     fn expired_pod(session: &mut Session, berth: u32) -> NpcId {
         let mut pod = bystander();
         pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        pod.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 0 };
+        pod.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 0.0 };
         session.space.traffic.add_npc_at(pod, berth)
     }
 
@@ -1382,7 +1382,7 @@ mod tests {
             let npc = session.space.npc_mut(id).expect("there");
             npc.goal = Goal::Attack(aim);
             npc.target = Some(aim);
-            npc.ai_wait = ai_wait;
+            npc.ai_wait = crate::traffic::ai_wait::ticks(ai_wait);
             id
         };
         let below = holder(&mut session, 2, 0);

@@ -202,7 +202,7 @@ impl Session {
         npc.afterburner = self.rolls_afterburner(&kind.hull, berth, chance);
         // The glide: +0x4c = the bay's `Count` (@0x3d843-0x3d85b), which
         // its first think ends unless it holds or returns.
-        npc.ai_wait = bay.map_or(0, |bay| bay.lifetime);
+        npc.ai_wait = bay.map_or(0.0, |bay| crate::traffic::ai_wait::ticks(bay.lifetime));
         // `_LaunchFighter` rolls its voice, the player's fighter and an
         // NPC carrier's alike (@0x3d9cc-0x3da3a; see the `voices` module),
         // before it joins, so its record and its berth take it.
@@ -729,7 +729,7 @@ fn fighter(
         afterburner: false,
         voice: None,
         pursuit: Pursuit::default(),
-        ai_wait: 0,
+        ai_wait: 0.0,
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
@@ -2647,7 +2647,7 @@ pub(super) mod tests {
                 guard: Some(ShipRef::Player)
             }
         );
-        assert_eq!(fighter.ai_wait, 0);
+        assert_eq!(fighter.ai_wait, 0.0);
         assert_eq!(fighter.escort, None);
         assert_eq!(aboard(&session, raider), 1);
         // The launch sets the bay's reload to 60 in `_AIDispatch`

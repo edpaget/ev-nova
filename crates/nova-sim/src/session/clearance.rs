@@ -19,8 +19,9 @@
 //! its position step (@0x6d4b0): @0x6864d, once read as the move, is
 //! `_WrapPlayerPosition` (see the `player_wrap` module; rdm weapons-fidelity
 //! phase 28's findings; filed as a hud-fidelity-followups phase). It is
-//! skipped while the land key is held ([`Session::set_land_key`], the
-//! original's `_dockTryFlag`, @0x6a965-0x6a97a). A request whose stellar
+//! skipped while L's latch is set ([`Session::set_dock_try`], the
+//! original's `_dockTryFlag`, @0x6a965-0x6a97a), which only a dock request
+//! sets (@0x6a953): L held with its latch clear doesn't hold it back. A request whose stellar
 //! is no longer among the system's is dropped (@0x647c5-0x647e3);
 //! otherwise [`approach`] counts it, and its
 //! greeting raises [`SimMessage::DockCleared`], with the fee due there
@@ -66,8 +67,9 @@
 //! **Ordering.** The original's request sets `_dockTryFlag`
 //! (@0x6a938-0x6a956), so its approach never runs in the frame of the
 //! request, only from the first frame the land key is up. Ours runs the
-//! request on the press, between ticks, and the approach from the next
-//! tick the land key is up, so the two agree.
+//! request on the press, between ticks, the view setting L's latch with
+//! it, and the approach from the next tick the latch is clear, so the two
+//! agree.
 
 use super::{Chart, Outbox, Port, Session};
 use crate::clearance::{DockKind, approach, approach_clears};
@@ -77,11 +79,18 @@ use crate::navigation::NavMode;
 use crate::sound::SimSound;
 
 impl Session {
-    /// Takes the land key's state: `on` while it is held, which holds the
-    /// dock approach back (the original's `_dockTryFlag`, see the
-    /// `clearance` module). Up until it says otherwise.
+    /// Takes the land key's state: `on` while it is held, which L's pass
+    /// reads to pick a stellar (`Session::land_key_pass`). Up until it says
+    /// otherwise.
     pub(crate) fn set_land_key(&mut self, on: bool) {
         self.port.set_land_key(on);
+    }
+
+    /// Takes L's latch: `on` while it is set, which holds the dock
+    /// approach back (the original's `_dockTryFlag`, see the module
+    /// docs). Clear until it says otherwise.
+    pub(crate) fn set_dock_try(&mut self, on: bool) {
+        self.port.set_dock_try(on);
     }
 
     /// The dock request, if any: the stellar requested and its counter
@@ -133,7 +142,7 @@ impl Session {
     /// One frame of the dock approach, then nav mode 3's reset (see the
     /// module docs).
     pub(crate) fn dock_approach(&mut self) {
-        if !self.port.land_key
+        if !self.port.dock_try
             && let Some(mut request) = self.port.dock
         {
             match self
@@ -241,11 +250,16 @@ impl Chart {
 }
 
 impl Port {
-    /// Takes the land key's state: `on` while it is held, which holds the
-    /// dock approach back (the original's `_dockTryFlag`, see the
-    /// `clearance` module). Up until it says otherwise.
+    /// Takes the land key's state: `on` while it is held. Up until it
+    /// says otherwise.
     fn set_land_key(&mut self, on: bool) {
         self.land_key = on;
+    }
+
+    /// Takes L's latch, `_dockTryFlag`: `on` while it is set. Clear until
+    /// it says otherwise.
+    fn set_dock_try(&mut self, on: bool) {
+        self.dock_try = on;
     }
 
     /// The dock request, if any: the stellar requested and its counter
@@ -542,16 +556,27 @@ mod tests {
     }
 
     #[test]
-    fn the_land_key_held_holds_the_approach_back() {
+    fn the_dock_try_latch_holds_the_approach_back() {
+        // @0x6a970-0x6a978: the approach waits on `_dockTryFlag`.
         let mut session = session();
         session.land().expect("requests");
-        session.set_land_key(true);
+        session.set_dock_try(true);
         for _ in 0..5 {
             tick(&mut session);
         }
         assert_eq!(session.take_messages(), []);
         assert_eq!(session.dock_request(), request(128, REQUESTED_NEAR));
-        session.set_land_key(false);
+        session.set_dock_try(false);
+        tick(&mut session);
+        assert_eq!(session.take_messages(), [cleared_at(128, DockKind::Planet)]);
+    }
+
+    #[test]
+    fn the_land_key_held_with_its_latch_clear_lets_the_approach_run() {
+        let mut session = session();
+        session.land().expect("requests");
+        session.set_land_key(true);
+        session.set_dock_try(false);
         tick(&mut session);
         assert_eq!(session.take_messages(), [cleared_at(128, DockKind::Planet)]);
     }
@@ -691,10 +716,10 @@ mod tests {
         session.hyperspace_mode();
         assert_eq!(session.dock_request(), None, "H alone");
         session.port.dock = request(128, CLEARED);
-        session.set_land_key(true);
+        session.set_dock_try(true);
         tick(&mut session);
-        assert_eq!(session.dock_request(), None, "even with L held");
-        session.set_land_key(false);
+        assert_eq!(session.dock_request(), None, "even with L's latch set");
+        session.set_dock_try(false);
         assert_eq!(session.land(), requested(128));
     }
 

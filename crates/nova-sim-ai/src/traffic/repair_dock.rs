@@ -93,7 +93,7 @@ use crate::traffic::plunder_dock::{BOX_PER_TURN, BOX_TURNS, DockStep, DockSub, i
 pub const REPAIR_BOX_BASE: f32 = 50.0;
 /// The AI wait a repairer drifts for after its repair (the float 100.0
 /// @0x86f09).
-pub const REPAIR_HOLD: u32 = 100;
+pub const REPAIR_HOLD: f32 = 100.0;
 /// The armour a repair raises at a time (the float 1.0 @0xdd068).
 pub const REPAIR_STEP: f32 = 1.0;
 
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn a_completed_repair_drifts_with_a_hold_of_100_and_drops_its_target_and_docking() {
         let mut ship = repairer(0.0, 0.0);
-        ship.ai_wait = 40;
+        ship.ai_wait = 40.0;
         ship.docking = Some(Docking {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
@@ -510,6 +510,6 @@ mod tests {
     #[test]
     fn the_values_are_the_originals() {
         assert_eq!([REPAIR_BOX_BASE, REPAIR_STEP], [50.0, 1.0]);
-        assert_eq!(REPAIR_HOLD, 100);
+        assert_eq!(REPAIR_HOLD, 100.0);
     }
 }

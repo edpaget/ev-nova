@@ -68,8 +68,9 @@ impl AppScreen {
             let info = self.flight.as_mut().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
         }
-        // An abort frees the slot, and the info goes back, closing once
-        // nothing is left; a refusal (greyed) changes nothing.
+        // An abort frees the slot, and the info goes back as the
+        // `mission_info_rebuild` rule reads it, closing once nothing is
+        // left; a refusal changes nothing.
         abort_and_refresh(spaceport, self.flight.as_mut());
         // The bar draws the visit's news as it opens, before News can
         // show it; News shows what was drawn.
@@ -295,7 +296,9 @@ impl AppScreen {
 
     /// The venues' mission offers (`_OfferMissionFromPort` @0xa369e): a
     /// venue's ask answered with the session's next offer there, which
-    /// enters the venue, and a choice made through the session, each
+    /// enters the venue, told whether the mission info screen lists a
+    /// mission (`OfferDialog::set_missions_listed`), and a choice made
+    /// through the session, each
     /// answer showing the texts it queued and rearming the venue with a
     /// gap drawn on the router's chance (the spaceport never asks again);
     /// an accept changes the cash, so the shops are handed back.
@@ -315,7 +318,10 @@ impl AppScreen {
         }
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
-                Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
+                Some(VenueOffer::Prompt(prompt)) => {
+                    spaceport.open_offer(prompt);
+                    spaceport.set_offer_missions_listed(!flight.mission_info().rows.is_empty());
+                }
                 Some(VenueOffer::Accepted { .. }) => {
                     spaceport.show_mission_texts(flight.take_mission_texts());
                     spaceport.rearm_offers(offer_gap(chance));
@@ -422,37 +428,122 @@ impl AppScreen {
     }
 
     /// Whether each overlay is open, in the order the router looks for
-    /// the one in front. A mission dialog's map over flight is in front of
-    /// the mission dialogs it opened from.
-    fn overlays_open(&self) -> [(bool, Overlay); 18] {
+    /// the one in front, and whether it holds back keys for a held press
+    /// ([`Screen::holds_back_keys`]). A mission dialog's map over flight is
+    /// in front of the mission dialogs it opened from, and holds nothing:
+    /// flight places it.
+    fn overlays_open(&self) -> [OverlayRow; 18] {
+        let row = |open: bool, overlay, holds_back_keys| OverlayRow {
+            open,
+            overlay,
+            holds_back_keys,
+        };
         [
-            (self.about.is_some(), Overlay::About),
-            (self.preferences.is_some(), Overlay::Preferences),
-            (self.player_info.is_some(), Overlay::PlayerInfo),
-            (self.haggle.is_some(), Overlay::Haggle),
-            (self.comm.is_some(), Overlay::Comm),
-            (self.escort_dialog.is_some(), Overlay::EscortDialog),
-            (self.planet_comm.is_some(), Overlay::PlanetComm),
-            (self.flight_dialog_map_open(), Overlay::DialogMap),
-            (self.missions.is_some(), Overlay::Missions),
-            (self.offer.is_some(), Overlay::Offer),
-            (self.capture_naming.is_some(), Overlay::CaptureNaming),
-            (self.assignment.is_some(), Overlay::Assignment),
-            (self.plunder.is_some(), Overlay::Plunder),
-            (self.new_pilot.is_some(), Overlay::NewPilot),
-            (self.christening.is_some(), Overlay::Christening),
-            (self.open_pilot.is_some(), Overlay::OpenPilot),
-            (self.load_note.is_some(), Overlay::LoadNote),
-            (self.question.is_some(), Overlay::Question),
+            row(
+                self.about.is_some(),
+                Overlay::About,
+                holds(self.about.as_ref()),
+            ),
+            row(
+                self.preferences.is_some(),
+                Overlay::Preferences,
+                holds(self.preferences.as_ref()),
+            ),
+            row(
+                self.player_info.is_some(),
+                Overlay::PlayerInfo,
+                holds(self.player_info.as_ref()),
+            ),
+            row(
+                self.haggle.is_some(),
+                Overlay::Haggle,
+                holds(self.haggle.as_ref()),
+            ),
+            row(
+                self.comm.is_some(),
+                Overlay::Comm,
+                holds(self.comm.as_ref()),
+            ),
+            row(
+                self.escort_dialog.is_some(),
+                Overlay::EscortDialog,
+                holds(self.escort_dialog.as_ref()),
+            ),
+            row(
+                self.planet_comm.is_some(),
+                Overlay::PlanetComm,
+                holds(self.planet_comm.as_ref()),
+            ),
+            row(self.flight_dialog_map_open(), Overlay::DialogMap, false),
+            row(
+                self.missions.is_some(),
+                Overlay::Missions,
+                holds(self.missions.as_ref()),
+            ),
+            row(
+                self.offer.is_some(),
+                Overlay::Offer,
+                holds(self.offer.as_ref()),
+            ),
+            row(
+                self.capture_naming.is_some(),
+                Overlay::CaptureNaming,
+                holds(self.capture_naming.as_ref()),
+            ),
+            row(
+                self.assignment.is_some(),
+                Overlay::Assignment,
+                holds(self.assignment.as_ref()),
+            ),
+            row(
+                self.plunder.is_some(),
+                Overlay::Plunder,
+                holds(self.plunder.as_ref()),
+            ),
+            row(
+                self.new_pilot.is_some(),
+                Overlay::NewPilot,
+                holds(self.new_pilot.as_ref()),
+            ),
+            row(
+                self.christening.is_some(),
+                Overlay::Christening,
+                holds(self.christening.as_ref().map(|open| &open.dialog)),
+            ),
+            row(
+                self.open_pilot.is_some(),
+                Overlay::OpenPilot,
+                holds(self.open_pilot.as_ref()),
+            ),
+            row(
+                self.load_note.is_some(),
+                Overlay::LoadNote,
+                holds(self.load_note.as_ref()),
+            ),
+            row(
+                self.question.is_some(),
+                Overlay::Question,
+                self.question
+                    .as_ref()
+                    .is_some_and(|(_, dialog)| dialog.holds_back_keys()),
+            ),
         ]
     }
 
     /// The overlay open in front, if any: the one [`AppScreen::route`]
     /// gives every input to.
-    fn overlay_in_front(&self) -> Option<Overlay> {
+    pub(super) fn overlay_in_front(&self) -> Option<Overlay> {
         self.overlays_open()
             .into_iter()
-            .find_map(|(is_open, overlay)| is_open.then_some(overlay))
+            .find_map(|row| row.open.then_some(row.overlay))
+    }
+
+    /// Whether `overlay` holds back keys for a held press: its column of
+    /// [`AppScreen::overlays_open`].
+    pub(super) fn overlay_holds_back_keys(&self, overlay: Overlay) -> bool {
+        self.overlays_open()
+            .into_iter()
+            .any(|row| row.overlay == overlay && row.holds_back_keys)
     }
 
     /// How many overlays are open that flushed the event queue as they
@@ -462,8 +553,8 @@ impl AppScreen {
     pub(super) fn flushing_overlays(&self) -> usize {
         self.overlays_open()
             .into_iter()
-            .filter(|(is_open, overlay)| {
-                *is_open && !matches!(overlay, Overlay::DialogMap | Overlay::Missions)
+            .filter(|row| {
+                row.open && !matches!(row.overlay, Overlay::DialogMap | Overlay::Missions)
             })
             .count()
     }
@@ -543,12 +634,18 @@ impl AppScreen {
         }
         self.note_pointer(input);
         self.note_keys(input);
+        // While a dialog holds back its keys for a held press, the menu
+        // chords wait with them, and act after its replay (the
+        // `held_chords` module).
+        if self.hold_chord(input) {
+            return ScreenAction::None;
+        }
         // Command-Q quits at once, silently, wherever it is pressed (the
-        // main menu's appear holds it first, for when the appear ends), as
-        // `_HandleQuitEvent` @0xcc958 does on the main screen (`_gPause`
-        // set, @0xcc97e). In play the original asks first (@0xcc9f5),
-        // which the engine doesn't yet
-        // (rdm:phase/main-screen-fidelity/phase-1-ask-before-quitting-play).
+        // main menu's appear holds it first, for when the appear ends, and
+        // a dialog's held press until its release), as `_HandleQuitEvent`
+        // @0xcc958 does on the main screen (`_gPause` set, @0xcc97e).
+        // Quitting never asks, by the user's decision, so its question in
+        // play (@0xcc98c-0xcca0f) isn't ported.
         if let Input::Key {
             key, pressed: true, ..
         } = *input
@@ -559,6 +656,9 @@ impl AppScreen {
         }
         if let Some(front) = self.front() {
             return self.front_input(front, input);
+        }
+        if self.rescue_takes(input) {
+            return ScreenAction::None;
         }
         if self.preferences_key(input) {
             return ScreenAction::None;
@@ -639,9 +739,27 @@ impl AppScreen {
                 Some(Point::new(at.x - offset.x, at.y))
             }
             Input::PointerLeft => None,
-            Input::Key { .. } | Input::Text(_) | Input::Scroll { .. } => return,
+            // Keys, text and the wheel leave it, and so does a held move
+            // outside the game: the `PointerLeft` before it set `None`.
+            _ => return,
         };
     }
+}
+
+/// One overlay's row of [`AppScreen::overlays_open`].
+#[derive(Clone, Copy, Debug)]
+struct OverlayRow {
+    /// Whether it is open.
+    open: bool,
+    /// Which it is.
+    overlay: Overlay,
+    /// Whether it holds back keys for a held press.
+    holds_back_keys: bool,
+}
+
+/// Whether `screen`, if open, holds back keys for a held press.
+fn holds(screen: Option<&impl Screen>) -> bool {
+    screen.is_some_and(Screen::holds_back_keys)
 }
 
 /// What takes every input in front of the router's own keys

@@ -57,7 +57,7 @@ fn land(fuel: i16, stay: u32) -> Landing {
         traffic.tick(&ai, &sites, &mut chance());
         assert_eq!(traffic.departed(), [], "it stays");
         let now = ship(&traffic);
-        if now.ai_wait > 0 {
+        if now.ai_wait > 0.0 {
             landed = Some((tick, now));
             break;
         }
@@ -68,7 +68,7 @@ fn land(fuel: i16, stay: u32) -> Landing {
     loop {
         traffic.tick(&ai, &sites, &mut chance());
         let now = ship(&traffic);
-        if now.state != landed.state || now.ai_wait == 0 && now.goal == Goal::Wait {
+        if now.state != landed.state || now.ai_wait == 0.0 && now.goal == Goal::Wait {
             let then = now.goal;
             if now.state == landed.state {
                 still_for += 1;

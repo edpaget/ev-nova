@@ -114,7 +114,7 @@ impl Traffic {
             let slot = slot_place(npc, world.flight);
             let handling = npc.flying_handling(TopSpeeds::own_of(npc).own, world.flight);
             for _ in frame.iter().filter(|body| branches(body.manoeuvre)) {
-                plunder_dock::swarm_branch(npc, lead, slot, &handling);
+                plunder_dock::swarm_branch(npc, lead, slot, &handling, world.speed_mult);
             }
         }
     }
@@ -166,7 +166,7 @@ mod tests {
         fn decision(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Decision {
             Decision {
                 goal: npc.goal,
-                lost_sight: Some(LostSight::Searching(5)),
+                lost_sight: Some(LostSight::Searching(5.0)),
                 ..Decision::default()
             }
         }
@@ -391,6 +391,36 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_each_bodys_branch_nudges_by_the_nudge_at_half_gain() {
+        let half = crate::speed_mult::SpeedMult::new(0.5);
+        let at_gain = |gain, change: fn(&mut Npc)| {
+            let (mut traffic, id) = traffic(|ship, _| change(ship));
+            let world = World {
+                speed_mult: gain,
+                ..world(START + Vec2::new(100.0, 100.0))
+            };
+            think_in(&mut traffic, &world);
+            (traffic, id)
+        };
+        let flee_rush: fn(&mut Npc) = |ship| {
+            fleeing(ship);
+            ship.afterburner = true;
+        };
+        for (change, times) in [(fleeing as fn(&mut Npc), 1), (flee_rush, 2)] {
+            let (traffic, id) = at_gain(half, change);
+            let ship = of(&traffic, id);
+            assert_eq!(bodies(&traffic, id).len(), times as usize);
+            let place = ship.slot_place.expect("a place");
+            let handling =
+                ship.flying_handling(TopSpeeds::own_of(ship).own, FlightRules::default());
+            let by = crate::traffic::formation_flight::nudge(ship, &handling, half);
+            assert_eq!(ship.state.position, nudged_from(START, place, by, times));
+            let (full, _) = at_gain(crate::speed_mult::SpeedMult::FULL, change);
+            assert_ne!(ship.state.position, of(&full, id).state.position);
+        }
+    }
+
+    #[test]
     fn a_dogfight_rushing_in_the_same_frame_nudges_once() {
         let (mut traffic, id) = traffic(|ship, _| {
             ship.afterburner = true;
@@ -505,7 +535,7 @@ mod tests {
         searching.think_holding(&Searches, world(FAR_PLAYER), &[], &mut NeverFires);
         assert_eq!(
             of(&searching, id).lost_sight,
-            SearchTimer::Searching(5),
+            SearchTimer::Searching(5.0),
             "its decision wrote it"
         );
         assert_eq!(of(&searching, id).state.position, START);
@@ -556,7 +586,7 @@ mod tests {
         assert_branched(&traffic, id, place, 1, GlowCopy::Swarm(GLOW));
         let ship = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         let ship = ship.expect("there");
-        ship.ai_wait = 50;
+        ship.ai_wait = 50.0;
         ship.display.drive.glow = GlowCopy::None;
         think_in(&mut traffic, &world);
         assert_eq!(bodies(&traffic, id), [Manoeuvre::Approach], "sub 7 again");

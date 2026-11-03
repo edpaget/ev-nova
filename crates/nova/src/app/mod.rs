@@ -356,6 +356,14 @@ pub struct App<S, C = AppScreen> {
     /// Whether the screen has been told where the pointer is since it
     /// last started drawing its own ([`App::draws_pointer`]).
     cursor_synced: bool,
+    /// Whether the left button went down over the game, routed to the
+    /// screen, and hasn't been let go of, abandoned by a focus loss or
+    /// taken by the overlay opening since: moves outside the game then
+    /// reach the screen as [`Input::PointerMovedOutside`]. It is the
+    /// app's, not the screen's, as only the router knows where the press
+    /// went down, and the screen is never sent the moves outside it
+    /// would need to tell.
+    left_held: bool,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
@@ -396,6 +404,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             pointer: None,
             pointer_hidden: false,
             cursor_synced: false,
+            left_held: false,
             failures: Vec::new(),
             overlay: None,
             audio: None,
@@ -762,6 +771,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// [`App::redraw`]).
     fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_lost(window);
+        self.left_held = false;
         self.screen.cancel_pointer();
         self.screen.release_keys();
         self.screen.focus_lost();
@@ -782,6 +792,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// Handles one window event as [`App::handle_routed`] does, before its
     /// after-event steps.
+    ///
+    /// A move outside the game reaches the screen as one
+    /// [`Input::PointerLeft`] as it leaves; while the left button that went
+    /// down over the game is held ([`App::left_held`]), it and every move
+    /// after it also reach the screen as [`Input::PointerMovedOutside`],
+    /// at the point past the content's edges
+    /// ([`Viewport::window_to_logical_unbounded`]), so a drag follows the
+    /// pointer as `_DoSystemMap`'s `_GetMouse`/`_StillDown` loop does
+    /// (@0x137e9-0x138d8). A left release outside the game ends the press
+    /// with [`Screen::cancel_pointer`] instead of a release.
     fn dispatch(
         &mut self,
         event: WindowEvent,
@@ -848,22 +868,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 }
                 game(self.route(Input::Text(c)))
             }
-            WindowEvent::PointerMoved { px } => {
-                let was_in_view = self.pointer_at().is_some();
-                self.pointer = Some(px);
-                if self.pointer_routing() == Routing::Overlay {
-                    return overlay;
-                }
-                // The original hides its arrow only inside the game rect
-                // (`_PtInRect` @0x38007-0x38017): leaving the viewport for
-                // a letterbox bar leaves the screen, as leaving the window
-                // does, and `show_pointer` shows the system pointer there.
-                game(match self.viewport.window_to_logical(px) {
-                    Some(at) => self.route(Input::PointerMoved(at)),
-                    None if was_in_view => self.route(Input::PointerLeft),
-                    None => Control::Continue,
-                })
-            }
+            WindowEvent::PointerMoved { px } => self.pointer_moved(px),
             WindowEvent::PointerLeft => {
                 self.pointer = None;
                 if self.pointer_routing() == Routing::Overlay {
@@ -875,6 +880,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             WindowEvent::PointerButton { button, pressed } => {
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;
+                }
+                if button == MouseButton::Left {
+                    // Held only by a press routed to the screen; any
+                    // release ends it.
+                    self.left_held = pressed && self.pointer_at().is_some();
                 }
                 game(match self.pointer_at() {
                     Some(at) => self.route(Input::PointerButton {
@@ -898,6 +908,43 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             WindowEvent::Menu(command) => game(self.route_menu(command, window)),
             WindowEvent::CheckForUpdates => game(self.check_for_updates()),
         }
+    }
+
+    /// The pointer moved to window pixel `px`: a move over the game, or a
+    /// leave as it goes out, and then, while the left button that went
+    /// down over the game is held, the move outside (see
+    /// [`App::dispatch`]). The overlay's alone while it takes the pointer.
+    fn pointer_moved(&mut self, px: (f64, f64)) -> Handled {
+        let was_in_view = self.pointer_at().is_some();
+        self.pointer = Some(px);
+        if self.pointer_routing() == Routing::Overlay {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Overlay,
+            };
+        }
+        let handled = |control| Handled {
+            control,
+            routing: Routing::Game,
+        };
+        // The original hides its arrow only inside the game rect
+        // (`_PtInRect` @0x38007-0x38017): leaving the viewport for a
+        // letterbox bar leaves the screen, as leaving the window does, and
+        // `show_pointer` shows the system pointer there.
+        if let Some(at) = self.viewport.window_to_logical(px) {
+            return handled(self.route(Input::PointerMoved(at)));
+        }
+        if was_in_view && self.route(Input::PointerLeft) == Control::Exit {
+            return handled(Control::Exit);
+        }
+        // A press held from over the game follows the pointer out, in a
+        // bar or off the window (winit reports moves there while a button
+        // is down), as `_DoSystemMap`'s drag polls `_GetMouse` with no
+        // rect test until `_StillDown` goes false (@0x137e9-0x138d8).
+        handled(match self.viewport.window_to_logical_unbounded(px) {
+            Some(at) if self.left_held => self.route(Input::PointerMovedOutside(at)),
+            _ => Control::Continue,
+        })
     }
 
     /// A redraw at `elapsed`: ticks the screen and the overlay, then draws
@@ -999,6 +1046,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         let was_visible = overlay.visible();
         let routing = overlay.key(key, pressed, repeat);
         if overlay.visible() && !was_visible {
+            self.left_held = false;
             self.screen.cancel_pointer();
             self.screen.release_keys();
         }
@@ -1410,6 +1458,7 @@ mod tests {
     mod display_shapes;
     mod exiting;
     mod menu;
+    mod pointer_outside;
     mod pointer_release;
     mod updates;
     mod wheel;

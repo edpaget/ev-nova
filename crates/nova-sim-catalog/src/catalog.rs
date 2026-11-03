@@ -21,6 +21,7 @@ use crate::handling::ShipFields;
 use crate::voice::Voices;
 use crate::warp::SoundLength;
 use nova_sim_base::fuel::OutfitMod;
+use nova_sim_base::sprite_mask::RleSheet;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2071,6 +2072,24 @@ pub fn slots_in_order(stellars: impl IntoIterator<Item = StellarId>) -> NavDefSl
     slots
 }
 
+/// A sheet whose run-length tokens a sprite is drawn and touched by (see
+/// `nova_sim_base::sprite_mask`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MaskSheet {
+    /// A ship's base image, as the class's sprite base draws it
+    /// ([`HullRecord::sprite_base`]): its `shän`'s `BaseImageID`.
+    Ship(ShipId),
+    /// Graphic type `t`'s sheet, `spïn` 1000 + `t`, as a stellar's `Type`
+    /// or `DeadType` names it.
+    Stellar(i16),
+    /// A shot's sheet, `spïn` 3000 + its weapon's `Graphic`.
+    Shot(i16),
+    /// Asteroid kind `k`'s sheet, `spïn` 800 + `k`.
+    Asteroid(u8),
+    /// Box graphic `g`'s sheet, `spïn` 500 + `g`.
+    CargoBox(u16),
+}
+
 /// The game data a flight session starts from.
 pub trait PilotCatalog {
     /// The first `chär` by ascending ID: its ship and starting systems.
@@ -2265,6 +2284,13 @@ pub trait PilotCatalog {
             })
             .collect()
     }
+    /// The run-length tokens `sheet` is drawn and touched by: a ship's base
+    /// sheet, or a stellar graphic's (see `nova_sim_base::sprite_mask`);
+    /// none when it cannot be read. None by default, so every touch falls
+    /// back to discs.
+    fn rle_sheet(&self, _sheet: MaskSheet) -> Option<RleSheet> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -2427,6 +2453,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
         (**self).nav_def_slots()
+    }
+
+    fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
+        (**self).rle_sheet(sheet)
     }
 }
 
@@ -2591,6 +2621,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
         (**self).nav_def_slots()
+    }
+
+    fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
+        (**self).rle_sheet(sheet)
     }
 }
 
@@ -3193,6 +3227,17 @@ mod tests {
                 info_types: 0,
             })
         }
+
+        /// Graphic type 3's sheet is 5 by 6, one frame of no tokens.
+        fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
+            (sheet == MaskSheet::Stellar(3)).then(|| RleSheet {
+                width: 5,
+                height: 6,
+                shift: 1,
+                words: vec![0],
+                starts: vec![Some(0)],
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -3243,6 +3288,8 @@ mod tests {
             format!("{:?}", catalog.desc_text(130)),
             format!("{:?}", catalog.stellar_scripts()),
             format!("{:?}", catalog.nav_def_slots()),
+            format!("{:?}", catalog.rle_sheet(MaskSheet::Stellar(3))),
+            format!("{:?}", catalog.rle_sheet(MaskSheet::Ship(ShipId(128)))),
             format!(
                 "{:?}",
                 catalog.landing_site(StellarId(140)).map(|site| site.id)
@@ -3509,8 +3556,13 @@ mod tests {
             direct[42].starts_with("[(SystemId(130), [None, Some(StellarId(129)), None"),
             "forwarded, not the default's numbering: {direct:?}"
         );
+        assert!(
+            direct[43].starts_with("Some(RleSheet { width: 5, height: 6"),
+            "forwarded, not a default: {direct:?}"
+        );
+        assert_eq!(direct[44], "None");
         assert_eq!(
-            direct[43], "Some(StellarId(140))",
+            direct[45], "Some(StellarId(140))",
             "forwarded, not the default's none"
         );
         assert_eq!(reads(&One), direct);
@@ -3850,6 +3902,13 @@ mod tests {
             assert_eq!(explosion_sound(none), None, "{none}");
         }
         assert_eq!(Mapped.boom_sounds(), [], "none by default");
+    }
+
+    #[test]
+    fn by_default_no_sheets_tokens_can_be_read() {
+        for sheet in [MaskSheet::Ship(ShipId(128)), MaskSheet::Stellar(0)] {
+            assert_eq!(Mapped.rle_sheet(sheet), None, "{sheet:?}");
+        }
     }
 
     #[test]

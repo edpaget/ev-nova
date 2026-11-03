@@ -291,7 +291,10 @@ impl MapDialog {
     /// The pointer moved to `to`: a drag in progress scrolls from where it
     /// started ([`MapPlace::drag`]), and a poll whose whole pixel moved
     /// draws the partial update, whether or not the scroll followed
-    /// (`_ScrollMapDisplay` @0x1128d-0x112fb).
+    /// (`_ScrollMapDisplay` @0x1128d-0x112fb). `to` may be anywhere,
+    /// outside the dialog and the screen too: the original's loop takes
+    /// `_GetMouse`'s point with no rect test and stores the scroll
+    /// unclamped (@0x13851-0x138b1).
     pub fn pointer_moved(&mut self, to: Point) {
         if let Some(drag) = &mut self.drag {
             let at = whole_pixel(to);
@@ -581,6 +584,19 @@ mod tests {
         dialog.cancel_pointer();
         dialog.pointer_moved(at(500.0, 300.0));
         assert_eq!(dialog.place().scroll(), (72, 109), "cancelled where it got");
+    }
+
+    #[test]
+    fn a_drag_follows_the_pointer_past_the_dialog_and_the_screen_unclamped() {
+        // `_DoSystemMap`'s loop takes `_GetMouse`'s point with no rect
+        // test and stores the scroll unclamped (@0x13851-0x138b1). At zoom
+        // 0.5625: x floors to -41, 441 left, 100 + 248.06 truncates to
+        // 348; y 600 down, 100 - 337.5 truncates toward zero to -237.
+        let mut dialog = MapDialog::new((100, 100));
+        dialog.press(at(400.0, 300.0));
+        dialog.pointer_moved(at(-40.5, 900.0));
+        assert_eq!(dialog.place().scroll(), (348, -237));
+        assert_eq!(dialog.update(), MapUpdate::Partial);
     }
 
     // The update item 3 shows.

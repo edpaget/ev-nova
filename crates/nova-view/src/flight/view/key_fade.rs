@@ -2,7 +2,9 @@
 //! fades it ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
 //! The gates are the session's (`nova_sim::key_fade`, which records where
 //! each of `_HandlePlayer`'s writes of the byte sits); the keys are the
-//! view's, in [`fade_key`].
+//! view's, in [`fade_key`]. Every latched block writes the byte before
+//! its latch test, so a latched key held past a close fades the cursor as
+//! a held one does ([`FlightView::keys_down`]).
 
 use nova_sim::flight_frame::FadeKey;
 
@@ -61,9 +63,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Whether this frame's pass sets the byte with what is held: a jump
-    /// or an auto-eject with no key at all, or any key held that fades.
+    /// Whether this frame's pass sets the byte with what is read down: a
+    /// jump or an auto-eject with no key at all, or any key down that
+    /// fades, a latched one held past a close included.
     pub(super) fn cursor_keyed(&self) -> bool {
-        self.frame.key_fades.unbidden() || self.held.iter().any(|&key| self.key_fades_cursor(key))
+        self.frame.key_fades.unbidden() || self.keys_down().any(|key| self.key_fades_cursor(key))
     }
 }

@@ -32,7 +32,8 @@
 //! - **The steering** (@0x3277c-0x32917, [`Shot::steer_at_asteroid`]): the
 //!   bearing is `_CalcInterceptAngle` of its slot's asteroid, whatever
 //!   asteroid that is now, a fragment or slot 0's refill included. Past
-//!   [`HOMING_DELAY`] ticks (`Count − life > 15.0`, unscaled, @0x327eb)
+//!   an age of [`HOMING_DELAY`] (`Count − life > 15.0`, unscaled by the
+//!   frame's gain, @0x327eb)
 //!   it turns its whole `GuidedTurn` when `|_AngularDifference|` is above
 //!   the untruncated turn, the way [`turned`] says. Its heading is then
 //!   wrapped and its velocity is its speed along it. A slot found empty
@@ -64,7 +65,7 @@
 //!   `Flags2` 0x0008 (@0x44821-0x44836); and its end-of-life sub-munitions
 //!   are aimed at that ship (@0x35f3e-0x35f49). Here a locked shot hits no
 //!   ship ([`Sides`](super::sides::Sides)) and its sub-munitions are aimed
-//!   at none: rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
+//!   at none: rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
 
 use super::projectile::{Guide, HOMING_DELAY, Jam, LockAngle, Shot, wrap_turned};
 use super::weapon::{Guidance, SEEKS_ASTEROIDS};
@@ -163,8 +164,9 @@ impl Shot {
     }
 
     /// The jam-1 steering of a shot locked onto `slot` (see the module
-    /// docs): at the bearing of the asteroid `guide` has in it, past
-    /// [`HOMING_DELAY`] ticks ([`turned`]); a slot found empty is let go,
+    /// docs): at the bearing of the asteroid `guide` has in it, past an
+    /// age of [`HOMING_DELAY`], unscaled ([`turned`]); a slot found empty
+    /// is let go,
     /// and the shot keeps its heading that tick and every tick after, as
     /// with no slot. Then its velocity is its speed along its heading.
     pub(super) fn steer_at_asteroid(&mut self, slot: Option<usize>, guide: &Guide) {
@@ -177,7 +179,7 @@ impl Shot {
             }
             None => trig::whole(self.heading),
         };
-        if self.age >= HOMING_DELAY {
+        if self.age() > f64::from(HOMING_DELAY) {
             self.heading = turned(self.heading, bearing, self.weapon.turn);
         }
         self.heading = wrap_turned(self.heading);
@@ -365,9 +367,9 @@ mod tests {
             jam: Jam::Asteroid(slot),
             target: None,
             aimed_at: None,
-            age,
             ..fired(missile(SEEKS_ASTEROIDS))
         }
+        .aged(age)
     }
 
     #[test]
@@ -388,16 +390,42 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_an_asteroid_locked_shot_steers_by_its_whole_turn_from_age_15() {
+        // Far off to the right, 45 degrees off its heading all the way.
+        let rocks = [at(1000.0, -1000.0)];
+        let guide = Guide {
+            asteroids: &rocks,
+            speed_mult: crate::speed_mult::SpeedMult::new(0.5),
+            ..Guide::among(&[])
+        };
+        let mut shot = locked(Some(0), 0);
+        let mut first = None;
+        for n in 1..=31 {
+            let heading = shot.heading;
+            shot.step(&guide, &mut NeverFires);
+            if shot.heading != heading && first.is_none() {
+                first = Some((n, shot.heading - heading));
+            }
+        }
+        assert_eq!(
+            first,
+            Some((31, shot.weapon.turn)),
+            "age 15.5 > 15, unscaled, by all of its turn"
+        );
+        assert_eq!(shot.weapon.turn, 7.0);
+    }
+
+    #[test]
     fn a_locked_shot_steers_from_the_tick_after_its_lock() {
         // About 11 degrees right: in the cone, and further off than the
         // turn.
         let rocks = [at(30.0, -150.0)];
         let mut shot = Shot {
-            age: HOMING_DELAY,
             target: None,
             aimed_at: None,
             ..fired(missile(SEEKS_ASTEROIDS))
-        };
+        }
+        .aged(HOMING_DELAY);
         fly(&mut shot, &[], &rocks, &mut seeks());
         assert_eq!(shot.jam, Jam::Asteroid(Some(0)));
         assert_eq!(shot.heading, 0.0, "the lock's tick");

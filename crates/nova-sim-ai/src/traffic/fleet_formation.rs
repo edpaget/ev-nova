@@ -720,7 +720,7 @@ mod tests {
                 lead,
                 follower(1, 9, Vec2::new(-150.0, 149.0), jumping),
                 follower(2, 7, Vec2::new(120.0, -30.0), jumping),
-                follower(3, 8, Vec2::ZERO, Mode::Emerging { ticks_left: 68 }),
+                follower(3, 8, Vec2::ZERO, Mode::Emerging { ticks_left: 68.0 }),
                 ship(9, 1, None, None),
                 other,
             ];

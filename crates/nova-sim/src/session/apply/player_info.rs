@@ -97,13 +97,16 @@ mod tests {
         );
         assert_eq!(session, direct, "as the opening leaves it");
         let mut jumping = jumping();
-        let before = jumping.clone();
+        let mut before = jumping.clone();
         assert_eq!(
             apply_with(&mut jumping, &catalog, FlightCommand::OpenPlayerInfo),
             Answer::PlayerInfo(None),
             "nothing opens in a jump"
         );
-        assert_eq!(jumping, before, "and nothing changes");
+        // `_HandlePlayer` zeroes the gain once the refusing dialog returns
+        // (@0x70357), at once, so no frame is held.
+        before.time.zero_unheld();
+        assert_eq!(jumping, before, "and nothing changes but the gain");
     }
 
     #[test]

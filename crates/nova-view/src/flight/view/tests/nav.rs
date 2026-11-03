@@ -1267,3 +1267,68 @@ fn faked_icons_drawn(view: &Faked) -> Vec<(i16, Point)> {
         })
         .collect()
 }
+
+// A latched key held past a site's close reads down past its latch
+// (`_QuickKeyCheck` @0xa0f5), so it holds the latch it shares.
+
+/// A site's close over `view` with `k` held: latched, its latch set.
+fn latched_across_a_close(view: &mut Faked, k: Key) {
+    super::live_keys::dialog_opens(view);
+    let _ = super::live_keys::back(view, [k], [], false);
+}
+
+/// The block's commands `view` sent from `from` of its commands on.
+fn nav_mode_keys_from(view: &Faked, from: usize) -> Vec<FlightCommand> {
+    sent(view)[from..]
+        .iter()
+        .filter(|command| matches!(command, FlightCommand::NavModeKeys { .. }))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_latched_h_keeps_a_fresh_backquote_from_acting() {
+    // H down holds `_navModeSelectFlag` (@0x69ac1, @0x69ae6), so \`
+    // pressed meets it set; only a frame with both up clears it.
+    let mut view = faked(in_sol());
+    latched_across_a_close(&mut view, HYPERSPACE_MODE_KEY);
+    let from = sent(&view).len();
+    view.input(&key(NAV_OFF_KEY, true));
+    view.nav_held_frame();
+    assert_eq!(nav_mode_keys_from(&view, from), [], "H holds the latch");
+    view.input(&key(HYPERSPACE_MODE_KEY, false));
+    view.nav_held_frame();
+    assert_eq!(nav_mode_keys_from(&view, from), [], "\\` still down");
+    view.input(&key(NAV_OFF_KEY, false));
+    view.nav_held_frame();
+    view.input(&key(NAV_OFF_KEY, true));
+    assert_eq!(
+        nav_mode_keys_from(&view, from),
+        [FlightCommand::NavModeKeys {
+            nav_off: true,
+            h: false
+        }]
+    );
+}
+
+#[test]
+fn a_latched_nav_key_held_through_a_jump_acts_after_it() {
+    // The block clears its latch on every frame of a jump (@0x69ad4 to
+    // @0x69baa), so H still down acts once the jump is over.
+    let mut view = faked(in_sol());
+    latched_across_a_close(&mut view, HYPERSPACE_MODE_KEY);
+    let from = sent(&view).len();
+    view.nav_held_frame();
+    assert_eq!(nav_mode_keys_from(&view, from), [], "latched");
+    super::faked_hud::changes(&mut view, |frame| frame.jump_under_way = true);
+    view.nav_held_frame();
+    super::faked_hud::changes(&mut view, |frame| frame.jump_under_way = false);
+    view.nav_held_frame();
+    assert_eq!(
+        nav_mode_keys_from(&view, from),
+        [FlightCommand::NavModeKeys {
+            nav_off: false,
+            h: true
+        }]
+    );
+}

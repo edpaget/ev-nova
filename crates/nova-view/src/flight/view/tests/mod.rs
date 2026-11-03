@@ -76,6 +76,8 @@ mod combat;
 mod comm_line;
 mod controls;
 mod dialog_map;
+mod display_gain;
+mod effects_gain;
 mod escorts;
 mod faded_keys;
 mod faked_board;
@@ -106,6 +108,7 @@ mod kept_frame;
 mod key_fades;
 mod landing;
 mod layers;
+mod live_keys;
 mod map_borders;
 mod map_find;
 mod map_key_wait;
@@ -115,7 +118,9 @@ mod murk_sprites;
 mod nav;
 mod outputs;
 mod painted_ships;
+mod particle_pixels;
 mod port_screen_map;
+mod rescue;
 mod ship_drawing;
 mod shots;
 mod stars;
@@ -779,7 +784,7 @@ fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound>
         })
         .collect()
 }
-use nova_sim::hire::DEFECTED_ONE;
+use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 
 use nova_sim::MissionTextKind;
 

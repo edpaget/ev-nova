@@ -11,6 +11,7 @@
 //! which is large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
+use super::live_keys::{back, latches_its_close};
 use super::*;
 use nova_sim::board_repair::Recovery;
 use nova_sim::flight_frame::FlightEvent;
@@ -238,6 +239,92 @@ fn a_recovery_latches_with_no_plunder_and_leaves_its_line_to_the_flights_message
     assert_eq!(view.message(), None, "the flight's message says it");
 }
 
+// `_HandlePlayerBoardAttempt`'s sites: the plunder (@0x659f1, @0x65f3e),
+// the boarding offer (@0x65956) and the cargo pickup (@0x6535a), which
+// `_SetAllKeyCmdFlags` follows whatever `_DoMissionCargoPickup` answered.
+
+#[test]
+fn the_plunder_dialogs_and_the_boarding_offers_close_latch_every_key() {
+    let mut view = sol();
+    opened(&mut view);
+    assert!(view.board());
+    latches_its_close(&mut view);
+
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
+            super::faked_hail::prompt("Help?"),
+        ))));
+    assert!(view.board());
+    latches_its_close(&mut view);
+}
+
+#[test]
+fn the_pickup_refused_for_room_latches_its_texts_close() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoRoomForCargo));
+    assert!(view.board(), "it latches the board");
+    assert_eq!(view.message(), Some(CANT_BOARD), "#130");
+    latches_its_close(&mut view);
+}
+
+#[test]
+fn the_other_refusals_mark_no_site() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::CantBoard));
+    view.board();
+    unlatched_close(&mut view);
+}
+
+#[test]
+fn a_pickup_that_fits_latches_the_keys_held_at_the_next_pass() {
+    let picked = MissionBoardLine::Retrieved { cargo: None };
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(picked.clone()))));
+    view.held.insert(JUMP_KEY);
+    view.board();
+    view.tick(TICK);
+    assert!(view.latched_down.contains(&JUMP_KEY), "latched");
+    // A failed mission's ship takes the same pickup, then the plunder.
+    let mut view = sol();
+    view.sim.queue_event(FlightEvent::BoardLine(picked));
+    view.sim.queue_answer(Answer::Boarded(Boarding::Repelled));
+    view.held.insert(JUMP_KEY);
+    view.board();
+    view.tick(TICK);
+    assert!(
+        view.latched_down.contains(&JUMP_KEY),
+        "latched by the pickup"
+    );
+}
+
+#[test]
+fn the_assist_paths_line_and_a_recovery_mark_no_site() {
+    let answers = [
+        Boarding::MissionShip(Some(MissionBoardLine::Boarded)),
+        Boarding::MissionShip(None),
+        Boarding::Recovered(Recovery::EscortRepaired),
+        Boarding::Repelled,
+    ];
+    for answer in answers {
+        let mut view = sol();
+        view.sim.queue_answer(Answer::Boarded(answer));
+        view.board();
+        unlatched_close(&mut view);
+    }
+}
+
+/// Asserts that `view`'s next close reads by the latches, no site marked:
+/// J pressed under it comes back as a press.
+fn unlatched_close(view: &mut Faked) {
+    view.let_go_of_input();
+    let replay = back(view, [JUMP_KEY], [], false);
+    assert_eq!(replay, [key(JUMP_KEY, true)], "no site");
+}
+
 #[test]
 fn boarding_keeps_the_message() {
     let mut view = sol();
@@ -367,6 +454,36 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
     assert_eq!(view.take_offer(), Some(prompt));
     assert!(view.held.is_empty(), "the flight keys let go");
     assert_eq!(view.message(), None, "nothing granted");
+}
+
+#[test]
+fn b_answered_with_an_offer_leaves_no_key_held_as_the_offer_takes_its_release() {
+    let mut view = sol();
+    let prompt = nova_sim::OfferPrompt {
+        mission: MissionId(130),
+        text: "Aboard.".to_owned(),
+        labels: nova_sim::mission::screens::offer_labels("", "", true),
+        graphic: None,
+        movie: None,
+    };
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
+            prompt.clone(),
+        ))));
+    view.input(&key(BOARD_KEY, true));
+    assert!(!view.holds_keys(), "the offer dialog takes B's release");
+    assert_eq!(view.take_offer(), Some(prompt));
+}
+
+#[test]
+fn b_refused_stays_held_until_its_release() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoTarget));
+    view.input(&key(BOARD_KEY, true));
+    assert!(view.holds_keys(), "held");
+    view.input(&key(BOARD_KEY, false));
+    assert!(!view.holds_keys(), "released");
 }
 
 // The Board key's latch (`*0xdee18`).
@@ -524,20 +641,50 @@ fn a_take_names_its_cargo_and_its_rounds_as_the_flight_names_them() {
     view.plunder_held(Take::Cargo, Duration::ZERO);
     assert_eq!(
         view.message(),
-        Some("You salvaged 13 tons of Food from this ship.")
+        Some("You salvaged 13 tons of food from this ship."),
+        "the good in lower case (`_DoPlunderDialog` @0x93922)"
     );
-    view.sim.queue_answer(plundered(
+    // #115, `_StrcatOrdinalNumber`, `LCName` at 1 or less else `LCPlural`,
+    // #108 (@0x93ded-0x93ec8).
+    for (count, said) in [
+        (1, "You salvaged one rocket pack from this ship."),
+        (2, "You salvaged two rocket packs from this ship."),
+        (10, "You salvaged ten rocket packs from this ship."),
+        (11, "You salvaged 11 rocket packs from this ship."),
+    ] {
+        view.sim.queue_answer(plundered(
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count,
+            },
+            true,
+        ));
+        view.plunder_held(Take::Ammo, Duration::ZERO);
+        assert_eq!(view.message(), Some(said), "{count}");
+    }
+}
+
+#[test]
+fn rounds_or_a_good_the_flight_does_not_name_say_nothing() {
+    // The original's Ammo press takes nothing when no outfit names the
+    // rounds (@0x93d0a-0x93d2f), and every good has a name, so it has no
+    // fallback words.
+    for taken in [
         Taken::Ammo {
-            outfit: OutfitId(310),
-            count: 2,
+            outfit: OutfitId(999),
+            count: 3,
         },
-        true,
-    ));
-    view.plunder_held(Take::Ammo, Duration::ZERO);
-    assert_eq!(
-        view.message(),
-        Some("You salvaged 2 Rockets from this ship.")
-    );
+        Taken::Cargo {
+            good: Good::Commodity(5),
+            stored: 3,
+        },
+    ] {
+        let mut view = sol();
+        view.say_for(MISSION_FAILED, 240);
+        view.sim.queue_answer(plundered(taken, true));
+        view.plunder_held(Take::Ammo, Duration::ZERO);
+        assert_eq!(view.message(), Some(MISSION_FAILED), "{taken:?}");
+    }
 }
 
 #[test]

@@ -38,7 +38,7 @@ use super::berth_kept::BerthKept;
 
 /// The search timer each berth's last ship left, and the reading a new
 /// ship takes it by (see the module docs).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BerthSearch(BerthKept<SearchTimer>);
 
 impl BerthSearch {
@@ -56,7 +56,7 @@ impl BerthSearch {
             RuleSource::Engine => self
                 .0
                 .left(berth)
-                .map_or(SearchTimer::Carried(0), SearchTimer::carried),
+                .map_or(SearchTimer::Carried(0.0), SearchTimer::carried),
             RuleSource::Bible => SearchTimer::Unset,
         }
     }
@@ -106,6 +106,7 @@ impl Traffic {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -113,7 +114,7 @@ mod tests {
     fn a_never_used_berth_seeds_a_zero_timer_by_the_engine_and_none_by_the_other_reading() {
         let mut kept = BerthSearch::default();
         assert_eq!(kept.reading(), RuleSource::Engine);
-        assert_eq!(kept.seed(3), SearchTimer::Carried(0));
+        assert_eq!(kept.seed(3), SearchTimer::Carried(0.0));
         kept.set_reading(RuleSource::Bible);
         assert_eq!(kept.reading(), RuleSource::Bible);
         assert_eq!(kept.seed(3), SearchTimer::Unset);
@@ -122,13 +123,22 @@ mod tests {
     #[test]
     fn a_berth_seeds_its_last_ships_timer_as_carried() {
         let mut kept = BerthSearch::default();
-        kept.write(1, SearchTimer::Searching(40));
-        assert_eq!(kept.seed(1), SearchTimer::Carried(40));
+        kept.write(1, SearchTimer::Searching(40.0));
+        assert_eq!(kept.seed(1), SearchTimer::Carried(40.0));
         kept.write(1, SearchTimer::Unset);
         assert_eq!(kept.seed(1), SearchTimer::Unset, "a written -1");
-        kept.write(2, SearchTimer::Carried(7));
-        assert_eq!(kept.seed(2), SearchTimer::Carried(7));
+        kept.write(2, SearchTimer::Carried(7.0));
+        assert_eq!(kept.seed(2), SearchTimer::Carried(7.0));
         kept.set_reading(RuleSource::Bible);
         assert_eq!(kept.seed(2), SearchTimer::Unset);
+    }
+
+    #[test]
+    fn a_berth_seeds_a_fractional_timer_as_carried_unchanged() {
+        // A search the frame's gain counted to a fraction is carried as it
+        // stands: the slot's +0xc90c is the float its last ship left.
+        let mut kept = BerthSearch::default();
+        kept.write(1, SearchTimer::Searching(2.5));
+        assert_eq!(kept.seed(1), SearchTimer::Carried(2.5));
     }
 }

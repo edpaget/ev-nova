@@ -100,7 +100,7 @@ fn a_landed_pass_spends_a_held_reinforcement_tick_and_the_clock_stands() {
     session.space.reinforcements_held = true;
     assert!(!pass(&mut session, &catalog));
     assert!(!session.space.reinforcements_held, "spent");
-    assert_eq!(timer(&session), i32::from(TIME), "landed, the clock stands");
+    assert_eq!(timer(&session), f32::from(TIME), "landed, the clock stands");
 }
 
 #[test]

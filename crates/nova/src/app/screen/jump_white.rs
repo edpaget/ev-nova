@@ -12,7 +12,8 @@
 //! - while the white still covers the screen (a plain before-movie
 //!   plays under it), flight's white runs on, though flight is paused,
 //!   and is drawn over the dialogs, as the original's display fade is
-//!   asynchronous and covers the whole display;
+//!   asynchronous and covers the whole display (the escape pod's
+//!   rescue's black is drawn the same way, the `rescue_fades` module);
 //! - once a text has faded the screen in from black, flight is told, so
 //!   the white is gone and the warp lights it again on its next pass.
 //!
@@ -76,13 +77,15 @@ impl AppScreen {
         }
     }
 
-    /// Draws flight's white over the texts it still covers, over the whole
-    /// widened view.
-    pub(super) fn draw_white_over_texts(&self, list: &mut DrawList) {
+    /// Draws what still covers the faded screen over the texts it covers,
+    /// over the whole widened view: flight's white, or the escape pod's
+    /// rescue's black ([`FlightView::draw_faded_cover`], the
+    /// `rescue_fades` module).
+    pub(super) fn draw_cover_over_texts(&self, list: &mut DrawList) {
         if self.texts_under_white()
-            && let Some(effect) = self.flight.as_ref().and_then(|flight| flight.jump_effect())
+            && let Some(flight) = &self.flight
         {
-            effect.draw_fade(list, self.widened);
+            flight.draw_faded_cover(list, self.widened);
         }
     }
 }

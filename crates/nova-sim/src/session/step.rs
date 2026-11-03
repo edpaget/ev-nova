@@ -46,12 +46,22 @@
 //!    asked after it
 //!    ([`Session::rescue_if_due`]), the strikes answered, the quote roll
 //!    on the clock unmoved ([`Session::tick_quotes_again`]), and its own
-//!    report. Its comm notes are taken with the step's, so the frame that
-//!    raised them relays them.
+//!    report. The lines the second pass raises, the rescue's among them,
+//!    are held apart while it runs ([`StepRun::second_pass_lines`]), off
+//!    the step's comm, its quotes, the messages and its last line. The
+//!    original's `_DisplayComm` draws its line into the background and
+//!    work frames at once (@0x90294-0x90390), and the line reaches the
+//!    screen only at the next frame's draw (`_FloaterDrawCallback`
+//!    @0x38b52-0x38b90), so the view shows them on the frame after. Only
+//!    the frame's last step holds them: as the next step begins, an
+//!    earlier step's are folded back into its own streams, its messages
+//!    onto those not yet drained, so the view replays that step in full.
+//!    A step the warp's end or the hold's expiry stops after keeps them.
 //! 5. the line the step raised last, whatever its kind
 //!    ([`StepRun::last_line`]): `_DisplayComm` replaces its one slot with
 //!    each line (@0x90251-0x90265), so the frame ends on the last raised,
-//!    and the view shows it last. The frame clears the record before its
+//!    and the view shows it last. On a step holding second-pass lines it
+//!    is the slot as the first pass left it. The frame clears the record before its
 //!    first step: a line raised before it (a press the view says at once,
 //!    a note or quote the inbox held) is older than any the steps raise.
 //!    With it, whether the step's passes cleared an escort class's kept
@@ -70,17 +80,20 @@
 //! put the ship (@0x68fab). The pass is not reported, and its quotes and
 //! fight events wait for the next frame's take; its comm and its last
 //! line are taken all the same, on either pass, so a note shows before
-//! the `dësc` opens. A rescue on the second pass reports no frame between
-//! the passes, as the view shows the new layout at once.
+//! the `dësc` opens. A rescue on the second pass still reports the frame
+//! between the passes, the pod where the first pass left it, and holds
+//! that pass's lines: the original's `_HandlePlayer` reaches the pod's
+//! countdown on either pass (@0x68ddd), and its `_FadeScreenOut` flushes
+//! and fades the screen as frame n's draw left it (@0x5358, @0x53a4), so
+//! the view fades out over that frame and shows the lines under the
+//! rescue's first text.
 
 use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::{Rules, ShipRef};
-#[cfg(doc)]
-use crate::flight_frame::RaisedLine;
 use crate::flight_frame::{
-    FlightFrame, FrameShot, PassReport, ShipPlace, StepInput, StepReport, StepRun,
+    FlightFrame, PassReport, RaisedLine, ShipPlace, StepInput, StepReport, StepRun,
 };
 
 use super::Session;
@@ -123,6 +136,9 @@ impl Session {
                 into.stopped = true;
                 return;
             }
+            if let Some(earlier) = into.steps.last_mut() {
+                self.fold_back_held_lines(earlier);
+            }
             let run = self.run_step(input, collab);
             let rescued = run.rescued.is_some();
             into.steps.push(run);
@@ -145,6 +161,11 @@ impl Session {
         self.set_double_time_key(input.double_time_key);
         self.set_hyperspace_effects(input.hyperspace_effects);
         self.set_land_key(input.land_key);
+        self.set_dock_try(input.dock_try);
+        self.hold_jettison(input.jettison);
+        if input.held {
+            self.hold_time();
+        }
     }
 
     /// One step under `input`, handed `collab` (see the module docs).
@@ -154,6 +175,7 @@ impl Session {
             before: self.ships_before(),
             ..StepRun::default()
         };
+        self.adjust_time();
         let rescued = self.game_work(
             input.controls,
             catalog,
@@ -164,6 +186,7 @@ impl Session {
         run.comm = self.take_comm();
         if rescued {
             run.rescued = Some(ShipPlace::from(*self.player()));
+            run.rescue_texts = self.ship.fate.rescue_texts.take();
             self.take_step_ends(&mut run);
             return run;
         }
@@ -175,6 +198,7 @@ impl Session {
             return run;
         }
         run.between_passes = Some(self.frame_between_passes());
+        self.out.second_pass = Some(Vec::new());
         self.tick_again(
             input.controls,
             collab.behaviour,
@@ -182,14 +206,12 @@ impl Session {
             &mut *collab.chance,
         );
         #[cfg(test)]
-        for note in std::mem::take(&mut self.out.second_pass_comm) {
-            self.space
-                .raise_line(&mut self.out, crate::flight_frame::RaisedLine::Comm(note));
-        }
+        self.raise_test_second_pass_lines();
         if self.rescue_if_due(catalog, &mut *collab.chance) {
-            run.between_passes = None;
+            run.second_pass_lines = self.close_second_pass();
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
+            run.rescue_texts = self.ship.fate.rescue_texts.take();
             self.take_step_ends(&mut run);
             return run;
         }
@@ -197,8 +219,51 @@ impl Session {
         self.tick_quotes_again(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
         run.comm.extend(self.take_comm());
+        run.second_pass_lines = self.close_second_pass();
         self.take_step_ends(&mut run);
         run
+    }
+
+    /// Ends double time's second pass's hold on its lines: the lines it
+    /// raised, in order (see the module docs).
+    fn close_second_pass(&mut self) -> Vec<RaisedLine> {
+        self.out.second_pass.take().unwrap_or_default()
+    }
+
+    /// Folds the lines `run`'s second pass held back into its streams,
+    /// as a step after it begins: its messages onto the messages not yet
+    /// drained, its comm notes onto the step's comm, its quotes onto that
+    /// pass's, and the last of them as the line the step raised last (see
+    /// the module docs).
+    fn fold_back_held_lines(&mut self, run: &mut StepRun) {
+        let held = std::mem::take(&mut run.second_pass_lines);
+        if let Some(last) = held.last() {
+            run.last_line = Some(last.clone());
+        }
+        for line in held {
+            match line {
+                RaisedLine::Message(message) => self.out.messages.push(message),
+                RaisedLine::Comm(note) => run.comm.push(note),
+                RaisedLine::Quote(quote) => {
+                    if let Some(pass) = run.passes.last_mut() {
+                        pass.quotes.push(quote);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Raises the next batch of the lines a test set for a second pass
+    /// to raise (`Outbox::second_pass_lines`), each as the session raises
+    /// a line.
+    #[cfg(test)]
+    fn raise_test_second_pass_lines(&mut self) {
+        if self.out.second_pass_lines.is_empty() {
+            return;
+        }
+        for line in self.out.second_pass_lines.remove(0) {
+            self.space.raise_line(&mut self.out, line);
+        }
     }
 
     /// The flight as it stands, between double time's two passes.
@@ -237,7 +302,11 @@ impl Session {
     fn pass_report(&mut self) -> PassReport {
         let mut ships = Vec::new();
         self.fill_ships(&mut ships);
-        let shots = self.shots().iter().map(FrameShot::of).collect();
+        let shots = self
+            .shots()
+            .iter()
+            .map(|shot| self.space.frame_shot(shot))
+            .collect();
         PassReport {
             ships,
             shots,
@@ -247,6 +316,7 @@ impl Session {
             system_murk: self.system_murk(),
             player_position: self.player().position,
             double_time: self.double_time(),
+            speed_mult: self.speed_mult(),
             quotes: self.take_quotes(),
             wrap: self.out.player_wrap.take(),
         }
@@ -256,10 +326,11 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::MaskSheet;
     use crate::chance::NeverFires;
     use crate::combat::CombatEvent;
     use crate::flight::Controls;
-    use crate::flight_frame::RaisedLine;
+    use crate::flight_frame::{FrameShot, RaisedLine};
     use crate::geometry::Vec2;
     use crate::hail::CommNote;
     use crate::player_wrap::{PlayerWrap, WRAP_EDGE};
@@ -304,7 +375,13 @@ mod tests {
 
     /// What a step took by hand: its comm, each pass's takes, the line it
     /// raised last, and whether it cleared a class's kept order.
-    type StepTook = (Vec<CommNote>, Vec<Took>, Option<RaisedLine>, bool);
+    type StepTook = (
+        Vec<CommNote>,
+        Vec<Took>,
+        Option<RaisedLine>,
+        bool,
+        Option<crate::flight_frame::RescueTexts>,
+    );
 
     /// The frame's calls made by hand, in the order the view made them,
     /// on the same collaborators: each step's comm, then each pass's
@@ -329,6 +406,8 @@ mod tests {
         session.set_double_time_key(input.double_time_key);
         session.set_hyperspace_effects(input.hyperspace_effects);
         session.set_land_key(input.land_key);
+        session.set_dock_try(input.dock_try);
+        session.hold_jettison(input.jettison);
         session.out.last_line = None;
         session.out.class_orders_cleared = false;
         let mut took = Vec::new();
@@ -354,11 +433,7 @@ mod tests {
             passes.push((session.take_quotes(), session.take_combat_events()));
             if session.double_time() {
                 session.tick_again(input.controls, &behaviour, Rules::default(), chance);
-                for note in std::mem::take(&mut session.out.second_pass_comm) {
-                    session
-                        .space
-                        .raise_line(&mut session.out, RaisedLine::Comm(note));
-                }
+                session.raise_test_second_pass_lines();
                 if session.rescue_if_due(catalog, chance) {
                     comm.extend(session.take_comm());
                     took.push(step_took(session, comm, passes));
@@ -375,16 +450,18 @@ mod tests {
     }
 
     /// What a step took by hand, its `comm` and its `passes`' takes: then
-    /// the line it raised last and whether it cleared a class.
+    /// the line it raised last, whether it cleared a class and where a
+    /// rescue's texts fell.
     fn step_took(session: &mut Session, comm: Vec<CommNote>, passes: Vec<Took>) -> StepTook {
         let line = session.out.last_line.take();
         let cleared = std::mem::take(&mut session.out.class_orders_cleared);
-        (comm, passes, line, cleared)
+        let rescue_texts = session.ship.fate.rescue_texts.take();
+        (comm, passes, line, cleared, rescue_texts)
     }
 
     /// What `report` took: each step's comm, then each pass's quotes and
-    /// fight events, the line it raised last, and whether it cleared a
-    /// class.
+    /// fight events, the line it raised last, whether it cleared a class
+    /// and where a rescue's texts fell.
     fn took(report: &StepReport) -> Vec<StepTook> {
         report
             .steps
@@ -400,6 +477,7 @@ mod tests {
                     passes,
                     run.last_line.clone(),
                     run.class_orders_cleared,
+                    run.rescue_texts,
                 )
             })
             .collect()
@@ -461,6 +539,8 @@ mod tests {
             double_time_key: true,
             hyperspace_effects: true,
             land_key: true,
+            dock_try: true,
+            jettison: Some(false),
             window_width: 640,
             play_area: crate::cloak::Area {
                 left: -1.0,
@@ -509,8 +589,16 @@ mod tests {
 
     #[test]
     fn each_pass_reports_the_session_as_it_stood_after_it() {
+        let one: &[&str] = &["#"];
+        let catalog = FakePilotCatalog {
+            rle_sheets: vec![(
+                MaskSheet::Shot(0),
+                nova_sim_base::fixture::rle::sheet(&[one; 4]),
+            )],
+            ..armed()
+        };
         for double in [false, true] {
-            let (catalog, mut session) = fight();
+            let mut session = facing_an_npc(&catalog, 180);
             let input = firing(double);
             // Each pass's records, as the session stands after it.
             let mut expected = Vec::new();
@@ -545,7 +633,9 @@ mod tests {
                 .flat_map(|run| run.passes.iter().cloned())
                 .collect();
             assert_eq!(passes, expected, "double time {double}");
-            assert!(passes.iter().any(|pass| !pass.shots.is_empty()), "fired");
+            let mut shots = passes.iter().flat_map(|pass| &pass.shots).peekable();
+            assert!(shots.peek().is_some(), "fired");
+            assert!(shots.all(|shot| shot.frame.is_some()), "each at its frame");
         }
     }
 
@@ -740,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rescue_on_the_second_pass_ends_the_stepping_with_its_comm_taken() {
+    fn a_rescue_on_the_second_pass_reports_the_frame_between_and_holds_its_lines() {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         let input = StepInput {
@@ -756,7 +846,16 @@ mod tests {
         assert!(report.stopped);
         let run = &report.steps[0];
         assert_eq!(run.passes.len(), 1, "the advance pass alone");
-        assert_eq!(run.between_passes, None, "the view lays out afresh");
+        let between = run.between_passes.as_ref().expect("the pod drawn");
+        assert_eq!(
+            between.player().position,
+            run.passes[0].player_position,
+            "where the first pass left the pod"
+        );
+        assert!(
+            matches!(between.fate, crate::PlayerFate::Ejected { .. }),
+            "not yet rescued"
+        );
         let player = session.player();
         assert_eq!(
             run.rescued,
@@ -769,19 +868,23 @@ mod tests {
         steps(&mut session, &catalog, &input, 0);
         session.ship.fate.rescue_due = false;
         let mut copy = session.clone();
-        copy.out.second_pass_comm.push(repaired());
+        copy.out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
         let report = steps(&mut copy, &catalog, &input, 1);
         assert_eq!(
             copy.take_rescue_desc().map(|desc| desc.id),
             Some(13999),
             "rescued on the second pass"
         );
-        assert_eq!(report.steps[0].comm, [repaired()], "taken with its step");
+        assert_eq!(report.steps[0].comm, [], "held");
         assert_eq!(
-            report.steps[0].last_line,
-            Some(RaisedLine::Comm(repaired()))
+            report.steps[0].second_pass_lines,
+            [RaisedLine::Comm(repaired())],
+            "for the frame after"
         );
-        assert_eq!(copy.take_comm(), [], "none held for the next take");
+        assert_eq!(report.steps[0].last_line, None, "the first pass's");
+        assert_eq!(copy.take_comm(), [], "none left for the next take");
     }
 
     /// An ally's note that it has repaired the player.
@@ -794,20 +897,135 @@ mod tests {
         }
     }
 
-    #[test]
-    fn comm_raised_on_the_second_pass_comes_with_its_step() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        let input = StepInput {
+    /// The input of a frame in double time.
+    fn doubled() -> StepInput {
+        StepInput {
             double_time_key: true,
             ..StepInput::default()
+        }
+    }
+
+    /// A message, a comm note and a quote, as a second pass raises them.
+    fn three_lines() -> Vec<RaisedLine> {
+        vec![
+            RaisedLine::Comm(repaired()),
+            RaisedLine::Message(crate::SimMessage::NoActiveMissions),
+            RaisedLine::Quote(halt()),
+        ]
+    }
+
+    /// A person's "Halt!".
+    fn halt() -> PersonQuote {
+        PersonQuote {
+            npc: crate::traffic::npc::NpcId(0),
+            text: "Halt!".to_owned(),
+        }
+    }
+
+    /// The messages `session` has raised since they were last drained.
+    fn messages_drained(session: &mut Session) -> Vec<crate::SimMessage> {
+        let mut events = Vec::new();
+        session.drain_events(&mut events);
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::flight_frame::FlightEvent::Message(message) => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn double_times_second_pass_lines_are_held_off_the_steps_streams() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        messages_drained(&mut session);
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 1);
+        let run = &report.steps[0];
+        assert_eq!(run.passes.len(), 2, "both passes");
+        assert_eq!(run.second_pass_lines, three_lines(), "in the order raised");
+        assert_eq!(run.comm, [], "not on the step's comm");
+        assert_eq!(run.passes[1].quotes, [], "nor on its pass's quotes");
+        assert_eq!(messages_drained(&mut session), [], "nor drained");
+        assert_eq!(run.last_line, None, "the slot as the first pass left it");
+        assert!(
+            !session.space.comm_line.free_for_calls(),
+            "the count set at once"
+        );
+    }
+
+    #[test]
+    fn only_the_frames_last_step_holds_its_second_passs_lines() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        messages_drained(&mut session);
+        let own = vec![RaisedLine::Comm(CommNote {
+            ship_name: "Lightning".to_owned(),
+            ..repaired()
+        })];
+        session.out.second_pass_lines = vec![three_lines(), own.clone()];
+        let report = steps(&mut session, &catalog, &doubled(), 2);
+        let [earlier, last] = &report.steps[..] else {
+            panic!("two steps: {report:?}");
         };
-        steps(&mut session, &catalog, &input, 1);
-        session.out.second_pass_comm.push(repaired());
-        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(earlier.second_pass_lines, [], "folded back");
+        assert_eq!(earlier.comm, [repaired()]);
+        assert_eq!(earlier.passes[1].quotes, [halt()]);
+        assert_eq!(earlier.last_line, Some(three_lines()[2].clone()));
+        assert_eq!(
+            messages_drained(&mut session),
+            [crate::SimMessage::NoActiveMissions]
+        );
+        assert_eq!(last.second_pass_lines, own, "its own held");
+        assert_eq!(last.comm, []);
+        assert_eq!(last.last_line, None);
+    }
+
+    #[test]
+    fn a_step_the_warps_end_stops_after_keeps_its_lines_held() {
+        use crate::session::warp_stage::tests::{frames, jumping_in_double_time, with_a_warp_out};
+        let catalog = with_a_warp_out();
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 96);
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 3);
+        assert_eq!(report.steps.len(), 1, "stopped before the next");
+        assert!(report.stopped);
+        assert_eq!(report.steps[0].second_pass_lines, three_lines());
+    }
+
+    #[test]
+    fn a_single_time_step_holds_no_lines() {
+        let (catalog, mut session) = fight();
+        let report = steps(&mut session, &catalog, &firing(false), 30);
+        assert!(
+            report
+                .steps
+                .iter()
+                .all(|run| run.second_pass_lines.is_empty())
+        );
+    }
+
+    #[test]
+    fn comm_raised_on_the_second_pass_is_held_with_its_step() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        session
+            .out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
+        let report = steps(&mut session, &catalog, &doubled(), 1);
         assert_eq!(report.steps[0].passes.len(), 2, "both passes");
-        assert_eq!(report.steps[0].comm, [repaired()], "taken with its step");
-        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(report.steps[0].comm, [], "held");
+        assert_eq!(
+            report.steps[0].second_pass_lines,
+            [RaisedLine::Comm(repaired())]
+        );
+        let report = steps(&mut session, &catalog, &doubled(), 1);
         assert_eq!(report.steps[0].comm, [], "none left for the next");
     }
 
@@ -821,18 +1039,17 @@ mod tests {
         let report = steps(&mut session, &catalog, &StepInput::default(), 2);
         assert_eq!(report.steps[0].last_line, None, "said before the frame");
         assert_eq!(report.steps[1].last_line, None);
-        let input = StepInput {
-            double_time_key: true,
-            ..StepInput::default()
-        };
-        steps(&mut session, &catalog, &input, 1);
-        session.out.second_pass_comm.push(repaired());
-        let report = steps(&mut session, &catalog, &input, 2);
+        steps(&mut session, &catalog, &doubled(), 1);
+        session
+            .out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
+        let report = steps(&mut session, &catalog, &doubled(), 2);
         assert_eq!(report.steps[0].comm, [repaired()]);
         assert_eq!(
             report.steps[0].last_line,
             Some(RaisedLine::Comm(repaired())),
-            "raised on the second pass"
+            "raised on the second pass, folded back as the next step began"
         );
         assert_eq!(report.steps[1].last_line, None, "taken with its step");
     }
@@ -959,8 +1176,13 @@ mod tests {
                 position: shot.position,
                 velocity: shot.velocity,
                 heading: shot.heading,
-                age: shot.age,
-                spin_timer: shot.spin_timer,
+                life: shot.life,
+                fade: shot.fade_shown,
+                frame: session
+                    .space
+                    .sprite_masks
+                    .sheet(MaskSheet::Shot(shot.weapon.graphic))
+                    .and_then(|sheet| shot.frame_on(sheet)),
                 layer: shot.layer,
             })
             .collect();
@@ -972,6 +1194,7 @@ mod tests {
             system_murk: session.system_murk(),
             player_position: session.player().position,
             double_time: session.double_time(),
+            speed_mult: session.speed_mult(),
             quotes: session.take_quotes(),
             combat: session.take_combat_events(),
             wrap: session.out.player_wrap.take(),

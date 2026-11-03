@@ -123,6 +123,7 @@ fn a_stock_raven_npc_turned_a_quarter_flies_along_its_heading() {
             &handling,
             Controls::default(),
             FlightRules::default(),
+            nova_sim::SpeedMult::FULL,
         );
     }
     assert!((speed - top).abs() < f32::EPSILON, "{speed}");

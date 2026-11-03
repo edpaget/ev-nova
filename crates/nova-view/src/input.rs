@@ -104,6 +104,14 @@ pub enum Input {
     PointerMoved(Point),
     /// The pointer left the window.
     PointerLeft,
+    /// The pointer moved outside the game, in a letterbox bar or off the
+    /// window, to `Point` in the logical space past the content's edges,
+    /// while the primary button that went down over the game is still held.
+    /// [`Input::PointerLeft`] came first, as the pointer left; only a drag
+    /// that follows the pointer anywhere (the map's, `_DoSystemMap`'s
+    /// `_GetMouse`/`_StillDown` loop @0x137e9-0x138d8) reads it, and every
+    /// other screen ignores it.
+    PointerMovedOutside(Point),
     /// A mouse button went down or up with the pointer at `at`.
     PointerButton {
         /// The button.
@@ -136,6 +144,7 @@ impl Input {
         let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
         match self {
             Self::PointerMoved(at) => Self::PointerMoved(moved(at)),
+            Self::PointerMovedOutside(at) => Self::PointerMovedOutside(moved(at)),
             Self::PointerButton {
                 button,
                 pressed,
@@ -165,6 +174,10 @@ mod tests {
         assert_eq!(
             Input::PointerMoved(Point::new(300.0, 40.0)).translated(by),
             Input::PointerMoved(Point::new(130.0, 42.0))
+        );
+        assert_eq!(
+            Input::PointerMovedOutside(Point::new(-40.0, 900.0)).translated(by),
+            Input::PointerMovedOutside(Point::new(-210.0, 902.0))
         );
         assert_eq!(
             Input::PointerButton {

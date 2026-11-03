@@ -111,11 +111,14 @@
 //! none); otherwise it defects, leaving the fleet and the system at once
 //! (@0x4021e-0x40266: the original deactivates it rather than flying it
 //! off), and the flight is told how many defected ([`PayNote`], `STR#`
-//! 2002 #302 or #303). Captured escorts and fighters are never paid. The
-//! days paid are a jump's days, after the date has moved on
-//! (`_HandlePlayer` @0x6c616), and one day at each take-off by the engine
-//! (`_DoEscortLand` @0x40853, which in the original pays for its landing
-//! day), as the rulebook's [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)
+//! 2002 #302 or #303), which the player sees in a text dialog
+//! (`_ShowTextDialog` @0x40301). Captured escorts, fighters and mission
+//! escorts are never paid: a mission escort has no wage. The days paid
+//! are a jump's days, after the date has moved on (`_HandlePlayer`
+//! @0x6c616), and one day at each take-off by the engine, after the
+//! escort days and with the spaceport still up (`_DoEscortLand`
+//! @0x4085a, which in the original pays for its landing day), as the
+//! rulebook's [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)
 //! chooses (`nova_sim::Session::with_rules`).
 //!
 //! A freighter that defects first destroys its share of the fleet's
@@ -137,8 +140,11 @@
 //!
 //! # Not modelled
 //!
-//! Mission escorts, never paid, wait for missions; and the extra days the
-//! original passes for outfitting and buying a ship are not passed.
+//! `_DoEscortPayment`'s `_IsDisabled` skip (@0x40174): a disabled escort
+//! has already left the fleet (`_DamageShip` @0x3afdd), so none paid can
+//! be disabled. Its redraw flag (*0x3b506c+2) and closing `_RefreshSAT`
+//! (@0x40306) and `_DrawStatus` (@0x40312): the engine draws the bar and
+//! the space from the frame every pass.
 //!
 //! # Why the session keeps these ports
 //!

@@ -13,7 +13,7 @@
 //!
 //! - **The types** ([`AsteroidType`]): `_LoadObjectData`
 //!   (@0x7dcaa-0x7dec3) keeps each `röid`'s strength, at least 1, and its
-//!   spin, `SpinRate` × 0.01 frames a tick. Its master sprite is `spïn`
+//!   spin, `SpinRate` × 0.01 frames a pass at full gain. Its master sprite is `spïn`
 //!   800 + type (`_LoadSprites` @0x20bb7), `xTiles` × `yTiles` frames.
 //! - **The spawn** ([`Asteroids::spawn`], `_SpawnAsteroid` @0x3a233):
 //!   nothing when the system's `Asteroids` is 0 or less, its `AstTypes`
@@ -39,8 +39,10 @@
 //!   asteroid of slots 1-15 moves into slot 0, the one every miner works.
 //!   The session derives the flag (see its `mining` module).
 //! - **The step** ([`Asteroids::step`], `_HandleAsteroids` @0x361ac):
-//!   each active asteroid moves by its velocity and turns by its spin
-//!   (@0x36300-0x3636f), its frame wrapped once, up by the frame count
+//!   each active asteroid moves by its velocity × the frame's gain and
+//!   turns by its spin × the gain, each added in doubles (`_gSpeedMult`
+//!   @0x3630a, 0x36319; @0x36300-0x3636f), the gain the session's, handed
+//!   in as a value; its frame is then wrapped once, unscaled, up by the frame count
 //!   below 0 or down by it at or past it (@0x363b2-0x363f6). It is
 //!   culled, its slot freed, when its sprite's left edge on screen is
 //!   past the play area's width + 32 or before −2 × its width − 32, or
@@ -74,9 +76,11 @@
 //!   its only read, and each −32000 written elsewhere (@0x9ad1, @0xc3d9,
 //!   @0x97c64) is to another table. A hit below 0 destroys the asteroid
 //!   at once, so the cull is moot.
-//! - The `_gameFrozen` skip (@0x36300-0x3636f) and the frozen game's call
-//!   from `_PrepareAllSprites` (@0x3a7dd): the engine has no frozen game
-//!   (see the `combat` module), and a paused session doesn't tick.
+//! - The `_gameFrozen` skip (@0x36300) and the frozen game's call from
+//!   `_PrepareAllSprites` (@0x3a7dd): the engine has no frozen game (see
+//!   the `combat` module), and a paused session doesn't tick. Under
+//!   `_PrepareAllSprites` the skip leaves the asteroids still, and the
+//!   engine runs no step there, so nothing moves either way.
 //! - The largest master's width and height (@0x3624d-0x362a2), which
 //!   only dead writes read, and the repositioning writes of the cull.
 //! - The anti-piracy block (@0x3a2a1-0x3a2f9), which writes the
@@ -88,7 +92,9 @@ use crate::chance::Chance;
 use crate::cloak::Area;
 use crate::combat::ParticleBurst;
 use crate::combat::weapon::Explosion;
+use crate::flight;
 use crate::geometry::Vec2;
+use crate::speed_mult::SpeedMult;
 
 /// The most asteroids in a field at once: `_asteroidData`'s 16 slots.
 pub const SLOTS: usize = 16;
@@ -159,7 +165,7 @@ const SPIN_BASE: u16 = 80;
 pub struct AsteroidType {
     /// Its strength: `Strength`, at least 1.
     pub strength: i16,
-    /// Its spin, in frames a tick: `SpinRate` / 100.
+    /// Its spin, in frames a pass at full gain: `SpinRate` / 100.
     pub spin: f32,
     /// Its master sprite's frame count.
     pub frames: u16,
@@ -376,17 +382,33 @@ pub enum Origin {
 pub struct Asteroid {
     /// Where it is, in pixels from the system's centre.
     pub position: Vec2,
-    /// How far it moves each tick.
+    /// How far it moves a pass at full gain: the move is this × the
+    /// frame's gain.
     pub velocity: Vec2,
     /// Its frame: drawn at its whole part.
     pub frame: f32,
-    /// How many frames it turns each tick.
+    /// How many frames it turns a pass at full gain: the turn is this ×
+    /// the frame's gain.
     pub spin: f32,
     /// Its strength.
     pub strength: i16,
     /// Its type, 0-15: `röid` 128 + `kind`, drawn with `spïn` 800 +
     /// `kind`.
     pub kind: u8,
+}
+
+impl Asteroid {
+    /// The frame it shows, which the view draws and the contact passes
+    /// touch it by: its frame's whole part, one below 0, which the single
+    /// wrap can leave, as the first (`_HandleAsteroids` @0x36422-0x36446),
+    /// its sheet taking it round its frames.
+    #[must_use]
+    pub fn shown_frame(&self) -> u16 {
+        // Its whole part, saturated into a `u16`: below 0 is 0.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole = self.frame as u16;
+        whole
+    }
 }
 
 /// What a destroyed asteroid leaves, for the session to put in space
@@ -722,16 +744,26 @@ impl Asteroids {
         }
     }
 
-    /// Steps every asteroid one tick about `player` in `area`, with the
-    /// types `types`: `_HandleAsteroids` (see the module docs).
-    pub fn step(&mut self, types: &[AsteroidType; KINDS], player: Vec2, area: Area) {
+    /// Steps every asteroid a pass at the frame's `gain` about `player` in
+    /// `area`, with the types `types`: `_HandleAsteroids` (see the module
+    /// docs). It moves by its velocity × the gain and turns by its spin ×
+    /// the gain, each added in doubles (`_gSpeedMult` @0x3630a, 0x36319);
+    /// the wrap and the cull after it are unscaled.
+    pub fn step(
+        &mut self,
+        types: &[AsteroidType; KINDS],
+        player: Vec2,
+        area: Area,
+        gain: SpeedMult,
+    ) {
         for slot in &mut self.slots {
             let Some(asteroid) = slot else {
                 continue;
             };
             let kind_type = type_of(types, asteroid.kind);
-            asteroid.position = asteroid.position + asteroid.velocity;
-            asteroid.frame = wrapped(asteroid.frame + asteroid.spin, kind_type.frames);
+            asteroid.position = flight::moved(asteroid.position, asteroid.velocity, gain);
+            let turned = gain.add_times(asteroid.frame, asteroid.spin);
+            asteroid.frame = wrapped(turned, kind_type.frames);
             if culled(asteroid.position - player, kind_type.size, area) {
                 *slot = None;
             }
@@ -882,6 +914,22 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::cloak::DEFAULT_PLAY_AREA;
     use nova_sim_base::fixture::Scripted;
+
+    #[test]
+    fn an_asteroid_shows_its_frames_whole_part_and_none_below_0() {
+        let at = |frame| Asteroid {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            frame,
+            spin: 0.0,
+            strength: 1,
+            kind: 0,
+        };
+        assert_eq!(at(7.9).shown_frame(), 7);
+        assert_eq!(at(35.99).shown_frame(), 35);
+        assert_eq!(at(-0.5).shown_frame(), 0);
+        assert_eq!(at(-3.0).shown_frame(), 0);
+    }
 
     /// Every roll its last outcome.
     struct Last;
@@ -1349,14 +1397,60 @@ mod tests {
     #[test]
     fn a_step_moves_each_asteroid_by_its_velocity_and_turns_it_by_its_spin() {
         let mut field = one(PLAYER, Vec2::new(0.5, -1.5), 3.0, 0.75);
-        field.step(&types(), PLAYER, AREA);
+        field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
         let stepped = first(&field);
         assert_eq!(stepped.position, PLAYER + Vec2::new(0.5, -1.5));
         assert_eq!(stepped.velocity, Vec2::new(0.5, -1.5));
         assert_eq!(stepped.frame, 3.75);
-        field.step(&types(), PLAYER, AREA);
+        field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
         assert_eq!(first(&field).position, PLAYER + Vec2::new(1.0, -3.0));
         assert_eq!(first(&field).frame, 4.5);
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn an_asteroid_moves_and_turns_by_the_gain() {
+        let mut half = one(PLAYER, Vec2::new(0.5, -1.5), 3.0, 0.75);
+        half.step(&types(), PLAYER, AREA, HALF);
+        let stepped = first(&half);
+        assert_eq!(stepped.position, PLAYER + Vec2::new(0.25, -0.75));
+        assert_eq!(stepped.frame, 3.375);
+        let mut held = one(PLAYER, Vec2::new(0.5, -1.5), 3.0, 0.75);
+        held.step(&types(), PLAYER, AREA, SpeedMult::ZERO);
+        assert_eq!(
+            first(&held),
+            first(&one(PLAYER, Vec2::new(0.5, -1.5), 3.0, 0.75))
+        );
+    }
+
+    #[test]
+    fn at_half_gain_the_wrap_is_by_the_whole_frame_count() {
+        let mut table = types();
+        table[0].frames = 10;
+        let mut field = one(PLAYER, Vec2::ZERO, 0.0, -0.5);
+        field.step(&table, PLAYER, AREA, HALF);
+        assert_eq!(first(&field).frame, 9.75, "-0.25 wraps up by 10");
+    }
+
+    #[test]
+    fn the_cull_reads_the_position_moved_at_the_gain() {
+        // Culled from an offset of 356 on: one full step from 355 culls,
+        // half of one keeps.
+        let leaving = || {
+            one(
+                PLAYER + Vec2::new(355.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                0.0,
+                0.0,
+            )
+        };
+        let mut full = leaving();
+        full.step(&types(), PLAYER, AREA, SpeedMult::FULL);
+        assert_eq!(full.active(), 0);
+        let mut half = leaving();
+        half.step(&types(), PLAYER, AREA, HALF);
+        assert_eq!(half.active(), 1);
     }
 
     #[test]
@@ -1373,12 +1467,12 @@ mod tests {
             (0.0, -25.0, -15.0),
         ] {
             let mut field = one(PLAYER, Vec2::ZERO, frame, spin);
-            field.step(&table, PLAYER, AREA);
+            field.step(&table, PLAYER, AREA, SpeedMult::FULL);
             assert_eq!(first(&field).frame, wrapped, "{frame} {spin}");
         }
         table[0].frames = 0;
         let mut field = one(PLAYER, Vec2::ZERO, 5.0, 2.0);
-        field.step(&table, PLAYER, AREA);
+        field.step(&table, PLAYER, AREA, SpeedMult::FULL);
         assert_eq!(first(&field).frame, 7.0, "no frames, no wrap");
     }
 
@@ -1386,7 +1480,7 @@ mod tests {
     /// player survives a step.
     fn survives(off: Vec2) -> bool {
         let mut field = one(PLAYER + off, Vec2::ZERO, 0.0, 0.0);
-        field.step(&types(), PLAYER, AREA);
+        field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
         field.active() == 1
     }
 
@@ -1425,7 +1519,7 @@ mod tests {
             );
         }
         field.slots[0].as_mut().expect("spawned").position = PLAYER + Vec2::new(1000.0, 0.0);
-        field.step(&types(), PLAYER, AREA);
+        field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
         assert_eq!(field.active(), 2);
         assert_eq!(field.first_free(), Some(0));
         field.spawn(
@@ -1537,7 +1631,7 @@ mod tests {
             // Still, it survives the cull.
             let mut field = Asteroids::default();
             field.slots[0] = Some(made);
-            field.step(&types(), PLAYER, AREA);
+            field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
             assert_eq!(field.active(), 1, "{side} {jitter}");
         }
     }
@@ -1549,10 +1643,10 @@ mod tests {
             let mut chance = edge_rolls([side, 31, 199], [side, 0, 199]);
             let mut field = Asteroids::default();
             field.spawn(OUTSIDE, spec(1, 1), &types(), PLAYER, AREA, &mut chance);
-            field.step(&types(), PLAYER, AREA);
+            field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
             assert_eq!(field.active(), 1, "its first tick");
             for _ in 0..60 {
-                field.step(&types(), PLAYER, AREA);
+                field.step(&types(), PLAYER, AREA, SpeedMult::FULL);
             }
             let made = first(&field);
             let left = edge(made.position.x - PLAYER.x, 40.0, AREA.left);
@@ -1570,7 +1664,7 @@ mod tests {
             let off = first(&field).position - PLAYER;
             assert!(off.x.abs() >= 900.0 + 20.0, "{off:?}");
             assert!(off.y.abs() >= 550.0 + 15.0, "{off:?}");
-            field.step(&types(), PLAYER, wide);
+            field.step(&types(), PLAYER, wide, SpeedMult::FULL);
             assert_eq!(field.active(), 1);
         }
     }

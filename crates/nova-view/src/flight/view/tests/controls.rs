@@ -697,3 +697,115 @@ fn block_presses(view: &Faked) -> usize {
         .filter(|command| matches!(command, FlightCommand::NavModeKeys { .. }))
         .count()
 }
+
+// Tab and the click in space share `_weapTargetSelectFlag` (0xdede8):
+// with Tab down the click isn't read at all (@0x69dfd); a click sets the
+// latch before anything it tries (@0x6a01b); Tab acts only with it clear
+// (@0x69f24); a pass with both up clears it (@0x6a764).
+
+/// A left press at `at`, through flight's input.
+fn left_press(view: &mut Faked, at: Point) {
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at,
+    });
+}
+
+/// A left release at `at`, through flight's input.
+fn left_release(view: &mut Faked, at: Point) {
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+        at,
+    });
+}
+
+/// Whether `view` sent a click in space.
+fn clicked(view: &Faked) -> bool {
+    sent(view)
+        .iter()
+        .any(|command| matches!(command, FlightCommand::ClickInSpace { .. }))
+}
+
+/// How many target picks `view` sent.
+fn tab_picks(view: &Faked) -> usize {
+    sent(view)
+        .iter()
+        .filter(|command| matches!(command, FlightCommand::SelectTarget(_)))
+        .count()
+}
+
+#[test]
+fn a_click_in_space_with_tab_held_targets_nothing() {
+    let (mut view, id) = faked_with_npc();
+    let over = npc_on_screen(&view, id);
+    view.input(&key(TARGET_KEY, true));
+    left_press(&mut view, over);
+    assert!(!clicked(&view), "{:?}", sent(&view));
+    // Tab let go, a fresh click targets.
+    view.input(&key(TARGET_KEY, false));
+    left_release(&mut view, over);
+    left_press(&mut view, over);
+    assert!(clicked(&view));
+}
+
+#[test]
+fn a_click_with_a_latched_tab_targets_nothing() {
+    let (mut view, id) = faked_with_npc();
+    let over = npc_on_screen(&view, id);
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [TARGET_KEY], [], false);
+    left_press(&mut view, over);
+    assert!(!clicked(&view), "{:?}", sent(&view));
+}
+
+#[test]
+fn tab_pressed_with_the_button_down_selects_nothing() {
+    let (mut view, _) = faked_with_npc();
+    left_press(&mut view, NOWHERE);
+    let from = tab_picks(&view);
+    view.input(&key(TARGET_KEY, true));
+    assert_eq!(tab_picks(&view), from, "{:?}", sent(&view));
+}
+
+#[test]
+fn tab_let_go_with_the_button_still_down_then_pressed_selects_nothing() {
+    let (mut view, _) = faked_with_npc();
+    view.input(&key(TARGET_KEY, true));
+    assert_eq!(tab_picks(&view), 1, "Tab alone picks");
+    left_press(&mut view, NOWHERE);
+    view.input(&key(TARGET_KEY, false));
+    view.held_keys_frame();
+    view.input(&key(TARGET_KEY, true));
+    assert_eq!(tab_picks(&view), 1, "the button holds the latch");
+}
+
+#[test]
+fn the_latch_clears_at_the_poll_once_both_are_up() {
+    let (mut view, _) = faked_with_npc();
+    left_press(&mut view, NOWHERE);
+    assert!(view.target_latch, "the click set it");
+    view.input(&key(TARGET_KEY, true));
+    view.held_keys_frame();
+    assert!(view.target_latch, "Tab down");
+    view.input(&key(TARGET_KEY, false));
+    view.held_keys_frame();
+    assert!(view.target_latch, "the button down");
+    left_release(&mut view, NOWHERE);
+    view.held_keys_frame();
+    assert!(!view.target_latch, "both up");
+}
+
+#[test]
+fn a_button_held_across_a_sites_close_keeps_tab_from_selecting() {
+    // `_SetAllKeyCmdFlags` sets the latch (@0x61e6d), and `_Button` down
+    // keeps the poll from clearing it.
+    let (mut view, _) = faked_with_npc();
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [], [], true);
+    view.held_keys_frame();
+    let from = tab_picks(&view);
+    view.input(&key(TARGET_KEY, true));
+    assert_eq!(tab_picks(&view), from, "{:?}", sent(&view));
+}

@@ -1,5 +1,5 @@
 //! How the flight draws its shots and beams (rdm weapons-fidelity phase
-//! 24): the spin start, the fade, the murk, the trails, the weapon glow
+//! 24): the frame, the fade, the murk, the trails, the weapon glow
 //! and the lightning. On [`FakeFlight`]: each frame's shots and beams are
 //! scripted, and each pass the view steps its shot looks after is
 //! reported; what the session does to a shot (its age, its slot's spin
@@ -10,8 +10,8 @@ use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepR
 use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::Colorize;
-use crate::flight::weapons::SPINS;
 use crate::system::camera::Anchor;
+use nova_sim::combat::shot_fade::at_full_gain;
 
 /// The blaster's look set by `edit`, in [`armed`]'s catalog.
 fn with_blaster(edit: impl FnOnce(&mut WeaponLook)) -> FakeCatalog {
@@ -36,26 +36,47 @@ fn shooting_by(catalog: FakeCatalog, rules: &Rulebook) -> Faked {
 }
 
 /// [`shooting_by`] Nova's rules.
-fn shooting(catalog: FakeCatalog) -> Faked {
+pub(super) fn shooting(catalog: FakeCatalog) -> Faked {
     shooting_by(catalog, &Rulebook::default())
 }
 
 /// The player's blaster shot as the session flies it on the frame `tick`
 /// ticks after the one it is fired on: 20 pixels a tick up from the
-/// player, aged one more pass than the ticks it has flown.
-fn blaster_shot(tick: u32) -> FrameShot {
+/// player, one more visit old than the frames it has flown, of the
+/// [`armed`] blaster's `Count` and `Falloff`, none.
+pub(super) fn blaster_shot(tick: u32) -> FrameShot {
     let flown = 20.0 * f32::from(u16::try_from(tick + 1).expect("a short life"));
+    let (life, fade) = at_full_gain(0, 0, tick + 1);
     FrameShot {
         velocity: Vec2::new(0.0, -20.0),
-        age: tick + 1,
+        life,
+        fade,
         ..shot_of(0, BLASTER, Vec2::new(0.0, -flown), 0.0)
+    }
+}
+
+/// [`blaster_shot`] of the `Count` and `Falloff` `view`'s blaster looks
+/// by.
+fn blaster_shot_in(view: &Faked, tick: u32) -> FrameShot {
+    let look = view.looks.weapon(BLASTER).expect("the blaster's look");
+    let count = u32::try_from(look.count).expect("a Count");
+    let (life, fade) = at_full_gain(count, look.shot_falloff, tick + 1);
+    FrameShot {
+        life,
+        fade,
+        ..blaster_shot(tick)
     }
 }
 
 /// Runs a frame of `view` whose one step's pass holds `shots`, on a
 /// smoke frame or not, raising `combat`, and leaves its frame showing
 /// them.
-fn pass_with(view: &mut Faked, shots: Vec<FrameShot>, smoke_frame: bool, combat: Vec<CombatEvent>) {
+pub(super) fn pass_with(
+    view: &mut Faked,
+    shots: Vec<FrameShot>,
+    smoke_frame: bool,
+    combat: Vec<CombatEvent>,
+) {
     let frame = FlightFrame {
         shots: shots.clone(),
         ..view.frame.clone()
@@ -128,72 +149,42 @@ fn a_shot_draws_with_the_look_of_a_weapon_the_flight_lists() {
 }
 
 #[test]
-fn a_spinning_shot_starts_on_the_index_drawn_on_the_effects_chance() {
-    let catalog = with_blaster(|look| {
-        look.flags = SPINS;
-        look.beam_width = 1;
-    });
-    let (effects, effects_chance) = scripted(&[20]);
+fn a_shot_is_drawn_at_the_frame_the_simulation_gives_drawing_nothing() {
+    // The frame is the simulation's (nova-sim's
+    // `a_fill_shows_each_shot_at_the_frame_the_contact_passes_touch_it_by`):
+    // the view draws the frame the frame carries, whatever the shot's
+    // heading, age or look would make of it.
+    let catalog = with_blaster(|look| look.flags = 0);
+    let (effects, effects_chance) = scripted(&[]);
     let mut view = shooting(catalog);
     view.effects_chance = effects_chance;
-    pass_with(&mut view, vec![blaster_shot(0)], false, Vec::new());
-    assert_eq!(effects.borrow().asked, [36], "Rand(36), once");
-    assert_eq!(
-        blaster_frames(&view),
-        [20],
-        "its first pass shows its start"
-    );
-    pass_with(&mut view, vec![blaster_shot(1)], false, Vec::new());
-    assert_eq!(blaster_frames(&view), [21], "then a frame a tick");
-    assert_eq!(effects.borrow().asked, [36], "drawn once a shot");
-}
-
-#[test]
-fn a_spinning_shot_of_flags_0x0004_starts_on_its_first_frame() {
-    let catalog = with_blaster(|look| {
-        look.flags = SPINS | crate::flight::spin::FIRST_FRAME_START;
-        look.beam_width = 1;
-    });
-    let (effects, effects_chance) = scripted(&[20]);
-    let mut view = shooting(catalog);
-    view.effects_chance = effects_chance;
-    pass_with(&mut view, vec![blaster_shot(0)], false, Vec::new());
-    assert_eq!(blaster_frames(&view), [0]);
-    assert_eq!(effects.borrow().asked, Vec::<u32>::new());
-}
-
-#[test]
-fn a_spinning_shot_is_drawn_stepping_on_the_spin_timer_its_frame_gives() {
-    // The blaster spins from its first frame, a step every 4 passes. The
-    // timer a shot's slot left it is the session's
-    // (nova-sim-combat's `a_spinning_shot_runs_its_slots_spin_timer_and_the_next_shot_there_starts_on_it`):
-    // the view steps it from the timer the frame gives.
-    let look = WeaponLook {
-        flags: SPINS | crate::flight::spin::FIRST_FRAME_START,
-        beam_width: 4,
-        ..WeaponLook::default()
-    };
-    let catalog = with_blaster(|blaster| {
-        blaster.flags = look.flags;
-        blaster.beam_width = look.beam_width;
-    });
-    let mut view = shooting(catalog);
-    let frames = NonZeroU16::new(36).expect("non-zero");
-    let timer = 3;
-    let (mut shown, mut expected, mut from_0) = (Vec::new(), Vec::new(), Vec::new());
-    for tick in 0..6 {
+    let mut shown = Vec::new();
+    for (tick, frame) in [(0, 20), (1, 21), (2, 5)] {
         let shot = FrameShot {
-            spin_timer: timer,
             heading: 90.0,
+            frame: Some(frame),
             ..blaster_shot(tick)
         };
         pass_with(&mut view, vec![shot], false, Vec::new());
         shown.extend(blaster_frames(&view));
-        expected.push(weapons::shot_frame(90.0, shot.age, frames, &look, 0, timer));
-        from_0.push(weapons::shot_frame(90.0, shot.age, frames, &look, 0, 0));
     }
-    assert_eq!(shown, expected, "from timer {timer}");
-    assert_ne!(shown, from_0, "not as from 0");
+    assert_eq!(shown, [20, 21, 5]);
+    assert_eq!(effects.borrow().asked, Vec::<u32>::new(), "no draw");
+}
+
+#[test]
+fn a_shot_given_no_frame_is_drawn_at_its_sheets_first() {
+    // The simulation reads the same `spïn` the view draws, so it gives
+    // none only where the view's sheet is missing too; a sheet the view
+    // read anyway shows its first frame.
+    let mut view = shooting(with_blaster(|_| {}));
+    let shot = FrameShot {
+        heading: 90.0,
+        frame: None,
+        ..blaster_shot(3)
+    };
+    pass_with(&mut view, vec![shot], false, Vec::new());
+    assert_eq!(blaster_frames(&view), [0]);
 }
 
 /// Each frame's draw of the blaster's shot over `ticks` ticks from the
@@ -205,7 +196,7 @@ fn one_shot_draws(view: &mut Faked, ticks: u32, life: u32) -> Vec<Option<(Color,
     (0..ticks)
         .map(|tick| {
             let shots = if tick < life {
-                vec![blaster_shot(tick)]
+                vec![blaster_shot_in(view, tick)]
             } else {
                 Vec::new()
             };
@@ -243,6 +234,38 @@ fn a_shot_is_drawn_count_times_on_its_live_ticks_fading_from_its_first() {
         .map(|level| (crate::draw::lights_tint(level), true))
         .collect();
     assert_eq!(shown, expected, "32 on its first tick, then 30, 28 … 4");
+}
+
+#[test]
+fn a_shot_is_drawn_by_the_fade_and_life_its_frame_carries() {
+    // A fade of 3.5, read between whole steps at a gain below 1, and a
+    // life of 10.25: the shade `shot_shade` gives them, whatever the age.
+    let catalog = with_blaster(|look| {
+        look.count = 100;
+        look.shot_falloff = 2;
+    });
+    let mut view = shooting(catalog);
+    let look = view.looks.weapon(BLASTER).expect("the look").clone();
+    let shot = FrameShot {
+        fade: 3.5,
+        life: 10.25,
+        ..blaster_shot(0)
+    };
+    pass_with(&mut view, vec![shot], false, Vec::new());
+    let drawn = super::faked_world::world_list(&view)
+        .iter()
+        .find_map(|command| match *command {
+            DrawCommand::Sprite {
+                image, tint, blend, ..
+            } if image.id == 3500 => Some((tint, blend)),
+            _ => None,
+        });
+    let shade = crate::flight::shot_fade::shot_shade(&look, 3.5, 10.25, RuleSource::Engine);
+    assert_eq!(shade, crate::flight::shot_fade::ShotShade::Translucent(3));
+    assert_eq!(
+        drawn,
+        Some((weapons::see_through(3), crate::draw::Blend::OrCrossfade))
+    );
 }
 
 #[test]
@@ -522,7 +545,8 @@ fn with_weapon_effects_off_no_ship_draws_its_weapon_glow() {
     let mut view = beside_an_npc(0);
     view.weapon_effects = false;
     let npc = ShipRef::Npc(NpcId(0));
-    view.glows.step(&[(npc, false)], |_| Some(1.0));
+    view.glows
+        .step(&[(npc, false)], |_| Some(1.0), nova_sim::SpeedMult::FULL);
     assert_eq!(glow_layers(&view, 2301), [], "an NPC's neither");
     view.weapon_effects = true;
     assert_eq!(glow_layers(&view, 2301).len(), 1);
@@ -535,7 +559,11 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         let npc = view.frame.ships[1];
         let level = crate::flight::murk::sprite_murk(npc.position, Vec2::ZERO, murk);
         assert_eq!(level, sprite_murk, "murk {murk}");
-        view.glows.step(&[(npc.ship, false)], |_| Some(1.0));
+        view.glows.step(
+            &[(npc.ship, false)],
+            |_| Some(1.0),
+            nova_sim::SpeedMult::FULL,
+        );
         let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
         let tint = crate::draw::lights_tint(capped);
         let colorize = (level > 0).then(|| Colorize::toward_pixel(level, 0x1081));

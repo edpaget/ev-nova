@@ -766,6 +766,14 @@ impl OutfitterScreen {
         }
     }
 
+    /// Tells its offer dialog open whether the mission info screen lists a
+    /// mission ([`SpaceportView::set_offer_missions_listed`](super::SpaceportView::set_offer_missions_listed)).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_missions_listed(listed);
+        }
+    }
+
     /// Its offers play their movies as `movies` says.
     pub fn set_offer_movies(&mut self, movies: Movies) {
         if let Some(offering) = &mut self.offering {
@@ -777,6 +785,19 @@ impl OutfitterScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
         }
     }
 
@@ -903,6 +924,16 @@ impl OutfitterScreen {
     #[must_use]
     pub fn alt_held(&self) -> bool {
         self.quantity.alt_held()
+    }
+
+    /// Runs what the alert's replay queued after the key that closed it
+    /// through the outfitter's own input, as `_ShowTextDialog` flushes
+    /// nothing as it closes (@0x5b353-0x5b507) and the outfitter's loop
+    /// reads those events next.
+    fn pass_alerts_unclaimed(&mut self) {
+        for input in self.alert.take_unclaimed() {
+            self.input(&input);
+        }
     }
 
     /// The alert, while it is open.
@@ -1286,6 +1317,7 @@ impl Screen for OutfitterScreen {
         if self.alert.is_open() {
             self.quantity.follow_alt(input);
             self.alert.input(input, &mut self.sounds);
+            self.pass_alerts_unclaimed();
             return ScreenAction::None;
         }
         if self.quantity.is_open() {
@@ -1346,13 +1378,17 @@ impl Screen for OutfitterScreen {
     }
 
     /// The wait for the next offer runs down, the quantity dialog or the
-    /// alert covering the outfitter while either is open.
+    /// alert covering the outfitter while either is open. The alert ticks,
+    /// and the keys it held back for a cancelled press can close it.
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         let covered = self.quantity.is_open() || self.alert.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
-        self.alert.tick(dt);
+        if self.alert.tick(dt).is_some() {
+            self.pass_alerts_unclaimed();
+        }
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1404,6 +1440,16 @@ impl Screen for OutfitterScreen {
     fn release_keys(&mut self) {
         self.alert.release_keys();
         self.quantity.release_keys();
+    }
+
+    /// The alert's readout ([`ModalHost::holds_back_keys`]), or the offers'
+    /// ([`VenueOffers::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.alert.holds_back_keys()
+            || self
+                .offering
+                .as_ref()
+                .is_some_and(VenueOffers::holds_back_keys)
     }
 
     /// The quantity dialog's and the alert's sounds, in order. The
@@ -4268,6 +4314,56 @@ mod tests {
         counting_screen().with_offers(offer_templates())
     }
 
+    /// Wiring: the outfitter reads its offers' readout
+    /// ([`VenueOffers::holds_back_keys`]), from a click held on the offer's
+    /// Accept until what the answer left has run on the next tick.
+    #[test]
+    fn the_outfitter_holds_back_keys_for_its_offers_held_click() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        assert!(!screen.holds_back_keys(), "before the press");
+        let [press, held, release] = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false,
+            },
+        );
+        screen.input(&press);
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&held);
+        screen.input(&release);
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(
+            screen.holds_back_keys(),
+            "the Escape waits for the next tick"
+        );
+        screen.tick(Duration::ZERO);
+        assert!(!screen.holds_back_keys(), "it has run");
+    }
+
+    /// Wiring: the outfitter runs what the offer's answer left, an Escape
+    /// held back by the click that accepts, through its own input on its
+    /// next tick ([`VenueOffers::take_unclaimed`]). When it is dropped
+    /// instead is the offers' rule, pinned in `offer`.
+    #[test]
+    fn a_key_queued_after_the_offers_answer_reaches_the_outfitter_on_its_next_tick() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let click = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            key(Key::Escape, true, false),
+        );
+        for input in &click {
+            screen.input(input);
+        }
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(!screen.closed(), "the Escape waits for the next tick");
+        screen.tick(Duration::ZERO);
+        assert!(screen.closed());
+    }
+
     #[test]
     fn the_outfitter_with_offers_asks_for_an_offer_as_it_opens() {
         let mut screen = offering();
@@ -4689,6 +4785,25 @@ mod tests {
             .center()
     }
 
+    /// Wiring: the outfitter reads its alert's readout
+    /// ([`ModalHost::holds_back_keys`]) while a click is held on its Done.
+    #[test]
+    fn the_outfitter_holds_back_keys_for_its_alerts_held_click() {
+        let mut screen = alerting(RAISED);
+        assert!(!screen.holds_back_keys(), "before the press");
+        let at = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&left(true));
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&left(false));
+        assert!(screen.alert_dialog().is_none(), "Done closed it");
+        assert!(!screen.holds_back_keys(), "after the release");
+    }
+
     #[test]
     fn a_sale_alert_opens_its_words_in_the_desc_dialog_over_the_outfitter() {
         let screen = alerting(RAISED);
@@ -4869,6 +4984,58 @@ mod tests {
         });
         assert_eq!(screen.take_sounds(), []);
         assert!(screen.alert_dialog().is_none());
+    }
+
+    /// A Return held back by a press on the alert's Done, then a cancel:
+    /// the alert closes on the next tick.
+    fn cancelled_with(screen: &mut OutfitterScreen, keys: &[Key]) {
+        let done = alert_item(screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        for &k in keys {
+            press(screen, k);
+        }
+        screen.cancel_pointer();
+    }
+
+    #[test]
+    fn the_alert_closed_by_a_ticks_replay_lets_a_leaving_outfitter_close() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        screen.reselect(Reselection::Leave);
+        cancelled_with(&mut screen, &[Key::Enter]);
+        assert!(!screen.closed(), "the alert first");
+        screen.tick(Duration::ZERO);
+        assert!(screen.alert_dialog().is_none());
+        assert!(screen.closed());
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so a key queued after the alert's closing key reaches the outfitter.
+    #[test]
+    fn a_key_queued_after_the_alerts_closing_key_reaches_the_outfitter() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        cancelled_with(&mut screen, &[Key::Enter, Key::Escape]);
+        screen.tick(Duration::ZERO);
+        assert!(screen.alert_dialog().is_none());
+        assert!(screen.closed(), "the queued Escape closed the outfitter");
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        press(&mut screen, Key::Enter);
+        press(&mut screen, Key::Escape);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: Point::new(0.0, 0.0),
+        });
+        assert!(screen.closed(), "and at a release, within that input");
     }
 
     #[test]

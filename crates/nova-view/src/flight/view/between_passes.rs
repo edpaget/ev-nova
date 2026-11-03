@@ -20,20 +20,42 @@
 //! so a tick with no step, the open map and a background pause go on
 //! showing it. A command leaves it: what it changed shows on the next step,
 //! as the original's key reads act on the next pass. The three places that
-//! seat the ship afresh drop it unreplayed (`FlightView::lay_out`,
-//! [`FlightView::place_ship`] and a Use As My Ship takeover,
-//! `FlightView::assigned`). A hold is not drawn docked or once the hold
+//! seat the ship afresh drop it unreplayed ([`FlightView::drop_between_passes`]
+//! from `FlightView::lay_out`, [`FlightView::place_ship`] and a Use As My
+//! Ship takeover, `FlightView::assigned`). A hold is not drawn docked or once the hold
 //! after the player's explosion has run out, as neither reaches a step to
 //! let it go ([`shows_hold`]).
 //!
 //! **The view's own effects wait with it.** The last step's second pass is
 //! not replayed that frame: its wrap and its effects, flashes, glows, shot
 //! looks and stars run as the hold goes, before the next report's first
-//! pass. So they never disagree with the frame shown, across a wrap too.
-//! Earlier steps of a many-step frame replay in full: nothing draws them.
-//! A second pass's quotes, comm and last line stay on their own frame; a
-//! line the original draws a frame later is left out, as the phase body
-//! says (rdm:phase/play-feel-6/phase-9-double-time-draws-between-its-passes).
+//! pass. Its sounds are the exception (see below). So they never disagree
+//! with the frame shown, across a wrap too. Earlier steps of a many-step
+//! frame replay in full: nothing draws them.
+//!
+//! **Its lines wait with it.** `_DisplayComm` fills the slot at once but
+//! draws its line into the background and work frames (@0x90294-0x90390),
+//! which reach the screen at the next frame's draw (`_FloaterDrawCallback`
+//! @0x38b52-0x38b90). So a line the second pass raised shows on the frame
+//! after, unless that frame's first pass raises one of its own. The
+//! session holds them apart (`StepRun::second_pass_lines`), the frame's own
+//! last line being the first pass's. The hold words them as it is taken
+//! ([`FlightView::hold_lines`]), against the frame its own messages are
+//! worded against, and relays them once: at the next frame's steps,
+//! before their lines ([`FlightView::release_held_lines`]); or before a
+//! drop of the hold or any other write to the slot
+//! ([`FlightView::relay_held_lines`]), a line said between the frames
+//! among them. The original reads a press on the next first pass, after
+//! the held line was drawn, so the press's line stands over it, and a cut
+//! or a clear acts on the line the held one left. A write the frame makes
+//! after its own steps leaves them held, as the original made it before
+//! the second pass raised them: the frame-rate readout (`_PlayGame`
+//! @0x45bcd-0x45d57, between the first pass and the draw), the keys kept
+//! through a jump, read on the pass that collapses it, and an arrival's
+//! line, raised inside its pass's `_HandlePlayer` (@0x6bbb8-0x6c625).
+//! An arrival on the second pass runs the tick's steps in the new system,
+//! and their release relays the held lines over its line, as the rest of
+//! the original's pass raises them after the arrival.
 //!
 //! **The smoothing.** A double-time frame's target is the first pass's
 //! state, reached at alpha 1, but its alpha spans two passes, as the
@@ -47,27 +69,34 @@
 //! a jump's fallback end on a second pass draws the frame with the warp-ups
 //! halted and the warp-out playing (`_HandlePlayer` @0x6c62a-0x6c706,
 //! @0x6bbb8-0x6bbd9), and the arrival comes on the next step, which stops
-//! before it runs. An end on the first pass waits for nothing: the original
+//! before it runs. That arrival runs the tick's steps the stop left unrun
+//! in the new system, so the new system's first frame is after its first
+//! pass there, as the original's frame 98 is (@0x45bc8), held between its
+//! passes in double time. An end on the first pass waits for nothing: the original
 //! settles it inside that pass, before the draw, so the frame held already
 //! says so and the ship arrives in the same tick, its layout dropping the
 //! hold. A second pass's sounds and white fade do not wait, as
 //! `PlaySound` and `_FadeWhiteIn` (@0x68404) start at once, so the jump's
 //! effect reads the kept frame.
 //!
-//! **Ordering against the original.** A held pass's combat sounds are
-//! raised as its effects step, so they play up to a step late, where the
-//! original's `PlaySound` (`_HandleShot` @0x44385, `_HandleExplods`
-//! @0x444e1) comes straight after the draw. That crosses a frame, so it is
-//! filed with the rest of what this left out
-//! (rdm:phase/play-feel-6-followups/phase-5-second-pass-lines-sounds-and-rescue).
+//! **A held pass is heard on its own frame.** Its combat sounds are made as
+//! the hold is taken ([`FlightView::hear_held_pass`]), because the
+//! original's `PlaySound` comes straight after the draw (`_HandleShot`
+//! @0x44385, `_HandleShip` @0x44483, `_HandleShipDisplay` @0x444ad,
+//! `_CreateExplosion` @0x3f91a, all on both passes). That covers the
+//! looped sounds' countdown, the breakup rolls and each event's sound.
+//! Its sprites, the breakups among them, are set off at the release, with
+//! the rest of its effects (see the `effects` module's "Heard, then
+//! shown"). A hold dropped unreplayed drops its breakups, and its sounds
+//! have played, as the original's have.
 
-use nova_sim::PersonQuote;
-use nova_sim::flight_frame::{FlightFrame, PassReport, StepRun};
+use nova_sim::flight_frame::{FlightFrame, PassReport, RaisedLine, StepRun};
 
+use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 
-use super::FlightView;
+use super::{FlightView, Said, dying};
 
 /// What a double-time frame holds until the next step (see the module
 /// docs).
@@ -77,6 +106,9 @@ pub(super) struct BetweenPasses {
     frame: Box<FlightFrame>,
     /// The second pass, to replay as the hold goes.
     second: Option<PassReport>,
+    /// The second pass's breakups, once its sounds are heard
+    /// ([`FlightView::hear_held_pass`]), to set off as the hold goes.
+    heard: Option<Breakups>,
 }
 
 impl BetweenPasses {
@@ -89,12 +121,11 @@ impl BetweenPasses {
         } else {
             None
         };
-        Some(Self { frame, second })
-    }
-
-    /// The quotes the held pass said, which stay on their own frame.
-    pub(super) fn quotes(&self) -> &[PersonQuote] {
-        self.second.as_ref().map_or(&[], |pass| &pass.quotes)
+        Some(Self {
+            frame,
+            second,
+            heard: None,
+        })
     }
 }
 
@@ -149,12 +180,73 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass, its wrap first, as [`FlightView::step_frame`] replays any (see
     /// the module docs). Nothing held does nothing.
     pub(super) fn release_between_passes(&mut self, anchor: Anchor) {
-        let held = self.between_passes.take();
-        if let Some(pass) = held.and_then(|held| held.second) {
+        let Some(held) = self.between_passes.take() else {
+            return;
+        };
+        if let Some(pass) = held.second {
             if let Some(wrap) = pass.wrap {
                 self.carry_wrap(&wrap);
             }
-            self.step_effects(&pass, None, anchor);
+            self.step_effects(&pass, None, anchor, held.heard);
         }
+    }
+
+    /// Drops the hold unreplayed, where the ship is seated afresh, its
+    /// lines relayed first (see the module docs).
+    pub(super) fn drop_between_passes(&mut self) {
+        self.relay_held_lines();
+        self.between_passes = None;
+    }
+
+    /// Words the lines `lines` a second pass held, against the kept frame
+    /// and scene ([`FlightView::said_of`], an arrival's lead kept for its
+    /// arrival), for the frame after ([`FlightView::held_lines`](FlightView#structfield.held_lines)).
+    pub(super) fn hold_lines(&mut self, lines: Vec<RaisedLine>) {
+        let said: Said = lines
+            .into_iter()
+            .filter_map(|line| self.said_of(line))
+            .collect();
+        self.held_lines.extend(said);
+    }
+
+    /// Relays the lines a second pass held before a write to the slot
+    /// (see the module docs): a drop of the hold, or any write but the
+    /// frame's own relays, so a line said between the frames, which the
+    /// original's next first pass reads after the held one, stands over
+    /// it. A write the frame makes after its steps
+    /// ([`FlightView::writing_in_frame`](FlightView#structfield.writing_in_frame))
+    /// leaves them held: the original said it before the second pass
+    /// raised them, so they stand over it on the frame after.
+    pub(super) fn relay_held_lines(&mut self) {
+        if !self.writing_in_frame {
+            self.release_held_lines();
+        }
+    }
+
+    /// Relays the lines a second pass held, in the order raised, once,
+    /// whatever writes the frame: at the next frame's steps, before their
+    /// lines (see the module docs).
+    pub(super) fn release_held_lines(&mut self) {
+        for (text, ticks) in std::mem::take(&mut self.held_lines) {
+            self.relay(text, ticks);
+        }
+    }
+
+    /// Makes the sounds of `held`'s second pass now, as the original's
+    /// `PlaySound` comes straight after the frame's draw, and keeps its
+    /// breakups on the hold for the release to set off (see the module
+    /// docs). Each sound is heard from where the pass left the player.
+    pub(super) fn hear_held_pass(&mut self, held: &mut BetweenPasses) {
+        let Some(pass) = &held.second else {
+            return;
+        };
+        let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+        let scene = self.presentation.scene(pass.player_position);
+        let chance = &mut self.effects_chance;
+        let breakups = self.effects.hear_step(&dying, &scene, &self.looks, chance);
+        for event in &pass.combat {
+            self.effects.hear_event(event, &scene, &self.looks);
+        }
+        held.heard = Some(breakups);
     }
 }

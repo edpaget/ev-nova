@@ -630,7 +630,8 @@ impl Session {
     /// (@0x967e2-0x96948): it beeps [`SimSound::CommDialogClosed`]
     /// (@0x96843); then, while the release flag is set (see the module
     /// docs), the ship hailed is released ([`Session::release`],
-    /// @0x96852-0x968c1), the flag staying set; then a person hailed is
+    /// @0x96852-0x968c1), the flag staying set; then the gain is zeroed
+    /// (@0x9690e; see the `time_adjustment` module); then a person hailed is
     /// quoted (+0xbc 1, @0x9691d): it never says its hail quote again this
     /// stay where "once" holds it back.
     pub fn hang_up(&mut self) {
@@ -641,6 +642,9 @@ impl Session {
         if self.space.escorts.release_comm_escort {
             self.release(talk.npc);
         }
+        // `_gSpeedMult` 0.0 after `DisposeDialogNoFlash` (@0x968fd-0x9690e;
+        // see the `time_adjustment` module).
+        self.zero_speed_mult();
         if let Some(person) = self
             .space
             .npc_mut(talk.npc)
@@ -1129,7 +1133,7 @@ pub(super) mod tests {
     fn a_target_emerging_from_a_gate_cannot_be_hailed_and_is_let_go() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        npc(&mut session).mode = Mode::Emerging { ticks_left: 4 };
+        npc(&mut session).mode = Mode::Emerging { ticks_left: 4.0 };
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_err(), "{hailed:?}");
         assert!(asked.is_empty());
@@ -1604,6 +1608,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn closing_the_hail_holds_the_next_frame_at_zero_then_ramps() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        hail(&mut session, &catalog);
+        session.hang_up();
+        let gains = crate::session::time_adjustment::tests::frame_gains(&mut session, 3);
+        assert_eq!(gains, [0.0, 0.25, 0.4375], "@0x9690e");
+    }
+
+    #[test]
+    fn hanging_up_nothing_leaves_the_gain() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.hang_up();
+        assert_eq!(session.speed_mult(), crate::SpeedMult::FULL);
+    }
+
+    #[test]
     fn hanging_up_beeps_the_close_and_hanging_up_nothing_is_silent() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
@@ -1623,7 +1645,7 @@ pub(super) mod tests {
     fn a_target_holding_its_course_after_its_glide_answers_a_hail() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        npc(&mut session).mode = Mode::Coasting { ticks_left: 30 };
+        npc(&mut session).mode = Mode::Coasting { ticks_left: 30.0 };
         let (hailed, _) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_ok(), "{hailed:?}");
     }
@@ -2385,7 +2407,7 @@ pub(super) mod tests {
         asked_for_help_in(
             session,
             catalog,
-            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30 },
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30.0 },
         )
     }
 
@@ -2398,7 +2420,7 @@ pub(super) mod tests {
     ) -> Npc {
         session.pilot.reserves.fuel.now = 40.0;
         let ship = npc(&mut session);
-        ship.ai_wait = 50;
+        ship.ai_wait = 50.0;
         ship.mode = mode;
         ship.docking = Some(crate::traffic::plunder_dock::Docking {
             ship: ShipRef::Npc(NpcId(7)),
@@ -2419,7 +2441,7 @@ pub(super) mod tests {
         let catalog = hailable();
         let helper = asked_for_help_while_held(targeting(&catalog), &catalog);
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
-        assert_eq!((helper.ai_wait, helper.docking), (0, None));
+        assert_eq!((helper.ai_wait, helper.docking), (0.0, None));
         assert_eq!(
             helper.mode,
             crate::traffic::npc::Mode::Flying,
@@ -2435,11 +2457,11 @@ pub(super) mod tests {
         let helper = asked_for_help_in(
             targeting(&catalog),
             &catalog,
-            crate::traffic::npc::Mode::Coasting { ticks_left: 30 },
+            crate::traffic::npc::Mode::Coasting { ticks_left: 30.0 },
         );
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
         assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
-        assert_eq!(helper.ai_wait, 0);
+        assert_eq!(helper.ai_wait, 0.0);
     }
 
     #[test]
@@ -2452,7 +2474,7 @@ pub(super) mod tests {
             &catalog,
             crate::traffic::npc::Mode::EnteringGate {
                 gate: crate::catalog::StellarId(128),
-                ticks_left: 9,
+                ticks_left: 9.0,
             },
         );
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
@@ -3117,7 +3139,7 @@ pub(super) mod tests {
         )]);
         let pirate = npc(&mut session);
         pirate.goal = Goal::CountWait;
-        pirate.ai_wait = 50;
+        pirate.ai_wait = 50.0;
         let mut chance = Draws::of(&opening(0));
         let view = session
             .hail(&catalog, &options, &mut chance)
@@ -3131,7 +3153,7 @@ pub(super) mod tests {
             .expect("open");
         let pirate = &session.npcs()[0];
         assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
-        assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
+        assert_eq!(pirate.ai_wait, 50.0, "the wait outlives goal 0x16");
         assert!(pirate.wait_running());
         // Through the session's traffic, the wait it kept holds it still
         // (`_HandleShip` @0x34a54-0x34a72). The whole hold and the turn

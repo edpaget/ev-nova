@@ -944,6 +944,32 @@ fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
 }
 
 #[test]
+fn thrust_held_through_merchants_offer_thrusts_once_n_refuses_it() {
+    // `_HandlePlayerCommunication` latches only the latched keys after
+    // the offer (`_SetAllKeyCmdFlags` @0x622ac), and `_HandlePlayer`
+    // polls Up on the next frame.
+    let store = MemoryPilots::new();
+    let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.key(Key::Up, true);
+    game.tap(Key::Char('y'));
+    game.settle();
+    assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
+    game.tap(Key::Char('n'));
+    game.settle();
+    assert_eq!(game.showing(), Showing::Flight, "refused");
+    let speed = game.session().player().velocity.length();
+    for _ in 0..30 {
+        game.frame();
+    }
+    assert!(
+        game.session().player().velocity.length() > speed,
+        "Up still held thrusts: {:?}",
+        game.session().player()
+    );
+}
+
+#[test]
 fn b_on_the_wreck_of_0x0200_reaches_its_offer_and_return_accepts_it() {
     let store = MemoryPilots::new();
     let knobs = Knobs {

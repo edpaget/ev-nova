@@ -306,7 +306,13 @@ fn flown(row: &Row, off: i16, at_slot: f32, at_step: f32) -> (bool, [Vec2; 2], f
     let adjust = npc
         .flying_handling(speeds.own, FlightRules::default())
         .accel;
-    let at_step = AtStep::of_npc(&npc, 1.0, FlightRules::default(), adjust);
+    let at_step = AtStep::of_npc(
+        &npc,
+        1.0,
+        FlightRules::default(),
+        adjust,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     let by = (FlightRules::default(), RuleSource::Engine, false);
     autopilot::step(&mut npc, &word, at_step, speeds, by, &mut NeverFires);
     (
@@ -324,8 +330,13 @@ fn turned(heading: f32, wanted: i16, rate: f32) -> f32 {
         heading,
         ..ShipState::default()
     };
-    let turn = flight::turn_to(&mut state, wanted, rate);
-    flight::turned(state.heading, turn, rate)
+    let turn = flight::turn_to(&mut state, wanted, rate, crate::speed_mult::SpeedMult::FULL);
+    flight::turned(
+        state.heading,
+        turn,
+        rate,
+        crate::speed_mult::SpeedMult::FULL,
+    )
 }
 
 #[test]
@@ -392,11 +403,24 @@ fn a_docking_ships_window_reads_the_turn_rate_at_its_slot_too() {
     };
     let rules = FlightRules::default();
     let handling = pirate.flying_handling(pirate.stats.handling.max_speed, rules);
-    let (word, _) =
-        plunder_dock::low_level(&mut pirate, &far, &handling, rules, None, &mut NeverFires);
+    let (word, _) = plunder_dock::low_level(
+        &mut pirate,
+        &far,
+        &handling,
+        rules,
+        None,
+        crate::speed_mult::SpeedMult::FULL,
+        &mut NeverFires,
+    );
     assert!(!word.thrusts());
     pirate.ion.charge = 0.0;
-    let at_step = AtStep::of_npc(&pirate, 1.0, rules, handling.accel);
+    let at_step = AtStep::of_npc(
+        &pirate,
+        1.0,
+        rules,
+        handling.accel,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     slot_word::handle_ship(&mut pirate, &word, at_step, rules);
     assert_eq!(pirate.state.velocity, Vec2::ZERO);
     assert_eq!(pirate.state.heading, turned(f32::from(outside), 0, step));

@@ -580,7 +580,7 @@ mod tests {
         let cases: [(&str, Change, Change); 3] = [
             (
                 "gate",
-                |npc| npc.mode = Mode::Emerging { ticks_left: 30 },
+                |npc| npc.mode = Mode::Emerging { ticks_left: 30.0 },
                 |npc| npc.mode = Mode::Flying,
             ),
             (

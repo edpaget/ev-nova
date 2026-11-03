@@ -69,7 +69,7 @@
 //! any boundary the player sees.
 //!
 //! Left out, the display-mode check:
-//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs. The starfield's
+//! rdm:phase/front-end/phase-5-entry-left-outs. The starfield's
 //! re-randomising at entry, and its clear in a system of negative murk,
 //! are the flight's (`nova_view::flight::FlightView`), which scatters its
 //! stars when it is first caught up with.
@@ -399,8 +399,9 @@ impl AppScreen {
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
         if let Some(flight) = &mut self.flight {
-            // `_EnterGameFromMainScreen`'s refresh (@0x19f81).
-            enter_game(flight);
+            // `_EnterGameFromMainScreen`'s refresh (@0x19f81), at the gain
+            // the last game left.
+            enter_game(flight, self.speed_mult);
             flight.cancel_pointer();
             flight.release_keys();
             flight.shut_escort_menu();

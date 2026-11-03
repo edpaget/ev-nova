@@ -12,6 +12,7 @@ use super::faked_shops::{
     full, leaves, load, purchase, stale, writes_nav,
 };
 use super::faked_travel::{faked_lasts, sent_but_lines};
+use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::radar::RadarScene;
 use nova_sim::flight_frame::FlightEvent;
@@ -42,16 +43,16 @@ fn walk() -> ComputerRow {
 
 /// The mission info listing mission 130 in slot 0.
 fn info() -> MissionInfo {
-    MissionInfo {
-        rows: vec![InfoRow {
+    MissionInfo::shown(
+        vec![InfoRow {
             slot: 0,
             name: "Run".to_owned(),
             failed: false,
             text: "Quick.".to_owned(),
             abortable: true,
         }],
-        today: "June 23rd, 1177 NC".to_owned(),
-    }
+        "June 23rd, 1177 NC".to_owned(),
+    )
 }
 
 /// A refusal of an offer whose dialog was hidden.
@@ -468,6 +469,18 @@ fn the_mission_info_its_rows_and_an_abort_go_through_the_flight() {
         view.sim.screens_asked(),
         [ScreenAsk::MissionInfo, ScreenAsk::MissionInfo]
     );
+    assert_eq!(view.mission_info_after_abort().rows, [], "nothing answered");
+    let table = info().with_table(Vec::new());
+    view.sim
+        .queue_screen(ScreenAnswer::MissionInfoAfterAbort(table.clone()));
+    assert_eq!(view.mission_info_after_abort(), table);
+    assert_eq!(
+        view.sim.screens_asked()[2..],
+        [
+            ScreenAsk::MissionInfoAfterAbort,
+            ScreenAsk::MissionInfoAfterAbort
+        ]
+    );
     view.sim
         .queue_answer(Answer::InfoRow(Some("Quick.".to_owned())));
     assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));
@@ -552,6 +565,16 @@ fn i_with_an_active_mission_asks_for_the_info_screen_once_letting_go_of_the_keys
     assert_eq!(view.take_mission_info_request(), None, "once");
     assert_eq!(view.message(), None);
     assert!(view.held.is_empty(), "the flight keys let go");
+}
+
+#[test]
+fn the_mission_info_screens_close_latches_every_key() {
+    // `_SetAllKeyCmdFlags` @0x70524.
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
+    view.ask_mission_info();
+    latches_its_close(&mut view);
 }
 
 #[test]

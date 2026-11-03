@@ -21,6 +21,7 @@ use super::ranks;
 /// `Session`'s former field order.
 // The fields keep the names they had on `Session`.
 #[allow(clippy::struct_field_names)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each set and read on its own
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Port {
     /// Each ship class's roll for hire today: drawn by the daily step, or
@@ -53,6 +54,11 @@ pub(super) struct Port {
     /// saved: the original keeps it in flags `_DoPortDialog` clears on
     /// opening (@0x5f93d-0x5f95a), and loading a save passes no time.
     pub(super) stay: Stay,
+    /// Whether the leave under way has run `_DoEscortLand`'s tail, the
+    /// escort days and the day's pay (see the `escort_land` module), so a
+    /// second settling of the marks runs it no more. The take-off clears
+    /// it as the ship leaves. Not saved, as the stay is not.
+    pub(super) escorts_landed: bool,
     /// Each ship class's roll for sale today: drawn by the daily step, or
     /// else the first time the shipyard's list asks it (see
     /// [`RuleKey::DayRolls`](crate::rulebook::RuleKey::DayRolls)). Not saved.
@@ -77,10 +83,13 @@ pub(super) struct Port {
     /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
     /// not saved, as a flight start sets both to −1.
     pub(super) dock: Option<crate::clearance::DockRequest>,
-    /// Whether the land key is held, as the view last said: the
-    /// original's `_dockTryFlag`, which holds the dock approach back (see
-    /// the `clearance` module).
+    /// Whether the land key is held, as the view last said: what L's pass
+    /// reads to pick a stellar (see the `land_key` module).
     pub(super) land_key: bool,
+    /// Whether L's latch is set, as the view last said: the original's
+    /// `_dockTryFlag` (0xdee34), which holds the dock approach back (see
+    /// the `clearance` module).
+    pub(super) dock_try: bool,
     /// The take-off grace's ticks still to run (see the `takeoff_grace`
     /// module); not saved, as the original's pilot file does not keep its
     /// frame counter.
@@ -147,11 +156,13 @@ impl Port {
             outfit_visit: OutfitVisit::default(),
             outfit_reselected: None,
             stay: Stay::default(),
+            escorts_landed: false,
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             shipyard_listing: None,
             dock: None,
             land_key: false,
+            dock_try: false,
             takeoff_grace: 0,
             hold_position: false,
             touchdown,

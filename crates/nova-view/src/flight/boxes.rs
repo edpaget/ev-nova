@@ -7,8 +7,9 @@
 //!   asteroid's 1-4), its bottom right on the box's position at whole
 //!   pixels from the player, the whole size taken off, not half
 //!   ([`Camera::box_centre`](crate::system::camera::Camera::box_centre),
-//!   @0x2e1c2-0x2e250). The scoop reads the same rect, up and left of the
-//!   point (`nova_sim::scoop::touches`). Its frame is the simulation's,
+//!   @0x2e1c2-0x2e250), the simulation's box rule. The scoop touches the
+//!   box's mask on the same rect at the same frame
+//!   (`nova_sim::scoop::Scooping`). Its frame is the simulation's,
 //!   `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the sheet's frames.
 //! - Over its last 32 ticks it fades: its blend level `n`, 0 to 31
 //!   ([`CargoBox::fade`](nova_sim::cargo_box::CargoBox::fade)), draws it

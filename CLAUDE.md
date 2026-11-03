@@ -132,28 +132,41 @@ original's bugs and limits are the only exceptions.
 
 File every divergence the binary shows, however niche.
 
-- If it serves the roadmap's goal, add it as a new phase of that roadmap.
-- On a feature roadmap, a finding that doesn't block playing the stock
-  storyline goes to `<slug>-fidelity` instead. Create that roadmap, depending
-  on the feature roadmap, the first time it's needed.
-- If the roadmap is finished, file a task, not a phase.
+- If it serves the roadmap's goal (on a feature roadmap: playing the stock
+  storyline needs it), add it as a new phase of that roadmap.
+- Otherwise it goes to the theme roadmap for its area. Theme roadmaps hold
+  each area's outstanding fidelity work (NPC AI, combat and flight,
+  rendering, flight controls, the front end, ports and story, and so on).
+  `rdm roadmap list` shows them, and each one's body says what it covers.
+  If none fits, create one named for the area, not for the roadmap that
+  found the finding.
+- Don't create `<slug>-fidelity`, `<slug>-followups` or
+  `<slug>-cross-roadmap` roadmaps. They scatter one area's work over many
+  small roadmaps, and nobody can see what is left where.
 
-### Phase caps, follow-ups and dependencies
+### Phase caps and dependencies
 
 A roadmap that keeps growing never finishes, and it blocks the roadmaps
 that depend on it.
 
 - A roadmap holds at most 20 phases. Phases found during its run are added
   until it reaches 20.
-- Past 20, a finding that needs only the roadmap's own branch goes to
-  `<slug>-followups`. Create that roadmap the first time it's needed, with
-  `rdm roadmap depend` on the capped roadmap.
-- A finding that waits on another roadmap's not-started or unlanded work goes
-  to `<slug>-cross-roadmap` at any phase count. That roadmap depends on the
-  origin roadmap and on every roadmap the work waits on. A finding that waits
-  on a task names the task in its body, since a task can't be a dependency.
-- The existing phases stay, and amending them is fine. When a phase moves to
-  one of these roadmaps, repoint the `rdm:phase/...` links that named it.
+- Past 20, the finding goes to the theme roadmap for its area. When a theme
+  roadmap itself reaches 20, start its next volume, `<theme>-2`, with the
+  same scope.
+- A finding that waits on not-started or unlanded work still goes to its
+  theme roadmap. Tag the phase `depends-unlanded`, name the roadmap, phase
+  or task it waits on in its body, and drop the tag once that work lands.
+  Don't add a roadmap dependency for one phase's sake: it would hold back
+  the whole theme.
+- The existing phases stay, and amending them is fine. When a phase moves
+  between roadmaps, repoint the links that named it in phases, roadmaps,
+  plans, tasks and code comments. `rdm backlinks` misses bare `rdm:` links,
+  so search for the old `<roadmap>/<stem>` text, including links a comment
+  wraps across lines.
+- Archive a finished roadmap with `rdm roadmap archive`, unless an open
+  roadmap depends on it: archiving deletes that dependency edge from the
+  dependent roadmap.
 
 ## Testing with hand-written mocks
 

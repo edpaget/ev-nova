@@ -10,10 +10,12 @@
 //! `oütf` 437, Repair Droids, is one, and no `shïp` carries it, so only
 //! plug-ins make an NPC repair itself.
 //!
-//! **The draw.** Each tick a disabled ship with the gear draws
-//! `Rand(`[`REPAIR_ODDS`]`)` and repairs itself on 0 ([`can_self_repair`]):
-//! the original's n is 500 over the frame's length in 30 Hz ticks
-//! (`*0x3b511c`), which is 1 at the engine's fixed rate. A ship breaking
+//! **The draw.** Each pass a disabled ship with the gear draws
+//! `Rand(`[`repair_odds`]`)` and repairs itself on 0 ([`can_self_repair`]):
+//! the original's n is 500 over the frame's gain (`_gSpeedMult`
+//! `*0x3b511c`, @0x913c), 500 itself at a gain of none, and the session
+//! hands the gain in as a value. The armour tests after it are
+//! unscaled. A ship breaking
 //! up, or one with no armour, never does. The engine tests the gear before
 //! it draws, so a ship without it draws nothing.
 //!
@@ -41,11 +43,33 @@ use crate::combat::hull::Condition;
 use crate::fleet::Escort;
 use crate::message::SimMessage;
 use crate::reserves::Reserves;
+use crate::speed_mult::SpeedMult;
+
+/// The range of a disabled ship's repair draw at the frame's `gain`
+/// (`_ShipCanSelfRepair` @0x913c-0x916f): `trunc(500.0 / g)` while g >
+/// 0.0 (`ucomisd g, 0.0` / `jbe`, @0x9148-0x9150), the compare the
+/// original's taken arm, so a NaN gain draws [`REPAIR_ODDS`]'s range as a
+/// gain of none does. The original's 16-bit range (`cwtl` of the
+/// truncation, a tiny gain's 0x80000000 made 0, @0x915e-0x9162) isn't
+/// replicated: a range past `u32::MAX` saturates.
+#[must_use]
+pub fn repair_odds(gain: SpeedMult) -> u32 {
+    let g = gain.get();
+    if g > 0.0 {
+        // Whole and above 0; `as` saturates past u32::MAX.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let range = (f64::from(REPAIR_ODDS) / g).trunc() as u32;
+        range
+    } else {
+        REPAIR_ODDS
+    }
+}
 
 /// The `ModType` of a repair system (the Bible's 49, 0x31).
 pub const MOD_REPAIR: i16 = 49;
-/// The sides of the draw a disabled ship makes each tick: it repairs
-/// itself on 0 (500.0 @0xdd120 over a frame of one tick).
+/// The sides of the draw a disabled ship makes a pass at full gain, and at
+/// a gain of none: it repairs itself on 0 (500.0 @0xdd120). At a gain g
+/// the range is [`repair_odds`].
 pub const REPAIR_ODDS: u32 = 500;
 /// The share of what it holds a tough hull's armour is repaired to (0.1
 /// @0xdd110).
@@ -93,55 +117,57 @@ pub fn repaired_armor(capacity: f32, tough: bool) -> f32 {
     armor
 }
 
-/// The ticks a newly disabled player's repair inhibit holds after it is
-/// armed: `_DamageShip` sets `_playerRepairInhibit` to 300.0
-/// (@0x3b186-0x3b18d).
+/// The full frames a newly disabled player's repair inhibit holds after it
+/// is armed: `_DamageShip` sets `_playerRepairInhibit` to 300.0
+/// (@0x3b186-0x3b18d), which [`RepairInhibit::armed`] keeps as a float.
 pub const REPAIR_INHIBIT_TICKS: i32 = 300;
 
 /// The player's repair inhibit, `_playerRepairInhibit` (0x3b50b4): while it
 /// holds, the player's armour neither regenerates (`_HandlePlayer`
 /// @0x6d03e-0x6d049) nor is repaired by its gear (@0x68b3d-0x68b40).
 ///
-/// The original keeps it as a float. `_DamageShip` arms it at 300.0 as the
-/// player is newly disabled, `_ResetPlayerPrecalcedValues` turns it off at
-/// -1.0 (@0xc998), and each frame of `_HandlePlayer` takes a frame's length
-/// in ticks (1 at the engine's rate) off it while it is at 0 or above
-/// (@0x68b09-0x68b2c). It holds while it is at 0 or above, so armed it
-/// holds through the next [`REPAIR_INHIBIT_TICKS`] ticks and opens on the
-/// one after. The count here is whole ticks, which matches the float
-/// exactly at the engine's fixed rate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The original keeps it as a float, and so does the engine. `_DamageShip`
+/// arms it at 300.0 as the player is newly disabled,
+/// `_ResetPlayerPrecalcedValues` turns it off at -1.0 (@0xc998), and each
+/// frame of `_HandlePlayer` takes the frame's gain, `_gSpeedMult`, off it
+/// while it is at 0 or above, in doubles and narrowed (@0x68b09-0x68b2c).
+/// It holds while it is at 0 or above, so armed it holds through the next
+/// [`REPAIR_INHIBIT_TICKS`] full frames and opens on the one after; at a
+/// lower gain it holds longer.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RepairInhibit {
-    /// The ticks left, -1 when off.
-    left: i32,
+    /// The frames left, -1.0 when off.
+    left: f32,
 }
 
 impl RepairInhibit {
     /// Off: it never holds (the -1.0).
-    pub const OFF: Self = Self { left: -1 };
+    pub const OFF: Self = Self { left: -1.0 };
 
-    /// Armed as the player is newly disabled: it holds for the next
-    /// [`REPAIR_INHIBIT_TICKS`] ticks.
+    /// Armed as the player is newly disabled: at 300.0, it holds for the
+    /// next [`REPAIR_INHIBIT_TICKS`] full frames.
     #[must_use]
     pub fn armed() -> Self {
-        Self {
-            left: REPAIR_INHIBIT_TICKS,
-        }
+        Self { left: ARMED }
     }
 
-    /// Counts down one tick while it is at 0 or above.
-    pub fn tick(&mut self) {
-        if self.left >= 0 {
-            self.left -= 1;
+    /// Counts down the frame's `gain` while it is at 0 or above.
+    pub fn tick(&mut self, gain: SpeedMult) {
+        if self.left >= 0.0 {
+            self.left = gain.add_times(self.left, -1.0);
         }
     }
 
     /// Whether it holds back the player's armour regeneration and repair.
     #[must_use]
     pub fn holds(self) -> bool {
-        self.left >= 0
+        self.left >= 0.0
     }
 }
+
+/// The float a newly disabled player's inhibit is armed at, 300.0
+/// (`_DamageShip` @0x3b186-0x3b18d).
+const ARMED: f32 = 300.0;
 
 impl Default for RepairInhibit {
     fn default() -> Self {
@@ -228,6 +254,35 @@ mod tests {
     use crate::reserves::Gauge;
     use nova_sim_catalog::fixture::outfit;
 
+    #[test]
+    fn the_repair_draws_range_is_500_over_the_gain() {
+        assert_eq!(repair_odds(SpeedMult::new(0.5)), 1000);
+        assert_eq!(repair_odds(SpeedMult::new(0.25)), 2000);
+        assert_eq!(repair_odds(SpeedMult::new(0.3)), 1666, "truncated");
+    }
+
+    #[test]
+    fn with_no_gain_or_a_nan_one_the_range_is_500() {
+        for gain in [SpeedMult::ZERO, SpeedMult::new(f64::NAN)] {
+            assert_eq!(repair_odds(gain), REPAIR_ODDS, "{gain:?}");
+        }
+        assert_eq!(
+            repair_odds(SpeedMult::SETTLED),
+            REPAIR_ODDS,
+            "trunc(500.000…1)"
+        );
+    }
+
+    #[test]
+    fn a_tiny_gain_saturates_the_range() {
+        assert_eq!(repair_odds(SpeedMult::new(1e-300)), u32::MAX);
+    }
+
+    #[test]
+    fn the_full_gain_range_is_repair_odds() {
+        assert_eq!(repair_odds(SpeedMult::FULL), REPAIR_ODDS);
+    }
+
     /// Repair Droids (437), a repair system in its third slot; a shield
     /// booster (300) with none.
     fn outfits() -> Vec<OutfitRecord> {
@@ -287,7 +342,7 @@ mod tests {
         let mut inhibit = RepairInhibit::OFF;
         for _ in 0..400 {
             assert!(!inhibit.holds());
-            inhibit.tick();
+            inhibit.tick(SpeedMult::FULL);
         }
         assert_eq!(inhibit, RepairInhibit::OFF);
         assert_eq!(RepairInhibit::default(), RepairInhibit::OFF);
@@ -298,7 +353,7 @@ mod tests {
     fn held_for(mut inhibit: RepairInhibit, most: u32) -> u32 {
         let mut held = 0;
         for _ in 0..most {
-            inhibit.tick();
+            inhibit.tick(SpeedMult::FULL);
             if !inhibit.holds() {
                 return held;
             }
@@ -315,10 +370,10 @@ mod tests {
         assert_eq!(held_for(armed, 1000), 300);
         let mut inhibit = armed;
         for _ in 0..301 {
-            inhibit.tick();
+            inhibit.tick(SpeedMult::FULL);
         }
         assert!(!inhibit.holds());
-        inhibit.tick();
+        inhibit.tick(SpeedMult::FULL);
         assert!(!inhibit.holds(), "and stays open");
     }
 
@@ -326,7 +381,7 @@ mod tests {
     fn arming_again_restarts_the_inhibit_from_300() {
         let mut inhibit = RepairInhibit::armed();
         for _ in 0..200 {
-            inhibit.tick();
+            inhibit.tick(SpeedMult::FULL);
         }
         inhibit = RepairInhibit::armed();
         assert_eq!(held_for(inhibit, 1000), 300);
@@ -423,5 +478,32 @@ mod tests {
             rejoin_message(FormerKind::Captured),
             SimMessage::EscortRepaired
         );
+    }
+
+    #[test]
+    fn at_half_gain_an_armed_inhibit_holds_for_600_frames_and_opens_on_the_601st() {
+        let mut inhibit = RepairInhibit::armed();
+        let half = SpeedMult::new(0.5);
+        for frame in 1..=600 {
+            inhibit.tick(half);
+            assert!(inhibit.holds(), "frame {frame}");
+        }
+        inhibit.tick(half);
+        assert!(!inhibit.holds(), "the 601st");
+    }
+
+    #[test]
+    fn at_no_gain_an_armed_inhibit_stays_armed() {
+        let mut inhibit = RepairInhibit::armed();
+        for _ in 0..1000 {
+            inhibit.tick(SpeedMult::ZERO);
+        }
+        assert_eq!(inhibit, RepairInhibit::armed());
+    }
+
+    #[test]
+    fn the_inhibit_is_armed_at_300() {
+        assert_eq!(ARMED, 300.0);
+        assert_eq!(f64::from(ARMED), f64::from(REPAIR_INHIBIT_TICKS));
     }
 }

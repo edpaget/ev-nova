@@ -19,9 +19,12 @@
 //!   A fighter with no bay for it there gets nothing written (@0x80384)
 //!   and exits to @0x88111, skipping the pull and the word below
 //!   ([`By::unpulled`]).
-//! - **The pull** (@0x87ff9-0x880b8): pull = `_ShipAccelRate` × 10.0
-//!   (double @0xdd0b0, [`FORMATION_NUDGE`]) × `_gSpeedMult` (1.0 a tick
-//!   here). On each axis, towards the carrier: x += pull when carrier.x -
+//! - **The pull** (@0x87ff9-0x880b8, [`pull`]): pull = `_ShipAccelRate`
+//!   × 10.0 (double @0xdd0b0, [`FORMATION_NUDGE`]) × `_gSpeedMult`, the
+//!   frame's gain ([`By::gain`], @0x88004), one double product narrowed
+//!   once. The same pull is the move, the axis tests and the word below,
+//!   so at a gain of none it is 0, as for a ship with no acceleration.
+//!   On each axis, towards the carrier: x += pull when carrier.x -
 //!   pull >= x (@0x8805b-0x88068), else x -= pull when x >= carrier.x +
 //!   pull (@0x8806f-0x8807f); y the same (@0x8808c-0x880b8). Both tests
 //!   are inclusive, so an axis exactly the pull off is pulled onto the
@@ -83,6 +86,7 @@ use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 #[cfg(doc)]
 use crate::traffic::autopilot::{self, TopSpeeds};
 #[cfg(doc)]
@@ -109,13 +113,27 @@ pub(crate) struct By {
     /// `_AIAddFighterToParent` writes nothing (@0x80384) and sub 8 exits
     /// to @0x88111, past the pull and the word.
     pub unpulled: bool,
+    /// The frame's gain, `_gSpeedMult`, which the pull reads ([`pull`],
+    /// @0x88004): the autopilot's
+    /// [`Readings::speed_mult`](crate::traffic::autopilot::Readings::speed_mult).
+    pub gain: SpeedMult,
+}
+
+/// Sub 8's pull for a ship of acceleration `accel` at the frame's `gain`:
+/// accel × [`FORMATION_NUDGE`] × the gain, one double product narrowed
+/// once (@0x87ff9-0x8801a, the double 10.0 @0xdd0b0).
+#[must_use]
+pub(crate) fn pull(accel: f32, gain: SpeedMult) -> f32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let pull = (f64::from(accel) * f64::from(FORMATION_NUDGE) * gain.get()) as f32;
+    pull
 }
 
 /// One tick of `npc`'s sub 8 docking with a carrier at `carrier`, inside
 /// its dock window, on `handling`, at its slot (see the module docs): it
 /// wants the carrier's table bearing, thrusting within its window by its
 /// heading at the slot, its burst word written as `by` says, and is
-/// [`pulled`] towards the carrier. Its flight, which `_HandleShip` flies
+/// [`pulled`] towards the carrier by its [`pull`] at `by`'s gain. Its flight, which `_HandleShip` flies
 /// at its step ([`held_burst::step`]): by the engine's reading a burst
 /// along its heading at its pull within the window ([`Word::Keeps`]), by
 /// the other a plain thrust ([`Word::Writes`]). Double time's second pass
@@ -131,7 +149,7 @@ pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: B
         thrust: window,
         ..Controls::default()
     };
-    let pull = handling.accel * FORMATION_NUDGE;
+    let pull = pull(handling.accel, by.gain);
     let thrust = if window { handling.accel } else { 0.0 };
     let word = match by.word {
         RuleSource::Engine if window => {
@@ -179,6 +197,7 @@ pub(crate) fn pulled(at: Vec2, to: Vec2, pull: f32) -> Vec2 {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use super::{By, pull};
     use crate::ai::Goal;
     use crate::combat::ShipRef;
     use crate::escort::FORMATION_NUDGE;
@@ -186,8 +205,10 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::rulebook::RuleSource;
+    use crate::speed_mult::SpeedMult;
     use crate::stats::{INERTIALESS_HULL, ShipStats};
     use crate::traffic::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
+    use crate::traffic::held_burst::Flight;
     use crate::traffic::npc::Npc;
     use crate::traffic::ship_display::Thrust;
     use nova_sim_base::fixture::{Draws, FAST};
@@ -539,5 +560,112 @@ mod tests {
         assert!(close(both, Vec2::new(47.0, 57.0)), "{both:?}");
         let original = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), FlightRules::default());
         assert!(close(original, Vec2::new(48.2, 58.2)), "{original:?}");
+    }
+
+    // The frame's gain.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Sub 8 of `ship` at the carrier ([`carrier`]) on its own handling at
+    /// `gain`, by the engine's word, pulled.
+    fn sub_8_at(ship: &mut Npc, gain: SpeedMult) -> Flight {
+        let handling = ship.stats.handling;
+        let by = By {
+            top: handling.max_speed,
+            word: RuleSource::Engine,
+            unpulled: false,
+            gain,
+        };
+        super::fly(ship, &carrier(), &handling, by)
+    }
+
+    #[test]
+    fn the_pull_is_ten_ticks_thrust_times_the_gain_in_one_double_product() {
+        let accel = ShipStats::new(FAST, &[]).handling.accel;
+        #[allow(clippy::cast_possible_truncation)]
+        let half = (f64::from(accel) * 10.0 * 0.5) as f32;
+        assert_eq!(pull(accel, HALF), half);
+        assert_eq!(pull(accel, SpeedMult::ZERO), 0.0);
+        // 0.02 a tick at 0.3: the double product narrows otherwise than
+        // the float 0.2 times the gain (@0x87ff9-0x8801a).
+        let gain = SpeedMult::new(0.3);
+        #[allow(clippy::cast_possible_truncation)]
+        let double = (f64::from(0.02_f32) * 10.0 * 0.3) as f32;
+        assert_eq!(pull(0.02, gain), double);
+        assert_ne!(pull(0.02, gain), gain.times(0.02 * FORMATION_NUDGE));
+    }
+
+    #[test]
+    fn at_full_gain_the_pull_is_ten_ticks_thrust_and_one_sub_8_pulls_by_it() {
+        for fields in [FAST, AVERAGE, SLOW_TOP, EVEN] {
+            let mut ship = docking(fields, at(50.0, 60.0, 0.0, 0.0, 135.0), None);
+            let full = pull_of(&ship);
+            assert_eq!(pull(ship.stats.handling.accel, SpeedMult::FULL), full);
+            sub_8_at(&mut ship, SpeedMult::FULL);
+            assert_eq!(ship.state.position, Vec2::new(50.0 - full, 60.0 - full));
+        }
+        for accel in [0.02_f32, 0.1, 0.375, 1.53] {
+            assert_eq!(pull(accel, SpeedMult::FULL), accel * FORMATION_NUDGE);
+        }
+    }
+
+    #[test]
+    fn at_half_gain_its_window_moves_it_and_writes_its_word_by_the_half_pull() {
+        let mut ship = docking(FAST, at(0.0, -60.0, 0.0, 0.0, 182.0), Some(30.0));
+        let half = pull(ship.stats.handling.accel, HALF);
+        sub_8_at(&mut ship, HALF);
+        assert_eq!(ship.owed_burst, Some(half), "+0x34 = 0 less the pull");
+        assert_eq!(ship.state.position, Vec2::new(0.0, -60.0 + half));
+    }
+
+    #[test]
+    fn at_half_gain_outside_its_window_its_kept_word_owes_another_half_pull() {
+        let mut ship = docking(FAST, at(0.0, -60.0, 0.0, 0.0, 0.0), Some(5.0));
+        let half = pull(ship.stats.handling.accel, HALF);
+        sub_8_at(&mut ship, HALF);
+        assert_eq!(ship.owed_burst, Some(5.0 + half));
+        // `_ShipMaxSpeed` less the half pull owes nothing; a pull of
+        // exactly the top speed at full gain is half of it at half.
+        let mut ship = docking(EVEN, at(0.0, -60.0, 0.0, 0.0, 0.0), None);
+        sub_8_at(&mut ship, HALF);
+        assert_eq!(ship.owed_burst, None);
+    }
+
+    #[test]
+    fn at_half_gain_an_axis_exactly_the_half_pull_off_is_pulled_onto_the_carrier() {
+        let half = pull(ShipStats::new(FAST, &[]).handling.accel, HALF);
+        let mut ship = docking(FAST, at(-half, 60.0, 0.0, 0.0, 135.0), None);
+        sub_8_at(&mut ship, HALF);
+        assert_eq!(ship.state.position, Vec2::new(0.0, 60.0 - half));
+    }
+
+    #[test]
+    fn at_no_gain_it_neither_moves_nor_owes_as_with_no_acceleration() {
+        let start = at(0.0, -60.0, 0.0, 0.0, 182.0);
+        let mut ship = docking(FAST, start, Some(30.0));
+        sub_8_at(&mut ship, SpeedMult::ZERO);
+        assert_eq!(ship.owed_burst, None);
+        assert_eq!(ship.state.position, start.position);
+    }
+
+    #[test]
+    fn at_half_gain_the_autopilots_low_level_pulls_by_its_readings_gain() {
+        let pulled = |gain| {
+            let mut ship = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0), None);
+            let readings = Readings {
+                speed_mult: gain,
+                ..Readings::default()
+            };
+            fly_by(
+                &mut ship,
+                readings,
+                Beside::default(),
+                FlightRules::default(),
+            );
+            ship.state.position
+        };
+        let half = pull(ShipStats::new(FAST, &[]).handling.accel, HALF);
+        assert!(close(pulled(HALF), Vec2::new(50.0 - half, 60.0 - half)));
+        assert_ne!(pulled(HALF), pulled(SpeedMult::FULL));
     }
 }

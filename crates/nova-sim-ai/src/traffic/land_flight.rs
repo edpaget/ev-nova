@@ -58,8 +58,8 @@
 //! 9. **The landing** (@0x8dadc-0x8db5a): it stops and waits at the
 //!    stellar ([`stay`]), and the flight gives [`Outcome::Landed`]. The
 //!    traffic keeps it in its slot (+0xb8 stays set), so it still counts
-//!    toward the system's ships; `_HandleShip` counts its wait down a
-//!    tick at a time, `_gSpeedMult` 1.0 (@0x35025-0x35048), as the
+//!    toward the system's ships; `_HandleShip` counts its wait down by
+//!    the frame's gain, `_gSpeedMult` (@0x35025-0x35048), as the
 //!    traffic counts every AI wait down
 //!    ([`plunder::count_down`](crate::traffic::plunder::count_down)),
 //!    skipping its turn, thrust and fire meanwhile (@0x34a54-0x34a72;
@@ -175,11 +175,11 @@ pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Size
     npc.goal = Goal::Idle;
     npc.visited = Some(stellar);
     npc.travel = Some(stellar);
-    npc.ai_wait = if npc.miner & SCOOPS != 0 {
+    npc.ai_wait = crate::traffic::ai_wait::ticks(if npc.miner & SCOOPS != 0 {
         SHORT_STAY_BASE + chance.below(SHORT_STAY_SPAN)
     } else {
         STAY_BASE + chance.below(STAY_SPAN)
-    };
+    });
 }
 
 #[cfg(test)]
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn a_ship_that_scoops_stays_100_to_174_ticks_and_any_other_300_to_499() {
-        for (drawn, short, long) in [(0, 100, 300), (74, 174, 374), (199, 174, 499)] {
+        for (drawn, short, long) in [(0, 100.0, 300.0), (74, 174.0, 374.0), (199, 174.0, 499.0)] {
             let (scooper, asked) = stayed(crate::ai::miner::SCOOPS, drawn);
             assert_eq!(scooper.ai_wait, short, "{drawn}");
             assert_eq!(asked, [75], "Rand(75)");
@@ -525,7 +525,7 @@ mod tests {
             assert_eq!(stayed(both, drawn).0.ai_wait, short, "{drawn}");
         }
         let (miner, asked) = stayed(crate::ai::miner::MINES, 0);
-        assert_eq!(miner.ai_wait, 300, "Flags3 0x0001 alone stays long");
+        assert_eq!(miner.ai_wait, 300.0, "Flags3 0x0001 alone stays long");
         assert_eq!(asked, [200]);
     }
 
@@ -551,7 +551,7 @@ mod tests {
             &mut chance,
         );
         assert_eq!(outcome, Outcome::Landed(StellarId(140)));
-        assert_eq!(npc.ai_wait, 317);
+        assert_eq!(npc.ai_wait, 317.0);
         assert_eq!(npc.goal, Goal::Idle);
         assert_eq!(npc.visited, Some(StellarId(140)));
         assert_eq!(npc.state.velocity, Vec2::ZERO);
@@ -567,6 +567,6 @@ mod tests {
             &mut chance,
         );
         assert!(chance.asked.is_empty(), "no stay while it brakes");
-        assert_eq!(flying.ai_wait, 0);
+        assert_eq!(flying.ai_wait, 0.0);
     }
 }

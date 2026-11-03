@@ -436,7 +436,7 @@ mod tests {
     fn a_pod_a_hulk_a_ship_gliding_in_or_on_a_jump_or_one_paused_is_not_reset() {
         let pod = |npc: &mut Npc| {
             npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-            npc.mode = Mode::Adrift { ticks_left: 50 };
+            npc.mode = Mode::Adrift { ticks_left: 50.0 };
         };
         let hulk = |npc: &mut Npc| npc.no_ai = true;
         let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };
@@ -484,15 +484,15 @@ mod tests {
         };
         for condition in [Condition::Disabled, dying] {
             for reading in RuleSource::ALL {
-                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3 });
+                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3.0 });
                 ticked(&mut traffic, reading, &mut NeverFires);
                 let reset = of(&traffic, LED);
                 assert!(was_reset(reset), "{condition:?} {reading:?}");
-                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2 });
+                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2.0 });
                 assert_eq!(reset.emerges_from, None, "{condition:?} {reading:?}");
                 assert!(!reset.emerging(), "{condition:?} {reading:?}");
                 ticked(&mut traffic, reading, &mut NeverFires);
-                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1 });
+                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1.0 });
                 ticked(&mut traffic, reading, &mut NeverFires);
                 let out = of(&traffic, LED);
                 assert_eq!(out.mode, Mode::Flying, "{condition:?} {reading:?}");
@@ -517,10 +517,10 @@ mod tests {
 
     #[test]
     fn an_intact_ship_in_its_gate_keeps_its_mode() {
-        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3 });
+        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3.0 });
         ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
         let waiting = of(&traffic, LED);
-        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2 });
+        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2.0 });
         assert!(waiting.emerges_from.is_some());
     }
 
@@ -534,7 +534,7 @@ mod tests {
         let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
         led.expect("there").mode = Mode::EnteringGate {
             gate: ENTERED,
-            ticks_left: 9,
+            ticks_left: 9.0,
         };
         traffic
     }
@@ -559,7 +559,7 @@ mod tests {
             traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut NeverFires);
             assert_eq!(
                 of(&traffic, LED).mode,
-                Mode::Coasting { ticks_left: 8 },
+                Mode::Coasting { ticks_left: 8.0 },
                 "{condition:?}: its wait counts down"
             );
             let mut departed = Vec::new();
@@ -841,7 +841,7 @@ mod tests {
         fn the_reset_leaves_the_victims_cut_wait() {
             // The wait cut (+0x4c @0x3be6e-0x3be7c), which the reset never
             // writes; the target, the provocation and the goal it wipes.
-            let mut traffic = traffic(&|npc| npc.ai_wait = 300);
+            let mut traffic = traffic(&|npc| npc.ai_wait = 300.0);
             let on_w = strike(ShipRef::Npc(W), ShipRef::Player);
             answered_and_thought(&mut traffic, &[on_w], &|npc| {
                 took_the_write(npc);
@@ -881,8 +881,8 @@ mod tests {
             // gate (`Npc::hold_at_gate`); the reset then ends the gate goal
             // where its wait runs on (`Npc::leaves_gate_goal`).
             let mut traffic = traffic(&|npc| {
-                npc.ai_wait = 300;
-                npc.mode = Mode::Emerging { ticks_left: 60 };
+                npc.ai_wait = 300.0;
+                npc.mode = Mode::Emerging { ticks_left: 60.0 };
                 npc.emerges_from = Some(crate::catalog::StellarId(310));
             });
             let on_w = strike(ShipRef::Npc(W), ShipRef::Player);

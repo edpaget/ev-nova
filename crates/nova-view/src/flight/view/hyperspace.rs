@@ -151,22 +151,37 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
-    /// Whether the jump's white leaves the screen faded
-    /// ([`JumpEffect::faded`]): a text shown over flight now shows on the
-    /// faded screen, which whoever shows it tells its dialogs
+    /// Whether the jump's white ([`JumpEffect::faded`]) or the escape
+    /// pod's rescue (the `rescue` module) leaves the screen faded: a text
+    /// shown over flight now shows on the faded screen, which whoever
+    /// shows it tells its dialogs
     /// ([`MissionDialogs::set_faded`](crate::ui::mission_dialogs::MissionDialogs::set_faded)).
     #[must_use]
     pub fn screen_faded(&self) -> bool {
-        self.jump_effect().is_some_and(JumpEffect::faded)
+        self.jump_effect().is_some_and(JumpEffect::faded) || self.rescue_faded()
     }
 
     /// A text over flight has faded the screen in from black
     /// ([`MissionDialogs::take_faded_in`](crate::ui::mission_dialogs::MissionDialogs::take_faded_in)):
     /// the white is gone, the warp to be lit again, or the arrival's
-    /// effect over ([`JumpEffect::faded_in`]).
+    /// effect over ([`JumpEffect::faded_in`]); the rescue's screen
+    /// fades in no more as it closes.
     pub fn screen_faded_in(&mut self) {
         self.jump = self.jump.take().and_then(JumpEffect::faded_in);
         self.fade_in = self.fade_in.take().and_then(JumpEffect::faded_in);
+        self.rescue_faded_in();
+    }
+
+    /// Draws what still covers the faded screen over the texts shown on
+    /// it ([`FlightView::screen_faded`]), over the whole of a view `view`
+    /// in size: the rescue's black, or else the jump's white as far as it
+    /// shows.
+    pub fn draw_faded_cover(&self, list: &mut crate::DrawList, view: (f32, f32)) {
+        if self.rescue_faded() {
+            crate::draw::fill_rect(list, crate::fade::whole_view(view), crate::Color::BLACK);
+        } else if let Some(effect) = self.jump_effect() {
+            effect.draw_fade(list, view);
+        }
     }
 
     /// The fade to white moves on by `dt` while flight is paused under a
@@ -183,21 +198,31 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// arrival's answer carries them ([`Answer::Arrived`]), a crön's `Y`
     /// on its days among them, in the scene just laid out, so they are on
     /// the arrival's first frame: the original keeps its explod table
-    /// through the arrival (only `_ResetPlayer` empties it, @0x1d7fb), and
-    /// its `_PrepareAllSprites` advances them once (@0x6c59c,
-    /// `_HandleExplods` @0x3a7ce) before the frame's own pass, which the
-    /// steps' order from spawn to draw stands for. A `Y`'s carries no
-    /// sound of its own (see
-    /// [`Effects::apply`](crate::flight::effects::Effects::apply)).
+    /// through the arrival (only `_ResetPlayer` empties it, @0x1d7fb).
+    /// The jump's explorations and days run inside the arrival pass's
+    /// `_HandlePlayer` (@0x43e19), and that pass goes on to its own
+    /// `_HandleExplods` (@0x444e1), which advances them once before the
+    /// frame is drawn. The view stepped that pass
+    /// ([`FlightView::step_effects`]) before the arrival made them, so the
+    /// one step here stands for it, at that pass's gain: the frame the
+    /// catch-up refilled holds it
+    /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult)),
+    /// as an arrival writes no gain. The arrival's `_PrepareAllSprites`
+    /// (@0x6c59c, `_HandleExplods` @0x3a7ce) advances nothing, as it runs
+    /// under the frozen flag `*0x3b523c` (set @0x3a765-0x3a773), which
+    /// `_HandleExplods` reads before the delay's countdown (@0x2f629) and
+    /// the frame's step (@0x2f7eb). A `Y`'s carries no sound of its own
+    /// (see [`Effects::apply`](crate::flight::effects::Effects::apply)).
     fn show_arrival_explosions(&mut self, combat: &[CombatEvent]) {
         let player = self.player_place().position;
         let scene = self.presentation.scene(player);
         let chance = &mut self.effects_chance;
+        let gain = self.frame.speed_mult;
         for event in combat {
-            self.effects.apply(event, &scene, &self.looks, chance);
+            self.effects.apply(event, &scene, &self.looks, gain, chance);
         }
         if !combat.is_empty() {
-            self.effects.step(&[], &scene, &self.looks, chance);
+            self.effects.step(&[], &scene, &self.looks, gain, chance);
         }
     }
 }
@@ -214,12 +239,19 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// time's second pass has its frame between the passes drawn first
     /// ([`FlightView::holding_between_passes`]): that frame shows the old
     /// system, and the arrival follows on the next step, which stops
-    /// before it runs. One ended on the first pass is in that frame
-    /// already, so the ship arrives as in single time, and the arrival's
-    /// layout drops the hold.
-    pub(super) fn arrival_frame(&mut self) {
-        let frame_comes_first = self.holding_between_passes() && !self.drawn().warp_end_due;
-        if !self.frame.warp_end_due || frame_comes_first {
+    /// before it runs. That arrival then runs the tick's `steps`, which
+    /// the stop left unrun, in the new system, its arrival line said first:
+    /// the original draws frame 98 after one `_DoPlayGameWork(1)` there
+    /// (@0x45bc1-0x45bc8), so the frame shows that pass, between its
+    /// passes in double time, drawn at its target. One ended on the first
+    /// pass is in that frame already, so the ship arrives as in single
+    /// time, and the arrival's layout drops the hold.
+    pub(super) fn arrival_frame(&mut self, steps: u32) {
+        if !self.frame.warp_end_due {
+            return;
+        }
+        if self.holding_between_passes() && !self.drawn().warp_end_due {
+            self.arrival_waited = true;
             return;
         }
         self.arrive();
@@ -231,6 +263,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                 effect
             })
             .filter(|effect| !effect.done());
+        if std::mem::take(&mut self.arrival_waited) {
+            self.run_steps(steps, None);
+            // The layout drew from the arrival's place; the frame is the
+            // pass's, at its target.
+            self.alpha = 1.0;
+        }
     }
 
     /// Ends the jump ([`FlightCommand::Arrive`]): the ship arrives in the
@@ -253,8 +291,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// its text as the flight gives it), followed by how many fighters
     /// were abandoned, the line's own tail (`_HandlePlayer`
     /// @0x6c3c4-0x6c42b), then the flight's other messages
-    /// ([`FlightView::word`]) and how many hired escorts defected unpaid,
-    /// if any. A buoy's arrival carries no
+    /// ([`FlightView::word`]). The hired escorts that defected unpaid are
+    /// kept for a text dialog ([`FlightView::take_defections`]), not said.
+    /// A buoy's arrival carries no
     /// fighter notes: the flight drops them, as the buoy replaces the
     /// arrival line's suffix too. The escort menu shuts at once and
     /// silently, at a jump's arrival (`_HandlePlayer` @0x6c50e) and a
@@ -268,7 +307,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         // (`_PlayerEnterHypergate` @0x63a5d) and a wormhole's
         // (`_PlayerEnterWormhole` @0x64307).
         self.map.recentre();
-        let (fighters, pay, drained) = self.arrival_outputs();
+        let (fighters, drained) = self.arrival_outputs();
         let date = self.frame.long_date.clone();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(drained);
@@ -301,7 +340,6 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             .collect();
         said.extend(fighters);
         said.extend(worded);
-        said.extend(pay);
         self.say_all(&said);
     }
 }

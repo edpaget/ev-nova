@@ -150,18 +150,18 @@ mod tests {
     #[test]
     fn a_ship_brought_into_a_new_traffic_takes_its_berths_search_timer() {
         let mut old = passed();
-        old.write_berth_search(1, SearchTimer::Searching(40));
+        old.write_berth_search(1, SearchTimer::Searching(40.0));
         let mut new = Traffic::new();
         new.keep_berths(old.kept_berths());
         let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
         let ship = new.npcs().iter().find(|npc| npc.id == id).expect("added");
-        assert_eq!(ship.lost_sight, SearchTimer::Carried(40));
+        assert_eq!(ship.lost_sight, SearchTimer::Carried(40.0));
     }
 
     #[test]
     fn keeping_berths_keeps_the_traffics_own_reading() {
         let mut old = passed();
-        old.write_berth_search(1, SearchTimer::Searching(40));
+        old.write_berth_search(1, SearchTimer::Searching(40.0));
         let mut new = Traffic::new();
         new.set_reused_slot_search(RuleSource::Bible);
         new.keep_berths(old.kept_berths());

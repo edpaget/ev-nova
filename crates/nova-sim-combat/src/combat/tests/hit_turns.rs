@@ -746,7 +746,11 @@ fn the_stretch_after_a_lock_resumes_at_the_next_slot() {
     // Its visit flew it one tick: the stretch after the stop took up the
     // next slot, not the missile's again.
     let missile = &keeper.combat.shots()[0];
-    assert_eq!(missile.age, projectile::LOCK_AGE + 1, "{missile:?}");
+    assert_eq!(
+        missile.age(),
+        f64::from(projectile::LOCK_AGE + 1),
+        "{missile:?}"
+    );
     assert_eq!(missile.moved_from, Some(locking_on(A).position));
     assert!(!keeper.combat.slots.is_held(0), "the held slot stays freed");
 }

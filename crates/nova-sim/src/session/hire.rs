@@ -130,7 +130,9 @@ impl Session {
     /// own holds among the fleet's, and the session resetting
     /// ([`Session::destroy_cargo_share`], `_DoEscortPayment` @0x40240),
     /// then leaving the fleet and the system at once. When any defected
-    /// the flight is told how many, and a save is due.
+    /// the jump's white is put out (`_DoEscortPayment` @0x40291-0x402aa,
+    /// see `PlayerShip::put_out_white`), the flight is told how many, and
+    /// a save is due.
     pub(super) fn pay_escorts(&mut self, days: u32) {
         let mut defected = 0_u32;
         for _ in 0..days {
@@ -160,6 +162,7 @@ impl Session {
             }
         }
         if defected > 0 {
+            self.ship.put_out_white();
             self.reform();
             self.out.pay_notes.push(PayNote::Defected(defected));
             self.out.save_due = true;
@@ -1248,8 +1251,18 @@ pub(in crate::session) mod tests {
     /// its fleet placed, `rule` choosing take-off pay, and each jump
     /// taking `days`.
     fn payer(cash: i64, escorts: Vec<Escort>, days: u16, rule: RuleSource) -> Session {
-        let catalog = paying();
-        let mut pilot = crate::Pilot::new(&catalog, "Ada").expect("starts");
+        payer_of(&paying(), cash, escorts, days, rule)
+    }
+
+    /// [`payer`] of `catalog`.
+    fn payer_of(
+        catalog: &FakePilotCatalog,
+        cash: i64,
+        escorts: Vec<Escort>,
+        days: u16,
+        rule: RuleSource,
+    ) -> Session {
+        let mut pilot = crate::Pilot::new(catalog, "Ada").expect("starts");
         pilot.cash = cash;
         pilot.escorts = escorts;
         if days > 1 {
@@ -1257,12 +1270,12 @@ pub(in crate::session) mod tests {
                 .outfits
                 .insert(crate::catalog::OutfitId(300), days - 1);
         }
-        let mut session = Session::fly(&catalog, pilot)
+        let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, rule));
         work_with(
             &mut session,
-            &catalog,
+            catalog,
             Controls::default(),
             &Peaceful,
             Rules::default(),
@@ -1609,6 +1622,140 @@ pub(in crate::session) mod tests {
             &mut NeverFires,
         );
         assert_eq!(placed_ships(&session), [129, 129, 129]);
+    }
+
+    #[test]
+    fn settling_the_escorts_pays_before_the_spaceport_closes() {
+        let mut session = docked(350, RuleSource::Engine);
+        assert_eq!(session.land_escorts(&paying(), &mut NeverFires), None);
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+        assert_eq!(session.landed(), Some(BAR_AT), "still landed");
+        assert_eq!(session.pilot().cash(), 250);
+        assert_eq!(session.pilot().escorts().len(), 3);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_leave_pays_once_whoever_settles_the_escorts() {
+        let mut twice = docked(1000, RuleSource::Engine);
+        let _ = twice.land_escorts(&paying(), &mut NeverFires);
+        let _ = twice.land_escorts(&paying(), &mut NeverFires);
+        twice
+            .take_off(&paying(), &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(twice.pilot().cash(), 600, "a second settling pays none");
+        let mut alone = docked(1000, RuleSource::Engine);
+        alone
+            .take_off(&paying(), &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(alone.pilot().cash(), 600, "the take-off pays once");
+        // The next leave pays again.
+        assert_eq!(land_now(&mut twice), Ok(BAR_AT));
+        let _ = twice.land_escorts(&paying(), &mut NeverFires);
+        assert_eq!(twice.pilot().cash(), 200);
+    }
+
+    #[test]
+    fn by_the_other_reading_settling_the_escorts_pays_nothing() {
+        let mut session = docked(1000, RuleSource::Bible);
+        let _ = session.land_escorts(&paying(), &mut NeverFires);
+        assert_eq!(session.pilot().cash(), 1000);
+    }
+
+    #[test]
+    fn the_escorts_settling_does_nothing_in_flight() {
+        let catalog = paying();
+        let mut session = docked(350, RuleSource::Engine);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+        let (cash, date) = (session.pilot().cash(), session.date());
+        let escorts = ships(&session);
+        assert!(!session.chart.in_take_off_window());
+        let answer = session.apply(
+            crate::flight_frame::FlightCommand::LandEscorts,
+            &mut crate::session::ApplyCollaborators {
+                catalog: Some(&catalog),
+                chance: &mut NeverFires,
+                law: &crate::legal::NovaLaw::default(),
+                boarding_rule: &crate::board::NovaBoarding::default(),
+                hail_options: &HailOptions::default(),
+            },
+        );
+        assert_eq!(answer, crate::flight_frame::Answer::EscortReport(None));
+        assert_eq!(session.landed(), None, "still flying");
+        assert_eq!(session.pilot().cash(), cash, "no wages");
+        assert_eq!(session.date(), date, "no escort days");
+        assert_eq!(ships(&session), escorts, "no defection");
+        assert!(!session.chart.in_take_off_window(), "no window");
+        assert_eq!(session.take_pay_notes(), []);
+    }
+
+    /// [`docked`] holding `cash`, with rank 200 paying `salary` a day
+    /// active, two escorts sold or upgraded on the stay so a day passes
+    /// before the pay, and `rules`.
+    fn salaried(cash: i64, salary: i64, rules: Rulebook) -> Session {
+        let mut catalog = paying();
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            salary,
+            ..crate::testkit::rank(200)
+        }];
+        let mut session =
+            payer_of(&catalog, cash, payroll(), 1, RuleSource::Engine).with_rules(rules);
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
+        session.run_set(
+            &crate::control::SetExpr::parse("K200").expect("parses"),
+            &mut NeverFires,
+        );
+        session.pilot.cash = cash;
+        session.port.stay.escorts_changed = 2;
+        session
+    }
+
+    #[test]
+    fn the_escort_days_pass_before_the_pay_so_a_salary_can_cover_it() {
+        let mut session = salaried(100, 300, Rulebook::default());
+        let landed = session.date();
+        let _ = session.land_escorts(&paying(), &mut NeverFires);
+        assert_eq!(session.date(), landed.next_day(), "the escort day");
+        assert_eq!(session.take_pay_notes(), [], "the salary paid the wages");
+        assert_eq!(session.pilot().cash(), 0);
+        assert_eq!(session.pilot().escorts().len(), 4);
+        let stayless = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
+        let mut session = salaried(100, 300, stayless);
+        let _ = session.land_escorts(&paying(), &mut NeverFires);
+        assert_eq!(session.date(), landed, "no day passes");
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+    }
+
+    #[test]
+    fn a_defection_puts_the_jumps_white_out() {
+        // `_DoEscortPayment` @0x40291-0x402aa: a `_hyperGamma` of 0 or more
+        // goes to -1 when any escort defected.
+        for (cash, gamma, after) in [
+            (350, 120.0, -1.0),
+            (350, 0.0, -1.0),
+            (1000, 120.0, 120.0),
+            (350, -0.5, -0.5),
+        ] {
+            let mut session = payer(cash, payroll(), 1, RuleSource::Engine);
+            session.ship.light_white(gamma);
+            session.pay_escorts(1);
+            assert_eq!(session.hyper_gamma(), after, "{cash} {gamma}");
+        }
+    }
+
+    #[test]
+    fn an_arrival_with_a_defection_leaves_the_white_out() {
+        let mut session = payer(350, payroll(), 1, RuleSource::Engine);
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session, &paying());
+        crate::testkit::begin_jump_now(&mut session, &paying()).expect("jumps");
+        session.ship.light_white(120.0);
+        session.arrive(&paying(), &mut NeverFires).expect("arrives");
+        assert_eq!(session.hyper_gamma(), -1.0);
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
     }
 
     #[test]

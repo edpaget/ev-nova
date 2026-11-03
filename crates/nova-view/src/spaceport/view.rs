@@ -945,7 +945,7 @@ impl SpaceportView {
         if let Some(Open::Outfitter(screen)) = &mut self.open {
             screen.alert(alert);
             if screen.alert_dialog().is_some() {
-                self.alert_after = shop_texts::after_movie(after);
+                self.alert_after = DescShown::str_movie(after);
             }
         }
     }
@@ -1740,6 +1740,25 @@ impl SpaceportView {
         }
     }
 
+    /// Tells the offer dialog open, the spaceport's or the one over the
+    /// venue open, whether the mission info screen lists a mission
+    /// ([`OfferDialog::set_missions_listed`]): whoever flies the ship says
+    /// so as it opens one ([`SpaceportView::open_offer`]), and the mission
+    /// info screen's view says so after an abort
+    /// ([`SpaceportView::set_mission_info`]).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing.set_missions_listed(listed);
+        }
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Trade(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Outfitter(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Shipyard(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Service(_) | Open::Computer(_)) | None => {}
+        }
+    }
+
     /// Disposes of the offer dialog answered and left drawn once no
     /// mission dialog covers it (`DisposeDialogNoFlash` @0xa361e, after
     /// the after-check @0xa3580-0xa35b8), in the input or tick that closed
@@ -1817,8 +1836,13 @@ impl SpaceportView {
     /// Opens the player info screen on `info` over whatever is open, laid
     /// out by the dialogs given ([`SpaceportView::with_player_info`]); it
     /// says why not without them. Without the spaceport's own dialog,
-    /// nothing opens.
+    /// nothing opens. What it covers lets go of its press and keys first,
+    /// as the screen takes their release.
     pub fn open_player_info(&mut self, info: PlayerInfo) {
+        if self.port.is_err() {
+            return;
+        }
+        self.let_go_under_overlay();
         let Ok(port) = &self.port else {
             return;
         };
@@ -1893,10 +1917,22 @@ impl SpaceportView {
     pub fn open_mission_info(&mut self, info: MissionInfo) {
         let over_mission_dialog =
             self.offer_dialog().is_some() || matches!(self.open, Some(Open::Computer(_)));
+        if self.dialogs.is_some() {
+            self.let_go_under_overlay();
+        }
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.open_info_with_map(info, !over_mission_dialog);
             self.sounds.extend(dialogs.take_sounds());
         }
+    }
+
+    /// Lets go of the press and the keys of what is shown, before an
+    /// overlay covers it and takes their release: a press held on the
+    /// mission computer's or mission info's list would otherwise go on
+    /// scrolling under it, and after it closes.
+    fn let_go_under_overlay(&mut self) {
+        Screen::cancel_pointer(self);
+        Screen::release_keys(self);
     }
 
     /// The mission info screen open, if it is.
@@ -1912,8 +1948,10 @@ impl SpaceportView {
     }
 
     /// After an abort, the mission info screen shows `info`, closing once
-    /// nothing is left.
+    /// nothing is left; the offer under it, if any, is told whether
+    /// anything is still listed ([`SpaceportView::set_offer_missions_listed`]).
     pub fn set_mission_info(&mut self, info: MissionInfo) {
+        self.set_offer_missions_listed(!info.rows.is_empty());
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.set_info(info);
             self.sounds.extend(dialogs.take_sounds());
@@ -1989,11 +2027,7 @@ impl SpaceportView {
     /// [`shop_texts`] module).
     pub fn show_text(&mut self, text: &str, after: Option<DescMovie>) {
         if let Some(dialogs) = &mut self.dialogs {
-            dialogs.show_descs(vec![DescShown {
-                text: text.to_owned(),
-                graphic: None,
-                movie: shop_texts::after_movie(after),
-            }]);
+            dialogs.show_descs(vec![DescShown::str_text(text, after)]);
         }
     }
 
@@ -2347,6 +2381,23 @@ impl Screen for SpaceportView {
         self.dialogs.as_ref().is_some_and(Screen::hides_pointer)
             || self.offer_dialog().is_some_and(Screen::hides_pointer)
     }
+
+    /// The mission texts', the spaceport's offers' and the open screen's
+    /// readouts: that screen's covers its offers and the outfitter's alert.
+    fn holds_back_keys(&self) -> bool {
+        self.dialogs.as_ref().is_some_and(Screen::holds_back_keys)
+            || self
+                .missioning
+                .as_ref()
+                .is_some_and(|missioning| missioning.landing.holds_back_keys())
+            || match &self.open {
+                Some(Open::Bar(screen)) => screen.holds_back_keys(),
+                Some(Open::Trade(screen)) => screen.holds_back_keys(),
+                Some(Open::Outfitter(screen)) => screen.holds_back_keys(),
+                Some(Open::Shipyard(screen)) => screen.holds_back_keys(),
+                _ => false,
+            }
+    }
 }
 
 impl SpaceportView {
@@ -2469,27 +2520,45 @@ impl SpaceportView {
         self.dispose_answered_offer();
         self.close_alerted_outfitter();
         let open_covered = self.mission_dialogs_open() || self.player_info.is_some();
-        if let Some(missioning) = &mut self.missioning
-            && !open_covered
-        {
-            missioning.landing.tick_dialog(dt);
+        // The spaceport's offer ticks, or, covered, drops what its answer
+        // left ([`VenueOffers::tick`]); what is still left then reaches the
+        // spaceport. Its timer never runs out: the spaceport asks once.
+        let unclaimed = self
+            .missioning
+            .as_mut()
+            .map(|missioning| {
+                missioning.landing.tick(dt, open_covered);
+                missioning.landing.take_unclaimed()
+            })
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.route_input(input);
         }
         if let Some(open) = &mut self.open {
             if open_covered {
                 open.tick_covered(dt);
             } else {
                 open.screen_mut().tick(dt);
+                // The outfitter's alert can close as it ticks, running the
+                // keys a cancelled press held back.
+                self.play_alert_after();
+                self.close_alerted_outfitter();
             }
         }
     }
 
-    /// Gives what was pressed under the last mission movie to what is
-    /// beneath it, as the original's queued events reach the next filter.
+    /// Gives what was pressed under the last mission movie, and what the
+    /// last text's replay queued after its closing key, to what is beneath
+    /// them, as the original's queued events reach the next filter.
     fn pass_unclaimed(&mut self) {
         let unclaimed = self
             .dialogs
             .as_mut()
-            .map(MissionDialogs::take_unclaimed)
+            .map(|dialogs| {
+                let mut unclaimed = dialogs.take_unclaimed();
+                unclaimed.append(&mut dialogs.take_left());
+                unclaimed
+            })
             .unwrap_or_default();
         for input in &unclaimed {
             self.input(input);
@@ -2548,6 +2617,8 @@ impl SpaceportView {
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
     mod flushing_layers;
+    mod held_keys;
+    mod overlay_pointer;
     mod ship_movies;
 
     use crate::ui::mission_info::MISSION_INFO_KEY;
@@ -5317,6 +5388,42 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_sounds(), []);
     }
 
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so a key held back by a click on its Done, after the closing key,
+    /// reaches the spaceport's filter.
+    #[test]
+    fn a_key_queued_after_a_texts_closing_key_reaches_the_spaceport() {
+        let mut view = missioned();
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Done.".to_owned(),
+            graphic: None,
+            movie: None,
+            map: None,
+        }]);
+        let at = view
+            .mission_text()
+            .and_then(|dialog| dialog.dialog().item_bounds(1))
+            .expect("Done")
+            .center();
+        let button = |pressed, at| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        view.input(&button(true, at));
+        view.input(&key(Key::Enter));
+        view.input(&key(crate::ui::mission_info::MISSION_INFO_KEY));
+        assert!(!view.take_mission_info_request(), "it waits");
+        view.input(&button(false, Point::new(0.0, 0.0)));
+        assert!(view.mission_text().is_none(), "closed by the release");
+        assert!(
+            view.take_mission_info_request(),
+            "the I reached the spaceport"
+        );
+    }
+
     #[test]
     fn without_a_text_dialog_mission_texts_are_not_shown() {
         let mut view = earth().with_missions(
@@ -5478,6 +5585,46 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_offer_choice(), None, "once");
         view.input(&key(Key::Escape));
         assert!(view.left(), "then the spaceport takes the input");
+    }
+
+    /// The answer flushes only mouse events (@0xa2da2-0xa2dde), so an
+    /// Escape held back by the click that accepts the spaceport's offer
+    /// leaves the spaceport on its next tick, unless a text the answer
+    /// shows covers it and flushes it (@0x5ae67).
+    #[test]
+    fn a_key_queued_after_the_spaceports_offer_is_answered_reaches_it_on_a_tick() {
+        for covered in [false, true] {
+            let mut view = missioned();
+            view.open_offer(offered());
+            let at = view
+                .offer_dialog()
+                .and_then(OfferDialog::dialog)
+                .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::ACCEPT_ITEM))
+                .expect("accept")
+                .center();
+            let button = |pressed| Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            };
+            view.input(&button(true));
+            view.input(&key(Key::Escape));
+            view.input(&button(false));
+            assert!(view.take_offer_choice().is_some(), "accepted");
+            if covered {
+                view.show_mission_texts(vec![MissionText {
+                    kind: MissionTextKind::Brief,
+                    mission: MissionId(141),
+                    text: "Go.".to_owned(),
+                    graphic: None,
+                    movie: None,
+                    map: None,
+                }]);
+            }
+            assert!(!view.left());
+            view.tick(Duration::ZERO);
+            assert_eq!(view.left(), !covered, "covered {covered}");
+        }
     }
 
     #[test]
@@ -5941,8 +6088,8 @@ pub(in crate::spaceport) mod tests {
     }
 
     pub(in crate::spaceport) fn actives(rows: usize) -> MissionInfo {
-        MissionInfo {
-            rows: (0..rows)
+        MissionInfo::shown(
+            (0..rows)
                 .map(|n| InfoRow {
                     slot: n as u8,
                     name: format!("Mission {n}"),
@@ -5951,8 +6098,8 @@ pub(in crate::spaceport) mod tests {
                     abortable: true,
                 })
                 .collect(),
-            today: "June 23rd, 1177 NC".to_owned(),
-        }
+            "June 23rd, 1177 NC".to_owned(),
+        )
     }
 
     #[test]
@@ -7015,6 +7162,44 @@ pub(in crate::spaceport) mod tests {
                     "{venue} {overlay:?}"
                 );
             }
+        }
+    }
+
+    /// With no mission listed, an offer's I asks for nothing
+    /// (`OfferDialog::set_missions_listed`), at the spaceport and over
+    /// every venue.
+    #[test]
+    fn an_offers_i_asks_nothing_once_told_no_mission_is_listed() {
+        let mut view = missioned();
+        view.open_offer(offered());
+        view.set_offer_missions_listed(false);
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(!view.take_mission_info_request(), "the spaceport's");
+        for venue in OFFER_VENUES {
+            let mut view = asked_at(venue, RuleSource::Engine);
+            view.open_offer(offered());
+            view.set_offer_missions_listed(false);
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(!view.take_mission_info_request(), "{venue}");
+            view.set_offer_missions_listed(true);
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request(), "{venue}");
+        }
+    }
+
+    /// The mission info screen shown after an abort tells the offer under
+    /// it whether anything is still listed.
+    #[test]
+    fn an_abort_that_leaves_nothing_listed_tells_the_offer_under_it() {
+        for left in [1, 0] {
+            let mut view = missioned();
+            view.open_offer(offered());
+            view.open_mission_info(actives(2));
+            view.set_mission_info(actives(left));
+            view.input(&key(Key::Escape));
+            assert!(view.mission_info().is_none(), "{left} left");
+            view.input(&key(MISSION_INFO_KEY));
+            assert_eq!(view.take_mission_info_request(), left > 0, "{left} left");
         }
     }
 

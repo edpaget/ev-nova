@@ -47,7 +47,7 @@ fn pirate(wait: u32, fuel: bool) -> Npc {
     pirate.goal = Goal::Attack(ShipRef::Npc(VICTIM));
     pirate.target = Some(ShipRef::Npc(VICTIM));
     pirate.travel = Some(crate::ai::travel::of_slot(5));
-    pirate.ai_wait = wait;
+    pirate.ai_wait = crate::traffic::ai_wait::ticks(wait);
     pirate.state.velocity = Vec2::new(0.25, 0.0);
     pirate.class_fuel = if fuel { 300 } else { 0 };
     pirate.docking = Some(Docking {
@@ -113,7 +113,7 @@ fn a_docked_pirate_whose_victims_slot_went_keeps_its_dock_through_its_wait_whate
         assert!(docked.state.position.x > 0.25, "fuel {fuel}: it crept");
         assert_eq!(docked.warp.stage, 0.0, "fuel {fuel}: no warp");
         let mut ticks = 1;
-        while of(&traffic, PIRATE).ai_wait > 0 {
+        while of(&traffic, PIRATE).ai_wait > 0.0 {
             assert_eq!(of(&traffic, PIRATE).docking, ON_VICTIM, "tick {ticks}");
             tick(&mut traffic, &govts);
             ticks += 1;
@@ -290,7 +290,7 @@ fn a_docked_pirate_whose_victim_went_and_who_found_another_to_plunder_completes_
     let drifting = of(&traffic, PIRATE);
     assert_eq!(
         drifting.ai_wait,
-        crate::ai::plunder_contents::PLUNDER_HOLD - 1
+        crate::ai::plunder_contents::PLUNDER_HOLD - 1.0
     );
     assert_eq!(
         (drifting.docking, drifting.target, drifting.travel),
@@ -406,7 +406,7 @@ fn the_players_hit_on_a_docked_pirate_turns_it_on_the_player_and_its_completion_
         }
     );
     assert_eq!(turned.docking, ON_VICTIM);
-    assert_eq!(turned.ai_wait, crate::traffic::autopilot::HIT_WAIT - 1);
+    assert_eq!(turned.ai_wait, crate::traffic::autopilot::HIT_WAIT - 1.0);
     let mut ticks = 1;
     while of(&traffic, PIRATE).goal != Goal::Drift {
         assert_eq!(traffic.take_pirate_events(), [], "tick {ticks}");

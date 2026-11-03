@@ -7,6 +7,7 @@
 
 use super::faked_travel::{faked_lasts, sent_but_lines, shown_to_flight};
 use super::faked_world::{raise, world};
+use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::flash::ShieldFlash;
 use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR, JumpPhase};
@@ -37,7 +38,11 @@ pub(super) fn at_gate(kind: GateKind) -> Answer {
 
 /// The answer to a refused press, its stellar's gate `gate`.
 fn refused(refusal: LandingRefusal, gate: Option<GateKind>) -> Answer {
-    Answer::LandRefused { refusal, gate }
+    Answer::LandRefused {
+        refusal,
+        gate,
+        requested: true,
+    }
 }
 
 /// Presses L on `view`'s flight, which answers `answer`.
@@ -292,7 +297,11 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     let mut flash = ShieldFlash::default();
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);
-    view.glows.step(&[(ShipRef::Player, false)], |_| Some(1.0));
+    view.glows.step(
+        &[(ShipRef::Player, false)],
+        |_| Some(1.0),
+        nova_sim::SpeedMult::FULL,
+    );
     assert!(view.glows.drawn(ShipRef::Player).is_some(), "a glow lit");
     let alt = crate::flight::held_alt::AltLayer {
         image: ImageKey::sprite(2100, 0),
@@ -398,6 +407,8 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
     let mut view = at_the_hypergate();
     view.map.centre_on_system(SystemId(132));
     view.track_held(&key(Key::Up, true));
+    view.held.insert(JUMP_KEY);
+    view.held.insert(BOARD_KEY);
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     close_on(&mut view, Some(SystemId(131)), arrived());
     assert_eq!(
@@ -416,7 +427,11 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeIn(0.0))
     );
-    assert!(!view.holds_keys(), "the keys let go");
+    assert_eq!(
+        view.held,
+        [Key::Up, BOARD_KEY].into_iter().collect(),
+        "the latched keys let go (@0x6387a, @0x639f2), Up and B polled"
+    );
     assert_eq!(view.ui_sounds, [], "closed in silence");
     let exited = "Exiting hypergate in the Alpha Centauri system on June 23rd, 1177 NC. No stellar objects present.";
     faked_lasts(&mut view, exited, 360);
@@ -450,6 +465,30 @@ fn without_hyperspace_effects_a_hypergate_flashes_white() {
     );
     view.fade_frame(ARRIVAL_FLASH_FOR);
     assert_eq!(view.jump_effect(), None);
+}
+
+#[test]
+fn the_hypergate_map_hides_flights_cursor_until_the_pointer_moves() {
+    // `_PlayerEnterHypergate` hides the sprite before `_DoSystemMap`
+    // (@0x63836).
+    use super::controls::NOWHERE;
+    let mut view = faked(sol());
+    view.input(&Input::PointerMoved(NOWHERE));
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_answer(at_gate(GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.land();
+    assert!(view.map_open());
+    close_on(&mut view, None, Answer::GateRefused(GateRefusal::Cancelled));
+    assert!(!view.map_open());
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(view.cursor_at(), None, "a same-point move after the map");
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(view.cursor_at(), Some(other));
 }
 
 #[test]
@@ -505,6 +544,8 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
     for effects in [true, false] {
         let mut view = faked(sol()).with_hyperspace_effects(effects);
         view.track_held(&key(Key::Up, true));
+        view.track_held(&key(JUMP_KEY, true));
+        view.track_held(&key(BOARD_KEY, true));
         view.sim.queue_answer(at_gate(GateKind::Wormhole));
         came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
         view.sim.queue_answer(arrived());
@@ -520,7 +561,11 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
             Some(JumpPhase::Flash(0.0)),
             "effects {effects}"
         );
-        assert!(!view.holds_keys());
+        assert_eq!(
+            view.held,
+            [Key::Up, BOARD_KEY].into_iter().collect(),
+            "the latched keys let go (@0x6429c), Up and B polled"
+        );
         let passed = "Passing through a wormhole into the Alpha Centauri system on June 23rd, 1177 NC. No stellar objects present.";
         faked_lasts(&mut view, passed, 240);
     }
@@ -767,6 +812,15 @@ fn taking_off_gives_the_stellar_and_draws_the_ship_there_on_the_next_frame() {
     assert_eq!(view.shown_position(), at(6.0, -8.0));
     assert_eq!(view.camera().center(), at(6.0, -8.0));
     assert_eq!(view.take_off(), None, "not landed: refused");
+}
+
+#[test]
+fn the_take_off_latches_every_key_at_the_spaceports_close() {
+    // `_PlayerLandOnStellar` @0x63583, after `_DoPortDialog`.
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.sim.queue_answer_showing(departed(128), sol());
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    latches_its_close(&mut view);
 }
 
 #[test]
@@ -1055,7 +1109,7 @@ fn take_off_says_the_greeting_for_240() {
 }
 
 #[test]
-fn the_greeting_leads_the_pay_notes() {
+fn a_take_offs_defection_is_kept_for_a_dialog_not_said_after_the_greeting() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::TookOff {
@@ -1066,21 +1120,21 @@ fn the_greeting_leads_the_pay_notes() {
         .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
-    let said = format!("{}  {DEFECTED_ONE}", take_off_greeting(4, "Earth", DATE));
-    faked_lasts(&mut view, &said, 240);
+    faked_lasts(&mut view, &take_off_greeting(4, "Earth", DATE), 240);
+    assert_eq!(view.take_defections(), [DEFECTED_ONE]);
 }
 
 #[test]
-fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
+fn a_landed_qs_message_is_said_alone_and_its_defection_kept() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     view.sim
         .queue_event(FlightEvent::LeaveMessage("Off you go.".to_owned()));
     view.sim
-        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
+        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(3)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
-    let said = format!("Off you go.  {DEFECTED_ONE}");
-    faked_lasts(&mut view, &said, SCRIPT_MESSAGE_TICKS);
+    faked_lasts(&mut view, "Off you go.", SCRIPT_MESSAGE_TICKS);
+    assert_eq!(view.take_defections(), [DEFECTED_SOME]);
 }
 
 #[test]

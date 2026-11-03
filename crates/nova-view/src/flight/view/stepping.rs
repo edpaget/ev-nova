@@ -26,6 +26,10 @@
 //! after them; then the line the steps raised last, whatever its kind
 //! ([`StepRun::last_line`], [`FlightView::relay_last_line`]), so the
 //! line shows it, as `_DisplayComm` replaces its slot with each line.
+//! The lines a double-time last step's second pass raised are not among
+//! them: the hold keeps them for the frame after
+//! ([`StepRun::second_pass_lines`], the `between_passes` module), and the
+//! release relays them before the next report's.
 //!
 //! **The presentation rules** the effects, stars, world, HUD and wording
 //! read ([`Presentation`]) are the view's own, held from the rulebook the
@@ -62,7 +66,7 @@ use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, Shi
 
 use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::effects::{LoopedSounds, Scene};
+use crate::flight::effects::{Breakups, LoopedSounds, Scene};
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
@@ -70,8 +74,8 @@ use crate::system::catalog::SystemCatalog;
 use super::between_passes::{self, BetweenPasses};
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
-    LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point, show_combat,
-    show_frozen_frames, show_gate_frames, stars, window_width,
+    JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point,
+    show_combat, show_frozen_frames, show_gate_frames, stars, window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars, the world, the
@@ -176,10 +180,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// chord, the cloak and the safety only while the flight takes its
     /// command (the cloak key needs no Command, `_QuickKeyCheck`
     /// @0x705b7); double time and Hyperspace Effects as the screen was
-    /// told; and the land key.
+    /// told; the land key held and L's latch, `_dockTryFlag`, which holds
+    /// the dock approach back (the `faded_keys` module); the jettison
+    /// chord, `Some(all)` while Command and K are down and the flight
+    /// takes it, `all` unless Option is down too, or a tap of it since
+    /// the last step ([`FlightView::jettison`]); and whether 334 ms or
+    /// more of the wall time handed to the view went by without a step,
+    /// which holds the next step's gain.
     pub(super) fn step_input(&self, anchor: Anchor) -> StepInput {
         let held = |key| self.held.contains(&key);
         let chord = |command, key| self.takes(command) && held(Key::Command) && held(key);
+        let jettison = chord(PlayerCommand::Jettison, JETTISON_KEY)
+            .then(|| !held(Key::Alt))
+            .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),
             play_area: play_area(self.view, anchor),
@@ -192,6 +205,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             double_time_key: self.double_time,
             hyperspace_effects: self.hyperspace_effects,
             land_key: held(LAND_KEY),
+            dock_try: self.faded_keys.land_latched(),
+            jettison,
+            held: nova_sim::speed_mult::holds_after(self.since_step),
         }
     }
 
@@ -200,13 +216,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass reported, relays the comm and quotes they raised and fills the
     /// kept frame afresh. A step or a stop first lets go what the last
     /// double-time frame held, and a double-time last step holds its
-    /// frame and its second pass, whose quotes it says now (see the
-    /// `between_passes` module). Whether the escape pod's rescue ended the
+    /// frame and its second pass, heard now, its lines worded for the
+    /// frame after (see the `between_passes` module). Whether the escape pod's rescue ended the
     /// stepping.
     pub(super) fn step_frame(&mut self, steps: u32, anchor: Anchor) -> bool {
         let input = self.step_input(anchor);
         let mut report = std::mem::take(&mut self.step_report);
         self.sim.step(&input, steps, &mut report);
+        if !report.steps.is_empty() {
+            self.since_step = std::time::Duration::ZERO;
+            // A step has read the tap (`FlightView::jettison`).
+            self.jettison_tapped = None;
+        }
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         if !report.steps.is_empty() {
@@ -216,9 +237,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
             quotes.extend(self.inbox.take_quotes());
         }
         if !report.steps.is_empty() || report.stopped {
+            // A stop for the warp's end leaves them for the steps its
+            // arrival runs, which relay them over the arrival's line.
+            if !(report.steps.is_empty() && self.frame.warp_end_due) {
+                self.release_held_lines();
+            }
             self.release_between_passes(anchor);
         }
-        let held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
+        let mut held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
         let mut rescued = false;
         for run in &report.steps {
             notes.extend(run.comm.iter().cloned());
@@ -229,18 +255,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     self.carry_wrap(&wrap);
                 }
                 let first = (at == 0).then_some(self.previous.position);
-                self.step_effects(pass, first, anchor);
+                self.step_effects(pass, first, anchor, None);
             }
             if let Some(ship) = run.rescued {
                 self.previous = ship;
                 rescued = true;
             }
         }
-        quotes.extend(held.iter().flat_map(BetweenPasses::quotes).cloned());
+        if let Some(held) = &mut held {
+            self.hear_held_pass(held);
+        }
         self.between_passes = held.or_else(|| self.between_passes.take());
+        let lines = report
+            .steps
+            .last_mut()
+            .map(|run| std::mem::take(&mut run.second_pass_lines))
+            .unwrap_or_default();
         self.step_report = report;
         self.relay_comm_and_quotes(&notes, quotes);
         self.refresh_frame();
+        self.hold_lines(lines);
         rescued
     }
 
@@ -271,19 +305,50 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Steps the view's effects, flashes, glows, shot looks and stars
     /// after `pass`, as the view stepped them after each pass: `first`
     /// the ship's position before the step on its first pass, the ship
-    /// drawn at `anchor`.
-    pub(super) fn step_effects(&mut self, pass: &PassReport, first: Option<Vec2>, anchor: Anchor) {
-        let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+    /// drawn at `anchor`. The post-animate a frame left moves the
+    /// particles first, and a first pass leaves one, as a frame stands
+    /// after it (see the `scroll_offset` module). A pass `heard` already,
+    /// its breakups rolled, is only shown (see the `between_passes`
+    /// module).
+    pub(super) fn step_effects(
+        &mut self,
+        pass: &PassReport,
+        first: Option<Vec2>,
+        anchor: Anchor,
+        heard: Option<Breakups>,
+    ) {
+        if self.scroll.begin_pass() {
+            self.effects.move_particles();
+        }
         let chance = &mut self.effects_chance;
         let scene = self.presentation.scene(pass.player_position);
-        self.effects.step(&dying, &scene, &self.looks, chance);
+        let was_heard = heard.is_some();
+        let breakups = if let Some(breakups) = heard {
+            breakups
+        } else {
+            let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+            self.effects.hear_step(&dying, &scene, &self.looks, chance)
+        };
+        // The pass's gain, `_gSpeedMult`: `_HandleExplods`' for the
+        // explosions (@0x2f655, @0x2f811), `_HandleEscapePods`' for the
+        // pods (@0x39e92, @0x39ebe, @0x39fcc), a new pod's first step among
+        // them, and `_HandleShipDisplay`'s for the flashes (@0x2c964) and
+        // the glows (@0x2c7ed). The shot looks read it from `pass` for
+        // `_HandleSmoke` (@0x2e3d6).
+        let gain = pass.speed_mult;
+        self.effects.show_step(&breakups, &scene, &self.looks, gain);
         let shown = (&mut self.effects, &mut self.flashes);
         let sheets = (&self.sheet, &self.npc_sheets);
         let fight = (pass.combat.as_slice(), pass.ships.as_slice());
-        let lit = show_combat(fight, &scene, shown, (&self.looks, sheets), chance);
+        let looks = (&self.looks, sheets);
+        let heard_at = (was_heard, gain);
+        let lit = show_combat(fight, &scene, shown, looks, heard_at, chance);
         let (player, sheets) = (&self.sheet, &self.npc_sheets);
-        self.glows
-            .step(&lit, |ship| glow_decay(&pass.ships, player, sheets, ship));
+        self.glows.step(
+            &lit,
+            |ship| glow_decay(&pass.ships, player, sheets, ship),
+            gain,
+        );
         let effects = (&mut self.effects, scene.caps);
         let trails = self.smoke_trails;
         self.shot_looks
@@ -297,6 +362,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             first,
             chance,
         );
+        if first.is_some() {
+            self.scroll.drawn(point(pass.player_position));
+        }
     }
 }
 
@@ -310,33 +378,44 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the quotes, then in double time the second pass with the same
     /// (`nova_sim::Session::step`), the view's effects stepped after each
     /// pass and the comm notes and quotes said. Then each hypergate draws
-    /// the frame the steps left it on, and a pass whose ship tick brought
-    /// the escape pod's rescue, which ends the stepping there, has the
-    /// view laid out afresh where the rescue put the ship. Then the
-    /// messages the steps raised are said, then the line they raised last
-    /// again, whatever its kind ([`FlightView::relay_last_line`]), and the
-    /// sheets of a system the session populated afresh are read. Flight and the jump's warp both
-    /// step this way.
+    /// the frame the steps left it on, the messages the steps raised are
+    /// said, then the line they raised last again, whatever its kind
+    /// ([`FlightView::relay_last_line`]). A pass whose ship tick brought
+    /// the escape pod's rescue, which ends the stepping there, then
+    /// begins the rescue's screen over `pod`, the frame the pod showed as
+    /// the tick began ([`FlightView::pod_frame`], the `rescue` module), or,
+    /// for a rescue on double time's second pass, the frame between its
+    /// passes ([`FlightView::pod_frame_between_passes`]), the lines that
+    /// pass held relayed after it,
+    /// its repaint reading the message line those lines left, which lays
+    /// the view out afresh where the rescue put the ship once it has faded
+    /// out. Last the sheets of a system the session populated afresh are
+    /// read. Flight and the jump's warp both step this way.
     ///
     /// The comm notes and quotes are said before the gates' frames are
     /// shown, where the view once showed the frames first: the two touch
     /// nothing in common, and both are set before the frame is drawn.
-    pub(super) fn run_steps(&mut self, steps: u32) {
+    pub(super) fn run_steps(&mut self, steps: u32, pod: Option<super::rescue::PodFrame>) {
         let rescued = self.step_frame(steps, self.anchor());
         let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
             show_frozen_frames(scene, drawn);
             show_gate_frames(scene, drawn);
         }
-        if rescued {
-            // Laid out in the system the rescue took the pod to, from where
-            // it put the ship, before the frame is drawn; the course map
-            // looking there too (`_HandlePlayer` @0x68fab).
-            self.catch_up();
-            self.map.recentre();
-        }
         self.relay_messages();
         self.relay_last_line();
+        if rescued {
+            // A rescue on double time's second pass fades out over the
+            // frame between its passes, its lines under the first text.
+            let pod = match self.pod_frame_between_passes() {
+                Some(between) => {
+                    self.release_held_lines();
+                    Some(between)
+                }
+                None => pod,
+            };
+            self.begin_rescue(pod);
+        }
         // The session may have populated its system afresh.
         self.read_npc_sheets();
     }

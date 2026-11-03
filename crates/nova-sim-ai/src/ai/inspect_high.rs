@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn under_the_ai_wait_nothing_is_written() {
         // The handler returns first (@0x8d4b9-0x8d4d2).
-        let waiting = folded(n(2), 10.0, true, |npc| npc.ai_wait = 30);
+        let waiting = folded(n(2), 10.0, true, |npc| npc.ai_wait = 30.0);
         assert_eq!(waiting.goal, Goal::Inspect(n(2)));
         assert!(!waiting.clears_target);
     }

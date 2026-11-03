@@ -207,7 +207,6 @@ impl CombatLooks for GameData {
             },
             beam_color: weapon.beam_color,
             corona_color: weapon.corona_color,
-            prox_safety: weapon.prox_safety,
         })
     }
 
@@ -949,7 +948,6 @@ mod tests {
                 smoke_set: 1,
                 beam_color: 0x00FF_8000,
                 corona_color: 0x0000_80FF,
-                prox_safety: 6,
                 sound_ticks: None,
             })
         );

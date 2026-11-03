@@ -69,7 +69,7 @@ mod tests {
         session
             .space
             .traffic
-            .write_berth_search(5, SearchTimer::Searching(40));
+            .write_berth_search(5, SearchTimer::Searching(40.0));
         session.space.traffic.set_berth_person(9, "Ace");
         session
     }
@@ -156,12 +156,12 @@ mod tests {
         let mut last = facing_an_npc(&catalog, 180);
         last.space
             .traffic
-            .write_berth_search(1, SearchTimer::Searching(40));
+            .write_berth_search(1, SearchTimer::Searching(40.0));
         let mut next = Session::start(&catalog)
             .expect("starts")
             .with_kept_berths(last.kept_berths());
         next.populate(&catalog, &mut Draws::of(&POPULATE));
         assert_eq!(next.npcs()[0].berth, 1);
-        assert_eq!(next.npcs()[0].lost_sight, SearchTimer::Carried(40));
+        assert_eq!(next.npcs()[0].lost_sight, SearchTimer::Carried(40.0));
     }
 }

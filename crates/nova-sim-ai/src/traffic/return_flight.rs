@@ -45,6 +45,7 @@
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::autopilot::Beside;
 use crate::traffic::formation_flight;
 use crate::traffic::held_burst::Flight;
@@ -77,20 +78,21 @@ pub fn sub(at: Vec2, carrier: Vec2, window: f32, seen: bool) -> Sub {
 }
 
 /// Sub 0xb of `npc` closing on its carrier at `carrier` on `handling`,
-/// with `beside` its swarm lead, at its slot (see the module docs): its
-/// flight. Double time's second pass runs no low level, so it nudges
+/// with `beside` its swarm lead, at its slot, at the frame's `gain` (see
+/// the module docs): its flight. Double time's second pass runs no low level, so it nudges
 /// nothing there, flying the advance pass's word.
 pub(crate) fn close(
     npc: &mut Npc,
     carrier: &ShipState,
     beside: Beside,
     handling: &Handling,
+    gain: SpeedMult,
 ) -> Flight {
     let slot = npc
         .formation()
         .map(|place| place.position(carrier))
         .or_else(|| npc.parent_word());
-    formation_flight::steer(npc, carrier, true, beside.swarm, slot, handling)
+    formation_flight::steer(npc, carrier, true, beside.swarm, slot, handling, gain)
 }
 
 #[cfg(test)]
@@ -354,6 +356,61 @@ mod tests {
             );
             assert_eq!(ship.display.drive.glow, GlowCopy::Swarm(12), "{name}");
         }
+    }
+
+    #[test]
+    fn at_half_gain_a_returning_swarmer_closing_is_nudged_by_its_swarm_branch_at_half_gain() {
+        let half = crate::speed_mult::SpeedMult::new(0.5);
+        let place = FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        };
+        let swarm = Some(SwarmLead {
+            aim: Vec2::ZERO,
+            leads_it: false,
+            glow: 12,
+        });
+        let beside = Beside {
+            swarm,
+            ..Beside::default()
+        };
+        let mut ship = returning(100.0, at(450.0, 0.0, 0.0, 0.0, 90.0));
+        ship.escort = Some(EscortDuty {
+            formation: place,
+            order: None,
+        });
+        ship.swarm_leader = Some(5);
+        let flown_at = |gain| {
+            let mut ship = ship.clone();
+            let speeds = TopSpeeds::own_of(&ship);
+            autopilot::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                Some(&CARRIER),
+                false,
+                beside,
+                speeds,
+                FlightRules::default(),
+                Readings {
+                    speed_mult: gain,
+                    ..Readings::default()
+                },
+                &crate::ai::NO_WEAPONS,
+                &mut Draws::of(&[]),
+            );
+            ship.state.position
+        };
+        let handling = ship.flying_handling(TopSpeeds::own_of(&ship).own, FlightRules::default());
+        let mut closed = ship.clone();
+        close(&mut closed, &CARRIER, beside, &handling, half);
+        let mut branched = ship.clone();
+        let slot = Some(place.position(&CARRIER));
+        crate::traffic::plunder_dock::swarm_branch(&mut branched, swarm, slot, &handling, half);
+        assert_eq!(closed.state.position, branched.state.position);
+        assert_eq!(flown_at(half), closed.state.position);
+        assert_ne!(flown_at(half), flown_at(crate::speed_mult::SpeedMult::FULL));
     }
 
     /// A swarmer of a fleet at rest 450 right of the carrier, facing away

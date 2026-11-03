@@ -52,6 +52,8 @@ impl Session {
     ///   [`Session::news_picture`].
     /// - To [`ScreenAsk::Gamble`], [`Session::gamble_opening`].
     /// - To [`ScreenAsk::MissionInfo`], [`Session::mission_info`].
+    /// - To [`ScreenAsk::MissionInfoAfterAbort`],
+    ///   [`Session::mission_info_after_abort`].
     /// - To [`ScreenAsk::RefusableOffer`],
     ///   [`Session::refusable_offer_dialog`].
     /// - To [`ScreenAsk::OfferText`], [`Session::offer_text`].
@@ -142,6 +144,9 @@ impl Session {
             ScreenAsk::News => self.news_screen(),
             ScreenAsk::Gamble => self.gamble_screen(),
             ScreenAsk::MissionInfo => self.mission_info_screen(),
+            ScreenAsk::MissionInfoAfterAbort => {
+                ScreenAnswer::MissionInfoAfterAbort(self.mission_info_after_abort())
+            }
             ScreenAsk::RefusableOffer(mission) => self.refusable_offer_screen(mission),
             ScreenAsk::OfferText { mission, raw } => self.offer_text_screen(mission, &raw),
             ScreenAsk::Hail => self.hail_screen(catalog, collab.hail_options),

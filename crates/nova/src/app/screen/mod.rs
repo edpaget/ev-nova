@@ -37,7 +37,9 @@
 //! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
 //! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
 //! Command-Q anywhere, quits at once (see `quit_question`), but while the
-//! menu appears, below. Escape in flight, by the engine's reading of
+//! menu appears, below, and during a dialog's held press, when it quits
+//! at the release, after the keys typed before it (see `held_chords`).
+//! Escape in flight, by the engine's reading of
 //! [`RuleKey::EscapeToMainScreen`](nova_sim::RuleKey::EscapeToMainScreen),
 //! saves the pilot and goes back to the menu, which holds it, so Enter
 //! Ship resumes it; by the other reading it does nothing, as in the
@@ -382,12 +384,15 @@ mod background;
 mod build;
 mod capture_naming;
 mod christening;
+mod defection;
 mod entry;
 mod escort_dialog;
 mod flight;
 mod game;
+mod held_chords;
 mod jump_white;
 mod launch;
+mod live_input;
 mod map_wait_keys;
 mod menu;
 mod menu_commands;
@@ -396,6 +401,7 @@ mod pilot_panel;
 mod planet_comm;
 mod port_dialogs;
 mod quit_question;
+mod rescue_fades;
 mod routing;
 mod screen_impl;
 mod ship_name_dialog;
@@ -568,6 +574,13 @@ pub struct AppScreen {
     /// [`nova_sim::CarryOver::release_comm_escort`]). Clear at launch, as
     /// its BSS reads 0; it is never saved, so a quit drops it.
     release_comm_escort: bool,
+    /// The frame gain the last flight put away left, which the next game
+    /// enters at: the original's `_gSpeedMult` is process-wide (see
+    /// [`nova_sim::CarryOver::speed_mult`]), 0.0 after a game that ended
+    /// landed. Full at launch, as the launch's resume event runs
+    /// `_SwitchedIn` (`_DoMainScreen` @0x1b33c), and again at every
+    /// switch-in (`Screen::focus_gained`).
+    speed_mult: nova_sim::SpeedMult,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.
@@ -718,6 +731,13 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// The menu chords held while a dialog holds back its keys for a
+    /// held press, until its replay has run (see `held_chords`).
+    held_chords: held_chords::HeldChords,
+    /// What is physically down while flight's input is away, for flight
+    /// as it gets it back (see `live_input`): the router's, as only it
+    /// sees the input while a dialog or the spaceport takes flight's.
+    live: live_input::LiveInput,
     /// Whether the physical S, L and E keys are held: O does nothing
     /// while S or L is (`_KeyCheck(0x01)`, `_KeyCheck(0x25)`
     /// @0x1abd3-0x1abf5), and E waits for E's release.

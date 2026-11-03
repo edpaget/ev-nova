@@ -91,8 +91,8 @@ mod tests {
     #[test]
     fn a_ship_at_its_gate_carries_its_emerges_word() {
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
-            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 2 },
         ] {
             let mut npc = in_mode(mode, Some(12.0));
@@ -107,8 +107,8 @@ mod tests {
     #[test]
     fn a_ship_marked_as_carrying_its_own_word_bursts_from_what_it_owes_else_from_the_top() {
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
-            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
         ] {
             for owed in [None, Some(12.0)] {

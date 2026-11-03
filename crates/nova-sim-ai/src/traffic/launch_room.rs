@@ -344,8 +344,8 @@ mod tests {
     #[test]
     fn a_carrier_held_at_its_gate_or_not_intact_takes_no_berth() {
         for mode in [
-            Mode::HeldAtGate { ticks_left: 5 },
-            Mode::Emerging { ticks_left: 5 },
+            Mode::HeldAtGate { ticks_left: 5.0 },
+            Mode::Emerging { ticks_left: 5.0 },
         ] {
             let held = Npc { mode, ..carrier() };
             let mut room = LaunchRoom::new(1);
@@ -360,7 +360,7 @@ mod tests {
         room.settle(&disabled, sniping(true));
         assert!(room.any());
         let coasting = Npc {
-            mode: Mode::Coasting { ticks_left: 5 },
+            mode: Mode::Coasting { ticks_left: 5.0 },
             ..carrier()
         };
         room.settle(&coasting, sniping(true));

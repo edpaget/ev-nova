@@ -104,7 +104,12 @@ mod tests {
     /// ([`flight::turn_to`]), the turn in the controls.
     fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
         let (controls, flown, wanted) = super::toward(state, stellar, handling);
-        let turn = flight::turn_to(state, wanted, handling.turn_rate);
+        let turn = flight::turn_to(
+            state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         (Controls { turn, ..controls }, flown)
     }
 

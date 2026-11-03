@@ -842,7 +842,7 @@ fn picture_bar_template() -> DialogTemplate {
 
 /// [`PastTheHoldsDialogs`], with the picture variants of the offer
 /// (1020) and the bar (1021) too.
-struct PictureDialogs;
+pub(super) struct PictureDialogs;
 
 impl DialogResources for PictureDialogs {
     fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
@@ -981,7 +981,7 @@ impl DialogResources for NoTextDialogs {
 /// The router over [`briefing_person_offer_data`] with `dialogs`, in
 /// the developer's flight, the tank half full, hailing the merchant:
 /// its offer open.
-fn hailing_briefer(dialogs: Rc<dyn DialogResources>) -> AppScreen {
+pub(super) fn hailing_briefer(dialogs: Rc<dyn DialogResources>) -> AppScreen {
     let mut screen = AppScreen::new(briefing_person_offer_data())
         .with_dialogs(dialogs, Rc::new(MonoMetrics))
         .with_behaviour(Rc::new(Idle));
@@ -1147,6 +1147,14 @@ fn an_offer_and_a_mission_text_open_with_the_rulebooks_focus_ring() {
 /// its offer of mission 130 open over flight, whose `dësc` names
 /// "Offer.mov" as its after-movie; and the reel the movies play on.
 pub(super) fn holding_and_offered_in_flight() -> (AppScreen, Rc<MockMoviePlayer>) {
+    holding_and_offered_in_flight_with(|_| {})
+}
+
+/// [`holding_and_offered_in_flight`], mission 128's record changed by
+/// `fit` after its `QuickBrief` is set.
+fn holding_and_offered_in_flight_with(
+    fit: impl FnOnce(&mut Vec<u8>),
+) -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut person = vec![0; Person::SIZE.expect("fixed")];
     put_i16s(&mut person, 0x00, &[-2, -1, 3, 2, 0, 129]);
     put_i16s(&mut person, 0x0C, &[-1; 4]);
@@ -1157,21 +1165,27 @@ pub(super) fn holding_and_offered_in_flight() -> (AppScreen, Rc<MockMoviePlayer>
     put_i16s(&mut offered, 0x0A, &[100]);
     put_i16s(&mut offered, 0x34, &[-1]);
     put_i16s(&mut offered, 0x58, &[-1]);
-    let fork = person_offer_fork_of(|held| put_i16s(held, 0x36, &[6001]), 2)
-        .resource(Person::TYPE, 129, Some(b"Second"), &person)
-        .resource(Mission::TYPE, 130, Some(b"Second job"), &offered)
-        .resource(
-            Desc::TYPE,
-            130 + 3872,
-            Some(b"Offer"),
-            &filmed_desc_of("Job.", "Offer.mov", 0x0001),
-        )
-        .resource(
-            Desc::TYPE,
-            6001,
-            Some(b"Quick"),
-            &filmed_desc_of("Quick.", "Quick.mov", 0x0001),
-        );
+    let fork = person_offer_fork_of(
+        |held| {
+            put_i16s(held, 0x36, &[6001]);
+            fit(held);
+        },
+        2,
+    )
+    .resource(Person::TYPE, 129, Some(b"Second"), &person)
+    .resource(Mission::TYPE, 130, Some(b"Second job"), &offered)
+    .resource(
+        Desc::TYPE,
+        130 + 3872,
+        Some(b"Offer"),
+        &filmed_desc_of("Job.", "Offer.mov", 0x0001),
+    )
+    .resource(
+        Desc::TYPE,
+        6001,
+        Some(b"Quick"),
+        &filmed_desc_of("Quick.", "Quick.mov", 0x0001),
+    );
     let reel = MockMoviePlayer::playing((160, 120), 2);
     let mut screen = AppScreen::new(loaded(&fork))
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
@@ -1357,17 +1371,20 @@ fn the_mission_info_closing_over_a_flight_offer_lets_go_of_the_keys_held() {
 }
 
 #[test]
-fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_pointer_held() {
-    // A press on the offer's Refuse held as I opens the info is let go
-    // (`FlushEvents` @0xa32f4-0xa333f), so its release after the close
-    // clicks nothing.
+fn i_pressed_during_a_click_on_a_flight_offers_refuse_waits_for_its_release() {
+    // `_TrackSingleMissionButtons` reads no events (@0x28188), so the I
+    // waits in the queue while the press is held on Refuse. The release
+    // refuses, and the I after it reaches what shows next: over flight,
+    // which reads its keys as held, nothing.
     let (mut screen, _reel) = holding_and_offered_in_flight();
-    let at = screen
+    let refuse = screen
         .offer()
         .and_then(|offer| offer.dialog())
         .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::offer::REFUSE_ITEM))
         .expect("the Refuse button")
         .center();
+    let offset = screen.overlay_offset();
+    let at = Point::new(refuse.x + offset.x, refuse.y + offset.y);
     let pointer = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
@@ -1375,15 +1392,89 @@ fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_pointer_held() {
     };
     screen.input(&pointer(true));
     press_mission_info(&mut screen);
-    assert!(screen.flight_mission_info().is_some(), "info open");
-    screen.input(&key(Key::Escape, true));
-    screen.input(&key(Key::Escape, false));
-    assert!(screen.flight_mission_info().is_none(), "info closed");
-    screen.take_sounds();
+    assert!(screen.flight_mission_info().is_none(), "it waits");
     screen.input(&pointer(false));
     assert!(
-        screen.offer().is_some_and(|offer| !offer.answered()),
-        "the offer still open and unanswered"
+        screen.offer().is_none_or(OfferDialog::answered),
+        "refused by the click"
     );
-    assert_eq!(screen.take_sounds(), [], "no click or button sound");
+    assert!(
+        screen.flight_mission_info().is_none(),
+        "the I reached nothing"
+    );
+}
+
+/// With no mission active, an I held back by a click on the spaceport's
+/// offer's Refuse, let go outside it, opens nothing and flushes nothing,
+/// so the Return after it accepts at the release (`_OfferOneMission`
+/// @0xa32c1-0xa32ee).
+#[test]
+fn an_i_and_a_return_held_back_on_the_spaceports_offer_accept_with_no_mission_active() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_at_venues(&store, venue_data(SPACEPORT));
+    let refuse = spaceport(&screen)
+        .offer_dialog()
+        .and_then(OfferDialog::dialog)
+        .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::offer::REFUSE_ITEM))
+        .expect("laid")
+        .center();
+    let left = |pressed, at| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    screen.input(&left(true, refuse));
+    for k in [nova_view::ui::mission_info::MISSION_INFO_KEY, Key::Enter] {
+        screen.input(&key(k, true));
+        screen.input(&key(k, false));
+    }
+    assert!(spaceport(&screen).offer_dialog().is_some(), "it waits");
+    screen.input(&left(false, Point::new(1.0, 1.0)));
+    assert!(
+        spaceport(&screen).mission_info().is_none(),
+        "nothing to list"
+    );
+    assert_eq!(active(&screen), [MissionId(130)], "accepted");
+}
+
+/// An abort on the mission info screen over a flight offer that leaves
+/// nothing listed tells the offer: an I held back by a click on its
+/// Refuse, let go outside it, then opens nothing, and the Return after it
+/// accepts (`_OfferOneMission` @0xa32c1-0xa32ee).
+#[test]
+fn after_an_abort_leaves_nothing_listed_an_i_held_back_on_a_flight_offer_lets_its_return_accept() {
+    // Mission 128's `CanAbort` (0x42) set.
+    let (mut screen, _reel) = holding_and_offered_in_flight_with(|held| put_i16s(held, 0x42, &[1]));
+    press_mission_info(&mut screen);
+    let offset = screen.overlay_offset();
+    let on_screen = |at: Point| Point::new(at.x + offset.x, at.y + offset.y);
+    let abort = screen
+        .flight_mission_info()
+        .and_then(|info| info.dialog())
+        .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::missions::ABORT_ITEM))
+        .expect("the Abort button")
+        .center();
+    let pointer = |pressed, at| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    for pressed in [true, false] {
+        screen.input(&pointer(pressed, on_screen(abort)));
+    }
+    assert_eq!(active(&screen), [], "aborted");
+    assert!(screen.flight_mission_info().is_none(), "nothing left");
+    let refuse = screen
+        .offer()
+        .and_then(|offer| offer.dialog())
+        .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::offer::REFUSE_ITEM))
+        .expect("the Refuse button")
+        .center();
+    screen.input(&pointer(true, on_screen(refuse)));
+    press_mission_info(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    screen.input(&pointer(false, Point::new(1.0, 1.0)));
+    assert!(screen.flight_mission_info().is_none(), "nothing to list");
+    assert_eq!(active(&screen), [MissionId(130)], "accepted");
 }

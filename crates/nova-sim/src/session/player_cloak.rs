@@ -47,6 +47,7 @@
 //!   `_ResetPlayer`.
 
 use super::{Outbox, PlayerShip, Session, Setup, Statics};
+use crate::SpeedMult;
 use crate::cloak::{self, Cloak, CloakCheck, CloakGear, CloakShown, SEEN_AT_FULL_FADE};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -103,13 +104,14 @@ impl Session {
             return;
         }
         let jumping = self.mode.jump().is_some();
+        let gain = self.speed_mult();
         self.ship.cloak_tick(
             &mut self.pilot,
             &self.statics,
             &self.setup,
             &mut self.out,
-            jumping,
-            disabled_at_head,
+            (jumping, disabled_at_head),
+            gain,
         );
     }
 }
@@ -129,8 +131,8 @@ impl PlayerShip {
         statics: &Statics,
         setup: &Setup,
         out: &mut Outbox,
-        jumping: bool,
-        disabled: bool,
+        (jumping, disabled): (bool, bool),
+        gain: SpeedMult,
     ) {
         let gear = self.cloak_gear(pilot, statics);
         let reserves = setup.rules.source_for(RuleKey::CloakReserves);
@@ -163,18 +165,28 @@ impl PlayerShip {
         let able = can_cloak(pilot);
         let reserves = &mut pilot.reserves;
         let (fuel, shield) = (&mut reserves.fuel.now, &mut reserves.shield.now);
-        if upkeep(&mut self.cloak.cloak, gear, able, disabled, fuel, shield) == Some(true) {
+        if upkeep(
+            &mut self.cloak.cloak,
+            gear,
+            able,
+            disabled,
+            fuel,
+            shield,
+            gain,
+        ) == Some(true)
+        {
             out.sounds.push(SimSound::Uncloaked);
         }
     }
 
-    /// One step of the player's fade, as its slot's `_HandleShipDisplay`
-    /// steps it (@0x2d088-0x2d17e): a dying player's falls at twice the
-    /// rate.
-    pub(super) fn step_cloak_fade(&mut self, pilot: &Pilot, statics: &Statics) {
+    /// One step of the player's fade at the frame's gain `gain`, as its
+    /// slot's `_HandleShipDisplay` steps it (@0x2d088-0x2d17e): a moving
+    /// fade by the gain (@0x2d0d2), a drift unscaled, a dying player's
+    /// then falling at twice the rate.
+    pub(super) fn step_cloak_fade(&mut self, pilot: &Pilot, statics: &Statics, gain: SpeedMult) {
         let fast = self.cloak_gear(pilot, statics).fast();
         let dying = self.condition.is_dying(pilot.reserves.armor);
-        self.cloak.cloak.display_step(fast, dying);
+        self.cloak.cloak.display_step(fast, dying, gain);
     }
 
     /// Each direct one of `strikes` on the player, as its cloak takes it
@@ -493,8 +505,8 @@ mod tests {
         tick(&mut session, false);
         again(&mut session);
         let paid = fuel - session.pilot.reserves.fuel.now;
-        let rate = 3.0 * crate::cloak::CLOAK_UPKEEP_RATE;
-        assert!((paid - 2.0 * rate).abs() < 1e-4, "paid {paid}");
+        let rate = -3.0 * crate::cloak::CLOAK_UPKEEP;
+        assert!((f64::from(paid) - 2.0 * rate).abs() < 1e-4, "paid {paid}");
     }
 
     #[test]
@@ -541,10 +553,14 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
+        let mut stepped = landed;
+        for _ in 0..2 {
+            stepped.display_step(false, false, crate::SpeedMult::ZERO);
+        }
         assert_eq!(
             session.player_cloak(),
-            at(landed.fade + 1.5, 1),
-            "and the take-off's two displays step it"
+            stepped,
+            "and the take-off's two displays step it at its gain of 0"
         );
     }
 
@@ -734,5 +750,28 @@ mod tests {
             &mut NeverFires,
         );
         assert!(attacks(&session), "uncloaked");
+    }
+
+    #[test]
+    fn at_half_gain_the_upkeep_pays_half_a_frames_fuel_and_shield() {
+        let catalog = cloaking(0x0830);
+        let paid = |gain: crate::SpeedMult| {
+            let mut session = owning(&catalog);
+            session.ship.cloak.cloak = FULL;
+            session.at_gain(gain);
+            tick(&mut session, false);
+            (
+                100.0 - session.pilot.reserves.fuel.now,
+                100.0 - session.pilot.reserves.shield.now,
+            )
+        };
+        let (fuel, shield) = paid(crate::SpeedMult::new(0.5));
+        let (full_fuel, full_shield) = paid(crate::SpeedMult::FULL);
+        assert!(full_fuel > 0.0 && full_shield > 0.0);
+        assert!((fuel * 2.0 - full_fuel).abs() < 1e-4, "{fuel} {full_fuel}");
+        assert!(
+            (shield * 2.0 - full_shield).abs() < 1e-4,
+            "{shield} {full_shield}"
+        );
     }
 }

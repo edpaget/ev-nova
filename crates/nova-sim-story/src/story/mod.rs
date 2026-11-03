@@ -2486,8 +2486,8 @@
 //!   @0x8db19-0x8db3a), else `Rand(200)` + 300 (@0x8db41-0x8db5a). Its
 //!   slot stays active (+0xb8 is not cleared), so it still counts toward
 //!   the system's ships and `AvgShips` and keeps its berth.
-//! - **The wait.** `_HandleShip` counts +0x4c down by `_gSpeedMult` (1.0
-//!   a frame) for any class but the escape pod (@0x35025-0x35048), and
+//! - **The wait.** `_HandleShip` counts +0x4c down by the frame's gain,
+//!   `_gSpeedMult`, for any class but the escape pod (@0x35025-0x35048), and
 //!   skips the ship's turn, thrust and fire meanwhile (@0x34a54-0x34a72):
 //!   the engine's AI wait, counted down at the end of the fly half,
 //!   holding its flight and its guns. `_AIDispatch` runs its type's think
@@ -2819,12 +2819,12 @@
 //!     brackets and the hail dialog's picture sized by the slot, and the
 //!     scene's problems for an uncounted `spïn` (the original reports
 //!     nothing; none is added):
-//!     rdm:phase/stellar-fidelity-followups/phase-7-uncounted-slot-readers.
+//!     rdm:phase/rendering/phase-3-uncounted-slot-readers.
 //!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
 //!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
 //!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates
 //!     over the tiles; the view counts the decoded frames:
-//!     rdm:phase/stellar-fidelity-followups/phase-8-tiles-below-frame-count.
+//!     rdm:phase/rendering/phase-4-tiles-below-frame-count.
 //!   - Memory-layout accidents, not copied: a slot reused across a system
 //!     change that keeps another stellar's +0x54 through a failed clone
 //!     (@0x32fe0-0x32fea, @0x331c6), the engine keeping the state per

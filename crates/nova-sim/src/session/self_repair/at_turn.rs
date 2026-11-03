@@ -201,7 +201,7 @@ fn a_ship_disabled_in_handle_shot_is_repaired_at_its_turn_that_pass() {
         let at = w_at + Vec2::new(0.0, -100.0);
         shell.moved_from = Some(at - Vec2::new(10.0, 0.0));
         shell.position = at;
-        shell.age = shell.weapon.lifetime;
+        shell.set_age(shell.weapon.lifetime);
     });
     let catalog = armed();
     pass(&mut session, &catalog, &watching, 1);

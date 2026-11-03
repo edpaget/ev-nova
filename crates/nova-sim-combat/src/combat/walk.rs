@@ -48,6 +48,7 @@
 
 use super::asteroid_walk::{self, AsteroidField, Shown};
 use super::collision::{WalkTerms, walk_order};
+use super::contact::ContactSprites;
 use super::hit_turns::Stretch;
 use super::hull::DisableRule;
 use super::lineup::Lineup;
@@ -231,7 +232,10 @@ impl Combat {
             stellars,
             asteroids,
             hazards: _,
+            contact,
         } = scenery;
+        let no_sprites = ContactSprites::default();
+        let sprites = contact.unwrap_or(&no_sprites);
         let mut none = Asteroids::default();
         let mut field = asteroids.unwrap_or(AsteroidField {
             asteroids: &mut none,
@@ -255,7 +259,11 @@ impl Combat {
             })
             .collect();
         let mut lineup = Lineup::new(fighters, &places, govts, self.hit_readings());
-        let terms = WalkTerms { arsenal, rule };
+        let terms = WalkTerms {
+            arsenal,
+            rule,
+            sprites,
+        };
         if let Some(pending) = walk.pending.take() {
             self.land_pending(pending, (fighters, &mut lineup), &terms, chance);
         }

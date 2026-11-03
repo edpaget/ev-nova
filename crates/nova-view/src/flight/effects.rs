@@ -6,10 +6,12 @@
 //!
 //! - An explosion is a frame of its `bööm`'s sheet, drawn centred where it
 //!   went off: it never moves. Each step its frame advances by the
-//!   `bööm`'s `FrameAdvance` / 100, and it ends once the frame is past the
-//!   last. A delayed one is hidden while its delay counts down by the same
-//!   advance a step. One whose sheet cannot be read is heard and lasts a
-//!   frame, unseen.
+//!   `bööm`'s `FrameAdvance` / 100 × the frame's gain
+//!   ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult),
+//!   `_gSpeedMult` @0x2f811), and it ends once its truncated frame is past
+//!   the last. A delayed one is hidden while its delay counts down by the
+//!   same advance × the gain a step (@0x2f655). One whose sheet cannot be
+//!   read is heard and lasts a frame, unseen.
 //! - Each frame an explosion is shown it is added at full `AddOver`,
 //!   [`Blend::Or`](crate::draw::Blend::Or) at
 //!   [`lights_tint`](crate::draw::lights_tint)`(`[`EXPLOSION_LEVEL`]`)`,
@@ -41,11 +43,16 @@
 //!     height; their 32-pixel fallback can't happen for a shown explosion.
 //!   - Left out: the 8-bit blits
 //!     (@0xbb5a9-0xbb88b), as the engine draws at 16 bits only
-//!     (rdm:phase/stellar-fidelity-cross-roadmap/phase-1-translucent-8-bit-sheets).
+//!     (rdm:phase/rendering/phase-2-translucent-8-bit-sheets).
 //!     The frozen flag `*0x3b523c`'s gates on the delay countdown
-//!     (@0x2f629) and the frame step (@0x2f7eb), as the engine has no
-//!     frozen pass
-//!     (rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47).
+//!     (@0x2f629) and the frame step (@0x2f7eb) under `_PlayGame`'s and
+//!     `_EnterGameFromMainScreen`'s frozen game-work pass, as the engine
+//!     has no frozen pass
+//!     (rdm:phase/combat-and-flight/phase-2-left-out-of-weapons-fidelity-47).
+//!     Under the arrival's `_PrepareAllSprites` (@0x6c59c) the gate is
+//!     built by its absence: the view steps the arrival's explosions once,
+//!     for the arrival pass's own `_HandleExplods` (@0x444e1), and not for
+//!     the frozen one (`FlightView::show_arrival_explosions`).
 //! - Under the original's caps
 //!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
 //!   reading, [`Scene::caps`]; by default nothing is capped) at most
@@ -110,8 +117,10 @@
 //!   beam's hit on a ship, a shot's on an asteroid or a stellar, an
 //!   asteroid destroyed) is `_SpawnParticles`
 //!   (@0x44b70-0x44d4e) as a plain particle effect: each of its pieces
-//!   leaves where it went off, or `_Accel(Rand(360), Rand(spread × 100)
-//!   × 0.01)` off it with a spread, along `Rand(360)` at its speed,
+//!   leaves where it went off, truncated toward zero as every caller
+//!   passes it (e.g. @0x366ee-0x366f8), or `_Accel(Rand(360),
+//!   Rand(spread × 100) × 0.01)` off that with a spread, its start then
+//!   truncated again (@0x44d19-0x44d2a), along `Rand(360)` at its speed,
 //!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
 //!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
 //!   when `min` is at or above `max`; it takes on no source's velocity,
@@ -124,6 +133,19 @@
 //!   (+0x24, @0xc50de), is only ever tested against 0x20 by the drawing
 //!   (@0xc5a61, @0xc5b2b), and both its paths draw the same: it changes
 //!   nothing, so a burst carries none.
+//! - Every particle is kept as the original keeps it, in 1/256 of a pixel
+//!   ([`Fixed`]): it starts on a whole pixel, its
+//!   velocity is `trunc(v × 256)`, and it moves by integer addition
+//!   ([`Effects::move_particles`], `_MoveParticles` @0xc6145-0xc615d),
+//!   once a drawn frame (see [`scroll_offset`](super::scroll_offset)).
+//! - Each is plotted as `_DrawParticlesOffscreen` plots it: a pixel at
+//!   its whole pixel, floored, less the scroll offset the frame before
+//!   left, `trunc(player - centre)` (@0xc5a29-0xc5a3b;
+//!   [`Camera::particle_pixel`]). None with a tick of life or less is
+//!   drawn, and none on the play area's first column or row
+//!   ([`Effects::draw_particles`]). The flight view holds the offset
+//!   ([`ScrollOffset`](super::scroll_offset::ScrollOffset)), whose docs
+//!   say how it reads between steps.
 //!
 //! - A stellar's gun ([`CombatEvent::StellarFired`]) sounds its weapon's
 //!   `snd ` from the stellar at its [`FireSound`](nova_sim::FireSound)'s
@@ -148,6 +170,25 @@
 //! in no layer, last of all, by `_PostDrawCallback`'s
 //! `_DrawParticlesOffscreen` (@0x38c9a) ([`Effects::draw_particles`]).
 //!
+//! # Heard, then shown
+//!
+//! A pass's sounds and its sprites can come on different frames. On double
+//! time's second pass, the original's `PlaySound` comes straight after
+//! the frame's draw (`_HandleShot` @0x44385, `_HandleShip` @0x44483,
+//! `_HandleShipDisplay` @0x444ad, `_CreateExplosion` @0x3f91a). The
+//! sprites that pass writes show only on the next frame. So each half
+//! can run on its own:
+//!
+//! - [`Effects::hear_step`] and [`Effects::hear_event`] make the sounds:
+//!   the looped sounds' countdown, the breakup rolls ([`Breakups`]), and
+//!   each event's sound.
+//! - [`Effects::show_step`] and [`Effects::show_event`] make the
+//!   sprites: the pods and explosions stepped, the breakups set off, and
+//!   each event's explosions, debris, bursts and pods.
+//!
+//! [`Effects::step`] and [`Effects::apply`] run the two halves together,
+//! the sound half first, so each makes the same draws in the same order.
+//!
 //! The effects draw on their own [`Chance`], never on the simulation's.
 
 use std::collections::BTreeMap;
@@ -155,10 +196,11 @@ use std::collections::BTreeMap;
 use nova_sim::combat::ParticleBurst;
 use nova_sim::combat::weapon::Explosion as Blast;
 use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
+use nova_sim::{Chance, CombatEvent, ShipRef, SpeedMult, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::murk::SeenMurk;
+use super::particle::Fixed;
 use super::pods::{EscapePods, Pod, carry_point};
 use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
@@ -309,10 +351,11 @@ pub struct Explosion {
 /// A particle: a piece of debris, or of a burst.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
-    /// Where it is, in world units.
-    pub at: Point,
-    /// How far it moves a tick.
-    pub velocity: Point,
+    /// Where it is, in the original's 1/256 of a world unit
+    /// ([`Fixed`]).
+    pub at: Fixed,
+    /// How far it moves a tick, in the same units.
+    pub velocity: Fixed,
     /// The ticks it has left.
     pub life: u32,
     /// Its colour.
@@ -370,16 +413,35 @@ pub struct Effects {
     pods: EscapePods,
 }
 
+/// Where a pass's breakup explosions go off, each `bööm` and its place, as
+/// [`Effects::hear_step`] rolled them, heard or not, for
+/// [`Effects::show_step`] to set off (see "Heard, then shown" in the
+/// module docs).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Breakups(Vec<(BoomId, Point)>);
+
 impl Effects {
-    /// Shows `event` in `scene`, its looks from `looks`, drawing on
-    /// `chance` (see the module docs).
+    /// Shows `event` in `scene`, its looks from `looks`, in a pass at the
+    /// frame's `gain`, drawing on `chance` (see the module docs): heard
+    /// ([`Effects::hear_event`]), then shown ([`Effects::show_event`]).
     pub fn apply(
         &mut self,
         event: &CombatEvent,
         scene: &Scene,
         looks: &Looks,
+        gain: SpeedMult,
         chance: &mut dyn Chance,
     ) {
+        self.hear_event(event, scene, looks);
+        self.show_event(event, scene, looks, gain, chance);
+    }
+
+    /// Makes `event`'s sound in `scene`, its looks from `looks`, and
+    /// shows nothing: a weapon fired, a looped one waiting as
+    /// [`Scene::looped`] says, a stellar's gun, an explosion's own sound
+    /// and an escape pod's. It draws on no chance (see "Heard, then
+    /// shown" in the module docs).
+    pub fn hear_event(&mut self, event: &CombatEvent, scene: &Scene, looks: &Looks) {
         match *event {
             CombatEvent::Fired {
                 ship,
@@ -425,6 +487,54 @@ impl Effects {
                 self.sounds
                     .push(heard(sound, point(at), scene.player, priority, false));
             }
+            CombatEvent::Exploded { at, explosion, .. }
+            | CombatEvent::Destroyed {
+                at,
+                explosion: Some(explosion),
+                ..
+            } => self.hear_explosion(explosion, point(at), scene, looks),
+            // `_HandleShip` plays the pod's sound whether or not
+            // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
+            CombatEvent::PodEjected { at, .. } => {
+                self.sounds.push(heard(
+                    nova_sim::sound::ESCAPE_POD_SOUND,
+                    point(at),
+                    scene.player,
+                    POD_PRIORITY,
+                    false,
+                ));
+            }
+            // A `Y`'s: the session raised its sound as it went off.
+            CombatEvent::ExplodedHeard { .. }
+            | CombatEvent::ShotDown { .. }
+            | CombatEvent::Fizzled { .. }
+            | CombatEvent::Destroyed {
+                explosion: None, ..
+            }
+            | CombatEvent::Particles(_)
+            | CombatEvent::Fired { sound: None, .. }
+            | CombatEvent::Disabled { .. }
+            | CombatEvent::BreakingUp { .. }
+            | CombatEvent::Hit { .. }
+            | CombatEvent::WeaponGlow { .. } => {}
+        }
+    }
+
+    /// Shows `event` in `scene`, its looks from `looks`, drawing on
+    /// `chance`, and makes no sound: the explosions and their extras,
+    /// debris, bursts and escape pods (see "Heard, then shown" in the
+    /// module docs). An escape pod takes its first step at the pass's
+    /// `gain` ([`EscapePods::spawn`]); the explosions' delays are the
+    /// spawn's own, unscaled.
+    pub fn show_event(
+        &mut self,
+        event: &CombatEvent,
+        scene: &Scene,
+        looks: &Looks,
+        gain: SpeedMult,
+        chance: &mut dyn Chance,
+    ) {
+        match *event {
             CombatEvent::ShotDown { at } | CombatEvent::Fizzled { at } => {
                 self.spawn(TYPE_ZERO, point(at), 0.0, looks, scene.caps);
             }
@@ -433,9 +543,8 @@ impl Effects {
                 explosion,
                 size,
             } => {
-                self.explode(explosion, point(at), size, scene, looks, chance);
+                self.go_off(explosion, point(at), size, scene, looks, chance);
             }
-            // A `Y`'s: the session raised its sound as it went off.
             CombatEvent::ExplodedHeard { at, explosion } => {
                 self.go_off(explosion, point(at), 0.0, scene, looks, chance);
             }
@@ -447,31 +556,22 @@ impl Effects {
                 ..
             } => {
                 if let Some(explosion) = explosion {
-                    self.explode(explosion, point(at), size, scene, looks, chance);
+                    self.go_off(explosion, point(at), size, scene, looks, chance);
                 }
                 if scene.debris {
                     self.scatter(point(at), point(velocity), scene.caps, chance);
                 }
             }
             CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
-            // `_HandleShip` plays the pod's sound whether or not
-            // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
             CombatEvent::PodEjected { at, velocity, .. } => {
-                let at = point(at);
-                self.sounds.push(heard(
-                    nova_sim::sound::ESCAPE_POD_SOUND,
-                    at,
-                    scene.player,
-                    POD_PRIORITY,
-                    false,
-                ));
                 self.pods
-                    .spawn(at, point(velocity), scene.caps, looks, chance);
+                    .spawn(point(at), point(velocity), gain, scene.caps, looks, chance);
             }
             // A hit's shield flash is the flight view's
             // ([`ShieldFlash`](super::flash::ShieldFlash)), and so is the
             // weapon glow.
-            CombatEvent::Fired { sound: None, .. }
+            CombatEvent::Fired { .. }
+            | CombatEvent::StellarFired { .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
             | CombatEvent::Hit { .. }
@@ -483,7 +583,9 @@ impl Effects {
     /// module docs): a fight's burst, or a shot's trail
     /// ([`trails`](super::trails)).
     pub fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
-        let at = point(burst.at);
+        // Every caller of `_SpawnParticles` truncates the point toward
+        // zero first (`cvttss2si`, e.g. @0x366ee-0x366f8).
+        let at = Point::new(burst.at.x.trunc(), burst.at.y.trunc());
         let color = particle_color(burst.color);
         let (least, most) = burst.life;
         for _ in 0..burst.count {
@@ -509,8 +611,8 @@ impl Effects {
                 at
             };
             let piece = Particle {
-                at: start,
-                velocity: offset_along(Point::new(0.0, 0.0), heading, speed),
+                at: Fixed::spawned(start),
+                velocity: Fixed::velocity(offset_along(Point::new(0.0, 0.0), heading, speed)),
                 life,
                 color,
             };
@@ -548,8 +650,11 @@ impl Effects {
             let life = DEBRIS_LIFE_MIN + chance.below(DEBRIS_LIFE_MAX - DEBRIS_LIFE_MIN + 1);
             let (sin, cos) = heading.to_radians().sin_cos();
             let piece = Particle {
-                at,
-                velocity: Point::new(velocity.x + sin * speed, velocity.y - cos * speed),
+                at: Fixed::spawned(at),
+                velocity: Fixed::velocity(Point::new(
+                    velocity.x + sin * speed,
+                    velocity.y - cos * speed,
+                )),
                 life,
                 color: DEBRIS_COLOR,
             };
@@ -586,8 +691,13 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         self.go_off(explosion, at, size, scene, looks, chance);
-        // Heard whether or not the pool had room for it (`_CreateExplosion`
-        // @0x3f91a).
+        self.hear_explosion(explosion, at, scene, looks);
+    }
+
+    /// Makes `explosion`'s own sound at `at`, heard from the player in
+    /// `scene`: whether or not the pool had room for it
+    /// (`_CreateExplosion` @0x3f91a).
+    fn hear_explosion(&mut self, explosion: Blast, at: Point, scene: &Scene, looks: &Looks) {
         if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
             self.sounds.push(explosion_heard(sound, at, scene.player));
         }
@@ -629,34 +739,61 @@ impl Effects {
         self.spawn(explosion.boom, at, 0.0, looks, caps);
     }
 
-    /// Advances the explosions and debris a step, and the looped sounds
-    /// playing, then sets off the explosions of the ships `dying`, but
-    /// for those on their breakup's first tick, heard from the player in
-    /// `scene`, under its caps or not.
-    pub fn step(&mut self, dying: &[Dying], scene: &Scene, looks: &Looks, chance: &mut dyn Chance) {
+    /// Moves the particles a step, as `_MoveParticles` does
+    /// (@0xc6134-0xc615d): each takes a tick off its life and is gone at
+    /// none, unmoved; the rest move by their velocity, by integer
+    /// addition. `_gGravity` (@0xc6160) is always 0 (`_InitParticles(0x400,
+    /// 0)` @0x22170-0x2217f), so it is not kept. The original moves them
+    /// once a drawn frame, after the draw (`_PostAnimateHandler` @0x38f07),
+    /// not once a pass, so the flight view calls this apart from
+    /// [`Effects::step`] (see [`scroll_offset`](super::scroll_offset)).
+    pub fn move_particles(&mut self) {
+        self.particles.retain_mut(|piece| {
+            piece.life = piece.life.saturating_sub(1);
+            if piece.life == 0 {
+                return false;
+            }
+            piece.at = piece.at.moved_by(piece.velocity);
+            true
+        });
+    }
+
+    /// Advances the explosions a step at the frame's `gain`, and the
+    /// looped sounds playing, then sets off the explosions of the ships
+    /// `dying`, but for those on their breakup's first tick, heard from
+    /// the player in `scene`, under its caps or not: heard
+    /// ([`Effects::hear_step`]), then shown ([`Effects::show_step`]).
+    pub fn step(
+        &mut self,
+        dying: &[Dying],
+        scene: &Scene,
+        looks: &Looks,
+        gain: SpeedMult,
+        chance: &mut dyn Chance,
+    ) {
+        let breakups = self.hear_step(dying, scene, looks, chance);
+        self.show_step(&breakups, scene, looks, gain);
+    }
+
+    /// Steps the looped sounds playing, then rolls the breakup explosions
+    /// of the ships `dying`, but for those on their breakup's first tick:
+    /// whether one goes off, where, and whether it is heard from the
+    /// player in `scene`. Makes the sounds of those heard and gives where
+    /// each goes off, for [`Effects::show_step`]; shows nothing (see
+    /// "Heard, then shown" in the module docs).
+    pub fn hear_step(
+        &mut self,
+        dying: &[Dying],
+        scene: &Scene,
+        looks: &Looks,
+        chance: &mut dyn Chance,
+    ) -> Breakups {
         let player = scene.player;
-        self.pods.step();
         self.playing.retain(|_, left| {
             *left = left.saturating_sub(1);
             *left > 0
         });
-        self.explosions.retain_mut(|explosion| {
-            let Some(look) = looks.boom(explosion.boom) else {
-                return false;
-            };
-            if explosion.delay > 0.0 {
-                explosion.delay -= look.advance;
-            } else {
-                explosion.frame += look.advance;
-            }
-            let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
-            (explosion.frame as u32) < u32::from(frames)
-        });
-        self.particles.retain_mut(|piece| {
-            piece.at = Point::new(piece.at.x + piece.velocity.x, piece.at.y + piece.velocity.y);
-            piece.life = piece.life.saturating_sub(1);
-            piece.life > 0
-        });
+        let mut breakups = Vec::new();
         // The original never reaches its puff branch (0x2dd01) on the
         // frame it sets the timer: both its paths jump past it to 0x2def0.
         for ship in dying.iter().filter(|ship| !ship.starting) {
@@ -678,11 +815,45 @@ impl Effects {
             let at = Point::new(ship.at.x + x, ship.at.y + y);
             // `_CreateExplosion(.., Rand(4) == 0)` @0x2decf: heard whether
             // or not the pool had room for it.
-            self.spawn(explosion.boom, at, 0.0, looks, scene.caps);
+            breakups.push((explosion.boom, at));
             let audible = chance.below(4) == 0;
             if audible && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
                 self.sounds.push(explosion_heard(sound, at, player));
             }
+        }
+        Breakups(breakups)
+    }
+
+    /// Steps the escape pods and advances the explosions a step at the
+    /// frame's `gain`, then sets off the `breakups` [`Effects::hear_step`]
+    /// rolled, under `scene`'s caps or not. Makes no sound and draws on no
+    /// chance (see "Heard, then shown" in the module docs). A delayed
+    /// explosion's delay falls by its advance × the gain while it is above
+    /// 0 (`ucomiss 0, delay` / `jbe`, @0x2f60d-0x2f666), else its frame
+    /// gains the advance × the gain (@0x2f7f5-0x2f822), each in doubles;
+    /// it ends once its truncated frame is past its last (@0x2f830-0x2f83b).
+    pub fn show_step(
+        &mut self,
+        breakups: &Breakups,
+        scene: &Scene,
+        looks: &Looks,
+        gain: SpeedMult,
+    ) {
+        self.pods.step(gain);
+        self.explosions.retain_mut(|explosion| {
+            let Some(look) = looks.boom(explosion.boom) else {
+                return false;
+            };
+            if explosion.delay > 0.0 {
+                explosion.delay = gain.add_times(explosion.delay, -look.advance);
+            } else {
+                explosion.frame = gain.add_times(explosion.frame, look.advance);
+            }
+            let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
+            (explosion.frame as u32) < u32::from(frames)
+        });
+        for &(boom, at) in &breakups.0 {
+            self.spawn(boom, at, 0.0, looks, scene.caps);
         }
     }
 
@@ -701,7 +872,11 @@ impl Effects {
         looks: &Looks,
         seen: SeenMurk,
     ) {
-        for explosion in self.explosions.iter().filter(|e| e.delay <= 0.0) {
+        // Shown unless its delay is above 0 (`ucomiss 0, delay` / `jbe`
+        // to shown, @0x2f60d-0x2f615): a NaN delay is shown.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let shown = |e: &&Explosion| !(e.delay > 0.0);
+        for explosion in self.explosions.iter().filter(shown) {
             if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
                 let frame = sheet.image.frame(explosion.frame as u16);
                 let at = Vec2::new(explosion.at.x, explosion.at.y);
@@ -717,16 +892,31 @@ impl Effects {
         }
     }
 
-    /// Draws the particles, the bursts' and the debris, where `camera`
-    /// shows them: last of the world, after the beams over the ships
+    /// Draws the particles, the bursts' and the debris, by the scroll
+    /// offset taken from the player at `scrolled_from`, on `camera`'s
+    /// anchor: last of the world, after the beams over the ships
     /// ([`WorldPass::Particles`](nova_sim::sprite_layer::WorldPass::Particles)).
-    pub fn draw_particles(&self, list: &mut DrawList, camera: &Camera) {
-        for piece in &self.particles {
+    /// As `_DrawParticlesOffscreen` draws them at 16 bits, each is a pixel
+    /// at its whole pixel less the offset ([`Camera::particle_pixel`],
+    /// @0xc5a29-0xc5a3b), but none with a tick or less left
+    /// (@0xc5a20-0xc5a27), and none on the play area's first column or
+    /// first row: the routine clips strictly inside the play area's rect,
+    /// whose top left is (0, 0) (@0xc5a41-0xc5a5f; `_SetupSpriteWorld`
+    /// @0x21b54-0x21ba4). The right and bottom edges are the world's clip
+    /// to the play area.
+    pub fn draw_particles(&self, list: &mut DrawList, camera: &Camera, scrolled_from: Point) {
+        for piece in self.particles.iter().filter(|piece| piece.life > 1) {
+            let at = camera.particle_pixel(piece.at.whole(), scrolled_from);
+            // A pixel's centre: 0.5 is the first column's, or the first
+            // row's.
+            if at.x <= 0.5 || at.y <= 0.5 {
+                continue;
+            }
             let color = Color {
                 a: particle_alpha(piece.life),
                 ..piece.color
             };
-            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, color);
+            list.dot(at, DEBRIS_SIZE, color);
         }
     }
 
@@ -764,7 +954,10 @@ impl Effects {
     /// Carries the explosions within `wrap`'s reach
     /// (`_WrapPlayerPosition`'s loop of `_explodData` @0x68097-0x68119) and
     /// the escape pods. The particles stay, as no code in the routine reads
-    /// `_gParticleArray`: they leave the screen.
+    /// `_gParticleArray`. On the wrap's frame they are drawn in their place
+    /// by the offset from before it, which the routine doesn't touch either
+    /// (see [`scroll_offset`](super::scroll_offset)), and they leave the
+    /// screen on the next.
     pub fn carry(&mut self, wrap: &PlayerWrap) {
         for explosion in self.explosions.iter_mut() {
             carry_point(wrap, &mut explosion.at);
@@ -931,10 +1124,23 @@ mod tests {
         effects.explosions().iter().map(|e| e.frame).collect()
     }
 
+    /// `n` single-time passes: the particles moved, then the rest stepped.
     fn steps(effects: &mut Effects, n: u32) {
         for _ in 0..n {
-            effects.step(&[], &scene(), &looks(), &mut Script::default());
+            effects.move_particles();
+            effects.step(
+                &[],
+                &scene(),
+                &looks(),
+                SpeedMult::FULL,
+                &mut Script::default(),
+            );
         }
+    }
+
+    /// Within a 256th of a pixel, the original's unit.
+    fn near(got: f32, want: f32) -> bool {
+        (got - want).abs() <= 1.0 / 256.0
     }
 
     /// `looks` with the escape pods' sheet, `rlëD` 1095 of 36 rotations.
@@ -966,6 +1172,7 @@ mod tests {
             &ejected(30.0),
             &scene(),
             &pod_looks(),
+            SpeedMult::FULL,
             &mut Script::default(),
         );
         assert_eq!(
@@ -979,8 +1186,14 @@ mod tests {
         );
         assert_eq!(effects.pods().len(), 1);
         let life = effects.pods()[0].life;
-        effects.step(&[], &scene(), &pod_looks(), &mut Script::default());
-        assert_eq!(effects.pods()[0].life, life - 1, "it steps with the rest");
+        effects.step(
+            &[],
+            &scene(),
+            &pod_looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
+        assert_eq!(effects.pods()[0].life, life - 1.0, "it steps with the rest");
         let mut list = DrawList::new();
         effects.draw_pods(&mut list, &Camera::centred_on(PLAYER), &pod_looks(), CLEAR);
         assert!(
@@ -1000,7 +1213,13 @@ mod tests {
             let mut effects = Effects::default();
             let scene = Scene { caps, ..scene() };
             for _ in 0..33 {
-                effects.apply(&ejected(0.0), &scene, &pod_looks(), &mut Script::default());
+                effects.apply(
+                    &ejected(0.0),
+                    &scene,
+                    &pod_looks(),
+                    SpeedMult::FULL,
+                    &mut Script::default(),
+                );
             }
             assert_eq!(effects.pods().len(), kept, "caps {caps}");
             assert_eq!(effects.take_sounds().len(), 33, "every one heard");
@@ -1129,20 +1348,44 @@ mod tests {
         }
         assert_eq!(effects.explosions().len(), 33);
         let mut chance = Script::of(&[0, 0, 0, 0]);
-        effects.step(&[dying(30)], &scene(), &looks(), &mut chance);
+        effects.step(
+            &[dying(30)],
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert_eq!(effects.explosions().len(), 34, "a breakup's too");
         let mut capped_too = effects.clone();
         let mut chance = Script::of(&[0, 0, 0, 0]);
-        capped_too.step(&[dying(30)], &capped(), &looks(), &mut chance);
+        capped_too.step(
+            &[dying(30)],
+            &capped(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert_eq!(
             capped_too.explosions().len(),
             34,
             "none more under the caps"
         );
         let shot_down = CombatEvent::ShotDown { at: Vec2::ZERO };
-        effects.apply(&shot_down, &scene(), &looks(), &mut Script::default());
+        effects.apply(
+            &shot_down,
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(effects.explosions().len(), 35);
-        capped_too.apply(&shot_down, &capped(), &looks(), &mut Script::default());
+        capped_too.apply(
+            &shot_down,
+            &capped(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(capped_too.explosions().len(), 34);
     }
 
@@ -1151,8 +1394,20 @@ mod tests {
         let fill = |scene: &Scene| {
             let mut effects = Effects::default();
             let mut chance = Script::default();
-            effects.apply(&burst(1000, 0, (10, 10), 0.0), scene, &looks(), &mut chance);
-            effects.apply(&burst(30, 0, (10, 10), 0.0), scene, &looks(), &mut chance);
+            effects.apply(
+                &burst(1000, 0, (10, 10), 0.0),
+                scene,
+                &looks(),
+                SpeedMult::FULL,
+                &mut chance,
+            );
+            effects.apply(
+                &burst(30, 0, (10, 10), 0.0),
+                scene,
+                &looks(),
+                SpeedMult::FULL,
+                &mut chance,
+            );
             effects
         };
         assert_eq!(fill(&scene()).particles().len(), 1030);
@@ -1166,14 +1421,26 @@ mod tests {
             explosion: None,
             size: 0.0,
         };
-        capped_fill.apply(&destroyed, &capped(), &looks(), &mut Script::default());
+        capped_fill.apply(
+            &destroyed,
+            &capped(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(
             capped_fill.particles().len(),
             MAX_PARTICLES,
             "no debris either"
         );
         let mut debris = fill(&scene());
-        debris.apply(&destroyed, &scene(), &looks(), &mut Script::default());
+        debris.apply(
+            &destroyed,
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(debris.particles().len(), 1030 + DEBRIS_COUNT as usize);
         assert_eq!(MAX_PARTICLES, 1024);
     }
@@ -1186,14 +1453,16 @@ mod tests {
             &burst(1000, 0, (0, 0), 0.0),
             &capped(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(effects.particles(), [], "never kept to be drawn");
-        effects.step(&[], &capped(), &looks(), &mut chance);
+        effects.move_particles();
         effects.apply(
             &burst(30, 0, (10, 10), 0.0),
             &capped(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(effects.particles().len(), 24, "the pool's count held");
@@ -1202,6 +1471,7 @@ mod tests {
             &burst(30, 0, (10, 10), 0.0),
             &capped(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(effects.particles().len(), 30, "cleared");
@@ -1210,16 +1480,205 @@ mod tests {
             &burst(1000, 0, (0, 0), 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
-        uncapped.step(&[], &scene(), &looks(), &mut chance);
+        uncapped.move_particles();
         uncapped.apply(
             &burst(30, 0, (10, 10), 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(uncapped.particles().len(), 30, "gone a step on, by default");
+    }
+
+    /// One explosion of `bööm` 130 (4 frames, an advance of 1.0) at
+    /// `frame`, hidden for `delay`.
+    fn one_at(frame: f32, delay: f32) -> Effects {
+        let mut effects = Effects::default();
+        effects.spawn(BoomId(130), at(0.0, 0.0), delay, &looks(), false);
+        effects.explosions.iter_mut().for_each(|e| e.frame = frame);
+        effects
+    }
+
+    /// `effects` after one show step at `gain`, with no breakups.
+    fn shown_at(effects: &mut Effects, gain: SpeedMult) {
+        effects.show_step(&Breakups::default(), &scene(), &looks(), gain);
+    }
+
+    /// How many sprites of `bööm` 130's sheet `effects` draws.
+    fn drawn_130(effects: &Effects) -> usize {
+        let mut list = DrawList::new();
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), CLEAR);
+        list.iter()
+            .filter(|c| matches!(c, DrawCommand::Sprite { image, .. } if image.id == 402))
+            .count()
+    }
+
+    #[test]
+    fn a_delayed_explosions_delay_falls_by_its_advance_times_the_gain() {
+        let mut half = one_at(0.0, 4.0);
+        shown_at(&mut half, SpeedMult::new(0.5));
+        assert_eq!(half.explosions()[0].delay, 3.5);
+        assert_eq!(half.explosions()[0].frame, 0.0, "hidden: its frame holds");
+        let mut held = one_at(0.0, 4.0);
+        shown_at(&mut held, SpeedMult::ZERO);
+        assert_eq!(held.explosions()[0].delay, 4.0, "held at 0");
+    }
+
+    #[test]
+    fn at_a_quarter_gain_a_delayed_explosion_stays_hidden_four_times_as_many_steps() {
+        let hidden = |gain| {
+            let mut effects = one_at(0.0, 4.0);
+            let mut steps = 0;
+            while effects.explosions()[0].delay > 0.0 {
+                assert_eq!(drawn_130(&effects), 0);
+                shown_at(&mut effects, gain);
+                steps += 1;
+            }
+            assert_eq!(drawn_130(&effects), 1, "shown once its delay runs out");
+            steps
+        };
+        assert_eq!(hidden(SpeedMult::FULL), 4);
+        assert_eq!(hidden(SpeedMult::new(0.25)), 16);
+    }
+
+    #[test]
+    fn the_extras_spawn_delays_are_unscaled() {
+        // Size 25: one small extra (`Rand(8) + 4`, drawn 4) first, then
+        // four large ones (`Rand(16) + 8`, the first drawn 8).
+        let event = CombatEvent::Exploded {
+            at: Vec2::ZERO,
+            explosion: blast(130, true),
+            size: 25.0,
+        };
+        let mut chance = Script::of(&[10, 10, 0, 10, 10, 0]);
+        let mut effects = Effects::default();
+        effects.show_event(&event, &scene(), &looks(), SpeedMult::new(0.5), &mut chance);
+        let delays: Vec<f32> = effects.explosions().iter().map(|e| e.delay).collect();
+        assert_eq!(delays[..2], [4.0, 8.0], "{delays:?}");
+    }
+
+    #[test]
+    fn a_shown_explosions_frame_grows_by_its_advance_times_the_gain_and_ends_after_twice_its_passes()
+     {
+        let mut half = one_at(0.0, 0.0);
+        shown_at(&mut half, SpeedMult::new(0.5));
+        assert_eq!(frames(&half), [0.5]);
+        let mut held = one_at(1.0, 0.0);
+        shown_at(&mut held, SpeedMult::ZERO);
+        assert_eq!(frames(&held), [1.0], "held at 0");
+        let passes = |gain| {
+            let mut effects = one_at(0.0, 0.0);
+            let mut passes = 0;
+            while !effects.explosions().is_empty() {
+                shown_at(&mut effects, gain);
+                passes += 1;
+            }
+            passes
+        };
+        assert_eq!(passes(SpeedMult::FULL), 4);
+        assert_eq!(passes(SpeedMult::new(0.5)), 8);
+    }
+
+    #[test]
+    fn an_explosion_ends_by_its_truncated_frame() {
+        // 4 frames: a frame of 3.5 truncates to 3, the last, so it is kept.
+        let mut kept = one_at(3.0, 0.0);
+        shown_at(&mut kept, SpeedMult::new(0.5));
+        assert_eq!(frames(&kept), [3.5]);
+        shown_at(&mut kept, SpeedMult::new(0.5));
+        assert_eq!(frames(&kept), Vec::<f32>::new(), "gone at 4.0");
+    }
+
+    #[test]
+    fn an_explosion_with_a_nan_delay_is_drawn() {
+        let effects = one_at(0.0, f32::NAN);
+        assert_eq!(drawn_130(&effects), 1);
+    }
+
+    #[test]
+    fn a_show_step_steps_the_pods_at_its_gain() {
+        let mut effects = Effects::default();
+        effects.show_event(
+            &ejected(30.0),
+            &scene(),
+            &pod_looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
+        let before = effects.pods()[0];
+        effects.show_step(
+            &Breakups::default(),
+            &scene(),
+            &pod_looks(),
+            SpeedMult::new(0.5),
+        );
+        let after = effects.pods()[0];
+        assert_eq!(after.life, before.life - 0.5);
+        assert!(
+            near(after.at.y, before.at.y + before.velocity.y * 0.5),
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn a_step_advances_an_explosion_at_its_gain() {
+        let mut effects = one_at(0.0, 0.0);
+        effects.step(
+            &[],
+            &scene(),
+            &looks(),
+            SpeedMult::new(0.5),
+            &mut Script::default(),
+        );
+        assert_eq!(frames(&effects), [0.5]);
+    }
+
+    /// A pod ejected at (30, 0) at rest, its first step at `gain`, by
+    /// `show`: its life and place.
+    fn ejected_by(show: impl FnOnce(&mut Effects, &CombatEvent)) -> (f32, Point) {
+        let mut effects = Effects::default();
+        show(&mut effects, &ejected(30.0));
+        let pod = effects.pods()[0];
+        (pod.life, pod.at)
+    }
+
+    #[test]
+    fn a_shown_pod_ejection_takes_its_first_step_at_the_gain() {
+        // The script's draws: life 150 + 0, along 0°, pushed 1.0 up.
+        let shown = |gain| {
+            ejected_by(|effects, event| {
+                effects.show_event(
+                    event,
+                    &scene(),
+                    &pod_looks(),
+                    gain,
+                    &mut Script::of(&[0, 0, 0]),
+                );
+            })
+        };
+        assert_eq!(shown(SpeedMult::new(0.5)), (149.5, at(30.0, -0.5)));
+        assert_eq!(shown(SpeedMult::FULL), (149.0, at(30.0, -1.0)));
+    }
+
+    #[test]
+    fn an_applied_pod_ejection_takes_its_first_step_at_the_gain() {
+        let applied = |gain| {
+            ejected_by(|effects, event| {
+                effects.apply(
+                    event,
+                    &scene(),
+                    &pod_looks(),
+                    gain,
+                    &mut Script::of(&[0, 0, 0]),
+                );
+            })
+        };
+        assert_eq!(applied(SpeedMult::new(0.5)), (149.5, at(30.0, -0.5)));
+        assert_eq!(applied(SpeedMult::FULL), (149.0, at(30.0, -1.0)));
     }
 
     #[test]
@@ -1367,10 +1826,22 @@ mod tests {
             starting: true,
             ..dying(30)
         };
-        effects.step(&[starting], &scene(), &looks(), &mut chance);
+        effects.step(
+            &[starting],
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
         assert_eq!(effects.explosions(), []);
-        effects.step(&[dying(30)], &scene(), &looks(), &mut chance);
+        effects.step(
+            &[dying(30)],
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert_eq!(chance.asked, [2], "from the tick after");
     }
 
@@ -1391,7 +1862,13 @@ mod tests {
         ] {
             let mut effects = Effects::default();
             let mut chance = Script::default();
-            effects.step(&[dying(ticks_left)], &scene(), &looks(), &mut chance);
+            effects.step(
+                &[dying(ticks_left)],
+                &scene(),
+                &looks(),
+                SpeedMult::FULL,
+                &mut chance,
+            );
             let expected: &[u32] = if odds == 1 { &[1, 24, 24, 4] } else { &[odds] };
             assert_eq!(chance.asked, expected, "{ticks_left}");
         }
@@ -1407,6 +1884,7 @@ mod tests {
             &[ship, ship],
             &heard_at(at(100.0, 0.0)),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(chance.asked, [2, 24, 24, 4, 2, 24, 24, 4]);
@@ -1435,7 +1913,7 @@ mod tests {
             caps: true,
             ..heard_at(at(100.0, 0.0))
         };
-        effects.step(&[dying(30)], &scene, &looks(), &mut chance);
+        effects.step(&[dying(30)], &scene, &looks(), SpeedMult::FULL, &mut chance);
         assert!(
             effects.explosions().iter().all(|e| e.boom == BoomId(129)),
             "no room"
@@ -1451,7 +1929,7 @@ mod tests {
             sprite_width: 3.0,
             ..dying(10)
         };
-        effects.step(&[narrow], &scene(), &looks(), &mut chance);
+        effects.step(&[narrow], &scene(), &looks(), SpeedMult::FULL, &mut chance);
         assert_eq!(&chance.asked[..3], [1, 2, 2]);
         assert_eq!(effects.explosions()[0].at, at(99.0, 200.0));
     }
@@ -1468,6 +1946,7 @@ mod tests {
             &[dying(2), dying(1), dying(0), quiet],
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
@@ -1559,7 +2038,7 @@ mod tests {
         };
         let first = Some(FireSound::at(4));
         for event in [pick(first), pick(None), pick(None)] {
-            effects.apply(&event, &scene(), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         }
         assert_eq!(
             effects.take_sounds(),
@@ -1584,7 +2063,7 @@ mod tests {
                 sound: Some(FireSound::at(4)),
             },
         ] {
-            effects.apply(&event, &scene(), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         }
         assert_eq!(
             effects.take_sounds(),
@@ -1606,7 +2085,13 @@ mod tests {
             ..scene()
         };
         let mut effects = Effects::default();
-        effects.apply(&fired(NPC, 128), &scene, &looks(), &mut Script::default());
+        effects.apply(
+            &fired(NPC, 128),
+            &scene,
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(effects.take_sounds(), [fire_sound(208, (290, -420))]);
     }
 
@@ -1621,12 +2106,19 @@ mod tests {
         let mut effects = Effects::default();
         let mut heard = vec![Vec::new(); firers.len()];
         for _ in 0..steps {
-            effects.step(&[], scene, &looks(), &mut Script::default());
+            effects.step(
+                &[],
+                scene,
+                &looks(),
+                SpeedMult::FULL,
+                &mut Script::default(),
+            );
             for (n, &firer) in firers.iter().enumerate() {
                 effects.apply(
                     &fired(firer, weapon),
                     scene,
                     &looks(),
+                    SpeedMult::FULL,
                     &mut Script::default(),
                 );
                 heard[n].push(effects.take_sounds());
@@ -1667,7 +2159,13 @@ mod tests {
             assert_eq!(heard[firer], vec![vec![looped]; 3], "firer {firer}");
         }
         let mut effects = Effects::default();
-        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        effects.apply(
+            &fired(NPC, 155),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(
             effects,
             Effects {
@@ -1698,7 +2196,13 @@ mod tests {
                 }),
             };
             for _ in 0..2 {
-                effects.apply(&launch, &scene, &looks(), &mut Script::default());
+                effects.apply(
+                    &launch,
+                    &scene,
+                    &looks(),
+                    SpeedMult::FULL,
+                    &mut Script::default(),
+                );
             }
             let launched = CombatSound {
                 sound: SoundId(205),
@@ -1734,7 +2238,13 @@ mod tests {
                 stellar_fired(155, -5.2, 7.6),
                 stellar_fired(147, 0.0, 0.0),
             ] {
-                effects.apply(&event, &scene, &looks(), &mut Script::default());
+                effects.apply(
+                    &event,
+                    &scene,
+                    &looks(),
+                    SpeedMult::FULL,
+                    &mut Script::default(),
+                );
             }
             let sound = |id, offset| CombatSound {
                 sound: SoundId(id),
@@ -1784,6 +2294,7 @@ mod tests {
                 &at_priority(priority),
                 &scene(),
                 &looks(),
+                SpeedMult::FULL,
                 &mut Script::default(),
             );
         }
@@ -1809,15 +2320,28 @@ mod tests {
         let mut effects = Effects::default();
         let mut heard = Vec::new();
         for step in 0..20 {
-            effects.step(&[], &scene, &looks(), &mut Script::default());
+            effects.step(
+                &[],
+                &scene,
+                &looks(),
+                SpeedMult::FULL,
+                &mut Script::default(),
+            );
             if step % 14 == 0 {
-                effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
+                effects.apply(
+                    &fired(NPC, 155),
+                    &scene,
+                    &looks(),
+                    SpeedMult::FULL,
+                    &mut Script::default(),
+                );
             }
             if step >= 5 {
                 effects.apply(
                     &fired(ShipRef::Player, 155),
                     &scene,
                     &looks(),
+                    SpeedMult::FULL,
                     &mut Script::default(),
                 );
             }
@@ -1848,9 +2372,21 @@ mod tests {
     fn clearing_forgets_the_looped_sounds_playing() {
         let scene = per_firer();
         let mut effects = Effects::default();
-        effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
+        effects.apply(
+            &fired(NPC, 155),
+            &scene,
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         effects.clear();
-        effects.apply(&fired(NPC, 155), &scene, &looks(), &mut Script::default());
+        effects.apply(
+            &fired(NPC, 155),
+            &scene,
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
         assert_eq!(effects.take_sounds().len(), 1, "heard afresh");
     }
 
@@ -1863,7 +2399,7 @@ mod tests {
         ] {
             let mut effects = Effects::default();
             let mut chance = Script::default();
-            effects.apply(&event, &scene(), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
             assert_eq!(
                 effects.explosions(),
                 [Explosion {
@@ -1891,7 +2427,7 @@ mod tests {
             passes_shields: false,
             late: false,
         };
-        effects.apply(&event, &scene(), &looks(), &mut chance);
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         assert_eq!(effects, Effects::default());
     }
 
@@ -1904,7 +2440,7 @@ mod tests {
             explosion: blast(130, true),
             size: 0.0,
         };
-        effects.apply(&event, &scene(), &looks(), &mut chance);
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         assert_eq!(effects.explosions().len(), 1, "no size, no extras");
         assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
         assert_eq!(effects.take_sounds(), [explosion_sound(302, (30, 40))]);
@@ -1919,7 +2455,7 @@ mod tests {
             at: Vec2::new(30.0, 40.0),
             explosion: blast(130, true),
         };
-        effects.apply(&event, &scene(), &looks(), &mut chance);
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         assert_eq!(effects.explosions().len(), 1, "of size 0, no extras");
         assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
         assert_eq!(effects.take_sounds(), [], "the session sounded it");
@@ -1935,7 +2471,7 @@ mod tests {
             explosion,
             size,
         };
-        effects.apply(&event, &scene(), &looks(), &mut chance);
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         (effects, chance.asked)
     }
 
@@ -1989,7 +2525,7 @@ mod tests {
                 explosion: Some(blast(130, false)),
             },
         ] {
-            effects.apply(&event, &scene(), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
         }
         assert_eq!(effects, Effects::default());
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
@@ -2014,6 +2550,7 @@ mod tests {
             &destroyed(Some(blast(130, true)), 57.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         // trunc(2.28) small and trunc(9.12) large extras, then the main.
@@ -2044,6 +2581,7 @@ mod tests {
             &destroyed(Some(blast(130, false)), 57.0),
             &scene,
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(effects.explosions().len(), 1, "its Explode2 still");
@@ -2059,22 +2597,33 @@ mod tests {
         let mut draws = vec![0, 0, 0, 90, 100, 30];
         draws.extend([0, 50, 0].repeat(14));
         let mut chance = Script::of(&draws);
-        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &destroyed(None, 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert_eq!(effects.explosions(), [], "no Explode2");
         let first = effects.particles()[0];
-        assert_eq!(first.at, at(200.0, 100.0));
-        assert!((first.velocity.x - 3.0).abs() < 1e-5, "{first:?}");
-        assert!((first.velocity.y + 2.0).abs() < 1e-5, "{first:?}");
+        assert_eq!(first.at, Fixed::spawned(at(200.0, 100.0)));
+        let velocity = first.velocity.point();
+        assert!(near(velocity.x, 3.0) && near(velocity.y, -2.0), "{first:?}");
         assert_eq!(first.life, 15);
         let second = effects.particles()[1];
-        assert!((second.velocity.x - 6.0).abs() < 1e-5, "{second:?}");
-        assert!((second.velocity.y + 1.0).abs() < 1e-5, "{second:?}");
+        let velocity = second.velocity.point();
+        assert!(
+            near(velocity.x, 6.0) && near(velocity.y, -1.0),
+            "{second:?}"
+        );
         assert_eq!(second.life, 45);
         let third = effects.particles()[2];
-        assert!((third.velocity.y + 3.0).abs() < 1e-5, "up at 2: {third:?}");
+        assert!(near(third.velocity.point().y, -3.0), "up at 2: {third:?}");
         steps(&mut effects, 1);
         let moved = effects.particles()[0];
-        assert!((moved.at.x - 203.0).abs() < 1e-4 && (moved.at.y - 98.0).abs() < 1e-4);
+        assert_eq!(moved.at, first.at.moved_by(first.velocity));
+        let place = moved.at.point();
+        assert!(near(place.x, 203.0) && near(place.y, 98.0), "{moved:?}");
         assert_eq!(moved.life, 14);
         steps(&mut effects, 14);
         assert_eq!(effects.particles().len(), 1, "the first expired");
@@ -2088,11 +2637,17 @@ mod tests {
         exploded(&mut effects, 130, at(10.0, 20.0));
         steps(&mut effects, 2);
         let mut chance = Script::of(&[0, 0, 0]);
-        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &destroyed(None, 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         let camera = Camera::centred_on(at(10.0, 20.0));
         let mut list = DrawList::new();
         effects.draw_explosions(&mut list, &camera, &looks(), CLEAR);
-        effects.draw_particles(&mut list, &camera);
+        effects.draw_particles(&mut list, &camera, camera.center());
         let commands: Vec<DrawCommand> = list.iter().cloned().collect();
         assert_eq!(
             commands[0],
@@ -2108,7 +2663,9 @@ mod tests {
         assert_eq!(
             commands[1],
             DrawCommand::Dot {
-                center: camera.world_to_screen(at(200.0, 100.0)),
+                // (200, 100) less trunc((10, 20) - (512, 384)), a pixel's
+                // centre.
+                center: at(200.0 + 502.0 + 0.5, 100.0 + 364.0 + 0.5),
                 size: DEBRIS_SIZE,
                 color: Color {
                     a: particle_alpha(15),
@@ -2197,7 +2754,13 @@ mod tests {
         let mut effects = Effects::default();
         exploded(&mut effects, 130, at(10.0, 20.0));
         let mut chance = Script::of(&[0, 0, 0]);
-        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &destroyed(None, 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         effects
     }
 
@@ -2267,7 +2830,7 @@ mod tests {
     fn draw_particles_draws_the_particles_alone() {
         let effects = exploded_and_debris();
         let mut list = DrawList::new();
-        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
         assert_eq!(list.iter().count(), 16);
         assert!(
             list.iter()
@@ -2285,10 +2848,16 @@ mod tests {
         assert_eq!(particle_alpha(0), 0);
         let mut effects = Effects::default();
         let mut chance = Script::of(&[0, 0, 0]);
-        effects.apply(&burst(1, 0, (40, 40), 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &burst(1, 0, (40, 40), 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         let alphas = |effects: &Effects| {
             let mut list = DrawList::new();
-            effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+            effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
             list.iter()
                 .filter_map(|command| match *command {
                     DrawCommand::Dot { color, .. } => Some(color.a),
@@ -2299,8 +2868,11 @@ mod tests {
         assert_eq!(alphas(&effects), [255], "40 ticks left");
         steps(&mut effects, 24);
         assert_eq!(alphas(&effects), [128], "16 left");
-        steps(&mut effects, 15);
-        assert_eq!(alphas(&effects), [8], "1 left");
+        steps(&mut effects, 14);
+        assert_eq!(alphas(&effects), [16], "2 left");
+        steps(&mut effects, 1);
+        assert_eq!(alphas(&effects), [] as [u8; 0], "1 left: not drawn");
+        assert_eq!(effects.particles()[0].life, 1, "but still kept");
     }
 
     /// A burst of `count` at (10, 20), 2 pixels a tick varied by
@@ -2328,16 +2900,17 @@ mod tests {
             &burst(2, 20, (30, 37), 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(chance.asked, [360, 41, 8, 360, 41, 8]);
         let pieces = effects.particles();
         assert_eq!(pieces.len(), 2);
-        assert_eq!(pieces[0].at, at(10.0, 20.0));
-        assert!((pieces[0].velocity.y + 1.6).abs() < 1e-5, "{:?}", pieces[0]);
-        assert!(pieces[0].velocity.x.abs() < 1e-5, "{:?}", pieces[0]);
+        assert_eq!(pieces[0].at, Fixed::spawned(at(10.0, 20.0)));
+        // Up at 1.6: trunc(-1.6 x 256) = -409.
+        assert_eq!(pieces[0].velocity, Fixed { x: 0, y: -409 });
         assert_eq!((pieces[0].life, pieces[0].color), (30, ORANGE));
-        assert!((pieces[1].velocity.x - 2.4).abs() < 1e-5, "{:?}", pieces[1]);
+        assert!(near(pieces[1].velocity.point().x, 2.4), "{:?}", pieces[1]);
         assert_eq!(pieces[1].life, 37);
         assert_eq!(effects.explosions(), []);
         assert_eq!(effects.take_sounds(), []);
@@ -2352,19 +2925,26 @@ mod tests {
                 &burst(1, variation, (5, 5), 0.0),
                 &scene(),
                 &looks(),
+                SpeedMult::FULL,
                 &mut chance,
             );
             assert_eq!(chance.asked, [360], "{variation}");
             let piece = effects.particles()[0];
             assert!(
-                (piece.velocity.x - 2.0).abs() < 1e-5,
+                near(piece.velocity.point().x, 2.0),
                 "{variation}: {piece:?}"
             );
             assert_eq!(piece.life, 5);
         }
         let mut effects = Effects::default();
         let mut chance = Script::default();
-        effects.apply(&burst(1, 0, (9, 4), 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &burst(1, 0, (9, 4), 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         assert_eq!(chance.asked, [360], "the least life above the most");
         assert_eq!(effects.particles()[0].life, 9);
     }
@@ -2379,23 +2959,207 @@ mod tests {
             &burst(1, 20, (30, 37), 10.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut chance,
         );
         assert_eq!(chance.asked, [360, 41, 8, 360, 1000]);
+        // 10 + 9.99 = 19.99, its start truncated to a whole pixel.
+        assert_eq!(effects.particles()[0].at.whole(), (19, 20));
+    }
+
+    #[test]
+    fn a_bursts_point_is_truncated_toward_zero_before_its_pieces_leave_it() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[0]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(10.75, -3.25),
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
+        assert_eq!(effects.particles()[0].at, Fixed::spawned(at(10.0, -3.0)));
+        assert_eq!(effects.particles()[0].at.whole(), (10, -3));
+    }
+
+    /// One piece of [`burst`]'s, its speed and life fixed, spread over
+    /// `spread`.
+    fn fractional_burst(spread: f32) -> ParticleBurst {
+        ParticleBurst {
+            at: Vec2::new(10.75, 20.5),
+            speed: 2.0,
+            variation: 0,
+            life: (30, 30),
+            color: 0x00FF_8000,
+            count: 1,
+            spread,
+        }
+    }
+
+    #[test]
+    fn a_spread_burst_truncates_its_point_then_each_pieces_start() {
+        let mut effects = Effects::default();
+        // East, then 9.99 east of the point.
+        let mut chance = Script::of(&[0, 90, 999]);
+        let event = CombatEvent::Particles(fractional_burst(10.0));
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
+        assert_eq!(chance.asked, [360, 360, 1000]);
+        // trunc(10.75) + 9.99 = 19.99, then 19: unless the point were
+        // truncated first it would be 20.74, and 20.
+        assert_eq!(effects.particles()[0].at.whole(), (19, 20));
+    }
+
+    #[test]
+    fn debris_starts_on_the_ships_point_truncated_toward_zero() {
+        let mut effects = Effects::default();
+        let event = CombatEvent::Destroyed {
+            ship: NPC,
+            ship_type: nova_sim::ShipId(129),
+            at: Vec2::new(200.6, -100.4),
+            velocity: Vec2::new(3.0, -1.0),
+            explosion: None,
+            size: 0.0,
+        };
+        effects.apply(
+            &event,
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
+        assert!(
+            effects
+                .particles()
+                .iter()
+                .all(|piece| piece.at == Fixed::spawned(at(200.0, -100.0))),
+            "{:?}",
+            effects.particles()
+        );
+    }
+
+    #[test]
+    fn a_piece_steps_by_its_velocity_in_256ths_from_its_whole_start() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[90]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(5.0, 5.0),
+            speed: 0.3,
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
+        // East at trunc(0.3 x 256) = 76 a step.
+        assert_eq!(effects.particles()[0].velocity.x, 76);
+        steps(&mut effects, 10);
         let piece = effects.particles()[0];
-        assert!((piece.at.x - 19.99).abs() < 1e-3, "{piece:?}");
-        assert!((piece.at.y - 20.0).abs() < 1e-3, "{piece:?}");
+        assert_eq!(piece.at.x, 5 * 256 + 760);
+        // 2040 / 256 = 7.97: pixel 7, where 0.3 a step in floats reaches 8.
+        assert_eq!(piece.at.whole().0, 7);
+    }
+
+    #[test]
+    fn stepping_the_effects_leaves_the_particles_to_their_move() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[90]);
+        effects.apply(
+            &burst(1, 0, (5, 5), 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
+        let sprayed = effects.particles()[0];
+        effects.step(
+            &[],
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut Script::default(),
+        );
+        assert_eq!(effects.particles(), [sprayed], "not moved by a step");
+        effects.move_particles();
+        assert_eq!(
+            effects.particles()[0].at,
+            sprayed.at.moved_by(sprayed.velocity)
+        );
+        assert_eq!(effects.particles()[0].life, 4);
+    }
+
+    /// The dots drawn of `effects`, by `camera` and the offset from its
+    /// center.
+    fn dots(effects: &Effects, camera: &Camera) -> Vec<Point> {
+        let mut list = DrawList::new();
+        effects.draw_particles(&mut list, camera, camera.center());
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_particle_is_drawn_at_its_floor_less_the_offset() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[180]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(-3.0, 4.0),
+            speed: 0.25,
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), SpeedMult::FULL, &mut chance);
+        steps(&mut effects, 1);
+        // Down a quarter: y 4.25, x -3 less a 256th's float error at most.
+        let camera = Camera::centred_on(at(0.5, -0.5));
+        let piece = effects.particles()[0];
+        let (x, y) = piece.at.whole();
+        assert_eq!(y, 4);
+        // trunc(0.5 - 512) = -511, trunc(-0.5 - 384) = -384.
+        assert_eq!(
+            dots(&effects, &camera),
+            [at(x as f32 + 511.0 + 0.5, 4.0 + 384.0 + 0.5)]
+        );
+    }
+
+    #[test]
+    fn a_particle_on_the_play_areas_first_column_or_row_is_not_drawn() {
+        // The anchor is (512, 384): from the camera at (512, 384), world
+        // pixel n is drawn on screen pixel n.
+        let camera = Camera::centred_on(at(512.0, 384.0));
+        let drawn = |x: f32, y: f32| {
+            let mut effects = Effects::default();
+            let event = CombatEvent::Particles(ParticleBurst {
+                at: Vec2::new(x, y),
+                speed: 0.0,
+                ..fractional_burst(0.0)
+            });
+            effects.apply(
+                &event,
+                &scene(),
+                &looks(),
+                SpeedMult::FULL,
+                &mut Script::default(),
+            );
+            dots(&effects, &camera)
+        };
+        assert_eq!(drawn(1.0, 1.0), [at(1.5, 1.5)]);
+        assert_eq!(drawn(0.0, 5.0), [], "the first column");
+        assert_eq!(drawn(5.0, 0.0), [], "the first row");
+        assert_eq!(drawn(-1.0, 5.0), [], "left of it");
     }
 
     #[test]
     fn burst_pieces_move_by_their_own_velocity_and_expire() {
         let mut effects = Effects::default();
         let mut chance = Script::of(&[90]);
-        effects.apply(&burst(1, 0, (2, 2), 0.0), &scene(), &looks(), &mut chance);
+        effects.apply(
+            &burst(1, 0, (2, 2), 0.0),
+            &scene(),
+            &looks(),
+            SpeedMult::FULL,
+            &mut chance,
+        );
         steps(&mut effects, 1);
         let moved = effects.particles()[0];
-        assert!((moved.at.x - 12.0).abs() < 1e-4, "{moved:?}");
-        assert!((moved.at.y - 20.0).abs() < 1e-4, "{moved:?}");
+        let place = moved.at.point();
+        assert!(near(place.x, 12.0) && near(place.y, 20.0), "{moved:?}");
         assert_eq!(moved.life, 1);
         steps(&mut effects, 1);
         assert_eq!(effects.particles(), []);
@@ -2408,16 +3172,18 @@ mod tests {
             &burst(3, 20, (30, 37), 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut Script::default(),
         );
         effects.apply(
             &destroyed(None, 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut Script::default(),
         );
         let mut list = DrawList::new();
-        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
         let colours: Vec<Color> = list
             .iter()
             .filter_map(|command| match command {
@@ -2438,9 +3204,116 @@ mod tests {
             &destroyed(None, 0.0),
             &scene(),
             &looks(),
+            SpeedMult::FULL,
             &mut Script::default(),
         );
         effects.clear();
         assert_eq!(effects, Effects::default());
+    }
+
+    /// A pass of every event with a sound and a sprite: a looped weapon
+    /// fired, an explosion, a ship destroyed and a pod ejected, its
+    /// dying ships one breaking up on its last 19 ticks, so it rolls a
+    /// puff every step.
+    fn a_full_pass() -> (Vec<Dying>, Vec<CombatEvent>) {
+        let events = vec![
+            fired(NPC, 155),
+            CombatEvent::Exploded {
+                at: Vec2::new(40.0, 0.0),
+                explosion: blast(130, true),
+                size: 30.0,
+            },
+            destroyed(Some(blast(135, false)), 20.0),
+            ejected(60.0),
+        ];
+        (vec![dying(10)], events)
+    }
+
+    /// The draws a scripted chance makes in [`a_full_pass`]: every one a
+    /// heard puff, then the rest at their last outcome.
+    fn full_pass_chance() -> Script {
+        Script::of(&[0, 5, 7, 0])
+    }
+
+    #[test]
+    fn hearing_then_showing_a_pass_is_stepping_and_applying_it() {
+        let (dying, events) = a_full_pass();
+        let scene = per_firer();
+        let looks = pod_looks();
+        let mut stepped = Effects::default();
+        let mut chance = full_pass_chance();
+        stepped.step(&dying, &scene, &looks, SpeedMult::FULL, &mut chance);
+        for event in &events {
+            stepped.apply(event, &scene, &looks, SpeedMult::FULL, &mut chance);
+        }
+        let mut split = Effects::default();
+        let mut split_chance = full_pass_chance();
+        let breakups = split.hear_step(&dying, &scene, &looks, &mut split_chance);
+        for event in &events {
+            split.hear_event(event, &scene, &looks);
+        }
+        split.show_step(&breakups, &scene, &looks, SpeedMult::FULL);
+        for event in &events {
+            split.show_event(event, &scene, &looks, SpeedMult::FULL, &mut split_chance);
+        }
+        assert_eq!(split, stepped);
+        assert_eq!(split_chance.asked, chance.asked, "the same draws");
+        assert_eq!(stepped.take_sounds().len(), 5, "every sound made");
+    }
+
+    #[test]
+    fn a_pass_heard_sounds_and_shows_nothing() {
+        let (dying, events) = a_full_pass();
+        let (scene, looks) = (per_firer(), pod_looks());
+        let mut effects = Effects::default();
+        exploded(&mut effects, 135, at(0.0, 0.0));
+        effects.take_sounds();
+        let shown = (effects.explosions(), effects.particles().to_vec());
+        let pods = effects.pods();
+        let mut chance = full_pass_chance();
+        effects.hear_step(&dying, &scene, &looks, &mut chance);
+        let drawn = chance.asked.len();
+        for event in &events {
+            effects.hear_event(event, &scene, &looks);
+        }
+        assert_eq!(chance.asked.len(), drawn, "the events heard draw nothing");
+        assert_eq!(
+            effects.take_sounds(),
+            [
+                explosion_sound(302, (93, 195)),
+                fire_sound(205, (300, -400)),
+                explosion_sound(302, (40, 0)),
+                explosion_sound(300, (200, 100)),
+                CombatSound {
+                    sound: SoundId(372),
+                    offset: (60, 0),
+                    priority: POD_PRIORITY,
+                    until_stopped: false,
+                },
+            ]
+        );
+        assert_eq!((effects.explosions(), effects.particles().to_vec()), shown);
+        assert_eq!(effects.pods(), pods);
+    }
+
+    #[test]
+    fn a_breakup_heard_goes_off_where_its_roll_put_it_once_shown() {
+        let mut effects = Effects::default();
+        // A quarter of 48 is 12; the offsets draw below 24, less 12.
+        let mut chance = Script::of(&[0, 0, 23, 1]);
+        let breakups = effects.hear_step(&[dying(30)], &scene(), &looks(), &mut chance);
+        assert_eq!(breakups, Breakups(vec![(BoomId(130), at(88.0, 211.0))]));
+        assert_eq!(effects.explosions(), [], "not yet shown");
+        assert_eq!(effects.take_sounds(), [], "rolled unheard");
+        effects.show_step(&breakups, &scene(), &looks(), SpeedMult::FULL);
+        assert_eq!(
+            effects.explosions(),
+            [Explosion {
+                boom: BoomId(130),
+                at: at(88.0, 211.0),
+                frame: 0.0,
+                delay: 0.0,
+            }]
+        );
     }
 }

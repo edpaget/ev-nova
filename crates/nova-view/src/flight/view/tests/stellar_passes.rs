@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use nova_sim::SpeedMult;
 use nova_sim::flight_frame::{FlightEvent, FrameStellar};
 use nova_sim::gate_sprite::StellarPass;
 use nova_sim::{DrawnSheet, NeverFires, SessionEvent};
@@ -85,7 +86,7 @@ fn a_take_offs_still_passes_test_each_threshold_and_add_to_no_timer() {
     tick_stellars(&mut view);
     let kept = frames_of(&view, 151);
     raising(&mut view, &[SessionEvent::StellarFramesReset]);
-    passing(&mut view, &[StellarPass::Still; 2]);
+    passing(&mut view, &[StellarPass::ticked(SpeedMult::ZERO); 2]);
     caught_up(&mut view);
     assert_eq!(
         frames_of(&view, 150).shown(),
@@ -122,7 +123,11 @@ fn a_gate_exits_passes_step_the_new_scene_around_its_reset_and_not_the_old_one()
     );
     passing(
         &mut view,
-        &[StellarPass::Entry, StellarPass::Ticked, StellarPass::Ticked],
+        &[
+            StellarPass::entry(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+        ],
     );
     caught_up(&mut view);
     assert_eq!(
@@ -167,7 +172,11 @@ fn a_gate_entrys_pass_reads_the_frame_the_stellar_was_left_on_before_the_reset()
     );
     passing(
         &mut view,
-        &[StellarPass::Entry, StellarPass::Ticked, StellarPass::Ticked],
+        &[
+            StellarPass::entry(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+        ],
     );
     caught_up(&mut view);
     assert_eq!(
@@ -181,7 +190,7 @@ fn a_gate_entrys_pass_reads_the_frame_the_stellar_was_left_on_before_the_reset()
 #[test]
 fn a_pass_alone_steps_the_scene_shown_before_the_next_draw() {
     let mut view = faked_from(catalog(), showing(130, sol()));
-    passing(&mut view, &[StellarPass::Ticked]);
+    passing(&mut view, &[StellarPass::ticked(SpeedMult::FULL)]);
     caught_up(&mut view);
     assert_eq!(moon_on(&view), 1);
 }
@@ -191,7 +200,9 @@ fn game_entrys_passes_reach_the_scene_on_a_tick_of_no_time_with_no_step_run() {
     let mut view = faked_from(catalog(), showing(130, sol()));
     view.enter_game(|sim| {
         for _ in 0..3 {
-            sim.queue_event(FlightEvent::StellarPass(StellarPass::Ticked));
+            sim.queue_event(FlightEvent::StellarPass(StellarPass::ticked(
+                SpeedMult::FULL,
+            )));
         }
         true
     });
@@ -209,7 +220,7 @@ fn a_frozen_stellars_frame_stays_shown_through_a_pass() {
     raising(&mut view, &[SessionEvent::GalaxyChanged]);
     caught_up(&mut view);
     let before = moon_frames(&view);
-    passing(&mut view, &[StellarPass::Ticked]);
+    passing(&mut view, &[StellarPass::ticked(SpeedMult::FULL)]);
     caught_up(&mut view);
     assert_eq!(moon_on(&view), 2, "drawn as it was");
     assert_ne!(moon_frames(&view), before, "stepped behind it");
@@ -247,7 +258,13 @@ fn gate_on(view: &Faked) -> Vec<u16> {
 fn no_pass_changes_the_frame_a_hypergate_draws() {
     let mut view = with_a_gate(3);
     assert_eq!(gate_on(&view), [3]);
-    passing(&mut view, &[StellarPass::Ticked, StellarPass::Still]);
+    passing(
+        &mut view,
+        &[
+            StellarPass::ticked(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::ZERO),
+        ],
+    );
     caught_up(&mut view);
     assert_eq!(gate_on(&view), [3]);
 }
@@ -273,8 +290,58 @@ fn the_exit_gate_draws_the_sessions_frame_after_a_reset_with_a_layout() {
     );
     passing(
         &mut view,
-        &[StellarPass::Entry, StellarPass::Ticked, StellarPass::Ticked],
+        &[
+            StellarPass::entry(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::FULL),
+        ],
     );
     caught_up(&mut view);
     assert_eq!(gate_on(&view), [5]);
+}
+
+#[test]
+fn a_stellar_steps_by_the_frames_gain() {
+    let mut catalog = catalog();
+    catalog.sol_more.push(animated(150, 1, 0));
+    let quarter = FlightFrame {
+        speed_mult: SpeedMult::new(0.25),
+        ..showing(130, sol_and(&[150]))
+    };
+    let mut view = faked_from(catalog, quarter);
+    view.refresh_frame();
+    let shown: Vec<u16> = (0..5)
+        .map(|_| {
+            tick_stellars(&mut view);
+            frames_of(&view, 150).shown()
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [0, 0, 0, 1, 1],
+        "a quarter a tick reaches 1 on the fourth"
+    );
+}
+
+#[test]
+fn a_replayed_pass_steps_by_its_own_gain() {
+    let mut catalog = catalog();
+    catalog.sol_more.push(animated(150, 1, 0));
+    let mut view = faked_from(catalog, showing(130, sol_and(&[150])));
+    passing(&mut view, &[StellarPass::ticked(SpeedMult::new(0.5))]);
+    caught_up(&mut view);
+    assert_eq!(frames_of(&view, 150).shown(), 0, "half the delay");
+    passing(
+        &mut view,
+        &[
+            StellarPass::ticked(SpeedMult::new(0.5)),
+            StellarPass::ticked(SpeedMult::ZERO),
+        ],
+    );
+    caught_up(&mut view);
+    assert_eq!(
+        frames_of(&view, 150).shown(),
+        1,
+        "the second half reaches it"
+    );
 }

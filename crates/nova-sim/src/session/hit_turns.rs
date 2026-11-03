@@ -292,7 +292,13 @@ mod wired {
         session.player_fires(pass, Rules::default(), &mut NeverFires);
         assert_eq!(session.space.combat.beams().len(), 1, "fired");
         session.take_combat_events();
-        session.beams_phase(&NovaAi::default(), pass, Rules::default(), &mut NeverFires);
+        session.beams_phase(
+            &NovaAi::default(),
+            None,
+            pass,
+            Rules::default(),
+            &mut NeverFires,
+        );
         let hit: Vec<ShipRef> = session
             .take_combat_events()
             .iter()
@@ -432,7 +438,7 @@ mod wired {
         if locks {
             missile.weapon.guidance = Guidance::Homing;
             missile.weapon.lifetime = LOCK_AGE * 2;
-            missile.age = LOCK_AGE;
+            missile.set_age(LOCK_AGE);
             missile.aimed_at = Some(p);
             missile.target = Some(p);
         }
@@ -453,7 +459,7 @@ mod wired {
         shell.weapon.energy_damage = 10.0;
         shell.moved_from = Some(quarry_at - step);
         shell.position = quarry_at;
-        shell.age = shell.weapon.lifetime;
+        shell.set_age(shell.weapon.lifetime);
         let pass = GamePass::Advance { double_time: false };
         session.shots_phase(&NovaAi::default(), pass, Rules::default(), &mut NeverFires);
         let released = session

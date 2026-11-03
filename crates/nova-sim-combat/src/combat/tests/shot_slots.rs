@@ -28,7 +28,6 @@ fn ending_on_b() -> Shot {
     Shot {
         position: at,
         moved_from: Some(at - Vec2::new(10.0, 0.0)),
-        age: 1,
         ..Shot::launch(
             WeaponSpec::new(&blaster()),
             C,
@@ -37,6 +36,7 @@ fn ending_on_b() -> Shot {
             90.0,
         )
     }
+    .aged(1)
 }
 
 /// The slots of the shots in flight, as kept.
@@ -128,7 +128,6 @@ fn a_shot_spent_on_a_stellar_holds_its_slot_through_the_npcs_point_defence() {
     let on_the_stellar = Shot {
         position: at,
         moved_from: Some(at - Vec2::new(10.0, 0.0)),
-        age: 1,
         ..Shot::launch(
             WeaponSpec::new(&planet_gun()),
             C,
@@ -136,7 +135,8 @@ fn a_shot_spent_on_a_stellar_holds_its_slot_through_the_npcs_point_defence() {
             &ShipState::default(),
             90.0,
         )
-    };
+    }
+    .aged(1);
     let mut combat = Combat::default();
     combat.put_in_flight(idle());
     combat.put_in_flight(on_the_stellar);
@@ -407,9 +407,9 @@ pub(super) fn spent_shell(record: WeaponRecord) -> Shot {
     Shot {
         position: at,
         moved_from: Some(at - Vec2::new(10.0, 0.0)),
-        age: 3,
         ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
     }
+    .aged(3)
 }
 
 /// `_HandleShot`'s pass alone, among two ships far off, its
@@ -903,15 +903,15 @@ fn a_spinning_shot_runs_its_slots_spin_timer_and_the_next_shot_there_starts_on_i
     // writes it (@0x3e550-0x3f143).
     let mut combat = Combat::default();
     combat.put_in_flight(idle_of(SPINS));
-    assert_eq!(combat.shots()[0].spin_timer, 0, "a slot never used");
+    assert_eq!(combat.shots()[0].spin_timer, 0.0, "a slot never used");
     visits(&mut combat, 6);
-    assert_eq!(combat.slots.spin(0), 2, "6 passes at 4: stepped at 4");
+    assert_eq!(combat.slots.spin(0), 2.0, "6 passes at 4: stepped at 4");
     end_and_free(&mut combat, 0);
     combat.put_in_flight(idle_of(SPINS));
-    assert_eq!(combat.shots()[0].spin_timer, 2, "the slot's leftover");
+    assert_eq!(combat.shots()[0].spin_timer, 2.0, "the slot's leftover");
     visits(&mut combat, 3);
-    assert_eq!(combat.slots.spin(0), 1, "(2 + 3) mod 4");
-    assert_eq!(combat.slots.spin(1), 0, "another slot's own");
+    assert_eq!(combat.slots.spin(0), 1.0, "(2 + 3) mod 4");
+    assert_eq!(combat.slots.spin(1), 0.0, "another slot's own");
 }
 
 #[test]
@@ -921,12 +921,12 @@ fn a_shot_that_does_not_spin_leaves_its_slots_spin_timer_as_it_found_it() {
     visits(&mut combat, 3);
     end_and_free(&mut combat, 0);
     combat.put_in_flight(idle_of(0));
-    assert_eq!(combat.shots()[0].spin_timer, 3, "it starts on it too");
+    assert_eq!(combat.shots()[0].spin_timer, 3.0, "it starts on it too");
     visits(&mut combat, 5);
-    assert_eq!(combat.slots.spin(0), 3, "untouched");
+    assert_eq!(combat.slots.spin(0), 3.0, "untouched");
     end_and_free(&mut combat, 0);
     combat.put_in_flight(idle_of(SPINS));
-    assert_eq!(combat.shots()[0].spin_timer, 3);
+    assert_eq!(combat.shots()[0].spin_timer, 3.0);
 }
 
 #[test]
@@ -939,7 +939,7 @@ fn a_sub_munition_put_in_a_slot_starts_on_its_spin_timer() {
     end_and_free(&mut combat, 0);
     handle_shots(&mut combat, &arsenal);
     let subs = sub_shots(&combat);
-    assert_eq!((subs[0].slot, subs[0].spin_timer), (0, 3));
+    assert_eq!((subs[0].slot, subs[0].spin_timer), (0, 3.0));
 }
 
 #[test]
@@ -950,10 +950,10 @@ fn by_the_other_reading_every_shot_starts_its_spin_timer_on_0() {
     visits(&mut combat, 3);
     end_and_free(&mut combat, 0);
     combat.put_in_flight(idle_of(SPINS));
-    assert_eq!(combat.shots()[0].spin_timer, 0);
-    assert_eq!(combat.slots.spin(0), 0, "the slot's own put back too");
+    assert_eq!(combat.shots()[0].spin_timer, 0.0);
+    assert_eq!(combat.slots.spin(0), 0.0, "the slot's own put back too");
     visits(&mut combat, 1);
-    assert_eq!(combat.slots.spin(0), 1, "and running from there");
+    assert_eq!(combat.slots.spin(0), 1.0, "and running from there");
 }
 
 #[test]
@@ -962,10 +962,10 @@ fn the_shot_slots_keep_their_spin_timers_through_a_system_change() {
     combat.put_in_flight(idle_of(SPINS));
     visits(&mut combat, 2);
     let history = combat.shot_slots();
-    assert_eq!(history.spin(0), 2);
+    assert_eq!(history.spin(0), 2.0);
     combat.clear();
     let mut later = Combat::default();
     later.set_shot_slots(history);
     later.put_in_flight(idle_of(SPINS));
-    assert_eq!(later.shots()[0].spin_timer, 2);
+    assert_eq!(later.shots()[0].spin_timer, 2.0);
 }

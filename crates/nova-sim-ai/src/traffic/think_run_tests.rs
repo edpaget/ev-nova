@@ -118,7 +118,7 @@ fn a_run_leaves_every_ship_outside_it_as_it_was() {
     };
     traffic.add_npc_at(flying, 1);
     let held = Npc {
-        mode: Mode::HeldAtGate { ticks_left: 5 },
+        mode: Mode::HeldAtGate { ticks_left: 5.0 },
         target: Some(ShipRef::Player),
         ..fixture::npc(0, ShipStats::default())
     };
@@ -126,14 +126,14 @@ fn a_run_leaves_every_ship_outside_it_as_it_was() {
     // Coasting with a kept launch: settled again with no room, it
     // would lose it.
     let coasting = Npc {
-        mode: Mode::Coasting { ticks_left: 5 },
+        mode: Mode::Coasting { ticks_left: 5.0 },
         trigger: LAUNCHING,
         ..carrier(0)
     };
     traffic.add_npc_at(coasting, 4);
     let pod = Npc {
         ship: ESCAPE_POD_SHIP,
-        mode: Mode::Adrift { ticks_left: 5 },
+        mode: Mode::Adrift { ticks_left: 5.0 },
         ..fixture::npc(0, ShipStats::default())
     };
     traffic.add_npc_at(pod, 5);
@@ -309,7 +309,7 @@ fn a_pods_wait_counts_down_only_in_its_own_run() {
     let mut traffic = Traffic::new();
     let pod = Npc {
         ship: ESCAPE_POD_SHIP,
-        mode: Mode::Adrift { ticks_left: 1 },
+        mode: Mode::Adrift { ticks_left: 1.0 },
         ..fixture::npc(0, ShipStats::default())
     };
     let pod = traffic.add_npc_at(pod, 3);
@@ -324,7 +324,7 @@ fn a_pods_wait_counts_down_only_in_its_own_run() {
         &crate::traffic::NoBay::new(),
         &mut chance,
     );
-    assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 1 });
+    assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 1.0 });
     traffic.think_run(
         &keep,
         world,
@@ -332,7 +332,7 @@ fn a_pods_wait_counts_down_only_in_its_own_run() {
         &crate::traffic::NoBay::new(),
         &mut chance,
     );
-    assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 0 });
+    assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 0.0 });
     assert_eq!(traffic.free_berths(0), 61, "held by both");
     traffic.think_run(
         &keep,

@@ -124,7 +124,11 @@ pub fn mining(npc: &Npc, around: &Surroundings) -> Trigger {
     }
     let accel = npc.flying_handling(0.0, around.flight).accel;
     let mut held = npc.state;
-    mine_orders::hold(&mut held, rock, mine_orders::kill_step(accel));
+    mine_orders::hold(
+        &mut held,
+        rock,
+        mine_orders::kill_step(accel, around.speed_mult),
+    );
     let pick = npc.pick.and_then(|pick| around.weapons.weapon(pick));
     let wanted = mine_orders::kill_heading(&held, rock, pick);
     if mine_orders::fires(npc.state.heading, wanted, npc.turn_rate()) {
@@ -350,7 +354,7 @@ mod tests {
         let mut waiting = mining_at(100.0, 100.0, 314.0);
         waiting.trigger = fired_at(&waiting, Some(rock(0.0, 0.0)));
         assert_eq!(waiting.trigger.only, id(128));
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         assert_eq!(crate::ai::fire::gated(&waiting).only, None);
     }
 
@@ -431,6 +435,47 @@ mod tests {
             Trigger::default(),
             "facing the lead before the hold"
         );
+    }
+
+    #[test]
+    fn at_half_gain_a_miner_fires_by_the_lead_from_its_hold_at_half_gain() {
+        // The think predicts order 0x14's hold the slot flies at the same
+        // frame's gain (`Surroundings::speed_mult`).
+        let half = crate::speed_mult::SpeedMult::new(0.5);
+        let full = crate::speed_mult::SpeedMult::FULL;
+        let slot0 = crossing(0.5);
+        let (probe, weapons) = picking(100, 0.0);
+        let wanted = |gain| {
+            let accel = probe
+                .flying_handling(0.0, crate::flight::FlightRules::default())
+                .accel;
+            let mut held = probe.state;
+            mine_orders::hold(&mut held, &slot0, mine_orders::kill_step(accel, gain));
+            let pick = probe.pick.and_then(|pick| weapons.weapon(pick));
+            mine_orders::kill_heading(&held, &slot0, pick)
+        };
+        let (at_half, at_full) = (wanted(half), wanted(full));
+        assert_ne!(at_half, at_full);
+        let heading = (0_i16..360)
+            .map(f32::from)
+            .find(|&heading| {
+                mine_orders::fires(heading, at_half, probe.turn_rate())
+                    && !mine_orders::fires(heading, at_full, probe.turn_rate())
+            })
+            .expect("a heading between the two windows");
+        let (miner, weapons) = picking(100, heading);
+        let fired = |gain| {
+            let npcs = [miner.clone()];
+            let around = Surroundings {
+                mining_rock: Some(slot0),
+                weapons: &weapons,
+                speed_mult: gain,
+                ..Surroundings::new(&[], &npcs)
+            };
+            crate::ai::fire::trigger(&miner, &around, crate::ai::fire::FireRules::default())
+        };
+        assert_eq!(fired(half).only, id(128), "facing the half hold's lead");
+        assert_eq!(fired(full), Trigger::default());
     }
 
     #[test]

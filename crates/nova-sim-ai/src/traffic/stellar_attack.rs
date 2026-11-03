@@ -330,7 +330,7 @@ mod tests {
         fly_one(&mut npc);
         assert!(npc.state.velocity.x > 0.0, "it closes in");
         let mut waiting = attacker(state(0.0, 0.0, (1.0, 0.0), to));
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         waiting.mode = Mode::Flying;
         fly_one(&mut waiting);
         assert_eq!(waiting.state.velocity, Vec2::new(1.0, 0.0), "it coasts");

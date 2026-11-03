@@ -389,7 +389,7 @@ mod tests {
         // the reaction block tests no condition (@0x3bb7a-0x3bcf6).
         let by_player = strike(n(1), ShipRef::Player);
         let mut waiting = ship(1, 0.0, 0.0);
-        waiting.mode = Mode::Emerging { ticks_left: 60 };
+        waiting.mode = Mode::Emerging { ticks_left: 60.0 };
         let world = World {
             arrival_hits: RuleSource::Bible,
             ..World::new(&[])
@@ -723,7 +723,7 @@ mod tests {
             // asks `_IsDisabled` (@0x89c94).
             let mut victim = ship(1, 0.0, 0.0);
             victim.condition = Condition::Disabled;
-            victim.ai_wait = 300;
+            victim.ai_wait = 300.0;
             victim.travel = Some(crate::catalog::StellarId(128));
             victim.person = Some(crate::traffic::npc::NpcPerson {
                 id: nova_sim_catalog::catalog::PersonId(151),

@@ -17,7 +17,7 @@
 //! [`Session::carry_stellar_sprite_pool`]), as the original never clears
 //! a stellar's sprite pointer.
 //!
-//! **Which sprite a deadly stellar kills by** ([`Session::deadly_discs`]):
+//! **Which sprite a deadly stellar kills by** ([`Session::deadly_sprites`]):
 //! `_HandleDeadlyStellars` walks the system's listed stellars in slot
 //! order and tests each deadly one holding a sprite (spöb +0 not null,
 //! @0x39d1d), shown or not:
@@ -39,14 +39,15 @@
 //!   only).
 //!
 //! Those are [`RuleKey::StaleStellarSprite`]'s engine reading. By the
-//! other reading a hidden stellar kills nothing. Each sprite is a disc,
-//! half the larger side of its frame across, centred on its rect, where
-//! the original compares masks: see rdm
-//! phase/ship-handling-fidelity-followups/phase-1-deadly-stellars-pixel-masks.
+//! other reading a hidden stellar kills nothing. Each sprite touches by
+//! its placed mask, its sheet's run-length tokens (see the `deadly_masks`
+//! module, rdm:phase/play-feel-8/phase-1-sprite-pixel-masks), and by its
+//! disc, half the larger side of its frame across and centred on its
+//! rect, where a mask can't be read.
 
 use super::{Chart, PlayerShip, Session, Setup, Space, Statics};
 use crate::catalog::LandingSite;
-use crate::combat::stellar_hazards::DeadlyDisc;
+use crate::combat::stellar_hazards::{DeadlyDisc, DeadlySprite};
 use crate::deadly_stellar::{is_deadly, sprite_radius};
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -85,10 +86,9 @@ impl Session {
         }
     }
 
-    /// The disc each listed deadly stellar holding a sprite kills within,
-    /// in slot order, by [`RuleKey::StaleStellarSprite`] (see the module
-    /// docs).
-    pub(super) fn deadly_discs(&self) -> Vec<DeadlyDisc> {
+    /// The sprite each listed deadly stellar holding one kills by, in slot
+    /// order, by [`RuleKey::StaleStellarSprite`] (see the module docs).
+    pub(super) fn deadly_sprites(&self) -> Vec<DeadlySprite> {
         let stale = self.setup.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
         self.chart
             .listed
@@ -102,16 +102,28 @@ impl Session {
                     None => SlotSprite::None,
                 };
                 match sprite {
-                    SlotSprite::Own => self.space.drawn_disc(&self.statics, &self.setup, shown?),
+                    SlotSprite::Own => self.drawn_sprite(shown?),
                     SlotSprite::Owner(owner) => {
                         let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
-                        self.space.drawn_disc(&self.statics, &self.setup, owner)
+                        self.drawn_sprite(owner)
                     }
-                    SlotSprite::Ghost { top_left } => self.ship.ghost_disc(&self.statics, top_left),
+                    SlotSprite::Ghost { top_left } => Some(DeadlySprite {
+                        disc: self.ship.ghost_disc(&self.statics, top_left)?,
+                        mask: self.space.ghost_mask(&self.statics, top_left),
+                    }),
                     SlotSprite::None => None,
                 }
             })
             .collect()
+    }
+
+    /// `site`'s sprite, one of the stellars shown, as it is drawn: its disc
+    /// and its mask; none when no frame is.
+    fn drawn_sprite(&self, site: &LandingSite) -> Option<DeadlySprite> {
+        Some(DeadlySprite {
+            disc: self.space.drawn_disc(&self.statics, &self.setup, site)?,
+            mask: self.deadly_stellar_mask(site),
+        })
     }
 
     /// The stellar sprite pool, to hand to the next pilot's session in the
@@ -226,6 +238,15 @@ mod tests {
         work(session, &crate::testkit::catalog(), Controls::default());
     }
 
+    /// The disc of each sprite `session`'s deadly stellars kill by.
+    fn discs(session: &Session) -> Vec<DeadlyDisc> {
+        session
+            .deadly_sprites()
+            .into_iter()
+            .map(|sprite| sprite.disc)
+            .collect()
+    }
+
     fn other_reading() -> Rulebook {
         Rulebook::default().with_override(RuleKey::StaleStellarSprite, RuleSource::Bible)
     }
@@ -295,7 +316,7 @@ mod tests {
         session.statics_mut().fallback_frame = Some((300, 40));
         shown_then(&mut session, &[hidden], &[]);
         assert_eq!(
-            session.deadly_discs(),
+            discs(&session),
             [DeadlyDisc {
                 at: Vec2::new(100.0, -180.0),
                 radius: 150.0,
@@ -310,7 +331,7 @@ mod tests {
         let mut session = among(&catalog, &[hidden], Rulebook::default());
         shown_then(&mut session, &[hidden], &[]);
         session.statics_mut().fallback_frame = None;
-        assert_eq!(session.deadly_discs(), []);
+        assert_eq!(discs(&session), []);
         fight(&mut session);
         assert_eq!(session.npcs().len(), 1);
     }
@@ -322,7 +343,7 @@ mod tests {
         let shown = planet(141, 3000.0, 0.0);
         let mut session = among(&catalog, &[shown, hidden], Rulebook::default());
         shown_then(&mut session, &[shown], &[shown]);
-        assert_eq!(session.deadly_discs(), []);
+        assert_eq!(discs(&session), []);
         fight(&mut session);
         assert_eq!(session.npcs().len(), 1);
     }
@@ -336,7 +357,7 @@ mod tests {
         let hidden = deadly_at(140, 0.0, -150.0);
         let mut ghost = among(&catalog, &[hidden], other_reading());
         shown_then(&mut ghost, &[hidden], &[]);
-        assert_eq!(ghost.deadly_discs(), []);
+        assert_eq!(discs(&ghost), []);
         fight(&mut ghost);
         assert_eq!(ghost.npcs().len(), 1, "the ghost");
         // A shown one still kills by either reading.
@@ -466,9 +487,9 @@ mod tests {
         let mut first = among(&catalog, &[hidden], Rulebook::default());
         shown_then(&mut first, &[hidden], &[]);
         let mut next = among(&catalog, &[hidden], Rulebook::default());
-        assert_eq!(next.deadly_discs(), [], "a fresh pool");
+        assert_eq!(discs(&next), [], "a fresh pool");
         next.carry_stellar_sprite_pool(first.stellar_sprite_pool().clone());
-        assert_eq!(next.deadly_discs().len(), 1, "the carried ghost");
+        assert_eq!(discs(&next).len(), 1, "the carried ghost");
         // The stellars shown as it is carried take their slots again.
         let shown = planet(141, 3000.0, 0.0);
         let mut again = among(&catalog, &[hidden, shown], Rulebook::default());

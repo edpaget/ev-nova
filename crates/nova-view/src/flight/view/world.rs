@@ -33,7 +33,7 @@
 //!   @0x38c0f-0x38c5b), filed in rdm:task/escorts-follow-up;
 //! - the escort menu showing a change a frame late, as the callback blits
 //!   the menu's frame before redrawing it (@0x38c60-0x38c77)
-//!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late).
+//!   (rdm:phase/rendering/phase-9-escort-menu-redraw-a-frame-late).
 
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 
@@ -49,7 +49,7 @@ use crate::system::scene::{self, SystemScene};
 use crate::{Color, DrawList, Point};
 
 use super::stars;
-use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE};
+use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world over the scene laid out
@@ -93,11 +93,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.draw_help(list);
             return false;
         }
+        self.draw_bar_or_why(list);
+        true
+    }
+
+    /// Draws the status bar over the frame drawn ([`FlightView::draw_bar`]),
+    /// or why it can't be shown.
+    pub(super) fn draw_bar_or_why(&self, list: &mut DrawList) {
         match &self.status_bar {
             Ok(bar) => self.draw_bar(list, (bar, self.view.0), self.drawn()),
             Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
-        true
     }
 
     /// The message on screen, if any: the slot's until its ticks have
@@ -153,7 +159,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
-                WorldPass::Particles => self.effects.draw_particles(list, camera),
+                WorldPass::Particles => {
+                    let at_rest = point(self.previous.position);
+                    let scrolled_from = self.scroll.drawn_from(camera.center(), at_rest);
+                    self.effects.draw_particles(list, camera, scrolled_from);
+                }
                 WorldPass::Layer(
                     layer @ (SpriteLayer::Disabled
                     | SpriteLayer::PointDefence
@@ -218,7 +228,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// command draws in list order, so the text stays under the
     /// particles; drawn into a world texture under a frame upscaler, the
     /// world is laid out before the overlay and the text draws over the
-    /// particles (rdm:phase/play-feel-cross-roadmap/phase-3-floater-text-under-the-particles-upscaled).
+    /// particles (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled).
     fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
@@ -276,7 +286,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// thousands-of-colours display shows it, or black with no system or no
 /// session (`_SetSystemBackgroundBackColor` @0x6e06-0x6e46, `BackColor`
 /// 33 @0x6e1c).
-fn message_background(background: Option<u32>) -> Color {
+pub(super) fn message_background(background: Option<u32>) -> Color {
     background.map_or(Color::BLACK, Color::from_rgb24_as_rgb555)
 }
 

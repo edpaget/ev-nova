@@ -16,13 +16,15 @@
 //! - **It counts its wait down and leaves silently** ([`count_down`]): at
 //!   its own slot's turn in the loop, on the advance pass, as `_AIDispatch`
 //!   runs only there, its AI wait
-//!   (+0x4c, [`Mode::Adrift`]; none in any other mode) goes down a tick,
-//!   and once it is below 0 (0.0 at 0xdd054) its slot is freed (+0xb8 =
-//!   0, @0x8fbb3): no explosion, no fate, no event
+//!   (+0x4c, [`Mode::Adrift`]; none in any other mode) goes down by the
+//!   frame's gain in doubles, before the `_gameFrozen` test and with no
+//!   running test first (@0x8fb8b, [`counted`]), and once it is below 0
+//!   (0.0 at 0xdd054) its slot is freed (+0xb8 = 0, @0x8fbb3), so a wait
+//!   of none on a frame of no gain stays and isn't freed: no explosion, no fate, no event
 //!   ([`Outcome::Freed`]). Every NPC spawner leaves +0x4c at 0
 //!   (`_RandomShipSpawn` @0x3c3ff, `_GenericRandomShipSpawn` @0x3c9c7,
 //!   `_MissionDudeSpawn` @0x3ced1), so a pod spawned is gone on its first
-//!   tick.
+//!   frame with any gain.
 //!
 //! No stock `düde`, `flët`, `përs` or fighter bay names shïp 895, so only
 //! plug-in data brings a pod NPC; the player's own pod is the player's
@@ -44,6 +46,7 @@ use crate::combat::hull::ESCAPE_POD_SHIP;
 #[cfg(doc)]
 use crate::flight;
 use crate::flight::Controls;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::slot_word::Cap;
 use crate::trig;
@@ -72,32 +75,49 @@ pub(crate) fn flight(npc: &Npc) -> Flight {
 /// as a pod is never in a count wait.
 #[must_use]
 pub fn turns(npc: &Npc) -> bool {
-    !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0)
+    !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0.0)
+}
+
+/// A pod's wait `wait` after its `_AIDispatch` at the frame's `gain`: the
+/// gain off it in doubles, narrowed, with no running test first
+/// (@0x8fb8b-0x8fba0); none once it is below 0.0 (0xdd054), when its slot
+/// is freed (@0x8fbb3). The compare is the free's own arm, so a NaN wait,
+/// for which the `jae`/`jp` skip the free, is kept.
+#[must_use]
+pub fn counted(wait: f32, gain: SpeedMult) -> Option<f32> {
+    let left = gain.add_times(wait, -1.0);
+    if left < 0.0 { None } else { Some(left) }
 }
 
 /// `_AIDispatch` for each pod among `npcs` that `picks` picks, its slot's
-/// turn in the loop: its wait goes down a tick, and it is taken out once
-/// its wait goes below 0, so its slot is free to the slots after it and
-/// not to those before. The pods taken out, in order, each
+/// turn in the loop, at the frame's `gain`: its wait goes down by the gain
+/// ([`counted`]), and it is taken out once its wait goes below 0, so its
+/// slot is free to the slots after it and not to those before. A pod in
+/// any mode but [`Mode::Adrift`] has a wait of none, as every spawner
+/// leaves +0x4c at 0. The pods taken out, in order, each
 /// [`Outcome::Freed`].
-pub fn count_down(npcs: &mut Vec<Npc>, picks: impl Fn(&Npc) -> bool) -> Vec<(NpcId, Outcome)> {
+pub fn count_down(
+    npcs: &mut Vec<Npc>,
+    picks: impl Fn(&Npc) -> bool,
+    gain: SpeedMult,
+) -> Vec<(NpcId, Outcome)> {
     let mut freed = Vec::new();
     npcs.retain_mut(|npc| {
         if !is_pod(npc) || !picks(npc) {
             return true;
         }
-        match npc.mode {
-            Mode::Adrift { ticks_left } if ticks_left > 0 => {
-                npc.mode = Mode::Adrift {
-                    ticks_left: ticks_left - 1,
-                };
-                true
-            }
-            _ => {
-                freed.push((npc.id, Outcome::Freed));
-                false
-            }
+        let wait = match npc.mode {
+            Mode::Adrift { ticks_left } => ticks_left,
+            _ => 0.0,
+        };
+        let Some(left) = counted(wait, gain) else {
+            freed.push((npc.id, Outcome::Freed));
+            return false;
+        };
+        if let Mode::Adrift { ticks_left } = &mut npc.mode {
+            *ticks_left = left;
         }
+        true
     });
     freed
 }
@@ -110,6 +130,7 @@ mod tests {
     use crate::chance::Chance;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
+    use crate::speed_mult::SpeedMult;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::{Traffic, World};
@@ -157,7 +178,7 @@ mod tests {
     #[test]
     fn a_pod_with_a_wait_of_2_thrusts_along_its_heading_for_2_ticks_then_is_freed() {
         let behaviour = Recording::default();
-        let mut traffic = holding(vec![pod(90.0, Mode::Adrift { ticks_left: 2 })]);
+        let mut traffic = holding(vec![pod(90.0, Mode::Adrift { ticks_left: 2.0 })]);
         let mut seen = Vec::new();
         for _ in 0..2 {
             tick(&mut traffic, &behaviour);
@@ -170,8 +191,8 @@ mod tests {
         assert_eq!(
             seen,
             [
-                (Mode::Adrift { ticks_left: 1 }, 90.0),
-                (Mode::Adrift { ticks_left: 0 }, 90.0)
+                (Mode::Adrift { ticks_left: 1.0 }, 90.0),
+                (Mode::Adrift { ticks_left: 0.0 }, 90.0)
             ]
         );
         let speed = traffic.npcs()[0].state.velocity.x;
@@ -202,14 +223,14 @@ mod tests {
         // flies.
         let behaviour = Recording::default();
         for heading in [0.0, 45.0, 45.5, 359.9] {
-            let mut traffic = holding(vec![pod(heading, Mode::Adrift { ticks_left: 5 })]);
+            let mut traffic = holding(vec![pod(heading, Mode::Adrift { ticks_left: 5.0 })]);
             for _ in 0..4 {
                 tick(&mut traffic, &behaviour);
                 assert_eq!(traffic.npcs()[0].state.heading, heading);
             }
             tick(&mut traffic, &behaviour);
             let pod = &traffic.npcs()[0];
-            assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 });
+            assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0.0 });
             assert_eq!(pod.state.heading, heading.trunc(), "{heading}");
         }
     }
@@ -217,12 +238,12 @@ mod tests {
     #[test]
     fn a_pod_moves_again_on_the_second_pass_without_counting_down() {
         let behaviour = Recording::default();
-        let mut traffic = holding(vec![pod(180.0, Mode::Adrift { ticks_left: 1 })]);
+        let mut traffic = holding(vec![pod(180.0, Mode::Adrift { ticks_left: 1.0 })]);
         tick(&mut traffic, &behaviour);
         let before = traffic.npcs()[0].state;
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         let pod = &traffic.npcs()[0];
-        assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 }, "no countdown");
+        assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0.0 }, "no countdown");
         assert!(pod.state.position.y > before.position.y, "it moves down");
     }
 
@@ -231,15 +252,15 @@ mod tests {
         let behaviour = Recording::default();
         let mut other = npc(0, ShipStats::new(FAST, &[]));
         other.state.position = Vec2::new(500.0, 0.0);
-        other.ai_wait = 3;
-        let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3 })]);
+        other.ai_wait = 3.0;
+        let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3.0 })]);
         let waits = |traffic: &Traffic| (traffic.npcs()[0].ai_wait, traffic.npcs()[1].mode);
         tick(&mut traffic, &behaviour);
-        assert_eq!(waits(&traffic), (2, Mode::Adrift { ticks_left: 2 }));
+        assert_eq!(waits(&traffic), (2.0, Mode::Adrift { ticks_left: 2.0 }));
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(
             waits(&traffic),
-            (1, Mode::Adrift { ticks_left: 2 }),
+            (1.0, Mode::Adrift { ticks_left: 2.0 }),
             "the fight's countdown runs on both passes, the pod's on the advance pass alone"
         );
     }
@@ -254,11 +275,75 @@ mod tests {
         assert_eq!(word.controls, full);
         assert_eq!(word.wanted, Some(45));
         assert_eq!(word.cap, Cap::Slot, "+0x34 = `_ShipMaxSpeed` (@0x8fb90)");
-        for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0 }] {
+        for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0.0 }] {
             assert!(turns(&pod(45.9, mode)), "{mode:?}");
         }
         // While its wait runs, its turn is skipped.
-        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 3 })));
+        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 3.0 })));
         assert!(!is_pod(&npc(0, ShipStats::default())));
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_a_pods_wait_counts_down_half_a_frame_and_is_freed_below_none() {
+        // (float)((double)w - g), freed when w < 0.0 (@0x8fb8b-0x8fbb3).
+        assert_eq!(counted(1.0, HALF), Some(0.5));
+        assert_eq!(counted(0.5, HALF), Some(0.0));
+        assert_eq!(counted(0.0, HALF), None);
+        assert_eq!(counted(0.25, HALF), None, "-0.25 is below none");
+        assert_eq!(counted(1.0, SpeedMult::FULL), Some(0.0));
+        assert_eq!(counted(0.0, SpeedMult::FULL), None);
+    }
+
+    #[test]
+    fn at_no_gain_a_pods_wait_holds_and_a_wait_of_none_is_kept() {
+        assert_eq!(counted(0.0, SpeedMult::ZERO), Some(0.0));
+        assert_eq!(counted(2.0, SpeedMult::ZERO), Some(2.0));
+    }
+
+    #[test]
+    fn a_nan_pod_wait_is_kept() {
+        // `jae`/`jp` skip the free on an unordered compare.
+        assert!(counted(f32::NAN, HALF).is_some_and(f32::is_nan));
+    }
+
+    /// `npcs` counted down once at `gain`, every one picked: the pods freed.
+    fn counted_down_at(npcs: &mut Vec<Npc>, gain: SpeedMult) -> Vec<(NpcId, Outcome)> {
+        count_down(npcs, |_| true, gain)
+    }
+
+    #[test]
+    fn at_half_gain_a_pods_count_down_writes_its_wait_and_frees_it_below_none() {
+        let mut npcs = vec![pod(0.0, Mode::Adrift { ticks_left: 1.0 })];
+        assert!(counted_down_at(&mut npcs, HALF).is_empty());
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 0.5 });
+        assert!(counted_down_at(&mut npcs, HALF).is_empty());
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 0.0 });
+        assert_eq!(
+            counted_down_at(&mut npcs, HALF),
+            [(NpcId(0), Outcome::Freed)]
+        );
+        assert!(npcs.is_empty());
+    }
+
+    #[test]
+    fn at_no_gain_a_pod_with_no_wait_is_not_freed() {
+        // Every spawner leaves +0x4c at 0, so a pod in any mode but
+        // `Adrift` has a wait of none: 0 - 0 is not below none.
+        let mut npcs = vec![
+            pod(0.0, Mode::Flying),
+            pod(0.0, Mode::Adrift { ticks_left: 0.0 }),
+        ];
+        assert!(counted_down_at(&mut npcs, SpeedMult::ZERO).is_empty());
+        assert_eq!(npcs[0].mode, Mode::Flying);
+        assert_eq!(npcs[1].mode, Mode::Adrift { ticks_left: 0.0 });
+        assert_eq!(counted_down_at(&mut npcs, HALF).len(), 2);
+    }
+
+    #[test]
+    fn a_pod_turns_once_its_wait_is_none_and_not_while_half_a_frame_is_left() {
+        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 0.5 })));
+        assert!(turns(&pod(45.9, Mode::Adrift { ticks_left: 0.0 })));
     }
 }

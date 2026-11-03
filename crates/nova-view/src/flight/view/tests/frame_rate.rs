@@ -244,6 +244,18 @@ fn coming_back_to_the_front_says_calculating_again() {
 }
 
 #[test]
+fn focus_gained_sends_switched_in() {
+    let mut view = faked(in_sol());
+    let from = sent_count(&view);
+    view.focus_gained();
+    assert_eq!(
+        view.sim.applied()[from..],
+        [FlightCommand::SwitchedIn],
+        "_SwitchedIn's gain of 1.0, @0x513e1-0x513ec"
+    );
+}
+
+#[test]
 fn going_to_the_background_sends_the_switch_out() {
     let mut view = faked(in_sol());
     let from = sent_count(&view);

@@ -186,6 +186,10 @@ pub(super) struct Fate {
     /// The rescue's dësc, loaded and still to show (see the `rescue`
     /// module); never saved.
     pub(super) rescue_desc: Option<crate::flight_frame::LoadedDesc>,
+    /// Where the rescue's texts fell against its reset and its move,
+    /// still to report with its step (see the `rescue` module); never
+    /// saved.
+    pub(super) rescue_texts: Option<crate::flight_frame::RescueTexts>,
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     pub(super) eject_held: bool,
@@ -195,6 +199,10 @@ pub(super) struct Fate {
     /// Whether the player holds the self-destruct chord, Command and `-`
     /// together (see the `self_destruct` module); never saved.
     pub(super) self_destruct_held: bool,
+    /// The jettison chord, Command and K, while it is held: `Some(all)`,
+    /// `all` unless Option is down too (see the `held_jettison` module);
+    /// never saved.
+    pub(super) jettison_held: Option<bool>,
     /// Whether a pirate has docked with the player's disabled ship (its
     /// slot's +0xb9; see the `pirate_plunder` module): never saved.
     pub(super) player_boarded: bool,
@@ -284,9 +292,11 @@ impl PlayerShip {
                 pod_zeroed: false,
                 rescue_due: false,
                 rescue_desc: None,
+                rescue_texts: None,
                 eject_held: false,
                 self_destruct: crate::self_destruct::SelfDestruct::default(),
                 self_destruct_held: false,
+                jettison_held: None,
                 player_boarded: false,
             },
             warp: Warp {

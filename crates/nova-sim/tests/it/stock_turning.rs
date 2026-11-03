@@ -46,7 +46,14 @@ fn the_stock_pegasus_turns_2_a_tick_as_the_player_and_2_5_as_an_npc() {
     let fields = data.ship_fields(PEGASUS).expect("decodes");
     let npc = ShipStats::new(fields, &[]).handling;
     let mut state = ShipState::default();
-    step(&mut state, &npc, right, FlightRules::default(), Flyer::Npc);
+    step(
+        &mut state,
+        &npc,
+        right,
+        FlightRules::default(),
+        Flyer::Npc,
+        nova_sim::SpeedMult::FULL,
+    );
     assert!(
         (state.heading - 2.5).abs() < 1e-6,
         "the full rate: {state:?}"

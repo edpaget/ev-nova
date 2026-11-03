@@ -36,7 +36,7 @@ pub(super) fn spent(record: WeaponRecord, at: Vec2) -> Shot {
     );
     shot.position = at;
     shot.moved_from = Some(at - Vec2::new(10.0, 0.0));
-    shot.age = shot.weapon.lifetime;
+    shot.set_age(shot.weapon.lifetime);
     shot
 }
 
@@ -54,7 +54,7 @@ pub(super) fn locking_on(at: ShipRef) -> Shot {
         90.0,
     );
     shot.moved_from = Some(shot.position);
-    shot.age = projectile::LOCK_AGE;
+    shot.set_age(projectile::LOCK_AGE);
     shot.aimed_at = Some(at);
     shot.target = Some(at);
     shot
@@ -246,7 +246,7 @@ pub(super) fn homing_at_e() -> Shot {
         90.0,
     );
     shot.moved_from = Some(shot.position);
-    shot.age = projectile::HOMING_DELAY;
+    shot.set_age(projectile::HOMING_DELAY);
     shot.aimed_at = Some(E);
     shot.target = Some(E);
     shot.jam_rolls = [71, 0, 0, 0];

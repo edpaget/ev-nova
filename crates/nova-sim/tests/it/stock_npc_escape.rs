@@ -67,7 +67,7 @@ fn the_stock_star_liner_ejects_10_pods_every_10_frames_from_half_its_delay() {
         .find(|hull| hull.id == STAR_LINER)
         .expect("shïp 134");
     assert_eq!((liner.death_delay, liner.pod_count), (100, 10));
-    assert_eq!(pod_interval(100, 10), 10);
+    assert_eq!(pod_interval(100, 10, nova_sim::SpeedMult::FULL), 10);
     let name = data
         .ships()
         .into_iter()

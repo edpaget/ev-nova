@@ -65,6 +65,7 @@ use crate::ai::Goal;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
+use crate::traffic::ai_wait;
 
 impl Traffic {
     /// The loop's opening, after the passes before the first slot: every
@@ -236,12 +237,13 @@ impl Traffic {
         }
         if npc.warp.goal == Some(WarpGoal::Own) && own_jump {
             let npc = &mut self.npcs[index];
-            return warp_out::own_jump(npc, world.warp.duration()).then_some(Outcome::JumpedOut);
+            let gone = warp_out::own_jump(npc, world.warp.duration(), world.speed_mult);
+            return gone.then_some(Outcome::JumpedOut);
         }
         let (Goal::Dock(ship), Some(dock)) = (npc.goal, npc.carrier) else {
             return None;
         };
-        let waiting = npc.ai_wait > 0 && !npc.count_wait();
+        let waiting = ai_wait::running(npc.ai_wait) && !npc.count_wait();
         if waiting || npc.jumping() || no_bay.contains(&npc.id) {
             return None;
         }
@@ -457,10 +459,10 @@ mod tests {
             "disabled"
         );
         assert!(
-            stays(&|npc| npc.mode = Mode::Coasting { ticks_left: 5 }),
+            stays(&|npc| npc.mode = Mode::Coasting { ticks_left: 5.0 }),
             "coasting"
         );
-        assert!(stays(&|npc| npc.ai_wait = 5), "in its wait");
+        assert!(stays(&|npc| npc.ai_wait = 5.0), "in its wait");
         let on_a_jump = |npc: &mut Npc| {
             npc.class_fuel = 300;
             npc.leader = Some(NpcId(0));
@@ -477,7 +479,7 @@ mod tests {
         let mut traffic = Traffic::with_interval(1);
         let lead = entrant(&mut traffic);
         let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == lead);
-        npc.expect("there").ai_wait = 5;
+        npc.expect("there").ai_wait = 5.0;
         traffic.think_holding(&Reads::of(lead), World::new(&sites), &[], &mut NeverFires);
         let mode = of(&traffic, lead).expect("there").mode;
         assert_eq!(mode, crate::traffic::npc::Mode::Flying);

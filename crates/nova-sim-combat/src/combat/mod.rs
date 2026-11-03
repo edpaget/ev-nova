@@ -409,6 +409,7 @@ pub mod asteroid_walk;
 pub mod beam;
 pub mod beam_stellar;
 mod collision;
+pub mod contact;
 pub mod damage;
 pub mod defence;
 mod display;
@@ -438,6 +439,9 @@ pub mod script_explosions;
 pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
+pub mod shot_decay;
+pub mod shot_fade;
+pub mod shot_frame;
 pub mod shot_layer;
 pub mod shot_slots;
 pub mod sides;
@@ -500,6 +504,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
 use crate::ship_layer::Slot;
 use crate::speed_cap::SpeedCap;
+use crate::speed_mult::SpeedMult;
 
 /// An NPC's number in its system, unique while the player stays there:
 /// the order it appeared in.
@@ -806,6 +811,9 @@ pub struct Scenery<'a> {
     /// The stellar hazards ([`stellar_hazards`]): none when there are
     /// none.
     pub hazards: Option<&'a StellarHazards>,
+    /// The masks and readings the contact passes touch by ([`contact`]):
+    /// none for no masks at the engine's speed, by the default readings.
+    pub contact: Option<&'a contact::ContactSprites>,
 }
 
 /// How a strike left the ship it hit.
@@ -1144,7 +1152,7 @@ impl Default for Rules<'static> {
 }
 
 /// What a fight reads of when and where it is fought, each tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Field {
     /// The frame counter (`_frameCounter`) as `_DoPlayGameWork` sees it,
     /// before `_PlayGame` adds 1: what an interfered shot circles by
@@ -1160,6 +1168,10 @@ pub struct Field {
     /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
     /// @0x88fb3-0x8901b). The default stretches nothing.
     pub player_rating: ai_fire::PlayerRating,
+    /// The frame's gain, `_gSpeedMult`, as the session's pass runs at it:
+    /// what the player's regeneration and reloads take a frame of
+    /// (`_HandlePlayer` @0x6cfc6, @0x6d063, @0x6ae46). Full by default.
+    pub speed_mult: SpeedMult,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -2025,7 +2037,7 @@ impl Combat {
                 ..Shot::launch(weapon, ship, fleet, &leaving, heading)
             };
             shot.disable_only |= plunder::shot_disables(plunderer, aimed_at, targets);
-            shot.roll_at_launch(self.field.interference, chance);
+            shot.roll_at_launch(self.field.interference, self.field.speed_mult, chance);
             // A dropped bomb or rocket reads no heading, so it is never sent
             // broadside, as the gate it fails holds the broadside
             // (@0x3ede8-0x3ee0a).
@@ -2920,7 +2932,7 @@ impl Combat {
             }
             shot.id = self.next_id();
             shot.disable_only |= plunder::shot_disables(owner, target, sides.targets);
-            shot.roll_at_launch(self.field.interference, chance);
+            shot.roll_at_launch(self.field.interference, self.field.speed_mult, chance);
             // Each seeks once seated, with its own roll and jam (@0x3f3cf).
             let shot = submunition::aim(parent, shot, n, sides, chance);
             self.insert_seated(&shot);
@@ -3474,13 +3486,14 @@ const LOCK_HIT: Hit = Hit {
 /// other slots' ends of life ([`Combat::shot_stretch`]), before the NPCs
 /// fire. The original's target sets +0x70 then, in `_DamageShip`'s
 /// reaction block; the session answers the strike after the shot step
-/// (`nova_sim::Session::game_work`).
-fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
+/// (`nova_sim::Session::game_work`). The lock age is in frames at the
+/// frame's `gain` (@0x35669, @0x35796).
+fn lock(shot: &Shot, sides: &Sides, gain: SpeedMult) -> Option<Landed> {
     let players = shot.firer == ShipRef::Player && matches!(shot.source, Source::Ship(_));
     if shot.weapon.guidance != Guidance::Homing
         || !players
         || shot.jam != Jam::Clear
-        || !shot.passes_lock_age()
+        || !shot.passes_lock_age(gain)
     {
         return None;
     }
@@ -3579,13 +3592,14 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
 /// destroyed ship regenerates neither. It comes before that frame's
 /// `_HandleBeams`, so a beam that disables the ship after it leaves it
 /// regenerated. A ship whose shield and armour are full has nothing to
-/// regenerate, and the rule is not asked of it.
-fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
+/// regenerate, and the rule is not asked of it. Each gauge gains its rate
+/// × the frame's `gain` (`_gSpeedMult` @0x345da, @0x3464c).
+fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule, gain: SpeedMult) {
     let reserves = &fighter.reserves;
     let short = below_full(reserves.shield) || below_full(reserves.armor);
     if short && !fighter.disabled_now(rule) {
-        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
-        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen, gain);
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen, gain);
     }
 }
 
@@ -3598,14 +3612,15 @@ fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
 /// the frame began (a sabotage kill, a self-destruct) regenerates none.
 /// Its repair inhibit holds the armour back through
 /// [`Fighter::armor_regen`]. As the original tests the capacity first
-/// (@0x6cf99, @0x6d01d), a full gauge asks nothing.
-fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
+/// (@0x6cf99, @0x6d01d), a full gauge asks nothing. Each gauge gains its
+/// rate × the frame's `gain` (@0x6cfc6-0x6cfee, @0x6d063-0x6d089).
+fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule, gain: SpeedMult) {
     let began_whole = !fighter.disabled_as_tick_began();
     if began_whole && below_full(fighter.reserves.shield) {
-        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen, gain);
     }
     if began_whole && below_full(fighter.reserves.armor) && !fighter.disabled_now(rule) {
-        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen, gain);
     }
 }
 
@@ -3614,9 +3629,13 @@ fn below_full(gauge: Gauge) -> bool {
     gauge.now < gauge.max
 }
 
-/// Adds `rate` to `gauge` up to what it holds, never taking any away.
-fn recharge(gauge: &mut Gauge, rate: f32) {
-    gauge.now = gauge.now.max((gauge.now + rate).min(gauge.max));
+/// Adds `rate` × the frame's `gain` to `gauge`, in doubles and narrowed
+/// as `_HandlePlayer` adds it ([`SpeedMult::add_times`]), up to what it
+/// holds, never taking any away.
+fn recharge(gauge: &mut Gauge, rate: f32, gain: SpeedMult) {
+    gauge.now = gauge
+        .now
+        .max(gain.add_times(gauge.now, rate).min(gauge.max));
 }
 
 #[cfg(test)]
@@ -3658,16 +3677,21 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod npc_gain;
     mod pd_parent;
     mod phase;
     mod pick_at_breakup;
+    mod placed_contact;
     mod planet_hits;
+    mod player_gain;
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;
     mod rock_blasts;
+    mod shot_gain;
     mod shot_slots;
     mod shot_visits;
+    mod spin_starts;
     mod stellar_guns;
     mod stellar_hazards;
     mod strike_terms;
@@ -4222,7 +4246,6 @@ mod tests {
         Shot {
             position: at,
             moved_from: Some(at - Vec2::new(15.0, 0.0)),
-            age: 1,
             ..Shot::launch(
                 WeaponSpec::new(&record),
                 by,
@@ -4231,6 +4254,7 @@ mod tests {
                 90.0,
             )
         }
+        .aged(1)
     }
 
     /// The events about `ships[1]` the collision passes raise as each of
@@ -5839,8 +5863,8 @@ mod tests {
     fn the_shots_in_flight_are_changed_in_place_through_shots_mut() {
         let mut combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), vec![]);
         assert_eq!(combat.shots_mut().len(), 1);
-        combat.shots_mut()[0].age = 9;
-        assert_eq!(combat.shots()[0].age, 9);
+        combat.shots_mut()[0].set_age(9);
+        assert_eq!(combat.shots()[0].age(), 9.0);
     }
 
     #[test]
@@ -6826,14 +6850,16 @@ mod tests {
             phase::fly_shots(&mut combat, &mut ships, &NovaDisable);
         }
         assert_eq!(combat.take_strikes(), [], "no lock yet");
-        combat.put_in_flight(Shot {
-            id: ShotId(99),
-            position: Vec2::new(5000.0, 0.0),
-            velocity: Vec2::new(10.0, 0.0),
-            age: 1,
-            moved_from: Some(Vec2::new(4990.0, 0.0)),
-            ..aimed(blaster())
-        });
+        combat.put_in_flight(
+            Shot {
+                id: ShotId(99),
+                position: Vec2::new(5000.0, 0.0),
+                velocity: Vec2::new(10.0, 0.0),
+                moved_from: Some(Vec2::new(4990.0, 0.0)),
+                ..aimed(blaster())
+            }
+            .aged(1),
+        );
         phase::test_hits(&mut combat, &mut ships, &NovaDisable);
         let hit = combat.take_strikes();
         assert_eq!(hit.len(), 1, "{hit:?}");
@@ -7446,9 +7472,9 @@ mod tests {
             velocity,
             position: at + velocity,
             moved_from: Some(at),
-            age: 1,
             ..Shot::launch(WeaponSpec::new(&record), firer, firer, &from, 0.0)
-        };
+        }
+        .aged(1);
         combat.put_in_flight(shot);
         shot.id
     }
@@ -7924,7 +7950,7 @@ mod tests {
         assert!((at - Vec2::new(30.0, 0.0)).length() < 1e-3, "{at:?}");
         for sub in &subs {
             assert_eq!(sub.moved_from, Some(at));
-            assert_eq!(sub.age, 1, "a move in the tick it is released");
+            assert_eq!(sub.age(), 1.0, "a move in the tick it is released");
             assert_eq!(sub.generation, 1);
             assert_eq!(sub.target, Some(C), "the shell's target");
             assert_eq!(sub.aimed_at, Some(C), "aimed at its own target");
@@ -8110,19 +8136,21 @@ mod tests {
         ];
         // A shot whose last move, its `age`th, took it from (x, y) 10
         // pixels on.
-        let flown = |record: WeaponRecord, x: f32, y: f32, age: u32| Shot {
-            position: Vec2::new(x + 10.0, y),
-            moved_from: Some(Vec2::new(x, y)),
-            velocity: Vec2::new(10.0, 0.0),
-            heading: 90.0,
-            age,
-            ..Shot::launch(
-                WeaponSpec::new(&record),
-                ShipRef::Player,
-                ShipRef::Player,
-                &ShipState::default(),
-                90.0,
-            )
+        let flown = |record: WeaponRecord, x: f32, y: f32, age: u32| {
+            Shot {
+                position: Vec2::new(x + 10.0, y),
+                moved_from: Some(Vec2::new(x, y)),
+                velocity: Vec2::new(10.0, 0.0),
+                heading: 90.0,
+                ..Shot::launch(
+                    WeaponSpec::new(&record),
+                    ShipRef::Player,
+                    ShipRef::Player,
+                    &ShipState::default(),
+                    90.0,
+                )
+            }
+            .aged(age)
         };
         let flak = WeaponRecord {
             count: 5,
@@ -8359,7 +8387,6 @@ mod tests {
         Shot {
             position: at,
             moved_from: Some(at - Vec2::new(10.0, 0.0)),
-            age: 1,
             ..Shot::launch(
                 WeaponSpec::new(&blaster()),
                 A,
@@ -8368,6 +8395,7 @@ mod tests {
                 90.0,
             )
         }
+        .aged(1)
     }
 
     #[test]
@@ -14160,11 +14188,13 @@ mod tests {
         let (shell, arsenal) = cluster(0);
         // A shot whose last move, its `age`th, ended at `at` from 10 to
         // the left, fired by A.
-        let flown = |record: WeaponRecord, at: Vec2, age: u32| Shot {
-            position: at,
-            moved_from: Some(at - Vec2::new(10.0, 0.0)),
-            age,
-            ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+        let flown = |record: WeaponRecord, at: Vec2, age: u32| {
+            Shot {
+                position: at,
+                moved_from: Some(at - Vec2::new(10.0, 0.0)),
+                ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+            }
+            .aged(age)
         };
         // One ends on B, and one inside the stellar, in the collision
         // passes; the shell's end of life comes after, in `_HandleShot`
@@ -14200,11 +14230,13 @@ mod tests {
     #[test]
     fn a_release_at_an_end_of_life_finds_the_asteroid_and_point_defence_ends_freed() {
         let (shell, arsenal) = cluster(0);
-        let flown = |record: WeaponRecord, at: Vec2, age: u32| Shot {
-            position: at,
-            moved_from: Some(at - Vec2::new(10.0, 0.0)),
-            age,
-            ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+        let flown = |record: WeaponRecord, at: Vec2, age: u32| {
+            Shot {
+                position: at,
+                moved_from: Some(at - Vec2::new(10.0, 0.0)),
+                ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 90.0)
+            }
+            .aged(age)
         };
         let spent_shell = flown(shell, Vec2::new(0.0, -3000.0), 3);
         // A shot spent on an asteroid; and a point-defence shot and the
@@ -14213,7 +14245,6 @@ mod tests {
         let defended = vec![
             Shot {
                 moved_from: Some(Vec2::new(0.0, 300.0)),
-                age: 1,
                 ..Shot::launch(
                     WeaponSpec::new(&pd_shot()),
                     A,
@@ -14224,10 +14255,10 @@ mod tests {
                     },
                     0.0,
                 )
-            },
+            }
+            .aged(1),
             Shot {
                 moved_from: Some(Vec2::new(3.0, 300.0)),
-                age: 1,
                 ..Shot::launch(
                     WeaponSpec::new(&still_missile()),
                     B,
@@ -14238,7 +14269,8 @@ mod tests {
                     },
                     0.0,
                 )
-            },
+            }
+            .aged(1),
         ];
         for (what, endings) in [
             ("on an asteroid", on_a_rock),
@@ -15008,9 +15040,9 @@ mod tests {
         Shot {
             position: at,
             moved_from: Some(at - Vec2::new(15.0, 0.0)),
-            age: 1,
             ..Shot::launch(WeaponSpec::new(&record), C, C, &ShipState::default(), 90.0)
         }
+        .aged(1)
     }
 
     /// The ships struck when, after a tick's close with `ships` where
@@ -15194,23 +15226,25 @@ mod tests {
             let mut ships = [defender];
             let mut combat = Combat::default();
             let from = Vec2::new(0.0, -40.0);
-            combat.put_in_flight(Shot {
-                target: Some(A),
-                aimed_at: Some(A),
-                position: Vec2::new(0.0, -10.0),
-                moved_from: Some(from),
-                age: 1,
-                ..Shot::launch(
-                    WeaponSpec::new(&fast),
-                    C,
-                    C,
-                    &ShipState {
-                        position: from,
-                        ..ShipState::default()
-                    },
-                    180.0,
-                )
-            });
+            combat.put_in_flight(
+                Shot {
+                    target: Some(A),
+                    aimed_at: Some(A),
+                    position: Vec2::new(0.0, -10.0),
+                    moved_from: Some(from),
+                    ..Shot::launch(
+                        WeaponSpec::new(&fast),
+                        C,
+                        C,
+                        &ShipState {
+                            position: from,
+                            ..ShipState::default()
+                        },
+                        180.0,
+                    )
+                }
+                .aged(1),
+            );
             phase::defend_npcs(&mut combat, &mut ships, &NovaDisable);
             phase::close_tick(&mut combat, &mut ships, &NovaDisable);
             let downed = combat
@@ -15246,13 +15280,13 @@ mod tests {
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2, "released in the hit pass");
         for sub in subs {
-            assert_eq!((sub.age, sub.moved_from), (0, None), "unflown");
+            assert_eq!((sub.age(), sub.moved_from), (0.0, None), "unflown");
         }
         fly_by_arsenal(&mut combat, &mut ships, &arsenal);
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2);
         for sub in subs {
-            assert_eq!(sub.age, 1, "and flown once");
+            assert_eq!(sub.age(), 1.0, "and flown once");
             assert_eq!(sub.moved_from, Some(Vec2::new(20.0, 0.0)));
         }
     }
@@ -15316,10 +15350,12 @@ mod tests {
 
     #[test]
     fn the_damage_aimed_at_a_ship_counts_no_spent_shot() {
-        let aimed_at_b = |age: u32| Shot {
-            aimed_at: Some(B),
-            age,
-            ..aimed(blaster())
+        let aimed_at_b = |age: u32| {
+            Shot {
+                aimed_at: Some(B),
+                ..aimed(blaster())
+            }
+            .aged(age)
         };
         let combat = Combat {
             shots: vec![aimed_at_b(12), aimed_at_b(13)],

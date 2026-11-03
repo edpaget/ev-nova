@@ -7,9 +7,12 @@
 //!   stellar is scaled by [`DISTANCE_SCALE`] on each axis (the `f32`
 //!   difference times the double 0.01 @0xdd098, back to `f32`), its square
 //!   is floored at [`MIN_DISTANCE_SQUARED`] (`maxss` against 30.0
-//!   @0xdd084), and `_Accel` pushes the velocity by `Gravity` × the speed
-//!   multiplier over that square along the bearing from the ship to the
-//!   stellar (`_CalcInterceptAngle(ship, stellar)`). The pull is constant
+//!   @0xdd084), and `_Accel` pushes the velocity by `Gravity` × the
+//!   frame's gain over that square along the bearing from the ship to the
+//!   stellar (`_CalcInterceptAngle(ship, stellar)`). `_HandleGravity`
+//!   hands the strength on as a float, (double)`Gravity` × `_gSpeedMult`
+//!   narrowed (@0x39c84-0x39c94), for every ship in slots 0-63, the
+//!   player's too. The pull is constant
 //!   within √30 × 100 ≈ 548 pixels and falls with the inverse square
 //!   beyond. `_Accel` caps nothing: the player's velocity is clamped to
 //!   its box on its next move, and an NPC's is not clamped, so gravity can
@@ -41,6 +44,7 @@ use crate::geometry::Vec2;
 #[cfg(doc)]
 use crate::rulebook::RuleKey;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::trig::{accel, intercept_angle};
 
 /// What each axis of a ship's offset from a stellar is scaled by before
@@ -63,20 +67,14 @@ pub const STELLAR_IMMUNE_HULL: u16 = 0x0020;
 /// over each of an outfit's four `ModType`s, `_ShipResistsGravity`).
 pub const GRAVITY_RESISTANCE: i16 = 41;
 
-/// The engine's speed multiplier, `_gSpeedMult` (*0x3b511c), which
-/// `_HandleGravity` multiplies each `Gravity` by: 1.0 at the engine's
-/// tick.
-pub const SPEED_MULT: f64 = 1.0;
-
 /// The velocity a stellar of `gravity` at `stellar` adds to a ship at
-/// `ship` this pass, under the speed multiplier `speed_mult`
+/// `ship` this pass, at the frame's `gain`, `_gSpeedMult`
 /// (`_ApplyGravity`, see the module docs). A negative `gravity` pushes the
 /// ship away; none adds nothing.
 #[must_use]
-pub fn pull(ship: Vec2, stellar: Vec2, gravity: i16, speed_mult: f64) -> Vec2 {
+pub fn pull(ship: Vec2, stellar: Vec2, gravity: i16, gain: SpeedMult) -> Vec2 {
     // `Gravity` × `_gSpeedMult` in doubles, passed on as a float.
-    #[allow(clippy::cast_possible_truncation)]
-    let magnitude = (f64::from(gravity) * speed_mult) as f32;
+    let magnitude = gain.times(f32::from(gravity));
     // Each axis's difference in floats, scaled in doubles, back to floats.
     #[allow(clippy::cast_possible_truncation)]
     let scaled = |from: f32, to: f32| (f64::from(from - to) * DISTANCE_SCALE) as f32;
@@ -173,7 +171,7 @@ mod tests {
     #[test]
     fn a_ship_1000_east_of_a_gravity_50_stellar_is_pulled_west_by_a_half() {
         let ship = Vec2::new(1000.0, 0.0);
-        let pulled = pull(ship, Vec2::ZERO, 50, SPEED_MULT);
+        let pulled = pull(ship, Vec2::ZERO, 50, SpeedMult::FULL);
         let expected = accel(intercept_angle(ship, Vec2::ZERO), 0.5);
         assert!(near(pulled, expected), "{pulled:?}, {expected:?}");
         assert!(pulled.x < -0.49 && pulled.y.abs() < 1e-6, "{pulled:?}");
@@ -182,59 +180,67 @@ mod tests {
     #[test]
     fn the_pull_points_from_the_ship_toward_the_stellar_on_either_axis() {
         let at = Vec2::new(300.0, -200.0);
-        let below = pull(at + Vec2::new(0.0, 2000.0), at, 40, SPEED_MULT);
+        let below = pull(at + Vec2::new(0.0, 2000.0), at, 40, SpeedMult::FULL);
         assert!(below.y < 0.0 && below.x.abs() < 1e-6, "up: {below:?}");
-        let left = pull(at + Vec2::new(-2000.0, 0.0), at, 40, SPEED_MULT);
+        let left = pull(at + Vec2::new(-2000.0, 0.0), at, 40, SpeedMult::FULL);
         assert!(left.x > 0.0 && left.y.abs() < 1e-6, "right: {left:?}");
     }
 
     #[test]
     fn halving_the_distance_quadruples_the_pull() {
-        let far = pull(Vec2::new(0.0, 2000.0), Vec2::ZERO, 30, SPEED_MULT);
-        let near_ = pull(Vec2::new(0.0, 1000.0), Vec2::ZERO, 30, SPEED_MULT);
+        let far = pull(Vec2::new(0.0, 2000.0), Vec2::ZERO, 30, SpeedMult::FULL);
+        let near_ = pull(Vec2::new(0.0, 1000.0), Vec2::ZERO, 30, SpeedMult::FULL);
         assert!((near_.length() - 4.0 * far.length()).abs() < 1e-6);
         assert!((far.length() - 30.0 / 400.0).abs() < 1e-6, "{far:?}");
     }
 
     #[test]
     fn within_548_pixels_the_pull_is_that_at_a_square_of_30() {
-        let at = |x: f32| pull(Vec2::new(x, 0.0), Vec2::ZERO, 60, SPEED_MULT);
+        let at = |x: f32| pull(Vec2::new(x, 0.0), Vec2::ZERO, 60, SpeedMult::FULL);
         assert_eq!(at(100.0).length(), at(500.0).length());
         assert!((at(500.0).length() - 2.0).abs() < 1e-6, "{:?}", at(500.0));
         assert!(at(560.0).length() < 2.0, "beyond, it falls");
         // On the diagonal too: (380, 380) squares to 28.88 once scaled.
-        let diagonal = pull(Vec2::new(380.0, 380.0), Vec2::ZERO, 60, SPEED_MULT);
+        let diagonal = pull(Vec2::new(380.0, 380.0), Vec2::ZERO, 60, SpeedMult::FULL);
         assert!((diagonal.length() - 2.0).abs() < 1e-5, "{diagonal:?}");
     }
 
     #[test]
     fn a_negative_gravity_pushes_away() {
-        let pushed = pull(Vec2::new(1000.0, 0.0), Vec2::ZERO, -50, SPEED_MULT);
+        let pushed = pull(Vec2::new(1000.0, 0.0), Vec2::ZERO, -50, SpeedMult::FULL);
         assert!(pushed.x > 0.49, "{pushed:?}");
     }
 
     #[test]
     fn no_gravity_adds_nothing() {
         assert_eq!(
-            pull(Vec2::new(1000.0, 7.0), Vec2::ZERO, 0, SPEED_MULT),
+            pull(Vec2::new(1000.0, 7.0), Vec2::ZERO, 0, SpeedMult::FULL),
             Vec2::ZERO
         );
     }
 
     #[test]
-    fn the_speed_multiplier_scales_the_pull() {
+    fn the_frames_gain_scales_the_pull() {
         let ship = Vec2::new(0.0, 3000.0);
-        let plain = pull(ship, Vec2::ZERO, 90, 1.0);
-        let doubled = pull(ship, Vec2::ZERO, 90, 2.0);
+        let plain = pull(ship, Vec2::ZERO, 90, SpeedMult::FULL);
+        let doubled = pull(ship, Vec2::ZERO, 90, SpeedMult::new(2.0));
         assert!(near(doubled, plain * 2.0), "{doubled:?}, {plain:?}");
+        let half = pull(ship, Vec2::ZERO, 90, SpeedMult::new(0.5));
+        assert!(near(half, plain * 0.5), "{half:?}, {plain:?}");
+        assert_eq!(pull(ship, Vec2::ZERO, 90, SpeedMult::ZERO), Vec2::ZERO);
     }
 
     #[test]
     fn the_offset_is_scaled_as_a_float_difference() {
         // 0.01 of the difference, not of each place: a ship and a stellar
         // far from the centre pull as two near it.
-        let a = pull(Vec2::new(11000.0, 0.0), Vec2::new(10000.0, 0.0), 50, 1.0);
-        let b = pull(Vec2::new(1000.0, 0.0), Vec2::ZERO, 50, 1.0);
+        let a = pull(
+            Vec2::new(11000.0, 0.0),
+            Vec2::new(10000.0, 0.0),
+            50,
+            SpeedMult::FULL,
+        );
+        let b = pull(Vec2::new(1000.0, 0.0), Vec2::ZERO, 50, SpeedMult::FULL);
         assert!(near(a, b), "{a:?}, {b:?}");
     }
 

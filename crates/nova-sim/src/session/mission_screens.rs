@@ -42,7 +42,8 @@ use crate::chance::{Chance, NeverFires};
 use crate::galaxy_map::MapMarks;
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
-    AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
+    AcceptRefusal, ActiveMission, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability,
+    offer_labels,
 };
 use crate::navigation::NavMode;
 use crate::pilot::Pilot;
@@ -266,6 +267,41 @@ pub struct MissionInfo {
     pub rows: Vec<InfoRow>,
     /// Today, as the medium date.
     pub today: String,
+    /// What each row's place picks, when it isn't `rows` itself: after an
+    /// abort under the engine reading of `mission_info_rebuild`
+    /// ([`Session::mission_info_after_abort`]), every active slot in slot
+    /// order, hidden ones included, so row *i* picks the *i*th of these
+    /// and a step can pick past the rows. `None` picks by `rows`.
+    pub table: Option<Vec<InfoRow>>,
+}
+
+impl MissionInfo {
+    /// The screen listing `rows` on `today`, each row picking its own
+    /// mission.
+    #[must_use]
+    pub fn shown(rows: Vec<InfoRow>, today: impl Into<String>) -> Self {
+        Self {
+            rows,
+            today: today.into(),
+            table: None,
+        }
+    }
+
+    /// This screen with each row's place picking from `table` instead
+    /// ([`MissionInfo::table`]).
+    #[must_use]
+    pub fn with_table(self, table: Vec<InfoRow>) -> Self {
+        Self {
+            table: Some(table),
+            ..self
+        }
+    }
+
+    /// What each place picks: the table, if any, otherwise the rows.
+    #[must_use]
+    pub fn picks(&self) -> &[InfoRow] {
+        self.table.as_deref().unwrap_or(&self.rows)
+    }
 }
 
 /// What a press of the in-flight mission info key does
@@ -315,6 +351,22 @@ impl Session {
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
     pub(crate) fn press_mission_info(&mut self) -> MissionInfoPress {
+        self.reach_mission_info(false)
+    }
+
+    /// The mission info key read on the pass a jump collapsed under the
+    /// white: as [`Session::press_mission_info`], but what would open
+    /// `_DoMissionInfoDialog` is refused by its `_screenFaded` guard
+    /// (@0x9e1ac to @0x9e796), at once, so the gain's zero holds no frame.
+    /// The no-missions path never reaches the dialog, so no guard touches
+    /// its beep and #354 (@0x7052e).
+    pub(crate) fn press_faded_mission_info(&mut self) -> MissionInfoPress {
+        self.reach_mission_info(true)
+    }
+
+    /// [`Session::press_mission_info`], the dialog's guard refusing it
+    /// when the screen is `faded`.
+    fn reach_mission_info(&mut self, faded: bool) -> MissionInfoPress {
         if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
@@ -325,18 +377,24 @@ impl Session {
                 .say(&mut self.out, crate::SimMessage::NoActiveMissions);
             return MissionInfoPress::NoActiveMissions;
         }
-        MissionInfoPress::Opens(info)
-    }
-
-    /// The mission info key read on the pass a jump collapsed under the
-    /// white: as [`Session::press_mission_info`], but what would open
-    /// `_DoMissionInfoDialog` is refused by its `_screenFaded` guard
-    /// (@0x9e1ac to @0x9e796). The no-missions path never reaches the
-    /// dialog, so no guard touches its beep and #354 (@0x7052e).
-    pub(crate) fn press_faded_mission_info(&mut self) -> MissionInfoPress {
-        match self.press_mission_info() {
-            MissionInfoPress::Opens(_) => MissionInfoPress::Faded,
-            press => press,
+        // In flight, `_HandlePlayer` zeroes the gain once
+        // `_DoMissionInfoDialog` returns, whatever its guard did
+        // (@0x704e3-0x704f3; see the `time_adjustment` module): after the
+        // dialog, at its close (`Session::close_info_dialog`), held, so it
+        // follows a switch-in under the dialog; after the guard's refusal
+        // here, not held. The no-missions path skips both (@0x704ba). The
+        // port's is `_DoPortDialog`'s, which writes none.
+        if self.mode.landed().is_none() {
+            if faded {
+                self.zero_speed_mult_unheld();
+            } else {
+                self.owe_info_zero();
+            }
+        }
+        if faded {
+            MissionInfoPress::Faded
+        } else {
+            MissionInfoPress::Opens(info)
         }
     }
 
@@ -574,27 +632,51 @@ impl Session {
             .pilot
             .missions
             .iter()
-            .filter_map(|(slot, active)| {
-                let record = self.statics.lifecycle_record(active.mission);
-                if record.flags & HIDDEN != 0 {
-                    return None;
-                }
-                let texts = self.mission_texts(active.mission);
-                let name = texts.map_or("", |texts| texts.name.as_str());
-                let (text, loaded) =
-                    self.peek_desc(texts.and_then(|texts| texts.quick_brief.as_deref()));
-                Some(InfoRow {
-                    slot,
-                    name: self.mission_text(slot, name),
-                    failed: active.failed.is_some(),
-                    text: self.mission_text_reading(slot, &text, loaded),
-                    abortable: record.can_abort != 0,
-                })
-            })
+            .filter(|(_, active)| self.statics.lifecycle_record(active.mission).flags & HIDDEN == 0)
+            .map(|(slot, active)| self.info_row(slot, active))
             .collect();
-        MissionInfo {
-            rows,
-            today: self.med_date_text(),
+        MissionInfo::shown(rows, self.med_date_text())
+    }
+
+    /// The mission info screen after an abort, by the
+    /// `mission_info_rebuild` rule ([`RuleKey::MissionInfoRebuild`]). By
+    /// the other reading, the default, it is [`Session::mission_info`]:
+    /// each row picks the mission it names. By the engine,
+    /// `_DoMissionInfoDialog` rebuilds the rows from the shown missions
+    /// (`_SetupMissionInfoList` @0x9e628) but refills the table behind them
+    /// with every active slot, hidden ones included (@0x9e69f-0x9e6d8), so
+    /// the info carries that table ([`MissionInfo::table`]), each entry
+    /// filled as a row is; the screen then stays open while any mission
+    /// is active (@0x9e5f9-0x9e60a), hidden ones counted.
+    #[must_use]
+    pub fn mission_info_after_abort(&self) -> MissionInfo {
+        let info = self.mission_info();
+        match self.setup.rules.source_for(RuleKey::MissionInfoRebuild) {
+            RuleSource::Bible => info,
+            RuleSource::Engine => {
+                let table = self
+                    .pilot
+                    .missions
+                    .iter()
+                    .map(|(slot, active)| self.info_row(slot, active))
+                    .collect();
+                info.with_table(table)
+            }
+        }
+    }
+
+    /// The mission info screen's row of `active`, in `slot`.
+    fn info_row(&self, slot: u8, active: &ActiveMission) -> InfoRow {
+        let record = self.statics.lifecycle_record(active.mission);
+        let texts = self.mission_texts(active.mission);
+        let name = texts.map_or("", |texts| texts.name.as_str());
+        let (text, loaded) = self.peek_desc(texts.and_then(|texts| texts.quick_brief.as_deref()));
+        InfoRow {
+            slot,
+            name: self.mission_text(slot, name),
+            failed: active.failed.is_some(),
+            text: self.mission_text_reading(slot, &text, loaded),
+            abortable: record.can_abort != 0,
         }
     }
 
@@ -3162,8 +3244,8 @@ pub(super) mod tests {
         run(&mut session, "F132");
         assert_eq!(
             session.mission_info(),
-            MissionInfo {
-                rows: vec![
+            MissionInfo::shown(
+                vec![
                     info_row(
                         0,
                         "Run to Mars",
@@ -3173,10 +3255,92 @@ pub(super) mod tests {
                     ),
                     info_row(2, "Stay", true, "", false),
                 ],
-                today: session.med_date_text(),
-            },
+                session.med_date_text()
+            ),
             "131 has Flags 0x0400; 132 failed by F, and cannot be aborted"
         );
+    }
+
+    /// A session of [`screens`] docked by `rules` with missions accepted
+    /// into slots 0 on: 131 (`Flags` 0x0400) first when `hidden`, then
+    /// 130 and 132 when `shown`.
+    fn after_abort(rules: Rulebook, hidden: bool, shown: bool) -> Session {
+        let catalog = screens(
+            vec![
+                to_mars(130),
+                MissionRecord {
+                    flags: HIDDEN,
+                    can_abort: 0,
+                    ..to_mars(131)
+                },
+                to_mars(132),
+            ],
+            vec![
+                MissionTexts::named(MissionId(130), "Run"),
+                MissionTexts::named(MissionId(131), "Hidden"),
+                MissionTexts::named(MissionId(132), "Walk"),
+            ],
+        );
+        let mut session = docked(&catalog).with_rules(rules);
+        let ids = [(131, hidden), (130, shown), (132, shown)];
+        for (id, _) in ids.iter().filter(|(_, take)| *take) {
+            session
+                .accept_mission(MissionId(*id), &mut NeverFires)
+                .expect("accepted");
+        }
+        session
+    }
+
+    fn engine_rebuild() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MissionInfoRebuild, RuleSource::Engine)
+    }
+
+    #[test]
+    fn after_an_abort_the_engine_reading_selects_by_every_active_slot() {
+        let session = after_abort(engine_rebuild(), true, true);
+        let info = session.mission_info_after_abort();
+        let slots = |rows: &[InfoRow]| rows.iter().map(|row| row.slot).collect::<Vec<_>>();
+        assert_eq!(slots(&info.rows), [1, 2], "the shown rows (@0x9e628)");
+        let table = info.table.as_deref().expect("a table");
+        assert_eq!(
+            slots(table),
+            [0, 1, 2],
+            "every active slot (@0x9e69f-0x9e6d8)"
+        );
+        assert_eq!(
+            table[0],
+            info_row(0, "Hidden", false, "", false),
+            "filled as a row"
+        );
+        assert_eq!(info.picks(), table);
+        assert_eq!(info.rows, session.mission_info().rows);
+        assert_eq!(session.mission_info().table, None, "the opening has none");
+    }
+
+    #[test]
+    fn after_an_abort_the_default_reading_lists_shown_rows_only() {
+        let session = after_abort(Rulebook::default(), true, true);
+        let info = session.mission_info_after_abort();
+        assert_eq!(info, session.mission_info());
+        assert_eq!(info.table, None);
+        assert_eq!(info.picks(), info.rows.as_slice());
+    }
+
+    #[test]
+    fn with_only_hidden_missions_left_the_engine_reading_keeps_a_table() {
+        let session = after_abort(engine_rebuild(), true, false);
+        let info = session.mission_info_after_abort();
+        assert_eq!(info.rows, []);
+        assert_eq!(
+            info.table.as_deref().map(<[InfoRow]>::len),
+            Some(1),
+            "the screen stays open on it (@0x9e5f9-0x9e60a)"
+        );
+        let none = after_abort(engine_rebuild(), false, false).mission_info_after_abort();
+        assert_eq!(none.table, Some(Vec::new()), "nothing active: it closes");
+        let default = after_abort(Rulebook::default(), true, false).mission_info_after_abort();
+        assert_eq!(default.table, None);
+        assert!(default.picks().is_empty(), "closes by default");
     }
 
     #[test]

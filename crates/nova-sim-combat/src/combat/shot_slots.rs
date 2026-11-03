@@ -35,7 +35,7 @@
 //! timer (+0x1c; no store to it @0x3e550-0x3f143), and only
 //! `_HandleShot`'s spin step does (@0x35884-0x358c4), so a new shot
 //! starts on the timer the slot's last spinning shot left
-//! ([`ShotSlots::spin`], [`ShotSlots::spin_pass`]; see
+//! ([`ShotSlots::spin`], [`ShotSlots::keep_spin`]; see
 //! [`spin_timer`](super::spin_timer)), across systems and pilots too. A
 //! slot never used holds 0, the zeroed table's.
 //!
@@ -51,9 +51,10 @@ use super::shot_layer::ShotLayer;
 use super::spin_timer;
 use super::{Combat, MAX_SHOTS};
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 
 /// The original's shot slots (see the module docs).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShotSlots {
     /// The slots whose shot has ended but which `_HandleShot` has not
     /// freed yet.
@@ -67,9 +68,9 @@ pub struct ShotSlots {
     /// The miss roll each slot's last ship-fired shot left, where it left
     /// one.
     rolls: BTreeMap<usize, u32>,
-    /// Each slot's spin timer (+0x1c), in passes, where a spinning shot
+    /// Each slot's spin timer (+0x1c), where a spinning shot
     /// has run it.
-    spins: BTreeMap<usize, u32>,
+    spins: BTreeMap<usize, f32>,
 }
 
 impl ShotSlots {
@@ -168,18 +169,26 @@ impl ShotSlots {
         self.rolls.get(&slot).copied()
     }
 
-    /// The spin timer `slot` holds, in passes, which a shot put in it
-    /// starts on: 0 for a slot never used.
+    /// The spin timer `slot` holds, which a shot put in it starts on: 0
+    /// for a slot never used.
     #[must_use]
-    pub fn spin(&self, slot: usize) -> u32 {
-        self.spins.get(&slot).copied().unwrap_or(0)
+    pub fn spin(&self, slot: usize) -> f32 {
+        self.spins.get(&slot).copied().unwrap_or(0.0)
     }
 
-    /// Runs `slot`'s spin timer a pass, as a live visit of a spinning shot
-    /// of `BeamWidth` `beam_width` does ([`spin_timer::pass`]).
-    pub fn spin_pass(&mut self, slot: usize, beam_width: i16) {
-        let (timer, _) = spin_timer::pass(self.spin(slot), beam_width);
+    /// Keeps `timer` as `slot`'s spin timer, the timer its spinning shot's
+    /// visit left (@0x35884-0x358c4, the slot's +0x1c).
+    pub fn keep_spin(&mut self, slot: usize, timer: f32) {
         self.spins.insert(slot, timer);
+    }
+
+    /// Runs `slot`'s spin timer one visit at full gain, as a live visit of
+    /// a spinning shot of `BeamWidth` `beam_width` does
+    /// ([`spin_timer::pass`], [`ShotSlots::keep_spin`]): a builder, the
+    /// state a slot's earlier shots leave it in.
+    pub fn spin_pass(&mut self, slot: usize, beam_width: i16) {
+        let (timer, _) = spin_timer::pass(self.spin(slot), beam_width, SpeedMult::FULL);
+        self.keep_spin(slot, timer);
     }
 
     /// Puts `slot`'s spin timer back to 0.
@@ -334,6 +343,7 @@ impl Combat {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -448,16 +458,28 @@ mod tests {
     #[test]
     fn a_slots_spin_timer_runs_on_its_spinning_shots_passes() {
         let mut slots = ShotSlots::new();
-        assert_eq!(slots.spin(0), 0, "never used");
+        assert_eq!(slots.spin(0), 0.0, "never used");
         slots.spin_pass(0, 3);
         slots.spin_pass(0, 3);
-        assert_eq!(slots.spin(0), 2);
-        assert_eq!(slots.spin(1), 0, "its own");
+        assert_eq!(slots.spin(0), 2.0);
+        assert_eq!(slots.spin(1), 0.0, "its own");
         slots.spin_pass(0, 3);
-        assert_eq!(slots.spin(0), 0, "stepped at 3");
+        assert_eq!(slots.spin(0), 0.0, "stepped at 3");
         slots.spin_pass(0, 3);
         slots.reset_spin(0);
-        assert_eq!(slots.spin(0), 0, "reset");
+        assert_eq!(slots.spin(0), 0.0, "reset");
+    }
+
+    #[test]
+    fn a_shot_seated_in_a_slot_whose_last_spinning_shot_left_half_a_frame_starts_on_it() {
+        let mut combat = Combat::default();
+        combat.slots.keep_spin(0, 0.5);
+        let spec = super::super::weapon::WeaponSpec::new(&nova_sim_catalog::fixture::weapon(128));
+        let ship = super::super::ShipRef::Player;
+        let mut shot = Shot::launch(spec, ship, ship, &crate::flight::ShipState::default(), 0.0);
+        assert_eq!(combat.seat(&mut shot), Some(0));
+        assert_eq!(shot.spin_timer, 0.5);
+        assert_eq!(combat.slots.spin(0), 0.5);
     }
 
     #[test]
@@ -466,10 +488,10 @@ mod tests {
         slots.spin_pass(4, 9);
         slots.hold(4);
         slots.free(4);
-        assert_eq!(slots.spin(4), 1);
+        assert_eq!(slots.spin(4), 1.0);
         slots.hold(4);
         slots.clear();
-        assert_eq!(slots.spin(4), 1);
+        assert_eq!(slots.spin(4), 1.0);
     }
 
     #[test]

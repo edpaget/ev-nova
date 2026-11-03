@@ -176,8 +176,9 @@ impl Session {
     /// fight by `rules`, the NPCs answering its hits as `behaviour` says,
     /// drawing on `chance` (see the module docs), in `_DoPlayGameWork(0)`'s
     /// order: `_HandlePlayer`'s fight before its move
-    /// ([`Session::player_fires`]), then its move; the collision passes,
-    /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
+    /// ([`Session::player_fires`]), then its move; its display, its frame
+    /// stepped again, then the scoop; the collision passes, their hits
+    /// answered; no AI, so no NPC point defence; `_HandleShot`,
     /// its hits answered; the ship loop's flights and fire; the
     /// asteroids, with no spawn (see the `asteroids` module), and the
     /// reinforcement clock; then `_HandleBeams` and what the pass leaves;
@@ -214,7 +215,7 @@ impl Session {
             return;
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
-        self.pass_after_move(&start, pass, None, behaviour, rules, chance);
+        self.pass_after_move(&start, pass, None, None, behaviour, rules, chance);
     }
 }
 
@@ -929,7 +930,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
         // @0x686a4), so the hit is a stray one: provoked past forgiving
@@ -947,7 +948,7 @@ mod tests {
         }
         assert_eq!(
             session.npcs()[0].mode,
-            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 19 }
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 19.0 }
         );
     }
 

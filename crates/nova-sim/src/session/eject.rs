@@ -342,12 +342,15 @@ impl Session {
         self.out.save_due = save_due;
     }
 
-    /// The escape pod's flight, a tick of it (`_HandlePlayer`
-    /// @0x68d1d-0x68ddd): it thrusts along its heading at its full accel,
-    /// gaining along each axis only while short of its top speed's share
-    /// there (`_AdjustedAccel` @0x68d8d, [`launch_velocity`]: so a
-    /// velocity above the top speed, as the eject's push may leave, is not
-    /// cut back), moves by its velocity, and counts the pod down a tick.
+    /// The escape pod's flight, a frame of it (`_HandlePlayer`
+    /// @0x68d1d-0x68ddd): it thrusts along its heading at its full accel ×
+    /// the frame's gain (narrowed to a float, @0x68d6e-0x68d7e), gaining
+    /// along each axis only while short of its top speed's share there
+    /// (`_AdjustedAccel` @0x68d8d, [`launch_velocity`]: so a velocity
+    /// above the top speed, as the eject's push may leave, is not cut
+    /// back), moves by its velocity × the gain (@0x68d9c-0x68dd8,
+    /// [`moved`](crate::flight::moved)), and counts the pod down a whole
+    /// frame (`decl` @0x68dc1), unscaled.
     /// It never turns and its glow stays out: the thrust key's handler,
     /// like every other, comes after the pod's frames return (@0x68ddd),
     /// and so does the fuel's regeneration. On the tick the countdown
@@ -363,10 +366,11 @@ impl Session {
             .flying_handling(&self.pilot, &self.setup, self.mode.jump());
         // Whole degrees (`cvttss2si` @0x68d84).
         let heading = self.ship.player.heading.trunc();
+        let gain = self.speed_mult();
         let state = &mut self.ship.player;
-        state.velocity =
-            launch_velocity(state.velocity, heading, handling.accel, handling.max_speed);
-        state.position = state.position + state.velocity;
+        let push = gain.times(handling.accel);
+        state.velocity = launch_velocity(state.velocity, heading, push, handling.max_speed);
+        state.position = crate::flight::moved(state.position, state.velocity, gain);
         let left = left.saturating_sub(1);
         self.pod = Some(left);
         if left == 0 {
@@ -551,7 +555,7 @@ impl PlayerShip {
             afterburner: false,
             voice: None,
             pursuit: Pursuit::default(),
-            ai_wait: 0,
+            ai_wait: 0.0,
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
@@ -2583,5 +2587,32 @@ mod tests {
         session.eject_check(&mut NeverFires);
         assert!(!in_the_pod(&session));
         assert_eq!(session.ship.condition, Condition::Intact);
+    }
+
+    #[test]
+    fn at_half_gain_the_pod_thrusts_and_moves_half_a_frame_and_still_counts_down_a_whole_one() {
+        let catalog = ejecting(100);
+        let mut session = in_a_pod(&catalog, 90.0);
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
+        let half = crate::SpeedMult::new(0.5);
+        session.at_gain(half);
+        let before = session.ship.player;
+        let left = session.pod.expect("in the pod");
+        crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+        let velocity = launch_velocity(
+            before.velocity,
+            90.0,
+            half.times(handling.accel),
+            handling.max_speed,
+        );
+        assert_eq!(session.ship.player.velocity, velocity);
+        assert_eq!(
+            session.ship.player.position,
+            crate::flight::moved(before.position, velocity, half)
+        );
+        assert_eq!(session.pod, Some(left - 1), "the countdown is unscaled");
     }
 }

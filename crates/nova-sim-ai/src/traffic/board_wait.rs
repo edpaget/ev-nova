@@ -66,11 +66,12 @@ use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
 use crate::rulebook::RuleSource;
+use crate::traffic::ai_wait;
 use crate::traffic::npc::Npc;
 
 /// The ticks a pirate waits while another ship boards its victim (+0x4c
 /// = 120.0, 0x42f00000 @0x8c71c).
-pub const BOARD_WAIT: u32 = 120;
+pub const BOARD_WAIT: f32 = 120.0;
 
 /// The wait loop over `decisions`, one for each of `npcs` in order (see
 /// the module docs): each pirate whose decision waits on a boarded ship
@@ -160,11 +161,11 @@ pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
 }
 
 /// The end of each count wait among `npcs` whose think was `due` this
-/// tick: at none of its AI wait left, goal 0 (`_HighLevelAIHandler`
+/// tick: once its AI wait no longer runs (+0x4c > 0.0 @0x8d474), goal 0 (`_HighLevelAIHandler`
 /// @0x8d497-0x8d4a3), [`Goal::Idle`].
 pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
     for (npc, _) in npcs.iter_mut().zip(due).filter(|(_, due)| **due) {
-        if npc.goal == Goal::CountWait && npc.ai_wait == 0 {
+        if npc.goal == Goal::CountWait && !ai_wait::running(npc.ai_wait) {
             npc.goal = Goal::Idle;
         }
     }
@@ -273,7 +274,7 @@ mod tests {
                 "berth {high} reads the lower's new goal 0x16"
             );
         }
-        assert_eq!(BOARD_WAIT, 120);
+        assert_eq!(BOARD_WAIT, 120.0);
     }
 
     #[test]
@@ -367,7 +368,7 @@ mod tests {
             ship: n(9),
             sub: crate::traffic::plunder_dock::DockSub::Dock,
         });
-        docked.ai_wait = 50;
+        docked.ai_wait = 50.0;
         let npcs = [ship(1, 1, Goal::Idle), docked, victim()];
         assert_eq!(
             resolved(&npcs, vec![Some(waiting_on(n(9))), None, None])[0],
@@ -468,6 +469,18 @@ mod tests {
     }
 
     #[test]
+    fn a_count_wait_lapses_once_its_float_wait_no_longer_runs() {
+        let mut out = waiting(1, 0);
+        out.ai_wait = -0.25;
+        let mut running = waiting(2, 0);
+        running.ai_wait = 0.25;
+        let mut npcs = vec![out, running];
+        lapse(&mut npcs, &[true, true]);
+        let goals: Vec<Goal> = npcs.iter().map(|npc| npc.goal).collect();
+        assert_eq!(goals, [Goal::Idle, Goal::CountWait]);
+    }
+
+    #[test]
     fn a_count_wait_lapses_at_none_left_on_a_think() {
         let mut npcs = vec![waiting(1, 0), waiting(2, 0), waiting(3, 1)];
         npcs.push(ship(4, 4, Goal::Hold));
@@ -488,7 +501,7 @@ mod tests {
         let mut kept = waiting(2, 7);
         kept.provoked = 5.0;
         enter(&mut kept, Goal::CountWait, RuleSource::Engine);
-        assert_eq!(kept.ai_wait, 7, "its think keeps goal 0x16");
+        assert_eq!(kept.ai_wait, 7.0, "its think keeps goal 0x16");
         assert_eq!(kept.provoked, 5.0, "@0x8c713 runs only on the way in");
         let mut turned = waiting(3, 7);
         enter(
@@ -496,11 +509,11 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             RuleSource::Engine,
         );
-        assert_eq!(turned.ai_wait, 7, "a new goal writes no +0x4c");
+        assert_eq!(turned.ai_wait, 7.0, "a new goal writes no +0x4c");
         let mut held = ship(4, 4, Goal::Hold);
-        held.ai_wait = 9;
+        held.ai_wait = 9.0;
         enter(&mut held, Goal::Idle, RuleSource::Engine);
-        assert_eq!(held.ai_wait, 9);
+        assert_eq!(held.ai_wait, 9.0);
     }
 
     /// A pirate stand-in: it keeps a count wait, waits on NPC 9 while it
@@ -580,10 +593,10 @@ mod tests {
         );
         assert_eq!(
             traffic.npcs()[1].ai_wait,
-            BOARD_WAIT - 1,
+            BOARD_WAIT - 1.0,
             "its tick counted down as it flew"
         );
-        assert_eq!(traffic.npcs()[0].ai_wait, 0, "the attacker waits none");
+        assert_eq!(traffic.npcs()[0].ai_wait, 0.0, "the attacker waits none");
         assert_eq!(traffic.npcs()[1].target, None);
         assert_eq!(
             crate::traffic::fixture::calls_on_line(&traffic.take_on_line()),
@@ -599,7 +612,7 @@ mod tests {
         let mut traffic = traffic_of(vec![kept]);
         tick(&mut traffic, &Waiter);
         let npc = &traffic.npcs()[0];
-        assert_eq!((npc.goal, npc.ai_wait), (Goal::CountWait, 49));
+        assert_eq!((npc.goal, npc.ai_wait), (Goal::CountWait, 49.0));
         assert_eq!(npc.provoked, 5.0, "no second zero (@0x8c713)");
     }
 
@@ -627,20 +640,25 @@ mod tests {
         tick(&mut traffic, &Waiter);
         let waiting = &traffic.npcs()[0];
         assert_eq!(waiting.goal, Goal::CountWait);
-        assert_eq!(waiting.ai_wait, BOARD_WAIT - 1);
+        assert_eq!(waiting.ai_wait, BOARD_WAIT - 1.0);
         assert_eq!(waiting.pursuit, Pursuit::default());
     }
 
     #[test]
     fn a_count_wait_holds_120_ticks_and_the_pirate_decides_afresh_on_the_next() {
         // The tick that set it has counted one off.
-        let mut traffic = traffic_of(vec![waiting(1, BOARD_WAIT - 1)]);
-        for tick_after in 1..BOARD_WAIT {
+        let mut traffic = traffic_of(vec![waiting(
+            1,
+            crate::traffic::ai_wait::frames(BOARD_WAIT) - 1,
+        )]);
+        for tick_after in
+            (1..crate::traffic::ai_wait::frames(BOARD_WAIT)).map(crate::traffic::ai_wait::ticks)
+        {
             tick(&mut traffic, &Waiter);
             let npc = &traffic.npcs()[0];
             assert_eq!(
                 (npc.goal, npc.ai_wait),
-                (Goal::CountWait, BOARD_WAIT - 1 - tick_after),
+                (Goal::CountWait, BOARD_WAIT - 1.0 - tick_after),
                 "tick {tick_after} after"
             );
         }
@@ -659,7 +677,7 @@ mod tests {
         let mut traffic = traffic_of(vec![waiting(1, 1)]);
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         let npc = &traffic.npcs()[0];
-        assert_eq!((npc.goal, npc.ai_wait), (Goal::CountWait, 0));
+        assert_eq!((npc.goal, npc.ai_wait), (Goal::CountWait, 0.0));
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(
             traffic.npcs()[0].goal,
