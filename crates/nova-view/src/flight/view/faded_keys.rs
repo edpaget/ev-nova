@@ -55,7 +55,15 @@
 //! **The latches.** With its key down, a failed gate (a jump, or the
 //! flight not taking the command) clears the latch; a passing gate with
 //! the latch clear acts once and sets it; the key up clears it. A press
-//! sets it. Dialog keys stay press-only otherwise, by the user's decision:
+//! sets it. L's latch, `_dockTryFlag`, is set only by a dock request
+//! (@0x6a953): a press that found nothing to land on, or that the flight
+//! refused before its pick, leaves it clear, so L held reads again on
+//! every pass ([`FlightView::press_land`]). It is no `_SetAllKeyCmdFlags`
+//! latch, so L is held across every close (the `map_wait` module's
+//! `OWN_LATCH_KEYS`), and the step carries it as the dock approach's
+//! hold ([`StepInput::dock_try`](nova_sim::flight_frame::StepInput::dock_try)).
+//! I's is, and a site sets it ([`FlightView::set_every_latch`]). A pass in
+//! the pod or dead reaches neither block, so neither latch clears there. Dialog keys stay press-only otherwise, by the user's decision:
 //! M, P and Y don't act on being held. A key let go of as a dialog or a
 //! refusal takes the latched keys is held no more until it goes down
 //! afresh: ours has no live read to see it still down, so an OS repeat
@@ -95,6 +103,8 @@
 
 #[cfg(doc)]
 use nova_sim::flight_frame::{FlightCommand, FlightFrame, StepRun};
+
+use nova_sim::Takes;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
@@ -142,6 +152,17 @@ impl FadedKeys {
         self.kept.clear();
     }
 
+    /// Sets I's latch, as `_SetAllKeyCmdFlags` does (0xdee00); L's is
+    /// not among its latches.
+    pub(super) fn set_mission_latch(&mut self) {
+        self.mission_latch = true;
+    }
+
+    /// Whether L's latch is set.
+    pub(super) fn land_latched(&self) -> bool {
+        self.land_latch
+    }
+
     /// `key`'s latch, L's or else I's.
     fn latch_mut(&mut self, key: Key) -> &mut bool {
         if key == LAND_KEY {
@@ -182,16 +203,20 @@ impl<
 
     /// Each of L and I down with its latch clear, which a pass reads
     /// besides the presses kept; when `clearing`, each latch cleared with
-    /// its key up or its gate shut.
+    /// its key up or its gate shut (@0x6a95d, @0x705af). A pass in the pod
+    /// or dead returns before either block (@0x68ddd, @0x68853), so it
+    /// clears neither: L held from before an eject still waits on its
+    /// latch after the rescue.
     fn waiting_keys(&mut self, clearing: bool) -> Vec<Key> {
+        let reached = self.frame.fate.row().input != Takes::Nothing;
         [LAND_KEY, MISSION_INFO_KEY]
             .into_iter()
             .filter(|&key| {
-                let down = self.held.contains(&key);
+                let down = self.reads_down(key);
                 let taken = self.press_taken(Some(key), false).is_some();
                 let latch = self.faded_keys.latch_mut(key);
                 let waiting = down && !*latch;
-                if clearing && !(down && taken) {
+                if clearing && reached && !(down && taken) {
                     *latch = false;
                 }
                 waiting
@@ -199,11 +224,16 @@ impl<
             .collect()
     }
 
-    /// A press of L read: its latch set, and the land key pressed. It is
+    /// A press of L read: the land key pressed, and its latch set only if
+    /// the press made a dock request (@0x6a938-0x6a953): not when the
+    /// flight refused it before its pick or the pick found nothing
+    /// ([`FlightView::land`]'s answer), so L held with nothing to land
+    /// reads again on every pass, silently, as the original's does. It is
     /// the keyboard's and the polls' alike.
     pub(super) fn press_land(&mut self) {
-        self.faded_keys.land_latch = true;
-        self.land();
+        if self.land() {
+            self.faded_keys.land_latch = true;
+        }
     }
 
     /// A press of I read: its latch set (@0x7047a), and the mission info
@@ -234,10 +264,17 @@ impl<
             return false;
         }
         self.read_keys(&reads, false);
+        self.opened_something()
+    }
+
+    /// Whether a key read opened something that takes flight's input: its
+    /// map, a dialog for the router, a landing or a movie.
+    pub(super) fn opened_something(&self) -> bool {
         self.map_open
             || self.pending_player_info
             || self.pending_mission_info.is_some()
             || self.hail_opened()
+            || self.pending_boarding
             || self.pending_landing.is_some()
             || self.playing()
     }

@@ -24,9 +24,37 @@ fn the_credits_message_says_no_amount() {
 }
 
 #[test]
+fn the_ammunition_message_words_its_count_and_names_the_rounds() {
+    // #115, `_StrcatOrdinalNumber`, `LCName` at 1 or less else
+    // `LCPlural`, #108 (`_DoPlunderDialog` @0x93ded-0x93ed8).
+    let ammo = |count| Taken::Ammo {
+        outfit: OutfitId(310),
+        count,
+    };
+    let message = |count| plunder_message(ammo(count), None, Some(("rocket", "rockets")));
+    assert_eq!(
+        message(1).as_deref(),
+        Some("You salvaged one rocket from this ship.")
+    );
+    assert_eq!(
+        message(7).as_deref(),
+        Some("You salvaged seven rockets from this ship.")
+    );
+    assert_eq!(
+        message(12).as_deref(),
+        Some("You salvaged 12 rockets from this ship.")
+    );
+    assert_eq!(
+        plunder_message(ammo(7), None, None),
+        None,
+        "rounds no outfit names"
+    );
+}
+
+#[test]
 fn the_plunder_messages_are_the_originals() {
-    let food = Some("Food");
-    let message = |taken| plunder_message(taken, food, Some("Rockets"));
+    let food = Some("food");
+    let message = |taken| plunder_message(taken, food, Some(("rocket", "rockets")));
     let cargo = |stored| Taken::Cargo {
         good: Good::Commodity(0),
         stored,
@@ -34,15 +62,16 @@ fn the_plunder_messages_are_the_originals() {
     assert_eq!(message(cargo(0)).as_deref(), Some(NO_CARGO_STORED));
     assert_eq!(
         message(cargo(1)).as_deref(),
-        Some("You salvaged 1 ton of Food from this ship.")
+        Some("You salvaged 1 ton of food from this ship.")
     );
     assert_eq!(
         message(cargo(12)).as_deref(),
-        Some("You salvaged 12 tons of Food from this ship.")
+        Some("You salvaged 12 tons of food from this ship."),
+        "the tons in digits (`NumToString` @0x9385c)"
     );
     assert_eq!(
-        plunder_message(cargo(3), None, None).as_deref(),
-        Some("You salvaged 3 tons of cargo from this ship."),
+        plunder_message(cargo(3), None, None),
+        None,
         "a good with no name"
     );
     assert_eq!(
@@ -54,10 +83,6 @@ fn the_plunder_messages_are_the_originals() {
         count,
     };
     assert_eq!(message(ammo(0)).as_deref(), Some(NO_AMMO_STORED));
-    assert_eq!(
-        message(ammo(7)).as_deref(),
-        Some("You salvaged 7 Rockets from this ship.")
-    );
     let energy = |stored, full| Taken::Energy {
         offered: 170,
         stored,

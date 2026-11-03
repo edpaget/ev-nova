@@ -14,6 +14,7 @@ use crate::gpu::{
     Batch, Frame, Gpu, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun, colorize_instance,
 };
 use crate::images::{ImageError, ImageSource};
+use crate::quickdraw_stretch;
 use crate::streams::Streams;
 use crate::upscale::world_space;
 use crate::viewport::{PixelRect, Viewport};
@@ -64,6 +65,10 @@ pub struct Renderer<S> {
     rebuild: bool,
     /// The movie frames' pages.
     streams: Streams,
+    /// Each picture frame stretched by QuickDraw's rule, by its key and
+    /// size, or `None` when it couldn't be placed
+    /// ([`Renderer::push_stretched`]).
+    stretches: HashMap<(ImageKey, (u32, u32)), Option<Placed>>,
 }
 
 impl<S: ImageSource> Renderer<S> {
@@ -86,6 +91,7 @@ impl<S: ImageSource> Renderer<S> {
             enlarger: Box::new(NativeDetail),
             rebuild: false,
             streams: Streams::default(),
+            stretches: HashMap::new(),
         }
     }
 
@@ -116,6 +122,7 @@ impl<S: ImageSource> Renderer<S> {
         }
         self.atlas = Atlas::new(self.atlas.page_size());
         self.streams = Streams::default();
+        self.stretches.clear();
         self.resident
             .retain(|_, resident| matches!(resident, Resident::Failed));
     }
@@ -398,6 +405,19 @@ impl<S: ImageSource> Renderer<S> {
     /// Appends a stretched picture's quad, `(image, top_left, size)`,
     /// combined by `blend`. A rectangle with no drawable size draws
     /// nothing, so its picture is not even loaded.
+    ///
+    /// The original draws every stretched picture through QuickDraw's
+    /// stretch ([`crate::quickdraw_stretch`]). So a rectangle a whole
+    /// number of pixels wide and high, where that stretch would show other
+    /// pixels than the GPU's sampling ([`quickdraw_stretch::differs`]),
+    /// draws from an entry of its own: the frame decoded once more,
+    /// resampled by [`quickdraw_stretch::stretched`], turned by the
+    /// enlarger as any frame is, placed in the atlas and kept by key and
+    /// size until the atlas starts afresh. It is drawn at its own size,
+    /// with the crop and the blend of any other. A fractional rectangle
+    /// (an engine-only zoom), a repeat of every pixel alike, one bigger
+    /// than a page, or a frame that no longer decodes draws from the
+    /// picture's own entry, the GPU sampling it.
     fn push_stretched(
         &mut self,
         batches: &mut Vec<Batch>,
@@ -407,10 +427,61 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) {
-        if drawable(width) && drawable(height) {
-            let picture = (image, top_left, Some((width, height)));
-            self.push_picture(batches, picture, blend, clip, gpu, report);
+        if !(drawable(width) && drawable(height)) {
+            return;
         }
+        let Some(own) = self.entry(image, gpu, report) else {
+            return;
+        };
+        let placed = self
+            .stretch(image, own, (width, height), gpu)
+            .unwrap_or(own);
+        let dest = Rect {
+            x: top_left.x,
+            y: top_left.y,
+            w: width,
+            h: height,
+        };
+        if let Some((entry, dest)) = cropped(&placed.entry, dest, clip) {
+            push_quad(batches, &entry, dest, (Color::WHITE, NO_COLORIZE), blend);
+        }
+    }
+
+    /// `image`'s entry stretched to `size` by QuickDraw's rule, from its
+    /// own entry `own`, when it is to have one ([`Renderer::push_stretched`]).
+    fn stretch(
+        &mut self,
+        image: ImageKey,
+        own: Placed,
+        (width, height): (f32, f32),
+        gpu: &mut impl Gpu,
+    ) -> Option<Placed> {
+        if width.fract() != 0.0 || height.fract() != 0.0 {
+            return None;
+        }
+        // Bigger than a page, the atlas would refuse it.
+        if width.max(height) > self.atlas.page_size() as f32 {
+            return None;
+        }
+        let size = (width as u32, height as u32);
+        let source = (own.size.0 as u32, own.size.1 as u32);
+        if !quickdraw_stretch::differs(source, size) {
+            return None;
+        }
+        if let Some(placed) = self.stretches.get(&(image, size)) {
+            return *placed;
+        }
+        let frames = self.images.frames(image.kind, image.id).ok();
+        let placed = frames
+            .as_ref()
+            .and_then(|frames| frames.get(usize::from(image.frame)))
+            .and_then(|frame| {
+                let resampled = quickdraw_stretch::stretched(frame, size.0, size.1);
+                let enlarged = self.enlarger.enlarge(image.kind, &resampled).into_owned();
+                self.place(&resampled, &enlarged, gpu).ok()
+            });
+        self.stretches.insert((image, size), placed);
+        placed
     }
 
     /// Appends a picture's quad: `(image, top_left, size)`, drawn at `size`
@@ -3402,5 +3473,243 @@ mod tests {
         assert_eq!(quads.len(), 1);
         assert_eq!(quads[0].dest, native[0].dest);
         assert_eq!(quads[0].uv, uv(0, 0, 10, 12));
+    }
+
+    // QuickDraw's stretch (`quickdraw_stretch`): a stretch to whole
+    // pixels that it would show otherwise draws from an entry resampled by
+    // it.
+
+    /// A 2 x 2 picture, its rows red and blue, its columns told apart by
+    /// green.
+    fn two_by_two() -> Image {
+        let pixels = [
+            [255, 0, 0, 255],
+            [255, 9, 0, 255],
+            [0, 0, 255, 255],
+            [0, 9, 255, 255],
+        ];
+        Image::from_rgba(2, 2, pixels.concat()).expect("2 x 2")
+    }
+
+    fn two_by_two_images() -> FakeImages {
+        FakeImages::default().with(ImageKind::Pict, 300, vec![two_by_two()])
+    }
+
+    /// The uploads among `calls`.
+    fn uploads(calls: &[GpuCall]) -> Vec<&GpuCall> {
+        calls
+            .iter()
+            .filter(|call| matches!(call, GpuCall::Upload { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn a_stretch_quickdraw_shows_otherwise_draws_its_resampled_picture() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(4.0, 5.0), 2.0, 3.0);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        let rows: Vec<u8> = (0..3)
+            .map(|y| resampled.pixel(0, y).expect("inside")[0])
+            .collect();
+        assert_eq!(rows, [255, 255, 0], "rows 0, 0, 1");
+        assert_eq!(
+            uploads(&gpu.calls),
+            [
+                &GpuCall::upload(PageId(0), rect(0, 0, 2, 2), &two_by_two()),
+                &GpuCall::upload(PageId(0), rect(0, 3, 2, 3), &resampled),
+            ]
+        );
+        assert_eq!(
+            all_quads(gpu.submits()[0]),
+            [QuadInstance {
+                dest: Rect {
+                    x: 4.0,
+                    y: 5.0,
+                    w: 2.0,
+                    h: 3.0,
+                },
+                uv: uv(0, 3, 2, 3),
+                tint: WHITE,
+                colorize: NO_COLORIZE,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_resampled_picture_is_made_once_for_each_size() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 2.0, 3.0)
+            .stretched_picture(ImageKey::picture(300), at(9.0, 0.0), 2.0, 3.0);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(uploads(&gpu.calls).len(), 2, "the picture and one stretch");
+        let quads = all_quads(gpu.submits()[1]);
+        assert_eq!(quads.len(), 2);
+        assert!(quads.iter().all(|quad| quad.uv == uv(0, 3, 2, 3)));
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 3.0, 2.0);
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(uploads(&gpu.calls).len(), 3, "another size, another entry");
+    }
+
+    #[test]
+    fn exact_multiples_and_fractional_sizes_draw_from_the_pictures_own_entry() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 4.0, 6.0)
+            .stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 3.5, 3.0)
+            .stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 2.0, 1.5);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(uploads(&gpu.calls).len(), 1, "the picture alone");
+        let quads = all_quads(gpu.submits()[0]);
+        assert_eq!(quads.len(), 3);
+        assert!(quads.iter().all(|quad| quad.uv == uv(0, 0, 2, 2)));
+    }
+
+    /// Where the 2 x 3 image `calls` uploaded is on its page.
+    fn resampled_at(calls: &[GpuCall]) -> PixelRect {
+        let found = calls.iter().find_map(|call| match call {
+            GpuCall::Upload {
+                rect,
+                width: 2,
+                height: 3,
+                ..
+            } => Some(*rect),
+            _ => None,
+        });
+        found.expect("the resampled picture uploaded")
+    }
+
+    #[test]
+    fn a_blended_stretch_draws_its_resampled_picture_too() {
+        let mut list = DrawList::new();
+        list.blended_picture(ImageKey::picture(300), at(0.0, 0.0), 2.0, 3.0, Blend::Max);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let at = resampled_at(&gpu.calls);
+        match gpu.submits()[0].batches.as_slice() {
+            [Batch::Sprites { blend, quads, .. }] => {
+                assert_eq!(*blend, Blend::Max);
+                assert_eq!(quads[0].uv, uv(at.x, at.y, 2, 3));
+            }
+            other => panic!("one sprite batch: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_clipped_resampled_stretch_is_cut_in_its_own_texels() {
+        let mut list = DrawList::new();
+        let clip = Bounds::at(at(0.0, 1.0), 2.0, 2.0);
+        list.clipped(
+            clip,
+            DrawCommand::StretchedPicture {
+                image: ImageKey::picture(300),
+                top_left: at(0.0, 0.0),
+                width: 2.0,
+                height: 3.0,
+            },
+        );
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let at = resampled_at(&gpu.calls);
+        let quads = all_quads(gpu.submits()[0]);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(
+            quads[0].dest,
+            Rect {
+                x: 0.0,
+                y: 1.0,
+                w: 2.0,
+                h: 2.0,
+            }
+        );
+        assert_eq!(
+            quads[0].uv,
+            uv(at.x, at.y + 1, 2, 2),
+            "the resampled rows 1 and 2"
+        );
+    }
+
+    /// Records the size of every image it is given, and leaves them alone.
+    #[derive(Debug, Default)]
+    struct SizeLog {
+        sizes: Rc<RefCell<Vec<(u32, u32)>>>,
+    }
+
+    impl Enlarger for SizeLog {
+        fn enlarge<'a>(&self, _kind: ImageKind, image: &'a Image) -> Cow<'a, Image> {
+            self.sizes
+                .borrow_mut()
+                .push((image.width(), image.height()));
+            Cow::Borrowed(image)
+        }
+    }
+
+    #[test]
+    fn the_enlarger_turns_the_resampled_picture_as_any_frame() {
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let mut renderer = renderer(two_by_two_images());
+        renderer.set_enlarger(Box::new(SizeLog {
+            sizes: Rc::clone(&sizes),
+        }));
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 2.0, 3.0);
+        renderer.render(&list, &viewport(), &mut RecordingGpu::new());
+        assert_eq!(*sizes.borrow(), [(2, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn a_new_enlarger_drops_the_resampled_pictures() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 2.0, 3.0);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        renderer.set_enlarger(Box::new(NativeDetail));
+        let mut again = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut again);
+        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        assert_eq!(
+            uploads(&again.calls),
+            [
+                &GpuCall::upload(PageId(0), rect(0, 0, 2, 2), &two_by_two()),
+                &GpuCall::upload(PageId(0), rect(0, 3, 2, 3), &resampled),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stretch_as_wide_or_as_high_as_a_page_is_resampled() {
+        for (w, h) in [(64.0, 3.0), (3.0, 64.0)] {
+            let mut list = DrawList::new();
+            list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), w, h);
+            let mut renderer = renderer(two_by_two_images());
+            let mut gpu = RecordingGpu::new();
+            renderer.render(&list, &viewport(), &mut gpu);
+            assert_eq!(uploads(&gpu.calls).len(), 2, "{w} x {h}: resampled");
+            assert_ne!(all_quads(gpu.submits()[0])[0].uv, uv(0, 0, 2, 2));
+        }
+    }
+
+    #[test]
+    fn a_stretch_too_big_for_a_page_draws_from_the_pictures_own_entry() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(300), at(0.0, 0.0), 65.0, 3.0);
+        let mut renderer = renderer(two_by_two_images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        assert_eq!(uploads(&gpu.calls).len(), 1);
+        assert_eq!(all_quads(gpu.submits()[0])[0].uv, uv(0, 0, 2, 2));
     }
 }

@@ -17,6 +17,10 @@
 //! original does for a `spïn` with no `rlëD`; its mask has the opposite
 //! polarity.
 //!
+//! [`rled_words`] reads an `rlëD`'s run-length tokens as words, and
+//! [`sheet_rle_words`] makes the tokens the original makes for a cut
+//! `PICT` sheet: the [`RleWords`] two sprites' pixels touch by.
+//!
 //! A sprite sheet's header gives frame size and count but not how the frames
 //! are arranged. That comes from the `spïn` or `shän` record pointing at the
 //! sheet ([`records::spin::Spin::sheet_layout`],
@@ -127,6 +131,7 @@ mod pict_sheet;
 mod pixmap;
 mod reader;
 mod region;
+mod rle_words;
 mod rled;
 mod rled8;
 mod sheet;
@@ -143,6 +148,7 @@ pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, decode_pict};
 pub use pict_sheet::{SheetMask, cut_pict_sheet};
+pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{RLED, RledInfo, decode_rled, decode_rled_as, scan_rled};
 pub use rled8::EightBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

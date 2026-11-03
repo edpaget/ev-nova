@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn a_leader_waiting_in_its_gate_is_goal_0x15_and_orders_all_return() {
         for mode in [
-            Mode::Emerging { ticks_left: 5 },
+            Mode::Emerging { ticks_left: 5.0 },
             Mode::LeavingGate { tick: 0 },
         ] {
             let mut waiting = leader(Goal::Attack(n(2)), 100.0);
@@ -695,7 +695,7 @@ mod tests {
             assert_eq!(issued(&[waiting]), [3, 3, 3, 3], "{mode:?}");
         }
         let mut held = leader(Goal::Attack(n(2)), 100.0);
-        held.mode = Mode::HeldAtGate { ticks_left: 5 };
+        held.mode = Mode::HeldAtGate { ticks_left: 5.0 };
         assert_eq!(issued(&[held]), [2, 2, 0, 0], "held attacking: banded");
     }
 
@@ -828,9 +828,9 @@ mod tests {
         assert!(!issues(&with(Mode::JumpingIn { tick: 0 })));
         assert!(!issues(&with(Mode::LeavingGate { tick: 1 })));
         assert!(issues(&with(Mode::LeavingGate { tick: 0 })));
-        assert!(issues(&with(Mode::Emerging { ticks_left: 3 })));
-        assert!(issues(&with(Mode::HeldAtGate { ticks_left: 3 })));
-        assert!(issues(&with(Mode::Coasting { ticks_left: 3 })));
+        assert!(issues(&with(Mode::Emerging { ticks_left: 3.0 })));
+        assert!(issues(&with(Mode::HeldAtGate { ticks_left: 3.0 })));
+        assert!(issues(&with(Mode::Coasting { ticks_left: 3.0 })));
         assert!(issues(&with(Mode::Flying)));
         let mut jumping = with(Mode::Flying);
         jumping.goal = Goal::JumpOut;

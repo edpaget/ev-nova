@@ -6,6 +6,8 @@
 //! @0x83b36-0x83b7f), docking back into the escort's bay. Its side for
 //! hits is the player's, the root of its leads.
 
+#![allow(clippy::float_cmp)]
+
 use super::Session;
 use super::fighters::tests::{
     BAY, WARSHIP, carrying, fight, fleet, pirate, sitting_ai, vipers, warship,
@@ -124,7 +126,7 @@ fn its_fighter_attacks_while_the_escort_attacks_or_defends() {
             Goal::Attack(ShipRef::Npc(raider)),
             "{order:?}"
         );
-        assert_eq!(fighter.ai_wait, 0, "its glide ended, {order:?}");
+        assert_eq!(fighter.ai_wait, 0.0, "its glide ended, {order:?}");
     }
 }
 

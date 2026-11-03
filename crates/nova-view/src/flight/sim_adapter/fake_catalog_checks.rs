@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use nova_sim::SpeedMult;
 use nova_sim::catalog::MissionRecord;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::flight_frame::{
@@ -725,7 +726,7 @@ fn random_gate_held() -> (Rc<FakeCatalog>, Session) {
         .over(StellarId(150))
         .build();
     session.land().expect("requests clearance");
-    session.enter_game(&mut NeverFires);
+    session.enter_game(SpeedMult::FULL, &mut NeverFires);
     (catalog, session)
 }
 
@@ -734,10 +735,10 @@ fn entering_play_forwards_on_the_flights_chance() {
     let (catalog, session) = random_gate_held();
     let (script, chance) = scripted(&[1]);
     let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
-    assert!(flight.enter_game());
+    assert!(flight.enter_game(SpeedMult::FULL));
     let mut by_hand = session;
     let (own, mut own_chance) = scripted(&[1]);
-    by_hand.enter_game(&mut own_chance);
+    by_hand.enter_game(SpeedMult::FULL, &mut own_chance);
     assert_eq!(flight.session(), Ok(&by_hand));
     assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
     assert!(!own.borrow().asked.is_empty());

@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use nova_sim::SpeedMult;
 use nova_sim::fixture::SessionBuilder;
 use nova_sim::landing::StellarFlags;
 use nova_sim::map_borders::Next;
@@ -179,6 +180,7 @@ fn history() -> CarryOver {
         kept_berths: Some(traffic.kept_berths()),
         last_refresh: Some(nova_sim::LastRefresh::hiding([SystemId(131)])),
         release_comm_escort: Some(true),
+        speed_mult: Some(SpeedMult::ZERO),
     }
 }
 
@@ -289,15 +291,26 @@ fn the_edges_beginning_places_the_ship_where_the_session_began_it() {
 fn the_edges_entering_play_scatters_the_stars_once_the_session_entered() {
     let mut view = test_flight::new(catalog());
     view.stars_due = false;
-    enter_game(&mut view);
+    enter_game(&mut view, SpeedMult::FULL);
     assert!(view.stars_due, "the stars scattered afresh");
     let mut failed = test_flight::new(FakeCatalog {
         character: Err(StartError::NoCharacter),
         ..catalog()
     });
     failed.stars_due = false;
-    enter_game(&mut failed);
+    enter_game(&mut failed, SpeedMult::FULL);
     assert!(!failed.stars_due, "a flight that enters nothing");
+}
+
+/// The edge hands the session the gain the run carried: the frame
+/// filled after entry shows the next step's.
+#[test]
+fn the_edge_enters_play_at_the_gain_it_is_handed() {
+    for gain in [SpeedMult::ZERO, SpeedMult::FULL] {
+        let mut view = test_flight::new(catalog());
+        enter_game(&mut view, gain);
+        assert_eq!(view.frame.speed_mult, gain, "held at entry");
+    }
 }
 
 /// Phase 13's fold-in: the slot sprites the run carried reach the view

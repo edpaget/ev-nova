@@ -74,7 +74,9 @@ impl<
     /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
     /// whose steps stop there, before the frame is drawn, or, on a
     /// double time second pass, on the next step, after the frame between
-    /// its passes is drawn ([`FlightView::holding_between_passes`]). From then on the
+    /// its passes is drawn ([`FlightView::holding_between_passes`]), that
+    /// tick's steps then run in the new system
+    /// ([`FlightView::arrival_frame`]). From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's
     /// display fade does. A jump the session gave up instead is settled at
@@ -107,6 +109,9 @@ impl<
     /// [`FlightView::draw_dialog_map`], which the app draws apart when a
     /// mission dialog goes between them.
     fn draw(&self, list: &mut DrawList) {
+        if self.draw_rescue(list) {
+            return;
+        }
         if self.draw_movie(list, |list| {
             if self.draw_scene(list) {
                 self.draw_fades(list);
@@ -154,9 +159,12 @@ impl<
 
     /// The frame-rate readout starts afresh, "Calculating FPS..." on the
     /// next frame while it is shown, as `_SwitchedIn` zeroes its counters
-    /// (@0x513cc-0x513dc).
+    /// (@0x513cc-0x513dc), and the flight's gain is set full
+    /// (`FlightCommand::SwitchedIn`, @0x513e1-0x513ec). A flight that
+    /// failed to start refuses it, as any command.
     fn focus_gained(&mut self) {
         self.switched_in();
+        self.send(nova_sim::flight_frame::FlightCommand::SwitchedIn);
     }
 
     /// The flight halts both warp-ups, as `_SwitchedOut` does
@@ -179,6 +187,9 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
+        if self.rescue_shows_pointer() {
+            return false;
+        }
         if self.playing() {
             return self.movie_hides_pointer();
         }
@@ -219,8 +230,12 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        self.since_step += dt;
         if self.playing() {
             self.movie_tick(dt);
+            return;
+        }
+        if self.rescue_frame(dt) {
             return;
         }
         self.elapse_frame_rate(dt);
@@ -240,16 +255,23 @@ impl<
             self.frame_rate_frame();
             return;
         }
+        let pod = self.pod_frame();
         self.step_stellars(dt);
+        self.settle_dialog_latch();
         if self.faded_keys_frame() {
             return;
         }
         self.held_keys_frame();
+        if self.read_after_poll() {
+            return;
+        }
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         let keyed = self.cursor_keyed();
         let jumping = self.jump_under_way();
-        self.run_steps(steps);
+        self.run_steps(steps, pod);
+        // From here the frame's own writes come before the held lines.
+        self.writing_in_frame = true;
         self.settle_faded_keys(jumping);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
@@ -261,8 +283,9 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        self.arrival_frame();
+        self.arrival_frame(steps);
         self.advance_hud();
+        self.writing_in_frame = false;
     }
 
     /// `press`, if a jump under way lets it through and the flight takes
@@ -284,7 +307,13 @@ impl<
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
+        if self.hold_under_rescue(input) {
+            return ScreenAction::None;
+        }
         if self.playing() {
+            // `_HandlePlayer` polls the unlatched keys again after the
+            // movie, however they went down under it (the `movies` module).
+            self.track_unlatched(input);
             self.movie_input(input);
             return ScreenAction::None;
         }
@@ -321,10 +350,8 @@ impl<
             at,
         } = *input
             && self.takes(PlayerCommand::Nav)
-            && !self.click_escort_menu(at)
-            && !self.click_floating_map(at)
         {
-            self.click_in_space(at);
+            self.press_button_latched(at);
         }
         match self.press_taken(press, jumping) {
             Some(LAND_KEY) => {
@@ -338,7 +365,9 @@ impl<
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
                 self.board_frame(true);
-                if self.pending_boarding {
+                // The plunder screen or a boarding offer's dialog opened:
+                // it takes B's release, so B isn't held.
+                if self.pending_boarding || self.pending_offer.is_some() {
                     return ScreenAction::None;
                 }
             }
@@ -376,7 +405,7 @@ impl<
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
                 self.zoom_floating_map(key);
             }
-            Some(TARGET_KEY) => self.press_target_key(),
+            Some(TARGET_KEY) => self.press_target_latched(),
             Some(key) if self.escort_key(key) => {}
             Some(NEAREST_KEY) => self.press_nearest_key(),
             Some(SELECT_KEY) => self.press_weapon_select(),

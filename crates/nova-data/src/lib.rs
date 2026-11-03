@@ -173,8 +173,8 @@ pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
     FailedFile, GameData, IgnoredEntry, InterfaceData, LayerError, LayerSprite, NoInterfaceFile,
     OpenError, Origin, ParsedSet, ParsedTest, Provenance, SheetKind, SheetScan, ShipLayer,
-    ShipLayerInfos, ShipLayers, ShipSprite, ShipSpriteInfo, SourceFile, SpinSheet, SpinSpriteError,
-    SpriteError, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
+    ShipLayerInfos, ShipLayers, ShipSprite, ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet,
+    SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
     interface_path_candidates, load_interface, open_interface, ship_desc_id, shot_spin_id,
     stellar_spin_id,
 };

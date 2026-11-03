@@ -399,8 +399,9 @@ impl AppScreen {
         self.return_to = Side::MainMenu;
         self.switch_to(Side::Flight);
         if let Some(flight) = &mut self.flight {
-            // `_EnterGameFromMainScreen`'s refresh (@0x19f81).
-            enter_game(flight);
+            // `_EnterGameFromMainScreen`'s refresh (@0x19f81), at the gain
+            // the last game left.
+            enter_game(flight, self.speed_mult);
             flight.cancel_pointer();
             flight.release_keys();
             flight.shut_escort_menu();

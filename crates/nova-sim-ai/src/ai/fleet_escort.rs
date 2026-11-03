@@ -1573,7 +1573,7 @@ mod tests {
             )
         );
         assert_eq!(
-            at_guard(Mode::Emerging { ticks_left: 5 }),
+            at_guard(Mode::Emerging { ticks_left: 5.0 }),
             (DEFENCE, Some(n(3)))
         );
     }
@@ -1749,13 +1749,13 @@ mod tests {
             let npcs = [lead(Goal::Idle), npc, raider(3, 0.0, -50.0, n(1))];
             ai.gate_wait(&npcs[1], &Surroundings::new(&[], &npcs))
         };
-        let held = Mode::HeldAtGate { ticks_left: 20 };
+        let held = Mode::HeldAtGate { ticks_left: 20.0 };
         assert!(
             in_gate(held, Goal::Wait).trigger.point_defence,
             "held, holding"
         );
         assert_eq!(
-            in_gate(Mode::Emerging { ticks_left: 20 }, Goal::Wait),
+            in_gate(Mode::Emerging { ticks_left: 20.0 }, Goal::Wait),
             GateWait::default(),
             "waiting in its gate"
         );

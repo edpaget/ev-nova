@@ -137,7 +137,7 @@ fn shots_between_the_fighter_and_its_carriers_leads_other_escort_still_miss() {
     let fighter = session.space.npc_mut(id).expect("there");
     fighter.state.position = Vec2::new(0.0, 0.0);
     fighter.state.velocity = Vec2::ZERO;
-    fighter.ai_wait = 1000;
+    fighter.ai_wait = 1000.0;
     let full = fighter.reserves.shield.now;
     let ai = NovaAi::default()
         .with_fleet_escorts(Rc::new(Shooting))
@@ -187,7 +187,10 @@ fn npc_launched(
     let fighter = &launched[0];
     // It moves in its launch frame's ship loop (@0x4445c-0x444c4), which
     // counts its glide down once.
-    assert_eq!((fighter.goal, fighter.ai_wait), (Goal::Idle, GLIDE - 1));
+    assert_eq!(
+        (fighter.goal, fighter.ai_wait),
+        (Goal::Idle, crate::traffic::ai_wait::ticks(GLIDE - 1))
+    );
     // `_AISetup` @0x7f40c.
     assert_eq!(fighter.order_word, crate::fleet::OrderWord::NONE);
     (session, fighter.id, raider, lead)
@@ -201,7 +204,7 @@ fn coasts(
     ai: &NovaAi,
     id: NpcId,
     ticks: u32,
-) -> (bool, u32) {
+) -> (bool, f32) {
     let mut held = true;
     for _ in 0..ticks {
         let before = session.space.npc(id).expect("there").state;
@@ -224,7 +227,7 @@ fn an_npcs_fighter_ends_its_glide_at_its_first_think_and_attacks_once_its_carrie
     let (mut session, id, raider, _) = npc_launched(&catalog, Rulebook::default(), &raiding_ai());
     fight(&mut session, &catalog, &raiding_ai());
     let fighter = session.space.npc(id).expect("there");
-    assert_eq!(fighter.ai_wait, 0, "its formation block ends it");
+    assert_eq!(fighter.ai_wait, 0.0, "its formation block ends it");
     assert!(
         matches!(fighter.goal, Goal::Follow { lead, .. } if lead == raider),
         "{:?}",
@@ -268,13 +271,13 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
     // The launch frame counted one (see `npc_launched`).
     let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
     assert!(held, "no turn or thrust while it glides");
-    assert_eq!(left, 1);
+    assert_eq!(left, 1.0);
     assert_eq!(
         session.space.npc(id).expect("there").goal,
         Goal::Dock(ShipRef::Npc(raider))
     );
     fight(&mut session, &catalog, &ai);
-    assert_eq!(session.space.npc(id).expect("there").ai_wait, 0);
+    assert_eq!(session.space.npc(id).expect("there").ai_wait, 0.0);
     let (held, _) = coasts(&mut session, &catalog, &ai, id, 5);
     assert!(!held, "it flies home once its glide is out");
 }
@@ -288,7 +291,7 @@ fn by_the_other_reading_an_npcs_fighter_attacking_ends_its_glide_and_one_docking
     let (mut session, id, _, _) = npc_launched(&catalog, earlier_escorts(), &ai);
     fight(&mut session, &catalog, &ai);
     let fighter = session.space.npc(id).expect("there");
-    assert_eq!(fighter.ai_wait, 0, "its first think ends it");
+    assert_eq!(fighter.ai_wait, 0.0, "its first think ends it");
     assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player));
     let (held, _) = coasts(&mut session, &catalog, &ai, id, 5);
     assert!(!held, "it flies at once");
@@ -300,7 +303,7 @@ fn by_the_other_reading_an_npcs_fighter_attacking_ends_its_glide_and_one_docking
     // The launch frame counted one (see `npc_launched`).
     let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
     assert!(held, "no turn or thrust while it glides");
-    assert_eq!(left, 1);
+    assert_eq!(left, 1.0);
     assert_eq!(
         session.space.npc(id).expect("there").goal,
         Goal::Dock(ShipRef::Npc(raider))
@@ -318,7 +321,11 @@ fn players_launched(catalog: &FakePilotCatalog, order: Option<EscortCommand>) ->
     // Launched in `_HandlePlayer` (@0x62c61), it moves in its launch
     // frame's ship loop (@0x4445c-0x444c4), which counts its glide down
     // once.
-    assert_eq!(fighter.ai_wait, GLIDE - 1, "{order:?}");
+    assert_eq!(
+        fighter.ai_wait,
+        crate::traffic::ai_wait::ticks(GLIDE - 1),
+        "{order:?}"
+    );
     let id = fighter.id;
     if let Some(order) = order {
         session.command_escorts(EscortGroup::All, order, &mut crate::chance::NeverFires);
@@ -342,7 +349,7 @@ fn the_players_fighter_in_formation_attacking_or_defending_ends_its_glide_at_its
         fight(&mut session, &catalog, &NovaAi::default());
         assert_eq!(
             session.space.npc(id).expect("there").ai_wait,
-            0,
+            0.0,
             "{order:?}"
         );
     }
@@ -356,7 +363,7 @@ fn the_players_fighter_told_to_hold_coasts_its_glide_out() {
     // The launch frame counted one (see `players_launched`).
     let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
     assert!(held, "no turn or thrust while it glides");
-    assert_eq!(left, 1);
+    assert_eq!(left, 1.0);
     assert_eq!(session.space.npc(id).expect("there").goal, Goal::Wait);
 }
 

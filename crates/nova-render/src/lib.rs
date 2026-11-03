@@ -30,6 +30,10 @@
 //!   at the frame's own logical size. [`NativeDetail`] holds each frame
 //!   as it decodes; a new enlarger ([`Renderer::set_enlarger`]) starts the
 //!   atlas afresh at the next frame ([`Gpu::clear_pages`]).
+//! - [`quickdraw_stretch`]: QuickDraw's stretch, by which the original
+//!   draws a picture at a size not its own: the rows and columns it shows
+//!   and its merges when shrinking. The [`Renderer`] resamples a stretch
+//!   to whole pixels by it wherever the GPU's sampling would show others.
 //! - [`super_xbr`]: [`SuperXbr`], the enlarger that doubles each image
 //!   but a pattern with Hyllian's Super-xBR, ported to the CPU.
 //! - [`upscale`]: the [`Upscaler`] the adapter draws the world with
@@ -93,6 +97,7 @@ pub mod glyph_raster;
 pub mod gpu;
 pub mod images;
 pub mod present;
+pub mod quickdraw_stretch;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod source;

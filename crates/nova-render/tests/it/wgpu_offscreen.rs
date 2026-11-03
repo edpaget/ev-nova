@@ -237,6 +237,34 @@ fn a_known_frame_draws_the_expected_pixels() {
     assert_near(&pixels, (5, 50), BLACK, 0);
 }
 
+/// The renderer draws a stretch by QuickDraw's rule
+/// (`nova_render::quickdraw_stretch`): the 4x2 patterned picture stretched
+/// to 4x3 shows its rows 0, 0, 1, where sampling at pixel centres would
+/// show 0, 1, 1, each logical texel a 2x2 block at scale 2.
+#[test]
+fn a_stretched_picture_shows_the_rows_quickdraws_stretch_picks() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let mut list = DrawList::new();
+    list.stretched_picture(ImageKey::picture(1), Point::new(2.0, 2.0), 4.0, 3.0);
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Logical (2..6, 2..5) is pixels (4..12, 12..18).
+    for (row, shows) in [0, 0, 1].into_iter().enumerate() {
+        for x in 0..4 {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let at = (4 + 2 * x + dx, 12 + 2 * row as u32 + dy);
+                assert_near(&pixels, at, texel(4, x, shows), 0);
+            }
+        }
+    }
+}
+
 #[test]
 fn a_movie_frame_draws_its_pixels_and_a_new_frame_replaces_them() {
     let Some(mut gpu) = gpu() else {

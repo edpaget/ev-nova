@@ -7,10 +7,12 @@
 //! **The bank** ([`PlayerShip::bank_player`], `_HandlePlayer`
 //! @0x6cd59-0x6cf06, right after the thrust's glow step). The flag
 //! (+0xc8f8) is first cleared. A ship of `shän` `Flags` 0x0001 moves its
-//! bank (+0xc8e4) a frame toward ±16 turning that way (its turn keys or
-//! its auto-turn's, @0x6c905-0x6ca9c), and 2 frames back toward 0 turning
-//! neither way, 0 within 2 of it (16.0 @0xdd048, -16.0 @0xdd674, -2.0
-//! @0xdd998). Its flag is 1 past 6 turning right or auto-turning, -1 below
+//! bank (+0xc8e4) the frame's gain toward ±16 turning that way (its turn
+//! keys or its auto-turn's, @0x6c905-0x6ca9c; @0x6cdb1-0x6cdf2), and 2 ×
+//! the gain back toward 0 turning neither way, compared and added in
+//! doubles, 0 within 2 × the gain of it (16.0 @0xdd048, -16.0 @0xdd674,
+//! -2.0 @0xdd998, @0x6ce07-0x6ce61). The gain is
+//! [`Session::speed_mult`]; at a gain of none a bank stays where it is. Its flag is 1 past 6 turning right or auto-turning, -1 below
 //! -6 turning left or auto-turning, else 0 (6.0 @0xdd06c, -6.0 @0xdd964):
 //! auto-turning (local -0x2cd) flags a bank either way. A banked ship of
 //! 0x0002 raises its glow by 2 while it is 23 or less (@0x6cece-0x6cf06),
@@ -51,11 +53,60 @@
 //! cleared (`_RespawnEscort` @0x3d505), as its ship-table slot keeps it;
 //! one whose ship was not in the system takes the load's.
 //!
-//! **The display** ([`Session::display_ships`]): after each pass's fight,
-//! the player's frame and then each NPC's, so each ship's frame reads the
-//! fold its flight and fire left, as `_HandleShipDisplay` runs after
-//! `_HandlePlayer` and each `_HandleShip`; before the frame is drawn. Each
-//! frame steps the ship's lights state, which lights out zeroes by
+//! **The display**: each ship's frame steps at its own display step, as
+//! `_DoPlayGameWork` runs `_HandleShipDisplay` for the player right after
+//! `_HandlePlayer` (@0x43e29, [`PlayerShip::display_frames`] in
+//! `Session::player_display_step`) and for each NPC right after its own
+//! `_HandleShip` in the ship loop (@0x444ad, [`Space::display_npc_frames`]
+//! in `Session::ship_loop`), on both passes, each at the frame's gain
+//! (`Session::speed_mult`, which those `Session` methods read and pass on:
+//! `Moment::gain`, which its fold, animation, alt and lights timers take;
+//! see the `display_gain` module). So each ship's frame reads the
+//! fold its flight and fire left, and every reader later in the pass sees
+//! this pass's set: the collision passes and the scoop the player's (the
+//! NPCs display after them, so those read each NPC's last display, as the
+//! original does; see the `contact_masks` module), and the deadly stellars
+//! every ship's (see the `deadly_masks` module). What the pass writes
+//! after a ship's display (a hit that disables or ionizes it, a later
+//! slot's shockwave) shows from the next frame, as in the original.
+//!
+//! Inside `_HandleShipDisplay` the set step (@0x2b7d8-0x2bc2e), the ion
+//! tint (@0x2beb9-0x2bf94) and the lights (@0x2c2ea-0x2c5a6) come after the
+//! settle and before the dying block (@0x2d7ef-0x2dcfc), the set step and
+//! the lights reading the `_IsDisabled` kept at -0x152 (@0x2b61f, tested
+//! @0x2ba56 and @0x2c585). The fight runs the settle and the dying block
+//! together (`nova_sim::combat::Combat::display_npc`), so each step reads
+//! the fight's record of that display
+//! (`nova_sim::combat::Combat::displayed`): a ship its own display
+//! destroys steps once, as disabled, and an NPC's writes its berth's blink
+//! timer before the fight takes it out, which nothing clears at the
+//! slot's freeing (@0x2ded6). A ship already destroyed when its display
+//! began has no record and is not stepped (@0x2b522-0x2b60a).
+//!
+//! A ship no loop display reached (a fighter launched below its carrier or
+//! from a bay after the loop, an arrival or reinforcement after it) is, by
+//! [`RuleKey::UndisplayedShips`]' engine reading, neither walked nor drawn
+//! until its slot's next display, which steps it; by the other reading it
+//! is drawn at once, so the pass's tail steps it once
+//! ([`Space::display_undisplayed`]).
+//!
+//! The deferrals that cross no boundary (rdm
+//! play-feel-8 phase 18's findings): no reader between a ship's display
+//! and the end of the pass reads another ship's set, lights or tint but
+//! the contact passes, the scoop and the deadly stellars. `_AIDispatch`,
+//! `_HighLevelAIHandler` and `_FireAIShipWeapon` read and write only their
+//! own ship's fold (+0xc8fa, +0xc8fc), which it has not displayed yet that
+//! pass; `_HandleShip` its own bank (+0xc8e4, +0xc8f8); `_SpawnBeam`'s and
+//! `_ModifyShotStartPosition`'s exits the cursors (+0xc8fe-+0xc905), a
+//! stray `ExitType` -1 stepping the firer's own fold at its fire, before
+//! its display; `_HandleBeams` writes a target's weapon glow (+0xc8e8) and
+//! `_DamageShip` a shield flash (+0xc8f0), the view's timers, and reads no
+//! set; `_LaunchFighter` writes the new fighter's own display from its
+//! class; `_CheckShotProximities` and `_AsteroidCollisionHandler` mask a
+//! shot against a stellar or an asteroid alone; and the slot layout, the
+//! hover boxes and the headings shots leave from read no set.
+//!
+//! Each frame steps the ship's lights state, which lights out zeroes by
 //! [`RuleKey::LightsOutZeroesBlink`]'s engine reading
 //! (`nova_sim::combat::ship_lights`). The player's lights state rides
 //! through every landing, jump and ship change; the escape pod's rescue
@@ -65,16 +116,25 @@
 //! app quits, which is recorded only. As a flight is entered the player's
 //! lights block runs once before the first frame, as `_PrepareAllSprites`
 //! runs `_HandleShipDisplay` (@0x3a776-0x3a78e;
-//! [`PlayerShip::prepare_player_lights`]); its other parts are weapons-fidelity
-//! phase 47's. The NPCs come into the system on a traffic tick, whose
-//! display runs before the frame.
+//! [`PlayerShip::prepare_player_lights`]), at the session's gain at
+//! construction, full; the original's entry runs it at the gain the last
+//! game left (`_EnterGameFromMainScreen` @0x1a36c). Its layers, visibility
+//! and fades are the `slot_visibility` module's
+//! (`Session::prepare_all_sprites`); its set step, the NPCs' lights, every
+//! ship's ion tint and the entry's gain there are
+//! rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames's.
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
-//! gone ([`Session::player_ion_tint`]). No sound plays in any of it.
+//! gone ([`Session::player_ion_tint`]). No sound plays in any of it: the
+//! set, tint and lights blocks call no `PlaySound`, the only one in
+//! `_HandleShipDisplay` being the dying block's (@0x2db5a).
+
+use std::collections::BTreeSet;
 
 use super::{Jump, PlayerShip, Session, Setup, Space, Statics};
 use crate::Chance;
 use crate::RuleKey;
+use crate::SpeedMult;
 use crate::combat::armament::{Fold, OutfitRounds};
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
@@ -83,11 +143,12 @@ use crate::combat::ship_frames::{
 use crate::flight::{Turn, shortest_turn};
 use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
+use crate::traffic::npc::NpcId;
 
 /// The most the player banks either way (16.0 @0xdd048).
 pub const PLAYER_BANK_MOST: f32 = 16.0;
-/// How far the player's bank levels a frame turning neither way (-2.0
-/// @0xdd998).
+/// How far the player's bank levels a full frame turning neither way, ×
+/// the frame's gain (-2.0 @0xdd998).
 pub const PLAYER_BANK_LEVEL: f32 = 2.0;
 /// The bank past which the player's flag is set (6.0 @0xdd06c).
 pub const PLAYER_BANK_FLAG: f32 = 6.0;
@@ -109,8 +170,14 @@ pub(super) struct PlayerDisplay {
 
 /// One frame of `_HandlePlayer`'s bank (see the module docs) of a ship of
 /// class `spec`, its display `frames`, turning `way`, auto-turning when
-/// `auto`.
-pub(super) fn bank(frames: &mut ShipFrames, spec: &FrameSpec, way: Turn, auto: bool) {
+/// `auto`, at the frame's `gain`.
+pub(super) fn bank(
+    frames: &mut ShipFrames,
+    spec: &FrameSpec,
+    way: Turn,
+    auto: bool,
+    gain: SpeedMult,
+) {
     frames.flag = 0;
     if !spec.has(BANKS) {
         return;
@@ -119,19 +186,20 @@ pub(super) fn bank(frames: &mut ShipFrames, spec: &FrameSpec, way: Turn, auto: b
     match way {
         Turn::Right => {
             if *bank < PLAYER_BANK_MOST {
-                *bank += 1.0;
+                *bank = gain.add_times(*bank, 1.0);
             }
         }
         Turn::Left => {
             if *bank > -PLAYER_BANK_MOST {
-                *bank -= 1.0;
+                *bank = gain.add_times(*bank, -1.0);
             }
         }
         Turn::None => {
-            if *bank >= PLAYER_BANK_LEVEL {
-                *bank -= PLAYER_BANK_LEVEL;
-            } else if *bank <= -PLAYER_BANK_LEVEL {
-                *bank += PLAYER_BANK_LEVEL;
+            let level = f64::from(PLAYER_BANK_LEVEL) * gain.get();
+            if f64::from(*bank) >= level {
+                *bank = gain.add_times(*bank, -PLAYER_BANK_LEVEL);
+            } else if f64::from(*bank) <= -level {
+                *bank = gain.add_times(*bank, PLAYER_BANK_LEVEL);
             } else {
                 *bank = 0.0;
             }
@@ -157,39 +225,6 @@ pub(super) fn way_turned(before: f32, after: f32) -> Turn {
 }
 
 impl Session {
-    /// `_HandleShipDisplay` for the player and then every NPC, after the
-    /// pass's fight (see the module docs), the NPCs' spawn rolls made on
-    /// `chance`.
-    pub(super) fn display_ships(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let rules = self.setup.display_rules();
-        let spec = self.ship.fit.hull.frames;
-        let rounds = OutfitRounds {
-            owned: &mut self.pilot.outfits,
-            sources: &self.statics.ammo_outfits,
-        };
-        let moment = Moment {
-            disabled: self.ship.condition.disabled(),
-            key_aboard: self
-                .ship
-                .fit
-                .armament
-                .key_ship_aboard(self.ship.fit.hull.key_carried, &rounds),
-            rules,
-        };
-        let fold = self.ship.fit.armament.fold_mut();
-        let frames = &mut self.ship.ship_display.frames;
-        let mut drawn = frames.step(&spec, fold, moment);
-        drawn.lights = frames.light(&spec, &moment, |sides| chance.roll(sides));
-        self.ship.ship_display.drawn = drawn;
-        let capacity = self.ion_capacity();
-        self.ship.ship_display.ion_tint =
-            ion_tint::display(&mut self.ship.ion, capacity, &mut *chance);
-        let govts = &self.statics.govts;
-        self.space
-            .traffic
-            .display_ships(|govt| govts.derelict(govt), rules, chance);
-    }
-
     /// The sets the player's ship was last drawn on: its hull's, and its
     /// alt layer's while it is drawn (see `nova_sim::combat::ship_frames`).
     #[must_use]
@@ -219,7 +254,7 @@ impl Session {
 impl Setup {
     /// The readings every ship's display runs by, from the session's
     /// rulebook.
-    fn display_rules(&self) -> DisplayRules {
+    pub(super) fn display_rules(&self) -> DisplayRules {
         DisplayRules {
             double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
             alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
@@ -246,33 +281,37 @@ impl Statics {
 
 impl PlayerShip {
     /// Which way the player's ship turns this tick out of a jump under
-    /// `controls`, toward `aim` while the auto-turn aims, as its turn
-    /// block does ([`player_turn::turn`](crate::player_turn::turn)).
+    /// `controls`, toward `aim` while the auto-turn aims, at the frame's
+    /// `gain`, as its turn block does
+    /// ([`player_turn::turn`](crate::player_turn::turn)): at a gain of
+    /// none an aim off at all still gives a way.
     pub(super) fn turn_way(
         &self,
         pilot: &Pilot,
         setup: &Setup,
         jump: Option<Jump>,
-        controls: crate::flight::Controls,
-        aim: Option<i16>,
+        (controls, aim): (crate::flight::Controls, Option<i16>),
+        gain: SpeedMult,
     ) -> Turn {
         let rate = self.flying_handling(pilot, setup, jump).turn_rate;
         let rule = setup.flight_rules().player_turn;
-        crate::player_turn::turn(self.player.heading, rate, aim, controls.turn, rule).1
+        let heading = self.player.heading;
+        crate::player_turn::turn(heading, rate, aim, controls.turn, rule, gain).1
     }
 
     /// One frame of the player's bank out of a jump, turning `way`,
-    /// auto-turning when `auto` (see the module docs).
-    pub(super) fn bank_player(&mut self, way: Turn, auto: bool) {
+    /// auto-turning when `auto`, at the frame's `gain` (see the module
+    /// docs).
+    pub(super) fn bank_player(&mut self, way: Turn, auto: bool, gain: SpeedMult) {
         let spec = self.fit.hull.frames;
-        bank(&mut self.ship_display.frames, &spec, way, auto);
+        bank(&mut self.ship_display.frames, &spec, way, auto, gain);
     }
 
-    /// One frame of the player's bank through a jump, its auto-turn turning
-    /// it `way`: a banking ship levels at once past a stage of 30 (see the
-    /// module docs).
-    pub(super) fn bank_through_jump(&mut self, jump: Option<Jump>, way: Turn) {
-        self.bank_player(way, true);
+    /// One frame of the player's bank through a jump at the frame's
+    /// `gain`, its auto-turn turning it `way`: a banking ship levels at
+    /// once past a stage of 30, unscaled (see the module docs).
+    pub(super) fn bank_through_jump(&mut self, jump: Option<Jump>, way: Turn, gain: SpeedMult) {
+        self.bank_player(way, true, gain);
         if self.fit.hull.frames.has(BANKS) && self.warp_stage(jump) > JUMP_LEVEL_STAGE {
             self.ship_display.frames.bank = 0.0;
         }
@@ -346,20 +385,57 @@ impl PlayerShip {
         }
     }
 
+    /// `_HandleShipDisplay`'s frame for the player at the frame's gain
+    /// `gain`, read as `disabled` (the `_IsDisabled` its display kept,
+    /// @0x2b61f): its sets, its lights, random lights rolling on `chance`,
+    /// then its ion tint on its own capacity (see the module docs).
+    pub(super) fn display_frames(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        disabled: bool,
+        gain: SpeedMult,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let spec = self.fit.hull.frames;
+        let rounds = OutfitRounds {
+            owned: &mut pilot.outfits,
+            sources: &statics.ammo_outfits,
+        };
+        let moment = Moment {
+            disabled,
+            key_aboard: self
+                .fit
+                .armament
+                .key_ship_aboard(self.fit.hull.key_carried, &rounds),
+            rules: setup.display_rules(),
+            gain,
+        };
+        let fold = self.fit.armament.fold_mut();
+        let frames = &mut self.ship_display.frames;
+        let mut drawn = frames.step(&spec, fold, moment);
+        drawn.lights = frames.light(&spec, &moment, |sides| chance.roll(sides));
+        self.ship_display.drawn = drawn;
+        let capacity = self.ion_capacity();
+        self.ship_display.ion_tint = ion_tint::display(&mut self.ion, capacity, &mut *chance);
+    }
+
     /// The player's lights block run once as a flight is entered, before
     /// its first frame, as `_PrepareAllSprites` runs `_HandleShipDisplay`
     /// (@0x3a776-0x3a78e): so the first frame shows the lights at their
     /// first step from rest, and each step's display the next. A random
     /// light's first roll is the stateless solver's first, on
     /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
-    /// chance is to hand.
-    pub(super) fn prepare_player_lights(&mut self, setup: &Setup) {
+    /// chance is to hand. The lights step at `gain`, the session's.
+    pub(super) fn prepare_player_lights(&mut self, setup: &Setup, gain: SpeedMult) {
         use crate::blink::BlinkChance;
         let spec = self.fit.hull.frames;
         let moment = Moment {
             disabled: self.condition.disabled(),
             key_aboard: false,
             rules: setup.display_rules(),
+            gain,
         };
         let rolls = crate::blink::HashedRolls::new(0);
         let frames = &mut self.ship_display.frames;
@@ -382,6 +458,63 @@ impl PlayerShip {
 }
 
 impl Space {
+    /// `_HandleShipDisplay`'s frame for NPC `id` at the frame's gain
+    /// `gain`, read as `disabled` (the `_IsDisabled` its display kept,
+    /// @0x2b61f), right after its own step in the ship loop: its sets, lights and ion tint, a derelict
+    /// government's ship glowing 0 from its spawn, its spawn's rolls and
+    /// its random lights rolled on `chance`; then its blink timer kept as
+    /// its berth's (`Traffic::display_npc`).
+    pub(super) fn display_npc_frames(
+        &mut self,
+        id: NpcId,
+        disabled: bool,
+        gain: SpeedMult,
+        statics: &Statics,
+        setup: &Setup,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let govts = &statics.govts;
+        self.traffic.display_npc(
+            id,
+            disabled,
+            |govt| govts.derelict(govt),
+            setup.display_rules(),
+            gain,
+            chance,
+        );
+    }
+
+    /// The frames of each NPC no display of the ship loop reached this
+    /// pass (one not in `displayed`: a fighter launched below its carrier
+    /// or from a bay after the loop, an arrival or reinforcement after
+    /// it), stepped once at the frame's gain `gain`, read as disabled as
+    /// it is now, by the other
+    /// reading of [`RuleKey::UndisplayedShips`] alone, under which it is
+    /// drawn at once; by the engine's it is neither walked nor drawn until
+    /// its slot's next display, which steps it (see the module docs).
+    pub(super) fn display_undisplayed(
+        &mut self,
+        displayed: &BTreeSet<NpcId>,
+        statics: &Statics,
+        setup: &Setup,
+        gain: SpeedMult,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Engine {
+            return;
+        }
+        let undisplayed: Vec<(NpcId, bool)> = self
+            .traffic
+            .npcs()
+            .iter()
+            .filter(|npc| !displayed.contains(&npc.id))
+            .map(|npc| (npc.id, npc.is_disabled()))
+            .collect();
+        for (id, disabled) in undisplayed {
+            self.display_npc_frames(id, disabled, gain, statics, setup, &mut *chance);
+        }
+    }
+
     /// Tells the traffic the first class, ID 128, which a spawn of most
     /// origins rolls its animation on
     /// (`nova_sim::traffic::ship_display::FirstClass`), its frames as
@@ -394,7 +527,7 @@ impl Space {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{HullRecord, ShipDisplay, ShipExits, ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -412,7 +545,7 @@ mod tests {
     /// The test catalog, the player's ship 128 of `shän` `Flags` `flags`
     /// and `sets` base sets, `AnimDelay` 5, 36 frames a turn; ship 129 of
     /// the Asteroid Miner's 0xc2 and six sets.
-    fn displaying(flags: u16, sets: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn displaying(flags: u16, sets: i16) -> FakePilotCatalog {
         let shän = |id, flags, sets| HullRecord {
             display: Some(ShipDisplay {
                 flags,
@@ -457,7 +590,7 @@ mod tests {
     /// The bank and flag after `n` frames turning `way` from `frames`.
     fn turned(frames: &mut ShipFrames, way: Turn, auto: bool, n: usize) -> (f32, i8) {
         for _ in 0..n {
-            bank(frames, &banking(), way, auto);
+            bank(frames, &banking(), way, auto, SpeedMult::FULL);
         }
         (frames.bank, frames.flag)
     }
@@ -534,8 +667,46 @@ mod tests {
             flag: 1,
             ..ShipFrames::default()
         };
-        bank(&mut frames, &FrameSpec::NONE, Turn::Right, true);
+        bank(
+            &mut frames,
+            &FrameSpec::NONE,
+            Turn::Right,
+            true,
+            SpeedMult::FULL,
+        );
         assert_eq!((frames.bank, frames.flag), (9.0, 0));
+    }
+
+    /// The bank after a frame turning `way` from `from` at `gain`.
+    fn banked(from: f32, way: Turn, gain: f64) -> f32 {
+        let mut frames = ShipFrames {
+            bank: from,
+            ..ShipFrames::default()
+        };
+        bank(&mut frames, &banking(), way, false, SpeedMult::new(gain));
+        frames.bank
+    }
+
+    #[test]
+    fn at_half_gain_the_bank_turns_half_a_frame_and_levels_one() {
+        assert_eq!(banked(6.0, Turn::Right, 0.5), 6.5);
+        assert_eq!(banked(-6.0, Turn::Left, 0.5), -6.5);
+        assert_eq!(banked(15.75, Turn::Right, 0.5), 16.25, "below 16: on");
+        assert_eq!(banked(16.0, Turn::Right, 0.5), 16.0, "at 16: held");
+        assert_eq!(banked(5.0, Turn::None, 0.5), 4.0);
+        assert_eq!(banked(-5.0, Turn::None, 0.5), -4.0);
+        assert_eq!(banked(1.5, Turn::None, 0.5), 0.5, "past 2 × 0.5: levels");
+        assert_eq!(banked(1.0, Turn::None, 0.5), 0.0, "on 2 × 0.5: levels");
+        assert_eq!(banked(0.75, Turn::None, 0.5), 0.0, "within it: 0");
+        assert_eq!(banked(-1.0, Turn::None, 0.5), 0.0);
+    }
+
+    #[test]
+    fn at_no_gain_the_bank_stays_put() {
+        assert_eq!(banked(6.0, Turn::Right, 0.0), 6.0);
+        assert_eq!(banked(-6.0, Turn::Left, 0.0), -6.0);
+        assert_eq!(banked(5.0, Turn::None, 0.0), 5.0);
+        assert_eq!(banked(-5.0, Turn::None, 0.0), -5.0);
     }
 
     #[test]
@@ -780,7 +951,7 @@ mod tests {
         npc.display.glow = 20;
         // Its berth keeps a timer of 9; its own, carried, is 3.
         npc.display.frames.lights.timer = 9.0;
-        session.space.traffic.keep_berth_blink();
+        session.space.traffic.keep_berth_blink_of(id);
         let lights = crate::combat::ship_lights::ShipLights {
             intensity: 12.5,
             count: 1,
@@ -1008,7 +1179,10 @@ mod tests {
         assert_eq!(owed, AnimRoll::FirstClass, "`_SpawnEscort`'s");
         // Its first display spends it, on class 128's four sets.
         let mut first = Draws::of(&[]).keyed(4, 1);
-        session.display_ships(&mut first);
+        let (statics, setup) = (&session.statics, &session.setup);
+        session
+            .space
+            .display_npc_frames(id, false, SpeedMult::FULL, statics, setup, &mut first);
         assert_eq!(first.times_asked(4), 1);
         let npc = session.space.npc_mut(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::None, "spent");
@@ -1018,7 +1192,10 @@ mod tests {
         session.populate(&catalog, &mut NeverFires);
         let id = session.space.escorts.fleet[0].expect("placed");
         let mut again = Draws::of(&[]).keyed(4, 3).keyed(6, 5);
-        session.display_ships(&mut again);
+        let (statics, setup) = (&session.statics, &session.setup);
+        session
+            .space
+            .display_npc_frames(id, false, SpeedMult::FULL, statics, setup, &mut again);
         assert_eq!((again.times_asked(4), again.times_asked(6)), (0, 0));
         assert_eq!(
             session
@@ -1049,6 +1226,189 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_no_loop_display_reached_is_stepped_by_the_tail_by_the_other_reading_alone() {
+        // By `UndisplayedShips`' engine reading a ship that came after the
+        // ship loop (@0x4445c-0x444c4) is neither walked nor drawn until
+        // its slot's next display, which steps it; by the other it is drawn
+        // at once, so the tail steps it once. A folding class at its last
+        // set with no direction, drawn on set 1 once stepped.
+        let catalog = displaying(0, 1);
+        for (reading, tail_set) in [(RuleSource::Engine, 0), (RuleSource::Bible, 1)] {
+            let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, reading);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            // Set up, so a pass keeps the NPC the test adds.
+            session.populate(&catalog, &mut NeverFires);
+            let mut ship = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
+            ship.hull.frames = FrameSpec {
+                flags: FOLDS,
+                base_sets: 2,
+                ..FrameSpec::NONE
+            };
+            *ship.armament.fold_mut() = Fold::default().at(1);
+            let late = session.space.traffic.add_npc(ship);
+            let (statics, setup) = (&session.statics, &session.setup);
+            session.space.display_undisplayed(
+                &BTreeSet::new(),
+                statics,
+                setup,
+                SpeedMult::FULL,
+                &mut NeverFires,
+            );
+            let drawn =
+                |session: &Session| session.space.npc(late).expect("there").display.drawn.set;
+            assert_eq!(drawn(&session), tail_set, "{reading:?}: after the tail");
+            // One the loop displayed is not stepped again.
+            session
+                .space
+                .npc_mut(late)
+                .expect("there")
+                .display
+                .drawn
+                .set = 0;
+            let (statics, setup) = (&session.statics, &session.setup);
+            session.space.display_undisplayed(
+                &BTreeSet::from([late]),
+                statics,
+                setup,
+                SpeedMult::FULL,
+                &mut NeverFires,
+            );
+            assert_eq!(drawn(&session), 0, "{reading:?}: displayed already");
+            // The next pass's loop display steps it.
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(drawn(&session), 1, "{reading:?}: the loop's display");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_the_tail_steps_a_disabled_ship_as_disabled() {
+        // A ship no loop display reached has no record of one: the tail
+        // reads it disabled as it is now. A 0x0040 class whose lights burn
+        // steady goes dark disabled.
+        let catalog = displaying(0, 1);
+        let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let lit = |session: &mut Session| {
+            let mut ship = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
+            ship.hull.frames = FrameSpec {
+                flags: 0x0040,
+                lights: true,
+                blink: crate::blink::Blink::STEADY,
+                ..FrameSpec::NONE
+            };
+            session.space.traffic.add_npc(ship)
+        };
+        let downed = lit(&mut session);
+        let well = lit(&mut session);
+        crate::fixture::disable(&mut session, downed);
+        let (statics, setup) = (&session.statics, &session.setup);
+        session.space.display_undisplayed(
+            &BTreeSet::new(),
+            statics,
+            setup,
+            SpeedMult::FULL,
+            &mut NeverFires,
+        );
+        let lights = |id| session.space.npc(id).expect("there").display.drawn.lights;
+        assert_eq!(lights(downed), None, "out while disabled");
+        assert_eq!(lights(well), Some(32), "steady");
+    }
+
+    #[test]
+    fn the_tail_steps_a_fleet_arriving_after_the_loop_by_the_other_reading_and_no_ship_twice() {
+        use crate::session::reinforcements::tests::{FED, TIME, fight, flying, reinforced};
+        // The second pass's `_HandleReinforcements` (@0x44504) brings the
+        // fleet in after the ship loop (@0x4445c-0x444c4). An animated class
+        // of two sets, `AnimDelay` 0, moves a set at every step: a ship the
+        // loop displayed moves exactly one a pass, and the fleet, by the
+        // other reading of `UndisplayedShips`, one in its arrival pass's
+        // tail; by the engine's none until its slot's next display.
+        let animated = FrameSpec {
+            flags: ANIMATED,
+            base_sets: 2,
+            anim_delay: 0,
+            ..FrameSpec::NONE
+        };
+        let mut catalog = reinforced();
+        catalog.hulls.retain(|hull| hull.id != ShipId(128));
+        catalog.hulls.push(HullRecord {
+            display: Some(ShipDisplay {
+                flags: ANIMATED,
+                base_sets: 2,
+                anim_delay: 0,
+                ..ShipDisplay::default()
+            }),
+            exits: Some(ShipExits {
+                frames: 36,
+                ..ShipExits::default()
+            }),
+            ..hull(128)
+        });
+        for (reading, arrived_set) in [(RuleSource::Engine, 0), (RuleSource::Bible, 1)] {
+            let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, reading);
+            let mut session = flying(&catalog).with_rules(rules);
+            let warship = fight(&mut session, FED, 100.0);
+            session.space.npc_mut(warship).expect("there").hull.frames = animated;
+            session.call_for_reinforcements(warship, false, None);
+            let set =
+                |session: &Session| session.space.npc(warship).expect("there").display.drawn.set;
+            for pass in 0..TIME - 1 {
+                let before = set(&session);
+                work(&mut session, &catalog, Controls::default());
+                assert_eq!(
+                    set(&session),
+                    1 - before,
+                    "{reading:?}: pass {pass}, one step"
+                );
+            }
+            let before = (session.npcs().len(), set(&session));
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            assert_eq!(set(&session), 1 - before.1, "{reading:?}: one step");
+            let fleet = &session.npcs()[before.0..];
+            assert!(!fleet.is_empty(), "{reading:?}: arrived");
+            for npc in fleet {
+                assert_eq!(npc.display.drawn.set, arrived_set, "{reading:?}");
+                if reading == RuleSource::Engine {
+                    assert_eq!(npc.display.frames.anim_timer, 0.0, "untouched");
+                    assert_eq!(npc.display.drawn, Drawn::default(), "untouched");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_player_its_display_destroys_steps_its_lights_as_disabled() {
+        // The lights (@0x2c2ea) read the `_IsDisabled` kept before the
+        // dying block (@0x2d7ef) explodes the player: a lit 0x0040 class
+        // goes dark on its final step, where the condition read after it,
+        // destroyed, is not disabled.
+        let catalog = lit(0x0040);
+        let mut session = Session::start(&catalog).expect("starts");
+        let lit_before = player_lights(&mut session, 30, false);
+        assert_eq!(lit_before[29], Some(23));
+        session.pilot.reserves.armor.now = 0.0;
+        session.ship.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        work(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+        );
+        assert_eq!(
+            session.ship.condition,
+            crate::combat::hull::Condition::Destroyed
+        );
+        assert_eq!(session.player_drawn().lights, None, "lights out");
+    }
+
+    #[test]
     fn a_classs_own_shield_is_its_loaded_shield() {
         let mut catalog = displaying(0, 1);
         let mut record = ship(129, FAST);
@@ -1057,5 +1417,14 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.class_shield(ShipId(129)), Some(200.0), "5 × 40");
         assert_eq!(session.class_shield(ShipId(999)), None);
+    }
+
+    #[test]
+    fn a_pass_banks_the_player_at_the_sessions_gain() {
+        let catalog = displaying(BANKS, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.at_gain(SpeedMult::new(0.5));
+        step(&mut session, right());
+        assert_eq!(session.ship.ship_display.frames.bank, 0.5);
     }
 }

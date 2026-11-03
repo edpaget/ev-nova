@@ -1,7 +1,9 @@
 use super::faked_hud::{barred, barred_by, flown, hud_tick};
 use super::faked_world::{shows, world, world_list};
 use super::*;
-use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, ShipPlace, StepReport, StepRun};
+use nova_sim::flight_frame::{
+    FrameShip, FrameTarget, PassReport, RaisedLine, ShipPlace, StepReport, StepRun,
+};
 
 // Traffic.
 
@@ -56,7 +58,7 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint() {
     // a held ship is at no gate (`GateFade::of`, nova-sim's
     // `an_npcs_gate_fade_follows_its_mode`).
     assert_eq!(
-        npc_tint(GateFade::Emerging { ticks_left: 30 }),
+        npc_tint(GateFade::Emerging { ticks_left: 30.0 }),
         None,
         "hidden at its gate"
     );
@@ -212,12 +214,12 @@ fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in() {
         npc_tints(&world_list(view))
     };
     assert_eq!(
-        at_gate(&mut view, GateFade::Emerging { ticks_left: 40 }),
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 40.0 }),
         [],
         "hidden"
     );
     assert_eq!(
-        at_gate(&mut view, GateFade::Emerging { ticks_left: 8 }),
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 8.0 }),
         [Color::rgba(255, 255, 255, 128)],
         "half in"
     );
@@ -229,7 +231,7 @@ fn an_npc_coming_out_of_a_gate_is_on_the_radar_all_along() {
     // When it comes out is the session's (nova-sim's emerge tests); its
     // record keeps it on the radar.
     let emerging = FrameShip {
-        gate: GateFade::Emerging { ticks_left: 40 },
+        gate: GateFade::Emerging { ticks_left: 40.0 },
         ..lit_npc(0.0)
     };
     let view = barred(trafficked(&[130], 1, 129, 3), among(vec![emerging]));
@@ -272,7 +274,7 @@ fn a_ship_held_at_its_gate_is_drawn_plain_on_the_frame_it_is_held() {
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
     );
     let mut frame = view.frame.clone();
-    frame.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    frame.ships[1].gate = GateFade::Emerging { ticks_left: 40.0 };
     shows(&mut view, frame.clone());
     assert_eq!(npc_tints(&world_list(&view)), [], "hidden");
     frame.ships[1].gate = GateFade::None;
@@ -300,7 +302,7 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
         ..PassReport::default()
     };
     let mut waiting = held.clone();
-    waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40.0 };
     view.sim.set_frame(held.clone());
     view.sim.queue_report(super::stepping::doubled(
         pass(&waiting),
@@ -322,11 +324,13 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
 }
 
 #[test]
-fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
+fn a_quote_said_on_a_second_pass_is_on_the_message_line_the_frame_after() {
     // `_DamageShip`'s reaction on the second pass turns it on the
     // player, and `_AIMakeShipAttackPlayer` says its quote there
-    // (`_ShowPersonHailQuote` @0x89ce1), before the next frame: the
-    // session's (nova-sim's `the_quotes_said_before_a_pass_come_with_that_pass`).
+    // (`_ShowPersonHailQuote` @0x89ce1). `_DisplayComm` draws it off
+    // screen, so it shows on the next frame: the session holds it for
+    // that frame (nova-sim's
+    // `double_times_second_pass_lines_are_held_off_the_steps_streams`).
     let mut view = world(
         volleying(),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
@@ -336,17 +340,20 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
         text: "Ace: Prepare to die, !".to_owned(),
     };
     let frame = view.frame.clone();
-    let pass = |quotes| PassReport {
+    let pass = || PassReport {
         ships: frame.ships.clone(),
         double_time: true,
-        quotes,
         ..PassReport::default()
     };
-    view.sim.queue_report(super::stepping::doubled(
-        pass(Vec::new()),
-        pass(vec![quote]),
-        frame.clone(),
-    ));
+    let mut report = super::stepping::doubled(pass(), pass(), frame.clone());
+    report.steps[0].second_pass_lines = vec![RaisedLine::Quote(quote)];
+    view.sim.queue_report(report);
+    view.step_frame(1, view.anchor());
+    assert_eq!(view.message(), None, "not on its own frame");
+    view.sim.queue_report(StepReport {
+        steps: vec![],
+        stopped: true,
+    });
     view.step_frame(1, view.anchor());
     assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
 }
@@ -381,21 +388,21 @@ fn gate_frames(list: &DrawList) -> Vec<u16> {
 fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
     let entering = |ticks_left| GateFade::Entering { ticks_left };
     assert_eq!(
-        npc_tint(entering(15)),
+        npc_tint(entering(15.0)),
         Some(Color::rgba(255, 255, 255, 239)),
         "30/32"
     );
     assert_eq!(
-        npc_tint(entering(8)),
+        npc_tint(entering(8.0)),
         Some(Color::rgba(255, 255, 255, 128)),
         "half"
     );
     assert_eq!(
-        npc_tint(entering(1)),
+        npc_tint(entering(1.0)),
         Some(Color::rgba(255, 255, 255, 16)),
         "2/32"
     );
-    assert_eq!(npc_tint(entering(16)), Some(Color::WHITE));
+    assert_eq!(npc_tint(entering(16.0)), Some(Color::WHITE));
 }
 
 #[test]
@@ -412,7 +419,7 @@ fn a_hypergate_is_drawn_on_the_frame_its_record_gives_and_an_npc_entering_it_fad
     assert_eq!(gate_frames(&world_list(&view)), [0], "closed at first");
     let mut shown = Vec::new();
     let mut tints = Vec::new();
-    for (open, ticks_left) in [(1, 15), (2, 8), (3, 1)] {
+    for (open, ticks_left) in [(1, 15.0), (2, 8.0), (3, 1.0)] {
         let mut frame = view.frame.clone();
         frame.stellars[2].gate_frame = Some(open);
         frame.ships[1].gate = GateFade::Entering { ticks_left };
@@ -749,9 +756,11 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
 
 #[test]
 fn a_shot_is_drawn_with_its_frame_where_it_flies() {
-    // Turned 45 degrees right, so the shot flies across and up.
+    // Turned 45 degrees right, so the shot flies across and up, at the
+    // frame the simulation gives.
     let shot = nova_sim::flight_frame::FrameShot {
         velocity: Vec2::new(14.0, -14.0),
+        frame: Some(4),
         ..super::faked_world::shot_of(0, BLASTER, Vec2::new(28.0, -28.0), 45.0)
     };
     let mut view = world(
@@ -771,7 +780,7 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
         .into_iter()
         .find(|(image, _)| image.id == 3500)
         .expect("the shot");
-    assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "heading 45");
+    assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "the frame given");
     assert_eq!(drawn_at.1, view.camera().shot_centre(shown, (0, 0)));
 }
 

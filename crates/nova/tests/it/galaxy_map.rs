@@ -290,16 +290,17 @@ impl Harness {
     /// Presses at (500, 400), drags to (520, 400), then has `leave` take
     /// the pointer out of the game and let the button go, and comes back
     /// to a point the press hasn't seen: the view stays where the drag
-    /// left it.
+    /// left it, which may be past the move out (a move into a pillar with
+    /// the button held keeps dragging).
     fn assert_lost_release_ends_the_drag(mut self, leave: impl FnOnce(&mut Self)) {
         let before = self.view();
         self.point_past_pillar(Point::new(500.0, 400.0));
         self.button(true);
         self.point_past_pillar(Point::new(520.0, 400.0));
-        let dragged = self.view();
-        assert_ne!(dragged, before, "the drag moved the map");
+        assert_ne!(self.view(), before, "the drag moved the map");
 
         leave(&mut self);
+        let dragged = self.view();
         self.point_past_pillar(Point::new(600.0, 450.0));
         assert_eq!(self.view(), dragged, "the move back");
         self.point_past_pillar(Point::new(700.0, 500.0));
@@ -315,6 +316,30 @@ fn a_release_in_a_pillar_ends_the_drag() {
         harness.point(Point::new(PILLAR / 2.0, 400.0));
         harness.button(false);
     });
+}
+
+/// A drag that moves into a pillar keeps panning the viewer by the
+/// pointer's moves there, as the in-flight map follows the original's
+/// `_GetMouse` loop (`_DoSystemMap` @0x137e9-0x138d8).
+#[test]
+#[allow(clippy::float_cmp)] // The pan's own arithmetic, repeated.
+fn a_drag_into_a_pillar_keeps_panning_the_viewer() {
+    let mut harness = Harness::open_map_with_pillars();
+    harness.point_past_pillar(Point::new(500.0, 400.0));
+    harness.button(true);
+    harness.point_past_pillar(Point::new(520.0, 400.0));
+    let dragged = harness.view();
+    harness.point(Point::new(PILLAR / 2.0, 400.0));
+    let in_pillar = harness.view();
+    assert_ne!(in_pillar, dragged, "the move into the pillar");
+    harness.point(Point::new(PILLAR / 2.0, 450.0));
+    let moved = harness.view();
+    assert_eq!(moved.center().x, in_pillar.center().x);
+    assert_eq!(
+        moved.center().y,
+        in_pillar.center().y - 50.0 / in_pillar.scale(),
+        "50 down in the pillar"
+    );
 }
 
 /// So does one off the window.

@@ -135,6 +135,8 @@ use crate::flight::{self, Controls, FlightRules, Turn};
 use crate::handling::Handling;
 use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
+use crate::traffic::ai_wait;
 use crate::traffic::berth_kept::BerthKept;
 use crate::traffic::held_burst::{self, Flight, Word};
 #[cfg(doc)]
@@ -192,9 +194,11 @@ pub enum Cap {
 
 /// What `_HandleShip` reads of a ship at its own step: its turn rate
 /// (`_ShipTurnRate`, @0x344b0, @0x34510, @0x34554) after the frame's ion
-/// block, its top speed (`_ShipMaxSpeed`, @0x34aab), and the
+/// block, its top speed (`_ShipMaxSpeed`, @0x34aab), the
 /// `_ShipAccelRate` its inertialess adjustment reads before the ion block
-/// (`_AdjustInertialessShipVelocity` @0x334e1).
+/// (`_AdjustInertialessShipVelocity` @0x334e1), and the frame's gain,
+/// `_gSpeedMult`, which its move, turn and thrust read (@0x3427e,
+/// @0x344b8, @0x34af9, @0x34b3b, @0x34b85).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AtStep {
     /// Its turn rate.
@@ -203,34 +207,54 @@ pub struct AtStep {
     pub top_speed: f32,
     /// The acceleration its inertialess adjustment pulls by.
     pub adjust_accel: f32,
+    /// The frame's gain.
+    pub gain: SpeedMult,
 }
 
 impl AtStep {
     /// What `_HandleShip` reads of `npc` at its step under `flight`, the
     /// ships the player leads at `led_speed`, its adjustment's
-    /// acceleration `adjust_accel` read before the frame's ion block: its
-    /// turn rate after the ion block ([`Npc::flying_handling`], whose top
-    /// speed it doesn't read) and its `_ShipMaxSpeed` with the hold as it
-    /// stands then and no charge ([`Npc::top_speed`]).
+    /// acceleration `adjust_accel` read before the frame's ion block, at
+    /// the frame's `gain`: its turn rate after the ion block
+    /// ([`Npc::flying_handling`], whose top speed it doesn't read) and its
+    /// `_ShipMaxSpeed` with the hold as it stands then and no charge
+    /// ([`Npc::top_speed`]).
     #[must_use]
-    pub fn of_npc(npc: &Npc, led_speed: f32, flight: FlightRules, adjust_accel: f32) -> Self {
+    pub fn of_npc(
+        npc: &Npc,
+        led_speed: f32,
+        flight: FlightRules,
+        adjust_accel: f32,
+        gain: SpeedMult,
+    ) -> Self {
         let top_speed = npc.top_speed(led_speed);
         Self {
             turn_rate: npc.flying_handling(top_speed, flight).turn_rate,
             top_speed,
             adjust_accel,
+            gain,
         }
     }
 
-    /// The turn rate, top speed and acceleration of `handling`: a step
-    /// that reads what its slot read.
+    /// The turn rate, top speed and acceleration of `handling`, at a full
+    /// frame's gain: a step that reads what its slot read, as the
+    /// modules' tests compose a low level and its step with nothing
+    /// between (`autopilot::fly`, `fly_at_once`). A flight of the
+    /// traffic's reads the frame's gain ([`AtStep::of_npc`]).
     #[must_use]
     pub fn of(handling: &Handling) -> Self {
         Self {
             turn_rate: handling.turn_rate,
             top_speed: handling.max_speed,
             adjust_accel: handling.accel,
+            gain: SpeedMult::FULL,
         }
+    }
+
+    /// This step at the frame's `gain`.
+    #[must_use]
+    pub fn at_gain(self, gain: SpeedMult) -> Self {
+        Self { gain, ..self }
     }
 
     /// The handling a step that thrusts nothing flies by: its turn rate,
@@ -366,13 +390,15 @@ pub fn spawn_heading(headings: &BerthKept<i16>, berth: u32) -> Option<i16> {
 /// low level said, by the thrust its low level read at its slot, capped
 /// as the low level left the cap ([`Cap`]), an inertialess ship's
 /// velocity pulled by its adjustment's own acceleration at its step.
+/// Each moves, turns and thrusts at the frame's gain ([`AtStep::gain`]).
 pub fn handle_ship(npc: &mut Npc, word: &SlotWord, at_step: AtStep, flight: FlightRules) {
-    if npc.ai_wait > 0 && !npc.count_wait() {
-        super::autopilot::position_step(npc, &at_step.unthrust(), word.inertia);
+    if ai_wait::running(npc.ai_wait) && !npc.count_wait() {
+        let unthrust = at_step.unthrust();
+        super::autopilot::position_step(npc, &unthrust, word.inertia, at_step.gain);
         return;
     }
     let turn = word.wanted.map_or(Turn::None, |wanted| {
-        flight::turn_to(&mut npc.state, wanted, at_step.turn_rate)
+        flight::turn_to(&mut npc.state, wanted, at_step.turn_rate, at_step.gain)
     });
     fly_word(npc, word, turn, at_step, flight);
 }
@@ -397,15 +423,21 @@ pub(crate) fn fly_word(
     };
     if word.speed_off && npc.owed_burst.is_none() {
         // +0x30 = −`_ShipAccelRate`, capped at its top speed and floored at
-        // none (@0x34aef-0x34b68).
-        npc.speed = step_speed(npc.speed, REVERSE, handling.accel, handling.max_speed);
+        // none, × the frame's gain (@0x34aef-0x34b68, read @0x34af9).
+        npc.speed = step_speed(
+            npc.speed,
+            REVERSE,
+            handling.accel,
+            handling.max_speed,
+            at_step.gain,
+        );
     }
     let controls = Controls {
         turn,
         ..word.controls
     };
     let by = (word.inertia, word.word, at_step.adjust_accel);
-    held_burst::step(npc, &handling, controls, flight, by);
+    held_burst::step(npc, &handling, controls, flight, by, at_step.gain);
 }
 
 /// `flight`, a low level's on `handling` as `inertia` says, flown at once
@@ -579,7 +611,7 @@ mod tests {
     #[test]
     fn in_its_ai_wait_it_moves_on_with_no_turn_or_thrust_but_in_a_count_wait() {
         let mut waiting = ship(1.0, 0.0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         handle_ship(
             &mut waiting,
             &word(90, true, Cap::Slot),
@@ -602,7 +634,7 @@ mod tests {
     #[test]
     fn an_inertialess_ship_in_its_wait_drifts_by_the_steps_adjust_accel() {
         let mut waiting = ship(1.0, 90.0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         waiting.speed = 2.0;
         let inertialess = SlotWord {
             inertia: Inertia::Inertialess { speed: 2.0 },

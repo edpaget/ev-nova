@@ -144,7 +144,7 @@ mod tests {
             down,
         ]);
         let mut waiting = traffic.npcs[4].clone();
-        waiting.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        waiting.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3.0 };
         traffic.npcs[4] = waiting;
         assert_eq!(words(&traffic), [-1; 6], "every spawn writes -1");
         issue(&mut traffic, 0);

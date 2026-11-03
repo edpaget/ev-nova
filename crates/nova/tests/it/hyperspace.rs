@@ -645,6 +645,88 @@ fn a_release_off_the_window_ends_the_maps_drag() {
     assert_eq!(harness.map_scroll(), dragged, "and the moves after");
 }
 
+/// The bar above (and below) widened flight's 1024 x 768 content in a
+/// 1024 x 1024 window.
+const BAR: f32 = 128.0;
+
+/// A drag on M's map follows the pointer into a letterbox bar and off the
+/// window, as `_DoSystemMap`'s loop polls `_GetMouse` with no rect test
+/// until `_StillDown` goes false (@0x137e9-0x138d8); a release in the bar
+/// still ends it and clicks nothing.
+#[test]
+fn the_maps_drag_follows_the_pointer_into_a_bar_and_off_the_window() {
+    let mut harness = Harness::flying();
+    harness.send(WindowEvent::Resized {
+        size_px: (1024, 1024),
+        scale_factor: 1.0,
+    });
+    harness.frame();
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::FlightMap);
+    let place = *harness
+        .flight()
+        .course_map()
+        .place()
+        .expect("an in-flight map");
+    let start = place.scroll();
+    let selected = harness.flight().course_map().selected();
+    let route = harness.flight().course_map().route().to_vec();
+    // The scroll a drag from `from` to logical `to` leaves.
+    let dragged_to = |from: Point, to: Point| {
+        let mut place = place;
+        place.drag(start, from, to);
+        place.scroll()
+    };
+    let corner = map_area().grown(-12.0).min;
+    // Window pixels are logical units moved down by the bar.
+    let to_window = |at: Point| (at.x, at.y + BAR);
+    let pointer_at = |harness: &mut Harness, at: Point| {
+        let (x, y) = to_window(at);
+        harness.pointer_to(x, y);
+    };
+    pointer_at(&mut harness, corner);
+    harness.button(true);
+    pointer_at(&mut harness, Point::new(corner.x + 20.0, corner.y + 20.0));
+    assert_ne!(harness.map_scroll(), start, "the drag scrolled the map");
+
+    let in_bar = Point::new(corner.x + 30.0, -BAR + 40.0);
+    pointer_at(&mut harness, in_bar);
+    assert_eq!(
+        harness.map_scroll(),
+        dragged_to(corner, in_bar),
+        "into the top bar"
+    );
+    let further = Point::new(corner.x - 60.0, -BAR + 10.0);
+    pointer_at(&mut harness, further);
+    assert_eq!(
+        harness.map_scroll(),
+        dragged_to(corner, further),
+        "on in the bar"
+    );
+    harness.send(WindowEvent::PointerLeft);
+    let off = Point::new(-50.0, -BAR - 60.0);
+    pointer_at(&mut harness, off);
+    assert_eq!(
+        harness.map_scroll(),
+        dragged_to(corner, off),
+        "off the window"
+    );
+
+    pointer_at(&mut harness, in_bar);
+    harness.button(false);
+    let released = harness.map_scroll();
+    assert_eq!(released, dragged_to(corner, in_bar), "released in the bar");
+    pointer_at(&mut harness, corner);
+    assert_eq!(
+        harness.map_scroll(),
+        released,
+        "the move back scrolls nothing"
+    );
+    let map = harness.flight().course_map();
+    assert_eq!(map.selected(), selected, "nothing clicked");
+    assert_eq!(map.route(), route);
+}
+
 /// So does losing the focus. While the app is away moves never reach
 /// the screen, so only the moves after the focus returns can bite.
 #[test]
@@ -1071,6 +1153,32 @@ fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_o
         "the Up pressed under the movie thrusts once the gate lets go: {:?}",
         harness.ship()
     );
+}
+
+#[test]
+fn a_latched_key_pressed_under_a_hypergates_movie_acts_only_once_pressed_again_after_the_come_out()
+{
+    // `_SetAllKeyCmdFlags` follows the movie (@0x639f2), and flight reads
+    // no queued key (`_IterateInGameEventLoop` @0x56a6b): the slot key's
+    // latch waits for its release.
+    let (mut harness, _) = gamma_picked_filmed(true);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    harness.key(Key::Char('1'), true);
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() != Showing::Movie
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "entered");
+    for _ in 0..60 {
+        harness.frame();
+    }
+    assert_eq!(harness.session().nav_target(), None, "latched");
+    harness.key(Key::Char('1'), false);
+    harness.key(Key::Char('1'), true);
+    for _ in 0..10 {
+        harness.frame();
+    }
+    assert_ne!(harness.session().nav_target(), None, "pressed afresh");
 }
 
 /// In flight over [`wormhole_fork`] with `dësc` 131, the wormhole's own

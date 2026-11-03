@@ -1018,3 +1018,62 @@ fn the_intro_text_opens_with_the_rulebooks_focus_ring() {
         );
     }
 }
+
+/// The gain the flight shown runs at now, `_gSpeedMult`.
+fn flight_gain(screen: &AppScreen) -> nova_sim::SpeedMult {
+    flight(screen)
+        .sim()
+        .carry_over()
+        .and_then(|carry| carry.speed_mult)
+        .expect("a session")
+}
+
+#[test]
+fn the_first_game_enters_at_full_gain() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    assert_eq!(
+        screen.speed_mult,
+        nova_sim::SpeedMult::FULL,
+        "_SwitchedIn @0x1b33c"
+    );
+    create(&mut screen, "Ada");
+    assert_eq!(flight_gain(&screen), nova_sim::SpeedMult::FULL);
+}
+
+#[test]
+fn a_pilot_entered_after_a_game_left_at_a_take_off_enters_at_gain_zero() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight, "taken off");
+    // Left before a frame ran: the stay's tail zeroed the gain.
+    escape_to_menu(&mut screen);
+    assert_eq!(screen.speed_mult, nova_sim::SpeedMult::ZERO);
+    create(&mut screen, "Bea");
+    assert!(
+        flight_gain(&screen) < nova_sim::SpeedMult::FULL,
+        "Bea's frames ramp from 0: {:?}",
+        flight_gain(&screen)
+    );
+}
+
+#[test]
+fn a_switch_in_on_the_main_screen_restores_full_gain() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    escape_to_menu(&mut screen);
+    assert_eq!(screen.speed_mult, nova_sim::SpeedMult::ZERO);
+    screen.focus_gained();
+    assert_eq!(
+        screen.speed_mult,
+        nova_sim::SpeedMult::FULL,
+        "_SwitchedIn @0x513e1"
+    );
+}

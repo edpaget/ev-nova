@@ -384,7 +384,7 @@ fn waited(
         _ => ship(FAST, goal, start, start.velocity.length()),
     };
     npc.state.velocity = start.velocity;
-    npc.ai_wait = wait;
+    npc.ai_wait = crate::traffic::ai_wait::ticks(wait);
     if let Goal::Attack(_) = goal {
         npc.pursuit.frame = Some(Frame {
             goal,
@@ -521,7 +521,7 @@ fn every_flight_of_the_autopilot_turns_as_handle_ship_does() {
     }
     // Searching for a target out of sight it stops as sub 1 does.
     let mut searching = ship(FAST, Goal::Attack(player), braking, 0.0);
-    searching.lost_sight = SearchTimer::Searching(5);
+    searching.lost_sight = SearchTimer::Searching(5.0);
     fly(&mut searching, Some(&east));
     assert_eq!(searching.state.heading, 90.0);
 }

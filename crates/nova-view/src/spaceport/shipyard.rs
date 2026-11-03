@@ -309,7 +309,8 @@ pub const SHIELDS_LABEL: &str = "Shields:";
 /// @0x71ddb-0x71e01).
 pub const ARMOR_LABEL: &str = "Armor:";
 /// `STR#` 2002 #7, the info panel's fuel label (`_fuelString` + 0x400,
-/// @0x71d8f-0x71db3).
+/// @0x71d8f-0x71db3); the plunder dialog's energy label too
+/// (`_fuelString[4]`, `ui::plunder`).
 pub const ENERGY_LABEL: &str = "Energy:";
 /// `STR#` 2002 #335: a value of none.
 pub const NONE: &str = "None";
@@ -1228,6 +1229,14 @@ impl ShipyardScreen {
         }
     }
 
+    /// Tells its offer dialog open whether the mission info screen lists a
+    /// mission ([`SpaceportView::set_offer_missions_listed`](super::SpaceportView::set_offer_missions_listed)).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_missions_listed(listed);
+        }
+    }
+
     /// Its offers play their movies as `movies` says, and so does the
     /// selected ship's loop in item 8, through its looping player: the
     /// ship selected now starts its own ([`ShipMovie::set_movies`]).
@@ -1249,6 +1258,19 @@ impl ShipyardScreen {
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
             offering.rearm(gap);
+        }
+    }
+
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
         }
     }
 
@@ -1747,6 +1769,7 @@ impl Screen for ShipyardScreen {
     /// `_ShipyardFilter` services it (@0x6046e); covered, it holds its
     /// frame while its time runs on ([`ShipMovie::covered`]).
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         self.grid.advance(dt);
         let covered = self.panel.is_some() || self.naming.is_open();
         if covered || self.offer_dialog().is_some() {
@@ -1809,6 +1832,13 @@ impl Screen for ShipyardScreen {
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
+    }
+
+    /// The offers' readout ([`VenueOffers::holds_back_keys`]).
+    fn holds_back_keys(&self) -> bool {
+        self.offering
+            .as_ref()
+            .is_some_and(VenueOffers::holds_back_keys)
     }
 
     /// The offer's and the naming dialog's sounds, in order. The buttons
@@ -4592,6 +4622,56 @@ mod tests {
     /// The shipyard, its offers given.
     fn offering() -> ShipyardScreen {
         screen().with_offers(offer_templates())
+    }
+
+    /// Wiring: the shipyard reads its offers' readout
+    /// ([`VenueOffers::holds_back_keys`]), from a click held on the offer's
+    /// Accept until what the answer left has run on the next tick.
+    #[test]
+    fn the_shipyard_holds_back_keys_for_its_offers_held_click() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        assert!(!screen.holds_back_keys(), "before the press");
+        let [press, held, release] = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false,
+            },
+        );
+        screen.input(&press);
+        assert!(screen.holds_back_keys(), "during the press");
+        screen.input(&held);
+        screen.input(&release);
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(
+            screen.holds_back_keys(),
+            "the Escape waits for the next tick"
+        );
+        screen.tick(Duration::ZERO);
+        assert!(!screen.holds_back_keys(), "it has run");
+    }
+
+    /// Wiring: the shipyard runs what the offer's answer left, an Escape
+    /// held back by the click that accepts, through its own input on its
+    /// next tick ([`VenueOffers::take_unclaimed`]). When it is dropped
+    /// instead is the offers' rule, pinned in `offer`.
+    #[test]
+    fn a_key_queued_after_the_offers_answer_reaches_the_shipyard_on_its_next_tick() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let click = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            key(Key::Escape, true, false),
+        );
+        for input in &click {
+            screen.input(input);
+        }
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(!screen.closed(), "the Escape waits for the next tick");
+        screen.tick(Duration::ZERO);
+        assert!(screen.closed());
     }
 
     #[test]

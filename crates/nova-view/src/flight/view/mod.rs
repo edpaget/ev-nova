@@ -255,8 +255,12 @@
 //!   control answers with the request's line ([`request_line`]); within
 //!   249 pixels it says nothing. On the ticks after, the dock approach
 //!   greets the pilot ([`approach_greeting`]) as its own message, and a
-//!   second L lands. While L is held the approach waits
-//!   (`nova_sim::Session::set_land_key`), as the original's does. An uninhabited
+//!   second L lands. While L's latch is set, which only a request sets,
+//!   the approach waits (`nova_sim::Session::set_dock_try`), as the
+//!   original's `_dockTryFlag` holds it; L held with nothing targeted
+//!   picks the nearest on every pass, silently (`nova_sim`'s `land_key`
+//!   module), and L held with nothing to land reads again on every pass
+//!   (the `faded_keys` module). An uninhabited
 //!   stellar answers every press "No response." ([`NO_RESPONSE`]) and
 //!   lands in that press when it can; a refusal in the same press
 //!   replaces it on the message line. The router takes the landing
@@ -590,7 +594,9 @@
 //!   ([`SessionSetup::hire_terms`](nova_sim::SessionSetup::hire_terms), [`SessionSetup::control_bits`](nova_sim::SessionSetup::control_bits)),
 //!   and its disputed hiring rules come from its rule set
 //!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). Hired escorts who defect unpaid
-//!   on arrival or at take-off are told ([`defection_message`]).
+//!   on arrival or at take-off are kept, worded by [`defection_message`],
+//!   for whoever shows texts to show each in a text dialog
+//!   ([`FlightView::take_defections`]), not said on the message line.
 //! - Persons appear as the session's rules say
 //!   ([`SessionSetup::person_rules`](nova_sim::SessionSetup::person_rules)); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote
@@ -677,7 +683,7 @@ use nova_sim::{
     NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef, SimMessage, StellarId,
     SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
+use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, SpeedMult, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
 use super::catalog::{Looks, ShipSheet, TargetCard};
@@ -713,6 +719,7 @@ mod build;
 mod cockpit;
 mod death;
 mod departure;
+mod dialog_latch;
 mod dialog_map;
 mod docked;
 mod drawing;
@@ -725,6 +732,7 @@ mod hyperspace;
 mod inbox;
 mod interface;
 mod key_fade;
+mod latched_reads;
 mod map_wait;
 mod messages;
 mod missions;
@@ -733,6 +741,7 @@ mod outputs;
 mod player;
 mod port_screen_map;
 mod readouts;
+mod rescue;
 mod screen;
 mod shops;
 mod shots;
@@ -741,9 +750,11 @@ mod sprites;
 mod stars;
 mod stellar_looks;
 mod stepping;
+mod target_latch;
 mod travel;
 mod world;
 
+pub use dialog_latch::LiveKeys;
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
 pub use gamble::RaceShown;
@@ -779,21 +790,29 @@ pub struct FlightOverlays {
 /// key, which lets go of the secondary on every pass it is held,
 /// Command, which the jettison, eject and self-destruct keys need, the
 /// eject key and the self-destruct key, which work only held with Command,
-/// the cloak key, which toggles once a hold, the land key, which holds the dock
-/// approach back while it is down, H and `\`, which show the floating map
-/// while they are down, \` and J, and B, which `_HandlePlayer` polls every
-/// frame, setting the cursor's fade while it is down (@0x6a98b-0x6a999).
+/// the cloak key, which toggles once a hold, the land key, which picks the
+/// nearest stellar on every pass it is down with none targeted, H and
+/// `\`, which show the floating map while they are down, \` and J, and B,
+/// which `_HandlePlayer` polls every frame, setting the cursor's fade
+/// while it is down (@0x6a98b-0x6a999).
 /// H, `\`, \` and J act again when held across a jump's end, a release
 /// of Option or a repair, and B once a target is taken or the cloak drops,
 /// as the original polls them with a latch each
-/// ([`FlightView::held_keys_frame`]); the original's
+/// ([`FlightView::held_keys_frame`]). Held across a dialog or map that
+/// `_SetAllKeyCmdFlags` (@0x61e6d) follows, a latched key stays out of
+/// `held`, its OS repeats too, until its release
+/// ([`FlightView::latched_down`]), but still reads down for every read
+/// that skips its latch (the `latched_reads` module); which keys have no
+/// latch is the `map_wait` module's `UNLATCHED_KEYS`, and which have
+/// latches no site sets, B and L, its `OWN_LATCH_KEYS`. The original's
 /// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
 /// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
-/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P, I and K act
-/// on their press and are here because they stay down: `_HandlePlayer`
+/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P and I act
+/// on their press, K with Command on every step it is held, and are here
+/// because they stay down: `_HandlePlayer`
 /// sets the cursor's byte on every frame one is held, and the zoom reads
 /// them held. A key that opens a dialog from its press isn't tracked, as
 /// the dialog takes its release. Being here doesn't make a key fade the
@@ -1405,13 +1424,38 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     between_passes: Option<between_passes::BetweenPasses>,
     /// The player's ship's place a step before the frame's.
     previous: ShipPlace,
+    /// The player the particles are drawn by, and when they move; see the
+    /// `scroll_offset` module.
+    scroll: crate::flight::scroll_offset::ScrollOffset,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
     /// Time since the view opened, which drives the stellars' animations
     /// and the running lights' blinking. It stops while the map is open.
     elapsed: Duration,
-    /// The flight keys held down.
+    /// The wall time handed to the view since the last step ran, the map's
+    /// ticks and those under a dialog over flight included: at 334 ms or
+    /// more the next step holds its gain (`StepInput::held`; see
+    /// `nova_sim::speed_mult`).
+    since_step: Duration,
+    /// The flight keys held down. A dialog over flight lets go of them,
+    /// and its close gets back those `_HandlePlayer` polls with no latch
+    /// that are still down ([`FlightView::take_back_live_input`]).
     held: HashSet<Key>,
+    /// The latched flight keys a `_SetAllKeyCmdFlags` (@0x61e6d) site
+    /// latched while they were down, and that haven't been let go since:
+    /// their latches (`_jumpTryFlag`, `_navModeSelectFlag` and the rest,
+    /// see the `map_wait` module) wait for a release `_HandlePlayer` reads
+    /// from `GetKeys`, so their OS repeats are no presses and stay out of
+    /// `held` (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
+    latched_down: HashSet<Key>,
+    /// Whether a `_SetAllKeyCmdFlags` site ran since the last hand-back or
+    /// key poll, so the dialogs it opened latch every key down at their
+    /// close (see the `dialog_latch` module).
+    latch_at_close: bool,
+    /// The press keys a hand-back left for the next key poll, in
+    /// `_HandlePlayer`'s order, as a slot key before them acts only there
+    /// (see the `dialog_latch` module). A release drops its key.
+    after_poll: Vec<Key>,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,
     /// so a key held acts once; cleared on a frame neither \` without
@@ -1433,6 +1477,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// A tap of the jettison chord since the last step, `Some(all)`, for
+    /// the next step to jettison once ([`FlightView::jettison`]).
+    jettison_tapped: Option<bool>,
+    /// `_weapTargetSelectFlag` (0xdede8), the latch Tab and the click in
+    /// space share: set as either acts, cleared on a frame both are up
+    /// (the `target_latch` module).
+    target_latch: bool,
     /// The presses kept through a jump, and L's and I's latches (see the
     /// `faded_keys` module).
     faded_keys: faded_keys::FadedKeys,
@@ -1447,6 +1498,16 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What was pressed under the last movie, until the router takes it
     /// ([`FlightView::take_movie_replay`]).
     movie_replay: Vec<crate::Input>,
+    /// The escape pod's rescue on screen while it shows: flight steps no
+    /// more until it is over (see the `rescue` module).
+    rescue: Option<super::rescue_screen::RescueScreen>,
+    /// The repaint under the rescue's first text, when a text queued
+    /// after `_ResetPlayer` reads it, until the screen is black (see the
+    /// `rescue` module).
+    rescue_later: Option<rescue::LaterRepaint>,
+    /// What was pressed under the rescue, until the router takes it
+    /// ([`FlightView::take_rescue_replay`]).
+    rescue_replay: Vec<crate::Input>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router
@@ -1533,6 +1594,19 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
     fade_in: Option<JumpEffect>,
+    /// The lines a double-time frame's second pass raised, worded, for the
+    /// frame after (see the `between_passes` module): relayed once, at the
+    /// next frame's steps or before a write to the slot.
+    held_lines: Said,
+    /// Whether the frame's own work after its steps is under way
+    /// (`Screen::tick` from its steps to its end): a write to the slot
+    /// then leaves the held lines to stand over it (see the
+    /// `between_passes` module).
+    writing_in_frame: bool,
+    /// Whether the warp's end waited for a double-time frame between its
+    /// passes to go ([`FlightView::arrival_frame`]): its arrival then runs
+    /// the tick's steps in the new system.
+    arrival_waited: bool,
     /// The fade to black after the player's death, once begun
     /// ([`FlightView::begin_fade`]).
     death_fade: Option<ScreenFade>,
@@ -1948,16 +2022,20 @@ fn point(v: Vec2) -> Point {
 /// Shows the fight's events a pass raised, `combat`, in `scene`: each on
 /// `effects`, as `looks` says, drawing on `chance`, and each hit on its
 /// ship's flash among `flashes`, which then step a frame by the pass's
-/// `ships` ([`step_flashes`]). An NPC's shot hits land before its
+/// `ships` at the pass's gain `gain` ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
 /// next. Gives the weapon glows the fight lit, each ship's and whether it
-/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
+/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`]. A
+/// pass `heard` already only shows its events ([`Effects::show_event`]),
+/// as its sounds were made on its own frame (see the `between_passes`
+/// module).
 fn show_combat(
     (combat, ships): (&[CombatEvent], &[FrameShip]),
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     (looks, sheets): (&Looks, Sheets<'_>),
+    (heard, gain): (bool, SpeedMult),
     chance: &mut dyn Chance,
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
@@ -1979,9 +2057,13 @@ fn show_combat(
                 flashes.entry(ship).or_default().hit(passes_shields);
             }
         }
-        effects.apply(event, scene, looks, chance);
+        if heard {
+            effects.show_event(event, scene, looks, gain, chance);
+        } else {
+            effects.apply(event, scene, looks, gain, chance);
+        }
     }
-    step_flashes(flashes, ships, sheets);
+    step_flashes(flashes, ships, sheets, gain);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
@@ -2015,8 +2097,8 @@ type Sheets<'a> = (
     &'a BTreeMap<ShipId, Result<ShipSheet, String>>,
 );
 
-/// Steps each ship's shield flash among `flashes` a frame by its shield
-/// among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
+/// Steps each ship's shield flash among `flashes` a frame at the pass's
+/// gain `gain` by its shield among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
 /// sheet among `sheets` has a shield layer, and its class's own loaded
 /// `Shield` (class +0x5c @0x2c8aa, [`FrameShip::class_shield`]), dropping
 /// the flashes of ships no longer in the system and those run out.
@@ -2024,6 +2106,7 @@ fn step_flashes(
     flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
     ships: &[FrameShip],
     (player, sheets): Sheets<'_>,
+    gain: SpeedMult,
 ) {
     flashes.retain(|&ship, flash| {
         let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
@@ -2037,7 +2120,7 @@ fn step_flashes(
         };
         let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
         let base = shown.class_shield.unwrap_or(shown.shield.max);
-        flash.step(shown.shield.now, base, has_layer);
+        flash.step(shown.shield.now, base, has_layer, gain);
         flash.shown() > 0.0
     });
 }

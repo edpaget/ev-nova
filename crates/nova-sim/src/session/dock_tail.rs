@@ -31,15 +31,20 @@
 //! frames (@0x675ce-0x675fa; see the `takeoff_frames` module) between
 //! the halves, the population first.
 //!
+//! The take-off zeroes the frame's gain before the first half
+//! (`_PlayerLandOnStellar`'s tail @0x6375e, which returns @0x66f29 before
+//! this tail runs), so both `_PrepareAllSprites` there, the ships'
+//! display steps and the stellar passes, run at 0; a gate exit and the
+//! wormhole with no exit run them at the gain of the moment.
+//!
 //! The order within each half is the take-off's. Only the deselect
 //! before the cue, and the population before the frames' reset, the
 //! rebuild and the sprites' preparation, matter: everything settles
 //! before the next frame is drawn.
 
 use super::Session;
-use super::stellar_passes::GateHolds;
+use super::stellar_passes::{GateHolds, PassKind};
 use crate::chance::Chance;
-use crate::gate_sprite::StellarPass;
 
 impl Session {
     /// The dock request's tail before the system is set up (see the
@@ -59,10 +64,11 @@ impl Session {
 
     /// The dock request's tail once the system is set up and its frames
     /// reset (see the module docs): the stellars rebuilt, the dock request
-    /// dropped, both `_PrepareAllSprites`' stellar passes run as `pass`,
-    /// their random picks drawn on `chance`, every sprite prepared again,
+    /// dropped, both `_PrepareAllSprites`' stellar passes run at the
+    /// session's gain (0 after a take-off's zero), their random picks drawn
+    /// on `chance`, every sprite prepared again at that gain,
     /// the nav selection let go and the course cued.
-    pub(super) fn end_dock_tail(&mut self, pass: StellarPass, chance: &mut (impl Chance + ?Sized)) {
+    pub(super) fn end_dock_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         // The rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
         // `_dockPermission` = 0 (@0x67064), before either pass reads it.
@@ -72,11 +78,11 @@ impl Session {
         // follows @0x674c7's rebuild in the original and the only one
         // after the reset in the engine: the session's sites are as the
         // rebuild left them either way.
-        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The second `_PrepareAllSprites` (@0x67658), `populate`'s being
         // the first (@0x6764e): every NPC's fade steps again.
         self.prepare_all_sprites();
-        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The selection let go, the mode kept, then the course cued
         // (@0x674d2-0x674d8).
         self.chart.deselect();

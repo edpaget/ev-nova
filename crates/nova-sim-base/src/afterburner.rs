@@ -33,14 +33,15 @@
 //! ([`MaxVel::bleed`]).
 //!
 //! None of the pushes, the bleed or the drain is scaled by a frame
-//! factor but the drain's `_gSpeedMult`, which is 1 a tick here. The
-//! box's two components are written with the same value on every path,
+//! factor but the drain, by the frame's gain, `_gSpeedMult`
+//! (@0x6fc0b-0x6fc3c). The box's two components are written with the same value on every path,
 //! so they are always equal, and [`MaxVel`] keeps one. None of these
 //! blocks plays a sound.
 
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::speed_cap::whole_degree;
+use crate::speed_mult::SpeedMult;
 
 /// The afterburner's top speed, in units of `_ShipMaxSpeed` (the double
 /// at 0xdd6e0): the thrust's top (@0x6cc80), the box (@0x6f9a7), the
@@ -127,11 +128,12 @@ pub fn push_speed(speed: f32, accel: f32, max_speed: f32) -> f32 {
     }
 }
 
-/// `fuel` after an afterburner tick using `usage`: down by it, floored at
-/// none (@0x6fbf3-0x6fc4a).
+/// `fuel` after an afterburner frame using `usage` at the frame's `gain`:
+/// down by the usage × the gain, in doubles and narrowed, floored at none
+/// (@0x6fbf3-0x6fc4a).
 #[must_use]
-pub fn drain(fuel: f32, usage: f32) -> f32 {
-    let left = (f64::from(fuel) - f64::from(usage)) as f32;
+pub fn drain(fuel: f32, usage: f32, gain: SpeedMult) -> f32 {
+    let left = gain.add_times(fuel, -usage);
     if left < 0.0 { 0.0 } else { left }
 }
 
@@ -305,9 +307,12 @@ mod tests {
 
     #[test]
     fn the_fuel_falls_by_the_usage_to_none() {
-        assert!(near(drain(10.0, 0.5), 9.5));
-        assert_eq!(drain(0.3, 0.5), 0.0);
-        assert_eq!(drain(0.5, 0.5), 0.0);
+        assert!(near(drain(10.0, 0.5, SpeedMult::FULL), 9.5));
+        assert_eq!(drain(0.3, 0.5, SpeedMult::FULL), 0.0);
+        assert_eq!(drain(0.5, 0.5, SpeedMult::FULL), 0.0);
+        assert_eq!(drain(10.0, 0.5, SpeedMult::new(0.5)), 9.75, "half at half");
+        assert_eq!(drain(0.2, 0.5, SpeedMult::new(0.5)), 0.0, "floored");
+        assert_eq!(drain(10.0, 0.5, SpeedMult::ZERO), 10.0);
     }
 
     // The box.

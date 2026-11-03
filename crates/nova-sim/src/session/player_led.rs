@@ -466,6 +466,8 @@ mod tests {
             session.pilot.escorts.push(hired());
             session.pilot.strict_play = strict_play;
             take_off(&mut session, &catalog);
+            // The integer days' full gain, not the take-off's zero.
+            session.at_gain(crate::SpeedMult::FULL);
             let mission: Vec<NpcId> = session
                 .npcs()
                 .iter()
@@ -774,6 +776,8 @@ mod tests {
     fn the_ships_the_player_leads_warp_out_with_it_on_its_clock() {
         let catalog = ships_catalog(ships(1));
         let (mut session, led, traffic) = with_traffic();
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         // The traffic flies on through the jump rather than landing at
         // once on planet 128, within its box, and waiting there.
         crate::session::tests::landing_by_circle(&mut session);

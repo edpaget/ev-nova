@@ -1,6 +1,7 @@
 //! A text shown on a faded screen, as `_ShowTextDialog` (@0x5a752) shows
-//! one with `_screenFaded` (*0x3b5198) set: under the jump's white, or
-//! over the intro's black. [`MissionDialogs`](super::mission_dialogs::MissionDialogs)
+//! one with `_screenFaded` (*0x3b5198) set: under the jump's white, over
+//! the intro's black, or under the escape pod's rescue's second fade
+//! ([`rescue_screen`](crate::flight::rescue_screen)). [`MissionDialogs`](super::mission_dialogs::MissionDialogs)
 //! keeps one [`FadedScreen`] and asks it what to do with the text in front.
 //!
 //! Whoever holds the dialogs says the screen is faded

@@ -82,7 +82,7 @@ fn the_fighters_abandoned_are_said_each_for_a_message_slot() {
 }
 
 #[test]
-fn an_arrival_takes_its_fighters_pay_and_messages_and_leaves_the_rest() {
+fn an_arrival_takes_its_fighters_and_messages_and_leaves_the_rest() {
     let mut view = faked(in_sol());
     let message = SimMessage::Buoy("Welcome.".to_owned());
     for event in [
@@ -93,13 +93,16 @@ fn an_arrival_takes_its_fighters_pay_and_messages_and_leaves_the_rest() {
     ] {
         view.sim.queue_event(event);
     }
-    let (fighters, pay, messages) = view.arrival_outputs();
+    let (fighters, messages) = view.arrival_outputs();
     assert_eq!(fighters, [(fighters_abandoned_message(3), MESSAGE_TICKS)]);
-    assert_eq!(pay, pay_said(&[nova_sim::PayNote::Defected(1)]));
-    assert!(!pay.is_empty(), "the defection is said");
     assert_eq!(messages, [message]);
-    let (_, _, held) = view.takeoff_outputs();
+    let (_, held) = view.takeoff_outputs();
     assert_eq!(held, Some(NavMode::Off), "another kind, kept for its take");
+    assert_eq!(
+        view.take_defections(),
+        [defection_message(1)],
+        "the defection is kept for the router, off the message line"
+    );
 }
 
 #[test]
@@ -119,15 +122,12 @@ fn a_take_off_says_its_held_q_message_for_a_scripts_slot_and_takes_its_nav() {
         view.leave_said(),
         [("Off you go.".to_owned(), SCRIPT_MESSAGE_TICKS)]
     );
-    let (pay, messages, held) = view.takeoff_outputs();
-    assert_eq!(pay, pay_said(&[nova_sim::PayNote::Defected(2)]));
+    let (messages, held) = view.takeoff_outputs();
     assert_eq!(messages, [message]);
     assert_eq!(held, Some(NavMode::Stellar(Some(StellarId(128)))));
-    assert_eq!(
-        view.takeoff_outputs(),
-        (Vec::new(), Vec::new(), None),
-        "once"
-    );
+    assert_eq!(view.takeoff_outputs(), (Vec::new(), None), "once");
+    assert_eq!(view.take_defections(), [defection_message(2)]);
+    assert_eq!(view.take_defections(), Vec::<String>::new(), "once");
 }
 
 /// A mission text of `mission`, its bar noted at the `texts`th queued

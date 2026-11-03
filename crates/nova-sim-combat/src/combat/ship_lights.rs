@@ -6,23 +6,23 @@
 //! triangle's direction, and the blink timer +0xc8ec (f32) ([`ShipLights`]).
 //! Each frame, for a class with a lights sprite (`LightImageID` above 0,
 //! [`FrameSpec::lights`], @0x2b681-0x2b6a2, gate @0x2c2dd), its `shän`'s
-//! `BlinkMode` steps them by `_gSpeedMult` ([`SPEED_MULT`],
-//! [`ShipLights::step`]):
+//! `BlinkMode` steps them by the frame's gain, `_gSpeedMult`
+//! ([`Moment::gain`], [`ShipLights::step`]):
 //!
 //! - **1, square** (@0x2c31a-0x2c40f): the timer is first held to at most
 //!   max(B, D). While the count is below C, a timer below 0 turns a lit
 //!   light (intensity above 0) dark, the count up by one and the timer A,
 //!   or a dark one lit, the intensity 32 and the timer B; a timer of 0 or
-//!   more falls. At a count of C or more, a timer of 0 or more falls, and
+//!   more falls by the gain (@0x2c3fe). At a count of C or more, a timer of 0 or more falls, and
 //!   one below 0 starts the gap: the count 0, the intensity 0, the timer D.
 //! - **2, triangle** (@0x2c411-0x2c4bb): rising (+0xc8d6 0), at or above
 //!   the top C it is set to C and turns; else it rises B hundredths.
 //!   Falling, at or below the bottom A it is set to A and turns; else it
-//!   falls D hundredths. Each step is added in double precision and stored
-//!   as f32.
+//!   falls D hundredths, times the gain. Each step is taken and added in
+//!   double precision, unnarrowed, and stored as f32 (@0x2c4a5-0x2c4b6).
 //! - **3, random** (@0x2c4c0-0x2c563): a timer at 0 or below rolls the
 //!   intensity A + `_Rand(B − A + 1)` (@0x2c4f3) and loads C; else the timer
-//!   falls and is held to at most C. A top below the bottom is the bottom,
+//!   falls by the gain (@0x2c523) and is held to at most C. A top below the bottom is the bottom,
 //!   unrolled, as `nova_sim::blink` reads it.
 //! - **any other**: the intensity 32 every frame (@0x2c565).
 //!
@@ -32,8 +32,12 @@
 //! (@0x2c56c-0x2c593), and the layer is drawn only while the intensity is
 //! above 1.0, at its whole part ([`level`], @0x2c59a-0x2c5a6).
 //!
-//! From rest (intensity 0, rising, timer 0) the state draws what
-//! `nova_sim::lights_level` solves per tick. After a lights out it does
+//! The loads A, B, C and D, the holds and the triangle's top and bottom
+//! are unscaled: only the falls and the triangle's step read the gain.
+//!
+//! From rest (intensity 0, rising, timer 0) at full gain the state draws
+//! what `nova_sim::lights_level` solves per tick: that closed form stays
+//! full-gain, for the ship browser, which runs no `_HandleShipDisplay`. After a lights out it does
 //! not: by [`RuleKey::LightsOutZeroesBlink`](crate::RuleKey::LightsOutZeroesBlink)'s
 //! engine reading the intensity written 0 is the state's, so a repaired
 //! square wave waits out its timer with its count held, a triangle climbs
@@ -45,8 +49,9 @@
 
 use nova_sim_base::blink::{Blink, FULL, level};
 
-use super::ship_frames::{FrameSpec, LIGHTS_OUT_WHILE_DISABLED, Moment, SPEED_MULT, ShipFrames};
+use super::ship_frames::{FrameSpec, LIGHTS_OUT_WHILE_DISABLED, Moment, ShipFrames};
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 
 /// The most a triangle's top C or a random top B is loaded as (the
 /// original's load-time clamp).
@@ -72,14 +77,14 @@ pub struct ShipLights {
 }
 
 impl ShipLights {
-    /// One frame of the lights block for `blink`, random mode rolling on
-    /// `roll` (sides in, outcome out), before lights out (see the module
-    /// docs).
-    pub fn step(&mut self, blink: &Blink, roll: impl FnOnce(u16) -> u16) {
+    /// One frame of the lights block for `blink` at the frame's gain
+    /// `gain`, random mode rolling on `roll` (sides in, outcome out),
+    /// before lights out (see the module docs).
+    pub fn step(&mut self, blink: &Blink, gain: SpeedMult, roll: impl FnOnce(u16) -> u16) {
         match blink.mode {
-            1 => self.square(blink),
-            2 => self.triangle(blink),
-            3 => self.random(blink, roll),
+            1 => self.square(blink, gain),
+            2 => self.triangle(blink, gain),
+            3 => self.random(blink, gain, roll),
             _ => self.intensity = f32::from(FULL),
         }
     }
@@ -95,13 +100,14 @@ impl ShipLights {
         level(self.intensity)
     }
 
-    /// The timer a frame lower, in double precision (@0x2c3fe).
-    fn fall(&mut self) {
-        self.timer = (f64::from(self.timer) - f64::from(SPEED_MULT)) as f32;
+    /// The timer lower by the frame's gain `gain`, in double precision
+    /// (@0x2c3fe, @0x2c523).
+    fn fall(&mut self, gain: SpeedMult) {
+        self.timer = gain.add_times(self.timer, -1.0);
     }
 
     /// Mode 1 (@0x2c31a-0x2c40f).
-    fn square(&mut self, blink: &Blink) {
+    fn square(&mut self, blink: &Blink, gain: SpeedMult) {
         self.timer = self.timer.min(f32::from(blink.b.max(blink.d)));
         if self.count < blink.c {
             if self.timer < 0.0 {
@@ -114,19 +120,19 @@ impl ShipLights {
                     self.timer = f32::from(blink.b);
                 }
             } else {
-                self.fall();
+                self.fall(gain);
             }
         } else if self.timer < 0.0 {
             self.count = 0;
             self.intensity = 0.0;
             self.timer = f32::from(blink.d);
         } else {
-            self.fall();
+            self.fall(gain);
         }
     }
 
     /// Mode 2 (@0x2c411-0x2c4bb).
-    fn triangle(&mut self, blink: &Blink) {
+    fn triangle(&mut self, blink: &Blink, gain: SpeedMult) {
         let step = if self.count == 0 {
             let top = f32::from(blink.c.min(TOP));
             if self.intensity >= top {
@@ -144,16 +150,18 @@ impl ShipLights {
             }
             f64::from(blink.d) * FALL_STEP
         };
-        // The step is B or D hundredths times `_gSpeedMult`, which is 1.0
-        // ([`SPEED_MULT`]).
-        self.intensity = (f64::from(self.intensity) + step) as f32;
+        // The step is B or D hundredths times the frame's gain, all in
+        // doubles and added unnarrowed (@0x2c4a5-0x2c4b6): not
+        // `SpeedMult::add_times`, which takes its step as an `f32` and
+        // would round B hundredths first.
+        self.intensity = (f64::from(self.intensity) + step * gain.get()) as f32;
     }
 
     /// Mode 3 (@0x2c4c0-0x2c563).
-    fn random(&mut self, blink: &Blink, roll: impl FnOnce(u16) -> u16) {
+    fn random(&mut self, blink: &Blink, gain: SpeedMult, roll: impl FnOnce(u16) -> u16) {
         let hold = f32::from(blink.c);
         if self.timer > 0.0 {
-            self.fall();
+            self.fall(gain);
             self.timer = self.timer.min(hold);
             return;
         }
@@ -194,7 +202,7 @@ impl ShipFrames {
         if !spec.lights {
             return None;
         }
-        self.lights.step(&spec.blink, roll);
+        self.lights.step(&spec.blink, moment.gain, roll);
         if lights_out(spec.flags, moment.disabled) {
             if moment.rules.lights_zeroed == RuleSource::Engine {
                 self.lights.put_out();
@@ -283,7 +291,7 @@ mod tests {
     ) -> Vec<Option<u8>> {
         (0..n)
             .map(|_| {
-                lights.step(blink, |s| {
+                lights.step(blink, SpeedMult::FULL, |s| {
                     sides.push(s);
                     let answer = rolls.answer(*made);
                     *made += 1;
@@ -364,7 +372,7 @@ mod tests {
     fn out(lights: &mut ShipLights, blink: &Blink, n: usize) -> Vec<Option<u8>> {
         (0..n)
             .map(|_| {
-                lights.step(blink, |_| 0);
+                lights.step(blink, SpeedMult::FULL, |_| 0);
                 lights.put_out();
                 lights.level()
             })
@@ -477,17 +485,138 @@ mod tests {
             timer: 20.0,
             ..ShipLights::default()
         };
-        lights.step(&random, |_| 0);
+        lights.step(&random, SpeedMult::FULL, |_| 0);
         assert_eq!(lights.timer, 3.0, "19, held to C");
-        lights.step(&random, |_| 0);
+        lights.step(&random, SpeedMult::FULL, |_| 0);
         assert_eq!(lights.timer, 2.0);
         // A square wave's timer is held to max(B, D) before it falls.
         let mut square = ShipLights {
             timer: 30.0,
             ..ShipLights::default()
         };
-        square.step(&SHUTTLE, |_| 0);
+        square.step(&SHUTTLE, SpeedMult::FULL, |_| 0);
         assert_eq!(square.timer, 19.0, "20, then a frame");
+    }
+
+    /// The levels `lights` draws over `n` frames of `blink` at `gain`,
+    /// every roll answered 0.
+    fn at(lights: &mut ShipLights, blink: &Blink, n: usize, gain: f64) -> Vec<Option<u8>> {
+        (0..n)
+            .map(|_| {
+                lights.step(blink, SpeedMult::new(gain), |_| 0);
+                lights.level()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_square_waves_timer_falls_by_the_gain_and_loads_unscaled() {
+        let mut lights = ShipLights::default();
+        assert_eq!(at(&mut lights, &SHUTTLE, 2, 0.5), [None, Some(FULL)]);
+        assert_eq!(lights.timer, 1.0, "B, not B x 0.5");
+        assert_eq!(
+            at(&mut lights, &SHUTTLE, 4, 0.5),
+            [Some(FULL), Some(FULL), Some(FULL), None],
+            "lit B / 0.5 + 2 = 4 frames, where at full it is 3"
+        );
+        assert_eq!(lights.timer, 4.0, "A, unscaled");
+        // At full: lit 3 frames.
+        let mut full = ShipLights::default();
+        assert_eq!(
+            at(&mut full, &SHUTTLE, 5, 1.0),
+            [None, Some(FULL), Some(FULL), Some(FULL), None]
+        );
+        // The max(B, D) hold is unscaled.
+        let mut held = ShipLights {
+            timer: 30.0,
+            ..ShipLights::default()
+        };
+        at(&mut held, &SHUTTLE, 1, 0.5);
+        assert_eq!(held.timer, 19.5, "20, then half a frame");
+    }
+
+    #[test]
+    fn a_square_wave_at_no_gain_never_flips_from_rest() {
+        let mut lights = ShipLights::default();
+        assert_eq!(at(&mut lights, &SHUTTLE, 10, 0.0), [None; 10]);
+        assert_eq!(lights, ShipLights::default());
+    }
+
+    #[test]
+    fn a_triangle_steps_by_the_gain_and_turns_at_its_unscaled_top_and_bottom() {
+        let mut lights = ShipLights::default();
+        at(&mut lights, &TRIANGLE, 1, 0.5);
+        assert_eq!(lights.intensity, 0.375, "75 hundredths x 0.5");
+        // Near its top: C held to 31, unscaled.
+        lights.intensity = 30.5;
+        at(&mut lights, &TRIANGLE, 1, 0.5);
+        assert_eq!(
+            (lights.intensity, lights.count),
+            (30.875, 0),
+            "still rising"
+        );
+        at(&mut lights, &TRIANGLE, 2, 0.5);
+        assert_eq!((lights.intensity, lights.count), (31.0, 1), "turned at 31");
+        at(&mut lights, &TRIANGLE, 1, 0.5);
+        assert_eq!(lights.intensity, 30.625, "falling 75 hundredths x 0.5");
+        // At its bottom A = 10, unscaled.
+        lights.intensity = 10.0;
+        at(&mut lights, &TRIANGLE, 1, 0.5);
+        assert_eq!((lights.intensity, lights.count), (10.0, 0));
+        // At no gain it holds.
+        let mut still = ShipLights {
+            intensity: 5.0,
+            ..ShipLights::default()
+        };
+        at(&mut still, &TRIANGLE, 3, 0.0);
+        assert_eq!(still.intensity, 5.0);
+    }
+
+    #[test]
+    fn a_triangles_step_is_taken_in_doubles_not_narrowed_first() {
+        // 7 hundredths is inexact in an `f32`: added as a double, the third
+        // step from rest lands on another float than the narrowed step does.
+        let slow = blink(2, 0, 7, 31, 7);
+        let step = 7.0 * RISE_STEP;
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = f64::from(step as f32);
+        let mut lights = ShipLights::default();
+        let (mut wide, mut narrow) = (0.0_f32, 0.0_f32);
+        let mut differ = false;
+        for _ in 0..3 {
+            lights.step(&slow, SpeedMult::FULL, |_| 0);
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                wide = (f64::from(wide) + step) as f32;
+                narrow = (f64::from(narrow) + narrowed) as f32;
+            }
+            assert_eq!(lights.intensity, wide);
+            differ |= wide != narrow;
+        }
+        assert!(differ, "the narrowed step would draw another intensity");
+    }
+
+    #[test]
+    fn a_random_lights_timer_falls_by_the_gain_and_loads_c_unscaled() {
+        let random = blink(3, 5, 12, 3, 0);
+        let mut lights = ShipLights::default();
+        let rolls = std::cell::Cell::new(0);
+        let step = |lights: &mut ShipLights| {
+            lights.step(&random, SpeedMult::new(0.5), |_| {
+                rolls.set(rolls.get() + 1);
+                0
+            });
+        };
+        step(&mut lights);
+        assert_eq!(lights.timer, 3.0, "loaded C");
+        for _ in 0..6 {
+            step(&mut lights);
+        }
+        assert_eq!(lights.timer, 0.0, "at 0 on the 6th frame after its load");
+        assert_eq!(rolls.get(), 1);
+        step(&mut lights);
+        assert_eq!(lights.timer, 3.0, "rolled on the 7th, C unscaled");
+        assert_eq!(rolls.get(), 2);
     }
 
     #[test]
@@ -515,6 +644,7 @@ mod tests {
                 lights_zeroed,
                 ..DisplayRules::ENGINE
             },
+            gain: SpeedMult::FULL,
         }
     }
 
@@ -558,6 +688,24 @@ mod tests {
         let mut frames = ShipFrames::default();
         let disabled = moment(true, RuleSource::Engine);
         assert_eq!(frames.light(&plain, &disabled, |_| 0), Some(FULL));
+    }
+
+    #[test]
+    fn a_ships_lights_step_at_its_moments_gain() {
+        let spec = lights_class(0, SHUTTLE);
+        let mut frames = ShipFrames {
+            lights: ShipLights {
+                timer: 3.0,
+                ..ShipLights::default()
+            },
+            ..ShipFrames::default()
+        };
+        let half = Moment {
+            gain: SpeedMult::new(0.5),
+            ..moment(false, RuleSource::Engine)
+        };
+        frames.light(&spec, &half, |_| 0);
+        assert_eq!(frames.lights.timer, 2.5);
     }
 
     #[test]

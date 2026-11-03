@@ -38,7 +38,7 @@ fn first_goal_out_of_the_gate(fuel_capacity: f32) -> Goal {
     npc.reserves.fuel.max = fuel_capacity;
     npc.reserves.fuel.now = fuel_capacity;
     npc.state.position = Vec2::new(300.0, -400.0);
-    npc.emerge_from_gate(GATE, 3);
+    npc.emerge_from_gate(GATE, 3.0);
     let mut traffic = Traffic::with_interval(1);
     traffic.add_npc(npc);
     let ai = NovaAi::from_rulebook(&Rulebook::default());

@@ -468,7 +468,7 @@ mod tests {
             assert_eq!(shot.target, Some(HIT));
             assert_eq!(shot.heading, 90.0, "the parent's heading");
             assert_eq!(shot.durability, 2.0, "its own weapon's");
-            assert_eq!(shot.age, 0);
+            assert_eq!(shot.age(), 0.0);
         }
     }
 

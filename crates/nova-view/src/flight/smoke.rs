@@ -30,7 +30,9 @@
 //! - Each frame a puff is shown at full `AddOver`, [`Blend::Or`](crate::draw::Blend::Or)
 //!   at [`lights_tint`]`(32)` (+0xa8 and its channels 0x20,
 //!   @0x2e377-0x2e3b3), murked by where it is ([`SeenMurk::at`],
-//!   @0x2e367), and then ages by [`PUFF_AGE_STEP`]; its frame is then set
+//!   @0x2e367), and then ages by [`PUFF_AGE_STEP`] × the frame's gain
+//!   ([`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult),
+//!   `_gSpeedMult` @0x2e3d6), in doubles; its frame is then set
 //!   from its age ([`smoke_frame`], @0x2e3f9-0x2e499), and a puff past its
 //!   last frame is freed. It never moves.
 //! - It is placed at whole pixels from the player by its current frame's
@@ -51,8 +53,8 @@
 //! once (@0x2e308-0x2e33f), which is never seen; and the frozen frame
 //! (@0x35ccf, @0x2e3bc), which the engine never has.
 
-use nova_sim::Vec2;
 use nova_sim::player_wrap::PlayerWrap;
+use nova_sim::{SpeedMult, Vec2};
 
 use super::catalog::SmokeSheet;
 use super::murk::SeenMurk;
@@ -71,7 +73,8 @@ pub const LINGERING_SMOKE: u16 = 0x0800;
 /// The most puffs kept under the caps (64 slots of 0x18 at 0x3b535c).
 pub const MAX_PUFFS: usize = 64;
 
-/// What a puff ages a tick (the double 0.25 @0xdd130).
+/// What a puff ages a pass at full gain (the double 0.25 @0xdd130): the
+/// step is this × the frame's gain ([`SmokePuffs::step`]).
 pub const PUFF_AGE_STEP: f32 = 0.25;
 
 /// The kind of smoke a shot of `Flags` `flags` leaves, if any: 1 under
@@ -102,7 +105,7 @@ pub fn smoke_frame(kind: u8, age: f32) -> Option<u8> {
     if age < 0.0 {
         return None;
     }
-    // A puff ages a quarter a tick: its index is small.
+    // A puff ages a quarter a pass at most: its index is small.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let whole = age.trunc() as u32;
     let index = if kind >= 2 { whole / 2 } else { whole };
@@ -129,7 +132,7 @@ pub struct Puff {
     pub kind: u8,
     /// Its set's sprite.
     pub sheet: SmokeSheet,
-    /// How old it is, a quarter a tick.
+    /// How old it is: [`PUFF_AGE_STEP`] × the gain a pass.
     pub age: f32,
 }
 
@@ -172,11 +175,12 @@ impl SmokePuffs {
         }
     }
 
-    /// Ages every puff a tick, freeing each past its last frame, as
-    /// `_HandleSmoke` does after it shows them.
-    pub fn step(&mut self) {
+    /// Ages every puff by [`PUFF_AGE_STEP`] × the frame's `gain`, freeing
+    /// each past its last frame, as `_HandleSmoke` does after it shows
+    /// them: `(double)age + 0.25 × g`, narrowed (@0x2e3c6-0x2e3ec).
+    pub fn step(&mut self, gain: SpeedMult) {
         self.puffs.retain_mut(|puff| {
-            puff.age += PUFF_AGE_STEP;
+            puff.age = gain.add_times(puff.age, PUFF_AGE_STEP);
             smoke_frame(puff.kind, puff.age).is_some()
         });
     }
@@ -261,7 +265,7 @@ mod tests {
         puffs.spawn(Vec2::ZERO, kind, Some(SET_0), false);
         let mut frames = Vec::new();
         loop {
-            puffs.step();
+            puffs.step(SpeedMult::FULL);
             let Some(puff) = puffs.puffs().first().copied() else {
                 return frames;
             };
@@ -301,6 +305,44 @@ mod tests {
         );
     }
 
+    /// One puff of `kind` from its spawn, its age after one step at
+    /// `gain`.
+    fn aged_at(kind: u8, gain: SpeedMult) -> Option<f32> {
+        let mut puffs = SmokePuffs::default();
+        puffs.spawn(Vec2::ZERO, kind, Some(SET_0), false);
+        puffs.step(gain);
+        puffs.puffs().first().map(|puff| puff.age)
+    }
+
+    #[test]
+    fn a_puff_ages_by_its_step_times_the_gain() {
+        assert_eq!(aged_at(0, SpeedMult::new(0.5)), Some(0.125), "at 0.5");
+        assert_eq!(aged_at(0, SpeedMult::ZERO), Some(0.0), "held at 0");
+    }
+
+    #[test]
+    fn a_full_gain_step_ages_a_puff_by_puff_age_step() {
+        assert_eq!(aged_at(0, SpeedMult::FULL), Some(PUFF_AGE_STEP));
+    }
+
+    #[test]
+    fn at_half_gain_a_puff_shows_each_frame_twice_as_long_and_ends_after_twice_its_steps() {
+        let mut puffs = SmokePuffs::default();
+        puffs.spawn(Vec2::ZERO, 0, Some(SET_0), false);
+        let mut frames = Vec::new();
+        loop {
+            puffs.step(SpeedMult::new(0.5));
+            let Some(puff) = puffs.puffs().first().copied() else {
+                break;
+            };
+            frames.push(puff.frame());
+        }
+        let mut slow = held(&[0, 1, 2, 3, 4, 5, 6, 7], 8);
+        slow.remove(0);
+        assert_eq!(frames, slow);
+        assert_eq!(frames.len() + 1, 64, "twice kind 0's 32 steps");
+    }
+
     #[test]
     fn a_frame_is_none_before_its_age_starts_or_past_its_last() {
         assert_eq!(smoke_frame(0, -1.0), None);
@@ -323,7 +365,7 @@ mod tests {
         assert_eq!(capped.puffs().len(), MAX_PUFFS);
         assert_eq!(uncapped.puffs().len(), 70);
         for _ in 0..32 {
-            capped.step();
+            capped.step(SpeedMult::FULL);
         }
         capped.spawn(Vec2::ZERO, 0, Some(SET_0), true);
         assert_eq!(capped.puffs().len(), 1, "the freed slots taken again");
@@ -335,7 +377,7 @@ mod tests {
         puffs.spawn(Vec2::new(10.0, 0.0), 1, Some(SET_0), false);
         puffs.spawn(Vec2::new(20.0, 0.0), 0, Some(SET_0), false);
         for _ in 0..24 {
-            puffs.step();
+            puffs.step(SpeedMult::FULL);
         }
         let xs =
             |puffs: &SmokePuffs| -> Vec<f32> { puffs.puffs().iter().map(|p| p.at.x).collect() };
@@ -387,7 +429,7 @@ mod tests {
         // is the top left (422, 361).
         assert_eq!(centre(&puffs), Point::new(425.5, 365.5));
         for _ in 0..4 {
-            puffs.step();
+            puffs.step(SpeedMult::FULL);
         }
         assert_eq!(puffs.puffs()[0].frame(), 1);
         // (425, 365) less (4, 3).
@@ -419,7 +461,7 @@ mod tests {
         };
         puffs.spawn(Vec2::new(0.0, 160.0), 0, Some(set_1), false);
         for _ in 0..6 {
-            puffs.step();
+            puffs.step(SpeedMult::FULL);
         }
         let camera = Camera::centred_on(Point::new(0.0, 0.0));
         let mut list = DrawList::new();

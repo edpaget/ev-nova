@@ -331,7 +331,7 @@ pub struct WeaponLook {
     pub flags2: u16,
     /// Its `Flags3`.
     pub flags3: u16,
-    /// `BeamWidth`: a beam's width, and a spinning shot's ticks a frame.
+    /// `BeamWidth`: a beam's width.
     pub beam_width: i16,
     /// `Falloff` as the original loads it
     /// ([`loaded_falloff`](nova_sim::combat::weapon::loaded_falloff)): how
@@ -348,7 +348,9 @@ pub struct WeaponLook {
     pub li_density: i16,
     /// `LiAmplitude` as loaded: none or below is 1 (@0x79625-0x7967c).
     pub li_amplitude: i16,
-    /// `Count`: a shot's life in ticks.
+    /// `Count`: a shot's life at launch, in frames, which the simulation
+    /// counts down by the frame's gain; the view reads the life the frame
+    /// carries, not this.
     pub count: i16,
     /// `Particles`: the trail's particles a tick, none for no trail.
     pub particles: i16,
@@ -365,9 +367,6 @@ pub struct WeaponLook {
     pub beam_color: u32,
     /// `CoronaColor`, `00RRGGBB`.
     pub corona_color: u32,
-    /// `ProxSafety`: the ticks a shot's frame waits before it spins, with
-    /// `Flags2` 0x0001.
-    pub prox_safety: i16,
     /// How long its sound lasts, in ticks rounded up; none when it has no
     /// sound or the sound cannot be decoded.
     pub sound_ticks: Option<u32>,

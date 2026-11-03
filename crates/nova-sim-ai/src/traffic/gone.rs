@@ -842,7 +842,7 @@ mod tests {
             let mut entering = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
             entering.mode = Mode::EnteringGate {
                 gate: StellarId(130),
-                ticks_left: 1,
+                ticks_left: 1.0,
             };
             traffic.add_npc_at(entering, berth)
         }

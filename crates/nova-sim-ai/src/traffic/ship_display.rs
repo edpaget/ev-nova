@@ -17,10 +17,13 @@
 //! **The bank and glow** ([`bank_and_glow`], `_HandleShip`
 //! @0x34d93-0x34fcb, after its flight):
 //!
-//! - `shän` `Flags` 0x0001: the bank (+0xc8e4) moves a frame toward ±8
-//!   turning, and a frame back toward 0 not turning, 0 within a frame of it
+//! - `shän` `Flags` 0x0001: the bank (+0xc8e4) moves by the frame's gain
+//!   toward ±8 turning while short of it (`_gSpeedMult` @0x34dda,
+//!   @0x34e03), and by the gain back toward 0 not turning, 0 within the
+//!   gain of it (@0x34e2f), each compare and add in doubles, narrowed
 //!   (8.0 @0xdd044, -8.0 @0xdd68c); the flag (+0xc8f8) is 1 past 4, -1
-//!   below -4, else 0 (@0xdd680, @0xdd690). A banked ship of 0x0002 too
+//!   below -4, else 0 (@0xdd680, @0xdd690), compares the gain doesn't
+//!   scale. A banked ship of 0x0002 too
 //!   raises its glow by 2 while it is 23 or less (@0x34eb3-0x34ee5).
 //! - Thrusting, a ship of 0x0001 sets its flag to its turn itself
 //!   (@0x34f3d-0x34f4a); then a rush raises the glow (+0xc8d4) by 1 while
@@ -84,29 +87,37 @@
 //! up, its timer `-Rand(10)`. The rolls are made as its first flight or
 //! display begins, before it is drawn, which is all that reads them.
 //!
-//! **The display** ([`display`]): each frame after the flight and the
-//! fight, [`ShipFrames::step`] on its class's [`FrameSpec`], its fold and
-//! whether it is disabled and its key ship aboard; its lights
+//! **The display** ([`display`], one NPC at a time by
+//! [`Traffic::display_npc`]): right after its own step in the ship loop,
+//! as `_HandleShipDisplay` runs for each slot right after its
+//! `_HandleShip` (@0x444ad), [`ShipFrames::step`] on its class's
+//! [`FrameSpec`], its fold, whether it is disabled, its key ship aboard
+//! and the frame's gain ([`Moment::gain`], which its fold, animation and
+//! alt timers and its lights take, `_HandleShipDisplay`'s `_gSpeedMult`
+//! reads). Its caller passes the disabled and the gain: the `_IsDisabled` that display
+//! kept (@0x2b61f), read by the set step and the lights before the dying
+//! block, so one its display destroys steps as disabled. Then its lights
 //! ([`ShipFrames::light`], random lights rolling on the traffic's chance;
 //! a new ship's blink timer is its berth's,
 //! [`berth_blink`](crate::traffic::berth_blink)); then its ion tint
 //! ([`ion_tint::display`]), on its class's capacity, its colour cleared
-//! once its charge is gone. No sound plays in any of it.
+//! once its charge is gone, unscaled by the gain; then its blink timer kept as its berth's. No
+//! sound plays in any of it.
 
 use crate::catalog::GovtId;
 use crate::chance::Chance;
 use crate::combat::armament::Fold;
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
-    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, SPEED_MULT, ShipFrames,
-    UNFOLDS_TO_FIRE,
+    BANKS, DisplayRules, Drawn, FOLDS, FrameSpec, Moment, REFOLD_TICKS, ShipFrames, UNFOLDS_TO_FIRE,
 };
 use crate::flight::Flyer;
 use crate::flight::{Controls, FlightRules, Turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::Traffic;
-use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::spawn::{Entry, NewShip};
 
 /// The most an NPC banks either way (8.0 @0xdd044).
@@ -352,8 +363,14 @@ pub fn held(npc: &Npc) -> bool {
 /// `_HandleShip`'s bank and glow for `npc` after its flight, `held` by its
 /// AI wait as the tick began ([`held`]), its government derelict when
 /// `derelict`, its close-formation leader's glow `leader_glow` (see the
-/// module docs). Its drive is spent.
-pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Option<i16>) {
+/// module docs), its bank at the frame's `gain`. Its drive is spent.
+pub fn bank_and_glow(
+    npc: &mut Npc,
+    held: bool,
+    derelict: bool,
+    leader_glow: Option<i16>,
+    gain: SpeedMult,
+) {
     let spec = npc.hull.frames;
     let drive = std::mem::take(&mut npc.display.drive);
     let display = &mut npc.display;
@@ -365,7 +382,7 @@ pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Opt
         fade(&mut display.glow);
     } else {
         if spec.has(BANKS) {
-            bank(&mut display.frames, drive.turn);
+            bank(&mut display.frames, drive.turn, gain);
             if display.frames.flag != 0 && spec.has(FOLDS) && display.glow <= GLOW_RISES_TO {
                 display.glow += BANK_GLOW;
             }
@@ -394,26 +411,29 @@ pub fn bank_and_glow(npc: &mut Npc, held: bool, derelict: bool, leader_glow: Opt
     }
 }
 
-/// `frames`' bank and flag a frame on, turning `turn` (see the module
-/// docs).
-fn bank(frames: &mut ShipFrames, turn: i8) {
+/// `frames`' bank and flag a frame on, turning `turn`, at the frame's
+/// `gain` (see the module docs): turning, the bank gains ±`gain` while
+/// short of ±8; not turning, a bank at or past ±`gain`, compared in
+/// doubles, moves `gain` toward 0, and any nearer is 0.
+fn bank(frames: &mut ShipFrames, turn: i8, gain: SpeedMult) {
     let bank = &mut frames.bank;
     match turn {
         1.. => {
             if *bank < BANK_MOST {
-                *bank += SPEED_MULT;
+                *bank = gain.add_times(*bank, 1.0);
             }
         }
         ..0 => {
             if *bank > -BANK_MOST {
-                *bank -= SPEED_MULT;
+                *bank = gain.add_times(*bank, -1.0);
             }
         }
         0 => {
-            if *bank >= SPEED_MULT {
-                *bank -= SPEED_MULT;
-            } else if *bank <= -SPEED_MULT {
-                *bank += SPEED_MULT;
+            let g = gain.get();
+            if f64::from(*bank) >= g {
+                *bank = gain.add_times(*bank, -1.0);
+            } else if f64::from(*bank) <= -g {
+                *bank = gain.add_times(*bank, 1.0);
             } else {
                 *bank = 0.0;
             }
@@ -513,23 +533,29 @@ pub fn settle_spawn(
 
 /// `_HandleShipDisplay`'s frame for `npc` by `rules`, what its spawn owes
 /// made first: its glow of 0 when its government is `derelict`, and its
-/// rolls on `chance`, its anim rolls on the class `first` says; then its sets and its lights, random lights rolling
-/// on `chance` (see the module docs).
+/// rolls on `chance`, its anim rolls on the class `first` says; then its
+/// sets and its lights at the frame's gain `gain` ([`Moment::gain`]),
+/// read as `disabled` (the `_IsDisabled` its display kept, @0x2b61f),
+/// random lights rolling on `chance`; then its ion tint, unscaled (see
+/// the module docs).
 pub fn display(
     npc: &mut Npc,
+    disabled: bool,
     derelict: bool,
     rules: DisplayRules,
+    gain: SpeedMult,
     first: &FirstClass,
     chance: &mut (impl Chance + ?Sized),
 ) {
     settle_spawn(npc, derelict, first, chance);
     let spec = npc.hull.frames;
     let moment = Moment {
-        disabled: npc.is_disabled(),
+        disabled,
         key_aboard: npc
             .armament
             .key_ship_aboard(npc.hull.key_carried, &npc.rounds),
         rules,
+        gain,
     };
     let fold = npc.armament.fold_mut();
     let frames = &mut npc.display.frames;
@@ -562,23 +588,29 @@ impl Traffic {
         self.first_class
     }
 
-    /// Every NPC's display this frame ([`display`]) by `rules`, after the
-    /// flight and the fight: a ship of a government `derelict` says is
-    /// derelict glowing 0 from its spawn, its spawn's rolls and its random
-    /// lights rolled on `chance`; then each blink timer kept as its
-    /// berth's ([`Traffic::keep_berth_blink`]).
-    pub fn display_ships(
+    /// NPC `id`'s display ([`display`]) by `rules` at the frame's gain
+    /// `gain`, read as `disabled`, right after its own step in the ship
+    /// loop (`_HandleShipDisplay` @0x444ad): a ship of a government `derelict` says is derelict
+    /// glowing 0 from its spawn, its spawn's rolls and its random lights
+    /// rolled on `chance`; then its blink timer kept as its berth's
+    /// ([`Traffic::keep_berth_blink_of`]). No other NPC is touched; none
+    /// for an NPC not in the traffic.
+    pub fn display_npc(
         &mut self,
+        id: NpcId,
+        disabled: bool,
         derelict: impl Fn(Option<GovtId>) -> bool,
         rules: DisplayRules,
+        gain: SpeedMult,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let first = self.first_class;
-        for npc in &mut self.npcs {
-            let derelict = derelict(npc.govt);
-            display(npc, derelict, rules, &first, &mut *chance);
-        }
-        self.keep_berth_blink();
+        let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) else {
+            return;
+        };
+        let derelict = derelict(npc.govt);
+        display(npc, disabled, derelict, rules, gain, &first, chance);
+        self.keep_berth_blink_of(id);
     }
 }
 
@@ -627,7 +659,7 @@ mod tests {
             thrust,
             ..Drive::default()
         };
-        bank_and_glow(ship, false, false, None);
+        bank_and_glow(ship, false, false, None, crate::speed_mult::SpeedMult::FULL);
     }
 
     #[test]
@@ -683,6 +715,44 @@ mod tests {
     }
 
     #[test]
+    fn at_a_gain_below_1_a_ship_banks_by_the_gain_and_levels_within_it() {
+        let half = SpeedMult::new(0.5);
+        let banked = |bank: f32, turn: i8, gain: SpeedMult| {
+            let mut frames = ShipFrames {
+                bank,
+                ..ShipFrames::default()
+            };
+            super::bank(&mut frames, turn, gain);
+            (frames.bank, frames.flag)
+        };
+        assert_eq!(banked(0.0, 1, half), (0.5, 0), "right");
+        assert_eq!(
+            banked(7.75, 1, half),
+            (8.25, 1),
+            "short of 8: on by the gain"
+        );
+        assert_eq!(banked(8.0, 1, half), (8.0, 1), "at 8: held");
+        assert_eq!(banked(0.0, -1, half), (-0.5, 0), "left");
+        assert_eq!(banked(4.25, 0, half), (3.75, 0), "level from 0.5 up");
+        assert_eq!(banked(0.5, 0, half), (0.0, 0), "at the gain: down by it");
+        assert_eq!(banked(-0.5, 0, half), (0.0, 0));
+        assert_eq!(banked(-4.75, 0, half), (-4.25, -1), "the flag at -4");
+        assert_eq!(banked(0.25, 0, half), (0.0, 0), "within the gain: 0");
+        assert_eq!(banked(-0.25, 0, half), (0.0, 0));
+        assert_eq!(banked(3.0, 1, SpeedMult::ZERO), (3.0, 0), "no gain: held");
+        assert_eq!(banked(3.0, 0, SpeedMult::ZERO), (3.0, 0), "not levelled");
+        assert_eq!(banked(0.0, 0, SpeedMult::ZERO), (0.0, 0));
+    }
+
+    #[test]
+    fn at_half_gain_a_banking_ship_flown_banks_half_a_frame() {
+        let mut ship = folding(BANKS, 3);
+        ship.display.drive.turn = 1;
+        bank_and_glow(&mut ship, false, false, None, SpeedMult::new(0.5));
+        assert_eq!(ship.display.frames.bank, 0.5);
+    }
+
+    #[test]
     fn a_ship_that_does_not_bank_keeps_no_bank() {
         let mut ship = folding(0, 3);
         flown(&mut ship, 1, Thrust::Plain);
@@ -715,7 +785,13 @@ mod tests {
             thrust: Thrust::Rush,
             ..Drive::default()
         };
-        bank_and_glow(&mut ship, true, false, None);
+        bank_and_glow(
+            &mut ship,
+            true,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(
             (ship.display.frames.bank, ship.display.frames.flag),
             (6.0, 1)
@@ -723,7 +799,13 @@ mod tests {
         assert_eq!(ship.display.glow, 9);
         assert_eq!(ship.display.drive, Drive::default(), "spent");
         ship.display.glow = 0;
-        bank_and_glow(&mut ship, true, false, None);
+        bank_and_glow(
+            &mut ship,
+            true,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 0);
     }
 
@@ -731,17 +813,17 @@ mod tests {
     fn the_wait_that_holds_it_is_not_a_count_wait_nor_a_pods() {
         let mut ship = folding(0, 1);
         assert!(!held(&ship));
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         assert!(held(&ship));
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         ship.goal = crate::ai::Goal::CountWait;
-        ship.ai_wait = 9;
+        ship.ai_wait = 9.0;
         assert!(!held(&ship), "a count wait thrusts on");
         ship.goal = crate::ai::Goal::Idle;
-        ship.ai_wait = 0;
-        ship.mode = Mode::Adrift { ticks_left: 50 };
+        ship.ai_wait = 0.0;
+        ship.mode = Mode::Adrift { ticks_left: 50.0 };
         assert!(!held(&ship), "an escape pod");
-        ship.mode = Mode::Coasting { ticks_left: 3 };
+        ship.mode = Mode::Coasting { ticks_left: 3.0 };
         assert!(held(&ship));
     }
 
@@ -801,7 +883,13 @@ mod tests {
     fn a_derelict_governments_ship_holds_its_glow_at_0() {
         let mut ship = ship_of_glow(0, 20);
         ship.display.drive.thrust = Thrust::Rush;
-        bank_and_glow(&mut ship, false, true, None);
+        bank_and_glow(
+            &mut ship,
+            false,
+            true,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 0);
     }
 
@@ -809,13 +897,31 @@ mod tests {
     fn a_ship_in_close_formation_takes_its_leaders_glow_before_its_own_step() {
         let mut ship = ship_of_glow(0, 3);
         ship.display.drive.glow = GlowCopy::Leader;
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 19, "the leader's, then coasting");
         ship.display.glow = 3;
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 2, "out of formation: its own");
         ship.display.drive.glow = GlowCopy::Leader;
-        bank_and_glow(&mut ship, false, false, None);
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            None,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 1, "with no leader's glow, its own");
     }
 
@@ -823,7 +929,13 @@ mod tests {
     fn a_ship_closing_with_a_swarm_leader_takes_its_glow_before_its_own_step() {
         let mut ship = ship_of_glow(0, 3);
         ship.display.drive.glow = GlowCopy::Swarm(12);
-        bank_and_glow(&mut ship, false, false, Some(20));
+        bank_and_glow(
+            &mut ship,
+            false,
+            false,
+            Some(20),
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.display.glow, 11, "the swarm leader's, then coasting");
     }
 
@@ -936,8 +1048,10 @@ mod tests {
             ship.display = spawned;
             display(
                 &mut ship,
+                false,
                 derelict,
                 DisplayRules::ENGINE,
+                crate::speed_mult::SpeedMult::FULL,
                 &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
@@ -945,8 +1059,10 @@ mod tests {
             ship.display.glow = 9;
             display(
                 &mut ship,
+                false,
                 derelict,
                 DisplayRules::ENGINE,
+                crate::speed_mult::SpeedMult::FULL,
                 &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
@@ -977,7 +1093,9 @@ mod tests {
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut draws,
         );
@@ -989,7 +1107,9 @@ mod tests {
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut draws,
         );
@@ -1152,44 +1272,171 @@ mod tests {
         traffic.npcs = vec![ship];
         traffic.set_spawn_anim_rolls_first_class(RuleSource::Engine);
         let mut draws = Draws::of(&[2]);
-        traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut draws);
+        let id = traffic.npcs[0].id;
+        traffic.display_npc(
+            id,
+            false,
+            |_| false,
+            DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
+            &mut draws,
+        );
         assert_eq!(draws.asked, [3]);
         assert_eq!(traffic.npcs()[0].display.drawn.set, 2);
     }
 
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// The moment `display` builds for `ship`, shown, at `gain`.
+    fn moment_of(ship: &Npc, gain: SpeedMult) -> Moment {
+        Moment {
+            disabled: false,
+            key_aboard: ship
+                .armament
+                .key_ship_aboard(ship.hull.key_carried, &ship.rounds),
+            rules: DisplayRules::ENGINE,
+            gain,
+        }
+    }
+
+    /// An animated NPC of `AnimDelay` 1 with the Shuttle's square-wave
+    /// lights, its blink timer at 3.
+    fn animated_and_lit() -> Npc {
+        let mut ship = folding(ANIMATED, 4);
+        ship.hull.frames.anim_delay = 1;
+        ship.hull.frames.lights = true;
+        ship.hull.frames.blink = nova_sim_base::blink::Blink {
+            mode: 1,
+            a: 4,
+            b: 1,
+            c: 2,
+            d: 20,
+        };
+        ship.display.frames.lights.timer = 3.0;
+        ship
+    }
+
     #[test]
-    fn the_display_reads_its_condition_and_key_ship() {
+    fn a_display_steps_the_sets_at_the_frames_gain() {
+        let mut ship = animated_and_lit();
+        let mut expected = ship.display.frames;
+        let mut fold = ship.armament.fold();
+        let spec = ship.hull.frames;
+        let mut drawn = Drawn::default();
+        for _ in 0..3 {
+            drawn = expected.step(&spec, &mut fold, moment_of(&ship, HALF));
+            display(
+                &mut ship,
+                false,
+                false,
+                DisplayRules::ENGINE,
+                HALF,
+                &FirstClass::default(),
+                &mut Draws::of(&[]),
+            );
+        }
+        assert_eq!(ship.display.frames.anim_timer, expected.anim_timer);
+        assert_eq!(ship.display.frames.anim_set, expected.anim_set);
+        assert_eq!(ship.display.drawn.set, drawn.set);
+    }
+
+    #[test]
+    fn a_display_steps_the_lights_at_the_frames_gain() {
+        let mut ship = animated_and_lit();
+        let before = ship.display.frames;
+        let mut expected = before;
+        let spec = ship.hull.frames;
+        expected.light(&spec, &moment_of(&ship, HALF), |_| 0);
+        display(
+            &mut ship,
+            false,
+            false,
+            DisplayRules::ENGINE,
+            HALF,
+            &FirstClass::default(),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(ship.display.frames.lights, expected.lights);
+        let mut full = before;
+        full.light(&spec, &moment_of(&ship, SpeedMult::FULL), |_| 0);
+        assert_ne!(expected.lights, full.lights, "the gain shows");
+    }
+
+    #[test]
+    fn display_npc_steps_at_the_frames_gain_and_keeps_that_timer_for_its_berth() {
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc(animated_and_lit());
+        // Its berth's timer, not its own, is the one it starts on.
+        traffic.npcs_mut()[0].display.frames.lights.timer = 3.0;
+        let ship = &traffic.npcs()[0];
+        let mut expected = ship.display.frames;
+        let mut fold = ship.armament.fold();
+        let spec = ship.hull.frames;
+        let moment = moment_of(ship, HALF);
+        let mut drawn = expected.step(&spec, &mut fold, moment);
+        drawn.lights = expected.light(&spec, &moment, |_| 0);
+        traffic.display_npc(
+            id,
+            false,
+            |_| false,
+            DisplayRules::ENGINE,
+            HALF,
+            &mut Draws::of(&[]),
+        );
+        let shown = &traffic.npcs()[0];
+        assert_eq!(shown.display.frames, expected);
+        assert_eq!(shown.display.drawn, drawn);
+        assert_eq!(
+            traffic.berth_blink_timer(shown.berth),
+            expected.lights.timer,
+            "its berth keeps the timer stepped at the gain"
+        );
+    }
+
+    #[test]
+    fn the_display_reads_the_disabled_it_is_given_and_its_key_ship() {
         let mut ship = folding(KEY_CARRIED, 2);
         ship.hull.key_carried = Some(ShipId(140));
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
         assert_eq!(ship.display.drawn.set, 0, "no bay aboard");
+        // The set step reads the `_IsDisabled` its display kept (@0x2ba56
+        // reads -0x152, from @0x2b61f), not the condition as it is now.
         let mut still = folding(ANIMATED | 0x0010, 3);
-        still.condition = Condition::Disabled;
         display(
             &mut still,
+            true,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
-        assert_eq!(still.display.frames.anim_timer, 0.0, "disabled, still");
-        let mut guard = crate::traffic::fixture::breaking_up_guard(folding(ANIMATED | 0x0010, 3));
+        assert_eq!(
+            still.display.frames.anim_timer, 0.0,
+            "displayed disabled, still"
+        );
+        let mut moving = folding(ANIMATED | 0x0010, 3);
+        moving.condition = Condition::Disabled;
         display(
-            &mut guard,
+            &mut moving,
+            false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
         assert_ne!(
-            guard.display.frames.anim_timer, 0.0,
-            "a defence ship breaking up is not disabled (@0x2d6f)"
+            moving.display.frames.anim_timer, 0.0,
+            "displayed not disabled"
         );
     }
 
@@ -1220,10 +1467,10 @@ mod tests {
         assert_eq!(ship.armament.fold().dir, -1, "near: unfold");
         ship.goal = crate::ai::Goal::Idle;
         ship.armament.fold_mut().dir = 0;
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         dispatch_fold(&mut ship);
         assert_eq!(ship.armament.fold().dir, 0, "waiting: no fold");
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         ship.armament.fold_mut().dir = -1;
         dispatch_fold(&mut ship);
         assert_eq!(ship.armament.fold().dir, -1, "a direction kept");

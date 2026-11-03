@@ -25,7 +25,9 @@
 
 use std::rc::Rc;
 
-use nova_sim::{AsteroidCatalog, CombatCatalog, Pilot, Rulebook, SessionSetup, SimCatalog};
+use nova_sim::{
+    AsteroidCatalog, CombatCatalog, Pilot, Rulebook, SessionSetup, SimCatalog, SpeedMult,
+};
 
 use super::catalog::{CombatLooks, ShipSprites, StatusBars};
 use super::escorts::EscortMenuLooks;
@@ -103,12 +105,16 @@ pub fn begin_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut Fli
     flight.begin(SessionFlight::begin);
 }
 
-/// Enters play from the main screen on `flight`: the adapter's half
+/// Enters play from the main screen on `flight` at `gain`, the
+/// `_gSpeedMult` the last game of the run left: the adapter's half
 /// ([`SessionFlight::enter_game`]) paired with the view's
 /// ([`FlightView::enter_game`]), which scatters the stars afresh. A flight
 /// that enters nothing changes nothing.
-pub fn enter_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut FlightView<C>) {
-    flight.enter_game(SessionFlight::enter_game);
+pub fn enter_game<C: SystemCatalog + ShipSprites + CombatLooks>(
+    flight: &mut FlightView<C>,
+    gain: SpeedMult,
+) {
+    flight.enter_game(|sim| sim.enter_game(gain));
 }
 
 /// The bare opening, which [`open_flight`] sets up after and the test

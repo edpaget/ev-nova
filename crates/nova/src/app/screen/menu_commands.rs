@@ -5,8 +5,8 @@
 //!   ([`menu_chord`]): the command feeds the chord to the router exactly
 //!   as its keys arrive, so every gate and hold the keys meet applies to
 //!   it unchanged (Quit's delay, the entry's and the appear's held
-//!   chords, a keyed click's hold, the overlays, the spaceport and a
-//!   map's Find), but the background's: a command isn't a key, and works
+//!   chords, a keyed click's hold, a dialog's held press (`held_chords`),
+//!   the overlays, the spaceport and a map's Find), but the background's: a command isn't a key, and works
 //!   with the app away, Quit at once whatever would hold it (see
 //!   `background`). With Command already held (the chord's
 //!   key equivalent was typed: the window saw Command go down, and the menu

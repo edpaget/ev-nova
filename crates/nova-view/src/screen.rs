@@ -260,6 +260,15 @@ pub trait Screen {
     fn hides_pointer(&self) -> bool {
         false
     }
+    /// Whether keys typed now would come after keys the screen holds back
+    /// for a press (a dialog's held press, `ui::held_keys`): true from the
+    /// press until the replay of what it held back has run. The router
+    /// (`nova::app`) holds its own chords, Command-Q and Command-comma,
+    /// until then, so they act after the keys typed before them. `false`
+    /// by default.
+    fn holds_back_keys(&self) -> bool {
+        false
+    }
     /// The logical shape the screen draws in now, for the app to fit into
     /// the window: [`ViewShape::Classic`], 1024x768, by default.
     fn view_shape(&self) -> ViewShape {
@@ -375,6 +384,12 @@ mod tests {
     fn a_screen_leaves_the_system_pointer_shown_by_default() {
         let screen: &dyn Screen = &Counter::default();
         assert!(!screen.hides_pointer());
+    }
+
+    #[test]
+    fn a_screen_holds_back_no_keys_by_default() {
+        let screen: &dyn Screen = &Counter::default();
+        assert!(!screen.holds_back_keys());
     }
 
     #[test]

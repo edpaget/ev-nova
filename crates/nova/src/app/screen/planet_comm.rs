@@ -25,8 +25,11 @@ impl AppScreen {
     /// the interface file's, or the built-in one without it (with a
     /// warning when the interface file has none), its buttons taking the
     /// rulebook's `dialog_focus_ring`. With no metrics to lay
-    /// it out, the dialog is closed at once, with a warning.
+    /// it out, the dialog is closed at once, with a warning. Flight's
+    /// cursor hides first, as `_HandlePlayerCommunication` hides its sprite
+    /// before `_DoPlanetCommDialog` (@0x62035).
     pub(super) fn open_planet_comm(&mut self, view: &PlanetCommView) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.press_planet_comm(PlanetCommItem::Close);

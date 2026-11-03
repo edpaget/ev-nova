@@ -7,7 +7,9 @@
 //! ([`Session::lose_escorts`]), every NPC that is not disabled forgets
 //! what it was as an escort ([`Npc::former`](crate::traffic::npc::Npc::former), @0x33bdb), and every
 //! disabled NPC whose class carries a repair system
-//! ([`Npc::self_repair`](crate::traffic::npc::Npc::self_repair)) draws `Rand(500)`. On 0, with armour above 0
+//! ([`Npc::self_repair`](crate::traffic::npc::Npc::self_repair)) draws
+//! `Rand(`[`repair_odds`]`)` at the frame's
+//! gain ([`Session::speed_mult`]), `Rand(500)` at full gain. On 0, with armour above 0
 //! and not breaking up, its armour goes to
 //! [`repaired_armor`](crate::self_repair::repaired_armor) and its
 //! condition is decided again at once, so no frame shows it disabled: it
@@ -52,7 +54,7 @@ use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::hull::{Condition, DisableRule};
 use crate::self_repair::{
-    FormerEscort, REPAIR_ODDS, can_self_repair, rejoin_message, repaired_armor,
+    FormerEscort, can_self_repair, rejoin_message, repair_odds, repaired_armor,
 };
 use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
@@ -75,8 +77,8 @@ impl Session {
                 continue;
             };
             // The gear is tested before the draw, so that a ship without
-            // it draws nothing.
-            let drawn = chance.below(REPAIR_ODDS);
+            // it draws nothing. The range is the frame's gain's.
+            let drawn = chance.below(repair_odds(self.speed_mult()));
             if !can_self_repair(drawn, npc.condition, npc.reserves.armor.now, true) {
                 continue;
             }
@@ -147,6 +149,7 @@ mod tests {
     use crate::message::SimMessage;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
+    use crate::self_repair::REPAIR_ODDS;
     use crate::self_repair::{FormerKind, MOD_REPAIR};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, catalog, hull, jump, outfit, ship};
     use crate::testkit::{Passive, work, work_with};
@@ -352,6 +355,32 @@ mod tests {
             crate::save::encode(session.pilot()).contains("\"defend\""),
             "saved with its order"
         );
+    }
+
+    #[test]
+    fn a_disabled_ship_with_the_gear_draws_the_range_at_the_frames_gain() {
+        let catalog = repairing();
+        let mut session = flying(&catalog);
+        let hired = placed(&session)[0];
+        disable(&mut session, hired);
+        let half = crate::SpeedMult::new(0.5);
+        session.at_gain(half);
+        assert_eq!(fight(&mut session, &[1]), [repair_odds(half)]);
+        assert_ne!(
+            repair_odds(half),
+            repair_odds(crate::SpeedMult::FULL),
+            "the gain shows"
+        );
+    }
+
+    #[test]
+    fn at_full_gain_a_disabled_ship_draws_repair_odds_range() {
+        let catalog = repairing();
+        let mut session = flying(&catalog);
+        let hired = placed(&session)[0];
+        disable(&mut session, hired);
+        session.at_gain(crate::SpeedMult::FULL);
+        assert_eq!(fight(&mut session, &[1]), [REPAIR_ODDS]);
     }
 
     #[test]

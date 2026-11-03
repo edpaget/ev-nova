@@ -435,6 +435,7 @@
 
 mod afterburner;
 mod afterburner_roll;
+mod ai_gain;
 mod answer_flag;
 mod apply;
 mod arrival_system;
@@ -469,13 +470,16 @@ mod collision_order;
 mod combat_rating;
 mod comm_calls;
 mod command_word;
+mod contact_masks;
 mod control;
 mod course;
 mod crons;
+mod deadly_masks;
 mod deadly_stellars;
 mod derelicts;
 mod description;
 mod disabled_mission_escorts;
+mod display_gain;
 mod display_step;
 mod dock_tail;
 mod dominated_stellars;
@@ -484,6 +488,7 @@ mod double_time;
 mod drift_blast;
 mod dying_player_escorts;
 mod edit;
+mod effects_gain;
 mod eject;
 mod entry;
 mod escort_arrival;
@@ -529,6 +534,7 @@ mod grant_explorations;
 mod gravity;
 mod hail;
 mod hail_advice;
+mod held_jettison;
 mod hire;
 mod hooks;
 mod hover;
@@ -545,8 +551,10 @@ mod jump_moves;
 mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
+mod land_key;
 mod land_on_stellar;
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod landed_work;
 mod landing_fee;
 mod last_refresh;
@@ -579,6 +587,7 @@ mod news;
 #[cfg(test)]
 mod npc_destinations;
 mod npc_escape;
+mod npc_gain;
 mod npc_kinds;
 mod operator_moves;
 mod outbox;
@@ -599,6 +608,7 @@ mod player_cloak;
 mod player_downed;
 #[cfg(test)]
 mod player_exits;
+mod player_gain;
 mod player_info;
 mod player_led;
 mod player_repair;
@@ -637,6 +647,7 @@ mod ship_display;
 mod ship_loop;
 mod ship_paint;
 mod shipyard_listing;
+mod shot_gain;
 mod shot_slots;
 #[cfg(test)]
 mod slot_search;
@@ -647,6 +658,7 @@ mod smoke_frame;
 mod space;
 mod spawn_availability;
 mod sprite_load;
+mod sprite_sheets;
 mod stale_sprites;
 mod statics;
 mod status_cargo;
@@ -671,6 +683,7 @@ mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
 mod thrust;
+mod time_adjustment;
 mod tractor_hold;
 mod trade_dialog;
 mod trip_days;
@@ -727,7 +740,7 @@ use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
 use self::statics::Statics;
-use self::stellar_passes::GateHolds;
+use self::stellar_passes::{GateHolds, PassKind};
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -766,7 +779,6 @@ use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
-use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
@@ -1066,6 +1078,22 @@ pub struct Session {
     /// Whether the load had to fall back for data the save references
     /// and the catalog lacks ([`Session::load_repaired`]); never saved.
     load_repaired: bool,
+    /// The frame's time gain and its ramp, the original's `_gSpeedMult`
+    /// (see the `time_adjustment` module). On `Session` itself, not a
+    /// sub-state: the original's is process-wide, every pass of every
+    /// stateful sub-state reads it, and the landing, the dialogs, game
+    /// entry and the app's switch-in write it, so no one sub-state owns
+    /// it. Sub-state methods never take it: they take the frame's gain as
+    /// a plain [`SpeedMult`](crate::SpeedMult). Never saved: the pilot
+    /// file doesn't keep it.
+    time: crate::TimeAdjustment,
+    /// Whether an info dialog `_HandlePlayer` opened in flight (the player
+    /// info or the mission info) is open, whose close owes the gain's zero
+    /// (`Session::close_info_dialog`; see the `time_adjustment` module).
+    /// On `Session` itself beside `time`, for its reason: it is a write
+    /// of `time` waiting for the close. Never saved: no step runs under
+    /// the dialog, so none is open at a save.
+    info_zero_owed: bool,
 }
 
 impl Session {
@@ -1367,6 +1395,8 @@ impl Session {
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
             load_repaired,
+            time: crate::TimeAdjustment::default(),
+            info_zero_owed: false,
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),
@@ -1428,8 +1458,13 @@ impl Session {
             .space
             .set_first_class(&session.statics, &session.setup);
         // `_PrepareAllSprites`' display of the player's lights before the
-        // first frame (see the `ship_display` module).
-        session.ship.prepare_player_lights(&session.setup);
+        // first frame (see the `ship_display` module), at the session's
+        // gain at construction, full: the original's entry prepares at
+        // the gain the last game left (`_EnterGameFromMainScreen`
+        // @0x1a36c), filed as rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames.
+        session
+            .ship
+            .prepare_player_lights(&session.setup, crate::SpeedMult::FULL);
         // `_EnterGameFromMainScreen` (@0x1a36c).
         session.prepare_all_sprites();
         Ok(session)
@@ -1673,7 +1708,9 @@ impl Session {
     /// module), then the tribbles and perishables on a due frame, the Red
     /// Alert's check, and its blink on the advance pass alone, as
     /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
-    /// target brackets, and the cargo boxes scooped and aged.
+    /// target brackets. The cargo boxes are scooped and aged after the
+    /// move and the player's display step
+    /// ([`Session::scoop_after_display`]).
     fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
@@ -1697,9 +1734,7 @@ impl Session {
             self.red_alert.step(frame);
         }
         self.tutorial_tick(frame);
-        self.chart.brackets_tick();
-        self.scoop_boxes();
-        self.space.boxes_tick();
+        self.chart.brackets_tick(self.speed_mult());
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
@@ -1717,7 +1752,9 @@ impl Session {
         // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
         // the `clearance` module reads as the move, is
         // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
-        // hud-fidelity-followups' dock approach phase).
+        // hud-fidelity-followups' dock approach phase). L's pick
+        // (@0x6a8c5) runs before it.
+        self.land_key_pass();
         self.dock_approach();
     }
 
@@ -1759,6 +1796,7 @@ impl Session {
     /// capped by the box the last tick left ([`Session::player_caps`]).
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
+        let gain = self.speed_mult();
         self.ship
             .engage_afterburner(&self.pilot, self.mode.jump(), controls);
         let controls = match self.ship.condition {
@@ -1780,11 +1818,14 @@ impl Session {
         match self.mode.jump() {
             None => {
                 let aim = self.steer(controls);
-                self.ship.bank_player(
-                    self.ship
-                        .turn_way(&self.pilot, &self.setup, self.mode.jump(), controls, aim),
-                    aim.is_some(),
+                let way = self.ship.turn_way(
+                    &self.pilot,
+                    &self.setup,
+                    self.mode.jump(),
+                    (controls, aim),
+                    gain,
                 );
+                self.ship.bank_player(way, aim.is_some(), gain);
                 if self.ship.player_inertialess(&self.setup) {
                     self.fly_inertialess(controls, aim);
                 } else {
@@ -1804,9 +1845,10 @@ impl Session {
                         aim,
                         caps,
                         flight,
+                        gain,
                     );
                 }
-                self.ship.ionize_tick(&self.pilot, &self.setup);
+                self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
@@ -1820,7 +1862,7 @@ impl Session {
                 });
                 let bearing = self.chart.jump_aim(&self.pilot, to);
                 self.fly_warp_stage(bearing, controls);
-                self.ship.ionize_tick(&self.pilot, &self.setup);
+                self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
                 // `_HandlePlayer` regenerates and clamps the fuel through
                 // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
@@ -1829,6 +1871,7 @@ impl Session {
                 regenerate(
                     &mut self.pilot.reserves.fuel,
                     self.ship.fit.stats.fuel_regen,
+                    gain,
                 );
                 return;
             }
@@ -1836,6 +1879,7 @@ impl Session {
         regenerate(
             &mut self.pilot.reserves.fuel,
             self.ship.fit.stats.fuel_regen,
+            gain,
         );
         // `_HandlePlayer` reads `_ShipFuelCapacity` right after the
         // regeneration (@0x6d9cd), which caches it (see the `capture`
@@ -2020,6 +2064,9 @@ impl Session {
             // Every stellar the system lists, shown or not, which a fleet
             // may come out of (see the `npc_destinations` module).
             listed: &self.chart.listed,
+            // The entry flies no ship (`Traffic::enter_with`), so its
+            // gain moves nothing; it reads the frame's all the same.
+            speed_mult: self.speed_mult(),
             // No tractor's step: the entry flies no ship. No stellar
             // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)
@@ -2131,8 +2178,10 @@ impl Session {
     /// the system's stellars, the player, the governments, the system's
     /// government and the player's legal record with it, the persons'
     /// world, the escorts' tons, the led ships' speed factor, the damage
-    /// the fight's shots aim, the gates' widths and asteroid slot 0. The
-    /// advance pass's think and flight ([`Session::game_work`]), the gate
+    /// the fight's shots aim, the gates' widths, asteroid slot 0 and the
+    /// frame's gain ([`Session::speed_mult`]), which `_HandleShip` reads as
+    /// it flies each NPC (see the `npc_gain` module). The advance pass's
+    /// think and flight ([`Session::game_work`]), the gate
     /// exit's arrivals pass ([`Session::gate_exit_pass`]) and double
     /// time's second pass (see the `double_time` module) step the traffic
     /// in it. The pilot's defence ships left are lent to the traffic for
@@ -2216,6 +2265,7 @@ impl Session {
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
             slot_stellars: &self.statics.slot_stellars,
+            speed_mult: self.speed_mult(),
         };
         let stepped = f(&mut self.space.traffic, world);
         self.lend_defence_ships();
@@ -2319,6 +2369,9 @@ impl Session {
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
             slot_stellars: &self.statics.slot_stellars,
+            // It flies no ship: only a pass's traffic flies
+            // (`Session::step_traffic`).
+            speed_mult: self.speed_mult(),
         }
     }
 
@@ -2418,11 +2471,13 @@ impl Session {
     }
 
     /// When and where the fight is fought this tick ([`Field`]): the frame
-    /// counter this tick read, and the player's system's raw
-    /// `Interference`, which no anti-interference lessens for a shot
-    /// (`_SpawnShot` @0x3eb1f-0x3eb29).
+    /// counter this tick read, the player's system's raw `Interference`,
+    /// which no anti-interference lessens for a shot (`_SpawnShot`
+    /// @0x3eb1f-0x3eb29), and the frame's gain (see the `player_gain`
+    /// module).
     fn field(&self) -> Field {
         Field {
+            speed_mult: self.speed_mult(),
             frame: i32::from(self.space.pass_frame),
             interference: self.chart.galaxy.map().interference(self.pilot.system),
             // Refreshed each tick, so a kill's rating counts from the next.
@@ -3382,7 +3437,7 @@ impl Session {
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
 
@@ -3487,7 +3542,9 @@ impl Session {
     /// [`SimMessage::NoResponse`] and lands in that press when it can.
     /// With no stellar selected in nav mode 2, a press selects one there,
     /// in silence, starting its brackets' fly-in (@0x6a8ed-0x6a932), and
-    /// requests it in the same press. A press that lands docks the ship
+    /// requests it in the same press: the pick is
+    /// [`land_key_pick`](crate::landing::land_key_pick), which L held
+    /// also makes on every pass (the `land_key` module). A press that lands docks the ship
     /// at the stellar's centre, at rest, its heading and reserves
     /// unchanged, the selection kept, as the original's landing writes
     /// neither word; the take-off lets go of it, so that once it takes
@@ -3552,24 +3609,34 @@ impl Session {
     /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
     /// [`LandingRefusal::NothingLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
-        let press = self.land_press();
+        self.land_requesting().0
+    }
+
+    /// [`Session::land`], and whether the press made a dock request,
+    /// which sets L's latch `_dockTryFlag` (@0x6a938-0x6a953): every press
+    /// whose pick found a stellar, the target or the nearest, whatever the
+    /// request then answered. A press refused before the pick (a jump
+    /// under way, a breaking-up or destroyed ship, @0x6a8cb-0x6a8df) or
+    /// whose pick found nothing (@0x6a90f) makes none.
+    pub(crate) fn land_requesting(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+        let (press, requested) = self.land_press();
         if let Err(refusal) = &press
             && refusal.beeps()
         {
             self.out.sounds.push(SimSound::Refused);
         }
-        press
+        (press, requested)
     }
 
-    fn land_press(&mut self) -> Result<LandPress, LandingRefusal> {
+    fn land_press(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
         if self.mode.jump().is_some() {
-            return Err(LandingRefusal::Jumping);
+            return (Err(LandingRefusal::Jumping), false);
         }
         let disabled = match self.ship.condition {
             Condition::Intact => false,
             Condition::Disabled => true,
             Condition::Dying { .. } | Condition::Destroyed => {
-                return Err(LandingRefusal::Disabled);
+                return (Err(LandingRefusal::Disabled), false);
             }
         };
         let blessing = self.blessing();
@@ -3579,9 +3646,8 @@ impl Session {
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
         // player's system ([`Chart::held_here`]), and active, which the
         // stellars shown hold as the last rebuild point left them.
-        let target = self
-            .nav_target()
-            .and_then(|id| self.chart.listed.iter().find(|site| site.id == id));
+        let target = self.chart.land_key_target();
+        let had_target = target.is_some();
         let held = |site: &LandingSite| {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
                 && self.chart.held_here(&self.pilot, &self.statics, site.id)
@@ -3601,6 +3667,17 @@ impl Session {
             self.setup.rules.source_for(RuleKey::LandingSpeed),
             self.setup.rules.source_for(RuleKey::GatePickRange),
         );
+        let requested = had_target || press.selected.is_some();
+        (self.land_picked(press, disabled), requested)
+    }
+
+    /// The rest of the land key's press once its pick is made, `press`
+    /// what [`land_or_select`] gave and the ship `disabled` or not.
+    fn land_picked(
+        &mut self,
+        press: crate::landing::DockPress,
+        disabled: bool,
+    ) -> Result<LandPress, LandingRefusal> {
         // The fee's refusal (@0x669b4) comes before the cloak's
         // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
         // (@0x66aee), all after the landability (@0x66977-0x669ae).
@@ -3885,18 +3962,19 @@ impl Session {
     ) {
         // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
         // @0x64743: before the old ships go, so before the escorts' cloaks
-        // are carried. The player's slot always passes the display's
-        // system test (@0x2b7d8-0x2b7e0), so its fade steps first,
-        // whatever the exit.
-        self.ship.step_cloak_fade(&self.pilot, &self.statics);
+        // are carried, at the frame's gain, which no gate entry zeroes.
+        // The player's slot always passes the display's system test
+        // (@0x2b7d8-0x2b7e0), so its fade steps first, whatever the exit.
+        let gain = self.speed_mult();
+        self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
         self.space
-            .step_fades_at_gate_entry(system, self.pilot.system);
+            .step_fades_at_gate_entry(system, self.pilot.system, gain);
         // Its stellar pass reads the old ships and the request where the
         // exit is in the system gone in; otherwise it follows the system's
         // entry, below, and they reach none of its gates.
         let exit_elsewhere = system != self.pilot.system;
         if !exit_elsewhere {
-            self.stellar_pass(StellarPass::Entry, GateHolds::Entered(entered), chance);
+            self.stellar_pass(PassKind::Entry, GateHolds::Entered(entered), chance);
         }
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
@@ -3934,7 +4012,7 @@ impl Session {
             chance,
         );
         if exit_elsewhere {
-            self.stellar_pass(StellarPass::Entry, GateHolds::Nobody, chance);
+            self.stellar_pass(PassKind::Entry, GateHolds::Nobody, chance);
         }
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
@@ -3946,9 +4024,9 @@ impl Session {
         // out, and again after the stellars' visibility (@0x67658): every
         // NPC's fade steps twice, and every gate.
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -4123,14 +4201,18 @@ impl Session {
         // A docked move's entry still owed comes before the take-off's
         // window opens (see the `operator_moves` module).
         self.settle_pending_move(catalog, catalog, chance);
-        // The escorts' marks, settled on the leave before the stay's days
-        // (`_DoPortDialog` @0x601a0; see the `escort_land` module). The
-        // router settles them first, to show the report over the
-        // spaceport; this settles them on every other leave.
-        self.land_escorts(&mut &mut *chance);
+        // The escorts' marks, then the escort days and their pay, settled
+        // on the leave before the port's days (`_DoPortDialog` @0x601a0;
+        // see the `escort_land` module). The router settles them first, to
+        // show the report and any defection over the spaceport; this
+        // settles them on every other leave. Either way they settle once a
+        // leave: after the router's, this changes nothing.
+        self.land_escorts(catalog, chance);
         let stellar = self.mode.take_landed()?;
+        self.port.escorts_landed = false;
         // `_playerIsLanded` stays set to @0x6358e: the moves until then
-        // are landed ones (see the `take_off_moves` module).
+        // are landed ones (see the `take_off_moves` module). The window
+        // `land_escorts` opened stays open.
         self.chart.open_take_off_window();
         // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
         // @0x633a0), before the stay's days (@0x63440) and the deselect
@@ -4144,12 +4226,6 @@ impl Session {
         self.port.forget_shipyard_listing();
         self.chart.bar_nav = None;
         let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
-        if stay_days {
-            self.pass_days(stay.escort_days(), chance);
-        }
-        if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
-            self.pay_escorts(1);
-        }
         // The port's days, before the take-off's placement
         // (`_DoPortDialog` @0x601fa, @0x6020e).
         if stay_days {
@@ -4211,6 +4287,14 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
+        // The stay's tail zeroes `_gSpeedMult` (`_PlayerLandOnStellar`
+        // @0x6375e-0x63769, after `_DoPortDialog`), which returns
+        // (@0x66f29) before the dock request's tail runs, so both of that
+        // tail's `_PrepareAllSprites` (@0x6764e, @0x67658) and its passes
+        // run at 0 and add nothing, and the first frame holds (see the
+        // `time_adjustment` module). A drifting cloak fade still falls at
+        // each prepare, as its drift is unscaled.
+        self.zero_speed_mult();
         // The dock request's tail before the setup, after the stay's days
         // (see the `dock_tail` module; the glow is already out).
         self.begin_dock_tail(chance);
@@ -4223,12 +4307,11 @@ impl Session {
         // the `in_flight_save` module).
         self.out.save_now();
         self.run.raise(StoryEvent::TookOff { stellar });
-        // The rest of the tail (see the `dock_tail` module). The
-        // original's bar is redrawn before its deselect with the selection
-        // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`. A landing left `_gSpeedMult` 0
-        // (@0x6375e-0x63769), so its passes add nothing.
-        self.end_dock_tail(StellarPass::Still, chance);
+        // The rest of the tail (see the `dock_tail` module), at the gain
+        // of 0 zeroed above. The original's bar is redrawn before its
+        // deselect with the selection still held (@0x633a0), noted as
+        // `takeoff_nav` above; see the flight view's `took_off`.
+        self.end_dock_tail(chance);
         Some(stellar)
     }
 
@@ -5210,7 +5293,7 @@ impl Session {
     /// began (the original's ship sits braking in the old system then,
     /// its velocity × 0.98 a frame, @0x6bb32-0x6bb59). A `PickupMode`
     /// 2 mission's special ship whose cargo has no room is
-    /// [`BoardRefusal::CantBoard`], and the pickup's refusal is queued
+    /// [`BoardRefusal::NoRoomForCargo`], and the pickup's refusal is queued
     /// as a mission text, as `_DoMissionCargoPickup` shows its dialog
     /// (@0x982ff); nothing else changes, the velocity not matched
     /// (@0x65fdb).
@@ -7750,6 +7833,7 @@ pub(super) mod tests {
                 None,
                 crate::flight::Caps::top(session.handling().max_speed),
                 FlightRules::default(),
+                crate::SpeedMult::FULL,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -7858,6 +7942,8 @@ pub(super) mod tests {
         assert_eq!(*session.player(), docked);
         assert_eq!(docked.position, Vec2::new(30.0, -40.0));
         assert_eq!(docked.velocity, Vec2::ZERO);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         work(&mut session, &catalog, THRUST);
         let mut expected = docked;
         player_step(
@@ -7867,6 +7953,7 @@ pub(super) mod tests {
             None,
             crate::flight::Caps::top(session.handling().max_speed),
             FlightRules::default(),
+            crate::SpeedMult::FULL,
         );
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, docked);
@@ -9320,6 +9407,8 @@ pub(super) mod tests {
         }
         assert_eq!(session.reserves().fuel.now, 200.0);
         session.take_off(&catalog, &mut NeverFires);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
     }
@@ -15910,6 +15999,8 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         // The first flight tick's box of none holds the ship at rest.
         work(&mut session, &catalog, Controls::default());
         let mut expected = *session.player();
@@ -15926,6 +16017,7 @@ pub(super) mod tests {
                 None,
                 crate::flight::Caps::top(handling.max_speed),
                 FlightRules::default(),
+                crate::SpeedMult::FULL,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -16650,7 +16742,7 @@ pub(super) mod tests {
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
             let mut ticks = 0;
-            while session.npcs()[0].ai_wait == 0 {
+            while session.npcs()[0].ai_wait == 0.0 {
                 work_with(
                     &mut session,
                     &catalog,
@@ -16665,7 +16757,7 @@ pub(super) mod tests {
             }
             let landed = &session.npcs()[0];
             assert_eq!(landed.visited, Some(StellarId(128)), "AI {ai_type}");
-            assert_eq!(landed.ai_wait, 498, "AI {ai_type}: 300 + Rand(200)");
+            assert_eq!(landed.ai_wait, 498.0, "AI {ai_type}: 300 + Rand(200)");
             // Its stay out, the idle block finds it has visited a stellar
             // here and sends it away by hyperspace.
             let how = first_departure(&mut session, &catalog);
@@ -17423,7 +17515,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         session.hold_trigger(FIRE);
         let mut hit = false;
         for _ in 0..60 {
@@ -17449,7 +17541,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.setup.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         session.chart.target = Some(NpcId(0));
         struck_by_the_player(&mut session, 10.0);
@@ -17718,7 +17810,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(catalog, 180);
         make_quoting_warship(&mut session);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         session.take_sounds();
         session.chart.target = Some(NpcId(0));
         struck_by_the_player(&mut session, 10.0);
@@ -17734,7 +17826,7 @@ pub(super) mod tests {
         let mut session = hit_in_its_gate(&catalog);
         session.answer_strikes(&crate::ai::NovaAi::default());
         let npc = &session.npcs()[0];
-        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20 });
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20.0 });
         assert!(npc.arrived());
         session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
@@ -17760,7 +17852,7 @@ pub(super) mod tests {
         );
         let npc = &session.npcs()[0];
         assert_eq!(npc.provoked, provoked);
-        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19.0 });
     }
 
     #[test]
@@ -17830,7 +17922,7 @@ pub(super) mod tests {
     fn by_the_other_reading_a_ship_the_player_hits_in_its_gate_waits_on_unseen() {
         use crate::traffic::npc::Mode;
         let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Bible);
-        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59 });
+        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59.0 });
         session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::Next), None);
     }
@@ -20160,7 +20252,7 @@ pub(super) mod tests {
         assert!(!session.sees(&session.npcs()[0]));
         session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak::default();
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 5.0 };
         assert!(!session.sees(&session.npcs()[0]));
     }
 
@@ -20169,7 +20261,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 5.0 };
         assert!(session.sees_past_cloak(&session.npcs()[0]), "emerging");
         session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
         assert!(!session.sees_past_cloak(&session.npcs()[0]), "cloaked");
@@ -20893,6 +20985,8 @@ pub(super) mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         session.take_off(&catalog, &mut NeverFires);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         session.ship.ion = IONIZED;
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(132)));
         assert_eq!(
@@ -20994,7 +21088,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 3.0 };
         session.watch_ship(NpcId(0));
         for left in [2, 1] {
             work_with(
@@ -22640,6 +22734,7 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
+        session.at_gain(crate::SpeedMult::FULL);
         session.hold_trigger(FIRE);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(
@@ -24446,7 +24541,7 @@ pub(super) mod tests {
             !fires(Goal::Idle, |s| {
                 let npc = &mut s.space.traffic.npcs_mut()[0];
                 npc.target = Some(ShipRef::Player);
-                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30 };
+                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30.0 };
             }),
             "its target is the player, but its wait runs"
         );
@@ -24558,7 +24653,7 @@ pub(super) mod tests {
                 npc.cloak = CLOAKED;
             }
             if emerging {
-                npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 50 };
+                npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 50.0 };
             }
             work(&mut session, &catalog, Controls::default());
             quad_fired(&session.take_combat_events(), ShipRef::Player)
@@ -24640,7 +24735,7 @@ pub(super) mod tests {
         assert!(!terms(false).fighter(&mut npc).threatens_player);
         let fighter = terms(false).fighter(&mut npc);
         assert!(!fighter.emerging && !fighter.cloak_scanner);
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3.0 };
         npc.cloak_gear.scanner.on_screen = true;
         let fighter = terms(false).fighter(&mut npc);
         assert!(fighter.emerging && fighter.cloak_scanner);

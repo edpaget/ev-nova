@@ -320,7 +320,7 @@ mod tests {
         let (mut disabled, helper) = refuelled(&catalog, 40.0, 300.0);
         disabled.space.npc_mut(helper).expect("here").condition = Condition::Disabled;
         let (mut coasting, helper) = refuelled(&catalog, 40.0, 300.0);
-        coasting.space.npc_mut(helper).expect("here").mode = Mode::Coasting { ticks_left: 3 };
+        coasting.space.npc_mut(helper).expect("here").mode = Mode::Coasting { ticks_left: 3.0 };
         // One at a time: three sessions make too large an array.
         let given_nothing = |name: &str, mut session: Session| {
             traffic_tick(&mut session, &catalog);

@@ -486,7 +486,7 @@ mod tests {
             "breaking up"
         );
         assert_eq!(
-            skipped(&|ship| ship.mode = Mode::Emerging { ticks_left: 5 }),
+            skipped(&|ship| ship.mode = Mode::Emerging { ticks_left: 5.0 }),
             Some(7),
             "emerging from a gate (goal 0x15)"
         );
@@ -511,8 +511,8 @@ mod tests {
             "an escape pod"
         );
         for mode in [
-            Mode::HeldAtGate { ticks_left: 5 },
-            Mode::Coasting { ticks_left: 5 },
+            Mode::HeldAtGate { ticks_left: 5.0 },
+            Mode::Coasting { ticks_left: 5.0 },
         ] {
             assert_eq!(skipped(&|ship| ship.mode = mode), Some(1), "{mode:?}");
         }
@@ -794,7 +794,7 @@ mod tests {
         assert!(verifies(&Npc {
             mode: Mode::EnteringGate {
                 gate: crate::catalog::StellarId(128),
-                ticks_left: 3,
+                ticks_left: 3.0,
             },
             ..ship
         }));

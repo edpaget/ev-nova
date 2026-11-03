@@ -80,7 +80,7 @@ impl Session {
         }
         let heading = self.ship.player.heading;
         for id in led {
-            let wait = chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST;
+            let wait = crate::traffic::ai_wait::ticks(chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST);
             if let Some(npc) = self.space.npc_mut(id) {
                 npc.state = ShipState {
                     position: exit,
@@ -95,7 +95,8 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+#[allow(clippy::float_cmp)]
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -137,7 +138,7 @@ mod tests {
 
     /// In flight in 130 with a hired escort and mission 140's escorts,
     /// under `rules`.
-    fn flying(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = accepted(catalog).with_rules(rules);
         session.pilot.escorts.push(hired());
         take_off(&mut session, catalog);
@@ -176,7 +177,7 @@ mod tests {
                     heading: session.ship.player.heading,
                 };
                 assert_eq!(npc.state, expected, "{kind:?}");
-                assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34 }, "{kind:?}");
+                assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34.0 }, "{kind:?}");
                 assert_eq!(npc.target, None, "{kind:?}");
                 assert!(npc.led_out, "{kind:?}");
                 assert_eq!(npc.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
@@ -257,21 +258,23 @@ mod tests {
             &mut draws,
         );
         assert_eq!(draws.asked, [LEAD_OUT_DRAW; 3], "one Rand(20) a ship");
-        let mut waits: Vec<u32> = ids
+        let mut waits: Vec<f32> = ids
             .iter()
             .map(|&id| match session.space.npc(id).map(|npc| npc.mode) {
                 Some(Mode::Emerging { ticks_left }) => ticks_left,
                 other => panic!("{other:?}"),
             })
             .collect();
-        waits.sort_unstable();
-        assert_eq!(waits, [15, 22, 34]);
+        waits.sort_by(f32::total_cmp);
+        assert_eq!(waits, [15.0, 22.0, 34.0]);
     }
 
     #[test]
     fn a_led_ship_holds_at_the_gate_then_bursts_at_15() {
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         let heading = session.ship.player.heading;
@@ -313,6 +316,8 @@ mod tests {
             },
         );
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         assert!((session.top_speed() - 9.0).abs() < 1e-4);
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
@@ -381,20 +386,20 @@ mod tests {
     }
 
     /// An escort fading in at 10.
-    const FADING_IN: Cloak = Cloak {
+    pub(in crate::session) const FADING_IN: Cloak = Cloak {
         fade: 10.0,
         direction: 1,
     };
 
     /// Fades the hired escort in from 10 ([`FADING_IN`]): its NPC.
-    fn fade_in_hired(session: &mut Session) -> NpcId {
+    pub(in crate::session) fn fade_in_hired(session: &mut Session) -> NpcId {
         let before = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(before).expect("here").cloak = FADING_IN;
         before
     }
 
     /// The hired escort's cloak, from a new NPC than `before`.
-    fn hired_cloak(session: &Session, before: NpcId) -> Cloak {
+    pub(in crate::session) fn hired_cloak(session: &Session, before: NpcId) -> Cloak {
         let hired = session.space.escorts.fleet[0].expect("placed");
         assert_ne!(hired, before, "a new NPC");
         session.space.npc(hired).expect("here").cloak
@@ -419,6 +424,7 @@ mod tests {
         for kind in [GateKind::Hypergate, GateKind::Wormhole] {
             let catalog = catalog();
             let mut session = flying(&catalog, Rulebook::default());
+            session.at_gain(crate::SpeedMult::FULL);
             let before = fade_in_hired(&mut session);
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             assert_eq!(hired_cloak(&session, before), stepped(2), "{kind:?}");
@@ -427,7 +433,7 @@ mod tests {
 
     /// [`catalog`] with hypergate 300 linked to 320 too, a hypergate in
     /// 130, the system it is in, at (500, 500).
-    fn gated_into_130() -> FakePilotCatalog {
+    pub(in crate::session) fn gated_into_130() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.gates[0].links[1] = Some(StellarId(320));
         catalog.gates.push(crate::catalog::GateSite {
@@ -451,7 +457,7 @@ mod tests {
     }
 
     /// Takes hypergate 300 to 320, in 130, the system gone in.
-    fn exit_into_130(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn exit_into_130(session: &mut Session, catalog: &FakePilotCatalog) {
         session.ship.player.position = Vec2::new(-3000.0, 0.0);
         session.ship.player.velocity = Vec2::ZERO;
         session.chart.nav = crate::navigation::NavMode::Off;
@@ -473,6 +479,7 @@ mod tests {
     fn a_gate_exit_into_the_system_gone_in_steps_the_old_ships_fades_once_more() {
         let catalog = gated_into_130();
         let mut session = flying(&catalog, Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         let before = fade_in_hired(&mut session);
         exit_into_130(&mut session, &catalog);
         assert_eq!(session.space.npc(before), None, "the old NPC gone");
@@ -488,12 +495,14 @@ mod tests {
         for kind in [GateKind::Hypergate, GateKind::Wormhole] {
             let catalog = catalog();
             let mut session = flying(&catalog, Rulebook::default());
+            session.at_gain(crate::SpeedMult::FULL);
             session.ship.cloak.cloak = FADING_IN;
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             assert_eq!(session.player_cloak(), stepped(3), "{kind:?}");
         }
         let catalog = gated_into_130();
         let mut session = flying(&catalog, Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         session.ship.cloak.cloak = FADING_IN;
         exit_into_130(&mut session, &catalog);
         assert_eq!(
@@ -569,6 +578,8 @@ mod tests {
         use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING, CloakGear, FADE_RATE};
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let hired = session.space.escorts.fleet[0].expect("placed");
         let other = session
@@ -586,7 +597,9 @@ mod tests {
         let Mode::Emerging { ticks_left: wait } = npc.mode else {
             panic!("{:?}", npc.mode)
         };
-        assert_eq!(wait, 34);
+        assert_eq!(wait, 34.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let wait = wait as u32;
         let seeded = Cloak {
             fade: 4.0,
             direction: 1,

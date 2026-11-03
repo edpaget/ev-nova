@@ -952,16 +952,16 @@ fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
         }
         let screen = MissionInfoScreen::new(
             Ok((info, mono())),
-            MissionInfo {
-                rows: vec![InfoRow {
+            MissionInfo::shown(
+                vec![InfoRow {
                     slot: 0,
                     name: "Run".to_owned(),
                     failed: false,
                     text: "Go.".to_owned(),
                     abortable: true,
                 }],
-                today: "June 23rd, 1177 NC".to_owned(),
-            },
+                "June 23rd, 1177 NC".to_owned(),
+            ),
             ButtonStyle::STOCK,
         );
         let dialog = screen.dialog().expect("laid out");
@@ -1019,8 +1019,18 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
             (REFUSE_ITEM, rect(117.0, 285.0, 99.0, 25.0)),
             (OFFER_TEXT_ITEM, rect(12.0, 9.0, 415.0, 267.0)),
             (SINGLE_ITEM, rect(173.0, 285.0, 99.0, 25.0)),
+            (9, rect(340.0, 287.0, 23.0, 23.0)),
+            (10, rect(373.0, 287.0, 23.0, 23.0)),
         ] {
             assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
+        for item in [9, 10] {
+            let arrow = &template.items[item - 1];
+            assert_eq!(
+                (&arrow.kind, arrow.enabled),
+                (&ItemSpec::User, false),
+                "item {item}, a disabled user item"
+            );
         }
         let mut dialog = OfferDialog::new(
             Ok((template, mono())),
@@ -1232,6 +1242,8 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     (3, rect(13.0, 7.0, 413.0, 200.0)),
                     (6, rect(170.0, 213.0, 99.0, 25.0)),
                     (OFFER_PICTURE_ITEM, rect(441.0, 7.0, 200.0, 200.0)),
+                    (9, rect(340.0, 214.0, 23.0, 23.0)),
+                    (10, rect(373.0, 214.0, 23.0, 23.0)),
                 ],
             ),
             (
@@ -1241,6 +1253,8 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     (DONE_ITEM, rect(173.0, 214.0, 99.0, 25.0)),
                     (DESC_PICTURE_ITEM, rect(439.0, 7.0, 200.0, 200.0)),
                     (TEXT_ITEM, rect(12.0, 7.0, 415.0, 201.0)),
+                    (SCROLL_UP_ITEM, rect(330.0, 215.0, 23.0, 23.0)),
+                    (SCROLL_DOWN_ITEM, rect(363.0, 215.0, 23.0, 23.0)),
                 ],
             ),
             (
@@ -1268,6 +1282,20 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     template.items[item - 1].bounds,
                     bounds,
                     "DLOG {id} item {item}"
+                );
+            }
+        }
+        for (id, arrows) in [
+            (PICTURE_OFFER_DIALOG, [9, 10]),
+            (PICTURE_DESC_DIALOG, [SCROLL_UP_ITEM, SCROLL_DOWN_ITEM]),
+        ] {
+            let template = ui.dialog_template(id).expect("converts");
+            for item in arrows {
+                let arrow = &template.items[item - 1];
+                assert_eq!(
+                    (&arrow.kind, arrow.enabled),
+                    (&ItemSpec::User, false),
+                    "DLOG {id} item {item}, a disabled user item"
                 );
             }
         }
@@ -1678,5 +1706,159 @@ fn dialogs_center_window_moves_are_placed_as_it_places_them() {
             }
         }
         assert!(present > 20, "{}: {present} listed DLOGs", path.display());
+    }
+}
+
+/// The arrow `item` of `dialog`, drawn as `_DrawButton` draws it enabled.
+fn enabled_arrow(dialog: &Dialog, item: usize, label: &str) -> Vec<DrawCommand> {
+    let button = nova_view::ui::Button {
+        rect: dialog.item_bounds(item).expect("the arrow"),
+        label: label.to_owned(),
+        enabled: true,
+    };
+    let mut list = DrawList::new();
+    button.draw(
+        false,
+        &ButtonSkin::NOVA,
+        &ButtonStyle::STOCK,
+        &MonoMetrics,
+        &mut list,
+    );
+    list.iter().cloned().collect()
+}
+
+#[test]
+fn a_long_offer_scrolls_ten_pixels_on_down_in_1016_and_1020_and_shows_both_arrows() {
+    use nova_view::spaceport::offer::{OFFER_DIALOG, PICTURE_OFFER_DIALOG};
+    use nova_view::spaceport::offer_arrows::{SCROLL_DOWN_ITEM, SCROLL_UP_ITEM};
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        let long_text = "line\r".repeat(40);
+        for (id, graphic) in [(OFFER_DIALOG, None), (PICTURE_OFFER_DIALOG, Some(5005))] {
+            let template = ui.dialog_template(id).expect("converts");
+            let mut offer = offer_of(template, &long_text, graphic, ("Yes", "No"));
+            offer.input(&key(Key::Down));
+            let laid = offer.dialog().expect("laid out");
+            let text = laid.scroll_text().expect("the text");
+            assert_eq!(text.offset(), ARROW_UNITS, "DLOG {id}");
+            let commands = drawn(&offer);
+            let arrows = [
+                enabled_arrow(laid, SCROLL_UP_ITEM, "^"),
+                enabled_arrow(laid, SCROLL_DOWN_ITEM, "&"),
+            ]
+            .concat();
+            assert!(
+                commands.windows(arrows.len()).any(|run| run == arrows),
+                "DLOG {id} draws both arrows enabled"
+            );
+        }
+    }
+}
+
+/// Where the text dialogs' and the offer's frames are black, under item
+/// 3, in the frame picture's own rows: `(PICT, its top in the dialog,
+/// item 3's rect)`. Only 8527's row 207, the bright top edge of the band
+/// the buttons sit on, falls in the rect, and 3004 stretches 8527's 244
+/// rows over its 245.
+#[test]
+fn the_frames_are_black_under_their_text_boxes_but_8527s_band_edge() {
+    use nova_view::spaceport::offer::{
+        FRAME as OFFER_FRAME, OFFER_DIALOG, PICTURE_FRAME as OFFER_PICTURE_FRAME,
+        PICTURE_OFFER_DIALOG, TEXT_ITEM as OFFER_TEXT_ITEM,
+    };
+    use nova_view::ui::desc::{PICTURE_DESC_DIALOG, PICTURE_FRAME as DESC_PICTURE_FRAME};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let Some(ui) = common::interface_file(&dir) else {
+        return;
+    };
+    let ui = interface(&ui);
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    // Each row's non-black pixels in `rect`, `PICT` `id` drawn with its
+    // top at `top` and its left at the dialog's.
+    let non_black = |id: i16, top: f32, rect: Bounds| -> Vec<(u32, usize)> {
+        let image = picture(&data, id);
+        let (x0, x1) = (rect.min.x as u32, rect.max.x as u32);
+        let (y0, y1) = ((rect.min.y - top) as u32, (rect.max.y - top) as u32);
+        (y0..y1.min(image.height()))
+            .map(|y| {
+                let count = (x0..x1)
+                    .filter(|&x| image.pixel(x, y).is_some_and(|p| p[..3] != [0, 0, 0]))
+                    .count();
+                (y, count)
+            })
+            .filter(|&(_, count)| count > 0)
+            .collect()
+    };
+    let item_3 = |id: i16, item: usize| {
+        let template = ui.dialog_template(id).expect("converts");
+        (template.items[item - 1].bounds, template.bounds)
+    };
+    let (plain_box, _) = item_3(DESC_DIALOG, TEXT_ITEM);
+    assert_eq!(non_black(FRAME.middle.id, FRAME.top_height, plain_box), []);
+    let (offer_box, _) = item_3(OFFER_DIALOG, OFFER_TEXT_ITEM);
+    assert_eq!(
+        non_black(OFFER_FRAME.middle.id, OFFER_FRAME.top_height, offer_box),
+        []
+    );
+    let (pictured_offer_box, _) = item_3(PICTURE_OFFER_DIALOG, OFFER_TEXT_ITEM);
+    assert_eq!(
+        non_black(OFFER_PICTURE_FRAME.id, 0.0, pictured_offer_box),
+        []
+    );
+    let (pictured_box, pictured) = item_3(PICTURE_DESC_DIALOG, TEXT_ITEM);
+    assert_eq!(
+        non_black(DESC_PICTURE_FRAME.id, 0.0, pictured_box),
+        [(207, 415)]
+    );
+    let frame = picture(&data, DESC_PICTURE_FRAME.id);
+    assert_eq!(
+        (frame.height(), pictured.height()),
+        (244, 245.0),
+        "stretched a row taller"
+    );
+}
+
+/// The stock texts that scroll in the picture variants, measured as the
+/// dialogs lay them out: a `dësc` with a `Graphic` above 127 in 3004's
+/// 201-high box, and a mission offer's in 1020's 200.
+#[test]
+fn stock_pictured_texts_scroll_in_3004_and_1020() {
+    use nova_view::spaceport::offer::PICTURE_OFFER_DIALOG;
+    use nova_view::ui::catalog::DescriptionGraphics;
+    use nova_view::ui::desc::PICTURE_DESC_DIALOG;
+    for (dir, path) in builds() {
+        let ui = interface(&path);
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let desc = ui.dialog_template(PICTURE_DESC_DIALOG).expect("converts");
+        let offer = ui.dialog_template(PICTURE_OFFER_DIALOG).expect("converts");
+        let (mut texts, mut scrolling, mut offers) = (0, Vec::new(), Vec::new());
+        for id in 128..=i16::MAX {
+            let Some(graphic) = data.description_graphic(id).filter(|&g| g > 127) else {
+                continue;
+            };
+            let Ok(text) = data.description(id) else {
+                continue;
+            };
+            texts += 1;
+            let shown = DescDialog::pictured(&desc, &text, graphic, ButtonStyle::STOCK, mono());
+            if shown.dialog().scroll_text().expect("the text").max_offset() > 0.0 {
+                scrolling.push(id);
+            }
+            if (4000..5000).contains(&id) {
+                let offered = offer_of(offer.clone(), &text, Some(graphic), ("Yes", "No"));
+                let laid = offered.dialog().expect("laid out");
+                if laid.scroll_text().expect("the text").max_offset() > 0.0 {
+                    offers.push(id);
+                }
+            }
+        }
+        assert_eq!((texts, scrolling.len()), (252, 33));
+        assert!(scrolling.contains(&4602), "the tallest mission text");
+        assert_eq!(
+            offers,
+            [4069, 4233, 4345, 4468, 4485, 4581, 4591, 4602, 4620]
+        );
     }
 }

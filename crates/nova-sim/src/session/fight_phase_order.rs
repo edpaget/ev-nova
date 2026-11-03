@@ -9,6 +9,9 @@
 //! and the collision passes come before `_HandleShot` (@0x44385), which
 //! flies what they released.
 
+// Ages read whole.
+#![allow(clippy::float_cmp)]
+
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::catalog::{WeaponId, WeaponRecord};
 use crate::chance::{Chance, NeverFires};
@@ -338,7 +341,7 @@ fn a_sub_munition_a_proximity_hit_releases_first_flies_in_the_pass_it_is_release
         }
         assert_eq!(subs.len(), 2);
         for sub in subs {
-            assert_eq!(sub.age, 1, "flown once: {sub:?}");
+            assert_eq!(sub.age(), 1.0, "flown once: {sub:?}");
             assert!(sub.moved_from.is_some(), "{sub:?}");
         }
         return;

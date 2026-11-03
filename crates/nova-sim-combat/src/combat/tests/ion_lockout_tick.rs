@@ -32,7 +32,7 @@ fn bolt_landing_on(combat: &mut Combat, at: Vec2) {
     let mut shot = Shot::launch(WeaponSpec::new(&bolt), B, B, &state, 270.0);
     shot.id = combat.next_id();
     shot.moved_from = Some(at + Vec2::new(15.0, 0.0));
-    shot.age = 1;
+    shot.set_age(1);
     shot.firer_slot = Some(Slot::Berth(2));
     combat.put_in_flight(shot);
 }

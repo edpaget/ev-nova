@@ -27,6 +27,7 @@
 //!   BBS, and the [`MissionInfoScreen`], the active missions, read and
 //!   aborted.
 //! - [`offer`]: the [`OfferDialog`], a mission offered at the bar.
+//! - [`offer_arrows`]: the offer dialog's scroll arrows.
 //! - [`news`]: the bar's [`NewsScreen`], the visit's commercial line and
 //!   story.
 //! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
@@ -60,6 +61,7 @@ pub mod missions;
 pub mod modal;
 pub mod news;
 pub mod offer;
+pub mod offer_arrows;
 mod offer_buttons;
 pub mod outfitter;
 pub mod port_map;

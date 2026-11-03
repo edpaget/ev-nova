@@ -2,9 +2,11 @@
 //! feature: [`Chance`] mocks and a ship class's fields. [`Scripted`]
 //! follows a script, [`Draws`] draws from a queue, and [`Ranged`] draws by
 //! the range asked. [`FAST`] is a fast, light ship class. [`chance`] holds
-//! the port's contract, which every source must meet.
+//! the port's contract, which every source must meet. [`rle`] draws
+//! run-length sheets as text, for the sprite masks' tests.
 
 pub mod chance;
+pub mod rle;
 
 use std::collections::VecDeque;
 

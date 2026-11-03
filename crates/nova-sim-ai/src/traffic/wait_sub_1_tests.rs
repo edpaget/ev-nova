@@ -37,7 +37,7 @@ fn waiting(fields: ShipFields, goal: Goal, velocity: Vec2, heading: f32) -> Npc 
         },
         goal,
         speed: 2.0,
-        ai_wait: 5,
+        ai_wait: 5.0,
         stopping: true,
         ..super::fixture::npc(1, ShipStats::new(fields, &[]))
     }
@@ -154,8 +154,8 @@ fn the_traffic_clears_a_ship_below_0_35_in_a_mode_wait_or_a_count_wait() {
     // Neither flies the AI wait's flight, so the fly pass ends a stored
     // sub 1 below 0.35 itself.
     let coasting = Npc {
-        ai_wait: 0,
-        mode: super::npc::Mode::Coasting { ticks_left: 9 },
+        ai_wait: 0.0,
+        mode: super::npc::Mode::Coasting { ticks_left: 9.0 },
         ..waiting(FAST, Goal::Wait, Vec2::new(0.0, -0.2), 180.0)
     };
     let counting = waiting(FAST, Goal::CountWait, Vec2::new(0.0, -0.2), 180.0);

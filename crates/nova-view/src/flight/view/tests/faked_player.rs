@@ -7,6 +7,7 @@
 //! `session::apply::player_info`).
 
 use super::faked_travel::sent_but_lines;
+use super::live_keys::latches_its_close;
 use super::*;
 use nova_sim::PlayerInfo;
 use nova_sim::flight_frame::FlightEvent;
@@ -66,6 +67,15 @@ fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
 }
 
 #[test]
+fn the_player_infos_close_latches_every_key() {
+    // `_SetAllKeyCmdFlags` @0x70393.
+    let mut view = faked(in_sol());
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    let _ = view.ask_player_info();
+    latches_its_close(&mut view);
+}
+
+#[test]
 fn a_press_the_flight_refuses_asks_nothing_and_beeps_through_the_drain() {
     let mut view = faked(in_sol());
     view.held.insert(Key::Up);
@@ -117,6 +127,13 @@ fn opening_the_player_info_gives_the_flights_screen_or_none() {
     assert_eq!(sent_but_lines(&view), [FlightCommand::OpenPlayerInfo]);
     view.sim.queue_answer(Answer::PlayerInfo(None));
     assert_eq!(view.open_player_info(), None, "nothing opens in a jump");
+}
+
+#[test]
+fn an_info_dialogs_close_tells_the_flight() {
+    let mut view = faked(in_sol());
+    view.close_info_dialog();
+    assert_eq!(sent_but_lines(&view), [FlightCommand::CloseInfoDialog]);
 }
 
 #[test]

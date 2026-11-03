@@ -198,7 +198,11 @@ impl<T: PickerEntry> Picker<T> {
                 pressed: true,
                 ..
             } => Some(Arrow::Down),
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft | Input::Scroll { .. } => None,
+            Input::Key { .. }
+            | Input::Text(_)
+            | Input::PointerLeft
+            | Input::PointerMovedOutside(_)
+            | Input::Scroll { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         };
         step.is_some_and(|arrow| self.step(arrow))

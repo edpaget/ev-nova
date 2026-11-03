@@ -115,6 +115,8 @@ mod tests {
     fn a_ship_behav_2_ship_flies_to_an_enemy_stellar_and_shoots_it_down_once() {
         let catalog = attacking(gun(PLANET_TYPE));
         let mut session = in_flight(&catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         let before = records(&session);
         let mut events = Vec::new();
         let mut ticks = 0;

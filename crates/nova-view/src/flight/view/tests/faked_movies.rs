@@ -4,6 +4,7 @@
 //! movies off leaves out. Kept apart from `tests/mod.rs`, which is large.
 
 use super::faked_landing::{arrived, at_gate, came_out_in_alpha};
+use super::faked_screen::{sent_count, sent_since};
 use super::*;
 use crate::Color;
 use crate::draw::fill_rect;
@@ -465,6 +466,245 @@ fn under_a_gates_movie_the_old_systems_flight_is_drawn_frozen() {
     let shown: Vec<_> = list.iter().cloned().collect();
     assert_eq!(shown[..flight.len()], flight[..], "the flight under it");
     assert!(matches!(shown.last(), Some(DrawCommand::MovieFrame { .. })));
+}
+
+// The keys under a gate's movie: `_PlayerEnterHypergate` and
+// `_PlayerEnterWormhole` latch after it (@0x639f2, @0x6429c), and nothing
+// between keeps the unlatched keys from reading (the gates write no jump
+// counter +0x50), so `_HandlePlayer` polls them after the come-out.
+
+#[test]
+fn an_unlatched_key_pressed_under_a_gate_movie_reads_down_after_the_come_out() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&key(Key::Up, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+}
+
+#[test]
+fn one_let_go_under_the_movie_doesnt() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    super::faked_flight::hold(&mut view, Key::Up, true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    view.input(&key(Key::Up, false));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(!view.held.contains(&Key::Up));
+}
+
+#[test]
+fn an_unlatched_key_held_through_the_hypergates_map_and_movie_reads_down_after_the_come_out() {
+    let (mut view, _) = filming(filmed(&[131], &[]), true);
+    super::faked_flight::hold(&mut view, Key::Up, true);
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_answer(at_gate(GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.land();
+    view.map.select_gate(Some(SystemId(131)));
+    view.sim
+        .queue_screen(ScreenAnswer::GateEntryDesc(Some(131)));
+    view.close_map();
+    assert!(view.playing());
+    came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    run_out(&mut view);
+    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+}
+
+#[test]
+fn a_jump_key_held_across_the_hypergate_map_and_its_movie_ignores_its_repeats_after_the_come_out() {
+    // The map's latch (@0x6387a) and the movie's (@0x639f2) both wait on
+    // J's release, which `_HandlePlayer` reads from `GetKeys`, never from
+    // a repeat.
+    let (mut view, _) = filming(filmed(&[131], &[]), true);
+    view.held.insert(JUMP_KEY);
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_answer(at_gate(GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.land();
+    view.map.select_gate(Some(SystemId(131)));
+    view.sim
+        .queue_screen(ScreenAnswer::GateEntryDesc(Some(131)));
+    view.close_map();
+    assert!(view.playing());
+    came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    run_out(&mut view);
+    view.input(&held(JUMP_KEY));
+    assert!(!view.held.contains(&JUMP_KEY), "latched: {:?}", view.held);
+}
+
+#[test]
+fn a_jump_key_let_go_under_the_gates_movie_is_tracked_afresh_after_the_come_out() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    view.held.insert(JUMP_KEY);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&key(JUMP_KEY, false));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    view.take_movie_replay();
+    view.input(&held(JUMP_KEY));
+    assert!(
+        view.held.contains(&JUMP_KEY),
+        "a first sight: {:?}",
+        view.held
+    );
+}
+
+#[test]
+fn a_jump_key_first_seen_under_a_gates_movie_by_a_repeat_ignores_its_repeats_after_the_come_out() {
+    // The latch after the movie (@0x6429c) takes every key down, however
+    // it went down: its press went elsewhere.
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&held(JUMP_KEY));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    view.take_movie_replay();
+    let from = sent_count(&view);
+    for _ in 0..3 {
+        view.input(&held(JUMP_KEY));
+        view.tick(TICK);
+    }
+    assert!(
+        !sent_since(&view, from).contains(&FlightCommand::Jump),
+        "{:?}",
+        sent_since(&view, from)
+    );
+    assert!(!view.held.contains(&JUMP_KEY), "latched: {:?}", view.held);
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(
+        sent_since(&view, from).contains(&FlightCommand::Jump),
+        "let go and pressed afresh"
+    );
+}
+
+#[test]
+fn a_skip_flushes_the_queue_but_not_a_key_still_down() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    view.input(&key(Key::Up, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    view.input(&key(Key::Enter, true));
+    assert!(!view.playing(), "skipped");
+    assert_eq!(view.take_movie_replay(), [], "flushed");
+    assert!(view.held.contains(&Key::Up), "polled: {:?}", view.held);
+}
+
+#[test]
+fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    view.held.insert(JUMP_KEY);
+    view.held.insert(BOARD_KEY);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(!view.held.contains(&JUMP_KEY), "latched (@0x6429c)");
+    assert!(
+        view.held.contains(&BOARD_KEY),
+        "B's own latch, never set there"
+    );
+}
+
+/// J and B pressed and let go, and the zoom tapped, under the movie
+/// playing in front of `view`.
+fn pressed_under_the_movie(view: &mut Faked) {
+    assert!(view.playing());
+    for k in [JUMP_KEY, BOARD_KEY, ZOOM_IN_KEY] {
+        view.input(&key(k, true));
+        view.input(&key(k, false));
+    }
+}
+
+#[test]
+fn a_gates_movie_leaves_nothing_to_replay() {
+    // Flight reads no queued key (`_IterateInGameEventLoop` @0x56a6b),
+    // and `_SetAllKeyCmdFlags` follows each gate's movie (@0x639f2,
+    // @0x6429c).
+    let (mut view, _) = at_the_filmed_hypergate(filmed(&[131], &[]), true);
+    view.sim
+        .queue_screen(ScreenAnswer::GateEntryDesc(Some(131)));
+    view.close_map();
+    pressed_under_the_movie(&mut view);
+    came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    run_out(&mut view);
+    assert_eq!(view.take_movie_replay(), [], "the hypergate");
+
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    pressed_under_the_movie(&mut view);
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert_eq!(view.take_movie_replay(), [], "the wormhole");
+}
+
+#[test]
+fn a_jump_key_pressed_under_a_gates_movie_jumps_only_once_let_go_and_pressed_again() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&key(JUMP_KEY, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    let from = sent_count(&view);
+    for _ in 0..3 {
+        view.input(&held(JUMP_KEY));
+        view.tick(TICK);
+    }
+    assert!(
+        !sent_since(&view, from).contains(&FlightCommand::Jump),
+        "{:?}",
+        sent_since(&view, from)
+    );
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(
+        sent_since(&view, from).contains(&FlightCommand::Jump),
+        "let go and pressed afresh"
+    );
 }
 
 // The wormhole.

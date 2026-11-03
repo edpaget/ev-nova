@@ -241,23 +241,23 @@ mod tests {
     #[test]
     fn a_ship_emerging_from_a_gate_is_unseen_even_uncloaked() {
         let mut emerging = other(50.0, 0.0);
-        emerging.mode = Mode::Emerging { ticks_left: 5 };
+        emerging.mode = Mode::Emerging { ticks_left: 5.0 };
         assert!(!sees(&warship(), emerging));
     }
 
     #[test]
     fn only_goal_0x15_hides_an_arriving_ship() {
         for (mode, seen) in [
-            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::Emerging { ticks_left: 5.0 }, false),
             (Mode::LeavingGate { tick: 0 }, false),
             (Mode::LeavingGate { tick: 1 }, true),
             (Mode::JumpingIn { tick: 1 }, true),
-            (Mode::HeldAtGate { ticks_left: 5 }, true),
-            (Mode::Coasting { ticks_left: 5 }, true),
+            (Mode::HeldAtGate { ticks_left: 5.0 }, true),
+            (Mode::Coasting { ticks_left: 5.0 }, true),
             (
                 Mode::EnteringGate {
                     gate: crate::catalog::StellarId(128),
-                    ticks_left: 5,
+                    ticks_left: 5.0,
                 },
                 true,
             ),

@@ -194,6 +194,7 @@ use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
+use crate::traffic::ai_wait;
 
 impl Traffic {
     /// Each ship whose lead is lost takes a new lead, leads, or is left
@@ -414,7 +415,7 @@ impl Npc {
         match self.mode {
             Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {}
             Mode::HeldAtGate { ticks_left } => self.mode = Mode::Emerging { ticks_left },
-            Mode::Flying if self.ai_wait == 0 => {
+            Mode::Flying if !ai_wait::running(self.ai_wait) => {
                 self.mode = Mode::JumpingIn { tick: 0 };
                 return true;
             }
@@ -423,7 +424,7 @@ impl Npc {
                     Mode::Coasting { ticks_left } => ticks_left,
                     _ => self.ai_wait,
                 };
-                self.ai_wait = 0;
+                self.ai_wait = 0.0;
                 self.mode = Mode::Emerging { ticks_left };
                 self.trigger = Trigger::default();
                 self.bursts_own_word = true;
@@ -1190,10 +1191,10 @@ mod tests {
     fn a_follower_waiting_in_its_gate_pauses_seen_and_out_of_its_gate() {
         // The emerge's +0x50 of -1.0 (@0x89555), a wait skipping the hold:
         // goal 0x13 over goal 0x15.
-        let paused = beside_a_successor(|ship| ship.mode = Mode::Emerging { ticks_left: 30 });
+        let paused = beside_a_successor(|ship| ship.mode = Mode::Emerging { ticks_left: 30.0 });
         assert_eq!(paused.leader, Some(NpcId(1)));
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
-        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 30.0 });
         assert_eq!(paused.emerges_from, None);
         assert!(!paused.emerging());
     }
@@ -1201,13 +1202,13 @@ mod tests {
     #[test]
     fn a_follower_held_at_its_gate_pauses_in_sub_0_whatever_its_goal() {
         let paused = beside_a_successor(|ship| {
-            ship.mode = Mode::HeldAtGate { ticks_left: 12 };
+            ship.mode = Mode::HeldAtGate { ticks_left: 12.0 };
             ship.emerges_from = None;
             ship.goal = Goal::Attack(PLAYER);
             ship.target = Some(PLAYER);
         });
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
-        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 12 });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 12.0 });
         assert_eq!(paused.target, Some(PLAYER));
     }
 
@@ -1215,7 +1216,7 @@ mod tests {
     fn a_follower_on_the_frame_its_wait_ran_out_pauses_and_bursts_no_more() {
         let paused = beside_a_successor(|ship| ship.mode = Mode::LeavingGate { tick: 0 });
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
-        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 0.0 });
         assert_eq!(paused.emerges_from, None);
     }
 
@@ -1251,7 +1252,7 @@ mod tests {
     }
 
     /// A lead waiting in its gate.
-    const LEAD_WAITING: Mode = Mode::Emerging { ticks_left: 9 };
+    const LEAD_WAITING: Mode = Mode::Emerging { ticks_left: 9.0 };
 
     /// `setup` for a follower waiting in another gate.
     fn in_its_gate(ship: &mut Npc, mode: Mode) {
@@ -1274,7 +1275,7 @@ mod tests {
         // before the lead's disabled reset (@0x8fece) replaces it.
         for lead_mode in [LEAD_WAITING, Mode::LeavingGate { tick: 0 }] {
             for mode in [
-                Mode::Emerging { ticks_left: 30 },
+                Mode::Emerging { ticks_left: 30.0 },
                 Mode::LeavingGate { tick: 0 },
             ] {
                 let mut traffic = under_a_lead_in(lead_mode, FEDS, |ship| in_its_gate(ship, mode));
@@ -1293,21 +1294,21 @@ mod tests {
     #[test]
     fn a_lead_gone_from_its_gate_leaves_its_goal_0x15_in_its_slot() {
         let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
-            in_its_gate(ship, Mode::Emerging { ticks_left: 30 });
+            in_its_gate(ship, Mode::Emerging { ticks_left: 30.0 });
         });
         let lead = of(&traffic, 0).clone();
         traffic.remove(LEAD);
         traffic.gone.record(lead, Freed::InDispatch);
         think(&mut traffic);
         let leads = of(&traffic, 1);
-        assert_eq!(leads.mode, Mode::Emerging { ticks_left: 30 });
+        assert_eq!(leads.mode, Mode::Emerging { ticks_left: 30.0 });
         assert_eq!(leads.emerges_from, LEADS_GATE);
     }
 
     #[test]
     fn a_successor_that_stayed_in_its_gate_bursts_out_as_its_wait_ends() {
         let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
-            in_its_gate(ship, Mode::Emerging { ticks_left: 2 });
+            in_its_gate(ship, Mode::Emerging { ticks_left: 2.0 });
         });
         for _ in 0..3 {
             traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
@@ -1323,13 +1324,13 @@ mod tests {
         // Goal 4 is overwritten too; its wait runs on, and its emerge's
         // +0x34 (@0x895aa-0x895bd) stands for the burst.
         let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
-            ship.mode = Mode::HeldAtGate { ticks_left: 12 };
+            ship.mode = Mode::HeldAtGate { ticks_left: 12.0 };
             ship.goal = Goal::Attack(PLAYER);
             ship.target = Some(PLAYER);
         });
         think(&mut traffic);
         let leads = of(&traffic, 1);
-        assert_eq!(leads.mode, Mode::Emerging { ticks_left: 12 });
+        assert_eq!(leads.mode, Mode::Emerging { ticks_left: 12.0 });
         assert!(leads.emerging());
         assert_eq!(leads.emerges_from, LEADS_GATE);
         assert_eq!(leads.goal, Goal::Idle);
@@ -1450,9 +1451,9 @@ mod tests {
     /// AI wait, or holding its course.
     fn under_a_wait() -> [(&'static str, Wait); 2] {
         [
-            ("flying", |ship| ship.ai_wait = 5),
+            ("flying", |ship| ship.ai_wait = 5.0),
             ("coasting", |ship| {
-                ship.mode = Mode::Coasting { ticks_left: 5 }
+                ship.mode = Mode::Coasting { ticks_left: 5.0 }
             }),
         ]
     }
@@ -1480,8 +1481,8 @@ mod tests {
         for (name, wait) in under_a_wait() {
             let traffic = taken_over_under(wait, None);
             let leads = of(&traffic, 1);
-            assert_eq!(leads.mode, Mode::Emerging { ticks_left: 5 }, "{name}");
-            assert_eq!(leads.ai_wait, 0, "{name}: its wait is the mode's");
+            assert_eq!(leads.mode, Mode::Emerging { ticks_left: 5.0 }, "{name}");
+            assert_eq!(leads.ai_wait, 0.0, "{name}: its wait is the mode's");
             assert_eq!(leads.goal, Goal::Idle, "{name}");
             assert!(leads.emerging(), "{name}: unseen");
             assert_eq!(leads.emerges_from, LEADS_GATE, "{name}");
@@ -1490,6 +1491,14 @@ mod tests {
             assert_eq!(leads.target, LEADS_TARGET, "{name}: until its turn-out");
             assert_eq!(leads.leader, None, "{name}");
         }
+    }
+
+    #[test]
+    fn a_successor_flying_under_half_a_frames_wait_takes_it_into_its_gate_goal() {
+        let traffic = taken_over_under(|ship| ship.ai_wait = 0.5, None);
+        let leads = of(&traffic, 1);
+        assert_eq!(leads.mode, Mode::Emerging { ticks_left: 0.5 });
+        assert_eq!(leads.ai_wait, 0.0);
     }
 
     #[test]
@@ -1570,7 +1579,7 @@ mod tests {
             assert_eq!(of(&traffic, 1).target, None, "{mode:?}");
         }
         let mut traffic = with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
-            in_its_gate(ship, Mode::Emerging { ticks_left: 2 });
+            in_its_gate(ship, Mode::Emerging { ticks_left: 2.0 });
         }));
         think(&mut traffic);
         assert_eq!(of(&traffic, 1).target, LEADS_TARGET, "in its gate");
@@ -1712,16 +1721,16 @@ mod tests {
 
     #[test]
     fn a_lead_the_player_held_at_its_gate_writes_its_goal_4_over_its_successors_0x15() {
-        let held = Mode::HeldAtGate { ticks_left: 9 };
+        let held = Mode::HeldAtGate { ticks_left: 9.0 };
         let mut traffic = under_a_lead_in(held, FEDS, |ship| {
-            in_its_gate(ship, Mode::Emerging { ticks_left: 30 });
+            in_its_gate(ship, Mode::Emerging { ticks_left: 30.0 });
         });
         let lead = of_mut(&mut traffic, 0);
         lead.goal = Goal::Attack(PLAYER);
         lead.target = Some(PLAYER);
         think(&mut traffic);
         let leads = of(&traffic, 1);
-        assert_eq!(leads.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(leads.mode, Mode::HeldAtGate { ticks_left: 30.0 });
         assert_eq!(leads.emerges_from, None);
         assert_eq!(leads.goal, Goal::Attack(PLAYER));
         assert_eq!(leads.target, Some(PLAYER));
@@ -1735,8 +1744,8 @@ mod tests {
         for (target, goal) in [(None, Goal::Idle), (Some(PLAYER), Goal::Attack(PLAYER))] {
             for (mode, left) in [
                 (
-                    Mode::Emerging { ticks_left: 30 },
-                    Mode::HeldAtGate { ticks_left: 30 },
+                    Mode::Emerging { ticks_left: 30.0 },
+                    Mode::HeldAtGate { ticks_left: 30.0 },
                 ),
                 (Mode::JumpingIn { tick: 3 }, Mode::Flying),
             ] {
@@ -1786,8 +1795,8 @@ mod tests {
             let cut_short = |speed| (burst == RuleSource::Engine).then_some(speed);
             for (mode, left, owed) in [
                 (Mode::Flying, Mode::Flying, None),
-                (Mode::Emerging { ticks_left: 30 }, held(30), None),
-                (Mode::LeavingGate { tick: 0 }, held(1), None),
+                (Mode::Emerging { ticks_left: 30.0 }, held(30.0), None),
+                (Mode::LeavingGate { tick: 0 }, held(0.0), None),
                 (
                     Mode::JumpingIn { tick: 3 },
                     Mode::Flying,
@@ -1823,7 +1832,7 @@ mod tests {
             ("its own", REBELS, Goal::Idle),
         ] {
             let mut waiting = follower(govt, 300);
-            waiting.mode = Mode::Emerging { ticks_left: 30 };
+            waiting.mode = Mode::Emerging { ticks_left: 30.0 };
             waiting.emerges_from = Some(StellarId(310));
             let mut traffic = fleet(FEDS, DISABLED, vec![waiting]);
             of_mut(&mut traffic, 0).goal = Goal::Hold;
@@ -1831,7 +1840,7 @@ mod tests {
             let leads = of(&traffic, 1);
             assert_eq!(leads.leader, None, "{name}");
             assert_eq!(leads.goal, goal, "{name}");
-            assert_eq!(leads.mode, Mode::HeldAtGate { ticks_left: 30 }, "{name}");
+            assert_eq!(leads.mode, Mode::HeldAtGate { ticks_left: 30.0 }, "{name}");
             assert_eq!(leads.emerges_from, None, "{name}");
         }
     }
@@ -1840,13 +1849,13 @@ mod tests {
     fn a_disabled_follower_alone_in_its_gate_is_left_seen_and_held() {
         let mut alone = follower(FEDS, 300);
         alone.condition = DISABLED;
-        alone.mode = Mode::Emerging { ticks_left: 30 };
+        alone.mode = Mode::Emerging { ticks_left: 30.0 };
         alone.emerges_from = Some(StellarId(310));
         let mut traffic = fleet(FEDS, DISABLED, vec![alone]);
         think(&mut traffic);
         let alone = of(&traffic, 1);
         assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast });
-        assert_eq!(alone.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(alone.mode, Mode::HeldAtGate { ticks_left: 30.0 });
         assert_eq!(alone.emerges_from, None);
         assert_eq!(alone.leader, None);
     }

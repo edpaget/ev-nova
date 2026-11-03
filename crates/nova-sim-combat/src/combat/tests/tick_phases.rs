@@ -117,7 +117,6 @@ fn ending_on_b() -> Shot {
     Shot {
         position: at,
         moved_from: Some(at - Vec2::new(10.0, 0.0)),
-        age: 1,
         ..Shot::launch(
             WeaponSpec::new(&blaster()),
             C,
@@ -126,6 +125,7 @@ fn ending_on_b() -> Shot {
             90.0,
         )
     }
+    .aged(1)
 }
 
 #[test]

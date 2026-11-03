@@ -85,7 +85,7 @@ pub(super) fn fly(
     let mut shot = Shot::launch(WeaponSpec::new(&record), firer, firer, &state, 90.0);
     shot.id = combat.next_id();
     shot.moved_from = Some(from);
-    shot.age = 1;
+    shot.set_age(1);
     shot.miss_roll = roll;
     shot.layer = layer;
     shot.firer_slot = Some(match firer {

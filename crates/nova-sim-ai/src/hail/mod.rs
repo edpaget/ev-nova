@@ -1426,7 +1426,7 @@ mod tests {
         let mut hit = of_govt(2, Some(142), Goal::Idle);
         hit.target = Some(ShipRef::Player);
         assert!(by_enemy(&[flying(1, Goal::Idle), hit.clone()], false));
-        hit.ai_wait = 5;
+        hit.ai_wait = 5.0;
         assert!(
             !by_enemy(&[flying(1, Goal::Idle), hit], false),
             "its wait running"

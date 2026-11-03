@@ -14,7 +14,7 @@ use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{
-    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, scan_rled,
+    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, rled_words, scan_rled,
 };
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -131,6 +131,53 @@ fn every_stock_rled_scans_as_it_decodes() {
         let scanned = scan_rled(data);
         if scanned != decoded {
             problems.push(format!("scanned {scanned:?}, decoded {decoded:?}"));
+        }
+    });
+}
+
+/// Every stock sheet's tokens, as the collision walks them: each frame's
+/// start found by `_SWLockSprite`'s walk, and each line start counting
+/// its line's bytes, which that walk and `_BlitPixieRLECollision` skip a
+/// line by.
+#[test]
+fn every_stock_rleds_words_start_each_frame_and_count_each_lines_bytes() {
+    check_all("rlëD", 282, |data, problems| {
+        let words = match rled_words(data) {
+            Ok(words) => words,
+            Err(e) => return problems.push(e.to_string()),
+        };
+        if words.starts.iter().any(Option::is_none) {
+            return problems.push(format!("starts {:?}", words.starts));
+        }
+        for (frame, &start) in words.starts.iter().flatten().enumerate() {
+            let mut at = start;
+            let mut line: Option<(usize, u32)> = None;
+            loop {
+                let Some(&word) = words.words.get(at) else {
+                    return problems.push(format!("frame {frame} runs out"));
+                };
+                let (op, count) = (word >> 24, word & 0x00FF_FFFF);
+                if op <= 1 {
+                    if let Some((from, counted)) = line {
+                        let bytes = 4 * (at - from - 1) as u32;
+                        if bytes != counted {
+                            return problems.push(format!(
+                                "frame {frame}: a line of {bytes} bytes counts {counted}"
+                            ));
+                        }
+                    }
+                    if op == 0 {
+                        break;
+                    }
+                    line = Some((at, count));
+                }
+                at += match op {
+                    1 | 3 => 1,
+                    2 => 1 + count.div_ceil(4) as usize,
+                    4 => 2,
+                    _ => return problems.push(format!("frame {frame}: op {op}")),
+                };
+            }
         }
     });
 }

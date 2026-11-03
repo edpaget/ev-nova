@@ -16,7 +16,7 @@ use std::num::NonZeroU16;
 use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
 use super::kept_frames::KeptFrames;
-use nova_sim::{Chance, DrawnSheet, Vec2};
+use nova_sim::{Chance, DrawnSheet, SpeedMult, Vec2};
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
@@ -178,16 +178,10 @@ impl SceneStellar {
             .map_or(NonZeroU16::MIN, |sheet| sheet.frames)
     }
 
-    /// One tick of its animation, over the counted sheet's frames (one
-    /// when it counts none), shown on the sheet drawn; a frozen frame
-    /// stays shown. A random next frame is drawn on `chance`.
-    fn step(&mut self, chance: &mut dyn Chance) {
-        self.step_by(1, chance);
-    }
-
-    /// One pass of its animation at `gain` ticks, as [`SceneStellar::step`]
-    /// runs one at 1.
-    fn step_by(&mut self, gain: u8, chance: &mut dyn Chance) {
+    /// One pass of its animation at `gain`, over the counted sheet's
+    /// frames (one when it counts none), shown on the sheet drawn; a
+    /// frozen frame stays shown. A random next frame is drawn on `chance`.
+    fn step_by(&mut self, gain: SpeedMult, chance: &mut dyn Chance) {
         let counted = if self.counts_none {
             NonZeroU16::MIN
         } else {
@@ -419,17 +413,23 @@ impl SystemScene {
     /// source, never the session's, as nothing the session decides reads
     /// the frame a stellar shows.
     pub fn step(&mut self, ticks: u128, chance: &mut dyn Chance) {
+        self.step_by(ticks, SpeedMult::FULL, chance);
+    }
+
+    /// Steps every stellar's animation `ticks` ticks of 1/30 s, each at
+    /// `gain`, the frame's `_gSpeedMult` (see [`SystemScene::step`]).
+    pub fn step_by(&mut self, ticks: u128, gain: SpeedMult, chance: &mut dyn Chance) {
         for _ in 0..ticks {
             for stellar in &mut self.stellars {
-                stellar.step(chance);
+                stellar.step_by(gain, chance);
             }
         }
     }
 
-    /// Steps every stellar's animation one pass of `gain` ticks: a stellar
-    /// pass outside a play frame (`nova_sim::gate_sprite::StellarPass`), its
+    /// Steps every stellar's animation one pass at `gain`: a stellar pass
+    /// outside a play frame (`nova_sim::gate_sprite::StellarPass`), its
     /// random next frames drawn on `chance`, a visual-only source.
-    pub fn step_pass(&mut self, gain: u8, chance: &mut dyn Chance) {
+    pub fn step_pass(&mut self, gain: SpeedMult, chance: &mut dyn Chance) {
         for stellar in &mut self.stellars {
             stellar.step_by(gain, chance);
         }

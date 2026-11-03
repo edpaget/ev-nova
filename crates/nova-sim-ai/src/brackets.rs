@@ -15,9 +15,12 @@
 //!   [`FLY_IN_START`] (0x43800000). Both bracket routines step it
 //!   *before* they place the corners (nav @0x2fcd5-0x2fd0d before
 //!   @0x2fe46, ship @0x2ff35-0x2ff6d before @0x300ed): while it is above
-//!   0 it falls by 60.0 (0xdd5b0) x `_gSpeedMult`, then is clamped at 0.
-//!   So the 256 is never drawn: the drawn sequence is 196, 136, 76, 16,
-//!   0, settling on the fifth pass, the selection's own counted.
+//!   0 it falls by 60.0 (0xdd5b0) x `_gSpeedMult` (@0x2fce7, @0x2ff47),
+//!   in doubles, then is clamped at 0. So at full gain the 256 is never
+//!   drawn: the drawn sequence is 196, 136, 76, 16, 0, settling on the
+//!   fifth pass, the selection's own counted; at half gain it is 226,
+//!   196, … 16, 0, settling on the ninth. The gain is the session's,
+//!   handed in as a value; no frozen gate stops it.
 //! - **Nav brackets** (`_HandleNavTargetSprites` @0x2fcaf-0x2ff19) show
 //!   only in nav mode 2 with a stellar target (@0x2fcbf-0x2fccf);
 //!   otherwise all four are hidden and the expand set to 0 on every pass
@@ -47,12 +50,14 @@
 use crate::catalog::StellarId;
 use crate::cloak::Area;
 use crate::geometry::Vec2;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// How far out a selection starts the brackets (0x43800000).
 pub const FLY_IN_START: f32 = 256.0;
 
-/// How far the brackets fly in each pass (−60.0 at 0xdd5b0).
+/// How far the brackets fly in a pass at full gain (−60.0 at 0xdd5b0):
+/// the step is this × the frame's gain ([`FlyIn::step`]).
 pub const FLY_IN_STEP: f32 = 60.0;
 
 /// How far out a set of brackets is, flying in from a selection.
@@ -78,10 +83,18 @@ impl FlyIn {
         *self = Self::default();
     }
 
-    /// One pass: the brackets fly in by [`FLY_IN_STEP`], no further than
-    /// settled.
-    pub fn step(&mut self) {
-        self.expand = (self.expand - FLY_IN_STEP).max(0.0);
+    /// One pass at the frame's `gain`: while the expand is above 0 the
+    /// brackets fly in by [`FLY_IN_STEP`] × the gain, in doubles, then an
+    /// expand below 0 is clamped at 0 (`ucomiss 0, e` / `jbe`, `ucomiss e,
+    /// 0` / `jbe`, @0x2fcd5-0x2fd0d, @0x2ff35-0x2ff6d): a NaN expand is
+    /// held.
+    pub fn step(&mut self, gain: SpeedMult) {
+        if self.expand > 0.0 {
+            self.expand = gain.add_times(self.expand, -FLY_IN_STEP);
+        }
+        if self.expand < 0.0 {
+            self.expand = 0.0;
+        }
         self.fresh = false;
     }
 
@@ -90,14 +103,17 @@ impl FlyIn {
     /// The original takes a selection in `_HandlePlayer` and steps the
     /// expand in the same pass before drawing it. Ours takes a key between
     /// ticks, so a frame drawn before the next tick shows what that pass
-    /// would draw: a fresh start is drawn already stepped once, 196. The
-    /// next tick steps it there, so the frames from the key are 196, 196,
-    /// 136, …; the extra frame never shows a value the original doesn't.
+    /// would draw: a fresh start is drawn already stepped once, at `next`,
+    /// the gain that pass will run at (196 at full gain). The next tick
+    /// steps it there, so the frames from the key are 196, 196, 136, …;
+    /// the extra frame never shows a value the original doesn't. After a
+    /// take-off's zero, the next pass is held at 0, so a selection then is
+    /// drawn at 256, as the original's pass at gain 0 draws it.
     #[must_use]
-    pub fn expand(&self) -> f32 {
+    pub fn expand(&self, next: SpeedMult) -> f32 {
         if self.fresh {
             let mut stepped = *self;
-            stepped.step();
+            stepped.step(next);
             stepped.expand
         } else {
             self.expand
@@ -191,8 +207,8 @@ mod tests {
     fn steps(fly_in: &mut FlyIn, steps: usize) -> Vec<f32> {
         (0..steps)
             .map(|_| {
-                fly_in.step();
-                fly_in.expand()
+                fly_in.step(SpeedMult::FULL);
+                fly_in.expand(SpeedMult::FULL)
             })
             .collect()
     }
@@ -201,7 +217,11 @@ mod tests {
     fn the_fly_in_draws_196_136_76_16_then_0_after_a_start() {
         let mut fly_in = FlyIn::default();
         fly_in.start();
-        assert_eq!(fly_in.expand(), 196.0, "drawn before the next step");
+        assert_eq!(
+            fly_in.expand(SpeedMult::FULL),
+            196.0,
+            "drawn before the next step"
+        );
         assert_eq!(steps(&mut fly_in, 6), [196.0, 136.0, 76.0, 16.0, 0.0, 0.0]);
         assert_eq!((FLY_IN_START, FLY_IN_STEP), (256.0, 60.0));
     }
@@ -209,16 +229,16 @@ mod tests {
     #[test]
     fn a_step_from_0_stays_0_and_settle_is_0_at_once() {
         let mut fly_in = FlyIn::default();
-        assert_eq!(fly_in.expand(), 0.0);
+        assert_eq!(fly_in.expand(SpeedMult::FULL), 0.0);
         assert_eq!(steps(&mut fly_in, 2), [0.0, 0.0]);
         fly_in.start();
-        fly_in.step();
+        fly_in.step(SpeedMult::FULL);
         fly_in.settle();
-        assert_eq!(fly_in.expand(), 0.0);
+        assert_eq!(fly_in.expand(SpeedMult::FULL), 0.0);
         assert_eq!(fly_in, FlyIn::default());
         fly_in.start();
         fly_in.settle();
-        assert_eq!(fly_in.expand(), 0.0, "a fresh start settled");
+        assert_eq!(fly_in.expand(SpeedMult::FULL), 0.0, "a fresh start settled");
     }
 
     #[test]
@@ -227,8 +247,88 @@ mod tests {
         fly_in.start();
         steps(&mut fly_in, 3);
         fly_in.start();
-        assert_eq!(fly_in.expand(), 196.0);
+        assert_eq!(fly_in.expand(SpeedMult::FULL), 196.0);
         assert_eq!(steps(&mut fly_in, 2), [196.0, 136.0]);
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// The expand drawn after each of `steps` steps at `gain`, the next
+    /// gain `gain` too.
+    fn steps_at(fly_in: &mut FlyIn, steps: usize, gain: SpeedMult) -> Vec<f32> {
+        (0..steps)
+            .map(|_| {
+                fly_in.step(gain);
+                fly_in.expand(gain)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn at_half_gain_the_fly_in_draws_226_196_and_on_settling_on_the_ninth_pass() {
+        let mut fly_in = FlyIn::default();
+        fly_in.start();
+        let mut drawn = vec![fly_in.expand(HALF)];
+        drawn.extend(steps_at(&mut fly_in, 9, HALF));
+        assert_eq!(
+            drawn,
+            [
+                226.0, 226.0, 196.0, 166.0, 136.0, 106.0, 76.0, 46.0, 16.0, 0.0
+            ]
+        );
+    }
+
+    #[test]
+    fn at_zero_gain_the_fly_in_holds_and_a_settled_one_stays_settled() {
+        let mut fly_in = FlyIn::default();
+        fly_in.start();
+        assert_eq!(fly_in.expand(SpeedMult::ZERO), 256.0, "drawn at 256");
+        assert_eq!(steps_at(&mut fly_in, 2, SpeedMult::ZERO), [256.0, 256.0]);
+        let mut settled = FlyIn::default();
+        assert_eq!(steps_at(&mut settled, 1, HALF), [0.0], "from 0 it stays 0");
+    }
+
+    #[test]
+    fn a_fresh_starts_expand_is_the_expand_after_one_step_at_the_next_gain() {
+        for next in [HALF, SpeedMult::ZERO, SpeedMult::FULL] {
+            let mut fresh = FlyIn::default();
+            fresh.start();
+            let mut stepped = fresh;
+            stepped.step(next);
+            assert_eq!(fresh.expand(next), stepped.expand(next), "{next:?}");
+        }
+    }
+
+    #[test]
+    fn a_nan_expand_is_held_and_a_negative_one_clamped() {
+        let mut nan = FlyIn {
+            expand: f32::NAN,
+            fresh: false,
+        };
+        nan.step(SpeedMult::FULL);
+        assert!(nan.expand(SpeedMult::FULL).is_nan(), "held");
+        let mut below = FlyIn {
+            expand: -5.0,
+            fresh: false,
+        };
+        below.step(SpeedMult::FULL);
+        assert_eq!(below.expand(SpeedMult::FULL), 0.0, "clamped");
+    }
+
+    #[test]
+    fn a_settled_fly_in_takes_no_step_even_at_a_nan_gain() {
+        // `ucomiss 0, e` / `jbe` skips the step at 0, so no gain reaches it.
+        let mut settled = FlyIn::default();
+        settled.step(SpeedMult::new(f64::NAN));
+        assert_eq!(settled.expand(SpeedMult::FULL), 0.0);
+    }
+
+    #[test]
+    fn a_full_gain_step_drops_a_start_by_fly_in_step() {
+        let mut fly_in = FlyIn::default();
+        fly_in.start();
+        fly_in.step(SpeedMult::FULL);
+        assert_eq!(fly_in.expand(SpeedMult::FULL), FLY_IN_START - FLY_IN_STEP);
     }
 
     fn hired() -> Npc {

@@ -196,7 +196,8 @@
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`gravity`]: a stellar's pull by inverse square and who resists it,
 //!   and [`deadly_stellar`]: the stellars that destroy the ships that
-//!   touch them.
+//!   touch them, by the pixel masks of [`sprite_mask`], placed by the
+//!   rules of [`sprite_place`].
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`jump_arrival`]: the original's jump arrival, 1350 out on the
@@ -401,6 +402,9 @@ pub use nova_sim_base::clock;
 pub use nova_sim_base::deadly_stellar;
 pub use nova_sim_base::gravity;
 pub use nova_sim_base::ionization;
+pub use nova_sim_base::speed_mult;
+pub use nova_sim_base::sprite_mask;
+pub use nova_sim_base::sprite_place;
 pub use nova_sim_catalog::buoy;
 pub use nova_sim_catalog::catalog;
 pub use nova_sim_catalog::control;
@@ -635,6 +639,7 @@ pub use shipyard::{
     StockLine,
 };
 pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound, SoundCue};
+pub use speed_mult::{SpeedMult, TimeAdjustment};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use story::DrawnSheet;

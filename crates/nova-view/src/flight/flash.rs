@@ -16,9 +16,12 @@
 //!   a weak shield flashes faintly and briefly and a recharging one never
 //!   raises it again; a quotient out of an `i32`'s range, as a `base` of
 //!   none gives, truncates to `i32::MIN` (`cvttss2si`) and so to 4. The
-//!   layer is drawn at `max(trunc(timer), 1)`. Then the timer drops by a
-//!   frame while it is above none, drawn or not ([`ShieldFlash::step`]):
-//!   the original's `_gSpeedMult`, 1 at the fixed step the engine runs.
+//!   layer is drawn at `max(trunc(timer), 1)`. Then the timer drops by the
+//!   frame's gain while it is above none, drawn or not
+//!   ([`ShieldFlash::step`]): the original's `_gSpeedMult` (@0x2c964), in
+//!   doubles, narrowed, the pass's
+//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult). The
+//!   hold to the share and the level before it are unscaled.
 //!
 //! An NPC's shot hits land before its `_HandleShipDisplay` in
 //! `_DoPlayGameWork`, so they show on the frame they land; a hit on the
@@ -65,6 +68,8 @@ fn share(shield: f32, base: f32) -> f32 {
     }
 }
 
+use nova_sim::SpeedMult;
+
 /// One ship's shield flash.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ShieldFlash {
@@ -86,11 +91,12 @@ impl ShieldFlash {
         }
     }
 
-    /// A frame, for a ship of `shield` whose class's own `Shield` is
-    /// `base` and which has a shield layer when `has_layer`: the level its
-    /// layer is drawn at, if it is drawn (see the module docs). The timer
-    /// then drops by 1 while it is above none.
-    pub fn step(&mut self, shield: f32, base: f32, has_layer: bool) -> Option<u8> {
+    /// A frame at the frame's gain `gain`, for a ship of `shield` whose
+    /// class's own `Shield` is `base` and which has a shield layer when
+    /// `has_layer`: the level its layer is drawn at, if it is drawn (see
+    /// the module docs). The timer then drops by the gain while it is
+    /// above none.
+    pub fn step(&mut self, shield: f32, base: f32, has_layer: bool, gain: SpeedMult) -> Option<u8> {
         let level = if self.timer > 0.0 && shield > 0.0 && has_layer {
             self.timer = self.timer.min(share(shield, base));
             // At most 32 and at least 1: within a `u8`.
@@ -102,7 +108,7 @@ impl ShieldFlash {
         self.shown = self.timer;
         self.drawn = level;
         if self.timer > 0.0 {
-            self.timer -= 1.0;
+            self.timer = gain.add_times(self.timer, -1.0);
         }
         level
     }
@@ -139,7 +145,7 @@ mod tests {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
         (0..frames)
-            .map(|_| flash.step(shield, 100.0, true))
+            .map(|_| flash.step(shield, 100.0, true, SpeedMult::FULL))
             .collect()
     }
 
@@ -159,10 +165,18 @@ mod tests {
     fn a_class_of_no_shield_of_its_own_holds_the_flash_to_4() {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        assert_eq!(flash.step(50.0, 0.0, true), Some(4), "inf: i32::MIN");
+        assert_eq!(
+            flash.step(50.0, 0.0, true, SpeedMult::FULL),
+            Some(4),
+            "inf: i32::MIN"
+        );
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        assert_eq!(flash.step(50.0, -10.0, true), Some(4), "negative");
+        assert_eq!(
+            flash.step(50.0, -10.0, true, SpeedMult::FULL),
+            Some(4),
+            "negative"
+        );
         assert_eq!(share(1.0e9, 1.0), 4.0, "out of an i32's range");
         // 2^26 × 32 is 2^31, just past `i32::MAX`.
         assert_eq!(share(67_108_864.0, 1.0), 4.0, "2^31 is out of range");
@@ -194,10 +208,10 @@ mod tests {
             shown: 0.0,
             drawn: None,
         };
-        assert_eq!(flash.step(100.0, 100.0, true), Some(1));
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), Some(1));
         assert_eq!(flash.drawn(), Some(1), "the level kept for the draw");
         assert!(flash.spent());
-        assert_eq!(flash.step(100.0, 100.0, true), None);
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), None);
         assert_eq!(flash.drawn(), None);
     }
 
@@ -205,32 +219,32 @@ mod tests {
     fn a_shield_of_none_shows_nothing_but_the_timer_still_runs_down() {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        assert_eq!(flash.step(0.0, 100.0, true), None);
+        assert_eq!(flash.step(0.0, 100.0, true, SpeedMult::FULL), None);
         assert_eq!(flash.shown(), 32.0, "not held down");
-        assert_eq!(flash.step(100.0, 100.0, true), Some(31));
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), Some(31));
     }
 
     #[test]
     fn a_recharging_shield_never_raises_the_flash_again() {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        assert_eq!(flash.step(25.0, 100.0, true), Some(8));
-        assert_eq!(flash.step(100.0, 100.0, true), Some(7));
+        assert_eq!(flash.step(25.0, 100.0, true, SpeedMult::FULL), Some(8));
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), Some(7));
     }
 
     #[test]
     fn without_a_layer_nothing_is_shown_and_the_timer_still_runs_down() {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        assert_eq!(flash.step(5.0, 100.0, false), None);
+        assert_eq!(flash.step(5.0, 100.0, false, SpeedMult::FULL), None);
         assert_eq!(flash.shown(), 32.0, "no clamp without a layer");
-        assert_eq!(flash.step(5.0, 100.0, false), None);
+        assert_eq!(flash.step(5.0, 100.0, false, SpeedMult::FULL), None);
         assert_eq!(flash.shown(), 31.0);
         for _ in 0..31 {
-            flash.step(5.0, 100.0, false);
+            flash.step(5.0, 100.0, false, SpeedMult::FULL);
         }
         assert!(flash.spent());
-        assert_eq!(flash.step(5.0, 100.0, false), None);
+        assert_eq!(flash.step(5.0, 100.0, false, SpeedMult::FULL), None);
         assert_eq!(flash.shown(), 0.0, "it stops at none");
     }
 
@@ -238,23 +252,71 @@ mod tests {
     fn a_hit_that_passes_shields_leaves_the_timer_as_it_was() {
         let mut flash = ShieldFlash::default();
         flash.hit(true);
-        assert_eq!(flash.step(100.0, 100.0, true), None);
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), None);
         assert!(flash.spent());
         flash.hit(false);
         assert!(!flash.spent(), "set");
-        flash.step(100.0, 100.0, true);
-        flash.step(100.0, 100.0, true);
+        flash.step(100.0, 100.0, true, SpeedMult::FULL);
+        flash.step(100.0, 100.0, true, SpeedMult::FULL);
         flash.hit(true);
-        assert_eq!(flash.step(100.0, 100.0, true), Some(30), "not set again");
+        assert_eq!(
+            flash.step(100.0, 100.0, true, SpeedMult::FULL),
+            Some(30),
+            "not set again"
+        );
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_a_full_shields_flash_drops_half_a_level_a_frame() {
+        let mut flash = ShieldFlash::default();
+        flash.hit(false);
+        let seen: Vec<Option<u8>> = (0..5)
+            .map(|_| flash.step(100.0, 100.0, true, HALF))
+            .collect();
+        assert_eq!(seen, [Some(32), Some(31), Some(31), Some(30), Some(30)]);
+        assert_eq!(flash.shown(), 30.0);
+    }
+
+    #[test]
+    fn at_half_gain_a_weak_shield_still_holds_the_flash_to_its_whole_share() {
+        let mut flash = ShieldFlash::default();
+        flash.hit(false);
+        assert_eq!(flash.step(25.0, 100.0, true, HALF), Some(8), "held to 8");
+        assert_eq!(flash.shown(), 8.0, "the share, unscaled");
+        assert_eq!(flash.step(25.0, 100.0, true, HALF), Some(7), "7.5");
+    }
+
+    #[test]
+    fn at_no_gain_the_flash_stays() {
+        let mut flash = ShieldFlash::default();
+        flash.hit(false);
+        for _ in 0..3 {
+            assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::ZERO), Some(32));
+        }
+    }
+
+    #[test]
+    fn at_half_gain_the_last_fraction_shows_level_1_then_runs_out() {
+        let mut flash = ShieldFlash {
+            timer: 0.5,
+            shown: 0.0,
+            drawn: None,
+        };
+        assert_eq!(flash.step(100.0, 100.0, true, HALF), Some(1));
+        assert!(flash.spent(), "0.5 less 0.5");
+        assert_eq!(flash.step(100.0, 100.0, true, HALF), None);
+        assert_eq!(flash.shown(), 0.0, "shown 0: the view drops it");
     }
 
     #[test]
     fn a_new_hit_sets_the_timer_back_to_32() {
         let mut flash = ShieldFlash::default();
         flash.hit(false);
-        flash.step(100.0, 100.0, true);
+        flash.step(100.0, 100.0, true, SpeedMult::FULL);
         flash.hit(false);
-        assert_eq!(flash.step(100.0, 100.0, true), Some(32));
+        assert_eq!(flash.step(100.0, 100.0, true, SpeedMult::FULL), Some(32));
         assert_eq!((FLASH_TICKS, FLASH_LEVELS, FLASH_FLOOR), (32.0, 32.0, 4.0));
     }
 }

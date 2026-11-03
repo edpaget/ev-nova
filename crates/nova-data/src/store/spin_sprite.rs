@@ -4,8 +4,8 @@
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
 use crate::graphics::{
-    GraphicsError, Image, PICT, RLED, SheetMask, SpriteSheet, cut_pict_sheet, decode_pict,
-    decode_rled,
+    GraphicsError, Image, PICT, RLED, RleWords, SheetMask, SpriteSheet, cut_pict_sheet,
+    decode_pict, decode_rled, rled_words, sheet_rle_words,
 };
 use crate::records::spin::Spin;
 use crate::wire::id::NovaId;
@@ -98,6 +98,10 @@ pub enum SpinSpriteError {
     },
 }
 
+/// The depth a cut `PICT` sheet's tokens are made at: the 16-bit world's,
+/// as `_SWCreateRLEData` parses each frame's 16-bit pixels.
+const PICT_SHEET_DEPTH: u16 = 16;
+
 /// A `MasksID` for an error message: the ID, or "none".
 pub(super) fn mask_label(mask_id: Option<i16>) -> String {
     mask_id.map_or_else(|| "none".to_owned(), |id| id.to_string())
@@ -149,6 +153,33 @@ impl GameData {
             spin: spin.source,
             sheet_source: found.source,
         })
+    }
+
+    /// The run-length tokens of `spïn` `spin_id`'s sheet, which its pixels
+    /// touch by, from the sheet [`GameData::spin_sheet`] resolves: an
+    /// `rlëD`'s own ([`rled_words`]), or those the original makes of its
+    /// cut `PICT` pair at 16 bits ([`sheet_rle_words`]). It fails where
+    /// that does, but for an `rlëD`'s tokens, which it does not check. The
+    /// sheet is read on every call and not cached.
+    pub fn spin_words(&self, spin_id: i16) -> Result<RleWords, SpinSpriteError> {
+        let spin = self
+            .get::<Spin>(spin_id)
+            .ok_or(SpinSpriteError::NoSpin(spin_id))?
+            .map_err(|e| SpinSpriteError::Decode(e.clone()))?;
+        let record = spin.record;
+        let image_id = record.sprites_id;
+        if let Some(found) = self.resource(RLED, image_id) {
+            return rled_words(found.resource.data())
+                .map_err(|source| SpinSpriteError::Graphics { image_id, source });
+        }
+        let found = self
+            .resource(PICT, image_id)
+            .ok_or(SpinSpriteError::NoSheet {
+                spin: spin_id,
+                image_id,
+            })?;
+        let (_, sheet) = self.pict_pair(spin_id, record, found.resource.data())?;
+        Ok(sheet_rle_words(&sheet, PICT_SHEET_DEPTH))
     }
 
     /// Cuts `spïn` `spin_id`'s sprites `PICT` (`sprites`, its bytes) and
@@ -383,6 +414,37 @@ mod tests {
         assert_eq!(sheet.sheet.solid_frames(), None);
         assert_eq!(sheet.spin.path, Path::new("/p/Grid"));
         assert_eq!(sheet.sheet_source.path, Path::new("/p/Grid"));
+    }
+
+    #[test]
+    fn a_spins_words_are_its_rleds_tokens_or_its_cut_pairs() {
+        let data = store(&[]);
+        assert_eq!(
+            data.spin_words(3000).expect("an rlëD"),
+            rled_words(&sheet(36, 0x7C00)).expect("reads")
+        );
+        assert_eq!(
+            data.spin_words(3001).expect_err("absent"),
+            SpinSpriteError::NoSpin(3001)
+        );
+        let data = pict_grid(2101, distinct(6, 2), &[(PICT, 2101, mask(6, 2, &[(3, 1)]))]);
+        let cut = data.spin_sheet(3000).expect("resolves").sheet;
+        let words = data.spin_words(3000).expect("a PICT pair");
+        assert_eq!(words, sheet_rle_words(&cut, 16));
+        assert_eq!(words.starts.len(), 6);
+        let deep = fork(&[(RLED, 2000, RledBuilder::new(2, 1).depth(32).build())]);
+        assert_eq!(
+            store(&[("Bad", deep)]).spin_words(3000),
+            Err(SpinSpriteError::Graphics {
+                image_id: 2000,
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
+            })
+        );
+        let nothing = fork(&[(Spin::TYPE, 3000, masked_spin(2001, 2101, 2, 1, 6, 6))]);
+        assert!(matches!(
+            store(&[("Grid", nothing)]).spin_words(3000),
+            Err(SpinSpriteError::NoSheet { .. })
+        ));
     }
 
     #[test]

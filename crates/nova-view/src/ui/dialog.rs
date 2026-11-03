@@ -47,6 +47,7 @@ use crate::input::{Input, Key, MouseButton};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+use super::held_keys::HeldKeys;
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
@@ -429,6 +430,10 @@ pub struct Dialog {
     held: Option<usize>,
     /// The press held on a scroll arrow, if any.
     hold: Option<ArrowHold>,
+    /// The keys held back while a press is held, when the dialog holds
+    /// them ([`Dialog::with_held_keys`]); none when keys act at once.
+    /// Boxed, as most dialogs leave it out.
+    held_keys: Option<Box<HeldKeys>>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -517,6 +522,7 @@ impl Dialog {
             tracker: ButtonTracker::default(),
             held: None,
             hold: None,
+            held_keys: None,
         }
     }
 
@@ -588,6 +594,57 @@ impl Dialog {
             *text = text.clone().pixel_scrolled();
         }
         self
+    }
+
+    /// The dialog with its keys waiting while a left press is held on an
+    /// arrow or a click is tracked on an item, until the release, as the
+    /// text dialog's and the offer's held loops and trackers read no events
+    /// (see the `held_keys` module). Other dialogs act
+    /// on keys at once.
+    #[must_use]
+    pub fn with_held_keys(mut self) -> Self {
+        self.held_keys = Some(Box::default());
+        self
+    }
+
+    /// Whether the dialog holds its keys back now: it holds them
+    /// ([`Self::with_held_keys`]) and a press is held on an arrow or a
+    /// click is tracked. Its host gives it every input then, skipping its
+    /// own keys.
+    #[must_use]
+    pub fn holds(&self) -> bool {
+        self.held_keys.is_some() && self.pressing()
+    }
+
+    /// Whether keys typed now would come after keys the dialog holds back:
+    /// it [`holds`](Self::holds) them, or keeps some for its replay
+    /// (abandoned until the next tick, or released and not yet taken). See
+    /// the `held_keys` module.
+    #[must_use]
+    pub fn holds_back_keys(&self) -> bool {
+        self.holds() || self.held_keys.as_ref().is_some_and(|keys| keys.waiting())
+    }
+
+    /// Whether a press is held on an arrow, or a click tracked on an item.
+    fn pressing(&self) -> bool {
+        self.hold.is_some() || self.tracked.is_some()
+    }
+
+    /// What the press held back, once it is over: the keys queued, and a
+    /// left press that ended it, in order, for the host to run through its
+    /// own input path. Once.
+    pub fn take_replay(&mut self) -> Vec<Input> {
+        self.held_keys
+            .as_mut()
+            .map(|keys| keys.take_replay())
+            .unwrap_or_default()
+    }
+
+    /// The press is over: its keys, and `then` after them, are the replay.
+    fn release_keys(&mut self, then: Option<Input>) {
+        if let Some(keys) = &mut self.held_keys {
+            keys.release(then);
+        }
     }
 
     /// Greys item `item` (from 1), as [`Role::Greyed`] does, or ungreys it
@@ -760,7 +817,17 @@ impl Dialog {
     ///   click in progress stays armed.
     ///
     /// Key repeats never activate anything.
+    ///
+    /// While the dialog [`holds`](Self::holds), keys and typed characters
+    /// wait for the release instead ([`Self::take_replay`]).
     pub fn input(&mut self, input: &Input) -> Option<DialogEvent> {
+        if self.holds()
+            && HeldKeys::waits(input)
+            && let Some(keys) = &mut self.held_keys
+        {
+            keys.queue(*input);
+            return None;
+        }
         match *input {
             Input::Key {
                 key,
@@ -780,7 +847,10 @@ impl Dialog {
                 }
                 None
             }
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
+            Input::Key { .. }
+            | Input::Text(_)
+            | Input::PointerLeft
+            | Input::PointerMovedOutside(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }
@@ -839,6 +909,11 @@ impl Dialog {
     /// makes up for a release that never came. Any other press on an arrow
     /// is tracked like a button's, and its click is one gated step
     /// (@0x5b0af-0x5b130), which reports no item.
+    ///
+    /// When the dialog holds its keys, a left press during a hold, or any
+    /// press during a tracked click, ends it without acting: it joins the
+    /// replay after the keys (see the `held_keys`
+    /// module).
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
         if self.hold.is_some() {
             match *input {
@@ -846,13 +921,20 @@ impl Dialog {
                     button: MouseButton::Left,
                     pressed: true,
                     ..
-                } => {}
+                } => {
+                    if self.held_keys.is_some() {
+                        self.hold = None;
+                        self.release_keys(Some(*input));
+                        return None;
+                    }
+                }
                 Input::PointerButton {
                     button: MouseButton::Left,
                     pressed: false,
                     ..
                 } => {
                     self.hold = None;
+                    self.release_keys(None);
                     return None;
                 }
                 _ => return None,
@@ -864,6 +946,12 @@ impl Dialog {
             at,
         } = *input
         {
+            if self.holds() {
+                self.tracker.cancel_pointer();
+                self.tracked = None;
+                self.release_keys(Some(*input));
+                return None;
+            }
             self.cancel_pointer();
             if button == MouseButton::Left
                 && let Some(arrow) = self.arrow_to_hold(at)
@@ -891,6 +979,7 @@ impl Dialog {
         let _ = self.tracker.take_sound();
         if !self.tracker.armed() {
             self.tracked = None;
+            self.release_keys(None);
         }
         if !activated {
             return None;
@@ -957,7 +1046,13 @@ impl Dialog {
     /// each taken alone, so the text's sticky flag goes as the original's
     /// loop leaves it (@0x52172-0x5237f). It runs on past the ends, as
     /// that loop does.
+    ///
+    /// What an abandoned press held back becomes the replay
+    /// ([`Self::cancel_pointer`]).
     pub fn tick(&mut self, dt: Duration) {
+        if let Some(keys) = &mut self.held_keys {
+            keys.tick();
+        }
         let Some(hold) = &mut self.hold else {
             return;
         };
@@ -970,8 +1065,14 @@ impl Dialog {
     }
 
     /// Abandons any click in progress without activating anything, and any
-    /// press held on a scroll arrow.
+    /// press held on a scroll arrow. What it held back waits for the next
+    /// [`Self::tick`] to become the replay.
     pub fn cancel_pointer(&mut self) {
+        if self.pressing()
+            && let Some(keys) = &mut self.held_keys
+        {
+            keys.abandon();
+        }
         self.tracker.cancel_pointer();
         self.tracked = None;
         self.hold = None;

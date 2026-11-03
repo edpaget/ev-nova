@@ -176,7 +176,7 @@ impl Session {
                 heading,
             };
             npc.provoked = EMERGE_PROVOCATION;
-            let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
+            let wait = crate::traffic::ai_wait::ticks(chance.below(EMERGE_DRAW) + EMERGE_LEAST);
             npc.emerge_from_gate(gate, wait);
         }
     }
@@ -497,6 +497,8 @@ pub(super) mod tests {
             let catalog = gated(following(0, 0), flags2);
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
+            // The integer days' full gain, not the take-off's zero.
+            session.at_gain(crate::SpeedMult::FULL);
             session.run.drop_raised();
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             let ships = specials(&session);
@@ -513,7 +515,7 @@ pub(super) mod tests {
                     },
                     "{kind:?}"
                 );
-                assert_eq!(ship.mode, Mode::Emerging { ticks_left: 149 }, "{kind:?}");
+                assert_eq!(ship.mode, Mode::Emerging { ticks_left: 149.0 }, "{kind:?}");
                 assert_eq!(ship.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
             }
             let arrived: Vec<StoryEvent> = ships

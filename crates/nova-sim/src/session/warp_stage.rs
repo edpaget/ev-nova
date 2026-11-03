@@ -9,8 +9,9 @@
 //!
 //! 1. the ships it leads take its jump ([`Session::make_escorts_hyper`],
 //!    `_MakeEscortsHyperWithParent` @0x6bb0a);
-//! 2. +0x50 grows by `_gSpeedMult`, 1.0 on either of double time's passes
-//!    (@0x6bb0f-0x6bb21);
+//! 2. +0x50 grows by the frame's gain, `_gSpeedMult`
+//!    ([`Session::speed_mult`]), the same on either of double time's
+//!    passes (@0x6bb0f-0x6bb21);
 //! 3. unless it can expedite its jumps (`_ShipCanExpiditeJumps`), its
 //!    velocity is multiplied by [`WARP_DRAG`], 0.98 (@0x6bb32-0x6bb59;
 //!    [`drag_by`]);
@@ -28,13 +29,18 @@
 //!    ([`warp::move_off_speed`]) is above 0: `_hyperGamma` is set to
 //!    (v − 55) × 5 ([`warp::hyper_gamma`]) unless the Hyperspace Effects
 //!    preference is off (`_settings`+0x14, @0x6d29c-0x6d2bf); its
-//!    position, not its velocity, moves min(v, 50) × `_gSpeedMult` along
-//!    its whole-degree heading (`_Accel` on +0x18, @0x6d2c3-0x6d318), so
-//!    no speed cap holds it; and its glow rises by 4 to at most 32
+//!    position, not its velocity, moves min(v, 50) × the frame's gain,
+//!    the product narrowed to a float (@0x6d2fd-0x6d305), along its
+//!    whole-degree heading (`_Accel` on +0x18, @0x6d2c3-0x6d318), so no
+//!    speed cap holds it; and its glow rises by 4 to at most 32
 //!    (@0x6d320-0x6d33c);
 //! 7. an inertialess ship's glow follows its speed and its velocity its
 //!    heading (@0x6d343-0x6d43a), then the velocity is capped to the box
-//!    and the ship moves on at it (@0x6d43f-0x6d4eb), as every frame.
+//!    and the ship moves on at it × the gain (@0x6d43f-0x6d4eb), as every
+//!    frame.
+//!
+//! The turn, the bank and the move each take the frame's gain, as out of
+//! a jump; the 0.98 drag and the bank's level past a stage of 30 do not.
 //!
 //! The warp clock is the jump's (see the session's `Jump`), moved on only
 //! on the advance pass, as `TickCount` is real time.
@@ -73,6 +79,7 @@
 //! player's jump collapses first (see the `jump_collapse` module).
 
 use super::{Jump, Mode, PlayerShip, Session, Setup, Statics};
+use crate::SpeedMult;
 use crate::catalog::{StellarId, SystemId};
 use crate::flight::{Adjusted, Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
 use crate::glow::{Follow, JumpRaises, ramp_jump_glow};
@@ -179,10 +186,11 @@ impl Session {
     /// One pass of the warp stage toward `bearing` under `controls` (see
     /// the module docs, steps 1-7), the aim already set.
     pub(super) fn fly_warp_stage(&mut self, bearing: Option<i16>, controls: Controls) {
+        let gain = self.speed_mult();
         let staged = self.ship.warp.warp.stage > 1.0;
         if staged {
             self.make_escorts_hyper();
-            self.ship.warp.warp.stage = grown(self.ship.warp.warp.stage);
+            self.ship.warp.warp.stage = grown(self.ship.warp.warp.stage, gain);
             if !self.ship.fit.stats.fast_jump {
                 self.ship.player.velocity = drag_by(self.ship.player.velocity, WARP_DRAG);
             }
@@ -202,15 +210,16 @@ impl Session {
             bearing,
             Turn::None,
             flight.player_turn,
+            gain,
         );
-        self.ship.bank_through_jump(self.mode.jump(), way);
+        self.ship.bank_through_jump(self.mode.jump(), way, gain);
         let moved = staged
             && self.ship.move_off(
                 &self.pilot,
                 &self.statics,
                 self.mode.jump(),
-                bearing,
-                handling.turn_rate,
+                (bearing, handling.turn_rate),
+                gain,
             );
         let caps = self.player_caps();
         if self.ship.player_inertialess(&self.setup) {
@@ -222,6 +231,7 @@ impl Session {
                 caps,
                 flight,
                 Flyer::Player,
+                gain,
             );
         } else {
             advance(
@@ -231,6 +241,7 @@ impl Session {
                 caps,
                 flight,
                 Flyer::Player,
+                gain,
             );
         }
         self.ship.sound_thrust(&mut self.out, false);
@@ -279,6 +290,7 @@ impl Session {
                 self.ship.aim = brake_aim(self.ship.player.velocity);
             }
             let caps = self.player_caps();
+            let gain = self.speed_mult();
             let speed = inertialess.then_some(&mut self.ship.player_speed);
             let before = self.ship.player.heading;
             let thrust = pre_jump::fly(
@@ -289,10 +301,12 @@ impl Session {
                 caps,
                 flight,
                 speed,
+                gain,
             );
             self.ship.bank_through_jump(
                 self.mode.jump(),
                 super::ship_display::way_turned(before, self.ship.player.heading),
+                gain,
             );
             self.ship.sound_thrust(&mut self.out, thrust);
             self.ship.ramp_jump(
@@ -306,7 +320,7 @@ impl Session {
                 },
                 controls.thrust,
             );
-            self.ship.ionize_tick(&self.pilot, &self.setup);
+            self.ship.ionize_tick(&self.pilot, &self.setup, gain);
             self.burn_afterburner();
             self.stage_jump(to, bearing, None);
         } else {
@@ -326,7 +340,8 @@ impl Session {
                 warp: Some(warp),
             });
             self.fly_warp_stage(bearing, controls);
-            self.ship.ionize_tick(&self.pilot, &self.setup);
+            self.ship
+                .ionize_tick(&self.pilot, &self.setup, self.speed_mult());
             self.burn_afterburner();
             // Unless its end has already begun the jump.
             if self.preparing_jump().is_some() {
@@ -408,6 +423,23 @@ impl PlayerShip {
     #[must_use]
     fn hyper_gamma(&self) -> f32 {
         self.warp.warp.gamma
+    }
+
+    /// Puts the screen's white out for an escort's defection: a
+    /// `_hyperGamma` of 0 or more goes to −1.0, as `_DoEscortPayment`
+    /// sets it once any escort has defected (@0x40298-0x402aa), so the
+    /// next pass's `_FadeWhiteOut` is skipped (@0x6840b-0x6841f). A value
+    /// below 0 stays.
+    pub(super) fn put_out_white(&mut self) {
+        if self.warp.warp.gamma >= 0.0 {
+            self.warp.warp.gamma = -1.0;
+        }
+    }
+
+    /// Sets `_hyperGamma` to `gamma`, for the tests.
+    #[cfg(test)]
+    pub(super) fn light_white(&mut self, gamma: f32) {
+        self.warp.warp.gamma = gamma;
     }
 
     /// Whether the warp has ended, so the jump arrives
@@ -502,15 +534,16 @@ impl PlayerShip {
             ramp_jump_glow(self.engine_glow, raises, follow, self.afterburner_on, key);
     }
 
-    /// The move-off toward `bearing`, at a turn rate of `turn_rate` (see
-    /// the module docs, step 6): whether the ship moved off.
+    /// The move-off toward `bearing`, at a turn rate of `turn_rate` and
+    /// the frame's `gain` (see the module docs, step 6): whether the ship
+    /// moved off.
     fn move_off(
         &mut self,
         pilot: &Pilot,
         statics: &Statics,
         jump: Option<Jump>,
-        bearing: Option<i16>,
-        turn_rate: f32,
+        (bearing, turn_rate): (Option<i16>, f32),
+        gain: SpeedMult,
     ) -> bool {
         let Some(bearing) = bearing else {
             return false;
@@ -531,7 +564,10 @@ impl PlayerShip {
         if self.warp.warp.effects {
             self.warp.warp.gamma = warp::hyper_gamma(v);
         }
-        let push = trig::accel(whole(self.player.heading), warp::capped_move_off(v));
+        let push = trig::accel(
+            whole(self.player.heading),
+            gain.times(warp::capped_move_off(v)),
+        );
         self.player.position = self.player.position + push;
         true
     }
@@ -546,11 +582,10 @@ pub(super) fn player_warp_factor(pilot: &Pilot, statics: &Statics) -> f32 {
     warp::warp_factor(flags)
 }
 
-/// `stage` grown by `_gSpeedMult`, 1.0, in the original's widths: the f64
-/// sum stored as an f32 (@0x6bb0f-0x6bb21).
-#[allow(clippy::cast_possible_truncation)]
-fn grown(stage: f32) -> f32 {
-    (f64::from(stage) + 1.0) as f32
+/// `stage` grown by the frame's `gain`, `_gSpeedMult`, in the original's
+/// widths: the f64 sum stored as an f32 (@0x6bb0f-0x6bb21).
+fn grown(stage: f32, gain: SpeedMult) -> f32 {
+    gain.add_times(stage, 1.0)
 }
 
 #[cfg(test)]
@@ -763,9 +798,18 @@ pub(super) mod tests {
             caps,
             flight,
             Flyer::Player,
+            crate::SpeedMult::FULL,
         );
         let mut plain = dragged;
-        advance(&mut plain, &handling, false, caps, flight, Flyer::Player);
+        advance(
+            &mut plain,
+            &handling,
+            false,
+            caps,
+            flight,
+            Flyer::Player,
+            SpeedMult::FULL,
+        );
         assert_ne!(inertialess.velocity, plain.velocity);
         let raises = JumpRaises {
             move_off: true,
@@ -1312,5 +1356,207 @@ pub(super) mod tests {
         tick(&mut session);
         assert_eq!(session.jumping(), Some(SystemId(131)));
         assert!(session.warp_end_due());
+    }
+
+    // The frame's gain.
+
+    #[test]
+    fn at_half_gain_the_stage_grows_half_a_pass() {
+        let mut session = jumping(&catalog());
+        session.at_gain(SpeedMult::new(0.5));
+        tick(&mut session);
+        assert_eq!(session.ship.warp_stage(session.mode.jump()), 2.5);
+        assert_eq!(grown(2.5, SpeedMult::ZERO), 2.5);
+    }
+
+    #[test]
+    fn at_half_gain_the_move_off_moves_half_as_far() {
+        let mut session = jumping(&catalog());
+        tick_to(&mut session, 300);
+        let at = session.ship.player.position;
+        let half = SpeedMult::new(0.5);
+        session.at_gain(half);
+        tick(&mut session);
+        assert_eq!(
+            session.ship.player.position,
+            at + trig::accel(90, half.times(50.0))
+        );
+    }
+
+    #[test]
+    fn at_half_gain_the_warp_stages_turn_takes_half_a_turn_and_the_ship_moves_half_its_velocity() {
+        let mut session = jumping(&catalog());
+        tick(&mut session);
+        // Facing north, far off the bearing east: no move-off.
+        session.ship.player.heading = 0.0;
+        session.ship.player.velocity = Vec2::new(1.0, -0.5);
+        let half = SpeedMult::new(0.5);
+        session.at_gain(half);
+        let before = session.ship.player;
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
+        let rule = session.setup.flight_rules().player_turn;
+        tick(&mut session);
+        let (heading, _) = turn(0.0, handling.turn_rate, Some(90), Turn::None, rule, half);
+        let (full, _) = turn(
+            0.0,
+            handling.turn_rate,
+            Some(90),
+            Turn::None,
+            rule,
+            SpeedMult::FULL,
+        );
+        assert_ne!(heading, full);
+        assert_eq!(session.ship.player.heading, heading);
+        let velocity = session.ship.player.velocity;
+        assert_ne!(velocity, Vec2::ZERO);
+        assert_eq!(
+            session.ship.player.position,
+            crate::flight::moved(before.position, velocity, half)
+        );
+    }
+
+    // The frame's gain on the jump's other paths.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Moving up fast, facing east: J begins a pre-jump that brakes.
+    fn braking(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::new(0.0, -5.0), 90.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        assert!(matches!(
+            session.mode.jump(),
+            Some(Jump::PreJump { warp: None, .. })
+        ));
+        session
+    }
+
+    /// At rest facing north, the bearing east: J begins a pre-jump that
+    /// turns inside the warp stage.
+    fn turning(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 0.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        session
+    }
+
+    fn ionizing() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(crate::handling::ShipFields {
+                    ionize_max: 400,
+                    deionize: 50,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        }
+    }
+
+    /// The charge left after a pass at half gain from 100.
+    fn shed_at_half(session: &mut Session) -> (f32, Option<f32>) {
+        session.ship.ion.charge = 100.0;
+        let rate = session.ion_rate();
+        session.at_gain(HALF);
+        tick(session);
+        (
+            session.ion().charge,
+            crate::ionization::deionize(100.0, rate, HALF),
+        )
+    }
+
+    #[test]
+    fn at_half_gain_an_ionized_player_sheds_half_its_rate_braking_turning_and_in_hyperspace() {
+        let catalog = ionizing();
+        let mut brake = braking(&catalog);
+        let (charge, expected) = shed_at_half(&mut brake);
+        assert!(matches!(
+            brake.mode.jump(),
+            Some(Jump::PreJump { warp: None, .. })
+        ));
+        assert_eq!(Some(charge), expected, "braking");
+        let mut turn = turning(&catalog);
+        let (charge, expected) = shed_at_half(&mut turn);
+        assert!(matches!(
+            turn.mode.jump(),
+            Some(Jump::PreJump { warp: Some(_), .. })
+        ));
+        assert_eq!(Some(charge), expected, "turning in the warp stage");
+        let mut hyper = jumping(&catalog);
+        let (charge, expected) = shed_at_half(&mut hyper);
+        assert!(hyper.jumping().is_some());
+        assert_eq!(Some(charge), expected, "in hyperspace");
+        assert_ne!(
+            expected,
+            crate::ionization::deionize(100.0, hyper.ion_rate(), SpeedMult::FULL)
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_banking_hull_banks_half_a_frame_braking_and_in_the_warp_stage() {
+        let catalog =
+            crate::session::ship_display::tests::displaying(crate::combat::ship_frames::BANKS, 3);
+        let mut brake = braking(&catalog);
+        brake.at_gain(HALF);
+        tick(&mut brake);
+        assert_eq!(brake.ship.ship_display.frames.bank, 0.5, "braking");
+        let mut turn = turning(&catalog);
+        turn.at_gain(HALF);
+        tick(&mut turn);
+        assert_eq!(turn.ship.ship_display.frames.bank, 0.5, "in the warp stage");
+    }
+
+    #[test]
+    fn at_half_gain_the_pre_jump_brake_flies_as_pre_jump_fly_at_that_gain() {
+        for inertialess in [false, true] {
+            let catalog = if inertialess {
+                FakePilotCatalog {
+                    ships: vec![(
+                        ShipId(128),
+                        Ok(crate::handling::ShipFields {
+                            flags2: crate::stats::INERTIALESS_HULL,
+                            ..FAST
+                        }),
+                    )],
+                    ..catalog()
+                }
+            } else {
+                catalog()
+            };
+            let mut session = braking(&catalog);
+            if inertialess {
+                session.ship.player_speed = 5.0;
+            }
+            session.at_gain(HALF);
+            let Some(Jump::PreJump { bearing, .. }) = session.mode.jump() else {
+                panic!("in the pre-jump");
+            };
+            let handling =
+                session
+                    .ship
+                    .flying_handling(&session.pilot, &session.setup, session.mode.jump());
+            let mut expected = session.ship.player;
+            let mut speed = session.ship.player_speed;
+            pre_jump::fly(
+                &mut expected,
+                &handling,
+                bearing,
+                !session.ship.fit.stats.fast_jump,
+                session.player_caps(),
+                session.setup.flight_rules(),
+                inertialess.then_some(&mut speed),
+                HALF,
+            );
+            tick(&mut session);
+            assert_eq!(session.ship.player, expected, "inertialess {inertialess}");
+            if inertialess {
+                assert_eq!(session.ship.player_speed, speed);
+            }
+        }
     }
 }

@@ -561,7 +561,7 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
         });
-        npc.ai_wait = 0;
+        npc.ai_wait = 0.0;
         // Queued by its think and settled with the pass's line work.
         work_with(
             &mut session,
@@ -620,7 +620,7 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
         });
-        npc.ai_wait = 0;
+        npc.ai_wait = 0.0;
         // A box of 210 for the high level's sub 0xf, and no search under
         // way, which would stop it instead.
         npc.hull.class_turn = 3.0;

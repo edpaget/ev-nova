@@ -990,10 +990,10 @@ mod tests {
         let govts = relations(0, 0);
         for mode in [
             Mode::JumpingIn { tick: 0 },
-            Mode::Emerging { ticks_left: 4 },
-            Mode::HeldAtGate { ticks_left: 4 },
+            Mode::Emerging { ticks_left: 4.0 },
+            Mode::HeldAtGate { ticks_left: 4.0 },
             Mode::LeavingGate { tick: 1 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Coasting { ticks_left: 30.0 },
         ] {
             let mut npcs = [
                 ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),

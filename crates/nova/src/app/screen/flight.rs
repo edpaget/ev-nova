@@ -224,8 +224,12 @@ impl AppScreen {
     /// rescue (`_LoadDescription` @0x68e90, before the missions ended), so
     /// it is not loaded again here. One that could not be read is a
     /// warning, saying why as the catalog reads it. The rescue settled
-    /// before it, and flight goes on once it closes: no fade follows,
-    /// unlike the death's.
+    /// before it, and flight gives it once the rescue's screen has faded
+    /// out and shown black; the screen fades out again once it closes
+    /// (the `rescue_fades` module). No `_SetAllKeyCmdFlags` follows it
+    /// before the rescue leaves `_HandlePlayer` (@0x692ce), so a latched
+    /// key pressed under it and still down acts once the rescue is over
+    /// (see `live_input`).
     fn show_rescue_desc(&mut self, desc: LoadedDesc) {
         let id = desc.id;
         if let Some(text) = desc.text {
@@ -288,10 +292,11 @@ impl AppScreen {
 
     /// Takes what a stellar's movie in front of flight left once it has
     /// ended ([`FlightView::playing`]): the landing it held back shows the
-    /// spaceport, and what was pressed under it goes to what is shown
-    /// next, the spaceport or flight
+    /// spaceport, and what was pressed under it goes to the spaceport
     /// ([`FlightView::take_movie_replay`]), as the original's queued
-    /// events reach the next event loop. Nothing while it plays.
+    /// events reach the port's loop. A gate's leaves nothing: flight
+    /// reads no queued key, and `_SetAllKeyCmdFlags` follows the movie
+    /// (@0x639f2, @0x6429c). Nothing while it plays.
     ///
     /// After a landing, the land checks' texts the movie held
     /// ([`FlightView::take_mission_texts`]) and the venues' offers settle
@@ -299,6 +304,11 @@ impl AppScreen {
     /// shows the spaceport (@0x5faff), then runs `_MissionLandCheck`
     /// (@0x5fbeb) and `_OfferMissionFromPort` (@0x5fc37) before its own
     /// loop: the replayed keys reach the first text.
+    ///
+    /// The router's own handlers ran on each input as it came, before
+    /// the movie held it, so the replay goes past them
+    /// ([`AppScreen::rerouted_input`]): a Caps Lock pressed under the
+    /// movie toggles double time once.
     pub(super) fn settle_flight_movie(&mut self) {
         let Some(flight) = self.flight.as_mut().filter(|flight| !flight.playing()) else {
             return;
@@ -309,7 +319,7 @@ impl AppScreen {
             self.settle_script();
         }
         for input in replay {
-            let _ = self.routed_input(&input);
+            let _ = self.rerouted_input(&input);
         }
     }
 
@@ -326,8 +336,8 @@ impl AppScreen {
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
     /// its stellar sprite pool, what its berths keep, what its last galaxy
-    /// refresh left hidden, its comm dialog's release flag, its course
-    /// map's zoom and whether the map
+    /// refresh left hidden, its comm dialog's release flag, its frame
+    /// gain, its course map's zoom and whether the map
     /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(carry) = flight.sim().carry_over() {
@@ -345,6 +355,9 @@ impl AppScreen {
             }
             if let Some(release) = carry.release_comm_escort {
                 self.release_comm_escort = release;
+            }
+            if let Some(gain) = carry.speed_mult {
+                self.speed_mult = gain;
             }
         }
         if let Some(zoom) = flight.course_map_zoom() {
@@ -543,7 +556,23 @@ impl AppScreen {
     /// An offer's movies come in the places the session queued them.
     /// Over the spaceport, the texts it closed or dropped are told to
     /// flight first and last (`close_mission_texts`).
+    ///
+    /// Then the escorts' defections flight kept show after them, in the
+    /// same place (`AppScreen::show_defections`), as `_DoEscortPayment`
+    /// is an arrival's last call (@0x6c620).
+    ///
+    /// Over flight, whether their close latches every key is flight's to
+    /// say: the texts a `_SetAllKeyCmdFlags` site queued (a boarding's
+    /// pickup @0x6535a, a take-off's @0x63583, an offer's answer
+    /// @0x622ac) latch, and the mission handler's, the rescue's and a
+    /// defection's don't (the `live_input` module).
     pub(super) fn show_mission_texts(&mut self) {
+        self.show_queued_mission_texts();
+        self.show_defections();
+    }
+
+    /// [`AppScreen::show_mission_texts`] but for the defections.
+    fn show_queued_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             close_mission_texts(spaceport, flight);
             spaceport.show_mission_texts(flight.take_mission_texts());
@@ -587,13 +616,19 @@ impl AppScreen {
     }
 
     /// Queues what `show` queues on the mission dialogs over flight, first
-    /// cancelling flight's pointer gesture and letting go of its keys
+    /// hiding flight's cursor (`_HideCursorSprite` before `_ShowTextDialog`,
+    /// @0x687a0; [`AppScreen::hide_flight_cursor`]), cancelling flight's
+    /// pointer gesture and letting go of its keys
     /// (their releases will go to the dialogs), as any dialog over flight
-    /// does. Without dialogs nothing is queued.
+    /// does: the last one's close hands back what is still down (see
+    /// `live_input`). Letting go marks no `_SetAllKeyCmdFlags` site, so
+    /// the close latches every key only when flight marked one for what
+    /// queued the texts. Without dialogs nothing is queued.
     fn over_flight(&mut self, show: impl FnOnce(&mut MissionDialogs)) {
         if self.flight_missions().is_none() {
             return;
         }
+        self.hide_flight_cursor();
         let below = self.shown_mut();
         below.cancel_pointer();
         below.release_keys();

@@ -351,7 +351,12 @@ mod tests {
     ) -> (Controls, Handling) {
         let flight = super::stop(npc, handling, inertia, refuelling);
         let wanted = flight.wanted.expect("sub 1 wants a heading");
-        let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        let turn = flight::turn_to(
+            &mut npc.state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         let flown = flight.flown.unwrap_or(*handling);
         (
             Controls {
@@ -364,7 +369,12 @@ mod tests {
 
     fn run_out(state: &ShipState) -> Controls {
         let (controls, out) = super::run_out(state, &HANDLING);
-        let turn = flight::turn_to(&mut state.clone(), out, HANDLING.turn_rate);
+        let turn = flight::turn_to(
+            &mut state.clone(),
+            out,
+            HANDLING.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         Controls { turn, ..controls }
     }
 
@@ -807,6 +817,7 @@ mod tests {
             controls,
             rules,
             crate::flight::Flyer::Npc,
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(inertial.state, by_hand);
         let mut inertialess = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
@@ -822,6 +833,7 @@ mod tests {
             controls,
             rules,
             (inertia, HANDLING.accel),
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(
             (inertialess.state, inertialess.speed),

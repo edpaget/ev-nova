@@ -216,6 +216,66 @@ fn each_display_is_recorded_in_display_order_with_its_disabled_read() {
     assert_eq!(combat.take_displays(), [], "taken");
 }
 
+#[test]
+fn a_ships_display_record_is_peeked_until_taken() {
+    // The session steps each ship's frames right after its display, by the
+    // `_IsDisabled` that display read (@0x2b61f, kept at -0x152), before the
+    // ship loop's records are taken (`nova_sim::Session::ship_loop`).
+    let player = Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        slot: Slot::Player,
+        ..Ship::at(0, 0.0, 0.0)
+    };
+    let mut downed = Ship::at(3, 500.0, 0.0);
+    downed.reserves.armor.now = 1.0;
+    let mut ships = [downed, player];
+    let mut combat = Combat::default();
+    assert_eq!(combat.displayed(ShipRef::Player), None, "none yet");
+    phase::display_player(&mut combat, &mut ships, &NovaDisable);
+    let players = Displayed {
+        ship: ShipRef::Player,
+        slot: Slot::Player,
+        disabled: false,
+    };
+    assert_eq!(combat.displayed(ShipRef::Player), Some(players));
+    assert_eq!(combat.displayed(C), None, "not displayed yet");
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(
+        combat.displayed(C),
+        Some(Displayed {
+            ship: C,
+            slot: Slot::Berth(3),
+            disabled: true
+        })
+    );
+    assert_eq!(combat.displayed(ShipRef::Player), Some(players), "kept");
+    assert_eq!(combat.take_displays().len(), 2, "peeking takes none");
+    assert_eq!(combat.displayed(C), None, "taken");
+}
+
+#[test]
+fn a_ship_its_display_destroys_was_displayed_disabled_and_a_destroyed_one_not_at_all() {
+    // The set step (@0x2b7d8) and the lights (@0x2c2ea) read the
+    // `_IsDisabled` kept before the dying block (@0x2d7ef) explodes the
+    // ship; a slot destroyed before its display takes the inactive branch
+    // (@0x2b522-0x2b60a) and has no record.
+    let mut wreck = Ship::at(1, 0.0, 0.0);
+    wreck.hull.death_delay = 5;
+    wreck.condition = counting(2);
+    let mut gone = Ship::at(2, 300.0, 0.0);
+    gone.condition = Condition::Destroyed;
+    let mut ships = [wreck, gone];
+    let mut combat = Combat::default();
+    phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+    assert_eq!(ships[0].condition, Condition::Destroyed, "exploded");
+    assert_eq!(
+        combat.displayed(ShipRef::Npc(NpcId(1))).map(|d| d.disabled),
+        Some(true)
+    );
+    assert_eq!(combat.displayed(ShipRef::Npc(NpcId(2))), None);
+}
+
 /// NPC 7 at (-40, 0) regenerating a point of shield, A at (40, 0), and a
 /// wreck in slot 5 at the centre going off on its display.
 fn by_slot() -> [Ship; 3] {

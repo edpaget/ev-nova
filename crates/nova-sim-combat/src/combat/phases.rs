@@ -83,7 +83,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            lockout.reload_one(fighter);
+            lockout.reload_one(fighter, arena.field.speed_mult);
         }
     }
 
@@ -159,7 +159,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            regenerate_player(fighter, rule);
+            regenerate_player(fighter, rule, arena.field.speed_mult);
         }
     }
 
@@ -239,11 +239,14 @@ impl Combat {
             .target
             .is_none_or(|target| fighters.iter().all(|other| other.ship != target));
         let fighter = &mut fighters[index];
-        self.ion_lockout.reload_one(fighter);
+        // Its reloads and regeneration at the frame's gain (@0x338b3,
+        // @0x345da, @0x3464c).
+        let gain = arena.field.speed_mult;
+        self.ion_lockout.reload_one(fighter, gain);
         if idle {
             fighter.armament.hold_idle_bays();
         }
-        regenerate(fighter, arena.rules.disable);
+        regenerate(fighter, arena.rules.disable, gain);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);
         fighters[index].condition.count_down();
@@ -274,8 +277,9 @@ impl Combat {
     /// ([`Combat::handle_shots`]), among `fighters`, drawing on `chance`:
     /// at each slot's visit a held slot is freed, a shot its last move
     /// spent comes to its end of life (@0x36195), its sub-munitions
-    /// released and then its blast landed, and any other shot flies a tick
-    /// and lands its missile lock ([`Strike::lock`](super::Strike::lock),
+    /// released and then its blast landed, and any other shot flies a
+    /// visit at the frame's gain ([`Field::speed_mult`]) and lands its
+    /// missile lock ([`Strike::lock`](super::Strike::lock),
     /// @0x35855). Each ship struck settles its condition as in the
     /// collision passes, so every later visit reads what the earlier ones
     /// landed, an escort's cleared leader included. Then each

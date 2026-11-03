@@ -6,27 +6,38 @@
 //! and the beams ([`Combat::hazards`], before [`Combat::close_tick_in`]), on
 //! either pass:
 //!
-//! - **The pull** ([`pull`]) is added to the velocity of each fighter not
-//!   destroyed that does not resist gravity ([`HazardResistance::gravity`]),
-//!   source by source in the system's slot order, and reported as a
-//!   [`Shove`]. A later beam tick's knockback starts from the pulled
+//! - **The pull** ([`pull`]), at the frame's gain
+//!   ([`StellarHazards::speed_mult`]), is added to the velocity of each
+//!   fighter not destroyed that does not resist gravity
+//!   ([`HazardResistance::gravity`]), source by source in the system's
+//!   slot order, and reported as a [`Shove`]. A later beam tick's knockback starts from the pulled
 //!   velocity, so `_SpeedLimit`'s clamp covers the pull, as the original's
 //!   does.
-//! - **A kill**, disc by disc in slot order, fighters in their order (the
-//!   player first): each fighter neither destroyed nor breaking up, that
-//!   does not resist ([`HazardResistance::deadly`]) and touches the disc
-//!   ([`touches`]), goes destroyed with its armour at [`KILLED_ARMOR`],
+//! - **A kill**, sprite by sprite in slot order, fighters in their order
+//!   (the player first): each fighter neither destroyed nor breaking up,
+//!   that does not resist ([`HazardResistance::deadly`]) and touches the
+//!   sprite (see below), goes destroyed with its armour at [`KILLED_ARMOR`],
 //!   and its `Explode2` goes off at size 0 ([`Combat::explode`]; none when
 //!   it has none). It is kept as a [`StellarKill`]
 //!   ([`Combat::take_stellar_kills`]) for the session to settle. A ship
-//!   killed by one disc is out for the later ones. The kill makes no
+//!   killed by one sprite is out for the later ones. The kill makes no
 //!   breakup, death timer or shockwave, and the beams that follow neither
 //!   follow nor hit the ship.
 //!
-//! Which stellars pull and which discs kill, and what a kill does to the
-//! ship beyond this, are the session's (`nova_sim::Session`'s gravity and
-//! deadly-stellar steps). The discs stand in for the original's sprite
-//! masks (`_SWRLECollision` @0x39d97; see [`deadly_stellar`]).
+//! **The touch** ([`DeadlySprite`]). `_HandleDeadlyStellars` tests each
+//! ship by `_SWRLECollision(stellar sprite, ship sprite)` (@0x39d97): the
+//! stellar's placed mask against the ship's, the stellar first, walked as
+//! [`StellarHazards::walk`] says ([`PlacedMask::touches`], see
+//! [`sprite_mask`](crate::sprite_mask)). Where either mask can't be read
+//! (a sheet the catalog couldn't read, a ship whose base image is a `PICT`,
+//! which nova-data doesn't read, or a frame whose start the token walk
+//! didn't find), the touch falls back to discs ([`disc_fallback`]): the
+//! ship's hit radius against the stellar's disc ([`touches`]).
+//!
+//! Which stellars pull and which sprites kill, where each is placed and
+//! what a kill does to the ship beyond this, are the session's
+//! (`nova_sim::Session`'s gravity and deadly-stellar steps; see
+//! [`deadly_stellar`]).
 
 use super::{Combat, Fighter, ShipRef, Shove};
 use crate::combat::hull::Condition;
@@ -34,7 +45,9 @@ use crate::combat::hull::Condition;
 use crate::deadly_stellar;
 use crate::deadly_stellar::{KILLED_ARMOR, touches};
 use crate::geometry::Vec2;
-use crate::gravity::{SPEED_MULT, pull};
+use crate::gravity::pull;
+use crate::speed_mult::SpeedMult;
+use crate::sprite_mask::{MaskWalk, PlacedMask};
 
 /// A stellar that pulls: where it is and its `spöb` `Gravity`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,8 +58,8 @@ pub struct GravitySource {
     pub gravity: i16,
 }
 
-/// The disc a deadly stellar's sprite kills within: its centre and
-/// radius.
+/// The disc a deadly stellar's sprite kills within when no mask can be
+/// read ([`disc_fallback`]): its centre and radius.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeadlyDisc {
     /// Its centre.
@@ -55,14 +68,35 @@ pub struct DeadlyDisc {
     pub radius: f32,
 }
 
+/// The sprite a deadly stellar kills by: its placed mask, when its sheet
+/// can be read, and its disc, which the touch falls back to otherwise
+/// (see the module docs).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeadlySprite {
+    /// Its disc.
+    pub disc: DeadlyDisc,
+    /// Its placed mask, if its sheet can be read.
+    pub mask: Option<PlacedMask>,
+}
+
 /// The stellar hazards of the player's system for a tick, each in the
 /// system's slot order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StellarHazards {
     /// The stellars that pull.
     pub gravity: Vec<GravitySource>,
-    /// The deadly stellars' discs.
-    pub deadly: Vec<DeadlyDisc>,
+    /// The deadly stellars' sprites.
+    pub deadly: Vec<DeadlySprite>,
+    /// Each ship's placed mask, where its sheet can be read; a ship not
+    /// here touches by its disc.
+    pub ships: Vec<(ShipRef, PlacedMask)>,
+    /// How the masks are walked, by
+    /// [`RuleKey::RleCollisionWalk`](crate::RuleKey::RleCollisionWalk).
+    pub walk: MaskWalk,
+    /// The frame's gain, `_gSpeedMult`, that each source's `Gravity` is
+    /// multiplied by for every fighter, the player and the NPCs alike
+    /// (`_HandleGravity` @0x39c84-0x39c94). Full by default.
+    pub speed_mult: SpeedMult,
 }
 
 /// Which stellar hazards a fighter resists (`_ShipResistsGravity`,
@@ -98,7 +132,7 @@ impl Combat {
                     fighter.state.position,
                     source.at,
                     source.gravity,
-                    SPEED_MULT,
+                    hazards.speed_mult,
                 );
                 let velocity = fighter.state.velocity + pulled;
                 fighter.state.velocity = velocity;
@@ -108,19 +142,21 @@ impl Combat {
                 });
             }
         }
-        for disc in &hazards.deadly {
+        for sprite in &hazards.deadly {
             for fighter in fighters.iter_mut() {
                 let standing = !matches!(
                     *fighter.condition,
                     Condition::Destroyed | Condition::Dying { .. }
                 );
-                let touching = touches(
-                    fighter.state.position,
-                    fighter.hull.hit_radius,
-                    disc.at,
-                    Some(disc.radius),
-                );
-                if standing && !fighter.resists.deadly && touching {
+                let ship = hazards
+                    .ships
+                    .iter()
+                    .find(|(ship, _)| *ship == fighter.ship)
+                    .map(|(_, mask)| mask);
+                if standing
+                    && !fighter.resists.deadly
+                    && sprite_touches(sprite, ship, fighter, hazards.walk)
+                {
                     self.kill_by_stellar(fighter);
                 }
             }
@@ -154,4 +190,33 @@ impl Combat {
     pub fn take_stellar_kills(&mut self) -> Vec<StellarKill> {
         std::mem::take(&mut self.stellar_kills)
     }
+}
+
+/// Whether `fighter`, its placed mask `ship` if read, touches `sprite`: by
+/// the masks walked as `walk` says, the stellar's first, as
+/// `_HandleDeadlyStellars` passes them to `_SWRLECollision` (@0x39d97);
+/// else by the [`disc_fallback`].
+fn sprite_touches(
+    sprite: &DeadlySprite,
+    ship: Option<&PlacedMask>,
+    fighter: &Fighter,
+    walk: MaskWalk,
+) -> bool {
+    sprite
+        .mask
+        .as_ref()
+        .zip(ship)
+        .and_then(|(stellar, ship)| stellar.touches(ship, walk))
+        .unwrap_or_else(|| disc_fallback(&sprite.disc, fighter))
+}
+
+/// The disc fallback, where either mask can't be read (see the module
+/// docs): whether `fighter`'s hit disc overlaps `disc` ([`touches`]).
+fn disc_fallback(disc: &DeadlyDisc, fighter: &Fighter) -> bool {
+    touches(
+        fighter.state.position,
+        fighter.hull.hit_radius,
+        disc.at,
+        Some(disc.radius),
+    )
 }

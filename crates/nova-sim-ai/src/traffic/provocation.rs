@@ -275,7 +275,7 @@ mod tests {
             "an interceptor"
         );
         let waiting_one = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..police_one.clone()
         };
         assert!(

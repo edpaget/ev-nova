@@ -38,7 +38,7 @@ impl Session {
         *radar_gear = super::super::radar::radar_gear(pilot, statics);
         *interference = self.chart.interference(pilot, statics);
         *interface_government = super::super::interface_government(pilot, statics);
-        *nav_brackets = self.chart.nav_brackets();
+        *nav_brackets = self.chart.nav_brackets(self.next_speed_mult());
         *target_brackets = self.target_brackets();
         *red_alert = self.red_alert.icon();
         *escort_rows = self.space.escort_rows();
@@ -206,6 +206,24 @@ mod tests {
         let brackets = filled(&session).hud.nav_brackets.expect("bracketed");
         assert_eq!(brackets.stellar, crate::catalog::StellarId(131));
         assert_eq!(Some(brackets), session.nav_brackets());
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_fill_writes_a_fresh_nav_pick_stepped_at_the_next_gain() {
+        let half = crate::SpeedMult::new(0.5);
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.at_gain(half);
+        session.select_stellar(StellarPick::Slot(0));
+        let mut fresh = crate::brackets::FlyIn::default();
+        fresh.start();
+        let expand = filled(&session).hud.nav_brackets.expect("bracketed").expand;
+        assert_eq!(expand, fresh.expand(half));
+        assert_ne!(
+            expand,
+            fresh.expand(crate::SpeedMult::FULL),
+            "the gain shows"
+        );
     }
 
     #[test]

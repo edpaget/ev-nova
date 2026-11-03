@@ -6,13 +6,14 @@
 //!
 //! **Out of a jump** ([`Session::fly_inertialess`]):
 //!
-//! 1. Reverse (@0x6c770-0x6c7d3), held by a player not disabled, takes a
-//!    tick's acceleration off the speed, down to none. It gives no aim and
+//! 1. Reverse (@0x6c770-0x6c7d3), held by a player not disabled, takes
+//!    its acceleration × the frame's gain ([`Session::speed_mult`]) off
+//!    the speed, down to none. It gives no aim and
 //!    writes no +0x68, so the turn keys still turn (see the `steering`
 //!    module), and it still counts as a flight key.
 //! 2. The turn block turns the ship as any ship's (`player_turn`).
-//! 3. Thrust (@0x6cbb2-0x6cc3e) adds a tick's acceleration to the speed,
-//!    up to `_ShipMaxSpeed`, and ramps the glow as any ship's
+//! 3. Thrust (@0x6cbb2-0x6cc3e) adds its acceleration × the gain to the
+//!    speed, up to `_ShipMaxSpeed`, and ramps the glow as any ship's
 //!    (@0x6cd24-0x6cd52).
 //! 4. The speed is capped at the box, `_playerMaxVel` (@0x6d356-0x6d369;
 //!    see the `afterburner` module), the top speed but while the
@@ -23,12 +24,13 @@
 //!    [`DISABLED_DRAG`](crate::flight::DISABLED_DRAG) (@0x68ad1); in
 //!    flight the glow follows the speed (@0x6d3af-0x6d42d; see the
 //!    [`glow`](crate::glow) module).
-//! 5. The velocity is pulled toward heading x speed (@0x6d43a), clamped
-//!    to the box (@0x6d43f-0x6d4aa) and the ship moves.
+//! 5. The velocity is pulled toward heading x speed by four accelerations
+//!    × the gain (@0x6d43a), clamped to the box (@0x6d43f-0x6d4aa) and
+//!    the ship moves its velocity × the gain.
 //!
 //! **In the pre-jump** (see [`pre_jump`](crate::pre_jump)) the brake takes
-//! a tick's acceleration off the speed instead of turning against the
-//! motion and thrusting, and the glow follows the speed in both stages,
+//! its acceleration × the gain off the speed instead of turning against
+//! the motion and thrusting, and the glow follows the speed in both stages,
 //! as both reach @0x6d343.
 //!
 //! **The speed's resets.** It starts at none (`_ResetPlayer` @0x1d43c), and
@@ -73,6 +75,7 @@ impl Session {
                 self.ship.player_speed.min(caps.max_vel) * PLAYER_DISABLED_DECAY;
         }
         let flight = self.setup.flight_rules();
+        let gain = self.speed_mult();
         inertialess_player_step(
             &mut self.ship.player,
             &mut self.ship.player_speed,
@@ -81,6 +84,7 @@ impl Session {
             aim,
             caps,
             flight,
+            gain,
         );
         let follow = if disabled {
             Follow::Disabled
@@ -494,5 +498,22 @@ mod tests {
             session.ship.player.velocity,
             facing(session.ship.player.heading) * half
         ));
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_players_thrust_takes_half_an_acceleration() {
+        let catalog = hull();
+        let mut session = flying(&catalog, 90.0);
+        let mut full = flying(&catalog, 90.0);
+        session.at_gain(crate::SpeedMult::new(0.5));
+        work(&mut session, &catalog, held(true, Turn::None, false));
+        work(&mut full, &catalog, held(true, Turn::None, false));
+        assert!(session.player_speed() > 0.0);
+        assert!(
+            (session.player_speed() * 2.0 - full.player_speed()).abs() < 1e-6,
+            "{} against {}",
+            session.player_speed(),
+            full.player_speed()
+        );
     }
 }

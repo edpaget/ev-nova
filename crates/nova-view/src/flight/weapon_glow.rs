@@ -21,7 +21,9 @@
 //!   ([`solid_runs`](super::solid_runs)): the Thunderforge's.
 //! - Then the glow falls by its class's decay, `WeapDecay` × 0.333
 //!   ([`ShipSheet::weapon_decay`](super::catalog::ShipSheet::weapon_decay)),
-//!   to −1.0 at the least ([`WeaponGlow::step`]).
+//!   times the frame's gain (@0x2c7ed), in doubles, narrowed, the pass's
+//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult), to
+//!   −1.0 at the least, unscaled ([`WeaponGlow::step`]).
 //!
 //! The spawns zero it (@0x3c4ff, @0x3ca71, @0x3d949, @0x82ef3, @0x1c4d4)
 //! and the player's resets write it (@0x1d58b, @0x6c587, @0x67002,
@@ -43,7 +45,7 @@
 
 use std::collections::BTreeMap;
 
-use nova_sim::ShipRef;
+use nova_sim::{ShipRef, SpeedMult};
 
 /// The glow a firing lights (32.0 @0x62c98, @0x88de4, @0x30b37).
 pub const GLOW_LIT: f32 = 32.0;
@@ -89,11 +91,13 @@ impl WeaponGlow {
         (self.glow > 0.0).then(|| self.glow.min(GLOW_LIT).trunc() as u8)
     }
 
-    /// Its frame's display: the level it shows is kept ([`WeaponGlow::drawn`]),
-    /// then the glow falls by `decay`, to [`GLOW_FLOOR`] at the least.
-    pub fn step(&mut self, decay: f32) {
+    /// Its frame's display at the frame's gain `gain`: the level it shows
+    /// is kept ([`WeaponGlow::drawn`]), then the glow falls by `decay`
+    /// times the gain, in doubles, narrowed (@0x2c7ed), to [`GLOW_FLOOR`]
+    /// at the least, unscaled.
+    pub fn step(&mut self, decay: f32, gain: SpeedMult) {
         self.drawn = self.shown();
-        self.glow = (self.glow - decay).max(GLOW_FLOOR);
+        self.glow = gain.add_times(self.glow, -decay).max(GLOW_FLOOR);
     }
 
     /// The level its last display showed, if it showed.
@@ -121,12 +125,18 @@ pub struct WeaponGlows {
 }
 
 impl WeaponGlows {
-    /// Steps the glows a frame, as the fight's `lit` glows say (each
-    /// ship's, and whether it is late): the glows lit before their ship's
-    /// display are lit, then each ship's display shows its glow and lets
-    /// it fall by its decay, `decay(ship)`, a ship of none being gone and
-    /// forgotten; then the late ones are lit, to show the next frame.
-    pub fn step(&mut self, lit: &[(ShipRef, bool)], decay: impl Fn(ShipRef) -> Option<f32>) {
+    /// Steps the glows a frame at the frame's gain `gain`, as the fight's
+    /// `lit` glows say (each ship's, and whether it is late): the glows lit
+    /// before their ship's display are lit, then each ship's display shows
+    /// its glow and lets it fall by its decay, `decay(ship)`, times the
+    /// gain, a ship of none being gone and forgotten; then the late ones
+    /// are lit, to show the next frame.
+    pub fn step(
+        &mut self,
+        lit: &[(ShipRef, bool)],
+        decay: impl Fn(ShipRef) -> Option<f32>,
+        gain: SpeedMult,
+    ) {
         for &(ship, _) in lit.iter().filter(|(_, late)| !late) {
             self.glows.entry(ship).or_default().light();
         }
@@ -134,7 +144,7 @@ impl WeaponGlows {
             let Some(decay) = decay(ship) else {
                 return false;
             };
-            glow.step(decay);
+            glow.step(decay, gain);
             // One not shown is at or below none: as good as out.
             glow.drawn().is_some()
         });
@@ -174,7 +184,7 @@ mod tests {
         let decay = (5.0_f64 * 0.333) as f32;
         let mut shown = Vec::new();
         for _ in 0..22 {
-            glow.step(decay);
+            glow.step(decay, SpeedMult::FULL);
             shown.push(glow.drawn());
         }
         let mut level = 32.0_f32;
@@ -191,17 +201,59 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_a_lit_glow_falls_half_its_decay_a_frame() {
+        let half = SpeedMult::new(0.5);
+        let mut glow = WeaponGlow::default();
+        glow.light();
+        glow.step(4.0, half);
+        assert_eq!((glow.drawn(), glow.glow), (Some(32), 30.0));
+        glow.step(4.0, half);
+        assert_eq!((glow.drawn(), glow.glow), (Some(30), 28.0));
+    }
+
+    #[test]
+    fn at_part_gain_the_floor_is_still_minus_1() {
+        let mut glow = WeaponGlow {
+            glow: 0.5,
+            drawn: None,
+        };
+        glow.step(4.0, SpeedMult::new(0.5));
+        assert_eq!(glow.glow, GLOW_FLOOR, "0.5 less 2: held at -1");
+        glow.step(4.0, SpeedMult::new(0.5));
+        assert_eq!(glow.glow, GLOW_FLOOR);
+    }
+
+    #[test]
+    fn at_no_gain_a_lit_glow_holds() {
+        let mut glow = WeaponGlow::default();
+        glow.light();
+        for _ in 0..3 {
+            glow.step(4.0, SpeedMult::ZERO);
+            assert_eq!(glow.drawn(), Some(32));
+        }
+        assert_eq!(glow.glow, GLOW_LIT);
+    }
+
+    #[test]
+    fn the_glows_step_each_ships_glow_at_the_gain() {
+        let mut glows = WeaponGlows::default();
+        glows.step(&[(NPC, false)], |_| Some(4.0), SpeedMult::new(0.5));
+        glows.step(&[], |_| Some(4.0), SpeedMult::new(0.5));
+        assert_eq!(glows.drawn(NPC), Some(30), "32 less 2");
+    }
+
+    #[test]
     fn a_glow_at_or_below_none_is_hidden() {
         let mut glow = WeaponGlow::default();
         glow.light();
-        glow.step(32.0);
+        glow.step(32.0, SpeedMult::FULL);
         assert_eq!(glow.drawn(), Some(32));
         assert_eq!(glow.shown(), None, "at 0.0");
-        glow.step(1.0);
+        glow.step(1.0, SpeedMult::FULL);
         assert_eq!(glow.drawn(), None);
         let mut faint = WeaponGlow::default();
         faint.light();
-        faint.step(31.5);
+        faint.step(31.5, SpeedMult::FULL);
         assert_eq!(faint.shown(), Some(0), "above none: level 0");
     }
 
@@ -221,29 +273,37 @@ mod tests {
     fn a_firing_shows_that_frame_and_a_beams_glow_the_next() {
         let mut glows = WeaponGlows::default();
         let decay = |_| Some(4.0);
-        glows.step(&[(ShipRef::Player, false)], decay);
+        glows.step(&[(ShipRef::Player, false)], decay, SpeedMult::FULL);
         assert_eq!(glows.drawn(ShipRef::Player), Some(32), "that frame");
-        glows.step(&[], decay);
+        glows.step(&[], decay, SpeedMult::FULL);
         assert_eq!(glows.drawn(ShipRef::Player), Some(28));
-        glows.step(&[(NPC, true)], decay);
+        glows.step(&[(NPC, true)], decay, SpeedMult::FULL);
         assert_eq!(glows.drawn(NPC), None, "a beam's: not this frame");
-        glows.step(&[(NPC, true)], decay);
+        glows.step(&[(NPC, true)], decay, SpeedMult::FULL);
         assert_eq!(glows.drawn(NPC), Some(32), "the next");
-        glows.step(&[], decay);
+        glows.step(&[], decay, SpeedMult::FULL);
         assert_eq!(
             glows.drawn(NPC),
             Some(32),
             "once after the beam's last tick"
         );
-        glows.step(&[], decay);
+        glows.step(&[], decay, SpeedMult::FULL);
         assert_eq!(glows.drawn(NPC), Some(28));
     }
 
     #[test]
     fn a_gone_ships_glow_is_forgotten_and_a_cleared_one_out() {
         let mut glows = WeaponGlows::default();
-        glows.step(&[(NPC, false), (ShipRef::Player, false)], |_| Some(1.0));
-        glows.step(&[], |ship| (ship == ShipRef::Player).then_some(1.0));
+        glows.step(
+            &[(NPC, false), (ShipRef::Player, false)],
+            |_| Some(1.0),
+            SpeedMult::FULL,
+        );
+        glows.step(
+            &[],
+            |ship| (ship == ShipRef::Player).then_some(1.0),
+            SpeedMult::FULL,
+        );
         assert_eq!(glows.drawn(NPC), None, "gone");
         assert_eq!(glows.drawn(ShipRef::Player), Some(31));
         glows.clear();
@@ -253,9 +313,9 @@ mod tests {
     #[test]
     fn a_glow_run_out_is_dropped() {
         let mut glows = WeaponGlows::default();
-        glows.step(&[(NPC, false)], |_| Some(40.0));
+        glows.step(&[(NPC, false)], |_| Some(40.0), SpeedMult::FULL);
         assert_eq!(glows.drawn(NPC), Some(32));
-        glows.step(&[], |_| Some(40.0));
+        glows.step(&[], |_| Some(40.0), SpeedMult::FULL);
         assert_eq!(glows.drawn(NPC), None);
         assert!(glows.glows.is_empty(), "dropped");
     }

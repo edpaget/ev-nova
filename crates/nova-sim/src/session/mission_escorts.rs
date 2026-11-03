@@ -702,6 +702,8 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player.position = crate::geometry::Vec2::new(5000.0, 0.0);
         let led: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
@@ -1236,6 +1238,8 @@ pub(super) mod tests {
     fn aborted_in_flight_a_mission_escort_takes_its_ships_ai_and_leaves() {
         let catalog = inherent_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         assert_eq!(hired_slot(&session), (2, 4));
         tick(&mut session, &catalog);
         assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));

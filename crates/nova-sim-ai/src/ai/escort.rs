@@ -1162,7 +1162,7 @@ mod tests {
         );
         // The slot's active test (+0xb8) keeps a ship still arriving.
         let mut arriving = pirate(2, 100.0, 0.0);
-        arriving.mode = Mode::Emerging { ticks_left: 5 };
+        arriving.mode = Mode::Emerging { ticks_left: 5.0 };
         let npcs = [escort(None), arriving];
         let around = Surroundings::new(&[], &npcs);
         assert_eq!(
@@ -1195,7 +1195,7 @@ mod tests {
         // the turret fires at one gliding in or bursting out (goal 0 or 8).
         for (mode, fires) in [
             (Mode::JumpingIn { tick: 1 }, turret_pick(140)),
-            (Mode::Emerging { ticks_left: 5 }, DEFENCE),
+            (Mode::Emerging { ticks_left: 5.0 }, DEFENCE),
             (Mode::LeavingGate { tick: 0 }, DEFENCE),
             (Mode::LeavingGate { tick: 1 }, turret_pick(140)),
         ] {
@@ -1380,7 +1380,7 @@ mod tests {
     #[test]
     fn an_escort_keeps_a_target_holding_its_course_after_its_burst() {
         let coasting = |npc: Npc| Npc {
-            mode: Mode::Coasting { ticks_left: 30 },
+            mode: Mode::Coasting { ticks_left: 30.0 },
             ..npc
         };
         let defend = Some(EscortOrder::Defend);
@@ -1479,7 +1479,7 @@ mod tests {
             window: 100.0,
             reach: 40.0,
         });
-        fighter.ai_wait = 30;
+        fighter.ai_wait = 30.0;
         let govts = govts(0, 0);
         for (order, threat, ends) in [
             (None, false, true),
@@ -1523,7 +1523,7 @@ mod tests {
         // Return to Hangar with no carrier acts as no standing command:
         // formation, its wait ended.
         let mut uncarried = escort(Some(EscortOrder::Dock));
-        uncarried.ai_wait = 30;
+        uncarried.ai_wait = 30.0;
         let npcs = [uncarried];
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
@@ -1785,7 +1785,7 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         let mut npc = npcs[0].clone();
-        npc.mode = Mode::Emerging { ticks_left: 30 };
+        npc.mode = Mode::Emerging { ticks_left: 30.0 };
         ai.gate_wait(&npc, &around)
     }
 
@@ -1838,11 +1838,11 @@ mod tests {
             };
             ENGINE.gate_wait(&npcs[0], &around)
         };
-        let held = Mode::HeldAtGate { ticks_left: 20 };
+        let held = Mode::HeldAtGate { ticks_left: 20.0 };
         let intact = Condition::Intact;
         assert_eq!(in_gate(held, Goal::Wait, intact), POINT_DEFENCE);
         assert_eq!(
-            in_gate(Mode::Emerging { ticks_left: 20 }, Goal::Wait, intact),
+            in_gate(Mode::Emerging { ticks_left: 20.0 }, Goal::Wait, intact),
             GateWait::default(),
             "waiting in its gate"
         );
@@ -1878,7 +1878,7 @@ mod tests {
         };
         assert_eq!(waiting(&ENGINE, &npcs), found, "its turret, in reach");
         let mut held = npcs[0].clone();
-        held.mode = Mode::Emerging { ticks_left: 30 };
+        held.mode = Mode::Emerging { ticks_left: 30.0 };
         held.trigger = found.trigger;
         assert_eq!(fire::gated(&held).only, None, "fires nothing");
         // Out of its turret's reach, it finds nothing.
@@ -2185,7 +2185,7 @@ mod tests {
                     having(fighter(Some(order)), Goal::Attack(n(2)), Some(n(2))),
                     left,
                 );
-                dry.ai_wait = 30;
+                dry.ai_wait = 30.0;
                 let npcs = [dry, pirate(2, 0.0, 100.0)];
                 for ai in [ENGINE, BIBLE] {
                     let decision = decision_of(ai, &npcs, 0.0, &[0]);

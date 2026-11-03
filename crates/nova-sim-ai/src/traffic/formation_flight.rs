@@ -70,10 +70,13 @@
 //!     whole degrees, and onto it otherwise. So it steps a degree a
 //!     frame while it is close to its leader's heading.
 //! - **The nudge** ([`maintain`], `_AIMaintainFormation(ship, 0)`): the
-//!   nudge is [`FORMATION_NUDGE`] times its `_ShipAccelRate`, the thrust
-//!   it flies by (ionized, under the thrust divisor), cut to (1 − f) with
-//!   an ion charge above none, f its ionization factor held to
-//!   [`ION_HOLD`]. Each axis [`FORMATION_SLACK`] or more off its slot,
+//!   nudge ([`nudge`]) is [`FORMATION_NUDGE`] times its `_ShipAccelRate`,
+//!   the thrust it flies by (ionized, under the thrust divisor), cut to
+//!   (1 − f) with an ion charge above none, f its ionization factor held
+//!   to [`ION_HOLD`], then times the frame's gain in doubles (@0x84fab,
+//!   the autopilot's `Readings::speed_mult`, or the dispatch's
+//!   `World::speed_mult` for sub 0xd and the swarm branches). The snap,
+//!   the slack and the guards read no gain. Each axis [`FORMATION_SLACK`] or more off its slot,
 //!   inclusive, moves by the whole nudge toward it, which can carry it
 //!   past. Nothing moves while its warp stage runs. The nudge comes
 //!   before `_HandleShip`'s move, so it is nudged, then moves. Double
@@ -141,6 +144,7 @@ use crate::flight;
 use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::autopilot::Beside;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::Inertia;
@@ -194,8 +198,9 @@ pub fn sub(at: Vec2, leader: Vec2, leader_seen: bool) -> Sub {
 }
 
 /// `_AIMaintainFormation` (see the module docs): `npc` nudged toward
-/// `slot` by its thrust on `handling`, or put on it when `snap`.
-pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
+/// `slot` by its thrust on `handling` at the frame's `gain` ([`nudge`]),
+/// or put on it when `snap`, which reads no gain.
+pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool, gain: SpeedMult) {
     if snap {
         npc.state.position = slot;
         return;
@@ -203,19 +208,7 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
     if npc.warp.under_way() {
         return;
     }
-    let mut nudge = handling.accel * FORMATION_NUDGE;
-    if npc.ion.charge > 0.0 {
-        let factor = f64::from(npc.ion_factor());
-        let held = if factor > ION_HOLD_ABOVE {
-            f64::from(ION_HOLD)
-        } else {
-            factor
-        };
-        // Doubles, back to a float (@0x84f93-0x84fa7).
-        #[allow(clippy::cast_possible_truncation)]
-        let cut = (f64::from(nudge) * (1.0 - held)) as f32;
-        nudge = cut;
-    }
+    let nudge = nudge(npc, handling, gain);
     let towards = |at: f32, to: f32| {
         if to - FORMATION_SLACK >= at {
             at + nudge
@@ -229,10 +222,32 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
     npc.state.position = Vec2::new(towards(at.x, slot.x), towards(at.y, slot.y));
 }
 
+/// `_AIMaintainFormation`'s nudge of `npc` on `handling` at the frame's
+/// `gain` (@0x84f4c-0x84fb5): [`FORMATION_NUDGE`] × its `_ShipAccelRate`
+/// as floats, cut to (1 − f) in doubles with an ion charge above none,
+/// then × the gain in doubles, narrowed (@0x84fab).
+#[must_use]
+pub fn nudge(npc: &Npc, handling: &Handling, gain: SpeedMult) -> f32 {
+    let mut nudge = handling.accel * FORMATION_NUDGE;
+    if npc.ion.charge > 0.0 {
+        let factor = f64::from(npc.ion_factor());
+        let held = if factor > ION_HOLD_ABOVE {
+            f64::from(ION_HOLD)
+        } else {
+            factor
+        };
+        // Doubles, back to a float (@0x84f93-0x84fa7).
+        #[allow(clippy::cast_possible_truncation)]
+        let cut = (f64::from(nudge) * (1.0 - held)) as f32;
+        nudge = cut;
+    }
+    gain.times(nudge)
+}
+
 /// Sub 0xc for `npc` beside its leader at `leader`, its slot at `slot`,
-/// on `handling` under `flight` (see the module docs), at its slot: its
-/// flight, its velocity, position and glow copy set as the substate sets
-/// them. Double time's second pass runs no `_LowLevelAIHandler` (`je
+/// on `handling` under `flight` (see the module docs), at its slot, at the
+/// frame's `gain`: its flight, its velocity, position and glow copy set as
+/// the substate sets them. Double time's second pass runs no `_LowLevelAIHandler` (`je
 /// 0x44350` @0x4402a), so it is neither nudged nor matched there: it flies
 /// the advance pass's word ([`slot_word`](crate::traffic::slot_word)).
 fn keep(
@@ -241,6 +256,7 @@ fn keep(
     slot: Vec2,
     handling: &Handling,
     flight: FlightRules,
+    gain: SpeedMult,
 ) -> Flight {
     let rate = handling.turn_rate;
     let mismatched = plunder_dock::mismatched(npc.state.velocity - leader.velocity);
@@ -261,7 +277,7 @@ fn keep(
     }
     npc.state.velocity = leader.velocity;
     let wanted = matched_heading(npc.state.heading, leader.heading, npc.skill);
-    maintain(npc, slot, handling, false);
+    maintain(npc, slot, handling, false, gain);
     npc.display.drive.glow = GlowCopy::Leader;
     Flight::writes(Controls::default(), wanted, Cap::Slot)
 }
@@ -313,8 +329,9 @@ fn matched_heading(heading: f32, theirs: f32, skill: f32) -> i16 {
 
 /// The low level of `npc` on one tick of goal 0xa beside its leader at
 /// `leader`, with `beside` its guard, its sight of its leader and its
-/// swarm lead, on `handling` under `flight`, as `inertia` says (see the
-/// module docs): its flight. With no leader or no slot it brakes.
+/// swarm lead, on `handling` under `flight`, as `inertia` says, at the
+/// frame's `gain` (see the module docs): its flight. With no leader or no
+/// slot it brakes.
 pub(crate) fn fly(
     npc: &mut Npc,
     leader: Option<&ShipState>,
@@ -322,6 +339,7 @@ pub(crate) fn fly(
     handling: &Handling,
     flight: FlightRules,
     inertia: Inertia,
+    gain: SpeedMult,
 ) -> Flight {
     let flying = leader.and_then(|leader| {
         let slot = npc.slot_at(leader)?;
@@ -333,11 +351,19 @@ pub(crate) fn fly(
         return leave_flight::stop_flight(npc, handling, inertia);
     };
     match sub {
-        Sub::Keep => keep(npc, leader, slot, handling, flight),
+        Sub::Keep => keep(npc, leader, slot, handling, flight, gain),
         sub => {
             let target = beside.guard.unwrap_or(*leader);
             let close = sub == Sub::Close;
-            steer(npc, &target, close, beside.swarm, Some(slot), handling)
+            steer(
+                npc,
+                &target,
+                close,
+                beside.swarm,
+                Some(slot),
+                handling,
+                gain,
+            )
         }
     }
 }
@@ -345,7 +371,7 @@ pub(crate) fn fly(
 /// Sub 9, or sub 0xb when `close`, of `npc` steering at a ship at
 /// `target` on `handling` (see the module docs), at its slot: closing, the
 /// swarm branch first ([`plunder_dock::swarm_branch`], with `swarm` its
-/// swarm lead and `slot` its slot), then [`plunder_dock::approach`], the
+/// swarm lead and `slot` its slot, at the frame's `gain`), then [`plunder_dock::approach`], the
 /// heading it wants left for `_HandleShip` to turn to at its step. Sub 9
 /// and 0xb outside their box write +0x34 = 0, and closing within it, half
 /// its slot's top speed.
@@ -356,9 +382,10 @@ pub(crate) fn steer(
     swarm: Option<SwarmLead>,
     slot: Option<Vec2>,
     handling: &Handling,
+    gain: SpeedMult,
 ) -> Flight {
     if close {
-        plunder_dock::swarm_branch(npc, swarm, slot, handling);
+        plunder_dock::swarm_branch(npc, swarm, slot, handling, gain);
     }
     let (controls, flown, wanted) = plunder_dock::approach(npc, target, handling, close);
     let cap = if flown.max_speed < handling.max_speed {
@@ -384,9 +411,14 @@ mod tests {
         handling: &Handling,
         flight: FlightRules,
     ) -> (Controls, Handling) {
-        let kept = super::keep(npc, leader, slot, handling, flight);
+        let kept = super::keep(npc, leader, slot, handling, flight, SpeedMult::FULL);
         let wanted = kept.wanted.expect("sub 0xc wants a heading");
-        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        let turn = crate::flight::turn_to(
+            &mut npc.state,
+            wanted,
+            handling.turn_rate,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         (
             Controls {
                 turn,
@@ -520,7 +552,13 @@ mod tests {
             position: at,
             ..ShipState::default()
         });
-        maintain(&mut ship, Vec2::new(100.0, 200.0), handling, false);
+        maintain(
+            &mut ship,
+            Vec2::new(100.0, 200.0),
+            handling,
+            false,
+            SpeedMult::FULL,
+        );
         ship.state.position
     }
 
@@ -575,7 +613,13 @@ mod tests {
             at(109.0, 200.0, 0.0, 0.0, 0.0),
         );
         ship.ion.charge = charge;
-        maintain(&mut ship, Vec2::new(100.0, 200.0), &GENTLE, false);
+        maintain(
+            &mut ship,
+            Vec2::new(100.0, 200.0),
+            &GENTLE,
+            false,
+            SpeedMult::FULL,
+        );
         ship.state.position.x
     }
 
@@ -598,10 +642,203 @@ mod tests {
         let slot = Vec2::new(100.0, 200.0);
         let mut ship = escort(at(150.0, 120.0, 0.0, 0.0, 0.0));
         ship.warp.stage = 1.0;
-        maintain(&mut ship, slot, &GENTLE, false);
+        maintain(&mut ship, slot, &GENTLE, false, SpeedMult::FULL);
         assert_eq!(ship.state.position, Vec2::new(150.0, 120.0));
-        maintain(&mut ship, slot, &GENTLE, true);
+        maintain(&mut ship, slot, &GENTLE, true, SpeedMult::FULL);
         assert_eq!(ship.state.position, slot, "even while warping");
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// An escort at `at`, nudged once toward a slot at (100, 200) on
+    /// [`GENTLE`] at `gain`, snapped when `snap`: where it ends.
+    fn nudged_at(at: Vec2, snap: bool, gain: SpeedMult) -> Vec2 {
+        let mut ship = escort(ShipState {
+            position: at,
+            ..ShipState::default()
+        });
+        maintain(&mut ship, Vec2::new(100.0, 200.0), &GENTLE, snap, gain);
+        ship.state.position
+    }
+
+    #[test]
+    fn at_half_gain_the_nudge_is_half_and_at_no_gain_none() {
+        // (float)((double)nudge × g) (@0x84fab).
+        let ship = escort(ShipState::default());
+        assert_eq!(nudge(&ship, &GENTLE, HALF), 0.25);
+        assert_eq!(nudge(&ship, &GENTLE, SpeedMult::ZERO), 0.0);
+        assert_eq!(
+            nudged_at(Vec2::new(108.0, 192.0), false, HALF),
+            Vec2::new(107.75, 192.25),
+            "8 off, inclusive: the slack is unscaled"
+        );
+        assert_eq!(
+            nudged_at(Vec2::new(108.0, 192.0), false, SpeedMult::ZERO),
+            Vec2::new(108.0, 192.0)
+        );
+        assert_eq!(
+            nudged_at(Vec2::new(107.99, 192.0), false, HALF),
+            Vec2::new(107.99, 192.25),
+            "within the slack on x"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_an_ionized_nudge_is_half_its_cut() {
+        let mut ship = escort_of(
+            ShipFields {
+                ionize_max: 100,
+                ..FAST
+            },
+            30.0,
+            at(109.0, 200.0, 0.0, 0.0, 0.0),
+        );
+        ship.ion.charge = 50.0;
+        assert_eq!(nudge(&ship, &GENTLE, HALF), 0.125);
+        maintain(&mut ship, Vec2::new(100.0, 200.0), &GENTLE, false, HALF);
+        assert_eq!(ship.state.position.x, 108.875);
+    }
+
+    #[test]
+    fn the_snap_puts_it_on_its_slot_at_any_gain() {
+        for gain in [HALF, SpeedMult::ZERO] {
+            assert_eq!(
+                nudged_at(Vec2::new(150.0, 120.0), true, gain),
+                Vec2::new(100.0, 200.0)
+            );
+        }
+    }
+
+    #[test]
+    fn at_half_gain_nothing_is_nudged_while_its_warp_runs() {
+        let mut ship = escort(at(150.0, 120.0, 0.0, 0.0, 0.0));
+        ship.warp.stage = 1.0;
+        maintain(&mut ship, Vec2::new(100.0, 200.0), &GENTLE, false, HALF);
+        assert_eq!(ship.state.position, Vec2::new(150.0, 120.0));
+    }
+
+    #[test]
+    fn the_nudge_at_full_gain_is_ten_ticks_thrust_and_one_maintain_moves_by_it() {
+        for accel in [0.05, 0.02, 0.1, 0.375, 1.53] {
+            let handling = Handling { accel, ..GENTLE };
+            for charge in [0.0, 50.0] {
+                let mut ship = escort_of(
+                    ShipFields {
+                        ionize_max: 100,
+                        ..FAST
+                    },
+                    30.0,
+                    at(200.0, 300.0, 0.0, 0.0, 0.0),
+                );
+                ship.ion.charge = charge;
+                let full = nudge(&ship, &handling, SpeedMult::FULL);
+                if charge == 0.0 {
+                    assert_eq!(full, accel * FORMATION_NUDGE, "{accel}");
+                }
+                maintain(&mut ship, Vec2::ZERO, &handling, false, SpeedMult::FULL);
+                assert_eq!(ship.state.position, Vec2::new(200.0 - full, 300.0 - full));
+            }
+        }
+    }
+
+    /// An escort keeping formation beside a leader at rest at the centre
+    /// heading 90, 20 off its slot on x: the leader, the escort and its
+    /// slot.
+    fn keeping() -> (ShipState, Npc, Vec2) {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 90.0);
+        let mut ship = escort(ShipState::default());
+        let slot = ship.slot_at(&leader).expect("a slot");
+        ship.state = at(slot.x + 20.0, slot.y, 0.0, 0.0, 90.0);
+        (leader, ship, slot)
+    }
+
+    #[test]
+    fn at_half_gain_a_keeping_escort_is_nudged_by_maintain_at_half_gain() {
+        let (leader, ship, slot) = keeping();
+        let flown_at = |gain: SpeedMult| {
+            let mut ship = ship.clone();
+            let beside = Beside::default();
+            fly(
+                &mut ship,
+                Some(&leader),
+                beside,
+                &GENTLE,
+                FlightRules::default(),
+                Inertia::Inertial,
+                gain,
+            );
+            ship.state.position
+        };
+        let mut maintained = ship.clone();
+        maintain(&mut maintained, slot, &GENTLE, false, HALF);
+        assert_eq!(flown_at(HALF), maintained.state.position);
+        assert_ne!(flown_at(HALF), flown_at(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_the_autopilots_low_level_nudges_a_keeping_escort_by_its_readings_gain() {
+        let (leader, ship, slot) = keeping();
+        let flown_at = |gain: SpeedMult| {
+            let mut ship = ship.clone();
+            let speeds = TopSpeeds::own_of(&ship);
+            autopilot::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                Some(&leader),
+                false,
+                Beside::default(),
+                speeds,
+                FlightRules::default(),
+                Readings {
+                    speed_mult: gain,
+                    ..Readings::default()
+                },
+                &crate::ai::NO_WEAPONS,
+                &mut Draws::of(&[]),
+            );
+            ship.state.position
+        };
+        let handling = ship.flying_handling(TopSpeeds::own_of(&ship).own, FlightRules::default());
+        let mut maintained = ship.clone();
+        maintain(&mut maintained, slot, &handling, false, HALF);
+        assert_eq!(flown_at(HALF), maintained.state.position);
+        assert_ne!(flown_at(HALF), flown_at(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_a_closing_escort_with_a_swarm_leader_is_nudged_by_its_swarm_branch_at_half_gain()
+     {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = escort(at(450.0, 0.0, 0.0, 0.0, 90.0));
+        ship.swarm_leader = Some(5);
+        let swarm = Some(SwarmLead {
+            aim: Vec2::ZERO,
+            leads_it: false,
+            glow: 12,
+        });
+        let beside = Beside {
+            swarm,
+            ..Beside::default()
+        };
+        let flown_at = |gain: SpeedMult| {
+            let mut ship = ship.clone();
+            fly(
+                &mut ship,
+                Some(&leader),
+                beside,
+                &GENTLE,
+                FlightRules::default(),
+                Inertia::Inertial,
+                gain,
+            );
+            ship.state.position
+        };
+        let mut branched = ship.clone();
+        let slot = ship.slot_at(&leader);
+        plunder_dock::swarm_branch(&mut branched, swarm, slot, &GENTLE, HALF);
+        assert_eq!(flown_at(HALF), branched.state.position);
+        assert_ne!(flown_at(HALF), flown_at(SpeedMult::FULL));
     }
 
     // Close formation: the counter-thrust.
@@ -708,7 +945,12 @@ mod tests {
             &handling,
             FlightRules::default(),
         );
-        crate::flight::turned(ship.state.heading, controls.turn, rate)
+        crate::flight::turned(
+            ship.state.heading,
+            controls.turn,
+            rate,
+            crate::speed_mult::SpeedMult::FULL,
+        )
     }
 
     #[test]
@@ -1170,6 +1412,7 @@ mod tests {
                 &HANDLING,
                 FlightRules::default(),
                 Inertia::Inertial,
+                SpeedMult::FULL,
             )
             .cap
         };

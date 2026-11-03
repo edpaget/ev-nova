@@ -37,7 +37,9 @@
 //! - the clock guard restamps a stamp later than `TickCount`
 //!   (@0x858b6-0x858de), which a count of ticks since the stamp never
 //!   meets;
-//! - +0x50 grows by `_gSpeedMult`, 1.0 (@0x858e4-0x858f9);
+//! - +0x50 grows by `_gSpeedMult`, the frame's gain, in doubles
+//!   (@0x858e4-0x858f9); sub-goal 0xd's own stage grows by the float 1.0
+//!   whatever the gain (@0x85c35-0x85c5a, [`follow_jump`]);
 //! - once t ≥ d / w on its own clock and its class's warp factor, it is
 //!   gone ([`npc_warped_out`]): +0x50 = 0, +0xb8 = 0, +0x74 = −1
 //!   (@0x859ae-0x859bf). A mission ship's record +0x30 and +0x6 are
@@ -159,6 +161,7 @@ use crate::flight::{self, Controls, FlightRules, drag_by, turned};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::Outcome;
 use crate::traffic::World;
 use crate::traffic::autopilot::{plain_step, position_step};
@@ -183,7 +186,7 @@ pub const FOLLOW_ARC: i32 = 10;
 
 /// The AI wait a follower takes while its leader turns within its own
 /// turn (+0x4c = 180.0, @0x85bc3).
-pub const FOLLOW_WAIT: u32 = 180;
+pub const FOLLOW_WAIT: f32 = 180.0;
 
 /// The stage past which a ship an NPC leads leaves it to jump on its
 /// own (30.0, f32 @0xdd084).
@@ -399,14 +402,16 @@ pub fn follow_check(leader: Option<(bool, LeaderWarp)>) -> FollowCheck {
 }
 
 /// One advance pass of sub-goal 4 for `npc` (see the module docs), its
-/// warp sound's duration `duration`: whether it is gone.
-pub fn own_jump(npc: &mut Npc, duration: u32) -> bool {
+/// warp sound's duration `duration`, at the frame's `gain`: whether it is
+/// gone. Its stage grows by the gain (@0x858e4-0x858f9); the gone test
+/// reads its clock, not its stage, so the gain doesn't move it.
+pub fn own_jump(npc: &mut Npc, duration: u32, gain: SpeedMult) -> bool {
     npc.warp.aim = intercept_angle(Vec2::ZERO, npc.state.position);
     if npc.warp.stage <= 0.0 {
         npc.warp.stage = 1.0;
         npc.warp.stamp();
     }
-    npc.warp.stage += 1.0;
+    npc.warp.stage = gain.add_times(npc.warp.stage, 1.0);
     if npc_warped_out(mac_ticks(npc.warp.since), npc.stats.warp_factor, duration) {
         npc.warp = Warp::default();
         return true;
@@ -558,8 +563,9 @@ pub enum Led {
 /// `world`, jumping as `jumping` says (`_AIIsShipJumping`, which reads the
 /// goal the ship holds, [`Npc::jumping`], not the one a paused ship flies;
 /// see the module docs): nothing unless its stage is under way and it is
-/// intact.
-pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool) {
+/// intact. Its move is v × the frame's `gain` (@0x349db), after the v > 0
+/// test (@0x349c1); its glow's +3 (@0x349ff-0x34a13) reads no gain.
+pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool, gain: SpeedMult) {
     if !npc.warp.under_way() || npc.condition != Condition::Intact {
         return;
     }
@@ -604,7 +610,7 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool) {
     };
     // No move, and no glow, at v ≤ 0 or a NaN v (@0x349c1).
     if v > 0.0 {
-        npc.state.position = npc.state.position + accel(whole(npc.state.heading), v);
+        npc.state.position = npc.state.position + accel(whole(npc.state.heading), gain.times(v));
         ship_display::warp_glow(npc);
     }
 }
@@ -612,26 +618,42 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool) {
 /// One pass of a jumping ship's flight before its warp-out: it moves on
 /// at its velocity and turns to its desired heading as `_HandleShip`
 /// turns it ([`flight::turn_to`]), with no thrust and no fire (see the
-/// module docs).
+/// module docs), each at the frame's `gain`.
 ///
 /// While its AI wait runs it only moves on, with no turn (`_HandleShip`
 /// @0x34a54-0x34a72), as the autopilot moves a waiting ship.
-pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Inertia) {
+pub fn fly(
+    npc: &mut Npc,
+    handling: &Handling,
+    flight: FlightRules,
+    inertia: Inertia,
+    gain: SpeedMult,
+) {
     npc.trigger = crate::combat::armament::Trigger::default();
     if npc.ai_wait_flies() {
-        position_step(npc, handling, inertia);
+        position_step(npc, handling, inertia, gain);
         return;
     }
     let controls = Controls {
-        turn: flight::turn_to(&mut npc.state, npc.warp.aim, handling.turn_rate),
+        turn: flight::turn_to(&mut npc.state, npc.warp.aim, handling.turn_rate, gain),
         ..Controls::default()
     };
     match inertia {
         // A turn alone writes neither word.
-        Inertia::Inertial => plain_step(npc, handling, controls, flight, (inertia, handling.accel)),
+        Inertia::Inertial => {
+            plain_step(
+                npc,
+                handling,
+                controls,
+                flight,
+                (inertia, handling.accel),
+                gain,
+            );
+        }
         Inertia::Inertialess { .. } => {
-            npc.state.heading = turned(npc.state.heading, controls.turn, handling.turn_rate);
-            inertialess::drift(npc, handling);
+            let rate = handling.turn_rate;
+            npc.state.heading = turned(npc.state.heading, controls.turn, rate, gain);
+            inertialess::drift(npc, handling, gain);
         }
     }
 }
@@ -778,16 +800,17 @@ fn led(npc: &Npc, leaders: &BTreeMap<NpcId, LeaderWarp>) -> Led {
 
 /// `_HandleShip`'s warp-out for `npc` after the autopilot flew it
 /// ([`warp_block`]), among `leaders`, in `world`, jumping as `jumping`
-/// says: for a ship whose stage is under way though it is not jumping, or
-/// not yet.
+/// says, at the frame's `gain`: for a ship whose stage is under way
+/// though it is not jumping, or not yet.
 pub fn settle(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
     world: &WarpWorld,
     jumping: bool,
+    gain: SpeedMult,
 ) {
     if npc.warp.under_way() {
-        warp_block(npc, led(npc, leaders), world, jumping);
+        warp_block(npc, led(npc, leaders), world, jumping, gain);
     }
 }
 
@@ -814,7 +837,7 @@ pub(crate) fn sub_0xd(
                 let handling = npc
                     .ionization()
                     .slows(world.flight.handling(npc.own_handling()));
-                formation_flight::maintain(npc, slot, &handling, false);
+                formation_flight::maintain(npc, slot, &handling, false, world.speed_mult);
             }
         }
         FollowStep::Waiting | FollowStep::Detached | FollowStep::Warping => {}
@@ -902,8 +925,14 @@ pub fn fly_jump(
     };
     // No leader passed: close formation needs one, so the sight is moot.
     let inertia = Inertia::of(npc, None, true, world.flight);
-    fly(npc, &handling, world.flight, inertia);
-    warp_block(npc, led(npc, leaders), &world.warp, jumping);
+    fly(npc, &handling, world.flight, inertia, world.speed_mult);
+    warp_block(
+        npc,
+        led(npc, leaders),
+        &world.warp,
+        jumping,
+        world.speed_mult,
+    );
     Some(Outcome::Flying)
 }
 
@@ -963,7 +992,7 @@ mod tests {
     /// [`warp_block`] for `npc` as its own goal says whether it jumps.
     fn block(npc: &mut Npc, led: Led, world: &WarpWorld) {
         let jumping = npc.jumping();
-        warp_block(npc, led, world, jumping);
+        warp_block(npc, led, world, jumping, crate::speed_mult::SpeedMult::FULL);
     }
 
     /// [`fly_jump`] for `npc` not in the regroup pause, on the advance
@@ -1322,7 +1351,7 @@ mod tests {
             gone.goal = Goal::Flee(ShipRef::Npc(NpcId(77)));
             gone.target = Some(ShipRef::Npc(NpcId(77)));
             gone.warp.stage = 3.0;
-            gone.ai_wait = wait;
+            gone.ai_wait = crate::traffic::ai_wait::ticks(wait);
             let gone = traffic.add_npc(gone);
             let mut seen = ship();
             seen.begin_own_jump();
@@ -1398,12 +1427,12 @@ mod tests {
         let mut ship = ship();
         ship.state.position = Vec2::new(0.0, -2000.0);
         ship.begin_own_jump();
-        assert!(!own_jump(&mut ship, 364));
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL));
         assert_eq!(ship.warp.aim, 0, "straight up, out");
         assert_eq!(ship.warp.stage, 2.0, "1.0, then 1.0 more");
         assert_eq!(ship.warp.since, 0, "stamped");
         ship.warp.tick_clock();
-        assert!(!own_jump(&mut ship, 364));
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL));
         assert_eq!(ship.warp.stage, 3.0);
         assert_eq!(ship.warp.since, 1, "not restamped");
     }
@@ -1412,12 +1441,12 @@ mod tests {
     fn its_own_jump_is_gone_once_t_reaches_d_over_w() {
         let mut ship = ship();
         ship.begin_own_jump();
-        own_jump(&mut ship, 364);
+        own_jump(&mut ship, 364, SpeedMult::FULL);
         // 364 / 1.3 = 280 Mac ticks: 140 ticks.
         ship.warp.since = 139;
-        assert!(!own_jump(&mut ship, 364), "278 Mac ticks");
+        assert!(!own_jump(&mut ship, 364, SpeedMult::FULL), "278 Mac ticks");
         ship.warp.since = 140;
-        assert!(own_jump(&mut ship, 364), "280");
+        assert!(own_jump(&mut ship, 364, SpeedMult::FULL), "280");
         assert_eq!(ship.warp, Warp::default(), "+0x50 = 0");
     }
 
@@ -1445,7 +1474,7 @@ mod tests {
             "disabled"
         );
         assert!(
-            kept(&|ship| ship.mode = Mode::Coasting { ticks_left: 3 }),
+            kept(&|ship| ship.mode = Mode::Coasting { ticks_left: 3.0 }),
             "coasting"
         );
     }
@@ -1516,7 +1545,7 @@ mod tests {
         let mut ship = ship();
         ship.mode = Mode::LeavingGate { tick: 0 };
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 0.0 });
         assert_eq!(ship.owed_burst, None);
     }
 
@@ -1582,7 +1611,7 @@ mod tests {
         assert_eq!(follow_jump(&mut ship, turning, true), FollowStep::Waiting);
         assert_eq!(ship.warp.stage, -1.0);
         assert_eq!(ship.warp.aim, 101, "its leader's +0x68");
-        assert_eq!(ship.ai_wait, 0);
+        assert_eq!(ship.ai_wait, 0.0);
         let mut nimble = ship.clone();
         nimble.stats.handling.turn_rate = 11.0;
         nimble.warp.stage = 4.0;
@@ -1664,6 +1693,137 @@ mod tests {
             Vec2::new(1.9, 0.0),
             "the velocity only drags"
         );
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_its_own_jump_starts_at_1_and_grows_half() {
+        let mut ship = ship();
+        ship.state.position = Vec2::new(0.0, -2000.0);
+        ship.begin_own_jump();
+        assert!(!own_jump(&mut ship, 364, HALF));
+        assert_eq!(ship.warp.stage, 1.5, "1.0, then half more");
+        assert!(!own_jump(&mut ship, 364, HALF));
+        assert_eq!(ship.warp.stage, 2.0);
+        let mut still = self::ship();
+        still.begin_own_jump();
+        assert!(!own_jump(&mut still, 364, SpeedMult::ZERO));
+        assert_eq!(still.warp.stage, 1.0, "no gain: the start's 1.0 alone");
+    }
+
+    #[test]
+    fn at_half_gain_its_own_jump_is_gone_on_its_clock_as_at_full_gain() {
+        // The gone test reads `TickCount` since the stamp (@0x858fe-0x8595e),
+        // not the stage.
+        for gain in [HALF, SpeedMult::ZERO, SpeedMult::FULL] {
+            let mut ship = ship();
+            ship.begin_own_jump();
+            own_jump(&mut ship, 364, gain);
+            ship.warp.since = 139;
+            assert!(!own_jump(&mut ship, 364, gain), "278 Mac ticks");
+            ship.warp.since = 140;
+            assert!(own_jump(&mut ship, 364, gain), "280 at {gain:?}");
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_followers_stage_grows_1_while_its_leaders_own_jump_grows_half() {
+        // Sub 0xd adds the float 1.0 (@0x85c35-0x85c5a), a constant; sub
+        // 4 adds the gain (@0x858e4-0x858f9).
+        let mut lead = ship();
+        lead.begin_own_jump();
+        own_jump(&mut lead, 364, HALF);
+        let lead_before = lead.warp.stage;
+        own_jump(&mut lead, 364, HALF);
+        assert_eq!(lead.warp.stage - lead_before, 0.5, "half");
+        let mut follower = ship();
+        follower.warp.stage = 1.0;
+        follow_jump(&mut follower, leader(), false);
+        assert_eq!(follower.warp.stage, 2.0, "a whole 1.0");
+    }
+
+    #[test]
+    fn at_half_gain_the_warp_out_moves_half_its_v_and_still_glows_3_higher() {
+        let world = world();
+        let v = npc_warp_out_speed(WarpOutClock::Own, 200, warp_factor(0), 364, false);
+        let mut half = warping(3.0, 100);
+        half.display.glow = 10;
+        warp_block(&mut half, Led::No, &world, true, HALF);
+        let start = Vec2::new(2000.0, 0.0);
+        assert_eq!(half.state.position, start + accel(90, HALF.times(v)));
+        assert_eq!(half.display.glow, 13);
+        let mut none = warping(3.0, 100);
+        none.display.glow = 10;
+        warp_block(&mut none, Led::No, &world, true, SpeedMult::ZERO);
+        assert_eq!(none.state.position, start + accel(90, 0.0), "no move");
+        assert_eq!(none.display.glow, 13, "the glow reads no gain");
+        let mut early = warping(3.0, 37);
+        warp_block(&mut early, Led::No, &world, true, HALF);
+        assert_eq!(early.state.position, start, "v ≤ 0: no move");
+        assert_eq!(early.display.glow, 0, "and no glow");
+    }
+
+    #[test]
+    fn at_half_gain_settling_moves_a_ship_under_way_half_its_v() {
+        let v = npc_warp_out_speed(WarpOutClock::Own, 200, warp_factor(0), 364, false);
+        let mut ship = warping(3.0, 100);
+        settle(&mut ship, &BTreeMap::new(), &world(), true, HALF);
+        let start = Vec2::new(2000.0, 0.0);
+        assert_eq!(ship.state.position, start + accel(90, HALF.times(v)));
+    }
+
+    #[test]
+    fn at_half_gain_a_jumping_ship_turns_and_moves_half_waiting_or_not_either_inertia() {
+        let rules = FlightRules::default();
+        let mut waiting = warping(3.0, 0);
+        waiting.ai_wait = 5.0;
+        let handling = waiting.stats.handling;
+        fly(&mut waiting, &handling, rules, Inertia::Inertial, HALF);
+        assert_eq!(
+            waiting.state.position,
+            Vec2::new(2001.0, 0.0),
+            "in its wait"
+        );
+        let mut inertial = warping(3.0, 0);
+        inertial.state.heading = 0.0;
+        fly(&mut inertial, &handling, rules, Inertia::Inertial, HALF);
+        assert_eq!(inertial.state.heading, 1.5, "half its 3");
+        assert_eq!(inertial.state.position, Vec2::new(2001.0, 0.0));
+        let mut inertialess = warping(3.0, 0);
+        inertialess.state.heading = 0.0;
+        inertialess.speed = 2.0;
+        let speed = Inertia::Inertialess { speed: 2.0 };
+        fly(&mut inertialess, &handling, rules, speed, HALF);
+        assert_eq!(inertialess.state.heading, 1.5, "half its 3");
+        let mut drifted = warping(3.0, 0);
+        drifted.state.heading = 1.5;
+        drifted.speed = 2.0;
+        inertialess::drift(&mut drifted, &handling, HALF);
+        assert_eq!(inertialess.state, drifted.state);
+        // On its aim within half its rate: put on it.
+        let mut near = warping(3.0, 0);
+        near.state.heading = 88.6;
+        fly(&mut near, &handling, rules, Inertia::Inertial, HALF);
+        let turned = near.state.heading;
+        assert!(
+            (turned - 90.1).abs() < 1e-4,
+            "2 off, beyond 1.5: it turns, {turned}"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_jump_flown_in_the_world_moves_and_warps_out_half() {
+        let world = crate::traffic::World {
+            speed_mult: HALF,
+            ..in_world(world())
+        };
+        let v = npc_warp_out_speed(WarpOutClock::Own, 200, warp_factor(0), 364, false);
+        let mut ship = warping(3.0, 100);
+        let flown = fly_jump(&mut ship, &BTreeMap::new(), &world, false, 0.2);
+        assert_eq!(flown, Some(Outcome::Flying));
+        let moved = Vec2::new(2001.0, 0.0);
+        assert_eq!(ship.state.position, moved + accel(90, HALF.times(v)));
     }
 
     #[test]
@@ -1834,7 +1994,7 @@ mod tests {
             pushes(&|npc| npc.condition = Condition::Disabled),
             "disabled too: the jump path's high level has no disabled test (@0x901e5)"
         );
-        assert!(!pushes(&|npc| npc.mode = Mode::Coasting { ticks_left: 3 }));
+        assert!(!pushes(&|npc| npc.mode = Mode::Coasting { ticks_left: 3.0 }));
         assert!(!pushes(&Npc::begin_own_jump), "an own jump follows no one");
         assert!(
             !pushes(&|npc| npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player))),
@@ -1842,7 +2002,7 @@ mod tests {
         );
         assert!(!pushes(&|npc| npc.leader = None), "+0x9a -1: its own jump");
         assert!(
-            !pushes(&|npc| npc.ai_wait = 5),
+            !pushes(&|npc| npc.ai_wait = 5.0),
             "its high level waits (@0x8d4b9)"
         );
         assert_eq!(
@@ -1889,10 +2049,22 @@ mod tests {
     fn settling_runs_the_warp_out_of_a_ship_whose_stage_is_under_way() {
         let views = BTreeMap::new();
         let mut ship = warping(3.0, 100);
-        settle(&mut ship, &views, &world(), true);
+        settle(
+            &mut ship,
+            &views,
+            &world(),
+            true,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.state.velocity, Vec2::new(1.9, 0.0));
         let mut still = warping(0.0, 100);
-        settle(&mut still, &views, &world(), true);
+        settle(
+            &mut still,
+            &views,
+            &world(),
+            true,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(still.state.velocity, Vec2::new(2.0, 0.0));
     }
 
@@ -1991,7 +2163,7 @@ mod tests {
             (ship.ai_wait, ship.warp.aim)
         };
         assert_eq!(followed(false), (FOLLOW_WAIT, 90), "it waits");
-        assert_eq!(followed(true), (0, 101), "it gives up");
+        assert_eq!(followed(true), (0.0, 101), "it gives up");
     }
 
     #[test]
@@ -2097,7 +2269,13 @@ mod tests {
             &mut crate::chance::NeverFires,
         );
         let jumping = follower.jumping();
-        settle(follower, views, &world.warp, jumping);
+        settle(
+            follower,
+            views,
+            &world.warp,
+            jumping,
+            crate::speed_mult::SpeedMult::FULL,
+        );
     }
 
     #[test]
@@ -2161,7 +2339,10 @@ mod tests {
             assert_eq!(ship.warp.stage, 3.0, "{think}: no step");
         }
         let mut ship = warping(3.0, 1000);
-        assert!(own_jump(&mut ship, world.warp.duration()), "its step's");
+        assert!(
+            own_jump(&mut ship, world.warp.duration(), SpeedMult::FULL),
+            "its step's"
+        );
     }
 
     #[test]
@@ -2241,7 +2422,7 @@ mod tests {
             assert_eq!(ship.travel, set.then_some(LEAD_STELLAR), "@0x8df18-0x8df22");
             assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
             let mut ship = following_lead(!set);
-            ship.ai_wait = 1;
+            ship.ai_wait = 1.0;
             fly_jump_by(&mut ship, &views_of(set), &world, true);
             assert_eq!(
                 ship.travel,
@@ -2404,7 +2585,7 @@ mod tests {
         let world = in_world(world());
         let mut waiting = following_lead(false);
         waiting.target = Some(QUARRY);
-        waiting.ai_wait = 1;
+        waiting.ai_wait = 1.0;
         fly_jump_by(&mut waiting, &views_of(false), &world, true);
         assert_eq!(waiting.target, Some(QUARRY));
         let mut paused = following_lead(false);
@@ -2458,13 +2639,14 @@ mod tests {
     fn a_jumping_ship_in_its_ai_wait_moves_on_without_turning() {
         let mut ship = warping(3.0, 0);
         ship.warp.aim = 180;
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         let handling = ship.stats.handling;
         fly(
             &mut ship,
             &handling,
             FlightRules::default(),
             Inertia::Inertial,
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(ship.state.heading, 90.0, "no turn (@0x34a54-0x34a72)");
         assert_eq!(ship.state.position, Vec2::new(2002.0, 0.0), "it moves on");
@@ -2472,8 +2654,14 @@ mod tests {
         for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 0.0 }] {
             let mut near = warping(3.0, 0);
             near.state.heading = 89.4;
-            near.ai_wait = 5;
-            fly(&mut near, &handling, FlightRules::default(), inertia);
+            near.ai_wait = 5.0;
+            fly(
+                &mut near,
+                &handling,
+                FlightRules::default(),
+                inertia,
+                crate::speed_mult::SpeedMult::FULL,
+            );
             assert_eq!(near.state.heading, 89.4, "{inertia:?}");
         }
     }
@@ -2487,7 +2675,13 @@ mod tests {
             turn_rate: rate,
             ..ship.stats.handling
         };
-        fly(&mut ship, &handling, FlightRules::default(), inertia);
+        fly(
+            &mut ship,
+            &handling,
+            FlightRules::default(),
+            inertia,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         ship.state.heading
     }
 
@@ -2659,6 +2853,50 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_sub_0xd_nudges_a_follower_in_formation_by_maintain_at_half_gain() {
+        let lead = NpcId(4);
+        let (ship, views) = off_the_pause(lead, Goal::Follow { lead, guard: None });
+        let leader = views[&lead];
+        let world_at = |gain: SpeedMult| crate::traffic::World {
+            speed_mult: gain,
+            ..in_world(world())
+        };
+        let stepped = |gain: SpeedMult| {
+            let mut ship = ship.clone();
+            assert_eq!(
+                sub_0xd(&mut ship, leader, false, &world_at(gain)),
+                FollowStep::Formation
+            );
+            ship.state.position
+        };
+        let world = world_at(HALF);
+        let mut maintained = ship.clone();
+        follow_jump(&mut maintained, leader, false);
+        let goal = maintained.warp.goal.expect("following");
+        let slot = jump_slot(&maintained, goal, &world).expect("a slot");
+        let handling =
+            (maintained.ionization()).slows(world.flight.handling(maintained.own_handling()));
+        formation_flight::maintain(&mut maintained, slot, &handling, false, HALF);
+        assert_eq!(stepped(HALF), maintained.state.position);
+        assert_ne!(stepped(HALF), stepped(SpeedMult::FULL));
+    }
+
+    #[test]
+    fn at_half_gain_sub_0xd_still_grows_a_warping_followers_stage_by_1() {
+        let mut ship = ship();
+        ship.warp.stage = 1.0;
+        let world = crate::traffic::World {
+            speed_mult: HALF,
+            ..in_world(world())
+        };
+        assert_eq!(
+            sub_0xd(&mut ship, leader(), false, &world),
+            FollowStep::Warping
+        );
+        assert_eq!(ship.warp.stage, 2.0, "the float 1.0 (@0x85c35-0x85c5a)");
+    }
+
+    #[test]
     fn a_ship_on_a_jump_is_never_in_close_formation() {
         // `_IsShipInCloseForm` reads sub 0xc (@0x82f54): sub 0xd isn't.
         let leader = ShipState {
@@ -2702,10 +2940,22 @@ mod tests {
     fn settling_reads_whether_the_ship_jumps_from_its_caller() {
         let views = BTreeMap::new();
         let mut held = warping(3.0, 100);
-        settle(&mut held, &views, &world(), false);
+        settle(
+            &mut held,
+            &views,
+            &world(),
+            false,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(held.warp.stage, 0.0);
         let mut jumping = warping(3.0, 100);
-        settle(&mut jumping, &views, &world(), true);
+        settle(
+            &mut jumping,
+            &views,
+            &world(),
+            true,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(jumping.warp.stage, 3.0);
     }
 
@@ -2718,14 +2968,32 @@ mod tests {
         ship.warp.aim = 300;
         let handling = ship.stats.handling;
         let inertialess = Inertia::Inertialess { speed: 0.0 };
-        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        fly(
+            &mut ship,
+            &handling,
+            FlightRules::default(),
+            inertialess,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.state.heading, 358.0, "left, wrapping");
         ship.warp.aim = 10;
         ship.state.heading = 359.0;
-        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        fly(
+            &mut ship,
+            &handling,
+            FlightRules::default(),
+            inertialess,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.state.heading, 2.0, "right, wrapping");
         ship.warp.aim = 2;
-        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        fly(
+            &mut ship,
+            &handling,
+            FlightRules::default(),
+            inertialess,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.state.heading, 2.0, "there");
     }
 
@@ -2739,7 +3007,13 @@ mod tests {
             ..ship.stats.handling
         };
         let inertialess = Inertia::Inertialess { speed: 0.0 };
-        fly(&mut ship, &handling, FlightRules::default(), inertialess);
+        fly(
+            &mut ship,
+            &handling,
+            FlightRules::default(),
+            inertialess,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(ship.state.heading, 0.0, "within [0, 360)");
     }
 
@@ -2754,6 +3028,7 @@ mod tests {
             &handling,
             FlightRules::default(),
             Inertia::Inertial,
+            crate::speed_mult::SpeedMult::FULL,
         );
         assert_eq!(ship.state.heading, 93.0, "a turn toward 180");
         assert_eq!(ship.state.velocity, Vec2::new(2.0, 0.0), "no thrust");
@@ -2778,7 +3053,11 @@ mod tests {
             accel: 0.01,
             ..stats().handling
         };
-        crate::traffic::inertialess::drift(&mut drifted, &pulled);
+        crate::traffic::inertialess::drift(
+            &mut drifted,
+            &pulled,
+            crate::speed_mult::SpeedMult::FULL,
+        );
         assert_eq!(jumper.state.velocity, drifted.state.velocity);
     }
 }

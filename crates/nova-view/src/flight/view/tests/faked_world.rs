@@ -73,7 +73,8 @@ pub(super) fn raise(view: &mut Faked, events: &[CombatEvent]) {
     let scene = view.presentation.scene(view.frame.player().position);
     let mut chance = view.effects_chance.clone();
     for event in events {
-        view.effects.apply(event, &scene, &view.looks, &mut chance);
+        view.effects
+            .apply(event, &scene, &view.looks, SpeedMult::FULL, &mut chance);
     }
 }
 
@@ -115,7 +116,7 @@ pub(super) fn asteroid_at(at: Vec2) -> nova_sim::flight_frame::FrameAsteroid {
     nova_sim::flight_frame::FrameAsteroid {
         position: at,
         velocity: Vec2::ZERO,
-        frame: 0.0,
+        frame: 0,
         kind: 0,
     }
 }

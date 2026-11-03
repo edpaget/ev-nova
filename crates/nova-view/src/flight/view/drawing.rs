@@ -193,6 +193,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Hides flight's cursor under a dialog, as `_HideCursorSprite`
+    /// (@0x81d6-0x8202) does before every dialog over flight: the course
+    /// map's gesture is abandoned and the cursor hides with a zero fade,
+    /// so the app's resync at the pointer's unchanged point when the
+    /// dialog closes doesn't show it again ([`HoverCursor::hide`](crate::flight::cursor::HoverCursor::hide)). A
+    /// plain `cancel_pointer` (a focus loss, a side hidden) keeps the fade.
+    pub fn hide_cursor(&mut self) {
+        crate::Screen::cancel_pointer(&mut self.map);
+        self.cursor.hide();
+    }
+
     /// What `input` tells the cursor: a pointer move or button press shows
     /// it where the pointer is, a button holds it whole until its release,
     /// and the pointer leaving the window hides it; a key pressed that
@@ -587,8 +598,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
     /// each where it is drawn: `alpha` of the way from where it was a step
     /// ago, as the ships are, placed from that point by its sheet's width
-    /// ([`FlightView::shot_placed`]); each with the index its spin started on
-    /// ([`SpinStarts`](crate::flight::spin::SpinStarts)) and its murk where
+    /// ([`FlightView::shot_placed`]); each at the frame of its sheet the
+    /// frame carries, and its murk where
     /// the frame holds it, seen from the player's ship as the frame holds
     /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a
     /// pass after it moves (@0x35c48).
@@ -600,8 +611,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .iter()
             .map(|shot| ShotShown {
                 id: shot.id,
-                spin_start: self.shot_looks.spin_starts.start(shot.id),
-                spin_timer: shot.spin_timer,
+                frame: shot.frame,
                 colorize: seen.at(shot.position),
                 at: self.shot_placed(
                     camera,
@@ -611,8 +621,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         shot.velocity.y.mul_add(-behind, shot.position.y),
                     ),
                 ),
-                heading: shot.heading,
-                age: shot.age,
+                life: shot.life,
+                fade: shot.fade,
                 weapon: shot.weapon,
                 layer: SpriteLayer::from(shot.layer),
             })
@@ -665,7 +675,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The asteroids in the field, each where it is drawn: `alpha` of the
     /// way from where it was a step ago, as the cargo boxes are, placed by
     /// its own sheet's sides ([`Camera::sprite_centre`], a crossed box at
-    /// its [whole point](Camera::whole_point)), at its whole frame, murked
+    /// its [whole point](Camera::whole_point)), at the frame the simulation
+    /// shows (`nova_sim::asteroid::Asteroid::shown_frame`), murked
     /// as the cargo boxes are (`_HandleAsteroids` @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
         let behind = 1.0 - self.shown_alpha();
@@ -683,10 +694,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         Some(sheet) => camera.sprite_centre(at, sheet.size()),
                         None => camera.whole_point(at),
                     },
-                    // Its whole part; a frame below 0, which the single wrap
-                    // can leave, shows the first.
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    frame: asteroid.frame as u16,
+                    frame: asteroid.frame,
                     kind: asteroid.kind,
                     colorize: seen.at(asteroid.position),
                 }

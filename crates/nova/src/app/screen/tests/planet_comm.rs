@@ -36,7 +36,7 @@ impl Chance for Haggles {
 /// The first `chär` holds 1,000,000 credits and flies ship 128 in system
 /// 128, which holds Alpha Prime (128), independent and of `MinStatus`
 /// `min_status`; `STR#` 3002 holds "s<n>" for each n up to 60.
-fn planet_data(min_status: i16) -> Rc<GameData> {
+pub(super) fn planet_data(min_status: i16) -> Rc<GameData> {
     let anim = ship_anim();
     let sheet = (0..4)
         .fold(RledBuilder::new(1, 1), |sheet, _| {

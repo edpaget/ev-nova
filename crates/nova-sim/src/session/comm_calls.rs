@@ -402,8 +402,8 @@ impl Space {
         self.comm_line.tick();
     }
 
-    /// A landing sets the line's count to 0 (`_HandlePlayerDockRequest`
-    /// @0x66d7f).
+    /// A landing (`_HandlePlayerDockRequest` @0x66d7f) and the escape
+    /// pod's rescue (`_ResetPlayer` @0x1d904) set the line's count to 0.
     pub(super) fn reset_comm_line(&mut self) {
         self.comm_line.reset();
     }
@@ -1527,11 +1527,12 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
         session.reset_precalced();
-        let _ = session
-            .ship
-            .latches
-            .sabotage
-            .tick(false, &mut Draws::of(&[0]));
+        let _ =
+            session
+                .ship
+                .latches
+                .sabotage
+                .tick(false, crate::SpeedMult::FULL, &mut Draws::of(&[0]));
         session
             .ship
             .latches
@@ -1900,7 +1901,7 @@ mod tests {
     fn coasting(session: &mut Session, quoting: bool) {
         crate::session::tests::make_quoting_warship(session);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 1000 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 1000.0 };
         if !quoting {
             npc.person = None;
         }

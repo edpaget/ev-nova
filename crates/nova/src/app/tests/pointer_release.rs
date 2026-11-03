@@ -50,6 +50,8 @@ fn a_primary_release_outside_the_game_abandons_the_screens_press() {
                 at: Point::new(100.0, 50.0)
             },
             Input::PointerLeft,
+            // The press is held as it moves into the bar.
+            Input::PointerMovedOutside(Point::new((10.0 - 256.0) / 2.0, 10.0 / 2.0)),
             Input::PointerLeft,
         ],
         "no release reaches the screen"

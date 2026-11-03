@@ -153,11 +153,14 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// spaceport and only then runs the land checks' texts (@0x5fbeb). They
     /// stay queued, the bar as the press found it, until it ends (see the
     /// `movies` module).
+    ///
+    /// While the escape pod's rescue shows, none until its second fade is
+    /// over: they then show on its faded screen (the `rescue` module).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown>
     where
         C: StatusBars,
     {
-        if self.holds_landing() {
+        if self.holds_landing() || self.rescue_holds_texts() {
             return Vec::new();
         }
         if self.docked() {

@@ -5,7 +5,9 @@
 //! While an appear runs, the router gives it every input and the window's
 //! close first, keeping the pointer, the button and the keys it notes as
 //! it always does. What the appear holds is replayed through
-//! [`Screen::input`] once it ends, in order, as the original's queue
+//! [`Screen::input`](nova_view::Screen::input)'s path once it ends
+//! ([`AppScreen::replay_input`], not noted as down again), in order, as
+//! the original's queue
 //! reaches the main screen after its synchronous fade; a replayed key
 //! that holds the menu queues the rest, as at a keyed click. The keys'
 //! letting go when the window loses focus waits among them, after the
@@ -21,7 +23,7 @@
 
 use nova_sim::{RuleKey, RuleSource};
 use nova_view::menu::appear::{Appear, Deferred, Verdict};
-use nova_view::{Input, Screen, ScreenAction};
+use nova_view::{Input, ScreenAction};
 
 use super::{AppScreen, MenuKeys, Side};
 
@@ -110,7 +112,8 @@ impl AppScreen {
 
     /// Moves the appear on by `dt`, the menu waiting under it unless it is
     /// live; once it ends, drops it and replays what it held, a quit a
-    /// replayed input asks kept for [`Screen::take_quit`].
+    /// replayed input asks kept for
+    /// [`Screen::take_quit`](nova_view::Screen::take_quit).
     pub(super) fn advance_appear(&mut self, dt: std::time::Duration) {
         let holds_menu = self.appear_holds_menu();
         let Some(appear) = &mut self.appear else {
@@ -127,12 +130,12 @@ impl AppScreen {
         for deferred in held.into_iter().flatten() {
             match deferred {
                 Deferred::Input(input) => {
-                    if self.input(&input) == ScreenAction::Quit {
+                    if self.replay_input(&input) == ScreenAction::Quit {
                         self.quit_due = true;
                     }
                 }
                 Deferred::Close => self.replay_close(),
-                Deferred::ReleaseKeys => self.release_keys(),
+                Deferred::ReleaseKeys => self.let_go_of_keys(),
             }
         }
     }

@@ -50,13 +50,22 @@ impl<
     /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take
     /// sends nothing and says nothing. A flight that failed refuses the
     /// press.
-    pub(super) fn land(&mut self) {
+    ///
+    /// Whether the press made a dock request, which sets L's latch
+    /// (`_dockTryFlag` @0x6a953), as the flight answers it: every press it
+    /// took, but a refusal it says made none ([`Answer::LandRefused`]'s
+    /// `requested`). A press not taken, or a flight that failed, made none.
+    pub(super) fn land(&mut self) -> bool {
         let pressed = self.send_gated(FlightCommand::Land);
         if pressed.is_refused() {
             // Not taken (`FlightView::send_gated`), or a flight that failed:
             // nothing was pressed.
-            return;
+            return false;
         }
+        let requested = match pressed {
+            Answer::LandRefused { requested, .. } => requested,
+            _ => true,
+        };
         self.say_messages();
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
@@ -84,7 +93,7 @@ impl<
                 kind: GateKind::Wormhole,
                 ..
             }) => self.enter_with_movie(GateEntry::Wormhole),
-            Answer::LandRefused { refusal, gate } => {
+            Answer::LandRefused { refusal, gate, .. } => {
                 // A stellar the scene doesn't hold, such as one another
                 // system owns, by its spöb name (`stellar_name`).
                 let name = refusal
@@ -103,6 +112,7 @@ impl<
             }
             _ => {}
         }
+        requested
     }
 
     /// The landing on `stellar` reaches the router
@@ -138,10 +148,14 @@ impl<
 
     /// Plays `effect` for the ship having come out of a gate, `combat` the
     /// fight's events its arrival left pending, caught up with as an
-    /// arrival is ([`FlightView::arrived`]); the flight keys
-    /// are let go.
+    /// arrival is ([`FlightView::arrived`]). The latched flight keys are
+    /// let go, their repeats dropped until their release, and the
+    /// unlatched ones kept, as `_PlayerEnterHypergate` and
+    /// `_PlayerEnterWormhole` set every latch after their movie
+    /// (`_SetAllKeyCmdFlags` @0x639f2, @0x6429c) and `_HandlePlayer` polls
+    /// the rest: neither touches the jump counter +0x50 its keys test.
     pub(super) fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent]) {
-        self.held.clear();
+        self.keep_unlatched_keys();
         self.arrived(combat);
         self.fade_in = Some(effect);
     }

@@ -3217,7 +3217,7 @@ fn the_stock_shots_that_decay() {
 /// The shield a stock railgun slug takes off a sponge `x` pixels ahead,
 /// and the ticks it had flown when it hit: fired, flown to the move that
 /// strikes the sponge, and that move tested ([`test_hits`]).
-fn slug_hit(spec: &WeaponSpec, x: f32) -> (f32, u32) {
+fn slug_hit(spec: &WeaponSpec, x: f32) -> (f32, f64) {
     let mut combat = Combat::default();
     let mut ships = [aiming(spec), sponge(x, 0.0)];
     let arsenal = Arsenal::default();
@@ -3227,7 +3227,10 @@ fn slug_hit(spec: &WeaponSpec, x: f32) -> (f32, u32) {
     for _ in 0..moves.unwrap_or(0) {
         fly_shots(&mut combat, &mut ships, &arsenal);
     }
-    let age = combat.shots().first().map(|shot| shot.age);
+    let age = combat
+        .shots()
+        .first()
+        .map(nova_sim::combat::projectile::Shot::age);
     test_hits(&mut combat, &mut ships, &arsenal);
     let now = ships[1].reserves.shield.now;
     match age {
@@ -3253,7 +3256,7 @@ fn a_stock_railgun_slug_loses_a_point_of_mass_and_energy_every_decay_plus_one_ti
         assert!(spec.decay > 0, "{id}");
         let (near, near_tick) = slug_hit(&spec, 100.0);
         let (far, far_tick) = slug_hit(&spec, spec.flight() * 0.75);
-        let steps = |flown: u32| (flown / (spec.decay + 1)) as f32;
+        let steps = |flown: f64| (flown / f64::from(spec.decay + 1)).floor() as f32;
         assert_eq!(near, spec.energy_damage - steps(near_tick), "{id} near");
         assert_eq!(far, spec.energy_damage - steps(far_tick), "{id} far");
         assert!(steps(far_tick) >= 2.0, "{id}: {far_tick}");
@@ -4421,6 +4424,33 @@ fn boarding(session: &Session, quarry: &nova_sim::Npc) -> nova_sim::Controls {
     }
 }
 
+/// A pass of `session` with the thrust key held and `escort` flying
+/// alongside, every other NPC held disabled first: the Federation's ships
+/// still come in and attack the player, so as the run's draws fall their
+/// shots may strike the escort and destroy it, and disabled they fire no
+/// more.
+fn thrust_alongside(
+    session: &mut Session,
+    data: &GameData,
+    escort: nova_sim::NpcId,
+    chance: &mut dyn nova_sim::Chance,
+) {
+    let others: Vec<_> = session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.id != escort)
+        .map(|npc| npc.id)
+        .collect();
+    for id in others {
+        nova_sim::fixture::disable(session, id);
+    }
+    let thrust = nova_sim::Controls {
+        thrust: true,
+        ..nova_sim::Controls::default()
+    };
+    crate::passes::nova(session, data, thrust, chance);
+}
+
 /// The Done scenario, to the end: once the trader is disabled, the player
 /// flies over it and boards it, which costs 5 more with the Civvies and
 /// with the Federation (the Civvies' `BoardPenalty`); its plunder offers
@@ -4516,11 +4546,7 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     session.plot_course(next).expect("a route");
     let mut tries = 0;
     while session.player().position.length() < session.stats().jump_distance {
-        let thrust = nova_sim::Controls {
-            thrust: true,
-            ..nova_sim::Controls::default()
-        };
-        crate::passes::nova(session, &data, thrust, &mut fight.chance);
+        thrust_alongside(session, &data, fight.trader, &mut fight.chance);
         tries += 1;
         assert!(tries < 10_000, "never got out");
     }

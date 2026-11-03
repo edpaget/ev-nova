@@ -14,10 +14,13 @@
 //!   reaches the asteroids. A weapon with `Seeker` 0x0001 (tested
 //!   @0x36a00, whatever its guidance) does nothing; any other's RLE
 //!   overlap tail-calls `_HandleAsteroidHit` (@0x36a38). Lost and homing
-//!   shots touch asteroids too. Here an asteroid is a circle of its
-//!   sprite's radius ([`AsteroidType::radius`]): the engine has no pixel
-//!   masks. The shot's path is swept from where it was, as against a
-//!   ship ([`touches`]). The asteroid layer is the outer list of each
+//!   shots touch asteroids too. The overlap is the two sprites' placed
+//!   masks, the asteroid's first ([`contact`](super::contact)). Where no
+//!   mask can be read, and by the other reading of
+//!   [`RuleKey::ShotContact`](crate::RuleKey::ShotContact), an asteroid
+//!   is a circle of its sprite's radius ([`AsteroidType::radius`]) and the
+//!   shot's path is swept from where it was ([`touches`]). The asteroid
+//!   layer is the outer list of each
 //!   pass, its sprites added in slot order (`_InitSprites` @0x2000d), so
 //!   each asteroid in slot order meets every shot of the layer, and a
 //!   shot that touches two is spent on the one in the lower slot,
@@ -420,7 +423,7 @@ mod tests {
             flags2,
             ..weapon(128)
         });
-        shot.age = age;
+        shot.set_age(age);
         shot
     }
 

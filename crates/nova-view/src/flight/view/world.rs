@@ -49,7 +49,7 @@ use crate::system::scene::{self, SystemScene};
 use crate::{Color, DrawList, Point};
 
 use super::stars;
-use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE};
+use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world over the scene laid out
@@ -93,11 +93,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.draw_help(list);
             return false;
         }
+        self.draw_bar_or_why(list);
+        true
+    }
+
+    /// Draws the status bar over the frame drawn ([`FlightView::draw_bar`]),
+    /// or why it can't be shown.
+    pub(super) fn draw_bar_or_why(&self, list: &mut DrawList) {
         match &self.status_bar {
             Ok(bar) => self.draw_bar(list, (bar, self.view.0), self.drawn()),
             Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
-        true
     }
 
     /// The message on screen, if any: the slot's until its ticks have
@@ -153,7 +159,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
-                WorldPass::Particles => self.effects.draw_particles(list, camera),
+                WorldPass::Particles => {
+                    let at_rest = point(self.previous.position);
+                    let scrolled_from = self.scroll.drawn_from(camera.center(), at_rest);
+                    self.effects.draw_particles(list, camera, scrolled_from);
+                }
                 WorldPass::Layer(
                     layer @ (SpriteLayer::Disabled
                     | SpriteLayer::PointDefence
@@ -276,7 +286,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// thousands-of-colours display shows it, or black with no system or no
 /// session (`_SetSystemBackgroundBackColor` @0x6e06-0x6e46, `BackColor`
 /// 33 @0x6e1c).
-fn message_background(background: Option<u32>) -> Color {
+pub(super) fn message_background(background: Option<u32>) -> Color {
     background.map_or(Color::BLACK, Color::from_rgb24_as_rgb555)
 }
 

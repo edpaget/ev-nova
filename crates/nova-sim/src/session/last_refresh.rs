@@ -106,10 +106,15 @@ impl Session {
     /// included: its refresh leaves the galaxy as the session already
     /// has it, so only the snapshot a later new pilot reads is taken
     /// afresh (see the module docs' "Ordering against the original"), and
-    /// the routine's stellar passes run, their random picks drawn on
-    /// `chance` (see the `stellar_passes` module).
-    pub fn enter_game(&mut self, chance: &mut (impl Chance + ?Sized)) {
+    /// the routine's stellar passes run at `gain`, the `_gSpeedMult` the
+    /// last game of the run left ([`CarryOver::speed_mult`](super::CarryOver::speed_mult)),
+    /// their random picks drawn on `chance` (see the `stellar_passes` and
+    /// `time_adjustment` modules). No `_HandleTimeAdjustment` runs before
+    /// `_PlayGame`'s loop, so all three passes (@0x1a359, @0x1a36c,
+    /// @0x45834) run at it, and the first frame holds it.
+    pub fn enter_game(&mut self, gain: crate::SpeedMult, chance: &mut (impl Chance + ?Sized)) {
         self.chart.snapshot_refresh();
+        self.enter_time(gain);
         self.enter_game_passes(chance);
     }
 }
@@ -245,7 +250,7 @@ mod tests {
             LastRefresh::hiding([SystemId(132)]),
             "@0x1925e, before the OnStart"
         );
-        session.enter_game(&mut NeverFires);
+        session.enter_game(crate::SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.last_refresh(), LastRefresh::default(), "@0x19f81");
     }
 

@@ -518,7 +518,7 @@ fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open through the warp");
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert!(
         sent(&view).contains(&FlightCommand::Arrive),
         "it arrived: {:?}",
@@ -920,7 +920,7 @@ fn steps_clearing(view: &mut Faked, cleared: &[bool]) {
         stopped: false,
     });
     let count = u32::try_from(cleared.len()).expect("a few steps");
-    view.run_steps(count);
+    view.run_steps(count, None);
     view.update_escort_menu(count);
 }
 
@@ -1016,4 +1016,17 @@ fn the_menu_is_drawn_at_its_fades_level() {
     assert_eq!(title_alpha(&view), Some(128), "at 16/32");
     view.update_escort_menu(16);
     assert_eq!(title_alpha(&view), None, "shut");
+}
+
+#[test]
+fn tab_held_keeps_the_click_off_the_escort_menu() {
+    // With Tab down `_Button` isn't read (@0x69dfd): the menu's click
+    // (@0x6a060-0x6a12b) never runs.
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    let group = view.escort_menu().group();
+    view.track_held(&key(TARGET_KEY, true));
+    click(&mut view, row_at(3));
+    assert_eq!(view.escort_menu().group(), group, "no row taken");
+    assert!(!clicked_in_space(&view));
 }

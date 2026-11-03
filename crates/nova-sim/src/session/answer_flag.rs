@@ -296,7 +296,7 @@ pub(super) mod tests {
         let chance: &mut dyn crate::chance::Chance = &mut crate::chance::NeverFires;
         session.hold_trigger(FIRE);
         session.player_fires(pass, rules, chance);
-        session.beams_phase(&NovaAi::default(), pass, rules, chance);
+        session.beams_phase(&NovaAi::default(), None, pass, rules, chance);
     }
 
     #[test]

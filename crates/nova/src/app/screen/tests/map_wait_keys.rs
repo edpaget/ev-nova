@@ -29,7 +29,7 @@ fn end_the_wait(screen: &mut AppScreen) {
 }
 
 /// A person's offer of mission 130.
-fn job() -> nova_sim::OfferPrompt {
+pub(super) fn job() -> nova_sim::OfferPrompt {
     nova_sim::OfferPrompt {
         mission: MissionId(130),
         text: "Job.".to_owned(),
@@ -39,25 +39,29 @@ fn job() -> nova_sim::OfferPrompt {
     }
 }
 
-/// Flight with a person's offer open over it, laid out.
-fn offered_over_flight() -> AppScreen {
+/// Flight with a person's offer open over it, laid out, as a hail opens
+/// it: `_SetAllKeyCmdFlags` follows it (@0x622ac), and flight's input is
+/// away from the end of the entry point that opened it.
+pub(super) fn offered_over_flight() -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(game_data_fork_loaded())
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
+    flight_mut(&mut screen).mark_site();
     screen.open_offer(job());
+    screen.settle_live_input();
     assert_eq!(screen.showing(), Showing::Offer);
     screen
 }
 
-fn game_data_fork_loaded() -> Rc<GameData> {
+pub(super) fn game_data_fork_loaded() -> Rc<GameData> {
     loaded(&game_data_fork(true, true, true, 100, b"", b"", None))
 }
 
 /// The spaceport with a person's offer open over it, laid out.
-fn offered_docked() -> AppScreen {
+pub(super) fn offered_docked() -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     screen.spaceport.as_mut().expect("landed").open_offer(job());

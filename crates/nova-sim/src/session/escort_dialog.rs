@@ -44,8 +44,11 @@
 //! Carrying it across a pilot changes only whose escort the stale
 //! release takes, so none of this reasoning changes and no key is added.
 //!
+//! Its close zeroes `_gSpeedMult` (@0x95693; see the `time_adjustment`
+//! module), so the frames after it ramp up from 0.
+//!
 //! Left out, as frame-timing and redraw bookkeeping the engine has no
-//! use for: `_gSpeedMult` zeroed (@0x95693), `FlushEvents`,
+//! use for: `FlushEvents`,
 //! `_ShowTheCursor`, `_commDialogMode` 2, `_statusRedraw` and
 //! `_RefreshSAT`. The flight pauses under the dialog and redraws every
 //! frame.
@@ -160,6 +163,8 @@ impl Session {
         {
             self.release_stale(dialog.npc);
         }
+        // `_gSpeedMult` 0.0 (@0x95693; see the `time_adjustment` module).
+        self.zero_speed_mult();
     }
 
     /// Escort NPC `id` is released as `_DoEscortDialog`'s close releases
@@ -419,6 +424,27 @@ pub(super) mod tests {
         assert_eq!(view.upgrade, UpgradeLine::Cannot);
         let view = session.press_escort(EscortButton::Upgrade).expect("open");
         assert_eq!(view.mark, None);
+    }
+
+    #[test]
+    fn closing_the_escort_dialog_holds_the_next_frame_at_zero_then_ramps() {
+        for button in [EscortButton::Close, EscortButton::Release] {
+            let catalog = upgradable();
+            let mut session = escorting(&catalog);
+            opened(&mut session, &catalog);
+            assert_eq!(session.speed_mult(), crate::SpeedMult::FULL, "open");
+            session.press_escort(button);
+            let gains = crate::session::time_adjustment::tests::frame_gains(&mut session, 3);
+            assert_eq!(gains, [0.0, 0.25, 0.4375], "{button:?} @0x95693");
+        }
+    }
+
+    #[test]
+    fn a_press_with_no_escort_dialog_open_leaves_the_gain() {
+        let catalog = upgradable();
+        let mut session = escorting(&catalog);
+        session.press_escort(EscortButton::Close);
+        assert_eq!(session.speed_mult(), crate::SpeedMult::FULL);
     }
 
     #[test]

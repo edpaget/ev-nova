@@ -97,6 +97,7 @@ fn away_a_dialog_over_flight_doesnt_tick() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // Whole pixels, exactly.
 fn away_a_key_and_the_wheel_do_nothing() {
     let mut screen =
         offering(Rulebook::default().with_override(RuleKey::DialogTextWheel, RuleSource::Bible));
@@ -104,10 +105,14 @@ fn away_a_key_and_the_wheel_do_nothing() {
     assert_eq!(screen.input(&key(Key::Down, true)), ScreenAction::None);
     screen.input(&key(Key::Down, false));
     wheel_over_text(&mut screen);
-    assert_eq!(text(&screen).first(), 0, "dropped");
+    assert_eq!(text(&screen).offset(), 0.0, "dropped");
     screen.focus_gained();
     screen.input(&key(Key::Down, true));
-    assert_eq!(text(&screen).first(), 1, "back, Down scrolls");
+    assert_eq!(
+        text(&screen).offset(),
+        nova_view::ui::desc::ARROW_UNITS,
+        "back, Down scrolls"
+    );
 }
 
 /// The first idle after a resume reads `GetMouse`: where the pointer is

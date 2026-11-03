@@ -140,17 +140,17 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
 }
 
 /// An `rlëD`'s checked header.
-struct Header {
-    width: u32,
-    height: u32,
+pub(super) struct Header {
+    pub(super) width: u32,
+    pub(super) height: u32,
     /// [`DEPTH`] or [`DEPTH_8`].
-    depth: u16,
+    pub(super) depth: u16,
     /// At least one.
-    count: u16,
+    pub(super) count: u16,
 }
 
 /// Reads and checks the 16-byte header of an `input_len`-byte sheet.
-fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header, GraphicsError> {
+pub(super) fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header, GraphicsError> {
     let width = r.u16()?;
     let height = r.u16()?;
     let depth = r.u16()?;

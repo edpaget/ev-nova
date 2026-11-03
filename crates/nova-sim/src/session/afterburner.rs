@@ -120,8 +120,9 @@ impl Session {
             );
         }
         let usage = self.ship.fit.stats.afterburner.unwrap_or_default();
+        let gain = self.speed_mult();
         let fuel = &mut self.pilot.reserves.fuel;
-        fuel.now = drain(fuel.now, usage);
+        fuel.now = drain(fuel.now, usage, gain);
     }
 }
 
@@ -665,7 +666,7 @@ mod tests {
                 combat.fly_shots_in(fighters, arena, &spots, chance);
             },
         );
-        session.beams_phase(&ai, pass, rules, chance);
+        session.beams_phase(&ai, None, pass, rules, chance);
     }
 
     /// Works `catalog`'s `session` a pass at a time until its NPC's fire
@@ -966,5 +967,24 @@ mod tests {
         }
         work(&mut session, &catalog, held(true, false));
         assert_eq!(session.ship.engine_glow, i16::from(GLOW_CRUISE));
+    }
+
+    #[test]
+    fn at_half_gain_the_afterburner_drains_half_its_usage() {
+        let catalog = burner();
+        let mut session = flying(&catalog, 90.0);
+        let full = fuel(&session);
+        let half = crate::SpeedMult::new(0.5);
+        session.at_gain(half);
+        work(&mut session, &catalog, held(false, true));
+        assert!(session.afterburner_on());
+        let usage = session.ship.fit.stats.afterburner.unwrap_or_default();
+        let regen = session.ship.fit.stats.fuel_regen;
+        let mut expected = crate::reserves::Gauge {
+            now: crate::afterburner::drain(full, usage, half),
+            ..session.pilot.reserves.fuel
+        };
+        crate::fuel::regenerate(&mut expected, regen, half);
+        assert_eq!(fuel(&session), expected.now);
     }
 }

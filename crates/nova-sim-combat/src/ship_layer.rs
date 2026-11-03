@@ -296,7 +296,7 @@ impl SlotPlaces {
 /// each ship slot's layer history, its last cloned frames and its last
 /// laid-out place (see the module docs), and each shot slot's place in
 /// its layer and its leftover miss roll ([`ShotSlots`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SlotSprites {
     /// Each slot's layer and when it entered it.
     pub layers: LayerEntries,

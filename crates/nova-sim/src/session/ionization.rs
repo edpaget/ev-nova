@@ -34,6 +34,7 @@
 //! no copy. None of this plays a sound.
 
 use super::{Jump, PlayerShip, Session, Setup};
+use crate::SpeedMult;
 use crate::flight::Flyer;
 use crate::handling::Handling;
 use crate::ionization::{Ionization, deionize, factor, lowered_top, pull};
@@ -83,7 +84,7 @@ impl PlayerShip {
     /// The ion charge at which the player is fully ionized: its class's
     /// `IonizeMax` and its Ion Absorbers' (see the module docs).
     #[must_use]
-    fn ion_capacity(&self) -> f32 {
+    pub(super) fn ion_capacity(&self) -> f32 {
         self.fit.stats.ion.capacity(Flyer::Player)
     }
 
@@ -130,9 +131,11 @@ impl PlayerShip {
     /// speed lowered by the charge left; one at or below none is cleared.
     /// What it took off is kept in the ion's `shed`, for the fight's
     /// lockout ([`Ion::as_block_found`](crate::combat::ion::Ion::as_block_found)).
-    pub(super) fn ionize_tick(&mut self, pilot: &Pilot, setup: &Setup) {
+    /// The shed and the pull are the frame's `gain`'s share (see
+    /// `nova_sim_base::ionization`).
+    pub(super) fn ionize_tick(&mut self, pilot: &Pilot, setup: &Setup, gain: SpeedMult) {
         let found = self.ion.charge;
-        let Some(charge) = deionize(found, self.ion_rate()) else {
+        let Some(charge) = deionize(found, self.ion_rate(), gain) else {
             self.ion.charge = 0.0;
             self.ion.shed = found;
             return;
@@ -140,7 +143,7 @@ impl PlayerShip {
         self.ion.charge = charge;
         self.ion.shed = found - charge;
         let cap = lowered_top(self.top_speed(pilot, setup), self.ion_factor());
-        self.player.velocity = pull(self.player.velocity, cap);
+        self.player.velocity = pull(self.player.velocity, cap, gain);
     }
 }
 
@@ -252,11 +255,15 @@ mod tests {
         // reads and clears what it shed.
         let mut session = flying(&catalog, 3.0);
         assert_eq!(session.ion_rate(), 1.0);
-        session.ship.ionize_tick(&session.pilot, &session.setup);
+        session
+            .ship
+            .ionize_tick(&session.pilot, &session.setup, crate::SpeedMult::FULL);
         assert_eq!((session.ion().charge, session.ion().shed), (2.0, 1.0));
         // A charge at or below none is cleared: the whole of it is shed.
         let mut cleared = flying(&catalog, -0.5);
-        cleared.ship.ionize_tick(&cleared.pilot, &cleared.setup);
+        cleared
+            .ship
+            .ionize_tick(&cleared.pilot, &cleared.setup, crate::SpeedMult::FULL);
         assert_eq!((cleared.ion().charge, cleared.ion().shed), (0.0, -0.5));
     }
 
@@ -266,8 +273,12 @@ mod tests {
         // each pass clears it.
         let mut session = flying(&ionizing(), 0.25);
         session.ship.ion.colour = 0x0000_80ff;
-        session.ship.ionize_tick(&session.pilot, &session.setup);
-        session.ship.ionize_tick(&session.pilot, &session.setup);
+        session
+            .ship
+            .ionize_tick(&session.pilot, &session.setup, crate::SpeedMult::FULL);
+        session
+            .ship
+            .ionize_tick(&session.pilot, &session.setup, crate::SpeedMult::FULL);
         assert_eq!(session.ion().colour, 0x0000_80ff, "the display clears it");
     }
 
@@ -736,6 +747,37 @@ mod tests {
     }
 
     #[test]
+    fn a_hit_that_ionizes_the_player_tints_it_from_the_next_frame() {
+        use crate::session::tests::knocking;
+        // The player's display (@0x43e29), whose ion tint block
+        // (@0x2beb9-0x2bf94) reads the charge, comes before the collision
+        // passes and `_HandleShot` land the hit: the frame drawn after the
+        // hit shows no tint, the next one does.
+        let dosing = of_ionize_max_100();
+        let mut session = knocking(&dosing, (None, 100.0), (Some(ion_bolt()), 100.0));
+        let pass = |session: &mut Session| {
+            work_with(
+                session,
+                &catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+        };
+        for _ in 0..12 {
+            pass(&mut session);
+            if session.ion().charge > 0.0 {
+                assert_eq!(session.player_ion_tint(), None, "displayed before the hit");
+                pass(&mut session);
+                assert!(session.player_ion_tint().is_some(), "the next display's");
+                return;
+            }
+        }
+        panic!("never dosed");
+    }
+
+    #[test]
     fn a_hit_holds_an_npcs_seeker_0x0020_gun_on_the_tick_it_lands() {
         use crate::session::tests::knocking;
         let catalog = of_ionize_max_100();
@@ -961,5 +1003,35 @@ mod tests {
         assert_eq!(session.ion().charge, 298.5);
         let plain = flying(&ionizing(), 300.0);
         assert!(plain.ion_factor() > session.ion_factor());
+    }
+
+    #[test]
+    fn at_half_gain_the_ion_block_sheds_half_the_rate_and_pulls_half_as_far() {
+        let catalog = ionizing();
+        let mut session = flying(&catalog, 10.0);
+        session.ship.player.velocity = Vec2::new(50.0, 0.0);
+        let half = crate::SpeedMult::new(0.5);
+        session
+            .ship
+            .ionize_tick(&session.pilot, &session.setup, half);
+        let charge = crate::ionization::deionize(10.0, session.ion_rate(), half);
+        assert_eq!(Some(session.ion().charge), charge);
+        let cap = lowered_top(
+            session.ship.top_speed(&session.pilot, &session.setup),
+            session.ship.ion_factor(),
+        );
+        assert_eq!(
+            session.ship.player.velocity,
+            pull(Vec2::new(50.0, 0.0), cap, half)
+        );
+    }
+
+    #[test]
+    fn a_pass_sheds_the_charge_at_the_sessions_gain() {
+        let catalog = ionizing();
+        let mut session = flying(&catalog, 10.0);
+        session.at_gain(crate::SpeedMult::new(0.5));
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(session.ion().charge, 9.75);
     }
 }

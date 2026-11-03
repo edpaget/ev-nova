@@ -15,11 +15,16 @@
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time, or a pixel at a time.
 //! - [`scroll_arrows`]: a text dialog's scroll arrows.
+//! - `held_keys`: the keys a dialog holds back while a press is held, until
+//!   its release.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
-//!   selected by a click or a wrapping step.
+//!   selected by a press tracked to its release or a wrapping step, with
+//!   a scroll bar when they don't fit.
+//! - [`list_bar`]: the List Manager's vertical scroll bar a [`RowList`]
+//!   gives itself ([`ListBar`](list_bar::ListBar)).
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
@@ -80,6 +85,8 @@ pub mod dialog;
 pub mod edit_dialog;
 pub mod escort_dialog;
 pub mod faded_texts;
+mod held_keys;
+pub mod list_bar;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;

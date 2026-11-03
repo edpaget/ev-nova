@@ -76,7 +76,9 @@ impl Screen for AppScreen {
     ///
     /// Command-Q quits at once, silently, on every side and under every
     /// overlay, but while the main menu appears, when it waits for the
-    /// appear's end with the other keys it holds.
+    /// appear's end with the other keys it holds, and while a dialog holds
+    /// back its keys for a held press, when it and Command-comma wait for
+    /// the release, acting after the dialog's replay (see `held_chords`).
     ///
     /// While the main menu appears (at start-up, and on a return from
     /// play), every input goes to the appear first, which drops it, holds
@@ -100,11 +102,20 @@ impl Screen for AppScreen {
     /// While the app is in the background, every input stops at the
     /// router: the pointer's last move or leave is kept for the app's
     /// return, and the rest is dropped (see `background`).
+    ///
+    /// What is physically down is noted as it arrives, and handed back
+    /// to flight as its input comes back from a dialog or the spaceport
+    /// (see `live_input`).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.away_takes_input(input) {
             return ScreenAction::None;
         }
-        self.input_past_away(input)
+        self.live.note(input);
+        let action = self.settled_input(input);
+        if action == ScreenAction::Quit {
+            return action;
+        }
+        self.replayed_held_chords()
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -127,7 +138,8 @@ impl Screen for AppScreen {
     /// While the app is in the background, and on the first tick after it
     /// comes back, none of that runs: the time is counted, and the main
     /// menu idles in the background where a tick would idle it (see
-    /// `background`).
+    /// `background`). A tick in which flight's input is its own notes
+    /// what is down as its poll (see `live_input`).
     fn tick(&mut self, dt: Duration) {
         if self.tick_away(dt) {
             return;
@@ -141,6 +153,7 @@ impl Screen for AppScreen {
                 }
             }
         }
+        self.note_flight_poll();
         self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);
@@ -163,7 +176,10 @@ impl Screen for AppScreen {
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
+        self.replay_rescue_input();
         self.save_if_due();
+        self.settle_live_input();
+        self.quit_on_held_chords();
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -260,7 +276,7 @@ impl Screen for AppScreen {
             dialog.draw(&mut dialogs);
         }
         list.extend_translated(&dialogs, offset);
-        self.draw_white_over_texts(list);
+        self.draw_cover_over_texts(list);
         if let Some(fade) = &self.fade_in {
             fade.draw(list, CLASSIC_VIEW);
         }
@@ -275,52 +291,18 @@ impl Screen for AppScreen {
     /// the main menu waits, the cancel waits too, in its place among the
     /// inputs.
     fn cancel_pointer(&mut self) {
-        if self.entry_cancel_pointer() {
-            return;
-        }
-        if self.appear_cancel_pointer() {
-            return;
-        }
-        if self.menu_hold.is_some() {
-            self.held.push(Held::CancelPointer);
-            return;
-        }
-        match self.overlay_mut() {
-            Some(overlay) => overlay.cancel_pointer(),
-            None => self.shown_mut().cancel_pointer(),
-        }
+        self.cancel_screen_pointer();
+        self.quit_on_held_chords();
     }
 
-    /// While the main menu appears unseen or waits, the letting go waits
-    /// too, in its place among the inputs; while E's wait holds, it
-    /// counts as E's release.
+    /// What is physically down is forgotten (see `live_input`), then the
+    /// keys are let go ([`AppScreen::let_go_of_keys`]), and so, in their
+    /// place, are the menu chords held for a press (see `held_chords`).
     fn release_keys(&mut self) {
-        if self.entry_release_keys() {
-            return;
-        }
-        if self.appear_release_keys() {
-            return;
-        }
-        if let Some(hold) = self.menu_hold {
-            self.held.push(Held::ReleaseKeys);
-            if hold == MenuHold::EHeld {
-                self.e_released();
-            }
-            return;
-        }
-        self.command_held = false;
-        self.keys_held = MenuKeys::default();
-        // A mission dialog's map over flight sits among the overlays, in
-        // front of the dialog it opened from, so flight lets go too: its
-        // map waiting for M's release closes
-        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
-        if self.flight_dialog_map_open() {
-            self.flight.as_mut().expect(ENTERED).release_keys();
-        }
-        match self.overlay_mut() {
-            Some(overlay) => overlay.release_keys(),
-            None => self.shown_mut().release_keys(),
-        }
+        self.live.forget();
+        self.let_go_of_keys();
+        self.hold_let_go();
+        self.quit_on_held_chords();
     }
 
     /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
@@ -341,12 +323,16 @@ impl Screen for AppScreen {
 
     /// Tells every flight held, shown or not, that the window came back
     /// to the front: the original's `_SwitchedIn` (@0x513cc-0x513dc)
-    /// zeroes the frame-rate readout's counters wherever the game is.
+    /// zeroes the frame-rate readout's counters and sets `_gSpeedMult` to
+    /// 1.0 (@0x513e1-0x513ec) wherever the game is: on the main screen the
+    /// gain the next game enters at, in each flight its own.
     /// No other screen keeps time across the switch. Then the router comes
     /// back, as `_SwitchedIn` clears `_inBackground` (@0x513c4): the
     /// pointer's last move while away goes to the screen, and the game
     /// goes on after the next tick (see `background`).
     fn focus_gained(&mut self) {
+        // `_SwitchedIn`'s 1.0 (@0x513e1-0x513ec), wherever the game is.
+        self.speed_mult = nova_sim::SpeedMult::FULL;
         for flight in self.flights_mut() {
             flight.focus_gained();
         }
@@ -378,11 +364,12 @@ impl Screen for AppScreen {
                         self.quit_due = true;
                     }
                 }
-                Held::CancelPointer => self.cancel_pointer(),
-                Held::ReleaseKeys => self.release_keys(),
+                Held::CancelPointer => self.cancel_screen_pointer(),
+                Held::ReleaseKeys => self.let_go_of_keys(),
                 Held::Close => self.replay_close(),
             }
         }
+        self.settle_live_input();
     }
 
     /// Whether Quit's delay has run out, a replayed input quit, or the
@@ -573,7 +560,12 @@ impl Screen for AppScreen {
     /// About text where nothing holds input or is in front (see
     /// `menu_commands`).
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
-        self.run_menu_command(command)
+        let action = self.run_menu_command(command);
+        self.settle_live_input();
+        if action == ScreenAction::Quit {
+            return action;
+        }
+        self.replayed_held_chords()
     }
 
     /// Quit always; Preferences… and About where the command would do
@@ -584,6 +576,96 @@ impl Screen for AppScreen {
 }
 
 impl AppScreen {
+    /// [`Screen::cancel_pointer`]'s work, without the held chords' replay
+    /// that follows it there: how the router cancels a pointer gesture
+    /// within a call of its own.
+    pub(super) fn cancel_screen_pointer(&mut self) {
+        if self.entry_cancel_pointer() {
+            return;
+        }
+        if self.appear_cancel_pointer() {
+            return;
+        }
+        if self.menu_hold.is_some() {
+            self.held.push(Held::CancelPointer);
+            return;
+        }
+        match self.overlay_mut() {
+            Some(overlay) => overlay.cancel_pointer(),
+            None => self.shown_mut().cancel_pointer(),
+        }
+    }
+
+    /// The held chords' replay, then what is down handed back to flight:
+    /// what it did.
+    fn replayed_held_chords(&mut self) -> ScreenAction {
+        let action = self.replay_held_chords();
+        self.settle_live_input();
+        action
+    }
+
+    /// The held chords' replay after a tick, a cancel or a release: a
+    /// quit it asks is due for [`Screen::take_quit`].
+    fn quit_on_held_chords(&mut self) {
+        if self.replayed_held_chords() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
+    }
+
+    /// Lets go of the keys of what takes the input, not forgetting what
+    /// is physically down: [`Screen::release_keys`]'s work, and how the
+    /// router lets go of the screen below a dialog it opens, whose
+    /// releases will go to the dialog. While the main menu appears unseen
+    /// or waits, the letting go waits too, in its place among the inputs;
+    /// while E's wait holds, it counts as E's release.
+    pub(super) fn let_go_of_keys(&mut self) {
+        if self.entry_release_keys() {
+            return;
+        }
+        if self.appear_release_keys() {
+            return;
+        }
+        if let Some(hold) = self.menu_hold {
+            self.held.push(Held::ReleaseKeys);
+            if hold == MenuHold::EHeld {
+                self.e_released();
+            }
+            return;
+        }
+        self.command_held = false;
+        self.keys_held = MenuKeys::default();
+        // A mission dialog's map over flight sits among the overlays, in
+        // front of the dialog it opened from, so flight lets go too: its
+        // map waiting for M's release closes
+        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
+        if self.flight_dialog_map_open() {
+            self.flight.as_mut().expect(ENTERED).release_keys();
+        }
+        match self.overlay_mut() {
+            Some(overlay) => overlay.release_keys(),
+            None => self.shown_mut().release_keys(),
+        }
+    }
+
+    /// `input` as [`Screen::input`] takes it, not noted as physically
+    /// down: what the main menu's appear held, replayed as it ends, went
+    /// down or up as it arrived (see `live_input`).
+    pub(super) fn replay_input(&mut self, input: &Input) -> ScreenAction {
+        if self.away_takes_input(input) {
+            return ScreenAction::None;
+        }
+        self.settled_input(input)
+    }
+
+    /// `input` taken past the background's gate
+    /// ([`AppScreen::input_past_away`]), then what is down handed back to
+    /// flight if its input has come back ([`AppScreen::settle_live_input`]).
+    fn settled_input(&mut self, input: &Input) -> ScreenAction {
+        let action = self.input_past_away(input);
+        self.settle_live_input();
+        action
+    }
+
     /// `input` as [`Screen::input`] takes it once past the background's
     /// gate: Quit's delay, the entry, the appear and a keyed click's hold
     /// each stop it or hold it first, and otherwise it is routed.
@@ -611,6 +693,19 @@ impl AppScreen {
     /// expressions queued settled and a save that is due made.
     pub(super) fn routed_input(&mut self, input: &Input) -> ScreenAction {
         self.double_time_key(input);
+        self.rerouted_input(input)
+    }
+
+    /// `input` routed again, as [`AppScreen::routed_input`] routes it, but
+    /// for Caps Lock's double time: a replay of what a screen past the
+    /// router held, the router's own handlers having run on it live, so
+    /// that double time, which toggles, doesn't toggle back. The route's
+    /// notes of the keys and the pointer ([`AppScreen::note_keys`],
+    /// [`AppScreen::note_pointer`]) run again, setting in order what the
+    /// same inputs set live, and the Command-Q chord quits live, before
+    /// flight can hold the Q; a key the route takes in front of flight
+    /// never reaches its hold.
+    pub(super) fn rerouted_input(&mut self, input: &Input) -> ScreenAction {
         let action = self.route(input);
         self.keep_frame_rate();
         self.settle_script();

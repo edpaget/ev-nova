@@ -64,6 +64,11 @@ pub fn credits_text(n: i64) -> String {
 pub const TON: &str = "ton";
 /// `STR#` 2002 #2 (`_tonsString`).
 pub const TONS: &str = "tons";
+/// `STR#` 2002 #391, between the tons and the good: in the plunder
+/// dialog's cargo line (`_PlunderDialogUpdate`, `ui::plunder`) and the
+/// cargo take's message (`_DoPlunderDialog` @0x938de) and a pirate's
+/// plunder line (@0x8463f), both in `flight::view::messages`.
+pub const OF: &str = "of";
 
 /// The words for `unit`; the core picks the unit.
 fn ton_word(unit: TonUnit) -> &'static str {

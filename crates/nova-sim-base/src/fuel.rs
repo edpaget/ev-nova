@@ -14,6 +14,7 @@
 //! Every source adds up. Any other `ModType` is not fuel's business.
 
 use crate::reserves::Gauge;
+use crate::speed_mult::SpeedMult;
 
 /// The `oütf` `ModType` that regenerates (or drains) fuel: the Bible's
 /// "fuel scoop".
@@ -49,9 +50,11 @@ pub fn fuel_regen_per_tick(ship_regen: i16, outfits: &[OutfitMod]) -> f32 {
         })
 }
 
-/// Adds `per_tick` to `fuel`, kept between empty and full.
-pub fn regenerate(fuel: &mut Gauge, per_tick: f32) {
-    fuel.now = (fuel.now + per_tick).min(fuel.max).max(0.0);
+/// Adds `per_tick` × the frame's `gain` to `fuel`, in doubles and
+/// narrowed as `_HandlePlayer` adds `_ShipFuelGenRate` × `_gSpeedMult`
+/// (@0x6d986-0x6d9b7), then kept between empty and full (@0x6d9cd-0x6d9f2).
+pub fn regenerate(fuel: &mut Gauge, per_tick: f32, gain: SpeedMult) {
+    fuel.now = gain.add_times(fuel.now, per_tick).min(fuel.max).max(0.0);
 }
 
 #[cfg(test)]
@@ -126,7 +129,7 @@ mod tests {
             now: 100.0,
             max: 300.0,
         };
-        regenerate(&mut fuel, 0.5);
+        regenerate(&mut fuel, 0.5, SpeedMult::FULL);
         assert_eq!(
             fuel,
             Gauge {
@@ -134,22 +137,40 @@ mod tests {
                 max: 300.0
             }
         );
-        regenerate(&mut fuel, -0.25);
+        regenerate(&mut fuel, -0.25, SpeedMult::FULL);
         assert_eq!(fuel.now, 100.25);
         let mut nearly_full = Gauge {
             now: 299.9,
             max: 300.0,
         };
-        regenerate(&mut nearly_full, 1.0);
+        regenerate(&mut nearly_full, 1.0, SpeedMult::FULL);
         assert_eq!(nearly_full, Gauge::full(300.0));
         let mut nearly_empty = Gauge {
             now: 0.03,
             max: 300.0,
         };
-        regenerate(&mut nearly_empty, -0.05);
+        regenerate(&mut nearly_empty, -0.05, SpeedMult::FULL);
         assert_eq!(nearly_empty.now, 0.0);
         let mut none = Gauge::full(0.0);
-        regenerate(&mut none, 1.0);
+        regenerate(&mut none, 1.0, SpeedMult::FULL);
         assert_eq!(none, Gauge::full(0.0));
+    }
+
+    #[test]
+    fn at_half_gain_regenerating_adds_half_the_rate_and_still_stops_at_full() {
+        let mut fuel = Gauge {
+            now: 100.0,
+            max: 300.0,
+        };
+        regenerate(&mut fuel, 0.5, SpeedMult::new(0.5));
+        assert_eq!(fuel.now, 100.25);
+        let mut nearly_full = Gauge {
+            now: 299.9,
+            max: 300.0,
+        };
+        regenerate(&mut nearly_full, 1.0, SpeedMult::new(0.5));
+        assert_eq!(nearly_full, Gauge::full(300.0));
+        regenerate(&mut fuel, 0.5, SpeedMult::ZERO);
+        assert_eq!(fuel.now, 100.25);
     }
 }

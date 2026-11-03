@@ -18,10 +18,12 @@
 //!   is not.
 //! - **The frame's block** ([`deionize`], [`pull`]), `_HandleShip`'s
 //!   (@0x342b2-0x34421) and `_HandlePlayer`'s (@0x6d7fd-0x6d96d), after
-//!   the move: a charge above none falls by the deionization rate ×
-//!   `_gSpeedMult` (1 a tick here), with **no floor** that frame; then,
-//!   on the charge left, each axis of the velocity past the top speed ×
-//!   (1 − the slowdown) moves back [`ION_PULL`] (@0xdd608, @0xdd610). A
+//!   the move: a charge above none falls by the deionization rate × the
+//!   frame's gain, `_gSpeedMult`, in doubles and narrowed
+//!   (@0x6d824-0x6d84c), with **no floor** that frame; then, on the
+//!   charge left, each axis of the velocity past the top speed × (1 − the
+//!   slowdown) moves back [`ION_PULL`] × the gain (@0xdd608, @0xdd610,
+//!   each × `_gSpeedMult` @0x6d8c9, @0x6d8fd, @0x6d928, @0x6d950). A
 //!   charge at or below none is cleared to none (@0x34418, @0x6d966) and
 //!   pulls nothing.
 //!
@@ -32,15 +34,16 @@
 
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::speed_mult::SpeedMult;
 
 /// The most the ionization factor slows a ship's turn, thrust and top
 /// speed: 0.7 (the double @0xdd0d0 the factor is compared with, the float
 /// @0xdd070 written in its place).
 pub const MAX_SLOWDOWN: f32 = 0.7;
 
-/// How far a frame's pull moves an axis of the velocity back toward the
-/// lowered top speed, in pixels a tick (the doubles -0.025 @0xdd608 and
-/// 0.025 @0xdd610, × `_gSpeedMult`).
+/// How far a full frame's pull moves an axis of the velocity back toward
+/// the lowered top speed, in pixels (the doubles -0.025 @0xdd608 and
+/// 0.025 @0xdd610), × the frame's gain ([`pull`]).
 pub const ION_PULL: f64 = 0.025;
 
 /// A ship's ionization factor, `_ShipIonizationFactor`: its `charge` over
@@ -115,13 +118,13 @@ impl Ionization {
     }
 }
 
-/// The ion `charge` left after a frame shedding `rate` (see the module
-/// docs): a charge above none falls by the rate, in doubles, unfloored,
-/// and the frame's [`pull`] follows; one at or below none is cleared to
-/// none, and nothing is pulled (`None`).
+/// The ion `charge` left after a frame shedding `rate` at the frame's
+/// `gain` (see the module docs): a charge above none falls by the rate ×
+/// the gain, in doubles, unfloored, and the frame's [`pull`] follows; one
+/// at or below none is cleared to none, and nothing is pulled (`None`).
 #[must_use]
-pub fn deionize(charge: f32, rate: f32) -> Option<f32> {
-    (charge > 0.0).then(|| (f64::from(charge) - f64::from(rate)) as f32)
+pub fn deionize(charge: f32, rate: f32, gain: SpeedMult) -> Option<f32> {
+    (charge > 0.0).then(|| gain.add_times(charge, -rate))
 }
 
 /// The top speed a ship of top speed `top_speed` and ionization `factor`
@@ -133,19 +136,21 @@ pub fn lowered_top(top_speed: f32, factor: f32) -> f32 {
     top_speed * (1.0 - slowdown(factor))
 }
 
-/// `velocity` after a frame's pull toward `cap` on each axis (see the
-/// module docs): an axis above the cap moves [`ION_PULL`] down, and then,
-/// as it now is, one below −cap moves [`ION_PULL`] up. An axis within it
-/// is left alone. A pull, not a clamp: a ship far past the cap takes many
+/// `velocity` after a frame's pull toward `cap` on each axis at the
+/// frame's `gain` (see the module docs): an axis above the cap moves
+/// [`ION_PULL`] × the gain down, and then, as it now is, one below −cap
+/// moves as much up, each in doubles and narrowed. An axis within it is
+/// left alone. A pull, not a clamp: a ship far past the cap takes many
 /// frames to come back.
 #[must_use]
-pub fn pull(velocity: Vec2, cap: f32) -> Vec2 {
+pub fn pull(velocity: Vec2, cap: f32, gain: SpeedMult) -> Vec2 {
+    let step = ION_PULL * gain.get();
     let axis = |mut v: f32| {
         if v > cap {
-            v = (f64::from(v) - ION_PULL) as f32;
+            v = (f64::from(v) - step) as f32;
         }
         if v < -cap {
-            v = (f64::from(v) + ION_PULL) as f32;
+            v = (f64::from(v) + step) as f32;
         }
         v
     };
@@ -156,6 +161,10 @@ pub fn pull(velocity: Vec2, cap: f32) -> Vec2 {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// A full frame's gain, as every frame of the integer days ran at.
+    const G: SpeedMult = SpeedMult::FULL;
+    const HALF: SpeedMult = SpeedMult::new(0.5);
 
     const HANDLING: Handling = Handling {
         max_speed: 5.0,
@@ -248,11 +257,11 @@ mod tests {
 
     #[test]
     fn a_charge_sheds_its_rate_unfloored_and_none_clears_to_none() {
-        assert_eq!(deionize(10.0, 1.0), Some(9.0));
-        assert_eq!(deionize(0.5, 1.0), Some(-0.5), "no floor this frame");
-        assert_eq!(deionize(0.0, 1.0), None);
-        assert_eq!(deionize(-0.5, 1.0), None);
-        let shed = deionize(1.0, 0.1).expect("charged");
+        assert_eq!(deionize(10.0, 1.0, G), Some(9.0));
+        assert_eq!(deionize(0.5, 1.0, G), Some(-0.5), "no floor this frame");
+        assert_eq!(deionize(0.0, 1.0, G), None);
+        assert_eq!(deionize(-0.5, 1.0, G), None);
+        let shed = deionize(1.0, 0.1, G).expect("charged");
         assert_eq!(shed, (1.0_f64 - f64::from(0.1_f32)) as f32, "in doubles");
     }
 
@@ -265,9 +274,9 @@ mod tests {
 
     #[test]
     fn an_axis_past_the_cap_is_pulled_back_0_025() {
-        let pulled = pull(Vec2::new(3.0, -1.0), 2.0);
+        let pulled = pull(Vec2::new(3.0, -1.0), 2.0, G);
         assert_eq!(pulled, Vec2::new((3.0_f64 - 0.025) as f32, -1.0));
-        let pulled = pull(Vec2::new(1.0, -3.0), 2.0);
+        let pulled = pull(Vec2::new(1.0, -3.0), 2.0, G);
         assert_eq!(pulled, Vec2::new(1.0, (-3.0_f64 + 0.025) as f32));
         assert_eq!(ION_PULL, 0.025);
     }
@@ -275,13 +284,13 @@ mod tests {
     #[test]
     fn an_axis_within_the_cap_is_left_alone() {
         let within = Vec2::new(2.0, -2.0);
-        assert_eq!(pull(within, 2.0), within);
-        assert_eq!(pull(Vec2::new(0.5, 0.0), 2.0), Vec2::new(0.5, 0.0));
+        assert_eq!(pull(within, 2.0, G), within);
+        assert_eq!(pull(Vec2::new(0.5, 0.0), 2.0, G), Vec2::new(0.5, 0.0));
     }
 
     #[test]
     fn a_cap_of_none_pulls_both_signs_toward_rest() {
-        let pulled = pull(Vec2::new(1.0, -1.0), 0.0);
+        let pulled = pull(Vec2::new(1.0, -1.0), 0.0, G);
         assert_eq!(
             pulled,
             Vec2::new((1.0_f64 - 0.025) as f32, (-1.0_f64 + 0.025) as f32)
@@ -292,7 +301,7 @@ mod tests {
     fn the_up_pull_reads_the_axis_as_the_down_pull_left_it() {
         // At a cap of none, a small speed pulled down past rest is below
         // −cap, so the up pull follows on the axis as updated.
-        let pulled = pull(Vec2::new(0.01, 0.0), 0.0);
+        let pulled = pull(Vec2::new(0.01, 0.0), 0.0, G);
         let down = (f64::from(0.01_f32) - 0.025) as f32;
         let up = (f64::from(down) + 0.025) as f32;
         assert_eq!(pulled.x, up);
@@ -302,6 +311,27 @@ mod tests {
     fn a_negative_factors_cap_above_the_top_speed_pulls_nothing_within_it() {
         let cap = lowered_top(4.0, -0.25);
         let fast = Vec2::new(4.5, -4.5);
-        assert_eq!(pull(fast, cap), fast);
+        assert_eq!(pull(fast, cap, G), fast);
+    }
+
+    #[test]
+    fn at_half_gain_a_charge_sheds_half_its_rate_unfloored() {
+        assert_eq!(deionize(10.0, 1.0, HALF), Some(9.5));
+        assert_eq!(deionize(0.25, 1.0, HALF), Some(-0.25), "no floor");
+        assert_eq!(deionize(0.0, 1.0, HALF), None);
+        assert_eq!(deionize(10.0, 1.0, SpeedMult::ZERO), Some(10.0));
+    }
+
+    #[test]
+    fn at_half_gain_an_axis_is_pulled_half_as_far() {
+        let pulled = pull(Vec2::new(3.0, -3.0), 2.0, HALF);
+        assert_eq!(
+            pulled,
+            Vec2::new((3.0_f64 - 0.0125) as f32, (-3.0_f64 + 0.0125) as f32)
+        );
+        assert_eq!(
+            pull(Vec2::new(3.0, -3.0), 2.0, SpeedMult::ZERO),
+            Vec2::new(3.0, -3.0)
+        );
     }
 }

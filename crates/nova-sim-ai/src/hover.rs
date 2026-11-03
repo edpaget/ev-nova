@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn hover_takes_a_ship_emerging_from_a_gate() {
         let mut emerging = ship(1);
-        emerging.mode = Mode::Emerging { ticks_left: 3 };
+        emerging.mode = Mode::Emerging { ticks_left: 3.0 };
         assert!(emerging.emerging());
         assert_eq!(over(&[emerging], BLIND), Some(Hover::Ship(NpcId(1))));
     }

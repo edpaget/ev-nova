@@ -13,7 +13,8 @@ impl Session {
     /// What fades the cursor now ([`KeyFades`]). `handlers` is
     /// [`PlayerCommand::FrameRate`] taken, which is taken wherever a key
     /// block runs. `_IsDisabled` and `_IsDying` are the next pass's
-    /// [`PlayerHead`], as the countdown and the cloak key read them.
+    /// [`PlayerHead`], as the countdown and the cloak key read them, and
+    /// the countdown drops by the next pass's gain.
     pub(super) fn key_fades(&self) -> KeyFades {
         let head = PlayerHead::of(self.ship.condition);
         KeyFades::of(KeyFacts {
@@ -23,7 +24,11 @@ impl Session {
             secondary: self.secondary().is_some(),
             land: self.takes(PlayerCommand::Land),
             mission_info: self.takes(PlayerCommand::MissionInfo),
-            self_destruct: self.ship.fate.self_destruct.chord_fades(head.dying),
+            self_destruct: self
+                .ship
+                .fate
+                .self_destruct
+                .chord_fades(head.dying, self.next_speed_mult()),
             auto_eject: self.ship.auto_eject_fires(&self.pilot, &self.statics),
         })
     }
@@ -159,9 +164,22 @@ mod tests {
     #[test]
     fn the_countdown_fades_only_at_its_last_pass() {
         let mut session = flying();
-        session.ship.fate.self_destruct = SelfDestruct::at(100);
+        session.ship.fate.self_destruct = SelfDestruct::at(100.0);
         assert!(!fades(&session).fades(FadeKey::SelfDestruct), "running");
-        session.ship.fate.self_destruct = SelfDestruct::at(END + 1);
+        session.ship.fate.self_destruct = SelfDestruct::at(END + 1.0);
+        assert!(fades(&session).fades(FadeKey::SelfDestruct), "last pass");
+    }
+
+    #[test]
+    fn the_countdowns_last_pass_is_read_at_the_next_passs_gain() {
+        let mut session = flying();
+        session.at_gain(crate::SpeedMult::new(0.5));
+        session.ship.fate.self_destruct = SelfDestruct::at(END + 1.0);
+        assert!(
+            !fades(&session).fades(FadeKey::SelfDestruct),
+            "half a frame leaves 1.5"
+        );
+        session.ship.fate.self_destruct = SelfDestruct::at(END + 0.5);
         assert!(fades(&session).fades(FadeKey::SelfDestruct), "last pass");
     }
 }

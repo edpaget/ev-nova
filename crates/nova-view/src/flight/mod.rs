@@ -48,7 +48,6 @@
 //! - `slot_pool`: the original's fixed sprite tables, a new item taking
 //!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
-//! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
 //! - [`stars`]: the starfield as the original builds it, 20 star sprites
@@ -86,9 +85,12 @@ pub mod jump;
 pub mod lightning;
 pub mod murk;
 pub mod paint;
+pub mod particle;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
+pub mod rescue_screen;
+pub mod scroll_offset;
 pub mod ship_layers;
 pub mod shot_fade;
 pub mod sim_adapter;
@@ -96,7 +98,6 @@ pub mod sim_port;
 pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
-pub mod spin;
 pub mod sprite;
 pub mod stars;
 pub mod target;
@@ -117,4 +118,6 @@ pub use jump::{JumpEffect, JumpPhase};
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, RaceShown, SharedChance};
+pub use view::{
+    FlightOverlays, FlightView, LiveKeys, MapOpener, PortScreen, RaceShown, SharedChance,
+};

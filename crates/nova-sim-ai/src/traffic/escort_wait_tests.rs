@@ -39,7 +39,7 @@ fn world(held_burst: RuleSource) -> World<'static> {
 /// NPC `id` waiting in its gate at the centre for 60 more ticks.
 fn waiting(id: u32) -> Npc {
     let mut ship = npc(id, ShipStats::new(FAST, &[]));
-    ship.mode = Mode::Emerging { ticks_left: 60 };
+    ship.mode = Mode::Emerging { ticks_left: 60.0 };
     ship
 }
 

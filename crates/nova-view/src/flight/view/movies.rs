@@ -49,7 +49,14 @@
 //!   refused, and holds the entry command behind the movie. Under it is
 //!   the old system's flight, frozen. The load goes before the entry, so
 //!   the rank governments it resets and the last movie it leaves come
-//!   before the come-out's texts, as in the original.
+//!   before the come-out's texts, as in the original. The keys
+//!   `_HandlePlayer` polls with no latch stay tracked under the movie, as
+//!   it polls them again after the come-out (`_SetAllKeyCmdFlags`
+//!   @0x639f2, @0x6429c, latches only the rest), so one still down
+//!   reads down, whenever it went down, the skip's flush or not. Flight
+//!   reads no queued key (`_IterateInGameEventLoop` @0x56a6b), so a gate
+//!   leaves nothing to replay ([`FlightView::take_movie_replay`]): a
+//!   latched key pressed under the movie waits for its release.
 //!
 //! Neither function plays a sound.
 
@@ -115,9 +122,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What was pressed under the last movie, taken once, for the router
-    /// to hand to what comes next, the spaceport after a landing and
-    /// flight after a gate, as the original's queued events reach the next
-    /// event loop.
+    /// to hand to what comes next, as the original's queued events reach
+    /// the next event loop: the spaceport after a landing, and none after
+    /// a gate, as flight reads no queued key.
     pub fn take_movie_replay(&mut self) -> Vec<Input> {
         std::mem::take(&mut self.movie_replay)
     }
@@ -277,13 +284,20 @@ impl<
     }
 
     /// Once the movie in front has ended, lets it go and runs what follows
-    /// it, keeping what was pressed under it for what comes next
-    /// ([`FlightView::take_movie_replay`]).
+    /// it, keeping what was pressed under it for the spaceport after a
+    /// landing ([`FlightView::take_movie_replay`]). A gate's keeps none:
+    /// flight reads no queued key (`_IterateInGameEventLoop` @0x56a6b)
+    /// and `_SetAllKeyCmdFlags` follows the movie (@0x639f2, @0x6429c),
+    /// so what is still down is polled (`FlightView::came_through`), a
+    /// click under it included, as the click shares Tab's latch.
     fn end_movie(&mut self) {
         let Some(mut movie) = self.movie.take_if(|movie| movie.stage.ended()) else {
             return;
         };
-        self.movie_replay = movie.stage.take_replay();
+        let replay = movie.stage.take_replay();
+        if let AfterMovie::Land(_) = movie.then {
+            self.movie_replay = replay;
+        }
         self.after_movie(movie.then);
     }
 }

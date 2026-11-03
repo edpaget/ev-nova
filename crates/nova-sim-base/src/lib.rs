@@ -51,6 +51,11 @@
 //!   still.
 //! - [`speed_cap`]: the original's per-axis speed caps, `_AdjustedAccel`
 //!   and `_SpeedLimit`, which flight, launches and knockback share.
+//! - [`speed_mult`]: the frame's time gain, `_gSpeedMult`, as a
+//!   [`SpeedMult`], and its ramp after a landing or a dialog,
+//!   [`TimeAdjustment`], as `_HandleTimeAdjustment` runs it.
+//! - [`sprite_mask`]: whether two placed sprites touch by their pixels,
+//!   as `_SWRLECollision` walks their sheets' run-length tokens.
 //! - [`trig`]: the original's table trigonometry in whole degrees.
 //!
 //! A doc here links only to items of this crate. An item of a crate above
@@ -79,6 +84,9 @@ pub mod rulebook;
 pub mod rules;
 pub mod skill;
 pub mod speed_cap;
+pub mod speed_mult;
+pub mod sprite_mask;
+pub mod sprite_place;
 pub mod trig;
 
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
@@ -91,3 +99,4 @@ pub use handling::{Handling, ShipFields};
 pub use reserves::{Gauge, Reserve, Reserves};
 pub use rule_values::RuleValue;
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
+pub use speed_mult::{SpeedMult, TimeAdjustment};

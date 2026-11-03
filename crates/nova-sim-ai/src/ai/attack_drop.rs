@@ -293,11 +293,11 @@ mod tests {
         };
         for waiting in [
             Npc {
-                ai_wait: 3,
+                ai_wait: 3.0,
                 ..attacker()
             },
             Npc {
-                mode: Mode::HeldAtGate { ticks_left: 20 },
+                mode: Mode::HeldAtGate { ticks_left: 20.0 },
                 ..attacker()
             },
         ] {
@@ -313,7 +313,7 @@ mod tests {
     fn a_think_that_ended_its_wait_passes_row_1() {
         // The think wrote +0x4c first (@0x83d62); the traffic ends it later.
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..attacker()
         };
         let dying = Npc {
@@ -736,7 +736,7 @@ mod tests {
             ..other(2, POLICE, None)
         };
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..attacker()
         };
         for goal in [

@@ -24,7 +24,7 @@ fn lit() -> AppScreen {
 }
 
 /// `fork` built with Alpha (128) linking Beta (129) and ship 128 fast.
-fn jump_ready(fork: &ForkBuilder) -> nova_rsrc::fixture::BuiltFork {
+pub(super) fn jump_ready(fork: &ForkBuilder) -> nova_rsrc::fixture::BuiltFork {
     let mut built = fork.build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
@@ -38,6 +38,14 @@ fn jump_ready(fork: &ForkBuilder) -> nova_rsrc::fixture::BuiltFork {
 /// [`lit`], the pilot in Ada's first flight off Alpha Prime with mission
 /// 130 active.
 fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
+    let mut screen = flying_on_a_mission(store);
+    plot_beta(&mut screen);
+    lit_from(screen)
+}
+
+/// Ada's first flight off Alpha Prime with mission 130 active, flown out
+/// of the take-off's grace, with dialogs.
+pub(super) fn flying_on_a_mission(store: &MemoryPilots) -> AppScreen {
     let fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(
             Mission::TYPE,
@@ -47,6 +55,9 @@ fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
         )
         .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job 130."));
     let mut screen = landed_at_venues(store, loaded_bytes(jump_ready(&fork).bytes));
+    // L, which landed, let go: held past the take-off it would pick a
+    // stellar on every pass (`_HandlePlayer` @0x6a8c5-0x6a932).
+    screen.input(&key(Key::Char('l'), false));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(active(&screen), [MissionId(130)]);
@@ -67,13 +78,12 @@ fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
     for _ in 0..120 {
         screen.tick(TICK);
     }
-    plot_beta(&mut screen);
-    lit_from(screen)
+    screen
 }
 
 /// `screen` flying with a course to Beta, flown out past the minimum jump
 /// distance, J pressed and ticked until the warp has lit the screen white.
-fn lit_from(mut screen: AppScreen) -> AppScreen {
+pub(super) fn lit_from(mut screen: AppScreen) -> AppScreen {
     screen.input(&key(Key::Up, true));
     for _ in 0..1800 {
         if ship(&screen).position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
@@ -95,7 +105,7 @@ fn lit_from(mut screen: AppScreen) -> AppScreen {
 
 /// Plots a course to Beta on flight's map: M, a Shift-click on Beta, M,
 /// whose close cues it.
-fn plot_beta(screen: &mut AppScreen) {
+pub(super) fn plot_beta(screen: &mut AppScreen) {
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::FlightMap);
@@ -120,13 +130,13 @@ fn plot_beta(screen: &mut AppScreen) {
 }
 
 /// The white's alpha over flight, if the jump's effect shows one.
-fn white(screen: &AppScreen) -> Option<u8> {
+pub(super) fn white(screen: &AppScreen) -> Option<u8> {
     flight(screen).jump_effect().map(JumpEffect::fade_alpha)
 }
 
 /// The alpha of the black drawn over the whole screen, last, if any: the
 /// text's fade-in from black.
-fn black(screen: &AppScreen) -> Option<u8> {
+pub(super) fn black(screen: &AppScreen) -> Option<u8> {
     drawn(screen)
         .iter()
         .rev()
@@ -141,7 +151,7 @@ fn black(screen: &AppScreen) -> Option<u8> {
 }
 
 /// Ticks `screen` until its jump has arrived, or something opens.
-fn tick_past_the_arrival(screen: &mut AppScreen) {
+pub(super) fn tick_past_the_arrival(screen: &mut AppScreen) {
     for _ in 0..1800 {
         let under_way = flight(screen).session().expect("flying").jumping();
         if under_way.is_none() || screen.showing() != Showing::Flight {

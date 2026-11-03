@@ -259,7 +259,7 @@ fn a_player_escort_waiting_in_its_gate_hit_by_an_npc_holds_its_point_defence() {
         .space
         .npc_mut(escort)
         .expect("there")
-        .emerge_from_gate(StellarId(128), 60);
+        .emerge_from_gate(StellarId(128), 60.0);
     let attacker = pirate_at(&mut session, 0.0, -200.0, ShipRef::Npc(escort));
     hits(&mut session, escort, attacker);
     work_with(
@@ -286,7 +286,7 @@ fn a_player_escort_held_at_its_gate_by_the_players_hit_flies_at_its_first_think(
         .space
         .npc_mut(escort)
         .expect("there")
-        .emerge_from_gate(StellarId(128), 60);
+        .emerge_from_gate(StellarId(128), 60.0);
     session.space.strikes = vec![strike(ShipRef::Npc(escort), ShipRef::Player)];
     session.answer_strikes(&sitting_ai());
     let held = session.space.npc(escort).expect("there");

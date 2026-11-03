@@ -32,6 +32,7 @@ use crate::cargo_box::CargoBox;
 use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::speed_mult::SpeedMult;
 use crate::traffic::npc::Npc;
 use crate::trig;
 use nova_sim_combat::asteroid::Asteroid;
@@ -100,13 +101,14 @@ pub fn order(npc: &Npc, rock: Option<&Asteroid>) -> MineOrder {
     }
 }
 
-/// Order 0x14's step for a ship of acceleration `accel`: accel ×
-/// [`KILL_EASE`] × the frame scale, 1, in doubles (@0x881db-0x88207).
+/// Order 0x14's step for a ship of acceleration `accel` at the frame's
+/// `gain`: accel × [`KILL_EASE`] × the gain, one double product, narrowed
+/// once (@0x881db-0x88207).
 #[must_use]
-pub fn kill_step(accel: f32) -> f32 {
+pub fn kill_step(accel: f32, gain: SpeedMult) -> f32 {
     // Back to the float the original keeps.
     #[allow(clippy::cast_possible_truncation)]
-    let step = (f64::from(accel) * KILL_EASE) as f32;
+    let step = (f64::from(accel) * KILL_EASE * gain.get()) as f32;
     step
 }
 
@@ -225,13 +227,14 @@ pub fn nearest_box(at: Vec2, boxes: &[CargoBox]) -> Option<Vec2> {
     nearest.map(|(position, _)| position)
 }
 
-/// Order 0x15's brake step for a ship of acceleration `accel`: accel ×
-/// [`SCOOP_BRAKE`] × the frame scale, 1, in doubles (@0x8858b-0x885ba).
+/// Order 0x15's brake step for a ship of acceleration `accel` at the
+/// frame's `gain`: accel × [`SCOOP_BRAKE`] × the gain, one double
+/// product, narrowed once (@0x8858b-0x885ba).
 #[must_use]
-pub fn scoop_brake_step(accel: f32) -> f32 {
+pub fn scoop_brake_step(accel: f32, gain: SpeedMult) -> f32 {
     // Back to the float the original keeps.
     #[allow(clippy::cast_possible_truncation)]
-    let step = (f64::from(accel) * SCOOP_BRAKE) as f32;
+    let step = (f64::from(accel) * SCOOP_BRAKE * gain.get()) as f32;
     step
 }
 
@@ -299,8 +302,8 @@ mod tests {
 
     #[test]
     fn the_kill_step_is_one_and_a_half_accelerations_in_doubles() {
-        assert_eq!(kill_step(0.2), (0.2_f64 * 1.5) as f32);
-        assert_eq!(kill_step(1.0), 1.5);
+        assert_eq!(kill_step(0.2, SpeedMult::FULL), (0.2_f64 * 1.5) as f32);
+        assert_eq!(kill_step(1.0, SpeedMult::FULL), 1.5);
     }
 
     fn held(state: ShipState, at: &Asteroid, step: f32) -> ShipState {
@@ -410,7 +413,7 @@ mod tests {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             life,
-            frame: 0,
+            frame: 0.0,
             spin: 0,
             graphic: 1,
             scoopable,
@@ -462,9 +465,62 @@ mod tests {
 
     #[test]
     fn the_brake_takes_each_axis_toward_none_by_its_step() {
-        assert_eq!(scoop_brake_step(0.2), (0.2_f64 * 1.75) as f32);
+        assert_eq!(
+            scoop_brake_step(0.2, SpeedMult::FULL),
+            (0.2_f64 * 1.75) as f32
+        );
         assert_eq!(brake(Vec2::new(2.0, -2.0), 0.5), Vec2::new(1.5, -1.5));
         assert_eq!(brake(Vec2::new(0.4, -0.5), 0.5), Vec2::new(0.0, 0.0));
         assert_eq!(brake(Vec2::new(0.5, -0.4), 0.5), Vec2::new(0.0, 0.0));
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_the_kill_step_is_half_and_at_no_gain_none() {
+        assert_eq!(kill_step(1.0, HALF), 0.75);
+        assert_eq!(kill_step(1.0, SpeedMult::ZERO), 0.0);
+        // 0.0333 a tick at 0.3: one double product (@0x881db-0x88207),
+        // which narrows otherwise than the float step times the gain.
+        let accel = 0.033_333_335_f32;
+        let gain = SpeedMult::new(0.3);
+        #[allow(clippy::cast_possible_truncation)]
+        let double = (f64::from(accel) * 1.5 * 0.3) as f32;
+        assert_eq!(kill_step(accel, gain), double);
+        assert_ne!(
+            kill_step(accel, gain),
+            gain.times(kill_step(accel, SpeedMult::FULL))
+        );
+    }
+
+    #[test]
+    fn at_half_gain_the_hold_eases_and_nudges_by_the_half_step_its_thresholds_unscaled() {
+        let slot0 = rock(0.0, 0.0, 0.0, 0.0);
+        let step = kill_step(1.0, HALF);
+        // 151 off is pulled in, 150 isn't; 79 off is pushed out, 80 isn't.
+        let state = held(at(151.0, 79.0, 3.0, -3.0), &slot0, step);
+        assert_eq!(state.velocity, Vec2::new(2.25, -2.25));
+        assert_eq!(state.position, Vec2::new(150.25, 79.75));
+        let state = held(at(150.0, 80.0, 0.5, 0.0), &slot0, step);
+        assert_eq!(state.position, Vec2::new(150.0, 80.0));
+        assert_eq!(state.velocity, Vec2::ZERO, "snapped within the half step");
+    }
+
+    #[test]
+    fn at_half_gain_the_scoop_brake_is_half_and_snaps_within_it() {
+        let step = scoop_brake_step(1.0, HALF);
+        assert_eq!(step, 0.875);
+        assert_eq!(scoop_brake_step(1.0, SpeedMult::ZERO), 0.0);
+        assert_eq!(brake(Vec2::new(2.0, -2.0), step), Vec2::new(1.125, -1.125));
+        assert_eq!(brake(Vec2::new(0.8, -0.8), step), Vec2::ZERO);
+        let accel = 0.033_333_335_f32;
+        let gain = SpeedMult::new(0.3);
+        #[allow(clippy::cast_possible_truncation)]
+        let double = (f64::from(accel) * 1.75 * 0.3) as f32;
+        assert_eq!(scoop_brake_step(accel, gain), double);
+        assert_ne!(
+            scoop_brake_step(accel, gain),
+            gain.times(scoop_brake_step(accel, SpeedMult::FULL))
+        );
     }
 }

@@ -1721,7 +1721,7 @@ mod tests {
         assert!(glide.point_defence);
         assert_eq!(glide.only, id(130), "goal 0 or 8, which it sees");
         let in_gate = |other: &mut Npc| {
-            other.mode = Mode::Emerging { ticks_left: 5 };
+            other.mode = Mode::Emerging { ticks_left: 5.0 };
         };
         let waiting = trigger_at_npc(&npc, 0.0, -100.0, in_gate);
         assert!(waiting.point_defence);
@@ -2681,7 +2681,7 @@ mod tests {
         (Mode::JumpingIn { tick: 1 }, true),
         (Mode::LeavingGate { tick: 1 }, true),
         (Mode::LeavingGate { tick: 0 }, false),
-        (Mode::Emerging { ticks_left: 5 }, false),
+        (Mode::Emerging { ticks_left: 5.0 }, false),
     ];
 
     fn breaking_up(other: &mut Npc) {
@@ -2762,7 +2762,7 @@ mod tests {
         // @0x811e7, @0x811f6.
         let in_gate = |other: &mut Npc| {
             cloaked(other);
-            other.mode = Mode::Emerging { ticks_left: 5 };
+            other.mode = Mode::Emerging { ticks_left: 5.0 };
         };
         let npc = shooter(&[short(128), missile(131)], ATTACK);
         assert_eq!(fired_at_npc(&npc, 0.0, -300.0, in_gate), None);
@@ -3837,12 +3837,12 @@ mod tests {
         let mut npc = shooter(&[gun(128, 1, 1)], ATTACK);
         npc.trigger = FULL;
         let waits = [
-            Mode::Emerging { ticks_left: 5 },
-            Mode::HeldAtGate { ticks_left: 5 },
-            Mode::Coasting { ticks_left: 5 },
+            Mode::Emerging { ticks_left: 5.0 },
+            Mode::HeldAtGate { ticks_left: 5.0 },
+            Mode::Coasting { ticks_left: 5.0 },
             Mode::EnteringGate {
                 gate: StellarId(128),
-                ticks_left: 5,
+                ticks_left: 5.0,
             },
         ];
         for mode in waits {
@@ -3873,11 +3873,11 @@ mod tests {
     fn a_pirates_count_wait_is_exempt_from_the_wait_gate() {
         // `_AIIsShipDoingCountWait` lets its trigger through (@0x34a5d-0x34a67).
         let mut npc = shooter(&[gun(128, 1, 1)], Goal::CountWait);
-        npc.ai_wait = 5;
+        npc.ai_wait = 5.0;
         npc.trigger = FULL;
         assert!(npc.wait_running());
         assert_eq!(gated(&npc), FULL);
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 5 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 5.0 };
         assert_eq!(gated(&npc), FULL, "its wait is one, its goal exempts it");
     }
 
@@ -3887,7 +3887,7 @@ mod tests {
         // unlike goal 0x16, no exemption (@0x34a54-0x34a72).
         let mut npc = shooter(&[gun(128, 1, 1)], Goal::Attack(ShipRef::Player));
         npc.trigger = FULL;
-        npc.ai_wait = 1;
+        npc.ai_wait = 1.0;
         assert_eq!(
             gated(&npc),
             Trigger {
@@ -3898,7 +3898,7 @@ mod tests {
                 ..Trigger::default()
             }
         );
-        npc.ai_wait = 0;
+        npc.ai_wait = 0.0;
         assert_eq!(gated(&npc), FULL);
     }
 
@@ -3908,7 +3908,7 @@ mod tests {
         // fire step tests none (@0x34a54-0x34a72, @0x34fcb-0x35018).
         let mut npc = shooter(&[gun(128, 1, 1)], Goal::Idle);
         npc.trigger = FULL;
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40.0 };
         assert_ne!(gated(&npc), FULL, "the wait gates it");
         npc.fires_on_burst_end = true;
         assert_eq!(gated(&npc), FULL);
@@ -3918,7 +3918,7 @@ mod tests {
     fn after_firing_on_a_bursts_end_releases_the_trigger_as_the_pick_goes_or_stays() {
         let after = |pick: i16| {
             let mut npc = holding(shooter(&[gun(128, 1, 1)], Goal::Idle), pick);
-            npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+            npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40.0 };
             npc.trigger = Trigger {
                 only: id(pick),
                 keep: id(pick),
@@ -3940,7 +3940,7 @@ mod tests {
     #[test]
     fn after_firing_on_a_bursts_end_with_nothing_flagged_still_clears_the_mark() {
         let mut npc = holding(shooter(&[gun(128, 1, 1)], Goal::Idle), 128);
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40.0 };
         npc.trigger = Trigger {
             keep: id(128),
             point_defence: true,
@@ -3959,7 +3959,7 @@ mod tests {
         // is its `Mode::Adrift`, which the gate doesn't read.
         let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
         npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5 };
+        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5.0 };
         npc.trigger = FULL;
         assert!(!npc.wait_running());
         assert_eq!(gated(&npc), FULL);
@@ -4197,7 +4197,7 @@ mod tests {
     fn after_firing_leaves_a_waiting_npcs_pick() {
         let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
         npc.trigger.only = id(128);
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 3 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 3.0 };
         after_firing(&mut npc, &gun_and_secondary());
         assert_eq!(npc.pick, id(128), "nothing fired");
     }

@@ -320,7 +320,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
         let ai = NovaAi::from_rulebook(&rules);
         let mut gliding = fighter(Goal::Idle, None);
-        gliding.ai_wait = 30;
+        gliding.ai_wait = 30.0;
         let think = |npcs: &[Npc], seen: Option<crate::ai::PlayerSide>| {
             let around = Surroundings {
                 player: seen,
@@ -351,7 +351,7 @@ mod tests {
     fn a_fighter_waiting_in_its_gate_runs_the_escorts_point_defence() {
         // AI type above 4 (@0x80e59): `_AIEscortFireUnprovoked` runs.
         let mut waiting = fighter(Goal::Idle, Some(n(3)));
-        waiting.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30 };
+        waiting.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30.0 };
         let mut down = trader();
         down.condition = crate::combat::hull::Condition::Disabled;
         for npcs in [

@@ -1066,7 +1066,7 @@ impl Session {
     /// counts the ship boarded, whatever its goal (@0x653a7), and the
     /// comm line names the cargo, its `STR#` 4001 name resolved here, as
     /// the session holds the string lists; a pickup refused refuses the board
-    /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
+    /// ([`BoardRefusal::NoRoomForCargo`], @0x65fdb), its dialog shown and
     /// nothing else changed. Any other takes the assist path
     /// ([`assists`]), on which its slot counts it boarded, the comm line
     /// is said and the ship holds its course for 100 ticks (its AI wait
@@ -1096,7 +1096,7 @@ impl Session {
             let goal = ShipGoal::from_code(record.ships.goal);
             let counts = if record.pickup_mode == PICKUP_BOARDING {
                 if !self.pick_up_boarded_cargo(mark.slot) {
-                    return Some(Err(BoardRefusal::CantBoard));
+                    return Some(Err(BoardRefusal::NoRoomForCargo));
                 }
                 let cargo = cargo
                     .and_then(|cargo| u8::try_from(cargo).ok())
@@ -2153,11 +2153,17 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         // Set up cloaked (`_SetupShipsInSystem` @0x43121), then stepped
         // twice before the first frame by the take-off's two
-        // `_PrepareAllSprites` (@0x6764e, @0x67658).
+        // `_PrepareAllSprites` (@0x6764e, @0x67658), at its gain of 0.
+        let mut set_up = Cloak::default();
+        set_up.cloak();
+        for _ in 0..2 {
+            set_up.display_step(false, false, crate::SpeedMult::ZERO);
+        }
         assert!(
-            session.npcs().iter().all(|npc| npc.mission.is_some()
-                && npc.cloak.direction == 1
-                && npc.cloak.fade == 2.0 * crate::cloak::FADE_RATE),
+            session
+                .npcs()
+                .iter()
+                .all(|npc| npc.mission.is_some() && npc.cloak == set_up),
             "fading in: {:?}",
             session
                 .npcs()
@@ -2905,6 +2911,7 @@ pub(super) mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
+            session.at_gain(crate::SpeedMult::FULL);
             session.setup.rules = session
                 .setup
                 .rules
@@ -3506,7 +3513,7 @@ pub(super) mod tests {
         npc.goal = Goal::EnterGate(StellarId(300));
         npc.mode = Mode::EnteringGate {
             gate: StellarId(300),
-            ticks_left: 1,
+            ticks_left: 1.0,
         };
         work_with(
             session,
@@ -3654,6 +3661,8 @@ pub(super) mod tests {
     fn a_chase_off_ship_leaving_through_a_gate_departs_but_counts_nothing_by_the_engine() {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         let id = session.npcs()[0].id;
         gate_out(&mut session, &catalog, 0);
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
@@ -3674,6 +3683,8 @@ pub(super) mod tests {
             crate::Rulebook::default()
                 .with_override(crate::RuleKey::GateExitCounts, crate::RuleSource::Bible),
         );
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         let id = session.npcs()[0].id;
         gate_out(&mut session, &catalog, 0);
         assert!(departed(&session, id));
@@ -4167,6 +4178,7 @@ pub(super) mod tests {
         }));
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
+        session.at_gain(crate::SpeedMult::FULL);
         settle(&mut session, &catalog);
         for npc in session.space.traffic.npcs_mut() {
             npc.cloak = full;
@@ -5301,8 +5313,8 @@ pub(super) mod tests {
     }
 
     /// `_DoMissionCargoPickup` refuses (@0x98292-0x9830b) and the board
-    /// jumps to @0x65fdb: the dialog, then #130, and nothing else: no
-    /// count, no mark, no velocity match.
+    /// jumps to @0x65fdb: the dialog, `_SetAllKeyCmdFlags` (@0x6535a),
+    /// then #130, and nothing else: no count, no mark, no velocity match.
     #[test]
     fn a_pickup_refused_for_room_refuses_the_board_and_changes_nothing_else() {
         let catalog = picking_up(2, 1, 0x0001);
@@ -5313,7 +5325,7 @@ pub(super) mod tests {
         }
         let _ = session.take_sounds();
         let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
-        assert_eq!(boarding, Err(crate::board::BoardRefusal::CantBoard));
+        assert_eq!(boarding, Err(crate::board::BoardRefusal::NoRoomForCargo));
         assert_eq!(
             boarded_beeps(&mut session),
             0,
@@ -5732,6 +5744,8 @@ pub(super) mod tests {
         });
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         ticks(&mut session, &catalog, 199);
         assert_eq!(marked(&session), [0, 0]);
         assert!(

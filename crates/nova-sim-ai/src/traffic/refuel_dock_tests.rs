@@ -341,7 +341,7 @@ fn a_refueller_with_no_target_flies_no_high_level_and_coasts() {
 #[test]
 fn a_refuellers_high_level_skips_while_its_wait_runs() {
     let mut traffic = refuelling(0.0, 0.0);
-    traffic.npcs[0].ai_wait = 5;
+    traffic.npcs[0].ai_wait = 5.0;
     tick(
         &mut traffic,
         &Recording::default(),
