@@ -464,17 +464,25 @@ fn interceptor_and_pirate(mode: Mode, goal: Goal) -> (Traffic, NpcId, NpcId) {
 
 /// `_AIDispatch` skips the type AI for goal 0x15 (@0x8ff18-0x8ff20 →
 /// @0x9001f), so an emerging interceptor never reaches `_InterceptorAI`'s
-/// search ([`decides_in`](super::waiting_think::decides_in)). Were it to
-/// think, its search would still be shut, as its emerge is a wait
-/// ([`Npc::wait_running`]): breaking `decides_in` alone doesn't fail this
-/// test, breaking it with the search gate does. It pins the dispatch skip
-/// all the same.
+/// think ([`decides_in`](super::waiting_think::decides_in)). It is provoked
+/// by the pirate: the provoked branch runs before the +0x4c gate
+/// (@0x8cbf6-0x8cc31), so were it to think it would take goal 4 on the
+/// pirate, and only the dispatch skip keeps it idle.
 #[test]
 fn an_interceptor_waiting_in_its_gate_searches_nothing() {
     let govts = govts(0, 0);
     let sites = [gate()];
-    let (mut traffic, cop, _) =
+    let (mut traffic, cop, pirate) =
         interceptor_and_pirate(Mode::Emerging { ticks_left: 10.0 }, Goal::Idle);
+    let provoker = n(pirate.0);
+    traffic
+        .npcs_mut()
+        .iter_mut()
+        .filter(|npc| npc.id == cop)
+        .for_each(|npc| {
+            npc.provoked = 1.0;
+            npc.target = Some(provoker);
+        });
     for tick in 0..5 {
         traffic.tick_in(
             &NovaAi::default(),
@@ -484,7 +492,7 @@ fn an_interceptor_waiting_in_its_gate_searches_nothing() {
         );
         let ship = of(&traffic, cop);
         assert_eq!(ship.goal, Goal::Idle, "tick {tick}");
-        assert_eq!(ship.target, None, "tick {tick}");
+        assert_eq!(ship.target, Some(provoker), "tick {tick}: kept, not taken");
         assert!(
             matches!(ship.mode, Mode::Emerging { .. }),
             "tick {tick}: {:?}",
