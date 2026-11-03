@@ -103,6 +103,7 @@ mod escort_defection;
 mod flight;
 mod flight_cursor_dialogs;
 mod game;
+mod held_press_chords;
 mod info_dialog_gain;
 mod jump_white;
 mod landing_texts_after_movie;

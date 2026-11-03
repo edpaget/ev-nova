@@ -39,8 +39,8 @@ use super::AppScreen;
 /// What says that a key opened something that flushes the queue: the
 /// layers open that flushed as they opened, and the texts shown or queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FlushMark {
-    layers: usize,
+pub(super) struct FlushMark {
+    pub(super) layers: usize,
     stages: usize,
 }
 
@@ -48,7 +48,7 @@ impl FlushMark {
     /// Whether anything opened through a flush since `before`: a layer
     /// more, or a change of texts that leaves one to come. A layer fewer
     /// flushes nothing, and neither does the last text closing.
-    fn flushed_since(self, before: Self) -> bool {
+    pub(super) fn flushed_since(self, before: Self) -> bool {
         self.layers > before.layers || (self.stages != before.stages && self.stages > 0)
     }
 }
@@ -58,7 +58,7 @@ impl AppScreen {
     /// spaceport says; over flight, the overlays open, of which the
     /// mission dialogs count for their mission info screen alone, as
     /// their texts count apart.
-    fn flush_mark(&self) -> FlushMark {
+    pub(super) fn flush_mark(&self) -> FlushMark {
         let port = self.spaceport_view();
         let missions = self.missions.as_ref();
         let info = missions.is_some_and(|dialogs| dialogs.info().is_some());

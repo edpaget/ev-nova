@@ -610,7 +610,7 @@ impl AppScreen {
             .map(|template| (template, Rc::clone(&dialogs.metrics)));
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
         self.hide_flight_cursor();
-        self.cancel_pointer();
+        self.cancel_screen_pointer();
         self.let_go_of_keys();
         self.player_info = Some(
             PlayerInfoScreen::new(

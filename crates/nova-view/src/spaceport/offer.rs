@@ -1062,10 +1062,12 @@ impl VenueOffers {
     /// Whether keys typed now would come after keys held back here: the
     /// open dialog's ([`OfferDialog`]'s [`Screen::holds_back_keys`]), or
     /// what its answer left until its holder runs it
-    /// ([`VenueOffers::take_unclaimed`]). Never the answered dialog's, which
-    /// takes no input.
+    /// ([`VenueOffers::take_unclaimed`]) while it holds an event the
+    /// original queues ([`queues_an_event`]). Never the answered dialog's,
+    /// which takes no input.
     pub(crate) fn holds_back_keys(&self) -> bool {
-        self.dialog.as_ref().is_some_and(Screen::holds_back_keys) || !self.unclaimed.is_empty()
+        self.dialog.as_ref().is_some_and(Screen::holds_back_keys)
+            || self.unclaimed.iter().any(queues_an_event)
     }
 
     /// Cancels the offer dialog's pointer, if it is open: whether it was.
@@ -1074,6 +1076,24 @@ impl VenueOffers {
             .as_mut()
             .map(OfferDialog::cancel_pointer)
             .is_some()
+    }
+}
+
+/// Whether the original's event queue holds an event for `input`: not
+/// for a key's release, as the system event mask leaves out key-ups by
+/// default and the game never sets it (no `SetEventMask` in `EV Nova`),
+/// nor for a modifier going down, which the classic event model has no
+/// event for.
+fn queues_an_event(input: &Input) -> bool {
+    match *input {
+        Input::Key { key, pressed, .. } => {
+            pressed
+                && !matches!(
+                    key,
+                    Key::Alt | Key::Control | Key::Shift | Key::Command | Key::CapsLock
+                )
+        }
+        _ => true,
     }
 }
 
@@ -1378,6 +1398,32 @@ mod tests {
         assert!(offers.holds_back_keys(), "until its holder runs it");
         assert_eq!(offers.take_unclaimed(), [key(Key::Char('z'))]);
         assert!(!offers.holds_back_keys(), "once it has");
+    }
+
+    #[test]
+    fn modifiers_and_releases_left_by_an_answer_hold_back_nothing() {
+        let released = Input::Key {
+            key: Key::Char('z'),
+            pressed: false,
+            repeat: false,
+        };
+        let modifiers = [
+            Key::Alt,
+            Key::Control,
+            Key::Shift,
+            Key::Command,
+            Key::CapsLock,
+        ];
+        for left in modifiers.map(key).into_iter().chain([released]) {
+            let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+            opened(&mut offers);
+            let click = fixture::accept_click_holding(offers.dialog().expect("open"), left);
+            for input in &click {
+                offers.input(input, &mut Vec::new());
+            }
+            assert!(offers.dialog().is_none(), "{left:?}: answered");
+            assert!(!offers.holds_back_keys(), "{left:?}");
+        }
     }
 
     #[test]

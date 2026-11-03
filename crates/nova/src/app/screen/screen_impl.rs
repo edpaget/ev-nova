@@ -76,7 +76,9 @@ impl Screen for AppScreen {
     ///
     /// Command-Q quits at once, silently, on every side and under every
     /// overlay, but while the main menu appears, when it waits for the
-    /// appear's end with the other keys it holds.
+    /// appear's end with the other keys it holds, and while a dialog holds
+    /// back its keys for a held press, when it and Command-comma wait for
+    /// the release, acting after the dialog's replay (see `held_chords`).
     ///
     /// While the main menu appears (at start-up, and on a return from
     /// play), every input goes to the appear first, which drops it, holds
@@ -109,7 +111,11 @@ impl Screen for AppScreen {
             return ScreenAction::None;
         }
         self.live.note(input);
-        self.settled_input(input)
+        let action = self.settled_input(input);
+        if action == ScreenAction::Quit {
+            return action;
+        }
+        self.replayed_held_chords()
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -173,6 +179,7 @@ impl Screen for AppScreen {
         self.replay_rescue_input();
         self.save_if_due();
         self.settle_live_input();
+        self.quit_on_held_chords();
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -284,27 +291,18 @@ impl Screen for AppScreen {
     /// the main menu waits, the cancel waits too, in its place among the
     /// inputs.
     fn cancel_pointer(&mut self) {
-        if self.entry_cancel_pointer() {
-            return;
-        }
-        if self.appear_cancel_pointer() {
-            return;
-        }
-        if self.menu_hold.is_some() {
-            self.held.push(Held::CancelPointer);
-            return;
-        }
-        match self.overlay_mut() {
-            Some(overlay) => overlay.cancel_pointer(),
-            None => self.shown_mut().cancel_pointer(),
-        }
+        self.cancel_screen_pointer();
+        self.quit_on_held_chords();
     }
 
     /// What is physically down is forgotten (see `live_input`), then the
-    /// keys are let go ([`AppScreen::let_go_of_keys`]).
+    /// keys are let go ([`AppScreen::let_go_of_keys`]), and so, in their
+    /// place, are the menu chords held for a press (see `held_chords`).
     fn release_keys(&mut self) {
         self.live.forget();
         self.let_go_of_keys();
+        self.hold_let_go();
+        self.quit_on_held_chords();
     }
 
     /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
@@ -366,7 +364,7 @@ impl Screen for AppScreen {
                         self.quit_due = true;
                     }
                 }
-                Held::CancelPointer => self.cancel_pointer(),
+                Held::CancelPointer => self.cancel_screen_pointer(),
                 Held::ReleaseKeys => self.let_go_of_keys(),
                 Held::Close => self.replay_close(),
             }
@@ -564,7 +562,10 @@ impl Screen for AppScreen {
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
         let action = self.run_menu_command(command);
         self.settle_live_input();
-        action
+        if action == ScreenAction::Quit {
+            return action;
+        }
+        self.replayed_held_chords()
     }
 
     /// Quit always; Preferences… and About where the command would do
@@ -575,6 +576,42 @@ impl Screen for AppScreen {
 }
 
 impl AppScreen {
+    /// [`Screen::cancel_pointer`]'s work, without the held chords' replay
+    /// that follows it there: how the router cancels a pointer gesture
+    /// within a call of its own.
+    pub(super) fn cancel_screen_pointer(&mut self) {
+        if self.entry_cancel_pointer() {
+            return;
+        }
+        if self.appear_cancel_pointer() {
+            return;
+        }
+        if self.menu_hold.is_some() {
+            self.held.push(Held::CancelPointer);
+            return;
+        }
+        match self.overlay_mut() {
+            Some(overlay) => overlay.cancel_pointer(),
+            None => self.shown_mut().cancel_pointer(),
+        }
+    }
+
+    /// The held chords' replay, then what is down handed back to flight:
+    /// what it did.
+    fn replayed_held_chords(&mut self) -> ScreenAction {
+        let action = self.replay_held_chords();
+        self.settle_live_input();
+        action
+    }
+
+    /// The held chords' replay after a tick, a cancel or a release: a
+    /// quit it asks is due for [`Screen::take_quit`].
+    fn quit_on_held_chords(&mut self) {
+        if self.replayed_held_chords() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
+    }
+
     /// Lets go of the keys of what takes the input, not forgetting what
     /// is physically down: [`Screen::release_keys`]'s work, and how the
     /// router lets go of the screen below a dialog it opens, whose

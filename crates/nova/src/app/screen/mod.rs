@@ -37,7 +37,9 @@
 //! ([`MainMenu`]). Closing the window on the menu asks `STR#` 140 #10 in
 //! the Yes/No dialog and quits only on Yes; closing it anywhere else, or
 //! Command-Q anywhere, quits at once (see `quit_question`), but while the
-//! menu appears, below. Escape in flight, by the engine's reading of
+//! menu appears, below, and during a dialog's held press, when it quits
+//! at the release, after the keys typed before it (see `held_chords`).
+//! Escape in flight, by the engine's reading of
 //! [`RuleKey::EscapeToMainScreen`](nova_sim::RuleKey::EscapeToMainScreen),
 //! saves the pilot and goes back to the menu, which holds it, so Enter
 //! Ship resumes it; by the other reading it does nothing, as in the
@@ -387,6 +389,7 @@ mod entry;
 mod escort_dialog;
 mod flight;
 mod game;
+mod held_chords;
 mod jump_white;
 mod launch;
 mod live_input;
@@ -728,6 +731,9 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// The menu chords held while a dialog holds back its keys for a
+    /// held press, until its replay has run (see `held_chords`).
+    held_chords: held_chords::HeldChords,
     /// What is physically down while flight's input is away, for flight
     /// as it gets it back (see `live_input`): the router's, as only it
     /// sees the input while a dialog or the spaceport takes flight's.

@@ -61,7 +61,7 @@ pub(super) fn game_data_fork_loaded() -> Rc<GameData> {
 }
 
 /// The spaceport with a person's offer open over it, laid out.
-fn offered_docked() -> AppScreen {
+pub(super) fn offered_docked() -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = landed_at_venues(&store, game_data_fork_loaded());
     screen.spaceport.as_mut().expect("landed").open_offer(job());

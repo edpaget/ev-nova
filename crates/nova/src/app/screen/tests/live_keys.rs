@@ -332,7 +332,7 @@ fn texted() -> AppScreen {
 
 /// Flight in Sol with a mission text over it, and a click held on its
 /// Okay.
-fn texted_and_held() -> AppScreen {
+pub(super) fn texted_and_held() -> AppScreen {
     let mut screen = texted();
     let text = screen
         .flight_mission_text()
