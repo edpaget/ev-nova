@@ -25,7 +25,8 @@
 //!   moves to the next. Shrinking (`AverageH32`, line 7592), the ratio of
 //!   destination over source is added before each column: a carry with
 //!   nothing read copies one column, and otherwise the columns read until
-//!   the carry merge.
+//!   the carry merge. The last span stops at the source's last column,
+//!   where the original reads past the row.
 //! - **Merging** ([`stretched`]): a direct source's merged rows are
 //!   averaged first, then its merged columns, each channel truncated
 //!   (`MakeAverage`, lines 3950-3980, and `AverageH32`). The renderer's
@@ -86,6 +87,15 @@ pub fn rows(src: u32, dst: u32) -> Vec<Span> {
 
 /// The source columns each of `dst` destination columns shows, stretching
 /// `src` columns (see the module docs).
+///
+/// A shrink's last span ends at the source's last column. `FixRatio`
+/// truncates, so the carries come late and the last span would run past
+/// the row (190 to 1 would read 191 columns, 1070 to 32 end at 1071); the
+/// original reads past it, the engine doesn't. The truncation loses less
+/// than one column's worth of carry over the whole row, so for a source
+/// up to 32,768 wide only the last span runs over, and every span starts
+/// inside the row. [`rows`] needs no
+/// bound of its own, as its fetch stops at the source's last row.
 #[must_use]
 pub fn columns(src: u32, dst: u32) -> Vec<Span> {
     if src == dst {
@@ -126,7 +136,7 @@ pub fn columns(src: u32, dst: u32) -> Vec<Span> {
         next += 1;
         map.push(Span {
             first,
-            count: next - first,
+            count: next.min(src) - first,
         });
     }
     map
@@ -305,6 +315,51 @@ mod tests {
             columns(195, 121)[110..113],
             [span(177, 2), span(179, 1), span(180, 2)]
         );
+    }
+
+    /// Whether every span of `map` reads one or more of `src` indices and
+    /// none past them.
+    fn within(map: &[Span], src: u32) -> bool {
+        map.iter()
+            .all(|span| span.count >= 1 && span.first + span.count <= src)
+    }
+
+    /// `FixRatio` truncates, so a shrink's last span would read columns
+    /// past the source (190 to 1 ends at 191): the engine bounds it by the
+    /// source, where the original reads past the row.
+    #[test]
+    fn every_span_lies_within_the_source() {
+        for (src, dst) in [(190, 1), (276, 2), (325, 3), (1070, 32), (1100, 1)] {
+            assert!(within(&columns(src, dst), src), "columns {src} to {dst}");
+            assert!(within(&rows(src, dst), src), "rows {src} to {dst}");
+        }
+        let small = (1..=300).flat_map(|src| (1..=300).map(move |dst| (src, dst)));
+        let wide = (300..=1100).flat_map(|src| (1..=40).map(move |dst| (src, dst)));
+        for (src, dst) in small.chain(wide) {
+            let (cols, rows) = (columns(src, dst), rows(src, dst));
+            assert_eq!((cols.len(), rows.len()), (dst as usize, dst as usize));
+            assert!(within(&cols, src), "columns {src} to {dst}");
+            assert!(within(&rows, src), "rows {src} to {dst}");
+        }
+    }
+
+    /// The bounded last span merges every column left: 190 to 1 averages
+    /// all 190.
+    #[test]
+    fn a_shrinks_last_span_takes_the_columns_left() {
+        assert_eq!(
+            columns(190, 1),
+            [Span {
+                first: 0,
+                count: 190
+            }]
+        );
+    }
+
+    #[test]
+    fn a_wide_picture_shrunk_to_one_pixel_reads_only_its_own_row() {
+        let picture = image(300, 1, &[[8, 0, 0, 255]; 300]);
+        assert_eq!(stretched(&picture, 1, 1), image(1, 1, &[[8, 0, 0, 255]]));
     }
 
     #[test]
