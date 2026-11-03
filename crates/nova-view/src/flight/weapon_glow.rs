@@ -22,7 +22,7 @@
 //! - Then the glow falls by its class's decay, `WeapDecay` × 0.333
 //!   ([`ShipSheet::weapon_decay`](super::catalog::ShipSheet::weapon_decay)),
 //!   times the frame's gain (@0x2c7ed), in doubles, narrowed, the pass's
-//!   [`PassReport::speed_mult`](nova_sim::PassReport::speed_mult), to
+//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult), to
 //!   −1.0 at the least, unscaled ([`WeaponGlow::step`]).
 //!
 //! The spawns zero it (@0x3c4ff, @0x3ca71, @0x3d949, @0x82ef3, @0x1c4d4)

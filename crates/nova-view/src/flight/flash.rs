@@ -20,7 +20,7 @@
 //!   frame's gain while it is above none, drawn or not
 //!   ([`ShieldFlash::step`]): the original's `_gSpeedMult` (@0x2c964), in
 //!   doubles, narrowed, the pass's
-//!   [`PassReport::speed_mult`](nova_sim::PassReport::speed_mult). The
+//!   [`PassReport::speed_mult`](nova_sim::flight_frame::PassReport::speed_mult). The
 //!   hold to the share and the level before it are unscaled.
 //!
 //! An NPC's shot hits land before its `_HandleShipDisplay` in
