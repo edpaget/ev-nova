@@ -1,14 +1,16 @@
 //! The session's keeper of the fight's ships between the stretches of a
 //! phase ([`Turns`], the fight's [`HitTurns`] port; see
 //! [`hit_turns`](crate::combat::hit_turns)): the collision passes and
-//! `_HandleBeams` stop after each direct hit, and the keeper settles and
+//! `_HandleBeams` stop after each direct hit, and `_HandleShot` after each
+//! missile lock, and the keeper settles and
 //! answers that stretch's hits ([`Session::settle_landed`]) before it
 //! lends the fighters again, built afresh from what the answers wrote
 //! ([`Session::with_fighters`]). So each hit's can't-kill reads its
 //! attacker's target and goal, and its leader's goal, as the reactions of
 //! the hits before it left them, as `_DamageShip`'s prologue reads them
 //! live (@0x3a95b-0x3a9a3), and so does each later read of a fighter
-//! (see `Session::collision_passes` and `Session::beams_phase`).
+//! (see `Session::collision_passes`, `Session::shots_phase` and
+//! `Session::beams_phase`).
 //!
 //! Each stretch settles against the session as it was lent (`was`, the
 //! player's condition): the NPCs and the player as the last stretch's
@@ -24,8 +26,9 @@
 //! field is out on loan to the phase, so an answer's `World` holds no
 //! asteroid slot 0; only the dispatch autopilot reads
 //! [`World::mining_rock`](crate::traffic::World::mining_rock), never an
-//! answer. A hit that is never answered (a blast) settles with the
-//! stretch after it, before the next answer and the phase's end, where
+//! answer. A hit that is never answered (a blast, `_HandleShot`'s
+//! end-of-life blasts among them, @0x36106) settles with the stretch after
+//! it, at the next stop or the phase's end, before the next answer, where
 //! `_DamageShip` settles it as it lands: no boundary is crossed.
 
 use super::{NpcBefore, Session};

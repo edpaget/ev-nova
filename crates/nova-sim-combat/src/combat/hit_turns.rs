@@ -1,5 +1,5 @@
 //! The port through which a fight's phase has each direct hit answered
-//! before the next lands (rdm play-feel-9 phase 10): the phase runs in
+//! before the next lands (rdm play-feel-9 phases 10 and 11): the phase runs in
 //! stretches, each stopping just after a direct hit, and its keeper settles
 //! and answers that stretch's hits and lends the ships afresh before the
 //! next ([`HitTurns`], [`run_in_turn`]).
@@ -62,9 +62,42 @@
 //! the asteroid passes, point defence's layer and the hidden shots' turns
 //! land only blasts, which are never answered, and run through.
 //! `_HandleBeams` (`Combat::close_tick_in_turn`) stops after each beam's
-//! hit. `_HandleShot` doesn't stop: its hits are missile locks, which
-//! can't kill, and end-of-life blasts, which are no real hit (its other
-//! reads are rdm:phase/play-feel-9/phase-11-fight-reads-targets-in-turn).
+//! hit. `_HandleShot` (`Combat::fly_shots_in_turn`) stops after each
+//! missile lock (@0x35855), its one answered hit; its end-of-life blasts
+//! (@0x36106) are no real hit, and it runs through them.
+//!
+//! **The reads.** What a reaction writes (the reaction block
+//! @0x3b44d-0x3bef9 and its callees): the target +0x70; the goal
+//! +0xc8c8, so plundering, docked and mining; the cloak's direction
+//! +0xc8d8 (`_DoShipCloak` @0xdf01, @0xdf16) and `_DamageShip`'s decloak
+//! (@0x3bf1f); and fields none of these phases reads (the burst reload
+//! +0x17c, +0x6c, +0x4c, the hail flag +0xbc). None writes a leader
+//! (+0x9a). The phases read that state after an earlier hit's answer
+//! here, each through the fighters lent afresh at the next stretch:
+//!
+//! 1. a beam fired at nothing (+0x18 = -1, @0x3146b) takes its firer's
+//!    live +0x70 at the hit as `_DamageShip`'s intended ship
+//!    (@0x31597-0x315b4, `Combat::beam_hit`);
+//! 2. a mining firer's beam passes every ship
+//!    (`_AIShipIsAttackingAsteroid` @0x30f71-0x30f8c);
+//! 3. a beam's can't-kill (above);
+//! 4. a mining firer's shot passes every ship in the collision passes
+//!    (`_ShotCanHitShip` @0x4477e, its goal @0x44a54-0x44a6f, called
+//!    @0x37002 and @0x375b2);
+//! 5. a proximity hit's sub-munitions (`_SpawnShotSubmunitions` @0x36f47)
+//!    read their owner's goal for disable-only (`_SpawnShot` @0x3ea1b)
+//!    and its mining for their seek (@0x3f3cf);
+//! 6. a shot's can't-kill (above);
+//! 7. the victory voice after a direct hit (@0x36c85-0x36d45), read by
+//!    the session after every earlier hit's answer and before its own,
+//!    which can't change who speaks (`nova_sim::Session`'s `voices`
+//!    module);
+//! 8. after a lock, a later slot's spent shot's sub-munitions read their
+//!    owner's goal and mining (@0x35f49, @0x3ea1b, @0x3f3cf then
+//!    @0x44a68);
+//! 9. after a lock, a later slot's homing shot reads its target's sight
+//!    (`_ShipVisibleToShip` @0x9749-0x9784), whose fade the cloak's
+//!    direction moves across the line of 8 or 16.
 //!
 //! *Ordering against the original.* A hit that is never answered (a blast,
 //! a shockwave) settles at the next stop or at the phase's end, where

@@ -2680,9 +2680,10 @@ impl Combat {
     ///
     /// A direct hit's can't-kill reads its attacker and its leader as
     /// `fighters` lend them ([`plunder::cant_kill`]): the collision passes
-    /// and the beams stop after each direct hit for it to be answered,
-    /// and lend the ships afresh after ([`hit_turns`]), so the read is of
-    /// what the answers of the hits before it wrote.
+    /// and the beams stop after each direct hit, and `_HandleShot` after
+    /// each missile lock, for it to be answered, and lend the ships afresh
+    /// after ([`hit_turns`]), so the read is of what the answers of the
+    /// hits before it wrote.
     ///
     /// The original writes each push to the ship's velocity at once, and
     /// the ship moves by it the next frame; here the session sets the
@@ -3227,9 +3228,12 @@ impl Fighter<'_> {
     /// What homing guidance reads of the ship (`_ShipECM` and the cloak
     /// test, @0x321b7-0x32335): its jamming, whether it is disabled as
     /// `_IsDisabled` reads it (not intact, or held disabled), and its sight
-    /// facts. Read as the tick begins, and again after each landing on the
-    /// ship within a loop ([`Lineup::refresh`](lineup::Lineup::refresh)),
-    /// once `Combat::settle_struck` has settled its condition, so a later
+    /// facts. Read as the tick begins, afresh at each stretch of a phase
+    /// that stops for its hits' answers ([`hit_turns`]), so a later
+    /// visit's shot reads a cloak a lock's answer flipped, and again after
+    /// each landing on the ship within a loop
+    /// ([`Lineup::refresh`](lineup::Lineup::refresh)), once
+    /// `Combat::settle_struck` has settled its condition, so a later
     /// visit's shot reads a ship an earlier landing disabled as jamming
     /// nothing, as the original reads the live record after `_DamageShip`.
     fn sight(&self) -> Sight {

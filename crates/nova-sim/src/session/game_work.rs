@@ -44,8 +44,10 @@
 //!    ([`Session::settle_line_queue`]). All before `_HandleShot`, so the
 //!    fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
-//!    life or each other shot's move and lock, landing at its visit,
-//!    their hits settled and answered.
+//!    life or each other shot's move and lock, landing at its visit, each
+//!    lock settled and answered before the next visit, the fighters lent
+//!    afresh after it (see the `hit_turns` module;
+//!    [`Session::shots_phase`]).
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
 //!    inactive, its flight (the traffic's fly half, one NPC at a time),
@@ -103,10 +105,11 @@
 //!   is met by no shot until the next pass either way, and the step comes
 //!   before the beams in both (see the `asteroids` module).
 //! - The session's part of an escort a shot's blast or lock takes out of
-//!   the player's fleet (its record, AI type and cargo share) settles
-//!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
-//!   `_DamageShip` settles it at the landing; the fight clears its leader
-//!   at the landing, which is all the later visits read.
+//!   the player's fleet (its record, AI type and cargo share) settles at
+//!   `_HandleShot`'s next stop or its phase's end
+//!   ([`Session::settle_landed`]), where `_DamageShip` settles it at the
+//!   landing; the fight clears its leader at the landing, which is all
+//!   the later visits read.
 //! - **Filed.** What the fly half still settles, where the high and low
 //!   level make it in the AI loop (a dock's completion, a repair, goal
 //!   0xb's check), a higher slot's think reads a drawn frame late (see
@@ -118,11 +121,12 @@
 //! on the terms the session works out for it. A phase that lands hits is
 //! settled at once ([`Session::settle_landed`]): the player's downing
 //! lines, the pushes, the NPCs' fates, the crimes and kills, and each
-//! strike weighed and answered in turn. The collision passes and the
-//! beams run in stretches, each stopping after a direct hit, settled and
-//! answered before the fighters are built afresh for the next, as
-//! `_DamageShip` answers each hit as it lands (see the `hit_turns`
-//! module); `_HandleShot`'s hits settle after its phase. A target that starts breaking up, emerging or cloaked in a
+//! strike weighed and answered in turn. The collision passes, the beams
+//! and `_HandleShot` run in stretches, each stopping after a direct hit
+//! (for `_HandleShot`, a missile lock), settled and answered before the
+//! fighters are built afresh for the next, as `_DamageShip` answers each
+//! hit as it lands (see the `hit_turns` module). A target that starts
+//! breaking up, emerging or cloaked in a
 //! phase stays the target through the pass and is let go at the next
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
@@ -574,10 +578,11 @@ impl Session {
     /// after it does not ([`Space::credit_kills`]).
     ///
     /// The original's `_DamageShip` settles each hit as it lands. Here the
-    /// collision passes and the beams settle each direct hit, and the
-    /// blasts before it, as the fight stops after it, before the next
-    /// lands (see the `hit_turns` module); `_HandleShot`'s hits settle
-    /// together after its phase, before the next phase or the frame. The
+    /// collision passes and the beams settle each direct hit, and
+    /// `_HandleShot` each missile lock, with the blasts before it, as the
+    /// fight stops after it, before the next lands (see the `hit_turns`
+    /// module); the blasts after the last stop settle with the phase's
+    /// end, before the next phase or the frame. The
     /// fight itself already clears a lost escort's leader as its hit lands
     /// (see the fight's `escort_loss` module), so the rest of the phase
     /// reads it unled; only the session's part of the loss waits for the
@@ -591,8 +596,9 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let (strikes, losses, finished) = self.space.combat.take_landed();
-        // `_HandleShipHit`'s victories, as the hits landed, before the
-        // answers retarget anyone (see the `voices` module).
+        // `_HandleShipHit`'s victories, as the hits landed: after the
+        // answers of the stops before, before this one's, which can't
+        // change who speaks (see the `voices` module).
         self.space
             .speak_victories(&self.statics, &finished, &losses);
         let struck = super::struck_npcs(&strikes);

@@ -15,10 +15,9 @@
 //! reads a plunderer's target and goal too (@0x3a95b-0x3a9a3), but for
 //! the fight's can't-kill, not the flag. The fight lends its
 //! [`Fighter`](crate::combat::Fighter)s afresh after each answered direct
-//! hit of the collision passes and the beams
-//! ([`hit_turns`](crate::combat::hit_turns)), so a later hit of the same
-//! phase reads what this answer wrote; the reads left are `_HandleShot`'s,
-//! rdm:phase/play-feel-9/phase-11-fight-reads-targets-in-turn.
+//! hit of the collision passes, `_HandleShot` (after each missile lock)
+//! and the beams ([`hit_turns`](crate::combat::hit_turns)), so a later hit
+//! or read of the same phase reads what this answer wrote.
 //!
 //! Between two `_DamageShip` calls of one pass (the collision passes,
 //! `_HandleShot`, `_HandleBeams`, `_HandleAsteroidHit`,

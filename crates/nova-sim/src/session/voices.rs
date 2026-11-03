@@ -213,9 +213,22 @@ impl Space {
     /// `lost`, is led only until the strike that lost it, as `_DamageShip`
     /// takes it out of the fleet as that hit lands (@0x3afdd).
     ///
-    /// The original speaks inside each hit; these settle after the
-    /// phase's hits, before anything else reads or writes the channel, so
-    /// the difference crosses no boundary the player hears.
+    /// The original speaks inside each hit, after its `_DamageShip`
+    /// (@0x36c7a), reading the speaker's target and goal live (+0x70
+    /// @0x36cd2, `_IsShipAttacking` @0x36ce5). These settle at the top of
+    /// the settle at the stop after that hit ([`Session::settle_landed`]):
+    /// after every earlier hit's answer, which the stops before it ran
+    /// (see the `hit_turns` module), and before its own hit's answer,
+    /// which can't change who speaks. That answer writes the victim's
+    /// target, and a speaker would have to target itself; its lead's
+    /// (@0x3bd79), but only for a lead that isn't attacking, which the
+    /// block never makes attacking, so that lead fails @0x36ce5 before and
+    /// after; and the Good Samaritans' target and goal, but those are AI
+    /// 3-4 ships not attacking (@0x8289f-0x828bb), so they fail @0x36ce5
+    /// before the call, and target the player after it. So the speaker is
+    /// the original's.
+    ///
+    /// [`Session::settle_landed`]: super::Session::settle_landed
     pub(super) fn speak_victories(
         &mut self,
         statics: &Statics,
