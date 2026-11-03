@@ -2042,12 +2042,7 @@ impl Session {
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
         let (missions, set_up) =
             self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
-        let facts = control::Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-            held: &self.ship.held_stock,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let world = World {
             govts: &self.statics.govts,
             persons: PersonWorld {
@@ -2192,12 +2187,7 @@ impl Session {
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
-        let facts = control::Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-            held: &self.ship.held_stock,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let targeted = self.space.combat.targeted_damage();
         let type_widths = self.gate_type_widths();
         let world = World {

@@ -21,7 +21,7 @@
 //! | Original | Reads `*0x3b51a8` at | Here |
 //! |---|---|---|
 //! | `_GetPlayerContributeBits` (the hire screen's `Require` @0xbd09, @0x4f833; the mission offers @0x9b50b; the crons @0x3850d, @0x38681, @0x3883f; the landing request @0x67964) | @0x7730-0x775f | `PlayerShip::contributed` |
-//! | `_GetToken`'s `o` (the hire screen @0xbd52, @0x4f901; the mission offers @0x9b4c8; the crons; the system's setup @0x43356; a person's spawn @0x40b66; a disaster @0x41b2c; the escort dialog @0x95335) | @0x14a95-0x14a9a | `control::Facts::held`, filled by `PlayerShip::facts`, the traffic's facts, the hire screen's and the escort dialog's |
+//! | `_GetToken`'s `o` (the hire screen @0xbd52, @0x4f901; the mission offers @0x9b4c8; the crons; the system's setup @0x43356; a person's spawn @0x40b66; a disaster @0x41b2c; the escort dialog @0x95335) | @0x14a95-0x14a9a | `PlayerShip::facts`, the one builder of `control::Facts`, over the counted outfits |
 //! | `_ScanPlayer` | @0x7efd1-0x7eff6, @0x7f103-0x7f10e | `Session::scanned_by` |
 //! | `_AIPlunderShipContents`'s marines for a player victim | @0x841bd-0x84204, @0x84345-0x84388 | `PlayerShip::marines`, for `Session::plundered_by` |
 //! | `_SetPlunderValues`' marines | @0x926cb-0x9271a | `PlayerShip::marines`, for `Session::capture_crew` |

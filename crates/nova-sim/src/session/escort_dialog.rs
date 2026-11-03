@@ -54,7 +54,6 @@
 //! frame.
 
 use super::Session;
-use super::control::Facts;
 use crate::SimSound;
 use crate::control::Gate;
 use crate::escort_dialog::{self, EscortButton, EscortDialogView};
@@ -85,12 +84,7 @@ impl Session {
         let index = self.space.fleet_index(id)?;
         let escort = self.pilot.escorts.get(index)?;
         let record = self.statics.ship_record(escort.ship)?;
-        let facts = Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-            held: &self.ship.held_stock,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let gate = Gate {
             control_bits: &*self.setup.control_bits.0,
             pilot: &facts,

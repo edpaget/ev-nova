@@ -64,7 +64,6 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use super::control::Facts;
 use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
@@ -175,12 +174,7 @@ impl Session {
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
         let site = self.chart.bar_site(self.mode.landed())?;
-        let facts = Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-            held: &self.ship.held_stock,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let bar = Bar {
             ships: &self.statics.ships,
             site: &site,
