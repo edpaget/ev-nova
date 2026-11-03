@@ -1563,8 +1563,9 @@ impl Traffic {
     /// the system. Every NPC it doesn't pick is left exactly as it was: it
     /// decides nothing, its trigger is not settled again, it holds no gate
     /// wait, its cloak does not think and its pod's wait does not run. No
-    /// NPC moves but a drifting one, 0.7 along its heading in its think,
-    /// as `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
+    /// NPC moves but a drifting one, 0.7 × the frame's gain
+    /// ([`World::speed_mult`]) along its heading in its think, as
+    /// `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
     /// [`plunder::drift`]), before the fight's `_HandleShot` (@0x44385)
     /// meets it.
     pub fn think_run(
@@ -1636,7 +1637,7 @@ impl Traffic {
             .collect();
         self.pursue(&world, &high_levels, chance);
         self.refuel(&world, &high_levels);
-        plunder::drift(&mut self.npcs, &due);
+        plunder::drift(&mut self.npcs, &due, world.speed_mult);
         // Whether a fighter launched now finds a slot, the test
         // `_LaunchFighter` makes (@0x3d648-0x3d662), read slot by slot as
         // `_AIDispatch`'s loop runs them (@0x44270-0x442ae): a lower
@@ -1682,7 +1683,7 @@ impl Traffic {
         // What the low level of a ship whose high level was skipped reads
         // of a gone ship (`skipped_high_level`).
         self.skipped.note(&self.npcs, &picked, self.gone.ships());
-        let freed = pod_flight::count_down(&mut self.npcs, &picks);
+        let freed = pod_flight::count_down(&mut self.npcs, &picks, world.speed_mult);
         self.freed.extend(freed);
         self.leave_in_dispatch(&world, &picks, no_bay, chance)
     }

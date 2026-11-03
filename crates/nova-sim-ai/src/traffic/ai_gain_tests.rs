@@ -9,12 +9,12 @@
 
 #![allow(clippy::float_cmp)]
 
-use super::{Traffic, World, formation_flight, warp_out};
+use super::{Traffic, World, formation_flight, plunder, pod_flight, warp_out};
 use crate::ai::fixture::{TRADERS, ship};
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::Chance;
 use crate::speed_mult::SpeedMult;
-use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::npc::{AiType, Mode, Npc};
 use nova_sim_base::fixture::Draws;
 
 const HALF: SpeedMult = SpeedMult::new(0.5);
@@ -109,5 +109,48 @@ fn at_half_gain_a_keeping_escorts_think_run_nudges_it_by_maintain_at_half_gain()
     let handling = before.flying_handling(before.top_speed(1.0), flight);
     formation_flight::maintain(&mut maintained, slot, &handling, false, HALF);
     assert_eq!(run(HALF), maintained.state.position);
+    assert_ne!(run(HALF), run(SpeedMult::FULL));
+}
+
+#[test]
+fn at_half_gain_a_drifting_pirates_think_run_drifts_it_by_drift_at_half_gain() {
+    let mut pirate = ship(1, TRADERS, AiType::Warship, 0.0, 0.0);
+    pirate.goal = Goal::Drift;
+    pirate.ai_wait = 5.0;
+    let mut traffic = Traffic::with_interval(1);
+    let id = traffic.add_npc_at(pirate, 1);
+    let before = traffic.npcs().to_vec();
+    let run = |gain| {
+        let mut traffic = traffic.clone();
+        think_at(&mut traffic, gain);
+        let npc = traffic.npcs().iter().find(|npc| npc.id == id);
+        npc.expect("there").state.position
+    };
+    let mut drifted = before;
+    plunder::drift(&mut drifted, &[true], HALF);
+    assert_eq!(run(HALF), drifted[0].state.position);
+    assert_ne!(run(HALF), run(SpeedMult::FULL));
+}
+
+#[test]
+fn at_half_gain_a_pods_think_run_counts_its_wait_by_counted_at_half_gain() {
+    let mut pod = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+    pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+    pod.mode = Mode::Adrift { ticks_left: 2.0 };
+    let mut traffic = Traffic::with_interval(1);
+    let id = traffic.add_npc_at(pod, 1);
+    let run = |gain| {
+        let mut traffic = traffic.clone();
+        think_at(&mut traffic, gain);
+        let npc = traffic.npcs().iter().find(|npc| npc.id == id);
+        npc.expect("there").mode
+    };
+    let wait = |gain| pod_flight::counted(2.0, gain).expect("kept");
+    assert_eq!(
+        run(HALF),
+        Mode::Adrift {
+            ticks_left: wait(HALF)
+        }
+    );
     assert_ne!(run(HALF), run(SpeedMult::FULL));
 }

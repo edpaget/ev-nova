@@ -1041,6 +1041,53 @@ mod tests {
     }
 
     #[test]
+    fn the_default_readings_fly_as_a_full_frames_gain_does() {
+        assert_eq!(Readings::default().speed_mult, SpeedMult::FULL);
+        let full = Readings {
+            speed_mult: SpeedMult::FULL,
+            ..Readings::default()
+        };
+        let leader = at(0.0, 0.0, 0.0, 0.0, 90.0);
+        let keeping = escort(FAST, at(slot_of(&leader).x + 20.0, 0.0, 0.0, 0.0, 90.0));
+        let mut docking = npc(
+            FAST,
+            Goal::Dock(ShipRef::Player),
+            at(50.0, 60.0, 0.0, 0.0, 135.0),
+        );
+        docking.carrier = Some(Carrier {
+            ship: ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        for ship in [keeping, docking] {
+            let flown = |readings: Readings| {
+                let mut ship = ship.clone();
+                let speeds = TopSpeeds::own_of(&ship);
+                let rules = FlightRules::default();
+                let chance = &mut Draws::of(&[]);
+                let weapons = &crate::ai::NO_WEAPONS;
+                let outcome = super::fly(
+                    &mut ship,
+                    &[],
+                    &BTreeMap::new(),
+                    Some(&leader),
+                    false,
+                    Beside::default(),
+                    speeds,
+                    rules,
+                    readings,
+                    weapons,
+                    chance,
+                );
+                (outcome, ship)
+            };
+            let (by_default, by_full) = (flown(Readings::default()), flown(full));
+            assert_eq!(by_default, by_full);
+            assert_ne!(by_default.1.state.position, ship.state.position, "it moved");
+        }
+    }
+
+    #[test]
     fn an_escort_on_its_slot_matches_the_leaders_velocity_and_heading() {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_of(&leader);

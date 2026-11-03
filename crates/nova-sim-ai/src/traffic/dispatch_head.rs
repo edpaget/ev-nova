@@ -86,7 +86,7 @@ impl Traffic {
             .map(|(&picked, &jump_path)| picked && !jump_path)
             .collect();
         self.issue_escort_orders(world, &rest);
-        self.release_regroups(&rest, chance);
+        self.release_regroups(&rest, world.speed_mult, chance);
         self.reset_disabled(world.npc_escort_ai, &rest);
         self.turn_out_of_waits(&rest);
         jump_path
@@ -456,5 +456,24 @@ mod tests {
         let (below, above) = read_of_disabled();
         assert_eq!(below.warp.stage, 5.0);
         assert_eq!(above.warp.stage, GIVEN_UP_STAGE);
+    }
+
+    #[test]
+    fn at_half_gain_a_paused_ship_draws_its_release_below_its_half_gain_range_once() {
+        use crate::speed_mult::SpeedMult;
+        use crate::traffic::regroup::release_draw;
+        let half = SpeedMult::new(0.5);
+        let mut traffic = traffic();
+        let mut paused = ship();
+        paused.goal = Goal::Regroup { kept: Kept::Coast };
+        traffic.add_npc_at(paused, 3);
+        let mut chance = Draws::of(&[]).keyed(release_draw(half), 1);
+        let world = World {
+            speed_mult: half,
+            ..World::new(&[])
+        };
+        traffic.think_holding(&Watch::default(), world, &[], &mut chance);
+        assert_eq!(chance.asked, [release_draw(half)]);
+        assert_ne!(release_draw(half), release_draw(SpeedMult::FULL));
     }
 }

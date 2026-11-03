@@ -106,9 +106,15 @@ use crate::traffic::{Traffic, World};
 use nova_sim_base::trig;
 use nova_sim_catalog::catalog::ShipId;
 
-/// How far a drifting ship moves along its heading each think, in pixels
-/// (the double 0.7 @0xdd0d0, by the frame).
+/// How far a drifting ship moves along its heading each think on a full
+/// frame, in pixels: [`DRIFT_STEP`] narrowed, as [`drift`] steps it at
+/// [`SpeedMult::FULL`].
 pub const DRIFT: f32 = 0.7;
+
+/// The drift's step before the frame's gain, the double 0.7 @0xdd0d0:
+/// `_Accel` moves the ship by `(float)(0.7 × g)` (@0x8eb9e), the product
+/// in doubles, narrowed once.
+pub const DRIFT_STEP: f64 = 0.7;
 
 /// What the pirates did that their session answers, queued on the line
 /// at the actor's berth ([`OnLine::Pirate`](crate::traffic::on_line::OnLine::Pirate)).
@@ -375,8 +381,10 @@ pub fn count_down(npcs: &mut [Npc], gain: SpeedMult) {
 }
 
 /// The drift of each ship among `npcs` whose think was `due` and which
-/// drifts (see the module docs).
-pub fn drift(npcs: &mut [Npc], due: &[bool]) {
+/// drifts, at the frame's `gain` (see the module docs): [`DRIFT_STEP`] ×
+/// the gain along its whole heading. Its end, once its wait no longer
+/// runs, reads no gain.
+pub fn drift(npcs: &mut [Npc], due: &[bool], gain: SpeedMult) {
     for (npc, _) in npcs.iter_mut().zip(due).filter(|(_, due)| **due) {
         if npc.goal != Goal::Drift {
             continue;
@@ -384,7 +392,9 @@ pub fn drift(npcs: &mut [Npc], due: &[bool]) {
         npc.target = None;
         npc.docking = None;
         let along = flight::facing(f32::from(trig::whole(npc.state.heading)));
-        npc.state.position = npc.state.position + along * DRIFT;
+        #[allow(clippy::cast_possible_truncation)]
+        let step = (DRIFT_STEP * gain.get()) as f32;
+        npc.state.position = npc.state.position + along * step;
         // Once +0x4c no longer runs (@0x8ebc5-0x8ebcb).
         if !ai_wait::running(npc.ai_wait) {
             npc.goal = Goal::Idle;
@@ -1952,5 +1962,52 @@ mod tests {
         plunder_dock::low_level(&mut docked, &victim, &handling, flight, None, half, chance);
         assert_eq!(shed(half), docked.speed);
         assert_ne!(shed(half), shed(SpeedMult::FULL));
+    }
+
+    /// A drifting pirate facing up from the centre, its wait `wait`,
+    /// drifted one think at `gain`.
+    fn drifted_at(wait: f32, gain: SpeedMult) -> Npc {
+        let mut ship = pirate(100);
+        ship.goal = Goal::Drift;
+        ship.ai_wait = wait;
+        let mut npcs = [ship];
+        drift(&mut npcs, &[true], gain);
+        let [ship] = npcs;
+        ship
+    }
+
+    #[test]
+    fn at_half_gain_a_drifting_ship_drifts_half_its_step() {
+        // `_Accel(heading, (float)(0.7 × g))` (@0x8eb9e).
+        #[allow(clippy::cast_possible_truncation)]
+        let half = (0.7_f64 * 0.5) as f32;
+        let ship = drifted_at(5.0, SpeedMult::new(0.5));
+        assert_eq!(ship.state.position, Vec2::new(0.0, -half));
+        assert_eq!(ship.goal, Goal::Drift);
+    }
+
+    #[test]
+    fn at_no_gain_a_drift_holds_still_but_still_ends_once_its_wait_is_out() {
+        let ship = drifted_at(0.0, SpeedMult::ZERO);
+        assert_eq!(ship.state.position, Vec2::ZERO);
+        assert_eq!(ship.goal, Goal::Idle, "the end test is unscaled (@0x8ebc2)");
+    }
+
+    #[test]
+    fn the_drift_steps_by_the_double_0_7_times_the_gain_narrowed_once() {
+        // At 0.7 the double product narrows otherwise than the float 0.7
+        // times the gain.
+        let gain = SpeedMult::new(0.7);
+        #[allow(clippy::cast_possible_truncation)]
+        let double = (0.7_f64 * 0.7) as f32;
+        assert_ne!(double, gain.times(DRIFT));
+        let ship = drifted_at(5.0, gain);
+        assert_eq!(ship.state.position, Vec2::new(0.0, -double));
+    }
+
+    #[test]
+    fn at_full_gain_one_drift_moves_exactly_drift() {
+        let ship = drifted_at(5.0, SpeedMult::FULL);
+        assert_eq!(ship.state.position, Vec2::new(0.0, -DRIFT));
     }
 }

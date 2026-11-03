@@ -170,7 +170,10 @@ pub fn after_think(
             ..decision
         },
         SearchTimer::Carried(left) | SearchTimer::Searching(left) => {
-            let left = left - 1.0;
+            // The gain off it in doubles, narrowed (@0x8d85f-0x8d876), then
+            // the give-up arm on the new count: `0 < t` searches on
+            // (`ucomiss`/`jb`), so a NaN searches on too.
+            let left = around.speed_mult.add_times(left, -1.0);
             if left <= 0.0 {
                 Decision {
                     goal: Goal::Idle,
@@ -262,6 +265,7 @@ mod tests {
     use crate::bay::Carrier;
     use crate::combat::ShipRef;
     use crate::rulebook::RuleSource;
+    use crate::speed_mult::SpeedMult;
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
 
@@ -305,6 +309,94 @@ mod tests {
 
     fn lost(npc: &Npc, decision: Decision, chance: &mut Draws) -> Decision {
         through(npc, quarry(true), decision, RuleSource::Engine, chance)
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// What becomes of `npc`'s search timer, its target out of sight, at
+    /// `gain`, a roll drawing 0.
+    fn searched_at(npc: &Npc, gain: SpeedMult) -> Option<LostSight> {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs = [npc.clone(), quarry(true)];
+        let around = Surroundings {
+            speed_mult: gain,
+            ..around(&sites, &npcs, &govts, (0.0, 2000.0), 0)
+        };
+        let chance = &mut Draws::of(&[0]);
+        after_think(&npcs[0], of(Goal::Attack(n(2))), &around, chance).lost_sight
+    }
+
+    fn searching_with(timer: SearchTimer) -> Npc {
+        hunter(AiType::Warship, timer)
+    }
+
+    #[test]
+    fn at_half_gain_a_search_counts_down_half_a_frame_and_gives_up_at_none() {
+        // (float)((double)t - g), then searching on while 0 < t
+        // (@0x8d85f-0x8d876).
+        use SearchTimer::{Carried, Searching};
+        let at_half = |timer| searched_at(&searching_with(timer), HALF);
+        assert_eq!(at_half(Searching(5.0)), Some(LostSight::Searching(4.5)));
+        assert_eq!(at_half(Searching(0.5)), Some(LostSight::GaveUp));
+        assert_eq!(at_half(Searching(0.75)), Some(LostSight::Searching(0.25)));
+        assert_eq!(at_half(Carried(2.5)), Some(LostSight::Searching(2.0)));
+    }
+
+    #[test]
+    fn a_carried_0_gives_up_at_any_gain() {
+        for gain in [HALF, SpeedMult::ZERO] {
+            let decision = searched_at(&searching_with(SearchTimer::Carried(0.0)), gain);
+            assert_eq!(decision, Some(LostSight::GaveUp), "{gain:?}");
+        }
+    }
+
+    #[test]
+    fn at_no_gain_a_search_holds_its_count() {
+        let decision = searched_at(
+            &searching_with(SearchTimer::Searching(3.0)),
+            SpeedMult::ZERO,
+        );
+        assert_eq!(decision, Some(LostSight::Searching(3.0)));
+    }
+
+    #[test]
+    fn at_half_gain_the_searchs_start_roll_is_whole_and_unscaled() {
+        // `Rand(100)+100` by `cvtsi2ss` (@0x8d83b-0x8d852).
+        let decision = searched_at(&searching_with(SearchTimer::Unset), HALF);
+        assert_eq!(decision, Some(LostSight::Searching(100.0)));
+    }
+
+    #[test]
+    fn a_nan_search_timer_searches_on() {
+        // 0 < NaN is false, so the `jb` searches on (@0x8d876-0x8d884).
+        let decision = searched_at(&searching_with(SearchTimer::Searching(f32::NAN)), HALF);
+        assert!(
+            matches!(decision, Some(LostSight::Searching(left)) if left.is_nan()),
+            "{decision:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_surroundings_counts_a_search_as_a_full_frame_does() {
+        let (sites, npcs) = (
+            sites(),
+            [searching_with(SearchTimer::Searching(5.0)), quarry(true)],
+        );
+        let bare = Surroundings::new(&sites, &npcs);
+        let full = Surroundings {
+            speed_mult: SpeedMult::FULL,
+            ..bare
+        };
+        let decided = |around: &Surroundings| {
+            after_think(
+                &npcs[0],
+                of(Goal::Attack(n(2))),
+                around,
+                &mut Draws::of(&[0]),
+            )
+        };
+        assert_eq!(decided(&bare), decided(&full));
+        assert_eq!(decided(&bare).lost_sight, Some(LostSight::Searching(4.0)));
     }
 
     #[test]

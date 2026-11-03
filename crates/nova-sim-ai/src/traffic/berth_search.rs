@@ -106,6 +106,7 @@ impl Traffic {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -130,5 +131,14 @@ mod tests {
         assert_eq!(kept.seed(2), SearchTimer::Carried(7.0));
         kept.set_reading(RuleSource::Bible);
         assert_eq!(kept.seed(2), SearchTimer::Unset);
+    }
+
+    #[test]
+    fn a_berth_seeds_a_fractional_timer_as_carried_unchanged() {
+        // A search the frame's gain counted to a fraction is carried as it
+        // stands: the slot's +0xc90c is the float its last ship left.
+        let mut kept = BerthSearch::default();
+        kept.write(1, SearchTimer::Searching(2.5));
+        assert_eq!(kept.seed(1), SearchTimer::Carried(2.5));
     }
 }

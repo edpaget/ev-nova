@@ -275,3 +275,25 @@ fn a_brave_trader_that_stops_keeps_its_target() {
     let npcs = traffic.npcs().to_vec();
     assert!(hunter(&traffic).threatens_npc_among(NpcId(1), &npcs));
 }
+
+#[test]
+fn at_half_gain_a_warships_think_counts_its_search_down_half_a_frame() {
+    // `NovaAi`'s decision runs the lost-sight block on the surroundings
+    // the world gives (`World::around`), whose gain the block reads.
+    let govts = govts();
+    let searched = |gain: crate::speed_mult::SpeedMult| {
+        let mut traffic = traffic_reading(AiType::Warship, RuleSource::Bible);
+        traffic.npcs_mut()[0].lost_sight = SearchTimer::Searching(5.0);
+        let ai = NovaAi::from_rulebook(&Rulebook::default());
+        let world = World {
+            govts: &govts,
+            speed_mult: gain,
+            ..World::new(&[])
+        };
+        traffic.think_holding(&ai, world, &[], &mut Draws::of(&[0; 4]));
+        hunter(&traffic).lost_sight
+    };
+    let half = crate::speed_mult::SpeedMult::new(0.5);
+    assert_eq!(searched(half), SearchTimer::Searching(4.5));
+    assert_ne!(searched(half), searched(crate::speed_mult::SpeedMult::FULL));
+}

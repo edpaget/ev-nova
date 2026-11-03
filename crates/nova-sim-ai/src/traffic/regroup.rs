@@ -5,9 +5,13 @@
 //! **The release** ([`Traffic::release_regroups`], `_AIDispatch`
 //! @0x8fe73-0x8febb). Each ship in the pause whose dispatch passes the gates
 //! ([`dispatch_gate::reaches_think`]) draws, every dispatch,
-//! `Rand(trunc(100.0 / _gSpeedMult))` (doubles 0xdd0e0 = 100.0, 0xdd118 =
-//! 0.0): [`RELEASE_DRAW`], as the engine's speed factor is always 1. At 0
-//! its goal becomes 0 ([`Goal::Idle`]), its substate kept, and the dispatch
+//! `Rand(trunc(100.0 / _gSpeedMult))` while the frame's gain is above 0.0,
+//! else `Rand(100)` (doubles 0xdd0e0 = 100.0, 0xdd118 = 0.0, `jbe`
+//! @0x8fe7d-0x8fea6; [`release_draw`]): [`RELEASE_DRAW`] at a full frame,
+//! twice that at half a frame's gain, so a ship is released at the same
+//! rate over time. The original keeps the range in 16 bits, which a tiny
+//! gain wraps (0x80000000 @0x8fe9c-0x8fea0); the engine's saturates
+//! instead. At 0 its goal becomes 0 ([`Goal::Idle`]), its substate kept, and the dispatch
 //! goes on: it thinks in the same tick. Each ship draws at the head of its
 //! own slot's run, after the leaders' orders and before the disabled
 //! reset, as the dispatch does (@0x8fdb3, @0x8fe73, @0x8fece; see
@@ -37,26 +41,49 @@ use super::npc::Npc;
 use crate::ai::regroup::Kept;
 use crate::ai::{Behaviour, GateWait, Goal, Surroundings, dispatch_gate};
 use crate::chance::Chance;
+use crate::speed_mult::SpeedMult;
 
-/// The range of the pause's release draw, `trunc(100.0 / _gSpeedMult)` at
-/// the engine's speed factor of 1: released on a 0.
+/// The range of the pause's release draw on a full frame, and at a gain
+/// of none (`Rand(100)` @0x8fea6): released on a 0. [`release_draw`] at
+/// [`SpeedMult::FULL`].
 pub const RELEASE_DRAW: u32 = 100;
+
+/// The range of the pause's release draw at the frame's `gain`
+/// (@0x8fe7d-0x8fea6): `trunc(100.0 / g)` while g > 0.0, the compare the
+/// original's taken arm, so a NaN gain draws [`RELEASE_DRAW`]'s range as
+/// a gain of none does. The original's 16-bit range isn't replicated: a
+/// range past `u32::MAX` saturates.
+#[must_use]
+pub fn release_draw(gain: SpeedMult) -> u32 {
+    let g = gain.get();
+    if g > 0.0 {
+        // Whole and above 0; `as` saturates past u32::MAX.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let range = (f64::from(RELEASE_DRAW) / g).trunc() as u32;
+        range
+    } else {
+        RELEASE_DRAW
+    }
+}
 
 impl Traffic {
     /// Each NPC `picked` picks (one flag an NPC) in the regroup pause that
-    /// passes the dispatch's gates draws its release, rolling on `chance`:
+    /// passes the dispatch's gates draws its release, below
+    /// [`release_draw`] at the frame's `gain`, rolling on `chance`:
     /// released, it idles (see the module docs).
     pub(crate) fn release_regroups(
         &mut self,
         picked: &[bool],
+        gain: SpeedMult,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let range = release_draw(gain);
         for (npc, _) in
             self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
                 **picked && paused(npc) && dispatch_gate::reaches_think(npc)
             })
         {
-            if chance.below(RELEASE_DRAW) == 0 {
+            if chance.below(range) == 0 {
                 npc.goal = Goal::Idle;
             }
         }
@@ -193,6 +220,55 @@ mod tests {
         assert_eq!(chance.times_asked(RELEASE_DRAW), 1);
         assert_eq!(of(&traffic, id).goal, Goal::Idle);
         assert_eq!(*behaviour.decided.borrow(), [id]);
+    }
+
+    #[test]
+    fn the_release_draws_below_100_over_the_gain_truncated() {
+        // `Rand((i16)cvttsd2si(100.0 / g))` while g > 0.0 (@0x8fe7d-0x8fea0).
+        assert_eq!(release_draw(SpeedMult::new(0.5)), 200);
+        assert_eq!(release_draw(SpeedMult::new(0.25)), 400);
+        assert_eq!(release_draw(SpeedMult::new(0.3)), 333);
+        assert_eq!(release_draw(SpeedMult::SETTLED), 100);
+    }
+
+    #[test]
+    fn at_no_gain_the_release_draws_below_100() {
+        // `jbe` to `Rand(100)` (@0x8fea6), a NaN too.
+        assert_eq!(release_draw(SpeedMult::ZERO), 100);
+        assert_eq!(release_draw(SpeedMult::new(f64::NAN)), 100);
+        assert_eq!(release_draw(SpeedMult::new(-0.5)), 100);
+    }
+
+    #[test]
+    fn a_tiny_gain_saturates_the_release_draw_with_no_16_bit_wrap() {
+        assert_eq!(release_draw(SpeedMult::new(1e-9)), u32::MAX);
+        assert_eq!(release_draw(SpeedMult::new(0.001)), 100_000);
+    }
+
+    #[test]
+    fn the_full_gain_release_draw_is_release_draw_and_a_bare_world_asks_for_it() {
+        assert_eq!(release_draw(SpeedMult::FULL), RELEASE_DRAW);
+        let mut traffic = Traffic::with_interval(1);
+        traffic.add_npc(paused_with(Kept::Coast));
+        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 99);
+        traffic.tick_in(&Recording::default(), World::new(&[]), &[], &mut chance);
+        assert_eq!(chance.asked, [RELEASE_DRAW]);
+    }
+
+    #[test]
+    fn at_half_gain_a_paused_ship_is_released_on_a_0_below_its_half_gain_range() {
+        let half = SpeedMult::new(0.5);
+        let mut traffic = Traffic::with_interval(1);
+        let id = traffic.add_npc(paused_with(Kept::Coast));
+        let mut chance = Draws::of(&[]).keyed(release_draw(half), 0);
+        let world = World {
+            speed_mult: half,
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Recording::default(), world, &[], &mut chance);
+        assert_eq!(of(&traffic, id).goal, Goal::Idle);
+        assert_eq!(chance.times_asked(RELEASE_DRAW), 0);
+        assert_eq!(chance.times_asked(release_draw(half)), 1);
     }
 
     #[test]
