@@ -83,7 +83,9 @@ pub(super) fn carry_point(wrap: &PlayerWrap, at: &mut Point) {
 /// (`cmpl $0x20` @0x456bc).
 pub const MAX_PODS: usize = 32;
 /// The life, in ticks, from which a pod is drawn opaque (32.0 at 0xdd654).
-pub const POD_FADE: i32 = 32;
+pub const POD_FADE: f32 = 32.0;
+/// The steps of a pod's fade, the draw proc's 32 (`>> 5`).
+const FADE_STEPS: i32 = 32;
 /// A pod's least life (`Rand(100) + 150`, @0x4556e-0x45584).
 pub const POD_LIFE_MIN: u32 = 150;
 /// How many lives a pod can roll above [`POD_LIFE_MIN`].
@@ -96,8 +98,8 @@ pub struct Pod {
     pub at: Point,
     /// How far it moves a tick.
     pub velocity: Point,
-    /// The ticks it has left.
-    pub life: i32,
+    /// The ticks it has left, a float as the original keeps it (+0x14).
+    pub life: f32,
     /// The frame of shän 895's sheet it shows.
     pub frame: u16,
 }
@@ -106,22 +108,29 @@ impl Pod {
     /// How it is drawn: white at its alpha, or none at a life of 0 or less.
     #[must_use]
     pub fn tint(&self) -> Option<Color> {
-        match self.life {
-            ..=0 => None,
-            life if life >= POD_FADE => Some(Color::WHITE),
-            life => Some(Color::rgba(
+        if self.life >= POD_FADE {
+            Some(Color::WHITE)
+        } else if self.life > 0.0 {
+            // The translucency `trunc(32 - life)`, in 0..=31 here
+            // (@0x3a00a-0x3a024); the source's share is 32 less it.
+            #[allow(clippy::cast_possible_truncation)]
+            let murk = (POD_FADE - self.life).trunc() as i32;
+            let shown = FADE_STEPS - murk;
+            Some(Color::rgba(
                 255,
                 255,
                 255,
-                ((life * 255 + POD_FADE / 2) / POD_FADE) as u8,
-            )),
+                ((shown * 255 + FADE_STEPS / 2) / FADE_STEPS) as u8,
+            ))
+        } else {
+            None
         }
     }
 
     /// One step: it drifts by its velocity, and a tick comes off its life.
     fn step(&mut self) {
         self.at = Point::new(self.at.x + self.velocity.x, self.at.y + self.velocity.y);
-        self.life -= 1;
+        self.life -= 1.0;
     }
 }
 
@@ -170,7 +179,7 @@ impl EscapePods {
         let mut pod = Pod {
             at,
             velocity,
-            life: i32::try_from(life).unwrap_or(i32::MAX),
+            life: life as f32,
             frame,
         };
         pod.step();
@@ -189,7 +198,7 @@ impl EscapePods {
     pub fn step(&mut self) {
         self.pods.retain_mut(|pod| {
             pod.step();
-            pod.life >= 0
+            pod.life >= 0.0
         });
     }
 
@@ -326,16 +335,16 @@ mod tests {
         let [pod] = pods.pods()[..] else {
             panic!("one pod");
         };
-        assert_eq!(pod.life, 169, "170 less its first step");
+        assert_eq!(pod.life, 169.0, "170 less its first step");
         assert!((pod.velocity.x - 3.5).abs() < 1e-5, "{:?}", pod.velocity);
         assert!(pod.velocity.y.abs() < 1e-5);
         assert!((pod.at.x - 103.5).abs() < 1e-5, "one step on");
         assert_eq!(pod.frame, 9, "facing 90°: 9 of 36");
         let least = spawned(&[0, 0, 0]);
-        assert_eq!(least.pods()[0].life, 149);
+        assert_eq!(least.pods()[0].life, 149.0);
         assert!((least.pods()[0].velocity.y + 1.0).abs() < 1e-5, "1.0 up");
         let most = spawned(&[99, 180, 9]);
-        assert_eq!(most.pods()[0].life, 248);
+        assert_eq!(most.pods()[0].life, 248.0);
         assert!((most.pods()[0].velocity.y - 1.9).abs() < 1e-5, "1.9 down");
     }
 
@@ -347,7 +356,7 @@ mod tests {
         let after = pods.pods()[0];
         assert!((after.at.x - before.at.x - 3.5).abs() < 1e-5);
         assert_eq!(after.at.y, before.at.y);
-        assert_eq!(after.life, before.life - 1);
+        assert_eq!(after.life, before.life - 1.0);
         // Pushed straight down: it drifts down too.
         let mut down = spawned(&[20, 180, 5]);
         let before = down.pods()[0];
@@ -366,17 +375,17 @@ mod tests {
             alphas.push((pod.life, pod.tint().map(|tint| tint.a)));
             pods.step();
         }
-        assert_eq!(alphas.first(), Some(&(149, Some(255))));
+        assert_eq!(alphas.first(), Some(&(149.0, Some(255))));
         let at = |life| alphas.iter().find(|(l, _)| *l == life).map(|(_, a)| *a);
-        assert_eq!(at(32), Some(Some(255)), "opaque at 32");
-        assert_eq!(at(31), Some(Some(247)), "31/32");
-        assert_eq!(at(16), Some(Some(128)));
-        assert_eq!(at(1), Some(Some(8)), "1/32");
-        assert_eq!(at(0), Some(None), "held unseen at 0");
-        assert_eq!(alphas.last(), Some(&(0, None)), "then freed");
+        assert_eq!(at(32.0), Some(Some(255)), "opaque at 32");
+        assert_eq!(at(31.0), Some(Some(247)), "31/32");
+        assert_eq!(at(16.0), Some(Some(128)));
+        assert_eq!(at(1.0), Some(Some(8)), "1/32");
+        assert_eq!(at(0.0), Some(None), "held unseen at 0");
+        assert_eq!(alphas.last(), Some(&(0.0, None)), "then freed");
         let fading: Vec<u8> = alphas
             .iter()
-            .filter_map(|(life, alpha)| alpha.filter(|_| *life < 32))
+            .filter_map(|(life, alpha)| alpha.filter(|_| *life < 32.0))
             .collect();
         assert!(
             fading.windows(2).all(|pair| pair[0] > pair[1]),
@@ -453,7 +462,7 @@ mod tests {
         assert_eq!(blends(&pods), [(Color::WHITE, Blend::Normal)], "at 32");
         pods.step();
         let tint = pods.pods()[0].tint().expect("shown");
-        assert_eq!(pods.pods()[0].life, POD_FADE - 1);
+        assert_eq!(pods.pods()[0].life, POD_FADE - 1.0);
         assert_eq!(blends(&pods), [(tint, Blend::OrCrossfade)], "at 31");
         assert_eq!(tint.a, 247, "31/32");
     }
@@ -536,7 +545,7 @@ mod tests {
         for _ in 0..149 {
             pods.step();
         }
-        assert!(pods.pods().iter().all(|pod| pod.life == 0));
+        assert!(pods.pods().iter().all(|pod| pod.life == 0.0));
         pods.spawn(
             Point::new(0.0, 0.0),
             Point::new(0.0, 0.0),

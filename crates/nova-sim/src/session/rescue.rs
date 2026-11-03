@@ -1277,8 +1277,12 @@ mod tests {
         session.ship.fate.rescue_due = true;
         session.pilot.reinforcement_days =
             std::collections::BTreeMap::from([(died_in, 2), (SystemId(999), 3)]);
-        session.space.reinforcements.timers.insert(died_in, 12);
-        session.space.reinforcements.timers.insert(SystemId(999), 7);
+        session.space.reinforcements.timers.insert(died_in, 12.0);
+        session
+            .space
+            .reinforcements
+            .timers
+            .insert(SystemId(999), 7.0);
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(
             session.pilot.reinforcement_days.get(&died_in),
@@ -1292,7 +1296,7 @@ mod tests {
         );
         assert_eq!(
             session.space.reinforcements.timers.get(&SystemId(999)),
-            Some(&7)
+            Some(&7.0)
         );
     }
 

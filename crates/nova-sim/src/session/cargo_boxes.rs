@@ -330,7 +330,7 @@ mod tests {
             // back: the draws' first outcomes.
             assert!((made.position - Vec2::new(0.0, 20.0)).length() < 1e-5);
             assert!((made.velocity - Vec2::new(0.0, 0.3)).length() < 1e-6);
-            assert_eq!((made.life, made.frame, made.spin), (180.0, 0, -1));
+            assert_eq!((made.life, made.frame, made.spin), (180.0, 0.0, -1));
         }
     }
 
@@ -494,7 +494,7 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         let made = session.cargo_boxes()[0];
         assert!((made.position - Vec2::new(0.0, 20.3)).length() < 1e-5);
-        assert_eq!((made.life, made.frame), (179.0, 35));
+        assert_eq!((made.life, made.frame), (179.0, 35.0));
         for _ in 0..180 {
             work(&mut session, &catalog, Controls::default());
         }

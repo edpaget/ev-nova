@@ -756,7 +756,7 @@ mod tests {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             life: 100.0,
-            frame: 0,
+            frame: 0.0,
             spin: 0,
             graphic: 1,
             scoopable,

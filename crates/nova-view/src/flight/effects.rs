@@ -1148,7 +1148,7 @@ mod tests {
         assert_eq!(effects.pods().len(), 1);
         let life = effects.pods()[0].life;
         effects.step(&[], &scene(), &pod_looks(), &mut Script::default());
-        assert_eq!(effects.pods()[0].life, life - 1, "it steps with the rest");
+        assert_eq!(effects.pods()[0].life, life - 1.0, "it steps with the rest");
         let mut list = DrawList::new();
         effects.draw_pods(&mut list, &Camera::centred_on(PLAYER), &pod_looks(), CLEAR);
         assert!(

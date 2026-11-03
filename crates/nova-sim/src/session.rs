@@ -553,6 +553,7 @@ mod killed_explosions;
 mod land_key;
 mod land_on_stellar;
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod landed_work;
 mod landing_fee;
 mod last_refresh;

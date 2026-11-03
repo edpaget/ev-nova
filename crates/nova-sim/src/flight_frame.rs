@@ -2044,7 +2044,7 @@ impl FrameBox {
         Self {
             position: cargo_box.position,
             velocity: cargo_box.velocity,
-            frame: cargo_box.frame,
+            frame: cargo_box.drawn_frame(),
             fade: cargo_box.fade(),
             graphic: cargo_box.graphic,
         }

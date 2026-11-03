@@ -108,8 +108,10 @@ pub struct CargoBox {
     pub velocity: Vec2,
     /// The ticks left before it is gone.
     pub life: f32,
-    /// Its frame, in `[0, 36)`.
-    pub frame: u16,
+    /// Its spin frame, in `[0, 36)`, a float as the original keeps it
+    /// (+0x18): it gains its spin × the frame's gain a pass. It is drawn
+    /// at [`CargoBox::drawn_frame`].
+    pub frame: f32,
     /// How many frames it turns each tick: −1, 0 or +1.
     pub spin: i8,
     /// Which box graphic it is drawn with, `spïn` 500 + graphic: 0 for a
@@ -124,6 +126,16 @@ pub struct CargoBox {
 }
 
 impl CargoBox {
+    /// The frame it is drawn at, its spin frame truncated (`cvttss2si`
+    /// @0x2e1ae, handed to `_SWSetCurrentFrameIndex`).
+    #[must_use]
+    pub fn drawn_frame(&self) -> u16 {
+        // In [0, 36) once wrapped; a NaN or a far value saturates.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frame = self.frame.trunc() as u16;
+        frame
+    }
+
     /// How faded it is, 0 (not at all) to [`MAX_FADE`]: none with
     /// [`FADE_LIFE`] ticks or more left, else `min(trunc(32 − life), 31)`
     /// (@0x2e119-0x2e157).
@@ -223,7 +235,7 @@ impl CargoBoxes {
             return;
         }
         let life = f32::from(chance.roll(90) + 180);
-        let frame = chance.roll(FRAMES);
+        let frame = f32::from(chance.roll(FRAMES));
         let spin = spin_of(chance.roll(4));
         // The whole-degree heading, in [0, 360).
         #[allow(clippy::cast_possible_truncation)]
@@ -259,7 +271,7 @@ impl CargoBoxes {
             return;
         }
         let life = f32::from(chance.roll(SCOOPABLE_LIFE_SIDES) + SCOOPABLE_LIFE_BASE);
-        let frame = chance.roll(FRAMES);
+        let frame = f32::from(chance.roll(FRAMES));
         let spin = spin_of(chance.roll(4));
         let angle = i32::from(chance.roll(360));
         let kick = f64::from(chance.roll(SCOOPABLE_KICK_SIDES) + SCOOPABLE_KICK_BASE) * 0.2 * 0.01;
@@ -283,8 +295,7 @@ impl CargoBoxes {
     pub fn step(&mut self) {
         self.boxes.retain(|cargo_box| cargo_box.life >= 0.0);
         for cargo_box in &mut self.boxes {
-            cargo_box.frame =
-                (cargo_box.frame + FRAMES).wrapping_add_signed(cargo_box.spin.into()) % FRAMES;
+            cargo_box.frame = wrapped(cargo_box.frame + f32::from(cargo_box.spin));
             cargo_box.life -= 1.0;
             cargo_box.position = cargo_box.position + cargo_box.velocity;
         }
@@ -318,6 +329,22 @@ impl CargoBoxes {
     pub fn clear(&mut self) {
         self.boxes.clear();
     }
+}
+
+/// `frame` wrapped into `[0, 36)` as `_HandleBoxes` wraps it, by two
+/// float loops (@0x2e01e-0x2e06a): while it is 36.0 or more it loses 36.0
+/// (`ucomiss 36, f` / `jae`), then while it is below 0.0 it gains 36.0
+/// (`ucomiss f, 0` / `ja`). A NaN takes neither loop, so it stays
+/// unwrapped.
+fn wrapped(mut frame: f32) -> f32 {
+    let frames = f32::from(FRAMES);
+    while frame >= frames {
+        frame -= frames;
+    }
+    while frame < 0.0 {
+        frame += frames;
+    }
+    frame
 }
 
 /// A box's spin by its `Rand(4)` draw `roll`: −1, 0, 0 or +1.
@@ -395,7 +422,7 @@ mod tests {
             position,
             velocity: Vec2::new(0.5, -1.5),
             life: 10.0,
-            frame: 0,
+            frame: 0.0,
             spin: 0,
             graphic: 0,
             scoopable: false,
@@ -434,10 +461,10 @@ mod tests {
     fn a_box_rolls_its_life_frame_and_spin_over_their_ranges() {
         let ship = heading(0.0);
         for (life, frame, spin, expected) in [
-            (0, 0, 0, (180.0, 0, -1)),
-            (89, 35, 1, (269.0, 35, 0)),
-            (10, 7, 2, (190.0, 7, 0)),
-            (0, 0, 3, (180.0, 0, 1)),
+            (0, 0, 0, (180.0, 0.0, -1)),
+            (89, 35, 1, (269.0, 35.0, 0)),
+            (10, 7, 2, (190.0, 7.0, 0)),
+            (0, 0, 3, (180.0, 0.0, 1)),
         ] {
             let mut chance = rolls(life, frame, spin, 0, 0, 0);
             let made = spawned(&ship, Some(40.0), &mut chance);
@@ -525,7 +552,7 @@ mod tests {
         assert!(made.scoopable);
         assert_eq!((made.contents, made.graphic), (Some(1003), 3));
         assert_eq!(made.position, Vec2::new(30.0, -40.0));
-        assert_eq!(made.frame, 7);
+        assert_eq!(made.frame, 7.0);
     }
 
     #[test]
@@ -573,7 +600,7 @@ mod tests {
         }
     }
 
-    fn one(life: f32, frame: u16, spin: i8) -> CargoBoxes {
+    fn one(life: f32, frame: f32, spin: i8) -> CargoBoxes {
         CargoBoxes {
             boxes: vec![CargoBox {
                 position: Vec2::new(10.0, 20.0),
@@ -590,10 +617,10 @@ mod tests {
 
     #[test]
     fn a_step_turns_ages_and_moves_each_box() {
-        let mut boxes = one(100.0, 7, 1);
+        let mut boxes = one(100.0, 7.0, 1);
         boxes.step();
         let stepped = boxes.boxes()[0];
-        assert_eq!(stepped.frame, 8);
+        assert_eq!(stepped.frame, 8.0);
         assert_eq!(stepped.life, 99.0);
         assert_eq!(stepped.position, Vec2::new(10.5, 18.5));
         assert_eq!(stepped.velocity, Vec2::new(0.5, -1.5));
@@ -601,25 +628,25 @@ mod tests {
 
     #[test]
     fn the_frame_wraps_both_ways_and_a_still_box_keeps_it() {
-        let mut boxes = one(100.0, 35, 1);
+        let mut boxes = one(100.0, 35.0, 1);
         boxes.step();
-        assert_eq!(boxes.boxes()[0].frame, 0);
-        let mut boxes = one(100.0, 0, -1);
+        assert_eq!(boxes.boxes()[0].frame, 0.0);
+        let mut boxes = one(100.0, 0.0, -1);
         boxes.step();
-        assert_eq!(boxes.boxes()[0].frame, 35);
-        let mut boxes = one(100.0, 12, 0);
+        assert_eq!(boxes.boxes()[0].frame, 35.0);
+        let mut boxes = one(100.0, 12.0, 0);
         boxes.step();
-        assert_eq!(boxes.boxes()[0].frame, 12);
+        assert_eq!(boxes.boxes()[0].frame, 12.0);
     }
 
     #[test]
     fn a_box_is_gone_on_the_step_after_its_life_falls_below_0() {
-        let mut boxes = one(0.5, 0, 0);
+        let mut boxes = one(0.5, 0.0, 0);
         boxes.step();
         assert_eq!(boxes.boxes()[0].life, -0.5, "still shown");
         boxes.step();
         assert!(boxes.boxes().is_empty());
-        let mut boxes = one(0.0, 0, 0);
+        let mut boxes = one(0.0, 0.0, 0);
         boxes.step();
         assert_eq!(boxes.boxes().len(), 1, "a life of exactly 0 steps on");
     }
@@ -648,14 +675,14 @@ mod tests {
             (0.5, 31),
             (-0.5, 31),
         ] {
-            assert_eq!(one(life, 0, 0).boxes()[0].fade(), fade, "{life}");
+            assert_eq!(one(life, 0.0, 0).boxes()[0].fade(), fade, "{life}");
         }
     }
 
     /// A table of a jettisoned box at the origin, then scoopable boxes
     /// of graphic 1 holding each of `contents` at each of `at`.
     fn with_scoopable(at: &[(f32, f32)], contents: &[i16]) -> CargoBoxes {
-        let mut boxes = one(100.0, 0, 0);
+        let mut boxes = one(100.0, 0.0, 0);
         boxes.boxes[0].position = Vec2::ZERO;
         for (&(x, y), &held) in at.iter().zip(contents) {
             boxes.spawn_scoopable(Vec2::new(x, y), Some(held), 1, &mut Scripted::default());
@@ -666,7 +693,7 @@ mod tests {
     #[test]
     fn only_a_scoopable_box_makes_the_table_scoopable() {
         assert!(!CargoBoxes::default().any_scoopable());
-        assert!(!one(100.0, 0, 0).any_scoopable(), "a jettisoned box");
+        assert!(!one(100.0, 0.0, 0).any_scoopable(), "a jettisoned box");
         assert!(with_scoopable(&[(50.0, 0.0)], &[1]).any_scoopable());
     }
 
@@ -713,7 +740,7 @@ mod tests {
 
     #[test]
     fn clearing_empties_the_table() {
-        let mut boxes = one(100.0, 0, 0);
+        let mut boxes = one(100.0, 0.0, 0);
         boxes.clear();
         assert!(boxes.boxes().is_empty());
     }

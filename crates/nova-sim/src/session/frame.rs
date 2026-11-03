@@ -770,13 +770,13 @@ pub(super) mod tests {
         let frame = filled(&session);
         let spawned = &session.cargo_boxes()[0];
         assert_ne!(spawned.velocity, spawned.position);
-        assert_ne!(spawned.frame, spawned.graphic);
+        assert_ne!(spawned.drawn_frame(), spawned.graphic);
         assert_eq!(
             frame.cargo_boxes,
             [FrameBox {
                 position: Vec2::new(30.0, -40.0),
                 velocity: spawned.velocity,
-                frame: spawned.frame,
+                frame: spawned.drawn_frame(),
                 fade: spawned.fade(),
                 graphic: 5,
             }]

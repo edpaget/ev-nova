@@ -91,11 +91,12 @@ pub const INHIBITOR: i16 = 44;
 pub const EVERY_GOVERNMENT: i16 = -1;
 
 /// The session's reinforcement state (see the module docs).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Reinforcements {
     /// Each system's timer (+0xc8), the ticks until its called fleet
-    /// comes; a system not listed reads 0, none coming.
-    pub(super) timers: BTreeMap<SystemId, i32>,
+    /// comes, a float as the original keeps it; a system not listed reads
+    /// 0, none coming.
+    pub(super) timers: BTreeMap<SystemId, f32>,
     /// The global inhibitor (`*0x3b510c`).
     pub(super) every_government: bool,
     /// The governments inhibited (+0x82).
@@ -118,7 +119,7 @@ impl Session {
                 .timers
                 .get(&system)
                 .copied()
-                .unwrap_or(0),
+                .unwrap_or(0.0),
             countdown: self
                 .pilot
                 .reinforcement_days
@@ -234,7 +235,7 @@ impl Space {
     /// Sets the clock of the player's system to `clock`.
     fn set_clock_here(&mut self, pilot: &mut Pilot, clock: Clock) {
         let system = pilot.system;
-        if clock.timer == 0 {
+        if clock.timer == 0.0 {
             self.reinforcements.timers.remove(&system);
         } else {
             self.reinforcements.timers.insert(system, clock.timer);
@@ -312,4 +313,5 @@ impl Chart {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 pub(super) mod tests;

@@ -143,14 +143,14 @@ impl Fleet {
 }
 
 /// The timer an arrival leaves (-1.0 @0x390e9): not running.
-pub const ARRIVED: i32 = -1;
+pub const ARRIVED: f32 = -1.0;
 
 /// A system's reinforcement clock (see the module docs).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Clock {
-    /// The ticks until a called fleet arrives (+0xc8); 0 or below when
-    /// none is coming.
-    pub timer: i32,
+    /// The ticks until a called fleet arrives (+0xc8), a float as the
+    /// original keeps it; 0 or below when none is coming.
+    pub timer: f32,
     /// The days until the fleet can be called again (+0xc4).
     pub countdown: u16,
 }
@@ -161,7 +161,7 @@ impl Clock {
     /// `_InterceptorAI` @0x8d24b).
     #[must_use]
     pub fn coming(self) -> bool {
-        self.timer > 0
+        self.timer > 0.0
     }
 
     /// The clock after the call answered `called`: marked, the countdown
@@ -171,7 +171,9 @@ impl Clock {
         match called {
             Called::No => {}
             Called::Marked => self.countdown = 1,
-            Called::Coming(ticks) => self.timer = ticks,
+            // `cvtsi2ss` of the `ReinfTime` (@0x7f6fc-0x7f70c).
+            #[allow(clippy::cast_precision_loss)]
+            Called::Coming(ticks) => self.timer = ticks as f32,
         }
     }
 }
@@ -246,7 +248,7 @@ pub fn call(facts: &ReinforcementFacts) -> Called {
     };
     let clock = facts.clock;
     let strong = facts.odds > STRENGTH_SHARE * facts.fleet_max_odds;
-    if clock.timer > 0
+    if clock.timer > 0.0
         || clock.countdown > 0
         || facts.odds <= 0.0
         || !facts.allied
@@ -280,20 +282,21 @@ pub enum Event {
 /// the module docs).
 pub fn tick(clock: &mut Clock, fleet: Option<Fleet>, named: bool) -> Option<Event> {
     let fleet = fleet?;
-    if clock.timer <= 0 {
+    if clock.timer > 0.0 {
+        clock.timer -= 1.0;
+    } else {
         return None;
     }
-    clock.timer -= 1;
-    if clock.timer <= 0 {
+    if clock.timer <= 0.0 {
         clock.timer = ARRIVED;
         clock.countdown = fleet.interval_days();
         return Some(Event::Arrive);
     }
-    if f64::from(clock.timer) >= f64::from(fleet.time) * ANNOUNCE_SHARE || clock.countdown > 0 {
-        return None;
+    if f64::from(fleet.time) * ANNOUNCE_SHARE > f64::from(clock.timer) && clock.countdown == 0 {
+        clock.countdown = fleet.interval_days();
+        return named.then_some(Event::Announce);
     }
-    clock.countdown = fleet.interval_days();
-    named.then_some(Event::Announce)
+    None
 }
 
 /// A system's countdown after a day, `countdown` before it: one less,
@@ -509,7 +512,7 @@ mod tests {
         assert_eq!(
             clock,
             Clock {
-                timer: 900,
+                timer: 900.0,
                 countdown: 0
             }
         );
@@ -523,7 +526,7 @@ mod tests {
         let failing: [(&str, Failing); 8] = [
             ("no government", |f| f.has_govt = false),
             ("no fleet", |f| f.fleet = None),
-            ("a fleet coming", |f| f.clock.timer = 1),
+            ("a fleet coming", |f| f.clock.timer = 1.0),
             ("called lately", |f| f.clock.countdown = 1),
             ("no odds", |f| f.odds = 0.0),
             ("odds of -1", |f| f.odds = -1.0),
@@ -553,7 +556,7 @@ mod tests {
         odd_less.odds = 0.0;
         assert_eq!(call(&odd_less), Called::No, "still above 0");
         let mut coming = weak;
-        coming.clock.timer = 5;
+        coming.clock.timer = 5.0;
         assert_eq!(call(&coming), Called::No, "still idle");
     }
 
@@ -582,7 +585,7 @@ mod tests {
             assert_eq!(
                 clock,
                 Clock {
-                    timer: 0,
+                    timer: 0.0,
                     countdown: 1
                 },
                 "no timer"
@@ -596,14 +599,14 @@ mod tests {
     #[test]
     fn nothing_answered_leaves_the_clock() {
         let mut clock = Clock {
-            timer: 3,
+            timer: 3.0,
             countdown: 2,
         };
         clock.answer(Called::No);
         assert_eq!(
             clock,
             Clock {
-                timer: 3,
+                timer: 3.0,
                 countdown: 2
             }
         );
@@ -645,7 +648,7 @@ mod tests {
         assert_eq!(
             clock,
             Clock {
-                timer: 224,
+                timer: 224.0,
                 countdown: 2
             }
         );
@@ -685,7 +688,7 @@ mod tests {
         for time in [0, -5] {
             let (events, clock) = run(time, true, 10);
             assert_eq!(events, [], "{time}");
-            assert_eq!(clock.timer, i32::from(time));
+            assert_eq!(clock.timer, f32::from(time));
             assert!(!clock.coming());
         }
     }
@@ -693,12 +696,12 @@ mod tests {
     #[test]
     fn with_no_fleet_or_the_timer_idle_nothing_happens() {
         let mut clock = Clock {
-            timer: 10,
+            timer: 10.0,
             countdown: 0,
         };
         assert_eq!(tick(&mut clock, None, true), None);
-        assert_eq!(clock.timer, 10, "no fleet: the timer stands");
-        for timer in [0, ARRIVED] {
+        assert_eq!(clock.timer, 10.0, "no fleet: the timer stands");
+        for timer in [0.0, ARRIVED] {
             let mut idle = Clock {
                 timer,
                 countdown: 0,
@@ -717,7 +720,7 @@ mod tests {
     #[test]
     fn a_countdown_already_set_holds_the_announcement() {
         let mut clock = Clock {
-            timer: 10,
+            timer: 10.0,
             countdown: 1,
         };
         let fleet = Fleet { time: 100, ..FLEET };
@@ -725,7 +728,7 @@ mod tests {
         assert_eq!(
             clock,
             Clock {
-                timer: 9,
+                timer: 9.0,
                 countdown: 1
             }
         );
@@ -763,14 +766,14 @@ mod tests {
     fn a_coming_fleet_is_one_whose_timer_runs() {
         assert!(
             Clock {
-                timer: 1,
+                timer: 1.0,
                 countdown: 0
             }
             .coming()
         );
         assert!(
             !Clock {
-                timer: 0,
+                timer: 0.0,
                 countdown: 0
             }
             .coming()

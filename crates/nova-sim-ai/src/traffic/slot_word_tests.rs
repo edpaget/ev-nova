@@ -661,7 +661,7 @@ fn on_the_second_pass_a_miners_0x14_ease_and_nudge_and_0x15_brake_dont_run() {
         position: Vec2::new(2000.0, 0.0),
         velocity: Vec2::ZERO,
         life: 100.0,
-        frame: 0,
+        frame: 0.0,
         spin: 0,
         graphic: 1,
         scoopable: true,

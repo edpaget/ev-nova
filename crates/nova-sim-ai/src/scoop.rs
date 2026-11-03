@@ -258,7 +258,7 @@ impl Scooping<'_> {
         let offset = cargo_box.position - self.camera;
         let held = PlacedMask {
             sheet: Rc::clone(sheet),
-            frame: cargo_box.frame,
+            frame: cargo_box.drawn_frame(),
             rect: Placement::CargoBox.rect(offset, (sheet.width, sheet.height)),
         };
         ship.touches(&held, self.walk)
