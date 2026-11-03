@@ -319,6 +319,7 @@ mod tests {
         let hidden = offers.answered().expect("kept");
         assert_eq!(drawn(hidden), [], "hidden");
         offers.release_answered(true);
+        assert_eq!(offers.take_unclaimed(), [], "the answer's Z waits too");
         assert!(offers.input(&press(Key::Char('x')), &mut Vec::new()));
         offers.input(&release(I), &mut Vec::new());
         assert_eq!(
