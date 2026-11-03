@@ -445,3 +445,94 @@ fn an_inertialess_ship_under_its_ai_wait_leaves_its_break_off_beyond_165() {
         .and_then(|frame| frame.last());
     assert_eq!(last.map(|body| body.manoeuvre), Some(Manoeuvre::Approach));
 }
+
+/// A traffic of a traders' interceptor at the centre in `mode`, of `goal`,
+/// and a pirate warship, the traders' enemy, with no AI, 200 above it: the
+/// interceptor and the pirate.
+fn interceptor_and_pirate(mode: Mode, goal: Goal) -> (Traffic, NpcId, NpcId) {
+    let mut traffic = Traffic::with_interval(1);
+    let mut pirate = ship(0, PIRATES, AiType::Warship, 0.0, 200.0);
+    pirate.no_ai = true;
+    let pirate = traffic.add_npc_at(pirate, 2);
+    let mut cop = ship(0, TRADERS, AiType::Interceptor, 0.0, 0.0);
+    cop.mode = mode;
+    cop.goal = goal;
+    cop.emerges_from = Some(GATE);
+    let cop = traffic.add_npc_at(cop, 1);
+    (traffic, cop, pirate)
+}
+
+/// `_AIDispatch` skips the type AI for goal 0x15 (@0x8ff18-0x8ff20 →
+/// @0x9001f), so an emerging interceptor never reaches `_InterceptorAI`'s
+/// search ([`decides_in`](super::waiting_think::decides_in)). Were it to
+/// think, its search would still be shut, as its emerge is a wait
+/// ([`Npc::wait_running`]): breaking `decides_in` alone doesn't fail this
+/// test, breaking it with the search gate does. It pins the dispatch skip
+/// all the same.
+#[test]
+fn an_interceptor_waiting_in_its_gate_searches_nothing() {
+    let govts = govts(0, 0);
+    let sites = [gate()];
+    let (mut traffic, cop, _) =
+        interceptor_and_pirate(Mode::Emerging { ticks_left: 10.0 }, Goal::Idle);
+    for tick in 0..5 {
+        traffic.tick_in(
+            &NovaAi::default(),
+            world(&sites, &govts),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, cop);
+        assert_eq!(ship.goal, Goal::Idle, "tick {tick}");
+        assert_eq!(ship.target, None, "tick {tick}");
+        assert!(
+            matches!(ship.mode, Mode::Emerging { .. }),
+            "tick {tick}: {:?}",
+            ship.mode
+        );
+    }
+}
+
+/// Held at its gate the emerge's +0x4c = 60.0 (@0x8954e) still runs
+/// (`_HandleShip` @0x3502a-0x35048), so `_InterceptorAI`'s search, which
+/// needs +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f), stays shut until
+/// the hold runs out.
+#[test]
+fn an_interceptor_held_at_its_gate_searches_nothing_until_its_hold_runs_out() {
+    let govts = govts(0, 0);
+    let sites = [gate()];
+    let (mut traffic, cop, pirate) =
+        interceptor_and_pirate(Mode::HeldAtGate { ticks_left: 3.0 }, Goal::Idle);
+    let mut held = 0;
+    while matches!(of(&traffic, cop).mode, Mode::HeldAtGate { .. }) {
+        assert!(held < 10, "the hold runs out");
+        traffic.tick_in(
+            &NovaAi::default(),
+            world(&sites, &govts),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, cop);
+        if matches!(ship.mode, Mode::HeldAtGate { .. }) {
+            assert_eq!(ship.goal, Goal::Idle, "tick {held}: no search");
+            assert_eq!(ship.target, None, "tick {held}");
+            assert_fire_held(&traffic, cop);
+        }
+        held += 1;
+    }
+    // The engine may search a tick after the original's first unwaited
+    // dispatch: a lag no player sees, so it isn't filed (CLAUDE.md,
+    // "Ordering against the original").
+    for _ in 0..2 {
+        if of(&traffic, cop).goal != Goal::Idle {
+            break;
+        }
+        traffic.tick_in(
+            &NovaAi::default(),
+            world(&sites, &govts),
+            &[],
+            &mut NeverFires,
+        );
+    }
+    assert_eq!(of(&traffic, cop).goal, Goal::Attack(n(pirate.0)));
+}

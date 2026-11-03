@@ -89,10 +89,14 @@
 //!   government's word lifts it.
 //! - **Under a wait** the block is shut too: it runs only with +0x4c at
 //!   most 0 (@0x8cc6d-0x8cc8d → @0x8d13f, [`search_shut`]), so an
-//!   interceptor holding its course, entering a gate or flying out its AI
-//!   wait keeps its goal and searches, inspects and patrols nothing, as
-//!   `_AIDispatch` runs its think through the wait
-//!   ([`waiting_think`](crate::traffic::waiting_think)). Its provoked
+//!   interceptor holding its course, entering a gate, held at its gate or
+//!   flying out its AI wait keeps its goal and searches, inspects and
+//!   patrols nothing, as `_AIDispatch` runs its think through the wait
+//!   ([`waiting_think`](crate::traffic::waiting_think)). Held, the emerge's
+//!   +0x4c = 60.0 (@0x8954e) runs on through the hold (`_HandleShip`
+//!   @0x3502a-0x35048), so it searches only once the hold runs out. An
+//!   emerging ship never reaches the think (`_AIDispatch` @0x8ff18 →
+//!   @0x9001f, `decides_in`). Its provoked
 //!   branch, its government's word, its retreats and its out-of-ammo
 //!   flight still run.
 //! - **Goal 4** ([`held_attack`](super::held_attack)): provoked with a
@@ -271,10 +275,14 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
 /// Whether `npc`'s search, inspection and patrol are shut among `around`:
 /// its goal closes the gate ([`gate_closed`]), or its wait runs. The block
 /// runs only with +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f), the wait a
-/// ship holding its course or entering a gate runs in its mode too
-/// ([`Npc::wait_running`]), so under a wait it answers only a provoker
+/// ship holding its course, entering a gate or held at its gate
+/// ([`Mode::HeldAtGate`], the emerge's +0x4c running on) runs in its mode
+/// too ([`Npc::wait_running`]), so under a wait it answers only a provoker
 /// (@0x8cbf6-0x8cc31), its government's word (@0x8cb66-0x8cb9d), its
-/// retreats and its out-of-ammo flight (@0x8d391).
+/// retreats and its out-of-ammo flight (@0x8d391). A hold made on a wait
+/// already out (`HeldAtGate { ticks_left: 0.0 }`) carries goal 4, 0x13 or
+/// 0xb, or a disabled ship, so the goal test (@0x8cc6d-0x8cc7d) shuts it
+/// anyway.
 #[must_use]
 pub fn search_shut(npc: &Npc, around: &Surroundings) -> bool {
     gate_closed(npc, around) || npc.wait_running()
@@ -664,8 +672,10 @@ mod tests {
     }
 
     /// `npc` waiting each way a wait runs: holding its course, entering a
-    /// gate, and flying with its AI wait (+0x4c) above 0.
-    fn waiting_each_way(npc: &Npc) -> [Npc; 3] {
+    /// gate, flying with its AI wait (+0x4c) above 0, and held at its gate,
+    /// where the emerge's +0x4c = 60.0 (@0x8954e) runs on through the hold
+    /// (`_HandleShip` @0x3502a-0x35048).
+    fn waiting_each_way(npc: &Npc) -> [Npc; 4] {
         [
             Npc {
                 mode: Mode::Coasting { ticks_left: 5.0 },
@@ -680,6 +690,11 @@ mod tests {
             },
             Npc {
                 ai_wait: 5.0,
+                ..npc.clone()
+            },
+            Npc {
+                mode: Mode::HeldAtGate { ticks_left: 5.0 },
+                ai_wait: 0.0,
                 ..npc.clone()
             },
         ]
