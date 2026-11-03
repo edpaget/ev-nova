@@ -358,3 +358,43 @@ mod tests {
         assert!(offers.answered().is_some(), "no wait, kept");
     }
 }
+
+#[cfg(test)]
+mod timer_tests {
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::super::fixture;
+    use super::*;
+    use crate::input::Key;
+    use crate::text::fixture::MonoMetrics;
+    use crate::ui::button::ButtonStyle;
+
+    fn key(key: Key, pressed: bool) -> Input {
+        Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn the_venue_asks_for_no_offer_while_an_answer_waits_for_i() {
+        let mut offers = VenueOffers::asking(fixture::templates());
+        assert!(offers.take_request());
+        offers.open(fixture::prompt(), Rc::new(MonoMetrics), ButtonStyle::STOCK);
+        offers.input(&key(Key::Char('n'), true), &mut Vec::new());
+        assert!(offers.take_choice().is_some());
+        offers.release_answered(true);
+        offers.rearm(Duration::from_millis(100));
+        offers.tick(Duration::from_millis(200), false);
+        assert!(!offers.take_request(), "not while it waits");
+        assert!(offers.dialog().is_none());
+        offers.input(&key(MISSION_INFO_KEY, false), &mut Vec::new());
+        offers.tick(Duration::from_millis(1), false);
+        assert!(
+            offers.take_request(),
+            "the deadline counted on: asked at once"
+        );
+    }
+}

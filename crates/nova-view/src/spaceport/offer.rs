@@ -1036,7 +1036,11 @@ impl VenueOffers {
         } else {
             self.tick_dialog(dt);
         }
-        let covered = covered || self.dialog.is_some();
+        // An answer waiting for I's release covers the venue too: the
+        // filter's deadline check can't run while `_OfferOneMission` spins
+        // in its wait (@0xa35fc-0xa3614), though the deadline, a tick
+        // count, runs on (the `close` module).
+        let covered = covered || self.dialog.is_some() || self.answer_waits();
         if covered && self.clock == RuleSource::Bible {
             return;
         }
