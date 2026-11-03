@@ -401,6 +401,86 @@ mod wired {
         );
     }
 
+    /// One `_HandleShot` over [`plunder_scene`], P in berth 5 and V in
+    /// berth 2, with the two shots set: P's spent shell in slot 1 at V,
+    /// which releases two blasters on its expiry (@0x35f49) and then
+    /// detonates, its blast of 25 mass and 10 energy disabling V (5 armour
+    /// of 30 left); and, when `locks`, the player's homing missile in slot
+    /// 0 making its lock on P this visit (@0x35855), or else a blaster far
+    /// off. The session after, P, V, and the disable-only flags of P's
+    /// sub-munitions.
+    fn one_shot_loop(locks: bool) -> (Session, NpcId, NpcId, Vec<bool>) {
+        use crate::combat::projectile::LOCK_AGE;
+        use crate::combat::weapon::{Guidance, Submunitions};
+        let catalog = crate::session::tests::armed();
+        let (mut session, pirate, quarry) = plunder_scene(&catalog, 5, 2);
+        let p = ShipRef::Npc(pirate);
+        let quarry_at = session.space.npc(quarry).expect("there").state.position;
+        let far = Vec2::new(-3000.0, -3000.0);
+        let step = Vec2::new(10.0, 0.0);
+        let shots = session.space.combat.shots_mut();
+        assert_eq!(
+            shots.iter().map(|shot| shot.slot).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        let missile = &mut shots[0];
+        missile.moved_from = Some(far - step);
+        missile.position = far;
+        if locks {
+            missile.weapon.guidance = Guidance::Homing;
+            missile.weapon.lifetime = LOCK_AGE * 2;
+            missile.age = LOCK_AGE;
+            missile.aimed_at = Some(p);
+            missile.target = Some(p);
+        }
+        let shell = &mut shots[1];
+        let sub = shell.weapon.id;
+        shell.firer = p;
+        shell.fleet = p;
+        shell.firer_slot = Some(crate::ship_layer::Slot::Berth(5));
+        shell.weapon.submunitions = Some(Submunitions {
+            weapon: sub,
+            count: 2,
+            theta: 0,
+            limit: None,
+        });
+        shell.weapon.flags |= crate::combat::weapon::DETONATES;
+        shell.weapon.blast_radius = 40.0;
+        shell.weapon.mass_damage = 25.0;
+        shell.weapon.energy_damage = 10.0;
+        shell.moved_from = Some(quarry_at - step);
+        shell.position = quarry_at;
+        shell.age = shell.weapon.lifetime;
+        let pass = GamePass::Advance { double_time: false };
+        session.shots_phase(&NovaAi::default(), pass, Rules::default(), &mut NeverFires);
+        let released = session
+            .shots()
+            .iter()
+            .filter(|shot| shot.firer == p && shot.weapon.id == sub)
+            .map(|shot| shot.disable_only)
+            .collect();
+        (session, pirate, quarry, released)
+    }
+
+    #[test]
+    fn a_later_slots_sub_munitions_read_their_owner_as_the_locks_answer_left_it() {
+        // The lock's `_DamageShip` (@0x35855) answers before slot 1's end
+        // of life (@0x35f49): `_AIMakeShipAttackPlayer` (@0x89d4d, goal 0xd
+        // to 4 @0x89d3e) has turned P, so `_SpawnShot` (@0x3ea1b) reads it
+        // no longer plundering.
+        let (session, pirate, quarry, released) = one_shot_loop(true);
+        let npc = session.space.npc(pirate).expect("there");
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.goal.plundering(), None);
+        assert_eq!(released, [false, false]);
+        // The blast after the lock lands in the last stretch, which the
+        // phase's own settle raises V's fate for.
+        assert_eq!(fates_of(&session, quarry), [crate::story::Fate::Disabled]);
+        let (session, _, quarry, released) = one_shot_loop(false);
+        assert_eq!(released, [true, true], "P still plunders");
+        assert_eq!(fates_of(&session, quarry), [crate::story::Fate::Disabled]);
+    }
+
     #[test]
     fn the_last_stretch_settles_a_blast_its_stop_left_to_come() {
         // The player's bomb hits E, and the walk stops there; its blast

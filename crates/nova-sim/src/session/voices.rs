@@ -1247,6 +1247,91 @@ pub(super) mod tests {
         assert_eq!(said(&mut session, 2), Some(4), "lost after");
     }
 
+    /// One pass's collision passes, each direct hit answered by Nova's AI
+    /// before the next, over [`attacking`]'s warship escort S, attacking a
+    /// far ship Z, and the victim E disabled 150 below S, so walked after
+    /// it (`_escortLayer`, then `_disabledLayer`): the player's two shots
+    /// set on their last moves, the second ending on E and finishing it,
+    /// the first, when `e_fires`, made E's, ending on S. The set of the
+    /// victory queued on the voice channel, if any.
+    fn victory_after_an_answer(e_fires: bool) -> Option<u8> {
+        use crate::geometry::Vec2;
+        let catalog = armed_voiced();
+        let (mut session, victim) = attacking(&catalog, &[WARSHIP]);
+        let crate::combat::ShipRef::Npc(e) = victim else {
+            panic!("an NPC")
+        };
+        let far = Vec2::new(5000.0, 5000.0);
+        session.space.npc_mut(e).expect("there").state.position = far;
+        session.hold_fire(true, false);
+        for _ in 0..10 {
+            if session.shots().len() >= 2 {
+                break;
+            }
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut NeverFires,
+            );
+        }
+        assert_eq!(session.shots().len(), 2, "fired");
+        session.hold_fire(false, false);
+        let mut quarry = crate::testkit::npc(0, ShipStats::default());
+        quarry.state.position = Vec2::new(-5000.0, -5000.0);
+        let z = session.space.traffic.add_npc_at(quarry, 9);
+        let z = crate::combat::ShipRef::Npc(z);
+        let s = escort_npc(&mut session, 0);
+        s.goal = Goal::Attack(z);
+        s.target = Some(z);
+        let s_at = Vec2::new(400.0, 0.0);
+        s.state.position = s_at;
+        let s = s.id;
+        let e_at = s_at + Vec2::new(0.0, 150.0);
+        let npc = session.space.npc_mut(e).expect("there");
+        npc.state.position = e_at;
+        npc.condition = crate::combat::hull::Condition::Disabled;
+        session.prepare_all_sprites();
+        let step = Vec2::new(10.0, 0.0);
+        let shots = session.space.combat.shots_mut();
+        let (first, second) = shots.split_at_mut(1);
+        let (first, second) = (&mut first[0], &mut second[0]);
+        if e_fires {
+            first.firer = victim;
+            first.fleet = victim;
+            first.aimed_at = Some(crate::combat::ShipRef::Npc(s));
+            first.moved_from = Some(s_at - step);
+            first.position = s_at;
+        } else {
+            let off = Vec2::new(-3000.0, 3000.0);
+            first.moved_from = Some(off - step);
+            first.position = off;
+        }
+        second.aimed_at = Some(victim);
+        second.moved_from = Some(e_at - step);
+        second.position = e_at;
+        session.space.voice = crate::voice::VoiceChannel::default();
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        let ai = crate::ai::NovaAi::default();
+        session.collision_passes(&ai, pass, Rules::default(), &mut NeverFires);
+        let e = session.space.npc(e).expect("there until the take-out");
+        assert!(e.condition.dying_or_destroyed(e.reserves.armor), "{e:?}");
+        session.space.voice.pending().and_then(|speech| speech.set)
+    }
+
+    #[test]
+    fn an_escort_an_earlier_hit_of_the_pass_turned_on_the_victim_says_the_victory() {
+        // `_HandleShipHit`'s victory reads the speaker's +0x70 and goal
+        // live (@0x36cd2, `_IsShipAttacking` @0x36ce5) after the finishing
+        // hit's `_DamageShip` (@0x36c7a): E's earlier hit on S, answered
+        // before it, set S's target to E (@0x3bcf6) and left its goal
+        // attacking Z.
+        assert_eq!(victory_after_an_answer(true), Some(3), "S targets E");
+        assert_eq!(victory_after_an_answer(false), None, "S targets Z");
+    }
+
     #[test]
     fn a_victory_overwrites_a_command_given_before_the_pass() {
         let catalog = armed_voiced();
