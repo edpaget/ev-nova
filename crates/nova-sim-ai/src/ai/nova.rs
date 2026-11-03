@@ -285,8 +285,7 @@ impl NovaAi {
     /// `_AIDispatch` @0x8ff9b-0x90016), so a bribed one (+0x88 1,
     /// `_DoCommDialog` @0x961f8) thinks as a wimpy trader with its parent
     /// kept and fires nothing unprovoked (`_AIEscortFireUnprovoked`
-    /// @0x80e59), and a fighter the player carries but doesn't lead
-    /// thinks as its type; by its other reading the carried fighters' for
+    /// @0x80e59); by its other reading the carried fighters' for
     /// one an NPC launched and its own AI type's for a led ship; the
     /// pirate's for a leaderless warship of a government with `Flags`
     /// 0x1000 ([`PLUNDERS`], `_AIDispatch` @0x8ffc8-0x8fff0); otherwise
@@ -1043,12 +1042,16 @@ mod tests {
     }
 
     #[test]
-    fn by_default_a_fighter_the_player_carries_but_does_not_lead_thinks_as_its_type() {
+    fn by_default_a_fighter_the_player_lost_thinks_as_its_type() {
         // Its class's `InherentAI` (`_DamageShip` @0x3b0d7), at most 4, so
-        // `_AIDispatch` calls its type's think, not `_EscortAI` (@0x90016).
+        // `_AIDispatch` calls its type's think, not `_EscortAI` (@0x90016):
+        // `Session::unfleet` takes it off its carrier, as a ship the player
+        // still carries reads 5.
         let (ai, marks, [fighters, fleet]) = fleet_marked(&Rulebook::default());
         for (ai_type, mark) in TYPES.into_iter().zip(&marks) {
-            let npcs = [carried(of(10, ai_type), ShipRef::Player)];
+            let mut lost = carried(of(10, ai_type), ShipRef::Player);
+            lost.leave_carrier();
+            let npcs = [lost];
             let around = Surroundings::new(&[], &npcs);
             assert_eq!(routed(&ai, &npcs[0], &around), all_of(mark), "{ai_type:?}");
         }
