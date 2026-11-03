@@ -821,7 +821,7 @@ mod tests {
         assert!(!held(&ship), "a count wait thrusts on");
         ship.goal = crate::ai::Goal::Idle;
         ship.ai_wait = 0.0;
-        ship.mode = Mode::Adrift { ticks_left: 50 };
+        ship.mode = Mode::Adrift { ticks_left: 50.0 };
         assert!(!held(&ship), "an escape pod");
         ship.mode = Mode::Coasting { ticks_left: 3.0 };
         assert!(held(&ship));

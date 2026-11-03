@@ -313,7 +313,7 @@ fn a_released_ship_braking_to_a_stop_bursts_out_along_its_retro_heading() {
     // alone: a wait (state 6, @0x8f101) and a search for a target lost
     // from sight (@0x8d814).
     let mut searching = released(Goal::Attack(ShipRef::Player), at(0.0, 0.0, 2.0, 0.0, 270.0));
-    searching.lost_sight = SearchTimer::Searching(10);
+    searching.lost_sight = SearchTimer::Searching(10.0);
     for mut npc in [
         released(Goal::Wait, at(0.0, 0.0, 2.0, 0.0, 270.0)),
         searching,

@@ -1866,10 +1866,10 @@ mod tests {
         use crate::traffic::npc::Mode;
         let mut pod = npc(0, ShipStats::new(FAST, &[]));
         pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        pod.mode = Mode::Adrift { ticks_left: 3 };
+        pod.mode = Mode::Adrift { ticks_left: 3.0 };
         let mut npcs = [pod];
         count_down(&mut npcs, crate::speed_mult::SpeedMult::FULL);
-        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3 });
+        assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3.0 });
     }
 
     #[test]

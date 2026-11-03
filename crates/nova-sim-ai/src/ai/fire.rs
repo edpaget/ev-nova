@@ -3959,7 +3959,7 @@ mod tests {
         // is its `Mode::Adrift`, which the gate doesn't read.
         let mut npc = holding(shooter(&[gun(128, 1, 1)], ATTACK), 128);
         npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5 };
+        npc.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 5.0 };
         npc.trigger = FULL;
         assert!(!npc.wait_running());
         assert_eq!(gated(&npc), FULL);

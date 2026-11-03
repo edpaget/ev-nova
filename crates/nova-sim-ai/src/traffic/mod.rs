@@ -3580,7 +3580,7 @@ mod tests {
         traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
         traffic.npcs[1].mode = Mode::Emerging { ticks_left: 5.0 };
         traffic.npcs[2].ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 2 };
+        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 2.0 };
         traffic.npcs[3].goal = Goal::JumpOut;
         traffic
     }
@@ -3611,7 +3611,7 @@ mod tests {
             ..World::new(&[])
         };
         let mut traffic = busy();
-        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 0 };
+        traffic.npcs[2].mode = Mode::Adrift { ticks_left: 0.0 };
         traffic.npcs[0].state.velocity = Vec2::new(1.0, 0.0);
         let places = |traffic: &Traffic| -> Vec<(NpcId, Vec2)> {
             traffic

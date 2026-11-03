@@ -72,7 +72,7 @@ pub(crate) fn flight(npc: &Npc) -> Flight {
 /// as a pod is never in a count wait.
 #[must_use]
 pub fn turns(npc: &Npc) -> bool {
-    !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0)
+    !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0.0)
 }
 
 /// `_AIDispatch` for each pod among `npcs` that `picks` picks, its slot's
@@ -87,9 +87,9 @@ pub fn count_down(npcs: &mut Vec<Npc>, picks: impl Fn(&Npc) -> bool) -> Vec<(Npc
             return true;
         }
         match npc.mode {
-            Mode::Adrift { ticks_left } if ticks_left > 0 => {
+            Mode::Adrift { ticks_left } if ticks_left > 0.0 => {
                 npc.mode = Mode::Adrift {
-                    ticks_left: ticks_left - 1,
+                    ticks_left: ticks_left - 1.0,
                 };
                 true
             }
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn a_pod_with_a_wait_of_2_thrusts_along_its_heading_for_2_ticks_then_is_freed() {
         let behaviour = Recording::default();
-        let mut traffic = holding(vec![pod(90.0, Mode::Adrift { ticks_left: 2 })]);
+        let mut traffic = holding(vec![pod(90.0, Mode::Adrift { ticks_left: 2.0 })]);
         let mut seen = Vec::new();
         for _ in 0..2 {
             tick(&mut traffic, &behaviour);
@@ -170,8 +170,8 @@ mod tests {
         assert_eq!(
             seen,
             [
-                (Mode::Adrift { ticks_left: 1 }, 90.0),
-                (Mode::Adrift { ticks_left: 0 }, 90.0)
+                (Mode::Adrift { ticks_left: 1.0 }, 90.0),
+                (Mode::Adrift { ticks_left: 0.0 }, 90.0)
             ]
         );
         let speed = traffic.npcs()[0].state.velocity.x;
@@ -202,14 +202,14 @@ mod tests {
         // flies.
         let behaviour = Recording::default();
         for heading in [0.0, 45.0, 45.5, 359.9] {
-            let mut traffic = holding(vec![pod(heading, Mode::Adrift { ticks_left: 5 })]);
+            let mut traffic = holding(vec![pod(heading, Mode::Adrift { ticks_left: 5.0 })]);
             for _ in 0..4 {
                 tick(&mut traffic, &behaviour);
                 assert_eq!(traffic.npcs()[0].state.heading, heading);
             }
             tick(&mut traffic, &behaviour);
             let pod = &traffic.npcs()[0];
-            assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 });
+            assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0.0 });
             assert_eq!(pod.state.heading, heading.trunc(), "{heading}");
         }
     }
@@ -217,12 +217,12 @@ mod tests {
     #[test]
     fn a_pod_moves_again_on_the_second_pass_without_counting_down() {
         let behaviour = Recording::default();
-        let mut traffic = holding(vec![pod(180.0, Mode::Adrift { ticks_left: 1 })]);
+        let mut traffic = holding(vec![pod(180.0, Mode::Adrift { ticks_left: 1.0 })]);
         tick(&mut traffic, &behaviour);
         let before = traffic.npcs()[0].state;
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         let pod = &traffic.npcs()[0];
-        assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0 }, "no countdown");
+        assert_eq!(pod.mode, Mode::Adrift { ticks_left: 0.0 }, "no countdown");
         assert!(pod.state.position.y > before.position.y, "it moves down");
     }
 
@@ -232,14 +232,14 @@ mod tests {
         let mut other = npc(0, ShipStats::new(FAST, &[]));
         other.state.position = Vec2::new(500.0, 0.0);
         other.ai_wait = 3.0;
-        let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3 })]);
+        let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3.0 })]);
         let waits = |traffic: &Traffic| (traffic.npcs()[0].ai_wait, traffic.npcs()[1].mode);
         tick(&mut traffic, &behaviour);
-        assert_eq!(waits(&traffic), (2.0, Mode::Adrift { ticks_left: 2 }));
+        assert_eq!(waits(&traffic), (2.0, Mode::Adrift { ticks_left: 2.0 }));
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(
             waits(&traffic),
-            (1.0, Mode::Adrift { ticks_left: 2 }),
+            (1.0, Mode::Adrift { ticks_left: 2.0 }),
             "the fight's countdown runs on both passes, the pod's on the advance pass alone"
         );
     }
@@ -254,11 +254,11 @@ mod tests {
         assert_eq!(word.controls, full);
         assert_eq!(word.wanted, Some(45));
         assert_eq!(word.cap, Cap::Slot, "+0x34 = `_ShipMaxSpeed` (@0x8fb90)");
-        for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0 }] {
+        for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0.0 }] {
             assert!(turns(&pod(45.9, mode)), "{mode:?}");
         }
         // While its wait runs, its turn is skipped.
-        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 3 })));
+        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 3.0 })));
         assert!(!is_pod(&npc(0, ShipStats::default())));
     }
 }

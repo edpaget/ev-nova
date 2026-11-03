@@ -200,7 +200,7 @@ fn an_escape_pods_thrust_is_its_slot_accel() {
     let mut traffic = Traffic::with_interval(1);
     let mut pod = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
     pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-    pod.mode = Mode::Adrift { ticks_left: 10 };
+    pod.mode = Mode::Adrift { ticks_left: 10.0 };
     pod.stats.ion.class_capacity = 400.0;
     pod.stats.ion.class_rate = 100.0;
     pod.ion.charge = 300.0;

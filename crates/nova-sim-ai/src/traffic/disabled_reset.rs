@@ -436,7 +436,7 @@ mod tests {
     fn a_pod_a_hulk_a_ship_gliding_in_or_on_a_jump_or_one_paused_is_not_reset() {
         let pod = |npc: &mut Npc| {
             npc.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-            npc.mode = Mode::Adrift { ticks_left: 50 };
+            npc.mode = Mode::Adrift { ticks_left: 50.0 };
         };
         let hulk = |npc: &mut Npc| npc.no_ai = true;
         let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };

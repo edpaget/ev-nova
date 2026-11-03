@@ -325,7 +325,7 @@ mod tests {
 
     fn pod(parent: &mut Npc) {
         parent.ship = ESCAPE_POD_SHIP;
-        parent.mode = Mode::Adrift { ticks_left: 100 };
+        parent.mode = Mode::Adrift { ticks_left: 100.0 };
     }
 
     #[test]

@@ -825,7 +825,9 @@ mod tests {
         assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
         assert_eq!(
             decision.lost_sight,
-            Some(LostSight::Searching(SEARCH_TICKS)),
+            Some(LostSight::Searching(crate::traffic::ai_wait::ticks(
+                SEARCH_TICKS
+            ))),
             "@0x8d83b-0x8d852"
         );
         assert!(!decision.forgets_provocation, "+0x96 stands");

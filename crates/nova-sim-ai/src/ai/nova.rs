@@ -2156,10 +2156,10 @@ mod tests {
         let around = with_player(&npcs, Condition::Intact);
         let searching = ai.decision(&npcs[0], &around, &mut Draws::of(&[7]));
         assert_eq!(searching.goal, Goal::Attack(NPC_TWO), "goal 4 stands");
-        assert_eq!(searching.lost_sight, Some(LostSight::Searching(107)));
+        assert_eq!(searching.lost_sight, Some(LostSight::Searching(107.0)));
         assert!(!searching.clears_target, "+0x70 stands");
         assert!(!searching.forgets_provocation, "+0x96 stands");
-        npcs[0].lost_sight = SearchTimer::Searching(1);
+        npcs[0].lost_sight = SearchTimer::Searching(1.0);
         let around = with_player(&npcs, Condition::Intact);
         let gave_up = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
         assert_eq!(gave_up.lost_sight, Some(LostSight::GaveUp));
@@ -3034,10 +3034,10 @@ mod tests {
         let around = with_player(&npcs, Condition::Intact);
         let searching = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
         assert_eq!(searching.goal, mark.goal());
-        assert_eq!(searching.lost_sight, Some(LostSight::Searching(100)));
+        assert_eq!(searching.lost_sight, Some(LostSight::Searching(100.0)));
         assert!(!searching.calls_reinforcements, "the jump to @0x8fb47");
         let mut gave_up = npcs[0].clone();
-        gave_up.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(1);
+        gave_up.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(1.0);
         let dropped = ai.decision(&gave_up, &around, &mut Draws::of(&[]));
         assert_eq!(dropped.goal, Goal::Idle);
         assert_eq!(dropped.lost_sight, Some(LostSight::GaveUp));
@@ -3071,7 +3071,7 @@ mod tests {
             let around = with_player(&npcs, Condition::Intact);
             let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[0]));
             assert_eq!(decision.goal, mark.goal());
-            assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
+            assert_eq!(decision.lost_sight, Some(LostSight::Searching(100.0)));
         }
     }
 }

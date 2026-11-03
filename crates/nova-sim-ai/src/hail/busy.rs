@@ -201,7 +201,7 @@ mod tests {
         }
         for mode in [
             Mode::Coasting { ticks_left: 10.0 },
-            Mode::Adrift { ticks_left: 10 },
+            Mode::Adrift { ticks_left: 10.0 },
             Mode::Flying,
         ] {
             let mut npc = flying(1, Goal::Idle);

@@ -164,7 +164,7 @@ mod tests {
         fn decision(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Decision {
             Decision {
                 goal: npc.goal,
-                lost_sight: Some(LostSight::Searching(5)),
+                lost_sight: Some(LostSight::Searching(5.0)),
                 ..Decision::default()
             }
         }
@@ -503,7 +503,7 @@ mod tests {
         searching.think_holding(&Searches, world(FAR_PLAYER), &[], &mut NeverFires);
         assert_eq!(
             of(&searching, id).lost_sight,
-            SearchTimer::Searching(5),
+            SearchTimer::Searching(5.0),
             "its decision wrote it"
         );
         assert_eq!(of(&searching, id).state.position, START);

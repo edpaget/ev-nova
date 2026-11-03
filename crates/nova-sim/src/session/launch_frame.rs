@@ -1277,7 +1277,7 @@ mod tests {
     fn expired_pod(session: &mut Session, berth: u32) -> NpcId {
         let mut pod = bystander();
         pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
-        pod.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 0 };
+        pod.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 0.0 };
         session.space.traffic.add_npc_at(pod, berth)
     }
 

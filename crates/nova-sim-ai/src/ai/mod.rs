@@ -1036,7 +1036,7 @@ pub struct GateWait {
 /// think turned it on the player.
 // Each flag is its own write or call of the original's think.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Decision {
     /// Its goal now.
     pub goal: Goal,

@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn at_half_gain_a_pod_turns_and_steps_at_half_its_rate() {
-        let mut pod = ship(Vec2::ZERO, Mode::Adrift { ticks_left: 0 });
+        let mut pod = ship(Vec2::ZERO, Mode::Adrift { ticks_left: 0.0 });
         pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
         pod.state.heading = 90.5;
         // 3 whole degrees off 93: beyond half its 4, so it turns by 2.

@@ -650,7 +650,7 @@ mod tests {
                     ship: ShipRef::Player,
                     hopeless: false,
                 };
-                lead.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(50);
+                lead.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(50.0);
             }),
             ("a mine with no rock (@0x8f879)", |lead: &mut Npc| {
                 lead.goal = Goal::Mine;
