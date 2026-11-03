@@ -189,14 +189,17 @@ impl Setup {
 
 impl PlayerShip {
     /// The capacities "Use As My Ship" taking a ship of `record` can draw
-    /// its fuel below, read before the swap (see the module docs).
+    /// its fuel below, read before the swap (see the module docs). The
+    /// captured class's capacity reads the outfit counts
+    /// (`_ShipFuelCapacity` @0x41786), a purchase's held stock left out
+    /// (see the `held_readers` module).
     pub(super) fn capture_fuel(
         &self,
         pilot: &Pilot,
         statics: &Statics,
         record: &ShipRecord,
     ) -> CaptureFuel {
-        let more: i64 = outfit_mods(&pilot.outfits, &statics.outfits)
+        let more: i64 = outfit_mods(&self.counted_outfits(pilot), &statics.outfits)
             .into_iter()
             .filter(|outfit| outfit.mod_type == MORE_FUEL)
             .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))

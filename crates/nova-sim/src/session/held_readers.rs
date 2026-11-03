@@ -394,4 +394,31 @@ mod tests {
         assert_eq!(after.max - before.max, 50.0, "the new most");
         assert_eq!(after.now, before.now, "no gain: the fold writes no reserve");
     }
+
+    // The capture's fuel.
+
+    #[test]
+    fn the_captures_fuel_leaves_a_held_outfits_fuel_out_until_the_fold() {
+        use crate::stats::MORE_FUEL;
+        let catalog = second_mod(MORE_FUEL, 100);
+        let captured = |session: &mut Session| {
+            let record = session
+                .statics
+                .ship_record(ShipId(128))
+                .cloned()
+                .expect("ship 128");
+            session
+                .ship
+                .capture_fuel(&session.pilot, &session.statics, &record)
+                .captured
+        };
+        let [held, folded, at_once] =
+            readings(&catalog, take_off(&catalog), relaunch(&catalog), captured);
+        assert_eq!(
+            held,
+            i64::from(FAST.fuel) + 100,
+            "the tank's alone: _ShipFuelCapacity @0x41786 reads the counts"
+        );
+        assert_eq!([folded, at_once], [held + 100, held + 100]);
+    }
 }
