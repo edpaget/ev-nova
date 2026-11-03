@@ -266,6 +266,35 @@ fn a_ship_boarded_is_disabled_at_the_dispatch_that_answers_the_call() {
 }
 
 #[test]
+fn a_ship_disabled_before_double_times_second_pass_is_repaired_at_its_turn_of_it() {
+    // `_DoPlayGameWork(0)` runs `_HandleShip` (@0x44350) with no
+    // `_AIDispatch` (@0x4402a), so the repair (@0x33950-0x33bdb) comes
+    // with it, and the next advance pass's dispatch reads W whole.
+    let catalog = armed();
+    let (mut session, w, x) = scene(&catalog);
+    let watching = Watching::new(w, x);
+    let npc = session.space.npc_mut(w).expect("there");
+    npc.reserves.armor.now = 3.0;
+    npc.condition = Condition::Disabled;
+    let mut chance = Ranged::of(&[(REPAIR_ODDS, 0)]);
+    session.tick_again(
+        Controls::default(),
+        &watching,
+        Rules::default(),
+        &mut chance,
+    );
+    assert_eq!(watching.at(0), [], "no dispatch in the second pass");
+    assert_eq!(
+        condition(&session, w),
+        Condition::Intact,
+        "repaired at its turn"
+    );
+    assert_eq!(armor(&session, w), repaired_armor(30.0, false), "repaired");
+    pass(&mut session, &catalog, &watching, 1);
+    assert_eq!(watching.at(1), [Condition::Intact]);
+}
+
+#[test]
 fn a_ship_repaired_at_its_turn_flies_that_turn_as_an_intact_ship() {
     // Its move (@0x34274) comes after its repair (@0x33a3b): no disabled
     // drag (@0x33950-0x339a1).
