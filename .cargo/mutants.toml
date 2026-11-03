@@ -16,6 +16,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # An inertialess plunderer's matched speed floored at none: `<=` also
+    # sets a speed of exactly none to 0.0. A 0.0 stays 0.0; only a -0.0,
+    # which needs a -0.0 speed already and no gain or acceleration, would
+    # become 0.0, and every speed the engine writes is 0.0 or above.
+    "nova-sim-ai/src/traffic/plunder_dock\\.rs:[0-9]+:[0-9]+: replace < with <= in floored$",
     # A button exactly two caps wide: its overlapping caps meet, and
     # `three_slice` gives the same two caps with no middle.
     "nova-view/src/ui/button\\.rs:[0-9]+:[0-9]+: replace < with <= in Button::draw$",

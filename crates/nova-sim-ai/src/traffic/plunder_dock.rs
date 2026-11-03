@@ -471,6 +471,13 @@ pub(crate) fn mismatched(gap: Vec2) -> bool {
     off(gap.x) || off(gap.y)
 }
 
+/// An inertialess matcher's `speed` floored as sub 0xf floors it: none
+/// when none is above it (`ucomiss` / `jbe` @0x86b2a-0x86b33), so a NaN
+/// stands.
+fn floored(speed: f32) -> f32 {
+    if speed < 0.0 { 0.0 } else { speed }
+}
+
 /// Sub 0xf (see the module docs) of a docking with the ship at `victim`,
 /// flown as `inertia` says, at the frame's `gain`, rolling a dock's wait
 /// on `chance`: the
@@ -493,8 +500,7 @@ fn dock(
         // narrowed, then none when below none, so a NaN stands
         // (@0x86aee-0x86b33); not capped at its top speed; no thrust, cap
         // or heading (@0x86ac8-0x86acd).
-        let speed = gain.add_times(npc.speed, -handling.accel);
-        npc.speed = if speed < 0.0 { 0.0 } else { speed };
+        npc.speed = floored(gain.add_times(npc.speed, -handling.accel));
         // The low level's own whole heading (@0x8522d).
         let wanted = trig::whole(npc.state.heading);
         return (Controls::default(), wanted, DockOutcome::Flying);
