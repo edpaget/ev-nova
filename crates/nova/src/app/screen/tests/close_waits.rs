@@ -263,3 +263,12 @@ fn losing_focus_leaves_an_unanswered_offer_over_flight_open() {
     screen.release_keys();
     assert_eq!(screen.showing(), Showing::Offer);
 }
+
+#[test]
+fn losing_focus_keeps_an_answered_offer_drawn_under_its_after_movie() {
+    let (mut screen, _reel) = holding_and_offered_in_flight();
+    tap(&mut screen, Key::Char('n'));
+    assert!(screen.missions.is_some(), "the after-movie plays");
+    screen.release_keys();
+    assert!(screen.offer().is_some(), "still under the movie");
+}
