@@ -23,15 +23,19 @@
 //!   which `_LoadObjectData` sets @0x77eb7-0x77f08);
 //! - the legal status string in it (`_DrawLegalStatusString(_selSystem)`
 //!   @0x10eb0; `Chart::legal_status_in`), its record read as
-//!   [`RuleKey::LegalRecords`] says;
+//!   [`RuleKey::LegalRecords`] says, and that record raw for cheat mode
+//!   (`_legalStatus[_selSystem]` under the engine's reading);
+//! - its government's ID, for cheat mode;
 //! - the standard commodities' names, as the trade screen names them
 //!   (`_cargoName`, [`market::commodities`]);
 //! - today's date ([`Session::med_date_text`]).
 //!
-//! With nothing selected the panel reads as for an unexplored system.
+//! With nothing selected the panel reads as for an unexplored system. The
+//! panel leaves cheat mode off: the view switches it on
+//! ([`MapPanel::with_cheats`]).
 
 use super::{Chart, Session, Setup, Statics, overlaid_sites};
-use crate::catalog::{PilotCatalog, SystemId};
+use crate::catalog::{GovtId, PilotCatalog, SystemId};
 use crate::exploration;
 use crate::map_panel::{self, MapPanel, PanelInput, PanelStellar, PanelWords};
 use crate::market;
@@ -102,12 +106,14 @@ impl Chart {
             level: facts.map_or(ExploredLevel::Unexplored, |facts| facts.level),
             name: facts.map_or("", |facts| &facts.name),
             government: facts.and_then(|facts| facts.government.as_deref()),
+            govt: facts.and_then(|facts| facts.govt),
             asteroids: facts.map_or(0, |facts| facts.asteroids),
             interference: facts.map_or(0, |facts| facts.interference),
             murk: facts.map_or(0, |facts| facts.murk),
             stellars: facts.map_or(&[], |facts| &facts.stellars),
             inhabited: facts.is_some_and(|facts| facts.inhabited),
             legal: facts.map_or("", |facts| &facts.legal),
+            legal_record: facts.map_or(0, |facts| facts.legal_record),
             commodities: &commodities,
             date: &date,
         };
@@ -144,6 +150,7 @@ impl Chart {
                 destroyed: site.destroyed,
             })
             .collect();
+        let govt = self.galaxy.govt(system);
         PanelFacts {
             level: pilot.explored_level(system),
             name: statics
@@ -152,7 +159,8 @@ impl Chart {
                 .get(&system)
                 .cloned()
                 .unwrap_or_default(),
-            government: self.galaxy.govt(system).map(|govt| {
+            govt,
+            government: govt.map(|govt| {
                 statics
                     .govts
                     .get(govt)
@@ -181,6 +189,7 @@ impl Chart {
                 system,
                 &setup.player_info_words(),
             ),
+            legal_record: self.record_in(pilot, setup, system, None),
         }
     }
 }
@@ -189,6 +198,7 @@ impl Chart {
 struct PanelFacts {
     level: ExploredLevel,
     name: String,
+    govt: Option<GovtId>,
     government: Option<String>,
     asteroids: i16,
     interference: i16,
@@ -196,6 +206,7 @@ struct PanelFacts {
     stellars: Vec<PanelStellar>,
     inhabited: bool,
     legal: String,
+    legal_record: i16,
 }
 
 #[cfg(test)]
@@ -207,7 +218,7 @@ mod tests {
         AsteroidFieldRecord, CommCatalog, CommodityStrings, GovtId, GovtRecord, LandingSite,
         StellarId,
     };
-    use crate::map_panel::{ColumnBody, Listing, Ports, Services, Strip};
+    use crate::map_panel::{CheatNumbers, ColumnBody, Listing, PanelDate, Ports, Services, Strip};
     use crate::market::DOMINATED;
     use crate::player_info::LEGAL_STATUS_STRINGS;
     use crate::rulebook::{RuleSource, Rulebook};
@@ -328,7 +339,7 @@ mod tests {
             panic!("the info strip");
         };
         assert_eq!(*ports, Ports::Listed(vec!["Earth".into(), "Moon".into()]));
-        assert_eq!(*date, session.med_date_text());
+        assert_eq!(*date, PanelDate::Text(session.med_date_text()));
         let ColumnBody::Inhabited {
             name,
             government,
@@ -395,6 +406,56 @@ mod tests {
         }));
         assert_eq!(legal(&body(&session, &catalog, 130)), "status 12");
         assert_eq!(legal(&body(&session, &catalog, 131)), "status 2");
+    }
+
+    #[test]
+    fn the_panel_carries_the_systems_government_and_record_numbers_with_cheat_mode_off() {
+        let catalog = panelled();
+        let mut session = session(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(130));
+        session.pilot.set_system_record(SystemId(130), 50);
+        let panel = panel(&session, &catalog, 130);
+        assert_eq!(
+            panel.numbers,
+            CheatNumbers {
+                system: 130,
+                govt: Some(128),
+                legal_record: 50
+            }
+        );
+        let Strip::Info { date, .. } = &panel.strip else {
+            panic!("the info strip");
+        };
+        assert_eq!(*date, PanelDate::Text(session.med_date_text()), "off");
+        assert_eq!(government(&panel.column.body), "Federation", "off");
+        // By the Bible, the record with the system's government.
+        let rules = Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible);
+        let mut session = self::session(&catalog, rules);
+        session.pilot.explore(SystemId(130));
+        session.pilot.set_legal_record(GovtId(128), -40);
+        assert_eq!(panel_numbers(&session, &catalog, 130).legal_record, -40);
+        // An independent system has no government number.
+        assert!(session.change_galaxy(&catalog, |galaxy| {
+            galaxy.set_govt(SystemId(130), Some(None));
+        }));
+        assert_eq!(panel_numbers(&session, &catalog, 130).govt, None);
+        // An unexplored system and no selection: the ID alone.
+        let unexplored = panel_numbers(&session, &catalog, 132);
+        assert_eq!(
+            unexplored,
+            CheatNumbers {
+                system: 132,
+                ..CheatNumbers::default()
+            }
+        );
+        assert_eq!(
+            session.map_panel(&catalog, None, None).numbers.system,
+            map_panel::NO_SELECTION_ID
+        );
+    }
+
+    fn panel_numbers(session: &Session, catalog: &FakePilotCatalog, system: i16) -> CheatNumbers {
+        panel(session, catalog, system).numbers
     }
 
     #[test]

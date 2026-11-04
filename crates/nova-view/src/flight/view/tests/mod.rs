@@ -583,13 +583,14 @@ fn blank_panel() -> nova_sim::map_panel::MapPanel {
         strip: Strip::Info {
             ports: Ports::None,
             hazards: String::new(),
-            date: String::new(),
+            date: nova_sim::map_panel::PanelDate::Text(String::new()),
         },
         column: Column {
             title: String::new(),
             body: ColumnBody::Unknown,
         },
         words: PanelWords::default(),
+        numbers: nova_sim::map_panel::CheatNumbers::default(),
     }
 }
 

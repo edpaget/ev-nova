@@ -5,7 +5,8 @@ use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
 use nova_sim::galaxy_map::{MapDrawing, MapLink};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::{
-    Column, ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip,
+    CheatNumbers, Column, ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services,
+    Strip,
 };
 
 // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
@@ -1813,13 +1814,14 @@ fn info_panel(ports: Ports, title: &str, body: ColumnBody) -> MapPanel {
         strip: Strip::Info {
             ports,
             hazards: String::new(),
-            date: String::new(),
+            date: PanelDate::Text(String::new()),
         },
         column: Column {
             title: title.to_owned(),
             body,
         },
         words: PanelWords::from_list(&panel_strings().1),
+        numbers: CheatNumbers::default(),
     }
 }
 
@@ -1888,6 +1890,96 @@ fn the_course_maps_panel_is_the_flights_for_the_system_selected_and_lists_its_po
     assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("Earth"));
 }
 
+/// A view over a scripted flight in Sol with the cheats setting `cheats`
+/// and the course map open, its flight answering with `panel`.
+fn faked_panel_cheats(panel: MapPanel, cheats: bool) -> Faked {
+    let mut view = faked(in_sol()).with_overlays(FlightOverlays {
+        cheats,
+        ..FlightOverlays::default()
+    });
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn_with(sol_drawing(), panel));
+    view.open_map();
+    view
+}
+
+/// An unexplored system's panel carrying `sÿst` 131's numbers, dated.
+fn numbered_panel() -> MapPanel {
+    MapPanel {
+        strip: Strip::Info {
+            ports: Ports::Unknown,
+            hazards: "<Unknown>".to_owned(),
+            date: PanelDate::Text("Jun 23, 1177".to_owned()),
+        },
+        numbers: CheatNumbers {
+            system: 131,
+            govt: None,
+            legal_record: 0,
+        },
+        ..info_panel(Ports::Unknown, "Selected System:", ColumnBody::Unknown)
+    }
+}
+
+#[test]
+fn with_cheats_on_the_course_map_shows_the_panel_in_cheat_mode_and_the_zoom_readout() {
+    // `_cheatsActive` (0xdeb60): the flight's panel, cheat mode applied by
+    // the core; the date's place reads trunc(1000 / 0.5625).
+    let view = faked_panel_cheats(numbered_panel(), true);
+    assert_eq!(view.map.panel(), Some(&numbered_panel().with_cheats()));
+    let list = map_drawn(&view);
+    assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("131"));
+    let texts: Vec<String> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&"1777".to_owned()), "{texts:?}");
+    assert!(!texts.contains(&"Jun 23, 1177".to_owned()), "{texts:?}");
+}
+
+#[test]
+fn with_cheats_off_the_course_map_shows_the_flights_panel_unchanged() {
+    let view = faked_panel_cheats(numbered_panel(), false);
+    assert_eq!(view.map.panel(), Some(&numbered_panel()));
+    let list = map_drawn(&view);
+    assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("<Unknown>"));
+}
+
+#[test]
+fn with_cheats_on_a_panel_taken_alone_is_in_cheat_mode_too() {
+    // A click's panels, taken after the redraw ([`ScreenAsk::MapPanel`]).
+    let mut view = faked_panel_cheats(numbered_panel(), true);
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(Answer::Clicked(MapClicked {
+        selected: Some(SystemId(131)),
+        gate_pick: None,
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: true,
+    }));
+    let explored = MapPanel {
+        numbers: CheatNumbers {
+            system: 131,
+            govt: Some(140),
+            legal_record: -5,
+        },
+        ..info_panel(
+            Ports::None,
+            "Destination System:",
+            ColumnBody::Uninhabited {
+                name: "Alpha".to_owned(),
+            },
+        )
+    };
+    queue_redraw_and_panel(&mut view, sol_drawing(), &explored);
+    faked_map_click(&mut view, alpha);
+    assert_eq!(panels_asked(&view).last(), Some(&panel_for(131)));
+    assert_eq!(view.map.panel(), Some(&explored.with_cheats()));
+}
+
 #[test]
 fn the_course_maps_panel_follows_a_click_to_the_flights_panel_for_it() {
     // Phase 16: `_MapDialogUpdate` @0x10b3f-0x10c76.
@@ -1937,7 +2029,7 @@ fn the_hypergate_maps_panel_is_asked_with_its_offers_and_draws_the_prompt_then_t
     let prompt = MapPanel {
         strip: Strip::HypergatePrompt {
             prompt: "Pick a destination".to_owned(),
-            date: String::new(),
+            date: PanelDate::Text(String::new()),
         },
         ..info_panel(Ports::None, "Current System:", ColumnBody::Unknown)
     };

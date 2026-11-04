@@ -457,6 +457,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         self.map.show_border_sources(borders);
         self.map_seen = Some(self.frame.map_key.clone());
+        self.show_map_panel(panel);
+    }
+
+    /// Shows `panel` on the course map, in cheat mode
+    /// ([`MapPanel::with_cheats`](nova_sim::map_panel::MapPanel::with_cheats))
+    /// when the cheats setting is on ([`FlightOverlays::cheats`](super::FlightOverlays::cheats)),
+    /// as `_MapDialogUpdate` reads `_cheatsActive`.
+    fn show_map_panel(&mut self, panel: nova_sim::map_panel::MapPanel) {
+        let panel = if self.overlays.cheats {
+            panel.with_cheats()
+        } else {
+            panel
+        };
         self.map.show_panel(panel);
     }
 
@@ -470,7 +483,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             selected: self.map.selected(),
             hypergate: offered,
         }) {
-            self.map.show_panel(*panel);
+            self.show_map_panel(*panel);
         }
     }
 

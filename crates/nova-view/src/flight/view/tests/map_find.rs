@@ -57,13 +57,14 @@ pub(super) fn panel_titled(title: &str) -> MapPanel {
         strip: Strip::Info {
             ports: Ports::Unknown,
             hazards: String::new(),
-            date: String::new(),
+            date: nova_sim::map_panel::PanelDate::Text(String::new()),
         },
         column: Column {
             title: title.to_owned(),
             body: ColumnBody::Unknown,
         },
         words: PanelWords::default(),
+        numbers: nova_sim::map_panel::CheatNumbers::default(),
     }
 }
 

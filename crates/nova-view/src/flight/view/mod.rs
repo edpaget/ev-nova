@@ -780,7 +780,9 @@ pub struct FlightOverlays {
     pub help: bool,
     /// The original's cheat mode (`_cheatsActive`, which nothing in 1.1
     /// turns on): the player info shows its IDs
-    /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)).
+    /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)),
+    /// and the course map's panels their raw numbers and the zoom readout
+    /// ([`MapPanel::with_cheats`](nova_sim::map_panel::MapPanel::with_cheats)).
     pub cheats: bool,
 }
 

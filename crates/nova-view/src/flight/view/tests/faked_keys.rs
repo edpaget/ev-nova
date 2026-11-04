@@ -759,7 +759,7 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
     panel.strip = Strip::Info {
         ports: nova_sim::map_panel::Ports::Unknown,
         hazards: String::new(),
-        date: date.clone(),
+        date: nova_sim::map_panel::PanelDate::Text(date.clone()),
     };
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);

@@ -26,7 +26,11 @@
 //! - "Navigation Hazards:" at (left + 10, top + 36), its value at
 //!   (left + 110, top + 36) (@0x10586-0x109aa);
 //! - the date with its right edge at right − 5, on top + 36
-//!   (@0x109af-0x10a6f).
+//!   (@0x109af-0x10a6f), or in cheat mode the zoom readout
+//!   ([`zoom_readout`] of the map's zoom) in its place.
+//!
+//! Cheat mode's IDs and numbers ([`MapPanel::with_cheats`]) are drawn at
+//! the pens, and in the colours, of the text they replace.
 //!
 //! **The right column**, [`INFO_COLUMN`] (item 6):
 //!
@@ -47,7 +51,9 @@
 //! ([`DIALOG_ORIGIN`](super::dialog::DIALOG_ORIGIN)), over `PICT` 8509,
 //! the dialog's background: neither is filled.
 
-use nova_sim::map_panel::{ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip};
+use nova_sim::map_panel::{
+    ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services, Strip, zoom_readout,
+};
 
 use super::map::{DARK_GREY, LIGHT_GREY};
 use super::view::Bounds;
@@ -84,12 +90,15 @@ pub fn placed(rect: IRect, origin: Point) -> Bounds {
 }
 
 /// Draws `panel`'s two items with the dialog's top-left corner at
-/// `origin`, measuring with `metrics`, if any (see the module docs).
+/// `origin`, measuring with `metrics`, if any (see the module docs);
+/// `zoom` is the map's, which cheat mode's readout shows in place of the
+/// date.
 pub fn draw_panel(
     list: &mut DrawList,
     panel: &MapPanel,
     origin: Point,
     metrics: Option<&dyn TextMetrics>,
+    zoom: f64,
 ) {
     let strip = placed(INFO_STRIP, origin);
     let column = placed(INFO_COLUMN, origin);
@@ -98,7 +107,7 @@ pub fn draw_panel(
         font: PANEL_FONT,
         metrics,
     };
-    draw_strip(&mut pen, &panel.strip, &panel.words, strip, column);
+    draw_strip(&mut pen, &panel.strip, &panel.words, strip, column, zoom);
     draw_column(
         &mut pen,
         &panel.column.title,
@@ -120,7 +129,14 @@ fn rule(list: &mut DrawList, from: Point, to: Point) {
 
 /// The bottom strip in `strip`, item 6 at `column` (see the module docs).
 #[allow(clippy::cast_precision_loss)] // Dialog pixels.
-fn draw_strip(pen: &mut Pen, panel: &Strip, words: &PanelWords, strip: Bounds, column: Bounds) {
+fn draw_strip(
+    pen: &mut Pen,
+    panel: &Strip,
+    words: &PanelWords,
+    strip: Bounds,
+    column: Bounds,
+    zoom: f64,
+) {
     let (left, top, right) = (strip.min.x, strip.min.y, strip.max.x);
     rule(
         pen.list,
@@ -149,8 +165,12 @@ fn draw_strip(pen: &mut Pen, panel: &Strip, words: &PanelWords, strip: Bounds, c
             date
         }
     };
-    let x = right - pen.width(date, PANEL_SIZE) - 5.0;
-    pen.at(date, x, top + 36.0, PANEL_SIZE, DATE);
+    let date = match date {
+        PanelDate::Text(text) => text.clone(),
+        PanelDate::ZoomReadout => zoom_readout(zoom).to_string(),
+    };
+    let x = right - pen.width(&date, PANEL_SIZE) - 5.0;
+    pen.at(&date, x, top + 36.0, PANEL_SIZE, DATE);
 }
 
 /// The Ports list (see the module docs' wrap).
@@ -165,6 +185,11 @@ fn draw_ports(pen: &mut Pen, ports: &Ports, words: &PanelWords, strip: Bounds, c
         }
         Ports::Unknown => {
             pen.at(&words.unknown, start, top + 12.0, PANEL_SIZE, Color::WHITE);
+            return;
+        }
+        Ports::Id(id) => {
+            let id = id.to_string();
+            pen.at(&id, start, top + 12.0, PANEL_SIZE, Color::WHITE);
             return;
         }
     };
@@ -217,6 +242,10 @@ fn draw_column(pen: &mut Pen, title: &str, body: &ColumnBody, words: &PanelWords
             value(pen, &words.unknown, 26.0);
             return;
         }
+        ColumnBody::Id(id) => {
+            value(pen, &id.to_string(), 26.0);
+            return;
+        }
         ColumnBody::Uninhabited { name } => {
             value(pen, name, 26.0);
             pen.at(
@@ -267,7 +296,7 @@ fn rows(pen: &mut Pen, items: &[String], set: impl Fn(&mut Pen, &str, f32), firs
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::map_panel::Column;
+    use nova_sim::map_panel::{CheatNumbers, Column, PanelDate};
 
     use super::*;
     use crate::DrawCommand;
@@ -301,13 +330,14 @@ mod tests {
             strip: Strip::Info {
                 ports,
                 hazards: "Sparse asteroid field".to_owned(),
-                date: "Jun 23, 1177".to_owned(),
+                date: PanelDate::Text("Jun 23, 1177".to_owned()),
             },
             column: Column {
                 title: "Selected System:".to_owned(),
                 body,
             },
             words: words(),
+            numbers: CheatNumbers::default(),
         }
     }
 
@@ -327,7 +357,7 @@ mod tests {
         metrics: Option<&dyn TextMetrics>,
     ) -> Vec<(String, f32, f32, Color)> {
         let mut list = DrawList::new();
-        draw_panel(&mut list, panel, Point::new(0.0, 0.0), metrics);
+        draw_panel(&mut list, panel, Point::new(0.0, 0.0), metrics, ZOOM);
         list.iter()
             .filter_map(|command| match command {
                 DrawCommand::Text {
@@ -355,6 +385,8 @@ mod tests {
     }
 
     const W: Color = Color::WHITE;
+    /// The zoom the panels are drawn at, unless a test says otherwise.
+    const ZOOM: f64 = 1.0;
 
     #[test]
     fn every_label_and_value_lands_at_its_offset_and_colour() {
@@ -390,7 +422,7 @@ mod tests {
     fn both_items_are_ruled_black_over_the_background_unfilled() {
         let mut list = DrawList::new();
         let panel = info(Ports::None, ColumnBody::Unknown);
-        draw_panel(&mut list, &panel, DIALOG_ORIGIN, None);
+        draw_panel(&mut list, &panel, DIALOG_ORIGIN, None, ZOOM);
         let fills: Vec<(Point, Point, f32, Color)> = list
             .iter()
             .filter_map(|command| match command {
@@ -581,13 +613,14 @@ mod tests {
         MapPanel {
             strip: Strip::HypergatePrompt {
                 prompt: "abcd".to_owned(),
-                date: "Jun 23, 1177".to_owned(),
+                date: PanelDate::Text("Jun 23, 1177".to_owned()),
             },
             column: Column {
                 title: "Current System:".to_owned(),
                 body: ColumnBody::Unknown,
             },
             words: words(),
+            numbers: CheatNumbers::default(),
         }
     }
 
@@ -598,20 +631,24 @@ mod tests {
         assert_eq!(found(&drawn, "abcd"), (296.0, 460.0, LABEL));
         assert!(!drawn.iter().any(|(text, ..)| text == "Ports:"));
         // "abc" is 13.5 wide: half 6.75, truncated to 6.
-        let MapPanel { column, words, .. } = prompt();
         let panel = MapPanel {
             strip: Strip::HypergatePrompt {
                 prompt: "abc".to_owned(),
-                date: String::new(),
+                date: PanelDate::Text(String::new()),
             },
-            column,
-            words,
+            ..prompt()
         };
         assert_eq!(found(&texts(&panel, Some(&MonoMetrics)), "abc").0, 299.0);
         // On screen the halving is of the dialog's right edge, not the
         // screen's: from the origin, 212 + 305 − 9.
         let mut list = DrawList::new();
-        draw_panel(&mut list, &prompt(), DIALOG_ORIGIN, Some(&MonoMetrics));
+        draw_panel(
+            &mut list,
+            &prompt(),
+            DIALOG_ORIGIN,
+            Some(&MonoMetrics),
+            ZOOM,
+        );
         let x = list.iter().find_map(|command| match command {
             DrawCommand::Text { text, origin, .. } if text == "abcd" => Some(origin.x),
             _ => None,
@@ -633,5 +670,69 @@ mod tests {
             "unmeasured"
         );
         assert_eq!(found(&drawn, "abcd").0, 305.0, "unmeasured");
+    }
+
+    // Cheat mode.
+
+    #[test]
+    fn cheat_modes_ids_land_at_the_pens_of_the_text_they_replace() {
+        let unexplored = MapPanel {
+            strip: Strip::Info {
+                ports: Ports::Id(131),
+                hazards: "131".to_owned(),
+                date: PanelDate::Text(String::new()),
+            },
+            ..info(Ports::None, ColumnBody::Id(131))
+        };
+        let drawn = texts(&unexplored, Some(&MonoMetrics));
+        let ids: Vec<(f32, f32, Color)> = drawn
+            .iter()
+            .filter(|(text, ..)| text == "131")
+            .map(|(_, x, y, color)| (*x, *y, *color))
+            .collect();
+        // Ports at (left + 45, top + 12), the hazards at (left + 110,
+        // top + 36), the name at (left + 15, top + 26).
+        assert_eq!(ids, [(53.0, 448.0, W), (118.0, 472.0, W), (489.0, 34.0, W)]);
+        assert!(!drawn.iter().any(|(text, ..)| text == "<Unknown>"));
+        assert!(!drawn.iter().any(|(text, ..)| text == "Government:"));
+    }
+
+    #[test]
+    fn the_zoom_readout_is_right_aligned_5_in_from_the_strips_right_in_the_dates_colour() {
+        // trunc(1000 / 0.5625) = 1777, 4 characters, 18 wide: 594 − 18 − 5.
+        for strip in [
+            Strip::HypergatePrompt {
+                prompt: "abcd".to_owned(),
+                date: PanelDate::ZoomReadout,
+            },
+            Strip::Info {
+                ports: Ports::None,
+                hazards: String::new(),
+                date: PanelDate::ZoomReadout,
+            },
+        ] {
+            let panel = MapPanel { strip, ..prompt() };
+            let mut list = DrawList::new();
+            draw_panel(
+                &mut list,
+                &panel,
+                Point::new(0.0, 0.0),
+                Some(&MonoMetrics),
+                0.5625,
+            );
+            let drawn: Vec<(String, f32, f32, Color)> = list
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Text {
+                        text,
+                        origin,
+                        color,
+                        ..
+                    } => Some((text.clone(), origin.x, origin.y + PANEL_SIZE, *color)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(found(&drawn, "1777"), (571.0, 472.0, DATE), "{panel:?}");
+        }
     }
 }
