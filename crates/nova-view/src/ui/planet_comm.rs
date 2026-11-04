@@ -109,7 +109,7 @@ pub fn key_press(key: Key, view: &PlanetCommView) -> Option<PlanetCommItem> {
     let second = |button| (view.second == button).then_some(PlanetCommItem::Second);
     let third = |button| (view.third == Some(button)).then_some(PlanetCommItem::Third);
     match key {
-        Key::Enter | Key::Escape | Key::KeyE => Some(PlanetCommItem::Close),
+        Key::Enter | Key::NumpadEnter | Key::Escape | Key::KeyE => Some(PlanetCommItem::Close),
         Key::KeyG => second(PlanetCommButton::Greetings),
         Key::KeyO | Key::KeyB => second(PlanetCommButton::OfferBribe),
         Key::KeyD | Key::KeyT => third(PlanetCommButton::DemandTribute),
@@ -736,6 +736,7 @@ mod tests {
         };
         let cases = [
             (Key::Enter, &open, Some(PlanetCommItem::Close)),
+            (Key::NumpadEnter, &open, Some(PlanetCommItem::Close)),
             (Key::Escape, &open, Some(PlanetCommItem::Close)),
             (Key::KeyE, &open, Some(PlanetCommItem::Close)),
             (Key::KeyG, &open, Some(PlanetCommItem::Second)),

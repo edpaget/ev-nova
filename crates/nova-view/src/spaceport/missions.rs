@@ -172,7 +172,7 @@ const NO_LIST: Bounds = Bounds {
 
 /// The keys that leave the mission computer, besides Leave: Return (and
 /// Enter), Escape and L (`_MissionFilter` @0x9f885-0x9f8af, @0xa0212).
-pub const LEAVE_KEYS: [Key; 3] = [Key::Enter, Key::Escape, Key::KeyL];
+pub const LEAVE_KEYS: [Key; 4] = [Key::Enter, Key::NumpadEnter, Key::Escape, Key::KeyL];
 
 /// The key that accepts the selected offer: A (key code 0x00), on a
 /// press only, giving Accept when a row is selected and nothing otherwise
@@ -931,7 +931,7 @@ impl Screen for MissionInfoScreen {
         }
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } = *input
@@ -1580,7 +1580,10 @@ mod tests {
         let mut screen = screen();
         click_item(&mut screen, LEAVE_ITEM);
         assert!(screen.closed());
-        assert_eq!(LEAVE_KEYS, [Key::Enter, Key::Escape, Key::KeyL]);
+        assert_eq!(
+            LEAVE_KEYS,
+            [Key::Enter, Key::NumpadEnter, Key::Escape, Key::KeyL]
+        );
     }
 
     #[test]
@@ -2292,7 +2295,7 @@ mod tests {
 
     #[test]
     fn done_return_and_escape_close_mission_info() {
-        for close in [Key::Enter, Key::Escape] {
+        for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = info_screen();
             screen.input(&key(close));
             assert!(screen.closed(), "{close:?}");
@@ -2425,7 +2428,7 @@ mod tests {
         assert_eq!(screen.take_sounds(), [OPENED]);
         click_info(&mut screen, INFO_DONE_ITEM);
         assert_eq!(screen.take_sounds(), [CLOSED]);
-        for close in [Key::Enter, Key::Escape] {
+        for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = info_screen();
             screen.take_sounds();
             screen.input(&key(close));
@@ -2485,7 +2488,7 @@ mod tests {
             ..info()
         });
         assert_eq!(screen.take_sounds(), [], "closed once");
-        for close in [Key::Enter, Key::Escape] {
+        for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = info_screen();
             screen.take_sounds();
             screen.input(&key(close));

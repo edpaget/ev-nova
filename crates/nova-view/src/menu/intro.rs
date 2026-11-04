@@ -711,6 +711,23 @@ mod tests {
         }
     }
 
+    /// `_ShowIntroScreen` polls Return's key code alone (`_KeyCheck(0x24)`
+    /// @0x16ef2, @0x16fc3, @0x17034), so the keypad's Enter neither ends a
+    /// picture nor is waited for.
+    #[test]
+    fn the_keypads_enter_neither_ends_a_picture_nor_is_waited_for() {
+        let data = sized();
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        faded_in(&mut screen);
+        screen.tick(ms(100));
+        screen.input(&key(Key::NumpadEnter, true));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, None, "it doesn't end the picture");
+        let mut keys = IntroKeys::default();
+        keys.note(&key(Key::NumpadEnter, true));
+        assert_eq!(keys, IntroKeys::default(), "nothing to wait for");
+    }
+
     #[test]
     fn a_key_held_through_the_fade_in_only_delays_the_timer() {
         let data = sized();

@@ -453,7 +453,7 @@ impl CommDialog {
     /// The press a key is, if any (see the module docs).
     fn key_press(&self, key: Key) -> Option<CommPress> {
         match key {
-            Key::Enter | Key::Escape => Some(CommPress::Close),
+            Key::Enter | Key::NumpadEnter | Key::Escape => Some(CommPress::Close),
             _ => match crate::input::key_letter(key)? {
                 c if c.eq_ignore_ascii_case(&CLOSE_KEY) => Some(CommPress::Close),
                 c => self
@@ -1202,7 +1202,13 @@ mod tests {
 
     #[test]
     fn return_enter_escape_and_e_close_the_channel() {
-        for pressed in [Key::Enter, Key::Escape, Key::KeyE, Key::KeyE] {
+        for pressed in [
+            Key::Enter,
+            Key::NumpadEnter,
+            Key::Escape,
+            Key::KeyE,
+            Key::KeyE,
+        ] {
             let mut dialog = dialog(&view());
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_press(), Some(CommPress::Close), "{pressed:?}");

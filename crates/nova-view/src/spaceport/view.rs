@@ -2500,7 +2500,7 @@ impl SpaceportView {
             Ok(port) => port.dialog.input(input),
             Err(_) => match *input {
                 Input::Key {
-                    key: Key::Enter | Key::Escape,
+                    key: Key::Enter | Key::NumpadEnter | Key::Escape,
                     pressed: true,
                     repeat: false,
                 } => Some(DialogEvent::Item(LEAVE_ITEM)),
@@ -2976,7 +2976,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = earth();
         click_item(&mut view, 12);
         assert!(view.left());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut view = earth();
             assert_eq!(view.input(&key(k)), ScreenAction::None);
             assert!(view.left(), "{k:?}");
@@ -3141,7 +3141,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn without_the_dialog_it_says_why_and_return_or_escape_leaves() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut view =
                 SpaceportView::new(&catalog(), StellarId(140), Err("no DLOG 1000".to_owned()));
             assert_eq!(view.problem(), Some("no DLOG 1000"));

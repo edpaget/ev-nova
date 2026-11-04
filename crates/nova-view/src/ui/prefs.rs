@@ -672,7 +672,7 @@ impl PrefsDialog {
                     self.focus = Some(self.focus.map_or(Focus::Music, Focus::next));
                 }
             }
-            (Key::Enter | Key::Escape, _) => self.dialog_input(input),
+            (Key::Enter | Key::NumpadEnter | Key::Escape, _) => self.dialog_input(input),
             (Key::Space, Some(Focus::Ok)) => {
                 if !repeat {
                     self.close();
@@ -1720,7 +1720,7 @@ mod tests {
 
     #[test]
     fn return_escape_space_on_ok_and_a_click_on_ok_close_it() {
-        for input in [key(Key::Enter), key(Key::Escape)] {
+        for input in [key(Key::Enter), key(Key::NumpadEnter), key(Key::Escape)] {
             let mut dialog = prefs();
             dialog.input(&input);
             assert!(dialog.closed(), "{input:?}");
@@ -1909,7 +1909,7 @@ mod tests {
     /// @0xcff7c play no sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for input in [key(Key::Enter), key(Key::Escape)] {
+        for input in [key(Key::Enter), key(Key::NumpadEnter), key(Key::Escape)] {
             let mut dialog = prefs();
             assert_eq!(dialog.take_sounds(), []);
             dialog.input(&input);

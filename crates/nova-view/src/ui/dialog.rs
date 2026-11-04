@@ -868,7 +868,7 @@ impl Dialog {
                 None
             }
             _ if repeat => None,
-            Key::Enter => self.activate(self.default_item),
+            Key::Enter | Key::NumpadEnter => self.activate(self.default_item),
             Key::Escape => self.activate(self.cancel_item),
             Key::Tab if self.focus_ring == FocusRing::Tab => {
                 self.focus_next();
@@ -1926,6 +1926,10 @@ mod tests {
     fn return_activates_the_default_item() {
         let mut dialog = dialog(&yes_no(), &[]);
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(
+            dialog.input(&key(Key::NumpadEnter)),
+            Some(DialogEvent::Item(1))
+        );
         let mut dialog = dialog.with_default(Some(5));
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(5)));
         let mut dialog = dialog.with_default(None);

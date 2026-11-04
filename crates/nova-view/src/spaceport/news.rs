@@ -187,7 +187,7 @@ impl Screen for NewsScreen {
     fn input(&mut self, input: &Input) -> ScreenAction {
         match *input {
             Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } => self.close(),
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn return_enter_or_escape_closes_it_on_a_press() {
-        for close in [Key::Enter, Key::Escape] {
+        for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = open();
             screen.input(&key(close, true));
             assert!(!screen.closed(), "{close:?} repeating");
@@ -533,6 +533,9 @@ mod tests {
         assert!(screen.closed());
         let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
         screen.input(&key(Key::Enter, false));
+        assert!(screen.closed());
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
+        screen.input(&key(Key::NumpadEnter, false));
         assert!(screen.closed());
     }
 

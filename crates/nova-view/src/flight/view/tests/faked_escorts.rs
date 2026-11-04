@@ -142,6 +142,11 @@ fn e_opens_the_menu_and_its_keys_pick_the_group_commanded() {
         view.message(),
         Some("New escort orders assigned:  Warships holding position.")
     );
+    press(&mut view, Key::NumpadEnter);
+    assert!(
+        view.escort_menu().is_open(),
+        "the keypad's Enter isn't ackComm's key code"
+    );
     press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open(), "Return closes it");
     press(&mut view, MENU_KEY);

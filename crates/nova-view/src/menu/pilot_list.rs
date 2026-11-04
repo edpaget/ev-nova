@@ -205,7 +205,7 @@ impl PilotList {
         match (key, self.selected, last) {
             (Key::ArrowDown, Some(at), Some(last)) => self.select((at + 1).min(last)),
             (Key::ArrowUp, Some(at), _) => self.select(at.saturating_sub(1)),
-            (Key::Enter, ..) if !repeat => self.open_selected(),
+            (Key::Enter | Key::NumpadEnter, ..) if !repeat => self.open_selected(),
             (Key::Escape, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
             _ => {}
         }
@@ -411,6 +411,9 @@ mod tests {
         pilots.input(&key(Key::Enter, false));
         assert_eq!(pilots.take_outcome(), open("Ada"));
         assert_eq!(pilots.take_outcome(), None, "once");
+        let mut pilots = list(&["Ada", "Bob"]);
+        pilots.input(&key(Key::NumpadEnter, false));
+        assert_eq!(pilots.take_outcome(), open("Ada"), "the keypad's Enter");
     }
 
     #[test]

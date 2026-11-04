@@ -220,7 +220,7 @@ pub fn mark_labels(mark: Option<EscortMark>) -> (&'static str, &'static str) {
 #[must_use]
 pub fn key_press(key: Key) -> Option<EscortButton> {
     match key {
-        Key::Enter | Key::Escape | Key::KeyC => Some(EscortButton::Close),
+        Key::Enter | Key::NumpadEnter | Key::Escape | Key::KeyC => Some(EscortButton::Close),
         Key::KeyR => Some(EscortButton::Release),
         Key::KeyU => Some(EscortButton::Upgrade),
         Key::KeyS => Some(EscortButton::Sell),
@@ -701,6 +701,7 @@ mod tests {
         let mut open = dialog(&captured());
         for (pressed, press) in [
             (Key::Enter, EscortButton::Close),
+            (Key::NumpadEnter, EscortButton::Close),
             (Key::Escape, EscortButton::Close),
             (Key::KeyC, EscortButton::Close),
             (Key::KeyC, EscortButton::Close),

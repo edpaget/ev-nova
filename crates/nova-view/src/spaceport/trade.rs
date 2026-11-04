@@ -838,7 +838,7 @@ impl Screen for TradeScreen {
         }
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } = *input
@@ -2539,7 +2539,7 @@ mod tests {
         let mut screen = screen();
         click_item(&mut screen, DONE_ITEM);
         assert!(screen.closed());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = screen_of(market());
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
@@ -2605,7 +2605,7 @@ mod tests {
 
     #[test]
     fn without_the_dialog_it_says_why_and_return_or_escape_closes_it() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = TradeScreen::new(
                 Err("no DLOG 1001".to_owned()),
                 Ok(quantity()),

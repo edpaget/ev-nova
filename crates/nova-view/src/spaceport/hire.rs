@@ -564,7 +564,7 @@ impl Screen for HireScreen {
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.laid.is_err() {
             if let Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } = *input
@@ -1358,6 +1358,19 @@ mod tests {
         screen.input(&key(HIRE_KEY, false));
         assert!(!screen.closed());
         screen.input(&key(Key::Enter, false));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_the_keypads_enter_closes_it_as_return_does() {
+        let mut screen = HireScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            list(),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        screen.input(&key(Key::NumpadEnter, false));
         assert!(screen.closed());
     }
 

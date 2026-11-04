@@ -381,7 +381,7 @@ pub fn skips_a_movie(input: &Input) -> bool {
     matches!(
         input,
         Input::Key {
-            key: Key::Space | Key::Enter,
+            key: Key::Space | Key::Enter | Key::NumpadEnter,
             ..
         } | Input::PointerButton {
             button: MouseButton::Left,
@@ -1869,7 +1869,12 @@ mod tests {
 
     #[test]
     fn a_click_space_or_return_skips_the_running_movie() {
-        for skip in [click(true), press(Key::Space), press(Key::Enter)] {
+        for skip in [
+            click(true),
+            press(Key::Space),
+            press(Key::Enter),
+            press(Key::NumpadEnter),
+        ] {
             let player = MockMoviePlayer::playing((160, 120), 30);
             let mut stage = staged(&player, 0);
             stage.begin();

@@ -945,7 +945,7 @@ impl Screen for BarScreen {
         }
         if self.laid.is_err() {
             if let Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } = *input
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[test]
     fn leave_return_enter_and_escape_leave_the_bar() {
-        for leave in [Key::Enter, Key::Escape] {
+        for leave in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = bar();
             screen.input(&key(leave, false));
             assert!(screen.closed(), "{leave:?}");

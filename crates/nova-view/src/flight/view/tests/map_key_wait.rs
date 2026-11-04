@@ -83,7 +83,14 @@ fn while_waiting_keys_and_clicks_change_nothing() {
     view.input(&key(MAP, true));
     let selected = view.map.selected();
     let from = sent_count(&view);
-    for k in [Key::Tab, Key::Enter, Key::KeyC, Key::Space, LAND] {
+    for k in [
+        Key::Tab,
+        Key::Enter,
+        Key::NumpadEnter,
+        Key::KeyC,
+        Key::Space,
+        LAND,
+    ] {
         tap(&mut view, k);
     }
     view.input(&held(Key::Tab));
@@ -111,10 +118,14 @@ fn letting_go_of_every_key_while_waiting_closes_the_map() {
 
 #[test]
 fn with_m_up_return_enter_done_and_the_routers_close_close_at_once() {
-    let closes: [fn(&mut Faked); 3] = [
-        // Return and Enter are one key here.
+    let closes: [fn(&mut Faked); 4] = [
         |view| {
             view.input(&key(Key::Enter, true));
+        },
+        // `_MapFilter` takes the keypad's Enter as Return (0x4C beside
+        // 0x24).
+        |view| {
+            view.input(&key(Key::NumpadEnter, true));
         },
         |view| {
             let done = done_at(view);
@@ -132,10 +143,14 @@ fn with_m_up_return_enter_done_and_the_routers_close_close_at_once() {
 
 #[test]
 fn with_m_held_return_enter_done_and_the_routers_close_wait_for_its_release() {
-    let closes: [fn(&mut Faked); 3] = [
-        // Return and Enter are one key here.
+    let closes: [fn(&mut Faked); 4] = [
         |view| {
             view.input(&key(Key::Enter, true));
+        },
+        // `_MapFilter` takes the keypad's Enter as Return (0x4C beside
+        // 0x24).
+        |view| {
+            view.input(&key(Key::NumpadEnter, true));
         },
         |view| {
             let done = done_at(view);

@@ -398,7 +398,7 @@ impl Screen for RaceScreen {
         self.quantity.follow_alt(input);
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } = *input
@@ -960,7 +960,7 @@ mod tests {
         let mut screen = open();
         click(&mut screen, LEAVE_ITEM);
         assert!(screen.closed());
-        for leave in [Key::Enter, Key::Escape] {
+        for leave in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = open();
             screen.input(&key(leave, true, true));
             assert!(!screen.closed(), "{leave:?} repeating");
@@ -989,7 +989,7 @@ mod tests {
 
     #[test]
     fn without_its_dialog_it_says_why_and_return_or_escape_leaves() {
-        for leave in [Key::Enter, Key::Escape] {
+        for leave in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen =
                 RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
             assert_eq!(screen.problem(), Some("no DLOG 1023"));

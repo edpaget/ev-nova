@@ -915,7 +915,7 @@ impl Screen for PlayerInfoScreen {
                 };
             }
             Input::Key {
-                key: Key::Enter | Key::Escape | PLAYER_INFO_KEY,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape | PLAYER_INFO_KEY,
                 pressed: true,
                 repeat: false,
             } => self.close(),
@@ -1851,7 +1851,7 @@ mod tests {
 
     #[test]
     fn return_enter_escape_and_p_close_it_but_not_a_repeat_or_release() {
-        for closing in [Key::Enter, Key::Escape, PLAYER_INFO_KEY] {
+        for closing in [Key::Enter, Key::NumpadEnter, Key::Escape, PLAYER_INFO_KEY] {
             let mut screen = screen();
             screen.input(&key(closing, true, true));
             screen.input(&key(closing, false, false));
@@ -2365,7 +2365,7 @@ mod tests {
     /// routine, and neither does `_MyModalDialog` @0x59954.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for closing in [Key::Enter, Key::Escape, PLAYER_INFO_KEY] {
+        for closing in [Key::Enter, Key::NumpadEnter, Key::Escape, PLAYER_INFO_KEY] {
             let mut screen = screen();
             assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
             screen.input(&press(closing));

@@ -173,6 +173,8 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 ///   from the original's following the lock state. winit 0.30.13 sends no
 ///   Caps Lock key on macOS (its `key_to_modifier` maps Alt, Control,
 ///   Super and Shift alone), so there it never arrives.
+/// - The keypad's Enter is its own key: the intro and flight's `ackComm`
+///   poll Return's key code alone, where the dialogs take both.
 /// - F11 is the fullscreen shortcut off a Mac. F12 is flight's frame-rate
 ///   key: macOS keeps it for itself unless "Use F1, F2, etc. keys as
 ///   standard function keys" is set, and fn-F12 reaches the game
@@ -198,8 +200,6 @@ pub fn map_key(key: PhysicalKey) -> Key {
                 // Either Command: what flight's jettison and eject keys
                 // need held.
                 PhysicalKey::Code(KeyCode::SuperRight) => Key::MetaLeft,
-                // Return or the keypad's Enter.
-                PhysicalKey::Code(KeyCode::NumpadEnter) => Key::Enter,
                 // `-` or the keypad's: the map's zoom out.
                 PhysicalKey::Code(KeyCode::NumpadSubtract) => Key::Minus,
                 // winit's `KeyCode` is `#[non_exhaustive]`; its legacy
@@ -218,7 +218,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
         NonConvert, Delete, End, Help, Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft,
         ArrowRight, ArrowUp, NumLock, Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5,
         Numpad6, Numpad7, Numpad8, Numpad9, NumpadAdd, NumpadBackspace, NumpadClear,
-        NumpadClearEntry, NumpadComma, NumpadDecimal, NumpadDivide, NumpadEqual, NumpadHash,
+        NumpadClearEntry, NumpadComma, NumpadDecimal, NumpadDivide, NumpadEnter, NumpadEqual, NumpadHash,
         NumpadMemoryAdd, NumpadMemoryClear, NumpadMemoryRecall, NumpadMemoryStore,
         NumpadMemorySubtract, NumpadMultiply, NumpadParenLeft, NumpadParenRight, NumpadStar,
         Escape, Fn, FnLock, PrintScreen, ScrollLock, Pause, BrowserBack, BrowserFavorites,
@@ -287,7 +287,7 @@ mod tests {
             (KeyCode::Home, Key::Home),
             (KeyCode::End, Key::End),
             (KeyCode::Enter, Key::Enter),
-            (KeyCode::NumpadEnter, Key::Enter),
+            (KeyCode::NumpadEnter, Key::NumpadEnter),
             (KeyCode::Escape, Key::Escape),
             (KeyCode::Space, Key::Space),
             (KeyCode::Tab, Key::Tab),
@@ -486,7 +486,7 @@ mod tests {
         (KeyCode::NumpadComma, Key::NumpadComma),
         (KeyCode::NumpadDecimal, Key::NumpadDecimal),
         (KeyCode::NumpadDivide, Key::NumpadDivide),
-        (KeyCode::NumpadEnter, Key::Enter),
+        (KeyCode::NumpadEnter, Key::NumpadEnter),
         (KeyCode::NumpadEqual, Key::NumpadEqual),
         (KeyCode::NumpadHash, Key::NumpadHash),
         (KeyCode::NumpadMemoryAdd, Key::NumpadMemoryAdd),
@@ -556,12 +556,11 @@ mod tests {
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.
-    const FOLDS: [(KeyCode, KeyCode); 6] = [
+    const FOLDS: [(KeyCode, KeyCode); 5] = [
         (KeyCode::ShiftRight, KeyCode::ShiftLeft),
         (KeyCode::AltRight, KeyCode::AltLeft),
         (KeyCode::ControlRight, KeyCode::ControlLeft),
         (KeyCode::SuperRight, KeyCode::SuperLeft),
-        (KeyCode::NumpadEnter, KeyCode::Enter),
         (KeyCode::NumpadSubtract, KeyCode::Minus),
     ];
 

@@ -107,7 +107,7 @@ impl Screen for ServiceScreen {
     fn input(&mut self, input: &Input) -> ScreenAction {
         let done = match *input {
             Input::Key {
-                key: Key::Enter | Key::Escape,
+                key: Key::Enter | Key::NumpadEnter | Key::Escape,
                 pressed: true,
                 repeat: false,
             } => true,
@@ -259,7 +259,7 @@ mod tests {
         let mut screen = bar();
         click(&mut screen, DONE_BUTTON.center());
         assert!(screen.closed());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = bar();
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
@@ -326,7 +326,7 @@ mod tests {
     /// Return and Escape are pinned silent like the original's filters.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = bar();
             screen.input(&key(k, true, false));
             screen.input(&key(k, false, false));

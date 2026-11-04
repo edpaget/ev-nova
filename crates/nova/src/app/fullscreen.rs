@@ -217,7 +217,8 @@ impl Fullscreen {
         match self.os {
             Os::MacOs => false,
             Os::Windows | Os::Other => {
-                (key == Key::Enter && self.held_modifiers.alt) || key == Key::F11
+                (matches!(key, Key::Enter | Key::NumpadEnter) && self.held_modifiers.alt)
+                    || key == Key::F11
             }
         }
     }
@@ -508,6 +509,7 @@ mod tests {
     fn elsewhere_alt_enter_and_f11_are_the_shortcut() {
         for os in [Os::Windows, Os::Other] {
             assert!(toggles(os, &[Key::AltLeft, Key::Enter]), "{os:?}");
+            assert!(toggles(os, &[Key::AltLeft, Key::NumpadEnter]), "{os:?}");
             assert!(toggles(os, &[Key::F11]), "{os:?}");
             assert!(!toggles(os, &[Key::Enter]), "{os:?}");
             assert!(!toggles(os, &[Key::F10]), "{os:?}");

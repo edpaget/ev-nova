@@ -1934,7 +1934,7 @@ impl GalaxyMap {
         match *input {
             // Return enters once, however long it is held.
             Input::Key {
-                key: Key::Enter,
+                key: Key::Enter | Key::NumpadEnter,
                 pressed: true,
                 repeat,
             } => {
@@ -2869,6 +2869,14 @@ mod tests {
             pressed: false,
             repeat: false,
         }
+    }
+
+    #[test]
+    fn the_keypads_enter_on_a_selected_system_asks_to_enter_it_as_return_does() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        assert_eq!(map.input(&press(Key::NumpadEnter)), ScreenAction::None);
+        assert_eq!(map.take_entry(), Some(SystemId(129)));
     }
 
     #[test]

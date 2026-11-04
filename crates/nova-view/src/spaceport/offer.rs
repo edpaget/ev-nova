@@ -575,7 +575,7 @@ impl OfferDialog {
         let accept = first(&self.prompt.labels.accept);
         let refuse = self.prompt.labels.refuse.as_deref().and_then(first);
         let letter = match key {
-            Key::Enter => return Some(OfferChoice::Accept),
+            Key::Enter | Key::NumpadEnter => return Some(OfferChoice::Accept),
             _ if accept != refuse => crate::input::key_letter(key),
             _ => return None,
         };
@@ -1528,6 +1528,9 @@ mod tests {
         assert_eq!(dialog.take_choice(), None, "a repeat does nothing");
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
@@ -1551,6 +1554,9 @@ mod tests {
         dialog.input(&key(Key::KeyS));
         assert_eq!(dialog.take_choice(), None);
         dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
@@ -2468,6 +2474,9 @@ mod tests {
         );
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
@@ -2551,6 +2560,9 @@ mod tests {
     fn a_before_movie_that_cannot_start_gives_its_first_input_to_the_dialog() {
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&MockMoviePlayer::refusing()));
         dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        let mut dialog = offer();
+        dialog.input(&key(Key::NumpadEnter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
