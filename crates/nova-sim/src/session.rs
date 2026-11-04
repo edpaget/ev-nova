@@ -2975,8 +2975,10 @@ impl Session {
         &self.pilot.course
     }
 
-    /// Presses the jump key: accepts a jump to the system selected in nav
-    /// mode 3 ([`Session::nav_mode`]), if the ship has not landed and the
+    /// Presses the jump key: accepts a jump to the system the mode-3
+    /// selection's Con slot names ([`Chart::jump_selection`], a
+    /// self-listed slot and one with no visible system at its place
+    /// included), if the ship has not landed and the
     /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
     /// system; otherwise the refusal says why. In any other mode, or with
     /// nothing selected, it is [`JumpRefusal::NoDestination`]
@@ -6794,10 +6796,12 @@ impl Space {
 impl Chart {
     /// The map bearing of `to` from the current system, in whole degrees,
     /// `_CalcInterceptAngle` of their map positions (@0x6b0cf), which the
-    /// warp stage turns to; none when either is off the map. Two systems
-    /// at one place give 0, as the original's table does.
+    /// warp stage turns to; none when either is not in the catalog. A
+    /// hidden system keeps its map position, as the original reads the
+    /// raw slot target's `sÿst` (@0x6b097-0x6b0a2). Two systems at one
+    /// place give 0, as the original's table does.
     fn jump_aim(&self, pilot: &Pilot, to: SystemId) -> Option<i16> {
-        let map = |id| self.galaxy.map().position(id);
+        let map = |id| self.galaxy.position(id);
         map(pilot.system)
             .zip(map(to))
             .map(|(from, to)| intercept_angle(from, to))
@@ -30083,18 +30087,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_course_hop_with_no_system_at_its_place_is_no_destination_until_one_shows() {
+    fn a_course_hop_with_no_system_at_its_place_is_jumped_to_by_its_slot() {
+        // The selection, 131, still stands in 130's Con slot 0, so J goes
+        // ahead (+0x6c ≠ −1, @0x6b11e-0x6b131) into hidden 131, and the
+        // refresh's move takes the player to the chain head at its place,
+        // 131 itself, made visible (@0x99929-0x999a4).
         let catalog = alternates();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         hide(&mut session, &catalog, &[131, 134]);
         assert_eq!(session.course_shown(), [], "cut at the first hop");
         fly_out(&mut session, &catalog);
-        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
-        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        unhide(&mut session, &catalog, &[131]);
-        assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert!(session.galaxy().visible(SystemId(131)));
     }
 
     /// [`alternates`] with two ships of düde 128 flying in 131, and none

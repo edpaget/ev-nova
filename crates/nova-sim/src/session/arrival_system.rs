@@ -33,7 +33,7 @@
 //! is under way (the keys, the map's key and the floating map's click),
 //! so the selection at arrival is the jump's. The engine falls back on the
 //! stand-in J took when the selection stands in no Con slot, which can't
-//! be jumped to, or names a system away from J's place, which only
+//! be jumped to but by [`HyperlinkRule::BothWays`](crate::HyperlinkRule::BothWays), or names a system away from J's place, which only
 //! [`Session::plot_course`](super::Session::plot_course), a helper for
 //! tests and tools, can make during the warp: neither is reached in play.
 //!
@@ -86,7 +86,6 @@
 //! deferred.
 
 use crate::catalog::SystemId;
-use crate::navigation::NavMode;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::HiddenMove;
@@ -135,11 +134,7 @@ impl Chart {
     /// see the flight view), so the jump enters the system it was bound
     /// for.
     pub(super) fn selected_con_target(&self, pilot: &Pilot, to: SystemId) -> Option<SystemId> {
-        let NavMode::Hyperspace(Some(selected)) = self.nav else {
-            return None;
-        };
-        let slot = self.selected_slot(pilot, selected)?;
-        let target = *self.galaxy.con_slots(pilot.system).get(slot)?;
+        let target = self.selected_link(pilot)?;
         self.galaxy
             .map()
             .places()
@@ -185,6 +180,7 @@ mod tests {
     use crate::control::SetExpr;
     use crate::gate::{GateKind, WORMHOLE};
     use crate::hyperspace::MultiJumpRule;
+    use crate::navigation::NavMode;
     use crate::rulebook::Rulebook;
     use crate::session::jump_exploration::tests::watching_explored;
     use crate::session::tests::{
