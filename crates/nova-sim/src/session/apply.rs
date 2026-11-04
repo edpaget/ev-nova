@@ -121,6 +121,7 @@ impl Session {
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
+    ///   [`FlightCommand::OpenSystemMap`] ([`Session::open_system_map`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
     ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]),
@@ -161,6 +162,10 @@ impl Session {
             FlightCommand::CycleMapSelection => done_if(self.cycle_map_selection()),
             FlightCommand::ClearRoute => {
                 self.clear_route();
+                Answer::Done
+            }
+            FlightCommand::OpenSystemMap => {
+                self.open_system_map();
                 Answer::Done
             }
             FlightCommand::SelectOnFloatingMap(link) => done_if(self.select_on_floating_map(link)),
@@ -630,6 +635,21 @@ pub(in crate::session) mod tests {
         assert_eq!(apply(&mut session, FlightCommand::ClearRoute), Answer::Done);
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+    }
+
+    /// Never refused: an opening tidies the course even with none.
+    #[test]
+    fn a_maps_opening_tidies_the_course_and_unsets_the_stale_length() {
+        let mut session = quiet(&catalog());
+        assert_eq!(apply(&mut session, FlightCommand::ClearRoute), Answer::Done);
+        assert_eq!(session.chart.map_length, Some(1));
+        assert_eq!(
+            apply(&mut session, FlightCommand::OpenSystemMap),
+            Answer::Done
+        );
+        assert_eq!(session.pilot.course_start(), None, "a start with no hops");
+        assert_eq!(session.chart.map_length, None);
+        assert_eq!(session.take_sounds(), []);
     }
 
     #[test]

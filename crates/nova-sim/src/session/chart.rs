@@ -116,6 +116,15 @@ pub(super) struct Chart {
     /// (`_bribeRandom`; see the `planet_comm` module). Not saved, as the
     /// original's load resets it.
     pub(super) bribe_roll: Option<u8>,
+    /// The course map's stale length, `_DoSystemMap`'s length local
+    /// (-0x9c(%ebp)), counting slot 0: what the last Shift-click
+    /// ([`RouteEdit::length`](crate::map_route::RouteEdit::length)) or
+    /// Clear Route (1) left, which the acceptance's Shift branch reads
+    /// (see the `map_click` module). `None` until the first of them in an
+    /// opening, which each opening resets it to: the original reads
+    /// uninitialised stack there, and ours reads the course's real length.
+    /// Not saved: it lives only while a map is open.
+    pub(super) map_length: Option<usize>,
 }
 
 impl Chart {
@@ -147,6 +156,7 @@ impl Chart {
             walk: MapWalk::default(),
             planet_comm: None,
             bribe_roll: None,
+            map_length: None,
         }
     }
 }

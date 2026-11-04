@@ -791,6 +791,12 @@ pub enum FlightCommand {
     /// Clear Route, from its button or C
     /// ([`Session::clear_route`](crate::Session::clear_route)).
     ClearRoute,
+    /// An in-flight map opens, by whichever opener: tidy the course and
+    /// unset the stale length
+    /// ([`Session::open_system_map`](crate::Session::open_system_map)).
+    /// Sent before the opening's ask ([`ScreenAsk::MapOpening`]), as the
+    /// tidy can change [`FlightFrame::course_plotted`], which no ask may.
+    OpenSystemMap,
     /// A click hit on the floating map: the link, or `None` for the
     /// current system's centre
     /// ([`Session::select_on_floating_map`](crate::Session::select_on_floating_map)).
@@ -1185,6 +1191,7 @@ impl FlightCommand {
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
+            | Self::OpenSystemMap
             | Self::MarkKnown(_)
             | Self::CueCourse
             | Self::SavePortNav
@@ -2254,6 +2261,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one row for each command
     fn each_command_is_gated_by_the_key_that_sends_it_or_by_none() {
         use crate::flight_frame::FlightCommand as C;
         let saved = SavedNav::of(NavMode::Off);
@@ -2303,6 +2311,7 @@ mod tests {
             ),
             (C::CycleMapSelection, None),
             (C::ClearRoute, None),
+            (C::OpenSystemMap, None),
             (C::MarkKnown(Vec::new()), None),
             (C::CueCourse, None),
             (C::SavePortNav, None),

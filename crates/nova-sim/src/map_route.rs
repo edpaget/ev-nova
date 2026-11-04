@@ -13,10 +13,14 @@
 //! ([`Places::head`]), a system not in the catalog being its own. In
 //! order:
 //!
-//! 1. **The tidy**, the inlined `_CompactHyperRoute` (@0x13280-0x132c2):
-//!    with slot 0 set the shift does nothing, and the clear when slot 1 is
-//!    −1 is the empty course already, so on the engine's course it is a
-//!    no-op.
+//! 1. **The tidy**, the inlined `_CompactHyperRoute` (@0x13280-0x132c2,
+//!    [`tidy`]): with no start the first hop shifts into it, and with no
+//!    hop left the start is cleared. A start with no hops (Clear Route or
+//!    a gate exit, then an `M`/`N` that kept the course) is cleared, so
+//!    the append starts the course again at the current system; a course
+//!    with no start (one a remove left) has its first hop shifted into
+//!    the start. The map's opening runs the same tidy
+//!    (@0x12338-0x12394, `nova_sim::Session::open_system_map`).
 //! 2. **The current system's place.** A pick there sets all 32 slots to −1
 //!    (@0x132ec-0x13306), the start included, and the click goes on: the
 //!    cut finds nothing, so the source is the current system.
@@ -34,11 +38,17 @@
 //!    itself when that is −1 (@0x133bc-0x133ec). A course longer than
 //!    [`ROUTE_HOPS`], which only the other reading's planner plots, is
 //!    taken as full.
-//! 5. **The remove** (@0x13466-0x134ba): the last slot at the pick's raw
-//!    position is set to −1 and the click ends. The cut has taken every
-//!    hop at the pick's place, so it can match only slot 0 with the
-//!    length 1 of step 4. Left out: galaxy-map-fidelity-followups phase 4,
-//!    which can read the stored start.
+//!    The length local this sets (-0x9c(%ebp)), counting slot 0, is
+//!    [`RouteEdit::length`].
+//! 5. **The remove** (@0x13466-0x134ba), whether the link test of step 6
+//!    passed or not: the last slot at the pick's raw position is set to
+//!    −1, the length dropped by one, and the click ends, with no append.
+//!    The cut has taken every hop at the pick's place, so it can match
+//!    only slot 0 with the length 1 of step 4: a full course, or one the
+//!    cut emptied. A start at the current system's place was cleared in
+//!    step 2, so only a start an `M`/`N` left elsewhere is removed. The
+//!    hops stay, with no start, until the next tidy shifts the first into
+//!    it.
 //! 6. **The append.** When the session's link test passes for the source
 //!    (`can_append`, @0x1340f-0x13462), the start is set to the current
 //!    system when it is −1 and kept otherwise (@0x134d3-0x134eb), the pick
@@ -68,6 +78,27 @@ pub struct RouteEdit {
     /// Whether the pick was written, setting `showClearRouteButton`
     /// (@0x134c9-0x13509).
     pub appended: bool,
+    /// What `_DoSystemMap`'s length local (-0x9c(%ebp)) holds after it,
+    /// counting slot 0: 1 for a full course and the hops + 1 otherwise
+    /// (@0x133ab, @0x133cf, @0x133f4), one more after an append
+    /// (@0x134f9) and 0 after the remove (@0x134ad). The acceptance's
+    /// Shift branch reads it until the next Shift-click or Clear Route
+    /// (`nova_sim::Session::map_click`'s module docs).
+    pub length: usize,
+}
+
+/// The tidy, `_CompactHyperRoute` as `_DoSystemMap` inlines it at its
+/// opening (@0x12338-0x12394) and at each Shift-click (@0x13280-0x132c2):
+/// with no start (slot 0 −1), the first hop shifts into it
+/// (@0x12338-0x12372); then with no hop (slot 1 −1), the start is cleared
+/// too (@0x12378-0x12394).
+pub fn tidy(start: &mut Option<SystemId>, course: &mut Vec<SystemId>) {
+    if start.is_none() && !course.is_empty() {
+        *start = Some(course.remove(0));
+    }
+    if course.is_empty() {
+        *start = None;
+    }
 }
 
 /// `course`, started at `start` and flown from `current`, after a
@@ -86,6 +117,7 @@ pub fn shift_click(
     let place = |system: SystemId| places.head(system).unwrap_or(system);
     let mut course = course.to_vec();
     let mut start = start;
+    tidy(&mut start, &mut course);
     if place(pick) == place(current) {
         course.clear();
         start = None;
@@ -98,12 +130,21 @@ pub fn shift_click(
         course.truncate(cut);
     }
     let full = course.len() >= ROUTE_HOPS;
+    let mut length = if full { 1 } else { course.len() + 1 };
     let source = match course.last() {
         Some(_) if full => current,
         Some(&last) => places.stand_in(last).unwrap_or(last),
         None => current,
     };
     let appended = can_append(source);
+    if length == 1 && start.is_some_and(|start| places.together(start, pick)) {
+        return RouteEdit {
+            start: None,
+            course,
+            appended: false,
+            length: 0,
+        };
+    }
     if appended {
         start = start.or(Some(current));
         if full {
@@ -111,11 +152,13 @@ pub fn shift_click(
         } else {
             course.push(pick);
         }
+        length += 1;
     }
     RouteEdit {
         start,
         course,
         appended,
+        length,
     }
 }
 
@@ -153,9 +196,16 @@ mod tests {
     }
 
     /// The Shift-click from 130, its link test passing for `sources`
-    /// alone.
+    /// alone, the course started at 130 when it has hops, as every course
+    /// with hops is started.
     fn click(course: &[i16], pick: i16, places: &Places, sources: &[i16]) -> RouteEdit {
-        click_from(None, course, pick, places, sources)
+        click_from(
+            (!course.is_empty()).then_some(130),
+            course,
+            pick,
+            places,
+            sources,
+        )
     }
 
     /// [`click`] with the course started at `start`.
@@ -177,21 +227,176 @@ mod tests {
         )
     }
 
-    /// The edit of a course with no start: an append starts it at 130.
+    /// The edit [`click`] gives, short of a full course's: started at 130
+    /// while it has hops, and the length the hops + 1.
     fn edit(course: &[i16], appended: bool) -> RouteEdit {
         RouteEdit {
-            start: appended.then_some(SystemId(130)),
+            start: (!course.is_empty()).then_some(SystemId(130)),
             course: ids(course),
             appended,
+            length: course.len() + 1,
         }
     }
 
     #[test]
     fn an_append_to_a_course_with_no_start_starts_it_at_the_current_system() {
         assert_eq!(
-            click_from(None, &[131], 132, &places(&[]), &[131]).start,
+            click_from(None, &[], 131, &places(&[]), &[130]).start,
             Some(SystemId(130))
         );
+    }
+
+    // The tidy.
+
+    /// [`tidy`] of `start` and `course`.
+    fn tidied(start: Option<i16>, course: &[i16]) -> (Option<SystemId>, Vec<SystemId>) {
+        let (mut start, mut course) = (start.map(SystemId), ids(course));
+        tidy(&mut start, &mut course);
+        (start, course)
+    }
+
+    #[test]
+    fn the_tidy_shifts_the_first_hop_into_a_missing_start() {
+        assert_eq!(
+            tidied(None, &[131, 132, 133]),
+            (Some(SystemId(131)), ids(&[132, 133]))
+        );
+    }
+
+    #[test]
+    fn the_tidy_empties_a_course_of_one_hop_with_no_start() {
+        assert_eq!(tidied(None, &[131]), (None, Vec::new()));
+    }
+
+    #[test]
+    fn the_tidy_clears_a_start_with_no_hops() {
+        assert_eq!(tidied(Some(133), &[]), (None, Vec::new()));
+        assert_eq!(tidied(None, &[]), (None, Vec::new()));
+    }
+
+    #[test]
+    fn the_tidy_keeps_a_started_course_with_hops() {
+        assert_eq!(
+            tidied(Some(133), &[131, 132]),
+            (Some(SystemId(133)), ids(&[131, 132]))
+        );
+    }
+
+    #[test]
+    fn a_shift_click_tidies_a_start_left_with_no_hops_before_the_append() {
+        assert_eq!(
+            click_from(Some(133), &[], 131, &places(&[]), &[130]),
+            edit(&[131], true),
+            "started again at the current system"
+        );
+    }
+
+    #[test]
+    fn a_shift_click_shifts_a_course_with_no_start_before_the_cut() {
+        // 131 becomes the start, so 133 is the first hop and the source.
+        assert_eq!(
+            click_from(None, &[131, 133], 132, &places(&[]), &[133]),
+            RouteEdit {
+                start: Some(SystemId(131)),
+                course: ids(&[133, 132]),
+                appended: true,
+                length: 3,
+            }
+        );
+    }
+
+    // The remove.
+
+    /// A full course of 131 and 132 in turn, with no hop at 133's place.
+    fn full_off_133() -> Vec<i16> {
+        (0..ROUTE_HOPS).map(|hop| 131 + (hop % 2) as i16).collect()
+    }
+
+    #[test]
+    fn a_pick_at_a_full_courses_start_removes_the_start_linked_or_not() {
+        let full = full_off_133();
+        for sources in [&[130][..], &[]] {
+            assert_eq!(
+                click_from(Some(133), &full, 133, &places(&[]), sources),
+                RouteEdit {
+                    start: None,
+                    course: ids(&full),
+                    appended: false,
+                    length: 0,
+                },
+                "{sources:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pick_at_the_start_of_a_course_the_cut_emptied_removes_the_start() {
+        // The first hop is at the start's place: the cut takes every hop.
+        assert_eq!(
+            click_from(Some(133), &[133, 131], 133, &places(&[]), &[130]),
+            RouteEdit {
+                start: None,
+                course: Vec::new(),
+                appended: false,
+                length: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn no_remove_when_the_start_is_elsewhere() {
+        assert_eq!(
+            click_from(Some(132), &[133, 131], 133, &places(&[]), &[130]),
+            RouteEdit {
+                start: Some(SystemId(132)),
+                course: ids(&[133]),
+                appended: true,
+                length: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn no_remove_with_a_longer_course_after_the_cut() {
+        // 133 is the last hop's place, not the start's.
+        assert_eq!(
+            click_from(Some(133), &[131, 133], 133, &places(&[]), &[]),
+            RouteEdit {
+                start: Some(SystemId(133)),
+                course: ids(&[131]),
+                appended: false,
+                length: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn no_remove_with_no_start() {
+        assert_eq!(
+            click_from(None, &[], 131, &places(&[]), &[]),
+            RouteEdit {
+                start: None,
+                course: Vec::new(),
+                appended: false,
+                length: 1,
+            }
+        );
+    }
+
+    // The length.
+
+    #[test]
+    fn the_length_is_the_hops_and_one_after_a_refused_pick_and_one_more_after_an_append() {
+        assert_eq!(click(&[131, 132], 133, &places(&[]), &[]).length, 3);
+        assert_eq!(click(&[131], 132, &places(&[]), &[131]).length, 3);
+        assert_eq!(click(&[], 131, &places(&[]), &[]).length, 1);
+    }
+
+    #[test]
+    fn the_length_of_a_full_course_is_1_and_2_after_the_wrap() {
+        let full = long(ROUTE_HOPS);
+        assert_eq!(click(&full, 131, &places(&[]), &[]).length, 1);
+        assert_eq!(click(&full, 131, &places(&[]), &[130]).length, 2);
     }
 
     #[test]
@@ -336,6 +541,15 @@ mod tests {
         (0..hops).map(|hop| 132 + (hop % 2) as i16).collect()
     }
 
+    /// The edit [`click`] gives of a full course: the length 1, and 2
+    /// after the wrap.
+    fn full_edit(course: &[i16], appended: bool) -> RouteEdit {
+        RouteEdit {
+            length: if appended { 2 } else { 1 },
+            ..edit(course, appended)
+        }
+    }
+
     #[test]
     fn a_full_course_has_its_first_hop_overwritten_from_the_current_system() {
         let full = long(ROUTE_HOPS);
@@ -343,11 +557,11 @@ mod tests {
         wrapped[0] = 131;
         assert_eq!(
             click(&full, 131, &places(&[]), &[130]),
-            edit(&wrapped, true)
+            full_edit(&wrapped, true)
         );
         assert_eq!(
             click(&full, 131, &places(&[]), &[133]),
-            edit(&full, false),
+            full_edit(&full, false),
             "the last hop is not the source"
         );
     }
@@ -359,7 +573,7 @@ mod tests {
         wrapped[0] = 131;
         assert_eq!(
             click(&longer, 131, &places(&[]), &[130]),
-            edit(&wrapped, true)
+            full_edit(&wrapped, true)
         );
     }
 
@@ -372,7 +586,7 @@ mod tests {
         wrapped[0] = 131;
         assert_eq!(
             click(&longer, 131, &places(&[]), &[130]),
-            edit(&wrapped, true)
+            full_edit(&wrapped, true)
         );
     }
 

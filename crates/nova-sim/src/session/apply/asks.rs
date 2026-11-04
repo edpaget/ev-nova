@@ -226,6 +226,7 @@ mod tests {
         }
         for command in [
             FlightCommand::ClearRoute,
+            FlightCommand::OpenSystemMap,
             FlightCommand::SetWindowWidth(1024),
             FlightCommand::ClickInSpace {
                 at: Vec2::ZERO,
