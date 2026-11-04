@@ -78,6 +78,9 @@ glyphon = "0.12.0"
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 zeno = { version = "0.3.3", default-features = false, features = ["eval", "std"] }
 winit = "0.30.13"
+# The physical key names nova-view's `Key` is (`Code`), with `Display` and
+# `FromStr` for the settings file. Its `serde` feature is not needed.
+keyboard-types = "0.8.3"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts
 # (nova's dependency on macOS, Windows and Linux). Its default features are

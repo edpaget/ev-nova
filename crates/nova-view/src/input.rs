@@ -55,6 +55,79 @@ pub enum Key {
     Other,
 }
 
+/// The letter keys and the top row's digit keys, each with its lowercase
+/// letter or digit on a US keyboard.
+const LETTER_KEYS: [(keyboard_types::Code, char); 36] = {
+    use keyboard_types::Code;
+    [
+        (Code::KeyA, 'a'),
+        (Code::KeyB, 'b'),
+        (Code::KeyC, 'c'),
+        (Code::KeyD, 'd'),
+        (Code::KeyE, 'e'),
+        (Code::KeyF, 'f'),
+        (Code::KeyG, 'g'),
+        (Code::KeyH, 'h'),
+        (Code::KeyI, 'i'),
+        (Code::KeyJ, 'j'),
+        (Code::KeyK, 'k'),
+        (Code::KeyL, 'l'),
+        (Code::KeyM, 'm'),
+        (Code::KeyN, 'n'),
+        (Code::KeyO, 'o'),
+        (Code::KeyP, 'p'),
+        (Code::KeyQ, 'q'),
+        (Code::KeyR, 'r'),
+        (Code::KeyS, 's'),
+        (Code::KeyT, 't'),
+        (Code::KeyU, 'u'),
+        (Code::KeyV, 'v'),
+        (Code::KeyW, 'w'),
+        (Code::KeyX, 'x'),
+        (Code::KeyY, 'y'),
+        (Code::KeyZ, 'z'),
+        (Code::Digit0, '0'),
+        (Code::Digit1, '1'),
+        (Code::Digit2, '2'),
+        (Code::Digit3, '3'),
+        (Code::Digit4, '4'),
+        (Code::Digit5, '5'),
+        (Code::Digit6, '6'),
+        (Code::Digit7, '7'),
+        (Code::Digit8, '8'),
+        (Code::Digit9, '9'),
+    ]
+};
+
+/// The lowercase letter or digit a letter key or top-row digit key is
+/// named for on a US keyboard, or `None` for any other key (the keypad's
+/// digits included).
+///
+/// This is the key's US position, not what the player's layout types
+/// there: a screen that reads a letter by key code, as the original's
+/// filters read `EventRecord.message`'s key-code byte, reads it this way.
+/// The layout's own names for keys come from the key-bindings roadmap's
+/// `KeyNames` port (its phase 5).
+#[must_use]
+pub fn key_letter(key: keyboard_types::Code) -> Option<char> {
+    LETTER_KEYS
+        .iter()
+        .find_map(|&(k, letter)| (k == key).then_some(letter))
+}
+
+/// The letter key or top-row digit key a letter, either case, or a digit
+/// is named for on a US keyboard, or `None` for any other character.
+///
+/// It is [`key_letter`] turned around, and reads a US position the same
+/// way.
+#[must_use]
+pub fn letter_key(letter: char) -> Option<keyboard_types::Code> {
+    let letter = letter.to_ascii_lowercase();
+    LETTER_KEYS
+        .iter()
+        .find_map(|&(key, l)| (l == letter).then_some(key))
+}
+
 /// A mouse button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MouseButton {
@@ -210,6 +283,101 @@ mod tests {
         };
         for unmoved in [key, Input::Text('a'), Input::PointerLeft] {
             assert_eq!(unmoved.translated(by), unmoved);
+        }
+    }
+
+    use keyboard_types::Code;
+
+    const LETTERS: [(Code, char); 26] = [
+        (Code::KeyA, 'a'),
+        (Code::KeyB, 'b'),
+        (Code::KeyC, 'c'),
+        (Code::KeyD, 'd'),
+        (Code::KeyE, 'e'),
+        (Code::KeyF, 'f'),
+        (Code::KeyG, 'g'),
+        (Code::KeyH, 'h'),
+        (Code::KeyI, 'i'),
+        (Code::KeyJ, 'j'),
+        (Code::KeyK, 'k'),
+        (Code::KeyL, 'l'),
+        (Code::KeyM, 'm'),
+        (Code::KeyN, 'n'),
+        (Code::KeyO, 'o'),
+        (Code::KeyP, 'p'),
+        (Code::KeyQ, 'q'),
+        (Code::KeyR, 'r'),
+        (Code::KeyS, 's'),
+        (Code::KeyT, 't'),
+        (Code::KeyU, 'u'),
+        (Code::KeyV, 'v'),
+        (Code::KeyW, 'w'),
+        (Code::KeyX, 'x'),
+        (Code::KeyY, 'y'),
+        (Code::KeyZ, 'z'),
+    ];
+
+    const DIGITS: [(Code, char); 10] = [
+        (Code::Digit0, '0'),
+        (Code::Digit1, '1'),
+        (Code::Digit2, '2'),
+        (Code::Digit3, '3'),
+        (Code::Digit4, '4'),
+        (Code::Digit5, '5'),
+        (Code::Digit6, '6'),
+        (Code::Digit7, '7'),
+        (Code::Digit8, '8'),
+        (Code::Digit9, '9'),
+    ];
+
+    #[test]
+    fn each_letter_and_top_row_digit_key_is_its_lowercase_letter_or_digit() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(key_letter(key), Some(letter), "{key}");
+        }
+    }
+
+    #[test]
+    fn each_letter_either_case_and_each_digit_is_its_key() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(letter_key(letter), Some(key), "{letter}");
+            assert_eq!(
+                letter_key(letter.to_ascii_uppercase()),
+                Some(key),
+                "{letter}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_letter_and_its_key_turn_into_each_other_and_back() {
+        for (key, letter) in LETTERS.into_iter().chain(DIGITS) {
+            assert_eq!(letter_key(key_letter(key).expect("a letter")), Some(key));
+            for c in [letter, letter.to_ascii_uppercase()] {
+                assert_eq!(
+                    key_letter(letter_key(c).expect("a key")),
+                    Some(c.to_ascii_lowercase())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_with_no_letter_and_a_character_with_no_key_are_none() {
+        for key in [
+            Code::Space,
+            Code::Enter,
+            Code::F1,
+            Code::Numpad1,
+            Code::Minus,
+            Code::Comma,
+            Code::ShiftLeft,
+            Code::Unidentified,
+        ] {
+            assert_eq!(key_letter(key), None, "{key}");
+        }
+        for c in [' ', '-', ',', 'é', '!'] {
+            assert_eq!(letter_key(c), None, "{c}");
         }
     }
 }
