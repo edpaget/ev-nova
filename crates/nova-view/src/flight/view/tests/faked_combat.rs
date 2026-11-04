@@ -149,6 +149,15 @@ fn the_flight_keys_are_held_until_let_go_or_released() {
 }
 
 #[test]
+fn the_right_control_fires_no_secondary() {
+    // `_HandlePlayer` polls the secondary fire key's code, the left
+    // Control's by default (`_QuickKeyCheck(0x3b)` @0x6e710).
+    let mut view = in_flight();
+    view.input(&key(Key::ControlRight, true));
+    assert_eq!(held_in_the_next_step(&mut view).0, (false, false));
+}
+
+#[test]
 fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
     let mut view = in_flight();
     view.input(&key(FIRE_KEY, true));

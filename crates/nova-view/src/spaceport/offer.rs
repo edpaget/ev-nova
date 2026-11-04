@@ -1110,6 +1110,7 @@ fn queues_an_event(input: &Input) -> bool {
                     Key::AltLeft
                         | Key::AltRight
                         | Key::ControlLeft
+                        | Key::ControlRight
                         | Key::ShiftLeft
                         | Key::ShiftRight
                         | Key::MetaLeft
@@ -1434,6 +1435,7 @@ mod tests {
             Key::AltLeft,
             Key::AltRight,
             Key::ControlLeft,
+            Key::ControlRight,
             Key::ShiftLeft,
             Key::ShiftRight,
             Key::MetaLeft,

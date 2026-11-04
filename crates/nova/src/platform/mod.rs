@@ -179,6 +179,8 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 /// - The right Option (Alt) is its own key: flight and the race poll the
 ///   left Option's key code alone, where the exchange's and the
 ///   outfitter's counts take either, as does Alt-Enter.
+/// - The right Control is its own key: flight polls the left Control's
+///   key code alone (its secondary fire key).
 /// - The keypad's Enter is its own key: the intro and flight's `ackComm`
 ///   poll Return's key code alone, where the dialogs take both.
 /// - F11 is the fullscreen shortcut off a Mac. F12 is flight's frame-rate
@@ -196,8 +198,6 @@ pub fn map_key(key: PhysicalKey) -> Key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
                 // Command, Super off a Mac.
                 PhysicalKey::Code(KeyCode::SuperLeft) => Key::MetaLeft,
-                // Either Control: flight's secondary fire key.
-                PhysicalKey::Code(KeyCode::ControlRight) => Key::ControlLeft,
                 // Either Command: what flight's jettison and eject keys
                 // need held.
                 PhysicalKey::Code(KeyCode::SuperRight) => Key::MetaLeft,
@@ -214,7 +214,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
         Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Equal, IntlBackslash, IntlRo, IntlYen,
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN,
         KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Minus, Period,
-        Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock, ContextMenu, ControlLeft, Enter,
+        Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock, ContextMenu, ControlLeft, ControlRight, Enter,
         ShiftLeft, ShiftRight, Space, Tab, Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5,
         NonConvert, Delete, End, Help, Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft,
         ArrowRight, ArrowUp, NumLock, Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5,
@@ -312,7 +312,7 @@ mod tests {
             (KeyCode::AltLeft, Key::AltLeft),
             (KeyCode::AltRight, Key::AltRight),
             (KeyCode::ControlLeft, Key::ControlLeft),
-            (KeyCode::ControlRight, Key::ControlLeft),
+            (KeyCode::ControlRight, Key::ControlRight),
             (KeyCode::ShiftLeft, Key::ShiftLeft),
             (KeyCode::ShiftRight, Key::ShiftRight),
             (KeyCode::KeyR, Key::KeyR),
@@ -557,8 +557,7 @@ mod tests {
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.
-    const FOLDS: [(KeyCode, KeyCode); 3] = [
-        (KeyCode::ControlRight, KeyCode::ControlLeft),
+    const FOLDS: [(KeyCode, KeyCode); 2] = [
         (KeyCode::SuperRight, KeyCode::SuperLeft),
         (KeyCode::NumpadSubtract, KeyCode::Minus),
     ];
