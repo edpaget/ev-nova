@@ -3,7 +3,10 @@
 //! the colour they murk toward, and its system's murk as loaded, which
 //! the starfield reads.
 
+use std::collections::BTreeMap;
+
 use super::{Chart, Session, Setup, Statics};
+use crate::catalog::OutfitId;
 use crate::murk;
 use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
@@ -13,7 +16,8 @@ impl Session {
     /// its system's `Murk` as loaded ([`murk::loaded_murk`], by the
     /// rulebook's [`RuleKey::LowMurk`] reading), plus what its outfits
     /// add ([`murk::outfit_murk`]), as `_PlayerEffectiveMurk`
-    /// (@0x6f8f-0x704b) sums them.
+    /// (@0x6f8f-0x704b) sums them from the outfit counts `counted` (see
+    /// the `held_readers` module).
     ///
     /// It is worked out afresh at every call, as
     /// the interference is (`Chart::interference`). The original caches it in
@@ -21,8 +25,9 @@ impl Session {
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
     pub fn effective_murk(&self) -> u8 {
+        let counted = self.ship.counted_outfits(&self.pilot);
         self.chart
-            .effective_murk(&self.pilot, &self.statics, &self.setup)
+            .effective_murk(&self.pilot, &self.statics, &self.setup, &counted)
     }
 
     /// The RGB555 colour the player's system's sprites murk toward
@@ -50,16 +55,23 @@ impl Chart {
     /// its system's `Murk` as loaded ([`murk::loaded_murk`], by the
     /// rulebook's [`RuleKey::LowMurk`] reading), plus what its outfits
     /// add ([`murk::outfit_murk`]), as `_PlayerEffectiveMurk`
-    /// (@0x6f8f-0x704b) sums them.
+    /// (@0x6f8f-0x704b) sums them from the outfit counts `counted` (see
+    /// the `held_readers` module).
     ///
     /// It is worked out afresh at every call, as
     /// the interference is (`Chart::interference`). The original caches it in
     /// `_playerEffectiveMurk`; when that goes stale is
     /// rdm:task/reset-player-precalced-left-out-branches's question.
     #[must_use]
-    fn effective_murk(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> u8 {
+    fn effective_murk(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        counted: &BTreeMap<OutfitId, u16>,
+    ) -> u8 {
         let loaded = self.system_murk(pilot, setup);
-        murk::effective_murk(loaded, murk::outfit_murk(&pilot.outfits, &statics.outfits))
+        murk::effective_murk(loaded, murk::outfit_murk(counted, &statics.outfits))
     }
 
     /// The player's system's `Murk` as loaded (see

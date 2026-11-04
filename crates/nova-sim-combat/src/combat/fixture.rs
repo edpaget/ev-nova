@@ -1,9 +1,10 @@
 //! Test support for the combat layer's tests and the tests above it.
 //! Behind the `fixture` feature, for other crates' tests: a plain strike
-//! ([`strike`]). For this crate's tests alone: a fight's sides with no
-//! governments (`among`).
+//! ([`strike`]), and a setter that lands one as a fight's phase would
+//! ([`Combat::push_strike`]). For this crate's tests alone: a fight's sides
+//! with no governments (`among`).
 
-use super::{Nominal, ShipRef, Strike};
+use super::{Combat, Nominal, ShipRef, Strike};
 
 /// No governments at all, for `among`.
 #[cfg(test)]
@@ -45,5 +46,16 @@ pub fn strike(ship: ShipRef, by: ShipRef) -> Strike {
         },
         weight: 0.0,
         answered: true,
+    }
+}
+
+impl Combat {
+    /// Keeps `strike` as if a hit had just landed it, for the hit-turns
+    /// contract's check that a keeper's answer leaves no landed hit
+    /// (`hit_turns::check_contract`).
+    ///
+    /// Kept for the contract's check, which nova-sim's keeper runs.
+    pub fn push_strike(&mut self, strike: Strike) {
+        self.strikes.push(strike);
     }
 }

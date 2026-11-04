@@ -58,9 +58,10 @@
 //!
 //! The `_ShipStatsToSystemInfo` sites a landed stay reaches (the landing,
 //! the player info, the outfitter opening and the hire screen closing),
-//! and `G`, `D`, `C`, `E` and `H`, also fold a bought ship's stock top-up
-//! into the outfit counts, clearing `PlayerShip::held_stock`, just before
-//! their reset (see the [`stock_fold`](super::stock_fold) module).
+//! `G`, `D`, `C`, `E` and `H`, and the plunder dialog's grant pick
+//! (@0x931d9) and Ammo press (@0x93cc9), also fold a bought ship's stock
+//! top-up into the outfit counts, clearing `PlayerShip::held_stock`, just
+//! before their reset (see the [`stock_fold`](super::stock_fold) module).
 //!
 //! *Ordering against the original.* The original runs a take-off's, a
 //! gate exit's and an arrival's story work (the days, the explorations,
@@ -139,10 +140,11 @@ impl Session {
         self.ship.latches.junk_latches =
             market::JunkLatches::of(&self.statics.goods, &self.pilot.cargo);
         self.ship.refresh_sabotage(&self.pilot, &self.statics);
+        let counted = self.ship.counted_outfits(&self.pilot);
         self.space
-            .reset_inhibitors(&self.pilot, &self.statics, &self.setup);
+            .reset_inhibitors(&counted, &self.statics, &self.setup);
         self.space
-            .reset_iff_scramblers(&self.pilot, &self.statics, &self.setup);
+            .reset_iff_scramblers(&counted, &self.statics, &self.setup);
         if self.ship.trims(&self.setup, cause) {
             self.ship
                 .trim_to_holds(&mut self.pilot, &self.statics, &mut self.out);

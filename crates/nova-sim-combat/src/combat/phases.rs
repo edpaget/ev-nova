@@ -9,10 +9,11 @@
 //! order.
 
 use super::asteroid_walk::AsteroidField;
+use super::hit_turns::Stretch;
 use super::ion::IonLockout;
-use super::lineup::reread;
 use super::stellar::StellarTarget;
 use super::stellar_hazards::StellarHazards;
+use super::walk::{BeamWalk, Walk};
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
     regenerate_player,
@@ -88,9 +89,44 @@ impl Combat {
     }
 
     /// Steps 2 and 3, the collision passes (`_SWCollideSpriteLayer`
-    /// @0x43e70-0x44010, `_CheckShotProximities` @0x44015): the last
-    /// tick's moves tested among `fighters` and `scenery`, the hits landed
-    /// and the struck ships' conditions settled (see `Combat::hit_pass`).
+    /// @0x43e70-0x44010, `_CheckShotProximities` @0x44015), one stretch
+    /// of them ([`hit_turns`](super::hit_turns)): the last tick's moves
+    /// tested among `fighters` and `scenery`, the hits landed and the
+    /// struck ships' conditions settled, as far as the next direct hit,
+    /// after which it stops ([`Stretch::Answer`]) for that hit to be
+    /// answered, its walk kept for the next stretch to resume among the
+    /// ships lent afresh; or to the passes' end ([`Stretch::Done`]) (see
+    /// `Combat::hit_stretch`).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Between stretches the passes' held shots are
+    /// missing from [`Combat::shots`] (and [`Combat::targeted_damage`]).
+    /// Starting another phase mid-walk is a logic error: a debug assertion
+    /// catches it, and in release the walk and its held shots are dropped.
+    pub fn test_hits_in_turn(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        scenery: Scenery<'_>,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Stretch {
+        self.field = arena.field;
+        self.note_slots(fighters);
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let terms = (arena.govts, arena.arsenal);
+        self.hit_stretch(fighters, terms, arena.rules.disable, scenery, chance)
+    }
+
+    /// The whole of the collision passes ([`Combat::test_hits_in_turn`])
+    /// among the same `fighters`, with nothing answered between their
+    /// stretches.
+    ///
+    /// Kept for this crate's and nova-sim's stock tests of the passes
+    /// alone, which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn test_hits(
         &mut self,
         fighters: &mut [Fighter],
@@ -98,12 +134,26 @@ impl Combat {
         scenery: Scenery<'_>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = arena.field;
-        self.note_slots(fighters);
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        let terms = (arena.govts, arena.arsenal);
-        self.hit_pass(fighters, terms, arena.rules.disable, scenery, chance);
+        let Scenery {
+            stellars,
+            mut asteroids,
+            hazards,
+            contact,
+        } = scenery;
+        loop {
+            let scenery = Scenery {
+                stellars: &mut *stellars,
+                asteroids: asteroids.as_mut().map(|field| AsteroidField {
+                    asteroids: &mut *field.asteroids,
+                    types: field.types,
+                }),
+                hazards,
+                contact,
+            };
+            if self.test_hits_in_turn(fighters, arena, scenery, &mut *chance) == Stretch::Done {
+                break;
+            }
+        }
     }
 
     /// Step 4's point defence and fighter launches: every NPC's, as
@@ -274,24 +324,66 @@ impl Combat {
     }
 
     /// Step 5, `_HandleShot` (@0x44385) for each shot slot in turn
-    /// ([`Combat::handle_shots`]), among `fighters`, drawing on `chance`:
-    /// at each slot's visit a held slot is freed, a shot its last move
-    /// spent comes to its end of life (@0x36195), its sub-munitions
-    /// released and then its blast landed, and any other shot flies a
-    /// visit at the frame's gain ([`Field::speed_mult`]) and lands its
-    /// missile lock ([`Strike::lock`](super::Strike::lock),
+    /// ([`Combat::shot_stretch`]), one stretch of it
+    /// ([`hit_turns`](super::hit_turns)), among `fighters`, drawing on
+    /// `chance`: at each slot's visit a held slot is freed, a shot its
+    /// last move spent comes to its end of life (@0x36195), its
+    /// sub-munitions released and then its blast landed, and any other
+    /// shot flies a visit at the frame's gain ([`Field::speed_mult`]) and
+    /// lands its missile lock ([`Strike::lock`](super::Strike::lock),
     /// @0x35855). Each ship struck settles its condition as in the
     /// collision passes, so every later visit reads what the earlier ones
-    /// landed, an escort's cleared leader included. Then each
-    /// one-at-a-time shot holds its firer's reload (`Combat::hold_reloads`,
-    /// @0x35c09).
+    /// landed, an escort's cleared leader included. It stops just after
+    /// each lock ([`Stretch::Answer`]), the one hit of `_HandleShot` that
+    /// is answered, its walk kept to resume at the next slot among the
+    /// ships lent afresh, so a later slot's sub-munitions read their
+    /// owner's plunder and mining, and a homing shot its target's cloak,
+    /// as the lock's answer left them; or it runs to the loop's end
+    /// ([`Stretch::Done`]), where each one-at-a-time shot holds its
+    /// firer's reload (`Combat::hold_reloads`, @0x35c09).
     ///
     /// A held slot, a shot point defence ended and hid at life 0, has no
     /// end of life (@0x36195 → @0x35f0a → @0x3617c): the collision passes
     /// have already tested and let it go (`Combat::proximity_pass`).
     ///
-    /// It lends the guidance no asteroids: it is [`Combat::fly_shots_in`]
-    /// with none.
+    /// The guidance is lent where each asteroid slot's asteroid is, by
+    /// slot, as `_HandleShot` meets them: a homing `Seeker` 0x0002 shot may
+    /// lock onto one, and a locked one steers at its slot's
+    /// ([`asteroid_seek`](super::asteroid_seek)).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Starting another phase mid-walk is a logic
+    /// error: a debug assertion catches it, and in release the walk is
+    /// dropped.
+    pub fn fly_shots_in_turn(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        asteroids: &[Option<Vec2>],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Stretch {
+        self.field = arena.field;
+        self.note_slots(fighters);
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let terms = (arena.govts, arena.arsenal);
+        let stretch = self.shot_stretch(fighters, terms, arena.rules.disable, asteroids, chance);
+        if stretch == Stretch::Done {
+            self.hold_reloads(fighters);
+        }
+        stretch
+    }
+
+    /// The whole of `_HandleShot` ([`Combat::fly_shots_in_turn`]) among
+    /// the same `fighters`, lending the guidance no asteroids, with nothing
+    /// answered between its stretches: each ship struck settles its
+    /// condition, and it stops after each missile lock.
+    ///
+    /// Kept for this crate's and nova-sim's tests of `_HandleShot` alone,
+    /// which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn fly_shots(
         &mut self,
         fighters: &mut [Fighter],
@@ -301,10 +393,13 @@ impl Combat {
         self.fly_shots_in(fighters, arena, &[], chance);
     }
 
-    /// [`Combat::fly_shots`] with the guidance lent where each asteroid
-    /// slot's asteroid is, by slot, as `_HandleShot` meets them: a homing
-    /// `Seeker` 0x0002 shot may lock onto one, and a locked one steers at
-    /// its slot's ([`asteroid_seek`](super::asteroid_seek)).
+    /// The whole of `_HandleShot` ([`Combat::fly_shots_in_turn`]) among
+    /// the same `fighters`, the guidance lent the `asteroids`, by slot,
+    /// with nothing answered between its stretches.
+    ///
+    /// Kept for this crate's and nova-sim's tests of `_HandleShot` alone,
+    /// which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
     pub fn fly_shots_in(
         &mut self,
         fighters: &mut [Fighter],
@@ -312,13 +407,7 @@ impl Combat {
         asteroids: &[Option<Vec2>],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.field = arena.field;
-        self.note_slots(fighters);
-        let mut source = &mut *chance;
-        let chance: &mut dyn Chance = &mut source;
-        let terms = (arena.govts, arena.arsenal);
-        self.handle_shots(fighters, terms, arena.rules.disable, asteroids, chance);
-        self.hold_reloads(fighters);
+        while self.fly_shots_in_turn(fighters, arena, asteroids, &mut *chance) == Stretch::Answer {}
     }
 
     /// `_HandleBeams` (@0x4453d), step 6's beams and the late steps 7 to
@@ -345,36 +434,64 @@ impl Combat {
     /// stopped (the Bible's reading of
     /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)) hit no ship,
     /// so it runs the asteroid pass too, short of the stellar.
-    pub fn close_tick_in(
+    ///
+    /// It runs in stretches ([`hit_turns`](super::hit_turns)): it stops
+    /// just after each beam's hit lands and the ship it struck settles
+    /// ([`Stretch::Answer`]), its walk kept for the next stretch, which
+    /// tests the next beam among the ships lent afresh, so a beam reads
+    /// its firer's target, and its can't-kill its firer's and its leader's
+    /// plunder, as the answers of the hits before it left them. The beams'
+    /// moves, stamps and point defence run once, at the first stretch; the
+    /// late steps at the last, which runs to the end ([`Stretch::Done`]).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Between stretches the pass's held shots are
+    /// missing from [`Combat::shots`] (and [`Combat::targeted_damage`]).
+    /// Starting another phase mid-walk is a logic error: a debug assertion
+    /// catches it, and in release the walk and its held shots are dropped.
+    pub fn close_tick_in_turn(
         &mut self,
         fighters: &mut [Fighter],
         arena: Arena<'_>,
         stellars: &mut [StellarTarget],
         mut field: Option<AsteroidField<'_>>,
         chance: &mut (impl Chance + ?Sized),
-    ) {
+    ) -> Stretch {
         self.field = arena.field;
         self.note_slots(fighters);
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         let pass = arena.pass;
         let rule = arena.rules.disable;
-        let mut targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
-        let beams_held = self.beams.len();
-        self.move_beams(fighters, &targets, pass, chance);
-        if pass.beams_act() {
-            self.stamp_beam_firers(fighters);
-        }
-        // Steps 7 and 8.
-        if pass.beams_act() {
-            self.hold_on_missiles(pass.beam_damage());
-        }
+        // A resumed walk's struck ships settled at their stops, so they
+        // read afresh as the loop's refresh would read them (see the
+        // `walk` module).
+        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        let mut walk = match self.walk.take() {
+            Some(Walk::Beams(walk)) => walk,
+            other => {
+                debug_assert!(other.is_none(), "a phase began amid {other:?}");
+                let walk = BeamWalk::open(self.beams.len());
+                self.move_beams(fighters, &targets, pass, chance);
+                if pass.beams_act() {
+                    self.stamp_beam_firers(fighters);
+                    // Steps 7 and 8.
+                    self.hold_on_missiles(pass.beam_damage());
+                }
+                walk
+            }
+        };
         let first_strike = self.strikes.len();
         if pass.beams_act() {
             // Each beam's hit lands before the next beam is tested
-            // (`_HandleBeams` @0x316a1), so a later beam's filter reads the
-            // escort an earlier one took out of the player's fleet.
-            for index in 0..self.beams.len() {
+            // (`_HandleBeams` @0x316a1), and is answered before it, so a
+            // later beam's filter reads the escort an earlier one took out
+            // of the player's fleet, and its can't-kill what the answer
+            // left of its firer's plunder.
+            while let Some(index) = (walk.next < self.beams.len()).then_some(walk.next) {
+                walk.next += 1;
                 let (pass_through, beam_planet_flag) = self.hit_readings();
                 let sides = Sides {
                     targets: &targets,
@@ -389,29 +506,56 @@ impl Combat {
                     }
                     continue;
                 };
-                let ship = hit.ship;
                 self.land(fighters, vec![hit], rule);
-                if let Some(struck) = fighters.iter().position(|fighter| fighter.ship == ship) {
-                    reread(&fighters[struck], &mut targets[struck], rule);
-                }
+                self.settle_struck(fighters, first_strike, rule);
+                self.walk = Some(Walk::Beams(walk));
+                return Stretch::Answer;
             }
         }
         // Step 9: each ship struck settles; a breakup begun here starts at
         // the ship's next display step.
         self.settle_struck(fighters, first_strike, rule);
-        self.ended_beams = beams_held.saturating_sub(self.beams.len());
+        self.ended_beams = walk.beams_held.saturating_sub(self.beams.len());
         self.player_stood = fighters
             .iter()
             .find(|fighter| fighter.ship == ShipRef::Player)
             .map(|fighter| fighter.state.position);
         IonLockout::clear_shed(fighters);
+        Stretch::Done
+    }
+
+    /// The whole of `_HandleBeams` and the late steps
+    /// ([`Combat::close_tick_in_turn`]) among the same `fighters`, with
+    /// nothing answered between their stretches.
+    ///
+    /// Kept for this crate's and nova-sim's stock tests of the beams
+    /// alone, which answer no hit.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn close_tick_in(
+        &mut self,
+        fighters: &mut [Fighter],
+        arena: Arena<'_>,
+        stellars: &mut [StellarTarget],
+        mut field: Option<AsteroidField<'_>>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        loop {
+            let lent = field.as_mut().map(|field| AsteroidField {
+                asteroids: &mut *field.asteroids,
+                types: field.types,
+            });
+            let stretch = self.close_tick_in_turn(fighters, arena, stellars, lent, &mut *chance);
+            if stretch == Stretch::Done {
+                break;
+            }
+        }
     }
 
     /// The stellar hazards among `fighters`: gravity's pull, then the
     /// deadly stellars' kills (`_HandleGravity` @0x44509,
     /// `_HandleDeadlyStellars` @0x4450e; see [`stellar_hazards`]), which
     /// `_DoPlayGameWork` runs after the ship loop and before
-    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick_in`]), on either pass.
+    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick_in_turn`]), on either pass.
     /// So a ship a deadly stellar kills is out of the beams.
     ///
     /// [`stellar_hazards`]: super::stellar_hazards

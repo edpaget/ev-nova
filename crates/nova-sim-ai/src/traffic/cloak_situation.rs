@@ -22,7 +22,7 @@
 use crate::ai::Goal;
 use crate::ai::regroup::Kept;
 use crate::area_cloak;
-use crate::cloak::{self, Cloak, MineOrder};
+use crate::cloak::{self, Cloak};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
@@ -43,8 +43,6 @@ pub struct Around {
     /// ([`CloakGear::area`](crate::cloak::CloakGear::area), or the
     /// player's [`PlayerSide::area_cloak`](crate::ai::PlayerSide::area_cloak)).
     pub leader_area: bool,
-    /// Whether the system's asteroid slot 0 holds a rock.
-    pub mining_rock: bool,
     /// How the `cloak_on_reload` rule reads a reloading weapon
     /// ([`RuleKey::CloakOnReload`](crate::RuleKey::CloakOnReload)).
     pub cloak_on_reload: RuleSource,
@@ -66,19 +64,24 @@ pub struct Around {
 ///   (goal 0xa: [`Goal::Follow`], [`Goal::Formation`] or [`Goal::Hold`])
 ///   is [`travelling`](cloak::Situation::travelling).
 /// - [`Goal::Idle`] is [`idle`](cloak::Situation::idle).
-/// - [`Goal::Mine`] mines on order 1 ([`MineOrder::Stop`]) while slot 0
-///   is empty (`_HighLevelAIHandler` @0x8f879). With a rock there the
-///   original chases (0x13) or closes on it (0x14), orders the engine
-///   doesn't fly until rdm:phase/asteroids/phase-5-ai-mining, so it
-///   reads no mining at all: reading it as either would hold a stock
-///   Zephyr's cloak (missions 603 and 604) for good or never.
+/// - [`Goal::Mine`] (goal 0x10) mines on the order its last flight stored
+///   ([`Npc::mine_order`], the sub-goal +0xc8ca the terms read at
+///   @0x834d6 and @0x835e9-0x835fb): order 1
+///   ([`MineOrder::Stop`](cloak::MineOrder::Stop)) with slot 0 empty,
+///   0x13 ([`MineOrder::Chase`](cloak::MineOrder::Chase)) outside the
+///   box, 0x14 ([`MineOrder::Close`](cloak::MineOrder::Close)) inside it.
+///   [`Goal::Scoop`] (goal 0x11) mines on nothing, as no term tests goal
+///   0x11.
 /// - Its last flight kept close formation ([`Npc::close_form`], the
 ///   stored sub-goal 0xc, which the parent rule reads directly at
 ///   @0x83633-0x8366d: the think runs before the high level writes it,
 ///   @0x8fcaa before @0x901e5) with its leader cloaked:
-///   [`close_to_cloaked_parent`](cloak::Situation::close_to_cloaked_parent).
-///   Only a formation flight sets the mark, so the rule's AI type above 4
-///   holds of it. Outside goal 8 and 0xb.
+///   [`close_to_cloaked_parent`](cloak::Situation::close_to_cloaked_parent),
+///   for a ship of AI type above 4 alone ([`Npc::original_ai_type`],
+///   `cmpw $4, 0x88` @0x83633, ahead of the parent and sub-goal tests).
+///   A bribed led ship (+0x88 1, `_DoCommDialog` @0x961f8) fails it,
+///   though its last flight's close formation still stands on its first
+///   think after the bribe. Outside goal 8 and 0xb.
 /// - That, with its leader carrying an area cloak, is a ride on it
 ///   ([`area_cloak::rides`],
 ///   [`area_cloak`](cloak::Situation::area_cloak)): `_HasCloak`'s area
@@ -98,7 +101,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         _ => Some(npc.goal),
     };
     let leader_cloaked = around.leader.is_some_and(Cloak::is_cloaked);
-    let close_to_cloaked_parent = goal.is_some() && npc.close_form && leader_cloaked;
+    let close_to_cloaked_parent =
+        goal.is_some() && npc.original_ai_type() > 4 && npc.close_form && leader_cloaked;
     cloak::Situation {
         disabled: npc.condition == Condition::Disabled,
         retreating: matches!(goal, Some(Goal::Flee(_))),
@@ -124,7 +128,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
             )
         ),
         idle: goal == Some(Goal::Idle),
-        mining: (goal == Some(Goal::Mine) && !around.mining_rock).then_some(MineOrder::Stop),
+        mining: (goal == Some(Goal::Mine)).then(|| npc.mine_order.into()),
         close_to_cloaked_parent,
         area_cloak: area_cloak::rides(npc.close_form, leader_cloaked, around.leader_area),
     }
@@ -163,6 +167,7 @@ mod tests {
     use crate::ai::Goal;
     use crate::catalog::StellarId;
     use crate::cloak::FADE_FULL;
+    use crate::cloak::MineOrder;
     use crate::combat::ShipRef;
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -397,13 +402,21 @@ mod tests {
     }
 
     #[test]
-    fn a_miner_with_a_rock_in_slot_0_reads_no_order_yet() {
-        let miner = npc(Goal::Mine, FLYING);
-        let rock = Around {
-            mining_rock: true,
-            ..Around::default()
+    fn a_miner_reads_the_order_its_last_flight_stored() {
+        use crate::ai::mine_orders::MineOrder as Flown;
+        let mining = |goal: Goal, order: Flown| {
+            let miner = Npc {
+                mine_order: order,
+                ..npc(goal, FLYING)
+            };
+            situation(&miner, Around::default()).mining
         };
-        assert_eq!(situation(&miner, rock).mining, None);
+        assert_eq!(mining(Goal::Mine, Flown::Stop), Some(MineOrder::Stop));
+        assert_eq!(mining(Goal::Mine, Flown::Chase), Some(MineOrder::Chase));
+        assert_eq!(mining(Goal::Mine, Flown::Kill), Some(MineOrder::Close));
+        // Goal 0x11 (order 0x15): no term tests it.
+        assert_eq!(mining(Goal::Scoop, Flown::Chase), None, "scoop");
+        assert_eq!(mining(Goal::Idle, Flown::Chase), None, "not goal 0x10");
     }
 
     #[test]
@@ -504,6 +517,48 @@ mod tests {
             ..escort(true)
         };
         assert!(!with(&gliding, CLOAKED), "goal 8 reads no goal term");
+    }
+
+    /// A ship NPC 7 leads, its last flight in close formation.
+    fn led_close() -> Npc {
+        Npc {
+            leader: Some(crate::traffic::npc::NpcId(7)),
+            close_form: true,
+            ..npc(Goal::Formation { guard: None }, FLYING)
+        }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_in_close_formation_does_not_cloak_with_its_cloaked_leader() {
+        // `cmpw $4, 0x88; jle` ahead of the parent rule (@0x83633), and
+        // the bribe's word is 1 (`_DoCommDialog` @0x961f8); its last
+        // flight's close formation still stands on its first think after.
+        let around = Around {
+            leader: Some(CLOAKED),
+            ..Around::default()
+        };
+        assert!(situation(&led_close(), around).close_to_cloaked_parent);
+        let mut bribed = led_close();
+        bribed.take_bribe();
+        assert!(!situation(&bribed, around).close_to_cloaked_parent);
+        // A word of 4 fails the `jle` too.
+        bribed.ai_type = crate::traffic::npc::AiType::Interceptor;
+        assert_eq!(bribed.original_ai_type(), 4);
+        assert!(!situation(&bribed, around).close_to_cloaked_parent);
+    }
+
+    #[test]
+    fn a_bribed_led_ship_in_close_formation_still_rides_its_leaders_area_cloak() {
+        // `_HasCloak`'s area branch reads +0x9a, +0xc8ca and the parent's
+        // area cloak, no +0x88 (@0x964c-0x96bf).
+        let mut bribed = led_close();
+        bribed.take_bribe();
+        let around = Around {
+            leader: Some(CLOAKED),
+            leader_area: true,
+            ..Around::default()
+        };
+        assert!(situation(&bribed, around).area_cloak);
     }
 
     #[test]

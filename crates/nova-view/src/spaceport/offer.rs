@@ -102,7 +102,12 @@
 //! refuse button (@0xa2df3) or a refusal that showed a `RefuseText`
 //! (@0xa2e8e). Otherwise it stays drawn, answered and inert, under the
 //! mission dialogs the answer opened, its after-movie among them, until
-//! they have all closed (`DisposeDialogNoFlash` @0xa361e). The dialog
+//! they have all closed (`DisposeDialogNoFlash` @0xa361e). Every answer
+//! then waits while I is down (@0xa35fc-0xa3614), the dialog drawn (or
+//! hidden) and inert, the venue under it taking nothing; on I's release
+//! comes the rest (@0xa361e-0xa3670): the disposal, the fade back in, and
+//! a `FlushEvents(7, 0)` that keeps the keys typed meanwhile for the
+//! venue. See the `close` module. The dialog
 //! makes no sound (`_TrackSingleMissionButtons` @0x28188 plays nothing,
 //! and its keys are silent), so none waits for the next input.
 //!
@@ -130,6 +135,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
+
+mod close;
 
 use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
@@ -281,6 +288,8 @@ pub struct OfferDialog {
     /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// opens it ([`OfferDialog::set_missions_listed`]).
     missions_listed: bool,
+    /// Its close: hidden, waiting or disposed of (the `close` module).
+    close: close::Close,
 }
 
 impl OfferDialog {
@@ -361,6 +370,7 @@ impl OfferDialog {
             picture,
             before: None,
             unclaimed: Vec::new(),
+            close: close::Close::default(),
             missions_listed: true,
         }
     }
@@ -655,6 +665,9 @@ impl Screen for OfferDialog {
     /// shows next ([`OfferDialog::take_unclaimed`]). See the `held_keys`
     /// module.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.close_input(input) {
+            return ScreenAction::None;
+        }
         self.begin_movie();
         if let Some(stage) = &mut self.before {
             stage.input(input);
@@ -698,6 +711,9 @@ impl Screen for OfferDialog {
     /// a graphic whose `PICT` is missing leaves item 8 empty, as
     /// `GetPicture` finds nothing to draw.
     fn draw(&self, list: &mut DrawList) {
+        if self.close.hidden() {
+            return;
+        }
         if let Some(stage) = &self.before {
             stage.draw(list);
             return;
@@ -737,6 +753,7 @@ impl Screen for OfferDialog {
     /// Letting go of the keys while a press holds them abandons the press,
     /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
     fn release_keys(&mut self) {
+        self.release_close_wait();
         if let Ok(dialog) = &mut self.laid
             && dialog.holds()
         {
@@ -757,9 +774,10 @@ pub(crate) struct VenueOffers {
     requested: bool,
     /// The offer dialog, while it is open.
     dialog: Option<OfferDialog>,
-    /// The offer dialog answered and not hidden, drawn and inert under
-    /// the mission dialogs its answer shows until they close or its holder
-    /// releases it ([`VenueOffers::release_answered`]).
+    /// The offer dialog answered, drawn (unless hidden) and inert under
+    /// the mission dialogs its answer shows until they close and its
+    /// holder releases it ([`VenueOffers::release_answered`]), then until
+    /// I's release if it is down (the `close` module).
     answered: Option<OfferDialog>,
     /// The offer answered and its choice, until it is taken.
     choice: Option<(MissionId, OfferChoice)>,
@@ -946,6 +964,9 @@ impl VenueOffers {
     /// Whether it took the input.
     pub(crate) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
         sounds.append(&mut self.sounds);
+        if self.answer_input(input) {
+            return true;
+        }
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
@@ -970,11 +991,10 @@ impl VenueOffers {
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
             self.unclaimed = dialog.take_unclaimed();
-            let hidden = choice == OfferChoice::Accept && dialog.prompt().labels.refuse.is_some();
-            let answered = self.dialog.take();
-            if !hidden {
-                self.answered = answered;
+            if choice == OfferChoice::Accept && dialog.prompt().labels.refuse.is_some() {
+                dialog.hide();
             }
+            self.answered = self.dialog.take();
         }
     }
 
@@ -985,17 +1005,10 @@ impl VenueOffers {
     /// covered before then drops it ([`VenueOffers::tick`]). Nothing while
     /// the choice waits to be taken.
     pub(crate) fn take_unclaimed(&mut self) -> Vec<Input> {
-        if self.choice.is_some() {
+        if self.choice.is_some() || self.answer_waits() {
             return Vec::new();
         }
         std::mem::take(&mut self.unclaimed)
-    }
-
-    /// Lets go of the offer dialog answered and left drawn, if any: its
-    /// holder hides it for a refusal that showed a `RefuseText`, and
-    /// disposes of it once the mission dialogs over it have all closed.
-    pub(crate) fn release_answered(&mut self) {
-        self.answered = None;
     }
 
     /// The offer dialog answered and left drawn under what its answer
@@ -1023,7 +1036,11 @@ impl VenueOffers {
         } else {
             self.tick_dialog(dt);
         }
-        let covered = covered || self.dialog.is_some();
+        // An answer waiting for I's release covers the venue too: the
+        // filter's deadline check can't run while `_OfferOneMission` spins
+        // in its wait (@0xa35fc-0xa3614), though the deadline, a tick
+        // count, runs on (the `close` module).
+        let covered = covered || self.dialog.is_some() || self.answer_waits();
         if covered && self.clock == RuleSource::Bible {
             return;
         }
@@ -2639,7 +2656,7 @@ mod tests {
         offers.input(&key(Key::Enter), &mut Vec::new());
         offers.tick(TICK, false);
         assert_eq!(offers.take_choice(), None, "inert");
-        offers.release_answered();
+        offers.release_answered(false);
         assert!(drawn_offers(&offers).is_empty());
     }
 
@@ -2648,7 +2665,7 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         opened(&mut offers);
         assert!(answer(&mut offers, Key::Enter).is_some());
-        assert!(offers.answered().is_none(), "hidden (@0xa2df3)");
+        assert!(drawn_offers(&offers).is_empty(), "hidden (@0xa2df3)");
         offers.open(prompt("OK", None), Rc::new(MonoMetrics), ButtonStyle::STOCK);
         assert!(answer(&mut offers, Key::Enter).is_some());
         assert!(

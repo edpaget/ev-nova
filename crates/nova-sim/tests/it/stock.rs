@@ -4212,7 +4212,11 @@ fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
         .map(|record| (record.id, record.crew))
         .collect();
     let mut session = destroyer_in_fomalhaut_without_point_defence(data);
-    let mut chance = Seeded(0x5EED_F00D);
+    // The fight's draws decide where the Federation's shots at the player
+    // fall: on 0x5EED_F00D an interceptor that had flown up to inspect the
+    // trader turns on the player 21 off it, and its stray shot lands the
+    // disabling hit, which the player isn't charged for.
+    let mut chance = Seeded(0x5EED_F00E);
     let (trader, police) = (1..=200)
         .find_map(|seed| {
             session.populate(data, &mut Seeded(seed));

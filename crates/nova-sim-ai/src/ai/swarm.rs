@@ -680,12 +680,11 @@ mod tests {
 
     #[test]
     fn a_fighter_the_player_lost_holds_the_player_and_an_npc_carriers_reads_the_rule() {
-        // `Session::unfleet` leaves the carrier, and its type is its class's
-        // (`_DamageShip` @0x3b0d7): the store.
-        assert_eq!(
-            formation_parent(&carried_off(ShipRef::Player, Some(0))),
-            Some(FormationParent::Player)
-        );
+        // Its type is its class's (`_DamageShip` @0x3b0d7), so
+        // `Session::unfleet` takes it off its carrier: the store.
+        let mut lost = carried_off(ShipRef::Player, Some(0));
+        lost.leave_carrier();
+        assert_eq!(formation_parent(&lost), Some(FormationParent::Player));
         // An NPC carrier's fighter after the reset stays AI 5: the pass
         // runs, and answers -1 with no leader and no target.
         assert_eq!(

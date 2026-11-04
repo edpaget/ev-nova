@@ -106,6 +106,7 @@ impl AppScreen {
             leave_held: false,
             haggle: None,
             offer: None,
+            offer_left: Vec::new(),
             missions: None,
             movies: Movies::new(
                 Rc::new(crate::movie::NoMoviePlayer),

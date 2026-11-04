@@ -118,9 +118,15 @@ impl Session {
 
 impl PlayerShip {
     /// The player's cloak gear, from its ship type's `Flags2` and the
-    /// outfits it owns.
+    /// outfit counts (`_HasCloak`, `_Cloak*`, `_ShipCloakVisibleOnRadar`,
+    /// `_ShipDecloaksWhenHit`, `_HasAreaCloak`), a purchase's held stock
+    /// left out (see the `held_readers` module).
     pub(super) fn cloak_gear(&self, pilot: &Pilot, statics: &Statics) -> CloakGear {
-        CloakGear::player(self.fit.fields.flags2, &pilot.outfits, &statics.outfits)
+        CloakGear::player(
+            self.fit.fields.flags2,
+            &self.counted_outfits(pilot),
+            &statics.outfits,
+        )
     }
 
     /// One pass of the cloak key and upkeep, the player `jumping` or not

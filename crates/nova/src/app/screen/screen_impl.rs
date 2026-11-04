@@ -111,6 +111,7 @@ impl Screen for AppScreen {
             return ScreenAction::None;
         }
         self.live.note(input);
+        self.tell_close_keys();
         let action = self.settled_input(input);
         if action == ScreenAction::Quit {
             return action;
@@ -153,6 +154,7 @@ impl Screen for AppScreen {
                 }
             }
         }
+        self.tell_close_keys();
         self.note_flight_poll();
         self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
@@ -300,7 +302,9 @@ impl Screen for AppScreen {
     /// place, are the menu chords held for a press (see `held_chords`).
     fn release_keys(&mut self) {
         self.live.forget();
+        self.tell_close_keys();
         self.let_go_of_keys();
+        self.settle_released_waits();
         self.hold_let_go();
         self.quit_on_held_chords();
     }

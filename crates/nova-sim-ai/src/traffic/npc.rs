@@ -170,9 +170,13 @@ pub enum Mode {
     /// for this many more ticks: a ship with no lead
     /// (`_HandleShip` @0x34d5c-0x34d8b, its AI wait +0x4c). It moves on at
     /// the velocity the glide or burst left it, with no steering, thrust,
-    /// slowing, fire or decisions, but is seen, targeted and fought as a
-    /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
-    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`]. A ship
+    /// slowing or fire, but is seen, targeted and fought as a flying ship
+    /// is: its goal is 0, not 21, so `_ShipVisibleToShip` (@0x972d) sees it
+    /// and it is drawn. See [`Npc::arrived`]. It decides through the wait,
+    /// as `_AIDispatch` runs its type's think for goal 0 whatever +0x4c
+    /// (@0x8ff18-0x90016), and takes the goal and target it decides; a
+    /// think that ends the wait flies it ([`Npc::end_wait`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)). A ship
     /// boarded on a mission's assist path waits so too
     /// ([`Npc::wait_on_course`]), and so does a ship whose gate entry the
     /// disabled reset ended, for what was left of the entry's wait
@@ -186,10 +190,17 @@ pub enum Mode {
     /// through, for this many more ticks: the original's sub-goal 0x17,
     /// its wait +0x4c counting down (see
     /// [`gate_entry`](crate::traffic::gate_entry)). It holds still and
-    /// fades out, and decides nothing, but is seen, targeted, fought and
-    /// hailed as a flying ship is ([`Npc::arrived`]). The disabled reset's
-    /// sub 0 ends it (@0x8ff0a, [`Npc::ends_gate_entry`]): the ship stays,
-    /// holding its course ([`Mode::Coasting`]) for the wait left.
+    /// fades out, and is seen, targeted, fought and hailed as a flying ship
+    /// is ([`Npc::arrived`]). It decides through the entry, as `_AIDispatch`
+    /// runs its type's think for goal 0x14 whatever +0x4c
+    /// (@0x8ff18-0x90016): a goal written over it leaves the sub 0x17 the
+    /// fade reads (@0x89508), so it still leaves. A sub written over it
+    /// ends it: the disabled reset's sub 0 (@0x8ff0a,
+    /// [`Npc::ends_gate_entry`]) or a think's
+    /// ([`Npc::takes_sub_write`]), and the ship stays, holding its course
+    /// ([`Mode::Coasting`]) for the wait left; a think that ends the wait
+    /// flies it at once ([`Npc::end_wait`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)).
     EnteringGate {
         /// The gate it enters.
         gate: StellarId,
@@ -373,7 +384,11 @@ pub struct Npc {
     /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
     /// person.
     pub aggression: u8,
-    /// The ship it last inspected, if any.
+    /// The ship its last inspection pick named (+0x90, `_InterceptorAI`
+    /// @0x8ce3b; see [`Decision::inspection_pick`](crate::ai::Decision::inspection_pick)),
+    /// which its next pick skips; set -1 at setup (`_AISetup` @0x7f403),
+    /// which a fresh `None` stands for, and cleared once its slot goes
+    /// (@0x8cc40-0x8cc58).
     pub inspected: Option<ShipRef>,
     /// Its `düde`'s `Booty` flags, what boarding it yields, and whose
     /// 0x0100 bit the hit rules read ([`sides`](crate::combat::sides));
@@ -427,10 +442,13 @@ pub struct Npc {
     /// The stellar it defends, the original's ship +0x8c: set only by
     /// the defence fleet's spawn (`_SpawnStellarDefenseShip` @0x3d387, see
     /// [`stellar_defence`](crate::traffic::stellar_defence)), and cleared
-    /// by a capture, a pirate taking it into its fleet and the disabled
-    /// reset, as it is for the ships that held a ship as the player
-    /// captured it (`_AIShipCapturedByPlayer` @0x896b6-0x89704); none for
-    /// every other ship.
+    /// by a capture, by a release at its lead's gate (@0x8dd08) and by the
+    /// disabled reset, as it is for the ships that held a ship as the
+    /// player captured it (`_AIShipCapturedByPlayer` @0x896b6-0x89704). A
+    /// pirate's plunder clears only the pirate's own +0x8c (@0x8c791,
+    /// @0x86f67): a ship the pirate takes into its fleet keeps its own
+    /// (`_AIPlunderShipContents` writes none, @0x83fab-0x84a23), led by the
+    /// pirate. None for every other ship.
     pub defends: Option<StellarId>,
     /// Its cloak: how far it has faded, and which way (see
     /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked
@@ -793,6 +811,18 @@ pub struct Npc {
     /// Sight and the cloak think read it, as they run before the frame's
     /// flight (see `nova_sim_combat::area_cloak`). Never saved.
     pub close_form: bool,
+    /// The order its last flight's high level gave it under goal 0x10
+    /// ([`mine_orders::order`](crate::ai::mine_orders::order)): the stored
+    /// sub-goal +0xc8ca that `_AIHandleCloaking` reads (@0x834d6,
+    /// @0x835e9-0x835fb), [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop)
+    /// in any other goal. The autopilot's low level writes it where it
+    /// writes [`Npc::close_form`], from where the flight starts, so the
+    /// think reads last tick's order as the original's does (it runs at
+    /// @0x8fcaa, before the high level's write @0x901e5). An NPC held
+    /// still, or whose flight a fly half never reaches (a docking's, which
+    /// flies no mining), keeps it; only [`Goal::Mine`](crate::ai::Goal::Mine)
+    /// reads it. Stop at every spawn. Never saved.
+    pub mine_order: crate::ai::mine_orders::MineOrder,
     /// Whether its last flight left it in sub 1: the stored +0xc8ca == 1
     /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
     /// it. The stop's brake sets it, moving 0.35 or more on an axis; the
@@ -1206,7 +1236,8 @@ impl Npc {
     /// interceptor lead's inspection (`traffic::succession`, which copies
     /// the lead's target too) holds no target, where the original's holds
     /// the inspected ship. The thinks that read +0x70 with a copied goal 7
-    /// read this: the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
+    /// read this, as does an interceptor's inspection a hit redirected
+    /// (`interceptor`'s "A hit on an inspection"): the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
     /// the pirate's ([`pirate::think`](crate::ai::pirate::think)), the
     /// defence ship's ([`defence_ship::think`](crate::ai::defence_ship::think))
     /// and goal 7's high level
@@ -1217,21 +1248,27 @@ impl Npc {
     }
 
     /// The ship the threat tests read as the one it fights: its goal's
-    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) or
-    /// idle ([`Goal::Idle`], state 0) the target it holds. The original's
-    /// tests read +0x70 and spare neither state 6 nor state 0
-    /// (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_ExtendedIsThreatToShip`
-    /// @0x81ace-0x81b03): a trader's stop keeps it (@0x8d803-0x8d80f; see
-    /// [`trader_target`](crate::ai::lost_sight::trader_target)), and so
-    /// does the attack block's ally drop for any type it idles (@0x8e2d2,
+    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6),
+    /// idle ([`Goal::Idle`], state 0), leaving ([`Goal::JumpOut`], state
+    /// 2), landing ([`Goal::Land`], state 1) or entering a gate
+    /// ([`Goal::EnterGate`], state 0x14) the target it holds. The
+    /// original's tests read +0x70 and spare only states 5, 7, 9, 0xa,
+    /// 0xb, 0xc, 0xf and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
+    /// `_IsThreatToShip` @0x82024-0x82055, `_ExtendedIsThreatToShip`
+    /// @0x81ace-0x81b03): a trader keeps a hit's target through its stop,
+    /// idle, leave, landing and gate entry (@0x8d803-0x8d80f, @0x3bcf6; see
+    /// [`trader_target`](crate::ai::trader_target::trader_target)), and the
+    /// attack block's ally drop keeps it for any type it idles (@0x8e2d2,
     /// [`Decision::holds_target`](crate::ai::Decision::holds_target)), so
-    /// such a ship threatens the ally it spared. In the other goals that
-    /// leave the quarry none, +0x70 is -1 or the state is one the tests
-    /// spare.
+    /// such a ship threatens the ally it spared. A pirate's target step
+    /// keeps its target in those goals too. In the other goals that leave
+    /// the quarry none, +0x70 is -1 or the state is one the tests spare.
     #[must_use]
     pub fn fought(&self) -> Option<ShipRef> {
         match self.goal {
-            Goal::Wait | Goal::Idle => self.target,
+            Goal::Wait | Goal::Idle | Goal::JumpOut | Goal::Land(_) | Goal::EnterGate(_) => {
+                self.target
+            }
             goal => goal.quarry(),
         }
     }
@@ -1602,7 +1639,7 @@ impl Npc {
     /// for an `_AIFire*` call to set again. A waiting ship's fire step is
     /// skipped (`_HandleShip` @0x34a54-0x34a72), and its burst runs under
     /// goal 8, sub-goal 0xa, which fires nothing (@0x8dd61-0x8dd93,
-    /// @0x8f3c8-0x8f3d9). No decision is due until it flies, so the
+    /// @0x8f3c8-0x8f3d9). No decision is due until its burst ends, so the
     /// released trigger holds through both.
     ///
     /// The caller places it, gives it its heading and decides
@@ -1725,7 +1762,8 @@ impl Npc {
     /// `_HandleShipDisplay` reads alone to fade it out and free it
     /// (`_AIShipIsEnteringHypergate` @0x89502, @0x2bf94-0x2c088): the
     /// disabled reset's sub 0 (@0x8ff0a, see
-    /// [`disabled_reset`](super::disabled_reset)). It stays in the system,
+    /// [`disabled_reset`](super::disabled_reset)), or a think's
+    /// ([`Npc::takes_sub_write`], [`Npc::detach_for_own_jump`]). It stays in the system,
     /// drawn unfaded and never freed, while its wait +0x4c runs on
     /// (@0x3501f-0x35048), as a ship holding its course does
     /// ([`Mode::Coasting`]): disabled it drifts, and once whole it moves on
@@ -1765,15 +1803,26 @@ impl Npc {
     /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)), as do
     /// `_AIMakeShipRefuelPlayer` and `_AIMakeShipRepairPlayer` (@0x82de9,
     /// @0x82e20), and `_HandleShip` then steers, thrusts and fires it in
-    /// the same frame (@0x34a54-0x34a72). Any other mode is left: only a
-    /// ship flying or held at its gate decides.
+    /// the same frame (@0x34a54-0x34a72). A ship holding its course
+    /// ([`Mode::Coasting`]) or entering a gate ([`Mode::EnteringGate`])
+    /// runs its think through that wait too, so one whose think ends it
+    /// flies its goal at once, keeping what it owes of a burst: the high
+    /// level runs in the same dispatch and writes its goal's own sub over
+    /// the entry's 0x17 (see
+    /// [`waiting_think`](crate::traffic::waiting_think)). Any other mode is
+    /// left: a ship gliding in, waiting in its gate or bursting out of it
+    /// runs no think.
     pub fn end_wait(&mut self, burst: RuleSource) {
         self.ai_wait = 0.0;
-        if matches!(self.mode, Mode::HeldAtGate { .. }) {
-            let word = self.burst_word();
-            self.mode = Mode::Flying;
-            self.owed_burst = word.filter(|_| burst == RuleSource::Engine);
-            self.bursts_own_word = false;
+        match self.mode {
+            Mode::HeldAtGate { .. } => {
+                let word = self.burst_word();
+                self.mode = Mode::Flying;
+                self.owed_burst = word.filter(|_| burst == RuleSource::Engine);
+                self.bursts_own_word = false;
+            }
+            Mode::Coasting { .. } | Mode::EnteringGate { .. } => self.mode = Mode::Flying,
+            _ => {}
         }
     }
 
@@ -2482,6 +2531,30 @@ mod tests {
     }
 
     #[test]
+    fn fought_reads_the_held_target_while_leaving_landing_or_entering_a_gate() {
+        // The threat tests spare goals 5, 7, 9, 0xa, 0xb, 0xc, 0xf and 0x12
+        // (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_IsThreatToShip`
+        // @0x82024-0x82055): not 1, 2 or 0x14, whose blocks keep +0x70.
+        for goal in [
+            Goal::JumpOut,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(129)),
+        ] {
+            let held = Npc {
+                goal,
+                target: Some(ShipRef::Npc(NpcId(2))),
+                ..crate::traffic::fixture::npc(4, ShipStats::default())
+            };
+            assert_eq!(held.fought(), Some(ShipRef::Npc(NpcId(2))), "{goal:?}");
+            let none = Npc {
+                target: None,
+                ..held
+            };
+            assert_eq!(none.fought(), None, "{goal:?}");
+        }
+    }
+
+    #[test]
     fn a_stopped_ship_threatens_by_the_target_it_kept() {
         // `_IsThreatToPlayer` (@0x7f536-0x7f56b) and `_ExtendedIsThreatToShip`
         // spare none of state 6, and read +0x70, which a trader's stop
@@ -2945,11 +3018,9 @@ mod tests {
         held.end_wait(RuleSource::Engine);
         assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0.0));
         assert!(!held.wait_running());
-        for mode in [
-            Mode::Emerging { ticks_left: 15.0 },
-            Mode::Coasting { ticks_left: 15.0 },
-            Mode::Flying,
-        ] {
+        // Waiting in its gate (goal 0x15) it runs no type think
+        // (@0x8ff18-0x8ff20), so no think ends that wait.
+        for mode in [Mode::Emerging { ticks_left: 15.0 }, Mode::Flying] {
             let mut npc = Npc {
                 mode,
                 ai_wait: 30.0,
@@ -2958,6 +3029,31 @@ mod tests {
             npc.end_wait(RuleSource::Engine);
             assert_eq!((npc.mode, npc.ai_wait), (mode, 0.0), "{mode:?}");
             assert_eq!(npc.owed_burst, None, "{mode:?}: no hold, no burst");
+        }
+    }
+
+    #[test]
+    fn a_think_ending_the_wait_of_a_coasting_or_entering_ship_flies_it() {
+        // +0x4c = -1.0 (`_EscortAI` @0x83c73, `_AIMakeShipRefuelPlayer`
+        // @0x82de9): the coast and the entry are that wait, and the high
+        // level runs in the same dispatch, writing its goal's own sub.
+        for mode in [
+            Mode::Coasting { ticks_left: 9.0 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 9.0,
+            },
+        ] {
+            let mut npc = Npc {
+                mode,
+                ai_wait: 30.0,
+                owed_burst: Some(12.0),
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            npc.end_wait(RuleSource::Engine);
+            assert_eq!((npc.mode, npc.ai_wait), (Mode::Flying, 0.0), "{mode:?}");
+            assert!(!npc.wait_running(), "{mode:?}");
+            assert_eq!(npc.owed_burst, Some(12.0), "{mode:?}: what it owed");
         }
     }
 

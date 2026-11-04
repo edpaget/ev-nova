@@ -38,10 +38,8 @@
 //!   leaves `_IsDisabled` a ship the player leads with no mission (+0x9a
 //!   0, +0xc8d2 -1, @0x3ae58-0x3ae62, @0x3af8f-0x3afa5), AI 5 and 6 alike
 //!   (the AI 6 compare @0x3afd5 picks the route, not the write, and each
-//!   route reaches @0x3b0d7). `Session::unfleet` clears the ship's duty and
-//!   leaves its carrier, for the capacities it holds, so
-//!   [`Npc::original_ai_type`] reads a ship the player carries but doesn't
-//!   lead as its own type's word, not [`FIGHTER_AI`]. A ship's other
+//!   route reaches @0x3b0d7). `Session::unfleet` takes it off its carrier
+//!   ([`Npc::leave_carrier`]), so its own type's word stands. A ship's other
 //!   carrier (an NPC's, or one a mission or NPC-led ship holds) goes past
 //!   this write to @0x3b0de, so `disabled_reset`'s AI 5 stands for it. The
 //!   formation pass reads this word ([`swarm`](crate::ai::swarm)).
@@ -73,13 +71,23 @@
 //! (`_InterceptorAI` @0x8cd4e, @0x8cdfe), the Good Samaritan
 //! (`_DoGoodSamaritan` @0x8289f), and the plunder candidate and lost-sight
 //! search (`_AIFindShipToPlunder` @0x7fdad, `_HighLevelAIHandler`
-//! @0x8d748).
+//! @0x8d748). Then the fleet escort's, each reading the bribe's 1 as no
+//! escort with its parent kept: `_AIDispatch`'s type chain, which calls
+//! `_EscortAI` above 4 (@0x8ff9b-0x90016; `NovaAi::of`, whose routing
+//! carries `_AIEscortFireUnprovoked`'s own test @0x80e59, and the idle
+//! block's lead-follow); `_DoPlayGameWork`'s marking pass (@0x440d8:
+//! [`has_escorts`](crate::ai::candidates::has_escorts) and the
+//! [`succession`](super::succession)) and swarm reset (@0x44160,
+//! [`swarm`](crate::ai::swarm)); `_AIIssueEscortOrders`' follower loop
+//! (@0x89b39, [`escort_orders`](super::escort_orders)); and
+//! `_AIHandleCloaking`'s parent rule (@0x83633,
+//! [`cloak_situation`](super::cloak_situation)).
 //!
 //! Nothing here plays a sound or draws a random number.
 
 use super::npc::{AiType, Npc};
 use crate::ai::miner;
-use crate::combat::ShipRef;
+use crate::rulebook::RuleSource;
 
 /// The original's AI type word of a ship with no AI (+0x88 -1).
 pub const NO_AI: i16 = -1;
@@ -118,8 +126,7 @@ impl Npc {
     /// type's word, [`BRIBED_AI`] until a later write, ahead of a leader
     /// or carrier it keeps; an NPC carrier's fighter [`FIGHTER_AI`]; a
     /// ship with an NPC leader, or a former escort that keeps its word,
-    /// [`ESCORT_AI`]; otherwise its own type's word, so a fighter the
-    /// player carries but no longer leads reads its class's.
+    /// [`ESCORT_AI`]; otherwise its own type's word.
     #[must_use]
     pub fn original_ai_type(&self) -> i16 {
         if self.no_ai {
@@ -136,10 +143,7 @@ impl Npc {
             ESCORT_AI
         } else if self.spared {
             self.ai_type.raw()
-        } else if self
-            .carrier
-            .is_some_and(|carrier| carrier.ship != ShipRef::Player)
-        {
+        } else if self.carrier.is_some() {
             FIGHTER_AI
         } else if self.leader.is_some() || self.kept_escort_ai {
             ESCORT_AI
@@ -150,10 +154,12 @@ impl Npc {
 
     /// The bribe (`_DoCommDialog` @0x961f8): +0x88 = [`BRIBED_AI`], kept
     /// over its leader or carrier ([`Npc::spared`]), as
-    /// [`AiType::WimpyTrader`].
+    /// [`AiType::WimpyTrader`]. A fighter is one no longer, and holds its
+    /// class's capacities (see the `fighter_capacity` module).
     pub fn take_bribe(&mut self) {
         self.spared = true;
         self.ai_type = AiType::WimpyTrader;
+        self.hold_capacities(RuleSource::Bible);
     }
 
     /// A write of +0x88 over the bribe's word, which was its only state:
@@ -186,6 +192,7 @@ impl Npc {
 mod tests {
     use super::*;
     use crate::bay::Carrier;
+    use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
@@ -294,17 +301,18 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_the_player_carries_but_does_not_lead_reads_its_classs_word() {
-        // One `Session::unfleet` lost: `_DamageShip` wrote its class's
-        // `InherentAI` (@0x3b0d7), and the carrier stays for its capacities.
-        let lost = Npc {
+    fn a_carried_ship_with_no_leader_reads_five_whatever_its_carrier() {
+        // `Session::unfleet` takes a lost fighter off its carrier, as
+        // `_DamageShip` writes its class's `InherentAI` (@0x3b0d7), so any
+        // ship still carried is a fighter.
+        let the_players = Npc {
             carrier: Some(Carrier {
                 ship: ShipRef::Player,
                 ..carrier()
             }),
             ..ship(AiType::Warship)
         };
-        assert_eq!(lost.original_ai_type(), 3);
+        assert_eq!(the_players.original_ai_type(), 5);
         let its_carrier_an_npc = Npc {
             carrier: Some(carrier()),
             ..ship(AiType::Warship)

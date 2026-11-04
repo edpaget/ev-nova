@@ -570,6 +570,11 @@ fn plunder_npc(
     ship.leader = Some(pirate);
     // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
     // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
+    // A fighter is one no longer, so the armour share below reads its
+    // class's capacity (`_ShipArmorCapacity` @0x849a6).
+    if ship.carrier.is_some() {
+        ship.leave_carrier();
+    }
     ship.overwrite_bribe();
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
@@ -1120,6 +1125,39 @@ mod tests {
         assert!(!taken.spared, "the bribe is overwritten");
         assert_eq!(taken.original_ai_type(), 6);
         assert!(crate::hail::fixture::hail(taken).escort_ai());
+    }
+
+    #[test]
+    fn an_npc_carriers_fighter_taken_by_a_pirate_is_its_escort_holding_its_classs() {
+        // +0x88 = 6 (@0x8495c), so its armour share reads its class's
+        // capacity (`_ShipArmorCapacity` @0x849a6), bribed or not.
+        for bribed in [false, true] {
+            let mut fighter = victim();
+            fighter.take_carrier(
+                crate::bay::Carrier {
+                    ship: ShipRef::Npc(NpcId(30)),
+                    window: 100.0,
+                    reach: 40.0,
+                },
+                crate::rulebook::RuleSource::Engine,
+            );
+            if bribed {
+                fighter.take_bribe();
+            }
+            let traffic = plundered(1000, fighter, 0);
+            let taken = ship(&traffic, VICTIM);
+            assert_eq!(taken.leader, Some(PIRATE), "bribed {bribed}");
+            assert_eq!(taken.carrier, None, "bribed {bribed}");
+            assert_eq!(taken.original_ai_type(), 6, "bribed {bribed}");
+            assert_eq!(
+                (taken.reserves.shield.max, taken.reserves.armor.max),
+                (taken.stats.shield, taken.stats.armor),
+                "bribed {bribed}"
+            );
+            #[allow(clippy::cast_possible_truncation)]
+            let share = (f64::from(taken.stats.armor) * CAPTURED_ARMOR_SHARE) as f32;
+            assert_eq!(taken.reserves.armor.now, share, "bribed {bribed}");
+        }
     }
 
     #[test]

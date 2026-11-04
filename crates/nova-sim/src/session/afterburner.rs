@@ -656,16 +656,7 @@ mod tests {
         let chance: &mut dyn crate::chance::Chance = &mut crate::chance::NeverFires;
         let ai = crate::ai::NovaAi::default();
         session.collision_passes(&ai, pass, rules, chance);
-        let spots = session.space.asteroid_spots();
-        session.land_phase(
-            &ai,
-            pass,
-            rules,
-            chance,
-            |combat, fighters, arena, chance| {
-                combat.fly_shots_in(fighters, arena, &spots, chance);
-            },
-        );
+        session.shots_phase(&ai, pass, rules, chance);
         session.beams_phase(&ai, None, pass, rules, chance);
     }
 

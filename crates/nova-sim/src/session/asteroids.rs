@@ -273,7 +273,7 @@ impl Space {
 
     /// Where each of the field's slots has its asteroid, none for a free
     /// slot: what the shots' guidance reads at `_HandleShot`
-    /// ([`Combat::fly_shots_in`](crate::combat::Combat::fly_shots_in)), the
+    /// ([`Combat::fly_shots_in_turn`](crate::combat::Combat::fly_shots_in_turn)), the
     /// field as the collision passes left it and before `_HandleAsteroids`
     /// moves it (see the `game_work` module).
     pub(super) fn asteroid_spots(&self) -> [Option<Vec2>; SLOTS] {

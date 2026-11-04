@@ -254,10 +254,14 @@ impl Session {
             return;
         }
         self.scan_mission_cargo(id, scanner, &govt, chance);
+        // `_ScanPlayer` reads the outfit counts (@0x7efd1-0x7eff6,
+        // @0x7f103-0x7f10e), a purchase's held stock left out (see the
+        // `held_readers` module).
+        let outfits = self.ship.counted_outfits(&self.pilot);
         let carried = scan::Carried {
             cargo: &self.pilot.cargo,
             junk: self.statics.goods.junk(),
-            outfits: &self.pilot.outfits,
+            outfits: &outfits,
             outfit_records: &self.statics.outfits,
         };
         let rules = scan::ScanRules {

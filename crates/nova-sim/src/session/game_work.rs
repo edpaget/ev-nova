@@ -22,10 +22,11 @@
 //!    (@0x43e46-0x43e70, @0x3710c), on the player's frame its display
 //!    just stepped, then the boxes' step
 //!    ([`Session::scoop_after_display`]); then the collision passes
-//!    (@0x43e70-0x44015), their hits settled and
-//!    answered at once, each in turn, as `_DamageShip`'s reaction block
-//!    runs in them, a shot's hit that starts a ship dying queuing the
-//!    victory of the escort attacking it (`_HandleShipHit`
+//!    (@0x43e70-0x44015), each direct hit settled and answered before the
+//!    next lands, the fighters lent afresh after it, as `_DamageShip`'s
+//!    reaction block runs in them (see the `hit_turns` module), a shot's
+//!    hit that starts a ship dying queuing the victory of the escort
+//!    attacking it (`_HandleShipHit`
 //!    @0x36c7f-0x36d45).
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
@@ -48,11 +49,13 @@
 //!    ([`Session::settle_line_queue`]). All before `_HandleShot`, so the
 //!    fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
-//!    life or each other shot's move and lock, landing at its visit,
-//!    their hits settled and answered.
+//!    life or each other shot's move and lock, landing at its visit, each
+//!    lock settled and answered before the next visit, the fighters lent
+//!    afresh after it (see the `hit_turns` module;
+//!    [`Session::shots_phase`]).
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
-//!    inactive, its flight (the traffic's fly half, one NPC at a time),
+//!    inactive, its self-repair (see the `self_repair` module), its flight (the traffic's fly half, one NPC at a time),
 //!    reloads, regeneration, fire and death timer's tick, a dying NPC's
 //!    dying branch, a mission escort it still is leaving the formation
 //!    (see the `mission_escorts` module), and its escape pods and
@@ -76,7 +79,8 @@
 //!    (`_HandleReinforcements` @0x44504); then the stellar hazards,
 //!    gravity's pull and the deadly stellars' kills (`_HandleGravity`
 //!    @0x44509, `_HandleDeadlyStellars` @0x4450e), then `_HandleBeams`
-//!    (@0x4453d), its hits settled and answered and the field lent to it, so a beam
+//!    (@0x4453d), each beam's hit settled and answered before the next
+//!    beam is tested (see the `hit_turns` module) and the field lent to it, so a beam
 //!    meets each asteroid where this pass's step left it
 //!    ([`Session::beams_phase`], see the `asteroid_beams` module), then
 //!    what the pass leaves ([`Session::fight_tail`]).
@@ -107,10 +111,11 @@
 //!   is met by no shot until the next pass either way, and the step comes
 //!   before the beams in both (see the `asteroids` module).
 //! - The session's part of an escort a shot's blast or lock takes out of
-//!   the player's fleet (its record, AI type and cargo share) settles
-//!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
-//!   `_DamageShip` settles it at the landing; the fight clears its leader
-//!   at the landing, which is all the later visits read.
+//!   the player's fleet (its record, AI type and cargo share) settles at
+//!   `_HandleShot`'s next stop or its phase's end
+//!   ([`Session::settle_landed`]), where `_DamageShip` settles it at the
+//!   landing; the fight clears its leader at the landing, which is all
+//!   the later visits read.
 //! - **Filed.** What the fly half still settles, where the high and low
 //!   level make it in the AI loop (a dock's completion, a repair, goal
 //!   0xb's check), a higher slot's think reads a drawn frame late (see
@@ -122,14 +127,19 @@
 //! on the terms the session works out for it. A phase that lands hits is
 //! settled at once ([`Session::settle_landed`]): the player's downing
 //! lines, the pushes, the NPCs' fates, the crimes and kills, and each
-//! strike weighed and answered in turn, the beams' as `_HandleBeams`
-//! answers each beam hit as it lands (@0x4453d). A target that starts breaking up, emerging or cloaked in a
+//! strike weighed and answered in turn. The collision passes, the beams
+//! and `_HandleShot` run in stretches, each stopping after a direct hit
+//! (for `_HandleShot`, a missile lock), settled and answered before the
+//! fighters are built afresh for the next, as `_DamageShip` answers each
+//! hit as it lands (see the `hit_turns` module). A target that starts
+//! breaking up, emerging or cloaked in a
 //! phase stays the target through the pass and is let go at the next
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
 use std::collections::BTreeSet;
 
+use super::hit_turns::Turns;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
@@ -137,6 +147,7 @@ use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::asteroid_walk::AsteroidField;
+use crate::combat::hit_turns::run_in_turn;
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
@@ -377,16 +388,7 @@ impl Session {
         };
         // `_HandleShot` (@0x44385), its guidance reading the field
         // before `_HandleAsteroids` moves it.
-        let spots = self.space.asteroid_spots();
-        self.land_phase(
-            behaviour,
-            pass,
-            rules,
-            chance,
-            |combat, fighters, arena, chance| {
-                combat.fly_shots_in(fighters, arena, &spots, chance);
-            },
-        );
+        self.shots_phase(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
         // The ship loop: `_HandleShip` (@0x44483) and `_HandleShipDisplay`
         // (@0x444ad), slot by slot.
@@ -414,7 +416,7 @@ impl Session {
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
         self.beams_phase(behaviour, sheets, pass, rules, chance);
-        self.fight_tail(&displayed, rules, chance);
+        self.fight_tail(&displayed, chance);
     }
 
     /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
@@ -611,13 +613,17 @@ impl Session {
     /// escort scored up to that strike in the phase still counts and one
     /// after it does not ([`Space::credit_kills`]).
     ///
-    /// The original's `_DamageShip` settles each hit as it lands; here a
-    /// phase's hits settle together after it, before the next phase or
-    /// the frame. The fight itself already clears a lost escort's leader
-    /// as its hit lands (see the fight's `escort_loss` module), so the
-    /// rest of the phase reads it unled; only the session's part of the
-    /// loss waits for the phase's end.
-    fn settle_landed(
+    /// The original's `_DamageShip` settles each hit as it lands. Here the
+    /// collision passes and the beams settle each direct hit, and
+    /// `_HandleShot` each missile lock, with the blasts before it, as the
+    /// fight stops after it, before the next lands (see the `hit_turns`
+    /// module); the blasts after the last stop settle with the phase's
+    /// end, before the next phase or the frame. The
+    /// fight itself already clears a lost escort's leader as its hit lands
+    /// (see the fight's `escort_loss` module), so the rest of the phase
+    /// reads it unled; only the session's part of the loss waits for the
+    /// settle.
+    pub(super) fn settle_landed(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         was: &[NpcBefore],
@@ -626,8 +632,9 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let (strikes, losses, finished) = self.space.combat.take_landed();
-        // `_HandleShipHit`'s victories, as the hits landed, before the
-        // answers retarget anyone (see the `voices` module).
+        // `_HandleShipHit`'s victories, as the hits landed: after the
+        // answers of the stops before, before this one's, which can't
+        // change who speaks (see the `voices` module).
         self.space
             .speak_victories(&self.statics, &finished, &losses);
         let struck = super::struck_npcs(&strikes);
@@ -658,21 +665,25 @@ impl Session {
     /// The pass's stellar hazards and its `_HandleBeams` on `pass` by
     /// `rules`, drawing on `chance`: gravity pulls and the deadly stellars
     /// kill (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e;
-    /// [`Combat::hazards`]), then the beams' step and the late steps
-    /// ([`Combat::close_tick_in`]), among one set of fighters, so a ship a
-    /// deadly stellar kills is out of the beams. The kills' hold starts
-    /// before the beams' hits settle (see the `deadly_stellars` module),
-    /// as a phase that lands hits settles ([`Session::settle_landed`]).
-    /// The beams meet the stellars shown that shots can hit, which only
-    /// the Bible's reading of
-    /// [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
+    /// [`Combat::hazards`]), the pulls set in the ships' velocities; then
+    /// the beams' step and the late steps
+    /// ([`Combat::close_tick_in_turn`]), each beam's hit settled and
+    /// answered before the next beam is tested, as `_HandleBeams` answers
+    /// it in its loop (@0x316a1), the fighters lent afresh after it (see
+    /// the `hit_turns` module). A ship a deadly stellar kills stays
+    /// destroyed through the beams, so it is out of them. The kills' hold
+    /// starts after the last beam and before the last stretch's hits
+    /// settle (see the `deadly_stellars` module), as a phase that lands
+    /// hits settles ([`Session::settle_landed`]). The beams meet the
+    /// stellars shown that shots can hit, which only the Bible's reading
+    /// of [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
     /// lets them strike; each a beam shoots down runs its `OnDestroy` (see
     /// the `stellars` module) once the hits have settled.
     ///
     /// The asteroid field is lent to the beams for the phase
-    /// ([`Combat::close_tick_in`]), which cut, wear down, break, push and
-    /// tractor its asteroids, destroying each at once; the boxes of each
-    /// one destroyed are spawned after it (see the `asteroid_beams`
+    /// ([`Combat::close_tick_in_turn`]), which cut, wear down, break, push
+    /// and tractor its asteroids, destroying each at once; the boxes of
+    /// each one destroyed are spawned after it (see the `asteroid_beams`
     /// module).
     ///
     /// With `sheets`, the advance pass's catalog, it first asks it for the
@@ -691,18 +702,21 @@ impl Session {
         }
         let hazards = self.stellar_hazards();
         let mut stellars = self.stellar_targets();
-        let was = self.space.npcs_before();
-        let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
-        let mut asteroids = std::mem::take(&mut self.space.asteroids);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+        self.with_fighters(pass, rules, chance, |combat, fighters, _, _| {
             combat.hazards(fighters, &hazards);
+        });
+        self.take_shoves();
+        let mut asteroids = std::mem::take(&mut self.space.asteroids);
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
             let field = AsteroidField {
                 asteroids: &mut asteroids,
                 types: &types,
             };
-            combat.close_tick_in(fighters, arena, &mut stellars, Some(field), chance);
+            combat.close_tick_in_turn(fighters, arena, &mut stellars, Some(field), chance)
         });
+        let (was, player_was) = turns.last();
         self.space.asteroids = asteroids;
         self.space.settle_asteroid_remains(&mut *chance);
         let killed = self.hold_stellar_kills();
@@ -711,14 +725,16 @@ impl Session {
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
-    /// `chance` ([`Combat::test_hits`]), among the stellars shown that
-    /// shots can hit and the asteroid field, lent whole, the shots touching
-    /// by the masks the session holds (see the `contact_masks` module),
-    /// then their
-    /// settling: the hits' ([`Session::settle_landed`]), each stellar shot
-    /// down running its `OnDestroy` (see the `stellars` module), and the
-    /// boxes of each asteroid the shots destroyed (see the `asteroid_hits`
-    /// module).
+    /// `chance` ([`Combat::test_hits_in_turn`]), among the stellars shown
+    /// that shots can hit and the asteroid field, lent whole, the shots
+    /// touching by the masks the session holds (see the `contact_masks`
+    /// module), each direct hit settled and answered before the next
+    /// lands, as `_DamageShip`'s reaction block runs in `_HandleShipHit`
+    /// (@0x36c7a), the fighters lent afresh after it (see the `hit_turns`
+    /// module); then the last stretch's settling: its hits'
+    /// ([`Session::settle_landed`]), each stellar shot down running its
+    /// `OnDestroy` (see the `stellars` module), and the boxes of each
+    /// asteroid the shots destroyed (see the `asteroid_hits` module).
     pub(super) fn collision_passes(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -728,11 +744,10 @@ impl Session {
     ) {
         let mut stellars = self.stellar_targets();
         let sprites = self.contact_sprites();
-        let was = self.space.npcs_before();
-        let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
         let mut asteroids = std::mem::take(&mut self.space.asteroids);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
             let scenery = Scenery {
                 stellars: &mut stellars,
                 asteroids: Some(AsteroidField {
@@ -742,21 +757,46 @@ impl Session {
                 hazards: None,
                 contact: Some(&sprites),
             };
-            combat.test_hits(fighters, arena, scenery, chance);
+            combat.test_hits_in_turn(fighters, arena, scenery, chance)
         });
+        let (was, player_was) = turns.last();
         self.space.asteroids = asteroids;
         self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
         self.strike_stellars(&stellars, rules.law, chance);
         self.space.settle_asteroid_remains(&mut *chance);
     }
 
-    /// What a pass's fight leaves, settled once after its last phase, by
-    /// `rules`, drawing on `chance`: each NPC's exit cursors kept for its
+    /// The fight's `_HandleShot` on `pass` by `rules`, drawing on `chance`
+    /// ([`Combat::fly_shots_in_turn`]), its guidance lent where each
+    /// asteroid slot's asteroid is as the collision passes left the field,
+    /// before `_HandleAsteroids` moves it (see the `asteroids` module):
+    /// each missile lock settled and answered before the next slot's visit,
+    /// as `_DamageShip`'s reaction block runs in the lock (@0x35855), the
+    /// fighters lent afresh after it (see the `hit_turns` module); then the
+    /// last stretch's hits settled ([`Session::settle_landed`]).
+    pub(super) fn shots_phase(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        pass: GamePass,
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
+        let spots = self.space.asteroid_spots();
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
+            combat.fly_shots_in_turn(fighters, arena, &spots, chance)
+        });
+        let (was, player_was) = turns.last();
+        self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
+    }
+
+    /// What a pass's fight leaves, settled once after its last phase,
+    /// drawing on `chance`: each NPC's exit cursors kept for its
     /// berth; the fighters launched from bays put in the system (see the
     /// `fighters` module); the words the pass's stray beams stepped; the
     /// fleet kept in step; the escorts whose ship is gone lost (a dying
-    /// mission escort leaves at its own step, in the ship loop); the NPCs'
-    /// self-repair; each NPC a deadly stellar killed vanished or destroyed
+    /// mission escort leaves at its own step, in the ship loop); each NPC
+    /// a deadly stellar killed vanished or destroyed
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
     /// fighters orphaned; a target gone let go; the stellars seen; the
@@ -767,15 +807,10 @@ impl Session {
     /// its own display (see the `ship_display` module); and the heading
     /// each ship is drawn at noted, which its next tick's shots leave
     /// from.
-    /// Each dying NPC's escape pods and escape-ship roll ran before it, in
-    /// its own turn of the ship loop ([`Session::ship_loop`]; see the
-    /// `npc_escape` module).
-    pub(super) fn fight_tail(
-        &mut self,
-        displayed: &BTreeSet<NpcId>,
-        rules: Rules,
-        chance: &mut dyn Chance,
-    ) {
+    /// Each NPC's self-repair, and each dying NPC's escape pods and
+    /// escape-ship roll, ran before it, in its own turn of the ship loop
+    /// ([`Session::ship_loop`]; see the `npc_escape` module).
+    pub(super) fn fight_tail(&mut self, displayed: &BTreeSet<NpcId>, chance: &mut dyn Chance) {
         self.space.traffic.keep_berth_exits();
         let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
@@ -789,7 +824,6 @@ impl Session {
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
-        self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
         self.space
             .lose_leads(self.setup.rules.source_for(crate::RuleKey::NpcEscortAi));
@@ -811,7 +845,7 @@ impl Session {
 impl Space {
     /// Every NPC as it is now, for the strikes that follow to be read
     /// against.
-    fn npcs_before(&self) -> Vec<NpcBefore> {
+    pub(super) fn npcs_before(&self) -> Vec<NpcBefore> {
         self.traffic.npcs().iter().map(NpcBefore::of).collect()
     }
 }

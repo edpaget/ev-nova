@@ -257,10 +257,17 @@ impl Session {
     /// [`PlayerShip::auto_eject_fires`], or the chord held) and the player
     /// can: an escape pod or ship, a free ship slot and a record of the
     /// class it flies. Whether it ejected.
-    fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
+    pub(super) fn try_eject(
+        &mut self,
+        auto: bool,
+        hulk: Condition,
+        chance: &mut dyn Chance,
+    ) -> bool {
         let armed = auto || (self.ship.fate.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
-            || !(has_escape_pod(&self.pilot.outfits, &self.statics.outfits)
+            // `_HasEscapePod` reads the outfit counts (see the
+            // `held_readers` module).
+            || !(has_escape_pod(&self.ship.counted_outfits(&self.pilot), &self.statics.outfits)
                 || self.escape_ship().is_some())
             || self.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM
         {
@@ -427,10 +434,14 @@ impl Session {
     /// weapons and ammunition fitted (see the module docs), holding its
     /// reserves to the new most until the caller sets them. The eject
     /// passes the class's defaults; the rescue, which adds none, passes
-    /// none.
+    /// none. The carry reads the outfit counts (@0x6f7b5-0x6f7db) before
+    /// the weapon array is cleared (@0x6f7dd-0x6f7fc), so a purchase's
+    /// held stock is lost, a persistent outfit too (see the
+    /// `held_readers` module); the rescue's holds none, as the eject's
+    /// change of class folded it.
     pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
         let mut outfits = carried_outfits(
-            &self.pilot.outfits,
+            &self.ship.counted_outfits(&self.pilot),
             OutfitCarry::Persistent {
                 mask: OutfitFlags::PERSISTENT,
             },
@@ -447,6 +458,7 @@ impl Session {
         let change = ClassChange {
             outfits,
             reserves: super::ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         self.become_class(record, change, |_| {});
     }
@@ -464,7 +476,9 @@ impl PlayerShip {
             .unwrap_or(self.condition);
         matches!(condition, Condition::Dying { ticks_left, .. }
             if auto_eject_armed(ticks_left, self.fit.hull.death_delay))
-            && has_auto_eject(&pilot.outfits, &statics.outfits)
+            // `_HasAutoEject` reads the outfit counts (see the
+            // `held_readers` module).
+            && has_auto_eject(&self.counted_outfits(pilot), &statics.outfits)
     }
 
     /// Holds the eject chord, Command and the eject key down together, or
@@ -564,6 +578,8 @@ impl PlayerShip {
             bursts_own_word: false,
             fires_on_burst_end: false,
             close_form: false,
+            // The spawn zeroes the sub-goal +0xc8ca: order 1.
+            mine_order: crate::ai::mine_orders::MineOrder::Stop,
             stopping: false,
             fleet_slot: None,
             form_parent: None,

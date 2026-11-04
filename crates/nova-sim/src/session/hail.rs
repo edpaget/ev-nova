@@ -87,7 +87,9 @@
 //!   ([`Escort::person`](crate::Escort)), with no wage and its reserves as
 //!   they are, of no government, its AI type its `InherentAI`, keeping
 //!   formation; every other NPC lets it go, and so does the player's
-//!   target. A save is due, and the hail stays open as the escort's. A
+//!   target, but the ships it leads keep it as their leader, as Use As
+//!   Escort's `_DoPlunderDialog` leaves their +0x9a (@0x9459b-0x947cf).
+//!   A save is due, and the hail stays open as the escort's. A
 //!   hail lists it ([`Hail::joins`](crate::Hail)) for a person whose
 //!   record allows it ([`offers_to_join`]) and whose `LinkMission` is
 //!   available from a ship (`_HandlePlayerCommunication` @0x6220d) while
@@ -708,11 +710,12 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
                 npc.trigger = Trigger::default();
                 npc.provoked = 0.0;
-                // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20): a wait
-                // running is cleared, a hold at its gate too, and any
-                // docking dropped. Its +0x50, the hyperspace state, is 0
-                // already for a ship hailed in flight. A ship held at its
-                // gate owes its burst as the rulebook reads.
+                // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20; sub 0
+                // @0x82de0, @0x82e17): a wait running is cleared, a hold at
+                // its gate, a coast and a gate entry too, and any docking
+                // dropped. Its +0x50, the hyperspace state, is 0 already
+                // for a ship hailed in flight. A ship held at its gate owes
+                // its burst as the rulebook reads.
                 npc.end_wait(held_burst);
                 npc.docking = None;
             }
@@ -2174,6 +2177,11 @@ pub(super) mod tests {
         assert!(!thinks_a_call(&mut session));
         let npc = &session.npcs()[0];
         assert_eq!((npc.goal, npc.provoked), (Goal::JumpOut, 0.0));
+        assert_eq!(
+            npc.target,
+            Some(ShipRef::Npc(attacker)),
+            "kept through the leave (goal-2 block @0x8dd9c-0x8de5e)"
+        );
     }
 
     #[test]
@@ -2224,6 +2232,28 @@ pub(super) mod tests {
         });
         decide(&mut session, &catalog, 1, |npc| {
             assert_eq!(npc.goal, Goal::Flee(ShipRef::Player), "hit, it flees");
+        });
+    }
+
+    #[test]
+    fn a_fleet_escort_paid_off_stops_escorting_and_leaves() {
+        // The bribe writes AI type 1 and keeps the parent (`_DoCommDialog`
+        // @0x961f8), so the ship thinks as a wimpy trader, which keeps its
+        // leave (@0x8b06c), not as its lead's escort.
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        let mut lead = session.npcs()[0].clone();
+        lead.state.position.x += 3000.0;
+        let lead = session.space.traffic.add_npc(lead);
+        npc(&mut session).leader = Some(lead);
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 99);
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(view.reply, "A pleasure doing business with you.");
+        decide(&mut session, &catalog, 3, |npc| {
+            assert_eq!(npc.goal, Goal::JumpOut, "never Follow");
+            assert!(npc.spared);
+            assert_eq!(npc.leader, Some(lead), "its parent kept");
         });
     }
 
@@ -2373,11 +2403,25 @@ pub(super) mod tests {
 
     /// `session`'s ship, held at its gate with an AI wait and a docking,
     /// once the player has hailed it and accepted its refuel.
-    fn asked_for_help_while_held(mut session: Session, catalog: &FakePilotCatalog) -> Npc {
+    fn asked_for_help_while_held(session: Session, catalog: &FakePilotCatalog) -> Npc {
+        asked_for_help_in(
+            session,
+            catalog,
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30.0 },
+        )
+    }
+
+    /// [`targeting`]'s idle warship in `mode`, with an AI wait of 50 and a
+    /// docking, paid to refuel the player: the ship after.
+    fn asked_for_help_in(
+        mut session: Session,
+        catalog: &FakePilotCatalog,
+        mode: crate::traffic::npc::Mode,
+    ) -> Npc {
         session.pilot.reserves.fuel.now = 40.0;
         let ship = npc(&mut session);
         ship.ai_wait = 50.0;
-        ship.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30.0 };
+        ship.mode = mode;
         ship.docking = Some(crate::traffic::plunder_dock::Docking {
             ship: ShipRef::Npc(NpcId(7)),
             sub: crate::traffic::plunder_dock::DockSub::Close,
@@ -2404,6 +2448,38 @@ pub(super) mod tests {
             "its hold ended"
         );
         assert_eq!(helper.owed_burst, Some(30.0));
+    }
+
+    #[test]
+    fn a_coasting_ship_asked_for_help_flies_to_the_player() {
+        // +0x4c = -1.0 (@0x82de9): the coast is that wait.
+        let catalog = hailable();
+        let helper = asked_for_help_in(
+            targeting(&catalog),
+            &catalog,
+            crate::traffic::npc::Mode::Coasting { ticks_left: 30.0 },
+        );
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
+        assert_eq!(helper.ai_wait, 0.0);
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_asked_for_help_stays() {
+        // Sub 0 (@0x82de0) over the entry's 0x17, then +0x4c = -1.0
+        // (@0x82de9): it stays, and flies to the player.
+        let catalog = hailable();
+        let helper = asked_for_help_in(
+            targeting(&catalog),
+            &catalog,
+            crate::traffic::npc::Mode::EnteringGate {
+                gate: crate::catalog::StellarId(128),
+                ticks_left: 9.0,
+            },
+        );
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
+        assert!(!helper.entering_gate());
     }
 
     #[test]
@@ -3822,6 +3898,40 @@ pub(super) mod tests {
             .expect("open");
         assert!(session.is_escort(NpcId(0)), "joined");
         assert_eq!(session.space.npc(NpcId(0)).expect("here").cloak, fading);
+    }
+
+    /// The hail's join has no routine of the original's; it follows Use As
+    /// Escort's in-place join, `_DoPlunderDialog` @0x9459b-0x947cf, which
+    /// writes no other ship's +0x9a: the person's followers keep it.
+    #[test]
+    fn a_person_joining_by_hail_keeps_its_followers_led_by_it() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        let mut led = session.space.npc(NpcId(0)).expect("here").clone();
+        led.person = None;
+        led.leader = Some(NpcId(0));
+        led.goal = Goal::Follow {
+            lead: NpcId(0),
+            guard: None,
+        };
+        let led = session.space.traffic.add_npc(led);
+        opened(&mut session, &catalog, &bible);
+        session
+            .answer(2, &catalog, &bible, &mut Draws::of(&[]))
+            .expect("open");
+        assert!(session.is_escort(NpcId(0)), "joined");
+        let led = session.space.npc(led).expect("here");
+        assert_eq!(
+            (led.leader, led.goal),
+            (
+                Some(NpcId(0)),
+                Goal::Follow {
+                    lead: NpcId(0),
+                    guard: None
+                }
+            )
+        );
     }
 
     /// A hail's join calls no `_AISetup` (@0x62509), so the person keeps

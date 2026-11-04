@@ -86,6 +86,7 @@ pub mod edit_dialog;
 pub mod escort_dialog;
 pub mod faded_texts;
 mod held_keys;
+pub(crate) mod key_wait;
 pub mod list_bar;
 pub mod mission_dialogs;
 pub mod mission_info;

@@ -55,7 +55,10 @@
 //! The player's own cloak, its draw and its hit decloak, are the
 //! `player_cloak` module's.
 
+use std::collections::BTreeMap;
+
 use super::{PlayerShip, Session, Space, Statics};
+use crate::catalog::OutfitId;
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
 use crate::combat::armament::Arsenal;
 use crate::combat::{ShipRef, Strike};
@@ -65,10 +68,10 @@ use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::Npc;
 
 impl Session {
-    /// What the player's cloak scanners give, from the outfits it owns.
+    /// What the player's cloak scanners give, from the outfit counts.
     #[must_use]
     pub(crate) fn scanner(&self) -> Scanner {
-        scanner(&self.pilot, &self.statics)
+        scanner(&self.ship.counted_outfits(&self.pilot), &self.statics)
     }
 
     /// Whether the player sees `npc` (see the module docs).
@@ -101,7 +104,7 @@ impl Session {
     /// left to the view's tint, as now.
     #[must_use]
     pub(crate) fn cloak_shown(&self, npc: &Npc) -> CloakShown {
-        PlayerShip::cloak_shown(&self.pilot, &self.statics, npc)
+        self.ship.cloak_shown(&self.pilot, &self.statics, npc)
     }
 
     /// Whether `npc` shows on the player's radar: uncloaked, its cloak
@@ -163,7 +166,10 @@ impl PlayerShip {
     /// Whether the player sees `npc` (see the module docs).
     #[must_use]
     fn sees(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
-        self.sees_scanning(scanner(pilot, statics).on_screen, npc)
+        self.sees_scanning(
+            scanner(&self.counted_outfits(pilot), statics).on_screen,
+            npc,
+        )
     }
 
     /// Whether the player sees `npc`, as [`PlayerShip::sees`] says, its
@@ -181,7 +187,10 @@ impl PlayerShip {
     #[cfg(test)]
     #[must_use]
     fn sees_past_cloak(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
-        self.sees_past_cloak_scanning(scanner(pilot, statics).on_screen, npc)
+        self.sees_past_cloak_scanning(
+            scanner(&self.counted_outfits(pilot), statics).on_screen,
+            npc,
+        )
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
@@ -210,9 +219,10 @@ impl PlayerShip {
     /// drawn as it is (@0x2d169-0x2d16c). A ship waiting at its gate is
     /// left to the view's tint, as now.
     #[must_use]
-    fn cloak_shown(pilot: &Pilot, statics: &Statics, npc: &Npc) -> CloakShown {
+    fn cloak_shown(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> CloakShown {
         let led = npc.escorts_player();
-        let level = cloak::full_fade_translucency(led, scanner(pilot, statics).on_screen);
+        let on_screen = scanner(&self.counted_outfits(pilot), statics).on_screen;
+        let level = cloak::full_fade_translucency(led, on_screen);
         cloak::shown(npc.cloak, level)
     }
 }
@@ -295,10 +305,12 @@ pub(super) fn npc_takes_hit(
     }
 }
 
-/// What the player's cloak scanners give, from the outfits it owns.
+/// What the player's cloak scanners give, from the outfit counts
+/// `counted` (`_ShipCanSeeCloakedShips`, `_ShipCanTargetCloakedShips`;
+/// see the `held_readers` module).
 #[must_use]
-fn scanner(pilot: &Pilot, statics: &Statics) -> Scanner {
-    Scanner::of(&pilot.outfits, &statics.outfits)
+fn scanner(counted: &BTreeMap<OutfitId, u16>, statics: &Statics) -> Scanner {
+    Scanner::of(counted, &statics.outfits)
 }
 
 #[cfg(test)]

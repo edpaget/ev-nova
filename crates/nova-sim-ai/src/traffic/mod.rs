@@ -17,7 +17,7 @@
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
 //!   goal, its condition, armament and fire command, its provocation,
-//!   aggression and the ship it last inspected, and the carrier that
+//!   aggression and the ship its last inspection pick named, and the carrier that
 //!   launched it from a fighter bay, if any, and the person flying it,
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
@@ -38,7 +38,8 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. each intact NPC answers the fight's strikes since the last tick
+//! 1. each NPC whose slot is active, disabled too, answers the fight's
+//!    strikes since the last tick
 //!    ([`Behaviour::react`]), one still coming in too unless the
 //!    [`World::arrival_hits`] say otherwise: the ship it targets, its
 //!    provocation, and any goal it takes at once; one hit in its gate has
@@ -85,8 +86,9 @@
 //!    decisions due on the AI timer, never for an escape pod
 //!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
-//!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
-//!    gate to leave, one that is not intact, one held in the regroup pause
+//!    but held at it, [`Mode::HeldAtGate`], it decides, and so does one
+//!    holding its course or entering a gate to leave, through its wait,
+//!    [`waiting_think`]), one that is not intact, one held in the regroup pause
 //!    (which holds its gate wait's fire in place of a decision's, and
 //!    flies its kept substate in step 6), or one assisting the player
 //!    whose type's think returns at once for the help, provoked or not
@@ -102,7 +104,9 @@
 //!    ship's swarm check ([`swarm::pass`], which a coasting ship, one
 //!    entering a gate or one assisting the player runs too);
 //!    then each NPC's high level, a
-//!    docking or its fight, none while its AI wait runs, and each drift's
+//!    docking or its fight, none while its AI wait runs, where the fight
+//!    sub its last frame left runs with no high level
+//!    ([`waiting_pursuit`](crate::ai::waiting_pursuit)), and each drift's
 //!    step, [`plunder::drift`]; a ship repairing a ship flies its high
 //!    level, its docking with the ship it targets, though it decides
 //!    nothing, [`repair_dock`], and so does one refuelling a ship,
@@ -203,6 +207,8 @@ pub mod berth_picks;
 pub mod berth_search;
 pub mod berth_voices;
 pub mod board_wait;
+#[cfg(test)]
+mod bribed_led_tests;
 pub mod burst_word;
 pub mod cloak_situation;
 #[cfg(test)]
@@ -268,6 +274,8 @@ mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 #[cfg(test)]
+mod inspection_hit_tests;
+#[cfg(test)]
 mod interceptor_goal4_tests;
 pub mod ionization;
 #[cfg(test)]
@@ -275,6 +283,8 @@ mod jump_out_hit_tests;
 pub mod jump_with_leader;
 pub mod kept_berths;
 pub mod land_flight;
+#[cfg(test)]
+mod landed_lead_tests;
 #[cfg(test)]
 mod landed_stay_tests;
 mod last_wait_frame;
@@ -358,11 +368,16 @@ mod think_run_tests;
 #[cfg(test)]
 mod tractor_freed_tests;
 pub mod tractor_hold;
+#[cfg(test)]
+mod trader_hit_target_tests;
 pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
 #[cfg(test)]
 mod wait_sub_1_tests;
+pub mod waiting_think;
+#[cfg(test)]
+mod waiting_think_tests;
 pub mod warp_out;
 #[cfg(test)]
 mod warship_ally_tests;
@@ -702,7 +717,7 @@ pub struct World<'a> {
     /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
     pub defence_reserve: u32,
     /// Which ships answer a hit ([`Traffic::tick_in`]'s reactions): every
-    /// intact one by the engine, as `_DamageShip` has it, or only those
+    /// active one by the engine, as `_DamageShip` has it, or only those
     /// that have arrived ([`Npc::arrived`]) by the other reading
     /// ([`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits)).
     pub arrival_hits: RuleSource,
@@ -1689,16 +1704,17 @@ impl Traffic {
     }
 
     /// Whether each NPC `picked` says (one flag an NPC) thinks this tick:
-    /// flying or held at its gate, intact, with AI, not a pod, not one
-    /// whose type's think returns at once, not paused, and on its own tick
-    /// of the AI timer.
+    /// in a mode that decides ([`waiting_think::decides_in`]: flying, held
+    /// at its gate, holding its course or entering a gate), intact, with
+    /// AI, not a pod, not one whose type's think returns at once, not
+    /// paused, and on its own tick of the AI timer.
     fn thinks_due(&self, picked: &[bool]) -> Vec<bool> {
         self.npcs
             .iter()
             .zip(picked)
             .map(|(npc, &picked)| {
                 picked
-                    && matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
+                    && waiting_think::decides_in(npc.mode)
                     && npc.condition == Condition::Intact
                     && !npc.no_ai
                     && !pod_flight::is_pod(npc)
@@ -1790,7 +1806,11 @@ impl Traffic {
     /// after the goal and before the passes and the flight read its frame.
     /// Each takes its step's pursuit: a drop to goal 0 keeps none, as the
     /// handler's tail writes sub 0 on every goal-0 frame (@0x8fb09-0x8fb13).
-    /// Each whose pursuit ran then runs its frame's swarm branch
+    /// One whose high level its AI wait skips runs the fight sub its last
+    /// frame left, with no high level
+    /// ([`waiting_pursuit::under_wait`](crate::ai::waiting_pursuit::under_wait)),
+    /// as the low level runs after the head's return (@0x8d4d2 →
+    /// @0x901f4). Each whose pursuit ran then runs its frame's swarm branch
     /// ([`swarm_low_level`]).
     fn pursue(&mut self, world: &World, due: &[bool], chance: &mut (impl Chance + ?Sized)) {
         let around = world.around(&self.npcs);
@@ -1798,7 +1818,7 @@ impl Traffic {
             approach_lead: world.approach_lead,
             inertial_dampener: world.flight.inertial_dampener,
         };
-        let steps: Vec<Option<(HighLevel, Pursuit)>> = self
+        let steps: Vec<Option<(HighLevel, Option<Pursuit>)>> = self
             .npcs
             .iter()
             .zip(due)
@@ -1809,10 +1829,15 @@ impl Traffic {
                         _ if lost_sight::searching(npc) => HighLevel::Stops,
                         high => high,
                     };
-                    let pursuit = if high == HighLevel::Fights {
-                        pursuit::step(npc, &around, rules, &mut *chance)
-                    } else {
-                        Pursuit::default()
+                    let pursuit = match high {
+                        HighLevel::Fights => Some(pursuit::step(npc, &around, rules, &mut *chance)),
+                        HighLevel::Skipped => crate::ai::waiting_pursuit::under_wait(
+                            npc,
+                            &around,
+                            rules,
+                            &mut *chance,
+                        ),
+                        _ => Some(Pursuit::default()),
                     };
                     (high, pursuit)
                 })
@@ -1820,15 +1845,12 @@ impl Traffic {
             .collect();
         let ran: Vec<bool> = steps
             .iter()
-            .map(|step| step.is_some_and(|(high, _)| high != HighLevel::Skipped))
+            .map(|step| step.is_some_and(|(_, pursuit)| pursuit.is_some()))
             .collect();
         for (npc, step) in self.npcs.iter_mut().zip(steps) {
-            let Some((high, pursuit)) = step else {
+            let Some((high, Some(pursuit))) = step else {
                 continue;
             };
-            if high == HighLevel::Skipped {
-                continue;
-            }
             plunder::take_high_level(npc, high);
             npc.pursuit = pursuit;
         }
@@ -1945,7 +1967,8 @@ impl Traffic {
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
     /// loses its lead, its carrier and its target, its travel stellar the
     /// lead's, the gate (@0x8dd30), its provocation -1
-    /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
+    /// ([`gate_entry::RELEASED_PROVOCATION`]), defends no stellar (+0x8c
+    /// -1, @0x8dd08), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
     /// over a bribe's ([`Npc::overwrite_bribe`], as the original's write
     /// has no AI type test, @0x8dcdf-0x8dcfd),
@@ -1965,6 +1988,7 @@ impl Traffic {
             follower.target = None;
             follower.travel = Some(gate);
             follower.provoked = gate_entry::RELEASED_PROVOCATION;
+            follower.defends = None;
             follower.goal = Goal::EnterGate(gate);
         }
     }
@@ -2057,7 +2081,6 @@ impl Traffic {
                 attacking: attacking.map(|state| state.position - npc.state.position),
                 leader: leader.map(|(_, cloak, _)| cloak),
                 leader_area: leader.is_some_and(|(_, _, area)| area),
-                mining_rock: world.mining_rock.is_some(),
                 cloak_on_reload: world.cloak_on_reload,
             };
             let situation = cloak_situation::situation(npc, around);
@@ -2192,8 +2215,8 @@ impl Traffic {
         );
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was
-    /// answered ([`Strike::answered`]), as `behaviour` says, now, as
+    /// Each NPC whose slot is active answers each of `strikes` in `world`
+    /// that was answered ([`Strike::answered`]), as `behaviour` says, now, as
     /// [`Traffic::tick_in`]'s step 2 does (see
     /// `nova_sim::Session::answer_strikes`). The strikes are answered one
     /// at a time, in the order they landed, each reading the NPCs as the
@@ -2213,8 +2236,8 @@ impl Traffic {
         self.react(behaviour, world, strikes);
     }
 
-    /// Each intact NPC answers each of `strikes` in `world` that was
-    /// answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
+    /// Each NPC whose slot is active answers each of `strikes` in `world`
+    /// that was answered ([`Strike::answered`]: `_DamageShip`'s answer flag, see
     /// [`weigh_strikes`](Traffic::weigh_strikes), which a blast's or a
     /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
     /// flag skips the whole reaction block, @0x3baea), as `behaviour`
@@ -2661,12 +2684,15 @@ impl Traffic {
     }
 
     /// Gives each NPC the goal of its decision, if any, the player where
-    /// `world` has it, if anywhere: one that stops inspecting a ship
-    /// remembers it, and has scanned the player when it was inspecting the
+    /// `world` has it, if anywhere: it forgets the ship it last inspected
+    /// when its think says so ([`Decision::forgets_inspected`]), then
+    /// records its think's inspection pick
+    /// ([`Decision::inspection_pick`]) as that ship; one that stops
+    /// inspecting a ship has scanned the player when it was inspecting the
     /// player within its reach, unless an interceptor's re-pick gave the
     /// new goal ([`Decision::re_picked`]); a ship the think looked over at
-    /// once ([`Decision::looked_over`]) is remembered last, and is a scan
-    /// if it is the player, a write on top of the first, as a kept
+    /// once ([`Decision::looked_over`]) is a scan if it is the player, a
+    /// write on top of the first, as a kept
     /// inspection of the player can end in the think of a pick that ends
     /// too, which the original does on two frames; its provocation takes the
     /// decision's writes ([`provocation::take`]: zeroed where the high
@@ -2683,8 +2709,12 @@ impl Traffic {
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
     /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`] and ends a hold at
-    /// its gate ([`Npc::end_wait`], owing its burst as
-    /// [`World::held_burst`] reads), so it flies this tick; it, and one that
+    /// its gate, a coast or a gate entry ([`Npc::end_wait`], owing its
+    /// burst as [`World::held_burst`] reads), so it flies this tick; one
+    /// that writes the sub itself ([`Decision::writes_sub`]) ends a gate
+    /// entry and drops its kept pursuit ([`Npc::takes_sub_write`]), first
+    /// among the writes of the mode, so a count wait or an end of the wait
+    /// in the same think leaves it flying ([`waiting_think`]); it, and one that
     /// leaves its fleet, gives up its warp stage ([`Warp::give_up`](warp_out::Warp::give_up)),
     /// as `_EscortAI` writes +0x50 = -1.0 with them (see
     /// [`jump_with_leader`]); and one that
@@ -2717,6 +2747,8 @@ impl Traffic {
                 visits,
                 re_picked,
                 looked_over,
+                inspection_pick,
+                forgets_inspected,
                 ends_wait,
                 order_word,
                 ..
@@ -2728,18 +2760,24 @@ impl Traffic {
                 };
                 self.berth_search.write(npc.berth, npc.lost_sight);
             }
+            // The think's clear of a slot gone (@0x8cc58), then its pick's
+            // write (@0x8ce3b): nothing else writes +0x90.
+            if forgets_inspected {
+                npc.inspected = None;
+            }
+            if let Some(ship) = inspection_pick {
+                npc.inspected = Some(ship);
+            }
             let mut scans = false;
             if let Goal::Inspect(ship) = npc.goal
                 && goal != npc.goal
             {
-                npc.inspected = Some(ship);
                 // A re-pick moves the reach onto its own target (@0x8f11e).
                 scans = !re_picked
                     && ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
             }
             if let Some(ship) = looked_over {
-                npc.inspected = Some(ship);
                 scans |= ship == ShipRef::Player;
             }
             // The calls carry the odds the think read, before the pass.
@@ -2751,7 +2789,13 @@ impl Traffic {
             if !plunder_dock::kept_by(npc, &decision) {
                 npc.docking = None;
             }
-            board_wait::enter(npc, goal);
+            // The sub write first among the writes of the mode, so a think
+            // that also enters the count wait or ends the wait flies
+            // (`waiting_think`).
+            if decision.writes_sub {
+                npc.takes_sub_write();
+            }
+            board_wait::enter(npc, goal, world.held_burst);
             // The scan's state-7 block writes +0x6c -1 first (@0x8f369).
             let travel = if scans {
                 crate::ai::travel::TravelWrite::Clear
@@ -3082,6 +3126,8 @@ impl Traffic {
                 bursts_own_word: false,
                 fires_on_burst_end: false,
                 close_form: false,
+                // The spawn zeroes the sub-goal +0xc8ca: order 1's reading.
+                mine_order: crate::ai::mine_orders::MineOrder::Stop,
                 stopping: false,
                 fleet_slot: None,
                 form_parent: None,
@@ -3738,7 +3784,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_in_never_decides_while_it_glides_and_holds_its_course() {
+    fn a_ship_jumping_in_never_decides_while_it_glides_and_decides_as_it_holds_its_course() {
+        // Goal 8 takes the glide-in path (`_AIDispatch` @0x8fcf5); the
+        // coast after it is goal 0, whose type AI runs whatever +0x4c
+        // (@0x8ff18-0x90016, `waiting_think`).
         let mut traffic = populated(1, 1);
         traffic.table.avg_ships = 2;
         let behaviour = Recording::deciding(Goal::Idle);
@@ -3749,8 +3798,13 @@ mod tests {
         assert_eq!(behaviour.take(), [NpcId(0)], "the newcomer is jumping in");
         let mut coasted = 0;
         while traffic.npcs()[1].mode != Mode::Flying {
+            let coasting = matches!(traffic.npcs()[1].mode, Mode::Coasting { .. });
             traffic.tick(&behaviour, &[], &mut Draws::of(&[2]));
-            assert_eq!(behaviour.take(), [NpcId(0)]);
+            if coasting {
+                assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)], "coasting");
+            } else {
+                assert_eq!(behaviour.take(), [NpcId(0)], "gliding");
+            }
             if let Mode::Coasting { .. } = traffic.npcs()[1].mode {
                 coasted += 1;
             }
@@ -3762,7 +3816,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
+    fn an_emerging_ship_never_decides_in_its_gate_or_burst_and_decides_as_it_holds_its_course() {
+        // Goal 0x15 skips the type AI (@0x8ff18) and the burst is goal 8's
+        // glide-in path (@0x8fcf5); the coast after it is goal 0, which
+        // decides through its wait, its fire held (`waiting_think`).
         let mut traffic = populated(2, 1);
         traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2.0 };
         let firing = Trigger {
@@ -3775,16 +3832,29 @@ mod tests {
             ..Recording::deciding(Goal::JumpOut)
         };
         let mut ticks = 0;
+        let mut coasted = 0;
         while traffic.npcs()[1].mode != Mode::Flying {
+            let coasting = matches!(traffic.npcs()[1].mode, Mode::Coasting { .. });
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
-            assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
-            assert_eq!(traffic.npcs()[1].goal, Goal::Idle);
-            assert_eq!(
-                traffic.npcs()[1].trigger,
-                Trigger::default(),
-                "tick {ticks}"
-            );
-            assert_eq!(traffic.npcs()[1].target, None, "tick {ticks}");
+            let ship = &traffic.npcs()[1];
+            if coasting {
+                coasted += 1;
+                assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)], "tick {ticks}");
+                assert_eq!(ship.goal, Goal::JumpOut, "tick {ticks}");
+                assert_eq!(ship.target, Some(ShipRef::Player), "tick {ticks}");
+                if ship.mode != Mode::Flying {
+                    assert_eq!(
+                        crate::ai::fire::gated(ship),
+                        Trigger::default(),
+                        "tick {ticks}"
+                    );
+                }
+            } else {
+                assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
+                assert_eq!(ship.goal, Goal::Idle);
+                assert_eq!(ship.trigger, Trigger::default(), "tick {ticks}");
+                assert_eq!(ship.target, None, "tick {ticks}");
+            }
             ticks += 1;
             assert!(ticks < 100, "out");
         }
@@ -3793,9 +3863,8 @@ mod tests {
         // tick, is 21 ticks; then, with no lead, 30 + Rand(30) holding its
         // course, the draw its last, 29.
         assert_eq!(ticks, 2 + 21 + 59);
-        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
-        assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
-        assert_eq!(traffic.npcs()[1].trigger, firing, "its first decision");
+        assert_eq!(coasted, 59);
+        assert_eq!(traffic.npcs()[1].trigger, firing, "its fire held no more");
     }
 
     /// A planet at the centre and a hypergate at (300, -400) heading ships
@@ -4929,6 +4998,7 @@ mod tests {
             follower.goal = Goal::Follow { lead, guard: None };
             follower.target = Some(ShipRef::Player);
             follower.provoked = 5.0;
+            follower.defends = Some(StellarId(128));
         }
         traffic.npcs[2].carrier = Some(crate::bay::Carrier {
             ship: ShipRef::Npc(lead),
@@ -4943,6 +5013,7 @@ mod tests {
             lead: NpcId(4),
             guard: None,
         };
+        traffic.npcs[3].defends = Some(StellarId(128));
         let untouched = traffic.npcs[3].clone();
         let sites = [gate_at_centre()];
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
@@ -4955,6 +5026,7 @@ mod tests {
                 follower.id
             );
             assert_eq!(follower.provoked, -1.0, "+0x96 -1 (@0x8dd14)");
+            assert_eq!(follower.defends, None, "+0x8c -1 (@0x8dd08)");
             assert_eq!(follower.goal, Goal::EnterGate(GATE));
             assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
             // Released at slot 1, it enters on its own: in the box too, at
@@ -4971,6 +5043,7 @@ mod tests {
         );
         assert_eq!(traffic.npcs[3].goal, untouched.goal);
         assert_eq!(traffic.npcs[3].leader, untouched.leader);
+        assert_eq!(traffic.npcs[3].defends, untouched.defends);
         let mut left = Vec::new();
         for _ in 0..40 {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
@@ -5041,13 +5114,18 @@ mod tests {
         assert!(!released.spared, "the bribe's word is overwritten");
     }
 
-    /// Answers every hit on itself by attacking the player.
+    /// Answers every hit on itself by attacking the player, keeping its
+    /// goal and targeting its quarry as it decides.
     #[derive(Debug)]
     struct Turning;
 
     impl Behaviour for Turning {
         fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
             npc.goal
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
         }
 
         fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
@@ -5064,7 +5142,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_entering_a_gate_decides_nothing_but_is_live_and_answers_a_hit() {
+    fn a_ship_entering_a_gate_decides_through_its_entry_and_still_leaves() {
+        // `_AIDispatch` runs the type AI for goal 0x14 whatever +0x4c
+        // (@0x8ff18-0x90016, `waiting_think`), and a goal written over it
+        // leaves the sub 0x17 the fade reads (@0x89508).
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::EnterGate(GATE);
         traffic.npcs[0].mode = Mode::EnteringGate {
@@ -5074,7 +5155,9 @@ mod tests {
         let sites = [gate_at_centre()];
         let recording = Recording::deciding(Goal::JumpOut);
         traffic.tick(&recording, &sites, &mut Draws::of(&[]));
-        assert_eq!(recording.take(), [], "never asked to decide");
+        assert_eq!(recording.take(), [NpcId(0)], "asked to decide");
+        assert_eq!(traffic.npcs()[0].goal, Goal::JumpOut);
+        assert!(traffic.npcs()[0].entering_gate(), "still entering");
         let around = World::new(&sites).around(traffic.npcs());
         assert!(around.live(ShipRef::Npc(NpcId(0))));
         traffic.tick_in(
@@ -5504,6 +5587,8 @@ mod tests {
             visits: None,
             re_picked: false,
             looked_over: None,
+            inspection_pick: None,
+            forgets_inspected: false,
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,
@@ -5699,11 +5784,13 @@ mod tests {
     }
 
     /// Who reacts to a strike on NPC 0, by `arrival_hits`, among a flying
-    /// ship, a disabled one, and ships jumping in, holding their course,
-    /// waiting in a gate, held at it and bursting out of it.
+    /// ship, a disabled one, ships jumping in, holding their course,
+    /// waiting in a gate, held at it and bursting out of it, and one
+    /// destroyed (its slot inactive).
     fn reacting(arrival_hits: RuleSource) -> Vec<String> {
-        let mut traffic = populated(7, 1);
+        let mut traffic = populated(8, 1);
         traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[7].condition = Condition::Destroyed;
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
         traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30.0 };
         traffic.npcs[4].mode = Mode::Emerging { ticks_left: 30.0 };
@@ -5725,13 +5812,16 @@ mod tests {
     }
 
     #[test]
-    fn every_intact_npc_answers_a_strike_by_the_engine() {
+    fn every_active_npc_answers_a_strike_by_the_engine() {
         // `_DamageShip` drops a reaction only while +0x50 is above 0, a
-        // ship jumping out (@0x3b46a, weighed by the answer flag).
+        // ship jumping out (@0x3b46a, weighed by the answer flag). Its
+        // reaction block and `_DoGoodSamaritan`'s loop test no condition
+        // (@0x3bb7a-0x3bcf6, @0x82891-0x82ba8), so a disabled ship
+        // answers too; an inactive slot does not.
         assert_eq!(World::new(&[]).arrival_hits, RuleSource::Engine);
         assert_eq!(
             reacting(RuleSource::Engine),
-            [0, 2, 3, 4, 5, 6].map(|id| format!("react {id} Npc(NpcId(0))"))
+            [0, 1, 2, 3, 4, 5, 6].map(|id| format!("react {id} Npc(NpcId(0))"))
         );
     }
 
@@ -5757,10 +5847,10 @@ mod tests {
     }
 
     #[test]
-    fn only_an_arrived_intact_npc_answers_a_strike_by_the_other_reading() {
+    fn only_an_arrived_active_npc_answers_a_strike_by_the_other_reading() {
         assert_eq!(
             reacting(RuleSource::Bible),
-            [0, 3, 5].map(|id| format!("react {id} Npc(NpcId(0))"))
+            [0, 1, 3, 5].map(|id| format!("react {id} Npc(NpcId(0))"))
         );
     }
 
@@ -5996,13 +6086,18 @@ mod tests {
     }
 
     /// Has ship 0 answer a strike on ship 1, its escort, as a strike on
-    /// itself, and ship 1 answer its own.
+    /// itself, and ship 1 answer its own; each keeps its goal and target
+    /// as it decides, a coasting ship deciding through its wait
+    /// (`waiting_think`).
     #[derive(Debug)]
     struct Guarding;
 
     impl Behaviour for Guarding {
         fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
             npc.goal
+        }
+        fn target(&self, npc: &Npc, _: &Surroundings) -> Option<ShipRef> {
+            npc.target
         }
         fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
             let answers = strike.ship == ShipRef::Npc(npc.id)
@@ -6311,15 +6406,47 @@ mod tests {
     }
 
     #[test]
-    fn an_npc_that_stops_inspecting_a_ship_remembers_it() {
-        let mut traffic = populated(1, 1);
-        traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
-        let still = Fighting::deciding(Goal::Inspect(ShipRef::Player));
-        traffic.tick_in(&still, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].inspected, None, "still at it");
-        let next = Fighting::deciding(Goal::Inspect(ShipRef::Npc(NpcId(7))));
-        traffic.tick_in(&next, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].inspected, Some(ShipRef::Player));
+    fn an_npc_records_only_its_inspection_pick() {
+        // +0x90 is written by the pick alone (@0x8ce3b) and cleared for a
+        // slot gone (@0x8cc40-0x8cc58), in that order in the think.
+        let seven = ShipRef::Npc(NpcId(7));
+        let after = |inspected: Option<ShipRef>, decision: crate::ai::Decision| {
+            let mut traffic = populated(1, 1);
+            traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
+            traffic.npcs[0].inspected = inspected;
+            traffic.tick_in(
+                &Decides(decision),
+                World::new(&[]),
+                &[],
+                &mut Draws::of(&[]),
+            );
+            traffic.npcs()[0].inspected
+        };
+        let decided = |goal| crate::ai::Decision {
+            goal,
+            ..crate::ai::Decision::default()
+        };
+        assert_eq!(after(None, decided(Goal::Inspect(seven))), None, "a move");
+        assert_eq!(after(None, decided(Goal::Idle)), None, "an end");
+        let picked = crate::ai::Decision {
+            inspection_pick: Some(seven),
+            ..decided(Goal::Inspect(seven))
+        };
+        assert_eq!(after(None, picked), Some(seven), "a pick");
+        let forgets = crate::ai::Decision {
+            forgets_inspected: true,
+            ..decided(Goal::Idle)
+        };
+        assert_eq!(after(Some(ShipRef::Player), forgets), None, "a clear");
+        let both = crate::ai::Decision {
+            forgets_inspected: true,
+            ..picked
+        };
+        assert_eq!(
+            after(Some(ShipRef::Player), both),
+            Some(seven),
+            "clear, then pick"
+        );
     }
 
     #[test]

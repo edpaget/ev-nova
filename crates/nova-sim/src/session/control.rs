@@ -41,7 +41,8 @@
 //! `OnCapture` and `OnRetire`) run through [`Session::run_set`] where
 //! the original runs them: see the `hooks` module.
 
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
@@ -58,11 +59,15 @@ use crate::rulebook::RuleSource;
 use crate::ship_change::OutfitCarry;
 
 /// What a control-bit test reads about the session's pilot (see the module
-/// docs).
-#[derive(Clone, Copy, Debug)]
+/// docs), built only by [`PlayerShip::facts`].
+#[derive(Clone, Debug)]
 pub(crate) struct Facts<'a> {
     /// The pilot.
     pub(crate) pilot: &'a Pilot,
+    /// The outfit counts an `o` test reads (`_GetToken` @0x14a95-0x14a9a):
+    /// the pilot's outfits less a purchase's held stock
+    /// (`PlayerShip::counted_outfits`; see the `held_readers` module).
+    outfits: Cow<'a, BTreeMap<OutfitId, u16>>,
     /// Each ammunition outfit, with the `wëap` it is the rounds of.
     pub(crate) ammo_outfits: &'a [(WeaponId, OutfitId)],
     /// The player's weapons, its fighter bays among them.
@@ -84,15 +89,15 @@ impl Facts<'_> {
         lowest_ammo_outfit(self.ammo_outfits, bay)
     }
 
-    /// The outfits an `o` test counts: each the pilot owns one of or
-    /// more, and each carried fighter's dock outfit
-    /// ([`Facts::docks_into`]).
+    /// The outfits an `o` test counts: each the outfit counts
+    /// ([`Facts::outfits`]) hold one of or more, and each carried
+    /// fighter's dock outfit ([`Facts::docks_into`], @0x14aab).
     pub(super) fn counted_outfits(&self) -> impl Iterator<Item = OutfitId> + '_ {
         let owned = self
-            .pilot
-            .outfits()
-            .filter(|&(_, count)| count > 0)
-            .map(|(id, _)| id);
+            .outfits
+            .iter()
+            .filter(|&(_, &count)| count > 0)
+            .map(|(&id, _)| id);
         let docked = self
             .pilot
             .escorts()
@@ -179,7 +184,7 @@ impl Session {
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         if folds_stock(op) {
-            self.ship.fold_stock();
+            self.ship.fold_stock(&mut self.pilot, &self.statics);
         }
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
@@ -342,6 +347,7 @@ impl PlayerShip {
     pub(super) fn facts<'a>(&'a self, pilot: &'a Pilot, statics: &'a Statics) -> Facts<'a> {
         Facts {
             pilot,
+            outfits: self.counted_outfits(pilot),
             ammo_outfits: &statics.ammo_outfits,
             armament: &self.fit.armament,
         }

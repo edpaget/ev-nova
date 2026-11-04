@@ -585,7 +585,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map_open: false,
             map_key_held: false,
             map_closing: false,
-            wait_keys: super::map_wait::WaitKeys::default(),
+            wait_keys: crate::ui::key_wait::WaitKeys::new(super::MAP_KEY),
             map_replay: Vec::new(),
             map_opened: None,
             map_missions: Vec::new(),

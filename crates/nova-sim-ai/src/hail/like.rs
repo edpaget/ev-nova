@@ -2,8 +2,10 @@
 //!
 //! The rules are the original's (`_AIDoesShipLikePlayer` @0x82177 in the
 //! `EV Nova` executable). G is the ship's government, S the system's, L
-//! the player's legal record in the system (its record with S; none in an
-//! independent system), and tol a government's `CrimeTol`. In order:
+//! the player's legal record in the system as `RuleKey::LegalRecords`
+//! reads it ([`Surroundings::record`]: the system's own record under the
+//! original's reading, 0 in an independent system under the Bible's), and
+//! tol a government's `CrimeTol`. In order:
 //!
 //! 1. A ship that threatens the player does not like it:
 //!    `_ExtendedIsThreatToPlayer` @0x81b70 (called @0x8218c), read whole as
@@ -30,19 +32,24 @@
 //!    joined.
 //! 4. An independent ship does.
 //! 5. A xenophobic G in another government's system does not when L is
-//!    above that government's tol. At home, and otherwise, the rules
-//!    below apply. (The original compares an independent system against
-//!    government index 0's tol, a slip that cannot matter, as L is none
-//!    there.)
-//! 6. In an independent system it does. When S is G, or allied with G,
-//!    it does while L is at least -tol(S); when S is G's enemy, only
-//!    while L is below -tol(S). When S is neutral to G, a nosy G
-//!    (`Flags` 0x0002) does while L is at least -tol(S), and any other G
-//!    does.
-//!
-//! The government byte +0x83 the original falls back to is the IFF
-//! byte, which the engine never sets. It is not the blessing, which is the
-//! government's byte +0x84 (see `nova_sim::rank`), read in rule 2.
+//!    above that government's tol (@0x822e1). In an independent system it
+//!    does not when L is above government index 0's tol, the lowest ID
+//!    (@0x822f9-0x82309): a slip of the original's, kept. At home, and
+//!    otherwise, the rules below apply.
+//! 6. In an independent system a nosy G (`Flags` 0x0002) does while L is
+//!    at least -tol(G) (@0x823f7-0x8240b), and any other G does
+//!    (@0x82319). When S is G, or allied with G, it does while L is at
+//!    least -tol(S); when S is G's enemy, only while L is below -tol(S)
+//!    (@0x823b5). When S is neutral to G, a nosy G does while L is at
+//!    least -tol(S), and any other G does.
+//! 7. A refusal by rule 6's record tests is overturned when G (the
+//!    ship's government, not the system's) carries the IFF scrambler's
+//!    mark, the government byte +0x83 (@0x82424, 1 @0x82432,
+//!    [`Surroundings::iff_marked`]), set by `nova_sim::Session`'s port of
+//!    `_ResetPlayerPrecalcedValues` under the rulebook's `iff_scrambler`.
+//!    The refusals of rules 1, 3 and 5 never reach it. The mark is not
+//!    the blessing, which is the government's byte +0x84 (see
+//!    `nova_sim::rank`), read in rule 2.
 //!
 //! The [`Attitude`] is hostile while the ship threatens the player as in
 //! rule 1, friendly while it likes it, and unfriendly otherwise. Every
@@ -54,6 +61,7 @@
 //! (@0x95ce1) and Greetings (@0x966da).
 
 use crate::ai::Surroundings;
+use crate::catalog::GovtId;
 use crate::govt::NOSY;
 use crate::hail::MissionHail;
 use crate::traffic::ShipBehav;
@@ -95,22 +103,27 @@ pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHai
     };
     let govts = around.govts;
     let record = i32::from(around.record);
-    let Some(system) = around.system_govt else {
-        return true;
-    };
-    let tolerance = i32::from(govts.crime_tol(Some(system)));
-    if govts.xenophobic(Some(govt)) && system != govt && record > tolerance {
+    let tol = |of: Option<GovtId>| i32::from(govts.crime_tol(of));
+    // The original's slip: in an independent system it reads government
+    // index 0's tolerance (@0x822f9-0x82309), the lowest ID.
+    let xeno_tol = tol(around.system_govt.or_else(|| govts.ids().next()));
+    if govts.xenophobic(Some(govt)) && around.system_govt != Some(govt) && record > xeno_tol {
         return false;
     }
-    if govts.allies(Some(system), Some(govt)) {
+    let marked = around.iff_marked(Some(govt));
+    let nosy = govts.flag(Some(govt), NOSY);
+    let Some(system) = around.system_govt else {
+        return !nosy || record >= -tol(Some(govt)) || marked;
+    };
+    let tolerance = tol(Some(system));
+    let liked = if govts.allies(Some(system), Some(govt)) {
         record >= -tolerance
     } else if govts.enemies(Some(system), Some(govt)) {
         record < -tolerance
-    } else if govts.flag(Some(govt), NOSY) {
-        record >= -tolerance
     } else {
-        true
-    }
+        !nosy || record >= -tolerance
+    };
+    liked || marked
 }
 
 /// How `npc` feels about the player among `around`, of `mission` (see
@@ -140,6 +153,7 @@ mod tests {
     use crate::traffic::npc::MissionMark;
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::govt;
+    use std::collections::BTreeSet;
 
     const ME: GovtId = GovtId(140);
     const ALLY: GovtId = GovtId(141);
@@ -194,12 +208,26 @@ mod tests {
     /// Whether a ship of `govt` (with `flags` for 140) likes the player
     /// of `record` in a system of `system`.
     fn likes(flags: u16, govt: Option<GovtId>, system: Option<GovtId>, record: i16) -> bool {
-        let govts = govts(flags);
+        likes_marked(&govts(flags), govt, system, record, &[])
+    }
+
+    /// Whether a ship of `govt` among `govts` likes the player of
+    /// `record` in a system of `system`, the governments in `marked`
+    /// carrying the IFF scrambler's mark.
+    fn likes_marked(
+        govts: &Governments,
+        govt: Option<GovtId>,
+        system: Option<GovtId>,
+        record: i16,
+        marked: &[GovtId],
+    ) -> bool {
+        let marked: BTreeSet<GovtId> = marked.iter().copied().collect();
         let npc = ship(govt);
         let around = Surroundings {
-            govts: &govts,
+            govts,
             system_govt: system,
             record,
+            iff_marked: &marked,
             ..Surroundings::new(&[], &[])
         };
         likes_player(&npc, &around, None)
@@ -251,11 +279,95 @@ mod tests {
         assert!(likes(0, None, None, -100));
     }
 
+    /// Government 140 of `CrimeTol` 3 (the lowest ID, the original's
+    /// index 0), a plain 141, a nosy 143 and a xenophobe 144, those of
+    /// `CrimeTol` 6.
+    fn independent_govts() -> Governments {
+        Governments::new([
+            GovtRecord {
+                crime_tol: 3,
+                ..govt(140)
+            },
+            GovtRecord {
+                crime_tol: 6,
+                ..govt(141)
+            },
+            GovtRecord {
+                flags: NOSY,
+                crime_tol: 6,
+                ..govt(143)
+            },
+            GovtRecord {
+                flags: XENOPHOBIC,
+                crime_tol: 6,
+                ..govt(144)
+            },
+        ])
+    }
+
     #[test]
-    fn in_an_independent_system_every_ship_likes_the_player() {
-        for govt in [ME, ENEMY, XENO] {
-            assert!(likes(0x0002, Some(govt), None, -100), "{govt:?}");
+    fn in_an_independent_system_a_nosy_government_minds_its_own_tolerance() {
+        let govts = independent_govts();
+        assert!(likes_marked(&govts, Some(NEUTRAL), None, -6, &[]));
+        assert!(!likes_marked(&govts, Some(NEUTRAL), None, -7, &[]));
+        assert!(likes_marked(&govts, Some(NEUTRAL), None, -7, &[NEUTRAL]));
+        assert!(likes_marked(&govts, Some(ALLY), None, -100, &[]));
+    }
+
+    #[test]
+    fn in_an_independent_system_a_xenophobe_minds_the_first_governments_tolerance() {
+        let govts = independent_govts();
+        assert!(likes_marked(&govts, Some(XENO), None, 3, &[]));
+        assert!(!likes_marked(&govts, Some(XENO), None, 4, &[]));
+        assert!(!likes_marked(&govts, Some(XENO), None, 4, &[XENO]));
+        assert!(likes_marked(&govts, Some(XENO), None, -100, &[]));
+    }
+
+    #[test]
+    fn a_ship_of_a_marked_government_likes_a_player_its_record_refuses() {
+        for (flags, system, record) in [
+            (0, ME, -7),
+            (0, ALLY, -7),
+            (0, ENEMY, -6),
+            (NOSY, NEUTRAL, -7),
+        ] {
+            let govts = govts(flags);
+            assert!(
+                !likes_marked(&govts, Some(ME), Some(system), record, &[]),
+                "{system:?}: unmarked"
+            );
+            assert!(
+                likes_marked(&govts, Some(ME), Some(system), record, &[ME]),
+                "{system:?}: marked"
+            );
         }
+    }
+
+    #[test]
+    fn the_mark_read_is_the_ships_government_not_the_systems() {
+        let govts = govts(0);
+        assert!(!likes_marked(&govts, Some(ME), Some(ENEMY), -6, &[ENEMY]));
+    }
+
+    #[test]
+    fn the_mark_excuses_no_threat_mission_ship_or_xenophobe() {
+        let govts = govts(0);
+        let marks: BTreeSet<GovtId> = [ME].into_iter().collect();
+        let around = Surroundings {
+            iff_marked: &marks,
+            ..among(&govts, Some(ME), 0)
+        };
+        let mut attacker = ship(Some(ME));
+        attacker.goal = Goal::Attack(ShipRef::Player);
+        assert!(!likes_player(&attacker, &around, None));
+        assert_eq!(attitude(&attacker, &around, None), Attitude::Hostile);
+        let mission = marked(Some(ME), ShipBehav::Own, false);
+        assert!(!likes_player(
+            &mission,
+            &around,
+            Some(of(ShipGoal::Destroy, ShipBehav::Own))
+        ));
+        assert!(!likes_marked(&govts, Some(XENO), Some(ALLY), 7, &[XENO]));
     }
 
     #[test]

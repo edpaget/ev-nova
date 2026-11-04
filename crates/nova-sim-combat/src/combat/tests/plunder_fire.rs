@@ -65,7 +65,7 @@ fn beamed(ships: &mut [Ship]) -> Vec<CombatEvent> {
 
 /// Whether `ship` was spared: left at 1 armour, disabled, never breaking
 /// up, among `events`.
-fn spared(ship: &Ship, events: &[CombatEvent]) -> bool {
+pub(super) fn spared(ship: &Ship, events: &[CombatEvent]) -> bool {
     ship.reserves.armor.now == damage::SPARED_ARMOR
         && ship.condition == Condition::Disabled
         && !broke_up(events, &[ship.id])

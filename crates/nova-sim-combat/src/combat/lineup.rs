@@ -15,8 +15,12 @@
 //! Here each loop reads the ships through one [`Lineup`], whose
 //! [`Lineup::refresh`] reads each struck ship again whole ([`reread`]),
 //! keeping it at the place each view meets it. A beam's loop
-//! (`_HandleBeams` @0x316a1, `Combat::close_tick_in`) reads its one view the
-//! same way.
+//! (`_HandleBeams` @0x316a1, `Combat::close_tick_in_turn`) reads its one view the
+//! same way. The collision passes and the beams stop after each direct
+//! hit for it to be answered ([`hit_turns`](super::hit_turns)); the next
+//! stretch builds its lineup afresh from the fighters lent after the
+//! answer. Each ship struck before the stop has already settled its
+//! condition there, so it reads as [`reread`] would read it.
 
 use super::hull::DisableRule;
 use super::planet_type::BeamPlanetFlag;
@@ -30,9 +34,9 @@ use crate::govt::Governments;
 /// fighter, in the fighters' order, in two views: where the blasts, the
 /// fuses and the sub-munitions meet them (`world`: every ship where it
 /// is), and where the loop's other tests meet them (`seen`: contact meets
-/// the player where it stood as the last tick closed, `Combat::hit_pass`;
+/// the player where it stood as the last tick closed, `Combat::hit_stretch`;
 /// `_HandleShot`'s moves and locks meet every ship where it is,
-/// `Combat::handle_shots`). Each ship a landing strikes is read again
+/// `Combat::shot_stretch`). Each ship a landing strikes is read again
 /// after it ([`Lineup::refresh`]).
 pub(super) struct Lineup<'a> {
     /// Each ship where the blasts and fuses meet it: where it is.
@@ -99,7 +103,8 @@ impl<'a> Lineup<'a> {
     /// Reads each ship among `struck` again from its fighter among
     /// `fighters`, as `rule` says, in each view at its place there
     /// ([`reread`]), and its sight. No other ship's record changes in a
-    /// loop but by a landing on it.
+    /// loop but by a landing, or an answer, after which the fight's ships
+    /// are lent afresh.
     pub(super) fn refresh(
         &mut self,
         fighters: &[Fighter],

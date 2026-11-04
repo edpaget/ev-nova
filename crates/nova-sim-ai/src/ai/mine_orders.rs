@@ -62,15 +62,30 @@ pub const HOLD_NEAR: f32 = 80.0;
 pub const SCOOP_BRAKE: f64 = 1.75;
 
 /// The low-level order state 16's high level gives a miner (see the
-/// module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// module docs). A ship that flies no mining holds [`MineOrder::Stop`],
+/// its default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MineOrder {
     /// Order 1: slot 0 is empty, so it stops.
+    #[default]
     Stop,
     /// Order 0x13: outside the box, it chases slot 0.
     Chase,
     /// Order 0x14: inside the box, it holds by slot 0 and fires at it.
     Kill,
+}
+
+/// The order as `_AIHandleCloaking` tests the stored sub-goal under goal
+/// 0x10: order 1 a stop, 0x13 the chase the 0x0200 term reads (@0x834d6)
+/// and 0x14 the close the 0x1000 term drops the cloak on (@0x835e9-0x835fb).
+impl From<MineOrder> for crate::cloak::MineOrder {
+    fn from(order: MineOrder) -> Self {
+        match order {
+            MineOrder::Stop => Self::Stop,
+            MineOrder::Chase => Self::Chase,
+            MineOrder::Kill => Self::Close,
+        }
+    }
 }
 
 /// The mining box of a class whose turn (+0x38) is `class_turn`:
@@ -287,6 +302,15 @@ mod tests {
     #[test]
     fn with_slot_0_empty_the_order_is_a_stop() {
         assert_eq!(order(&miner(0.0, 0.0), None), MineOrder::Stop);
+    }
+
+    #[test]
+    fn each_order_reads_as_the_cloak_thinks_of_it() {
+        use crate::cloak::MineOrder as Cloak;
+        assert_eq!(Cloak::from(MineOrder::Stop), Cloak::Stop);
+        assert_eq!(Cloak::from(MineOrder::Chase), Cloak::Chase);
+        assert_eq!(Cloak::from(MineOrder::Kill), Cloak::Close);
+        assert_eq!(MineOrder::default(), MineOrder::Stop);
     }
 
     #[test]

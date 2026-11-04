@@ -5,7 +5,7 @@
 //!
 //! **The field.** The beams' phase takes the field out of the session for
 //! the phase and lends it to the fight whole
-//! ([`Combat::close_tick_in`](crate::combat::Combat::close_tick_in)), so a
+//! ([`Combat::close_tick_in_turn`](crate::combat::Combat::close_tick_in_turn)), so a
 //! beam destroys an asteroid at once, as `_DestroyAsteroid` (@0x31a69)
 //! does inside the pass, and a later beam meets the fragments. Its
 //! particles and explosion are raised in the fight's events as it is

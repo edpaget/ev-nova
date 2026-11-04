@@ -93,7 +93,7 @@
 //!    [`PointDefenceRule`] which missiles are hostile only by the other
 //!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility), and
 //!    never of a ship.
-//! 2. The hit pass (`Combat::hit_pass`, [`Combat::test_hits`]): each shot
+//! 2. The hit pass (`Combat::hit_stretch`, [`Combat::test_hits_in_turn`]): each shot
 //!    that moved in the last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
 //!    moved, and is not tested. The pass meets every ship where it is now,
@@ -146,6 +146,13 @@
 //!    past it. Each age read is the one its move left, as the pass comes
 //!    before the shots move again. Sub-munitions released here take their
 //!    first move in step 5.
+//!
+//!    The pass stops just after each direct hit, a contact's or a fuse's,
+//!    before its blast and its sub-munitions, for the session to answer it
+//!    and lend the ships afresh before the walk goes on, as `_DamageShip`'s
+//!    reaction block runs inside `_HandleShipHit` (@0x36c7a): so each
+//!    later hit, its own blast included, reads the ships as that answer
+//!    left them ([`hit_turns`]).
 //!
 //!    2a. Each shot meets the asteroids of the field the session lends the
 //!    tick ([`AsteroidField`]), slot by slot,
@@ -200,8 +207,8 @@
 //!    point defence on the next tick, and under the caps it finds the
 //!    slots of the shots the collision passes ended, and of the spent
 //!    ones, still held ([`Combat::shot_room`]).
-//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots`]) visits the shot
-//!    slots in order ([`Combat::handle_shots`]), freeing each slot held
+//! 5. `_HandleShot` (@0x44385, [`Combat::fly_shots_in_turn`]) visits the shot
+//!    slots in order ([`Combat::shot_stretch`]), freeing each slot held
 //!    since its last pass at its visit, and doing all of each slot's work
 //!    there, so every later visit reads what an earlier one landed. Each
 //!    shot whose last move spent its life comes to its end of life where
@@ -245,7 +252,7 @@
 //!    @0x44509 and `_HandleDeadlyStellars` @0x4450e, [`Combat::hazards`]),
 //!    before every beam step, so a ship a deadly stellar kills is out of
 //!    the beams. Then, in `_HandleBeams` (@0x4453d,
-//!    [`Combat::close_tick_in`]), each beam spends a tick of its life, or
+//!    [`Combat::close_tick_in_turn`]), each beam spends a tick of its life, or
 //!    fades a tick at its end ([`Beam::live`]), one that has ended going
 //!    before it hits or is drawn again. The rest follow their firers
 //!    ([`Beam::follow`]), each from its exit on the frame its firer is
@@ -269,9 +276,12 @@
 //!    Bible's, a planet-type beam meeting a stellar nearer than its ship
 //!    strikes the stellar instead ([`beam_stellar`]). A beam that hits no
 //!    ship, or a mining NPC's, which passes every ship, goes on to the
-//!    asteroids the session lends ([`Combat::close_tick_in`]): it cuts,
+//!    asteroids the session lends ([`Combat::close_tick_in_turn`]): it cuts,
 //!    wears down, breaks, pushes or tractors the one it reaches before the
-//!    next beam is tested ([`asteroid_beam`]).
+//!    next beam is tested ([`asteroid_beam`]). The beams stop after each
+//!    beam's hit for the session to answer it and lend the ships afresh
+//!    before the next beam is tested, as `_HandleBeams` damages the ship
+//!    in its loop (@0x316a1, [`hit_turns`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -334,7 +344,7 @@
 //!     `_HandleShip` in step 6 (@0x34424).
 //!
 //! After step 10 each ship's place is kept: the next tick's hit pass meets
-//! each NPC there (`Combat::hit_pass`).
+//! each NPC there (`Combat::hit_stretch`).
 //!
 //! **Frame to tick.** Tick t is the original's frame t
 //! (`_DoPlayGameWork` @0x43de5-0x4453d, drawn after it returns,
@@ -411,6 +421,7 @@ pub mod finishing_hit;
 pub mod fixture;
 pub mod flags;
 pub mod hidden;
+pub mod hit_turns;
 pub mod hull;
 pub mod impact;
 pub mod ion;
@@ -442,6 +453,7 @@ pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
+mod walk;
 pub mod weapon;
 mod wrap_carry;
 
@@ -465,7 +477,6 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
-use lineup::Lineup;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
@@ -482,7 +493,6 @@ use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
-use crate::asteroid::Asteroids;
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, StellarId, WeaponId};
 use crate::chance::Chance;
@@ -590,9 +600,14 @@ pub enum CombatEvent {
     /// reaches, a beam tick, a death's shockwave, or a missile lock, which
     /// does no damage but flashes its target's shield all the same
     /// (@0x35855). Every path past `_DamageShip`'s entry guards reaches the
-    /// write, a breaking-up ship's too; the escape pod and every class
+    /// write, which follows the reaction block's skip target: a hit
+    /// answered or not, the hit that takes a ship's last armour, and a hit
+    /// on a disabled or breaking-up ship; the escape pod and every class
     /// after it take none ([`immune`], @0x3a87c-0x3a882). The sabotage
-    /// bomb passes shields (@0x699b2) and raises none.
+    /// bomb passes shields (@0x699b2) and raises none. The mark that
+    /// follows for a hit on the player, `_statusRedraw[1] = 1`
+    /// (@0x3bf0c-0x3bf1b), is left out: the cockpit reads the reserves
+    /// every frame in flight, where every hit lands.
     Hit {
         /// The ship hit.
         ship: ShipRef,
@@ -826,8 +841,11 @@ pub struct Strike {
     pub by: Option<ShipRef>,
     /// The shield and armour it took.
     pub damage: f32,
-    /// How it left the ship, for the last hit on a ship whose condition
-    /// changed that tick; none otherwise.
+    /// How it left the ship, for the last hit on a ship before its
+    /// condition settled, when that changed it; none otherwise. The
+    /// collision passes and the beams settle each ship a direct hit strikes
+    /// as that hit lands, as `_DamageShip` does, and a blast's at the next
+    /// direct hit or the phase's end (see the `hit_turns` module).
     pub downed: Option<Downed>,
     /// Whether it was a direct hit, which the ship hit may answer: the
     /// original's `_DamageShip` arg +0x20 ("real"). A shot's or beam's hit
@@ -1334,7 +1352,7 @@ pub struct Combat {
     proximity_fuse: ProximityFuse,
     /// Where the player stood as the last tick closed, which the next
     /// tick's contact and point defence's sprites meet it at (see
-    /// `Combat::hit_pass`): `_HandlePlayer` moves it before the collision
+    /// `Combat::hit_stretch`): `_HandlePlayer` moves it before the collision
     /// passes. Every NPC is met where it is, as the original reads each
     /// ship's record live (`_HandleShot`'s blasts @0x3603c-0x3605b).
     player_stood: Option<Vec2>,
@@ -1362,7 +1380,7 @@ pub struct Combat {
     /// The original's shot slots ([`shot_slots`]). Each shot that leaves
     /// the table holds its slot until the next `_HandleShot` visits it
     /// (see [`Combat::shot_room`]): from the late part of a tick (step 7)
-    /// to the next tick's `_HandleShot` ([`Combat::fly_shots`]), the
+    /// to the next tick's `_HandleShot` ([`Combat::fly_shots_in_turn`]), the
     /// missiles point-defence beams downed; from the collision passes on,
     /// those and the passes' own ends, as each is ended. Those point
     /// defence ended are also kept in `hidden` until a proximity pass
@@ -1402,6 +1420,9 @@ pub struct Combat {
     /// What the contact walks read of a wrap of the player on the pass it
     /// ran ([`wrap_carry`]), until the pass's hit pass ends.
     wrap_pass: Option<wrap_carry::WrapPass>,
+    /// The walk of a phase stopped after a direct hit, for its next
+    /// stretch to resume ([`hit_turns`], the `walk` module).
+    walk: Option<walk::Walk>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -1786,7 +1807,7 @@ impl Combat {
     ///   tick's point-defence beams downed still held;
     /// - an NPC's point defence finds those and every shot the collision
     ///   passes ended still held, and a spent shot still in the table;
-    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots`]), finds
+    /// - an NPC's pick, after `_HandleShot` ([`Combat::fly_shots_in_turn`]), finds
     ///   them all freed, the spent shots' too, and a shot of no life is
     ///   freed by the `_HandleShot` that first visits it, so it holds none.
     ///
@@ -1829,7 +1850,7 @@ impl Combat {
     /// passes and before the AI runs (`_DoPlayGameWork` @0x44223, before
     /// `_AIDispatch` @0x4429d), so no shot the passes hit counts. The
     /// session's `nova_sim::Session::game_work` reads them there, after
-    /// [`Combat::test_hits`].
+    /// [`Combat::test_hits_in_turn`].
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();
@@ -2496,105 +2517,6 @@ impl Combat {
         }
     }
 
-    /// Steps 2 and 3, the hit pass: each shot's last move, made the tick
-    /// before (its [`Shot::moved_from`]), is tested as the original's next
-    /// frame tests it, before `_HandleShot` moves it again
-    /// (`_DoPlayGameWork` @0x43e70-0x44015, @0x44385). A shot that has not
-    /// moved yet is not tested, as its sprite is not shown. The tests go
-    /// in the original's order ([`collision`]):
-    ///
-    /// 1. the contact passes, each shot layer against the ships, walked by
-    ///    layer and entry, then the asteroids, walked by slot, against the
-    ///    layer; then the asteroids against point defence's layer;
-    /// 2. point defence's layer against the missiles
-    ///    ([`Combat::intercept`]): a shot spent in 1 is hidden by then and
-    ///    never met, and each it ends is kept hidden at life 0 ([`hidden`]);
-    /// 3. the proximity pass ([`Combat::proximity_pass`]), slot by slot,
-    ///    the shots point defence ended, this pass's and the last tick's
-    ///    beam kills, among the live ones: each slot's stellar, then, live,
-    ///    its fuse's ship, then its fuse's asteroid.
-    ///
-    /// All three run in [`Combat::resolve`]. A shot whose move spent it
-    /// meets only the asteroids it touches and point defence, and is kept
-    /// for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
-    /// Point defence's [`CombatEvent::ShotDown`] follows the contact
-    /// passes' events.
-    ///
-    /// The pass meets each NPC where it is, as its last `_HandleShip` left
-    /// it (@0x3428f-0x342aa), and the player where it is now, as
-    /// `_HandlePlayer` has moved it. Contact and the point-defence layer
-    /// meet the player where it stood as the last tick closed, or where it
-    /// is if it was not in that tick's fight: their sprites are placed
-    /// relative to the player as it stood when the shots moved
-    /// (`_HandleShot` @0x35c48-0x35cc0), and the player's own is always
-    /// at the screen's centre (@0x2cd32-0x2cd9d). The fuse, the blasts
-    /// and the hits' pushes and ionization read world positions, the
-    /// player's where it is now. Each sub-munition's weapon is read from
-    /// `arsenal`, its spread drawn on `chance`; the relations between
-    /// governments are `govts`'. On the pass of a wrap of the player, the
-    /// contact walks meet what it left where its sprite stood, and the
-    /// pass ends that ([`wrap_carry`]).
-    ///
-    /// Each hit lands as the walk finds it ([`Combat::land`]), as
-    /// `_HandleShipHit` lands it before the walk's next pair, so a later
-    /// test reads the armour it left ([`Target::disabled`]). Each ship
-    /// struck then settles its condition as step 9 does but for a
-    /// breakup's countdown, its last strike marked as downing it, as
-    /// `rule` says: so an NPC downed by a shot fires nothing more that
-    /// tick, as `_HandleShip`'s fire reads `_IsDisabled` after the passes.
-    /// It keeps the ships whose breakup it began, whose first tick takes no
-    /// tick off (step 9, see `Combat::settle_struck`). The original
-    /// settles each in `_DamageShip`; nothing in the pass reads the
-    /// condition but whether a ship is destroyed, which no hit there
-    /// changes, so settling after it crosses no boundary.
-    fn hit_pass(
-        &mut self,
-        fighters: &mut [Fighter],
-        (govts, arsenal): (&Governments, &Arsenal),
-        rule: &dyn DisableRule,
-        scenery: Scenery<'_>,
-        chance: &mut dyn Chance,
-    ) {
-        let Scenery {
-            stellars,
-            asteroids,
-            hazards: _,
-            contact,
-        } = scenery;
-        let no_sprites = contact::ContactSprites::default();
-        let sprites = contact.unwrap_or(&no_sprites);
-        let mut none = Asteroids::default();
-        let mut field = asteroids.unwrap_or(AsteroidField {
-            asteroids: &mut none,
-            types: &asteroid_walk::NO_TYPES,
-        });
-        let player_stood = self.player_stood;
-        let touchable_at: Vec<Vec2> = fighters
-            .iter()
-            .map(|fighter| match player_stood {
-                Some(position) if fighter.ship == ShipRef::Player => position,
-                _ => self.ship_sprite(fighter.ship, fighter.state.position),
-            })
-            .collect();
-        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
-        let first_strike = self.strikes.len();
-        let entry = self.entry_order();
-        let terms = collision::WalkTerms {
-            arsenal,
-            rule,
-            sprites,
-        };
-        self.resolve(
-            (fighters, &mut lineup),
-            &entry,
-            &terms,
-            chance,
-            (stellars, &mut field),
-        );
-        self.wrap_pass = None;
-        self.settle_struck(fighters, first_strike, rule);
-    }
-
     /// Each ship among `fighters` struck since `first_strike` and still
     /// standing settles its condition as step 9 does, as `rule` says
     /// ([`Combat::settle_condition`]), its last strike marked as downing
@@ -2768,6 +2690,13 @@ impl Combat {
     /// `Impact` is gated from its firer's centre, which a firer no longer
     /// in the fight has none of.
     ///
+    /// A direct hit's can't-kill reads its attacker and its leader as
+    /// `fighters` lend them ([`plunder::cant_kill`]): the collision passes
+    /// and the beams stop after each direct hit, and `_HandleShot` after
+    /// each missile lock, for it to be answered, and lend the ships afresh
+    /// after ([`hit_turns`]), so the read is of what the answers of the
+    /// hits before it wrote.
+    ///
     /// The original writes each push to the ship's velocity at once, and
     /// the ship moves by it the next frame; here the session sets the
     /// velocities from the shoves after the fight's tick
@@ -2775,7 +2704,7 @@ impl Combat {
     /// no boundary the player sees. The hits compound in the order they
     /// land: the hit pass's in its walk's order ([`collision`]), then
     /// `_HandleShot`'s, the blasts and locks slot by slot
-    /// ([`Combat::handle_shots`]), then beams.
+    /// ([`Combat::shot_stretch`]), then beams.
     ///
     /// Each hit but a lock ionizes its ship ([`Ion::take`], `_IonizeShip`)
     /// at the ship's place, the escape pod included, whatever the tractor
@@ -3311,9 +3240,12 @@ impl Fighter<'_> {
     /// What homing guidance reads of the ship (`_ShipECM` and the cloak
     /// test, @0x321b7-0x32335): its jamming, whether it is disabled as
     /// `_IsDisabled` reads it (not intact, or held disabled), and its sight
-    /// facts. Read as the tick begins, and again after each landing on the
-    /// ship within a loop ([`Lineup::refresh`](lineup::Lineup::refresh)),
-    /// once `Combat::settle_struck` has settled its condition, so a later
+    /// facts. Read as the tick begins, afresh at each stretch of a phase
+    /// that stops for its hits' answers ([`hit_turns`]), so a later
+    /// visit's shot reads a cloak a lock's answer flipped, and again after
+    /// each landing on the ship within a loop
+    /// ([`Lineup::refresh`](lineup::Lineup::refresh)), once
+    /// `Combat::settle_struck` has settled its condition, so a later
     /// visit's shot reads a ship an earlier landing disabled as jamming
     /// nothing, as the original reads the live record after `_DamageShip`.
     fn sight(&self) -> Sight {
@@ -3551,7 +3483,7 @@ const LOCK_HIT: Hit = Hit {
 /// The original locks in `_HandleShot`, after the move and before the
 /// next frame's collision passes test that move; here too it is made
 /// right after the shot's move and lands at its own visit, between the
-/// other slots' ends of life ([`Combat::handle_shots`]), before the NPCs
+/// other slots' ends of life ([`Combat::shot_stretch`]), before the NPCs
 /// fire. The original's target sets +0x70 then, in `_DamageShip`'s
 /// reaction block; the session answers the strike after the shot step
 /// (`nova_sim::Session::game_work`). The lock age is in frames at the
@@ -3737,8 +3669,10 @@ mod tests {
     mod escort_lost_in_place;
     mod exit_steps;
     mod finishing_hits;
+    mod flash_hits;
     mod fold_stamp;
     mod hidden_shots;
+    mod hit_turns;
     mod idle_bays;
     mod interfered_hits;
     mod ion_lockout_tick;
@@ -3762,6 +3696,7 @@ mod tests {
     mod stellar_hazards;
     mod strike_terms;
     mod tick_phases;
+    mod turn_reads;
     mod weapon_glow;
     mod wrap_carry;
 
@@ -8683,7 +8618,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_last_strike_on_a_ship_downed_that_tick_says_so() {
+    fn the_strike_that_disables_a_ship_says_so_and_no_later_one_that_tick() {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield.now = 0.0;
@@ -8693,7 +8628,9 @@ mod tests {
             target,
             Ship::at(3, 200.0, 0.0).armed(blaster()).facing(270.0),
         ];
-        // Each shot's sixth move reaches B, from either side.
+        // Each shot's sixth move reaches B, from either side. Each direct
+        // hit settles B as it lands, as `_DamageShip` does, so A's, the
+        // first, disables it.
         let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         assert_eq!(
             strikes,
@@ -8702,7 +8639,7 @@ mod tests {
                     ship: B,
                     by: Some(A),
                     damage: 5.0,
-                    downed: None,
+                    downed: Some(Downed::Disabled),
                     direct: true,
                     intended: false,
                     lock: false,
@@ -8717,7 +8654,7 @@ mod tests {
                     ship: B,
                     by: Some(C),
                     damage: 4.0,
-                    downed: Some(Downed::Disabled),
+                    downed: None,
                     direct: true,
                     intended: false,
                     lock: false,
@@ -8729,7 +8666,7 @@ mod tests {
                     answered: false,
                 }
             ],
-            "12 armour less 8 is below a third of 30"
+            "12 armour less 5 is below a third of 30"
         );
     }
 

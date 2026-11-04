@@ -65,7 +65,7 @@ use crate::ai::odds::cached_odds_at;
 use crate::ai::reinforcements::{
     self, Called, Clock, Coming, Event, Inhibitors, ReinforcementFacts,
 };
-use crate::catalog::{GovtId, SystemId, outfit_mods};
+use crate::catalog::{GovtId, OutfitId, SystemId, outfit_mods};
 use crate::chance::Chance;
 use crate::message::SimMessage;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -267,16 +267,22 @@ impl Space {
         self.set_clock_here(pilot, Clock::default());
     }
 
-    /// The reset's inhibitors (@0xc628-0xc68f): set by each owned
-    /// `ModType` 44 outfit, on top of those set before by the engine's
-    /// reading of [`RuleKey::ReinforcementInhibitor`], in place of them by
-    /// the other.
-    pub(super) fn reset_inhibitors(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+    /// The reset's inhibitors (@0xc628-0xc68f): set by each `ModType` 44
+    /// outfit of the outfit counts `counted` (`_ShipAntiInterference`'s
+    /// reads; see the `held_readers` module), on top of those set before
+    /// by the engine's reading of [`RuleKey::ReinforcementInhibitor`], in
+    /// place of them by the other.
+    pub(super) fn reset_inhibitors(
+        &mut self,
+        counted: &BTreeMap<OutfitId, u16>,
+        statics: &Statics,
+        setup: &Setup,
+    ) {
         if setup.rules.source_for(RuleKey::ReinforcementInhibitor) == RuleSource::Bible {
             self.reinforcements.every_government = false;
             self.reinforcements.inhibited.clear();
         }
-        for owned in outfit_mods(&pilot.outfits, &statics.outfits) {
+        for owned in outfit_mods(counted, &statics.outfits) {
             if owned.mod_type != INHIBITOR {
                 continue;
             }

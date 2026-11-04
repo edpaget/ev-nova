@@ -2,8 +2,10 @@
 //! player's radar outfits, each ship's and stellar's IFF colour code, and
 //! the interference in the player's system.
 
+use std::collections::BTreeMap;
+
 use super::{Chart, Session, Space, Statics};
-use crate::catalog::StellarId;
+use crate::catalog::{OutfitId, StellarId};
 use crate::domination;
 use crate::iff::{self, RadarGear, ShipIff, Standing, StellarIff};
 use crate::pilot::Pilot;
@@ -25,7 +27,7 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn radar_gear(&self) -> RadarGear {
-        radar_gear(&self.pilot, &self.statics)
+        radar_gear(&self.ship.counted_outfits(&self.pilot), &self.statics)
     }
 
     /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
@@ -95,7 +97,9 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn interference(&self) -> u8 {
-        self.chart.interference(&self.pilot, &self.statics)
+        let counted = self.ship.counted_outfits(&self.pilot);
+        self.chart
+            .interference(&self.pilot, &self.statics, &counted)
     }
 }
 
@@ -112,17 +116,23 @@ impl Space {
 
 impl Chart {
     /// The interference in the player's system ([`iff::interference`]):
-    /// its `sÿst` `Interference` less the player's anti-interference,
-    /// 0..=100.
+    /// its `sÿst` `Interference` less the player's anti-interference from
+    /// the outfit counts `counted` (`_ShipAntiInterference`), 0..=100.
     #[must_use]
-    pub(super) fn interference(&self, pilot: &Pilot, statics: &Statics) -> u8 {
+    pub(super) fn interference(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        counted: &BTreeMap<OutfitId, u16>,
+    ) -> u8 {
         let system = self.galaxy.map().interference(pilot.system);
-        iff::interference(system, radar_gear(pilot, statics).anti_interference)
+        iff::interference(system, radar_gear(counted, statics).anti_interference)
     }
 }
 
-/// What the player's outfits give the radar: IFF, a density scanner
-/// and anti-interference ([`RadarGear::of`]).
+/// What the player's outfit counts `counted` give the radar: IFF, a
+/// density scanner and anti-interference ([`RadarGear::of`]), a
+/// purchase's held stock left out (see the `held_readers` module).
 ///
 /// It is read afresh at every call. The original caches it lazily,
 /// and every change to the outfits (the outfitter included, through
@@ -130,8 +140,8 @@ impl Chart {
 /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
 /// read, so the two match.
 #[must_use]
-pub(super) fn radar_gear(pilot: &Pilot, statics: &Statics) -> RadarGear {
-    RadarGear::of(&pilot.outfits, &statics.outfits)
+pub(super) fn radar_gear(counted: &BTreeMap<OutfitId, u16>, statics: &Statics) -> RadarGear {
+    RadarGear::of(counted, &statics.outfits)
 }
 
 #[cfg(test)]

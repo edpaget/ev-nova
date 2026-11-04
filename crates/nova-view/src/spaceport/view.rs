@@ -183,8 +183,11 @@ use nova_sim::{
     services,
 };
 
+mod close_keys;
 mod flushing_layers;
 mod gamble;
+
+pub use close_keys::CloseKeys;
 
 use super::ambient::Ambient;
 use super::bar::{BarScreen, BarTemplates, Hiring};
@@ -557,6 +560,12 @@ pub struct SpaceportView {
     /// Whether a closing that redraws the status bar has come since this
     /// was last taken ([`SpaceportView::take_status_refresh`]).
     status_refresh: bool,
+    /// Which of the keys a close waits on are down (the `close_keys`
+    /// module).
+    close_keys: CloseKeys,
+    /// What the player info screen's close wait left, until taken (the
+    /// `close_keys` module).
+    wait_replay: Vec<Input>,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
@@ -666,6 +675,8 @@ impl SpaceportView {
             alert_after: None,
             description_request,
             status_refresh: false,
+            close_keys: CloseKeys::default(),
+            wait_replay: Vec::new(),
             sounds: Vec::new(),
             ambient,
             chance: SharedChance::default(),
@@ -1722,24 +1733,6 @@ impl SpaceportView {
         self.close_bought_shipyard();
     }
 
-    /// Lets go of the offer dialog answered and left drawn under what its
-    /// answer shows, at the spaceport or over the venue open: whoever
-    /// flies the ship hides it once the refusal showed a `RefuseText`
-    /// ([`RefuseShown`](nova_sim::RefuseShown), `_OfferOneMission`
-    /// @0xa2e8e).
-    pub fn release_answered_offer(&mut self) {
-        if let Some(missioning) = &mut self.missioning {
-            missioning.landing.release_answered();
-        }
-        match &mut self.open {
-            Some(Open::Bar(screen)) => screen.release_answered_offer(),
-            Some(Open::Trade(screen)) => screen.release_answered_offer(),
-            Some(Open::Outfitter(screen)) => screen.release_answered_offer(),
-            Some(Open::Shipyard(screen)) => screen.release_answered_offer(),
-            Some(Open::Service(_) | Open::Computer(_)) | None => {}
-        }
-    }
-
     /// Tells the offer dialog open, the spaceport's or the one over the
     /// venue open, whether the mission info screen lists a mission
     /// ([`OfferDialog::set_missions_listed`]): whoever flies the ship says
@@ -1766,6 +1759,24 @@ impl SpaceportView {
     fn dispose_answered_offer(&mut self) {
         if !self.mission_dialogs_open() {
             self.release_answered_offer();
+        }
+    }
+
+    /// The offers at the spaceport and over the venue open, each given to
+    /// `each` (the `close_keys` module).
+    fn each_offers(&mut self, mut each: impl FnMut(&mut VenueOffers)) {
+        if let Some(missioning) = &mut self.missioning {
+            each(&mut missioning.landing);
+        }
+        let venue = match &mut self.open {
+            Some(Open::Bar(screen)) => screen.offering_mut(),
+            Some(Open::Trade(screen)) => screen.offering_mut(),
+            Some(Open::Outfitter(screen)) => screen.offering_mut(),
+            Some(Open::Shipyard(screen)) => screen.offering_mut(),
+            Some(Open::Service(_) | Open::Computer(_)) | None => None,
+        };
+        if let Some(offers) = venue {
+            each(offers);
         }
     }
 
@@ -1869,7 +1880,8 @@ impl SpaceportView {
                 port.style,
                 dialogs.background,
             )
-            .with_focus_ring(port.focus_ring),
+            .with_focus_ring(port.focus_ring)
+            .with_key_held(self.close_keys.player_info),
         );
     }
 
@@ -2361,8 +2373,10 @@ impl Screen for SpaceportView {
     /// Lets go of the keys the player info screen holds, or else the
     /// screen open.
     fn release_keys(&mut self) {
+        self.each_offers(VenueOffers::release_answer_wait);
         if let Some(screen) = &mut self.player_info {
             screen.release_keys();
+            self.drop_closed_player_info();
         } else if let Some(open) = &mut self.open {
             open.screen_mut().release_keys();
         }
@@ -2407,9 +2421,7 @@ impl SpaceportView {
         if let Some(screen) = &mut self.player_info {
             screen.input(input);
             self.player_info_jettison |= screen.take_jettison();
-            if screen.closed() {
-                self.status_refresh |= screen.problem().is_none();
-                self.player_info = None;
+            if self.drop_closed_player_info() {
                 self.release_keys();
             }
             return ScreenAction::None;
@@ -2616,6 +2628,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod close_keys;
     mod flushing_layers;
     mod held_keys;
     mod overlay_pointer;
@@ -6611,7 +6624,7 @@ pub(in crate::spaceport) mod tests {
         view.open_offer(offered());
         view.input(&key(Key::Char('n')));
         assert!(view.take_offer_choice().is_some());
-        view.release_answered_offer();
+        view.hide_answered_offer();
         view.show_mission_texts(vec![MissionText {
             movie: None,
             ..filmed_comp()
@@ -6663,7 +6676,7 @@ pub(in crate::spaceport) mod tests {
             let player = MockMoviePlayer::playing((160, 120), 2);
             let mut view = refused_over(venue, &player);
             assert!(offer_drawn(&view), "{venue}: drawn until released");
-            view.release_answered_offer();
+            view.hide_answered_offer();
             assert!(
                 !offer_drawn(&view),
                 "{venue}: hidden for its RefuseText (@0xa2e8e)"

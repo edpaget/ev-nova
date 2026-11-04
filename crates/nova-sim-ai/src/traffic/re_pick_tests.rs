@@ -2,8 +2,10 @@
 //! (`_InterceptorAI` @0x8d404-0x8d43a, see
 //! [`interceptor`](crate::ai::interceptor)): the state-7 block's reach
 //! reads the re-picked target (@0x8f11e), so a re-pick away from the
-//! player within its reach scans nothing; and of a pick looked over in
-//! its own think ([`Decision::looked_over`], @0x8f11e-0x8f394).
+//! player within its reach scans nothing; of a pick looked over in its
+//! own think ([`Decision::looked_over`], @0x8f11e-0x8f394); and of the
+//! pick's record of the last-inspected ship, which the re-pick leaves
+//! standing ([`Decision::inspection_pick`], @0x8ce3b).
 
 use super::on_line::OnLine;
 use super::{Traffic, World};
@@ -51,12 +53,14 @@ fn on_line_after(decision: Decision) -> Vec<OnLine> {
     after_tick(Goal::Inspect(ShipRef::Player), decision).0
 }
 
-/// A pick of `ship` the think looked over at once.
+/// A pick of `ship` the think looked over at once: the look-over drives
+/// the scan, the pick the record.
 fn looked_over(ship: ShipRef) -> Decision {
     Decision {
         goal: Goal::Idle,
         clears_target: true,
         looked_over: Some(ship),
+        inspection_pick: Some(ship),
         ..Decision::default()
     }
 }
@@ -83,6 +87,57 @@ fn a_kept_inspection_of_the_player_within_reach_still_scans_beside_a_fresh_pick_
     let (line, inspected) = after_tick(Goal::Inspect(ShipRef::Player), looked_over(other));
     assert_eq!(line, [OnLine::Scan(NpcId(1))]);
     assert_eq!(inspected, Some(other));
+}
+
+#[test]
+fn a_look_over_alone_records_nothing() {
+    // A re-pick looked over at once (@0x8f11e) writes no +0x90.
+    let re_picked = Decision {
+        inspection_pick: None,
+        ..looked_over(ShipRef::Player)
+    };
+    let (line, inspected) = after_tick(Goal::Idle, re_picked);
+    assert_eq!(line, [OnLine::Scan(NpcId(1))], "still a scan");
+    assert_eq!(inspected, None);
+}
+
+#[test]
+fn a_fresh_pick_re_picked_in_the_same_think_records_the_pick() {
+    // A traders' interceptor whose first search misses the player flying
+    // as a pirate (the enemy class roll, `Rand(50)` @0x8a993) picks NPC 2
+    // to inspect, and the re-pick's roll then turns it on the player:
+    // +0x90 names NPC 2 all the same (@0x8ce3b).
+    use crate::ai::fixture::{PIRATES, TRADERS, govts, n, player, ship};
+    use crate::ai::interceptor::Interceptor;
+    use crate::traffic::npc::AiType;
+    let govts = govts(0, 0);
+    let mut traffic = Traffic::with_interval(1);
+    let mut cop = ship(0, TRADERS, AiType::Interceptor, 0.0, 0.0);
+    cop.goal = Goal::Idle;
+    let cop = traffic.add_npc_at(cop, 1);
+    let mut trader = ship(0, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+    trader.no_ai = true;
+    let trader = traffic.add_npc_at(trader, 2);
+    let mut pirate_player = player(0.0, -1000.0);
+    pirate_player.combat_govt = Some(PIRATES);
+    let world = World {
+        govts: &govts,
+        player: Some(pirate_player),
+        ..World::new(&[])
+    };
+    traffic.tick_in(
+        &Interceptor::default(),
+        world,
+        &[],
+        &mut Draws::of(&[1, 1, 0]),
+    );
+    let after = traffic
+        .npcs()
+        .iter()
+        .find(|npc| npc.id == cop)
+        .expect("there");
+    assert_eq!(after.goal, Goal::Attack(ShipRef::Player), "re-picked");
+    assert_eq!(after.inspected, Some(n(trader.0)), "the pick's");
 }
 
 #[test]

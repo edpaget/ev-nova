@@ -142,7 +142,16 @@ fn a_ship_whose_burst_ends_in_its_wait_fires_that_frame_then_nothing_through_the
     assert_eq!(ship.pick, None, "a primary's, cleared");
     let mut passes = 0;
     while matches!(session.npcs()[0].mode, Mode::Coasting { .. }) {
-        assert_eq!(pass(&mut session), 0, "pass {passes} of its wait");
+        let fired = pass(&mut session);
+        if matches!(session.npcs()[0].mode, Mode::Coasting { .. }) {
+            assert_eq!(fired, 0, "pass {passes} of its wait");
+        } else {
+            // Its think runs through the coast (`_AIDispatch`
+            // @0x8ff18-0x90016) and holds its pick again, which fires as
+            // its flight ends the wait, as a kept pick does
+            // (`a_ship_holding_its_course_after_its_burst_fires_nothing_then_fires_its_kept_pick`).
+            assert_eq!(fired, 1, "the frame its wait runs out");
+        }
         passes += 1;
         assert!(passes < 100, "never ended");
     }

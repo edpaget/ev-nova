@@ -535,7 +535,9 @@ mod gravity;
 mod hail;
 mod hail_advice;
 mod held_jettison;
+mod held_readers;
 mod hire;
+mod hit_turns;
 mod hooks;
 mod hover;
 mod iff_scramblers;
@@ -745,7 +747,7 @@ use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
     CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE, EscortCrew,
-    HeldRounds, MARINES, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
+    HeldRounds, Plunder, PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE,
     TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
 };
 use crate::captured_loadout::{Captured, captured_outfits};
@@ -2040,11 +2042,7 @@ impl Session {
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
         let (missions, set_up) =
             self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
-        let facts = control::Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let world = World {
             govts: &self.statics.govts,
             persons: PersonWorld {
@@ -2189,11 +2187,7 @@ impl Session {
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
-        let facts = control::Facts {
-            pilot: &self.pilot,
-            ammo_outfits: &self.statics.ammo_outfits,
-            armament: &self.ship.fit.armament,
-        };
+        let facts = self.ship.facts(&self.pilot, &self.statics);
         let targeted = self.space.combat.targeted_damage();
         let type_widths = self.gate_type_widths();
         let world = World {
@@ -2496,9 +2490,11 @@ impl Session {
             .statics
             .ship_record(self.pilot.ship)
             .and_then(|record| record.inherent_govt);
+        // `_ShipECM` reads the outfit counts (@0x3aff-0x3d48; see the
+        // `held_readers` module).
         Jamming::of_player(
             self.statics.govts.inh_jam(class_govt),
-            &self.pilot.outfits,
+            &self.ship.counted_outfits(&self.pilot),
             &self.statics.outfits,
         )
     }
@@ -4093,7 +4089,7 @@ impl Session {
         }
         // `_PlayerLandOnStellar`'s fold and reset (@0x63211; see the
         // `stock_fold` and `precalced` modules), before the port opens.
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
         // An inhabited stellar runs `_DoAutoRefuel` instead of the beep
         // (`_PlayerLandOnStellar` @0x632c5), before the port dialog (see
@@ -4456,7 +4452,7 @@ impl Session {
     pub(crate) fn open_outfitter(&mut self) {
         self.port.open_outfit_visit(&self.pilot);
         // `_ShipStatsToSystemInfo` @0x5bb57 (see the `stock_fold` module).
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
     }
 
@@ -4485,7 +4481,7 @@ impl Session {
     /// is this one, after it.
     pub(crate) fn close_hire(&mut self) {
         // `_ShipStatsToSystemInfo` @0x49235 (see the `stock_fold` module).
-        self.ship.fold_stock();
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
     }
 
@@ -5053,7 +5049,11 @@ impl Session {
             },
             quote,
         );
-        self.become_class(&record, ClassChange::bought(outfits), |session| {
+        // The top-up sits in the weapon array alone until the next fold,
+        // by the engine reading of `purchase_stock_fold`, so the new
+        // class's stats leave it out; an `OnPurchase` set operator folds
+        // it, as it runs after the top-up (@0x5f00d).
+        self.become_class(&record, ClassChange::bought(outfits, held), |session| {
             settlement.settle(&mut session.pilot);
             if !paint_last {
                 session.pilot.paint = None;
@@ -5064,10 +5064,6 @@ impl Session {
         // module): their trims are the purchase rule's, already made.
         self.reset_precalced_for(precalced::ResetCause::Purchase);
         self.port.ship_redraws.insert(ship);
-        // The top-up sits in the weapon array alone until the next fold,
-        // by the engine reading of `purchase_stock_fold`; an `OnPurchase`
-        // set operator folds it, as it runs after the top-up (@0x5f00d).
-        self.ship.held_stock = held;
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         // No secondary is selected on the new ship (`_DoShipyardDialog`
         // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
@@ -5441,10 +5437,13 @@ impl Session {
             self.setup.outfit_rules().grant_max,
             chance,
         )?;
-        // The dialog's reset once an outfit is picked, before its count
-        // is fitted to the free mass (`_DoPlunderDialog` @0x931d9; see the
-        // `precalced` module): it trims only the cargo, so the free mass
-        // the count was fitted to stands.
+        // The dialog's fold and reset once an outfit is picked, before its
+        // count is fitted to the free mass (`_DoPlunderDialog` @0x931d9;
+        // see the `stock_fold` and `precalced` modules): the fold moves a
+        // held top-up into the counts the free mass already read, and the
+        // reset trims only the cargo, so the free mass the count was
+        // fitted to stands.
+        self.ship.fold_stock(&mut self.pilot, &self.statics);
         self.reset_precalced();
         if granted.count == 0 {
             return None;
@@ -5542,11 +5541,7 @@ impl Session {
                         .map_or(0, |record| record.inherent_ai),
                 })
                 .collect(),
-            marines: outfit_mods(&self.pilot.outfits, &self.statics.outfits)
-                .into_iter()
-                .filter(|outfit| outfit.mod_type == MARINES)
-                .map(|outfit| (outfit.mod_val, outfit.count))
-                .collect(),
+            marines: self.ship.marines(&self.pilot, &self.statics),
             target_crew: i32::from(self.statics.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
             derelict: self.statics.govts.derelict(npc.govt),
@@ -5635,9 +5630,11 @@ impl Session {
                 (Taken::Credits(credits), CREDITS_GROWTH)
             }
             Take::Ammo => {
-                // The ammunition button's reset (`_DoPlunderDialog`
-                // @0x93cc9; see the `precalced` module), before it looks
-                // for rounds on board.
+                // The ammunition button's fold and reset
+                // (`_DoPlunderDialog` @0x93cc9; see the `stock_fold` and
+                // `precalced` modules), before it looks for rounds on
+                // board.
+                self.ship.fold_stock(&mut self.pilot, &self.statics);
                 self.reset_precalced();
                 let Some(offer) = plunder.ammo else {
                     return self.space.refuse_take(&mut self.out, aboard);
@@ -5804,9 +5801,11 @@ impl Session {
     /// NPC `id` joins the fleet where it is (`_AIMakeEscortFlyInForm`
     /// @0x89b8e), the escort of `person` when it is one: of no
     /// government, its AI type its ship type's `InherentAI`, keeping
-    /// formation with no standing order. Every other NPC lets it go, its
-    /// own escorts leave it, and so does the player's target; a save is
-    /// due. A mission's special ship, captured with its mark kept, falls
+    /// formation with no standing order. Every other NPC lets it go, and
+    /// so does the player's target; a save is due. The ships it leads
+    /// keep it as their leader, as `_DoPlunderDialog` leaves their +0x9a
+    /// (@0x9459b-0x947cf): only Use As My Ship's `_DoShipCapture` lets
+    /// them go (`Space::release_led`). A mission's special ship, captured with its mark kept, falls
     /// in as a mission escort instead, with no escort record
     /// ([`Session::join_as_mission_escort`]).
     fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
@@ -5837,11 +5836,6 @@ impl Session {
         // so its slot's.
         self.space.traffic.clear_pick(id);
         self.space.drop_quarry(id);
-        for other in self.space.traffic.npcs_mut() {
-            if other.leader == Some(id) {
-                other.leader = None;
-            }
-        }
         if self.chart.target == Some(id) {
             self.chart.target = None;
         }
@@ -6007,6 +6001,7 @@ impl Session {
         let takeover = ClassChange {
             outfits,
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         // The player takes the captured ship's paint, or none
         // (`_DoShipCapture` @0x41728-0x4175e): after `OnRetire` and
@@ -6249,11 +6244,14 @@ impl PlayerShip {
         pilot::merged(&self.fit.defaults, &self.fit.stock)
     }
 
-    /// The ship's stats with the outfits the pilot owns.
+    /// The ship's stats with the outfits the pilot owns, read from the
+    /// outfit counts as the `_Ship*` readers do (e.g. `_ShipMaxSpeed`
+    /// @0x374a-0x37a1), so a purchase's held stock is left out until its
+    /// fold (see the `held_readers` module).
     fn current_stats(&self, pilot: &Pilot, statics: &Statics) -> ShipStats {
         ShipStats::for_player(
             self.fit.fields,
-            &outfit_mods(&pilot.outfits, &statics.outfits),
+            &outfit_mods(&self.counted_outfits(pilot), &statics.outfits),
         )
     }
 
@@ -7122,13 +7120,19 @@ fn led_speed(pilot: &Pilot, setup: &Setup) -> f32 {
     top_speed::led_speed(&setup.rules, pilot.strict_play())
 }
 
-/// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
-/// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
-/// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
-fn raised_max_of(pilot: &Pilot, statics: &Statics, setup: &Setup, record: &OutfitRecord) -> i64 {
+/// `record`'s `Max` as the `ModType` 27 outfits of the outfit counts
+/// `counted` raise it, as the boarding's calls of `_HasMaxOfItem` read it
+/// (`_DoPlunderDialog` @0x93119, @0x93192, @0x93d9f; see
+/// [`outfitter::raised_max`]).
+fn raised_max_of(
+    counted: &BTreeMap<OutfitId, u16>,
+    statics: &Statics,
+    setup: &Setup,
+    record: &OutfitRecord,
+) -> i64 {
     outfitter::raised_max(
         record,
-        &pilot.outfits,
+        counted,
         &statics.outfits,
         setup.rules.source_for(RuleKey::RaisedMax),
     )
@@ -25974,6 +25978,26 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_capture_odds_leave_a_held_stock_marines_outfit_out() {
+        // `_SetPlunderValues` reads the outfit counts (@0x926cb-0x9271a),
+        // which a purchase's held top-up is not in yet.
+        let mut catalog = boardable();
+        catalog.outfits.push(outfit(320, &[(25, 1)]));
+        let odds = |owned: u16, held: u16| {
+            let mut session = alongside(&catalog);
+            session.pilot.outfits.insert(OutfitId(320), owned);
+            session.ship.held_stock.insert(OutfitId(320), held);
+            let opened = board_by(&mut session, &NovaLaw::default());
+            let Ok(Boarding::Opened(view)) = opened else {
+                panic!("{opened:?}");
+            };
+            view.odds
+        };
+        assert_ne!(odds(2, 0), odds(1, 0), "the marines are an input");
+        assert_eq!(odds(2, 1), odds(1, 0));
+    }
+
+    #[test]
     fn the_capture_odds_count_the_fleet_and_the_marines() {
         let mut catalog = boardable();
         catalog.outfits.push(outfit(320, &[(25, 1)]));
@@ -26769,7 +26793,11 @@ pub(super) mod tests {
             (None, None),
             "_AISetup (@0x9478f)"
         );
-        assert_eq!(session.npcs()[1].leader, None, "its own escort let go");
+        assert_eq!(
+            session.npcs()[1].leader,
+            Some(NpcId(0)),
+            "its own escort kept: the crewless path reaches the same block (@0x9439d -> @0x9459b)"
+        );
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());

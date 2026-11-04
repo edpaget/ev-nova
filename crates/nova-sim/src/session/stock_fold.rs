@@ -17,8 +17,12 @@
 //! `PlayerShip::held_stock` records the part of it a purchase's top-up
 //! still holds in the array alone ([`shipyard::Purchase::held`]), and
 //! `PlayerShip::counted` takes it out for the shipyard's readers
-//! ([`shipyard::outfit_counts`]). The fold, `PlayerShip::fold_stock`,
-//! forgets it. By the other reading nothing is held. The held part is
+//! ([`shipyard::outfit_counts`]), as every other reader of the counts does
+//! (`PlayerShip::counted_outfits`; see the `held_readers` module). The
+//! fold, `PlayerShip::fold_stock`, forgets it and works the stats out
+//! again over the counts it leaves, moving each reserve's most and
+//! gaining nothing, as `_ShipStatsToSystemInfo` writes no reserve. By the
+//! other reading nothing is held. The held part is
 //! never saved: the original saves only at the new pilot (@0x1935f), a
 //! landing after its fold (@0x6354b) and the rescue (@0x692c4), so a load
 //! treats the top-up as owned, as a landing's fold would. The port's save
@@ -26,8 +30,8 @@
 //!
 //! # Fold sites
 //!
-//! Every caller of `_ShipStatsToSystemInfo` a landed stay can reach
-//! between two purchases calls `PlayerShip::fold_stock` at the original's
+//! Every caller of `_ShipStatsToSystemInfo` the port reaches between a
+//! purchase and its fold calls `PlayerShip::fold_stock` at the original's
 //! point:
 //!
 //! | Site | Original | Here |
@@ -38,6 +42,8 @@
 //! | `G` and `D` of an ID of 128-639 | `_EvalSetExp` @0x15424/@0x15439, @0x15452/@0x15466 | `Session::apply_op` |
 //! | `C`, `E` and `H` of an ID of 128-895 | `_EvalSetExp` @0x1549d/@0x154b3 (`E`/`H` again @0x15622) | `Session::apply_op` |
 //! | a landing | `_PlayerLandOnStellar` @0x63211 | the landing's reset |
+//! | the plunder dialog's grant, once an outfit is picked | `_DoPlunderDialog` @0x931d9 | `Session::grant` |
+//! | the plunder dialog's Ammo press | `_DoPlunderDialog` @0x93cc9 | `Session::plunder` |
 //! | any change of class | the weapon array rewritten | `Session::become_class` |
 //!
 //! A set operator folds whether or not it changes anything, and `C`, `E`
@@ -45,19 +51,16 @@
 //! purchase's own `OnPurchase` runs after the top-up (@0x5f00d), so one
 //! holding such an operator folds it.
 //!
-//! The rest need no code: the new pilot (@0x18f48) holds nothing yet, and
-//! the ship display (@0x2dc3c), `_HandleShip` (@0x33a28), Use As My Ship
-//! (@0x419fd), the eject (@0x6f8bb), the pod's ship (@0x6f077) and the
-//! plunder dialog (@0x931d9, @0x93cc9, @0x93dcb) run in flight. Those
-//! either change the class, which folds, or are followed by a landing,
-//! which folds before any shipyard can read the held part, so folding
-//! later changes nothing the player can see.
+//! The rest need no code. The new pilot (@0x18f48) holds nothing yet. The
+//! ship display's fold (@0x2dc3c) and `_HandleShip`'s (@0x33a28) sit on
+//! branches that cannot run (see the `player_led` module). Use As My Ship
+//! (@0x419fd), the eject (@0x6f8bb) and the pod's ship (@0x6f077) change
+//! the class, which folds. The plunder dialog's reset after each round
+//! taken (@0x93dcb) comes after the Ammo press's fold, so nothing is held
+//! by then.
 //!
-//! Readers outside the shipyard (the hire screen's `Require`, an `o`
-//! test, `_ShipFreeMass`, a pirate's plunder, `_ScanPlayer` and the
-//! `_Ship*` stat readers past a held outfit's first mod) still read the
-//! counts with the top-up: they are
-//! rdm:phase/play-feel-5-followups/phase-17-held-stock-outside-shipyard.
+//! The readers of the outfit counts outside the shipyard, and where each
+//! takes them, are the `held_readers` module's.
 
 use std::ops::RangeInclusive;
 
@@ -84,29 +87,77 @@ pub(super) fn folds_stock(op: &SetOp) -> bool {
     }
 }
 
+/// The purchase every held-stock test starts from, shared with the
+/// `held_readers` tests.
+#[cfg(test)]
+pub(super) mod fixture {
+    use crate::catalog::{OutfitId, OutfitRecord, ShipId};
+    use crate::chance::NeverFires;
+    use crate::outfitter::OutfitFlags;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::session::Session;
+    use crate::session::tests::{NEW, outfitted, shipbuying, stock_weapons};
+    use crate::testkit::{FakePilotCatalog, outfit};
+
+    /// The first ship, which [`stock_weapons`] stocks with two guns.
+    pub(in crate::session) const OLD: ShipId = ShipId(128);
+
+    /// A persistent outfit, which the engine's trade-in leaves out, so
+    /// granting it adds nothing to the trade-in.
+    pub(in crate::session) const LICENCE: OutfitId = OutfitId(340);
+
+    /// [`stock_weapons`] over [`shipbuying`], with [`LICENCE`].
+    pub(in crate::session) fn stocked() -> FakePilotCatalog {
+        let mut catalog = stock_weapons(shipbuying());
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(LICENCE.0, &[])
+        });
+        catalog
+    }
+
+    /// A session landed at `catalog`'s shipyard by `rules`, rich enough
+    /// for two purchases, having bought ship 129.
+    pub(in crate::session) fn bought(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+        let mut session = outfitted(catalog).with_rules(rules);
+        session.pilot.cash = 100_000;
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        session
+    }
+
+    /// The trade-in `session`'s shipyard shows.
+    pub(in crate::session) fn trade_in(session: &mut Session) -> i64 {
+        session
+            .shipyard(&mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
+    }
+
+    /// The default rules with the other reading of `purchase_stock_fold`.
+    pub(in crate::session) fn at_once() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::PurchaseStockFold, RuleSource::Bible)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::catalog::{OutfitId, OutfitRecord, ShipId, ShipRecord};
+    use crate::catalog::{OutfitId, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::{Script, SetOp};
     use crate::outfitter::OutfitFlags;
-    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::rulebook::Rulebook;
     use crate::session::ship_change::ClassChange;
-    use crate::session::tests::{
-        GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted, shipbuying, stock_weapons,
-    };
+    use crate::session::tests::{GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted};
     use crate::session::{ReservePolicy, Session};
     use crate::shipyard::ShipRefusal;
-    use crate::testkit::{FAST, FakePilotCatalog, land_now, outfit, ship};
+    use crate::stats::MORE_SPEED;
+    use crate::testkit::{FAST, FakePilotCatalog, land_now, ship};
 
-    /// The first ship, which [`stock_weapons`] stocks with two guns.
-    const OLD: ShipId = ShipId(128);
-
-    /// A persistent outfit, which the engine's trade-in leaves out, so
-    /// granting it adds nothing to the trade-in.
-    const LICENCE: OutfitId = OutfitId(340);
+    use super::fixture::{LICENCE, OLD, at_once, bought, stocked, trade_in};
 
     /// The trade-in of ship 129 (17,500 credits) with its tank (1000)
     /// alone: a quarter of the hull and half the tank, 4375 + 500 = 4875,
@@ -118,42 +169,8 @@ mod tests {
     /// 6575, rounded down to ten by the flux.
     const WITH_STOCK: i64 = 6570;
 
-    /// [`stock_weapons`] over [`shipbuying`], with [`LICENCE`].
-    fn stocked() -> FakePilotCatalog {
-        let mut catalog = stock_weapons(shipbuying());
-        catalog.outfits.push(OutfitRecord {
-            flags: OutfitFlags::PERSISTENT,
-            ..outfit(LICENCE.0, &[])
-        });
-        catalog
-    }
-
-    /// A session landed at `catalog`'s shipyard by `rules`, rich enough
-    /// for two purchases, having bought ship 129.
-    fn bought(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
-        let mut session = outfitted(catalog).with_rules(rules);
-        session.pilot.cash = 100_000;
-        session
-            .buy_ship(NEW, "Kestrel", &mut NeverFires)
-            .expect("bought");
-        session
-    }
-
-    /// The trade-in `session`'s shipyard shows.
-    fn trade_in(session: &mut Session) -> i64 {
-        session
-            .shipyard(&mut NeverFires)
-            .expect("a shipyard")
-            .trade_in
-    }
-
     /// A named step a stay can take after a purchase.
     type Step<'a> = (&'static str, &'a dyn Fn(&mut Session));
-
-    /// The default rules with the other reading of `purchase_stock_fold`.
-    fn at_once() -> Rulebook {
-        Rulebook::default().with_override(RuleKey::PurchaseStockFold, RuleSource::Bible)
-    }
 
     #[test]
     fn the_trade_in_counts_stock_weapons_and_rounds_as_the_original_does() {
@@ -192,9 +209,22 @@ mod tests {
         assert_eq!(session.ship.held_stock, BTreeMap::from([(GUN, 2)]));
     }
 
+    // The speeds compare exact sums of whole mod values.
+    #[allow(clippy::float_cmp)]
     #[test]
     fn the_stock_is_folded_by_the_outfitter_player_info_hire_screen_a_set_operator_or_a_landing() {
-        let catalog = stocked();
+        // The held gun speeds the ship up past its first mod, so the speed
+        // shows whether the fold worked the stats out again.
+        let mut catalog = stocked();
+        for record in &mut catalog.outfits {
+            if record.id == GUN {
+                record.mods[1] = (MORE_SPEED, 300);
+            }
+        }
+        let speed = |session: &Session| session.stats().handling.max_speed;
+        let folded = speed(&bought(&catalog, at_once()));
+        let held = speed(&bought(&catalog, Rulebook::default()));
+        assert!(folded > held, "{folded} > {held}");
         let script = |session: &mut Session, text: &str| {
             session.run_script(&Script::parse(text), &mut NeverFires);
         };
@@ -221,6 +251,7 @@ mod tests {
             let mut session = bought(&catalog, Rulebook::default());
             run(&mut session);
             assert_eq!(session.ship.held_stock, BTreeMap::new(), "{fold}");
+            assert_eq!(speed(&session), folded, "{fold}");
             assert_eq!(trade_in(&mut session), WITH_STOCK, "{fold}");
             let report = session
                 .buy_ship(OLD, "Kestrel", &mut NeverFires)
@@ -260,6 +291,7 @@ mod tests {
         for (stay, run) in stays {
             let mut session = bought(&catalog, Rulebook::default());
             run(&mut session);
+            assert_eq!(speed(&session), held, "{stay}");
             assert_eq!(trade_in(&mut session), WITHOUT_STOCK, "{stay}");
         }
     }
@@ -290,6 +322,7 @@ mod tests {
         let change = ClassChange {
             outfits: session.pilot.outfits.clone(),
             reserves: ReservePolicy::Hold,
+            held: BTreeMap::new(),
         };
         session.become_class(&record, change, |_| {});
         assert_eq!(session.ship.held_stock, BTreeMap::new());

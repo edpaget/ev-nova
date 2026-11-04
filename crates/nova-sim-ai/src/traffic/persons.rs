@@ -52,8 +52,9 @@ pub const DERELICT_ARMOR_LESS: f32 = 1.0;
 /// before the goal changes; see [`Npc::threatens_player_extended`]), it flies a person
 /// (+0xc8d0, @0x89c60) of `Flags` 0x0010 (@0x89c8a), it is no mission's
 /// special ship (+0xc8d2, @0x89c71), it is not disabled (`_IsDisabled`
-/// @0x89c94, which reads its armour, so a ship breaking up is disabled
-/// too), and the player is not `player_dying` (`_IsDying` @0x89ca7). A
+/// @0x89c94, [`Npc::active_not_disabled`]: it reads its armour, so a ship
+/// breaking up is disabled too, but for a stellar's defence ship, which
+/// is disabled only while held, @0x2d6f), and the player is not `player_dying` (`_IsDying` @0x89ca7). A
 /// person escorting the player is not the person: the original's joined
 /// ship is a mission ship.
 ///
@@ -65,7 +66,7 @@ pub const DERELICT_ARMOR_LESS: f32 = 1.0;
 pub fn turns_with_quote(npc: &Npc, threatened: bool, player_dying: bool) -> bool {
     !threatened
         && !player_dying
-        && npc.condition == Condition::Intact
+        && npc.active_not_disabled()
         && npc.mission.is_none()
         && npc.escort.is_none()
         && npc
@@ -1014,5 +1015,37 @@ mod tests {
             !turns_with_quote(&turning(0), false, true),
             "the player dying"
         );
+    }
+
+    #[test]
+    fn the_quote_gate_reads_is_disabled_so_a_defence_ship_breaking_up_still_quotes() {
+        // `_IsDisabled` (@0x89c94) doesn't count a stellar's defence ship
+        // breaking up (@0x2d6f), but counts any other breaking up, and a
+        // defence ship held disabled.
+        let breaking_up = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        let defending = |condition| Npc {
+            condition,
+            defends: Some(crate::catalog::StellarId(128)),
+            ..turning(0)
+        };
+        assert!(turns_with_quote(&defending(breaking_up), false, false));
+        assert!(!turns_with_quote(
+            &defending(Condition::Disabled),
+            false,
+            false
+        ));
+        let plain = Npc {
+            condition: breaking_up,
+            ..turning(0)
+        };
+        assert!(!turns_with_quote(&plain, false, false), "not defending");
+        let gone = Npc {
+            condition: Condition::Destroyed,
+            ..turning(0)
+        };
+        assert!(!turns_with_quote(&gone, false, false), "inactive");
     }
 }

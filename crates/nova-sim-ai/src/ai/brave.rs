@@ -29,8 +29,8 @@
 use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, lost_sight, provoked_by,
-    react, trader_keep,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by, react,
+    trader_keep, trader_target,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -101,7 +101,8 @@ impl Behaviour for BraveTrader {
     /// ([`with_flight_end`](crate::traffic::provocation::with_flight_end)).
     /// The attack block also flees a hopeless chase. Its idle block's pick
     /// is written to its travel stellar ([`idle_block::pick_write`] of the
-    /// think's goal; @0x8b53b, @0x8b559).
+    /// think's goal; @0x8b53b, @0x8b559), and its leave clears its target
+    /// ([`trader_target::idle_leave_clears`], @0x8b5fa).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
         Decision {
@@ -109,6 +110,7 @@ impl Behaviour for BraveTrader {
             comm_call: brave_call(npc, thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
             travel: idle_block::pick_write(npc, around, thought),
+            clears_target: trader_target::idle_leave_clears(npc, thought),
             ..Decision::default()
         }
     }
@@ -128,7 +130,7 @@ impl Behaviour for BraveTrader {
     }
 
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        lost_sight::trader_target(npc, around)
+        trader_target::trader_target(npc, around)
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
@@ -186,6 +188,37 @@ mod tests {
         let sites = sites();
         let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
         BraveTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn its_idle_blocks_leave_clears_a_held_target() {
+        // @0x8b190 / @0x8b5fa: the leave writes +0x70 -1; a kept leave,
+        // and the idle block's stop, write none.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        trader.target = Some(n(2));
+        let npcs = [
+            trader.clone(),
+            ship(2, PIRATES, AiType::Warship, 5000.0, 0.0),
+        ];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let leaving = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(leaving.goal, Goal::JumpOut);
+        assert!(leaving.clears_target);
+        let mut kept = npcs.clone();
+        kept[0].goal = Goal::JumpOut;
+        let around = crate::ai::fixture::around(&sites, &kept, &govts, (0.0, -100.0), 0);
+        let still = BraveTrader::default().decision(&kept[0], &around, &mut Draws::of(&[]));
+        assert_eq!(still.goal, Goal::JumpOut);
+        assert!(!still.clears_target, "a kept leave");
+        let mut stuck = npcs.clone();
+        stuck[0].class_fuel = 99;
+        let around = crate::ai::fixture::around(&sites, &stuck, &govts, (0.0, -100.0), 0);
+        let stopping = BraveTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
+        assert_eq!(stopping.goal, Goal::Wait);
+        assert!(!stopping.clears_target, "the stop");
     }
 
     #[test]
@@ -556,17 +589,8 @@ mod tests {
                 ..Decision::default()
             }
         );
-        let dropped = Npc {
-            goal: NovaAi::default()
-                .decision(&npcs[0], &around, &mut Draws::of(&[0]))
-                .goal,
-            ..npcs[0].clone()
-        };
-        assert_eq!(
-            NovaAi::default().target(&dropped, &around),
-            None,
-            "target -1 (@0x8e717)"
-        );
+        let dropped = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(dropped.last_target(), Some(None), "target -1 (@0x8e717)");
     }
 
     #[test]
@@ -832,8 +856,15 @@ mod tests {
         let idle = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
         assert_eq!(
             BraveTrader::default().target(&on_npc[0], &idle),
-            None,
-            "any other goal targets its quarry"
+            Some(n(2)),
+            "goal 0's idle block writes none but its leave's"
+        );
+        on_npc[0].goal = Goal::Flee(ShipRef::Player);
+        let fleeing = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            BraveTrader::default().target(&on_npc[0], &fleeing),
+            Some(ShipRef::Player),
+            "a flight targets its quarry"
         );
     }
 

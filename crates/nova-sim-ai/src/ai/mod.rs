@@ -92,8 +92,10 @@ pub mod swarm;
 pub mod target;
 pub mod threatened;
 pub mod trader_keep;
+pub mod trader_target;
 pub mod travel;
 pub mod wait;
+pub mod waiting_pursuit;
 pub mod warship;
 pub mod wimpy;
 
@@ -287,7 +289,7 @@ pub enum Goal {
     /// traders and the interceptor: their idle blocks need state 0, so only
     /// provocation, or a hunter's government's word, lifts it. It fights
     /// nothing and scoops nothing. A trader's stop keeps its target
-    /// ([`lost_sight::trader_target`]), and the threat tests spare none of
+    /// ([`trader_target::trader_target`]), and the threat tests spare none of
     /// state 6 (`_IsThreatToPlayer`, `_ExtendedIsThreatToShip`,
     /// `_ExtendedIsThreatToPlayer`): a stopped ship threatens the target it
     /// holds ([`Npc::fought`]). `_AIMakeShipWait` (@0x82c63) and
@@ -693,8 +695,9 @@ pub struct Surroundings<'a> {
     pub govts: &'a Governments,
     /// The system's government, or `None` when it is independent.
     pub system_govt: Option<GovtId>,
-    /// The player's legal record in the system: its record with the
-    /// system's government, none in an independent system.
+    /// The player's legal record in the system, as `RuleKey::LegalRecords`
+    /// reads it: the system's own record under the original's reading, 0
+    /// in an independent system under the Bible's.
     pub record: i16,
     /// The damage the shots in flight aim at each ship
     /// ([`Combat::targeted_damage`](crate::combat::Combat::targeted_damage)):
@@ -1111,10 +1114,17 @@ pub struct Decision {
     /// Whether the think writes the sub-goal (+0xc8ca) itself, ending any
     /// docking ([`Npc::docking`]) even while the AI wait skips the high
     /// level: `_PirateWarshipAI`'s count wait entry (@0x8c6fe), its plunder
-    /// (@0x8c788) and its dry drop (@0x8c878), and `_AIFindShipToPlunder`'s
-    /// find (@0x7fea5). A think that writes it not leaves a docking under
+    /// (@0x8c788) and its dry drop (@0x8c878), `_AIFindShipToPlunder`'s
+    /// find (@0x7fea5), `_WarshipAI`'s fully-dry drop (@0x8c108),
+    /// `_DeathStarAI`'s drop of goal 0x12 (@0x8c2b2) and `_EscortAI`'s lost
+    /// parent (@0x8396b). A think that writes it not leaves a docking under
     /// the wait whatever goal it writes (see
     /// [`plunder_dock::kept_by`](crate::traffic::plunder_dock::kept_by)).
+    /// The write also ends a gate entry, which the fade reads by sub 0x17
+    /// alone, the ship staying and holding its course for the wait left,
+    /// and drops the pursuit it kept
+    /// ([`Npc::takes_sub_write`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)).
     pub writes_sub: bool,
     /// The target the frame ends with on goal 0, when the high level
     /// dropped the attack keeping it: the attack block's wait test and its
@@ -1149,7 +1159,9 @@ pub struct Decision {
     /// Whether the inspection's ship moved before its reach: an
     /// inspecting interceptor's re-pick gave its goal (`_InterceptorAI`
     /// @0x8d41e, see [`interceptor`]), or a kept inspection moved to the
-    /// ship a hit made its target ([`inspect_high`]). The state-7 block's
+    /// ship a hit made its target: in an interceptor's own think
+    /// ([`interceptor`]'s "A hit on an inspection"), or in the high level's
+    /// fold for any other ship ([`inspect_high`]). The state-7 block's
     /// reach then reads the new target (@0x8f11e), and a state-4 pick runs
     /// no reach at all, so the ship it was inspecting is not looked over
     /// and the player is not scanned. A re-pick already within reach is
@@ -1158,9 +1170,25 @@ pub struct Decision {
     /// The ship an interceptor's think picked, or re-picked, and looked
     /// over at once, already within reach: goal 7's block runs after the
     /// think in one dispatch (@0x8f11e-0x8f394), so the pick ends there,
-    /// goal 0 and no target. The traffic records the ship
-    /// ([`Npc::inspected`]) and scans the player when it is the player.
+    /// goal 0 and no target. The traffic scans the player when it is the
+    /// player, and records nothing of it: only the pick writes +0x90
+    /// ([`inspection_pick`](Self::inspection_pick)).
     pub looked_over: Option<ShipRef>,
+    /// The ship an interceptor's inspection pick named, if it made one
+    /// (`_InterceptorAI` @0x8ce3b writes +0x90 beside +0x70 and state 7):
+    /// the traffic records it as [`Npc::inspected`], which its next pick
+    /// skips (@0x8cd45, @0x8cdf1). The pick's write comes before every
+    /// later write of the think, so it stands when the out-of-ammo flight,
+    /// the lost-sight drop, the re-pick or the reach then moves the goal
+    /// off it. Neither the re-pick nor the reach writes +0x90.
+    pub inspection_pick: Option<ShipRef>,
+    /// Whether an interceptor's think forgets the ship it last inspected,
+    /// whose slot has gone inactive: its clear writes +0x90 -1 for a slot
+    /// with +0xb8 clear (`_InterceptorAI` @0x8cc40-0x8cc58), after the
+    /// provoked branch and before the gate and wait tests. The traffic
+    /// clears [`Npc::inspected`] before it records
+    /// [`inspection_pick`](Self::inspection_pick), in the think's order.
+    pub forgets_inspected: bool,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
     /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) whoever the parent, an NPC
@@ -1170,8 +1198,12 @@ pub struct Decision {
     /// think. [`CarriedAi`] sets it as it attacks, by the Attack block
     /// alone. The traffic ends the wait as it takes the goal
     /// ([`Npc::end_wait`]): [`Npc::ai_wait`] zeroed, and a hold at its gate
-    /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate))
-    /// ended, so it flies this tick. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
+    /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)), a
+    /// coast ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) or a
+    /// gate entry
+    /// ([`Mode::EnteringGate`](crate::traffic::npc::Mode::EnteringGate))
+    /// ended, so it flies this tick, the high level writing its goal's own
+    /// sub over an entry's 0x17. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
     /// (see [`jump_with_leader`](crate::traffic::jump_with_leader)); the
     /// high level's hold zeroes the stage again in the same tick.
     pub ends_wait: bool,
@@ -1382,11 +1414,16 @@ pub(crate) fn random_stellar(
 /// anything: an escort follows its lead while the lead is in the system,
 /// guarding nothing, and a goal it can still fly is kept. The traders
 /// keep more of their own before their idle block ([`trader_keep`]). A led ship
-/// reaches its type's idle block only by the other reading of
-/// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the port's
-/// earlier routing; by the engine's it flies [`FleetEscortAi`] instead.
+/// of AI type above 4 reaches its type's idle block only by the other
+/// reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the
+/// port's earlier routing; by the engine's it flies [`FleetEscortAi`]
+/// instead. A bribed one (AI type 1 with its parent kept,
+/// [`Npc::original_ai_type`], `_DoCommDialog` @0x961f8) is no escort by
+/// either reading: it thinks as a wimpy trader, which follows no lead
+/// (`_WimpyTraderAI` @0x8b029-0x8b201).
 pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
     if let Some(lead) = npc.leader
+        && npc.original_ai_type() > 4
         && around.npc(lead).is_some()
     {
         return Some(Goal::Follow { lead, guard: None });
@@ -1904,6 +1941,32 @@ mod tests {
                 "{ai_type:?} without its lead"
             );
         }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_keeps_its_leave_not_its_lead() {
+        // The bribe's AI type 1 (`_DoCommDialog` @0x961f8) reaches
+        // `_WimpyTraderAI`, which keeps any goal but 0 (@0x8b06c) and
+        // follows no lead.
+        let lead = npc(1, AiType::WimpyTrader);
+        let mut spared = npc(2, AiType::Warship);
+        spared.leader = Some(NpcId(1));
+        spared.take_bribe();
+        spared.goal = Goal::JumpOut;
+        let together = [lead, spared.clone()];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            decide(&spared, &sites(), &together, &mut chance),
+            Goal::JumpOut
+        );
+        // A word of 4 follows no lead either.
+        spared.ai_type = AiType::Interceptor;
+        assert_eq!(spared.original_ai_type(), 4);
+        let together = [together[0].clone(), spared.clone()];
+        assert_eq!(
+            decide(&spared, &sites(), &together, &mut chance),
+            Goal::JumpOut
+        );
     }
 
     #[test]

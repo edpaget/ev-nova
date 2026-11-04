@@ -446,6 +446,8 @@ impl Session {
             bursts_own_word: false,
             fires_on_burst_end: false,
             close_form: false,
+            // The spawn zeroes the sub-goal +0xc8ca: order 1.
+            mine_order: crate::ai::mine_orders::MineOrder::Stop,
             stopping: false,
             fleet_slot: None,
             form_parent: None,
@@ -735,12 +737,16 @@ impl Session {
     }
 
     /// Escort NPC `id` leaves the fleet, as [`Session::dismiss`] says but
-    /// making no save due; whether it was in the fleet. A holding escort
-    /// ([`Goal::Wait`]) takes goal 0, as `_EscortAI` writes goal and sub 0
-    /// for a ship of AI type above 4 whose leader is gone
-    /// (@0x83917-0x8397b): `_DamageShip`'s leader clear (@0x3afdd) keeps
-    /// its type. Without it, a disabled holding escort the fleet lost and
-    /// later repaired would wait for good.
+    /// making no save due; whether it was in the fleet. A ship of the
+    /// player's lost or released here takes its class's word
+    /// (`_DamageShip` @0x3b0d7 on a hit that disables it, the releases'
+    /// `InherentAI`), so it leaves its carrier
+    /// ([`Npc::leave_carrier`](crate::traffic::npc::Npc::leave_carrier))
+    /// and holds its class's capacities. A holding escort
+    /// ([`Goal::Wait`]) takes goal 0, as `_AIDispatch`'s disabled reset
+    /// writes it (@0x8ff01, sub @0x8ff0a); `_EscortAI` no longer runs for
+    /// it, its word its class's. Without it, a disabled holding escort the
+    /// fleet lost and later repaired would wait for good.
     pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
         let Some(index) = self.space.fleet_index(id) else {
             return false;
@@ -751,6 +757,7 @@ impl Session {
         }
         if let Some(npc) = self.space.npc_mut(id) {
             npc.escort = None;
+            npc.leave_carrier();
             if npc.goal == Goal::Wait {
                 npc.goal = Goal::Idle;
             }
@@ -1228,12 +1235,19 @@ pub(super) fn reset_released(npc: &mut Npc) {
 /// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
 /// known, no longer a former escort, of no leader but the player, keeping
 /// formation with no target of its own, its travel stellar the player's slot
-/// (+0x6c = +0x9a, 0, @0x89bac). Its +0x88 = 6 overwrites a bribe
-/// ([`Npc::overwrite_bribe`]; `_DoPlunderDialog` @0x9461f).
+/// (+0x6c = +0x9a, 0, @0x89bac). Its +0x88 = 6, or the rejoin's 5,
+/// replaces any carrier's word and overwrites a bribe
+/// ([`Npc::leave_carrier`], [`Npc::overwrite_bribe`]; `_DoPlunderDialog`
+/// @0x9461f): the carrier comes back only through [`Session::enlist`] for
+/// a carried record, so a captured NPC carrier's fighter is an escort
+/// holding its class's capacities.
 pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.independent();
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
+    }
+    if npc.carrier.is_some() {
+        npc.leave_carrier();
     }
     npc.overwrite_bribe();
     npc.former = None;

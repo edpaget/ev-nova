@@ -84,13 +84,12 @@
 //!   [`BREAK_EXIT_BOX`] whole pixels on an axis, never by its facing
 //!   ([`leaves_break_off`], @0x864bd-0x86513). The high level, which runs
 //!   first on the same positions, keeps 0x10 only inside 165.0 on both
-//!   axes, so in the engine's tick the exit beyond 165 is never reached:
-//!   the original reaches it when the low level runs under an AI wait
-//!   without the high level (@0x8d4b9-0x8d4d2, @0x901f4), which the
-//!   engine's pursuit doesn't (rdm task
-//!   waiting-ships-run-their-per-type-ai). What shows is that an
-//!   inertialess ship never leaves the break-off by facing its break
-//!   heading.
+//!   axes, so with the high level the exit beyond 165 is never reached:
+//!   it is reached when the low level runs under an AI wait without the
+//!   high level (@0x8d4b9-0x8d4d2, @0x901f4;
+//!   [`waiting_pursuit`](super::waiting_pursuit), from [`chain`]). Without
+//!   a wait, what shows is that an inertialess ship never leaves the
+//!   break-off by facing its break heading.
 //! - **Rush** (0x11, [`Manoeuvre::Rush`]): it wants the table bearing to
 //!   its target, thrusts every tick at [`RUSH_THRUST`] times its
 //!   acceleration up to [`RUSH_SPEED`] times its top speed; inside
@@ -602,6 +601,24 @@ pub fn step(
     let Some(start) = high_level(npc, &at, disabled, swarm) else {
         return Pursuit::default();
     };
+    chain(npc, around, rules, chance, (ship, at), start)
+}
+
+/// `npc`'s low-level chain among `around`, by `rules`, rolling on
+/// `chance` (see the module docs): its frame at `ship`, at `at`, from the
+/// substate `start`, and the pursuit it keeps. [`step`] runs it from the
+/// high level's substate; under an AI wait it runs from the substate the
+/// last frame left, with no high level
+/// ([`waiting_pursuit`](super::waiting_pursuit)).
+pub(crate) fn chain(
+    npc: &Npc,
+    around: &Surroundings,
+    rules: PursuitRules,
+    chance: &mut (impl Chance + ?Sized),
+    (ship, at): (ShipRef, ShipState),
+    start: Start,
+) -> Pursuit {
+    let swarm = swarm::lead(npc, around);
     // A fight is never close formation: no leader.
     let inertialess = npc.hull_inertialess(rules.inertial_dampener);
     let looks = Looks::of(

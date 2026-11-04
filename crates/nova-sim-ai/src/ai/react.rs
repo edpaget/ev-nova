@@ -125,21 +125,22 @@
 //!   (@0x3beba-0x3becc), after the focus test, which rdm phase
 //!   combat-ai-fidelity/phase-26-assister-hit owns.
 //!
-//! Left out of `_DoGoodSamaritan`'s reach (weapons-fidelity phase 38
-//! records each):
+//! A disabled or breaking-up ship answers as any other: `_DamageShip`'s
+//! reaction block tests no condition (the victim's part @0x3bb7a-0x3bcf6,
+//! the lead's @0x3bcfa-0x3bd79, the wait cut @0x3be6e-0x3be7c, the grudge
+//! @0x3be83), nor does `_AIMakeShipAttackPlayer` but for its hail quote
+//! (@0x89c94), nor `_DoGoodSamaritan`'s loop (@0x82891-0x82ba8), so a
+//! disabled warship or interceptor not attacking takes goal 4 and the
+//! player (@0x82b82, @0x82b97). `_AIDispatch`'s disabled reset
+//! (@0x8fece-0x8ff13, `Traffic::reset_disabled`) wipes the target, the
+//! travel stellar, the provocation and the goal at the ship's next
+//! dispatch, but not its cut wait (+0x4c); only a ship repaired first, or
+//! one the reset skips, keeps them. The traffic asks every NPC whose slot
+//! is active (`Traffic::react`).
 //!
-//! - Disabled ships. The loop tests no slot's condition, so a disabled
-//!   warship or interceptor not attacking takes goal 4 and the player
-//!   (@0x82b82, @0x82b97), but `_AIDispatch`'s disabled reset
-//!   (@0x8fece-0x8ff13) wipes both at its next think, nearly always in the
-//!   same frame. The engine has no such reset yet, so a disabled NPC asks
-//!   for nothing here (`Traffic::react` takes only NPCs that are active and
-//!   not disabled, [`Npc::active_not_disabled`](crate::traffic::npc::Npc::active_not_disabled),
-//!   a stellar's defence ship breaking up included, as the reset never
-//!   wipes one, @0x2d6f): writing
-//!   the goal now would carry it through self-repair. rdm phase
-//!   weapons-fidelity-cross-roadmap/phase-2-disabled-ships-take-a-good-samaritans-write
-//!   owns it, behind escort-fleet-fidelity's disabled reset.
+//! Left out of `_DoGoodSamaritan`'s reach (weapons-fidelity phase 38
+//! records it):
+//!
 //! - Slots not in use. `_IsShipMyEnemy` answers "not an enemy" for an
 //!   inactive slot (@0x81a16), so a stale one may take the Samaritan's
 //!   write, but no code reads an inactive slot (@0x44275) and every spawn

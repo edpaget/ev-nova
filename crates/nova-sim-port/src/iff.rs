@@ -51,7 +51,10 @@
 //! escort and gives no escort duty).
 //!
 //! Never reached: the escort test's defender case (@0x4b52-0x4b7c), a
-//! ship led by the player that defends a stellar, as a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar (see
+//! ship led by the player that defends a stellar, as no ship the player
+//! leads defends a stellar: a defence ship spawns with no leader (-1), a
+//! pirate's take leaves it led by the pirate, and the player's capture
+//! clears its +0x8c (see
 //! `nova_sim_ai::traffic::stellar_defence`).
 //!
 //! # Stellars ([`stellar_iff`], `_ColorCodeStellar` @0xaa26)

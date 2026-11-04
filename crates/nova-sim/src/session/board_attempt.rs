@@ -32,9 +32,11 @@
 //! but not direct ([`Strike::direct`]): `_DoGoodSamaritan` writes only goal
 //! 4 and the target on the ships its gates pass (@0x82891-0x82ba8), so the
 //! ship boarded and its lead draw no hit's reaction, cut no wait and ask
-//! no quote; they answer as Samaritans or not at all. The ship boarded is
-//! still disabled when the call is answered, as its condition is settled
-//! by the fight after the traffic answers, so it never answers its own.
+//! no quote; they answer as Samaritans or not at all. The ship boarded
+//! answers its own call too, disabled as it is, as the loop tests no
+//! slot's condition; `_AIDispatch`'s disabled reset wipes the write at
+//! that pass's dispatch (the traffic's `disabled_reset`), before its turn
+//! of the ship loop could repair it.
 //!
 //! **A failed mission's ship** takes the pickup or assist path as any
 //! mission's ship does, as neither tests whether the mission failed
@@ -744,7 +746,9 @@ mod tests {
             assert_eq!(npc.state.heading, held.state.heading, "{at}: no turn");
             assert_eq!(npc.state.velocity, held.state.velocity, "{at}: no thrust");
             assert_eq!(npc.state.position, held.state.position, "{at}: still");
-            assert_eq!(npc.goal, held.goal, "{at}");
+            // Its goal is its type think's, which runs through the wait
+            // (`_AIDispatch` @0x8ff18-0x90016; the traffic's
+            // `waiting_think`): the hold is of its flight alone.
         }
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "the wait is out");
         // It flies its goal: it moves off, or, over the stellar it was

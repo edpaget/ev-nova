@@ -42,8 +42,16 @@
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; a pick already within reach ends in the think that made it,
 //!   as goal 7's block runs after the think (@0x8f11e-0x8f394,
-//!   [`Decision::looked_over`]). The traffic remembers the ship
-//!   ([`Npc::inspected`]). Having looked the player over, it has scanned
+//!   [`Decision::looked_over`]). The traffic records the ship it picked
+//!   ([`Npc::inspected`], +0x90, [`Decision::inspection_pick`]), and only
+//!   that: the pick writes +0x90 beside +0x70 and state 7 (@0x8ce3b),
+//!   before the hail, the out-of-ammo flight, the lost-sight drop, the
+//!   re-pick and the reach, none of which writes it, so a ship it was
+//!   moved to and looked over may be picked again. Each think past its
+//!   early returns (goal 0x16 @0x8c8c2, the helps @0x8cb07; a disabled
+//!   ship never reaches the think, @0x8c8ae) forgets it once its slot has
+//!   gone (@0x8cc40-0x8cc58, [`Decision::forgets_inspected`]), under a
+//!   wait too. Having looked the player over, it has scanned
 //!   the player
 //!   ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)): the
 //!   session checks the player's mission cargo against the interceptor's
@@ -79,6 +87,18 @@
 //!   keeps the goal, a lost lead's that the succession copied included,
 //!   with a hostile player in view though it is. Only provocation or its
 //!   government's word lifts it.
+//! - **Under a wait** the block is shut too: it runs only with +0x4c at
+//!   most 0 (@0x8cc6d-0x8cc8d → @0x8d13f, [`search_shut`]), so an
+//!   interceptor holding its course, entering a gate, held at its gate or
+//!   flying out its AI wait keeps its goal and searches, inspects and
+//!   patrols nothing, as `_AIDispatch` runs its think through the wait
+//!   ([`waiting_think`](crate::traffic::waiting_think)). Held, the emerge's
+//!   +0x4c = 60.0 (@0x8954e) runs on through the hold (`_HandleShip`
+//!   @0x3502a-0x35048), so it searches only once the hold runs out. An
+//!   emerging ship never reaches the think (`_AIDispatch` @0x8ff18 →
+//!   @0x9001f, `decides_in`). Its provoked
+//!   branch, its government's word, its retreats and its out-of-ammo
+//!   flight still run.
 //! - **Goal 4** ([`held_attack`](super::held_attack)): provoked with a
 //!   target, any goal but 3, 7, 9 and 0xf becomes goal 4 on it
 //!   (@0x8cbf6-0x8cc31), an idle or patrolling one's too, and goal 4 closes
@@ -107,8 +127,9 @@
 //!   travel stellar -1 (@0x8d3df). An inspection
 //!   the out-of-ammo retreat turned into a flight is left alone.
 //! - Inspecting (state 7) it runs no search of its own (the block needs
-//!   state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; [`hunt`] answers only
-//!   its provoker) while the inspection holds ([`inspection_holds`]): one
+//!   state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; and its provoked branch
+//!   skips state 7, @0x8cc0d) while the inspection holds
+//!   ([`inspection_holds`]): one
 //!   that ends this think, within reach or gone, is let go as state 0,
 //!   its travel stellar -1 when it scanned the player (@0x8f369) and kept
 //!   for any other ship (@0x8f391), and the hunt runs its full search, attacking any pick
@@ -125,6 +146,28 @@
 //!   player scans nothing ([`Decision::re_picked`]), and a re-pick already
 //!   within reach is looked over at once ([`Decision::looked_over`]), a
 //!   scan if it is the player.
+//! - **A hit on an inspection** by an NPC writes the attacker into +0x70
+//!   and no state (`_DamageShip` @0x3bcf6; its focus test reads state 4
+//!   alone, `_IsShipAttacking` @0x82f6a), and +0x70 is goal 7's ship. So,
+//!   by [`RuleKey::InspectionHit`](crate::RuleKey::InspectionHit)'s
+//!   default, its think reads the inspection as of the hit's target
+//!   (`Interceptor::slot_inspection`), provoked or not: the provoked branch
+//!   skips it (@0x8cc0d), the out-of-ammo flight flees it (@0x8d343-0x8d391),
+//!   the lost-sight tail tests its sight (@0x8d39a-0x8d3ee), the re-pick's
+//!   "none" keeps it (@0x8d42d) and its pick wins as any re-pick's does, and
+//!   the state-7 block flies to it and, within reach, lets it go (state 0,
+//!   +0x70 -1, `_HighLevelAIHandler` @0x8f391), writing no +0x96. Nothing
+//!   between the hit and the reach turns it on the attacker; the next
+//!   think's search may pick it, as an enemy or an ally's foe. The reach
+//!   reads the attacker, so the ship it was inspecting is not looked over
+//!   and the player not scanned ([`Decision::re_picked`]). An attacker
+//!   already within reach at the think, or gone, ends the inspection there,
+//!   and the think searches as from state 0, as for any inspection within
+//!   reach ([`inspection_holds`]). A hit by the ship it inspects changes
+//!   nothing. By the other reading it turns on its provoker at once. A
+//!   player's hit calls `_AIMakeShipAttackPlayer` (@0x3be66 → @0x89c3e:
+//!   state 4, @0x89d3e-0x89d4d) by either reading, which the reaction
+//!   models ([`react`]).
 
 use crate::ai::fire::FireRules;
 #[cfg(doc)]
@@ -229,6 +272,23 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
     }
 }
 
+/// Whether `npc`'s search, inspection and patrol are shut among `around`:
+/// its goal closes the gate ([`gate_closed`]), or its wait runs. The block
+/// runs only with +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f), the wait a
+/// ship holding its course, entering a gate or held at its gate
+/// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate), the
+/// emerge's +0x4c running on) runs in its mode too
+/// ([`Npc::wait_running`]), so under a wait it answers only a provoker
+/// (@0x8cbf6-0x8cc31), its government's word (@0x8cb66-0x8cb9d), its
+/// retreats and its out-of-ammo flight (@0x8d391). A hold made on a wait
+/// already out (`HeldAtGate { ticks_left: 0.0 }`) carries goal 4, 0x13 or
+/// 0xb, or a disabled ship, so the goal test (@0x8cc6d-0x8cc7d) shuts it
+/// anyway.
+#[must_use]
+pub fn search_shut(npc: &Npc, around: &Surroundings) -> bool {
+    gate_closed(npc, around) || npc.wait_running()
+}
+
 /// Whether `npc`, behind `_InterceptorAI`'s open gate, searches, inspects
 /// and patrols nothing for the target it kept: idle, landing or entering a
 /// gate (the engine's goal 0 and 1) with +0x70 set goes to @0x8d13f
@@ -268,6 +328,9 @@ pub struct Interceptor {
     pub patrol_uninhabited: RuleSource,
     /// The rulebook's entries its target pick follows.
     pub target: TargetRules,
+    /// What its inspection does when an NPC hits it
+    /// ([`RuleKey::InspectionHit`](crate::RuleKey::InspectionHit)).
+    pub inspection_hit: RuleSource,
 }
 
 impl Behaviour for Interceptor {
@@ -293,6 +356,16 @@ impl Behaviour for Interceptor {
                 ..Decision::default()
             };
         }
+        // Its clear of a last-inspected ship gone from its slot runs past
+        // the helps' return (@0x8cb07), before the gate (@0x8cc40-0x8cc58).
+        let forgets_inspected = !matches!(npc.goal, Goal::Assist(_))
+            && npc.inspected.is_some_and(|ship| !around.active(ship));
+        // A hit's target is the inspection's ship from here on.
+        let redirected = self.slot_inspection(npc);
+        let moved = redirected
+            .as_ref()
+            .is_some_and(|view| view.goal != npc.goal);
+        let npc = redirected.as_ref().unwrap_or(npc);
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
@@ -306,6 +379,7 @@ impl Behaviour for Interceptor {
             chance,
         );
         let mut comm_call = None;
+        let mut inspection_pick = None;
         let mut stops = false;
         // The 0x0040 word wrote +0x70 -1 and goal 0 (@0x8cbc0): its gate
         // runs from there.
@@ -331,8 +405,9 @@ impl Behaviour for Interceptor {
             stops = out_of_ammo::stops(&let_go, goal);
         }
         let decision = hunt.or(|| {
-            let (goal, call) = self.patrol(patroller, around, chance);
+            let (goal, call, pick) = self.patrol(patroller, around, chance);
             comm_call = call;
+            inspection_pick = pick;
             stops = out_of_ammo::stops(patroller, goal);
             out_of_ammo::after_patrol(patroller, goal)
         });
@@ -340,6 +415,8 @@ impl Behaviour for Interceptor {
             npc,
             Decision {
                 comm_call,
+                inspection_pick,
+                forgets_inspected,
                 ..decision
             },
             around,
@@ -347,6 +424,7 @@ impl Behaviour for Interceptor {
         let decision = re_pick(npc, decision, around, self.target, chance);
         let decision = reached(npc, decision, around);
         Decision {
+            re_picked: decision.re_picked || moved,
             forgets_provocation: decision.forgets_provocation || stops,
             // A stop leaves no target: goal 3 on -1 (@0x8dff6).
             clears_target: decision.clears_target || stops,
@@ -377,31 +455,58 @@ impl Behaviour for Interceptor {
 }
 
 impl Interceptor {
+    /// `npc` as its think reads it when a hit has made its target another
+    /// ship than the one it inspects, by the engine's reading of
+    /// [`RuleKey::InspectionHit`](crate::RuleKey::InspectionHit): the
+    /// original keeps goal 7's ship in +0x70 alone, which `_DamageShip`
+    /// rewrites (@0x3bcf6), so the inspection is of its slot's ship
+    /// ([`Npc::slot_target`]: the hit's target), with no target besides,
+    /// and the think finds no provoker in it. A hit by the ship it
+    /// inspects, or none, leaves the inspection as it was, with no
+    /// provoker either. None by the other reading, or when it inspects
+    /// nothing.
+    fn slot_inspection(self, npc: &Npc) -> Option<Npc> {
+        if self.inspection_hit != RuleSource::Engine {
+            return None;
+        }
+        let Goal::Inspect(_) = npc.goal else {
+            return None;
+        };
+        Some(Npc {
+            goal: Goal::Inspect(npc.slot_target()?),
+            target: None,
+            ..npc.clone()
+        })
+    }
+
     /// Its goal with nothing to fight: its inspection, hold or patrol;
-    /// and the pre-scan hail when its pick is the player, fresh
+    /// the pre-scan hail when its pick is the player, fresh
     /// (`_InterceptorAI` @0x8ce34-0x8ce4b: the block runs only as the
-    /// pick sets slot 0, never for an inspection kept).
+    /// pick sets slot 0, never for an inspection kept); and the ship a
+    /// fresh pick names, which it records as the last inspected (+0x90,
+    /// @0x8ce3b).
     fn patrol(
         self,
         npc: &Npc,
         around: &Surroundings,
         chance: &mut dyn Chance,
-    ) -> (Goal, Option<CommCall>) {
+    ) -> (Goal, Option<CommCall>, Option<ShipRef>) {
         if inspection_holds(npc, around) {
-            return (npc.goal, None);
+            return (npc.goal, None, None);
         }
-        if gate_closed(npc, around) || searches_nothing(npc) {
+        if search_shut(npc, around) || searches_nothing(npc) {
             // The patrol and inspect block needs goal 1 or below, or
-            // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
-            // holds, a waiting one (state 6) waits, and a leaving,
-            // plundering or drifting one keeps at it. Inside the gate a
-            // kept +0x70 skips it too (@0x8cc93-0x8ccc9 → @0x8d13f).
-            return (super::kept(npc, around).unwrap_or(npc.goal), None);
+            // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d), and no wait
+            // (@0x8cc7f-0x8cc8d): a held ship holds, a waiting one (state
+            // 6) waits, and a leaving, plundering or drifting one keeps at
+            // it. Inside the gate a kept +0x70 skips it too
+            // (@0x8cc93-0x8ccc9 → @0x8d13f).
+            return (super::kept(npc, around).unwrap_or(npc.goal), None, None);
         }
         match inspect(npc, around, chance) {
-            Some(goal) => {
-                let call = (goal == Goal::Inspect(ShipRef::Player)).then_some(CommCall::PreScan);
-                (goal, call)
+            Some(ship) => {
+                let call = (ship == ShipRef::Player).then_some(CommCall::PreScan);
+                (Goal::Inspect(ship), call, Some(ship))
             }
             None => (
                 idle_block::patrol(
@@ -410,6 +515,7 @@ impl Interceptor {
                     chance,
                     self.patrol_uninhabited == RuleSource::Engine,
                 ),
+                None,
                 None,
             ),
         }
@@ -480,10 +586,10 @@ fn reached(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
 
 /// A ship for `npc` to inspect among `around`, picked on `chance`: the
 /// player or an NPC, not itself, not another unled interceptor (see the
-/// module docs), not the one it last inspected nor the one it has just
-/// looked over.
-fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
-    let done = [npc.inspected, npc.goal.inspecting()];
+/// module docs), and not the one its last pick named ([`Npc::inspected`],
+/// +0x90, the only "done" the count and the pick skip, @0x8cd45,
+/// @0x8cdf1): a ship it looked over but did not pick may be picked again.
+fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<ShipRef> {
     let player = (around.active(ShipRef::Player) && around.sees(npc, ShipRef::Player))
         .then_some(ShipRef::Player);
     let npcs = around
@@ -495,15 +601,13 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
     let candidates: Vec<ShipRef> = player
         .into_iter()
         .chain(npcs)
-        .filter(|ship| !done.contains(&Some(*ship)))
+        .filter(|&ship| npc.inspected != Some(ship))
         .collect();
     if candidates.is_empty() {
         return None;
     }
     let len = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
-    candidates
-        .get(chance.below(len) as usize)
-        .map(|&ship| Goal::Inspect(ship))
+    candidates.get(chance.below(len) as usize).copied()
 }
 
 #[cfg(test)]
@@ -566,6 +670,98 @@ mod tests {
         provoked.target = Some(n(2));
         let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
         assert_eq!(decided(&[provoked, neutral], 0, &[]), Goal::Attack(n(2)));
+    }
+
+    /// `npc` waiting each way a wait runs: holding its course, entering a
+    /// gate, flying with its AI wait (+0x4c) above 0, and held at its gate,
+    /// where the emerge's +0x4c = 60.0 (@0x8954e) runs on through the hold
+    /// (`_HandleShip` @0x3502a-0x35048).
+    fn waiting_each_way(npc: &Npc) -> [Npc; 4] {
+        [
+            Npc {
+                mode: Mode::Coasting { ticks_left: 5.0 },
+                ..npc.clone()
+            },
+            Npc {
+                mode: Mode::EnteringGate {
+                    gate: StellarId(128),
+                    ticks_left: 5.0,
+                },
+                ..npc.clone()
+            },
+            Npc {
+                ai_wait: 5.0,
+                ..npc.clone()
+            },
+            Npc {
+                mode: Mode::HeldAtGate { ticks_left: 5.0 },
+                ai_wait: 0.0,
+                ..npc.clone()
+            },
+        ]
+    }
+
+    #[test]
+    fn a_waiting_interceptor_searches_inspects_and_patrols_nothing() {
+        // Its search, inspection and patrol need goal 1 or below, or 0x14,
+        // and +0x4c at most 0 (@0x8cc6d-0x8cc8d → @0x8d13f).
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        for goal in [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+        ] {
+            let mut trader_cop = police();
+            trader_cop.govt = Some(TRADERS);
+            trader_cop.goal = goal;
+            assert_eq!(
+                decided(&[trader_cop.clone(), pirate.clone()], 0, &[0; 8]),
+                Goal::Attack(n(2)),
+                "{goal:?}: unwaited, it searches"
+            );
+            for waiting in waiting_each_way(&trader_cop) {
+                let (decided, asked) = decided_by(
+                    &govts(0, 0),
+                    &[waiting.clone(), pirate.clone()],
+                    (0.0, -1000.0),
+                    0,
+                    &[0; 8],
+                );
+                assert_eq!(decided, goal, "{goal:?} {:?}: no search", waiting.mode);
+                assert!(asked.is_empty(), "{goal:?} {:?}: no pick", waiting.mode);
+            }
+            // With no one to fight it inspects the player, or patrols.
+            let mut cop = police();
+            cop.goal = goal;
+            for waiting in waiting_each_way(&cop) {
+                let (decided, asked) = decided_by(
+                    &govts(0, 0),
+                    std::slice::from_ref(&waiting),
+                    (0.0, -1000.0),
+                    0,
+                    &[0; 8],
+                );
+                assert_eq!(decided, goal, "{goal:?} {:?}: no inspection", waiting.mode);
+                assert!(asked.is_empty(), "{goal:?} {:?}", waiting.mode);
+            }
+        }
+    }
+
+    #[test]
+    fn a_provoked_waiting_interceptor_still_turns_on_its_provoker() {
+        // Its provoked branch comes before the gate (@0x8cbf6-0x8cc31).
+        let mut provoked = police();
+        provoked.provoked = 1.0;
+        provoked.target = Some(n(2));
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for waiting in waiting_each_way(&provoked) {
+            assert_eq!(
+                decided(&[waiting.clone(), neutral.clone()], 0, &[]),
+                Goal::Attack(n(2)),
+                "{:?}",
+                waiting.mode
+            );
+        }
     }
 
     /// The interceptor (its government's `flags`) attacking a pirate of
@@ -971,6 +1167,8 @@ mod tests {
     fn it_closes_in_until_within_100_on_both_axes_and_then_decides_again() {
         let mut cop = police();
         cop.goal = Goal::Inspect(n(2));
+        // As its pick of NPC 2 recorded it (@0x8ce3b).
+        cop.inspected = Some(n(2));
         let far = ship(2, TRADERS, AiType::WimpyTrader, 100.0, 100.1);
         let npcs = [cop.clone(), far];
         let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[]);
@@ -1926,6 +2124,8 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 looked_over: None,
+                inspection_pick: None,
+                forgets_inspected: false,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -1999,6 +2199,7 @@ mod tests {
             decision_by(0, &[police()], intact, 0, &[0]),
             Decision {
                 comm_call: Some(CommCall::PreScan),
+                inspection_pick: Some(P),
                 ..not(Goal::Inspect(P))
             },
             "an inspection"
@@ -2294,12 +2495,11 @@ mod tests {
     }
 
     #[test]
-    fn an_inspecting_interceptor_answers_only_a_provoker_it_holds() {
-        // Its search needs state 1 or below, or 0x14 (@0x8cc6d-0x8cc7d):
-        // while the inspection holds, a target a hit of no damage set is
-        // kept unanswered, and so is a provoker it spares; one it holds is
-        // answered (its provoked inspection is
-        // rdm:phase/play-feel-9/phase-6-inspection-redirected-by-a-hit's).
+    fn an_inspecting_interceptor_answers_only_a_provoker_it_holds_by_the_other_reading() {
+        // By the other reading of `inspection_hit`, while the inspection
+        // holds a target a hit of no damage set is kept unanswered, and so
+        // is a provoker it spares; one it holds is answered. By the engine
+        // the hit's target is the inspection's ship, never answered.
         let (cop, trader) = trader_cop_inspecting();
         let hitter = |govt| ship(3, govt, AiType::Warship, 0.0, 300.0);
         let with = |provoked: f32| Npc {
@@ -2307,14 +2507,36 @@ mod tests {
             provoked,
             ..cop.clone()
         };
-        let (decision, _) = re_picked(with(0.0), &[trader.clone(), hitter(NEUTRAL)], 0, None, &[]);
-        assert_eq!(decision.goal, Goal::Inspect(n(2)), "unprovoked");
+        let at_once = |provoked, govt| {
+            hit_decided(
+                RuleSource::Bible,
+                with(provoked),
+                &[trader.clone(), hitter(govt)],
+                (0.0, -1000.0),
+                &[],
+            )
+            .0
+            .goal
+        };
+        assert_eq!(at_once(0.0, NEUTRAL), Goal::Inspect(n(2)), "unprovoked");
         // An ally is answered too: the state-4 block spares it after the
         // think (`attack_drop`, @0x8e277-0x8e2db).
-        let (decision, _) = re_picked(with(5.0), &[trader.clone(), hitter(POLICE)], 0, None, &[]);
-        assert_eq!(decision.goal, Goal::Attack(n(3)), "an ally");
-        let (decision, _) = re_picked(with(5.0), &[trader, hitter(NEUTRAL)], 0, None, &[]);
-        assert_eq!(decision.goal, Goal::Attack(n(3)), "a provoker it holds");
+        assert_eq!(at_once(5.0, POLICE), Goal::Attack(n(3)), "an ally");
+        assert_eq!(
+            at_once(5.0, NEUTRAL),
+            Goal::Attack(n(3)),
+            "a provoker it holds"
+        );
+        for (provoked, govt) in [(0.0, NEUTRAL), (5.0, POLICE), (5.0, NEUTRAL)] {
+            let (decision, _) = re_picked(
+                with(provoked),
+                &[trader.clone(), hitter(govt)],
+                0,
+                None,
+                &[],
+            );
+            assert_eq!(decision.goal, Goal::Inspect(n(3)), "{provoked} {govt:?}");
+        }
     }
 
     #[test]
@@ -2641,5 +2863,324 @@ mod tests {
             Goal::Attack(P),
             "a stand-off hull asks nothing"
         );
+    }
+
+    // A hit on an inspection: `_DamageShip` writes the attacker into +0x70
+    // and no state (@0x3bcf6), and the think's provoked branch skips state 7
+    // (@0x8cc0d), so the think and the high level read the attacker.
+
+    /// [`police`] inspecting NPC 2, a trader 500 off, after NPC 3 hit it:
+    /// its target NPC 3, provoked by `provoked`.
+    fn hit_inspecting(provoked: f32) -> Npc {
+        Npc {
+            goal: Goal::Inspect(n(2)),
+            target: Some(n(3)),
+            provoked,
+            ..police()
+        }
+    }
+
+    /// NPC 3, a neutral warship at (`x`, `y`).
+    fn attacker(x: f32, y: f32) -> Npc {
+        ship(3, NEUTRAL, AiType::Warship, x, y)
+    }
+
+    /// NPC 2, the trader [`hit_inspecting`] inspects, at (`x`, `y`).
+    fn inspected_at(x: f32, y: f32) -> Npc {
+        ship(2, TRADERS, AiType::WimpyTrader, x, y)
+    }
+
+    /// The decision of `cop` by `rule` among `others` (it first), the
+    /// player at `player`, drawing `draws`; and the draws asked.
+    fn hit_decided(
+        rule: RuleSource,
+        cop: Npc,
+        others: &[Npc],
+        player: (f32, f32),
+        draws: &[u32],
+    ) -> (Decision, Vec<u32>) {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs: Vec<Npc> = std::iter::once(cop).chain(others.iter().cloned()).collect();
+        let seen = around(&sites, &npcs, &govts, player, 0);
+        let mut chance = Draws::of(draws);
+        let ai = Interceptor {
+            inspection_hit: rule,
+            ..Interceptor::default()
+        };
+        let decision = ai.decision(&npcs[0], &seen, &mut chance);
+        (decision, chance.asked)
+    }
+
+    /// [`hit_decided`] by the engine, the player 1000 off.
+    fn hit_by_engine(cop: Npc, others: &[Npc], draws: &[u32]) -> (Decision, Vec<u32>) {
+        hit_decided(RuleSource::Engine, cop, others, (0.0, -1000.0), draws)
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_hit_by_an_npc_inspects_its_attacker_and_does_not_attack_it() {
+        let others = [inspected_at(500.0, 0.0), attacker(0.0, 800.0)];
+        let (decision, asked) = hit_by_engine(hit_inspecting(3.0), &others, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)), "+0x70 is the attacker");
+        assert!(decision.re_picked, "its reach reads the attacker");
+        assert!(asked.is_empty(), "no search: state 7 (@0x8cc6d)");
+        let (bible, _) = hit_decided(
+            RuleSource::Bible,
+            hit_inspecting(3.0),
+            &others,
+            (0.0, -1000.0),
+            &[],
+        );
+        assert_eq!(bible.goal, Goal::Attack(n(3)), "the other reading");
+    }
+
+    /// [`hit_inspecting`]'s interceptor in state 0, unhit.
+    fn idle_cop() -> Npc {
+        Npc {
+            goal: Goal::Idle,
+            target: None,
+            provoked: 0.0,
+            ..police()
+        }
+    }
+
+    #[test]
+    fn its_reach_reads_the_attacker_not_the_ship_it_was_inspecting() {
+        // The attacker within reach ends the inspection (@0x8f391), and the
+        // think goes on as from state 0, as for any inspection within reach:
+        // it doesn't attack the attacker it was provoked by.
+        let near = [inspected_at(500.0, 0.0), attacker(50.0, 50.0)];
+        let (decision, asked) = hit_by_engine(hit_inspecting(3.0), &near, &[0; 4]);
+        assert_ne!(decision.goal, Goal::Attack(n(3)), "{decision:?}");
+        assert_ne!(decision.goal, Goal::Inspect(n(3)), "the reach ends it");
+        let (from_idle, idle_asked) = hit_by_engine(idle_cop(), &near, &[0; 4]);
+        assert_eq!(decision.goal, from_idle.goal, "as from state 0");
+        assert_eq!(asked, idle_asked, "as from state 0");
+        assert!(decision.goal.inspecting().is_some(), "{decision:?}");
+        assert!(decision.re_picked, "the player is not scanned");
+        // The ship it was inspecting within reach is not looked over.
+        let kept_near = [inspected_at(50.0, 0.0), attacker(0.0, 800.0)];
+        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &kept_near, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+        assert_eq!(decision.looked_over, None);
+        // Nor is the player within reach: no scan.
+        let of_player = Npc {
+            goal: Goal::Inspect(P),
+            ..hit_inspecting(3.0)
+        };
+        let (decision, _) = hit_decided(
+            RuleSource::Engine,
+            of_player,
+            &[attacker(0.0, 800.0)],
+            (0.0, 50.0),
+            &[],
+        );
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+        assert_eq!(decision.looked_over, None);
+        assert!(decision.re_picked, "no scan of the player");
+    }
+
+    #[test]
+    fn its_lost_sight_tail_reads_the_attacker() {
+        // @0x8d39a-0x8d3ee: target -1, state 0, +0x6c -1.
+        let unseen = [inspected_at(500.0, 0.0), cloaked(attacker(0.0, 800.0))];
+        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &unseen, &[]);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Clear);
+        let seen = [cloaked(inspected_at(500.0, 0.0)), attacker(0.0, 800.0)];
+        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &seen, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)), "the attacker seen");
+        assert!(!decision.clears_target);
+    }
+
+    #[test]
+    fn its_attacker_gone_ends_the_inspection_and_it_searches_unprovoked() {
+        let idle = idle_cop();
+        let mut destroyed = attacker(0.0, 800.0);
+        destroyed.condition = Condition::Destroyed;
+        for others in [
+            vec![inspected_at(500.0, 0.0)],
+            vec![inspected_at(500.0, 0.0), destroyed],
+        ] {
+            let (decision, asked) = hit_by_engine(hit_inspecting(3.0), &others, &[1]);
+            let (from_idle, idle_asked) = hit_by_engine(idle.clone(), &others, &[1]);
+            assert_eq!(decision.goal, from_idle.goal, "{others:?}");
+            assert_eq!(asked, idle_asked, "as from state 0");
+            assert_ne!(decision.goal, Goal::Attack(n(3)));
+        }
+    }
+
+    #[test]
+    fn its_re_pick_wins_over_the_attacker_and_none_keeps_it() {
+        // An enemy in view of a traders' interceptor: the hunt's NPC pick
+        // writes the target alone (@0x8ad11), so it inspects it.
+        let pirate = ship(4, PIRATES, AiType::Warship, 0.0, 300.0);
+        let enemy = [inspected_at(500.0, 0.0), attacker(0.0, 800.0), pirate];
+        let trader_cop = Npc {
+            govt: Some(TRADERS),
+            ..hit_inspecting(3.0)
+        };
+        let (decision, _) = hit_by_engine(trader_cop, &enemy, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(4)));
+        // A trader fleeing the attacker: the help writes state 4 on its
+        // foe (@0x8a5c1).
+        let mut fleeing = ship(4, TRADERS, AiType::WimpyTrader, 0.0, 200.0);
+        fleeing.goal = Goal::Flee(n(3));
+        let helped = [inspected_at(500.0, 0.0), attacker(0.0, 800.0), fleeing];
+        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &helped, &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)), "by the help pick");
+        // Nothing to pick: the attacker stands (@0x8d42d).
+        let alone = [inspected_at(500.0, 0.0), attacker(0.0, 800.0)];
+        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &alone, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+    }
+
+    #[test]
+    fn a_dry_interceptor_of_flags2_0x0080_flees_its_attacker() {
+        // @0x8d343-0x8d391 writes state 3 on +0x70.
+        let cop = short_of_ammo(hit_inspecting(3.0), AmmoLeft::Dry, true);
+        let others = [inspected_at(500.0, 0.0), attacker(0.0, 800.0)];
+        let (decision, _) = hit_by_engine(cop, &others, &[]);
+        assert_eq!(decision.goal, Goal::Flee(n(3)));
+    }
+
+    #[test]
+    fn hit_by_the_ship_it_inspects_it_keeps_inspecting_it() {
+        let cop = Npc {
+            target: Some(n(2)),
+            ..hit_inspecting(3.0)
+        };
+        let (decision, _) = hit_by_engine(cop, &[inspected_at(500.0, 0.0)], &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+        assert!(!decision.re_picked);
+    }
+
+    // The last-inspected ship (+0x90): written by the pick alone
+    // (@0x8ce3b), cleared when its slot goes (@0x8cc40-0x8cc58).
+
+    #[test]
+    fn its_pick_records_the_ship_it_picked() {
+        let (decision, _) = re_picked(police(), &[], 0, None, &[0]);
+        assert_eq!(decision.goal, Goal::Inspect(P));
+        assert_eq!(decision.inspection_pick, Some(P), "@0x8ce3b");
+        let (cop, trader) = trader_cop_inspecting();
+        let (kept, _) = re_picked(cop, &[trader], 0, None, &[]);
+        assert_eq!(kept.goal, Goal::Inspect(n(2)));
+        assert_eq!(
+            kept.inspection_pick, None,
+            "a kept inspection picks nothing"
+        );
+    }
+
+    #[test]
+    fn a_pick_re_picked_or_turned_to_a_flight_in_the_same_think_still_records_the_pick() {
+        // The re-pick (@0x8d41e) comes after the pick's write.
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Idle;
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let (decision, _) = re_picked(
+            cop.clone(),
+            std::slice::from_ref(&trader),
+            0,
+            Some(PIRATES),
+            &[1, 1, 0],
+        );
+        assert_eq!(decision.goal, Goal::Attack(P), "the re-pick's");
+        assert_eq!(decision.inspection_pick, Some(n(2)), "the pick's");
+        // The out-of-ammo flight (@0x8d391) comes after it too.
+        let dry = short(Goal::Idle, AmmoLeft::OnlyUnlimited, true);
+        let (decision, _) = re_picked(dry, std::slice::from_ref(&trader), 0, None, &[1]);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+        // And so does the reach (@0x8f391).
+        let near = ship(2, TRADERS, AiType::WimpyTrader, 50.0, 0.0);
+        let (decision, _) = re_picked(police(), &[near], 0, None, &[1]);
+        assert_eq!(decision.looked_over, Some(n(2)));
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+    }
+
+    #[test]
+    fn it_may_pick_again_a_ship_it_looked_over_but_did_not_pick() {
+        // Only +0x90 is skipped (@0x8cd45, @0x8cdf1).
+        let cop = |inspected| Npc {
+            goal: Goal::Inspect(n(2)),
+            inspected: Some(inspected),
+            ..police()
+        };
+        let others = [
+            ship(2, TRADERS, AiType::WimpyTrader, 50.0, 0.0),
+            ship(4, TRADERS, AiType::WimpyTrader, 900.0, 0.0),
+        ];
+        let (decision, asked) = re_picked(cop(P), &others, 0, None, &[0]);
+        assert_eq!(asked, [2], "NPC 2 and NPC 4");
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+        assert_eq!(decision.looked_over, Some(n(2)), "within reach again");
+        let (decision, asked) = re_picked(cop(n(2)), &others, 0, None, &[0]);
+        assert_eq!(asked, [2], "the player and NPC 4");
+        assert_eq!(decision.goal, Goal::Inspect(P));
+    }
+
+    #[test]
+    fn a_last_inspected_ship_gone_from_its_slot_is_forgotten() {
+        // @0x8cc40-0x8cc58: +0x90 -1 for a slot with +0xb8 clear.
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let forgets = |cop: Npc, player: bool| {
+            let npcs = [cop, trader.clone()];
+            let (sites, govts) = (sites(), govts(0, 0));
+            let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+            if !player {
+                seen.player = None;
+            }
+            Interceptor::default()
+                .decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+                .forgets_inspected
+        };
+        let after = |inspected| Npc {
+            inspected: Some(inspected),
+            ..police()
+        };
+        assert!(forgets(after(n(9)), true), "an NPC gone");
+        assert!(forgets(after(P), false), "the player gone");
+        assert!(!forgets(after(n(2)), true), "an NPC there");
+        assert!(!forgets(after(P), true), "the player there");
+        assert!(!forgets(police(), true), "none to forget");
+        // The think returns first for goal 0x16 (@0x8c8c2) and the helps
+        // (@0x8cb07).
+        for goal in [Goal::CountWait, Goal::Assist(crate::ai::Help::Refuel)] {
+            let cop = Npc {
+                goal,
+                ..after(n(9))
+            };
+            assert!(!forgets(cop, true), "{goal:?}");
+        }
+        // The clear comes before the wait test (@0x8cc86).
+        let waiting = Npc {
+            ai_wait: 5.0,
+            ..after(n(9))
+        };
+        assert!(forgets(waiting, true), "under a wait");
+    }
+
+    #[test]
+    fn an_unprovoked_hit_redirects_it_too() {
+        // A hit of no nominal damage writes +0x70 all the same.
+        let others = [inspected_at(500.0, 0.0), attacker(0.0, 800.0)];
+        let (decision, _) = hit_by_engine(hit_inspecting(0.0), &others, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+        assert!(decision.re_picked);
+        let unseen = [inspected_at(500.0, 0.0), cloaked(attacker(0.0, 800.0))];
+        let (decision, _) = hit_by_engine(hit_inspecting(0.0), &unseen, &[]);
+        assert_eq!(decision.goal, Goal::Idle, "the tail reads the attacker");
+        let near = [inspected_at(500.0, 0.0), attacker(50.0, 50.0)];
+        let (decision, asked) = hit_by_engine(hit_inspecting(0.0), &near, &[0; 4]);
+        assert_ne!(
+            decision.goal,
+            Goal::Inspect(n(2)),
+            "its reach reads the attacker"
+        );
+        assert_ne!(decision.goal, Goal::Inspect(n(3)), "the reach ends it");
+        let (from_idle, idle_asked) = hit_by_engine(idle_cop(), &near, &[0; 4]);
+        assert_eq!(decision.goal, from_idle.goal, "as from state 0");
+        assert_eq!(asked, idle_asked, "as from state 0");
     }
 }

@@ -738,6 +738,8 @@ fn fighter(
         bursts_own_word: false,
         fires_on_burst_end: false,
         close_form: false,
+        // The spawn zeroes the sub-goal +0xc8ca: order 1.
+        mine_order: crate::ai::mine_orders::MineOrder::Stop,
         stopping: false,
         fleet_slot: None,
         form_parent: None,

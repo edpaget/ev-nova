@@ -70,7 +70,12 @@ impl Session {
             return;
         }
         let drawn = chance.below(repair_odds(self.speed_mult()));
-        let gear = has_gear(&self.pilot.outfits, &self.statics.outfits);
+        // `_ShipCanSelfRepair` reads the outfit counts (see the
+        // `held_readers` module).
+        let gear = has_gear(
+            &self.ship.counted_outfits(&self.pilot),
+            &self.statics.outfits,
+        );
         let armor = &mut self.pilot.reserves.armor;
         if !can_self_repair(drawn, self.ship.condition, armor.now, gear) {
             return;

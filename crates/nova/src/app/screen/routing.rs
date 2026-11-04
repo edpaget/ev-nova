@@ -172,6 +172,7 @@ impl AppScreen {
             // button lags no frame behind the cash and the tank.
             spaceport.set_recharge_enabled(flight.recharge_enabled());
         }
+        self.replay_spaceport_wait();
         ScreenAction::None
     }
 
@@ -342,7 +343,7 @@ impl AppScreen {
                         .refuse_mission(mission)
                         .is_ok_and(|shown| shown.offer_hidden)
                     {
-                        spaceport.release_answered_offer();
+                        spaceport.hide_answered_offer();
                     }
                 }
             }

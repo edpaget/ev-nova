@@ -21,7 +21,9 @@
 //!    [`Goal::AttackStellar`], its target cleared and its travel stellar
 //!    the stellar; no warship think runs.
 //! 5. **Otherwise** (@0x8c293-0x8c2c5): a ship in goal 0x12 drops it (goal
-//!    and sub-goal 0, target and travel stellar -1), and then the
+//!    and sub-goal 0, target and travel stellar -1; the sub 0, @0x8c2b2, is
+//!    its [`Decision::writes_sub`], which ends a gate entry under its
+//!    wait), and then the
 //!    warship's think runs, whatever the ship's own type. So a goal 7 a
 //!    successor copied from a lost interceptor lead is kept, provoked or
 //!    not, as the warship keeps it (`_WarshipAI` @0x8bb2d, @0x8be10), and
@@ -123,6 +125,8 @@ impl Behaviour for DeathStar {
             goal,
             travel,
             clears_target: decision.clears_target || (reset && goal.quarry().is_none()),
+            // The drop's sub 0 (@0x8c2b2), before the warship's think.
+            writes_sub: decision.writes_sub || reset,
             ..decision
         }
     }
@@ -340,6 +344,7 @@ mod tests {
     struct Recording {
         goal: Goal,
         travel: TravelWrite,
+        writes_sub: bool,
         asked: RefCell<Vec<(Goal, Option<ShipRef>, bool)>>,
     }
 
@@ -352,6 +357,17 @@ mod tests {
             Rc::new(Self {
                 goal,
                 travel,
+                writes_sub: false,
+                asked: RefCell::default(),
+            })
+        }
+
+        /// Answering `goal`, its think writing the sub-goal itself.
+        fn writing_sub(goal: Goal) -> Rc<Self> {
+            Rc::new(Self {
+                goal,
+                travel: TravelWrite::Keep,
+                writes_sub: true,
                 asked: RefCell::default(),
             })
         }
@@ -369,6 +385,7 @@ mod tests {
             Decision {
                 goal: self.decide(npc, around, chance),
                 travel: self.travel,
+                writes_sub: self.writes_sub,
                 ..Decision::default()
             }
         }
@@ -741,6 +758,24 @@ mod tests {
             !decision.clears_target,
             "a fight keeps the target the warship takes"
         );
+    }
+
+    #[test]
+    fn a_dropped_stellar_attack_writes_sub_0_and_the_warships_think_keeps_its_own() {
+        // Goal and sub 0 (@0x8c293-0x8c2b2): over a gate entry, the fade
+        // reads the sub alone, so it ends (`waiting_think`).
+        let gun = planet_gun(130, -1);
+        let armed = arsenal(&[gun], &[(130, 1)]);
+        let no_enemy: Vec<LandingSite> = sites()[..3].to_vec();
+        let mut npc = attacker(&[gun]);
+        npc.goal = Goal::AttackStellar(StellarId(131));
+        let dropped = decided(&npc, &no_enemy, &armed, Recording::answering(Goal::Wait));
+        assert!(dropped.writes_sub, "@0x8c2b2");
+        npc.goal = Goal::Idle;
+        let idle = decided(&npc, &no_enemy, &armed, Recording::answering(Goal::Wait));
+        assert!(!idle.writes_sub, "no goal 0x12 to drop");
+        let own = decided(&npc, &no_enemy, &armed, Recording::writing_sub(Goal::Wait));
+        assert!(own.writes_sub, "the warship's own write");
     }
 
     #[test]

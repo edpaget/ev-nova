@@ -35,8 +35,9 @@ impl Session {
         *cargo = self.ship.status_cargo(pilot, statics, &self.setup);
         *secondary = self.ship.secondary();
         *secondary_line_count = self.ship.secondary_line_count(pilot, statics);
-        *radar_gear = super::super::radar::radar_gear(pilot, statics);
-        *interference = self.chart.interference(pilot, statics);
+        let counted = self.ship.counted_outfits(pilot);
+        *radar_gear = super::super::radar::radar_gear(&counted, statics);
+        *interference = self.chart.interference(pilot, statics, &counted);
         *interface_government = super::super::interface_government(pilot, statics);
         *nav_brackets = self.chart.nav_brackets(self.next_speed_mult());
         *target_brackets = self.target_brackets();

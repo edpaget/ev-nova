@@ -25,7 +25,7 @@ use crate::shipyard;
 use crate::stats::ShipStats;
 use crate::warp;
 
-use super::{ship_display, warp_stage};
+use super::{Statics, ship_display, warp_stage};
 
 /// The player's ship, in `Session`'s former field order, then its parts.
 #[derive(Clone, Debug, PartialEq)]
@@ -97,7 +97,11 @@ pub(super) struct PlayerShip {
     /// The part of the outfits owned that a purchase's stock top-up still
     /// holds in the weapon array alone, by the engine reading of
     /// [`RuleKey::PurchaseStockFold`](crate::rulebook::RuleKey::PurchaseStockFold),
-    /// until the next fold (see the `stock_fold` module). Never saved: the
+    /// until the next fold (see the `stock_fold` module). Every reader of
+    /// the outfit counts leaves it out
+    /// ([`counted_outfits`](Self::counted_outfits); see the
+    /// `held_readers` module), and the readers of the weapon array count
+    /// it. Never saved: the
     /// original never saves between a purchase and its fold
     /// (`_SavePilotFile` @0x1935f, @0x6354b, @0x692c4), so a load treats the
     /// top-up as owned, as a landing's fold would.
@@ -313,23 +317,53 @@ impl PlayerShip {
         }
     }
 
-    /// `_ShipStatsToSystemInfo`'s fold: the stock top-up held in the
-    /// weapon array becomes owned outfits, so nothing is held any more.
-    pub(super) fn fold_stock(&mut self) {
+    /// `_ShipStatsToSystemInfo`'s fold (@0xcaee-0xcce7): the stock top-up
+    /// held in the weapon array becomes owned outfits, so nothing is held
+    /// any more. The stats are worked out again over the counts it
+    /// leaves, and each reserve's most moves to the new stats' with
+    /// nothing gained or held down, as the fold writes no reserve. With
+    /// nothing held, it changes nothing.
+    pub(super) fn fold_stock(&mut self, pilot: &mut Pilot, statics: &Statics) {
+        if self.held_stock.is_empty() {
+            return;
+        }
         self.held_stock.clear();
+        let stats = self.current_stats(pilot, statics);
+        let reserves = &mut pilot.reserves;
+        for (gauge, max) in [
+            (&mut reserves.shield, stats.shield),
+            (&mut reserves.armor, stats.armor),
+            (&mut reserves.fuel, stats.fuel),
+        ] {
+            gauge.max = max;
+        }
+        self.fit.stats = stats;
+    }
+
+    /// The outfit counts the original reads (`*0x3b51a8`) while the stock
+    /// top-up is held: `pilot`'s outfits less
+    /// [`held_stock`](Self::held_stock) ([`shipyard::outfit_counts`]),
+    /// borrowed as they are when nothing is held. Every reader of the
+    /// counts takes them (see the `held_readers` module).
+    pub(super) fn counted_outfits<'p>(&self, pilot: &'p Pilot) -> Cow<'p, BTreeMap<OutfitId, u16>> {
+        if self.held_stock.is_empty() {
+            return Cow::Borrowed(&pilot.outfits);
+        }
+        Cow::Owned(shipyard::outfit_counts(&pilot.outfits, &self.held_stock))
     }
 
     /// `pilot` with the outfit counts the original reads while the stock
-    /// top-up is held: its outfits less [`held_stock`](Self::held_stock)
-    /// ([`shipyard::outfit_counts`]), borrowed as it is when nothing is
-    /// held.
+    /// top-up is held ([`counted_outfits`](Self::counted_outfits)),
+    /// borrowed as it is when nothing is held.
     pub(super) fn counted<'p>(&self, pilot: &'p Pilot) -> Cow<'p, Pilot> {
-        if self.held_stock.is_empty() {
-            return Cow::Borrowed(pilot);
+        match self.counted_outfits(pilot) {
+            Cow::Borrowed(_) => Cow::Borrowed(pilot),
+            Cow::Owned(outfits) => {
+                let mut counted = pilot.clone();
+                counted.outfits = outfits;
+                Cow::Owned(counted)
+            }
         }
-        let mut counted = pilot.clone();
-        counted.outfits = shipyard::outfit_counts(&pilot.outfits, &self.held_stock);
-        Cow::Owned(counted)
     }
 
     /// The dock request's tail's writes to the player's ship, run by a

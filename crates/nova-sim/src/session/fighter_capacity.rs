@@ -166,56 +166,190 @@ fn a_carried_fighter_placed_in_the_system_holds_its_scaled_capacities_keeping_it
     }
 }
 
-#[test]
-fn a_lost_fighter_repairing_itself_reaches_its_share_of_its_scaled_armour() {
-    // Lost to the fleet disabled, it keeps its carrier (the original's AI
-    // type 5, `_DamageShip` @0x3afdd clearing only its parent), so its
-    // repair reads the scaled capacity (`_HandleShip` @0x33a73, @0x33aaa).
-    let mut catalog = carrying();
-    catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(437), 1)];
-    catalog.outfits.push(crate::testkit::outfit(
-        437,
-        &[(crate::self_repair::MOD_REPAIR, 0)],
-    ));
-    for (capacity, armor) in [(RuleSource::Engine, SCALED.1), (RuleSource::Bible, CLASS.1)] {
-        let mut session = players_launched(&catalog, capacity);
-        let id = fleet_npcs(&session)[0].id;
-        assert!(session.space.npc(id).expect("out").self_repair);
-        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
-        work(&mut session, &catalog, Controls::default());
-        assert!(session.pilot().escorts().is_empty(), "lost");
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
-        let npc = session.space.npc(id).expect("there");
-        assert_eq!(
-            npc.reserves.armor.now,
-            crate::self_repair::repaired_armor(armor, npc.hull.tough),
-            "{capacity:?}"
-        );
-        assert_eq!(session.pilot().escorts().len(), 1, "rejoined");
-        assert_eq!(gauges(npc)[1].1, armor, "{capacity:?}");
-    }
-}
-
-#[test]
-fn a_fighter_rejoining_with_no_carrier_holds_its_scaled_capacities_again() {
-    // Rejoining as a fighter, it is carried by the player again (AI type 5),
-    // so its capacities and its recharge are a fighter's together.
+/// [`recharging`] with the Viper repairing itself (`ModType` 31), so a
+/// lost one rejoins.
+fn self_repairing() -> FakePilotCatalog {
     let mut catalog = recharging();
     catalog.ship_records[1].defaults = vec![(crate::catalog::OutfitId(437), 1)];
     catalog.outfits.push(crate::testkit::outfit(
         437,
         &[(crate::self_repair::MOD_REPAIR, 0)],
     ));
+    catalog
+}
+
+#[test]
+fn a_lost_fighter_holds_its_classs_capacities_and_repairs_to_its_classs_share() {
+    // Lost to the fleet disabled, it takes its class's `InherentAI`
+    // (`_DamageShip` @0x3b0d7), so it is a fighter no longer: it leaves its
+    // carrier and holds its class's capacities. Its repair reads
+    // `_ShipArmorCapacity` (`_HandleShip` @0x33a73, @0x33aaa) before the
+    // rejoin writes 5 (@0x33b32), so it repairs to its class's share.
+    let catalog = self_repairing();
+    for capacity in RuleSource::ALL {
+        let mut session = players_launched(&catalog, capacity);
+        let id = fleet_npcs(&session)[0].id;
+        assert!(session.space.npc(id).expect("out").self_repair);
+        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
+        work(&mut session, &catalog, Controls::default());
+        assert!(session.pilot().escorts().is_empty(), "lost");
+        let npc = session.space.npc(id).expect("there");
+        assert!(npc.carrier.is_none(), "{capacity:?}");
+        assert_eq!((gauges(npc)[0].1, gauges(npc)[1].1), CLASS, "{capacity:?}");
+        assert_eq!(npc.shield_recharge(capacity), 0.125, "{capacity:?}");
+        assert_eq!(
+            npc.original_ai_type(),
+            catalog.ship_records[1].inherent_ai,
+            "{capacity:?}"
+        );
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(
+            npc.reserves.armor.now,
+            crate::self_repair::repaired_armor(CLASS.1, npc.hull.tough),
+            "{capacity:?}"
+        );
+    }
+}
+
+#[test]
+fn a_lost_fighters_rejoin_reads_five_and_holds_a_fighters_capacities_again() {
+    // The rejoin leads it again (+0x9a 0, @0x33b11), its shield none
+    // (@0x33b1a), and writes 5 (@0x33b32): it is carried by the player
+    // again, its capacities and recharge a fighter's, and the armour it
+    // repaired to its class's share is kept. Against the engine's scaled
+    // capacity that share is still disabled (`_IsDisabled` reads it live).
+    let catalog = self_repairing();
+    for (capacity, (shield, armor), disabled) in [
+        (RuleSource::Engine, SCALED, true),
+        (RuleSource::Bible, CLASS, false),
+    ] {
+        let mut session = players_launched(&catalog, capacity);
+        let id = fleet_npcs(&session)[0].id;
+        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
+        work(&mut session, &catalog, Controls::default());
+        assert!(session.pilot().escorts().is_empty(), "lost");
+        assert!(session.space.npc(id).expect("there").carrier.is_none());
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
+        assert_eq!(session.pilot().escorts().len(), 1, "rejoined");
+        let npc = session.space.npc(id).expect("there");
+        assert!(npc.carrier.is_some(), "{capacity:?}: carried again");
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::FIGHTER_AI,
+            "{capacity:?}"
+        );
+        assert_eq!(
+            (gauges(npc)[0].1, gauges(npc)[1].1),
+            (shield, armor),
+            "{capacity:?}"
+        );
+        assert_eq!(
+            npc.shield_recharge(capacity),
+            fighter_capacity(0.125, capacity),
+            "{capacity:?}"
+        );
+        assert_eq!(npc.reserves.shield.now, 0.0, "{capacity:?}");
+        assert_eq!(
+            npc.reserves.armor.now,
+            crate::self_repair::repaired_armor(CLASS.1, npc.hull.tough),
+            "{capacity:?}: its class's share kept"
+        );
+        assert_eq!(
+            npc.condition == Condition::Disabled,
+            disabled,
+            "{capacity:?}"
+        );
+    }
+}
+
+#[test]
+fn a_lost_escorts_rejoin_reads_six_and_holds_its_classs_capacities() {
+    // Any other kind rejoins writing 6 (@0x33b51): no carrier, its class's.
+    let catalog = self_repairing();
+    let captured = crate::pilot::Escort {
+        carried: false,
+        ..out()
+    };
+    for capacity in RuleSource::ALL {
+        let mut session = flying_by(&catalog, pilot(&catalog, 0, vec![captured]), by(capacity));
+        let id = fleet_npcs(&session)[0].id;
+        session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
+        work(&mut session, &catalog, Controls::default());
+        assert!(session.pilot().escorts().is_empty(), "lost");
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
+        assert_eq!(session.pilot().escorts().len(), 1, "rejoined");
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(npc.carrier, None, "{capacity:?}");
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::ESCORT_AI,
+            "{capacity:?}"
+        );
+        assert_eq!((gauges(npc)[0].1, gauges(npc)[1].1), CLASS, "{capacity:?}");
+    }
+}
+
+#[test]
+fn an_npc_carriers_fighter_captured_is_an_escort_holding_its_classs_bribed_or_not() {
+    // The capture writes 6 (`_DoPlunderDialog` @0x9461f), over a bribe's 1
+    // too: no fighter, so its class's capacities.
+    let catalog = carrying();
+    for capacity in RuleSource::ALL {
+        for bribed in [false, true] {
+            let (mut session, _, _) = raided_by_rules(&catalog, by(capacity));
+            fight(&mut session, &catalog, &raiding_ai());
+            let id = vipers(&session)[0].id;
+            if bribed {
+                session.space.npc_mut(id).expect("out").take_bribe();
+            }
+            session.fleet_up(id, None);
+            let npc = session.space.npc(id).expect("there");
+            assert!(session.is_escort(id), "{capacity:?} bribed {bribed}");
+            assert_eq!(npc.carrier, None, "{capacity:?} bribed {bribed}");
+            assert_eq!(
+                npc.original_ai_type(),
+                crate::traffic::original_ai_type::ESCORT_AI,
+                "{capacity:?} bribed {bribed}"
+            );
+            assert_eq!(
+                (gauges(npc)[0].1, gauges(npc)[1].1),
+                CLASS,
+                "{capacity:?} bribed {bribed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_bribed_lost_fighters_rejoin_writes_five_over_the_bribe_and_holds_a_fighters_again() {
+    // The bribe's 1 (`_DoCommDialog` @0x961f8) holds its class's; the
+    // rejoin's 5 (@0x33b32, `fall_in`'s `Npc::overwrite_bribe` and
+    // `Session::enlist`'s carrier) gives a fighter's back.
+    let catalog = self_repairing();
     for (capacity, (shield, armor)) in [(RuleSource::Engine, SCALED), (RuleSource::Bible, CLASS)] {
         let mut session = players_launched(&catalog, capacity);
         let id = fleet_npcs(&session)[0].id;
         session.space.npc_mut(id).expect("out").reserves.armor.now = 1.0;
         work(&mut session, &catalog, Controls::default());
         assert!(session.pilot().escorts().is_empty(), "lost");
-        session.space.npc_mut(id).expect("out").leave_carrier();
-        session.self_repair(Rules::default(), &mut Draws::of(&[0]));
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.take_bribe();
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::BRIBED_AI
+        );
+        assert_eq!((gauges(npc)[0].1, gauges(npc)[1].1), CLASS, "{capacity:?}");
+        assert_eq!(npc.shield_recharge(capacity), 0.125, "{capacity:?}");
+        session.repair_at_turn(id, Rules::default(), &mut Draws::of(&[0]));
+        assert_eq!(session.pilot().escorts().len(), 1, "rejoined");
         let npc = session.space.npc(id).expect("there");
-        assert!(npc.carrier.is_some(), "{capacity:?}: carried again");
+        assert!(!npc.spared, "{capacity:?}: the bribe overwritten");
+        assert_eq!(
+            npc.original_ai_type(),
+            crate::traffic::original_ai_type::FIGHTER_AI,
+            "{capacity:?}"
+        );
         assert_eq!(
             (gauges(npc)[0].1, gauges(npc)[1].1),
             (shield, armor),

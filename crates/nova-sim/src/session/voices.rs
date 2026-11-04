@@ -213,9 +213,22 @@ impl Space {
     /// `lost`, is led only until the strike that lost it, as `_DamageShip`
     /// takes it out of the fleet as that hit lands (@0x3afdd).
     ///
-    /// The original speaks inside each hit; these settle after the
-    /// phase's hits, before anything else reads or writes the channel, so
-    /// the difference crosses no boundary the player hears.
+    /// The original speaks inside each hit, after its `_DamageShip`
+    /// (@0x36c7a), reading the speaker's target and goal live (+0x70
+    /// @0x36cd2, `_IsShipAttacking` @0x36ce5). These settle at the top of
+    /// the settle at the stop after that hit ([`Session::settle_landed`]):
+    /// after every earlier hit's answer, which the stops before it ran
+    /// (see the `hit_turns` module), and before its own hit's answer,
+    /// which can't change who speaks. That answer writes the victim's
+    /// target, and a speaker would have to target itself; its lead's
+    /// (@0x3bd79), but only for a lead that isn't attacking, which the
+    /// block never makes attacking, so that lead fails @0x36ce5 before and
+    /// after; and the Good Samaritans' target and goal, but those are AI
+    /// 3-4 ships not attacking (@0x8289f-0x828bb), so they fail @0x36ce5
+    /// before the call, and target the player after it. So the speaker is
+    /// the original's.
+    ///
+    /// [`Session::settle_landed`]: super::Session::settle_landed
     pub(super) fn speak_victories(
         &mut self,
         statics: &Statics,
@@ -1245,6 +1258,91 @@ pub(super) mod tests {
             "lost by that hit: still led"
         );
         assert_eq!(said(&mut session, 2), Some(4), "lost after");
+    }
+
+    /// One pass's collision passes, each direct hit answered by Nova's AI
+    /// before the next, over [`attacking`]'s warship escort S, attacking a
+    /// far ship Z, and the victim E disabled 150 below S, so walked after
+    /// it (`_escortLayer`, then `_disabledLayer`): the player's two shots
+    /// set on their last moves, the second ending on E and finishing it,
+    /// the first, when `e_fires`, made E's, ending on S. The set of the
+    /// victory queued on the voice channel, if any.
+    fn victory_after_an_answer(e_fires: bool) -> Option<u8> {
+        use crate::geometry::Vec2;
+        let catalog = armed_voiced();
+        let (mut session, victim) = attacking(&catalog, &[WARSHIP]);
+        let crate::combat::ShipRef::Npc(e) = victim else {
+            panic!("an NPC")
+        };
+        let far = Vec2::new(5000.0, 5000.0);
+        session.space.npc_mut(e).expect("there").state.position = far;
+        session.hold_fire(true, false);
+        for _ in 0..10 {
+            if session.shots().len() >= 2 {
+                break;
+            }
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Keep,
+                Rules::default(),
+                &mut NeverFires,
+            );
+        }
+        assert_eq!(session.shots().len(), 2, "fired");
+        session.hold_fire(false, false);
+        let mut quarry = crate::testkit::npc(0, ShipStats::default());
+        quarry.state.position = Vec2::new(-5000.0, -5000.0);
+        let z = session.space.traffic.add_npc_at(quarry, 9);
+        let z = crate::combat::ShipRef::Npc(z);
+        let s = escort_npc(&mut session, 0);
+        s.goal = Goal::Attack(z);
+        s.target = Some(z);
+        let s_at = Vec2::new(400.0, 0.0);
+        s.state.position = s_at;
+        let s = s.id;
+        let e_at = s_at + Vec2::new(0.0, 150.0);
+        let npc = session.space.npc_mut(e).expect("there");
+        npc.state.position = e_at;
+        npc.condition = crate::combat::hull::Condition::Disabled;
+        session.prepare_all_sprites();
+        let step = Vec2::new(10.0, 0.0);
+        let shots = session.space.combat.shots_mut();
+        let (first, second) = shots.split_at_mut(1);
+        let (first, second) = (&mut first[0], &mut second[0]);
+        if e_fires {
+            first.firer = victim;
+            first.fleet = victim;
+            first.aimed_at = Some(crate::combat::ShipRef::Npc(s));
+            first.moved_from = Some(s_at - step);
+            first.position = s_at;
+        } else {
+            let off = Vec2::new(-3000.0, 3000.0);
+            first.moved_from = Some(off - step);
+            first.position = off;
+        }
+        second.aimed_at = Some(victim);
+        second.moved_from = Some(e_at - step);
+        second.position = e_at;
+        session.space.voice = crate::voice::VoiceChannel::default();
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        let ai = crate::ai::NovaAi::default();
+        session.collision_passes(&ai, pass, Rules::default(), &mut NeverFires);
+        let e = session.space.npc(e).expect("there until the take-out");
+        assert!(e.condition.dying_or_destroyed(e.reserves.armor), "{e:?}");
+        session.space.voice.pending().and_then(|speech| speech.set)
+    }
+
+    #[test]
+    fn an_escort_an_earlier_hit_of_the_pass_turned_on_the_victim_says_the_victory() {
+        // `_HandleShipHit`'s victory reads the speaker's +0x70 and goal
+        // live (@0x36cd2, `_IsShipAttacking` @0x36ce5) after the finishing
+        // hit's `_DamageShip` (@0x36c7a): E's earlier hit on S, answered
+        // before it, set S's target to E (@0x3bcf6) and left its goal
+        // attacking Z.
+        assert_eq!(victory_after_an_answer(true), Some(3), "S targets E");
+        assert_eq!(victory_after_an_answer(false), None, "S targets Z");
     }
 
     #[test]

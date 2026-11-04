@@ -445,7 +445,9 @@ fn unworded(
     // Inspecting (state 7: its search needs state 1 or below, or 0x14,
     // @0x8cc6d-0x8cc7d, and its provoked branch leaves state 7 out,
     // @0x8cc0d; its re-pick comes after, see `interceptor`), it answers
-    // only a provoker it keeps. An inspection this think ends (within
+    // only a provoker it keeps, which only `inspection_hit`'s other
+    // reading leaves it: by the engine the interceptor reads a hit's target
+    // as its inspection's ship. An inspection this think ends (within
     // reach or gone) leaves it the search.
     if inspection_holds(npc, around) {
         return Err(Hunt {
@@ -576,6 +578,8 @@ impl Hunt {
             visits: None,
             re_picked: false,
             looked_over: None,
+            inspection_pick: None,
+            forgets_inspected: false,
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,
@@ -790,6 +794,8 @@ impl Behaviour for Warship {
             // The fully-dry drop's +0x70 -1 (@0x8c111).
             clears_target: decision.clears_target || dry,
             holds_target: decision.holds_target.filter(|_| !dry),
+            // Its sub 0 (@0x8c108).
+            writes_sub: decision.writes_sub || dry,
             ..decision
         }
     }
@@ -1873,6 +1879,8 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 looked_over: None,
+                inspection_pick: None,
+                forgets_inspected: false,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2439,6 +2447,8 @@ mod tests {
             visits: None,
             re_picked: false,
             looked_over: None,
+            inspection_pick: None,
+            forgets_inspected: false,
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,
@@ -2548,6 +2558,8 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 looked_over: None,
+                inspection_pick: None,
+                forgets_inspected: false,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2581,6 +2593,8 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 looked_over: None,
+                inspection_pick: None,
+                forgets_inspected: false,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2693,9 +2707,10 @@ mod tests {
             Decision {
                 travel: TravelWrite::Clear,
                 clears_target: true,
+                writes_sub: true,
                 ..turning(Goal::Idle, true)
             },
-            "fully dry without 0x0080, it drops the player at once, +0x70 and +0x6c -1 (@0x8c111, @0x8c117)"
+            "fully dry without 0x0080, it drops the player at once, sub 0, +0x70 and +0x6c -1 (@0x8c108, @0x8c111, @0x8c117)"
         );
     }
 
@@ -2972,11 +2987,18 @@ mod tests {
         let mut hunter = short_of_ammo(trader_cop(false), AmmoLeft::Dry, false);
         hunter.goal = Goal::Attack(n(2));
         hunter.target = Some(n(2));
-        let decision = decision_of(0, &[hunter, pirate()], 0);
+        let decision = decision_of(0, &[hunter.clone(), pirate()], 0);
         assert_eq!(
             (decision.goal, decision.travel, decision.clears_target),
             (Goal::Idle, TravelWrite::Clear, true)
         );
+        // The sub 0 (@0x8c108) ends a gate entry under the wait
+        // (`waiting_think`).
+        assert!(decision.writes_sub, "sub 0 (@0x8c108)");
+        let armed = short_of_ammo(hunter, AmmoLeft::OnlyUnlimited, false);
+        let kept = decision_of(0, &[armed, pirate()], 0);
+        assert_eq!(kept.goal, Goal::Attack(n(2)), "no drop");
+        assert!(!kept.writes_sub, "no sub written");
     }
 
     #[test]

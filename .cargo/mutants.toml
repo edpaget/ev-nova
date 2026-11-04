@@ -645,7 +645,7 @@ exclude_re = [
     # `_HandleShot`'s walk: one visit past the last slot held or holding a
     # shot finds neither, and a sub-munition never takes the visited slot,
     # which its parent still holds as it releases.
-    "nova-sim-combat/src/combat/expiry\\.rs:.*replace < with <= in Combat::visit_slots$",
+    "nova-sim-combat/src/combat/expiry\\.rs:.*replace < with <= in Combat::shot_stretch$",
     # A berth holds one ship, so a fighter just put in the system never
     # shares its carrier's: `>` and `>=` pick the same fighters above it.
     "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",

@@ -86,4 +86,4 @@ pub use port_map::PortMap;
 pub use service::ServiceScreen;
 pub use shipyard::{ShipBaseImages, ShipMovieFiles, ShipOrder, ShipyardCatalog, ShipyardScreen};
 pub use trade::{ListColors, ListLooks, TradeScreen};
-pub use view::{PortDialog, SpaceportView};
+pub use view::{CloseKeys, PortDialog, SpaceportView};

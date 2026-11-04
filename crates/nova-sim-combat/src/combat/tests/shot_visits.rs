@@ -26,7 +26,7 @@ fn flak() -> WeaponRecord {
 
 /// A shot of the player's of `record` whose last move, ending at `at`,
 /// spent it, aimed at nothing.
-fn spent(record: WeaponRecord, at: Vec2) -> Shot {
+pub(super) fn spent(record: WeaponRecord, at: Vec2) -> Shot {
     let mut shot = Shot::launch(
         WeaponSpec::new(&record),
         ShipRef::Player,
@@ -42,7 +42,7 @@ fn spent(record: WeaponRecord, at: Vec2) -> Shot {
 
 /// The player's homing missile at (-500, -100), aimed at `at`, whose next
 /// move takes its age past `LockAge`.
-fn locking_on(at: ShipRef) -> Shot {
+pub(super) fn locking_on(at: ShipRef) -> Shot {
     let mut shot = Shot::launch(
         WeaponSpec::new(&missile()),
         ShipRef::Player,
@@ -92,7 +92,7 @@ fn handle(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) -> Vec<(Sh
 }
 
 /// The targets of the seeking shell's sub-munitions (weapon 148).
-fn sub_targets(combat: &Combat) -> Vec<Option<ShipRef>> {
+pub(super) fn sub_targets(combat: &Combat) -> Vec<Option<ShipRef>> {
     combat
         .shots()
         .iter()
@@ -234,7 +234,7 @@ fn every_visits_blast_meets_a_struck_ship_where_it_is() {
 /// The player's homing missile at (0, -600), heading 90 with E straight
 /// below it, past its homing delay, chasing E: its roll of 71 against the
 /// first jamming type is jammed by 30 or more of it (@0x321b7-0x32275).
-fn homing_at_e() -> Shot {
+pub(super) fn homing_at_e() -> Shot {
     let mut shot = Shot::launch(
         WeaponSpec::new(&missile()),
         ShipRef::Player,

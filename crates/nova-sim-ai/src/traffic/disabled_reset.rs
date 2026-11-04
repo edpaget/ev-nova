@@ -774,4 +774,137 @@ mod tests {
         assert!(was_reset(led), "{led:?}");
         assert_eq!(led.leader, None);
     }
+
+    /// What the reset makes of a disabled ship's answer to a hit: the
+    /// Samaritan's write, or its own reaction as a victim.
+    mod answered_then_reset {
+        use super::*;
+        use crate::ai::fixture::{TRADERS, govts, player, ship};
+        use crate::combat::Strike;
+        use crate::combat::fixture::strike;
+        use crate::govt::Governments;
+        use crate::traffic::autopilot::HIT_WAIT;
+
+        const VICTIM: NpcId = NpcId(1);
+        const W: NpcId = NpcId(2);
+
+        fn world(govts: &Governments) -> World<'_> {
+            World {
+                player: Some(player(0.0, -100.0)),
+                govts,
+                ..World::new(&[])
+            }
+        }
+
+        /// A trader warship (1) and W (2), a disabled trader warship far
+        /// off, set up by `setup`.
+        fn traffic(setup: Setup) -> Traffic {
+            let mut traffic = Traffic::with_interval(1);
+            traffic.npcs = vec![
+                ship(1, TRADERS, AiType::Warship, 0.0, 0.0),
+                ship(2, TRADERS, AiType::Warship, 3000.0, 0.0),
+            ];
+            traffic.npcs[1].condition = Condition::Disabled;
+            setup(&mut traffic.npcs[1]);
+            traffic
+        }
+
+        /// `traffic` once it has answered `strikes` (checked by
+        /// `answered`), then run its think half, the dispatch heads among
+        /// it.
+        fn answered_and_thought(traffic: &mut Traffic, strikes: &[Strike], answered: Setup) {
+            let govts = govts(0, 0);
+            traffic.answer(&NovaAi::default(), &world(&govts), strikes);
+            let w = traffic.npcs_mut().iter_mut().find(|npc| npc.id == W);
+            answered(w.expect("there"));
+            traffic.think_holding(&Keep, world(&govts), &[], &mut NeverFires);
+        }
+
+        /// That `npc` took the Samaritan's write.
+        fn took_the_write(npc: &mut Npc) {
+            assert_eq!(npc.goal, Goal::Attack(ShipRef::Player), "{npc:?}");
+            assert_eq!(npc.target, Some(ShipRef::Player), "{npc:?}");
+        }
+
+        #[test]
+        fn the_reset_wipes_a_samaritans_write_at_the_ships_next_dispatch() {
+            // The write (@0x82b82, @0x82b97), then `_AIDispatch`'s reset
+            // (@0x8fece-0x8ff13).
+            let mut traffic = traffic(&|_| {});
+            let by_player = strike(ShipRef::Npc(VICTIM), ShipRef::Player);
+            answered_and_thought(&mut traffic, &[by_player], &took_the_write);
+            let w = of(&traffic, W);
+            assert!(was_reset(w), "{w:?}");
+        }
+
+        #[test]
+        fn the_reset_leaves_the_victims_cut_wait() {
+            // The wait cut (+0x4c @0x3be6e-0x3be7c), which the reset never
+            // writes; the target, the provocation and the goal it wipes.
+            let mut traffic = traffic(&|npc| npc.ai_wait = 300.0);
+            let on_w = strike(ShipRef::Npc(W), ShipRef::Player);
+            answered_and_thought(&mut traffic, &[on_w], &|npc| {
+                took_the_write(npc);
+                assert_eq!(npc.ai_wait, HIT_WAIT);
+                assert!(npc.provoked > 0.0);
+            });
+            let w = of(&traffic, W);
+            assert!(was_reset(w), "{w:?}");
+            assert_eq!(w.ai_wait, HIT_WAIT, "not reset");
+        }
+
+        #[test]
+        fn a_ship_on_the_jump_path_keeps_the_write_past_its_head() {
+            // Sub 4 or 0xd skips the reset (@0x8fd9a → 0x900d5).
+            let mut traffic = traffic(&|npc| npc.warp.goal = Some(WarpGoal::Own));
+            let by_player = strike(ShipRef::Npc(VICTIM), ShipRef::Player);
+            answered_and_thought(&mut traffic, &[by_player], &took_the_write);
+            let w = of(&traffic, W);
+            assert_eq!(w.goal, Goal::Attack(ShipRef::Player), "{w:?}");
+            assert_eq!(w.target, Some(ShipRef::Player), "{w:?}");
+        }
+
+        #[test]
+        fn a_paused_ship_the_write_takes_out_of_the_pause_is_reset() {
+            // Goal 4 over 0x13: the pause test (@0x8fe73) fails, so the
+            // reset reaches it.
+            let mut traffic = traffic(&|npc| npc.goal = Goal::Regroup { kept: Kept::Coast });
+            let by_player = strike(ShipRef::Npc(VICTIM), ShipRef::Player);
+            answered_and_thought(&mut traffic, &[by_player], &took_the_write);
+            let w = of(&traffic, W);
+            assert!(was_reset(w), "{w:?}");
+        }
+
+        #[test]
+        fn a_ship_waiting_in_its_gate_is_held_there_by_the_players_hit_then_reset() {
+            // `_AIMakeShipAttackPlayer`'s goal 4 over 0x15 holds it at the
+            // gate (`Npc::hold_at_gate`); the reset then ends the gate goal
+            // where its wait runs on (`Npc::leaves_gate_goal`).
+            let mut traffic = traffic(&|npc| {
+                npc.ai_wait = 300.0;
+                npc.mode = Mode::Emerging { ticks_left: 60.0 };
+                npc.emerges_from = Some(crate::catalog::StellarId(310));
+            });
+            let on_w = strike(ShipRef::Npc(W), ShipRef::Player);
+            answered_and_thought(&mut traffic, &[on_w], &|npc| {
+                assert_eq!(
+                    npc.mode,
+                    Mode::HeldAtGate {
+                        ticks_left: HIT_WAIT
+                    }
+                );
+            });
+            let w = of(&traffic, W);
+            assert!(was_reset(w), "{w:?}");
+            assert_eq!(
+                w.mode,
+                Mode::HeldAtGate {
+                    ticks_left: HIT_WAIT
+                },
+                "the fly half counts it"
+            );
+            assert_eq!(w.emerges_from, None);
+            assert!(!w.emerging());
+        }
+    }
 }

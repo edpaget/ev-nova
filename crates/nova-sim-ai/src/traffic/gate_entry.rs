@@ -38,7 +38,7 @@
 //! - **The release** (@0x8dc94-0x8dd58): every other ship, active, whose
 //!   leader (+0x9a) is this one has its leader cleared, takes this ship's
 //!   AI type capped at 3 ([`released_ai_type`]), clears the stellar it
-//!   defends (+0x8c) and its target (+0x70), sets its provocation (+0x96)
+//!   defends (+0x8c, @0x8dd08) and its target (+0x70), sets its provocation (+0x96)
 //!   to -1 ([`RELEASED_PROVOCATION`]),
 //!   and heads for this gate with goal 0x14 and sub-goal 0. Disabled
 //!   followers are not skipped. While +0x4c is above 0
@@ -81,6 +81,12 @@
 //!   leaves. `_ShipVisibleToShip` tests goal 0x15 only, so a ship
 //!   entering a gate is seen, targeted and fought, and with +0x50 at 0 it
 //!   answers hails.
+//! - **Thinking while it fades**, `_AIDispatch` runs its type's think
+//!   whatever +0x4c (@0x8ff18-0x90016), and only the high level stops at
+//!   its head. A goal the think writes leaves the sub, so the ship still
+//!   leaves; a sub it writes ends the entry and the ship stays, and a think
+//!   that ends the wait flies it
+//!   ([`waiting_think`](crate::traffic::waiting_think)).
 //!
 //! None of this calls `PlaySound` or `_beepSnd`: state 1's hand-off and
 //! state 20 call `_GetStellarSpriteXSize` and `_FloatAbs`; sub 2 calls
@@ -100,13 +106,15 @@
 //!   A ship that comes in from the approach always has -1 (@0x8dc4e), and
 //!   so starts at 16. Only a ship whose AI wait has just run out and
 //!   which first thinks inside the box keeps 0, and leaves at once,
-//!   unfaded. The engine has no AI wait outside
-//!   [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting), which
-//!   decides nothing, so every entry starts at 16.
+//!   unfaded. A coasting ship
+//!   ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) thinks
+//!   through its wait, but its high level, where the box is tested, still
+//!   waits, and the engine runs the box only for a ship flying with no AI
+//!   wait, so every entry starts at 16. The one ship that would keep 0 is
+//!   plug-in-only (see the follow-up for `_DefenseShipAI` entering a gate
+//!   it defends).
 //! - **The 16-bit wraps** of dx and dy (`cwtl` @0x8dbb3, @0x8dbd5) and of
 //!   the reach (@0x8dbfa): wider numbers are kept.
-//! - **The release's +0x8c = -1** (@0x8dd08), never reached: the
-//!   ships released are led by this one, and a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
 //! - **Ships 1-63 only** (@0x8dc97-0x8dd58). The engine takes every NPC.
 //! - **The 16-bit blit** (+0xb0/+0xb4, @0x2c010-0x2c05c). It is drawn as
 //!   an alpha fade, as the emerge's is.
