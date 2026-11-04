@@ -5,3 +5,15 @@
 # builds alone.
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.0"
+
+# Spawned threads' stack: 8 MiB, the main stack nova.exe links with
+# (`MAIN_STACK_BYTES` in crates/nova-winres/src/link.rs) and the one
+# macOS and Linux give a main thread. libtest's default is 2 MiB, and
+# unoptimised `app::screen` tests in `nova` take 1-2 MiB on aarch64
+# macOS. MSVC's debug frames are larger, and on windows-2025 two
+# escort-defection tests overflowed (CI run 41679890620). rustc reads
+# this variable for its own threads too, and its default is 8 MiB, so a
+# smaller value here would shrink the compiler's stack as well. Remove
+# this once the debug frames are shrunk (rdm task
+# shrink-debug-stack-frames).
+RUST_MIN_STACK = "8388608"
