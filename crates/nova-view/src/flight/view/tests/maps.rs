@@ -6,7 +6,7 @@ use nova_sim::galaxy_map::{MapDrawing, MapLink};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::{
     CheatNumbers, Column, ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services,
-    Strip,
+    Strip, zoom_readout,
 };
 
 // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
@@ -1924,8 +1924,9 @@ fn numbered_panel() -> MapPanel {
 #[test]
 fn with_cheats_on_the_course_map_shows_the_panel_in_cheat_mode_and_the_zoom_readout() {
     // `_cheatsActive` (0xdeb60): the flight's panel, cheat mode applied by
-    // the core; the date's place reads trunc(1000 / 0.5625).
+    // the core; the date's place reads the readout of the map's own zoom.
     let view = faked_panel_cheats(numbered_panel(), true);
+    let readout = zoom_readout(place_of(&view.map).0).to_string();
     assert_eq!(view.map.panel(), Some(&numbered_panel().with_cheats()));
     let list = map_drawn(&view);
     assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("131"));
@@ -1936,7 +1937,7 @@ fn with_cheats_on_the_course_map_shows_the_panel_in_cheat_mode_and_the_zoom_read
             _ => None,
         })
         .collect();
-    assert!(texts.contains(&"1777".to_owned()), "{texts:?}");
+    assert!(texts.contains(&readout), "{texts:?}");
     assert!(!texts.contains(&"Jun 23, 1177".to_owned()), "{texts:?}");
 }
 

@@ -699,7 +699,14 @@ mod tests {
 
     #[test]
     fn the_zoom_readout_is_right_aligned_5_in_from_the_strips_right_in_the_dates_colour() {
-        // trunc(1000 / 0.5625) = 1777, 4 characters, 18 wide: 594 − 18 − 5.
+        // The readout's text is nova-sim's; this pins only where and in
+        // what colour the panel sets it: its right edge 5 in from the
+        // strip's right, on the date's line.
+        let zoom = 0.5625;
+        let readout = zoom_readout(zoom).to_string();
+        let width = MonoMetrics.width(PANEL_FONT, PANEL_SIZE, &readout);
+        #[allow(clippy::cast_precision_loss)] // Dialog pixels.
+        let x = INFO_STRIP.right as f32 - 5.0 - width;
         for strip in [
             Strip::HypergatePrompt {
                 prompt: "abcd".to_owned(),
@@ -718,7 +725,7 @@ mod tests {
                 &panel,
                 Point::new(0.0, 0.0),
                 Some(&MonoMetrics),
-                0.5625,
+                zoom,
             );
             let drawn: Vec<(String, f32, f32, Color)> = list
                 .iter()
@@ -732,7 +739,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(found(&drawn, "1777"), (571.0, 472.0, DATE), "{panel:?}");
+            assert_eq!(found(&drawn, &readout), (x, 472.0, DATE), "{panel:?}");
         }
     }
 }
