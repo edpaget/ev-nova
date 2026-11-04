@@ -31,7 +31,7 @@ fn offered_thrusting() -> AppScreen {
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     offer_as_a_hail_would(&mut screen);
     screen
 }
@@ -51,7 +51,7 @@ fn offer_as_a_hail_would(screen: &mut AppScreen) {
 
 /// Refuses the offer open over flight, which closes back to flight.
 fn refuse(screen: &mut AppScreen) {
-    tap(screen, Key::Char('n'));
+    tap(screen, Key::KeyN);
     assert_eq!(screen.showing(), Showing::Flight, "closed");
 }
 
@@ -68,7 +68,7 @@ fn thrust_held_through_a_persons_offer_thrusts_after_its_close() {
 fn thrust_pressed_during_the_offer_and_still_down_at_its_close_thrusts() {
     let mut screen = offered_over_flight();
     let still = ship(&screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     refuse(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
@@ -77,7 +77,7 @@ fn thrust_pressed_during_the_offer_and_still_down_at_its_close_thrusts() {
 #[test]
 fn thrust_let_go_during_the_offer_doesnt() {
     let mut screen = offered_thrusting();
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     refuse(&mut screen);
     let closed = speed(&screen);
     screen.tick(TICK * 3);
@@ -89,7 +89,7 @@ fn a_thrust_key_let_go_after_the_close_stops_thrusting() {
     let mut screen = offered_thrusting();
     refuse(&mut screen);
     screen.tick(TICK);
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     let let_go = speed(&screen);
     screen.tick(TICK * 3);
     assert!(speed(&screen) <= let_go, "its release came live");
@@ -134,9 +134,9 @@ fn a_replayed_press_doesnt_bring_back_a_key_let_go() {
     screen.input(&key(MAP, true));
     tap(&mut screen, Key::Escape);
     assert!(flight(&screen).map_waiting(), "waiting");
-    screen.input(&key(Key::Up, false));
-    tap(&mut screen, Key::Up);
-    tap(&mut screen, Key::Char('n'));
+    screen.input(&key(Key::ArrowUp, false));
+    tap(&mut screen, Key::ArrowUp);
+    tap(&mut screen, Key::KeyN);
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Flight, "refused");
     let closed = speed(&screen);
@@ -181,7 +181,7 @@ fn thrust_held_through_the_comm_dialog_thrusts_after_its_close() {
     // `_HandlePlayerCommunication` @0x625ee.
     let mut screen = hailable(with_dialogs(boarding_data()));
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     hail(&mut screen);
     assert_eq!(screen.showing(), Showing::Comm);
     tap(&mut screen, Key::Escape);
@@ -198,8 +198,8 @@ fn thrust_held_through_the_plunder_dialog_thrusts_after_its_close() {
     fly(&mut screen);
     screen.tick(TICK);
     tap(&mut screen, Key::Tab);
-    screen.input(&key(Key::Up, true));
-    tap(&mut screen, Key::Char('b'));
+    screen.input(&key(Key::ArrowUp, true));
+    tap(&mut screen, Key::KeyB);
     assert_eq!(screen.showing(), Showing::Plunder);
     tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Flight, "aborted");
@@ -216,12 +216,12 @@ fn a_latched_key_held_across_the_offers_close_acts_only_once_pressed_again() {
     let mut screen = offered_over_flight();
     let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
     assert_eq!(target(&screen), None);
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     refuse(&mut screen);
     screen.tick(TICK * 8);
     assert_eq!(target(&screen), None, "held across the close: latched");
-    screen.input(&key(Key::Char('1'), false));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, false));
+    screen.input(&key(Key::Digit1, true));
     screen.tick(TICK * 8);
     assert_ne!(target(&screen), None, "pressed afresh");
 }
@@ -234,20 +234,20 @@ fn a_latched_key_held_across_the_offers_close_ignores_its_repeats_until_let_go()
     // set.
     let mut screen = offered_over_flight();
     let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     refuse(&mut screen);
     for _ in 0..4 {
         screen.tick(TICK * 2);
         screen.input(&Input::Key {
-            key: Key::Char('1'),
+            key: Key::Digit1,
             pressed: true,
             repeat: true,
         });
     }
     screen.tick(TICK * 8);
     assert_eq!(target(&screen), None, "repeats: still latched");
-    screen.input(&key(Key::Char('1'), false));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, false));
+    screen.input(&key(Key::Digit1, true));
     screen.tick(TICK * 8);
     assert_ne!(target(&screen), None, "pressed afresh");
 }
@@ -257,7 +257,7 @@ fn thrust_held_through_the_player_info_thrusts_after_its_close() {
     // `_HandlePlayer` @0x70393.
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     tap(&mut screen, PLAYER_INFO_KEY);
     assert_eq!(screen.showing(), Showing::PlayerInfo);
     tap(&mut screen, Key::Escape);
@@ -273,7 +273,7 @@ fn thrust_held_through_the_spaceport_thrusts_after_the_take_off() {
     // M, P and I.
     let mut screen = with_dialogs(data());
     land(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight, "took off");
     screen.tick(TICK * 3);
@@ -347,7 +347,7 @@ pub(super) fn texted_and_held() -> AppScreen {
 #[test]
 fn a_return_held_back_by_a_click_closes_the_text_at_the_release_and_flight_thrusts() {
     let mut screen = texted_and_held();
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     tap(&mut screen, Key::Enter);
     assert_eq!(screen.showing(), Showing::MissionText, "it waits");
     screen.input(&left(false, Point::new(1.0, 1.0)));
@@ -465,7 +465,7 @@ fn close_text(screen: &mut AppScreen) {
     assert_eq!(screen.showing(), Showing::Flight, "closed");
 }
 
-const SLOT_1: Key = Key::Char('1');
+const SLOT_1: Key = Key::Digit1;
 
 #[test]
 fn a_slot_key_pressed_under_a_mission_text_and_still_down_selects_after_its_close() {
@@ -587,7 +587,7 @@ fn a_slot_key_pressed_in_the_spaceport_and_held_past_the_take_off_waits_for_its_
     let mut screen = with_dialogs(game_data_fork_loaded());
     land(&mut screen);
     // L, which landed, let go: held, it would pick a stellar of its own.
-    screen.input(&key(Key::Char('l'), false));
+    screen.input(&key(Key::KeyL, false));
     screen.input(&key(SLOT_1, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight, "took off");
@@ -619,7 +619,7 @@ fn b_and_p_pressed_under_a_mission_text_board_and_p_waits_on_the_plunders_latch(
     screen.tick(TICK);
     tap(&mut screen, Key::Tab);
     text_over(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(PLAYER_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
     screen.tick(TICK);
@@ -675,7 +675,7 @@ fn b_pressed_under_a_dialog_boards_at_its_close() {
     screen.tick(TICK);
     tap(&mut screen, Key::Tab);
     offer_as_a_hail_would(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     refuse(&mut screen);
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::Plunder, "B boarded");

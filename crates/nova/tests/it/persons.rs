@@ -658,7 +658,7 @@ fn by_the_settings_other_reading_a_person_opens_the_hail_with_its_comm_quote() {
         Some(129),
         "Friend targeted"
     );
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Comm);
     assert_eq!(game.reply(), "Well met.");
@@ -676,9 +676,9 @@ fn a_unique_persons_kill_is_saved_on_landing_and_a_new_app_over_the_store_keeps_
     game.settle_until("both persons shot down", |game| game.persons().is_empty());
     game.key(Key::Space, false);
     // L requests clearance, a second L lands.
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.approach();
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");

@@ -233,8 +233,8 @@ impl<C: ShipCatalog> Screen for ShipBrowser<C> {
         } = input
         {
             match key {
-                Key::Right | Key::Down => self.select(true),
-                Key::Left | Key::Up => self.select(false),
+                Key::ArrowRight | Key::ArrowDown => self.select(true),
+                Key::ArrowLeft | Key::ArrowUp => self.select(false),
                 _ => {}
             }
         }
@@ -452,7 +452,13 @@ mod tests {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
         let mut visited = Vec::new();
-        for key in [Key::Right, Key::Right, Key::Right, Key::Left, Key::Left] {
+        for key in [
+            Key::ArrowRight,
+            Key::ArrowRight,
+            Key::ArrowRight,
+            Key::ArrowLeft,
+            Key::ArrowLeft,
+        ] {
             assert_eq!(browser.input(&press(key)), ScreenAction::None);
             visited.push(browser.selected().expect("a ship").0);
         }
@@ -466,7 +472,11 @@ mod tests {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
         let mut visited = Vec::new();
-        for input in [press(Key::Right), held(Key::Right), held(Key::Left)] {
+        for input in [
+            press(Key::ArrowRight),
+            held(Key::ArrowRight),
+            held(Key::ArrowLeft),
+        ] {
             assert_eq!(browser.input(&input), ScreenAction::None);
             visited.push(browser.selected().expect("a ship").0);
         }
@@ -477,10 +487,10 @@ mod tests {
     fn down_and_up_mirror_right_and_left() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
-        browser.input(&press(Key::Up));
+        browser.input(&press(Key::ArrowUp));
         assert_eq!(browser.selected(), Some(ShipId(130)));
-        browser.input(&press(Key::Down));
-        browser.input(&press(Key::Down));
+        browser.input(&press(Key::ArrowDown));
+        browser.input(&press(Key::ArrowDown));
         assert_eq!(browser.selected(), Some(ShipId(129)));
         assert_eq!(catalog.calls().len(), 4);
     }
@@ -491,10 +501,10 @@ mod tests {
         let mut browser = ShipBrowser::new(&catalog);
         browser.tick(tick() * 3);
         assert_eq!(browser.frame(), Some(3));
-        browser.input(&press(Key::Right));
+        browser.input(&press(Key::ArrowRight));
         assert_eq!(browser.frame(), Some(0));
         browser.tick(tick() * 2);
-        browser.input(&press(Key::Left));
+        browser.input(&press(Key::ArrowLeft));
         assert_eq!(browser.frame(), Some(0));
     }
 
@@ -505,20 +515,20 @@ mod tests {
         browser.tick(tick() * 2);
         let others = [
             Input::Key {
-                key: Key::Right,
+                key: Key::ArrowRight,
                 pressed: false,
                 repeat: false,
             },
             Input::Key {
-                key: Key::Left,
+                key: Key::ArrowLeft,
                 pressed: false,
                 repeat: false,
             },
             press(Key::Enter),
             press(Key::Escape),
             press(Key::Space),
-            press(Key::Char('d')),
-            press(Key::Other),
+            press(Key::KeyD),
+            press(Key::Unidentified),
             Input::PointerMoved(Point::new(1.0, 2.0)),
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -758,7 +768,7 @@ mod tests {
         let mut browser = ShipBrowser::new(&catalog);
         browser.tick(tick());
         assert_eq!(lights_alphas(&browser), [255], "tick 1");
-        browser.input(&press(Key::Right));
+        browser.input(&press(Key::ArrowRight));
         assert_eq!(lights_alphas(&browser), [0_u8; 0], "tick 0 again");
         browser.tick(tick());
         assert_eq!(lights_alphas(&browser), [255]);
@@ -813,7 +823,7 @@ mod tests {
     fn the_footer_counts_from_the_selected_ship() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
-        browser.input(&press(Key::Left));
+        browser.input(&press(Key::ArrowLeft));
         let texts = texts(&drawn(&browser));
         assert!(
             texts.contains(&"Ship 3 of 3 (shïp 130) - Left/Right to browse".to_owned()),
@@ -1012,7 +1022,12 @@ mod tests {
     fn an_empty_catalog_says_so_and_ignores_keys() {
         let catalog = FakeCatalog::default();
         let mut browser = ShipBrowser::new(&catalog);
-        for key in [Key::Right, Key::Left, Key::Up, Key::Down] {
+        for key in [
+            Key::ArrowRight,
+            Key::ArrowLeft,
+            Key::ArrowUp,
+            Key::ArrowDown,
+        ] {
             assert_eq!(browser.input(&press(key)), ScreenAction::None);
         }
         browser.tick(tick());

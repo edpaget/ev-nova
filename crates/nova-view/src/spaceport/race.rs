@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn with_alt_held_a_racer_asks_the_bet_titled_bet_at_the_asked_most() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(1));
         assert_eq!(screen.take_bet(), None, "asked first");
         let asking = screen.quantity().expect("asking");
@@ -837,7 +837,7 @@ mod tests {
             ButtonStyle::STOCK,
             5,
         );
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let _ = screen.take_sounds();
         screen.input(&Input::Text('9'));
@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_lets_go_of_alt() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         screen.release_keys();
         click(&mut screen, racer_item(0));
         assert!(screen.quantity().is_none(), "no ask");
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn an_asked_cancel_bets_nothing_and_lets_the_racer_go() {
         let mut screen = open();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         click_quantity(&mut screen, CANCEL_ITEM);
         assert_eq!(screen.take_bet(), None);
@@ -892,7 +892,7 @@ mod tests {
         let _ = screen.take_bet();
         screen.show_result(0, 4_000);
         screen.reveal();
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(2));
         assert!(screen.quantity().is_some(), "asked");
         click_quantity(&mut screen, OK_ITEM);
@@ -908,7 +908,7 @@ mod tests {
         screen.show_result(1, 70);
         screen.reveal();
         click(&mut screen, racer_item(0));
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let field = screen
             .quantity()
@@ -926,7 +926,7 @@ mod tests {
         screen.reveal();
         screen.winnings_collected(4_000);
         click(&mut screen, racer_item(0));
-        screen.input(&key(Key::Alt, true, false));
+        screen.input(&key(Key::AltLeft, true, false));
         click(&mut screen, racer_item(0));
         let field = screen
             .quantity()
@@ -973,8 +973,8 @@ mod tests {
     fn the_bars_keys_do_nothing_in_the_race() {
         let mut screen = open();
         for pressed in [
-            Key::Char('g'),
-            Key::Char('r'),
+            Key::KeyG,
+            Key::KeyR,
             crate::flight::view::MAP_KEY,
             crate::ui::mission_info::MISSION_INFO_KEY,
             crate::ui::player_info::PLAYER_INFO_KEY,
@@ -994,7 +994,7 @@ mod tests {
                 RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
             assert_eq!(screen.problem(), Some("no DLOG 1023"));
             assert!(texts(&screen)[0].contains("no DLOG 1023"));
-            screen.input(&key(Key::Char('g'), true, false));
+            screen.input(&key(Key::KeyG, true, false));
             assert!(!screen.closed());
             screen.input(&key(leave, true, false));
             assert!(screen.closed(), "{leave:?}");

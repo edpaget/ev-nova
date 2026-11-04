@@ -1130,9 +1130,9 @@ fn closing_the_hire_screen_or_the_outfitter_sends_its_close() {
 /// Holds Command (and Option, when `option`) as the jettison key is
 /// pressed, then lets go of them: what the next step is given of it.
 fn jettison_key(view: &mut Faked, option: bool) -> Option<bool> {
-    view.held.insert(Key::Command);
+    view.held.insert(Key::MetaLeft);
     if option {
-        view.held.insert(Key::Alt);
+        view.held.insert(Key::AltLeft);
     }
     view.jettison();
     view.held.clear();
@@ -1149,7 +1149,7 @@ fn command_k_jettisons_everything_on_the_next_step() {
     let mut view = faked(in_sol());
     assert_eq!(jettison_key(&mut view, false), Some(true));
     assert_eq!(sent_but_lines(&view), [], "no command");
-    assert_eq!(JETTISON_KEY, Key::Char('k'));
+    assert_eq!(JETTISON_KEY, Key::KeyK);
     assert_eq!(MISSION_FAILED, "Mission failed.");
     assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
 }
@@ -1169,7 +1169,7 @@ fn command_option_k_keeps_the_mission_cargo() {
 fn k_without_command_jettisons_nothing() {
     let mut view = faked(in_sol());
     view.jettison();
-    view.held.insert(Key::Alt);
+    view.held.insert(Key::AltLeft);
     view.jettison();
     assert_eq!(sent(&view), [], "K alone, then Option-K");
     view.tick(TICK);

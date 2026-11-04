@@ -31,11 +31,8 @@ fn f_enters_flight_from_each_screen_and_escape_goes_back_to_it() {
 #[test]
 fn an_f_repeat_or_release_does_not_enter_flight() {
     let mut screen = AppScreen::new(data());
-    assert_eq!(screen.input(&held(Key::Char('f'))), ScreenAction::None);
-    assert_eq!(
-        screen.input(&key(Key::Char('f'), false)),
-        ScreenAction::None
-    );
+    assert_eq!(screen.input(&held(Key::KeyF)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyF, false)), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::ShipBrowser);
     assert!(screen.flight_view().is_none());
 }
@@ -72,7 +69,7 @@ fn tab_in_flight_targets_ships_not_stellars_and_stays_in_flight() {
 fn the_flight_keys_fly_the_ship_and_flight_resumes_where_it_left_off() {
     let mut screen = AppScreen::new(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
     let flown = ship(&screen);
     assert!(flown.position.y < 0.0, "{flown:?}");
@@ -82,7 +79,7 @@ fn the_flight_keys_fly_the_ship_and_flight_resumes_where_it_left_off() {
         "the keys went to flight"
     );
     screen.input(&key(Key::Escape, true));
-    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::KeyF, true));
     assert_eq!(ship(&screen), flown, "the same flight");
 }
 
@@ -102,20 +99,20 @@ fn only_flight_with_nothing_over_it_hides_the_system_pointer() {
 fn entering_and_leaving_flight_let_go_of_the_keys_held() {
     let mut screen = AppScreen::new(data());
     enter(&mut screen, 128);
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     fly(&mut screen);
     // Right's release goes to flight.
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, false));
     screen.input(&key(Key::Escape, true));
     screen.tick(Duration::from_millis(250));
     assert_eq!(camera(&screen), Point::new(0.0, 0.0), "no drift");
 
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 5);
     screen.input(&key(Key::Escape, true));
     // Up's release goes to the system view.
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     fly(&mut screen);
     let coasting = ship(&screen);
     screen.tick(TICK * 5);
@@ -148,7 +145,7 @@ fn entering_flight_cancels_a_drag_on_the_map() {
 fn only_flight_ticks_while_it_is_shown() {
     let mut screen = AppScreen::new(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     // The first tick is held at rest by the new session's box of none.
     screen.tick(TICK * 2);
     assert_eq!(screen.ship_browser().frame(), Some(0), "paused");
@@ -162,8 +159,8 @@ fn only_flight_ticks_while_it_is_shown() {
 
 /// Taps the stellar slot key 1, which flight acts on at its next frame.
 fn tap_slot_key(screen: &mut AppScreen) {
-    screen.input(&key(Key::Char('1'), true));
-    screen.input(&key(Key::Char('1'), false));
+    screen.input(&key(Key::Digit1, true));
+    screen.input(&key(Key::Digit1, false));
 }
 
 #[test]
@@ -205,7 +202,7 @@ fn a_slot_key_left_in_a_hidden_flight_is_not_queued_input() {
 fn releasing_the_keys_reaches_flight() {
     let mut screen = AppScreen::new(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.release_keys();
     screen.tick(TICK * 3);
     assert_eq!(ship(&screen), nova_sim::ShipState::default());
@@ -295,7 +292,7 @@ fn tab_cycles_the_flight_maps_selection_and_f_and_i_do_nothing() {
             .map(nova_sim::Session::nav_mode)
     };
     assert_eq!(nav(&screen), Some(nova_sim::NavMode::Off));
-    for k in [Key::Tab, Key::Char('f'), Key::Char('i')] {
+    for k in [Key::Tab, Key::KeyF, Key::KeyI] {
         assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
     }
@@ -345,10 +342,10 @@ fn flights_sounds_come_through_the_router() {
     let mut screen = with_dialogs(data());
     assert_eq!(screen.take_sounds(), []);
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 2);
     assert_eq!(screen.take_sounds(), [Sound::Sim(SimSound::ThrustStarted)]);
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.tick(TICK * 2);
     assert_eq!(screen.take_sounds(), [Sound::Sim(SimSound::ThrustStopped)]);
     assert_eq!(screen.take_sounds(), [], "taken");

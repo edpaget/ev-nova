@@ -242,7 +242,7 @@ fn while_a_movie_plays_flight_takes_no_key_and_steps_not() {
 fn a_skip_ends_the_landing_movie_and_what_else_was_pressed_waits_for_the_spaceport() {
     let (mut view, player) = filming(filmed(&[129], &[]), true);
     land_on_mars(&mut view);
-    view.input(&key(Key::Char('b'), true));
+    view.input(&key(Key::KeyB, true));
     assert!(view.playing());
     view.input(&key(Key::Space, true));
     assert!(!view.playing(), "skipped");
@@ -251,9 +251,9 @@ fn a_skip_ends_the_landing_movie_and_what_else_was_pressed_waits_for_the_spacepo
     assert_eq!(view.take_movie_replay(), [], "a skip flushes the queue");
     let (mut view, _) = filming(filmed(&[129], &[]), true);
     land_on_mars(&mut view);
-    view.input(&key(Key::Char('b'), true));
+    view.input(&key(Key::KeyB, true));
     run_out(&mut view);
-    assert_eq!(view.take_movie_replay(), [key(Key::Char('b'), true)]);
+    assert_eq!(view.take_movie_replay(), [key(Key::KeyB, true)]);
     assert_eq!(view.take_movie_replay(), [], "taken");
 }
 
@@ -482,31 +482,31 @@ fn an_unlatched_key_pressed_under_a_gate_movie_reads_down_after_the_come_out() {
         arrived(),
     );
     assert!(view.playing());
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+    assert!(view.held.contains(&Key::ArrowUp), "down: {:?}", view.held);
 }
 
 #[test]
 fn one_let_go_under_the_movie_doesnt() {
     let (mut view, _) = filming(filmed(&[300], &[]), true);
-    super::faked_flight::hold(&mut view, Key::Up, true);
+    super::faked_flight::hold(&mut view, Key::ArrowUp, true);
     into_the_wormhole(
         &mut view,
         Some(ScreenAnswer::GateEntryDesc(Some(300))),
         arrived(),
     );
-    view.input(&key(Key::Up, false));
+    view.input(&key(Key::ArrowUp, false));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(!view.held.contains(&Key::Up));
+    assert!(!view.held.contains(&Key::ArrowUp));
 }
 
 #[test]
 fn an_unlatched_key_held_through_the_hypergates_map_and_movie_reads_down_after_the_come_out() {
     let (mut view, _) = filming(filmed(&[131], &[]), true);
-    super::faked_flight::hold(&mut view, Key::Up, true);
+    super::faked_flight::hold(&mut view, Key::ArrowUp, true);
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
@@ -521,7 +521,7 @@ fn an_unlatched_key_held_through_the_hypergates_map_and_movie_reads_down_after_t
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     view.sim.queue_answer(arrived());
     run_out(&mut view);
-    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+    assert!(view.held.contains(&Key::ArrowUp), "down: {:?}", view.held);
 }
 
 #[test]
@@ -613,12 +613,12 @@ fn a_skip_flushes_the_queue_but_not_a_key_still_down() {
         Some(ScreenAnswer::GateEntryDesc(Some(300))),
         arrived(),
     );
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     view.input(&key(Key::Enter, true));
     assert!(!view.playing(), "skipped");
     assert_eq!(view.take_movie_replay(), [], "flushed");
-    assert!(view.held.contains(&Key::Up), "polled: {:?}", view.held);
+    assert!(view.held.contains(&Key::ArrowUp), "polled: {:?}", view.held);
 }
 
 #[test]

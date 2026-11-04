@@ -311,10 +311,10 @@ mod tests {
         host.open("row", fake);
         assert!(host.is_open());
         let mut sounds = Vec::new();
-        host.input(&key(Key::Char('2')), &mut sounds);
+        host.input(&key(Key::Digit2), &mut sounds);
         host.input(&key(Key::Enter), &mut sounds);
         host.input(&key(Key::Escape), &mut sounds);
-        assert_eq!(log.borrow().inputs, [key(Key::Char('2')), key(Key::Enter)]);
+        assert_eq!(log.borrow().inputs, [key(Key::Digit2), key(Key::Enter)]);
     }
 
     #[test]
@@ -322,7 +322,7 @@ mod tests {
         let mut host = ModalHost::default();
         let (fake, _log) = FakeDialog::new([None::<u32>]);
         host.open("row", fake);
-        assert_eq!(host.input(&key(Key::Char('2')), &mut Vec::new()), None);
+        assert_eq!(host.input(&key(Key::Digit2), &mut Vec::new()), None);
         assert!(host.is_open());
         assert!(host.dialog().is_some());
     }
@@ -404,7 +404,7 @@ mod tests {
         let (fake, _log) = FakeDialog::new([None, Some(5_u32)]);
         host.open("row", fake.sounding([vec![DOWN], vec![ALERT, UP]]));
         let mut sounds = vec![UP];
-        host.input(&key(Key::Char('9')), &mut sounds);
+        host.input(&key(Key::Digit9), &mut sounds);
         assert_eq!(sounds, [UP, DOWN]);
         assert_eq!(host.input(&key(Key::Enter), &mut sounds), Some(("row", 5)));
         assert_eq!(sounds, [UP, DOWN, ALERT, UP]);
@@ -485,7 +485,7 @@ mod tests {
             .center();
         host.input(&left(true, done), &mut Vec::new());
         host.input(&key(Key::Enter), &mut Vec::new());
-        host.input(&key(Key::Char('b')), &mut Vec::new());
+        host.input(&key(Key::KeyB), &mut Vec::new());
         host.cancel_pointer();
     }
 
@@ -521,7 +521,7 @@ mod tests {
         host.open((), desc());
         cancelled_with_a_return(&mut host);
         host.tick(Duration::ZERO);
-        assert_eq!(host.take_unclaimed(), [key(Key::Char('b'))]);
+        assert_eq!(host.take_unclaimed(), [key(Key::KeyB)]);
         assert_eq!(host.take_unclaimed(), [], "once");
     }
 
@@ -529,7 +529,7 @@ mod tests {
     fn the_desc_dialog_reports_done_once_as_a_modal() {
         for input in [key(Key::Enter), key(Key::Escape)] {
             let mut dialog = desc();
-            dialog.input(&key(Key::Down));
+            dialog.input(&key(Key::ArrowDown));
             assert_eq!(dialog.take_outcome(), None, "{input:?}");
             dialog.input(&input);
             assert_eq!(dialog.take_outcome(), Some(()), "{input:?}");
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(dialog.take_outcome(), None);
         let mut host = ModalHost::default();
         host.open((), desc());
-        assert_eq!(host.input(&key(Key::Char('i')), &mut Vec::new()), None);
+        assert_eq!(host.input(&key(Key::KeyI), &mut Vec::new()), None);
         assert!(host.is_open());
         assert_eq!(
             host.input(&key(Key::Enter), &mut Vec::new()),

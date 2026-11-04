@@ -422,7 +422,7 @@ pub const HINT_COLOR: Color = Color::DIM;
 
 /// The key that, with Command held, opens the Preferences on every side:
 /// the Mac's Command+comma.
-pub const PREFERENCES_KEY: Key = Key::Char(',');
+pub const PREFERENCES_KEY: Key = Key::Comma;
 
 /// The key a menu command's Command chord presses: Q for Quit (Command-Q,
 /// see [`AppScreen::route`]) and [`PREFERENCES_KEY`] for Preferences…;
@@ -433,7 +433,7 @@ pub const PREFERENCES_KEY: Key = Key::Char(',');
 #[must_use]
 pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
     match command {
-        MenuCommand::Quit => Some(Key::Char('q')),
+        MenuCommand::Quit => Some(Key::KeyQ),
         MenuCommand::Preferences => Some(PREFERENCES_KEY),
         MenuCommand::About => None,
     }

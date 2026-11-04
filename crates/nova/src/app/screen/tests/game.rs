@@ -346,7 +346,7 @@ fn a_wrong_version_save_closes_the_list_and_shows_str_140_34_over_the_held_game(
     screen.take_warnings();
     choose(&mut screen, MenuChoice::OpenPilot);
     assert_eq!(screen.pilot_list().expect("open").keys(), ["Ada", "Bea"]);
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     screen.input(&key(Key::Enter, true));
     assert!(screen.pilot_list().is_none(), "the list closed");
     assert_eq!(screen.showing(), Showing::Note);
@@ -386,7 +386,7 @@ fn an_unreadable_pilot_closes_the_list_silently_with_a_warning() {
     screen.take_warnings();
     screen.take_sounds();
     choose(&mut screen, MenuChoice::OpenPilot);
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::MainMenu, "nothing shown");
     assert!(screen.pilot_list().is_none());
@@ -638,9 +638,9 @@ fn by_the_engine_escape_returns_with_the_pilot_held_and_enter_resumes_it() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     let left = ship(&screen).position;
     let writes = store.writes();
     escape_to_menu(&mut screen);
@@ -663,8 +663,8 @@ fn by_the_other_reading_escape_in_flight_does_nothing() {
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(store.writes(), writes, "nothing saved");
-    screen.input(&key(Key::Char('m'), true));
-    screen.input(&key(Key::Char('m'), false));
+    screen.input(&key(Key::KeyM, true));
+    screen.input(&key(Key::KeyM, false));
     assert_eq!(screen.showing(), Showing::FlightMap);
     screen.input(&key(Key::Escape, true));
     assert_eq!(
@@ -681,7 +681,7 @@ fn x_expands_the_loaded_pilots_tags() {
     let store = MemoryPilots::new();
     let mut screen = holding_menu(&store);
     create_held(&mut screen, "Ada");
-    screen.input(&key(Key::Char('x'), true));
+    screen.input(&key(Key::KeyX, true));
     screen.keyed_click_ended();
     assert_eq!(
         about(&screen).lines(),
@@ -694,12 +694,12 @@ fn x_expands_the_loaded_pilots_tags() {
 fn the_about_text_resolves_its_conditional_text_for_the_loaded_pilot() {
     let store = MemoryPilots::new();
     let mut screen = holding_menu(&store);
-    screen.input(&key(Key::Char('a'), true));
+    screen.input(&key(Key::KeyA, true));
     screen.keyed_click_ended();
     assert_eq!(about(&screen).lines()[3], "line 3", "before any pilot");
     screen.input(&key(Key::Enter, true));
     create_held(&mut screen, "Ada");
-    screen.input(&key(Key::Char('a'), true));
+    screen.input(&key(Key::KeyA, true));
     screen.keyed_click_ended();
     assert_eq!(about(&screen).lines()[2], "line 2 Ada [Error]");
     assert_eq!(about(&screen).lines()[3], "line 3 him", "Ada is male");
@@ -725,9 +725,9 @@ fn held_p_a_and_x_repeat_once_their_dialog_closes() {
     let store = MemoryPilots::new();
     let mut screen = holding_menu(&store);
     for (k, shown) in [
-        (Key::Char('a'), Showing::About),
-        (Key::Char('x'), Showing::Note),
-        (Key::Char('p'), Showing::Preferences),
+        (Key::KeyA, Showing::About),
+        (Key::KeyX, Showing::Note),
+        (Key::KeyP, Showing::Preferences),
     ] {
         ui_sounds(&mut screen);
         screen.input(&key(k, true));
@@ -763,7 +763,7 @@ fn the_load_note_opens_with_the_rulebooks_focus_ring() {
         let newer = nova_sim::save::CURRENT + 1;
         store.put("Bea", &format!(r#"{{"version": {newer}}}"#));
         choose(&mut screen, MenuChoice::OpenPilot);
-        screen.input(&key(Key::Down, true));
+        screen.input(&key(Key::ArrowDown, true));
         screen.input(&key(Key::Enter, true));
         assert_eq!(
             screen.load_note().map(|note| note.dialog().focus_ring()),

@@ -335,7 +335,7 @@ fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog 
     catalog.other_bars = vec![(129, bar_129())];
     catalog
 }
-const LAND: Key = Key::Char('l');
+const LAND: Key = Key::KeyL;
 
 /// Where the message's first line is drawn: the message box's
 /// top-left.
@@ -355,7 +355,7 @@ fn message_drawn(text: &str) -> DrawCommand {
     }
 }
 
-const JUMP: Key = Key::Char('j');
+const JUMP: Key = Key::KeyJ;
 
 fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -490,9 +490,9 @@ fn faked_map_click(view: &mut Faked, at: Point) -> bool {
 
 /// Shift-clicks at `at` on `view`'s open course map.
 fn faked_map_shift_click(view: &mut Faked, at: Point) {
-    faked_map_input(view, &key(Key::Shift, true));
+    faked_map_input(view, &key(Key::ShiftLeft, true));
     faked_map_click(view, at);
-    faked_map_input(view, &key(Key::Shift, false));
+    faked_map_input(view, &key(Key::ShiftLeft, false));
 }
 
 /// Where system `id` is on `view`'s course map, brought into item 3
@@ -825,7 +825,7 @@ fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
 fn now_tick(view: &FlightView<FakeCatalog, impl FlightSim>) -> u64 {
     u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
 }
-const HYPER_SELECT: Key = Key::Char('\\');
+const HYPER_SELECT: Key = Key::Backslash;
 
 use nova_sim::GateKind;
 

@@ -93,7 +93,7 @@ fn escape_and_other_keys_leave_the_question_open() {
     screen.close_requested();
     for input in [
         key(Key::Escape, true),
-        key(Key::Char('n'), true),
+        key(Key::KeyN, true),
         Input::Text('q'),
     ] {
         assert_eq!(screen.input(&input), ScreenAction::None, "{input:?}");
@@ -208,7 +208,7 @@ fn a_close_held_behind_a_click_waits_in_its_place_among_the_inputs() {
     // E, then A typed during its click: the close after A waits for A's
     // click too, and then lands on the About dialog A opened.
     screen.input(&Input::Text('e'));
-    screen.input(&key(Key::Char('a'), true));
+    screen.input(&key(Key::KeyA, true));
     assert!(!screen.close_requested());
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::MainMenu, "A's click plays");
@@ -273,29 +273,26 @@ fn command_q_quits_at_once_silently_wherever_it_is_pressed() {
     let store = MemoryPilots::new();
     let mut screen = asking_menu(&store);
     screen.take_sounds();
-    screen.input(&key(Key::Command, true));
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::Quit);
+    screen.input(&key(Key::MetaLeft, true));
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::Quit);
     assert_eq!(screen.take_sounds(), [], "no click");
     // A plain Q is the menu's Quit, which clicks and waits.
     let mut screen = asking_menu(&store);
     screen.take_sounds();
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::None);
     // Command-Q in flight, and over the question.
     let mut screen = asking_menu(&store);
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Command, true));
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::Quit);
+    screen.input(&key(Key::MetaLeft, true));
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::Quit);
     let mut screen = asking_menu(&store);
     screen.close_requested();
-    screen.input(&key(Key::Command, true));
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::Quit);
+    screen.input(&key(Key::MetaLeft, true));
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::Quit);
     // Its release quits nothing.
     let mut screen = asking_menu(&store);
-    screen.input(&key(Key::Command, true));
-    assert_eq!(
-        screen.input(&key(Key::Char('q'), false)),
-        ScreenAction::None
-    );
+    screen.input(&key(Key::MetaLeft, true));
+    assert_eq!(screen.input(&key(Key::KeyQ, false)), ScreenAction::None);
 }
 
 /// The updater's quit on Windows is the Quit command

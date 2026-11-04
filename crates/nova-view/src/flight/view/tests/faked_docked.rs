@@ -810,7 +810,7 @@ fn mapped() -> Faked {
 fn faked_port_click(view: &mut Faked, id: i16, shift: bool) {
     let at = faked_on_map(view, id);
     if shift {
-        view.port_map_input(&key(Key::Shift, true));
+        view.port_map_input(&key(Key::ShiftLeft, true));
     }
     for pressed in [true, false] {
         view.port_map_input(&Input::PointerButton {
@@ -820,7 +820,7 @@ fn faked_port_click(view: &mut Faked, id: i16, shift: bool) {
         });
     }
     if shift {
-        view.port_map_input(&key(Key::Shift, false));
+        view.port_map_input(&key(Key::ShiftLeft, false));
     }
 }
 

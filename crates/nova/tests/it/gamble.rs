@@ -522,7 +522,7 @@ impl Game {
     /// Lands at the pad: L requests clearance, the dock approach clears
     /// it, and a second L lands.
     fn land(&mut self) {
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         self.settle();
         self.settle_until("the dock approach's clearance", |game| {
             game.app
@@ -531,7 +531,7 @@ impl Game {
                 .and_then(|flight| flight.session().ok())
                 .is_some_and(nova_sim::Session::dock_cleared)
         });
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport);
     }
 
@@ -632,7 +632,7 @@ fn with_no_cash_gamble_shows_361_over_the_bar_and_its_close_returns_to_the_bar()
     let mut game = Game::flying_with(0);
     game.land();
     game.open_bar();
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     assert_eq!(
         game.text_shown().as_deref(),
         Some(nova_sim::gamble::NO_CASH_TO_BET)
@@ -650,7 +650,7 @@ fn with_cash_gamble_opens_the_race_and_a_bet_pays_once_its_text_closes() {
     game.land();
     game.open_bar();
     game.dial.set(0);
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let racer = game
         .bar()
         .and_then(|bar| bar.race_screen())
@@ -700,7 +700,7 @@ fn after_a_win_an_option_click_asks_the_bet_up_to_the_cash_credited() {
     game.land();
     game.open_bar();
     game.dial.set(0);
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let racer = game.racer(0);
     game.click(racer);
     assert_eq!(game.cash(), 0, "the bet taken");
@@ -712,7 +712,7 @@ fn after_a_win_an_option_click_asks_the_bet_up_to_the_cash_credited() {
     // A click lets the winner shown go; Option held, the next asks.
     game.click(racer);
     game.send(WindowEvent::Key {
-        key: Key::Alt,
+        key: Key::AltLeft,
         pressed: true,
         repeat: false,
     });
@@ -731,7 +731,7 @@ fn help_shows_its_text_over_the_race_with_its_after_movie_and_the_race_stays() {
     let mut game = Game::flying_with(25_000);
     game.land();
     game.open_bar();
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let help = game
         .bar()
         .and_then(|bar| bar.race_screen())
@@ -770,7 +770,7 @@ fn after_a_lost_bet_the_trade_center_shows_the_cash_less_the_bet() {
     game.open_bar();
     // Racer 2 wins; the bet is on racer 1.
     game.dial.set(1);
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let racer = game.racer(0);
     game.click(racer);
     let shown = game.text_shown().expect("the result");
@@ -787,7 +787,7 @@ fn after_a_win_is_credited_the_trade_center_shows_the_winnings() {
     game.land();
     game.open_bar();
     game.dial.set(0);
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let racer = game.racer(0);
     game.click(racer);
     game.tap(Key::Enter);
@@ -805,7 +805,7 @@ fn after_a_win_credited_as_its_text_closes_the_trade_center_shows_the_winnings()
     game.open_bar();
     // Racer 2 wins, and its result plays no movie after it.
     game.dial.set(1);
-    game.tap(Key::Char('g'));
+    game.tap(Key::KeyG);
     let racer = game.racer(1);
     game.click(racer);
     game.tap(Key::Enter);

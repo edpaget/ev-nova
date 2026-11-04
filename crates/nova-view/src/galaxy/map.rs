@@ -1265,20 +1265,20 @@ impl GalaxyMap {
         }
         match (&mut self.look, key) {
             // B, either case, its repeats too (@0x14251): item 9.
-            (Look::Dialog(dialog), Key::Char('b' | 'B')) => self.borders.toggle(dialog),
-            (Look::Viewer(_), Key::Char('b' | 'B')) => self.borders.toggle_viewer(),
-            (Look::Viewer(view), Key::Left) => view.pan(-PAN_STEP, 0.0),
-            (Look::Viewer(view), Key::Right) => view.pan(PAN_STEP, 0.0),
-            (Look::Viewer(view), Key::Up) => view.pan(0.0, -PAN_STEP),
-            (Look::Viewer(view), Key::Down) => view.pan(0.0, PAN_STEP),
-            (Look::Viewer(view), Key::Char('=' | '+')) => view.zoom_in(),
-            (Look::Viewer(view), Key::Char('-')) => view.zoom_out(),
-            (_, Key::Tab | Key::Char('\\')) if self.mode != MapMode::Viewer => {
+            (Look::Dialog(dialog), Key::KeyB) => self.borders.toggle(dialog),
+            (Look::Viewer(_), Key::KeyB) => self.borders.toggle_viewer(),
+            (Look::Viewer(view), Key::ArrowLeft) => view.pan(-PAN_STEP, 0.0),
+            (Look::Viewer(view), Key::ArrowRight) => view.pan(PAN_STEP, 0.0),
+            (Look::Viewer(view), Key::ArrowUp) => view.pan(0.0, -PAN_STEP),
+            (Look::Viewer(view), Key::ArrowDown) => view.pan(0.0, PAN_STEP),
+            (Look::Viewer(view), Key::Equal | Key::NumpadAdd) => view.zoom_in(),
+            (Look::Viewer(view), Key::Minus) => view.zoom_out(),
+            (_, Key::Tab | Key::Backslash) if self.mode != MapMode::Viewer => {
                 self.request = Some(Request::Cycle(MapCycle { back: self.shift }));
             }
             // C, either case, its repeats too, whatever Clear Route's
             // flag (`_MapFilter` @0x14268).
-            (Look::Dialog(_), Key::Char('c' | 'C')) => self.request = Some(Request::ClearRoute),
+            (Look::Dialog(_), Key::KeyC) => self.request = Some(Request::ClearRoute),
             _ => {}
         }
     }
@@ -1919,7 +1919,7 @@ impl GalaxyMap {
     /// [`Screen::input`]'s work, before the borders settle.
     fn take_input(&mut self, input: &Input) {
         if let Input::Key {
-            key: Key::Shift,
+            key: Key::ShiftLeft,
             pressed,
             ..
         } = *input
@@ -1959,7 +1959,7 @@ impl GalaxyMap {
             // F and S, any case, on key-down: the Find button
             // (@0x144b9-0x144d6).
             Input::Key {
-                key: Key::Char('f' | 's' | 'F' | 'S'),
+                key: Key::KeyF | Key::KeyS,
                 pressed: true,
                 repeat: false,
             } => self.open_find(),
@@ -2103,7 +2103,7 @@ mod tests {
     /// [`borders`](crate::galaxy::borders)'.
     fn map() -> GalaxyMap {
         let mut map = GalaxyMap::new(&FakeCatalog::new(galaxy()));
-        map.input(&press(Key::Char('b')));
+        map.input(&press(Key::KeyB));
         assert!(!map.borders_shown());
         map
     }
@@ -2320,11 +2320,11 @@ mod tests {
         let scale = view_of(&map).scale();
         let start = view_of(&map).center();
         let steps = [
-            (Key::Right, (1.0, 0.0)),
-            (Key::Left, (0.0, 0.0)),
-            (Key::Left, (-1.0, 0.0)),
-            (Key::Down, (-1.0, 1.0)),
-            (Key::Up, (-1.0, 0.0)),
+            (Key::ArrowRight, (1.0, 0.0)),
+            (Key::ArrowLeft, (0.0, 0.0)),
+            (Key::ArrowLeft, (-1.0, 0.0)),
+            (Key::ArrowDown, (-1.0, 1.0)),
+            (Key::ArrowUp, (-1.0, 0.0)),
         ];
         for (key, (x, y)) in steps {
             assert_eq!(map.input(&press(key)), ScreenAction::None);
@@ -2348,13 +2348,13 @@ mod tests {
             view_of(&map).center(),
             view_of(&map).zoom(),
         );
-        map.input(&press(Key::Right));
-        assert_eq!(map.input(&held(Key::Right)), ScreenAction::None);
-        map.input(&held(Key::Right));
+        map.input(&press(Key::ArrowRight));
+        assert_eq!(map.input(&held(Key::ArrowRight)), ScreenAction::None);
+        map.input(&held(Key::ArrowRight));
         let center = view_of(&map).center();
         let expected = start.x + 3.0 * PAN_STEP / scale;
         assert!((center.x - expected).abs() < 1e-3, "{center:?}");
-        map.input(&held(Key::Char('=')));
+        map.input(&held(Key::Equal));
         assert_eq!(view_of(&map).zoom(), fitted + 1);
     }
 
@@ -2362,12 +2362,12 @@ mod tests {
     fn equals_and_plus_zoom_in_and_minus_zooms_out() {
         let mut map = map();
         let fitted = view_of(&map).zoom();
-        map.input(&press(Key::Char('=')));
+        map.input(&press(Key::Equal));
         assert_eq!(view_of(&map).zoom(), fitted + 1);
-        map.input(&press(Key::Char('+')));
+        map.input(&press(Key::NumpadAdd));
         assert_eq!(view_of(&map).zoom(), fitted + 2);
         for _ in 0..3 {
-            assert_eq!(map.input(&press(Key::Char('-'))), ScreenAction::None);
+            assert_eq!(map.input(&press(Key::Minus)), ScreenAction::None);
         }
         assert_eq!(view_of(&map).zoom(), fitted - 1);
     }
@@ -2379,20 +2379,20 @@ mod tests {
         let (view, selected) = (view_of(&map), map.selected());
         let others = [
             Input::Key {
-                key: Key::Right,
+                key: Key::ArrowRight,
                 pressed: false,
                 repeat: false,
             },
             Input::Key {
-                key: Key::Char('='),
+                key: Key::Equal,
                 pressed: false,
                 repeat: false,
             },
             press(Key::Escape),
             press(Key::Tab),
             press(Key::Space),
-            press(Key::Char('x')),
-            press(Key::Other),
+            press(Key::KeyX),
+            press(Key::Unidentified),
         ];
         for input in others {
             assert_eq!(map.input(&input), ScreenAction::None, "{input:?}");
@@ -2666,7 +2666,7 @@ mod tests {
                     }),
                 })
             );
-            map.input(&press(Key::Char('-')));
+            map.input(&press(Key::Minus));
         }
     }
 
@@ -2805,7 +2805,7 @@ mod tests {
     fn the_zoom_is_shown_as_a_rounded_percentage() {
         let mut map = map();
         for _ in 0..SCALES.len() {
-            map.input(&press(Key::Char('-')));
+            map.input(&press(Key::Minus));
         }
         let mut shown = Vec::new();
         for _ in 0..SCALES.len() {
@@ -2817,7 +2817,7 @@ mod tests {
                     .find(|t| t.starts_with("Zoom"))
                     .expect("zoom"),
             );
-            map.input(&press(Key::Char('=')));
+            map.input(&press(Key::Equal));
         }
         assert_eq!(
             shown,
@@ -3127,7 +3127,7 @@ mod tests {
         assert_eq!(map.selected(), None, "the owner selects");
         map.input(&button(MouseButton::Left, false, beta));
         assert_eq!(map.take_press(), None, "no click on the release");
-        map.input(&press(Key::Shift));
+        map.input(&press(Key::ShiftLeft));
         map.input(&button(MouseButton::Left, true, beta));
         assert!(map.take_press().expect("held").shift, "Shift held");
     }
@@ -3467,7 +3467,7 @@ mod tests {
     fn tab_and_backslash_ask_the_course_and_hypergate_maps_to_cycle_repeats_too() {
         for mut map in [course_map(), gate_map()] {
             assert_eq!(map.take_cycle(), None);
-            for k in [Key::Tab, Key::Char('\\')] {
+            for k in [Key::Tab, Key::Backslash] {
                 map.input(&press(k));
                 assert_eq!(map.take_cycle(), Some(MapCycle { back: false }), "{k:?}");
                 assert_eq!(map.take_cycle(), None, "taken");
@@ -3476,13 +3476,13 @@ mod tests {
                 map.input(&release(k));
                 assert_eq!(map.take_cycle(), None, "a release");
             }
-            map.input(&press(Key::Shift));
+            map.input(&press(Key::ShiftLeft));
             map.input(&press(Key::Tab));
             assert_eq!(map.take_cycle(), Some(MapCycle { back: true }), "Shift");
-            map.input(&release(Key::Shift));
-            map.input(&press(Key::Char('\\')));
+            map.input(&release(Key::ShiftLeft));
+            map.input(&press(Key::Backslash));
             assert_eq!(map.take_cycle(), Some(MapCycle { back: false }));
-            map.input(&press(Key::Shift));
+            map.input(&press(Key::ShiftLeft));
             map.release_keys();
             map.input(&press(Key::Tab));
             assert_eq!(
@@ -3498,7 +3498,7 @@ mod tests {
         let mut map = map();
         click_on(&mut map, 129);
         let view = view_of(&map);
-        for k in [Key::Tab, Key::Char('\\'), Key::Enter] {
+        for k in [Key::Tab, Key::Backslash, Key::Enter] {
             map.input(&press(k));
         }
         assert_eq!(map.take_cycle(), None);
@@ -3617,7 +3617,7 @@ mod tests {
     /// (`draw_marks`).
     fn showing(drawing: &MapDrawing) -> GalaxyMap {
         let mut map = map();
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         assert_eq!(view_of(&map).scale(), 1.0);
         map.show_drawing(drawing);
         map
@@ -3756,7 +3756,7 @@ mod tests {
             filled(&oval_fill_pixels(oval_rect((212, 154), CURRENT_INSET)))
         );
         for _ in 0..3 {
-            map.input(&press(Key::Char('=')));
+            map.input(&press(Key::Equal));
         }
         assert_eq!(view_of(&map).scale(), 64.0 / 27.0, "the zoom ≤ 0.5");
         let list = drawn(&map);
@@ -3769,7 +3769,7 @@ mod tests {
                 CURRENT_INSET_ZOOMED
             )))
         );
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         let list = drawn(&map);
         let alpha = oval_rect(pixel_of(&map, 128), SYSTEM_INSET);
         assert_eq!(
@@ -3947,7 +3947,7 @@ mod tests {
             ],
             "the baseline 158, Geneva 9 white; Gamma, drawn, unnamed"
         );
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         assert_eq!(view_of(&map).scale(), 0.75, "a zoom of 4/3");
         assert_eq!(names(&drawn(&map)), [], "nothing selected");
         click_on(&mut map, 129);
@@ -3983,7 +3983,7 @@ mod tests {
         }));
         map.show_course(SystemId(128), &[]);
         for _ in 0..steps {
-            map.input(&press(Key::Char('-')));
+            map.input(&press(Key::Minus));
         }
         map
     }
@@ -4122,7 +4122,7 @@ mod tests {
             "the names again after the brackets"
         );
         for _ in 0..3 {
-            map.input(&press(Key::Char('=')));
+            map.input(&press(Key::Equal));
         }
         assert_eq!(
             rects(&drawn(&map), BRIGHT_GREEN),
@@ -4188,7 +4188,7 @@ mod tests {
             ),
             (None, 0, 0)
         );
-        map.input(&press(Key::Char('-')));
+        map.input(&press(Key::Minus));
         assert_eq!(view_of(&map).scale(), 1.0);
         let list = drawn(&map);
         let names = names(&list);
@@ -4356,7 +4356,7 @@ mod tests {
             let key = if c == ' ' {
                 Key::Space
             } else {
-                Key::Char(c.to_ascii_lowercase())
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified)
             };
             map.input(&press(key));
             map.input(&Input::Text(c));
@@ -4365,7 +4365,7 @@ mod tests {
 
     /// Opens Find with S, types `text` and confirms it with Return.
     fn find(map: &mut GalaxyMap, text: &str) {
-        map.input(&press(Key::Char('s')));
+        map.input(&press(Key::KeyS));
         map.input(&Input::Text('s'));
         assert!(map.finding(), "Find opened");
         type_in(map, text);
@@ -4440,14 +4440,14 @@ mod tests {
         ] {
             for key in ['f', 's', 'F', 'S'] {
                 let mut map = build();
-                map.input(&held(Key::Char(key)));
+                map.input(&held(crate::input::letter_key(key).expect("a letter key")));
                 assert!(!map.finding(), "{name}: a repeat of {key}");
-                map.input(&press(Key::Char(key)));
+                map.input(&press(crate::input::letter_key(key).expect("a letter key")));
                 assert!(map.finding(), "{name}: {key}");
             }
             let mut shifted = build();
-            shifted.input(&press(Key::Shift));
-            shifted.input(&press(Key::Char('f')));
+            shifted.input(&press(Key::ShiftLeft));
+            shifted.input(&press(Key::KeyF));
             assert!(shifted.finding(), "{name}: Shift-F");
         }
     }
@@ -4455,7 +4455,7 @@ mod tests {
     #[test]
     fn s_opens_find_on_the_viewer() {
         let mut map = measured(map());
-        map.input(&press(Key::Char('s')));
+        map.input(&press(Key::KeyS));
         assert!(map.finding());
     }
 
@@ -4463,7 +4463,7 @@ mod tests {
     fn without_metrics_find_does_not_open() {
         let mut map = course_map();
         map.show_course(SystemId(129), &[]);
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         assert!(!map.finding());
         let find = MapButtons::new(DIALOG_ORIGIN)
             .rect(MapButton::Find)
@@ -4475,7 +4475,7 @@ mod tests {
     #[test]
     fn find_opens_empty_dropping_the_key_that_opened_it() {
         let mut map = flown_map();
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         map.input(&Input::Text('f'));
         let dialog = map.find_dialog().expect("open");
         assert_eq!(dialog.field().text(), "");
@@ -4492,14 +4492,14 @@ mod tests {
     fn find_takes_every_input_while_it_is_open() {
         let mut map = flown_map();
         click_on(&mut map, 130);
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         let view = map.transform();
         for key in [
-            Key::Left,
-            Key::Up,
-            Key::Char('='),
+            Key::ArrowLeft,
+            Key::ArrowUp,
+            Key::Equal,
             Key::Tab,
-            Key::Char('\\'),
+            Key::Backslash,
         ] {
             map.input(&press(key));
         }
@@ -4543,7 +4543,7 @@ mod tests {
             click_on(&mut map, 129);
             let view = map.transform();
             find(&mut map, "");
-            map.input(&press(Key::Char('s')));
+            map.input(&press(Key::KeyS));
             type_in(&mut map, "gamma");
             let cancel = map
                 .find_dialog()
@@ -4623,12 +4623,12 @@ mod tests {
     #[test]
     fn closing_find_drops_the_dialog_and_its_text() {
         let mut map = flown_map();
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         type_in(&mut map, "sol");
         map.close_find();
         assert!(!map.finding());
         assert_eq!(map.take_find(), None);
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         assert_eq!(map.find_dialog().expect("open").field().text(), "");
     }
 
@@ -4694,7 +4694,7 @@ mod tests {
             ..ButtonStyle::STOCK
         };
         let mut map = flown_map().with_find(Some(template), style);
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         let list = drawn(&map);
         assert!(texts(&list).contains(&"Seek".to_owned()));
         assert!(
@@ -4707,7 +4707,7 @@ mod tests {
         let mut broken = crate::galaxy::find::fallback();
         broken.items.truncate(2);
         let mut map = flown_map().with_find(Some(broken), ButtonStyle::STOCK);
-        map.input(&press(Key::Char('f')));
+        map.input(&press(Key::KeyF));
         assert!(map.finding(), "a broken template falls back");
         assert!(format!("{map:?}").contains("FindDialog"));
     }

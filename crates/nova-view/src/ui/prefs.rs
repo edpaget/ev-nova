@@ -1681,20 +1681,20 @@ mod tests {
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Space));
         assert!(!dialog.prefs().sound.sound);
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.prefs().sound.effects_level, 4, "not a volume");
     }
 
     #[test]
     fn the_arrow_keys_step_the_focused_volume() {
         let mut dialog = prefs();
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
         for _ in 0..13 {
             dialog.input(&key(Key::Tab));
         }
-        dialog.input(&key(Key::Up));
-        dialog.input(&held(Key::Right));
+        dialog.input(&key(Key::ArrowUp));
+        dialog.input(&held(Key::ArrowRight));
         assert_eq!(dialog.prefs().sound.effects_level, 6);
         dialog.input(&key(Key::Space));
         assert_eq!(
@@ -1708,12 +1708,12 @@ mod tests {
             }
         );
         dialog.input(&key(Key::Tab));
-        dialog.input(&key(Key::Down));
-        dialog.input(&held(Key::Left));
-        dialog.input(&held(Key::Left));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&held(Key::ArrowLeft));
+        dialog.input(&held(Key::ArrowLeft));
         assert_eq!(dialog.prefs().sound.music_level, 0);
         dialog.input(&key(Key::Tab));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.prefs().sound.music_level, 0, "OK is focused");
         assert!(!dialog.closed());
     }
@@ -1764,10 +1764,10 @@ mod tests {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
-            dialog.input(&key(Key::Down));
+            dialog.input(&key(Key::ArrowDown));
         }
         dialog.take_prefs();
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.take_prefs(), None, "already silent");
     }
 
@@ -1801,9 +1801,9 @@ mod tests {
         assert!(!smoke.smoke_trails);
         let parallax = focused(10, key(Key::Space)).expect("Space on Parallax Starfield");
         assert!(!parallax.parallax_starfield);
-        let effects = focused(13, key(Key::Up)).expect("Up on the sound volume");
+        let effects = focused(13, key(Key::ArrowUp)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(14, key(Key::Down)).expect("Down on the music volume");
+        let volume = focused(14, key(Key::ArrowDown)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -2167,7 +2167,7 @@ mod tests {
         assert_eq!(dialog.display().entries(), [FullscreenKind::Borderless]);
         assert_eq!(dialog.display().selected(), FullscreenKind::Borderless);
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.display().selected(), FullscreenKind::Borderless);
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "nothing to step to");
@@ -2179,7 +2179,7 @@ mod tests {
         for close in [key(Key::Enter), key(Key::Escape)] {
             let mut dialog = offered();
             focus_display(&mut dialog);
-            dialog.input(&key(Key::Down));
+            dialog.input(&key(Key::ArrowDown));
             assert_eq!(dialog.display().selected(), FullscreenKind::Exclusive(qhd));
             assert_eq!(dialog.take_change(), None, "held while open");
             assert_eq!(dialog.prefs().fullscreen, FullscreenKind::Borderless);
@@ -2208,7 +2208,7 @@ mod tests {
         );
         let mut dialog = offered();
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         for _ in 0..4 {
             dialog.input(&key(Key::Tab));
         }
@@ -2226,7 +2226,7 @@ mod tests {
         let [qhd, _] = modes();
         let mut dialog = offered();
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.take_display_choice(), None, "held while open");
         dialog.input(&key(Key::Enter));
         assert_eq!(
@@ -2236,8 +2236,8 @@ mod tests {
         assert_eq!(dialog.take_display_choice(), None, "once");
         let mut dialog = offered();
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowUp));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_display_choice(), None, "back where it was");
     }
@@ -2293,8 +2293,8 @@ mod tests {
         let [_, fhd] = modes();
         let mut dialog = fallen_back(fhd);
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowUp));
         dialog.input(&key(Key::Enter));
         assert_eq!(
             dialog.take_display_choice(),
@@ -2303,8 +2303,8 @@ mod tests {
         );
         let mut dialog = fallen_back(fhd);
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&key(Key::Enter));
         assert_eq!(
             dialog.take_display_choice(),
@@ -2321,10 +2321,10 @@ mod tests {
         assert_eq!(dialog.take_change(), None, "untouched");
         let mut dialog = offered();
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Up));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowUp));
+        dialog.input(&key(Key::ArrowUp));
         dialog.input(&key(Key::Escape));
         assert_eq!(dialog.take_change(), None, "stepped away and back");
     }
@@ -2333,7 +2333,7 @@ mod tests {
     fn an_audio_change_with_a_step_pending_reports_the_kind_opened_on() {
         let mut dialog = offered();
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
         assert_eq!(
@@ -2355,10 +2355,10 @@ mod tests {
         focus_display(&mut dialog);
         dialog.input(&key(Key::Space));
         assert_eq!(dialog.display().selected(), FullscreenKind::Borderless);
-        dialog.input(&key(Key::Down));
-        dialog.input(&held(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&held(Key::ArrowDown));
         assert_eq!(dialog.display().selected(), FullscreenKind::Exclusive(fhd));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.display().selected(), FullscreenKind::Exclusive(qhd));
         assert_eq!(dialog.prefs(), start(), "nothing else changes");
     }
@@ -2513,7 +2513,7 @@ mod tests {
         for close in [key(Key::Enter), key(Key::Escape)] {
             let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
             focus_scaling(&mut dialog);
-            dialog.input(&key(Key::Down));
+            dialog.input(&key(Key::ArrowDown));
             assert_eq!(dialog.scaling().selected(), SHARP);
             assert_eq!(dialog.take_change(), None, "held while open");
             assert_eq!(dialog.prefs().scaling, NATIVE);
@@ -2543,13 +2543,13 @@ mod tests {
     fn stepping_the_scaling_away_and_back_or_not_at_all_reports_nothing() {
         let mut dialog = listing(&[NATIVE, SUPER]);
         focus_scaling(&mut dialog);
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowUp));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "stepped away and back");
         let mut dialog = opened_on(SUPER, &[NATIVE, SUPER]);
         focus_scaling(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_change(), None, "nothing to step to");
         let mut dialog = listing(&[NATIVE, SHARP, SUPER]);
@@ -2561,7 +2561,7 @@ mod tests {
     fn an_audio_change_with_a_scaling_step_pending_reports_the_one_running() {
         let mut dialog = listing(&[NATIVE, SUPER]);
         focus_scaling(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
         assert_eq!(
@@ -2576,7 +2576,7 @@ mod tests {
     fn the_scaling_and_display_steps_are_held_apart() {
         let mut dialog = offered().with_scaling(&[NATIVE, SHARP, SUPER]);
         focus_display(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&key(Key::Tab));
         assert_eq!(dialog.focus(), Some(Focus::Scaling));
         dialog.input(&key(Key::Enter));
@@ -2589,7 +2589,7 @@ mod tests {
         );
         let mut dialog = offered().with_scaling(&[NATIVE, SHARP, SUPER]);
         focus_scaling(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_display_choice(), None, "no display pick");
         assert_eq!(
@@ -2623,7 +2623,7 @@ mod tests {
     fn a_super_xbr_pick_is_drawn_by_its_label() {
         let mut dialog = listing(&[NATIVE, SUPER]);
         focus_scaling(&mut dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         let label = DrawCommand::Text {
             text: "Scaling: Super-xBR".to_owned(),
             font: crate::font::Font::Geneva,
@@ -3055,7 +3055,13 @@ mod tests {
         for _ in 0..16 {
             dialog.input(&key(Key::Tab));
             assert_eq!(dialog.focus(), None);
-            for k in [Key::Space, Key::Up, Key::Down, Key::Left, Key::Right] {
+            for k in [
+                Key::Space,
+                Key::ArrowUp,
+                Key::ArrowDown,
+                Key::ArrowLeft,
+                Key::ArrowRight,
+            ] {
                 dialog.input(&key(k));
             }
         }

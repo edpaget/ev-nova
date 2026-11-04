@@ -249,24 +249,21 @@ mod tests {
         assert!(!dialog.dispose(true));
         assert!(dialog.waiting());
         assert!(!dialog.dispose(false), "asked again, it waits on");
-        dialog.input(&press(Key::Char('z')));
+        dialog.input(&press(Key::KeyZ));
         dialog.input(&click());
         dialog.input(&press(Key::Enter));
         assert_eq!(drawn(&dialog), before);
         assert!(!dialog.disposed());
         dialog.input(&release(I));
         assert!(dialog.disposed());
-        assert_eq!(
-            dialog.take_replay(),
-            [press(Key::Char('z')), press(Key::Enter)]
-        );
+        assert_eq!(dialog.take_replay(), [press(Key::KeyZ), press(Key::Enter)]);
     }
 
     #[test]
     fn losing_focus_ends_the_wait() {
         let mut dialog = answered();
         dialog.dispose(true);
-        dialog.input(&press(Key::Char('z')));
+        dialog.input(&press(Key::KeyZ));
         dialog.release_keys();
         assert!(dialog.disposed());
         assert_eq!(dialog.take_replay(), []);
@@ -289,11 +286,11 @@ mod tests {
     #[test]
     fn an_answer_released_with_i_down_takes_the_venues_input_until_is_release() {
         // Return's accept is hidden, N's refusal drawn: both wait.
-        for key in [Key::Enter, Key::Char('n')] {
+        for key in [Key::Enter, Key::KeyN] {
             let mut offers = answered_by(key);
             offers.release_answered(true);
             assert!(offers.answered().is_some(), "{key:?}: kept");
-            assert!(offers.input(&press(Key::Char('z')), &mut Vec::new()));
+            assert!(offers.input(&press(Key::KeyZ), &mut Vec::new()));
             assert!(offers.input(&click(), &mut Vec::new()));
             assert_eq!(
                 offers.take_unclaimed(),
@@ -302,8 +299,8 @@ mod tests {
             );
             assert!(offers.input(&release(I), &mut Vec::new()));
             assert!(offers.answered().is_none(), "{key:?}: gone");
-            assert!(!offers.input(&press(Key::Char('y')), &mut Vec::new()));
-            assert_eq!(offers.take_unclaimed(), [press(Key::Char('z'))]);
+            assert!(!offers.input(&press(Key::KeyY), &mut Vec::new()));
+            assert_eq!(offers.take_unclaimed(), [press(Key::KeyZ)]);
         }
     }
 
@@ -311,7 +308,7 @@ mod tests {
     fn a_hidden_accept_is_kept_hidden_and_waits_the_same() {
         let mut offers = venue();
         let dialog = offers.dialog().expect("open");
-        let click = fixture::accept_click_holding(dialog, press(Key::Char('z')));
+        let click = fixture::accept_click_holding(dialog, press(Key::KeyZ));
         for input in &click {
             offers.input(input, &mut Vec::new());
         }
@@ -320,11 +317,11 @@ mod tests {
         assert_eq!(drawn(hidden), [], "hidden");
         offers.release_answered(true);
         assert_eq!(offers.take_unclaimed(), [], "the answer's Z waits too");
-        assert!(offers.input(&press(Key::Char('x')), &mut Vec::new()));
+        assert!(offers.input(&press(Key::KeyX), &mut Vec::new()));
         offers.input(&release(I), &mut Vec::new());
         assert_eq!(
             offers.take_unclaimed(),
-            [press(Key::Char('z')), press(Key::Char('x'))],
+            [press(Key::KeyZ), press(Key::KeyX)],
             "the answering key's followers, then the wait's"
         );
     }
@@ -334,12 +331,12 @@ mod tests {
         let mut offers = answered_by(Key::Enter);
         offers.release_answered(false);
         assert!(offers.answered().is_none());
-        assert!(!offers.input(&press(Key::Char('z')), &mut Vec::new()));
+        assert!(!offers.input(&press(Key::KeyZ), &mut Vec::new()));
     }
 
     #[test]
     fn hide_answered_hides_the_kept_answer() {
-        let mut offers = answered_by(Key::Char('n'));
+        let mut offers = answered_by(Key::KeyN);
         assert!(!drawn(offers.answered().expect("kept")).is_empty());
         offers.hide_answered();
         assert_eq!(drawn(offers.answered().expect("kept")), []);
@@ -349,7 +346,7 @@ mod tests {
     fn losing_focus_drops_a_waiting_answer_and_its_queue() {
         let mut offers = answered_by(Key::Enter);
         offers.release_answered(true);
-        offers.input(&press(Key::Char('z')), &mut Vec::new());
+        offers.input(&press(Key::KeyZ), &mut Vec::new());
         offers.release_answer_wait();
         assert!(offers.answered().is_none());
         assert_eq!(offers.take_unclaimed(), []);
@@ -383,7 +380,7 @@ mod timer_tests {
         let mut offers = VenueOffers::asking(fixture::templates());
         assert!(offers.take_request());
         offers.open(fixture::prompt(), Rc::new(MonoMetrics), ButtonStyle::STOCK);
-        offers.input(&key(Key::Char('n'), true), &mut Vec::new());
+        offers.input(&key(Key::KeyN, true), &mut Vec::new());
         assert!(offers.take_choice().is_some());
         offers.release_answered(true);
         offers.rearm(Duration::from_millis(100));

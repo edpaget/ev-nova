@@ -168,7 +168,7 @@ fn the_spaceports_offer_plays_its_before_movie_and_a_refusal_after_it_plays_none
     screen.tick(Duration::from_millis(16));
     assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     screen.tick(Duration::from_millis(16));
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     assert_eq!(active(&screen), []);
     assert_eq!(
         reeled(&reel),
@@ -248,7 +248,7 @@ fn a_refuse_texts_after_movie_plays_twice_and_the_offers_not_at_all() {
         &mission,
         &[(300, filmed_desc_of("No.", "Refuse.mov", 0x0001))],
     );
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     assert!(
         spaceport(&screen).mission_text().is_some(),
         "the RefuseText"
@@ -285,7 +285,7 @@ fn texts_drawn(screen: &AppScreen) -> Vec<String> {
 fn a_refused_spaceport_offer_without_a_refuse_text_stays_drawn_under_its_after_movie() {
     let (mut screen, reel) = landed_offering(&venue_mission(SPACEPORT), &[]);
     assert!(texts_drawn(&screen).contains(&"Job.".to_owned()));
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     assert!(
         texts_drawn(&screen).contains(&"Job.".to_owned()),
@@ -304,7 +304,7 @@ fn a_refuse_text_hides_the_spaceport_offer() {
     let mut mission = venue_mission(SPACEPORT);
     mission[0x58..0x5A].copy_from_slice(&300_i16.to_be_bytes());
     let (mut screen, _) = landed_offering(&mission, &[(300, desc_of("No."))]);
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     let shown = texts_drawn(&screen);
     assert!(
         !shown.contains(&"Job.".to_owned()),
@@ -375,7 +375,7 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
     screen.input(&key(Key::Escape, true));
     assert!(spaceport(&screen).mission_info().is_none(), "info closed");
     assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     assert_eq!(active(&screen), [MissionId(129)], "refused");
     assert!(spaceport(&screen).mission_text().is_none(), "no RefuseText");
     ticked(&mut screen, 3);
@@ -653,12 +653,12 @@ fn offer_a_moment_after_a_long_offer(clock: RuleSource) -> Option<MissionId> {
         )
     };
     assert_eq!(offered(&screen), Some(MissionId(130)));
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     screen.tick(Duration::from_secs(2));
     screen.tick(Duration::from_secs(2));
     assert_eq!(offered(&screen), Some(MissionId(131)), "{clock:?}");
     screen.tick(Duration::from_secs(5));
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     screen.tick(Duration::from_millis(1));
     screen.tick(Duration::from_millis(1));
     offered(&screen)
@@ -702,7 +702,7 @@ fn offered_after_a_refusal(chance: Option<SharedChance>) -> [Option<MissionId>; 
         )
     };
     assert_eq!(offered(&screen), Some(MissionId(130)), "precondition");
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     screen.tick(Duration::from_millis(700));
     let early = offered(&screen);
     screen.tick(Duration::from_millis(400));
@@ -777,8 +777,8 @@ fn the_bar_offers_again_after_its_hire_screen_restarts_its_wait() {
     screen.tick(Duration::from_millis(300));
     screen.tick(Duration::from_millis(300));
     assert_eq!(offered(&screen), Some(MissionId(130)));
-    screen.input(&key(Key::Char('n'), true));
-    screen.input(&key(Key::Char('h'), true));
+    screen.input(&key(Key::KeyN, true));
+    screen.input(&key(Key::KeyH, true));
     assert!(
         spaceport(&screen)
             .open_bar()
@@ -802,7 +802,7 @@ fn the_spaceport_does_not_offer_again_on_returning_from_a_service() {
         Some(MissionId(130)),
         "one offer as it lands"
     );
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     assert!(spaceport(&screen).offer_dialog().is_none(), "refused");
     screen.tick(Duration::from_secs(5));
     assert!(spaceport(&screen).offer_dialog().is_none(), "131 waits");
@@ -1048,8 +1048,8 @@ fn without_dialogs_a_persons_brief_dropped_over_flight_lets_go_of_the_bar() {
     let hyperspace = nova_view::flight::hud::NAV_HYPERSPACE;
     assert!(!draws_text(&screen, hyperspace), "not yet in mode 3");
     // H, flight's hyperspace mode key.
-    screen.input(&key(Key::Char('h'), true));
-    screen.input(&key(Key::Char('h'), false));
+    screen.input(&key(Key::KeyH, true));
+    screen.input(&key(Key::KeyH, false));
     assert!(draws_text(&screen, hyperspace), "the nav live");
 }
 
@@ -1225,8 +1225,8 @@ fn hail_person(screen: &mut AppScreen, id: i16) {
             .map(|person| person.id.0);
         if targeted == Some(id) {
             screen.take_sounds();
-            screen.input(&key(Key::Char('y'), true));
-            screen.input(&key(Key::Char('y'), false));
+            screen.input(&key(Key::KeyY, true));
+            screen.input(&key(Key::KeyY, false));
             return;
         }
     }
@@ -1252,8 +1252,8 @@ fn i_on_a_persons_offer_over_flight_opens_mission_info_over_it_with_no_map() {
     ticked(&mut screen, 5);
     assert_eq!(ship(&screen), still, "flight paused");
     screen.take_sounds();
-    screen.input(&key(Key::Char('m'), true));
-    screen.input(&key(Key::Char('m'), false));
+    screen.input(&key(Key::KeyM, true));
+    screen.input(&key(Key::KeyM, false));
     assert!(!flight(&screen).dialog_map_open(), "no map (@0x9e3c6)");
     assert!(screen.flight_mission_info().is_some(), "info still open");
     assert!(
@@ -1278,7 +1278,7 @@ fn closing_the_mission_info_over_a_flight_offer_reloads_the_offers_after_movie()
         screen.offer().is_some_and(|offer| !offer.answered()),
         "unanswered"
     );
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     ticked(&mut screen, 3);
     assert_eq!(
         reeled(&reel),
@@ -1300,10 +1300,7 @@ fn a_plain_q_on_an_offer_whose_labels_dont_start_with_it_does_nothing() {
         movie: None,
     });
     for pressed in [true, false] {
-        assert_eq!(
-            screen.input(&key(Key::Char('q'), pressed)),
-            ScreenAction::None
-        );
+        assert_eq!(screen.input(&key(Key::KeyQ, pressed)), ScreenAction::None);
     }
     assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::Offer, "still open");
@@ -1321,7 +1318,7 @@ fn i_on_a_persons_offer_over_flight_with_no_mission_held_does_nothing() {
         movie: None,
     });
     screen.take_sounds();
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     press_mission_info(&mut screen);
     assert!(screen.flight_mission_info().is_none(), "nothing (@0xa32ee)");
     assert!(screen.missions.is_none(), "no dialogs built");
@@ -1329,12 +1326,12 @@ fn i_on_a_persons_offer_over_flight_with_no_mission_held_does_nothing() {
     assert_eq!(screen.take_sounds(), [], "no sound");
     // No flush either: Command is still held, so Command-Q quits.
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::Quit,
         "Command still held"
     );
-    screen.input(&key(Key::Char('q'), false));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::KeyQ, false));
+    screen.input(&key(Key::MetaLeft, false));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert!(screen.offer().is_none(), "answered");
@@ -1345,11 +1342,11 @@ fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_keys_held() {
     // Command held as I opens the info is let go (`FlushEvents`
     // @0xa32f4-0xa333f), so a Q alone after doesn't quit.
     let (mut screen, _reel) = holding_and_offered_in_flight();
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     press_mission_info(&mut screen);
     assert!(screen.flight_mission_info().is_some(), "info open");
     assert_ne!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::Quit,
         "Command let go"
     );
@@ -1360,11 +1357,11 @@ fn the_mission_info_closing_over_a_flight_offer_lets_go_of_the_keys_held() {
     // As the port's close does (`note_info_closed`).
     let (mut screen, _reel) = holding_and_offered_in_flight();
     press_mission_info(&mut screen);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.input(&key(Key::Escape, true));
     assert!(screen.flight_mission_info().is_none(), "info closed");
     assert_ne!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::Quit,
         "Command let go"
     );

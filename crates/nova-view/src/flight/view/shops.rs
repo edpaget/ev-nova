@@ -210,10 +210,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// crosses no boundary the player sees. Its key's gate is asked by the
     /// key, before the press reaches it (`Screen::input`'s filter).
     pub(super) fn jettison(&mut self) {
-        if !self.held.contains(&Key::Command) {
+        if !self.held.contains(&Key::MetaLeft) {
             return;
         }
-        self.jettison_tapped = Some(!self.held.contains(&Key::Alt));
+        self.jettison_tapped = Some(!self.held.contains(&Key::AltLeft));
     }
 
     /// Whether the pilot flying has seen the intro screen, as the kept

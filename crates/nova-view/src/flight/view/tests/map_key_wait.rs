@@ -83,7 +83,7 @@ fn while_waiting_keys_and_clicks_change_nothing() {
     view.input(&key(MAP, true));
     let selected = view.map.selected();
     let from = sent_count(&view);
-    for k in [Key::Tab, Key::Enter, Key::Char('c'), Key::Space, LAND] {
+    for k in [Key::Tab, Key::Enter, Key::KeyC, Key::Space, LAND] {
         tap(&mut view, k);
     }
     view.input(&held(Key::Tab));
@@ -203,10 +203,10 @@ type KeyRead = (Key, fn(&StepInput) -> bool);
 /// Each unlatched key's read in a step, as flight acts on it at once.
 fn unlatched_reads() -> [KeyRead; 8] {
     [
-        (Key::Up, |step| step.controls.thrust),
-        (Key::Left, |step| step.controls.turn == Turn::Left),
-        (Key::Right, |step| step.controls.turn == Turn::Right),
-        (Key::Down, |step| step.controls.reverse),
+        (Key::ArrowUp, |step| step.controls.thrust),
+        (Key::ArrowLeft, |step| step.controls.turn == Turn::Left),
+        (Key::ArrowRight, |step| step.controls.turn == Turn::Right),
+        (Key::ArrowDown, |step| step.controls.reverse),
         (FACE_TARGET_KEY, |step| step.controls.face == Face::Target),
         (AFTERBURNER_KEY, |step| step.controls.afterburner),
         (FIRE_KEY, |step| step.fire.0),
@@ -228,7 +228,7 @@ fn a_flight_key_pressed_during_the_wait_and_still_down_acts_after_the_close() {
 
 #[test]
 fn option_command_and_shift_pressed_during_the_wait_stay_down_after_the_close() {
-    for k in [Key::Alt, Key::Command, Key::Shift] {
+    for k in [Key::AltLeft, Key::MetaLeft, Key::ShiftLeft] {
         let mut view = faked_m_open();
         view.input(&key(MAP, true));
         view.input(&key(k, true));
@@ -237,7 +237,7 @@ fn option_command_and_shift_pressed_during_the_wait_stay_down_after_the_close() 
     }
     let mut view = faked_m_open();
     view.input(&key(MAP, true));
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     view.input(&key(FACE_TARGET_KEY, true));
     view.input(&key(MAP, false));
     assert_eq!(next_step(&mut view).controls.face, Face::Stellar);
@@ -439,7 +439,7 @@ fn every_other_map_clears_the_flight_keys_as_it_opens() {
         MapOpening::Port(crate::flight::PortScreen::Exchange),
     ] {
         let mut view = faked_sol(in_sol());
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowUp, true));
         view.open_map_as(opening);
         assert!(view.held.is_empty(), "{opening:?}");
     }
@@ -448,7 +448,7 @@ fn every_other_map_clears_the_flight_keys_as_it_opens() {
 #[test]
 fn a_flight_key_lost_with_the_focus_on_the_map_reads_up_after_the_close() {
     let mut view = faked_m_open();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.release_keys();
     assert!(view.map_open(), "the map stays");
     tap(&mut view, MAP);
@@ -479,8 +479,8 @@ fn docked_map(opening: MapOpening) -> Faked {
 fn a_port_screens_map_gives_the_keys_of_its_wait_at_the_close_in_order_once() {
     let mut view = docked_map(MapOpening::Port(crate::flight::PortScreen::Exchange));
     view.port_map_input(&key(MAP, true));
-    view.port_map_input(&key(Key::Down, true));
-    view.port_map_input(&key(Key::Down, false));
+    view.port_map_input(&key(Key::ArrowDown, true));
+    view.port_map_input(&key(Key::ArrowDown, false));
     for input in enter_tap() {
         view.port_map_input(&input);
     }
@@ -490,8 +490,8 @@ fn a_port_screens_map_gives_the_keys_of_its_wait_at_the_close_in_order_once() {
     assert_eq!(
         view.take_map_replay(),
         [
-            key(Key::Down, true),
-            key(Key::Down, false),
+            key(Key::ArrowDown, true),
+            key(Key::ArrowDown, false),
             key(Key::Enter, true),
             key(Key::Enter, false)
         ]
@@ -502,8 +502,8 @@ fn a_port_screens_map_gives_the_keys_of_its_wait_at_the_close_in_order_once() {
 #[test]
 fn a_port_screens_map_keeps_only_the_keys_of_its_wait() {
     let mut view = docked_map(MapOpening::Bar);
-    view.port_map_input(&key(Key::Up, true));
-    view.port_map_input(&key(Key::Up, false));
+    view.port_map_input(&key(Key::ArrowUp, true));
+    view.port_map_input(&key(Key::ArrowUp, false));
     view.port_map_input(&key(MAP, true));
     view.port_map_input(&key(MAP, false));
     assert_eq!(view.take_map_replay(), []);
@@ -575,8 +575,8 @@ fn the_wait_is_read_from_its_start_not_from_ms_press() {
 #[test]
 fn a_live_key_handed_over_is_held_only_if_flight_reads_it_with_no_latch() {
     let mut view = faked_sol(in_sol());
-    view.hold_live_key(Key::Up);
+    view.hold_live_key(Key::ArrowUp);
     view.hold_live_key(JUMP_KEY);
-    assert!(view.held.contains(&Key::Up));
+    assert!(view.held.contains(&Key::ArrowUp));
     assert!(!view.held.contains(&JUMP_KEY));
 }

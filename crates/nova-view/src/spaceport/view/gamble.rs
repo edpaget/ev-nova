@@ -393,7 +393,7 @@ mod tests {
         view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
         // `_DoRaceDialog` @0x48ad0; `_DoQuantityDialog` has no flush.
         assert_eq!(view.flushing_layers(), 2);
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         let racer = race_item(&view, FIRST_RACER_ITEM);
         click(&mut view, racer);
         assert!(
@@ -449,7 +449,7 @@ mod tests {
         assert!(view.take_winnings_due());
         view.race_winnings_collected(4_000);
         click(&mut view, racer);
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         click(&mut view, racer);
         let field = race_open(&view)
             .and_then(RaceScreen::quantity)
@@ -510,7 +510,7 @@ mod tests {
         let _ = view.take_offer_request();
         click_item(&mut view, 11);
         view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
-        view.input(&key(Key::Alt));
+        view.input(&key(Key::AltLeft));
         let racer = race_item(&view, FIRST_RACER_ITEM);
         click(&mut view, racer);
         let at = race_open(&view)

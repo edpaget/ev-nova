@@ -1898,12 +1898,12 @@ mod tests {
         stage.begin();
         stage.input(&press(Key::Escape));
         run(&mut stage, MOVIE_FADE_FOR * 2);
-        stage.input(&press(Key::Char('d')));
+        stage.input(&press(Key::KeyD));
         stage.input(&press(Key::Space));
-        stage.input(&press(Key::Char('x')));
+        stage.input(&press(Key::KeyX));
         assert_eq!(
             stage.take_replay(),
-            [press(Key::Char('x'))],
+            [press(Key::KeyX)],
             "FlushEvents(0xf) @0x55e9f; what comes after waits for what is next"
         );
     }
@@ -2001,7 +2001,7 @@ mod tests {
         let player = MockMoviePlayer::refusing();
         let mut stage = staged(&player, 0);
         stage.begin();
-        stage.input(&press(Key::Char('a')));
+        stage.input(&press(Key::KeyA));
         assert!(stage.take_replay().is_empty());
         stage.tick(TICK);
         assert!(stage.ended());

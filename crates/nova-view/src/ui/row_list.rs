@@ -1170,7 +1170,7 @@ mod tests {
     #[test]
     fn keys_go_to_the_screen_not_the_list() {
         let mut rows = list(3);
-        for key in [Key::Up, Key::Down, Key::Enter] {
+        for key in [Key::ArrowUp, Key::ArrowDown, Key::Enter] {
             let press = Input::Key {
                 key,
                 pressed: true,

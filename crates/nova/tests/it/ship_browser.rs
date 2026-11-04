@@ -185,11 +185,11 @@ fn the_first_frame_brings_the_ships_sprites_and_name_to_the_gpu() {
 #[test]
 fn right_and_left_reach_the_browser_and_change_the_ship_drawn() {
     let mut harness = Harness::new();
-    harness.press(Key::Right);
+    harness.press(Key::ArrowRight);
     let frame = harness.frame();
     assert!(shows(&frame, "Courier"), "{:?}", texts(&frame));
 
-    harness.press(Key::Left);
+    harness.press(Key::ArrowLeft);
     let frame = harness.frame();
     assert!(shows(&frame, "Shuttle"), "{:?}", texts(&frame));
 }

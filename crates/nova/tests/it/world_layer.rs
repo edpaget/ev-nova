@@ -61,7 +61,7 @@ fn flights_frame_reaches_the_gpu_as_its_world_then_an_overlay_in_both_windows() 
 fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
     let store = MemoryPilots::new();
     let mut game = flying((1920, 1080), &store);
-    for key in [Key::Tab, Key::Tab, Key::Char('y')] {
+    for key in [Key::Tab, Key::Tab, Key::KeyY] {
         game.tap(key);
         game.settle();
     }
@@ -92,11 +92,11 @@ fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
 fn the_spaceport_draws_no_world() {
     let store = MemoryPilots::new();
     let mut game = flying((1920, 1080), &store);
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.settle_until("the dock approach's clearance", |game| {
         game.session().dock_cleared()
     });
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     let frame = game.frame();
     assert_eq!(frame.world, [0_usize; 0]);

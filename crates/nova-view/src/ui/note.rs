@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn other_input_leaves_it_open() {
         let mut note = note(&template());
-        for input in [key(Key::Space), key(Key::Tab), key(Key::Char('f'))] {
+        for input in [key(Key::Space), key(Key::Tab), key(Key::KeyF)] {
             note.input(&input);
         }
         note.tick(Duration::from_secs(1));

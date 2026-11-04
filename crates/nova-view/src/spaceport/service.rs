@@ -273,7 +273,7 @@ mod tests {
             key(Key::Enter, true, true),
             key(Key::Escape, false, false),
             key(Key::Space, true, false),
-            key(Key::Char('l'), true, false),
+            key(Key::KeyL, true, false),
         ] {
             screen.input(&input);
         }

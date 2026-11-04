@@ -489,7 +489,7 @@ mod tests {
             assert!(screen.closed(), "{close:?}");
         }
         let mut screen = open();
-        screen.input(&key(Key::Char('n'), false));
+        screen.input(&key(Key::KeyN, false));
         screen.input(&key(Key::Space, false));
         assert!(!screen.closed(), "other keys do nothing");
     }

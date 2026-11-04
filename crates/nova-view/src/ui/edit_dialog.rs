@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn typing_space_and_backspace_reach_the_field() {
         let mut dialog = dialog();
-        dialog.input(&key(Key::Char('x')));
+        dialog.input(&key(Key::KeyX));
         dialog.input(&Input::Text('x'));
         dialog.input(&key(Key::Space));
         dialog.input(&Input::Text(' '));

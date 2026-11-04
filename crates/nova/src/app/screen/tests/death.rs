@@ -318,11 +318,11 @@ fn drawn_black(screen: &AppScreen) -> bool {
 /// the ship.
 fn flies_on(screen: &mut AppScreen) -> bool {
     let at = ship(screen).position;
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     for _ in 0..3 {
         screen.tick(TICK);
     }
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     ship(screen).position != at
 }
 
@@ -636,10 +636,10 @@ fn command_comma_under_the_rescues_fade_out_opens_no_preferences() {
     let store = MemoryPilots::new();
     let mut screen = ejected(&store, Some(RESCUE_TEXT));
     until_rescued(&mut screen);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.input(&key(PREFERENCES_KEY, true));
     screen.input(&key(PREFERENCES_KEY, false));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     assert_eq!(screen.showing(), Showing::Flight, "held, not acted on");
     until_shown(&mut screen, Showing::MissionText);
     screen.tick(TICK);
@@ -959,7 +959,7 @@ fn a_key_typed_during_the_death_fade_is_flights_and_never_reaches_the_main_menu(
     tick_until(&mut screen, 400, |screen| black_over(screen).is_some());
     assert_eq!(screen.showing(), Showing::Flight, "flight's fade to black");
     screen.take_sounds();
-    screen.input(&key(Key::Char('n'), true));
+    screen.input(&key(Key::KeyN, true));
     screen.input(&Input::Text('n'));
     tick_until(&mut screen, 400, |screen| {
         screen.showing() == Showing::MainMenu
@@ -1353,7 +1353,7 @@ fn the_sabotage_dialogs_let_go_of_flights_keys() {
     for _ in 1..=nova_sim::HOLD_TICKS {
         screen.tick(TICK);
     }
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     assert!(flight(&screen).holds_keys(), "held before the expiry");
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::MissionText);

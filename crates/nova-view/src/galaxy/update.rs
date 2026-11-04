@@ -242,7 +242,7 @@ mod tests {
         let kept = drawn(&map);
         assert_eq!(nebulae(&kept).len(), 1, "the nebula, drawn partially");
         assert!(nebulae(&kept).iter().all(|command| is_plain(command)));
-        map.input(&press(Key::Left));
+        map.input(&press(Key::ArrowLeft));
         let after = drawn(&map);
         assert_eq!(nebulae(&after).len(), 1, "the nebula, drawn in full");
         assert!(nebulae(&after).iter().all(|command| is_max(command)));
@@ -273,10 +273,10 @@ mod tests {
             ("Clear Route answered", GalaxyMap::route_cleared),
             ("Borders", |map| click(map, on(MapButton::Borders))),
             ("- key", |map| {
-                map.input(&press(Key::Char('-')));
+                map.input(&press(Key::Minus));
             }),
             ("= key", |map| {
-                map.input(&press(Key::Char('=')));
+                map.input(&press(Key::Equal));
             }),
             ("- button", |map| click(map, on(MapButton::ZoomOut))),
             ("+ button", |map| click(map, on(MapButton::ZoomIn))),
@@ -284,20 +284,20 @@ mod tests {
                 map.input(&press(Key::Space));
             }),
             ("arrows", |map| {
-                for key in [Key::Right, Key::Up, Key::Down] {
+                for key in [Key::ArrowRight, Key::ArrowUp, Key::ArrowDown] {
                     map.input(&press(key));
                     assert_eq!(map.update(), Some(MapUpdate::Full), "{key:?}");
                 }
             }),
             ("Find closed with nothing to find", |map| {
-                map.input(&press(Key::Char('f')));
+                map.input(&press(Key::KeyF));
                 assert!(map.finding());
                 assert_eq!(map.update(), Some(MapUpdate::Partial), "open");
                 map.input(&press(Key::Enter));
                 assert!(!map.finding());
             }),
             ("Find searched", |map| {
-                map.input(&press(Key::Char('f')));
+                map.input(&press(Key::KeyF));
                 // The opening key's own text types nothing.
                 map.input(&Input::Text('f'));
                 map.input(&Input::Text('B'));
@@ -317,9 +317,9 @@ mod tests {
     #[test]
     fn a_refused_zoom_or_a_press_on_nothing_keeps_the_partial_update() {
         let mut map = course_map();
-        map.input(&press(Key::Char('=')));
+        map.input(&press(Key::Equal));
         jiggle(&mut map);
-        map.input(&press(Key::Char('=')));
+        map.input(&press(Key::Equal));
         assert_eq!(map.update(), Some(MapUpdate::Partial), "= at the limit");
         // A click on + at the limit is still a press outside item 3, which
         // redraws before `_TrackMapButtons` (@0x14558).

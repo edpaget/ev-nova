@@ -453,7 +453,7 @@ fn the_red_alert_icon_is_the_frames() {
 fn weapon_select_sends_its_press_backwards_with_option() {
     let mut view = faked(in_sol());
     view.press_weapon_select();
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     view.press_weapon_select();
     assert_eq!(
         sent(&view),

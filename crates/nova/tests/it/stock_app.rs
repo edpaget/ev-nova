@@ -103,7 +103,7 @@ fn the_ship_browser_draws_stock_ships() {
         if selected(&app).1 == (3..=3) {
             break;
         }
-        press(&mut app, Key::Right);
+        press(&mut app, Key::ArrowRight);
     }
     assert_eq!(
         selected(&app).1,
@@ -117,14 +117,14 @@ fn the_ship_browser_draws_stock_ships() {
         if selected(&app).0 == ShipId(128) {
             break;
         }
-        press(&mut app, Key::Right);
+        press(&mut app, Key::ArrowRight);
     }
     assert_eq!(
         selected(&app).0,
         ShipId(128),
         "Right did not wrap back to the first ship within {ship_count} presses"
     );
-    press(&mut app, Key::Left);
+    press(&mut app, Key::ArrowLeft);
     assert_eq!(selected(&app).0, ShipId(895));
     assert!(selected(&app).1.contains(&redraw(&mut app)));
 }
@@ -306,7 +306,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
     let mut send = |app: &mut App<Rc<GameData>>, event| {
         assert_eq!(app.handle(event, &mut Window, &mut gpu), Control::Continue);
     };
-    for key in [Key::Char('f'), Key::Char('m')] {
+    for key in [Key::KeyF, Key::KeyM] {
         for pressed in [true, false] {
             let event = WindowEvent::Key {
                 key,
@@ -334,7 +334,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
     );
     // A Shift-click adds the hop, as `_DoSystemMap` builds a course.
     let shift = |pressed| WindowEvent::Key {
-        key: Key::Shift,
+        key: Key::ShiftLeft,
         pressed,
         repeat: false,
     };
@@ -385,7 +385,7 @@ fn i_shows_the_stock_about_text() {
         repeat: false,
     };
 
-    send(&mut app, key(Key::Char('i')));
+    send(&mut app, key(Key::KeyI));
     assert_eq!(app.screen().showing(), Showing::About);
     send(
         &mut app,
@@ -397,7 +397,7 @@ fn i_shows_the_stock_about_text() {
     let about = app.screen().about().expect("open");
     assert!(about.lines().len() > 20, "{} lines", about.lines().len());
     assert_no_tag_or_brace(about.lines());
-    send(&mut app, key(Key::Down));
+    send(&mut app, key(Key::ArrowDown));
     assert_eq!(
         app.screen().about().expect("open").scroll_offset(),
         nova_view::ui::desc::ARROW_UNITS
@@ -533,19 +533,19 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!(session.system(), SystemId(128));
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
 
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     // Two redraws, at least a tick, for the dock approach to clear the
     // request.
     driver.redraw();
     driver.redraw();
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     assert_eq!(driver.showing(), Showing::FlightMap);
     let map = driver.flight().course_map();
     assert_eq!(map.mode(), MapMode::Hypergate);
     let tichel = map.model().system(SystemId(129)).expect("Tichel");
     let at = map.transform().world_to_screen(tichel.position());
     driver.click(at);
-    driver.press(Key::Char('m'));
+    driver.press(Key::KeyM);
     assert_eq!(driver.showing(), Showing::Flight);
     let session = driver.flight().session().expect("flying");
     assert_eq!(session.system(), SystemId(129));
@@ -609,7 +609,7 @@ fn x_shows_the_stock_desc_32766_over_the_main_menu() {
         assert_eq!(app.handle(event, &mut Window, &mut gpu), Control::Continue);
     };
 
-    press(&mut app, Key::Char('x'));
+    press(&mut app, Key::KeyX);
     assert_eq!(app.screen().showing(), Showing::Note);
     let text = app.screen().about().expect("open");
     assert!(!text.lines().is_empty());
@@ -673,12 +673,12 @@ fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
     driver.press(Key::Enter);
     driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     // Two redraws, at least a tick, for the dock approach to clear the
     // request.
     driver.redraw();
     driver.redraw();
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     assert_eq!(driver.showing(), Showing::Spaceport, "landed");
     driver.redraw();
 
@@ -767,12 +767,12 @@ fn resumed_at_earth_holding_krane(dir: &std::path::Path) -> Option<Driver> {
     driver.press(Key::Enter);
     driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "resumed in space");
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     // Two redraws, at least a tick, for the dock approach to clear the
     // request.
     driver.redraw();
     driver.redraw();
-    driver.press(Key::Char('l'));
+    driver.press(Key::KeyL);
     assert_eq!(driver.showing(), Showing::Spaceport, "landed");
     Some(driver)
 }
@@ -846,10 +846,10 @@ fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
     );
 
     // The map opens over the offer with the `Q` pending, and holds it.
-    driver.press(Key::Char('m'));
+    driver.press(Key::KeyM);
     assert_eq!(driver.showing(), Showing::FlightMap, "the map over it");
     assert!(driver.flight().leave_due(), "the Q held under the map");
-    driver.press(Key::Char('m'));
+    driver.press(Key::KeyM);
     assert_eq!(driver.showing(), Showing::Spaceport, "back to the offer");
     assert_eq!(port(&driver), (String::new(), Some(MissionId(878))));
     assert!(driver.flight().leave_due(), "still held");

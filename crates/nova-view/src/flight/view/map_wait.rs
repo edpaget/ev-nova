@@ -87,10 +87,10 @@ use crate::{Input, Key};
 /// A latched key held past the close still reads down for every read
 /// that skips its latch (the `latched_reads` module).
 pub(super) const UNLATCHED_KEYS: [Key; 15] = [
-    Key::Up,
-    Key::Left,
-    Key::Right,
-    Key::Down,
+    Key::ArrowUp,
+    Key::ArrowLeft,
+    Key::ArrowRight,
+    Key::ArrowDown,
     FACE_TARGET_KEY,
     AFTERBURNER_KEY,
     FIRE_KEY,
@@ -99,9 +99,9 @@ pub(super) const UNLATCHED_KEYS: [Key; 15] = [
     EJECT_KEY,
     SELF_DESTRUCT_KEY,
     JETTISON_KEY,
-    Key::Alt,
-    Key::Command,
-    Key::Shift,
+    Key::AltLeft,
+    Key::MetaLeft,
+    Key::ShiftLeft,
 ];
 
 /// The keys whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets: L's

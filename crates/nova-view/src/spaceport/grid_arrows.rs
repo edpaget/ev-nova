@@ -65,10 +65,10 @@ impl Arrow {
     /// as Up and Page Down as Down (@0x582c4-0x58307).
     fn of(key: Key) -> Option<Self> {
         match key {
-            Key::Left => Some(Self::Left),
-            Key::Right => Some(Self::Right),
-            Key::Up | Key::PageUp => Some(Self::Up),
-            Key::Down | Key::PageDown => Some(Self::Down),
+            Key::ArrowLeft => Some(Self::Left),
+            Key::ArrowRight => Some(Self::Right),
+            Key::ArrowUp | Key::PageUp => Some(Self::Up),
+            Key::ArrowDown | Key::PageDown => Some(Self::Down),
             _ => None,
         }
     }
@@ -230,62 +230,74 @@ mod tests {
     #[test]
     fn by_the_filter_up_on_the_lists_first_row_stays() {
         for index in 0..4 {
-            assert_eq!(by_filter(Key::Up, index, 0, 10), (index, 0), "{index}");
+            assert_eq!(by_filter(Key::ArrowUp, index, 0, 10), (index, 0), "{index}");
         }
-        assert_eq!(by_filter(Key::Up, 5, 0, 10), (1, 0));
+        assert_eq!(by_filter(Key::ArrowUp, 5, 0, 10), (1, 0));
     }
 
     #[test]
     fn by_the_filter_up_on_the_top_row_shown_scrolls_a_row_and_keeps_the_cell() {
         // 30 listed, scrolled 2 rows: index 9 is visible position 1.
-        assert_eq!(by_filter(Key::Up, 9, 2, 30), (5, 1));
+        assert_eq!(by_filter(Key::ArrowUp, 9, 2, 30), (5, 1));
     }
 
     #[test]
     fn by_the_filter_down_onto_an_empty_cell_stays() {
         // Worked examples 1, 3 and 4.
-        assert_eq!(by_filter(Key::Down, 6, 0, 10), (6, 0));
-        assert_eq!(by_filter(Key::Down, 26, 3, 30), (26, 3));
-        assert_eq!(by_filter(Key::Down, 3, 0, 6), (3, 0));
-        assert_eq!(by_filter(Key::Down, 1, 0, 6), (5, 0), "onto a listed one");
+        assert_eq!(by_filter(Key::ArrowDown, 6, 0, 10), (6, 0));
+        assert_eq!(by_filter(Key::ArrowDown, 26, 3, 30), (26, 3));
+        assert_eq!(by_filter(Key::ArrowDown, 3, 0, 6), (3, 0));
+        assert_eq!(
+            by_filter(Key::ArrowDown, 1, 0, 6),
+            (5, 0),
+            "onto a listed one"
+        );
     }
 
     #[test]
     fn by_the_filter_down_from_the_bottom_row_scrolls_and_steps_back_to_the_last_listed() {
         // Worked example 2: 22 listed, index 19 at cell 19.
-        assert_eq!(by_filter(Key::Down, 19, 0, 22), (21, 1));
+        assert_eq!(by_filter(Key::ArrowDown, 19, 0, 22), (21, 1));
         assert_eq!(
-            by_filter(Key::Down, 16, 0, 22),
+            by_filter(Key::ArrowDown, 16, 0, 22),
             (20, 1),
             "onto a listed one"
         );
         // At scroll 4 the same index is cell 15, and index 23 is empty.
-        assert_eq!(by_filter(Key::Down, 19, 1, 22), (19, 1));
+        assert_eq!(by_filter(Key::ArrowDown, 19, 1, 22), (19, 1));
     }
 
     #[test]
     fn by_the_filter_down_from_the_last_row_with_no_scroll_left_stays() {
-        assert_eq!(by_filter(Key::Down, 29, 3, 30), (29, 3));
-        assert_eq!(by_filter(Key::Down, 17, 0, 20), (17, 0));
+        assert_eq!(by_filter(Key::ArrowDown, 29, 3, 30), (29, 3));
+        assert_eq!(by_filter(Key::ArrowDown, 17, 0, 20), (17, 0));
     }
 
     #[test]
     fn by_the_filter_right_and_left_cross_a_row_by_scrolling() {
-        assert_eq!(by_filter(Key::Right, 19, 0, 21), (20, 1), "the next index");
         assert_eq!(
-            by_filter(Key::Right, 19, 0, 20),
+            by_filter(Key::ArrowRight, 19, 0, 21),
+            (20, 1),
+            "the next index"
+        );
+        assert_eq!(
+            by_filter(Key::ArrowRight, 19, 0, 20),
             (19, 0),
             "no row to scroll"
         );
         assert_eq!(
-            by_filter(Key::Right, 9, 0, 10),
+            by_filter(Key::ArrowRight, 9, 0, 10),
             (9, 0),
             "onto an empty cell"
         );
-        assert_eq!(by_filter(Key::Right, 3, 0, 10), (4, 0));
-        assert_eq!(by_filter(Key::Left, 4, 1, 30), (3, 0), "the previous index");
-        assert_eq!(by_filter(Key::Left, 5, 1, 30), (4, 1));
-        assert_eq!(by_filter(Key::Left, 0, 0, 30), (0, 0));
+        assert_eq!(by_filter(Key::ArrowRight, 3, 0, 10), (4, 0));
+        assert_eq!(
+            by_filter(Key::ArrowLeft, 4, 1, 30),
+            (3, 0),
+            "the previous index"
+        );
+        assert_eq!(by_filter(Key::ArrowLeft, 5, 1, 30), (4, 1));
+        assert_eq!(by_filter(Key::ArrowLeft, 0, 0, 30), (0, 0));
     }
 
     #[test]
@@ -293,7 +305,9 @@ mod tests {
         for moves in [ArrowMoves::Filter, ArrowMoves::Clamped] {
             for count in COUNTS {
                 for (index, top) in on_screen(count) {
-                    for (page, arrow) in [(Key::PageUp, Key::Up), (Key::PageDown, Key::Down)] {
+                    for (page, arrow) in
+                        [(Key::PageUp, Key::ArrowUp), (Key::PageDown, Key::ArrowDown)]
+                    {
                         assert_eq!(
                             moved(moves, page, index, top, count),
                             moved(moves, arrow, index, top, count),
@@ -311,7 +325,7 @@ mod tests {
     fn left_and_right_move_alike_by_both_readings() {
         for count in COUNTS {
             for (index, top) in on_screen(count) {
-                for key in [Key::Left, Key::Right] {
+                for key in [Key::ArrowLeft, Key::ArrowRight] {
                     assert_eq!(
                         moved(ArrowMoves::Filter, key, index, top, count),
                         moved(ArrowMoves::Clamped, key, index, top, count),
@@ -325,28 +339,28 @@ mod tests {
     #[test]
     fn by_the_clamped_reading_up_and_down_go_to_the_ends() {
         let clamped = |key, index, top, count| moved(ArrowMoves::Clamped, key, index, top, count);
-        assert_eq!(clamped(Key::Up, 2, 0, 10), (0, 0));
-        assert_eq!(clamped(Key::Down, 6, 0, 10), (9, 0));
+        assert_eq!(clamped(Key::ArrowUp, 2, 0, 10), (0, 0));
+        assert_eq!(clamped(Key::ArrowDown, 6, 0, 10), (9, 0));
         assert_eq!(clamped(Key::PageUp, 2, 0, 10), (0, 0));
         assert_eq!(clamped(Key::PageDown, 6, 0, 10), (9, 0));
-        assert_eq!(clamped(Key::Down, 19, 1, 22), (21, 1));
-        assert_eq!(clamped(Key::Down, 9, 0, 30), (13, 0));
+        assert_eq!(clamped(Key::ArrowDown, 19, 1, 22), (21, 1));
+        assert_eq!(clamped(Key::ArrowDown, 9, 0, 30), (13, 0));
     }
 
     #[test]
     fn with_no_cell_highlighted_an_arrow_picks_the_first_or_the_last_shown_by_both_readings() {
         for moves in [ArrowMoves::Filter, ArrowMoves::Clamped] {
             for (key, top, count, expected) in [
-                (Key::Right, 0, 30, 0),
-                (Key::Down, 0, 30, 0),
+                (Key::ArrowRight, 0, 30, 0),
+                (Key::ArrowDown, 0, 30, 0),
                 (Key::PageDown, 0, 30, 0),
-                (Key::Left, 0, 30, 19),
-                (Key::Up, 0, 30, 19),
+                (Key::ArrowLeft, 0, 30, 19),
+                (Key::ArrowUp, 0, 30, 19),
                 (Key::PageUp, 0, 30, 19),
                 (Key::PageDown, 1, 30, 4),
                 (Key::PageUp, 1, 30, 23),
                 (Key::PageUp, 0, 7, 6),
-                (Key::Up, 1, 22, 21),
+                (Key::ArrowUp, 1, 22, 21),
             ] {
                 let placed = arrow_move(key, false, 12, top, count, moves);
                 assert_eq!(
@@ -365,22 +379,27 @@ mod tests {
     fn by_the_filter_an_off_screen_selection_is_brought_into_view_then_moved() {
         // Index 2 with the grid scrolled 3 rows of 30: shown at the top,
         // then Up on the first row stays and Down moves a row.
-        assert_eq!(by_filter(Key::Up, 2, 3, 30), (2, 0));
-        assert_eq!(by_filter(Key::Down, 2, 3, 30), (6, 0));
+        assert_eq!(by_filter(Key::ArrowUp, 2, 3, 30), (2, 0));
+        assert_eq!(by_filter(Key::ArrowDown, 2, 3, 30), (6, 0));
         // Index 29 with the grid at its top: shown on the last row.
-        assert_eq!(by_filter(Key::Up, 29, 0, 30), (25, 3));
+        assert_eq!(by_filter(Key::ArrowUp, 29, 0, 30), (25, 3));
     }
 
     #[test]
     fn with_nothing_listed_an_arrow_selects_no_listed_cell() {
-        for key in [Key::Left, Key::Right, Key::Up, Key::Down] {
+        for key in [
+            Key::ArrowLeft,
+            Key::ArrowRight,
+            Key::ArrowUp,
+            Key::ArrowDown,
+        ] {
             assert_eq!(by_filter(key, 0, 0, 0), (0, 0), "{key:?}");
         }
     }
 
     #[test]
     fn other_keys_are_not_arrows() {
-        for key in [Key::Enter, Key::Char('j'), Key::Other] {
+        for key in [Key::Enter, Key::KeyJ, Key::Unidentified] {
             for highlighted in [true, false] {
                 assert_eq!(
                     arrow_move(key, highlighted, 0, 0, 10, ArrowMoves::Filter),

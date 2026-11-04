@@ -338,7 +338,7 @@ mod tests {
         assert!(toggle.on());
         assert!(toggle.input(&key(Key::Space, true, false)));
         assert!(!toggle.on());
-        for other in [Key::Enter, Key::Up, Key::Char(' ')] {
+        for other in [Key::Enter, Key::ArrowUp, Key::Unidentified] {
             assert!(!toggle.input(&key(other, true, false)), "{other:?}");
         }
         assert!(!toggle.input(&Input::Text(' ')), "typed text");

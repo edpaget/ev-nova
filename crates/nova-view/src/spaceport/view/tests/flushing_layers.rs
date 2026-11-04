@@ -15,8 +15,8 @@ fn the_exchange_and_its_quantity_flush_nothing() {
     click_item(&mut view, 7);
     assert!(view.open_trade().is_some());
     assert_eq!(view.flushing_layers(), 0);
-    view.input(&key(Key::Alt));
-    view.input(&key(Key::Char('b')));
+    view.input(&key(Key::AltLeft));
+    view.input(&key(Key::KeyB));
     assert!(view.open_trade().and_then(TradeScreen::quantity).is_some());
     assert_eq!(view.flushing_layers(), 0);
 }
@@ -27,7 +27,7 @@ fn the_outfitter_flushes_and_its_alert_does_but_not_its_quantity() {
     click_item(&mut view, 8);
     assert_eq!(view.flushing_layers(), 1, "_DoOutfitDialog @0x5bd51");
     click_outfit_cell(&mut view, 0);
-    view.input(&key(Key::Alt));
+    view.input(&key(Key::AltLeft));
     let buy = outfit_item(&view, 7);
     click(&mut view, buy);
     assert!(
@@ -48,7 +48,7 @@ fn the_shipyard_flushes_and_so_do_its_panel_and_its_name_prompt() {
     let mut view = shipbuying(Ok(shipyard_template()));
     click_item(&mut view, 9);
     assert_eq!(view.flushing_layers(), 1, "_DoShipyardDialog @0x5e85a");
-    view.input(&key(Key::Right));
+    view.input(&key(Key::ArrowRight));
     let buy = shipyard_item(&view, 1);
     click(&mut view, buy);
     view.open_ship_naming(&naming());

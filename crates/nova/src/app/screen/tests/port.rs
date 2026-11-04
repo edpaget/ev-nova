@@ -26,11 +26,11 @@ fn l_over_the_planet_shows_its_spaceport() {
 fn landing_lets_go_of_the_flight_keys() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
     // Up's release goes to the spaceport, and Leave takes off.
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
     screen.tick(TICK * 5);
@@ -59,7 +59,7 @@ fn leave_takes_off_back_into_flight_at_the_planet() {
     assert_eq!(flight(&screen).session().expect("flying").landed(), None);
     assert_eq!(ship(&screen), nova_sim::ShipState::default());
     // It flies again.
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 3);
     assert!(ship(&screen).position.y < 0.0);
 }
@@ -80,7 +80,7 @@ fn escape_in_the_spaceport_leaves_and_never_quits() {
 fn tab_f_and_i_do_nothing_in_the_spaceport() {
     let mut screen = with_dialogs(data());
     land(&mut screen);
-    for k in [Key::Tab, Key::Char('f'), Key::Char('i'), LAND] {
+    for k in [Key::Tab, Key::KeyF, Key::KeyI, LAND] {
         assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::Spaceport, "{k:?}");
     }
@@ -150,7 +150,7 @@ fn only_the_spaceport_ticks_and_takes_pointer_and_key_resets() {
 fn a_refused_landing_stays_in_flight() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 30);
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight);
@@ -184,7 +184,7 @@ fn an_order_trades_refreshes_the_exchange_and_saves_the_pilot() {
     let mut screen = landed_trader(&store);
     click_port_item(&mut screen, 7);
     let writes = store.writes();
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).cash(), 250, "a click buys up to 10 tons");
     assert_eq!(pilot(&screen).held(FOOD), 10);
     let open = spaceport(&screen).open_trade().expect("trading");
@@ -194,15 +194,15 @@ fn an_order_trades_refreshes_the_exchange_and_saves_the_pilot() {
     assert_eq!(saved(&store, "Ada").held(FOOD), 10);
     // A max sale and a max buy, the quantity dialog's default each
     // confirmed, then a click on Buy with no space.
-    screen.input(&key(Key::Alt, true));
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyS, true));
     assert_eq!(pilot(&screen).held(FOOD), 10, "the dialog asks first");
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).held(FOOD), 0, "everything held");
     assert_eq!(pilot(&screen).cash(), 1000);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Enter, true));
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, false));
     assert_eq!(pilot(&screen).held(FOOD), 10, "the hold is full");
     assert_eq!(pilot(&screen).cash(), 250);
     let writes = store.writes();
@@ -233,17 +233,17 @@ fn alt_b_asks_for_a_count_and_the_count_typed_is_bought_and_saved() {
     let mut screen = landed_trader(&store);
     click_port_item(&mut screen, 7);
     let writes = store.writes();
-    screen.input(&key(Key::Alt, true));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&Input::Text('b'));
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, false));
     let asking = spaceport(&screen)
         .open_trade()
         .and_then(TradeScreen::quantity)
         .expect("asking");
     assert_eq!(asking.field().text(), "10", "min(1000 / 75, 10 free)");
     assert_eq!(store.writes(), writes, "nothing traded yet");
-    screen.input(&key(Key::Char('3'), true));
+    screen.input(&key(Key::Digit3, true));
     screen.input(&Input::Text('3'));
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).held(FOOD), 3);
@@ -258,8 +258,8 @@ fn by_the_other_count_reading_alt_b_buys_the_most_at_once() {
     let store = MemoryPilots::new();
     let mut screen = landed_trader_by(&store, RuleSource::Bible);
     click_port_item(&mut screen, 7);
-    screen.input(&key(Key::Alt, true));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).held(FOOD), 10);
 }
 
@@ -452,7 +452,7 @@ fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
         click_port_item(&mut screen, 8);
         if !kept {
             // It opens with nothing selected by the engine.
-            screen.input(&key(Key::Right, true));
+            screen.input(&key(Key::ArrowRight, true));
         }
         let open = spaceport(&screen).open_outfitter().expect("outfitting");
         let first = open.selected_outfit();
@@ -573,7 +573,7 @@ fn the_hire_screen_opens_by_the_grid_selection_rule() {
             .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics));
         land(&mut screen);
         click_port_item(&mut screen, 11);
-        screen.input(&key(Key::Char('h'), true));
+        screen.input(&key(Key::KeyH, true));
         let hire = spaceport(&screen)
             .open_bar()
             .and_then(BarScreen::hire_screen)
@@ -593,16 +593,16 @@ fn an_outfit_purchase_that_relists_resets_the_outfitters_selection() {
     select_first_outfit(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().row(LICENSED), None, "hidden");
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.selected_outfit(), Some(LICENSE));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).owned(LICENSE), 1);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert!(open.outfitter().row(LICENSED).is_some(), "relisted");
     assert_eq!(open.selected(), None);
     assert_eq!(open.selected_outfit(), Some(BOOSTER));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "Buy answers for 128");
     assert_eq!(pilot(&screen).owned(LICENSE), 1);
     assert_eq!(pilot(&screen).cash(), 400);
@@ -616,7 +616,7 @@ fn an_outfit_purchase_that_leaves_nothing_listed_closes_the_outfitter() {
     select_first_outfit(&mut screen);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().rows.len(), 1);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).cash(), 500, "bought");
     assert_eq!(pilot(&screen).owned(BOOSTER), 0, "taken away");
     assert!(spaceport(&screen).open_outfitter().is_none(), "closed");
@@ -651,17 +651,17 @@ fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
     click_port_item(&mut screen, 7);
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).held(FOOD), 12);
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::KeyS, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
     assert!(spaceport(&screen).open_outfitter().is_some());
     assert_eq!(pilot(&screen).held(FOOD), 12, "kept past the holds");
@@ -734,11 +734,11 @@ fn past_the_holds(store: &MemoryPilots) -> AppScreen {
     assert_eq!(active(&screen), [MissionId(130)]);
     assert_eq!(pilot(&screen).total_cargo(), i64::from(MISSION_TONS));
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
     click_port_item(&mut screen, 7);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(pilot(&screen).held(FOOD), 10);
     click_port_item(&mut screen, 8);
@@ -749,7 +749,7 @@ fn past_the_holds(store: &MemoryPilots) -> AppScreen {
             .is_some_and(|open| open.offer_dialog().is_none()),
         "no offer over the sale"
     );
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::KeyS, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
     assert_eq!(pilot(&screen).held(FOOD), 10, "kept past the holds");
     screen.input(&key(Key::Escape, true));
@@ -789,7 +789,7 @@ fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
     let mut screen = past_the_holds(&MemoryPilots::new());
     click_port_item(&mut screen, 11);
     assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
-    screen.input(&key(Key::Char('h'), true));
+    screen.input(&key(Key::KeyH, true));
     assert!(
         spaceport(&screen)
             .open_bar()
@@ -844,7 +844,7 @@ fn the_bars_map_ticks_its_borders_and_saves_no_change() {
     screen.tick(Duration::from_millis(16));
     let passes = flight(&screen).course_map().border_passes().next();
     assert_eq!(passes, Next::Idle, "the router ticks the flight under it");
-    for k in [Key::Char('b'), MAP] {
+    for k in [Key::KeyB, MAP] {
         screen.input(&key(k, true));
         screen.input(&key(k, false));
     }
@@ -859,7 +859,7 @@ fn find_on_the_bars_map_keeps_escape_and_command_comma_from_it() {
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     for pressed in [true, false] {
-        screen.input(&key(Key::Char('f'), pressed));
+        screen.input(&key(Key::KeyF, pressed));
     }
     assert!(flight(&screen).map_finding());
     screen.input(&key(Key::Escape, true));
@@ -884,13 +884,13 @@ pub(super) fn scrolled_to(screen: &mut AppScreen, system: SystemId) -> nova_view
             .transform()
             .world_to_screen(map.model().system(system).expect("on the map").position());
         let arrow = if at.x < shown.min.x {
-            Key::Left
+            Key::ArrowLeft
         } else if at.x > shown.max.x {
-            Key::Right
+            Key::ArrowRight
         } else if at.y < shown.min.y {
-            Key::Up
+            Key::ArrowUp
         } else if at.y > shown.max.y {
-            Key::Down
+            Key::ArrowDown
         } else {
             return at;
         };
@@ -1070,8 +1070,8 @@ fn the_outfitters_map_puts_back_the_nav_the_outfitter_opened_with() {
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
     assert!(spaceport(&screen).open_outfitter().is_some(), "outfitting");
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::KeyB, false));
     assert_ne!(
         port_nav_mode(&screen),
         Some(LANDED_NAV),
@@ -1149,7 +1149,7 @@ fn tab_on_the_bars_map_changes_nothing() {
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::FlightMap);
-    for k in [Key::Tab, Key::Char('\\')] {
+    for k in [Key::Tab, Key::Backslash] {
         assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
         assert_eq!(nav(&screen), landed, "{k:?}");
@@ -1188,7 +1188,7 @@ fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
         .handling()
         .max_speed;
     let writes = store.writes();
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1);
     assert_eq!(pilot(&screen).cash(), 500);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
@@ -1203,7 +1203,7 @@ fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
         .max_speed;
     assert!((faster - speed - 3.0).abs() < 1e-6, "{speed} to {faster}");
     // Another, then a click on Buy with too little left to pay.
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).cash(), 0);
     let writes = store.writes();
     let buy = spaceport(&screen)
@@ -1222,7 +1222,7 @@ fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
     assert_eq!(pilot(&screen).owned(BOOSTER), 2, "greyed");
     assert_eq!(store.writes(), writes, "nothing to save");
     // S sells one back, bought since the outfitter opened: in full.
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::KeyS, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1);
     assert_eq!(pilot(&screen).cash(), 500);
     // Escape closes the outfitter; the spaceport stays.
@@ -1237,17 +1237,17 @@ fn a_sale_refused_in_the_loop_opens_its_words_over_the_outfitter() {
     let mut screen = landed_outfitter_over(&store, pod_data());
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Left, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowLeft, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1);
     assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     assert_eq!(open.outfitter().free_mass, 5);
     assert!(open.alert_dialog().is_none());
     let (cash, writes) = (pilot(&screen).cash(), store.writes());
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::KeyS, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "nothing sold");
     assert_eq!(pilot(&screen).cash(), cash);
     assert_eq!(store.writes(), writes, "nothing to save");
@@ -1270,11 +1270,11 @@ fn a_counted_sale_refused_part_way_keeps_its_sales_and_opens_its_words() {
     let mut screen = landed_outfitter_over(&store, two_pod_data());
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Char('b'), true));
-    screen.input(&key(Key::Left, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&key(Key::ArrowLeft, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 2);
     assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
@@ -1282,11 +1282,11 @@ fn a_counted_sale_refused_part_way_keeps_its_sales_and_opens_its_words() {
     let refund = open.outfitter().refund(BOOSTER).expect("a refund");
     let (cash, writes) = (pilot(&screen).cash(), store.writes());
     // Alt-S, as a Mac sends Option-S, then a count of 2.
-    screen.input(&key(Key::Alt, true));
-    screen.input(&key(Key::Char('s'), true));
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyS, true));
     screen.input(&Input::Text('ß'));
-    screen.input(&key(Key::Alt, false));
-    screen.input(&key(Key::Char('2'), true));
+    screen.input(&key(Key::AltLeft, false));
+    screen.input(&key(Key::Digit2, true));
     screen.input(&Input::Text('2'));
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "one sold, then refused");
@@ -1309,7 +1309,7 @@ fn alt_on_buy_asks_for_a_count_and_buys_the_count_typed() {
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
     let writes = store.writes();
-    screen.input(&key(Key::Alt, true));
+    screen.input(&key(Key::AltLeft, true));
     let buy = spaceport(&screen)
         .open_outfitter()
         .and_then(|open| open.dialog())
@@ -1323,12 +1323,12 @@ fn alt_on_buy_asks_for_a_count_and_buys_the_count_typed() {
             at: buy,
         });
     }
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, false));
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
     let asking = open.quantity().expect("asking");
     assert_eq!(asking.field().text(), "2", "1000 / 500");
     assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the dialog asks first");
-    screen.input(&key(Key::Char('2'), true));
+    screen.input(&key(Key::Digit2, true));
     screen.input(&Input::Text('2'));
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 2);
@@ -1373,7 +1373,7 @@ fn click_at(screen: &mut AppScreen, at: nova_view::Point) {
 /// quantity dialog it opens, leaving the boosters owned as they were.
 fn cancel_a_count_on(screen: &mut AppScreen, item: usize) {
     let owned = pilot(screen).owned(BOOSTER);
-    screen.input(&key(Key::Alt, true));
+    screen.input(&key(Key::AltLeft, true));
     let button = spaceport(screen)
         .open_outfitter()
         .and_then(|open| open.dialog())
@@ -1381,7 +1381,7 @@ fn cancel_a_count_on(screen: &mut AppScreen, item: usize) {
         .expect("the button")
         .center();
     click_at(screen, button);
-    screen.input(&key(Key::Alt, false));
+    screen.input(&key(Key::AltLeft, false));
     let cancel = spaceport(screen)
         .open_outfitter()
         .and_then(|open| open.quantity())
@@ -1407,7 +1407,7 @@ fn a_cancelled_quantity_after_an_allowed_buy_or_sell_passes_the_outfits_day_at_t
         (2, OUTFIT_SELL_ITEM, "a Sell's"),
     ] {
         let bought = take_off_date_after(seeded, |screen| {
-            screen.input(&key(Key::Char('b'), true));
+            screen.input(&key(Key::KeyB, true));
             assert_eq!(pilot(screen).owned(BOOSTER), seeded + 1);
         });
         let untouched = take_off_date_after(seeded, |_| {});
@@ -1424,7 +1424,7 @@ fn a_move_by_a_purchase_hook_keeps_the_spaceport_open_and_saves_the_pilot_moved(
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
     let writes = store.writes();
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
     assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
     let open = spaceport(&screen).open_outfitter().expect("outfitting");
@@ -1452,7 +1452,7 @@ fn a_q_by_a_purchase_hook_closes_the_spaceport_takes_off_and_saves() {
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
     let writes = store.writes();
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.spaceport_view().is_none());
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "bought first");
@@ -1477,7 +1477,7 @@ fn a_q_by_a_purchase_hook_closes_the_spaceport_takes_off_and_saves() {
         !sounds.contains(&Sound::Sim(nova_sim::SimSound::ScriptMessage)),
         "no beep on the take-off"
     );
-    screen.input(&key(Key::Char('l'), true));
+    screen.input(&key(Key::KeyL, true));
     assert_eq!(screen.showing(), Showing::Flight, "flight takes the keys");
 }
 
@@ -1487,7 +1487,7 @@ fn a_sound_by_a_purchase_hook_plays_after_the_take_off() {
     let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"P300"));
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.tick(Duration::from_millis(100));
     let mission = Sound::Sim(SimSound::Script {
         sound: nova_sim::SoundId(300),
@@ -1559,12 +1559,12 @@ fn an_order_in_one_refreshes_the_other_for_when_it_opens() {
     land_twice(&mut screen);
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 7);
     let open = spaceport(&screen).open_trade().expect("trading");
     assert_eq!(open.market().cash, 500, "the outfit was paid for");
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).held(FOOD), 6, "500 at 75");
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 8);
@@ -1597,9 +1597,9 @@ fn the_shipyard_opens_the_stellars_shipyard() {
 
 /// Presses B, as the platform sends it: the key, then its character.
 fn press_b(screen: &mut AppScreen) {
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&Input::Text('b'));
-    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::KeyB, false));
 }
 
 /// The name prompt open over the shipyard, if it is.
@@ -1667,7 +1667,7 @@ fn a_refused_ship_order_changes_nothing_and_saves_nothing() {
     // Ship 130: 200 and a 400 trade-in do not cover 5,000.
     click_port_item(&mut screen, 9);
     select_first_ship(&mut screen);
-    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::ArrowRight, true));
     let open = spaceport(&screen).open_shipyard().expect("shipbuying");
     assert_eq!(
         open.shipyard().can(ShipId(130)),
@@ -1739,9 +1739,9 @@ fn typing_a_ship_name_never_opens_the_dialogs_under_it() {
     select_first_ship(&mut screen);
     press_b(&mut screen);
     for c in ['p', 'i', 'f'] {
-        screen.input(&key(Key::Char(c), true));
+        screen.input(&key(nova_view::letter_key(c).expect("a letter key"), true));
         screen.input(&Input::Text(c));
-        screen.input(&key(Key::Char(c), false));
+        screen.input(&key(nova_view::letter_key(c).expect("a letter key"), false));
     }
     assert!(screen.preferences().is_none(), "no Preferences");
     assert_eq!(screen.showing(), Showing::Spaceport);
@@ -1750,7 +1750,7 @@ fn typing_a_ship_name_never_opens_the_dialogs_under_it() {
     // Once it is closed, P opens the player info.
     click_cancel(&mut screen);
     assert!(name_prompt(&screen).is_none(), "declined");
-    screen.input(&key(Key::Char('p'), true));
+    screen.input(&key(Key::KeyP, true));
     assert!(screen.preferences().is_none());
     assert!(
         spaceport(&screen).player_info().is_some(),
@@ -1876,8 +1876,8 @@ fn a_ship_declined_stays_listed_while_open_and_draws_its_roll_again_at_the_next_
     assert_eq!(rolls.borrow().asked, 1);
     // Player info over the shipyard hands the shops back: the list
     // built as it opened is relisted, and nothing is drawn.
-    screen.input(&key(Key::Char('p'), true));
-    screen.input(&key(Key::Char('p'), false));
+    screen.input(&key(Key::KeyP, true));
+    screen.input(&key(Key::KeyP, false));
     assert!(spaceport(&screen).player_info().is_some(), "player info");
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
@@ -1888,7 +1888,7 @@ fn a_ship_declined_stays_listed_while_open_and_draws_its_roll_again_at_the_next_
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the outfit was bought");
     assert_eq!(rolls.borrow().asked, 1, "not drawn by the outfitter");
     screen.input(&key(Key::Escape, true));
@@ -2119,7 +2119,7 @@ fn click_for_outfit(screen: &mut AppScreen, outfit: OutfitId, item: usize) {
         if open.selected_outfit() == Some(outfit) {
             break;
         }
-        screen.input(&key(Key::Right, true));
+        screen.input(&key(Key::ArrowRight, true));
     }
     let open = spaceport(screen).open_outfitter().expect("outfitting");
     assert_eq!(open.selected_outfit(), Some(outfit));
@@ -2193,7 +2193,7 @@ fn a_ship_bought_carrying_iff_turns_the_bars_radar_black_at_once() {
 /// every 8 ticks, has just refreshed, then 7 ticks more: it holds the
 /// ship as it was 7 ticks back.
 fn stale_radar(screen: &mut AppScreen) {
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     for _ in 0..200 {
         screen.tick(TICK);
     }
@@ -2466,7 +2466,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
         "the hire screen",
         |screen| {
             click_port_item(screen, 11);
-            screen.input(&key(Key::Char('h'), true));
+            screen.input(&key(Key::KeyH, true));
         },
         |port| port.open_bar().and_then(BarScreen::hire_screen).is_some(),
     ),
@@ -2474,7 +2474,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
         "the hire screen's description",
         |screen| {
             click_port_item(screen, 11);
-            screen.input(&key(Key::Char('h'), true));
+            screen.input(&key(Key::KeyH, true));
             select_first_ship(screen);
             screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
         },

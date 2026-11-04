@@ -172,12 +172,12 @@ const NO_LIST: Bounds = Bounds {
 
 /// The keys that leave the mission computer, besides Leave: Return (and
 /// Enter), Escape and L (`_MissionFilter` @0x9f885-0x9f8af, @0xa0212).
-pub const LEAVE_KEYS: [Key; 3] = [Key::Enter, Key::Escape, Key::Char('l')];
+pub const LEAVE_KEYS: [Key; 3] = [Key::Enter, Key::Escape, Key::KeyL];
 
 /// The key that accepts the selected offer: A (key code 0x00), on a
 /// press only, giving Accept when a row is selected and nothing otherwise
 /// (`_MissionFilter` @0x9f8b4-0x9f8c7, @0xa0201).
-pub const ACCEPT_KEY: Key = Key::Char('a');
+pub const ACCEPT_KEY: Key = Key::KeyA;
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
 #[derive(Clone)]
@@ -241,10 +241,10 @@ fn list_step(ring: FocusRing, input: &Input) -> Option<bool> {
             repeat: false,
         } if ring == FocusRing::Off => Some(true),
         Input::Key {
-            key: key @ (Key::Up | Key::Down),
+            key: key @ (Key::ArrowUp | Key::ArrowDown),
             pressed: true,
             ..
-        } => Some(key == Key::Down),
+        } => Some(key == Key::ArrowDown),
         _ => None,
     }
 }
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn selecting_another_offer_shows_its_text_and_blanks_the_name_until_it_loads() {
         let mut screen = screen();
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(item_text(&screen, NAME_ITEM), "");
         assert_eq!(item_text(&screen, TEXT_ITEM), "Go on foot.");
         let first = screen
@@ -1244,9 +1244,9 @@ mod tests {
         let _ = screen.take_text_request();
         screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &mut names);
         assert_eq!(item_text(&screen, NAME_ITEM), "Run to Mars");
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(item_text(&screen, NAME_ITEM), "", "by key");
-        screen.input(&key(Key::Up));
+        screen.input(&key(Key::ArrowUp));
         assert_eq!(item_text(&screen, NAME_ITEM), "", "back by key");
         screen.show_row(&row(130, "Run to Mars", "Take this to Mars."), &mut names);
         let second = screen
@@ -1368,7 +1368,7 @@ mod tests {
             "the first, as it opens (_DoMissionDialog @0xa3a96)"
         );
         assert_eq!(screen.take_text_request(), None, "once");
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(screen.take_text_request(), Some(MissionId(131)));
         screen.input(&key(Key::Escape));
         assert_eq!(screen.take_text_request(), None, "no new selection");
@@ -1396,7 +1396,7 @@ mod tests {
     fn accept_asks_for_the_selected_mission_once() {
         let mut screen = screen();
         assert_eq!(screen.take_accept(), None);
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         click_item(&mut screen, ACCEPT_ITEM);
         assert_eq!(screen.take_accept(), Some(MissionId(131)));
         assert_eq!(screen.take_accept(), None, "once");
@@ -1431,11 +1431,14 @@ mod tests {
     fn up_and_down_wrap_at_the_ends_of_the_computer() {
         let mut screen = screen_of(three());
         assert_eq!(
-            stepped(&mut screen, &[key(Key::Up), key(Key::Down), key(Key::Down)]),
+            stepped(
+                &mut screen,
+                &[key(Key::ArrowUp), key(Key::ArrowDown), key(Key::ArrowDown)]
+            ),
             [Some(132), Some(130), Some(131)]
         );
         let repeat = Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: true,
             repeat: true,
         };
@@ -1445,7 +1448,7 @@ mod tests {
             "repeats step and wrap too"
         );
         let release = Input::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: false,
             repeat: false,
         };
@@ -1471,7 +1474,7 @@ mod tests {
     #[test]
     fn shift_tab_also_steps_forward_on_the_computer() {
         let mut screen = screen_of(three()).with_focus_ring(FocusRing::Off);
-        screen.input(&key(Key::Shift));
+        screen.input(&key(Key::ShiftLeft));
         screen.input(&key(Key::Tab));
         assert_eq!(screen.selected_mission(), Some(MissionId(131)));
     }
@@ -1499,7 +1502,10 @@ mod tests {
         })
         .with_focus_ring(FocusRing::Off);
         assert_eq!(
-            stepped(&mut screen, &[key(Key::Tab), key(Key::Up), key(Key::Down)]),
+            stepped(
+                &mut screen,
+                &[key(Key::Tab), key(Key::ArrowUp), key(Key::ArrowDown)]
+            ),
             [None, None, None]
         );
     }
@@ -1520,7 +1526,7 @@ mod tests {
     fn a_accepts_the_selected_offer() {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             let mut screen = screen().with_focus_ring(ring);
-            screen.input(&key(Key::Down));
+            screen.input(&key(Key::ArrowDown));
             screen.input(&key(ACCEPT_KEY));
             assert_eq!(screen.take_accept(), Some(MissionId(131)), "{ring:?}");
             assert!(!screen.closed());
@@ -1540,7 +1546,7 @@ mod tests {
             empty.input(&key(ACCEPT_KEY));
             assert_eq!(empty.take_accept(), None, "nothing selected");
         }
-        assert_eq!(ACCEPT_KEY, Key::Char('a'));
+        assert_eq!(ACCEPT_KEY, Key::KeyA);
     }
 
     #[test]
@@ -1566,7 +1572,7 @@ mod tests {
         }
         let mut repeating = screen();
         repeating.input(&Input::Key {
-            key: Key::Char('l'),
+            key: Key::KeyL,
             pressed: true,
             repeat: true,
         });
@@ -1574,13 +1580,13 @@ mod tests {
         let mut screen = screen();
         click_item(&mut screen, LEAVE_ITEM);
         assert!(screen.closed());
-        assert_eq!(LEAVE_KEYS, [Key::Enter, Key::Escape, Key::Char('l')]);
+        assert_eq!(LEAVE_KEYS, [Key::Enter, Key::Escape, Key::KeyL]);
     }
 
     #[test]
     fn a_new_computer_keeps_the_selected_mission_while_it_is_listed() {
         let mut screen = screen();
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         screen.set_computer(MissionComputer {
             rows: vec![row(129, "Fly", "Up."), row(131, "Walk", "Go on foot.")],
             ..computer()
@@ -1701,17 +1707,17 @@ mod tests {
         };
         shows_whole_lines_from_the_top(&drawn(&screen), &text(&screen));
         for (input, selected) in [
-            (key(Key::Down), 1),
+            (key(Key::ArrowDown), 1),
             (
                 Input::Key {
-                    key: Key::Down,
+                    key: Key::ArrowDown,
                     pressed: true,
                     repeat: true,
                 },
                 0,
             ),
-            (key(Key::Up), 1),
-            (key(Key::Up), 0),
+            (key(Key::ArrowUp), 1),
+            (key(Key::ArrowUp), 0),
         ] {
             screen.input(&input);
             assert_eq!(screen.selected_mission(), Some(MissionId(130 + selected)));
@@ -1957,12 +1963,12 @@ mod tests {
     #[test]
     fn selecting_a_mission_shows_its_text_and_greys_abort_unless_it_can_be_aborted() {
         let mut screen = info_screen();
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Hold on.");
         assert!(!info_enabled(&screen, ABORT_LABEL));
         click_info(&mut screen, ABORT_ITEM);
         assert_eq!(screen.take_abort(), None, "greyed");
-        screen.input(&key(Key::Up));
+        screen.input(&key(Key::ArrowUp));
         click_info(&mut screen, ABORT_ITEM);
         assert_eq!(screen.take_abort(), Some(0));
         assert_eq!(screen.take_abort(), None, "once");
@@ -2044,17 +2050,17 @@ mod tests {
         };
         shows_whole_lines_from_the_top(&info_drawn(&screen), &text(&screen));
         for (input, slot) in [
-            (key(Key::Down), 3),
+            (key(Key::ArrowDown), 3),
             (
                 Input::Key {
-                    key: Key::Down,
+                    key: Key::ArrowDown,
                     pressed: true,
                     repeat: true,
                 },
                 0,
             ),
-            (key(Key::Up), 3),
-            (key(Key::Up), 0),
+            (key(Key::ArrowUp), 3),
+            (key(Key::ArrowUp), 0),
         ] {
             screen.input(&input);
             assert_eq!(screen.selected_row().map(|row| row.slot), Some(slot));
@@ -2110,7 +2116,10 @@ mod tests {
         for ring in BOTH_RINGS {
             let mut screen = info_screen_of(three_info()).with_focus_ring(ring);
             assert_eq!(
-                info_stepped(&mut screen, &[key(Key::Up), key(Key::Down), key(Key::Down)]),
+                info_stepped(
+                    &mut screen,
+                    &[key(Key::ArrowUp), key(Key::ArrowDown), key(Key::ArrowDown)]
+                ),
                 [Some(5), Some(0), Some(3)],
                 "@0x9da56, @0x9d833 ({ring:?})"
             );
@@ -2122,12 +2131,16 @@ mod tests {
             assert_eq!(
                 info_stepped(
                     &mut screen,
-                    &[repeat(Key::Down), repeat(Key::Down), repeat(Key::Up)]
+                    &[
+                        repeat(Key::ArrowDown),
+                        repeat(Key::ArrowDown),
+                        repeat(Key::ArrowUp)
+                    ]
                 ),
                 [Some(5), Some(0), Some(5)],
                 "repeats step and wrap too ({ring:?})"
             );
-            for release in [Key::Up, Key::Down] {
+            for release in [Key::ArrowUp, Key::ArrowDown] {
                 screen.input(&Input::Key {
                     key: release,
                     pressed: false,
@@ -2150,12 +2163,12 @@ mod tests {
             let visible = screen.rows().expect("laid out").visible();
             assert!(visible < 12, "more than fit");
             let first = |screen: &MissionInfoScreen| screen.rows().map(RowList::first);
-            screen.input(&key(Key::Up));
+            screen.input(&key(Key::ArrowUp));
             assert_eq!(first(&screen), Some(12 - visible), "the last row shown");
-            screen.input(&key(Key::Down));
+            screen.input(&key(Key::ArrowDown));
             assert_eq!(first(&screen), Some(0), "the first row shown");
             for _ in 0..visible {
-                screen.input(&key(Key::Down));
+                screen.input(&key(Key::ArrowDown));
             }
             assert_eq!(first(&screen), Some(1), "a row at a time");
         }
@@ -2171,7 +2184,7 @@ mod tests {
             .with_focus_ring(ring);
             screen.take_text_request();
             screen.show_text(3, "Loaded.");
-            for k in [Key::Up, Key::Down] {
+            for k in [Key::ArrowUp, Key::ArrowDown] {
                 screen.input(&key(k));
                 assert_eq!(screen.rows().and_then(RowList::selected), Some(0));
                 assert_eq!(screen.take_text_request(), None, "{k:?} ({ring:?})");
@@ -2196,7 +2209,10 @@ mod tests {
         })
         .with_focus_ring(FocusRing::Off);
         assert_eq!(
-            info_stepped(&mut screen, &[key(Key::Tab), key(Key::Up), key(Key::Down)]),
+            info_stepped(
+                &mut screen,
+                &[key(Key::Tab), key(Key::ArrowUp), key(Key::ArrowDown)]
+            ),
             [None, None, None]
         );
     }
@@ -2234,7 +2250,7 @@ mod tests {
     #[test]
     fn shift_tab_also_steps_forward_on_the_info_screen() {
         let mut screen = info_screen_of(three_info()).with_focus_ring(FocusRing::Off);
-        screen.input(&key(Key::Shift));
+        screen.input(&key(Key::ShiftLeft));
         screen.input(&key(Key::Tab));
         assert_eq!(screen.selected_row().map(|row| row.slot), Some(3));
     }
@@ -2290,7 +2306,7 @@ mod tests {
     #[test]
     fn new_info_keeps_the_selected_slot_and_closes_with_nothing_left() {
         let mut screen = info_screen();
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         screen.set_info(MissionInfo {
             rows: vec![info_row(3, "Stay", true, "Hold on.", false)],
             ..info()
@@ -2362,14 +2378,14 @@ mod tests {
     fn after_an_abort_down_selects_the_first_mission_and_up_the_last() {
         let mut screen = after_an_abort();
         assert_eq!(
-            info_stepped(&mut screen, &[key(Key::Down)]),
+            info_stepped(&mut screen, &[key(Key::ArrowDown)]),
             [Some(3)],
             "@0x9d839"
         );
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Hold on.");
         let mut screen = after_an_abort();
         assert_eq!(
-            info_stepped(&mut screen, &[key(Key::Up)]),
+            info_stepped(&mut screen, &[key(Key::ArrowUp)]),
             [Some(5)],
             "@0x9da60"
         );
@@ -2380,7 +2396,7 @@ mod tests {
     #[test]
     fn a_refused_abort_keeps_the_selected_slot() {
         let mut screen = info_screen_of(three_info());
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         screen.set_info(three_info());
         assert_eq!(screen.selected_row().map(|row| row.slot), Some(3));
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Hold on.");
@@ -2533,7 +2549,7 @@ mod tests {
             Some(MapOpener::Computer(Some(MissionId(130))))
         );
         assert_eq!(screen.take_map_request(), None, "once");
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         screen.input(&press);
         assert_eq!(
             screen.take_map_request(),
@@ -2570,7 +2586,7 @@ mod tests {
             Some(MapOpener::MissionInfo(Some(0)))
         );
         assert_eq!(screen.take_map_request(), None, "once");
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         screen.input(&press);
         assert_eq!(
             screen.take_map_request(),
@@ -2612,8 +2628,8 @@ mod tests {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             for k in [
                 Key::Tab,
-                Key::Up,
-                Key::Down,
+                Key::ArrowUp,
+                Key::ArrowDown,
                 MISSION_INFO_KEY,
                 crate::ui::player_info::PLAYER_INFO_KEY,
                 ACCEPT_KEY,
@@ -2644,7 +2660,7 @@ mod tests {
                 }
                 assert_eq!(screen.take_sounds(), [CLOSED], "{k:?} ({ring:?})");
             }
-            for k in [Key::Tab, Key::Up, Key::Down] {
+            for k in [Key::Tab, Key::ArrowUp, Key::ArrowDown] {
                 let mut screen = info_screen().with_focus_ring(ring);
                 screen.take_sounds();
                 for input in press_and_release(k) {
@@ -2755,12 +2771,12 @@ mod tests {
         assert_eq!(screen.take_text_request(), Some(0), "row 0 picks slot 0");
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Shh.");
         assert!(!info_enabled(&screen, ABORT_LABEL), "slot 0's grey");
-        screen.input(&key(Key::Char('m')));
+        screen.input(&key(Key::KeyM));
         assert_eq!(
             screen.take_map_request(),
             Some(MapOpener::MissionInfo(Some(0)))
         );
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(
             screen.take_text_request(),
             Some(1),
@@ -2774,8 +2790,8 @@ mod tests {
     fn with_a_table_a_step_can_select_past_the_rows() {
         let mut screen = info_screen_of(tabled());
         let _ = screen.take_text_request();
-        screen.input(&key(Key::Down));
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(
             screen.rows().and_then(RowList::selected),
             Some(2),
@@ -2794,7 +2810,7 @@ mod tests {
             })
             .count();
         assert_eq!(highlights, 0, "no row highlighted");
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(
             screen.rows().and_then(RowList::selected),
             Some(0),
@@ -2931,7 +2947,7 @@ mod tests {
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "", "item 4 black");
         assert!(!info_enabled(&screen, ABORT_LABEL), "Abort greyed");
         assert_eq!(screen.take_text_request(), None);
-        screen.input(&key(Key::Char('m')));
+        screen.input(&key(Key::KeyM));
         assert_eq!(
             screen.take_map_request(),
             Some(MapOpener::MissionInfo(None)),
@@ -2948,7 +2964,7 @@ mod tests {
         }
         assert_eq!(first_shown(&screen), Some(3), "row 0 scrolled out above");
         let _ = screen.take_text_request();
-        screen.input(&key(Key::Down));
+        screen.input(&key(Key::ArrowDown));
         assert_eq!(screen.rows().and_then(RowList::selected), Some(1));
         assert_eq!(
             first_shown(&screen),
@@ -3106,7 +3122,7 @@ mod tests {
         assert_eq!(screen.take_text_request(), None);
         screen.input(&key(ACCEPT_KEY));
         assert_eq!(screen.take_accept(), None, "A accepts nothing");
-        screen.input(&key(Key::Char('m')));
+        screen.input(&key(Key::KeyM));
         assert_eq!(screen.take_map_request(), Some(MapOpener::Computer(None)));
     }
 }

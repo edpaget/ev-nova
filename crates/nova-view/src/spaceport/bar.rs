@@ -168,15 +168,15 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 
 /// The keys that press Hire Escort (`_BarFilter`: Mac virtual keys 4 and
 /// 14).
-pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
+pub const HIRE_KEYS: [Key; 2] = [Key::KeyH, Key::KeyE];
 
 /// The keys that press Gamble (`_BarFilter`: Mac virtual keys 0x05 and
 /// 0x0F, @0x47b1c-0x47b31).
-pub const GAMBLE_KEYS: [Key; 2] = [Key::Char('g'), Key::Char('r')];
+pub const GAMBLE_KEYS: [Key; 2] = [Key::KeyG, Key::KeyR];
 
 /// The keys that press Holovid, the News button (`_BarFilter`: Mac
 /// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
-pub const NEWS_KEYS: [Key; 2] = [Key::Char('n'), Key::Char('w')];
+pub const NEWS_KEYS: [Key; 2] = [Key::KeyN, Key::KeyW];
 
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
@@ -1409,10 +1409,10 @@ mod tests {
                 .and_then(|dialog| dialog.text(TEXT_ITEM))
                 .map(ScrollText::first)
         };
-        screen.input(&key(Key::Down, false));
-        screen.input(&key(Key::Down, true));
+        screen.input(&key(Key::ArrowDown, false));
+        screen.input(&key(Key::ArrowDown, true));
         assert_eq!(first(&screen), Some(2));
-        screen.input(&key(Key::Up, false));
+        screen.input(&key(Key::ArrowUp, false));
         assert_eq!(first(&screen), Some(1));
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
             screen.input(&key(gamble, false));
             assert!(screen.take_gamble_request(), "{gamble:?}");
         }
-        assert_eq!(GAMBLE_KEYS, [Key::Char('g'), Key::Char('r')]);
+        assert_eq!(GAMBLE_KEYS, [Key::KeyG, Key::KeyR]);
         assert!(!screen.take_hire_request() && !screen.take_news_request());
         assert!(!screen.closed());
     }
@@ -1477,7 +1477,7 @@ mod tests {
         assert_eq!(held(&screen), Some(GAMBLE_ITEM), "no redraw on release");
         screen.release_gamble();
         assert_eq!(held(&screen), None);
-        screen.input(&key(Key::Char('g'), false));
+        screen.input(&key(Key::KeyG, false));
         assert_eq!(held(&screen), None, "a key draws no press");
     }
 
@@ -1517,9 +1517,9 @@ mod tests {
         let words: Vec<String> = texts(&screen).into_iter().map(|(text, _)| text).collect();
         assert!(words.iter().any(|text| text == "Cancel"), "{words:?}");
         for taken in [
-            key(Key::Char('h'), false),
-            key(Key::Char('n'), false),
-            key(Key::Char('g'), false),
+            key(Key::KeyH, false),
+            key(Key::KeyN, false),
+            key(Key::KeyG, false),
             key(MAP_KEY, false),
         ] {
             screen.input(&taken);
@@ -1606,7 +1606,7 @@ mod tests {
     fn the_bar_lets_go_of_the_races_alt() {
         let mut screen = racing();
         screen.open_race(4_000);
-        screen.input(&key(Key::Alt, false));
+        screen.input(&key(Key::AltLeft, false));
         screen.release_keys();
         let racer = screen
             .race_screen()
@@ -1667,7 +1667,7 @@ mod tests {
             screen.input(&key(hire, false));
             assert!(screen.take_hire_request(), "{hire:?}");
         }
-        assert_eq!(HIRE_KEYS, [Key::Char('h'), Key::Char('e')]);
+        assert_eq!(HIRE_KEYS, [Key::KeyH, Key::KeyE]);
         assert!(!screen.closed());
     }
 
@@ -1681,7 +1681,7 @@ mod tests {
         let mut screen = bar_of(&art, false);
         assert!(!enabled(&screen, HIRE_ESCORT));
         click_item(&mut screen, HIRE_ITEM);
-        screen.input(&key(Key::Char('h'), false));
+        screen.input(&key(Key::KeyH, false));
         assert!(!screen.take_hire_request());
     }
 
@@ -1747,7 +1747,7 @@ mod tests {
         let mut screen = laid_hire_bar();
         let bar_desc = screen.take_description_request().expect("the bar's");
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(screen.take_description_request(), Some(14_000));
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(14_000, "Loaded pilot.");
@@ -1775,7 +1775,7 @@ mod tests {
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         screen.input(&key(MISSION_INFO_KEY, false));
         assert!(screen.take_info_request());
         assert!(screen.hire_screen().is_some(), "still open");
@@ -1803,7 +1803,7 @@ mod tests {
     fn the_mission_info_key_asks_from_the_hire_info_panel_which_stays_open() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
         assert!(
             screen
@@ -1827,7 +1827,7 @@ mod tests {
     fn the_map_key_asks_for_the_shipyards_map_from_the_hire_screen_and_its_info_panel() {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         screen.input(&key(MAP_KEY, false));
         assert_eq!(
             screen.take_map_request(),
@@ -1856,7 +1856,7 @@ mod tests {
     fn the_mission_info_key_asks_nothing_from_a_hire_screen_without_its_dialog() {
         let mut screen = bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert!(
             screen
                 .hire_screen()
@@ -1870,7 +1870,7 @@ mod tests {
     fn the_hire_screen_opens_over_the_bar_and_takes_every_input_until_it_closes() {
         let mut screen = bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         let hire = screen.hire_screen().expect("open");
         assert_eq!(hire.problem(), Some("no DLOG 1004"), "its own template");
         assert_eq!(hire.list().rows.len(), 2);
@@ -1922,8 +1922,8 @@ mod tests {
         );
         assert_eq!(screen.take_hire(), None, "no hire screen");
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
-        screen.input(&key(Key::Char('h'), false));
+        screen.input(&key(Key::ArrowRight, false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         assert_eq!(screen.take_hire(), None, "once");
         let full = HireList {
@@ -1963,9 +1963,9 @@ mod tests {
                 .any(|(text, color)| text.contains("no DLOG 1013") && *color == Color::ERROR)
         );
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert!(screen.hire_screen().is_none());
-        screen.input(&key(Key::Char('h'), false));
+        screen.input(&key(Key::KeyH, false));
         assert!(!screen.take_hire_request());
         screen.input(&key(Key::Escape, false));
         assert!(screen.closed());
@@ -2034,7 +2034,7 @@ mod tests {
             true,
         );
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         let hire = screen
             .hire_screen()
             .and_then(HireScreen::dialog)
@@ -2197,7 +2197,7 @@ mod tests {
         assert!(!screen.closed(), "Escape does nothing in the offer");
         assert!(screen.offer_dialog().is_some());
         assert_eq!(screen.take_offer_choice(), None);
-        screen.input(&key(Key::Char('n'), false));
+        screen.input(&key(Key::KeyN, false));
         assert!(screen.offer_dialog().is_none(), "answered, it closes");
         assert_eq!(
             screen.take_offer_choice(),
@@ -2297,7 +2297,7 @@ mod tests {
     fn by_the_engine_an_offer_due_under_the_hire_screen_is_asked_for_as_it_closes() {
         let mut screen = offering();
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert!(screen.take_offer_restart(), "the hire screen restarts it");
         screen.rearm(ms(600));
         screen.tick(ms(10_000));
@@ -2317,7 +2317,7 @@ mod tests {
         screen.tick(ms(500));
         assert!(!screen.take_offer_restart());
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert!(screen.take_offer_restart());
         assert!(!screen.take_offer_restart(), "once");
         screen.rearm(ms(600));
@@ -2346,7 +2346,7 @@ mod tests {
     fn by_the_other_reading_the_hire_screen_neither_restarts_nor_runs_the_wait() {
         let mut screen = offering().with_offer_clock(RuleSource::Bible);
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert!(!screen.take_offer_restart());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
@@ -2456,7 +2456,7 @@ mod tests {
             screen.input(&key(news, false));
             assert!(screen.take_news_request(), "{news:?}");
         }
-        assert_eq!(NEWS_KEYS, [Key::Char('n'), Key::Char('w')]);
+        assert_eq!(NEWS_KEYS, [Key::KeyN, Key::KeyW]);
         assert!(!screen.take_hire_request());
         assert!(!screen.closed());
         assert!(screen.news_screen().is_none(), "the answer opens it");
@@ -2482,7 +2482,7 @@ mod tests {
             "the news covers the bar: {words:?}"
         );
         assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::NewsOpened)]);
-        for taken in [key(Key::Char('h'), false), key(Key::Char('n'), false)] {
+        for taken in [key(Key::KeyH, false), key(Key::KeyN, false)] {
             screen.input(&taken);
         }
         assert!(!screen.take_hire_request() && !screen.take_news_request());
@@ -2576,7 +2576,7 @@ mod tests {
         assert!(screen.take_info_request());
         assert!(!screen.take_info_request(), "once");
         assert!(!screen.take_hire_request());
-        assert_eq!(MISSION_INFO_KEY, Key::Char('i'));
+        assert_eq!(MISSION_INFO_KEY, Key::KeyI);
         assert!(!HIRE_KEYS.contains(&MISSION_INFO_KEY));
     }
 
@@ -2785,7 +2785,7 @@ mod tests {
 
         let mut screen = bar();
         screen.open_hire(list(2));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         screen.input(&key(MAP_KEY, false));
         assert_eq!(
             screen.take_map_request(),
@@ -2892,7 +2892,7 @@ mod tests {
                 .with_looping_player(Rc::clone(reel) as Rc<dyn MoviePlayer>),
         );
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
         screen
     }
@@ -2901,7 +2901,7 @@ mod tests {
     fn the_bar_gives_its_movies_to_the_hire_screen_it_opens_and_a_hire_stops_its_loop() {
         let reel = MockMoviePlayer::playing((32, 32), 100);
         let mut screen = hiring_with_loop(&reel);
-        screen.input(&key(Key::Char('h'), false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_hire(), Some(ShipId(128)));
         screen.set_hire(&list(1));
         assert!(screen.hire_screen().is_none());
@@ -2955,7 +2955,7 @@ mod tests {
         let main = MockMoviePlayer::playing((640, 480), 5);
         let mut screen = laid_hire_bar();
         screen.open_hire(list(1));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         screen.set_offer_movies(
             Movies::new(main as Rc<dyn MoviePlayer>, true)
                 .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>),

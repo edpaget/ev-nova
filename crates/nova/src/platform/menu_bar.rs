@@ -111,8 +111,9 @@ mod tests {
     /// it.
     fn key_char(key: Key) -> char {
         match key {
-            Key::Char(c) => c,
-            other => panic!("{other:?} is no character key"),
+            Key::Comma => ',',
+            other => nova_view::key_letter(other)
+                .unwrap_or_else(|| panic!("{other:?} is no character key")),
         }
     }
 

@@ -175,7 +175,7 @@ fn plotted_with_a_defector(prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
     let (mut screen, reel) = empty_shops_built(kept_wage(), prefs, built, paying(1, WAGE));
     // L, which landed, let go: held past the take-off it would pick a
     // stellar on every pass (`_HandlePlayer` @0x6a8c5-0x6a932).
-    screen.input(&key(Key::Char('l'), false));
+    screen.input(&key(Key::KeyL, false));
     screen.input(&key(Key::Escape, true));
     until_flight(&mut screen);
     assert_eq!(pilot(&screen).escorts().len(), 1, "paid at take-off");
@@ -233,16 +233,16 @@ fn with_hyperspace_effects_off_an_arrivals_defection_shows_unfaded() {
         ..Prefs::default()
     };
     let (mut screen, _) = plotted_with_a_defector(prefs);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     for _ in 0..1800 {
         if ship(&screen).position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
             break;
         }
         screen.tick(TICK);
     }
-    screen.input(&key(Key::Up, false));
-    screen.input(&key(Key::Char('j'), true));
-    screen.input(&key(Key::Char('j'), false));
+    screen.input(&key(Key::ArrowUp, false));
+    screen.input(&key(Key::KeyJ, true));
+    screen.input(&key(Key::KeyJ, false));
     for _ in 0..600 {
         if flight(&screen)
             .session()
@@ -309,7 +309,7 @@ fn an_arrivals_own_text_fades_in_first_and_the_defection_follows_unfaded() {
     };
     let (mut screen, _) = empty_shops_built(kept_wage(), Prefs::default(), built, kit);
     // L, which landed, let go (see `plotted_with_a_defector`).
-    screen.input(&key(Key::Char('l'), false));
+    screen.input(&key(Key::KeyL, false));
     screen.input(&key(Key::Escape, true));
     until_flight(&mut screen);
     for _ in 0..120 {

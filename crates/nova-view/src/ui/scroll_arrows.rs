@@ -269,7 +269,7 @@ mod tests {
             "reaching the end moved it"
         );
         dialog.input(&Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: true,
             repeat: false,
         });
@@ -682,13 +682,13 @@ mod tests {
         let at = down_at(&dialog);
         dialog.input(&left(true, at));
         assert!(dialog.holds());
-        dialog.input(&key(Key::Down, true, false));
+        dialog.input(&key(Key::ArrowDown, true, false));
         assert_eq!(offset(&dialog), 1.0, "it waits");
         assert_eq!(dialog.take_replay(), [], "nothing until the release");
         dialog.input(&left(false, at));
         assert!(!dialog.holds());
         let replay = dialog.take_replay();
-        assert_eq!(replay, [key(Key::Down, true, false)]);
+        assert_eq!(replay, [key(Key::ArrowDown, true, false)]);
         run(&mut dialog, &replay);
         assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS);
         assert_eq!(dialog.take_replay(), [], "taken once");
@@ -711,10 +711,10 @@ mod tests {
         let at = down_at(&dialog);
         dialog.input(&left(true, at));
         let queued = [
-            key(Key::Down, true, false),
+            key(Key::ArrowDown, true, false),
             Input::Text('x'),
-            key(Key::Down, true, true),
-            key(Key::Down, false, false),
+            key(Key::ArrowDown, true, true),
+            key(Key::ArrowDown, false, false),
         ];
         for input in &queued {
             dialog.input(input);
@@ -729,11 +729,11 @@ mod tests {
         let arrow = down_at(&dialog);
         let okay = dialog.item_bounds(1).expect("Okay").center();
         dialog.input(&left(true, arrow));
-        dialog.input(&key(Key::Down, true, false));
+        dialog.input(&key(Key::ArrowDown, true, false));
         assert_eq!(dialog.input(&left(true, okay)), None);
         assert!(!dialog.holds(), "the hold is over");
         let replay = dialog.take_replay();
-        assert_eq!(replay, [key(Key::Down, true, false), left(true, okay)]);
+        assert_eq!(replay, [key(Key::ArrowDown, true, false), left(true, okay)]);
         run(&mut dialog, &replay);
         assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS, "the key acts first");
         assert_eq!(dialog.pressed_item(), Some(1), "then the press");
@@ -773,7 +773,7 @@ mod tests {
         let at = down_at(&dialog);
         dialog.input(&left(true, at));
         assert!(!dialog.holds());
-        dialog.input(&key(Key::Down, true, false));
+        dialog.input(&key(Key::ArrowDown, true, false));
         assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS);
         assert_eq!(
             dialog.input(&key(Key::Enter, true, false)),

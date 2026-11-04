@@ -152,8 +152,8 @@ fn command_comma_on_a_dialogs_map_over_flight_opens_the_preferences_unless_find_
     let mut screen = offered_in_flight();
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
-    screen.input(&key(Key::Char('f'), true));
-    screen.input(&key(Key::Char('f'), false));
+    screen.input(&key(Key::KeyF, true));
+    screen.input(&key(Key::KeyF, false));
     assert!(flight(&screen).map_finding());
     command_comma(&mut screen);
     assert!(screen.preferences().is_none(), "Find takes every key");

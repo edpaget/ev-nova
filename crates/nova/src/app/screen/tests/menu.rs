@@ -91,7 +91,7 @@ fn input_during_the_quit_delay_does_nothing() {
         .press_point(MenuChoice::NewPilot);
     click_at(&mut screen, new_pilot);
     screen.input(&Input::Text('o'));
-    screen.input(&key(Key::Char('p'), true));
+    screen.input(&key(Key::KeyP, true));
     assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::MainMenu);
@@ -124,8 +124,8 @@ fn a_command_q_typed_during_a_keyed_click_quits_once_it_is_replayed() {
     let mut screen = menu(&store);
     // E is refused with no pilot: the replay reaches the menu.
     screen.input(&Input::Text('e'));
-    assert_eq!(screen.input(&key(Key::Command, true)), ScreenAction::None);
-    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::MetaLeft, true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyQ, true)), ScreenAction::None);
     assert!(!screen.take_quit(), "held for the click");
     screen.keyed_click_ended();
     assert!(screen.take_quit(), "the replayed Command-Q quit");
@@ -138,10 +138,10 @@ fn input_while_a_replayed_quit_is_untaken_does_nothing() {
     let mut screen = menu(&store);
     // E is refused with no pilot: the replay reaches the menu.
     screen.input(&Input::Text('e'));
-    screen.input(&key(Key::Command, true));
-    screen.input(&key(Key::Char('q'), true));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::KeyQ, true));
     screen.keyed_click_ended();
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     ui_sounds(&mut screen);
     assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
     assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
@@ -168,9 +168,9 @@ fn keyed_n_o_p_a_and_x_click_then_open_their_screen_once_the_click_ends() {
     for (press, opens) in [
         (Input::Text('n'), Showing::NewPilot),
         (Input::Text('O'), Showing::OpenPilot),
-        (key(Key::Char('p'), true), Showing::Preferences),
-        (key(Key::Char('a'), true), Showing::About),
-        (key(Key::Char('x'), true), Showing::Note),
+        (key(Key::KeyP, true), Showing::Preferences),
+        (key(Key::KeyA, true), Showing::About),
+        (key(Key::KeyX, true), Showing::Note),
     ] {
         let mut screen = menu_with_dialogs(&store);
         ui_sounds(&mut screen);
@@ -189,7 +189,7 @@ fn keyed_n_o_p_a_and_x_click_then_open_their_screen_once_the_click_ends() {
 fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
-    screen.input(&key(Key::Char('a'), true));
+    screen.input(&key(Key::KeyA, true));
     screen.keyed_click_ended();
     assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
     assert_eq!(
@@ -197,12 +197,12 @@ fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
         "line 2  [Error]",
         "no pilot's name, no mission, as _DoAboutBox munges with index -1"
     );
-    screen.input(&key(Key::Char('a'), false));
+    screen.input(&key(Key::KeyA, false));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(screen.showing(), Showing::MainMenu);
 
-    screen.input(&key(Key::Char('x'), true));
+    screen.input(&key(Key::KeyX, true));
     screen.keyed_click_ended();
     assert_eq!(
         screen.showing(),
@@ -214,7 +214,7 @@ fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
         ["x 0", "x 1 First [Error]"],
         "no pilot's name, ship 128's class, no mission"
     );
-    screen.input(&key(Key::Char('x'), false));
+    screen.input(&key(Key::KeyX, false));
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
 }
@@ -227,10 +227,10 @@ fn input_during_ns_keyed_click_is_flushed_as_the_new_pilot_dialog_opens() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     screen.input(&Input::Text('n'));
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&Input::Text('b'));
     screen.input(&key(Key::Enter, true));
-    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::KeyB, false));
     assert_eq!(screen.showing(), Showing::MainMenu);
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::NewPilot, "Return dropped too");
@@ -246,10 +246,10 @@ fn the_new_pilot_flush_keeps_releases_and_the_routers_own_steps() {
     // A release is kept through the flush: the dialog acts on presses
     // only, and the key's held state settles.
     assert!(!super::super::screen_impl::flushed_on_opening(
-        &Held::Input(key(Key::Char('b'), false))
+        &Held::Input(key(Key::KeyB, false))
     ));
     for dropped in [
-        Held::Input(key(Key::Char('b'), true)),
+        Held::Input(key(Key::KeyB, true)),
         Held::Input(Input::Text('b')),
         Held::Input(Input::PointerButton {
             button: MouseButton::Left,
@@ -277,7 +277,7 @@ fn letting_go_during_a_keyed_click_happens_in_its_place_in_the_replay() {
     ui_sounds(&mut screen);
     // E with the E key not held (another layout) clicks at once.
     screen.input(&Input::Text('e'));
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.release_keys();
     screen.input(&Input::Text('n'));
     assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed]);
@@ -325,12 +325,12 @@ fn e_held_waits_for_its_release_to_click_then_refuses_with_no_pilot() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     ui_sounds(&mut screen);
-    screen.input(&key(Key::Char('e'), true));
+    screen.input(&key(Key::KeyE, true));
     screen.input(&Input::Text('e'));
     assert_eq!(ui_sounds(&mut screen), [], "no click while E is held");
     screen.keyed_click_ended();
     assert_eq!(ui_sounds(&mut screen), [], "no click hold yet");
-    screen.input(&key(Key::Char('e'), false));
+    screen.input(&key(Key::KeyE, false));
     assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "on release");
     screen.keyed_click_ended();
     assert_eq!(ui_sounds(&mut screen), [UiSound::EnterRefused]);
@@ -354,10 +354,10 @@ fn typed_e_without_the_e_key_held_clicks_at_once() {
 fn while_e_is_held_its_repeats_are_dropped_and_the_rest_waits() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
-    screen.input(&key(Key::Char('e'), true));
+    screen.input(&key(Key::KeyE, true));
     screen.input(&Input::Text('e'));
     for _ in 0..3 {
-        screen.input(&held(Key::Char('e')));
+        screen.input(&held(Key::KeyE));
         screen.input(&Input::Text('e'));
     }
     screen.input(&Input::Text('n'));
@@ -384,10 +384,10 @@ fn command_e_does_nothing() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     ui_sounds(&mut screen);
-    screen.input(&key(Key::Command, true));
-    screen.input(&key(Key::Char('e'), true));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::KeyE, true));
     screen.input(&Input::Text('e'));
-    screen.input(&key(Key::Char('e'), false));
+    screen.input(&key(Key::KeyE, false));
     screen.keyed_click_ended();
     assert_eq!(ui_sounds(&mut screen), []);
 }
@@ -397,7 +397,7 @@ fn command_e_does_nothing() {
 #[test]
 fn o_does_nothing_while_s_or_l_is_held() {
     let store = MemoryPilots::new();
-    for guard in [Key::Char('s'), Key::Char('l')] {
+    for guard in [Key::KeyS, Key::KeyL] {
         let mut screen = menu_with_dialogs(&store);
         ui_sounds(&mut screen);
         screen.input(&key(guard, true));
@@ -424,13 +424,13 @@ fn command_n_o_and_q_on_the_main_menu_neither_click_nor_choose() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     ui_sounds(&mut screen);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     for typed in ['n', 'o', 'q', 'N'] {
         assert_eq!(screen.input(&Input::Text(typed)), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::MainMenu, "Command {typed}");
         assert_eq!(ui_sounds(&mut screen), [], "Command {typed}");
     }
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     screen.input(&Input::Text('n'));
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::NewPilot, "without Command");
@@ -441,33 +441,33 @@ fn the_main_menus_engine_keys_releases_are_silent() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     ui_sounds(&mut screen);
-    for k in [Key::Char('p'), Key::Char('a'), Key::Char('x')] {
+    for k in [Key::KeyP, Key::KeyA, Key::KeyX] {
         screen.input(&key(k, false));
         assert_eq!(screen.showing(), Showing::MainMenu, "{k:?}");
         assert_eq!(ui_sounds(&mut screen), [], "{k:?}");
     }
-    screen.input(&key(Key::Char('i'), true));
+    screen.input(&key(Key::KeyI, true));
     assert_eq!(screen.showing(), Showing::About);
     assert_eq!(ui_sounds(&mut screen), [], "the engine's About key");
     screen.input(&key(Key::Enter, true));
     ui_sounds(&mut screen);
 
     // Command keys go to the original's menus, which do not click.
-    screen.input(&key(Key::Command, true));
-    screen.input(&key(Key::Char('p'), true));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::KeyP, true));
     assert_eq!(screen.showing(), Showing::Preferences);
     assert_eq!(ui_sounds(&mut screen), [], "Command+P");
     screen.input(&key(Key::Escape, true));
-    for k in [Key::Char('a'), Key::Char('x')] {
+    for k in [Key::KeyA, Key::KeyX] {
         screen.input(&key(k, true));
         assert_eq!(screen.showing(), Showing::MainMenu, "Command {k:?}");
     }
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     assert_eq!(ui_sounds(&mut screen), []);
 
     // P away from the main menu is no main-screen key.
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Char('p'), true));
+    screen.input(&key(Key::KeyP, true));
     assert_eq!(screen.showing(), Showing::Preferences);
     assert_eq!(ui_sounds(&mut screen), [], "the ship browser");
 }
@@ -477,7 +477,7 @@ fn without_dialogs_a_and_x_open_nothing_and_make_no_sound() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     ui_sounds(&mut screen);
-    for k in [Key::Char('a'), Key::Char('x')] {
+    for k in [Key::KeyA, Key::KeyX] {
         screen.input(&key(k, true));
         assert_eq!(screen.showing(), Showing::MainMenu, "{k:?}");
     }
@@ -488,7 +488,7 @@ fn without_dialogs_a_and_x_open_nothing_and_make_no_sound() {
 fn tab_goes_from_the_menu_to_the_developer_sides_and_escape_comes_back() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
-    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::KeyF, true));
     assert_eq!(screen.showing(), Showing::MainMenu, "F is a developer key");
     screen.input(&key(Key::Tab, true));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
@@ -605,7 +605,7 @@ fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
     lay_out(&mut screen, led_berth_1());
     escape_to_menu(&mut screen);
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::KeyF, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(carried(flight(&screen)).slot_sprites, Some(led_berth_1()));
 }
@@ -771,7 +771,7 @@ fn the_developers_flight_after_a_pilot_carries_the_release_flag() {
     release_by_comm(&mut screen);
     escape_to_menu(&mut screen);
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::KeyF, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(carried(flight(&screen)).release_comm_escort, Some(true));
 }
@@ -1156,7 +1156,7 @@ fn typing_a_name_never_opens_the_dialogs_under_it() {
     let mut screen = menu_with_dialogs(&store);
     choose(&mut screen, MenuChoice::NewPilot);
     for c in ['p', 'i', 'f'] {
-        screen.input(&key(Key::Char(c), true));
+        screen.input(&key(nova_view::letter_key(c).expect("a letter key"), true));
         screen.input(&Input::Text(c));
     }
     assert_eq!(screen.showing(), Showing::NewPilot);
@@ -1534,7 +1534,7 @@ fn the_note_takes_every_event() {
     let mut screen = menu_with_dialogs(&store);
     open_first(&mut screen);
     for pressed in [true, false] {
-        for typed in [Key::Char('f'), Key::Tab, Key::Char('i'), Key::Char('l')] {
+        for typed in [Key::KeyF, Key::Tab, Key::KeyI, Key::KeyL] {
             assert_eq!(screen.input(&key(typed, pressed)), ScreenAction::None);
         }
     }
@@ -1668,7 +1668,7 @@ fn landing_taking_off_and_a_transaction_each_save_the_pilot() {
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(store.writes(), 4, "took off");
     screen.tick(TICK);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     assert_eq!(store.writes(), 4, "flying saves nothing");
 }
 
@@ -1678,7 +1678,7 @@ fn by_the_engine_escape_to_the_menu_in_flight_saves_nothing_and_quitting_landed_
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
     let created = store.text("Ada");
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
     let writes = store.writes();
     screen.input(&key(Key::Escape, true));
@@ -1705,7 +1705,7 @@ fn by_the_other_reading_escape_to_the_menu_and_quitting_in_flight_save_the_pilot
     let store = MemoryPilots::new();
     let mut screen = menu_ruled(&store, saving_in_flight());
     create(&mut screen, "Ada");
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
     let writes = store.writes();
     screen.input(&key(Key::Escape, true));
@@ -1967,7 +1967,7 @@ fn zoom_the_course_map_out(screen: &mut AppScreen) -> f64 {
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert!(flight(screen).map_open());
-    screen.input(&key(Key::Char('-'), true));
+    screen.input(&key(Key::Minus, true));
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert!(!flight(screen).map_open());
@@ -2000,7 +2000,7 @@ fn the_course_maps_zoom_carries_into_the_next_pilot_new_or_opened() {
 
 /// Opens the flight's course map, flips its borders with B and closes it.
 fn flip_the_borders(screen: &mut AppScreen) {
-    for k in [MAP, Key::Char('b'), MAP] {
+    for k in [MAP, Key::KeyB, MAP] {
         screen.input(&key(k, true));
         screen.input(&key(k, false));
     }
@@ -2108,7 +2108,7 @@ fn the_pointers_enter_ship_preferences_and_about_reach_what_e_p_and_a_reach() {
         assert_eq!(enter, keyed(Input::Text('e')));
         let preferences = clicked(MenuChoice::Preferences);
         assert_eq!(preferences.0, Showing::Preferences);
-        assert_eq!(preferences, keyed(key(Key::Char('p'), true)));
+        assert_eq!(preferences, keyed(key(Key::KeyP, true)));
         let about = clicked(MenuChoice::About);
         assert_eq!(about.0, Showing::About);
         assert_eq!(
@@ -2116,7 +2116,7 @@ fn the_pointers_enter_ship_preferences_and_about_reach_what_e_p_and_a_reach() {
             Some("line 2  [Error]".to_owned()),
             "munged as before any pilot"
         );
-        assert_eq!(about, keyed(key(Key::Char('a'), true)));
+        assert_eq!(about, keyed(key(Key::KeyA, true)));
     }
 }
 
@@ -2273,9 +2273,9 @@ fn the_main_screen_stands_still_behind_a_dialog_opened_over_it() {
         menu.draw(&mut before);
         // Opened from the keyboard, the pointer still over Quit.
         let press = if open == MenuChoice::About {
-            key(Key::Char('a'), true)
+            key(Key::KeyA, true)
         } else {
-            key(Key::Char('p'), true)
+            key(Key::KeyP, true)
         };
         screen.input(&press);
         screen.keyed_click_ended();

@@ -257,22 +257,22 @@ mod tests {
     fn up_and_down_step_it_repeats_included() {
         let [large, medium, _] = modes();
         let mut picker = picker(FullscreenKind::Borderless);
-        assert!(!picker.input(&key(Key::Up, false)));
-        assert!(picker.input(&key(Key::Down, false)));
-        assert!(picker.input(&key(Key::Down, true)));
+        assert!(!picker.input(&key(Key::ArrowUp, false)));
+        assert!(picker.input(&key(Key::ArrowDown, false)));
+        assert!(picker.input(&key(Key::ArrowDown, true)));
         assert_eq!(picker.selected(), exclusive(medium));
-        assert!(picker.input(&key(Key::Up, true)));
+        assert!(picker.input(&key(Key::ArrowUp, true)));
         assert_eq!(picker.selected(), exclusive(large));
         let release = Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: false,
             repeat: false,
         };
         for other in [
             release,
             key(Key::Space, false),
-            key(Key::Left, false),
-            key(Key::Right, false),
+            key(Key::ArrowLeft, false),
+            key(Key::ArrowRight, false),
             key(Key::Enter, false),
             Input::Text('d'),
             Input::PointerLeft,

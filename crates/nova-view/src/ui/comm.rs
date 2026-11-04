@@ -454,13 +454,14 @@ impl CommDialog {
     fn key_press(&self, key: Key) -> Option<CommPress> {
         match key {
             Key::Enter | Key::Escape => Some(CommPress::Close),
-            Key::Char(c) if c.eq_ignore_ascii_case(&CLOSE_KEY) => Some(CommPress::Close),
-            Key::Char(c) => self
-                .keys
-                .iter()
-                .position(|key| key.is_some_and(|key| key.eq_ignore_ascii_case(&c)))
-                .map(CommPress::Option),
-            _ => None,
+            _ => match crate::input::key_letter(key)? {
+                c if c.eq_ignore_ascii_case(&CLOSE_KEY) => Some(CommPress::Close),
+                c => self
+                    .keys
+                    .iter()
+                    .position(|key| key.is_some_and(|key| key.eq_ignore_ascii_case(&c)))
+                    .map(CommPress::Option),
+            },
         }
     }
 }
@@ -886,10 +887,11 @@ impl Screen for HaggleDialog {
     /// choice. Escape does nothing. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
-            key: Key::Char(c),
+            key,
             pressed: true,
             repeat,
         } = *input
+            && let Some(c) = crate::input::key_letter(key)
         {
             let choice = if c.eq_ignore_ascii_case(&ACCEPT_KEY) {
                 Some(Haggle::Accept)
@@ -1191,16 +1193,16 @@ mod tests {
                 .text(REPLY_ITEM)
                 .map(super::super::scroll_text::ScrollText::first)
         };
-        dialog.input(&key(Key::Down));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(first(&dialog), Some(2));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(first(&dialog), Some(1));
     }
 
     #[test]
     fn return_enter_escape_and_e_close_the_channel() {
-        for pressed in [Key::Enter, Key::Escape, Key::Char('e'), Key::Char('E')] {
+        for pressed in [Key::Enter, Key::Escape, Key::KeyE, Key::KeyE] {
             let mut dialog = dialog(&view());
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_press(), Some(CommPress::Close), "{pressed:?}");
@@ -1215,9 +1217,9 @@ mod tests {
         for (pressed, press) in [
             (Key::Enter, CommPress::Close),
             (Key::Escape, CommPress::Close),
-            (Key::Char('e'), CommPress::Close),
-            (Key::Char('g'), CommPress::Option(0)),
-            (Key::Char('r'), CommPress::Option(1)),
+            (Key::KeyE, CommPress::Close),
+            (Key::KeyG, CommPress::Option(0)),
+            (Key::KeyR, CommPress::Option(1)),
         ] {
             let mut dialog = dialog(&view());
             assert_eq!(dialog.take_sounds(), []);
@@ -1244,7 +1246,9 @@ mod tests {
         };
         for (pressed, place) in [('g', 0), ('G', 0), ('r', 1), ('R', 1)] {
             let mut dialog = dialog(&both);
-            dialog.input(&key(Key::Char(pressed)));
+            dialog.input(&key(
+                crate::input::letter_key(pressed).expect("a letter key")
+            ));
             assert_eq!(
                 dialog.take_press(),
                 Some(CommPress::Option(place)),
@@ -1252,16 +1256,16 @@ mod tests {
             );
         }
         let mut dialog = dialog(&both);
-        dialog.input(&key(Key::Char('x')));
+        dialog.input(&key(Key::KeyX));
         assert_eq!(dialog.take_press(), None, "an unkeyed letter");
         dialog.input(&Input::Key {
-            key: Key::Char('g'),
+            key: Key::KeyG,
             pressed: true,
             repeat: true,
         });
         assert_eq!(dialog.take_press(), None, "a repeat");
         dialog.input(&Input::Key {
-            key: Key::Char('g'),
+            key: Key::KeyG,
             pressed: false,
             repeat: false,
         });
@@ -1276,7 +1280,7 @@ mod tests {
         };
         let mut dialog = dialog(&fake);
         assert!(texts(&dialog).contains(&"Sing".to_owned()));
-        dialog.input(&key(Key::Char('s')));
+        dialog.input(&key(Key::KeyS));
         assert_eq!(dialog.take_press(), Some(CommPress::Option(1)));
     }
 
@@ -1665,7 +1669,7 @@ mod tests {
         dialog.set_hail(&later);
         assert!(!dialog.dialog().item_shown(MIDDLE_ITEM));
         assert!(texts(&dialog).contains(&"I'm busy.".to_owned()));
-        dialog.input(&key(Key::Char('r')));
+        dialog.input(&key(Key::KeyR));
         assert_eq!(dialog.take_press(), None, "its key is gone");
     }
 
@@ -1843,12 +1847,12 @@ mod tests {
     fn its_buttons_and_keys_choose_and_escape_does_nothing() {
         for (input, choice) in [
             (key(Key::Enter), Some(Haggle::Accept)),
-            (key(Key::Char('a')), Some(Haggle::Accept)),
-            (key(Key::Char('A')), Some(Haggle::Accept)),
-            (key(Key::Char('l')), Some(Haggle::LowerPrice)),
-            (key(Key::Char('L')), Some(Haggle::LowerPrice)),
+            (key(Key::KeyA), Some(Haggle::Accept)),
+            (key(Key::KeyA), Some(Haggle::Accept)),
+            (key(Key::KeyL), Some(Haggle::LowerPrice)),
+            (key(Key::KeyL), Some(Haggle::LowerPrice)),
             (key(Key::Escape), None),
-            (key(Key::Char('x')), None),
+            (key(Key::KeyX), None),
         ] {
             let mut dialog = haggle(3000);
             dialog.input(&input);
@@ -1856,7 +1860,7 @@ mod tests {
         }
         let mut dialog = haggle(3000);
         dialog.input(&Input::Key {
-            key: Key::Char('a'),
+            key: Key::KeyA,
             pressed: true,
             repeat: true,
         });
@@ -1880,8 +1884,8 @@ mod tests {
     fn haggle_keyboard_activation_is_silent_as_the_original() {
         for (input, choice) in [
             (key(Key::Enter), Some(Haggle::Accept)),
-            (key(Key::Char('a')), Some(Haggle::Accept)),
-            (key(Key::Char('l')), Some(Haggle::LowerPrice)),
+            (key(Key::KeyA), Some(Haggle::Accept)),
+            (key(Key::KeyL), Some(Haggle::LowerPrice)),
             (key(Key::Escape), None),
         ] {
             let mut dialog = haggle(3000);

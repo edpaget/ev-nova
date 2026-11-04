@@ -281,11 +281,11 @@ fn the_enter_button_enters_and_the_system_survives_a_tab_round_trip() {
     harness.frame();
     let start = harness.camera();
 
-    harness.key(Key::Down, true);
+    harness.key(Key::ArrowDown, true);
     harness.settle_until("the camera moving under Down", |harness| {
         harness.camera() != start
     });
-    harness.key(Key::Down, false);
+    harness.key(Key::ArrowDown, false);
     harness.frame();
     let moved = harness.camera();
 
@@ -306,7 +306,7 @@ fn losing_focus_while_holding_a_key_stops_the_camera() {
     harness.frame();
     let start = harness.camera();
 
-    harness.key(Key::Right, true);
+    harness.key(Key::ArrowRight, true);
     harness.settle_until("the camera moving under Right", |harness| {
         harness.camera() != start
     });

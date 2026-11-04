@@ -77,7 +77,7 @@ fn x_lines(data: Rc<GameData>, rules: Rulebook) -> Vec<String> {
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared()
         .with_rules(rules);
-    screen.input(&key(Key::Char('x'), true));
+    screen.input(&key(Key::KeyX, true));
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::Note);
     about(&screen).lines().to_vec()
@@ -148,7 +148,7 @@ fn the_about_dialog_uses_the_game_s_button_style() {
 fn without_dialogs_i_does_nothing() {
     let mut screen = AppScreen::new(data());
     let before = drawn(&screen);
-    assert_eq!(screen.input(&key(Key::Char('i'), true)), ScreenAction::None);
+    assert_eq!(screen.input(&key(Key::KeyI, true)), ScreenAction::None);
     assert_eq!(screen.showing(), Showing::ShipBrowser);
     assert!(screen.about().is_none());
     assert_eq!(drawn(&screen), before);
@@ -177,20 +177,20 @@ fn the_hint_offers_i_only_with_dialogs() {
 #[test]
 fn a_missing_dialog_or_text_opens_nothing() {
     let mut screen = AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
-    screen.input(&key(Key::Char('i'), true));
+    screen.input(&key(Key::KeyI, true));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
 
     let empty = Rc::new(one_file(ForkBuilder::new().build().bytes).load());
     let mut screen = with_dialogs(empty);
-    screen.input(&key(Key::Char('i'), true));
+    screen.input(&key(Key::KeyI, true));
     assert!(screen.about().is_none());
 }
 
 #[test]
 fn an_i_repeat_or_release_opens_nothing() {
     let mut screen = with_dialogs(data());
-    screen.input(&key(Key::Char('i'), false));
-    screen.input(&held(Key::Char('i')));
+    screen.input(&key(Key::KeyI, false));
+    screen.input(&held(Key::KeyI));
     assert_eq!(screen.showing(), Showing::ShipBrowser);
 }
 
@@ -198,7 +198,7 @@ fn an_i_repeat_or_release_opens_nothing() {
 fn i_does_nothing_in_flight() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Char('i'), true));
+    screen.input(&key(Key::KeyI, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(screen.about().is_none());
 }
@@ -209,18 +209,18 @@ fn while_open_input_reaches_only_the_dialog() {
     let mut screen = with_dialogs(data());
     open_about(&mut screen);
     for input in [
-        key(Key::Right, true),
+        key(Key::ArrowRight, true),
         key(Key::Tab, true),
-        key(Key::Char('f'), true),
-        key(Key::Char('i'), true),
+        key(Key::KeyF, true),
+        key(Key::KeyI, true),
     ] {
         assert_eq!(screen.input(&input), ScreenAction::None);
     }
     assert_eq!(screen.showing(), Showing::About);
     assert_eq!(screen.ship_browser().selected(), Some(ShipId(128)));
     assert!(screen.flight_view().is_none());
-    screen.input(&key(Key::Down, true));
-    screen.input(&held(Key::Down));
+    screen.input(&key(Key::ArrowDown, true));
+    screen.input(&held(Key::ArrowDown));
     assert_eq!(
         about(&screen).scroll_offset(),
         2.0 * nova_view::ui::desc::ARROW_UNITS
@@ -281,7 +281,7 @@ fn opening_cancels_a_drag_and_lets_go_of_the_keys_below() {
     let mut screen = with_dialogs(data());
     enter(&mut screen, 128);
     let camera_at = camera(&screen);
-    screen.input(&key(Key::Char('d'), true));
+    screen.input(&key(Key::KeyD, true));
     open_about(&mut screen);
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::System);
@@ -409,13 +409,13 @@ fn a_comma_without_command_or_after_it_is_let_go_opens_nothing() {
     fly(&mut screen);
     screen.input(&key(PREFERENCES_KEY, true));
     assert_eq!(screen.showing(), Showing::Flight, "no Command");
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.input(&held(PREFERENCES_KEY));
     assert_eq!(screen.showing(), Showing::Flight, "a repeat");
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     screen.input(&key(PREFERENCES_KEY, true));
     assert_eq!(screen.showing(), Showing::Flight, "Command let go");
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.release_keys();
     screen.input(&key(PREFERENCES_KEY, true));
     assert_eq!(screen.showing(), Showing::Flight, "the window lost focus");
@@ -927,14 +927,14 @@ fn a_missing_preferences_dialog_opens_nothing() {
 fn flight_is_paused_and_lets_go_of_its_keys_while_the_dialog_is_open() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK);
     let moving = ship(&screen);
     open_prefs(&mut screen);
     screen.tick(TICK * 5);
     assert_eq!(ship(&screen), moving, "paused");
     // Up's release goes to the dialog.
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
     let coasting = ship(&screen);
@@ -947,9 +947,9 @@ fn while_the_preferences_are_open_input_reaches_only_them() {
     let mut screen = with_dialogs(data());
     open_prefs(&mut screen);
     for input in [
-        key(Key::Right, true),
-        key(Key::Char('f'), true),
-        key(Key::Char('i'), true),
+        key(Key::ArrowRight, true),
+        key(Key::KeyF, true),
+        key(Key::KeyI, true),
         key(PREFS, true),
     ] {
         assert_eq!(screen.input(&input), ScreenAction::None);
@@ -1071,7 +1071,7 @@ fn click_player_info(screen: &mut AppScreen, button: PlayerInfoButton) {
 fn p_in_flight_opens_the_player_info_over_the_paused_flight() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK);
     let moving = ship(&screen);
     screen.input(&key(PLAYER_INFO_KEY, true));
@@ -1091,7 +1091,7 @@ fn p_in_flight_opens_the_player_info_over_the_paused_flight() {
     screen.tick(TICK * 5);
     assert_eq!(ship(&screen), moving, "paused");
     screen.input(&key(PLAYER_INFO_KEY, false));
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.input(&key(Key::Tab, true));
     assert_eq!(
         screen.flight_player_info().map(PlayerInfoScreen::tab),
@@ -1213,7 +1213,7 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
     let store = MemoryPilots::new();
     let mut screen = landed_trader(&store);
     click_port_item(&mut screen, 7);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     assert_eq!(pilot(&screen).held(FOOD), 10);
     let writes = store.writes();
     screen.input(&key(PLAYER_INFO_KEY, true));
@@ -1226,7 +1226,7 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
     let open = spaceport(&screen).open_trade().expect("trading");
     assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(0));
     assert_eq!(store.writes(), writes + 1, "saved");
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight, "taken off");
@@ -1341,7 +1341,7 @@ fn the_flight_player_infos_question_opens_with_the_rulebooks_focus_ring() {
         create(&mut screen, "Ada");
         land_twice(&mut screen);
         click_port_item(&mut screen, 7);
-        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::KeyB, true));
         screen.input(&key(Key::Escape, true));
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight, "taken off");

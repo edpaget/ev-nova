@@ -658,10 +658,7 @@ pub const TAKE_OFF_ON: &str = "on";
 /// once keys can be rebound, so for now they have no name.
 #[must_use]
 pub fn key_label(key: Key) -> Option<String> {
-    match key {
-        Key::Char(letter) => Some(letter.to_uppercase().collect()),
-        _ => None,
-    }
+    crate::input::key_letter(key).map(|letter| letter.to_uppercase().collect())
 }
 
 /// What the message line says as the ship takes off past the tutorial

@@ -26,7 +26,7 @@ fn cycled_to(to: i16) -> MapDrawing {
 fn tab_on_the_course_map_sends_the_cycle_and_shows_what_the_flight_selects_and_draws() {
     let mut view = faked_sol(in_sol());
     view.open_map();
-    for (k, expected) in [(Key::Tab, 131), (Key::Char('\\'), 132), (Key::Tab, 131)] {
+    for (k, expected) in [(Key::Tab, 131), (Key::Backslash, 132), (Key::Tab, 131)] {
         view.sim.queue_answer(Answer::Done);
         view.sim
             .queue_screen(ScreenAnswer::MapPreselection(Some(SystemId(expected))));
@@ -153,13 +153,13 @@ fn tab_on_the_hypergate_map_steps_through_the_flights_cycle_shift_reversing_and_
         faked_map_tap(&mut view, Key::Tab);
         assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
-    faked_map_input(&mut view, &key(Key::Shift, true));
+    faked_map_input(&mut view, &key(Key::ShiftLeft, true));
     for expected in [132, 131] {
         queue_gate_tab(&mut view);
-        faked_map_tap(&mut view, Key::Char('\\'));
+        faked_map_tap(&mut view, Key::Backslash);
         assert_eq!(view.map.selected(), Some(SystemId(expected)));
     }
-    faked_map_input(&mut view, &key(Key::Shift, false));
+    faked_map_input(&mut view, &key(Key::ShiftLeft, false));
     assert_eq!(sent(&view), [], "no nav mode written");
     assert_eq!(view.map.hyper_selection(), None);
     assert_eq!(view.ui_sounds, []);
@@ -180,7 +180,7 @@ fn tab_on_the_bars_map_is_refused_and_changes_nothing() {
     faked_map_input(&mut view, &key(MAP, false));
     let selected = view.map.selected();
     let nav = view.nav_scene.clone();
-    for k in [Key::Tab, Key::Char('\\')] {
+    for k in [Key::Tab, Key::Backslash] {
         assert!(!faked_map_tap(&mut view, k), "{k:?}");
         assert_eq!(sent(&view).last(), Some(&FlightCommand::CycleMapSelection));
         assert_eq!(view.map.selected(), selected, "{k:?}");
@@ -211,7 +211,7 @@ fn jiggle_map(view: &mut Faked) {
 fn a_course_cycle_the_flight_takes_redraws_item_3_with_a_link_or_none() {
     // The flight takes the cycle with no link too, selecting none: the
     // course cycle redraws anyway (@0x14032).
-    for k in [Key::Tab, Key::Char('\\')] {
+    for k in [Key::Tab, Key::Backslash] {
         let mut view = faked_sol(in_sol());
         view.open_map();
         jiggle_map(&mut view);
@@ -269,7 +269,7 @@ fn clear_route_redraws_item_3_by_c_or_its_button() {
         course_plotted: true,
         ..in_sol()
     };
-    for (frame, k) in [(plotted, Key::Char('c')), (in_sol(), Key::Char('C'))] {
+    for (frame, k) in [(plotted, Key::KeyC), (in_sol(), Key::KeyC)] {
         let mut view = faked_sol(frame);
         view.open_map();
         jiggle_map(&mut view);
@@ -292,7 +292,7 @@ fn over_a_held_frame_the_map_shows_what_it_changed_in_the_nav_area_with_no_step(
         ..in_sol()
     };
     let cases = [
-        (Key::Char('c'), Some(SystemId(131)), None),
+        (Key::KeyC, Some(SystemId(131)), None),
         (Key::Tab, None, Some(SystemId(131))),
     ];
     for (k, was, then) in cases {
@@ -391,19 +391,19 @@ fn a_key_down_the_map_doesnt_take_closes_it_while_the_map_key_is_held() {
     // Every key `_MapFilter` tests before the map key's close.
     for k in [
         Key::Tab,
-        Key::Char('\\'),
+        Key::Backslash,
         Key::Space,
-        Key::Char('b'),
-        Key::Char('c'),
-        Key::Char('-'),
-        Key::Char('='),
-        Key::Char('+'),
-        Key::Left,
-        Key::Right,
-        Key::Up,
-        Key::Down,
-        Key::Char('f'),
-        Key::Char('s'),
+        Key::KeyB,
+        Key::KeyC,
+        Key::Minus,
+        Key::Equal,
+        Key::NumpadAdd,
+        Key::ArrowLeft,
+        Key::ArrowRight,
+        Key::ArrowUp,
+        Key::ArrowDown,
+        Key::KeyF,
+        Key::KeyS,
     ] {
         assert!(!faked_map_tap(&mut view, k), "{k:?}");
     }
@@ -428,10 +428,10 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
     let mut view = faked_sol(in_sol());
     view.open_map_by_key();
     for k in [
-        Key::Shift,
-        Key::Control,
-        Key::Alt,
-        Key::Command,
+        Key::ShiftLeft,
+        Key::ControlLeft,
+        Key::AltLeft,
+        Key::MetaLeft,
         Key::CapsLock,
     ] {
         assert!(!faked_map_tap(&mut view, k), "{k:?}");
@@ -441,7 +441,7 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
 #[test]
 fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
     // Both fall through on a planet (@0x13d20).
-    for k in [Key::Tab, Key::Char('\\')] {
+    for k in [Key::Tab, Key::Backslash] {
         let mut view = faked_sol(FlightFrame {
             landed: Some(StellarId(128)),
             ..in_sol()
@@ -1087,7 +1087,7 @@ fn minus_zooms_out_a_step_with_snd_150() {
         [FRAME_CENTRE, near_at(4.0 / 3.0)]
     );
     assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed]);
-    assert_eq!(ZOOM_OUT_KEY, Key::Char('-'));
+    assert_eq!(ZOOM_OUT_KEY, Key::Minus);
 }
 
 /// Where the floating map draws Proxima Near now.
@@ -1099,7 +1099,7 @@ fn near_dot(view: &Faked) -> Point {
 fn command_and_minus_the_self_destruct_chord_do_not_zoom() {
     let mut view = floating_near(in_sol());
     floating_tap(&mut view, HYPERSPACE_MODE_KEY);
-    hold(&mut view, Key::Command);
+    hold(&mut view, Key::MetaLeft);
     floating_tap(&mut view, SELF_DESTRUCT_KEY);
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
     assert!(!view.ui_sounds.contains(&UiSound::FloatingMapZoomed));
@@ -1153,8 +1153,8 @@ fn equals_and_keypad_plus_zoom_in_a_step() {
         assert_eq!(near_dot(&view), near_at(64.0 / 27.0), "{k:?}");
         assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed], "{k:?}");
     }
-    assert_eq!(ZOOM_IN_KEY, Key::Char('='));
-    assert_eq!(ZOOM_IN_KEYPAD_KEY, Key::Char('+'));
+    assert_eq!(ZOOM_IN_KEY, Key::Equal);
+    assert_eq!(ZOOM_IN_KEYPAD_KEY, Key::NumpadAdd);
 }
 
 #[test]
@@ -1179,15 +1179,15 @@ fn a_zoom_at_its_limit_changes_nothing_and_says_nothing() {
 #[test]
 fn a_zoom_key_does_nothing_while_another_key_is_held() {
     for k in [
-        Key::Shift,
-        Key::Alt,
-        Key::Control,
-        Key::Command,
+        Key::ShiftLeft,
+        Key::AltLeft,
+        Key::ControlLeft,
+        Key::MetaLeft,
         HYPERSPACE_MODE_KEY,
         HYPER_SELECT_KEY,
         NAV_OFF_KEY,
         JUMP_KEY,
-        Key::Up,
+        Key::ArrowUp,
     ] {
         let mut view = floating_near(in_sol());
         floating_tap(&mut view, HYPERSPACE_MODE_KEY);
@@ -2061,9 +2061,9 @@ fn scroll_on(map: &GalaxyMap, id: i16) -> (i32, i32) {
 fn the_maps_zoom_and_scroll_are_kept_between_opens() {
     let mut view = faked_sol(in_sol());
     view.open_map();
-    faked_map_tap(&mut view, Key::Char('='));
-    faked_map_tap(&mut view, Key::Right);
-    faked_map_input(&mut view, &held(Key::Right));
+    faked_map_tap(&mut view, Key::Equal);
+    faked_map_tap(&mut view, Key::ArrowRight);
+    faked_map_input(&mut view, &held(Key::ArrowRight));
     assert_eq!(place_of(&view.map), (0.421_875, (20, 0)));
     assert!(faked_map_tap(&mut view, Key::Enter), "closed");
     view.open_map();
@@ -2226,7 +2226,7 @@ fn c_clears_the_route_whether_clear_route_is_enabled_or_not() {
     let mut view = faked_sol(plotted_to_alpha());
     view.open_map();
     view.sim.queue_answer(Answer::Done);
-    faked_map_tap(&mut view, Key::Char('c'));
+    faked_map_tap(&mut view, Key::KeyC);
     assert_eq!(sent(&view), [FlightCommand::ClearRoute]);
     assert!(!view.map.clear_route_enabled());
     // Clear Route is disabled now, and C still clears.
@@ -2235,7 +2235,7 @@ fn c_clears_the_route_whether_clear_route_is_enabled_or_not() {
     faked_map_click(&mut view, alpha);
     view.sim.queue_answer(Answer::Done);
     assert!(
-        !faked_map_tap(&mut view, Key::Char('c')),
+        !faked_map_tap(&mut view, Key::KeyC),
         "C doesn't close the map"
     );
     assert_eq!(sent(&view).len(), 3);
@@ -2252,7 +2252,7 @@ fn c_on_the_hypergate_map_sends_the_clear_and_drops_the_pick_so_the_close_cancel
     faked_map_click(&mut view, alpha);
     assert_eq!(view.map.selected(), Some(SystemId(131)));
     assert_eq!(view.map.clone().take_gate_choice(), Some(SystemId(131)));
-    faked_map_tap(&mut view, Key::Char('c'));
+    faked_map_tap(&mut view, Key::KeyC);
     assert!(sent(&view).contains(&FlightCommand::ClearRoute));
     assert_eq!(view.map.take_gate_choice(), None, "no pick to enter");
 }

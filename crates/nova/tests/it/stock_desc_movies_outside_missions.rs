@@ -257,7 +257,7 @@ fn about_x_and_an_entry_through_the_stock_intro_start_no_movie() {
     assert_eq!(driver.showing(), Showing::About);
     assert!(driver.app.screen().about().is_some(), "the text, no movie");
     driver.press(Key::Enter);
-    driver.press(Key::Char('x'));
+    driver.press(Key::KeyX);
     driver.redraw();
     assert_eq!(driver.showing(), Showing::Note);
     assert!(driver.app.screen().about().is_some());
@@ -318,10 +318,10 @@ impl Driver {
         self.press(Key::Enter);
         self.enter_ship();
         assert_eq!(self.showing(), Showing::Flight);
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         self.redraw();
         self.redraw();
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         for _ in 0..4 {
             self.redraw();
         }
@@ -406,9 +406,9 @@ fn nothing_for_hire_in_auroras_bar_starts_no_movie_once_it_closes() {
     let Some((mut driver, player, landed)) = landed_at(AURORA, |_| {}, None) else {
         return;
     };
-    driver.press(Key::Char('b'));
+    driver.press(Key::KeyB);
     assert!(driver.spaceport().open_bar().is_some(), "the bar");
-    driver.press(Key::Char('h'));
+    driver.press(Key::KeyH);
     assert_eq!(
         driver.text_up().as_deref(),
         Some(nova_sim::hire::NONE_FOR_HIRE),
@@ -497,7 +497,7 @@ fn a_sale_alert_in_auroras_outfitter_starts_no_movie_once_it_closes() {
     let Some((mut driver, player, landed)) = landed_at(AURORA, fitted, Some(chance)) else {
         return;
     };
-    driver.press(Key::Char('o'));
+    driver.press(Key::KeyO);
     let selected = |driver: &Driver| {
         driver
             .spaceport()
@@ -509,10 +509,10 @@ fn a_sale_alert_in_auroras_outfitter_starts_no_movie_once_it_closes() {
         if selected(&driver) == Some(nova_sim::OutfitId(MASS_EXPANSION)) {
             break;
         }
-        driver.press(Key::Right);
+        driver.press(Key::ArrowRight);
     }
     assert_eq!(selected(&driver), Some(nova_sim::OutfitId(MASS_EXPANSION)));
-    driver.press(Key::Char('s'));
+    driver.press(Key::KeyS);
     let open = driver.spaceport().open_outfitter().expect("outfitting");
     assert!(open.alert_dialog().is_some(), "the sale refused (@0x5c7a0)");
     assert_eq!(
@@ -536,7 +536,7 @@ fn an_empty_shipyards_text_starts_no_movie_once_it_closes() {
     let Some((mut driver, player, landed)) = landed_at(EMPTY_SHIPYARD, |_| {}, None) else {
         return;
     };
-    driver.press(Key::Char('s'));
+    driver.press(Key::KeyS);
     assert_eq!(
         driver.text_up().as_deref(),
         Some(nova_view::spaceport::shipyard::NO_SHIPS),

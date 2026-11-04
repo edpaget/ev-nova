@@ -85,7 +85,7 @@ fn the_maps_next_drawing_takes_the_flights_sources_again() {
     let mut view = faked_bordered(sources(false));
     view.open_map();
     for _ in 0..5 {
-        faked_map_tap(&mut view, Key::Char('-'));
+        faked_map_tap(&mut view, Key::Minus);
     }
     assert!(!view.map.place().expect("open").can_zoom_out());
     assert_eq!(govts_on(&view.map), [128], "Proxima Near unknown");
@@ -93,7 +93,7 @@ fn the_maps_next_drawing_takes_the_flights_sources_again() {
     view.sim.queue_screen(bordered_redraw(&sources(true)));
     view.sim.queue_answer(Answer::Done);
     faked_map_tap(&mut view, Key::Tab);
-    faked_map_tap(&mut view, Key::Left);
+    faked_map_tap(&mut view, Key::ArrowLeft);
     assert_eq!(govts_on(&view.map), [128, 129], "Proxima Near's blocks too");
 }
 

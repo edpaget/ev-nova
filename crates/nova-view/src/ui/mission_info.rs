@@ -12,7 +12,7 @@ use crate::input::{Input, Key};
 /// is not in `Nova-DF.rsrc`; I is free on every spaceport screen (the
 /// shipyard's Info is Space, as `_ShipyardFilter` reads it @0x60526) and
 /// in flight.
-pub const MISSION_INFO_KEY: Key = Key::Char('i');
+pub const MISSION_INFO_KEY: Key = Key::KeyI;
 
 /// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
 /// for the mission info screen where the original's filters read

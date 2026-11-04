@@ -207,7 +207,9 @@ mod tests {
 
     fn typed(dialog: &mut FindDialog, text: &str) {
         for c in text.chars() {
-            dialog.input(&key(Key::Char(c.to_ascii_lowercase())));
+            dialog.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified)
+            ));
             dialog.input(&Input::Text(c));
         }
     }

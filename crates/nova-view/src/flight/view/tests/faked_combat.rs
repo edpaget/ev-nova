@@ -96,7 +96,7 @@ fn tab_targets_the_next_npc_and_alt_r_the_nearest() {
     tap(&mut view, Key::Tab);
     view.input(&held(Key::Tab));
     view.input(&key(Key::Tab, false));
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     tap(&mut view, NEAREST_KEY);
     view.input(&held(NEAREST_KEY));
     assert_eq!(
@@ -107,7 +107,7 @@ fn tab_targets_the_next_npc_and_alt_r_the_nearest() {
         ],
         "a repeat of either sends nothing"
     );
-    assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::Char('r')));
+    assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::KeyR));
 }
 
 #[test]
@@ -139,11 +139,11 @@ fn a_target_key_press_beeps_once_and_its_repeat_is_silent() {
 fn the_flight_keys_are_held_until_let_go_or_released() {
     let mut view = in_flight();
     assert!(!view.holds_keys());
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     assert!(view.holds_keys());
-    view.input(&key(Key::Up, false));
+    view.input(&key(Key::ArrowUp, false));
     assert!(!view.holds_keys(), "let go");
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.release_keys();
     assert!(!view.holds_keys(), "released");
 }
@@ -163,7 +163,7 @@ fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
     let mut view = in_flight();
     tap(&mut view, SELECT_KEY);
     view.input(&held(SELECT_KEY));
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     tap(&mut view, SELECT_KEY);
     view.release_keys();
     tap(&mut view, SELECT_KEY);
@@ -176,7 +176,7 @@ fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
         ],
         "a repeat sends nothing, and the release lets go of Option"
     );
-    assert_eq!(SELECT_KEY, Key::Char('w'));
+    assert_eq!(SELECT_KEY, Key::KeyW);
 }
 
 #[test]

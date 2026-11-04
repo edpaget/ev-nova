@@ -945,9 +945,9 @@ mod tests {
         let mut dialogs = dialogs();
         dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
         let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
-        dialogs.input(&key(Key::Down));
+        dialogs.input(&key(Key::ArrowDown));
         assert_eq!(at(&dialogs), crate::ui::desc::ARROW_UNITS);
-        dialogs.input(&key(Key::Up));
+        dialogs.input(&key(Key::ArrowUp));
         assert_eq!(at(&dialogs), 0.0);
     }
 
@@ -1089,10 +1089,10 @@ mod tests {
         let at = done_at(&dialogs);
         dialogs.input(&left(true, at));
         dialogs.input(&key(Key::Enter));
-        dialogs.input(&key(Key::Char('b')));
+        dialogs.input(&key(Key::KeyB));
         dialogs.input(&left(false, Point::new(0.0, 0.0)));
         assert!(!dialogs.is_open());
-        assert_eq!(dialogs.take_left(), [key(Key::Char('b'))]);
+        assert_eq!(dialogs.take_left(), [key(Key::KeyB)]);
         assert_eq!(dialogs.take_left(), [], "once");
         assert_eq!(dialogs.take_unclaimed(), [], "kept apart from a movie's");
     }
@@ -1269,7 +1269,7 @@ mod tests {
         assert!(!dialogs.take_info_closed_laid_out(), "nothing open");
         dialogs.open_info(info());
         assert!(!dialogs.take_info_closed_laid_out(), "opening");
-        dialogs.input(&key(Key::Down));
+        dialogs.input(&key(Key::ArrowDown));
         assert!(!dialogs.take_info_closed_laid_out(), "still open");
         dialogs.input(&key(Key::Enter));
         assert!(dialogs.take_info_closed_laid_out(), "Done (@0x9e769)");
@@ -1582,7 +1582,7 @@ mod tests {
         assert_eq!(shown(&dialogs), None, "no text while the movie plays");
         assert!(drawn(&dialogs).is_empty(), "the text is not drawn");
         assert_eq!(player.drawn().len(), 1, "the movie is");
-        dialogs.input(&key(Key::Char('q')));
+        dialogs.input(&key(Key::KeyQ));
         assert_eq!(shown(&dialogs), None, "the movie swallows input");
         dialogs.tick(TICK);
         dialogs.tick(TICK);

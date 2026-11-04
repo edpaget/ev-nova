@@ -100,7 +100,7 @@ fn a_session_that_cannot_start_says_why_and_draws_nothing_else() {
     assert_eq!(view.failure(), Some("no chär to start from"));
     assert!(view.scene().is_none());
     assert_eq!(view.frame(), None);
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     for _ in 0..3 {
         view.tick(TICK);
     }
@@ -216,7 +216,7 @@ fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
 #[test]
 fn repeats_hold_a_key_and_releasing_the_keys_stops_the_thrust() {
     let mut view = in_flight();
-    view.input(&held(Key::Up));
+    view.input(&held(Key::ArrowUp));
     view.tick(TICK);
     assert_eq!(
         super::faked_flight::last_controls(&view).thrust,
@@ -241,9 +241,9 @@ fn other_input_changes_nothing_and_never_quits() {
         key(Key::Tab, true),
         key(Key::Space, true),
         key(Key::Enter, true),
-        key(Key::Char('w'), true),
-        key(Key::Char('w'), true),
-        key(Key::Other, true),
+        key(Key::KeyW, true),
+        key(Key::KeyW, true),
+        key(Key::Unidentified, true),
         Input::PointerMoved(at(1.0, 2.0)),
         Input::PointerButton {
             button: crate::MouseButton::Left,
@@ -272,12 +272,12 @@ fn other_input_changes_nothing_and_never_quits() {
 fn controls_flown_at(fps: u64) -> Vec<Controls> {
     let mut view = in_flight();
     let script = [
-        (0, Key::Up, true),
-        (2, Key::Up, false),
-        (2, Key::Right, true),
-        (3, Key::Right, false),
-        (3, Key::Down, true),
-        (5, Key::Down, false),
+        (0, Key::ArrowUp, true),
+        (2, Key::ArrowUp, false),
+        (2, Key::ArrowRight, true),
+        (3, Key::ArrowRight, false),
+        (3, Key::ArrowDown, true),
+        (5, Key::ArrowDown, false),
     ];
     let mut last = 0;
     for frame in 1..=3 * fps {

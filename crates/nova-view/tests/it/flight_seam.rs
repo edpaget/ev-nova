@@ -334,11 +334,11 @@ fn a_real_session_meets_the_contract_in_each_state() {
     );
     meets_the_contract(view.sim(), "holding a target");
     // Option-` lets go of the target on the next frame.
-    view.input(&key(Key::Alt, true));
-    view.input(&key(Key::Char('`'), true));
+    view.input(&key(Key::AltLeft, true));
+    view.input(&key(Key::Backquote, true));
     view.tick(TICK);
-    view.input(&key(Key::Char('`'), false));
-    view.input(&key(Key::Alt, false));
+    view.input(&key(Key::Backquote, false));
+    view.input(&key(Key::AltLeft, false));
     assert!(frame_of(view.sim()).target.is_none(), "let go");
     meets_the_contract(view.sim(), "after the target is let go");
 }
@@ -489,12 +489,12 @@ fn nav_mode(view: &FlightView<Rc<GameData>>) -> NavMode {
 #[test]
 fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
     let mut view = view();
-    tap(&mut view, Key::Char('m'));
+    tap(&mut view, Key::KeyM);
     assert!(view.map_open());
     let beta = on_map(&view, 129);
-    view.input(&key(Key::Shift, true));
+    view.input(&key(Key::ShiftLeft, true));
     click(&mut view, beta);
-    view.input(&key(Key::Shift, false));
+    view.input(&key(Key::ShiftLeft, false));
     assert_eq!(view.session().expect("flying").course(), [SystemId(129)]);
     assert_eq!(view.course_map().route(), [MapSystemId(129)]);
 }
@@ -504,7 +504,7 @@ fn a_course_plotted_on_the_map_reaches_the_session_and_the_map_draws_it() {
 #[test]
 fn a_slot_key_reaches_the_session_on_the_next_frame() {
     let mut view = view();
-    tap(&mut view, Key::Char('1'));
+    tap(&mut view, Key::Digit1);
     assert_eq!(nav_mode(&view), NavMode::Off, "the press waits for a frame");
     view.tick(TICK);
     assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
@@ -517,9 +517,9 @@ fn a_slot_key_reaches_the_session_on_the_next_frame() {
 fn a_hailed_stellar_opens_the_planet_comm_dialog_and_close_channel_closes_it() {
     use nova_sim::planet_comm::PlanetCommItem;
     let mut view = view();
-    tap(&mut view, Key::Char('1'));
+    tap(&mut view, Key::Digit1);
     view.tick(TICK);
-    tap(&mut view, Key::Char('y'));
+    tap(&mut view, Key::KeyY);
     let opened = view.take_planet_comm().expect("the planet comm dialog");
     assert_eq!(opened.stellar, StellarId(128));
     assert_eq!(opened.name, "Alpha Prime");
@@ -536,7 +536,7 @@ fn a_hailed_stellar_opens_the_planet_comm_dialog_and_close_channel_closes_it() {
 #[test]
 fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
     let mut view = view();
-    tap(&mut view, Key::Char('1'));
+    tap(&mut view, Key::Digit1);
     view.tick(TICK);
     let opened = nav_mode(&view);
     assert_eq!(opened, NavMode::Stellar(Some(StellarId(128))));
@@ -553,8 +553,8 @@ fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
         at: beta,
     });
     assert_ne!(nav_mode(&view), opened, "the click wrote the nav");
-    view.port_map_input(&key(Key::Char('m'), true));
-    view.port_map_input(&key(Key::Char('m'), false));
+    view.port_map_input(&key(Key::KeyM, true));
+    view.port_map_input(&key(Key::KeyM, false));
     assert!(!view.map_open());
     assert_eq!(nav_mode(&view), opened, "put back as the map closed");
 }
@@ -565,9 +565,9 @@ fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
 /// Presses L until the ship lands, as the view's own tests do: the
 /// request, a frame, then the landing.
 fn land(view: &mut FlightView<Rc<GameData>>) {
-    tap(view, Key::Char('l'));
+    tap(view, Key::KeyL);
     view.tick(TICK);
-    tap(view, Key::Char('l'));
+    tap(view, Key::KeyL);
 }
 
 /// `FlightSim::drain`: a landing request's sound and line, and the
@@ -575,7 +575,7 @@ fn land(view: &mut FlightView<Rc<GameData>>) {
 #[test]
 fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
     let mut view = view();
-    tap(&mut view, Key::Char('l'));
+    tap(&mut view, Key::KeyL);
     view.tick(TICK);
     assert_eq!(
         view.message(),
@@ -586,7 +586,7 @@ fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
         view.take_sounds(),
         [Sound::Sim(nova_sim::SimSound::TrafficControl)]
     );
-    tap(&mut view, Key::Char('l'));
+    tap(&mut view, Key::KeyL);
     assert_eq!(view.take_landing(), Some(StellarId(128)));
     assert!(view.take_save_due(), "the landing's save");
     assert!(!view.take_save_due(), "once");
@@ -600,14 +600,14 @@ fn a_real_landing_plays_its_sound_and_shows_its_line_through_the_drain() {
 #[test]
 fn a_real_jump_arrives_in_the_next_system() {
     let mut view = view();
-    tap(&mut view, Key::Char('m'));
+    tap(&mut view, Key::KeyM);
     let beta = on_map(&view, 129);
-    view.input(&key(Key::Shift, true));
+    view.input(&key(Key::ShiftLeft, true));
     click(&mut view, beta);
-    view.input(&key(Key::Shift, false));
-    tap(&mut view, Key::Char('m'));
+    view.input(&key(Key::ShiftLeft, false));
+    tap(&mut view, Key::KeyM);
     assert_eq!(view.session().expect("flying").course(), [SystemId(129)]);
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     for _ in 0..3000 {
         let at = view.session().expect("flying").player().position;
         if at.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
@@ -615,8 +615,8 @@ fn a_real_jump_arrives_in_the_next_system() {
         }
         view.tick(TICK);
     }
-    view.input(&key(Key::Up, false));
-    tap(&mut view, Key::Char('j'));
+    view.input(&key(Key::ArrowUp, false));
+    tap(&mut view, Key::KeyJ);
     for _ in 0..3000 {
         if view.session().expect("flying").system() == SystemId(129) {
             break;
@@ -1276,7 +1276,7 @@ fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
     let data = fighting_data(&[]);
     let session = SessionBuilder::flying(&data).build();
     let mut view = fighting(data, session);
-    tap(&mut view, Key::Char('m'));
+    tap(&mut view, Key::KeyM);
     assert!(
         view.map_open(),
         "control: M opens the map while the session takes the gate"
@@ -1295,7 +1295,7 @@ fn a_gate_the_session_refuses_keeps_the_views_key_from_acting() {
         session.takes(nova_sim::PlayerCommand::Map)
     });
     assert!(!takes_the_map, "precondition: the session refuses the map");
-    tap(&mut view, Key::Char('m'));
+    tap(&mut view, Key::KeyM);
     assert!(!view.map_open(), "the map key refused");
 }
 
@@ -1349,7 +1349,7 @@ fn a_real_hail_opens_the_comm_dialog_with_the_sessions_hail_view() {
     let session = SessionBuilder::flying(&data).build();
     let mut view = fighting(Rc::clone(&data), session);
     tap(&mut view, Key::Tab);
-    tap(&mut view, Key::Char('y'));
+    tap(&mut view, Key::KeyY);
     let hail = view.take_hail().expect("the trader answers");
     let session = view.session().expect("flying");
     assert_eq!(
@@ -1463,7 +1463,7 @@ fn a_real_board_opens_the_plunder_dialog_on_the_sessions_boarding() {
         nova_sim::fixture::disable(session, trader);
         nova_sim::fixture::put_player_over(session, trader);
     });
-    tap(&mut view, Key::Char('b'));
+    tap(&mut view, Key::KeyB);
     let shown = view.take_boarding().expect("the plunder dialog opens");
     assert!(
         witness.seen.borrow().contains(&nova_sim::Crime::Board),

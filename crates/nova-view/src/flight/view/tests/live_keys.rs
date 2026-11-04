@@ -60,9 +60,9 @@ pub(super) fn latches_its_close(view: &mut Faked) {
 #[test]
 fn the_close_gives_back_an_unlatched_key_still_down_and_flight_thrusts_on_the_next_step() {
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     dialog_opens(&mut view);
-    back(&mut view, [Key::Up], [], false);
+    back(&mut view, [Key::ArrowUp], [], false);
     ticked(&mut view, 1);
     assert!(last_controls(&view).thrust, "Up down at the close");
 }
@@ -71,7 +71,7 @@ fn the_close_gives_back_an_unlatched_key_still_down_and_flight_thrusts_on_the_ne
 fn the_close_gives_back_an_unlatched_key_pressed_under_the_dialog() {
     let mut view = at_rest(catalog());
     dialog_opens(&mut view);
-    back(&mut view, [Key::Left], [], false);
+    back(&mut view, [Key::ArrowLeft], [], false);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).turn, Turn::Left);
 }
@@ -80,7 +80,7 @@ fn the_close_gives_back_an_unlatched_key_pressed_under_the_dialog() {
 fn the_close_drops_an_unlatched_key_no_longer_down() {
     let mut view = at_rest(catalog());
     // Left in `held` by a path that kept it: its release went elsewhere.
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     back(&mut view, [], [], false);
     ticked(&mut view, 1);
     assert!(!last_controls(&view).thrust, "Up let go under the dialog");
@@ -90,10 +90,10 @@ fn the_close_drops_an_unlatched_key_no_longer_down() {
 fn the_close_gives_back_no_latched_key() {
     let mut view = in_flight();
     dialog_opens(&mut view);
-    let replay = back(&mut view, [BOARD_KEY, JUMP_KEY, Key::Up], [], false);
+    let replay = back(&mut view, [BOARD_KEY, JUMP_KEY, Key::ArrowUp], [], false);
     assert_eq!(replay, [], "nothing to replay");
     assert!(!view.held.contains(&JUMP_KEY), "J waits for its release");
-    assert!(view.held.contains(&Key::Up));
+    assert!(view.held.contains(&Key::ArrowUp));
     // B's own latch (0xdee18) is no site's: clear, B boards at the poll.
     assert!(view.held.contains(&BOARD_KEY), "B held");
     let sent_before = sent(&view).len();
@@ -114,11 +114,11 @@ fn the_close_keeps_a_latched_key_flight_still_holds() {
     let mut view = at_rest(catalog());
     view.held.insert(JUMP_KEY);
     view.held.insert(BOARD_KEY);
-    view.held.insert(Key::Up);
+    view.held.insert(Key::ArrowUp);
     back(&mut view, [], [], false);
     assert!(view.held.contains(&JUMP_KEY));
     assert!(!view.held.contains(&BOARD_KEY), "B let go");
-    assert!(!view.held.contains(&Key::Up), "Up let go");
+    assert!(!view.held.contains(&Key::ArrowUp), "Up let go");
 }
 
 #[test]
@@ -209,9 +209,9 @@ fn a_fresh_press_of_a_latched_key_after_the_close_acts_though_its_release_was_mi
 fn an_unlatched_key_repeated_after_the_close_stays_held() {
     let mut view = at_rest(catalog());
     dialog_opens(&mut view);
-    back(&mut view, [Key::Up], [], false);
-    view.input(&held(Key::Up));
-    assert!(view.held.contains(&Key::Up));
+    back(&mut view, [Key::ArrowUp], [], false);
+    view.input(&held(Key::ArrowUp));
+    assert!(view.held.contains(&Key::ArrowUp));
     ticked(&mut view, 1);
     assert!(last_controls(&view).thrust);
 }
@@ -244,7 +244,7 @@ fn the_close_latches_only_the_latched_flight_keys_of_what_is_down() {
     // repeats must go on holding it wherever `held` lost it.
     let mut view = in_flight();
     dialog_opens(&mut view);
-    back(&mut view, [JUMP_KEY, Key::Up, FIRE_KEY], [], false);
+    back(&mut view, [JUMP_KEY, Key::ArrowUp, FIRE_KEY], [], false);
     assert_eq!(view.latched_down, HashSet::from([JUMP_KEY]));
 }
 
@@ -261,7 +261,7 @@ fn the_keys_no_latch_guards_read_down_after_the_close() {
         EJECT_KEY,
         SELF_DESTRUCT_KEY,
         JETTISON_KEY,
-        Key::Command,
+        Key::MetaLeft,
     ];
     back(&mut view, down, [], false);
     for k in down {
@@ -373,7 +373,7 @@ fn a_latched_key_let_go_under_an_unlatching_dialog_comes_back_as_nothing() {
 fn an_unlatched_key_pressed_under_an_unlatching_dialog_is_held_not_replayed() {
     let mut view = at_rest(catalog());
     unlatching_dialog_opens(&mut view);
-    assert_eq!(back(&mut view, [Key::Up], [], false), []);
+    assert_eq!(back(&mut view, [Key::ArrowUp], [], false), []);
     ticked(&mut view, 1);
     assert!(last_controls(&view).thrust);
 }

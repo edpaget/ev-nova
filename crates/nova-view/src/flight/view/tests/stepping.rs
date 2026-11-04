@@ -185,7 +185,7 @@ fn steady_steps_are_not_held() {
 fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
     let mut view = stepping(catalog());
     for k in [
-        Key::Up,
+        Key::ArrowUp,
         FIRE_KEY,
         SECONDARY_KEY,
         CLOAK_KEY,
@@ -230,17 +230,22 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
 fn command_and_minus_hold_the_self_destruct_and_command_and_x_the_eject() {
     // The chords, `_QuickKeyCheck` (@0x705b7): Command with `-`, and
     // Command with X.
-    assert_eq!(SELF_DESTRUCT_KEY, Key::Char('-'));
+    assert_eq!(SELF_DESTRUCT_KEY, Key::Minus);
     let held = |keys: &[Key]| {
         let mut view = stepping(catalog());
         view.held.extend(keys.iter().copied());
         view.step_input(anchor())
     };
-    let destruct = held(&[Key::Command, SELF_DESTRUCT_KEY]);
+    let destruct = held(&[Key::MetaLeft, SELF_DESTRUCT_KEY]);
     assert!(destruct.self_destruct && !destruct.eject);
-    let eject = held(&[Key::Command, EJECT_KEY]);
+    let eject = held(&[Key::MetaLeft, EJECT_KEY]);
     assert!(eject.eject && !eject.self_destruct);
-    for keys in [&[SELF_DESTRUCT_KEY][..], &[EJECT_KEY], &[Key::Command], &[]] {
+    for keys in [
+        &[SELF_DESTRUCT_KEY][..],
+        &[EJECT_KEY],
+        &[Key::MetaLeft],
+        &[],
+    ] {
         let input = held(keys);
         assert!(!input.self_destruct && !input.eject, "{keys:?}");
     }
@@ -251,9 +256,9 @@ fn the_step_input_carries_the_held_jettison_chord_while_taken() {
     // `_HandlePlayer`'s Command-K block has no latch (@0x6fd54-0x6fda1):
     // Command and K down jettison on every pass, `!Option` all.
     let mut view = stepping(catalog());
-    view.held.extend([Key::Command, JETTISON_KEY]);
+    view.held.extend([Key::MetaLeft, JETTISON_KEY]);
     assert_eq!(view.step_input(anchor()).jettison, Some(true));
-    view.held.insert(Key::Alt);
+    view.held.insert(Key::AltLeft);
     assert_eq!(view.step_input(anchor()).jettison, Some(false), "Option");
     view.change_sim(|sim| sim.refuse(PlayerCommand::Jettison));
     assert_eq!(view.step_input(anchor()).jettison, None, "refused");
@@ -264,7 +269,7 @@ fn k_without_command_carries_nothing() {
     let mut view = stepping(catalog());
     view.held.insert(JETTISON_KEY);
     assert_eq!(view.step_input(anchor()).jettison, None);
-    view.held.insert(Key::Alt);
+    view.held.insert(Key::AltLeft);
     assert_eq!(view.step_input(anchor()).jettison, None);
 }
 
@@ -272,10 +277,10 @@ fn k_without_command_carries_nothing() {
 fn a_command_k_tapped_between_steps_jettisons_on_the_next_step_once() {
     // A pass would have read it down, as the slot block counts a tap.
     let mut view = stepping(catalog());
-    view.input(&key(Key::Command, true));
+    view.input(&key(Key::MetaLeft, true));
     view.input(&key(JETTISON_KEY, true));
     view.input(&key(JETTISON_KEY, false));
-    view.input(&key(Key::Command, false));
+    view.input(&key(Key::MetaLeft, false));
     assert_eq!(sent(&view), [], "the press sends nothing");
     assert_eq!(view.step_input(anchor()).jettison, Some(true), "the tap");
     frame(&mut view, one_step(Vec::new()));
@@ -303,7 +308,7 @@ fn the_step_input_carries_ls_latch_as_the_dock_try() {
 fn a_command_the_flight_refuses_holds_none_of_its_keys() {
     let mut view = stepping(catalog());
     view.held.extend([
-        Key::Command,
+        Key::MetaLeft,
         SELF_DESTRUCT_KEY,
         EJECT_KEY,
         CLOAK_KEY,
@@ -321,7 +326,7 @@ fn a_command_the_flight_refuses_holds_none_of_its_keys() {
     assert!(!input.self_destruct && !input.eject && !input.cloak && !input.weapon_safety);
     // U needs no Command.
     view.change_sim(|sim| sim.take(PlayerCommand::Cloak));
-    view.held.remove(&Key::Command);
+    view.held.remove(&Key::MetaLeft);
     assert!(view.step_input(anchor()).cloak);
 }
 

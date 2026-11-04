@@ -244,12 +244,16 @@ mod tests {
     #[test]
     fn the_queue_releases_in_order_and_an_abandon_waits_for_a_tick() {
         let mut keys = HeldKeys::default();
-        keys.queue(key(Key::Up, true));
-        keys.queue(key(Key::Up, false));
+        keys.queue(key(Key::ArrowUp, true));
+        keys.queue(key(Key::ArrowUp, false));
         keys.release(Some(Input::Text('a')));
         assert_eq!(
             keys.take_replay(),
-            [key(Key::Up, true), key(Key::Up, false), Input::Text('a')]
+            [
+                key(Key::ArrowUp, true),
+                key(Key::ArrowUp, false),
+                Input::Text('a')
+            ]
         );
         keys.queue(key(Key::End, true));
         keys.abandon();

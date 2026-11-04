@@ -66,23 +66,23 @@ pub enum PortKey {
 /// an item number, which [`port_key_item`] looks up.
 pub const PORT_KEYS: [(Key, PortKey); 8] = [
     // R (0x0f) → item 4, Recharge.
-    (Key::Char('r'), PortKey::Recharge),
+    (Key::KeyR, PortKey::Recharge),
     // F (0x03) → item 4, Recharge.
-    (Key::Char('f'), PortKey::Recharge),
+    (Key::KeyF, PortKey::Recharge),
     // C (0x08) → item 7, the Trade Center.
-    (Key::Char('c'), PortKey::Service(Service::TradeCenter)),
+    (Key::KeyC, PortKey::Service(Service::TradeCenter)),
     // T (0x11) → item 7, the Trade Center.
-    (Key::Char('t'), PortKey::Service(Service::TradeCenter)),
+    (Key::KeyT, PortKey::Service(Service::TradeCenter)),
     // O (0x1f) → item 8, the Outfitter.
-    (Key::Char('o'), PortKey::Service(Service::Outfitter)),
+    (Key::KeyO, PortKey::Service(Service::Outfitter)),
     // S (0x01) → item 9, the Shipyard.
-    (Key::Char('s'), PortKey::Service(Service::Shipyard)),
+    (Key::KeyS, PortKey::Service(Service::Shipyard)),
     // N (0x2d) → item 10, the Mission BBS (`STR#` 150 #16 in
     // `_DrawPlanetButtons`' table, @0x2982a; `_DoMissionDialog`, @0x5ffa8).
-    (Key::Char('n'), PortKey::Service(Service::MissionBbs)),
+    (Key::KeyN, PortKey::Service(Service::MissionBbs)),
     // B (0x0b) → item 11, the Bar (`STR#` 150 #10; `_DoBarDialog`,
     // @0x600b0).
-    (Key::Char('b'), PortKey::Service(Service::Bar)),
+    (Key::KeyB, PortKey::Service(Service::Bar)),
 ];
 
 /// The item `key` presses, if it is one of the [`PORT_KEYS`]: the
@@ -250,18 +250,21 @@ mod tests {
         assert_eq!(
             PORT_KEYS,
             [
-                (Key::Char('r'), PortKey::Recharge),
-                (Key::Char('f'), PortKey::Recharge),
-                (Key::Char('c'), service(TradeCenter)),
-                (Key::Char('t'), service(TradeCenter)),
-                (Key::Char('o'), service(Outfitter)),
-                (Key::Char('s'), service(Shipyard)),
-                (Key::Char('n'), service(MissionBbs)),
-                (Key::Char('b'), service(Bar)),
+                (Key::KeyR, PortKey::Recharge),
+                (Key::KeyF, PortKey::Recharge),
+                (Key::KeyC, service(TradeCenter)),
+                (Key::KeyT, service(TradeCenter)),
+                (Key::KeyO, service(Outfitter)),
+                (Key::KeyS, service(Shipyard)),
+                (Key::KeyN, service(MissionBbs)),
+                (Key::KeyB, service(Bar)),
             ]
         );
         for (letter, item) in [('r', RECHARGE_ITEM), ('f', RECHARGE_ITEM)] {
-            assert_eq!(port_key_item(Key::Char(letter)), Some(item));
+            assert_eq!(
+                port_key_item(crate::input::letter_key(letter).expect("a letter key")),
+                Some(item)
+            );
         }
         for (letter, each) in [
             ('c', TradeCenter),
@@ -271,9 +274,12 @@ mod tests {
             ('n', MissionBbs),
             ('b', Bar),
         ] {
-            assert_eq!(port_key_item(Key::Char(letter)), Some(service_item(each)));
+            assert_eq!(
+                port_key_item(crate::input::letter_key(letter).expect("a letter key")),
+                Some(service_item(each))
+            );
         }
-        for other in ['a', 'm', 'p', 'i', 'R'].map(Key::Char) {
+        for other in [Key::KeyA, Key::KeyM, Key::KeyP, Key::KeyI] {
             assert_eq!(port_key_item(other), None, "{other:?}");
         }
         assert_eq!(port_key_item(Key::Enter), None);

@@ -110,7 +110,7 @@ fn a_screen_switching_to_widened_renders_widened_from_the_next_frame_and_maps_th
     let mut window = FakeWindow::new((1920, 1080), 1.0);
     let mut app = shaped(&window, ViewShape::Classic);
     app.screen.shape_on_input = Some(ViewShape::Widened);
-    handle(&mut app, &mut window, key(Key::Char('f'), true));
+    handle(&mut app, &mut window, key(Key::KeyF, true));
     assert_eq!(
         app.viewport().logical(),
         nova_render::LogicalSize { w: 1365, h: 768 },
@@ -135,7 +135,7 @@ fn a_screen_switching_back_to_classic_is_pillarboxed_again() {
     let mut window = FakeWindow::new((1920, 1080), 1.0);
     let mut app = shaped(&window, ViewShape::Widened);
     app.screen.shape_on_input = Some(ViewShape::Classic);
-    handle(&mut app, &mut window, key(Key::Char('l'), true));
+    handle(&mut app, &mut window, key(Key::KeyL, true));
     assert_eq!(app.viewport().logical(), nova_render::LOGICAL);
 }
 
@@ -212,7 +212,7 @@ fn a_screen_drawing_its_pointer_is_told_where_it_is_after_its_shape_changes() {
         Some(&Input::PointerMoved(Point::new(512.0, 384.0)))
     );
     app.screen.shape_on_input = Some(ViewShape::Widened);
-    handle(&mut app, &mut window, key(Key::Char('f'), true));
+    handle(&mut app, &mut window, key(Key::KeyF, true));
     redraw(&mut app, &mut window);
     let Some(Input::PointerMoved(at)) = app.screen().inputs.last() else {
         panic!("{:?}", app.screen().inputs);

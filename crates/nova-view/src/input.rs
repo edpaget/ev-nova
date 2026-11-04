@@ -2,102 +2,62 @@
 
 use crate::geometry::Point;
 
-/// A keyboard key the screens care about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Key {
-    /// Left arrow.
-    Left,
-    /// Right arrow.
-    Right,
-    /// Up arrow.
-    Up,
-    /// Down arrow.
-    Down,
-    /// Page Up (fn+Up on a Mac laptop), which the shop grids take as Up.
-    PageUp,
-    /// Page Down (fn+Down on a Mac laptop), which the shop grids take as
-    /// Down.
-    PageDown,
-    /// Home (fn+Left on a Mac laptop, Mac key code 0x73), which takes a
-    /// text dialog's box to the start of its text.
-    Home,
-    /// End (fn+Right on a Mac laptop, Mac key code 0x77), which takes a
-    /// text dialog's box to the end of its text.
-    End,
-    /// Return or Enter.
-    Enter,
-    /// Escape.
-    Escape,
-    /// The space bar.
-    Space,
-    /// Tab.
-    Tab,
-    /// Backspace (Delete on a Mac keyboard), which deletes the character
-    /// before the caret.
-    Backspace,
-    /// Alt (Option on a Mac keyboard), either one, held as a modifier.
-    Alt,
-    /// Control, either one.
-    Control,
-    /// Shift, either one, held as a modifier.
-    Shift,
-    /// Command (the Windows or Super key off a Mac), either one, held as a
-    /// modifier.
-    Command,
-    /// Caps Lock, each press of which turns double time on or off. It is
-    /// no flight key: flight never holds it.
-    CapsLock,
-    /// A key that types a character.
-    Char(char),
-    /// Function key F`n`: F1 is `Function(1)`.
-    Function(u8),
-    /// Any other key.
-    Other,
-}
+/// A physical key, by its position: `keyboard_types`' `Code`, which names
+/// each key for what it types on a US keyboard. `Key::KeyW` is the key
+/// where a US keyboard has W, whatever the player's layout types there;
+/// [`key_letter`] and [`letter_key`] read that US letter.
+///
+/// A pair of keys the platform folds arrives as its left or main key: the
+/// platform adapter's `map_key` says which pairs it folds. `MetaLeft` is
+/// Command on a Mac and the Windows or Super key elsewhere, `AltLeft`
+/// Option, and `Backspace` the Mac keyboard's Delete. Page Up, Page Down,
+/// Home and End are fn with an arrow on a Mac laptop. A key the platform
+/// can't identify is `Key::Unidentified`.
+///
+/// `Code` is `#[non_exhaustive]` and grows with the standard it follows,
+/// so every `match` on a `Key` keeps a wildcard arm.
+pub use keyboard_types::Code as Key;
 
 /// The letter keys and the top row's digit keys, each with its lowercase
 /// letter or digit on a US keyboard.
-const LETTER_KEYS: [(keyboard_types::Code, char); 36] = {
-    use keyboard_types::Code;
-    [
-        (Code::KeyA, 'a'),
-        (Code::KeyB, 'b'),
-        (Code::KeyC, 'c'),
-        (Code::KeyD, 'd'),
-        (Code::KeyE, 'e'),
-        (Code::KeyF, 'f'),
-        (Code::KeyG, 'g'),
-        (Code::KeyH, 'h'),
-        (Code::KeyI, 'i'),
-        (Code::KeyJ, 'j'),
-        (Code::KeyK, 'k'),
-        (Code::KeyL, 'l'),
-        (Code::KeyM, 'm'),
-        (Code::KeyN, 'n'),
-        (Code::KeyO, 'o'),
-        (Code::KeyP, 'p'),
-        (Code::KeyQ, 'q'),
-        (Code::KeyR, 'r'),
-        (Code::KeyS, 's'),
-        (Code::KeyT, 't'),
-        (Code::KeyU, 'u'),
-        (Code::KeyV, 'v'),
-        (Code::KeyW, 'w'),
-        (Code::KeyX, 'x'),
-        (Code::KeyY, 'y'),
-        (Code::KeyZ, 'z'),
-        (Code::Digit0, '0'),
-        (Code::Digit1, '1'),
-        (Code::Digit2, '2'),
-        (Code::Digit3, '3'),
-        (Code::Digit4, '4'),
-        (Code::Digit5, '5'),
-        (Code::Digit6, '6'),
-        (Code::Digit7, '7'),
-        (Code::Digit8, '8'),
-        (Code::Digit9, '9'),
-    ]
-};
+const LETTER_KEYS: [(Key, char); 36] = [
+    (Key::KeyA, 'a'),
+    (Key::KeyB, 'b'),
+    (Key::KeyC, 'c'),
+    (Key::KeyD, 'd'),
+    (Key::KeyE, 'e'),
+    (Key::KeyF, 'f'),
+    (Key::KeyG, 'g'),
+    (Key::KeyH, 'h'),
+    (Key::KeyI, 'i'),
+    (Key::KeyJ, 'j'),
+    (Key::KeyK, 'k'),
+    (Key::KeyL, 'l'),
+    (Key::KeyM, 'm'),
+    (Key::KeyN, 'n'),
+    (Key::KeyO, 'o'),
+    (Key::KeyP, 'p'),
+    (Key::KeyQ, 'q'),
+    (Key::KeyR, 'r'),
+    (Key::KeyS, 's'),
+    (Key::KeyT, 't'),
+    (Key::KeyU, 'u'),
+    (Key::KeyV, 'v'),
+    (Key::KeyW, 'w'),
+    (Key::KeyX, 'x'),
+    (Key::KeyY, 'y'),
+    (Key::KeyZ, 'z'),
+    (Key::Digit0, '0'),
+    (Key::Digit1, '1'),
+    (Key::Digit2, '2'),
+    (Key::Digit3, '3'),
+    (Key::Digit4, '4'),
+    (Key::Digit5, '5'),
+    (Key::Digit6, '6'),
+    (Key::Digit7, '7'),
+    (Key::Digit8, '8'),
+    (Key::Digit9, '9'),
+];
 
 /// The lowercase letter or digit a letter key or top-row digit key is
 /// named for on a US keyboard, or `None` for any other key (the keypad's
@@ -109,7 +69,7 @@ const LETTER_KEYS: [(keyboard_types::Code, char); 36] = {
 /// The layout's own names for keys come from the key-bindings roadmap's
 /// `KeyNames` port (its phase 5).
 #[must_use]
-pub fn key_letter(key: keyboard_types::Code) -> Option<char> {
+pub fn key_letter(key: Key) -> Option<char> {
     LETTER_KEYS
         .iter()
         .find_map(|&(k, letter)| (k == key).then_some(letter))
@@ -121,7 +81,7 @@ pub fn key_letter(key: keyboard_types::Code) -> Option<char> {
 /// It is [`key_letter`] turned around, and reads a US position the same
 /// way.
 #[must_use]
-pub fn letter_key(letter: char) -> Option<keyboard_types::Code> {
+pub fn letter_key(letter: char) -> Option<Key> {
     let letter = letter.to_ascii_lowercase();
     LETTER_KEYS
         .iter()

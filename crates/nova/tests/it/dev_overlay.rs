@@ -159,10 +159,10 @@ fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
 fn backquote_shows_and_hides_the_overlay_over_the_ship_browser() {
     let mut harness = Harness::new(true);
     assert!(!harness.visible(), "starts hidden");
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     assert!(harness.visible());
     assert_eq!(harness.showing(), Showing::ShipBrowser);
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     assert!(!harness.visible());
     assert_eq!(harness.app.take_failures(), []);
 }
@@ -170,14 +170,14 @@ fn backquote_shows_and_hides_the_overlay_over_the_ship_browser() {
 #[test]
 fn tab_reaches_the_game_only_while_the_overlay_is_hidden() {
     let mut harness = Harness::new(true);
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     harness.press(Key::Tab);
     assert_eq!(
         harness.showing(),
         Showing::ShipBrowser,
         "the overlay took Tab"
     );
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     harness.press(Key::Tab);
     assert_eq!(harness.showing(), Showing::GalaxyMap);
 }
@@ -191,11 +191,11 @@ fn a_click_while_the_overlay_shows_selects_nothing_on_the_map() {
     let system = map.model().system(SystemId(128)).expect("a system");
     let alpha = map.transform().world_to_screen(system.position());
 
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     harness.click(alpha);
     assert_eq!(harness.app.screen().galaxy_map().selected(), None);
 
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     harness.click(alpha);
     assert_eq!(
         harness.app.screen().galaxy_map().selected(),
@@ -208,7 +208,7 @@ fn a_click_while_the_overlay_shows_selects_nothing_on_the_map() {
 fn redraws_draw_the_game_as_before_and_feed_the_frame_times() {
     let mut plain = Harness::new(false);
     let mut harness = Harness::new(true);
-    harness.press(Key::Char('`'));
+    harness.press(Key::Backquote);
     for ms in [0, 20, 40] {
         let expected = shape(&plain.redraw(ms));
         assert_eq!(shape(&harness.redraw(ms)), expected, "at {ms} ms");

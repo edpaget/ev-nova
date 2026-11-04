@@ -172,9 +172,9 @@ pub const JETTISON_ITEM: usize = 7;
 
 /// The player info key: the original's default `playerInfoKey`
 /// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
-pub const PLAYER_INFO_KEY: Key = Key::Char('p');
+pub const PLAYER_INFO_KEY: Key = Key::KeyP;
 /// The key that, held, makes Tab go back (`shiftKey`, 0x0200).
-pub const BACKWARDS_KEY: Key = Key::Shift;
+pub const BACKWARDS_KEY: Key = Key::ShiftLeft;
 
 /// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
 /// asks for the player info screen where the original's filters read the
@@ -1240,7 +1240,7 @@ mod tests {
         );
         assert_eq!(LABEL_COLOR, Color::rgba(192, 192, 192, 255));
         assert_eq!(TEXT_SIZE, 9.0);
-        assert_eq!(PLAYER_INFO_KEY, Key::Char('p'));
+        assert_eq!(PLAYER_INFO_KEY, Key::KeyP);
     }
 
     #[test]
@@ -1835,15 +1835,15 @@ mod tests {
         screen.input(&press(Key::Tab));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::General, "wrapped");
-        screen.input(&press(Key::Shift));
+        screen.input(&press(Key::ShiftLeft));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Honors, "back, wrapped");
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Extras);
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Honors, "forward again");
-        screen.input(&press(Key::Shift));
+        screen.input(&press(Key::ShiftLeft));
         screen.release_keys();
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::General, "let go of Shift");
@@ -1864,7 +1864,7 @@ mod tests {
             assert!(screen.closed(), "{closing:?}");
         }
         let mut screen = screen();
-        screen.input(&press(Key::Char('x')));
+        screen.input(&press(Key::KeyX));
         assert!(!screen.closed(), "another key");
     }
 
@@ -1985,7 +1985,7 @@ mod tests {
     fn losing_focus_during_the_wait_closes_it_with_nothing_to_replay() {
         let mut screen = held();
         screen.input(&press(Key::Enter));
-        screen.input(&press(Key::Char('x')));
+        screen.input(&press(Key::KeyX));
         screen.release_keys();
         assert!(screen.closed());
         assert_eq!(screen.take_replay(), []);

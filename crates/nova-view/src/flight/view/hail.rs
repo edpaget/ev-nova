@@ -34,7 +34,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// mission accepted at once shows nothing. A refusal reaches no site,
     /// and its beep is the flight's, drained with its sounds.
     pub(super) fn hail(&mut self) {
-        let option = self.held.contains(&Key::Alt);
+        let option = self.held.contains(&Key::AltLeft);
         let answer = self.send_gated(FlightCommand::Hail { option });
         self.take_hail_answer(answer);
     }
@@ -45,7 +45,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// go of the latched keys) or an offer opening. A refusal and an
     /// offer are answered as [`FlightView::hail`]'s.
     pub(super) fn hail_faded(&mut self) -> bool {
-        let option = self.held.contains(&Key::Alt);
+        let option = self.held.contains(&Key::AltLeft);
         let answer = self.send_gated(FlightCommand::PressFaded(FadedPress::Hail { option }));
         let faded = answer == Answer::Hailed(Hailed::Faded);
         if faded {

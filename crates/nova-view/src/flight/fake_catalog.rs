@@ -1136,7 +1136,7 @@ impl DescriptionGraphics for FakeCatalog {
     }
 }
 
-pub(in crate::flight) const MAP: Key = Key::Char('m');
+pub(in crate::flight) const MAP: Key = Key::KeyM;
 
 /// Presses and releases `k`.
 pub(in crate::flight) fn tap(view: &mut FlightView<FakeCatalog, impl FlightSim>, k: Key) {

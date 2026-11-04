@@ -1028,10 +1028,10 @@ mod tests {
         assert_eq!(grid.can_scroll(22), (false, true));
         grid.select(19, 22);
         assert_eq!(grid.top_row(), 0, "the fifth row shows without scrolling");
-        assert!(grid.arrow(Key::Down, 22, ArrowMoves::Filter));
+        assert!(grid.arrow(Key::ArrowDown, 22, ArrowMoves::Filter));
         assert_eq!((grid.selected(22), grid.top_row()), (Some(21), 1));
         grid.select(0, 22);
-        assert!(grid.arrow(Key::Down, 22, ArrowMoves::Filter));
+        assert!(grid.arrow(Key::ArrowDown, 22, ArrowMoves::Filter));
         assert_eq!(grid.selected(22), Some(4));
         assert!(!grid.arrow(Key::Enter, 22, ArrowMoves::Filter));
         assert_eq!(grid.selected(22), Some(4));
@@ -1252,18 +1252,18 @@ mod tests {
             grid
         };
         for (key, top_rows, count, expected) in [
-            (Key::Right, 0, 30, 0),
-            (Key::Down, 0, 30, 0),
-            (Key::Left, 0, 30, 19),
-            (Key::Up, 0, 30, 19),
-            (Key::Right, 1, 30, 4),
-            (Key::Down, 1, 30, 4),
-            (Key::Left, 1, 30, 23),
-            (Key::Up, 1, 30, 23),
-            (Key::Left, 0, 7, 6),
-            (Key::Up, 0, 7, 6),
-            (Key::Left, 1, 22, 21),
-            (Key::Right, 0, 7, 0),
+            (Key::ArrowRight, 0, 30, 0),
+            (Key::ArrowDown, 0, 30, 0),
+            (Key::ArrowLeft, 0, 30, 19),
+            (Key::ArrowUp, 0, 30, 19),
+            (Key::ArrowRight, 1, 30, 4),
+            (Key::ArrowDown, 1, 30, 4),
+            (Key::ArrowLeft, 1, 30, 23),
+            (Key::ArrowUp, 1, 30, 23),
+            (Key::ArrowLeft, 0, 7, 6),
+            (Key::ArrowUp, 0, 7, 6),
+            (Key::ArrowLeft, 1, 22, 21),
+            (Key::ArrowRight, 0, 7, 0),
             (Key::PageDown, 1, 30, 4),
             (Key::PageUp, 1, 30, 23),
         ] {
@@ -1289,20 +1289,20 @@ mod tests {
         for (moves, down, up) in [(ArrowMoves::Filter, 6, 2), (ArrowMoves::Clamped, 9, 0)] {
             let mut grid = CellGrid::default();
             grid.select(6, 10);
-            assert!(grid.arrow(Key::Down, 10, moves));
+            assert!(grid.arrow(Key::ArrowDown, 10, moves));
             assert_eq!(grid.selected(10), Some(down), "{moves:?} Down");
             grid.select(2, 10);
-            assert!(grid.arrow(Key::Up, 10, moves));
+            assert!(grid.arrow(Key::ArrowUp, 10, moves));
             assert_eq!(grid.selected(10), Some(up), "{moves:?} Up");
         }
         let mut grid = CellGrid::default();
-        assert!(grid.arrow(Key::Right, 30, ArrowMoves::Filter));
+        assert!(grid.arrow(Key::ArrowRight, 30, ArrowMoves::Filter));
         assert_eq!(grid.selected(30), Some(1));
         assert!(grid.arrow(Key::PageDown, 30, ArrowMoves::Filter));
         assert_eq!(grid.selected(30), Some(5));
         // Index 19 to the next row scrolls the grid with it.
         grid.select(19, 30);
-        assert!(grid.arrow(Key::Right, 30, ArrowMoves::Filter));
+        assert!(grid.arrow(Key::ArrowRight, 30, ArrowMoves::Filter));
         assert_eq!((grid.selected(30), grid.top_row()), (Some(20), 1));
     }
 

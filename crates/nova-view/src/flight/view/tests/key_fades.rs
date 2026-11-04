@@ -51,10 +51,10 @@ fn follows(gate: FadeKey, keys: &[Key]) {
 #[test]
 fn the_helm_keys_follow_their_gate_press_included() {
     for k in [
-        Key::Up,
-        Key::Down,
-        Key::Left,
-        Key::Right,
+        Key::ArrowUp,
+        Key::ArrowDown,
+        Key::ArrowLeft,
+        Key::ArrowRight,
         AFTERBURNER_KEY,
         FIRE_KEY,
         JUMP_KEY,
@@ -75,9 +75,9 @@ fn ctrl_s_l_and_i_each_follow_their_gate() {
 #[test]
 fn the_keys_handle_player_writes_no_byte_for_never_fade() {
     for k in [
-        Key::Alt,
-        Key::Shift,
-        Key::Command,
+        Key::AltLeft,
+        Key::ShiftLeft,
+        Key::MetaLeft,
         EJECT_KEY,
         SELF_DESTRUCT_KEY,
         JETTISON_KEY,
@@ -88,7 +88,7 @@ fn the_keys_handle_player_writes_no_byte_for_never_fade() {
         ESCORT_RECALL_KEY,
         FRAME_RATE_KEY,
         ZOOM_IN_KEY,
-        Key::Char('q'),
+        Key::KeyQ,
     ] {
         assert_eq!(alpha_holding(KeyFades::EVERY, &[k]), WHOLE, "{k:?}");
     }
@@ -96,10 +96,10 @@ fn the_keys_handle_player_writes_no_byte_for_never_fade() {
 
 #[test]
 fn the_chords_follow_their_gates_with_command_down() {
-    follows(FadeKey::Eject, &[Key::Command, EJECT_KEY]);
-    follows(FadeKey::SelfDestruct, &[Key::Command, SELF_DESTRUCT_KEY]);
+    follows(FadeKey::Eject, &[Key::MetaLeft, EJECT_KEY]);
+    follows(FadeKey::SelfDestruct, &[Key::MetaLeft, SELF_DESTRUCT_KEY]);
     assert_eq!(
-        alpha_holding(KeyFades::EVERY, &[Key::Command, JETTISON_KEY]),
+        alpha_holding(KeyFades::EVERY, &[Key::MetaLeft, JETTISON_KEY]),
         TWO,
         "Command-K: no gate"
     );
@@ -171,13 +171,13 @@ fn a_key_held_on_an_unbidden_frame_adds_no_fade_of_its_own() {
     // Up held in the pre-jump: the pass sets the one byte either way.
     let unbidden = KeyFades::EVERY.with_unbidden();
     assert_eq!(alpha_holding(unbidden, &[]), TWO, "nothing held");
-    assert_eq!(alpha_holding(unbidden, &[Key::Up]), TWO, "Up held");
+    assert_eq!(alpha_holding(unbidden, &[Key::ArrowUp]), TWO, "Up held");
 }
 
 #[test]
 fn with_nothing_fading_no_key_fades_a_slot_key_included() {
     assert_eq!(
-        alpha_holding(KeyFades::NONE, &[Key::Up, STELLAR_SLOT_KEYS[1][1]]),
+        alpha_holding(KeyFades::NONE, &[Key::ArrowUp, STELLAR_SLOT_KEYS[1][1]]),
         WHOLE
     );
 }
@@ -194,7 +194,7 @@ fn frame_of(view: &Faked, fades: KeyFades) -> FlightFrame {
 fn a_tick_reads_the_gates_at_the_head_of_its_pass_so_a_step_changes_the_next() {
     let mut view = in_flight();
     view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     // Spends the press's latch, which would fade the next tick by itself.
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), ONE, "the press");
@@ -211,7 +211,7 @@ fn a_tick_reads_the_gates_at_the_head_of_its_pass_so_a_step_changes_the_next() {
         frame.key_fades = KeyFades::EVERY.refusing(FadeKey::Helm);
     });
     view.input(&Input::PointerMoved(NOWHERE));
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     let allowed = frame_of(&view, KeyFades::EVERY);
     view.sim
         .queue_report_showing(StepReport::default(), allowed);

@@ -375,11 +375,11 @@ impl AppScreen {
         };
         let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
         let chord = chord_command(key) == Some(MenuCommand::Preferences);
-        let taken = (chord && self.command_held) || (key == Key::Char('p') && away);
+        let taken = (chord && self.command_held) || (key == Key::KeyP && away);
         if !taken || self.dialogs.is_none() {
             return false;
         }
-        let menu_key = self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held;
+        let menu_key = self.side == Side::MainMenu && key == Key::KeyP && !self.command_held;
         if pressed && (!repeat || menu_key) {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
@@ -670,7 +670,7 @@ impl AppScreen {
             Side::MainMenu | Side::Ships | Side::Galaxy => {}
         }
         if let Input::Key {
-            key: Key::Char('i'),
+            key: Key::KeyI,
             pressed,
             repeat,
         } = *input
@@ -685,7 +685,7 @@ impl AppScreen {
             return self.menu_input(input);
         }
         if let Input::Key {
-            key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
+            key: key @ (Key::Tab | Key::Escape | Key::KeyF),
             pressed,
             repeat,
         } = *input
@@ -712,10 +712,10 @@ impl AppScreen {
     pub(super) fn note_keys(&mut self, input: &Input) {
         if let Input::Key { key, pressed, .. } = *input {
             match key {
-                Key::Command => self.command_held = pressed,
-                Key::Char('s') => self.keys_held.s = pressed,
-                Key::Char('l') => self.keys_held.l = pressed,
-                Key::Char('e') => self.keys_held.e = pressed,
+                Key::MetaLeft => self.command_held = pressed,
+                Key::KeyS => self.keys_held.s = pressed,
+                Key::KeyL => self.keys_held.l = pressed,
+                Key::KeyE => self.keys_held.e = pressed,
                 _ => {}
             }
         }

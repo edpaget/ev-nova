@@ -1864,8 +1864,8 @@ mod tests {
             Input::Text(' '),
             Input::Text('\r'),
             key(Key::Enter, true, false),
-            key(Key::Char(' '), true, false),
-            key(Key::Char('n'), true, false),
+            key(Key::Unidentified, true, false),
+            key(Key::KeyN, true, false),
         ] {
             menu.input(&other);
             assert_eq!(menu.take_choice(), None, "{other:?}");

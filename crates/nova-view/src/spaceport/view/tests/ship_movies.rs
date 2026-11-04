@@ -22,7 +22,7 @@ fn in_the_shipyard(main: &Rc<MockMoviePlayer>, reel: &Rc<MockMoviePlayer>) -> Sp
     assert_eq!(view.take_offer_request(), Some(SPACEPORT));
     click_item(&mut view, 9);
     serve_openings(&mut view);
-    view.input(&key(Key::Right));
+    view.input(&key(Key::ArrowRight));
     assert_eq!(reel.calls(), [start("Ship.mov")]);
     view
 }
@@ -34,7 +34,7 @@ fn a_purchase_closing_the_shipyard_stops_the_loop() {
         MockMoviePlayer::playing((32, 32), 100),
     );
     let mut view = in_the_shipyard(&main, &reel);
-    view.input(&key(Key::Char('b')));
+    view.input(&key(Key::KeyB));
     assert_eq!(view.take_ship_request(), Some(ShipId(129)));
     view.open_ship_naming(&naming());
     view.input(&key(Key::Enter));
@@ -79,8 +79,8 @@ fn a_leave_with_the_hire_screen_open_stops_its_loop() {
     assert_eq!(view.take_offer_request(), Some(SPACEPORT));
     click_item(&mut view, 11);
     view.open_hire(hirelings(2, true), None);
-    view.input(&key(Key::Right));
-    view.input(&key(Key::Right));
+    view.input(&key(Key::ArrowRight));
+    view.input(&key(Key::ArrowRight));
     assert_eq!(reel.calls(), [start("Ship.mov")], "129 names it");
     let _ = view.close_sounds();
     assert_eq!(reel.calls(), [start("Ship.mov"), Call::Stop]);
@@ -105,7 +105,7 @@ fn an_offers_movie_over_the_shipyard_plays_on_the_main_player_and_leaves_the_loo
         [start("Ship.mov")],
         "neither stopped nor advanced under the offer"
     );
-    view.input(&key(Key::Char('n')));
+    view.input(&key(Key::KeyN));
     assert!(view.offer_dialog().is_none(), "refused");
     view.tick(ms(16));
     assert_eq!(reel.calls(), [start("Ship.mov"), Call::Advance]);

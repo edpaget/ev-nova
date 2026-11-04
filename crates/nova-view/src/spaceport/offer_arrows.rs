@@ -211,11 +211,11 @@ mod tests {
     #[test]
     fn down_and_up_scroll_ten_pixels_a_press_or_repeat_in_both_variants() {
         for mut offer in long() {
-            offer.input(&key(Key::Down, false));
+            offer.input(&key(Key::ArrowDown, false));
             assert_eq!(offset(&offer), ARROW_UNITS);
-            offer.input(&key(Key::Down, true));
+            offer.input(&key(Key::ArrowDown, true));
             assert_eq!(offset(&offer), 2.0 * ARROW_UNITS, "a repeat");
-            offer.input(&key(Key::Up, false));
+            offer.input(&key(Key::ArrowUp, false));
             assert_eq!(offset(&offer), ARROW_UNITS);
         }
     }
@@ -226,11 +226,11 @@ mod tests {
     #[test]
     fn up_at_the_top_and_down_on_a_text_that_fits_move_nothing() {
         for mut offer in long() {
-            offer.input(&key(Key::Up, false));
+            offer.input(&key(Key::ArrowUp, false));
             assert_eq!(offset(&offer), 0.0);
         }
         for mut offer in both("short") {
-            offer.input(&key(Key::Down, false));
+            offer.input(&key(Key::ArrowDown, false));
             assert_eq!(offset(&offer), 0.0);
         }
     }
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn a_line_partly_scrolled_off_is_cut_at_the_box() {
         for mut offer in long() {
-            offer.input(&key(Key::Down, false));
+            offer.input(&key(Key::ArrowDown, false));
             let box_bounds = offer
                 .dialog()
                 .and_then(|dialog| dialog.item_bounds(TEXT_ITEM))
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn once_moved_both_arrows_draw_enabled() {
         for mut offer in long() {
-            offer.input(&key(Key::Down, false));
+            offer.input(&key(Key::ArrowDown, false));
             assert_arrows(&offer, (true, false), (true, false));
         }
     }
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn a_held_up_arrow_steps_back() {
         for mut offer in long() {
-            offer.input(&key(Key::Down, false));
+            offer.input(&key(Key::ArrowDown, false));
             let at = item_at(&offer, SCROLL_UP_ITEM);
             offer.input(&left(true, at));
             offer.tick(TICK);
@@ -384,7 +384,10 @@ mod tests {
         use crate::spaceport::offer::OfferChoice;
         for (letter, choice) in [('y', OfferChoice::Accept), ('n', OfferChoice::Refuse)] {
             let (mut offer, at) = held();
-            offer.input(&key(Key::Char(letter), false));
+            offer.input(&key(
+                crate::input::letter_key(letter).expect("a letter key"),
+                false,
+            ));
             assert_eq!(offer.take_choice(), None, "it waits");
             offer.input(&left(false, at));
             assert_eq!(offer.take_choice(), Some(choice));
@@ -463,12 +466,12 @@ mod tests {
     #[test]
     fn a_key_queued_after_the_answering_key_is_left_for_what_shows_next() {
         let (mut offer, at) = held();
-        for k in [Key::Enter, Key::Char('b')] {
+        for k in [Key::Enter, Key::KeyB] {
             offer.input(&key(k, false));
         }
         offer.input(&left(false, at));
         assert!(offer.answered());
-        assert_eq!(offer.take_unclaimed(), [key(Key::Char('b'), false)]);
+        assert_eq!(offer.take_unclaimed(), [key(Key::KeyB, false)]);
         assert_eq!(offer.take_unclaimed(), [], "once");
     }
 
@@ -480,12 +483,15 @@ mod tests {
     fn a_press_left_after_an_accept_goes_with_its_flush_and_after_a_refusal_stays() {
         for (letter, kept) in [('y', false), ('n', true)] {
             let (mut offer, at) = held();
-            for k in [Key::Char(letter), Key::Char('b')] {
+            for k in [
+                crate::input::letter_key(letter).expect("a letter key"),
+                Key::KeyB,
+            ] {
                 offer.input(&key(k, false));
             }
             offer.input(&left(true, at));
             assert!(offer.answered());
-            let mut left_over = vec![key(Key::Char('b'), false)];
+            let mut left_over = vec![key(Key::KeyB, false)];
             if kept {
                 left_over.push(left(true, at));
             }

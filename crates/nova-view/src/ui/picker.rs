@@ -189,12 +189,12 @@ impl<T: PickerEntry> Picker<T> {
     pub fn input(&mut self, input: &Input) -> bool {
         let step = match *input {
             Input::Key {
-                key: Key::Up,
+                key: Key::ArrowUp,
                 pressed: true,
                 ..
             } => Some(Arrow::Up),
             Input::Key {
-                key: Key::Down,
+                key: Key::ArrowDown,
                 pressed: true,
                 ..
             } => Some(Arrow::Down),
@@ -310,9 +310,9 @@ mod tests {
     #[test]
     fn it_steps_without_wrapping_and_draws_the_chosen_label() {
         let mut picker = Picker::new(row(), vec![NATIVE, SHARP], NATIVE);
-        assert!(!picker.input(&key(Key::Up)));
-        assert!(picker.input(&key(Key::Down)));
-        assert!(!picker.input(&key(Key::Down)));
+        assert!(!picker.input(&key(Key::ArrowUp)));
+        assert!(picker.input(&key(Key::ArrowDown)));
+        assert!(!picker.input(&key(Key::ArrowDown)));
         assert_eq!(picker.selected(), SHARP);
         let mut list = DrawList::new();
         picker.draw(false, &mut list);

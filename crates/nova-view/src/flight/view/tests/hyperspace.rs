@@ -20,7 +20,7 @@ fn the_hints_name_letter_keys_as_str_129_does() {
     assert_eq!(key_label(LAND_KEY).as_deref(), Some("L"));
     assert_eq!(key_label(MAP_KEY).as_deref(), Some("M"));
     assert_eq!(key_label(JUMP_KEY).as_deref(), Some("J"));
-    assert_eq!(key_label(Key::Function(5)), None, "not yet named");
+    assert_eq!(key_label(Key::F5), None, "not yet named");
 }
 
 /// Whether [`FlightView::taken_during_jump`] takes `key` with Option
@@ -72,10 +72,10 @@ fn the_keys_a_jump_takes_are_the_originals_ungated_ones() {
         PLAYER_INFO_KEY,
         HYPERSPACE_MODE_KEY,
         HYPER_SELECT_KEY,
-        Key::Function(1),
-        Key::Function(4),
+        Key::F1,
+        Key::F4,
         NEAREST_STELLAR_KEY,
-        Key::Up,
+        Key::ArrowUp,
         FIRE_KEY,
     ];
     for key in never {

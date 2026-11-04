@@ -88,15 +88,15 @@ pub use nova_sim::escort::NO_ESCORTS;
 
 /// The escort menu key: the original's default (`Keys.nib`'s
 /// `escortMenuKey`).
-pub const MENU_KEY: Key = Key::Char('e');
+pub const MENU_KEY: Key = Key::KeyE;
 /// The keys that select All Ships, Fighters, Medium Ships, Warships and
 /// Freighters while the menu is open (hard-coded, @0xce722).
 pub const GROUP_KEYS: [Key; 5] = [
-    Key::Char('1'),
-    Key::Char('2'),
-    Key::Char('3'),
-    Key::Char('4'),
-    Key::Char('5'),
+    Key::Digit1,
+    Key::Digit2,
+    Key::Digit3,
+    Key::Digit4,
+    Key::Digit5,
 ];
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
@@ -893,7 +893,7 @@ mod tests {
         assert_eq!(menu.group(), EscortGroup::All);
         assert_eq!(menu.toggle(AT, &rows()), Toggled::Closed);
         assert!(!menu.is_open());
-        assert_eq!(MENU_KEY, Key::Char('e'));
+        assert_eq!(MENU_KEY, Key::KeyE);
     }
 
     #[test]
@@ -920,7 +920,13 @@ mod tests {
         assert!(!menu.select(5, AT, &rows()), "no sixth key");
         assert_eq!(
             GROUP_KEYS,
-            ['1', '2', '3', '4', '5'].map(Key::Char),
+            [
+                Key::Digit1,
+                Key::Digit2,
+                Key::Digit3,
+                Key::Digit4,
+                Key::Digit5
+            ],
             "hard-coded"
         );
     }

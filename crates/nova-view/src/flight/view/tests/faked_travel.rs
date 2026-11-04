@@ -348,7 +348,7 @@ fn the_sabotaged_players_death_descs_are_the_frames() {
 fn the_flight_keys_held_are_the_views() {
     let mut view = faked(in_sol());
     assert!(!view.holds_keys());
-    view.track_held(&key(Key::Up, true));
+    view.track_held(&key(Key::ArrowUp, true));
     assert!(view.holds_keys());
 }
 

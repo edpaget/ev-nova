@@ -227,8 +227,8 @@ mod tests {
         left_waiting_for(MAP_KEY, inputs)
     }
 
-    const A: Key = Key::Char('a');
-    const B: Key = Key::Char('b');
+    const A: Key = Key::KeyA;
+    const B: Key = Key::KeyB;
 
     #[test]
     fn it_keeps_keys_and_repeats_in_order() {

@@ -173,12 +173,12 @@ impl VolumeControl {
     pub fn input(&mut self, input: &Input) -> bool {
         let step = match *input {
             Input::Key {
-                key: Key::Up | Key::Right,
+                key: Key::ArrowUp | Key::ArrowRight,
                 pressed: true,
                 ..
             } => Some(Arrow::Up),
             Input::Key {
-                key: Key::Down | Key::Left,
+                key: Key::ArrowDown | Key::ArrowLeft,
                 pressed: true,
                 ..
             } => Some(Arrow::Down),
@@ -443,15 +443,15 @@ mod tests {
     #[test]
     fn the_arrow_keys_step_the_level_repeats_included() {
         let mut control = control(3);
-        assert!(control.input(&key(Key::Up, false)));
-        assert!(control.input(&key(Key::Right, true)));
+        assert!(control.input(&key(Key::ArrowUp, false)));
+        assert!(control.input(&key(Key::ArrowRight, true)));
         assert_eq!(control.level(), 5);
-        assert!(control.input(&key(Key::Down, false)));
-        assert!(control.input(&key(Key::Left, true)));
-        assert!(control.input(&key(Key::Left, true)));
+        assert!(control.input(&key(Key::ArrowDown, false)));
+        assert!(control.input(&key(Key::ArrowLeft, true)));
+        assert!(control.input(&key(Key::ArrowLeft, true)));
         assert_eq!(control.level(), 2);
         let release = Input::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: false,
             repeat: false,
         };
@@ -466,9 +466,9 @@ mod tests {
         }
         assert_eq!(control.level(), 2);
         let mut control = super::tests::control(8);
-        assert!(!control.input(&key(Key::Up, false)));
+        assert!(!control.input(&key(Key::ArrowUp, false)));
         let mut control = super::tests::control(0);
-        assert!(!control.input(&key(Key::Left, false)));
+        assert!(!control.input(&key(Key::ArrowLeft, false)));
         assert_eq!(control.level(), 0);
     }
 

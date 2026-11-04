@@ -56,9 +56,9 @@ fn the_planet_comm_dialog_hides_flights_cursor_until_the_pointer_moves() {
     let mut screen = with_dialogs(planet_data(0));
     fly(&mut screen);
     pointed(&mut screen);
-    tap(&mut screen, Key::Char('1'));
+    tap(&mut screen, Key::Digit1);
     screen.tick(TICK);
-    tap(&mut screen, Key::Char('y'));
+    tap(&mut screen, Key::KeyY);
     hidden_until_moved(&mut screen, Showing::Comm, |screen| {
         tap(screen, Key::Escape);
     });

@@ -298,7 +298,7 @@ impl Harness {
             frames: 0,
             held: Vec::new(),
         };
-        harness.press(Key::Char('f'));
+        harness.press(Key::KeyF);
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }
@@ -394,15 +394,15 @@ impl Harness {
             .star_map()
             .route(session.system(), SystemId(id), HyperlinkRule::Engine)
             .expect("a route");
-        self.press(Key::Char('m'));
-        self.key(Key::Shift, true);
+        self.press(Key::KeyM);
+        self.key(Key::ShiftLeft, true);
         for hop in &route {
             let at = self.on_map(hop.0);
             self.click(at);
         }
-        self.key(Key::Shift, false);
+        self.key(Key::ShiftLeft, false);
         assert_eq!(self.session().course(), route, "plotted");
-        self.press(Key::Char('m'));
+        self.press(Key::KeyM);
     }
 
     /// Plots a course to Beta on flight's map, flies out and jumps there.
@@ -415,7 +415,7 @@ impl Harness {
     /// Presses J and draws frames until the ship has arrived in system `id`
     /// and the jump's effect is over.
     fn jump_into(&mut self, id: i16) {
-        self.press(Key::Char('j'));
+        self.press(Key::KeyJ);
         self.settle_until("the jump's arrival", |harness| {
             harness.session().system() == SystemId(id) && harness.flight().jump_effect().is_none()
         });
@@ -444,9 +444,9 @@ impl Harness {
 
     /// Presses Command+comma, which opens the Preferences in flight.
     fn command_comma(&mut self) {
-        self.key(Key::Command, true);
-        self.press(Key::Char(','));
-        self.key(Key::Command, false);
+        self.key(Key::MetaLeft, true);
+        self.press(Key::Comma);
+        self.key(Key::MetaLeft, false);
     }
 
     /// Holds exactly `keys` of the flight keys, pressing and releasing
@@ -504,13 +504,13 @@ impl Harness {
             let system = map.model().system(SystemId(id)).expect("on the map");
             let at = map.transform().world_to_screen(system.position());
             let key = if at.x < shown.min.x {
-                Key::Left
+                Key::ArrowLeft
             } else if at.x > shown.max.x {
-                Key::Right
+                Key::ArrowRight
             } else if at.y < shown.min.y {
-                Key::Up
+                Key::ArrowUp
             } else if at.y > shown.max.y {
-                Key::Down
+                Key::ArrowDown
             } else {
                 return at;
             };
@@ -571,9 +571,9 @@ impl Harness {
             shortest_turn(ship.heading, way).abs() <= turn
         };
         if drifting_wrong && !facing {
-            self.hold(&[Key::Down]);
+            self.hold(&[Key::ArrowDown]);
         } else {
-            self.hold(&[Key::Up]);
+            self.hold(&[Key::ArrowUp]);
         }
     }
 }
@@ -581,7 +581,7 @@ impl Harness {
 #[test]
 fn escape_closes_flights_map_and_then_leaves_flight() {
     let mut harness = Harness::flying();
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::FlightMap);
     harness.press(Key::Escape);
     assert_eq!(harness.showing(), Showing::Flight);
@@ -596,7 +596,7 @@ impl Harness {
     fn dragging_the_map() -> (Self, (i32, i32)) {
         let mut harness = Self::flying();
         harness.frame();
-        harness.press(Key::Char('m'));
+        harness.press(Key::KeyM);
         assert_eq!(harness.showing(), Showing::FlightMap);
         let before = harness.map_scroll();
         let corner = map_area().grown(-12.0).min;
@@ -661,7 +661,7 @@ fn the_maps_drag_follows_the_pointer_into_a_bar_and_off_the_window() {
         scale_factor: 1.0,
     });
     harness.frame();
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::FlightMap);
     let place = *harness
         .flight()
@@ -793,7 +793,7 @@ fn losing_focus_halts_the_warp_ups_on_the_audio_port() {
         .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
     harness.plot(129);
     harness.fly_out();
-    harness.press(Key::Char('j'));
+    harness.press(Key::KeyJ);
     let warp_up_playing = |log: &Rc<RefCell<Vec<AudioCommand>>>| {
         log.borrow()
             .iter()
@@ -1053,9 +1053,9 @@ impl Harness {
     fn gamma_picked_in(data: Rc<GameData>, screen: AppScreen) -> Self {
         let mut harness = Self::flying_in(data, screen);
         harness.frame();
-        harness.press(Key::Char('l'));
+        harness.press(Key::KeyL);
         harness.approach();
-        harness.press(Key::Char('l'));
+        harness.press(Key::KeyL);
         assert_eq!(harness.showing(), Showing::FlightMap);
         assert_eq!(harness.flight().course_map().mode(), MapMode::Hypergate);
         let gamma = harness.on_map(130);
@@ -1068,7 +1068,7 @@ impl Harness {
 #[test]
 fn a_hypergate_picked_on_the_map_brings_the_ship_into_its_system() {
     let mut harness = Harness::gamma_picked();
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().system(), SystemId(130));
 }
@@ -1109,7 +1109,7 @@ fn gamma_picked_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
 fn a_hypergate_entry_with_movies_on_leaves_its_descs_movie_the_last_loaded() {
     let (mut harness, reel) = gamma_picked_filmed(true);
     assert_eq!(harness.session().loaded_after_movie(), None);
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::Movie);
     assert_eq!(
         harness.session().loaded_after_movie(),
@@ -1127,7 +1127,7 @@ fn a_hypergate_entry_with_movies_on_leaves_its_descs_movie_the_last_loaded() {
 #[test]
 fn a_hypergate_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
     let (mut harness, reel) = gamma_picked_filmed(false);
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(harness.session().system(), SystemId(130));
     assert_eq!(harness.session().loaded_after_movie(), None);
@@ -1137,9 +1137,9 @@ fn a_hypergate_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
 #[test]
 fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_out() {
     let (mut harness, _) = gamma_picked_filmed(true);
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::Movie);
-    harness.key(Key::Up, true);
+    harness.key(Key::ArrowUp, true);
     harness.settle_until("the movie's end", |harness| {
         harness.showing() != Showing::Movie
     });
@@ -1162,9 +1162,9 @@ fn a_latched_key_pressed_under_a_hypergates_movie_acts_only_once_pressed_again_a
     // no queued key (`_IterateInGameEventLoop` @0x56a6b): the slot key's
     // latch waits for its release.
     let (mut harness, _) = gamma_picked_filmed(true);
-    harness.press(Key::Char('m'));
+    harness.press(Key::KeyM);
     assert_eq!(harness.showing(), Showing::Movie);
-    harness.key(Key::Char('1'), true);
+    harness.key(Key::Digit1, true);
     harness.settle_until("the movie's end", |harness| {
         harness.showing() != Showing::Movie
     });
@@ -1173,8 +1173,8 @@ fn a_latched_key_pressed_under_a_hypergates_movie_acts_only_once_pressed_again_a
         harness.frame();
     }
     assert_eq!(harness.session().nav_target(), None, "latched");
-    harness.key(Key::Char('1'), false);
-    harness.key(Key::Char('1'), true);
+    harness.key(Key::Digit1, false);
+    harness.key(Key::Digit1, true);
     for _ in 0..10 {
         harness.frame();
     }
@@ -1196,9 +1196,9 @@ fn wormhole_entered_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut harness = Harness::flying_in(data, screen);
     harness.frame();
-    harness.press(Key::Char('l'));
+    harness.press(Key::KeyL);
     harness.approach();
-    harness.press(Key::Char('l'));
+    harness.press(Key::KeyL);
     (harness, reel)
 }
 
@@ -1292,7 +1292,7 @@ fn lit_with_about_filmed(movie: Option<&str>) -> (Harness, Rc<MockMoviePlayer>) 
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut harness = Harness::flying_in(data, screen);
     harness.out_towards_beta();
-    harness.press(Key::Char('j'));
+    harness.press(Key::KeyJ);
     harness.settle_until("the white", |game| game.flight().screen_faded());
     (harness, reel)
 }

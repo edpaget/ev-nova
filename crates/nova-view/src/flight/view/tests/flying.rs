@@ -14,7 +14,7 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
     // How far a thrust carries the ship is nova-sim's
     // (`thrust_accelerates_along_the_heading_and_then_moves`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -23.4), 0.0)));
     assert!(last_controls(&view).thrust, "Up held");
     tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -26.1), 0.0)));
@@ -30,9 +30,9 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
 fn releasing_up_coasts() {
     // That a coast keeps its velocity is nova-sim's (`a_ship_coasts_without_drag`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     ticked(&mut view, 1);
-    hold(&mut view, Key::Up, false);
+    hold(&mut view, Key::ArrowUp, false);
     ticked(&mut view, 1);
     let thrusts: Vec<bool> = view
         .sim
@@ -49,15 +49,15 @@ fn left_and_right_turn_the_ship_and_its_frame() {
     // (`right_turns_clockwise_and_left_anticlockwise_at_the_turn_rate`,
     // `turning_alone_does_not_move_the_ship`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::ArrowRight, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 30.0)));
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 33.0)));
     assert_eq!(last_controls(&view).turn, Turn::Right);
     // Drawn a step behind.
     assert_eq!(view.shown_heading(), 30.0);
     assert_eq!(view.frame(), Some(3));
-    hold(&mut view, Key::Right, false);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowRight, false);
+    hold(&mut view, Key::ArrowLeft, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 330.0)));
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 327.0)));
     assert_eq!(last_controls(&view).turn, Turn::Left);
@@ -67,15 +67,15 @@ fn left_and_right_turn_the_ship_and_its_frame() {
 #[test]
 fn left_and_right_together_cancel() {
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Left, true);
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::ArrowLeft, true);
+    hold(&mut view, Key::ArrowRight, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).turn, Turn::None);
 }
 
 #[test]
 fn z_is_the_afterburner_key_held() {
-    assert_eq!(AFTERBURNER_KEY, Key::Char('z'));
+    assert_eq!(AFTERBURNER_KEY, Key::KeyZ);
     let mut view = at_rest(catalog());
     assert!(!view.controls().afterburner);
     hold(&mut view, AFTERBURNER_KEY, true);
@@ -92,7 +92,7 @@ fn up_and_z_held_with_an_afterburner_pass_the_top_speed_and_burn_fuel() {
     // `the_fuel_drains_to_none_and_the_afterburner_stops_the_tick_after`,
     // `released_the_box_bleeds_at_accel_x_0_4_a_tick_holding_the_velocity_to_it`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     hold(&mut view, AFTERBURNER_KEY, true);
     ticked(&mut view, 1);
     let controls = last_controls(&view);
@@ -108,20 +108,20 @@ fn a_turns_the_ship_toward_its_target_and_alt_a_toward_the_nav_stellar() {
     // How the face key turns the ship is nova-sim's
     // (`the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`,
     // `while_the_auto_turn_aims_the_turn_keys_do_nothing`).
-    assert_eq!(FACE_TARGET_KEY, Key::Char('a'));
+    assert_eq!(FACE_TARGET_KEY, Key::KeyA);
     let mut view = at_rest(catalog());
     hold(&mut view, FACE_TARGET_KEY, true);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowLeft, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).face, Face::Target);
-    hold(&mut view, Key::Left, false);
-    hold(&mut view, Key::Alt, true);
+    hold(&mut view, Key::ArrowLeft, false);
+    hold(&mut view, Key::AltLeft, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).face, Face::Stellar, "Alt-A");
     // Let go of, the turn keys turn the ship again.
     hold(&mut view, FACE_TARGET_KEY, false);
-    hold(&mut view, Key::Alt, false);
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::AltLeft, false);
+    hold(&mut view, Key::ArrowRight, true);
     ticked(&mut view, 1);
     let controls = last_controls(&view);
     assert_eq!((controls.face, controls.turn), (Face::Off, Turn::Right));
@@ -133,8 +133,8 @@ fn down_turns_the_ship_against_its_motion() {
     // nova-sim's (`reverse_aims_against_the_velocity_from_0_05_on_either_axis`,
     // `the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Down, true);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowDown, true);
+    hold(&mut view, Key::ArrowLeft, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 177.0)));
     let controls = last_controls(&view);
     assert!(controls.reverse, "{controls:?}");
@@ -146,7 +146,7 @@ fn down_turns_the_ship_against_its_motion() {
 #[test]
 fn a_release_without_a_press_does_nothing() {
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, false);
+    hold(&mut view, Key::ArrowUp, false);
     ticked(&mut view, 1);
     assert!(view.held.is_empty());
     assert_eq!(last_controls(&view), Controls::default());
@@ -1000,7 +1000,7 @@ fn the_bars_show_the_sessions_reserves() {
 fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     let mut view = at_rest(catalog());
     view.status_bar = Err("no ïntf 128".to_owned());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     ticked(&mut view, 5);
     assert!(last_controls(&view).thrust, "flight goes on");
     let list = flown(&view);

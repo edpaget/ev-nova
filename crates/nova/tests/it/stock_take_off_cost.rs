@@ -300,9 +300,9 @@ impl<G: Gpu> Driver<G> {
     }
 
     fn land(&mut self) {
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         self.frames(4);
-        self.press(Key::Char('l'));
+        self.press(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport, "landed");
     }
 

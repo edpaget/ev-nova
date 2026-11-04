@@ -1000,9 +1000,9 @@ impl Game {
     /// L requests clearance, frames until the dock approach clears it,
     /// and a second L lands.
     fn land(&mut self) {
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         self.approach();
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport);
     }
 
@@ -1525,7 +1525,7 @@ fn bought_the_racer(store: &MemoryPilots) -> Game {
     game.land();
     game.click_port(SHIPYARD);
     select_the_racer(&mut game);
-    game.tap(Key::Char('b'));
+    game.tap(Key::KeyB);
     assert!(
         game.spaceport()
             .open_shipyard()
@@ -1568,7 +1568,7 @@ fn the_shipyards_name_prompts_cancel_reaches_flights_decline() {
     let mut game = bought_the_racer(&store);
     game.click_port(SHIPYARD);
     select_cell(&mut game, 1);
-    game.tap(Key::Char('b'));
+    game.tap(Key::KeyB);
     let cancel = game
         .spaceport()
         .open_shipyard()
@@ -1594,13 +1594,13 @@ fn the_bars_offers_reach_the_session_and_ns_refusal_goes_through_it() {
 
     // The bar's ask is answered with the session's offer; N refuses it.
     game.await_offer();
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert!(game.offer().is_none());
 
     // Offered again: N's refusal runs through the session, whose
     // RefuseText shows and whose OnRefuse is saved.
     game.await_offer();
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert!(game.offer().is_none());
     assert!(game.shown_text().is_some(), "the RefuseText");
     let bit = nova_sim::control::Bit::new(7).expect("in range");
@@ -1709,7 +1709,7 @@ fn the_spaceports_mission_infos_selected_quick_brief_is_loaded_through_flight() 
     let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
     game.frame();
     game.land();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     let info = game.spaceport().mission_info().expect("open");
     assert_eq!(
         info.info().rows[0].text,
@@ -1739,7 +1739,7 @@ fn the_spaceports_mission_info_loads_the_quick_brief_of_the_slot_selected() {
     let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
     game.frame();
     game.land();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     let info = game.spaceport().mission_info().expect("open");
     let shown = info
         .dialog()
@@ -1759,7 +1759,7 @@ fn i_opens_mission_info_whose_abort_reaches_the_session_and_the_info_comes_back(
     game.accept_both();
 
     // I opens the info the session gives.
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     let info = game.spaceport().mission_info().expect("open");
     assert_eq!(info.problem(), None, "laid out");
 
@@ -1802,7 +1802,7 @@ fn aborted_by(rules: Rulebook, shown: &[usize]) -> Game {
     let mut game = Game::with_rules(&store, &holding(&ada(), &held), data, rules);
     game.frame();
     game.land();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     let info = game.spaceport().mission_info().expect("open");
     assert_eq!(
         info.info().rows.len(),
@@ -1887,7 +1887,7 @@ fn in_flight_mission_infos_selected_quick_brief_is_loaded_through_flight() {
     let pilot = holding(&ada(), &[(0, 128, None, None)]);
     let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
     game.frame();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     assert_eq!(game.showing(), Showing::MissionInfo);
     let info = game.app.screen().flight_mission_info().expect("open");
     assert_eq!(
@@ -1917,7 +1917,7 @@ fn in_flight_mission_info_loads_the_quick_brief_of_the_slot_selected() {
     let pilot = holding(&ada(), &[(1, 128, None, None)]);
     let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
     game.frame();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     let info = game.app.screen().flight_mission_info().expect("open");
     let shown = info
         .dialog()
@@ -1938,7 +1938,7 @@ fn in_flight_i_opens_mission_info_and_abort_works_there() {
     let mut game = Game::with_pilot(&store, &pilot);
     game.frame();
 
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     assert_eq!(game.showing(), Showing::MissionInfo);
     let alpha = game.alpha();
     let shown = texts(&game.frame());
@@ -2110,7 +2110,7 @@ fn offered_after_the_comp_text(store: &MemoryPilots, (job, offer): (Vec<u8>, &st
 fn the_ports_offer_shows_after_the_texts_and_a_refusal_leaves() {
     let store = MemoryPilots::new();
     let mut game = offered_after_the_comp_text(&store, bar_job());
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), []);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
@@ -2121,7 +2121,7 @@ fn the_ports_offer_refused_shows_its_refuse_text_then_leaves() {
     let store = MemoryPilots::new();
     let job = bar_mission(202, 203, b"I'm in\0", b"\0");
     let mut game = offered_after_the_comp_text(&store, (job, "<PN>, join us."));
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert_eq!(
         game.showing(),
         Showing::Spaceport,
@@ -2194,9 +2194,9 @@ fn without_dialogs_a_landing_q_leaves_in_the_landings_input() {
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.approach();
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Flight, "left at once");
     assert_eq!(game.active(), [], "the run completed");
     assert_eq!(game.session().landed(), None);
@@ -2220,7 +2220,7 @@ fn a_landings_offer_holds_a_q_through_the_map_and_its_refusal_leaves() {
     let store = MemoryPilots::new();
     let mut game = offered_after_the_comp_text(&store, bar_job());
 
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert!(game.session().landed().is_some(), "still landed");
     assert!(leave_due(&game));
@@ -2233,12 +2233,12 @@ fn a_landings_offer_holds_a_q_through_the_map_and_its_refusal_leaves() {
     );
     assert!(leave_due(&game));
 
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::Spaceport, "back to the offer");
     assert_eq!(offer_shown(&game), Some(MissionId(130)));
     assert!(leave_due(&game));
 
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
@@ -2255,7 +2255,7 @@ fn a_brief_text_holds_its_on_accepts_q_through_the_map_over_the_computer() {
     game.accept();
     assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
 
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert!(game.session().landed().is_some(), "still landed");
     assert!(game.spaceport().mission_computer().is_some(), "under it");
@@ -2265,7 +2265,7 @@ fn a_brief_text_holds_its_on_accepts_q_through_the_map_over_the_computer() {
         "still landed after a frame"
     );
 
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::Spaceport, "back to the text");
     assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
     assert!(leave_due(&game));
@@ -2279,8 +2279,8 @@ fn a_brief_text_holds_its_on_accepts_q_through_the_map_over_the_computer() {
 fn a_key_from_the_maps_wait_answers_the_offer_and_the_leave_goes_as_the_map_closes() {
     let store = MemoryPilots::new();
     let mut game = offered_after_the_comp_text(&store, bar_job());
-    let land = Key::Char('l');
-    game.key(Key::Char('m'), true);
+    let land = Key::KeyL;
+    game.key(Key::KeyM, true);
     game.tap(Key::Escape);
     assert!(
         game.app
@@ -2293,13 +2293,13 @@ fn a_key_from_the_maps_wait_answers_the_offer_and_the_leave_goes_as_the_map_clos
 
     // `n` answers the offer at the close; `l` behind it is the spaceport's
     // Leave, and in flight the first of landing's two presses.
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     game.tap(land);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert!(game.session().landed().is_some(), "still landed");
     assert_eq!(offer_shown(&game), Some(MissionId(130)));
 
-    game.key(Key::Char('m'), false);
+    game.key(Key::KeyM, false);
     assert_eq!(game.showing(), Showing::Flight, "in that one input");
     assert_eq!(game.session().landed(), None);
     assert_eq!(game.active(), [], "refused");
@@ -2347,14 +2347,14 @@ fn m_on_the_mission_computer_opens_flights_map_with_its_offers_marks_and_closes_
     game.frame();
     game.land();
     game.click_port(MISSION_BBS);
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert_eq!(
         game.dialog_map(),
         (true, true),
         "the offer's marks reached it"
     );
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::Spaceport);
     assert!(game.spaceport().mission_computer().is_some(), "back to it");
 }
@@ -2365,9 +2365,9 @@ fn over_flight_m_on_mission_info_opens_its_map_and_escape_returns_to_it() {
     let pilot = holding(&ada(), &[(0, 128, None, Some(128))]);
     let mut game = Game::with_pilot(&store, &pilot);
     game.frame();
-    game.tap(Key::Char('i'));
+    game.tap(Key::KeyI);
     assert_eq!(game.showing(), Showing::MissionInfo);
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyM);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert!(game.dialog_map().0, "mission info's map");
     game.tap(Key::Escape);
@@ -2381,8 +2381,8 @@ fn over_flight_mission_infos_map_keeps_the_world_under_the_dialog_in_the_frame()
     let pilot = holding(&ada(), &[(0, 128, None, Some(128))]);
     let mut game = Game::with_pilot(&store, &pilot);
     game.frame();
-    game.tap(Key::Char('i'));
-    game.tap(Key::Char('m'));
+    game.tap(Key::KeyI);
+    game.tap(Key::KeyM);
     assert!(game.dialog_map().0, "mission info's map");
     let frame = game.frame_lacking_art();
     let mut info = DrawList::new();

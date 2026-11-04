@@ -109,15 +109,11 @@ pub fn key_press(key: Key, view: &PlanetCommView) -> Option<PlanetCommItem> {
     let second = |button| (view.second == button).then_some(PlanetCommItem::Second);
     let third = |button| (view.third == Some(button)).then_some(PlanetCommItem::Third);
     match key {
-        Key::Enter | Key::Escape => Some(PlanetCommItem::Close),
-        Key::Char(c) => match c.to_ascii_lowercase() {
-            'e' => Some(PlanetCommItem::Close),
-            'g' => second(PlanetCommButton::Greetings),
-            'o' | 'b' => second(PlanetCommButton::OfferBribe),
-            'd' | 't' => third(PlanetCommButton::DemandTribute),
-            'r' => third(PlanetCommButton::Release),
-            _ => None,
-        },
+        Key::Enter | Key::Escape | Key::KeyE => Some(PlanetCommItem::Close),
+        Key::KeyG => second(PlanetCommButton::Greetings),
+        Key::KeyO | Key::KeyB => second(PlanetCommButton::OfferBribe),
+        Key::KeyD | Key::KeyT => third(PlanetCommButton::DemandTribute),
+        Key::KeyR => third(PlanetCommButton::Release),
         _ => None,
     }
 }
@@ -741,20 +737,20 @@ mod tests {
         let cases = [
             (Key::Enter, &open, Some(PlanetCommItem::Close)),
             (Key::Escape, &open, Some(PlanetCommItem::Close)),
-            (Key::Char('E'), &open, Some(PlanetCommItem::Close)),
-            (Key::Char('g'), &open, Some(PlanetCommItem::Second)),
-            (Key::Char('g'), &hated, None),
-            (Key::Char('o'), &hated, Some(PlanetCommItem::Second)),
-            (Key::Char('B'), &hated, Some(PlanetCommItem::Second)),
-            (Key::Char('o'), &open, None),
-            (Key::Char('d'), &open, Some(PlanetCommItem::Third)),
-            (Key::Char('T'), &open, Some(PlanetCommItem::Third)),
-            (Key::Char('d'), &dominated, None),
-            (Key::Char('r'), &dominated, Some(PlanetCommItem::Third)),
-            (Key::Char('r'), &open, None),
-            (Key::Char('r'), &owned(), None),
-            (Key::Char('d'), &owned(), None),
-            (Key::Char('x'), &open, None),
+            (Key::KeyE, &open, Some(PlanetCommItem::Close)),
+            (Key::KeyG, &open, Some(PlanetCommItem::Second)),
+            (Key::KeyG, &hated, None),
+            (Key::KeyO, &hated, Some(PlanetCommItem::Second)),
+            (Key::KeyB, &hated, Some(PlanetCommItem::Second)),
+            (Key::KeyO, &open, None),
+            (Key::KeyD, &open, Some(PlanetCommItem::Third)),
+            (Key::KeyT, &open, Some(PlanetCommItem::Third)),
+            (Key::KeyD, &dominated, None),
+            (Key::KeyR, &dominated, Some(PlanetCommItem::Third)),
+            (Key::KeyR, &open, None),
+            (Key::KeyR, &owned(), None),
+            (Key::KeyD, &owned(), None),
+            (Key::KeyX, &open, None),
             (Key::Tab, &open, None),
         ];
         for (pressed, view, press) in cases {
@@ -765,9 +761,9 @@ mod tests {
     #[test]
     fn a_key_press_presses_once_and_its_repeat_does_not() {
         let mut shown = dialog(&greeting());
-        shown.input(&key(Key::Char('g'), true));
+        shown.input(&key(Key::KeyG, true));
         assert_eq!(shown.take_press(), None, "a repeat");
-        shown.input(&key(Key::Char('g'), false));
+        shown.input(&key(Key::KeyG, false));
         assert_eq!(shown.take_press(), Some(PlanetCommItem::Second));
         assert_eq!(shown.take_press(), None, "once");
     }

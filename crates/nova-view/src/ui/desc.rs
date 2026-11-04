@@ -702,7 +702,7 @@ mod tests {
         let mut desc = desc();
         assert_eq!(desc.lines(), ["one", "two", "three", "four", "five"]);
         assert_eq!(desc.first_line(), 0);
-        assert_eq!(desc.input(&key(Key::Down)), ScreenAction::None);
+        assert_eq!(desc.input(&key(Key::ArrowDown)), ScreenAction::None);
         assert_eq!(desc.scroll_offset(), ARROW_UNITS);
         assert_eq!(desc.first_line(), 0);
         assert!(!desc.closed());
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn other_input_leaves_it_open() {
         let mut desc = desc();
-        for input in [key(Key::Space), key(Key::Tab), key(Key::Char('i'))] {
+        for input in [key(Key::Space), key(Key::Tab), key(Key::KeyI)] {
             desc.input(&input);
         }
         assert!(!desc.closed());
@@ -1234,10 +1234,10 @@ mod tests {
     fn up_and_down_scroll_on_a_press_or_a_repeat() {
         let mut desc = long_desc();
         for (key, repeat, offset) in [
-            (Key::Down, false, 10.0),
-            (Key::Down, true, 20.0),
-            (Key::Up, true, 10.0),
-            (Key::Up, false, 0.0),
+            (Key::ArrowDown, false, 10.0),
+            (Key::ArrowDown, true, 20.0),
+            (Key::ArrowUp, true, 10.0),
+            (Key::ArrowUp, false, 0.0),
         ] {
             desc.input(&Input::Key {
                 key,
@@ -1314,7 +1314,7 @@ mod tests {
         assert_eq!(desc.scroll_offset(), END - 250.0);
         desc.input(&key(Key::Home));
         assert_eq!(desc.scroll_offset(), 0.0);
-        desc.input(&key(Key::Down));
+        desc.input(&key(Key::ArrowDown));
         assert_eq!(desc.scroll_offset(), ARROW_UNITS);
     }
 
@@ -1356,7 +1356,7 @@ mod tests {
     #[test]
     fn a_partial_line_is_clipped_to_item_3_at_the_top_and_the_bottom() {
         for mut desc in [long_desc(), pictured_long()] {
-            desc.input(&key(Key::Down));
+            desc.input(&key(Key::ArrowDown));
             let clip = desc.dialog().item_bounds(TEXT_ITEM);
             assert_eq!(
                 body_runs(&desc),
@@ -1565,7 +1565,7 @@ mod tests {
     fn a_key_pressed_during_a_hold_acts_at_the_release() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, SCROLL_DOWN_ITEM);
-        desc.input(&key(Key::Down));
+        desc.input(&key(Key::ArrowDown));
         assert_eq!(desc.scroll_offset(), 1.0, "it waits");
         desc.tick(TICK);
         assert_eq!(desc.scroll_offset(), 2.0, "the hold carries on");
@@ -1646,7 +1646,7 @@ mod tests {
     fn what_the_replay_queued_after_its_close_is_left_for_what_shows_next() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, SCROLL_DOWN_ITEM);
-        for input in [key(Key::Enter), released(Key::Enter), key(Key::Down)] {
+        for input in [key(Key::Enter), released(Key::Enter), key(Key::ArrowDown)] {
             desc.input(&input);
         }
         release_on(&mut desc, SCROLL_DOWN_ITEM);
@@ -1654,7 +1654,7 @@ mod tests {
         assert_eq!(desc.scroll_offset(), 1.0, "the Down reached nothing here");
         assert_eq!(
             desc.take_unclaimed(),
-            [released(Key::Enter), key(Key::Down)]
+            [released(Key::Enter), key(Key::ArrowDown)]
         );
         assert_eq!(desc.take_unclaimed(), [], "once");
     }
@@ -1663,11 +1663,11 @@ mod tests {
     fn what_a_click_on_okay_held_back_is_left_for_what_shows_next() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, DONE_ITEM);
-        desc.input(&key(Key::Down));
+        desc.input(&key(Key::ArrowDown));
         release_on(&mut desc, DONE_ITEM);
         assert!(desc.closed());
         assert_eq!(desc.scroll_offset(), 0.0);
-        assert_eq!(desc.take_unclaimed(), [key(Key::Down)]);
+        assert_eq!(desc.take_unclaimed(), [key(Key::ArrowDown)]);
     }
 
     /// `_DoSystemMap` flushes the queue as it opens (@0x1257b).

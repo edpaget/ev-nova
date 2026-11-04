@@ -232,9 +232,9 @@ pub use super::grid::{
 };
 
 /// Buys one, as Buy does: the original's default.
-pub const BUY_KEY: Key = Key::Char('b');
+pub const BUY_KEY: Key = Key::KeyB;
 /// Sells one, as Sell does: the original's default.
-pub const SELL_KEY: Key = Key::Char('s');
+pub const SELL_KEY: Key = Key::KeyS;
 /// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
 /// the original's Option does (`_DoOutfitDialog` tests `optionKey` alone,
 /// `testb $0x8`), unless the other reading of
@@ -1787,7 +1787,7 @@ mod tests {
         assert_eq!((CELL_WIDTH, CELL_HEIGHT), (84.0, 55.0));
         assert_eq!(grid::CELL_PITCH_X * COLUMNS as f32 + 1.0, 333.0);
         assert_eq!(grid::CELL_PITCH_Y * GRID_ROWS as f32 + 1.0, 271.0);
-        assert_eq!((BUY_KEY, SELL_KEY), (Key::Char('b'), Key::Char('s')));
+        assert_eq!((BUY_KEY, SELL_KEY), (Key::KeyB, Key::KeyS));
         assert_eq!((FIRST_PICTURE, FIRST_DESCRIPTION), (6000, 3000));
         assert_eq!(
             [PRICE_LABEL, MASS_LABEL, AVAILABLE_LABEL, NO_PICTURE],
@@ -2036,11 +2036,11 @@ mod tests {
     #[test]
     fn by_the_engine_the_first_arrow_after_opening_picks_a_cell_and_reads_it() {
         let mut right = opened(long(30));
-        press(&mut right, Key::Right);
+        press(&mut right, Key::ArrowRight);
         assert_eq!(right.selected(), Some(0));
         assert_eq!(right.take_description_request(), Some(3000 + 200 - 128));
         let mut up = opened(long(30));
-        press(&mut up, Key::Up);
+        press(&mut up, Key::ArrowUp);
         assert_eq!(up.selected(), Some(19), "the last shown");
         assert_eq!(up.take_description_request(), Some(3000 + 219 - 128));
     }
@@ -2233,7 +2233,7 @@ mod tests {
             assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
         assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let commands = drawn(&screen);
         assert!(!contains(&commands, &bright_frame(&screen, 0)));
         assert!(contains(&commands, &bright_frame(&screen, 1)));
@@ -2249,23 +2249,23 @@ mod tests {
     #[test]
     fn the_arrow_keys_move_the_selection_and_stop_at_the_ends() {
         let mut screen = screen_of(long(10));
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(0));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(0));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(1));
-        screen.input(&key(Key::Down, true, true));
+        screen.input(&key(Key::ArrowDown, true, true));
         assert_eq!(screen.selected(), Some(5), "a row down, repeats too");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(9), "the last");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(9));
-        screen.input(&key(Key::Up, false, false));
+        screen.input(&key(Key::ArrowUp, false, false));
         assert_eq!(screen.selected(), Some(9), "not on release");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(5));
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(4));
         assert_eq!(screen.take_sounds(), [], "keys are silent");
     }
@@ -2279,8 +2279,8 @@ mod tests {
             (screen.selected(), screen.selected_outfit())
         };
         let outfit = |index: usize| Some(OutfitId(200 + i16::try_from(index).expect("few")));
-        assert_eq!(at(long(10), 6, Key::Down), (Some(6), outfit(6)));
-        assert_eq!(at(long(10), 2, Key::Up), (Some(2), outfit(2)));
+        assert_eq!(at(long(10), 6, Key::ArrowDown), (Some(6), outfit(6)));
+        assert_eq!(at(long(10), 2, Key::ArrowUp), (Some(2), outfit(2)));
         assert_eq!(at(long(10), 1, Key::PageDown), (Some(5), outfit(5)));
         assert_eq!(at(long(10), 5, Key::PageUp), (Some(1), outfit(1)));
         let clamped = |outfitter: Outfitter| Outfitter {
@@ -2289,8 +2289,11 @@ mod tests {
                 .with_override(RuleKey::GridArrows, RuleSource::Bible),
             ..outfitter
         };
-        assert_eq!(at(clamped(long(10)), 6, Key::Down), (Some(9), outfit(9)));
-        assert_eq!(at(clamped(long(10)), 2, Key::Up), (Some(0), outfit(0)));
+        assert_eq!(
+            at(clamped(long(10)), 6, Key::ArrowDown),
+            (Some(9), outfit(9))
+        );
+        assert_eq!(at(clamped(long(10)), 2, Key::ArrowUp), (Some(0), outfit(0)));
         assert_eq!(
             at(clamped(long(10)), 6, Key::PageDown),
             (Some(9), outfit(9))
@@ -2443,7 +2446,7 @@ mod tests {
     fn by_the_engine_a_scroll_fills_a_blank_description() {
         let mut screen = reset(opened(long_with_blaster_at(19)));
         let _ = screen.take_description_request();
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(19));
         assert_eq!(screen.selected_outfit(), Some(BLASTER));
         assert!(!described(&screen), "blank, as the reset left it");
@@ -2498,10 +2501,10 @@ mod tests {
         let first: Vec<_> = (0..20).map(|n| format!("Good {n}")).collect();
         assert_eq!(names(&screen), first);
         for _ in 0..4 {
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
         }
         assert_eq!((screen.selected(), screen.top_row()), (Some(16), 0));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top_row()), (Some(20), 1));
         assert_eq!(names(&screen)[0], "Good 4");
         assert_eq!(names(&screen).last().map(String::as_str), Some("Good 21"));
@@ -2521,7 +2524,7 @@ mod tests {
         assert_eq!(screen.top_row(), 1);
         click_cell(&mut screen, 0);
         assert_eq!((screen.selected(), screen.top_row()), (Some(4), 1));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!((screen.selected(), screen.top_row()), (Some(0), 0));
     }
 
@@ -2625,18 +2628,18 @@ mod tests {
             ],
             "every cell's picture, then the selected one's description"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let shown = words(&screen);
         assert!(shown.contains(&NO_PICTURE.to_owned()), "{shown:?}");
         assert!(shown.contains(&"dësc 3001.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let shown = words(&screen);
         assert!(
             !shown.iter().any(|text| text.starts_with("dësc")),
             "{shown:?}"
         );
-        press(&mut screen, Key::Right);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::ArrowRight);
         screen.set_outfitter(outfitter());
         assert_eq!(
             *art.asked.borrow(),
@@ -2692,7 +2695,7 @@ mod tests {
     #[test]
     fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
         let mut screen = screen_with(outfitter(), &art());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let picture = item(&screen, PICTURE_ITEM);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
     }
@@ -2807,7 +2810,7 @@ mod tests {
             ..outfitter()
         };
         let mut screen = screen_with(odd, &art);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(
             *art.asked.borrow(),
             ["PICT -26768", "PICT 32767", "dësc -29768", "dësc 32767"]
@@ -2885,7 +2888,7 @@ mod tests {
             ])
         );
         // The massless ammunition.
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(
             info_placed(&screen),
             placed(&[
@@ -2896,7 +2899,7 @@ mod tests {
             ])
         );
         // The gun too heavy to hold.
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(
             info_placed(&screen),
             placed(&[
@@ -2994,13 +2997,13 @@ mod tests {
     #[test]
     fn the_info_box_says_why_buy_or_sell_is_greyed_when_the_original_words_it() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::ArrowRight);
         let shown = words(&screen);
         assert!(shown.contains(&NO_SPACE_FOR_ANY.to_owned()), "{shown:?}");
         assert!(shown.contains(&"9,000 cr".to_owned()));
         assert!(shown.contains(&"10 tons".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let shown = words(&screen);
         assert!(
             !shown.iter().any(|text| text.starts_with("Can't")),
@@ -3206,7 +3209,7 @@ mod tests {
         assert_eq!(enabled(&screen), (false, false));
         press(&mut screen, BUY_KEY);
         press(&mut screen, SELL_KEY);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.take_order(), None);
         assert_eq!(*art.asked.borrow(), Vec::<String>::new(), "nothing to read");
         assert!(!words(&screen_of(outfitter())).contains(&NO_ITEMS.to_owned()));
@@ -3220,7 +3223,7 @@ mod tests {
         assert_eq!(screen.take_order(), None, "once");
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, BUY_KEY);
         assert_eq!(screen.take_order(), Some(order(129, Direction::Buy)));
         screen.input(&key(BUY_KEY, true, true));
@@ -3229,7 +3232,7 @@ mod tests {
             Some(order(129, Direction::Buy)),
             "repeats too"
         );
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         press(&mut screen, SELL_KEY);
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
         screen.input(&key(SELL_KEY, true, true));
@@ -3242,9 +3245,9 @@ mod tests {
     fn buy_and_sell_are_greyed_when_one_could_not_go_that_way() {
         let mut screen = screen();
         assert_eq!(enabled(&screen), (true, true), "the blaster");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(enabled(&screen), (true, false), "ammunition, none owned");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(enabled(&screen), (false, false), "too heavy, none owned");
         click_item(&mut screen, BUY_ITEM);
         press(&mut screen, BUY_KEY);
@@ -3308,10 +3311,10 @@ mod tests {
         assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
         screen.input(&key(SELL_KEY, true, true));
         assert_eq!(screen.take_order(), None, "S was never pressed");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         screen.input(&key(BUY_KEY, true, true));
         assert_eq!(screen.take_order(), None, "pressed on another outfit");
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         screen.input(&key(BUY_KEY, true, true));
         assert_eq!(
             screen.take_order(),
@@ -3323,7 +3326,7 @@ mod tests {
     #[test]
     fn a_new_outfitter_shows_and_regreys_keeping_the_outfit_selected() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let mut bought = outfitter();
         bought.rows[1].owned = 3;
         bought.cash = 10;
@@ -3343,7 +3346,7 @@ mod tests {
         screen.set_outfitter(sold);
         assert_eq!(screen.selected(), Some(2), "clamped");
         let mut kept = screen_of(long(10));
-        press(&mut kept, Key::Right);
+        press(&mut kept, Key::ArrowRight);
         let mut moved = long(10);
         moved.rows.rotate_right(1);
         kept.set_outfitter(moved);
@@ -3384,7 +3387,7 @@ mod tests {
     #[test]
     fn after_a_reset_no_cell_is_highlighted_and_buy_and_sell_answer_for_the_outfit() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(any_highlight(&screen));
         let mut screen = reset(screen);
         assert_eq!(screen.selected(), None);
@@ -3476,7 +3479,7 @@ mod tests {
     fn a_reset_scrolls_the_grid_to_its_top() {
         let mut screen = screen_of(long(30));
         for _ in 0..6 {
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
         }
         assert_eq!(screen.top_row(), 2);
         let screen = reset(screen);
@@ -3486,7 +3489,7 @@ mod tests {
 
     #[test]
     fn after_a_reset_the_grid_reports_nothing_highlighted_until_an_arrow_picks_a_shown_cell() {
-        for (k, picked) in [(Key::Right, 0), (Key::Left, 9)] {
+        for (k, picked) in [(Key::ArrowRight, 0), (Key::ArrowLeft, 9)] {
             let mut screen = reset(screen_of(long(10)));
             assert!(!screen.grid.highlighted(), "{k:?}: the grid's own bit");
             assert_eq!(screen.grid.selected(10), None, "{k:?}");
@@ -3528,11 +3531,11 @@ mod tests {
             )
         };
         for (k, first_or_last) in [
-            (Key::Right, 0),
-            (Key::Down, 0),
+            (Key::ArrowRight, 0),
+            (Key::ArrowDown, 0),
             (Key::PageDown, 0),
-            (Key::Left, 19),
-            (Key::Up, 19),
+            (Key::ArrowLeft, 19),
+            (Key::ArrowUp, 19),
             (Key::PageUp, 19),
         ] {
             assert_eq!(arrowed(long(30), 0, k), at(first_or_last, 0), "{k:?}");
@@ -3542,7 +3545,7 @@ mod tests {
                 "{k:?} scrolled"
             );
         }
-        for k in [Key::Left, Key::Up] {
+        for k in [Key::ArrowLeft, Key::ArrowUp] {
             assert_eq!(arrowed(long(10), 0, k), at(9, 0), "{k:?}: the last");
             assert_eq!(
                 arrowed(long(22), 1, k),
@@ -3551,8 +3554,8 @@ mod tests {
             );
         }
         let mut ended = reset(screen_of(long(30)));
-        press(&mut ended, Key::Right);
-        press(&mut ended, Key::Right);
+        press(&mut ended, Key::ArrowRight);
+        press(&mut ended, Key::ArrowRight);
         assert_eq!(ended.selected(), Some(1), "the arrows move as before");
     }
 
@@ -3667,11 +3670,11 @@ mod tests {
             let description = 3072 + i16::try_from(index).expect("few");
             (Some(index), top_row, vec![format!("dësc {description}")])
         };
-        for k in [Key::Right, Key::Down] {
+        for k in [Key::ArrowRight, Key::ArrowDown] {
             assert_eq!(arrowed(long(10), 0, 12, k), at(0, 0), "{k:?}");
             assert_eq!(arrowed(long(22), 1, 19, k), at(4, 1), "{k:?} scrolled");
         }
-        for k in [Key::Left, Key::Up] {
+        for k in [Key::ArrowLeft, Key::ArrowUp] {
             assert_eq!(arrowed(long(10), 0, 12, k), at(9, 0), "{k:?}");
             assert_eq!(arrowed(long(22), 1, 19, k), at(21, 1), "{k:?} scrolled");
         }
@@ -3688,7 +3691,7 @@ mod tests {
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(3000, "Loaded blaster.");
         assert!(words(&screen).contains(&"Loaded blaster.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.take_description_request(), Some(3001));
         screen.show_description(3000, "Too late.");
         assert!(
@@ -3703,7 +3706,7 @@ mod tests {
     fn by_the_engine_an_arrow_onto_the_reset_outfit_asks_no_load() {
         let mut screen = reset(screen());
         let _ = screen.take_description_request();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.take_description_request(), None, "@0x58442-0x5844f");
     }
 
@@ -3712,7 +3715,7 @@ mod tests {
         let art = art();
         let mut screen = reset(screen_with(outfitter(), &art));
         art.asked.borrow_mut().clear();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(0));
         assert_eq!(screen.selected_outfit(), Some(BLASTER));
         assert!(contains(&drawn(&screen), &bright_frame(&screen, 0)));
@@ -3722,9 +3725,9 @@ mod tests {
         assert_eq!(enabled(&screen), (true, true));
         assert!(!described(&screen), "{:?}", words(&screen));
         assert_eq!(*art.asked.borrow(), Vec::<String>::new());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(*art.asked.borrow(), ["dësc 3001"]);
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(*art.asked.borrow(), ["dësc 3001", "dësc 3000"]);
         assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
     }
@@ -3740,7 +3743,7 @@ mod tests {
     #[test]
     fn by_the_other_reading_an_arrow_onto_the_reset_outfit_reads_its_description() {
         let mut screen = reset(screen_of(by_the_other_grid_reading(outfitter())));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(0));
         assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
     }
@@ -3811,7 +3814,7 @@ mod tests {
         let mut reset = reset(screen_of(outfitter()));
         press(&mut reset, SELL_KEY);
         assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
-        press(&mut reset, Key::Right);
+        press(&mut reset, Key::ArrowRight);
         assert_eq!(reset.selected(), Some(0));
         reset.input(&key(SELL_KEY, true, true));
         assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
@@ -3849,7 +3852,7 @@ mod tests {
     #[test]
     fn an_order_that_keeps_the_listing_keeps_the_selection() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let before = drawn(&screen);
         screen.reselect(Reselection::Kept);
         assert_eq!(screen.selected(), Some(1));
@@ -3963,7 +3966,7 @@ mod tests {
                 key(k, true, true),
                 key(k, false, false),
                 key(BUY_KEY, true, false),
-                key(Key::Down, true, false),
+                key(Key::ArrowDown, true, false),
             ] {
                 screen.input(&other);
             }
@@ -4018,7 +4021,11 @@ mod tests {
 
     fn typed(screen: &mut OutfitterScreen, text: &str) {
         for c in text.chars() {
-            screen.input(&key(Key::Char(c), true, false));
+            screen.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified),
+                true,
+                false,
+            ));
             screen.input(&Input::Text(c));
         }
     }
@@ -4042,7 +4049,7 @@ mod tests {
 
     #[test]
     fn with_alt_held_buy_opens_the_quantity_dialog_at_the_engines_maximum_titled_buy() {
-        assert_eq!(COUNT_KEY, Key::Alt);
+        assert_eq!(COUNT_KEY, Key::AltLeft);
         let mut screen = counting_screen();
         assert!(screen.quantity().is_none());
         alt_click(&mut screen, BUY_ITEM);
@@ -4147,7 +4154,7 @@ mod tests {
 
     #[test]
     fn with_shift_control_or_command_held_buy_records_one() {
-        for modifier in [Key::Shift, Key::Control, Key::Command] {
+        for modifier in [Key::ShiftLeft, Key::ControlLeft, Key::MetaLeft] {
             let mut screen = counting_screen();
             press(&mut screen, modifier);
             click_item(&mut screen, BUY_ITEM);
@@ -4181,7 +4188,13 @@ mod tests {
     fn while_the_dialog_is_open_b_escape_and_clicks_do_not_reach_the_outfitter() {
         let mut screen = counting_screen();
         alt_click(&mut screen, BUY_ITEM);
-        for k in [BUY_KEY, SELL_KEY, Key::Escape, Key::Right, Key::Down] {
+        for k in [
+            BUY_KEY,
+            SELL_KEY,
+            Key::Escape,
+            Key::ArrowRight,
+            Key::ArrowDown,
+        ] {
             press(&mut screen, k);
         }
         click_item(&mut screen, DONE_ITEM);
@@ -4872,7 +4885,13 @@ mod tests {
         let selected = screen.selected();
         let sell = item(&screen, SELL_ITEM).center();
         let cell = screen.cell_bounds(0).expect("a cell").center();
-        for k in [BUY_KEY, SELL_KEY, Key::Right, Key::Down, Key::Char('i')] {
+        for k in [
+            BUY_KEY,
+            SELL_KEY,
+            Key::ArrowRight,
+            Key::ArrowDown,
+            Key::KeyI,
+        ] {
             press(&mut screen, k);
         }
         click(&mut screen, sell);
@@ -5134,10 +5153,10 @@ mod tests {
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
         for k in [
-            Key::Right,
-            Key::Down,
-            Key::Left,
-            Key::Up,
+            Key::ArrowRight,
+            Key::ArrowDown,
+            Key::ArrowLeft,
+            Key::ArrowUp,
             BUY_KEY,
             SELL_KEY,
             Key::Enter,

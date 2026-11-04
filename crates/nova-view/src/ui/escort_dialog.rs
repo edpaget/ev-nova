@@ -220,14 +220,10 @@ pub fn mark_labels(mark: Option<EscortMark>) -> (&'static str, &'static str) {
 #[must_use]
 pub fn key_press(key: Key) -> Option<EscortButton> {
     match key {
-        Key::Enter | Key::Escape => Some(EscortButton::Close),
-        Key::Char(c) => match c.to_ascii_lowercase() {
-            'c' => Some(EscortButton::Close),
-            'r' => Some(EscortButton::Release),
-            'u' => Some(EscortButton::Upgrade),
-            's' => Some(EscortButton::Sell),
-            _ => None,
-        },
+        Key::Enter | Key::Escape | Key::KeyC => Some(EscortButton::Close),
+        Key::KeyR => Some(EscortButton::Release),
+        Key::KeyU => Some(EscortButton::Upgrade),
+        Key::KeyS => Some(EscortButton::Sell),
         _ => None,
     }
 }
@@ -706,21 +702,21 @@ mod tests {
         for (pressed, press) in [
             (Key::Enter, EscortButton::Close),
             (Key::Escape, EscortButton::Close),
-            (Key::Char('c'), EscortButton::Close),
-            (Key::Char('C'), EscortButton::Close),
-            (Key::Char('r'), EscortButton::Release),
-            (Key::Char('R'), EscortButton::Release),
-            (Key::Char('u'), EscortButton::Upgrade),
-            (Key::Char('U'), EscortButton::Upgrade),
-            (Key::Char('s'), EscortButton::Sell),
-            (Key::Char('S'), EscortButton::Sell),
+            (Key::KeyC, EscortButton::Close),
+            (Key::KeyC, EscortButton::Close),
+            (Key::KeyR, EscortButton::Release),
+            (Key::KeyR, EscortButton::Release),
+            (Key::KeyU, EscortButton::Upgrade),
+            (Key::KeyU, EscortButton::Upgrade),
+            (Key::KeyS, EscortButton::Sell),
+            (Key::KeyS, EscortButton::Sell),
         ] {
             open.input(&key(pressed, false));
             assert_eq!(open.take_press(), Some(press), "{pressed:?}");
             open.input(&key(pressed, true));
             assert_eq!(open.take_press(), None, "{pressed:?} repeating");
         }
-        open.input(&key(Key::Char('x'), false));
+        open.input(&key(Key::KeyX, false));
         assert_eq!(open.take_press(), None);
     }
 

@@ -84,7 +84,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
             | ESCORT_RECALL_KEY => PlayerCommand::Escort,
             _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
-            NEAREST_STELLAR_COMMAND_KEY if self.held.contains(&Key::Command) => PlayerCommand::Nav,
+            NEAREST_STELLAR_COMMAND_KEY if self.held.contains(&Key::MetaLeft) => PlayerCommand::Nav,
             SELECT_KEY => PlayerCommand::SelectWeapon,
             DESELECT_KEY => PlayerCommand::DeselectWeapon,
             NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
@@ -173,7 +173,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
             ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
             ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
-            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
+            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::AltLeft) {
                 EscortCommand::Dock
             } else {
                 EscortCommand::Recall
@@ -539,7 +539,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (@0x69ae6), a latched slot key a fresh one from picking (@0x69e15).
     pub(super) fn nav_held_frame(&mut self) {
         let down = |key: Key| self.reads_down(key);
-        let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
+        let (nav_off, option, h) = (
+            down(NAV_OFF_KEY),
+            down(Key::AltLeft),
+            down(HYPERSPACE_MODE_KEY),
+        );
         let select = down(HYPER_SELECT_KEY);
         if self.takes(PlayerCommand::Nav) {
             self.nav_keys_frame(nav_off, option, h);
@@ -656,7 +660,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::nav_keys_frame`]).
     fn press_nav_block(&mut self, key: Key) {
         let down = |read: Key| key == read || self.reads_down(read);
-        let option = self.held.contains(&Key::Alt);
+        let option = self.held.contains(&Key::AltLeft);
         let others = if key == NAV_OFF_KEY {
             self.reads_down(HYPERSPACE_MODE_KEY)
         } else {
@@ -928,8 +932,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightCommand::SelectTarget`]).
     pub(super) fn press_target_key(&mut self) {
         let (shift, option) = (
-            self.held.contains(&Key::Shift),
-            self.held.contains(&Key::Alt),
+            self.held.contains(&Key::ShiftLeft),
+            self.held.contains(&Key::AltLeft),
         );
         self.select_target(match (shift, option) {
             (false, false) => TargetPick::Next,
@@ -942,7 +946,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// A press of Closest Target ([`NEAREST_KEY`]): the nearest threat, or
     /// the nearest ship with Option ([`FlightCommand::SelectTarget`]).
     pub(super) fn press_nearest_key(&mut self) {
-        self.select_target(if self.held.contains(&Key::Alt) {
+        self.select_target(if self.held.contains(&Key::AltLeft) {
             TargetPick::Nearest
         } else {
             TargetPick::NearestThreat
@@ -954,7 +958,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the original reading it at the pass (@0x6acf6): the press is taken
     /// on the next step, before a frame is drawn.
     pub(super) fn press_weapon_select(&mut self) {
-        let backwards = self.held.contains(&Key::Alt);
+        let backwards = self.held.contains(&Key::AltLeft);
         self.send(FlightCommand::SelectWeapon { backwards });
     }
 }

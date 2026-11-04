@@ -148,14 +148,14 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 }
 
 /// The game's key for a physical key; keys it does not use are
-/// [`Key::Other`].
+/// [`Key::Unidentified`].
 #[must_use]
 pub fn map_key(key: PhysicalKey) -> Key {
     match key {
-        PhysicalKey::Code(KeyCode::ArrowLeft) => Key::Left,
-        PhysicalKey::Code(KeyCode::ArrowRight) => Key::Right,
-        PhysicalKey::Code(KeyCode::ArrowUp) => Key::Up,
-        PhysicalKey::Code(KeyCode::ArrowDown) => Key::Down,
+        PhysicalKey::Code(KeyCode::ArrowLeft) => Key::ArrowLeft,
+        PhysicalKey::Code(KeyCode::ArrowRight) => Key::ArrowRight,
+        PhysicalKey::Code(KeyCode::ArrowUp) => Key::ArrowUp,
+        PhysicalKey::Code(KeyCode::ArrowDown) => Key::ArrowDown,
         // The shop grids' Page Up and Page Down, Mac key codes 0x74 and
         // 0x79, fn+Up and fn+Down on a Mac laptop.
         PhysicalKey::Code(KeyCode::PageUp) => Key::PageUp,
@@ -173,93 +173,93 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Backspace) => Key::Backspace,
         // The map's zoom keys, by position: `=` is the unshifted `+` key on
         // US-layout keyboards.
-        PhysicalKey::Code(KeyCode::Equal) => Key::Char('='),
-        PhysicalKey::Code(KeyCode::NumpadAdd) => Key::Char('+'),
-        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
+        PhysicalKey::Code(KeyCode::Equal) => Key::Equal,
+        PhysicalKey::Code(KeyCode::NumpadAdd) => Key::NumpadAdd,
+        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Minus,
         // The system view's movement keys, by position: W, A, S and D on a
         // US-layout keyboard, wherever another layout puts those letters.
         // S is also the spaceport's Shipyard key.
-        PhysicalKey::Code(KeyCode::KeyW) => Key::Char('w'),
-        PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
-        PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
-        PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
+        PhysicalKey::Code(KeyCode::KeyW) => Key::KeyW,
+        PhysicalKey::Code(KeyCode::KeyA) => Key::KeyA,
+        PhysicalKey::Code(KeyCode::KeyS) => Key::KeyS,
+        PhysicalKey::Code(KeyCode::KeyD) => Key::KeyD,
         // E, by position: flight's escort menu key, the comm dialog's
         // close key, and the main menu's E, which waits for this key's
         // release as `_QuickKeyCheck(0x0e)` does.
-        PhysicalKey::Code(KeyCode::KeyE) => Key::Char('e'),
+        PhysicalKey::Code(KeyCode::KeyE) => Key::KeyE,
         // Flight's key and the spaceport's other Recharge key, by
         // position: F on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
+        PhysicalKey::Code(KeyCode::KeyF) => Key::KeyF,
         // The About text's key, by position: I on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyI) => Key::Char('i'),
+        PhysicalKey::Code(KeyCode::KeyI) => Key::KeyI,
         // Landing's key, by position: L on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyL) => Key::Char('l'),
+        PhysicalKey::Code(KeyCode::KeyL) => Key::KeyL,
         // The flight map's key, by position: M on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
+        PhysicalKey::Code(KeyCode::KeyM) => Key::KeyM,
         // The jump key, by position: J on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        PhysicalKey::Code(KeyCode::KeyJ) => Key::KeyJ,
         // Flight's Hyperspace Mode key and the bar's hire key, by position:
         // H on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyH) => Key::Char('h'),
+        PhysicalKey::Code(KeyCode::KeyH) => Key::KeyH,
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
-        PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
+        PhysicalKey::Code(KeyCode::Backslash) => Key::Backslash,
         // The player info key in flight and the spaceport, and the
         // Preferences dialog's elsewhere, by position: P on a US-layout
         // keyboard.
-        PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
+        PhysicalKey::Code(KeyCode::KeyP) => Key::KeyP,
         // Command+comma opens the Preferences, by position: the comma on a
         // US-layout keyboard.
-        PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
+        PhysicalKey::Code(KeyCode::Comma) => Key::Comma,
         // The Trade Center's buy key and the spaceport's Bar key, by
         // position: B on a US-layout keyboard. Its sell key is S, above.
-        PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
+        PhysicalKey::Code(KeyCode::KeyB) => Key::KeyB,
         // Flight's nearest target key and the spaceport's Recharge key,
         // by position: R on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyR) => Key::Char('r'),
+        PhysicalKey::Code(KeyCode::KeyR) => Key::KeyR,
         // The spaceport's letter keys, by position, as `_PortFilter` reads
         // the Mac key code: C (also flight's escort recall key) and T the
         // Trade Center, O the Outfitter, and N the Mission BBS (also the
         // bar's news key and an offer's refuse key).
-        PhysicalKey::Code(KeyCode::KeyC) => Key::Char('c'),
-        PhysicalKey::Code(KeyCode::KeyT) => Key::Char('t'),
-        PhysicalKey::Code(KeyCode::KeyO) => Key::Char('o'),
-        PhysicalKey::Code(KeyCode::KeyN) => Key::Char('n'),
+        PhysicalKey::Code(KeyCode::KeyC) => Key::KeyC,
+        PhysicalKey::Code(KeyCode::KeyT) => Key::KeyT,
+        PhysicalKey::Code(KeyCode::KeyO) => Key::KeyO,
+        PhysicalKey::Code(KeyCode::KeyN) => Key::KeyN,
         // Either Alt (Option on a Mac), which makes a trade the most
         // possible, and flight's weapon select go back, while held.
-        PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
+        PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::AltLeft,
         // Either Shift, which turns flight's target select key back while
         // held, and the player info's Tab to the previous tab.
-        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
+        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::ShiftLeft,
         // Either Control: flight's secondary fire key.
-        PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
+        PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::ControlLeft,
         // Either Command (Super, the Windows key, off a Mac): what flight's
         // jettison and eject keys need held.
-        PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
+        PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::MetaLeft,
         // Flight's jettison key, by position: K on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
+        PhysicalKey::Code(KeyCode::KeyK) => Key::KeyK,
         // Flight's eject key, by position: X on a US-layout keyboard, the
         // original's default (keycode 0x07).
-        PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
+        PhysicalKey::Code(KeyCode::KeyX) => Key::KeyX,
         // Flight's hail key, by position: Y on a US-layout keyboard, the
         // original's default.
-        PhysicalKey::Code(KeyCode::KeyY) => Key::Char('y'),
+        PhysicalKey::Code(KeyCode::KeyY) => Key::KeyY,
         // Flight's cloak key and the comm and escort dialogs' U, by
         // position: U on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyU) => Key::Char('u'),
+        PhysicalKey::Code(KeyCode::KeyU) => Key::KeyU,
         // Flight's escort hold key, by position: V on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyV) => Key::Char('v'),
+        PhysicalKey::Code(KeyCode::KeyV) => Key::KeyV,
         // Flight's afterburner key, by position: Z on a US-layout keyboard,
         // the original's default (keycode 0x06).
-        PhysicalKey::Code(KeyCode::KeyZ) => Key::Char('z'),
+        PhysicalKey::Code(KeyCode::KeyZ) => Key::KeyZ,
         // The comm and planet comm dialogs' Greetings key and the bar's
         // Gamble key, by position: G on a US-layout keyboard.
-        PhysicalKey::Code(KeyCode::KeyG) => Key::Char('g'),
+        PhysicalKey::Code(KeyCode::KeyG) => Key::KeyG,
         // Command-Q where no menu bar takes it, and an offer button's key
         // when its label starts with Q, by position: Q on a US-layout
         // keyboard. No screen acts on a plain Q's key: the main menu's Quit
         // reads the typed text.
-        PhysicalKey::Code(KeyCode::KeyQ) => Key::Char('q'),
+        PhysicalKey::Code(KeyCode::KeyQ) => Key::KeyQ,
         // Double time's key: each press toggles it, an accepted difference
         // from the original's following the lock state. winit 0.30.13
         // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
@@ -268,31 +268,31 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches
         // flight as Nav Off, the original's default.
-        PhysicalKey::Code(KeyCode::Backquote) => Key::Char('`'),
+        PhysicalKey::Code(KeyCode::Backquote) => Key::Backquote,
         // Flight's stellar slot keys, by position: 1-4 on the top row (the
         // keypad's are not the original's).
-        PhysicalKey::Code(KeyCode::Digit1) => Key::Char('1'),
-        PhysicalKey::Code(KeyCode::Digit2) => Key::Char('2'),
-        PhysicalKey::Code(KeyCode::Digit3) => Key::Char('3'),
-        PhysicalKey::Code(KeyCode::Digit4) => Key::Char('4'),
+        PhysicalKey::Code(KeyCode::Digit1) => Key::Digit1,
+        PhysicalKey::Code(KeyCode::Digit2) => Key::Digit2,
+        PhysicalKey::Code(KeyCode::Digit3) => Key::Digit3,
+        PhysicalKey::Code(KeyCode::Digit4) => Key::Digit4,
         // The top-row 5: the escort menu's Freighters key, and with
         // Command flight's second nearest-stellar key. 6-0 stay unmapped.
-        PhysicalKey::Code(KeyCode::Digit5) => Key::Char('5'),
+        PhysicalKey::Code(KeyCode::Digit5) => Key::Digit5,
         // F1-F4, flight's other stellar slot keys, and F5, its nearest
         // stellar key.
-        PhysicalKey::Code(KeyCode::F1) => Key::Function(1),
-        PhysicalKey::Code(KeyCode::F2) => Key::Function(2),
-        PhysicalKey::Code(KeyCode::F3) => Key::Function(3),
-        PhysicalKey::Code(KeyCode::F4) => Key::Function(4),
-        PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
+        PhysicalKey::Code(KeyCode::F1) => Key::F1,
+        PhysicalKey::Code(KeyCode::F2) => Key::F2,
+        PhysicalKey::Code(KeyCode::F3) => Key::F3,
+        PhysicalKey::Code(KeyCode::F4) => Key::F4,
+        PhysicalKey::Code(KeyCode::F5) => Key::F5,
         // The fullscreen shortcut off a Mac.
-        PhysicalKey::Code(KeyCode::F11) => Key::Function(11),
+        PhysicalKey::Code(KeyCode::F11) => Key::F11,
         // Flight's frame-rate key. macOS keeps F12 for itself unless "Use
         // F1, F2, etc. keys as standard function keys" is set; fn-F12
         // reaches the game otherwise. The key-bindings roadmap makes it
         // rebindable.
-        PhysicalKey::Code(KeyCode::F12) => Key::Function(12),
-        _ => Key::Other,
+        PhysicalKey::Code(KeyCode::F12) => Key::F12,
+        _ => Key::Unidentified,
     }
 }
 
@@ -342,10 +342,10 @@ mod tests {
     #[test]
     fn the_keys_the_game_uses_map_to_its_keys() {
         let cases = [
-            (KeyCode::ArrowLeft, Key::Left),
-            (KeyCode::ArrowRight, Key::Right),
-            (KeyCode::ArrowUp, Key::Up),
-            (KeyCode::ArrowDown, Key::Down),
+            (KeyCode::ArrowLeft, Key::ArrowLeft),
+            (KeyCode::ArrowRight, Key::ArrowRight),
+            (KeyCode::ArrowUp, Key::ArrowUp),
+            (KeyCode::ArrowDown, Key::ArrowDown),
             (KeyCode::PageUp, Key::PageUp),
             (KeyCode::PageDown, Key::PageDown),
             (KeyCode::Home, Key::Home),
@@ -356,67 +356,67 @@ mod tests {
             (KeyCode::Space, Key::Space),
             (KeyCode::Tab, Key::Tab),
             (KeyCode::Backspace, Key::Backspace),
-            (KeyCode::Equal, Key::Char('=')),
-            (KeyCode::NumpadAdd, Key::Char('+')),
-            (KeyCode::Minus, Key::Char('-')),
-            (KeyCode::NumpadSubtract, Key::Char('-')),
-            (KeyCode::KeyW, Key::Char('w')),
-            (KeyCode::KeyA, Key::Char('a')),
-            (KeyCode::KeyS, Key::Char('s')),
-            (KeyCode::KeyD, Key::Char('d')),
-            (KeyCode::KeyF, Key::Char('f')),
-            (KeyCode::KeyI, Key::Char('i')),
-            (KeyCode::KeyL, Key::Char('l')),
-            (KeyCode::KeyM, Key::Char('m')),
-            (KeyCode::KeyJ, Key::Char('j')),
-            (KeyCode::KeyH, Key::Char('h')),
-            (KeyCode::KeyP, Key::Char('p')),
-            (KeyCode::KeyB, Key::Char('b')),
-            (KeyCode::AltLeft, Key::Alt),
-            (KeyCode::AltRight, Key::Alt),
-            (KeyCode::ControlLeft, Key::Control),
-            (KeyCode::ControlRight, Key::Control),
-            (KeyCode::ShiftLeft, Key::Shift),
-            (KeyCode::ShiftRight, Key::Shift),
-            (KeyCode::KeyR, Key::Char('r')),
-            (KeyCode::KeyK, Key::Char('k')),
-            (KeyCode::KeyX, Key::Char('x')),
-            (KeyCode::KeyY, Key::Char('y')),
-            (KeyCode::KeyU, Key::Char('u')),
-            (KeyCode::KeyV, Key::Char('v')),
-            (KeyCode::KeyZ, Key::Char('z')),
-            (KeyCode::KeyE, Key::Char('e')),
-            (KeyCode::KeyC, Key::Char('c')),
-            (KeyCode::KeyT, Key::Char('t')),
-            (KeyCode::KeyO, Key::Char('o')),
-            (KeyCode::KeyN, Key::Char('n')),
-            (KeyCode::KeyG, Key::Char('g')),
-            (KeyCode::KeyQ, Key::Char('q')),
-            (KeyCode::SuperLeft, Key::Command),
-            (KeyCode::SuperRight, Key::Command),
+            (KeyCode::Equal, Key::Equal),
+            (KeyCode::NumpadAdd, Key::NumpadAdd),
+            (KeyCode::Minus, Key::Minus),
+            (KeyCode::NumpadSubtract, Key::Minus),
+            (KeyCode::KeyW, Key::KeyW),
+            (KeyCode::KeyA, Key::KeyA),
+            (KeyCode::KeyS, Key::KeyS),
+            (KeyCode::KeyD, Key::KeyD),
+            (KeyCode::KeyF, Key::KeyF),
+            (KeyCode::KeyI, Key::KeyI),
+            (KeyCode::KeyL, Key::KeyL),
+            (KeyCode::KeyM, Key::KeyM),
+            (KeyCode::KeyJ, Key::KeyJ),
+            (KeyCode::KeyH, Key::KeyH),
+            (KeyCode::KeyP, Key::KeyP),
+            (KeyCode::KeyB, Key::KeyB),
+            (KeyCode::AltLeft, Key::AltLeft),
+            (KeyCode::AltRight, Key::AltLeft),
+            (KeyCode::ControlLeft, Key::ControlLeft),
+            (KeyCode::ControlRight, Key::ControlLeft),
+            (KeyCode::ShiftLeft, Key::ShiftLeft),
+            (KeyCode::ShiftRight, Key::ShiftLeft),
+            (KeyCode::KeyR, Key::KeyR),
+            (KeyCode::KeyK, Key::KeyK),
+            (KeyCode::KeyX, Key::KeyX),
+            (KeyCode::KeyY, Key::KeyY),
+            (KeyCode::KeyU, Key::KeyU),
+            (KeyCode::KeyV, Key::KeyV),
+            (KeyCode::KeyZ, Key::KeyZ),
+            (KeyCode::KeyE, Key::KeyE),
+            (KeyCode::KeyC, Key::KeyC),
+            (KeyCode::KeyT, Key::KeyT),
+            (KeyCode::KeyO, Key::KeyO),
+            (KeyCode::KeyN, Key::KeyN),
+            (KeyCode::KeyG, Key::KeyG),
+            (KeyCode::KeyQ, Key::KeyQ),
+            (KeyCode::SuperLeft, Key::MetaLeft),
+            (KeyCode::SuperRight, Key::MetaLeft),
             (KeyCode::CapsLock, Key::CapsLock),
-            (KeyCode::Backquote, Key::Char('`')),
-            (KeyCode::Backslash, Key::Char('\\')),
-            (KeyCode::Digit1, Key::Char('1')),
-            (KeyCode::Digit2, Key::Char('2')),
-            (KeyCode::Digit3, Key::Char('3')),
-            (KeyCode::Digit4, Key::Char('4')),
-            (KeyCode::Digit5, Key::Char('5')),
-            (KeyCode::F1, Key::Function(1)),
-            (KeyCode::F2, Key::Function(2)),
-            (KeyCode::F3, Key::Function(3)),
-            (KeyCode::F4, Key::Function(4)),
-            (KeyCode::F5, Key::Function(5)),
-            (KeyCode::F11, Key::Function(11)),
-            (KeyCode::F12, Key::Function(12)),
-            (KeyCode::Digit6, Key::Other),
-            (KeyCode::F6, Key::Other),
+            (KeyCode::Backquote, Key::Backquote),
+            (KeyCode::Backslash, Key::Backslash),
+            (KeyCode::Digit1, Key::Digit1),
+            (KeyCode::Digit2, Key::Digit2),
+            (KeyCode::Digit3, Key::Digit3),
+            (KeyCode::Digit4, Key::Digit4),
+            (KeyCode::Digit5, Key::Digit5),
+            (KeyCode::F1, Key::F1),
+            (KeyCode::F2, Key::F2),
+            (KeyCode::F3, Key::F3),
+            (KeyCode::F4, Key::F4),
+            (KeyCode::F5, Key::F5),
+            (KeyCode::F11, Key::F11),
+            (KeyCode::F12, Key::F12),
+            (KeyCode::Digit6, Key::Unidentified),
+            (KeyCode::F6, Key::Unidentified),
         ];
         for (code, key) in cases {
             assert_eq!(map_key(PhysicalKey::Code(code)), key, "{code:?}");
         }
         let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        assert_eq!(map_key(unknown), Key::Other);
+        assert_eq!(map_key(unknown), Key::Unidentified);
     }
 
     /// Character keys that screens other than flight react to, from the
@@ -427,18 +427,18 @@ mod tests {
     /// one of these directly never crosses `map_key`, so this is what keeps
     /// each one reachable from a real keyboard.
     const GAME_CHARACTER_KEYS: [Key; 30] = [
-        Key::Char('f'),
-        Key::Char('i'),
-        Key::Char('p'),
+        Key::KeyF,
+        Key::KeyI,
+        Key::KeyP,
         nova_view::ui::player_info::PLAYER_INFO_KEY,
         crate::app::screen::PREFERENCES_KEY,
-        Key::Char('w'),
-        Key::Char('a'),
-        Key::Char('s'),
-        Key::Char('d'),
-        Key::Char('='),
-        Key::Char('+'),
-        Key::Char('-'),
+        Key::KeyW,
+        Key::KeyA,
+        Key::KeyS,
+        Key::KeyD,
+        Key::Equal,
+        Key::NumpadAdd,
+        Key::Minus,
         nova_view::devtools::TOGGLE_KEY,
         nova_view::spaceport::trade::BUY_KEY,
         nova_view::spaceport::trade::SELL_KEY,
@@ -459,81 +459,70 @@ mod tests {
         nova_view::spaceport::PORT_KEYS[7].0,
     ];
 
-    /// The physical key that types `c` on a US-layout keyboard.
-    fn us_position(c: char) -> KeyCode {
-        match c {
-            'a' => KeyCode::KeyA,
-            'b' => KeyCode::KeyB,
-            'c' => KeyCode::KeyC,
-            'd' => KeyCode::KeyD,
-            'e' => KeyCode::KeyE,
-            'f' => KeyCode::KeyF,
-            'g' => KeyCode::KeyG,
-            'h' => KeyCode::KeyH,
-            'i' => KeyCode::KeyI,
-            'j' => KeyCode::KeyJ,
-            'k' => KeyCode::KeyK,
-            'l' => KeyCode::KeyL,
-            'm' => KeyCode::KeyM,
-            'n' => KeyCode::KeyN,
-            'o' => KeyCode::KeyO,
-            'p' => KeyCode::KeyP,
-            'q' => KeyCode::KeyQ,
-            'r' => KeyCode::KeyR,
-            's' => KeyCode::KeyS,
-            't' => KeyCode::KeyT,
-            'w' => KeyCode::KeyW,
-            'u' => KeyCode::KeyU,
-            'v' => KeyCode::KeyV,
-            'x' => KeyCode::KeyX,
-            'y' => KeyCode::KeyY,
-            'z' => KeyCode::KeyZ,
-            '1' => KeyCode::Digit1,
-            '2' => KeyCode::Digit2,
-            '3' => KeyCode::Digit3,
-            '4' => KeyCode::Digit4,
-            '5' => KeyCode::Digit5,
-            '=' => KeyCode::Equal,
-            '+' => KeyCode::NumpadAdd,
-            '-' => KeyCode::Minus,
-            '`' => KeyCode::Backquote,
-            '\\' => KeyCode::Backslash,
-            ',' => KeyCode::Comma,
-            other => panic!("no physical key listed for {other:?}"),
-        }
-    }
-
     #[test]
     fn the_listed_character_keys_come_from_their_physical_keys() {
         for key in GAME_CHARACTER_KEYS {
-            let Key::Char(c) = key else {
-                panic!("{key:?} is not a character key");
-            };
-            assert_eq!(map_key(PhysicalKey::Code(us_position(c))), key, "{c:?}");
+            assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
         }
     }
 
     /// The physical key that sends `key` on a US-layout keyboard.
     fn us_key(key: Key) -> KeyCode {
         match key {
-            Key::Char(c) => us_position(c),
-            Key::Left => KeyCode::ArrowLeft,
-            Key::Right => KeyCode::ArrowRight,
-            Key::Up => KeyCode::ArrowUp,
-            Key::Down => KeyCode::ArrowDown,
+            Key::KeyA => KeyCode::KeyA,
+            Key::KeyB => KeyCode::KeyB,
+            Key::KeyC => KeyCode::KeyC,
+            Key::KeyD => KeyCode::KeyD,
+            Key::KeyE => KeyCode::KeyE,
+            Key::KeyF => KeyCode::KeyF,
+            Key::KeyG => KeyCode::KeyG,
+            Key::KeyH => KeyCode::KeyH,
+            Key::KeyI => KeyCode::KeyI,
+            Key::KeyJ => KeyCode::KeyJ,
+            Key::KeyK => KeyCode::KeyK,
+            Key::KeyL => KeyCode::KeyL,
+            Key::KeyM => KeyCode::KeyM,
+            Key::KeyN => KeyCode::KeyN,
+            Key::KeyO => KeyCode::KeyO,
+            Key::KeyP => KeyCode::KeyP,
+            Key::KeyQ => KeyCode::KeyQ,
+            Key::KeyR => KeyCode::KeyR,
+            Key::KeyS => KeyCode::KeyS,
+            Key::KeyT => KeyCode::KeyT,
+            Key::KeyU => KeyCode::KeyU,
+            Key::KeyV => KeyCode::KeyV,
+            Key::KeyW => KeyCode::KeyW,
+            Key::KeyX => KeyCode::KeyX,
+            Key::KeyY => KeyCode::KeyY,
+            Key::KeyZ => KeyCode::KeyZ,
+            Key::Digit1 => KeyCode::Digit1,
+            Key::Digit2 => KeyCode::Digit2,
+            Key::Digit3 => KeyCode::Digit3,
+            Key::Digit4 => KeyCode::Digit4,
+            Key::Digit5 => KeyCode::Digit5,
+            Key::Equal => KeyCode::Equal,
+            Key::NumpadAdd => KeyCode::NumpadAdd,
+            Key::Minus => KeyCode::Minus,
+            Key::Backquote => KeyCode::Backquote,
+            Key::Backslash => KeyCode::Backslash,
+            Key::Comma => KeyCode::Comma,
+            Key::ArrowLeft => KeyCode::ArrowLeft,
+            Key::ArrowRight => KeyCode::ArrowRight,
+            Key::ArrowUp => KeyCode::ArrowUp,
+            Key::ArrowDown => KeyCode::ArrowDown,
             Key::Enter => KeyCode::Enter,
             Key::Space => KeyCode::Space,
             Key::Tab => KeyCode::Tab,
-            Key::Alt => KeyCode::AltLeft,
-            Key::Control => KeyCode::ControlLeft,
-            Key::Shift => KeyCode::ShiftLeft,
-            Key::Command => KeyCode::SuperLeft,
-            Key::Function(1) => KeyCode::F1,
-            Key::Function(2) => KeyCode::F2,
-            Key::Function(3) => KeyCode::F3,
-            Key::Function(4) => KeyCode::F4,
-            Key::Function(5) => KeyCode::F5,
-            Key::Function(12) => KeyCode::F12,
+            Key::AltLeft => KeyCode::AltLeft,
+            Key::ControlLeft => KeyCode::ControlLeft,
+            Key::ShiftLeft => KeyCode::ShiftLeft,
+            Key::MetaLeft => KeyCode::SuperLeft,
+            Key::F1 => KeyCode::F1,
+            Key::F2 => KeyCode::F2,
+            Key::F3 => KeyCode::F3,
+            Key::F4 => KeyCode::F4,
+            Key::F5 => KeyCode::F5,
+            Key::F12 => KeyCode::F12,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
@@ -545,15 +534,11 @@ mod tests {
         }
     }
 
-    /// Asserts that `letter`'s physical key sends it. The dialogs take
-    /// either case and a physical key sends the lower.
+    /// Asserts that `letter`'s physical key sends its key. The dialogs take
+    /// either case, and one key sends both.
     fn assert_physical(letter: char) {
-        let sent = letter.to_ascii_lowercase();
-        assert_eq!(
-            map_key(PhysicalKey::Code(us_position(sent))),
-            Key::Char(sent),
-            "{letter:?}"
-        );
+        let key = nova_view::letter_key(letter).expect("a letter key");
+        assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{letter:?}");
     }
 
     #[test]
@@ -589,7 +574,9 @@ mod tests {
             asking: None,
         });
         for c in ' '..='~' {
-            let key = Key::Char(c);
+            let Some(key) = nova_view::letter_key(c) else {
+                continue;
+            };
             let planet = views
                 .iter()
                 .any(|view| planet_comm::key_press(key, view).is_some());
@@ -623,13 +610,13 @@ mod tests {
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
         // The outfitter's grid selection.
-        (Key::Left, KeyCode::ArrowLeft),
-        (Key::Right, KeyCode::ArrowRight),
-        (Key::Up, KeyCode::ArrowUp),
-        (Key::Down, KeyCode::ArrowDown),
+        (Key::ArrowLeft, KeyCode::ArrowLeft),
+        (Key::ArrowRight, KeyCode::ArrowRight),
+        (Key::ArrowUp, KeyCode::ArrowUp),
+        (Key::ArrowDown, KeyCode::ArrowDown),
         // Flight's jettison key's modifier.
-        (Key::Command, KeyCode::SuperLeft),
-        (Key::Command, KeyCode::SuperRight),
+        (Key::MetaLeft, KeyCode::SuperLeft),
+        (Key::MetaLeft, KeyCode::SuperRight),
         // The player info's Tab goes back with Shift held.
         (
             nova_view::ui::player_info::BACKWARDS_KEY,
@@ -657,7 +644,7 @@ mod tests {
                 false
             ),
             WindowEvent::Key {
-                key: Key::Up,
+                key: Key::ArrowUp,
                 pressed: true,
                 repeat: false
             }

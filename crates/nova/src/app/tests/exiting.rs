@@ -21,8 +21,8 @@ fn after_the_apps_own_quit_exiting_does_nothing() {
     type Quit = fn(&mut TestApp, &mut FakeWindow) -> Control;
     let close: Quit = |app, window| handle(app, window, WindowEvent::CloseRequested);
     let screen_quit: Quit = |app, window| {
-        app.screen.quit_on = Some(Key::Char('q'));
-        handle(app, window, key(Key::Char('q'), true))
+        app.screen.quit_on = Some(Key::KeyQ);
+        handle(app, window, key(Key::KeyQ, true))
     };
     let quit_on_tick: Quit = |app, window| {
         app.screen.asks_quit = true;

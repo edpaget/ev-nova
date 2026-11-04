@@ -79,7 +79,7 @@ pub(super) fn faked_type_in(view: &mut Faked, text: &str) {
         let k = if c == ' ' {
             Key::Space
         } else {
-            Key::Char(c.to_ascii_lowercase())
+            crate::input::letter_key(c).unwrap_or(Key::Unidentified)
         };
         faked_map_input(view, &key(k, true));
         faked_map_input(view, &Input::Text(c));
@@ -198,7 +198,7 @@ fn a_system_the_flights_find_doesnt_find_leaves_the_selection_and_panel() {
     // A viewer over the same galaxy finds both.
     let mut viewer = GalaxyMap::new(&view.catalog).with_metrics(Rc::new(MonoMetrics));
     for (name, id) in [("sol", 130), ("barnard", 132)] {
-        viewer.input(&key(Key::Char('s'), true));
+        viewer.input(&key(Key::KeyS, true));
         viewer.input(&Input::Text('s'));
         for c in name.chars() {
             viewer.input(&Input::Text(c));
@@ -216,11 +216,11 @@ fn with_find_open_m_types_and_closes_nothing() {
     faked_type_in(&mut view, "m");
     faked_map_input(&mut view, &key(MAP, true));
     assert!(
-        !faked_map_input(&mut view, &key(Key::Char('q'), true)),
+        !faked_map_input(&mut view, &key(Key::KeyQ, true)),
         "a key with M held"
     );
     faked_map_input(&mut view, &Input::Text('q'));
-    faked_map_input(&mut view, &key(Key::Char('q'), false));
+    faked_map_input(&mut view, &key(Key::KeyQ, false));
     faked_map_input(&mut view, &key(MAP, false));
     let typed = view.map.find_dialog().expect("open").field().text();
     assert_eq!(typed, "mq", "M held types nothing more");
@@ -311,7 +311,7 @@ fn with_find_open_on_the_bars_map_m_types_into_it() {
     });
     let mut port_type = |text: &str| {
         for c in text.chars() {
-            let k = Key::Char(c);
+            let k = crate::input::letter_key(c).unwrap_or(Key::Unidentified);
             view.port_map_input(&key(k, true));
             view.port_map_input(&Input::Text(c));
             view.port_map_input(&key(k, false));

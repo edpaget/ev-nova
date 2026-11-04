@@ -57,7 +57,7 @@ pub(super) fn flying_on_a_mission(store: &MemoryPilots) -> AppScreen {
     let mut screen = landed_at_venues(store, loaded_bytes(jump_ready(&fork).bytes));
     // L, which landed, let go: held past the take-off it would pick a
     // stellar on every pass (`_HandlePlayer` @0x6a8c5-0x6a932).
-    screen.input(&key(Key::Char('l'), false));
+    screen.input(&key(Key::KeyL, false));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(active(&screen), [MissionId(130)]);
@@ -84,16 +84,16 @@ pub(super) fn flying_on_a_mission(store: &MemoryPilots) -> AppScreen {
 /// `screen` flying with a course to Beta, flown out past the minimum jump
 /// distance, J pressed and ticked until the warp has lit the screen white.
 pub(super) fn lit_from(mut screen: AppScreen) -> AppScreen {
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     for _ in 0..1800 {
         if ship(&screen).position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
             break;
         }
         screen.tick(TICK);
     }
-    screen.input(&key(Key::Up, false));
-    screen.input(&key(Key::Char('j'), true));
-    screen.input(&key(Key::Char('j'), false));
+    screen.input(&key(Key::ArrowUp, false));
+    screen.input(&key(Key::KeyJ, true));
+    screen.input(&key(Key::KeyJ, false));
     for _ in 0..1800 {
         if flight(&screen).screen_faded() {
             return screen;
@@ -110,7 +110,7 @@ pub(super) fn plot_beta(screen: &mut AppScreen) {
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::FlightMap);
     let at = port::scrolled_to(screen, SystemId(129));
-    screen.input(&key(Key::Shift, true));
+    screen.input(&key(Key::ShiftLeft, true));
     for pressed in [true, false] {
         screen.input(&Input::PointerButton {
             button: MouseButton::Left,
@@ -118,7 +118,7 @@ pub(super) fn plot_beta(screen: &mut AppScreen) {
             at,
         });
     }
-    screen.input(&key(Key::Shift, false));
+    screen.input(&key(Key::ShiftLeft, false));
     screen.input(&key(MAP, true));
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Flight);
@@ -175,7 +175,7 @@ fn m_i_p_and_y_under_the_warps_white_leave_the_game_showing_flight() {
         MAP,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
         PLAYER_INFO_KEY,
-        Key::Char('y'),
+        Key::KeyY,
     ] {
         tapped(&mut screen, k);
         assert_eq!(screen.showing(), Showing::Flight, "{k:?}");

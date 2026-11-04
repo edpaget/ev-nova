@@ -143,14 +143,14 @@ pub const BUY_LABEL: &str = "Buy";
 pub const SELL_LABEL: &str = "Sell";
 
 /// Buys, as Buy does: the original's default.
-pub const BUY_KEY: Key = Key::Char('b');
+pub const BUY_KEY: Key = Key::KeyB;
 /// Sells, as Sell does: the original's default.
-pub const SELL_KEY: Key = Key::Char('s');
+pub const SELL_KEY: Key = Key::KeyS;
 /// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
 /// the original's Option does, or by the other reading of
 /// [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount) trade the most
 /// at once.
-pub const MAX_LOT_KEY: Key = Key::Alt;
+pub const MAX_LOT_KEY: Key = Key::AltLeft;
 
 /// The dialog's font: `_smallTextFont`, Geneva (@0x4cf4b-0x4cf72).
 pub const TEXT_FONT: Font = Font::Geneva;
@@ -813,7 +813,7 @@ impl Screen for TradeScreen {
         // Shift is followed under the offer and the quantity dialog too,
         // so a release there is not lost.
         if let Input::Key {
-            key: Key::Shift,
+            key: Key::ShiftLeft,
             pressed,
             ..
         } = *input
@@ -872,12 +872,12 @@ impl Screen for TradeScreen {
                 repeat: false,
             } if self.focus_ring == FocusRing::Off => self.step(!self.backwards),
             Input::Key {
-                key: Key::Up,
+                key: Key::ArrowUp,
                 pressed: true,
                 ..
             } => self.step(false),
             Input::Key {
-                key: Key::Down,
+                key: Key::ArrowDown,
                 pressed: true,
                 ..
             } => self.step(true),
@@ -1200,7 +1200,7 @@ mod tests {
         assert_eq!((BUY_LABEL, SELL_LABEL), ("Buy", "Sell"));
         assert_eq!(
             (BUY_KEY, SELL_KEY, MAX_LOT_KEY),
-            (Key::Char('b'), Key::Char('s'), Key::Alt)
+            (Key::KeyB, Key::KeyS, Key::AltLeft)
         );
         assert_eq!((TEXT_FONT, TEXT_SIZE), (Font::Geneva, 9.0));
         assert_eq!(DARK_GREY, Color::rgba(0x40, 0x40, 0x40, 255));
@@ -1484,7 +1484,7 @@ mod tests {
             drawn_at(&commands, "Food").map(|(_, c)| c),
             Some(colors.text)
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         let commands = drawn(&screen);
         assert!(contains(
             &commands,
@@ -1723,17 +1723,17 @@ mod tests {
     #[test]
     fn up_and_down_move_the_selection_and_wrap_at_the_ends() {
         let mut screen = screen();
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(2), "wraps to the last");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(0), "wraps to the first");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(1));
-        screen.input(&key(Key::Down, true, true));
+        screen.input(&key(Key::ArrowDown, true, true));
         assert_eq!(screen.selected(), Some(2), "repeats too");
-        screen.input(&key(Key::Up, false, false));
+        screen.input(&key(Key::ArrowUp, false, false));
         assert_eq!(screen.selected(), Some(2), "not on release");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(1));
     }
 
@@ -1760,13 +1760,13 @@ mod tests {
         let mut screen = screen_of(gappy());
         let mut visited = vec![screen.selected()];
         for _ in 0..4 {
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
             visited.push(screen.selected());
         }
         assert_eq!(visited, [Some(0), Some(1), Some(3), Some(2), Some(0)]);
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(2), "back round to slot 7");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(screen.selected(), Some(3), "back to slot 6");
     }
 
@@ -1787,15 +1787,15 @@ mod tests {
     #[test]
     fn shift_tab_steps_back_under_the_engine_reading() {
         let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(2), "round to the last filled slot");
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(3));
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(2), "forward again");
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         screen.release_keys();
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(0), "Shift let go with the keys");
@@ -1815,7 +1815,7 @@ mod tests {
     fn tab_with_no_rows_steps_nothing() {
         let mut screen = screen_of(long(0)).with_focus_ring(FocusRing::Off);
         for shift in [false, true] {
-            screen.input(&key(Key::Shift, shift, false));
+            screen.input(&key(Key::ShiftLeft, shift, false));
             press(&mut screen, Key::Tab);
             assert_eq!(screen.selected(), None);
         }
@@ -1824,11 +1824,11 @@ mod tests {
     #[test]
     fn under_the_focus_ring_tab_moves_the_button_focus_not_the_selection() {
         let mut screen = screen();
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(1));
         assert!(screen.dialog().and_then(Dialog::focus).is_some(), "focused");
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         press(&mut screen, Key::Tab);
         assert_eq!(screen.selected(), Some(1), "Shift+Tab too");
         let mut done = screen_of(gappy());
@@ -1841,9 +1841,9 @@ mod tests {
     #[test]
     fn shift_let_go_in_the_quantity_dialog_is_let_go_after_it() {
         let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
-        press(&mut screen, Key::Shift);
+        press(&mut screen, Key::ShiftLeft);
         alt_click(&mut screen, BUY_ITEM);
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
         assert!(screen.quantity().is_none(), "closed");
@@ -1922,8 +1922,8 @@ mod tests {
         // the first row shown scrolled into view.
         assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
         assert_eq!(names(&screen), ["Good 0", "Good 1"]);
-        press(&mut screen, Key::Down);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(2), 1));
         assert_eq!(names(&screen), ["Good 0", "Good 1", "Good 2"]);
         let good_2 = item(&screen, 11);
@@ -1931,19 +1931,19 @@ mod tests {
             &drawn(&screen),
             &filled(shrunk(good_2, 1.0, 1.0), Color::rgba(0x80, 0, 0, 255))
         ));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(3), 2));
         click_item(&mut screen, 4);
         assert_eq!(screen.selected(), Some(3), "slot 2, scrolled, is empty");
         click_item(&mut screen, 8);
         assert_eq!(screen.selected(), Some(0));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!(
             (screen.selected(), screen.top()),
             (Some(3), 2),
             "round to the last, shown"
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(
             (screen.selected(), screen.top()),
             (Some(0), 2),
@@ -1956,9 +1956,9 @@ mod tests {
         // 6 empty slots, goods 0-10 at positions 6-16, empty slot 7.
         let mut screen = screen_of(long(11));
         assert_eq!((screen.selected(), screen.top()), (Some(0), 0));
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         assert_eq!((screen.selected(), screen.top()), (Some(10), 9));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!((screen.selected(), screen.top()), (Some(0), 6));
     }
 
@@ -1966,7 +1966,7 @@ mod tests {
     fn eight_positions_or_fewer_never_scroll() {
         let mut screen = screen_of(long(1));
         assert_eq!(screen.top(), 0);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.top(), 0);
         assert_eq!(names(&screen), ["Good 0"]);
     }
@@ -2006,13 +2006,13 @@ mod tests {
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Click))
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
             Some(order(1, METAL, Direction::Buy, Lot::Click))
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         press(&mut screen, SELL_KEY);
         assert_eq!(
             screen.take_order(),
@@ -2096,7 +2096,11 @@ mod tests {
 
     fn typed(screen: &mut TradeScreen, text: &str) {
         for c in text.chars() {
-            screen.input(&key(Key::Char(c), true, false));
+            screen.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified),
+                true,
+                false,
+            ));
             screen.input(&Input::Text(c));
         }
     }
@@ -2196,7 +2200,7 @@ mod tests {
         let mut screen = screen();
         alt_click(&mut screen, BUY_ITEM);
         press(&mut screen, BUY_KEY);
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         click_item(&mut screen, SELL_ITEM);
         press(&mut screen, Key::Escape);
         assert_eq!(screen.take_order(), None);
@@ -2349,7 +2353,7 @@ mod tests {
     /// @0x5e45c): any other modifier is a plain trade.
     #[test]
     fn with_shift_control_or_command_held_buy_and_sell_ask_for_a_plain_trade() {
-        for modifier in [Key::Shift, Key::Control, Key::Command] {
+        for modifier in [Key::ShiftLeft, Key::ControlLeft, Key::MetaLeft] {
             let mut screen = screen();
             screen.input(&key(modifier, true, false));
             press(&mut screen, BUY_KEY);
@@ -2386,14 +2390,14 @@ mod tests {
     fn buy_and_sell_are_greyed_as_the_market_allows() {
         let mut screen = screen();
         assert_eq!(enabled(&screen), (true, true), "food");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (true, false), "metal, none held");
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (false, true), "opals, not sold here");
         click_item(&mut screen, BUY_ITEM);
         press(&mut screen, BUY_KEY);
         assert_eq!(screen.take_order(), None, "greyed asks for nothing");
-        press(&mut screen, Key::Up);
+        press(&mut screen, Key::ArrowUp);
         click_item(&mut screen, SELL_ITEM);
         press(&mut screen, SELL_KEY);
         assert_eq!(screen.take_order(), None);
@@ -2466,7 +2470,7 @@ mod tests {
             screen.take_order(),
             Some(order(0, OPALS, Direction::Sell, Lot::Click))
         );
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(enabled(&screen), (true, false), "the low row");
         press(&mut screen, SELL_KEY);
         assert_eq!(screen.take_order(), None);
@@ -2495,14 +2499,14 @@ mod tests {
                 screen.take_order(),
                 Some(order(row, OPALS, Direction::Sell, Lot::Click))
             );
-            press(&mut screen, Key::Down);
+            press(&mut screen, Key::ArrowDown);
         }
     }
 
     #[test]
     fn a_new_market_shows_and_regreys_keeping_the_selection() {
         let mut screen = screen();
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         let mut bought = market();
         bought.rows[1].held = 7;
         bought.free = 0;
@@ -2515,7 +2519,7 @@ mod tests {
         assert!(shown.contains(&"7".to_owned()), "{shown:?}");
         let mut scrolled = screen_of(long(11));
         for _ in 0..10 {
-            press(&mut scrolled, Key::Down);
+            press(&mut scrolled, Key::ArrowDown);
         }
         assert_eq!((scrolled.selected(), scrolled.top()), (Some(10), 9));
         scrolled.set_market(long(3));
@@ -2616,7 +2620,7 @@ mod tests {
                 key(k, false, false),
                 key(BUY_KEY, true, false),
                 key(MAX_LOT_KEY, true, false),
-                key(Key::Down, true, false),
+                key(Key::ArrowDown, true, false),
             ] {
                 screen.input(&other);
             }
@@ -2920,8 +2924,8 @@ mod tests {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             for k in [
                 Key::Tab,
-                Key::Down,
-                Key::Up,
+                Key::ArrowDown,
+                Key::ArrowUp,
                 BUY_KEY,
                 SELL_KEY,
                 crate::ui::player_info::PLAYER_INFO_KEY,

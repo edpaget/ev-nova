@@ -191,7 +191,7 @@ impl Fullscreen {
     /// not flicker, but it is swallowed with the press it repeats.
     pub(crate) fn key(&mut self, key: Key, pressed: bool, repeat: bool) -> Shortcut {
         self.drop_text = false;
-        if key == Key::Alt {
+        if key == Key::AltLeft {
             self.held_modifiers.alt = pressed;
         }
         if self.held == Some(key) {
@@ -217,7 +217,7 @@ impl Fullscreen {
         match self.os {
             Os::MacOs => false,
             Os::Windows | Os::Other => {
-                (key == Key::Enter && self.held_modifiers.alt) || key == Key::Function(11)
+                (key == Key::Enter && self.held_modifiers.alt) || key == Key::F11
             }
         }
     }
@@ -497,23 +497,23 @@ mod tests {
         let mac = Os::MacOs;
         // The View menu's key equivalent takes Control+Command+F before
         // the window: the keys that reach the game are the game's.
-        assert!(!toggles(mac, &[Key::Control, Key::Command, Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Command, Key::Control, Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Char('f')]));
-        assert!(!toggles(mac, &[Key::Alt, Key::Enter]));
-        assert!(!toggles(mac, &[Key::Function(11)]));
+        assert!(!toggles(mac, &[Key::ControlLeft, Key::MetaLeft, Key::KeyF]));
+        assert!(!toggles(mac, &[Key::MetaLeft, Key::ControlLeft, Key::KeyF]));
+        assert!(!toggles(mac, &[Key::KeyF]));
+        assert!(!toggles(mac, &[Key::AltLeft, Key::Enter]));
+        assert!(!toggles(mac, &[Key::F11]));
     }
 
     #[test]
     fn elsewhere_alt_enter_and_f11_are_the_shortcut() {
         for os in [Os::Windows, Os::Other] {
-            assert!(toggles(os, &[Key::Alt, Key::Enter]), "{os:?}");
-            assert!(toggles(os, &[Key::Function(11)]), "{os:?}");
+            assert!(toggles(os, &[Key::AltLeft, Key::Enter]), "{os:?}");
+            assert!(toggles(os, &[Key::F11]), "{os:?}");
             assert!(!toggles(os, &[Key::Enter]), "{os:?}");
-            assert!(!toggles(os, &[Key::Function(10)]), "{os:?}");
-            assert!(!toggles(os, &[Key::Alt, Key::Space]), "{os:?}");
+            assert!(!toggles(os, &[Key::F10]), "{os:?}");
+            assert!(!toggles(os, &[Key::AltLeft, Key::Space]), "{os:?}");
             assert!(
-                !toggles(os, &[Key::Control, Key::Command, Key::Char('f')]),
+                !toggles(os, &[Key::ControlLeft, Key::MetaLeft, Key::KeyF]),
                 "{os:?}"
             );
         }
@@ -522,8 +522,8 @@ mod tests {
     #[test]
     fn a_released_modifier_stops_counting() {
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
-        press(&mut fullscreen, Key::Alt);
-        release(&mut fullscreen, Key::Alt);
+        press(&mut fullscreen, Key::AltLeft);
+        release(&mut fullscreen, Key::AltLeft);
         assert_eq!(press(&mut fullscreen, Key::Enter), Shortcut::None);
     }
 
@@ -531,7 +531,7 @@ mod tests {
     fn losing_focus_forgets_the_held_modifiers() {
         let mut window = RecordingWindow::new((1024, 768));
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
-        press(&mut fullscreen, Key::Alt);
+        press(&mut fullscreen, Key::AltLeft);
         fullscreen.focus_lost(&mut window);
         assert_eq!(window.calls, [], "windowed");
         assert_eq!(press(&mut fullscreen, Key::Enter), Shortcut::None);
@@ -540,22 +540,16 @@ mod tests {
     #[test]
     fn a_held_shortcut_is_swallowed_without_toggling_again_and_so_is_its_release() {
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
-        assert_eq!(press(&mut fullscreen, Key::Function(11)), Shortcut::Toggle);
+        assert_eq!(press(&mut fullscreen, Key::F11), Shortcut::Toggle);
+        assert_eq!(fullscreen.key(Key::F11, true, true), Shortcut::Swallowed);
+        assert_eq!(release(&mut fullscreen, Key::F11), Shortcut::Swallowed);
         assert_eq!(
-            fullscreen.key(Key::Function(11), true, true),
-            Shortcut::Swallowed
-        );
-        assert_eq!(
-            release(&mut fullscreen, Key::Function(11)),
-            Shortcut::Swallowed
-        );
-        assert_eq!(
-            release(&mut fullscreen, Key::Function(11)),
+            release(&mut fullscreen, Key::F11),
             Shortcut::None,
             "only the one release"
         );
         assert_eq!(
-            fullscreen.key(Key::Function(11), true, true),
+            fullscreen.key(Key::F11, true, true),
             Shortcut::None,
             "a repeat of a key not taken as the shortcut"
         );
@@ -564,9 +558,9 @@ mod tests {
     #[test]
     fn the_shortcuts_key_released_after_its_modifier_is_still_swallowed() {
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
-        press(&mut fullscreen, Key::Alt);
+        press(&mut fullscreen, Key::AltLeft);
         assert_eq!(press(&mut fullscreen, Key::Enter), Shortcut::Toggle);
-        assert_eq!(release(&mut fullscreen, Key::Alt), Shortcut::None);
+        assert_eq!(release(&mut fullscreen, Key::AltLeft), Shortcut::None);
         assert_eq!(release(&mut fullscreen, Key::Enter), Shortcut::Swallowed);
         assert_eq!(release(&mut fullscreen, Key::Enter), Shortcut::None);
     }
@@ -575,12 +569,12 @@ mod tests {
     fn only_the_text_right_after_a_shortcut_press_is_dropped() {
         let mut fullscreen = Fullscreen::new(Os::Windows, (1024, 768));
         assert!(!fullscreen.drops_text(), "no shortcut yet");
-        press(&mut fullscreen, Key::Alt);
+        press(&mut fullscreen, Key::AltLeft);
         press(&mut fullscreen, Key::Enter);
         assert!(fullscreen.drops_text());
         assert!(!fullscreen.drops_text(), "the one text only");
-        press(&mut fullscreen, Key::Char('f'));
-        release(&mut fullscreen, Key::Char('f'));
+        press(&mut fullscreen, Key::KeyF);
+        release(&mut fullscreen, Key::KeyF);
         assert!(!fullscreen.drops_text(), "another key came between");
     }
 

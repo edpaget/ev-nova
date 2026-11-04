@@ -6,7 +6,7 @@ use super::*;
 /// release.
 fn type_in(screen: &mut AppScreen, text: &str) {
     for c in text.chars() {
-        let k = Key::Char(c.to_ascii_lowercase());
+        let k = nova_view::letter_key(c).unwrap_or(Key::Unidentified);
         screen.input(&key(k, true));
         screen.input(&Input::Text(c));
         screen.input(&key(k, false));

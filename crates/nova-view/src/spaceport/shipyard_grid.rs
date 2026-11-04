@@ -284,9 +284,9 @@ mod tests {
         let mut grid = ShipyardGrid::open(&engine(), LISTED);
         grid.select(6, LISTED);
         assert_eq!(grid.cells().selected(LISTED), Some(6));
-        assert!(grid.arrow(Key::Right, LISTED));
+        assert!(grid.arrow(Key::ArrowRight, LISTED));
         assert_eq!(grid.cells().selected(LISTED), Some(7));
-        assert!(!grid.arrow(Key::Char('x'), LISTED));
+        assert!(!grid.arrow(Key::KeyX, LISTED));
     }
 
     /// The grid by `rules` on `count` cells, with cell `index` selected.
@@ -304,10 +304,10 @@ mod tests {
     fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
         // Six escorts or ships: Down from 3 finds index 7 empty.
         let mut grid = selecting(&engine(), 3, 6);
-        assert!(grid.arrow(Key::Down, 6));
+        assert!(grid.arrow(Key::ArrowDown, 6));
         assert_eq!(grid.cells().selected(6), Some(3));
         let mut grid = selecting(&engine(), 2, 6);
-        assert!(grid.arrow(Key::Up, 6));
+        assert!(grid.arrow(Key::ArrowUp, 6));
         assert_eq!(grid.cells().selected(6), Some(2));
         assert!(grid.arrow(Key::PageDown, 6));
         assert_eq!(grid.cells().selected(6), Some(2), "Page Down as Down");
@@ -319,9 +319,9 @@ mod tests {
     #[test]
     fn by_the_other_arrows_reading_down_and_up_go_to_the_ends() {
         let mut grid = selecting(&arrows_other(), 3, 6);
-        assert!(grid.arrow(Key::Down, 6));
+        assert!(grid.arrow(Key::ArrowDown, 6));
         assert_eq!(grid.cells().selected(6), Some(5));
-        assert!(grid.arrow(Key::Up, 6));
+        assert!(grid.arrow(Key::ArrowUp, 6));
         assert_eq!(grid.cells().selected(6), Some(1));
         assert!(grid.arrow(Key::PageUp, 6));
         assert_eq!(grid.cells().selected(6), Some(0), "Page Up as Up");
@@ -334,10 +334,10 @@ mod tests {
         let mut grid = ShipyardGrid::open(&other(), 6);
         assert_eq!(grid.cells().selected(6), Some(0));
         grid.select(2, 6);
-        assert!(grid.arrow(Key::Up, 6));
+        assert!(grid.arrow(Key::ArrowUp, 6));
         assert_eq!(grid.cells().selected(6), Some(2));
         grid.select(3, 6);
-        assert!(grid.arrow(Key::Down, 6));
+        assert!(grid.arrow(Key::ArrowDown, 6));
         assert_eq!(grid.cells().selected(6), Some(3));
     }
 }

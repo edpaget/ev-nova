@@ -299,8 +299,8 @@ mod tests {
         let mut field = field(31);
         typed(&mut field, "Ada");
         for input in [
-            key(Key::Char('x'), true, false),
-            key(Key::Left, true, false),
+            key(Key::KeyX, true, false),
+            key(Key::ArrowLeft, true, false),
             key(Key::Enter, true, false),
             Input::PointerMoved(Point::new(110.0, 55.0)),
         ] {
@@ -342,7 +342,7 @@ mod tests {
         let mut field = selected("Ship");
         for input in [
             key(Key::Backspace, false, false),
-            key(Key::Left, true, false),
+            key(Key::ArrowLeft, true, false),
             Input::PointerMoved(Point::new(110.0, 55.0)),
         ] {
             assert!(!field.input(&input), "{input:?}");

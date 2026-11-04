@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn escape_goes_back_to_the_map_as_it_was() {
         let mut navigator = navigator();
-        navigator.input(&press(Key::Char('-')));
+        navigator.input(&press(Key::Minus));
         select(&mut navigator, 129);
         let (view, selected) = (
             *navigator.map().view().expect("the viewer"),
@@ -413,7 +413,7 @@ mod tests {
         select(&mut navigator, 128);
         let view = *navigator.map().view().expect("the viewer");
         navigator.input(&press(Key::Enter));
-        navigator.input(&press(Key::Right));
+        navigator.input(&press(Key::ArrowRight));
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(240.0, 0.0));
@@ -433,7 +433,7 @@ mod tests {
         let mut navigator = navigator();
         select(&mut navigator, 128);
         navigator.input(&press(Key::Enter));
-        navigator.input(&press(Key::Down));
+        navigator.input(&press(Key::ArrowDown));
         navigator.release_keys();
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
@@ -484,9 +484,9 @@ mod tests {
         let mut navigator = navigator();
         select(&mut navigator, 128);
         navigator.input(&press(Key::Enter));
-        navigator.input(&press(Key::Right));
+        navigator.input(&press(Key::ArrowRight));
         navigator.tick(Duration::from_millis(500));
-        navigator.input(&key(Key::Right, false, false));
+        navigator.input(&key(Key::ArrowRight, false, false));
         navigator.input(&press(Key::Escape));
         navigator.input(&press(Key::Enter));
         let view = navigator.system().expect("open");
@@ -499,7 +499,7 @@ mod tests {
         let mut navigator = navigator();
         select(&mut navigator, 128);
         navigator.input(&press(Key::Enter));
-        navigator.input(&press(Key::Up));
+        navigator.input(&press(Key::ArrowUp));
         navigator.tick(Duration::from_millis(250));
         let camera = navigator.system().expect("open").camera().center();
         assert_eq!(camera, Point::new(0.0, -240.0));
@@ -553,7 +553,7 @@ mod tests {
         let mut navigator = navigator()
             .with_metrics(std::rc::Rc::new(crate::text::fixture::MonoMetrics))
             .with_find(Some(template), crate::ui::ButtonStyle::STOCK);
-        navigator.input(&press(Key::Char('s')));
+        navigator.input(&press(Key::KeyS));
         assert!(navigator.map().finding());
         let mut list = DrawList::new();
         navigator.draw(&mut list);

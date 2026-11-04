@@ -434,7 +434,7 @@ mod tests {
         assert!(!ask.alt_held());
         ask.follow_alt(&key(MAX_LOT_KEY, true));
         assert!(ask.alt_held());
-        ask.follow_alt(&key(Key::Char('b'), false));
+        ask.follow_alt(&key(Key::KeyB, false));
         assert!(ask.alt_held(), "another key changes nothing");
         ask.open("row", Direction::Buy, 7, false, Rc::new(MonoMetrics));
         ask.input(&key(MAX_LOT_KEY, false), &mut Vec::new());

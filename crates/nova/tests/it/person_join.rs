@@ -818,7 +818,7 @@ fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialo
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
     assert_eq!(game.offered(), Some(128));
@@ -837,10 +837,10 @@ fn p_on_merchants_offer_reaches_the_player_info_over_it_and_escape_the_offer() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(Key::Char('p'));
+    game.tap(Key::KeyP);
     game.settle();
     assert_eq!(game.showing(), Showing::PlayerInfo, "over the offer");
     assert!(game.app.screen().flight_player_info().is_some());
@@ -859,10 +859,10 @@ fn n_refuses_merchants_offer_and_flight_resumes() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), Vec::<i16>::new());
@@ -874,7 +874,7 @@ fn answered_over_flight(answer: Key, shown: &str) -> Game {
     let store = MemoryPilots::new();
     let mut game = Game::opened_with(TEXTED, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(answer);
@@ -904,7 +904,7 @@ fn merchants_offer_accepted_shows_its_brief_text_over_the_paused_flight() {
 
 #[test]
 fn merchants_offer_refused_shows_its_refuse_text_over_the_paused_flight() {
-    let game = answered_over_flight(Key::Char('n'), "Your loss.");
+    let game = answered_over_flight(Key::KeyN, "Your loss.");
     assert_eq!(game.active(), Vec::<i16>::new());
 }
 
@@ -921,12 +921,12 @@ fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
     // Up held, Y hails Merchant, whose mission, unrefusable and with no
     // offer text, is accepted at once: its BriefText shows over flight,
     // and Up is let go under it.
-    game.key(Key::Up, true);
-    game.tap(Key::Char('y'));
+    game.key(Key::ArrowUp, true);
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
-    game.key(Key::Up, false);
+    game.key(Key::ArrowUp, false);
     game.tap(Key::Enter);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight);
@@ -951,11 +951,11 @@ fn thrust_held_through_merchants_offer_thrusts_once_n_refuses_it() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.key(Key::Up, true);
-    game.tap(Key::Char('y'));
+    game.key(Key::ArrowUp, true);
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight, "refused");
     let speed = game.session().player().velocity.length();
@@ -979,7 +979,7 @@ fn b_on_the_wreck_of_0x0200_reaches_its_offer_and_return_accepts_it() {
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(129);
-    game.tap(Key::Char('b'));
+    game.tap(Key::KeyB);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     assert!(game.offered().is_some(), "{:?}", game.offered());
@@ -1001,7 +1001,7 @@ fn b_held_as_the_wreck_of_0x0200_is_targeted_opens_its_offer_from_flights_board(
         ..PLAIN
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
-    game.key(Key::Char('b'), true);
+    game.key(Key::KeyB, true);
     game.tab_to(129);
     game.settle_until("the offer", |game| game.showing() == Showing::Offer);
     assert_eq!(game.offered(), Some(128));
@@ -1013,22 +1013,22 @@ fn by_the_settings_other_reading_a_hail_reaches_the_comm_dialog_and_the_joined_p
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, JOINING);
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(
         game.showing(),
         Showing::Comm,
         "the setting reached the hail"
     );
-    game.tap(Key::Char('u'));
+    game.tap(Key::KeyU);
     game.tap(Key::Escape);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.session().pilot().escorts().len(), 1, "joined");
     // L requests clearance, a second L lands.
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.approach();
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     let saved: serde_json::Value =
         serde_json::from_str(&store.text("Pilot").expect("saved")).expect("JSON");
@@ -1055,7 +1055,7 @@ fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<MockMoviePlayer>) {
     let player: Rc<dyn MoviePlayer> = Rc::clone(&projector) as Rc<dyn MoviePlayer>;
     let mut game = Game::opened_playing(knobs, &store, &BOTH, Showing::Flight, "{}", Some(player));
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     (game, projector)
 }
@@ -1105,7 +1105,7 @@ fn n_pressed_under_a_persons_offer_movie_reaches_the_offer_once_the_movie_ends()
         offer_movie: Some(0),
         ..TEXTED
     });
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert_eq!(game.showing(), Showing::Movie);
     game.settle_until("the movie's end", |game| game.showing() != Showing::Movie);
     assert_eq!(
@@ -1124,7 +1124,7 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
         ..PLAIN
     });
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
     game.settle();
@@ -1157,7 +1157,7 @@ fn a_persons_unrefusable_offer_accepted_stays_under_its_brief_until_return_close
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "one button, with a text");
     game.tap(Key::Enter);
@@ -1182,7 +1182,7 @@ fn a_persons_unrefusable_offer_accepted_stays_under_its_brief_until_return_close
 #[test]
 fn a_persons_offer_refused_with_a_text_is_hidden_under_it() {
     let (mut game, _) = hailed_with_movies(TEXTED);
-    game.tap(Key::Char('n'));
+    game.tap(Key::KeyN);
     game.settle();
     assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
     assert!(
@@ -1201,7 +1201,7 @@ fn with_the_engines_player_a_texts_movie_is_skipped_and_its_text_shows() {
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::Char('y'));
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "no movie plays");
     game.tap(Key::Enter);

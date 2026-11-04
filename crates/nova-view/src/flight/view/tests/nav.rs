@@ -872,10 +872,10 @@ fn the_slot_keys_are_1_to_4_and_f1_to_f4_in_nav_order() {
     assert_eq!(
         STELLAR_SLOT_KEYS,
         [
-            [Key::Char('1'), Key::Function(1)],
-            [Key::Char('2'), Key::Function(2)],
-            [Key::Char('3'), Key::Function(3)],
-            [Key::Char('4'), Key::Function(4)],
+            [Key::Digit1, Key::F1],
+            [Key::Digit2, Key::F2],
+            [Key::Digit3, Key::F3],
+            [Key::Digit4, Key::F4],
         ]
     );
     for (slot, keys) in STELLAR_SLOT_KEYS.iter().enumerate() {
@@ -902,8 +902,8 @@ fn a_slot_key_picks_on_the_slot_blocks_next_frame() {
 #[test]
 fn a_slot_key_repeat_or_release_sends_nothing() {
     let mut view = faked(in_sol());
-    view.track_held(&held(Key::Char('2')));
-    view.track_held(&key(Key::Char('2'), false));
+    view.track_held(&held(Key::Digit2));
+    view.track_held(&key(Key::Digit2, false));
     view.nav_held_frame();
     assert_eq!(sent(&view), []);
 }
@@ -913,7 +913,7 @@ fn f5_picks_the_nearest_stellar() {
     let mut view = faked(in_sol());
     faked_tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert_eq!(picks(&view), [StellarPick::Nearest]);
-    assert_eq!(NEAREST_STELLAR_KEY, Key::Function(5));
+    assert_eq!(NEAREST_STELLAR_KEY, Key::F5);
 }
 
 #[test]
@@ -933,9 +933,9 @@ fn no_slot_key_picks_while_the_flight_refuses_the_nav_keys_or_during_a_jump() {
 /// Presses `k` with Command held, as [`command_tap`] does, then runs the
 /// slot block's frame.
 fn faked_command_tap_slot(view: &mut Faked, k: Key) {
-    view.track_held(&key(Key::Command, true));
+    view.track_held(&key(Key::MetaLeft, true));
     faked_tap(view, k);
-    view.track_held(&key(Key::Command, false));
+    view.track_held(&key(Key::MetaLeft, false));
     view.nav_held_frame();
 }
 
@@ -944,7 +944,7 @@ fn command_5_picks_the_nearest_as_f5_does() {
     let mut view = faked(in_sol());
     faked_command_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
     assert_eq!(picks(&view), [StellarPick::Nearest]);
-    assert_eq!(NEAREST_STELLAR_COMMAND_KEY, Key::Char('5'));
+    assert_eq!(NEAREST_STELLAR_COMMAND_KEY, Key::Digit5);
 }
 
 #[test]
@@ -957,13 +957,13 @@ fn five_without_command_picks_nothing() {
 #[test]
 fn command_5_held_then_let_go_of_with_5_still_down_picks_once() {
     let mut view = faked(in_sol());
-    view.track_held(&key(Key::Command, true));
+    view.track_held(&key(Key::MetaLeft, true));
     faked_hold(&mut view, NEAREST_STELLAR_COMMAND_KEY);
     for _ in 0..3 {
         view.nav_held_frame();
     }
     assert_eq!(picks(&view), [StellarPick::Nearest]);
-    view.track_held(&key(Key::Command, false));
+    view.track_held(&key(Key::MetaLeft, false));
     view.nav_held_frame();
     faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][1]);
     assert_eq!(
@@ -976,12 +976,12 @@ fn command_5_held_then_let_go_of_with_5_still_down_picks_once() {
 #[test]
 fn a_slot_key_pressed_while_another_is_held_picks_nothing() {
     let mut view = faked(in_sol());
-    faked_hold(&mut view, Key::Function(1));
+    faked_hold(&mut view, Key::F1);
     view.nav_held_frame();
     faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     faked_tap_slot(&mut view, NEAREST_STELLAR_KEY);
     assert_eq!(picks(&view), [StellarPick::Slot(0)], "F1 holds the latch");
-    view.track_held(&key(Key::Function(1), false));
+    view.track_held(&key(Key::F1, false));
     faked_tap_slot(&mut view, STELLAR_SLOT_KEYS[1][0]);
     assert_eq!(
         picks(&view),
@@ -1035,7 +1035,7 @@ fn nav_off_sends_the_blocks_nav_off_press() {
             h: false
         }]
     );
-    assert_eq!(NAV_OFF_KEY, Key::Char('`'));
+    assert_eq!(NAV_OFF_KEY, Key::Backquote);
 }
 
 #[test]
@@ -1050,7 +1050,7 @@ fn hyperspace_mode_sends_the_blocks_h_press_and_shows_the_floating_map() {
         }]
     );
     assert!(view.floating.is_up());
-    assert_eq!(HYPERSPACE_MODE_KEY, Key::Char('h'));
+    assert_eq!(HYPERSPACE_MODE_KEY, Key::KeyH);
 }
 
 #[test]
@@ -1067,7 +1067,7 @@ fn hyper_select_sends_the_next_system_and_shows_the_floating_map_only_in_mode_3(
 #[test]
 fn option_backquote_lets_go_of_the_target_and_sends_no_block_press() {
     let mut view = faked(sol_in(NavMode::Stellar(Some(StellarId(129)))));
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_tap(&mut view, NAV_OFF_KEY);
     assert_eq!(sent(&view), [FlightCommand::ClearTarget]);
 }
@@ -1078,9 +1078,9 @@ fn option_backquote_lets_go_of_the_target_during_a_jump_too() {
         jump_under_way: true,
         ..in_sol()
     });
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_tap(&mut view, NAV_OFF_KEY);
-    view.track_held(&key(Key::Alt, false));
+    view.track_held(&key(Key::AltLeft, false));
     faked_tap(&mut view, NAV_OFF_KEY);
     assert_eq!(sent(&view), [FlightCommand::ClearTarget], "no block press");
 }
@@ -1205,7 +1205,7 @@ fn a_held_nav_block_acts_only_while_the_flight_takes_the_nav_keys() {
             h: true
         }]
     );
-    let option_backquote = [Key::Alt, NAV_OFF_KEY];
+    let option_backquote = [Key::AltLeft, NAV_OFF_KEY];
     assert_eq!(held_frame_sends(&option_backquote, PlayerCommand::Nav), []);
     assert_eq!(
         held_frame_sends(&option_backquote, PlayerCommand::SelectSystem),

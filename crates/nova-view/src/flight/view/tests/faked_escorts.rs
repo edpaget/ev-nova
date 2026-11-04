@@ -52,9 +52,9 @@ fn press(view: &mut Faked, k: Key) -> bool {
 
 /// Presses `k` with Option held.
 fn option_press(view: &mut Faked, k: Key) {
-    view.held.insert(Key::Alt);
+    view.held.insert(Key::AltLeft);
     press(view, k);
-    view.held.remove(&Key::Alt);
+    view.held.remove(&Key::AltLeft);
 }
 
 /// The interface's sounds `view` raised since they were last taken.
@@ -608,7 +608,7 @@ fn f_d_v_and_c_send_their_commands_and_say_what_each_changed() {
             ESCORT_HOLD_KEY,
             ESCORT_RECALL_KEY
         ],
-        ['f', 'd', 'v', 'c'].map(Key::Char)
+        [Key::KeyF, Key::KeyD, Key::KeyV, Key::KeyC]
     );
 }
 
@@ -786,10 +786,10 @@ fn the_target_key_walks_back_with_shift_and_through_the_escorts_with_option() {
     ] {
         view.held.clear();
         if shift {
-            view.held.insert(Key::Shift);
+            view.held.insert(Key::ShiftLeft);
         }
         if option {
-            view.held.insert(Key::Alt);
+            view.held.insert(Key::AltLeft);
         }
         let before = sent(&view).len();
         view.press_target_key();

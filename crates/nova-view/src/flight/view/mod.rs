@@ -818,19 +818,19 @@ pub struct FlightOverlays {
 /// the dialog takes its release. Being here doesn't make a key fade the
 /// cursor: [`FlightView::key_fades_cursor`] says which do.
 const FLIGHT_KEYS: [Key; 40] = [
-    Key::Up,
-    Key::Left,
-    Key::Right,
-    Key::Down,
+    Key::ArrowUp,
+    Key::ArrowLeft,
+    Key::ArrowRight,
+    Key::ArrowDown,
     FACE_TARGET_KEY,
     AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
     SELECT_KEY,
     DESELECT_KEY,
-    Key::Alt,
-    Key::Shift,
-    Key::Command,
+    Key::AltLeft,
+    Key::ShiftLeft,
+    Key::MetaLeft,
     LAND_KEY,
     EJECT_KEY,
     SELF_DESTRUCT_KEY,
@@ -892,25 +892,25 @@ pub fn every_key() -> impl Iterator<Item = Key> {
 /// the ship to face its target, or with Alt (Option) or no target the
 /// navigation stellar ([`Face`](nova_sim::Face)); a flight key, so it
 /// fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
-pub const FACE_TARGET_KEY: Key = Key::Char('a');
+pub const FACE_TARGET_KEY: Key = Key::KeyA;
 /// The afterburner key: the original's default, Mac keycode 6, Z (keyPrefs
 /// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
 /// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
 /// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
 /// the ship carries an afterburner, on a ship not disabled (@0x6caf2,
 /// @0x6cb03).
-pub const AFTERBURNER_KEY: Key = Key::Char('z');
+pub const AFTERBURNER_KEY: Key = Key::KeyZ;
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
 /// @0xcd5f8).
 pub const FIRE_KEY: Key = Key::Space;
 /// The secondary fire key: the original's default (`fireKey1`).
-pub const SECONDARY_KEY: Key = Key::Control;
+pub const SECONDARY_KEY: Key = Key::ControlLeft;
 /// The secondary weapon select key: the original's default
 /// (`weapSelect`); with Alt (Option) it selects the one before, in `wëap`
 /// ID order, on the next pass (see `nova_sim::session`'s
 /// `secondary_select`). Held, it fades the cursor, as `_HandlePlayer` sets
 /// *0x3b5550 on every pass it is down (@0x6ac2a).
-pub const SELECT_KEY: Key = Key::Char('w');
+pub const SELECT_KEY: Key = Key::KeyW;
 /// The weapon safety key: the original's default for key-preference slot
 /// 0x2 (`weapSafe`, Keys.nib's "Weapon Safety:"), keycode 0x01, S, which
 /// `_loadKeys` falls back to when the defaults hold none
@@ -918,40 +918,40 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
 /// `nova_sim::Session::hold_weapon_safety`), and fades the cursor only on
 /// those passes (@0x6ade1).
-pub const DESELECT_KEY: Key = Key::Char('s');
+pub const DESELECT_KEY: Key = Key::KeyS;
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
 pub const TARGET_KEY: Key = Key::Tab;
 /// The closest target key: the original's default (`closeTarg`), which
 /// picks the nearest threat, and with Alt (Option) the nearest ship.
-pub const NEAREST_KEY: Key = Key::Char('r');
+pub const NEAREST_KEY: Key = Key::KeyR;
 
 /// The land key: the original's default (`STR#` 129, and `STR#` 2002
 /// #25).
-pub const LAND_KEY: Key = Key::Char('l');
+pub const LAND_KEY: Key = Key::KeyL;
 /// The galaxy map key: the original's documented default (`Keys.nib`'s
 /// `mapKey`; `STR#` 2002 #26-28 name a map key).
-pub const MAP_KEY: Key = Key::Char('m');
+pub const MAP_KEY: Key = Key::KeyM;
 /// The hyperspace jump key: the original's documented default
 /// (`Keys.nib`'s `jumpKey`).
-pub const JUMP_KEY: Key = Key::Char('j');
+pub const JUMP_KEY: Key = Key::KeyJ;
 /// The board key: the original's default (`Keys.nib`'s `boardKey`), one
 /// attempt a press.
-pub const BOARD_KEY: Key = Key::Char('b');
+pub const BOARD_KEY: Key = Key::KeyB;
 /// The hail key: the original's default (`Keys.nib`'s `hailKey`), one
 /// hail a press.
-pub const HAIL_KEY: Key = Key::Char('y');
+pub const HAIL_KEY: Key = Key::KeyY;
 /// The jettison key: the original's default (`dumpCargo`, `_keyPrefs`
 /// +0x1e, keycode 0x28, `_loadKeys` @0xce33d-0xce360), which jettisons
 /// only with Command held (`_HandlePlayer` @0x6fd54-0x6fdaf): everything,
 /// or with Option (Alt) also held, all but the mission cargo. It works
 /// during a jump too: `_JettisonCargo` (0x3dffd-0x3e3c4) reads no jump
 /// state.
-pub const JETTISON_KEY: Key = Key::Char('k');
+pub const JETTISON_KEY: Key = Key::KeyK;
 /// The eject key: the original's default for key-preference slot 0x22
 /// (`ejectKey`), keycode 0x07, X, which ejects only held together with
 /// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
-pub const EJECT_KEY: Key = Key::Char('x');
+pub const EJECT_KEY: Key = Key::KeyX;
 /// The self-destruct key, `-`: key-preference slot 0x24 (`destructKey`),
 /// which `_loadKeys` reads (@0xce458) and then forces to keycode 0x1b
 /// whatever the preference says (@0xce71c). It acts only held together
@@ -960,28 +960,28 @@ pub const EJECT_KEY: Key = Key::Char('x');
 /// the same key, which refuses any press with Command held
 /// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
 /// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
-pub const SELF_DESTRUCT_KEY: Key = Key::Char('-');
+pub const SELF_DESTRUCT_KEY: Key = Key::Minus;
 /// The cloak key: the original's default for key-preference slot 0x52
 /// (`cloakKey`), keycode 0x20, U (`_loadKeys` @0xce461-0xce4d4). Held,
 /// it cloaks or uncloaks once a hold, with no Command
 /// (`_HandlePlayer` @0x705b7; see the session's `player_cloak`).
-pub const CLOAK_KEY: Key = Key::Char('u');
+pub const CLOAK_KEY: Key = Key::KeyU;
 /// The frame-rate key: the original's default for key-preference slot
 /// 0x68 (`framerateKey`), F12, Mac keycode 0x6f, which `_loadKeys` falls
 /// back to when the preferences hold none (@0xce6a1-0xce6c4). A press, no
 /// modifier read, toggles the frame-rate readout (`_HandlePlayer`
 /// @0x6e454-0x6e4bd), during a jump too; see
 /// [`frame_rate`](crate::flight::frame_rate).
-pub const FRAME_RATE_KEY: Key = Key::Function(12);
+pub const FRAME_RATE_KEY: Key = Key::F12;
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
-pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
+pub const ESCORT_ATTACK_KEY: Key = Key::KeyF;
 /// The escorts' defend key (`escortCmdKey1`, "Defend Me").
-pub const ESCORT_DEFEND_KEY: Key = Key::Char('d');
+pub const ESCORT_DEFEND_KEY: Key = Key::KeyD;
 /// The escorts' hold key (`escortCmdKey2`, "Hold Position").
-pub const ESCORT_HOLD_KEY: Key = Key::Char('v');
+pub const ESCORT_HOLD_KEY: Key = Key::KeyV;
 /// The escorts' recall key (`escortCmdKey3`, "Recall: (option = dock)").
-pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
+pub const ESCORT_RECALL_KEY: Key = Key::KeyC;
 /// What closes the escort menu besides its own key: Return
 /// (`ackComm`).
 pub const MENU_CLOSE_KEY: Key = Key::Enter;
@@ -997,16 +997,16 @@ pub const MENU_CLOSE_KEY: Key = Key::Enter;
 /// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a
 /// stellar.
 pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
-    [Key::Char('1'), Key::Function(1)],
-    [Key::Char('2'), Key::Function(2)],
-    [Key::Char('3'), Key::Function(3)],
-    [Key::Char('4'), Key::Function(4)],
+    [Key::Digit1, Key::F1],
+    [Key::Digit2, Key::F2],
+    [Key::Digit3, Key::F3],
+    [Key::Digit4, Key::F4],
 ];
 /// The nearest stellar key: F5 (Mac keycode 0x60), which the original
 /// reads beside the slot keys (@0x69cf6-0x69f17) and which selects the
 /// stellar its land key would with nothing selected. Command-5
 /// ([`NEAREST_STELLAR_COMMAND_KEY`]) is its twin.
-pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
+pub const NEAREST_STELLAR_KEY: Key = Key::F5;
 /// The other nearest stellar key: the top-row 5 (Mac keycode 0x17), held
 /// together with Command (0x37), which `_HandlePlayer` polls only while F5
 /// is up (@0x69dbc-0x69dda) and picks with as F5 does. Both are
@@ -1014,7 +1014,7 @@ pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
 /// `_QuickKeyCheck` hides the 5 from this block (@0xa106-0xa124), so
 /// Command-5 then picks the menu's Freighters instead
 /// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); 5 alone picks nothing.
-pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Char('5');
+pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Digit5;
 /// The Nav Off key, which turns the nav system off, the course kept: the
 /// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 /// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
@@ -1025,7 +1025,7 @@ pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Char('5');
 /// on the next frame ([`FlightView::nav_keys_frame`]). While the dev
 /// overlay is built in, backquote toggles the overlay instead and never
 /// reaches flight.
-pub const NAV_OFF_KEY: Key = Key::Char('`');
+pub const NAV_OFF_KEY: Key = Key::Backquote;
 
 /// The Hyper Select key, which cycles the hyperspace selection through
 /// the systems the current one links to, keeping the course by the
@@ -1038,7 +1038,7 @@ pub const NAV_OFF_KEY: Key = Key::Char('`');
 /// then, and held past its end selects on the first frame after it; one
 /// held from before the jump does nothing after it
 /// ([`FlightView::select_frame`]).
-pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
+pub const HYPER_SELECT_KEY: Key = Key::Backslash;
 
 /// The Hyperspace Mode key, which puts the nav system in hyperspace mode
 /// and selects the course's next hop (`nova_sim::Session::hyperspace_mode`): the
@@ -1048,16 +1048,16 @@ pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 /// [`floating`](super::floating) module). Held through a jump's end, it
 /// acts as a press on the first frame after it, as its latch is cleared
 /// on every frame of a jump ([`FlightView::nav_keys_frame`]).
-pub const HYPERSPACE_MODE_KEY: Key = Key::Char('h');
+pub const HYPERSPACE_MODE_KEY: Key = Key::KeyH;
 
 /// The floating map's zoom-out key, `-` and the keypad's `-` (keycodes
 /// 0x1b and 0x4e, `_HandlePlayer` @0x70f4e-0x71110), which the platform
 /// both gives as this.
-pub const ZOOM_OUT_KEY: Key = Key::Char('-');
+pub const ZOOM_OUT_KEY: Key = Key::Minus;
 /// The floating map's zoom-in key, `=` (keycode 0x18).
-pub const ZOOM_IN_KEY: Key = Key::Char('=');
+pub const ZOOM_IN_KEY: Key = Key::Equal;
 /// The floating map's other zoom-in key, the keypad's `+` (keycode 0x45).
-pub const ZOOM_IN_KEYPAD_KEY: Key = Key::Char('+');
+pub const ZOOM_IN_KEYPAD_KEY: Key = Key::NumpadAdd;
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
 fn shown_position(from: ShipPlace, to: ShipPlace, alpha: f32) -> Point {

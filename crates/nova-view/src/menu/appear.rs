@@ -156,7 +156,7 @@ impl Appear {
     pub fn input(&mut self, input: &Input, command_held: bool) -> Verdict {
         let verdict = match (self.kind, input) {
             (Kind::LiveReturn, _) => Verdict::Pass,
-            (Kind::StartUp, Input::Key { key, .. }) if *key == Key::Command || command_held => {
+            (Kind::StartUp, Input::Key { key, .. }) if *key == Key::MetaLeft || command_held => {
                 Verdict::Held
             }
             (Kind::Return, Input::Key { .. } | Input::Text(_)) => Verdict::Held,
@@ -371,14 +371,14 @@ mod tests {
     /// Every kind of input, a Command key's included.
     fn every_input() -> Vec<(Input, bool)> {
         vec![
-            (key(Key::Char('n'), true), false),
-            (key(Key::Char('n'), false), false),
+            (key(Key::KeyN, true), false),
+            (key(Key::KeyN, false), false),
             (Input::Text('n'), false),
             (key(Key::Escape, true), false),
-            (key(Key::Command, true), false),
-            (key(Key::Char('q'), true), true),
-            (key(Key::Char('q'), false), true),
-            (key(Key::Command, false), true),
+            (key(Key::MetaLeft, true), false),
+            (key(Key::KeyQ, true), true),
+            (key(Key::KeyQ, false), true),
+            (key(Key::MetaLeft, false), true),
             (Input::Text('q'), true),
             (button(MouseButton::Left, true), false),
             (button(MouseButton::Right, true), false),
@@ -436,8 +436,8 @@ mod tests {
     #[test]
     fn held_inputs_come_back_in_order() {
         let mut appear = Appear::start_up();
-        let command = key(Key::Command, true);
-        let quit = key(Key::Char('q'), true);
+        let command = key(Key::MetaLeft, true);
+        let quit = key(Key::KeyQ, true);
         appear.input(&command, false);
         appear.input(&Input::Text('x'), true);
         appear.close();
@@ -454,9 +454,9 @@ mod tests {
 
         let mut appear = Appear::returning(false, false);
         let typed = [
-            key(Key::Char('n'), true),
+            key(Key::KeyN, true),
             Input::Text('n'),
-            key(Key::Char('n'), false),
+            key(Key::KeyN, false),
         ];
         for input in &typed {
             appear.input(input, false);
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn a_letting_go_of_the_keys_waits_after_the_presses_held_before_it() {
-        let command = key(Key::Command, true);
+        let command = key(Key::MetaLeft, true);
         for mut appear in [Appear::start_up(), Appear::returning(false, true)] {
             appear.input(&command, false);
             assert_eq!(appear.release_keys(), Verdict::Held);

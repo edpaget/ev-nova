@@ -614,7 +614,7 @@ fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
     // and its standing (`standing_is_disabled_first_then_escort_then_threat_then_neutral`).
     let mut view = barred(armed(2, &[]), among(vec![lit_npc(180.0)]));
     view.press_nearest_key();
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     view.press_nearest_key();
     assert_eq!(
         sent(&view),

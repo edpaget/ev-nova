@@ -172,7 +172,7 @@ mod tests {
     fn nothing_for_hires_text_plays_the_after_movie_once_it_closes() {
         let (mut view, player) = playing(drinking_with_info, true);
         click_item(&mut view, 11);
-        view.input(&key(Key::Char('h')));
+        view.input(&key(Key::KeyH));
         assert!(view.take_hire_request());
         view.open_hire(hirelings(0, true), after("After.mov"));
         assert_eq!(shown_text(&view).as_deref(), Some(NONE_FOR_HIRE));

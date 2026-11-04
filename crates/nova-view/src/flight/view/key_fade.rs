@@ -30,10 +30,10 @@ fn fade_key(key: Key, command: bool) -> Option<FadeKey> {
         TARGET_KEY | NEAREST_KEY | HYPER_SELECT_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY
         | MAP_KEY | PLAYER_INFO_KEY | MENU_CLOSE_KEY | HYPERSPACE_MODE_KEY | NAV_OFF_KEY
         | FACE_TARGET_KEY => FadeKey::Free,
-        Key::Up
-        | Key::Down
-        | Key::Left
-        | Key::Right
+        Key::ArrowUp
+        | Key::ArrowDown
+        | Key::ArrowLeft
+        | Key::ArrowRight
         | AFTERBURNER_KEY
         | FIRE_KEY
         | JUMP_KEY
@@ -58,7 +58,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let fades = self.frame.key_fades;
         match self.slot_key_polled(key, false) {
             Some(polled) => polled && fades.fades(FadeKey::Free),
-            None => fade_key(key, self.held.contains(&Key::Command))
+            None => fade_key(key, self.held.contains(&Key::MetaLeft))
                 .is_some_and(|gate| fades.fades(gate)),
         }
     }

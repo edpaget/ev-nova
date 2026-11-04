@@ -267,15 +267,15 @@ mod tests {
     #[test]
     fn it_notes_keys_down_and_up_repeats_as_down() {
         let mut live = LiveInput::default();
-        live.note(&key(Key::Up, true));
-        live.note(&key(Key::Left, true));
-        live.note(&key(Key::Left, false));
+        live.note(&key(Key::ArrowUp, true));
+        live.note(&key(Key::ArrowLeft, true));
+        live.note(&key(Key::ArrowLeft, false));
         live.note(&Input::Key {
-            key: Key::Right,
+            key: Key::ArrowRight,
             pressed: true,
             repeat: true,
         });
-        assert_eq!(down(&live), [Key::Right, Key::Up]);
+        assert_eq!(down(&live), [Key::ArrowRight, Key::ArrowUp]);
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn it_keeps_what_was_down_at_flights_last_poll_and_as_its_input_went_away() {
-        let (j, one, two) = (Key::Char('j'), Key::Char('1'), Key::Char('2'));
+        let (j, one, two) = (Key::KeyJ, Key::Digit1, Key::Digit2);
         let mut live = LiveInput::default();
         live.note(&key(j, true));
         assert_eq!(down_before(&live), [], "not polled yet");
@@ -329,19 +329,19 @@ mod tests {
     #[test]
     fn is_down_reads_what_is_down() {
         let mut live = LiveInput::default();
-        assert!(!live.is_down(Key::Up));
-        live.note(&key(Key::Up, true));
-        assert!(live.is_down(Key::Up));
-        assert!(!live.is_down(Key::Down));
-        live.note(&key(Key::Up, false));
-        assert!(!live.is_down(Key::Up));
+        assert!(!live.is_down(Key::ArrowUp));
+        live.note(&key(Key::ArrowUp, true));
+        assert!(live.is_down(Key::ArrowUp));
+        assert!(!live.is_down(Key::ArrowDown));
+        live.note(&key(Key::ArrowUp, false));
+        assert!(!live.is_down(Key::ArrowUp));
     }
 
     #[test]
     fn forget_lets_go_of_everything_but_keeps_flights_input_away() {
         let mut live = LiveInput::default();
         live.settle(FlightInput::Away);
-        live.note(&key(Key::Up, true));
+        live.note(&key(Key::ArrowUp, true));
         live.note(&button(true));
         live.forget();
         assert_eq!(down(&live), []);

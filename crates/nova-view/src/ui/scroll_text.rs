@@ -284,10 +284,10 @@ impl ScrollText {
         };
         let pixels = self.pixels.is_some();
         match key {
-            Key::Up if pixels => self.scroll_arrow(ScrollArrow::Up),
-            Key::Down if pixels => self.scroll_arrow(ScrollArrow::Down),
-            Key::Up => self.scroll_by(-1),
-            Key::Down => self.scroll_by(1),
+            Key::ArrowUp if pixels => self.scroll_arrow(ScrollArrow::Up),
+            Key::ArrowDown if pixels => self.scroll_arrow(ScrollArrow::Down),
+            Key::ArrowUp => self.scroll_by(-1),
+            Key::ArrowDown => self.scroll_by(1),
             _ => return false,
         }
         true
@@ -525,7 +525,7 @@ mod tests {
 
     fn up(repeat: bool) -> Input {
         Input::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: true,
             repeat,
         }
@@ -533,7 +533,7 @@ mod tests {
 
     fn down(repeat: bool) -> Input {
         Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: true,
             repeat,
         }
@@ -846,7 +846,7 @@ mod tests {
     fn other_keys_and_releases_are_not_used() {
         let mut text = ten_lines();
         let release = Input::Key {
-            key: Key::Down,
+            key: Key::ArrowDown,
             pressed: false,
             repeat: false,
         };

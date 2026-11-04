@@ -369,7 +369,7 @@ fn docked_the_close_puts_back_the_selection_the_map_opened_with_on_every_map() {
             earth,
         );
         open(&mut view);
-        view.port_map_input(&key(Key::Char('c'), true));
+        view.port_map_input(&key(Key::KeyC, true));
         assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{what}");
         faked_press_map(&mut view);
         assert_eq!(
@@ -417,7 +417,7 @@ fn a_borders_change_on_a_dialogs_map_saves_in_flight_and_not_docked() {
     for (landed, saved) in [(None, Some(false)), (Some(StellarId(128)), None)] {
         let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
         view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-        view.port_map_input(&key(Key::Char('b'), true));
+        view.port_map_input(&key(Key::KeyB, true));
         faked_press_map(&mut view);
         assert_eq!(view.take_map_borders_save(), saved, "docked at {landed:?}");
     }

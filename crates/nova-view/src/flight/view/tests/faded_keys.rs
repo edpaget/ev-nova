@@ -179,7 +179,7 @@ fn a_shut_gate_sends_no_refusal() {
 #[test]
 fn m_on_a_lit_collapse_beeps_twice_and_opens_nothing_and_loses_its_keys() {
     let mut view = under_the_white();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.input(&key(JUMP_KEY, true));
     view.input(&key(MAP_KEY, true));
     let asked = view.sim.screens_asked().len();
@@ -196,7 +196,7 @@ fn m_on_a_lit_collapse_beeps_twice_and_opens_nothing_and_loses_its_keys() {
         asked,
         "no opening asked of the flight"
     );
-    assert!(view.held.contains(&Key::Up), "the unlatched key stays");
+    assert!(view.held.contains(&Key::ArrowUp), "the unlatched key stays");
     assert!(!view.held.contains(&JUMP_KEY), "the latched goes");
     assert!(!view.held.contains(&MAP_KEY));
     assert_eq!(view.take_map_replay(), [], "nothing queued");
@@ -205,7 +205,7 @@ fn m_on_a_lit_collapse_beeps_twice_and_opens_nothing_and_loses_its_keys() {
 #[test]
 fn m_on_a_lit_collapse_with_its_gate_shut_does_nothing() {
     let mut view = under_the_white();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.input(&key(JUMP_KEY, true));
     view.input(&key(MAP_KEY, true));
     view.change_sim(|sim| sim.refuse(PlayerCommand::Map));
@@ -219,14 +219,14 @@ fn m_on_a_lit_collapse_with_its_gate_shut_does_nothing() {
 fn p_on_a_lit_collapse_is_refused_in_silence_and_loses_its_keys() {
     let mut view = under_the_white();
     view.input(&key(JUMP_KEY, true));
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.input(&key(PLAYER_INFO_KEY, true));
     let from = sent_count(&view);
     view.sim.queue_answer(Answer::PlayerInfoFaded);
     collapses_lit(&mut view);
     assert_eq!(sent(&view, from), [FADED_P]);
     assert!(!view.take_player_info_request());
-    assert!(view.held.contains(&Key::Up));
+    assert!(view.held.contains(&Key::ArrowUp));
     assert!(!view.held.contains(&JUMP_KEY));
     assert!(!view.held.contains(&PLAYER_INFO_KEY));
 }
@@ -250,7 +250,7 @@ fn p_refused_by_its_own_beep_on_a_lit_collapse_keeps_the_keys_and_lets_y_read() 
 #[test]
 fn y_on_a_lit_collapse_carries_option_and_is_refused_in_silence() {
     let mut view = under_the_white();
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     view.input(&key(JUMP_KEY, true));
     view.input(&key(HAIL_KEY, true));
     let from = sent_count(&view);
@@ -261,7 +261,7 @@ fn y_on_a_lit_collapse_carries_option_and_is_refused_in_silence() {
         [FlightCommand::PressFaded(FadedPress::Hail { option: true })]
     );
     assert!(!view.hail_opened());
-    assert!(view.held.contains(&Key::Alt));
+    assert!(view.held.contains(&Key::AltLeft));
     assert!(!view.held.contains(&JUMP_KEY));
 }
 
@@ -282,7 +282,7 @@ fn y_on_a_lit_collapse_opens_a_persons_offer_and_ends_the_pass() {
 fn i_on_a_lit_collapse_is_refused_in_silence_and_loses_its_keys() {
     let mut view = under_the_white();
     view.input(&key(JUMP_KEY, true));
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.input(&key(MISSION_INFO_KEY, true));
     let from = sent_count(&view);
     view.sim
@@ -290,7 +290,7 @@ fn i_on_a_lit_collapse_is_refused_in_silence_and_loses_its_keys() {
     collapses_lit(&mut view);
     assert_eq!(sent(&view, from), [FADED_I]);
     assert_eq!(view.take_mission_info_request(), None);
-    assert!(view.held.contains(&Key::Up));
+    assert!(view.held.contains(&Key::ArrowUp));
     assert!(!view.held.contains(&JUMP_KEY));
 }
 

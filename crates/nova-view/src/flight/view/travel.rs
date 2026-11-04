@@ -603,24 +603,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
     fn map_filter_takes(&self, key: Key) -> bool {
         let docked = self.frame.docked();
         match key {
-            Key::Shift
-            | Key::Control
-            | Key::Alt
-            | Key::Command
+            Key::ShiftLeft
+            | Key::ControlLeft
+            | Key::AltLeft
+            | Key::MetaLeft
             | Key::CapsLock
             | Key::Enter
             | Key::Escape
             | Key::Space
-            | Key::Left
-            | Key::Right
-            | Key::Up
-            | Key::Down => true,
-            Key::Tab => !docked,
-            Key::Char(c) => match c.to_ascii_lowercase() {
-                '\\' => !docked,
-                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
-                _ => false,
-            },
+            | Key::ArrowLeft
+            | Key::ArrowRight
+            | Key::ArrowUp
+            | Key::ArrowDown
+            | Key::KeyB
+            | Key::KeyC
+            | Key::Minus
+            | Key::Equal
+            | Key::NumpadAdd
+            | Key::KeyF
+            | Key::KeyS => true,
+            Key::Tab | Key::Backslash => !docked,
             _ => false,
         }
     }

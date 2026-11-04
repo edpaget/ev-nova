@@ -63,19 +63,28 @@ fn left(pressed: bool, at: Point) -> Input {
 /// A point off every button.
 const NOWHERE: Point = Point::new(1.0, 1.0);
 
+/// The key that types `typed` on a US keyboard: a letter, or the comma.
+fn key_of(typed: char) -> Key {
+    if typed == ',' {
+        Key::Comma
+    } else {
+        nova_view::letter_key(typed).expect("a letter key")
+    }
+}
+
 /// Types `typed` with its key, as the platform reports it.
 fn type_key(screen: &mut AppScreen, typed: char) {
-    screen.input(&key(Key::Char(typed), true));
+    screen.input(&key(key_of(typed), true));
     screen.input(&Input::Text(typed));
-    screen.input(&key(Key::Char(typed), false));
+    screen.input(&key(key_of(typed), false));
 }
 
 /// Command-`typed`.
 fn command(screen: &mut AppScreen, typed: char) -> ScreenAction {
-    screen.input(&key(Key::Command, true));
-    let action = screen.input(&key(Key::Char(typed), true));
-    screen.input(&key(Key::Char(typed), false));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, true));
+    let action = screen.input(&key(key_of(typed), true));
+    screen.input(&key(key_of(typed), false));
+    screen.input(&key(Key::MetaLeft, false));
     action
 }
 
@@ -126,7 +135,7 @@ fn clicks_and_keys_during_the_start_up_fade_are_dropped() {
     type_key(&mut screen, 'o');
     assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Char('i'), true));
+    screen.input(&key(Key::KeyI, true));
     screen.tick(DEATH_FADE_FOR);
     assert_eq!(screen.showing(), Showing::MainMenu, "nothing opened");
     assert!(screen.main_menu().expect("a menu").slides_running());
@@ -170,13 +179,13 @@ fn a_close_during_the_start_up_fade_asks_once_it_ends() {
 fn a_focus_loss_during_the_start_up_fade_lets_go_of_command_after_its_press() {
     let store = MemoryPilots::new();
     let mut screen = opening(&store);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.input(&key(Key::Tab, true));
     // Command's release goes to the app switcher.
     screen.release_keys();
     screen.tick(DEATH_FADE_FOR);
     assert_eq!(
-        screen.input(&key(Key::Char('q'), true)),
+        screen.input(&key(Key::KeyQ, true)),
         ScreenAction::None,
         "a plain Q, Command let go of"
     );
@@ -341,7 +350,7 @@ fn a_focus_loss_during_the_return_lets_go_of_a_key_after_its_press() {
     let mut screen = flying(&store, RuleSource::Engine);
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
-    screen.input(&key(Key::Char('e'), true));
+    screen.input(&key(Key::KeyE, true));
     screen.release_keys();
     screen.tick(DEATH_FADE_FOR);
     assert_eq!(screen.take_sounds(), []);

@@ -147,10 +147,10 @@ impl SystemView {
 }
 
 /// The keys that move the camera each way.
-const LEFT: [Key; 2] = [Key::Left, Key::Char('a')];
-const RIGHT: [Key; 2] = [Key::Right, Key::Char('d')];
-const UP: [Key; 2] = [Key::Up, Key::Char('w')];
-const DOWN: [Key; 2] = [Key::Down, Key::Char('s')];
+const LEFT: [Key; 2] = [Key::ArrowLeft, Key::KeyA];
+const RIGHT: [Key; 2] = [Key::ArrowRight, Key::KeyD];
+const UP: [Key; 2] = [Key::ArrowUp, Key::KeyW];
+const DOWN: [Key; 2] = [Key::ArrowDown, Key::KeyS];
 
 impl Screen for SystemView {
     /// Never quits, nor goes back: Escape is the navigator's.
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn holding_right_moves_the_camera_at_its_speed() {
         let mut view = sol();
-        assert_eq!(view.input(&key(Key::Right, true)), ScreenAction::None);
+        assert_eq!(view.input(&key(Key::ArrowRight, true)), ScreenAction::None);
         ticks_of(&mut view, 4);
         assert_eq!(center(&view), at(CAMERA_SPEED, 0.0));
         assert_eq!(CAMERA_SPEED, 960.0);
@@ -355,14 +355,14 @@ mod tests {
     #[test]
     fn each_movement_key_moves_its_way() {
         let cases = [
-            (Key::Left, at(-480.0, 0.0)),
-            (Key::Char('a'), at(-480.0, 0.0)),
-            (Key::Right, at(480.0, 0.0)),
-            (Key::Char('d'), at(480.0, 0.0)),
-            (Key::Up, at(0.0, -480.0)),
-            (Key::Char('w'), at(0.0, -480.0)),
-            (Key::Down, at(0.0, 480.0)),
-            (Key::Char('s'), at(0.0, 480.0)),
+            (Key::ArrowLeft, at(-480.0, 0.0)),
+            (Key::KeyA, at(-480.0, 0.0)),
+            (Key::ArrowRight, at(480.0, 0.0)),
+            (Key::KeyD, at(480.0, 0.0)),
+            (Key::ArrowUp, at(0.0, -480.0)),
+            (Key::KeyW, at(0.0, -480.0)),
+            (Key::ArrowDown, at(0.0, 480.0)),
+            (Key::KeyS, at(0.0, 480.0)),
         ];
         for (pressed, expected) in cases {
             let mut view = sol();
@@ -375,14 +375,14 @@ mod tests {
     #[test]
     fn opposite_keys_cancel_and_a_diagonal_is_not_normalised() {
         let mut view = sol();
-        view.input(&key(Key::Left, true));
-        view.input(&key(Key::Char('d'), true));
+        view.input(&key(Key::ArrowLeft, true));
+        view.input(&key(Key::KeyD, true));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowUp, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(0.0, -240.0));
-        view.input(&key(Key::Left, false));
+        view.input(&key(Key::ArrowLeft, false));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, -480.0));
     }
@@ -390,14 +390,14 @@ mod tests {
     #[test]
     fn two_keys_for_one_way_keep_moving_until_both_are_released() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Char('d'), true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::KeyD, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, 0.0), "not twice as fast");
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(480.0, 0.0));
-        view.input(&key(Key::Char('d'), false));
+        view.input(&key(Key::KeyD, false));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(480.0, 0.0), "stopped");
     }
@@ -405,15 +405,15 @@ mod tests {
     #[test]
     fn repeats_hold_the_key_without_speeding_it_up() {
         let mut view = sol();
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowDown, true));
         for _ in 0..5 {
-            view.input(&held(Key::Down));
+            view.input(&held(Key::ArrowDown));
         }
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(0.0, 240.0));
         // A repeat alone holds the key too, as when the press went elsewhere.
         let mut view = sol();
-        view.input(&held(Key::Char('a')));
+        view.input(&held(Key::KeyA));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(-240.0, 0.0));
     }
@@ -421,10 +421,10 @@ mod tests {
     #[test]
     fn a_release_without_a_press_does_nothing() {
         let mut view = sol();
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
-        view.input(&key(Key::Right, true));
+        view.input(&key(Key::ArrowRight, true));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(240.0, 0.0));
     }
@@ -432,8 +432,8 @@ mod tests {
     #[test]
     fn releasing_the_keys_stops_the_camera() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Char('s'), true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::KeyS, true));
         view.release_keys();
         ticks_of(&mut view, 2);
         assert_eq!(center(&view), at(0.0, 0.0));
@@ -442,13 +442,13 @@ mod tests {
     #[test]
     fn space_recentres() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
+        view.input(&key(Key::ArrowRight, true));
         ticks_of(&mut view, 3);
-        view.input(&key(Key::Right, false));
+        view.input(&key(Key::ArrowRight, false));
         assert_eq!(view.input(&key(Key::Space, true)), ScreenAction::None);
         assert_eq!(center(&view), at(0.0, 0.0));
         // Its release does nothing more.
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowDown, true));
         ticks_of(&mut view, 1);
         view.input(&key(Key::Space, false));
         assert_eq!(center(&view), at(0.0, 240.0));
@@ -457,8 +457,8 @@ mod tests {
     #[test]
     fn the_camera_stops_at_the_scenes_bounds() {
         let mut view = sol();
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::ArrowUp, true));
         ticks_of(&mut view, 100);
         assert_eq!(
             center(&view),
@@ -473,8 +473,8 @@ mod tests {
             key(Key::Escape, true),
             key(Key::Enter, true),
             key(Key::Tab, true),
-            key(Key::Char('x'), true),
-            key(Key::Other, true),
+            key(Key::KeyX, true),
+            key(Key::Unidentified, true),
             Input::PointerMoved(at(1.0, 2.0)),
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -552,11 +552,11 @@ mod tests {
                 (ImageKey::sprite(1059, 0), at(2512.0, 384.0)),
             ]
         );
-        view.input(&key(Key::Right, true));
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowRight, true));
+        view.input(&key(Key::ArrowDown, true));
         view.tick(QUARTER);
-        view.input(&key(Key::Right, false));
-        view.input(&key(Key::Down, false));
+        view.input(&key(Key::ArrowRight, false));
+        view.input(&key(Key::ArrowDown, false));
         let moved: Vec<Point> = sprites(&drawn(&view)).into_iter().map(|(_, p)| p).collect();
         assert_eq!(
             moved,
@@ -672,14 +672,14 @@ mod tests {
             (at(16.0, 32.0), at(16.0, 58.0), at(16.0, 744.0))
         );
         // Just under a unit to the left: the camera line rounds.
-        view.input(&key(Key::Left, true));
+        view.input(&key(Key::ArrowLeft, true));
         view.tick(Duration::from_millis(1));
-        view.input(&key(Key::Left, false));
-        view.input(&key(Key::Up, true));
+        view.input(&key(Key::ArrowLeft, false));
+        view.input(&key(Key::ArrowUp, true));
         view.tick(Duration::from_millis(250));
         assert!(texts(&drawn(&view)).contains(&"Camera (-1, -240)".to_owned()));
-        view.input(&key(Key::Up, false));
-        view.input(&key(Key::Down, true));
+        view.input(&key(Key::ArrowUp, false));
+        view.input(&key(Key::ArrowDown, true));
         // Back to just above 0, which shows as 0, not -0.
         view.tick(Duration::from_micros(249_600));
         assert!(

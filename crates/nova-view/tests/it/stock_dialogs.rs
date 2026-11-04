@@ -233,7 +233,10 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         assert!(!lines.is_empty());
         assert!(lines.iter().all(|at| text_box.contains(*at)), "{lines:?}");
 
-        assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
+        assert_eq!(
+            desc.input(&key(Key::ArrowDown)),
+            nova_view::ScreenAction::None
+        );
         assert_eq!(desc.scroll_offset(), ARROW_UNITS);
         // The line Down took part of off the top is cut at the box.
         assert!(
@@ -1737,7 +1740,7 @@ fn a_long_offer_scrolls_ten_pixels_on_down_in_1016_and_1020_and_shows_both_arrow
         for (id, graphic) in [(OFFER_DIALOG, None), (PICTURE_OFFER_DIALOG, Some(5005))] {
             let template = ui.dialog_template(id).expect("converts");
             let mut offer = offer_of(template, &long_text, graphic, ("Yes", "No"));
-            offer.input(&key(Key::Down));
+            offer.input(&key(Key::ArrowDown));
             let laid = offer.dialog().expect("laid out");
             let text = laid.scroll_text().expect("the text");
             assert_eq!(text.offset(), ARROW_UNITS, "DLOG {id}");

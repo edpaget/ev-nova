@@ -262,7 +262,7 @@ pub const PANEL_GRAPHIC_ITEM: usize = 7;
 pub use crate::ui::desc::LAST_UNSHOWN_GRAPHIC;
 
 /// Buys the selected ship, as Buy Ship does: the original's default.
-pub const BUY_KEY: Key = Key::Char('b');
+pub const BUY_KEY: Key = Key::KeyB;
 /// Opens the info panel, as Info does: Space, which `_ShipyardFilter`
 /// maps to item 10 (@0x60526-0x60537). Nothing in it reads I, which asks
 /// for the mission info screen
@@ -2132,7 +2132,7 @@ mod tests {
     fn screen_with(shipyard: Shipyard, art: &Rc<FakeArt>) -> ShipyardScreen {
         let mut screen = opened_with(shipyard, art);
         if screen.selected().is_none() {
-            press(&mut screen, Key::Right);
+            press(&mut screen, Key::ArrowRight);
         }
         screen
     }
@@ -2272,7 +2272,7 @@ mod tests {
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
             (1, 3, 5)
         );
-        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Space));
+        assert_eq!((BUY_KEY, INFO_KEY), (Key::KeyB, Key::Space));
         assert_eq!(FIRST_SHIP_PICTURE, 5000);
         assert_eq!(
             [BUY_SHIP_LABEL, INFO_LABEL, PRICE_LABEL, TRADE_IN_LABEL],
@@ -2481,7 +2481,7 @@ mod tests {
             assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
         assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let commands = drawn(&screen);
         assert!(!contains(&commands, &bright_frame(&screen, 0)));
         assert!(contains(&commands, &bright_frame(&screen, 1)));
@@ -2530,12 +2530,12 @@ mod tests {
     #[test]
     fn the_selection_moves_by_click_and_arrows_and_the_grid_scrolls() {
         let mut screen = screen_of(long(22));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(1));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(5));
-        press(&mut screen, Key::Up);
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowUp);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(0));
         click_cell(&mut screen, 6);
         assert_eq!(screen.selected(), Some(6));
@@ -2619,7 +2619,7 @@ mod tests {
     #[test]
     fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
         let mut screen = screen_with(shipyard(), &art());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let picture = item(&screen, PICTURE_ITEM);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
     }
@@ -2631,7 +2631,7 @@ mod tests {
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(13000, "Loaded.");
         assert!(words(&screen).contains(&"Loaded.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.take_description_request(), Some(13001));
         screen.show_description(13000, "Stale.");
         assert!(
@@ -2652,9 +2652,9 @@ mod tests {
             height: 200.0,
         }));
         assert!(words(&screen).contains(&"dësc 13000.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(
             drawn(&screen).contains(&DrawCommand::StretchedPicture {
                 image: ImageKey::picture(5002),
@@ -2664,7 +2664,7 @@ mod tests {
             }),
             "its own"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(
             drawn(&screen).contains(&DrawCommand::StretchedPicture {
                 image: ImageKey::picture(5000),
@@ -2818,16 +2818,16 @@ mod tests {
             }),
             "the picture is still drawn"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(!info_box(&screen).is_empty(), "the Heavy Shuttle's lines");
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert!(info_box(&screen).is_empty(), "none again for the Shuttle");
     }
 
     /// The shipyard's screen with the Heavy Shuttle (not flown) selected.
     fn heavy_selected(shipyard: Shipyard) -> ShipyardScreen {
         let mut screen = screen_of(shipyard);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         screen
     }
 
@@ -2933,13 +2933,13 @@ mod tests {
             None,
             "the class flown asks for nothing"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(enabled(&screen, BUY_SHIP_LABEL));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "too dear");
         click_item(&mut screen, BUY_ITEM);
         press(&mut screen, BUY_KEY);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "not for sale");
         press(&mut screen, BUY_KEY);
         assert_eq!(screen.take_request(), None, "greyed asks for nothing");
@@ -2950,7 +2950,7 @@ mod tests {
     #[test]
     fn buy_ship_requests_the_selected_ship_and_b_only_on_a_press() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         assert_eq!(screen.take_request(), None, "once");
@@ -2967,7 +2967,7 @@ mod tests {
     #[test]
     fn a_new_shipyard_shows_and_regreys_keeping_the_ship_selected() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let mut bought = shipyard();
         bought.current = ShipId(129);
         bought.cash = 0;
@@ -3019,20 +3019,20 @@ mod tests {
             (screen.selected(), enabled(&screen, BUY_SHIP_LABEL))
         };
         let engine = Rulebook::default;
-        assert_eq!(arrowed(engine(), 1, Key::Down), (Some(1), true));
+        assert_eq!(arrowed(engine(), 1, Key::ArrowDown), (Some(1), true));
         assert_eq!(arrowed(engine(), 1, Key::PageDown), (Some(1), true));
-        assert_eq!(arrowed(engine(), 2, Key::Up), (Some(2), false));
+        assert_eq!(arrowed(engine(), 2, Key::ArrowUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 2, Key::PageUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 0, Key::PageDown), (Some(0), false));
         let clamped =
             || Rulebook::default().with_override(nova_sim::RuleKey::GridArrows, RuleSource::Bible);
         assert_eq!(
-            arrowed(clamped(), 1, Key::Down),
+            arrowed(clamped(), 1, Key::ArrowDown),
             (Some(3), false),
             "the Viper, not for sale"
         );
         assert_eq!(
-            arrowed(clamped(), 2, Key::Up),
+            arrowed(clamped(), 2, Key::ArrowUp),
             (Some(0), false),
             "the class flown"
         );
@@ -3253,7 +3253,7 @@ mod tests {
                 [Sound::Ui(UiSound::BuyRefused)],
                 "{rules:?}"
             );
-            press(&mut screen, Key::Right);
+            press(&mut screen, Key::ArrowRight);
             press(&mut screen, BUY_KEY);
             assert_eq!(screen.take_request(), Some(ShipId(129)));
             assert_eq!(screen.take_sounds(), [], "a buy does not beep");
@@ -3263,15 +3263,15 @@ mod tests {
     #[test]
     fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
         let mut screen = opened_with(long(30), &art());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(0));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(23), "the last shown");
         assert!(enabled(&screen, BUY_SHIP_LABEL));
         let mut short = opened_with(shipyard(), &art());
         click_cell(&mut short, 5);
-        press(&mut short, Key::Up);
+        press(&mut short, Key::ArrowUp);
         assert_eq!(short.selected(), Some(3), "the last listed");
     }
 
@@ -3346,7 +3346,10 @@ mod tests {
 
     fn typed(screen: &mut ShipyardScreen, text: &str) {
         for c in text.chars() {
-            press(screen, Key::Char(c.to_ascii_lowercase()));
+            press(
+                screen,
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified),
+            );
             screen.input(&Input::Text(c));
         }
     }
@@ -3354,7 +3357,7 @@ mod tests {
     /// The screen with B pressed on ship 129 and its prompt open.
     fn naming_by_key() -> ShipyardScreen {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, BUY_KEY);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         screen.open_naming(&naming());
@@ -3446,7 +3449,7 @@ mod tests {
     #[test]
     fn a_click_on_buy_ship_does_not_flush_text() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         screen.open_naming(&naming());
@@ -3464,7 +3467,7 @@ mod tests {
             art(),
             ButtonStyle::STOCK,
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         screen.take_request();
         screen.open_naming(&naming());
@@ -3767,7 +3770,7 @@ mod tests {
             .map(|n| stock(1, &format!("Gun {n}"), None))
             .collect();
         let mut screen = screen_of(shipyard);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, INFO_KEY);
         let area = panel_item(&screen, PANEL_TEXT_ITEM);
         assert_eq!(area.height(), 214.0);
@@ -3812,8 +3815,8 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         );
-        press(&mut taller, Key::Right);
-        press(&mut taller, Key::Right);
+        press(&mut taller, Key::ArrowRight);
+        press(&mut taller, Key::ArrowRight);
         press(&mut taller, INFO_KEY);
         assert_eq!(panel_item(&taller, PANEL_TEXT_ITEM).height(), 218.0);
         let words: Vec<String> = texts(&self::drawn(&taller))
@@ -3827,7 +3830,7 @@ mod tests {
     #[test]
     fn info_and_i_open_the_panel_with_the_ships_name_and_stats() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, INFO_ITEM);
         let panel = screen.info_panel().expect("open");
         assert_eq!(
@@ -3995,7 +3998,7 @@ mod tests {
             let mut screen = screen();
             press(&mut screen, INFO_KEY);
             press(&mut screen, BUY_KEY);
-            press(&mut screen, Key::Right);
+            press(&mut screen, Key::ArrowRight);
             assert_eq!(screen.take_request(), None, "the panel takes it");
             assert_eq!(screen.selected(), Some(0));
             screen.input(&key(k, true, true));
@@ -4071,7 +4074,7 @@ mod tests {
         let mut shipyard = shipyard();
         shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
         let mut screen = screen_with(shipyard, art);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         screen
     }
 
@@ -4177,13 +4180,13 @@ mod tests {
             Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
             ButtonStyle::STOCK,
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(enabled(&screen, INFO_LABEL));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, INFO_KEY);
         assert!(screen.info_panel().is_none());
         // A class without a graphic still opens 1005.
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         press(&mut screen, INFO_KEY);
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
@@ -4238,7 +4241,7 @@ mod tests {
         shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
         shipyard.rows[1].specs.weapons = weapons;
         let mut screen = screen_with(shipyard, &art);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, INFO_KEY);
         screen
     }
@@ -4404,7 +4407,7 @@ mod tests {
         let mut shipyard = shipyard();
         shipyard.rows[1].specs.weapons = five_weapons();
         let mut screen = screen_with(shipyard, &art);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         press(&mut screen, INFO_KEY);
         assert_eq!(
             screen.info_panel().expect("open").bounds(),
@@ -4482,7 +4485,7 @@ mod tests {
             );
             assert!(!enabled(&screen, INFO_LABEL));
             for _ in 0..=select {
-                press(&mut screen, Key::Right);
+                press(&mut screen, Key::ArrowRight);
             }
             assert_eq!(screen.selected(), Some(select));
             press(&mut screen, INFO_KEY);
@@ -4497,7 +4500,7 @@ mod tests {
     #[test]
     fn buy_ship_is_item_1_and_done_is_item_7() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let labels = texts(&drawn(&screen));
         for (label, number) in [(BUY_SHIP_LABEL, 1), (DONE_LABEL, 7)] {
             let bounds = item(&screen, number);
@@ -4538,7 +4541,7 @@ mod tests {
     #[test]
     fn pointer_click_is_silent_as_the_original_and_cancelling_the_pointer_abandons_a_click() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let buy = item(&screen, BUY_ITEM).center();
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -4890,10 +4893,10 @@ mod tests {
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
         for k in [
-            Key::Right,
-            Key::Down,
-            Key::Left,
-            Key::Up,
+            Key::ArrowRight,
+            Key::ArrowDown,
+            Key::ArrowLeft,
+            Key::ArrowUp,
             BUY_KEY,
             INFO_KEY,
             crate::ui::player_info::PLAYER_INFO_KEY,

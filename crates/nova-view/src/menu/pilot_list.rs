@@ -203,8 +203,8 @@ impl PilotList {
     fn key(&mut self, key: Key, repeat: bool) {
         let last = self.keys.len().checked_sub(1);
         match (key, self.selected, last) {
-            (Key::Down, Some(at), Some(last)) => self.select((at + 1).min(last)),
-            (Key::Up, Some(at), _) => self.select(at.saturating_sub(1)),
+            (Key::ArrowDown, Some(at), Some(last)) => self.select((at + 1).min(last)),
+            (Key::ArrowUp, Some(at), _) => self.select(at.saturating_sub(1)),
             (Key::Enter, ..) if !repeat => self.open_selected(),
             (Key::Escape, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
             _ => {}
@@ -416,19 +416,19 @@ mod tests {
     #[test]
     fn up_and_down_move_the_selection_within_the_list() {
         let mut pilots = list(&["Ada", "Bob", "Cy"]);
-        pilots.input(&key(Key::Down, false));
-        pilots.input(&key(Key::Down, true));
+        pilots.input(&key(Key::ArrowDown, false));
+        pilots.input(&key(Key::ArrowDown, true));
         assert_eq!(pilots.selected(), Some(2));
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         assert_eq!(pilots.selected(), Some(2), "the last");
-        pilots.input(&key(Key::Up, true));
+        pilots.input(&key(Key::ArrowUp, true));
         assert_eq!(pilots.selected(), Some(1));
         pilots.input(&key(Key::Enter, true));
         assert_eq!(pilots.take_outcome(), None, "a repeat opens nothing");
         pilots.input(&key(Key::Enter, false));
         assert_eq!(pilots.take_outcome(), open("Bob"));
-        pilots.input(&key(Key::Up, false));
-        pilots.input(&key(Key::Up, false));
+        pilots.input(&key(Key::ArrowUp, false));
+        pilots.input(&key(Key::ArrowUp, false));
         assert_eq!(pilots.selected(), Some(0), "the first");
     }
 
@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn open_opens_the_selection_and_cancel_or_escape_cancels() {
         let mut pilots = list(&["Ada", "Bob"]);
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         let open_at = pilots.open_button().rect.center();
         assert_eq!(click(&mut pilots, open_at), []);
         assert_eq!(pilots.take_outcome(), open("Bob"));
@@ -499,7 +499,7 @@ mod tests {
         assert!(texts(&pilots).contains(&(NO_PILOTS.to_owned(), Color::DIM)));
         assert_eq!(NO_PILOTS, "No saved pilots.");
         pilots.input(&key(Key::Enter, false));
-        pilots.input(&key(Key::Down, false));
+        pilots.input(&key(Key::ArrowDown, false));
         assert!(!pilots.open_button().enabled);
         let open_at = pilots.open_button().rect.center();
         click(&mut pilots, open_at);
@@ -552,7 +552,7 @@ mod tests {
         assert!(pilots.row(VISIBLE_ROWS - 1).is_some());
         assert!(pilots.row(VISIBLE_ROWS).is_none(), "below the list");
         for _ in 0..12 {
-            pilots.input(&key(Key::Down, true));
+            pilots.input(&key(Key::ArrowDown, true));
         }
         assert_eq!(pilots.selected(), Some(12));
         assert!(pilots.row(12).is_some());
@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(shown.first().map(String::as_str), Some("P03"));
         assert_eq!(shown.len(), VISIBLE_ROWS);
         for _ in 0..12 {
-            pilots.input(&key(Key::Up, true));
+            pilots.input(&key(Key::ArrowUp, true));
         }
         assert_eq!(pilots.row(0), Some(pilots.row_rect(0)), "back at the top");
     }
@@ -693,9 +693,9 @@ mod tests {
     /// play no sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Up, Key::Down, Key::Enter, Key::Escape] {
+        for k in [Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Escape] {
             let mut pilots = list(&["Ada", "Bob"]);
-            pilots.input(&key(Key::Down, false));
+            pilots.input(&key(Key::ArrowDown, false));
             pilots.input(&key(k, false));
             pilots.input(&Input::Key {
                 key: k,

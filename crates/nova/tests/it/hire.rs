@@ -564,12 +564,12 @@ impl Game {
     /// L requests clearance, the dock approach clears it, and a second L
     /// lands: the spaceport shows.
     fn land(&mut self) {
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         self.settle();
         self.settle_until("the dock approach's clearance", |game| {
             game.session().dock_cleared()
         });
-        self.tap(Key::Char('l'));
+        self.tap(Key::KeyL);
         assert_eq!(self.showing(), Showing::Spaceport);
     }
 
@@ -579,11 +579,11 @@ impl Game {
         self.settle_until("an escort in flight", |game| {
             game.session().npcs().iter().any(|npc| npc.escort.is_some())
         });
-        self.key(Key::Alt, true);
+        self.key(Key::AltLeft, true);
         self.tap(Key::Tab);
-        self.key(Key::Alt, false);
+        self.key(Key::AltLeft, false);
         self.settle();
-        self.tap(Key::Char('y'));
+        self.tap(Key::KeyY);
         assert_eq!(self.showing(), Showing::EscortDialog);
     }
 
@@ -721,10 +721,10 @@ fn a_hire_in_the_bar_is_saved_flies_beside_the_player_and_is_hailed_after_a_rest
     // The bar, and H its hire screen; Right picks a ship, and H hires it:
     // the bar is back, and the pilot saved with its escort.
     game.open_bar();
-    game.tap(Key::Char('h'));
+    game.tap(Key::KeyH);
     assert!(game.hiring());
-    game.tap(Key::Right);
-    game.tap(Key::Char('h'));
+    game.tap(Key::ArrowRight);
+    game.tap(Key::KeyH);
     assert!(!game.hiring(), "back in the bar");
     let escorts = game.pilot().escorts().to_vec();
     assert!(!escorts.is_empty(), "hired");
@@ -766,7 +766,7 @@ fn the_escort_dialogs_sale_mark_reaches_the_shipyard_whose_leave_holds_for_the_r
     game.hail_escort();
     assert!(game.app.screen().escort_dialog().is_some());
     // S marks it for sale.
-    game.tap(Key::Char('s'));
+    game.tap(Key::KeyS);
     assert_eq!(
         game.pilot().escorts()[0].mark,
         Some(nova_sim::fleet::EscortMark::Sell)
@@ -955,13 +955,13 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
         screen.with_hire_terms(Rc::new(Sevens))
     });
     game.open_bar();
-    game.tap(Key::Char('h'));
-    game.tap(Key::Right);
+    game.tap(Key::KeyH);
+    game.tap(Key::ArrowRight);
     let shown = texts(&game.frame());
     for text in ["Hiring Price:", "7 cr"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
-    game.tap(Key::Char('h'));
+    game.tap(Key::KeyH);
     assert_eq!(game.pilot().cash(), 25_000 - 7);
     assert_eq!(game.pilot().escorts().len(), 2);
     assert_eq!(
@@ -975,9 +975,9 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
         screen.with_control_bits(Rc::new(NothingHolds))
     });
     game.open_bar();
-    game.tap(Key::Char('h'));
+    game.tap(Key::KeyH);
     assert!(game.hiring());
-    game.tap(Key::Char('h'));
+    game.tap(Key::KeyH);
     assert_eq!(
         game.pilot().cash(),
         25_000,

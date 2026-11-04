@@ -576,7 +576,7 @@ impl OfferDialog {
         let refuse = self.prompt.labels.refuse.as_deref().and_then(first);
         let letter = match key {
             Key::Enter => return Some(OfferChoice::Accept),
-            Key::Char(c) if accept != refuse => Some(c.to_ascii_lowercase()),
+            _ if accept != refuse => crate::input::key_letter(key),
             _ => return None,
         };
         if letter == accept {
@@ -1107,7 +1107,11 @@ fn queues_an_event(input: &Input) -> bool {
             pressed
                 && !matches!(
                     key,
-                    Key::Alt | Key::Control | Key::Shift | Key::Command | Key::CapsLock
+                    Key::AltLeft
+                        | Key::ControlLeft
+                        | Key::ShiftLeft
+                        | Key::MetaLeft
+                        | Key::CapsLock
                 )
         }
         _ => true,
@@ -1373,7 +1377,7 @@ mod tests {
         assert!(!dialog.holds_back_keys(), "before the press");
         press_item(&mut dialog, ACCEPT_ITEM, true);
         assert!(dialog.holds_back_keys(), "during it");
-        dialog.input(&key(Key::Char('z')));
+        dialog.input(&key(Key::KeyZ));
         press_item(&mut dialog, ACCEPT_ITEM, false);
         assert!(dialog.answered());
         assert!(!dialog.holds_back_keys(), "answered");
@@ -1407,28 +1411,28 @@ mod tests {
         };
         offers.input(&left(true), &mut Vec::new());
         assert!(offers.holds_back_keys(), "during the press");
-        offers.input(&key(Key::Char('z')), &mut Vec::new());
+        offers.input(&key(Key::KeyZ), &mut Vec::new());
         offers.input(&left(false), &mut Vec::new());
         assert!(offers.dialog().is_none(), "answered");
         assert!(offers.holds_back_keys(), "Z waits for its holder");
         offers.take_choice();
         assert!(offers.holds_back_keys(), "until its holder runs it");
-        assert_eq!(offers.take_unclaimed(), [key(Key::Char('z'))]);
+        assert_eq!(offers.take_unclaimed(), [key(Key::KeyZ)]);
         assert!(!offers.holds_back_keys(), "once it has");
     }
 
     #[test]
     fn modifiers_and_releases_left_by_an_answer_hold_back_nothing() {
         let released = Input::Key {
-            key: Key::Char('z'),
+            key: Key::KeyZ,
             pressed: false,
             repeat: false,
         };
         let modifiers = [
-            Key::Alt,
-            Key::Control,
-            Key::Shift,
-            Key::Command,
+            Key::AltLeft,
+            Key::ControlLeft,
+            Key::ShiftLeft,
+            Key::MetaLeft,
             Key::CapsLock,
         ];
         for left in modifiers.map(key).into_iter().chain([released]) {
@@ -1529,29 +1533,22 @@ mod tests {
     #[test]
     fn each_labels_first_letter_chooses_it() {
         let mut dialog = offer();
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
         let mut dialog = offer();
-        dialog.input(&key(Key::Char('I')));
-        assert_eq!(
-            dialog.take_choice(),
-            Some(OfferChoice::Accept),
-            "either case"
-        );
-        let mut dialog = offer();
-        dialog.input(&key(Key::Char('x')));
+        dialog.input(&key(Key::KeyX));
         assert_eq!(dialog.take_choice(), None);
         let mut cannot = dialog_of(prompt("Okay", None));
-        cannot.input(&key(Key::Char('n')));
+        cannot.input(&key(Key::KeyN));
         assert_eq!(cannot.take_choice(), None, "no refuse label");
-        cannot.input(&key(Key::Char('o')));
+        cannot.input(&key(Key::KeyO));
         assert_eq!(cannot.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
     fn labels_starting_with_the_same_letter_take_no_letter() {
         let mut dialog = dialog_of(prompt("Sure", Some("Scram")));
-        dialog.input(&key(Key::Char('s')));
+        dialog.input(&key(Key::KeyS));
         assert_eq!(dialog.take_choice(), None);
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
@@ -1563,7 +1560,7 @@ mod tests {
             text: "line\r".repeat(40),
             ..prompt("Yes", Some("No"))
         });
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
         assert!(!dialog.answered());
     }
@@ -1627,14 +1624,14 @@ mod tests {
         let laid = dialog.dialog().expect("laid out");
         assert_eq!(laid.bounds(), Bounds::at(ORIGIN, 441.0, 317.0));
         assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 285.0));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
     }
 
     #[test]
     fn a_shrunk_text_has_nothing_to_scroll() {
         let mut dialog = offer();
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(0.0));
     }
 
@@ -2022,9 +2019,9 @@ mod tests {
             "nothing open takes nothing"
         );
         opened(&mut offers);
-        assert!(offers.input(&key(Key::Char('x')), &mut sounds));
+        assert!(offers.input(&key(Key::KeyX), &mut sounds));
         assert!(offers.dialog().is_some(), "x chooses nothing");
-        assert!(offers.input(&key(Key::Char('n')), &mut sounds));
+        assert!(offers.input(&key(Key::KeyN), &mut sounds));
         assert!(offers.dialog().is_none(), "answered, it closes");
         assert_eq!(
             offers.take_choice(),
@@ -2411,7 +2408,7 @@ mod tests {
             texts(&dialog)
         );
         assert_eq!(player.drawn().len(), 1, "the movie is");
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
         assert!(!dialog.answered(), "the dialog takes no input yet");
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2428,7 +2425,7 @@ mod tests {
     fn a_skipped_offer_movie_opens_the_dialog_with_nothing_queued() {
         let player = MockMoviePlayer::playing((160, 120), 20);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
         click_at(&mut dialog, Point::new(500.0, 520.0));
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
         assert!(
@@ -2479,8 +2476,8 @@ mod tests {
         let mut dialog = dialog_of(filmed(0x0004)).with_movies(&movies(&player));
         dialog.tick(MOVIE_FADE_FOR);
         assert!(dialog.hides_pointer());
-        dialog.input(&key(Key::Char('p')));
-        dialog.input(&key(Key::Char('i')));
+        dialog.input(&key(Key::KeyP));
+        dialog.input(&key(Key::KeyI));
         assert!(!dialog.take_player_info_request());
         assert!(!dialog.take_info_request());
         dialog.cancel_pointer();
@@ -2517,7 +2514,7 @@ mod tests {
         offers.set_movies(movies(&player));
         offers.open(filmed(0x0000), Rc::new(MonoMetrics), ButtonStyle::STOCK);
         let mut sounds = Vec::new();
-        offers.input(&key(Key::Char('n')), &mut sounds);
+        offers.input(&key(Key::KeyN), &mut sounds);
         assert_eq!(offers.take_choice(), None, "not while the movie plays");
         offers.tick(TICK, false);
         assert_eq!(
@@ -2539,7 +2536,7 @@ mod tests {
         assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
-        dialog.input(&key(Key::Char('n')));
+        dialog.input(&key(Key::KeyN));
         assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2644,7 +2641,7 @@ mod tests {
         let mut offers = VenueOffers::asking(plain_only(Ok(template())));
         opened(&mut offers);
         assert_eq!(
-            answer(&mut offers, Key::Char('n')),
+            answer(&mut offers, Key::KeyN),
             Some((MissionId(141), OfferChoice::Refuse))
         );
         assert!(offers.dialog().is_none(), "answered");
@@ -2684,7 +2681,7 @@ mod tests {
             crate::ui::player_info::PLAYER_INFO_KEY,
         ]
         .into_iter()
-        .chain(('a'..='z').map(Key::Char))
+        .chain(('a'..='z').filter_map(crate::input::letter_key))
         {
             let mut dialog = offer();
             for pressed in [true, false] {

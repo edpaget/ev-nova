@@ -240,7 +240,7 @@ mod tests {
         for input in [
             key(Key::Escape),
             key(Key::Tab),
-            key(Key::Char('y')),
+            key(Key::KeyY),
             Input::Text('y'),
         ] {
             dialog.input(&input);

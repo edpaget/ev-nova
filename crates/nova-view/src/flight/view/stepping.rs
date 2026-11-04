@@ -154,20 +154,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The controls for the keys held.
     pub(super) fn controls(&self) -> Controls {
         let holding = |key| self.held.contains(&key);
-        let turn = match (holding(Key::Left), holding(Key::Right)) {
+        let turn = match (holding(Key::ArrowLeft), holding(Key::ArrowRight)) {
             (true, false) => Turn::Left,
             (false, true) => Turn::Right,
             _ => Turn::None,
         };
-        let face = match (holding(FACE_TARGET_KEY), holding(Key::Alt)) {
+        let face = match (holding(FACE_TARGET_KEY), holding(Key::AltLeft)) {
             (false, _) => Face::Off,
             (true, false) => Face::Target,
             (true, true) => Face::Stellar,
         };
         Controls {
-            thrust: holding(Key::Up),
+            thrust: holding(Key::ArrowUp),
             turn,
-            reverse: holding(Key::Down),
+            reverse: holding(Key::ArrowDown),
             face,
             afterburner: holding(AFTERBURNER_KEY),
         }
@@ -189,9 +189,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// which holds the next step's gain.
     pub(super) fn step_input(&self, anchor: Anchor) -> StepInput {
         let held = |key| self.held.contains(&key);
-        let chord = |command, key| self.takes(command) && held(Key::Command) && held(key);
+        let chord = |command, key| self.takes(command) && held(Key::MetaLeft) && held(key);
         let jettison = chord(PlayerCommand::Jettison, JETTISON_KEY)
-            .then(|| !held(Key::Alt))
+            .then(|| !held(Key::AltLeft))
             .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),

@@ -857,7 +857,7 @@ impl Dialog {
 
     fn key(&mut self, key: Key, repeat: bool) -> Option<DialogEvent> {
         match key {
-            Key::Up | Key::Down => {
+            Key::ArrowUp | Key::ArrowDown => {
                 if let Some(text) = self.scroll_text_mut() {
                     text.input(&Input::Key {
                         key,
@@ -2113,7 +2113,7 @@ mod tests {
     #[test]
     fn set_text_rewraps_a_text_item_and_nothing_else() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.set_text(3, "new");
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!((text.lines(), text.first()), (&["new".to_owned()][..], 0));
@@ -2142,13 +2142,13 @@ mod tests {
                 .collect()
         };
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.set_rows(3, rows(&["a", "b", "c", "d"]));
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!(text.first(), 0);
         assert_eq!(text.lines(), ["a", "b", "c", "d"]);
         assert_eq!(text.rect(), rect(10.0, 10.0, 40.0, 36.0));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(
             dialog.scroll_text().expect("scrolling text").first(),
             1,
@@ -2164,15 +2164,15 @@ mod tests {
     #[test]
     fn up_and_down_reach_the_scroll_text_with_repeats() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        assert_eq!(dialog.input(&key(Key::Down)), None);
-        assert_eq!(dialog.input(&held(Key::Down)), None);
+        assert_eq!(dialog.input(&key(Key::ArrowDown)), None);
+        assert_eq!(dialog.input(&held(Key::ArrowDown)), None);
         assert_eq!(dialog.scroll_text().expect("text").first(), 2);
-        dialog.input(&held(Key::Down));
+        dialog.input(&held(Key::ArrowDown));
         assert_eq!(dialog.scroll_text().expect("text").first(), 2, "clamped");
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
         let release = Input::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: false,
             repeat: false,
         };
@@ -2185,10 +2185,10 @@ mod tests {
         let text = |dialog: &Dialog| dialog.scroll_text().expect("text").offset();
         let mut pixels =
             dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4")).with_pixel_scroll();
-        pixels.input(&key(Key::Down));
+        pixels.input(&key(Key::ArrowDown));
         assert_eq!(text(&pixels), ARROW_UNITS);
         let mut lines = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
-        lines.input(&key(Key::Down));
+        lines.input(&key(Key::ArrowDown));
         assert_eq!(text(&lines), 12.0);
     }
 
@@ -2202,7 +2202,7 @@ mod tests {
     fn set_text_keeps_a_dialogs_pixel_scroll() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0")).with_pixel_scroll();
         dialog.set_text(3, "l0\rl1\rl2\rl3\rl4");
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.scroll_text().expect("text").offset(), ARROW_UNITS);
     }
 
@@ -2269,7 +2269,7 @@ mod tests {
         assert_eq!((first(&dialog, 3), first(&dialog, 4)), (0, 1));
         dialog.input(&wheel(at(20.0, 20.0)));
         assert_eq!((first(&dialog, 3), first(&dialog, 4)), (1, 1));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(
             (first(&dialog, 3), first(&dialog, 4)),
             (2, 1),
@@ -2305,7 +2305,7 @@ mod tests {
         let mut dialog = dialog(&template, &[]);
         assert!(dialog.scroll_text().is_none());
         let before = drawn(&dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(drawn(&dialog), before);
     }
 
@@ -2396,9 +2396,9 @@ mod tests {
     #[test]
     fn up_and_down_still_scroll_a_backed_text() {
         let mut dialog = dialog(&desc_like(), &backed_roles("l0\rl1\rl2\rl3\rl4", INSET));
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.text(3).expect("text").first(), 1);
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(dialog.text(3).expect("text").first(), 0);
     }
 

@@ -8,7 +8,7 @@ use crate::input::Key;
 
 /// The key that shows and hides the overlay: backquote, the key under
 /// Escape on a US keyboard.
-pub const TOGGLE_KEY: Key = Key::Char('`');
+pub const TOGGLE_KEY: Key = Key::Backquote;
 
 /// Where one input event goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn the_toggle_key_is_backquote() {
-        assert_eq!(TOGGLE_KEY, Key::Char('`'));
+        assert_eq!(TOGGLE_KEY, Key::Backquote);
     }
 
     #[test]
@@ -145,11 +145,11 @@ mod tests {
             Key::Tab,
             Key::Enter,
             Key::Space,
-            Key::Left,
-            Key::Right,
-            Key::Up,
-            Key::Down,
-            Key::Char('d'),
+            Key::ArrowLeft,
+            Key::ArrowRight,
+            Key::ArrowUp,
+            Key::ArrowDown,
+            Key::KeyD,
         ];
         let mut overlay = DevOverlay::new();
         for key in keys {

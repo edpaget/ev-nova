@@ -55,7 +55,7 @@ impl AppScreen {
     /// original's menus and do nothing here.
     pub(super) fn menu_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
-            key: key @ Key::Char('a' | 'x'),
+            key: key @ (Key::KeyA | Key::KeyX),
             pressed,
             ..
         } = *input
@@ -68,7 +68,7 @@ impl AppScreen {
             // closed opens it again; the dialog itself drops those that
             // reach it (`_TextDialogFilter` @0x51f86-0x51fe5).
             if pressed {
-                self.click_then(if key == Key::Char('a') {
+                self.click_then(if key == Key::KeyA {
                     MenuAction::Choice(MenuChoice::About)
                 } else {
                     MenuAction::Text
@@ -170,7 +170,7 @@ impl AppScreen {
         if hold == MenuHold::EHeld {
             match *input {
                 Input::Key {
-                    key: Key::Char('e'),
+                    key: Key::KeyE,
                     pressed: false,
                     ..
                 } => {
@@ -178,7 +178,7 @@ impl AppScreen {
                     return;
                 }
                 Input::Key {
-                    key: Key::Char('e'),
+                    key: Key::KeyE,
                     pressed: true,
                     ..
                 }

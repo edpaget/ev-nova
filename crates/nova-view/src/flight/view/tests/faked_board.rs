@@ -91,7 +91,7 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
     let mut view = sol();
     assert_eq!(view.take_boarding(), None);
     opened(&mut view);
-    view.held.insert(Key::Up);
+    view.held.insert(Key::ArrowUp);
     assert!(view.board(), "a board that opens latches");
     assert_eq!(sent_but_lines(&view), [FlightCommand::Board]);
     let shown = view.take_boarding().expect("held for the router");
@@ -106,7 +106,7 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
     assert_eq!(view.boarding(), Some(ON_BOARD), "still under way");
     assert_eq!(view.message(), None);
     assert!(view.held.is_empty(), "the flight keys let go");
-    assert_eq!(BOARD_KEY, Key::Char('b'));
+    assert_eq!(BOARD_KEY, Key::KeyB);
 }
 
 #[test]
@@ -448,7 +448,7 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
         .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
             prompt.clone(),
         ))));
-    view.held.insert(Key::Up);
+    view.held.insert(Key::ArrowUp);
     view.board();
     assert_eq!(view.take_boarding(), None, "no plunder");
     assert_eq!(view.take_offer(), Some(prompt));

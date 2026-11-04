@@ -49,8 +49,8 @@ impl SlotBlock {
             self.latch = false;
         }
         self.presses.push(key);
-        if key == NEAREST_STELLAR_COMMAND_KEY && down(Key::Command) {
-            self.presses.push(Key::Command);
+        if key == NEAREST_STELLAR_COMMAND_KEY && down(Key::MetaLeft) {
+            self.presses.push(Key::MetaLeft);
         }
     }
 
@@ -141,7 +141,7 @@ pub(super) fn block_polls(key: Key, down: impl Fn(Key) -> bool, menu_open: bool)
         return false;
     }
     if key == NEAREST_STELLAR_COMMAND_KEY {
-        return down(Key::Command) && !down(NEAREST_STELLAR_KEY);
+        return down(Key::MetaLeft) && !down(NEAREST_STELLAR_KEY);
     }
     STELLAR_SLOT_KEYS.iter().any(|keys| keys[0] == key)
 }
@@ -160,10 +160,10 @@ mod tests {
 
     use super::*;
 
-    const ONE: Key = Key::Char('1');
-    const TWO: Key = Key::Char('2');
-    const THREE: Key = Key::Char('3');
-    const FIVE: Key = Key::Char('5');
+    const ONE: Key = Key::Digit1;
+    const TWO: Key = Key::Digit2;
+    const THREE: Key = Key::Digit3;
+    const FIVE: Key = Key::Digit5;
 
     fn set(keys: &[Key]) -> HashSet<Key> {
         keys.iter().copied().collect()
@@ -192,23 +192,20 @@ mod tests {
             Some(StellarPick::Nearest)
         );
         assert_eq!(
-            pick_of(&[Key::Command, FIVE], false),
+            pick_of(&[Key::MetaLeft, FIVE], false),
             Some(StellarPick::Nearest)
         );
         assert_eq!(pick_of(&[FIVE], false), None, "5 needs Command");
-        assert_eq!(pick_of(&[Key::Command], false), None);
-        assert_eq!(pick_of(&[Key::Char('6'), Key::Alt], false), None);
+        assert_eq!(pick_of(&[Key::MetaLeft], false), None);
+        assert_eq!(pick_of(&[Key::Digit6, Key::AltLeft], false), None);
         assert_eq!(pick_of(&[], false), None);
     }
 
     #[test]
     fn the_open_menu_hides_1_to_5_from_the_block() {
         assert_eq!(pick_of(&[TWO], true), None);
-        assert_eq!(pick_of(&[Key::Command, FIVE], true), None);
-        assert_eq!(
-            pick_of(&[Key::Function(2)], true),
-            Some(StellarPick::Slot(1))
-        );
+        assert_eq!(pick_of(&[Key::MetaLeft, FIVE], true), None);
+        assert_eq!(pick_of(&[Key::F2], true), Some(StellarPick::Slot(1)));
         assert_eq!(
             pick_of(&[NEAREST_STELLAR_KEY], true),
             Some(StellarPick::Nearest)
@@ -220,19 +217,19 @@ mod tests {
         // @0x69d38-0x69dda: each key found down overrides the last.
         assert_eq!(pick_of(&[ONE, THREE], false), Some(StellarPick::Slot(2)));
         assert_eq!(
-            pick_of(&[THREE, Key::Function(1)], false),
+            pick_of(&[THREE, Key::F1], false),
             Some(StellarPick::Slot(0))
         );
         assert_eq!(
-            pick_of(&[Key::Function(1), Key::Function(4)], false),
+            pick_of(&[Key::F1, Key::F4], false),
             Some(StellarPick::Slot(3))
         );
         assert_eq!(
-            pick_of(&[Key::Function(4), NEAREST_STELLAR_KEY], false),
+            pick_of(&[Key::F4, NEAREST_STELLAR_KEY], false),
             Some(StellarPick::Nearest)
         );
         assert_eq!(
-            pick_of(&[Key::Function(4), Key::Command, FIVE], false),
+            pick_of(&[Key::F4, Key::MetaLeft, FIVE], false),
             Some(StellarPick::Nearest)
         );
     }
@@ -270,8 +267,8 @@ mod tests {
     fn a_press_while_another_block_key_is_held_does_nothing() {
         let mut block = SlotBlock::default();
         let none = set(&[]);
-        let f1 = set(&[Key::Function(1)]);
-        block.press(Key::Function(1), down(&none), false);
+        let f1 = set(&[Key::F1]);
+        block.press(Key::F1, down(&none), false);
         assert_eq!(
             block.frame(down(&f1), false, true),
             Some(StellarPick::Slot(0))
@@ -285,7 +282,7 @@ mod tests {
         // 5 held without Command holds nothing, so F3 is fresh.
         let five = set(&[FIVE]);
         block.frame(down(&none), false, true);
-        block.press(Key::Function(3), down(&five), false);
+        block.press(Key::F3, down(&five), false);
         assert_eq!(
             block.frame(down(&five), false, true),
             Some(StellarPick::Slot(2))
@@ -293,9 +290,9 @@ mod tests {
         // A key the menu hides holds nothing either.
         let mut block = SlotBlock::default();
         let two = set(&[TWO]);
-        block.press(Key::Function(1), down(&none), false);
-        block.frame(down(&set(&[Key::Function(1)])), false, true);
-        block.press(Key::Function(1), down(&two), true);
+        block.press(Key::F1, down(&none), false);
+        block.frame(down(&set(&[Key::F1])), false, true);
+        block.press(Key::F1, down(&two), true);
         assert_eq!(
             block.frame(down(&two), true, true),
             Some(StellarPick::Slot(0))
@@ -313,7 +310,7 @@ mod tests {
             Some(StellarPick::Nearest)
         );
         block.frame(down(&none), false, true);
-        block.press(Key::Function(3), down(&none), false);
+        block.press(Key::F3, down(&none), false);
         block.press(ONE, down(&none), false);
         assert_eq!(
             block.frame(down(&none), false, true),
@@ -325,7 +322,7 @@ mod tests {
     #[test]
     fn command_5_tapped_counts_with_its_command_at_the_next_frame() {
         let mut block = SlotBlock::default();
-        block.press(FIVE, down(&set(&[Key::Command])), false);
+        block.press(FIVE, down(&set(&[Key::MetaLeft])), false);
         assert_eq!(
             block.frame(down(&set(&[])), false, true),
             Some(StellarPick::Nearest)
@@ -409,11 +406,11 @@ mod tests {
     fn the_block_polls_its_keys_as_the_menu_and_command_let_it() {
         let none = set(&[]);
         let down = |keys: HashSet<Key>| move |key: Key| keys.contains(&key);
-        for n in 1..=5 {
-            assert!(block_polls(Key::Function(n), down(none.clone()), false));
-            assert!(block_polls(Key::Function(n), down(none.clone()), true));
+        for f in [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5] {
+            assert!(block_polls(f, down(none.clone()), false));
+            assert!(block_polls(f, down(none.clone()), true));
         }
-        for key in [ONE, TWO, THREE, Key::Char('4')] {
+        for key in [ONE, TWO, THREE, Key::Digit4] {
             assert!(block_polls(key, down(none.clone()), false), "{key:?}");
             assert!(
                 !block_polls(key, down(none.clone()), true),
@@ -421,36 +418,35 @@ mod tests {
             );
         }
         assert!(!block_polls(FIVE, down(none.clone()), false), "no Command");
-        assert!(block_polls(FIVE, down(set(&[Key::Command])), false));
+        assert!(block_polls(FIVE, down(set(&[Key::MetaLeft])), false));
         assert!(
-            !block_polls(FIVE, down(set(&[Key::Command])), true),
+            !block_polls(FIVE, down(set(&[Key::MetaLeft])), true),
             "masked"
         );
         assert!(
-            !block_polls(FIVE, down(set(&[Key::Command, NEAREST_STELLAR_KEY])), false),
+            !block_polls(
+                FIVE,
+                down(set(&[Key::MetaLeft, NEAREST_STELLAR_KEY])),
+                false
+            ),
             "F5 down skips Command-5 (@0x69dba)"
         );
-        assert!(!block_polls(Key::Char('6'), down(none.clone()), false));
+        assert!(!block_polls(Key::Digit6, down(none.clone()), false));
         assert!(
-            !block_polls(Key::Command, down(none), false),
+            !block_polls(Key::MetaLeft, down(none), false),
             "not the block's"
         );
     }
 
     #[test]
     fn the_blocks_keys_are_1_to_5_and_f1_to_f5() {
-        for key in [ONE, TWO, THREE, Key::Char('4'), FIVE] {
+        for key in [ONE, TWO, THREE, Key::Digit4, FIVE] {
             assert!(is_block_key(key), "{key:?}");
         }
-        for n in 1..=5 {
-            assert!(is_block_key(Key::Function(n)));
+        for f in [Key::F1, Key::F2, Key::F3, Key::F4, Key::F5] {
+            assert!(is_block_key(f));
         }
-        for key in [
-            Key::Char('6'),
-            Key::Function(6),
-            Key::Command,
-            Key::Char('a'),
-        ] {
+        for key in [Key::Digit6, Key::F6, Key::MetaLeft, Key::KeyA] {
             assert!(!is_block_key(key), "{key:?}");
         }
     }
@@ -461,7 +457,7 @@ mod tests {
         // (@0x69e15), so 2 pressed picks nothing until both are up.
         let mut block = SlotBlock::default();
         block.set_latch();
-        let f1 = set(&[Key::Function(1)]);
+        let f1 = set(&[Key::F1]);
         block.press(TWO, down(&f1), false);
         assert_eq!(block.frame(down(&f1), false, true), None, "F1 holds it");
         assert_eq!(block.frame(down(&set(&[])), false, true), None);
@@ -478,7 +474,7 @@ mod tests {
             assert!(escort_loop_polls(key, true), "{key:?}");
             assert!(!escort_loop_polls(key, false), "{key:?}");
         }
-        assert!(!escort_loop_polls(Key::Function(1), true));
+        assert!(!escort_loop_polls(Key::F1, true));
         assert_eq!(NEAREST_STELLAR_COMMAND_KEY, FIVE);
     }
 }

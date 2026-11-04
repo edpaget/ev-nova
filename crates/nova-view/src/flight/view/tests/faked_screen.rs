@@ -87,7 +87,7 @@ pub(super) fn sent_count(view: &Faked) -> usize {
 #[test]
 fn m_opens_the_map_over_everything_and_keeps_the_live_flight_keys() {
     let mut view = in_flight();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     assert_eq!(view.input(&key(MAP, true)), ScreenAction::None);
     assert!(view.map_open());
     let mut map = DrawList::new();
@@ -114,7 +114,7 @@ fn m_opens_the_map_over_everything_and_keeps_the_live_flight_keys() {
 #[test]
 fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     let mut view = in_flight();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     view.tick(TICK);
     tap(&mut view, MAP);
     let steps = view.sim.steps();
@@ -124,7 +124,7 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     }
     assert_eq!(view.sim.steps(), steps, "paused: no step asked");
     let from = sent_count(&view);
-    view.input(&key(Key::Left, true));
+    view.input(&key(Key::ArrowLeft, true));
     assert_ne!(
         view.course_map().transform(),
         fitted,
@@ -156,7 +156,12 @@ fn the_course_map_makes_no_map_sound_on_its_own_input_or_ms_repeats() {
     view.take_sounds();
     view.input(&held(MAP));
     view.input(&key(MAP, false));
-    for k in [Key::Up, Key::Down, Key::Left, Key::Right] {
+    for k in [
+        Key::ArrowUp,
+        Key::ArrowDown,
+        Key::ArrowLeft,
+        Key::ArrowRight,
+    ] {
         tap(&mut view, k);
     }
     let somewhere = faked_on_map(&mut view, 131);
@@ -307,7 +312,14 @@ fn a_repeat_or_release_of_j_does_nothing() {
 fn keys_are_ignored_while_the_ship_turns_to_jump() {
     let mut view = braking();
     let from = sent_count(&view);
-    for k in [Key::Up, Key::Left, Key::Down, MAP, LAND, JUMP] {
+    for k in [
+        Key::ArrowUp,
+        Key::ArrowLeft,
+        Key::ArrowDown,
+        MAP,
+        LAND,
+        JUMP,
+    ] {
         assert_eq!(view.input(&key(k, true)), ScreenAction::None);
     }
     assert_eq!(sent_since(&view, from), [], "no command");
@@ -326,10 +338,10 @@ fn keys_are_ignored_while_the_ship_turns_to_jump() {
 #[test]
 fn keys_are_ignored_while_the_jump_plays() {
     let mut view = streaking();
-    view.input(&key(Key::Up, true));
-    view.input(&key(Key::Up, false));
+    view.input(&key(Key::ArrowUp, true));
+    view.input(&key(Key::ArrowUp, false));
     let from = sent_count(&view);
-    view.input(&key(Key::Left, true));
+    view.input(&key(Key::ArrowLeft, true));
     view.input(&key(MAP, true));
     view.input(&key(LAND, true));
     view.input(&key(JUMP, true));
@@ -337,7 +349,7 @@ fn keys_are_ignored_while_the_jump_plays() {
     assert!(!view.map_open());
     assert_eq!(view.message(), None);
     assert_eq!(view.take_landing(), None);
-    view.input(&key(Key::Left, false));
+    view.input(&key(Key::ArrowLeft, false));
     view.tick(TICK);
     assert_eq!(last_controls(&view), Controls::default(), "nothing held");
 }
@@ -352,7 +364,7 @@ fn keys_are_ignored_while_the_old_system_fades_out() {
         Some(JumpPhase::FadeOut(_))
     ));
     let from = sent_count(&view);
-    for k in [Key::Up, Key::Left, MAP, LAND, JUMP] {
+    for k in [Key::ArrowUp, Key::ArrowLeft, MAP, LAND, JUMP] {
         assert_eq!(view.input(&key(k, true)), ScreenAction::None);
         assert_eq!(view.input(&key(k, false)), ScreenAction::None);
     }
@@ -368,12 +380,12 @@ fn the_target_keys_are_taken_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         tap(&mut view, TARGET_KEY);
-        view.input(&key(Key::Shift, true));
+        view.input(&key(Key::ShiftLeft, true));
         tap(&mut view, TARGET_KEY);
-        view.input(&key(Key::Shift, false));
-        view.input(&key(Key::Alt, true));
+        view.input(&key(Key::ShiftLeft, false));
+        view.input(&key(Key::AltLeft, true));
         tap(&mut view, NEAREST_KEY);
-        view.input(&key(Key::Alt, false));
+        view.input(&key(Key::AltLeft, false));
         tap(&mut view, NEAREST_KEY);
         assert_eq!(
             sent_since(&view, from),
@@ -396,9 +408,9 @@ fn option_backquote_clears_the_target_through_a_jump_and_nav_off_is_ignored() {
         tap(&mut view, NAV_OFF_KEY);
         view.tick(TICK);
         assert_eq!(sent_since(&view, from), [], "{stage}: Nav Off ignored");
-        view.input(&key(Key::Alt, true));
+        view.input(&key(Key::AltLeft, true));
         tap(&mut view, NAV_OFF_KEY);
-        view.input(&key(Key::Alt, false));
+        view.input(&key(Key::AltLeft, false));
         assert_eq!(
             sent_since(&view, from),
             [FlightCommand::ClearTarget],
@@ -413,9 +425,9 @@ fn weapon_select_and_safety_are_taken_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         tap(&mut view, SELECT_KEY);
-        view.input(&key(Key::Alt, true));
+        view.input(&key(Key::AltLeft, true));
         tap(&mut view, SELECT_KEY);
-        view.input(&key(Key::Alt, false));
+        view.input(&key(Key::AltLeft, false));
         assert_eq!(
             sent_since(&view, from),
             [
@@ -472,9 +484,9 @@ fn command_k_jettisons_through_a_jump() {
     for mut view in faked_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
-        view.input(&key(Key::Command, true));
+        view.input(&key(Key::MetaLeft, true));
         tap(&mut view, JETTISON_KEY);
-        view.input(&key(Key::Command, false));
+        view.input(&key(Key::MetaLeft, false));
         assert_eq!(sent_since(&view, from), [], "{stage}: no command");
         assert_eq!(view.jettison_tapped, Some(true), "{stage}");
     }
@@ -499,9 +511,9 @@ fn nav_and_screen_keys_are_ignored_through_a_jump() {
         ] {
             tap(&mut view, k);
         }
-        view.input(&key(Key::Command, true));
+        view.input(&key(Key::MetaLeft, true));
         tap(&mut view, NEAREST_STELLAR_COMMAND_KEY);
-        view.input(&key(Key::Command, false));
+        view.input(&key(Key::MetaLeft, false));
         // The slot block's frame, still in the jump, takes nothing.
         view.tick(TICK);
         assert_eq!(sent_since(&view, from), [], "{stage}: nothing sent");
@@ -660,7 +672,7 @@ fn a_slot_key_held_from_before_a_jump_does_nothing_after_it() {
 #[test]
 fn a_flight_key_held_through_arrival_acts_at_once() {
     let mut view = streaking();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     warp_ends(&mut view);
     view.tick(TICK);
     view.tick(TICK);
@@ -674,7 +686,7 @@ fn a_flight_key_held_through_arrival_acts_at_once() {
 #[test]
 fn a_key_held_when_j_is_pressed_stays_held() {
     let mut view = in_flight();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     jump_now(&mut view);
     warp_ends(&mut view);
     view.tick(TICK);
@@ -727,7 +739,7 @@ fn the_ship_flies_under_the_arrival_fade_in() {
     let mut view = fading_in();
     let before = faked_fade_alpha(&view).expect("fading in");
     let steps = view.sim.steps();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     for _ in 0..3 {
         view.tick(TICK);
     }
@@ -748,7 +760,7 @@ fn the_ship_flies_under_a_hypergates_fade_in() {
         Some(JumpPhase::FadeIn(0.0))
     );
     let steps = view.sim.steps();
-    view.input(&key(Key::Up, true));
+    view.input(&key(Key::ArrowUp, true));
     for _ in 0..3 {
         view.tick(TICK);
     }
@@ -943,7 +955,7 @@ fn a_slot_key_held_during_a_jump_adds_nothing_to_the_cursors_fade() {
         let stage = faked_stage(&view);
         assert_eq!(
             alpha_holding(*view, STELLAR_SLOT_KEYS[1][1]),
-            alpha_holding(*other, Key::Char('q')),
+            alpha_holding(*other, Key::KeyQ),
             "{stage}"
         );
     }
@@ -1251,11 +1263,7 @@ fn targeting_and_escort_keys_still_work_while_the_player_breaks_up() {
 
 #[test]
 fn a_refused_nav_stops_the_held_slot_keys_once_the_player_has_exploded() {
-    for k in [
-        Key::Function(1),
-        STELLAR_SLOT_KEYS[1][0],
-        NEAREST_STELLAR_KEY,
-    ] {
+    for k in [Key::F1, STELLAR_SLOT_KEYS[1][0], NEAREST_STELLAR_KEY] {
         let mut view = refusing(&EXPLODED);
         view.input(&key(k, true));
         for _ in 0..3 {

@@ -53,16 +53,16 @@ pub(super) fn fleet_jumping(present: &[EscortClass], warping: bool) -> Faked {
 
 /// Taps `k` with Option held.
 fn alt_tap_faked(view: &mut Faked, k: Key) {
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     tap(view, k);
-    view.input(&key(Key::Alt, false));
+    view.input(&key(Key::AltLeft, false));
 }
 
 /// Taps `k` with Command held.
 fn command_tap_faked(view: &mut Faked, k: Key) {
-    view.input(&key(Key::Command, true));
+    view.input(&key(Key::MetaLeft, true));
     tap(view, k);
-    view.input(&key(Key::Command, false));
+    view.input(&key(Key::MetaLeft, false));
 }
 
 /// The interface's sounds `view` raised since they were last taken.
@@ -85,12 +85,12 @@ fn shift_tab_in_flight_selects_the_previous_ship() {
     let mut view = fleet(&[EscortClass::Fighter]);
     assert!(!view.jump_under_way(), "ordinary flight");
     let from = sent_count(&view);
-    view.input(&key(Key::Shift, true));
+    view.input(&key(Key::ShiftLeft, true));
     tap(&mut view, TARGET_KEY);
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     tap(&mut view, TARGET_KEY);
-    view.input(&key(Key::Alt, false));
-    view.input(&key(Key::Shift, false));
+    view.input(&key(Key::AltLeft, false));
+    view.input(&key(Key::ShiftLeft, false));
     tap(&mut view, TARGET_KEY);
     assert_eq!(
         sent_since(&view, from),
@@ -130,7 +130,7 @@ fn each_key_asks_the_session_for_its_command() {
         (DESELECT_KEY, PlayerCommand::DeselectWeapon),
         (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
         (NAV_OFF_KEY, PlayerCommand::Nav),
-        (Key::Function(1), PlayerCommand::Nav),
+        (Key::F1, PlayerCommand::Nav),
         (ZOOM_OUT_KEY, PlayerCommand::Nav),
         (ZOOM_IN_KEY, PlayerCommand::Nav),
         (ZOOM_IN_KEYPAD_KEY, PlayerCommand::Nav),
@@ -140,40 +140,40 @@ fn each_key_asks_the_session_for_its_command() {
     }
     for k in [
         FIRE_KEY,
-        Key::Up,
+        Key::ArrowUp,
         AFTERBURNER_KEY,
-        Key::Char('q'),
-        Key::Other,
+        Key::KeyQ,
+        Key::Unidentified,
     ] {
         assert_eq!(view.command_of(k), None, "{k:?}");
     }
     assert!(!view.escort_menu().is_open());
-    assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Nav));
+    assert_eq!(view.command_of(Key::Digit1), Some(PlayerCommand::Nav));
     assert_eq!(view.command_of(GROUP_KEYS[4]), None, "5 is no stellar slot");
-    view.input(&key(Key::Command, true));
+    view.input(&key(Key::MetaLeft, true));
     assert_eq!(
         view.command_of(NEAREST_STELLAR_COMMAND_KEY),
         Some(PlayerCommand::Nav),
         "Command-5"
     );
-    view.input(&key(Key::Command, false));
+    view.input(&key(Key::MetaLeft, false));
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
-    assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
+    assert_eq!(view.command_of(Key::Digit1), Some(PlayerCommand::Escort));
     assert_eq!(view.command_of(GROUP_KEYS[4]), Some(PlayerCommand::Escort));
-    assert_eq!(view.command_of(Key::Char('q')), None);
+    assert_eq!(view.command_of(Key::KeyQ), None);
 }
 
 #[test]
 fn every_key_that_is_a_command_is_published() {
     let mut view = fleet(&[EscortClass::Fighter]);
     tap(&mut view, MENU_KEY);
-    view.input(&key(Key::Command, true));
+    view.input(&key(Key::MetaLeft, true));
     let named = [
-        Key::Left,
-        Key::Right,
-        Key::Up,
-        Key::Down,
+        Key::ArrowLeft,
+        Key::ArrowRight,
+        Key::ArrowUp,
+        Key::ArrowDown,
         Key::PageUp,
         Key::PageDown,
         Key::Home,
@@ -183,15 +183,56 @@ fn every_key_that_is_a_command_is_published() {
         Key::Space,
         Key::Tab,
         Key::Backspace,
-        Key::Alt,
-        Key::Control,
-        Key::Shift,
-        Key::Command,
+        Key::AltLeft,
+        Key::ControlLeft,
+        Key::ShiftLeft,
+        Key::MetaLeft,
         Key::CapsLock,
     ];
+    let punctuation = [
+        Key::Backquote,
+        Key::Backslash,
+        Key::BracketLeft,
+        Key::BracketRight,
+        Key::Comma,
+        Key::Equal,
+        Key::Minus,
+        Key::NumpadAdd,
+        Key::Period,
+        Key::Quote,
+        Key::Semicolon,
+        Key::Slash,
+    ];
+    let functions = [
+        Key::F1,
+        Key::F2,
+        Key::F3,
+        Key::F4,
+        Key::F5,
+        Key::F6,
+        Key::F7,
+        Key::F8,
+        Key::F9,
+        Key::F10,
+        Key::F11,
+        Key::F12,
+        Key::F13,
+        Key::F14,
+        Key::F15,
+        Key::F16,
+        Key::F17,
+        Key::F18,
+        Key::F19,
+        Key::F20,
+        Key::F21,
+        Key::F22,
+        Key::F23,
+        Key::F24,
+    ];
     let keys = (' '..='~')
-        .map(Key::Char)
-        .chain((1..=24).map(Key::Function))
+        .filter_map(crate::input::letter_key)
+        .chain(punctuation)
+        .chain(functions)
         .chain(named);
     for k in keys {
         if view.command_of(k).is_some() {
@@ -205,10 +246,10 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
     let mut view = fleet(&[EscortClass::Warship]);
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
-    tap(&mut view, Key::Char('2'));
+    tap(&mut view, Key::Digit2);
     view.tick(TICK);
     assert_eq!(picks_since(&view, 0), [], "the menu took it");
-    tap(&mut view, Key::Function(2));
+    tap(&mut view, Key::F2);
     view.tick(TICK);
     assert_eq!(
         picks_since(&view, 0),
@@ -218,7 +259,7 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
     tap(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
     let from = sent_count(&view);
-    tap(&mut view, Key::Char('1'));
+    tap(&mut view, Key::Digit1);
     view.tick(TICK);
     assert_eq!(
         picks_since(&view, from),
@@ -232,7 +273,7 @@ fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
 fn a_slot_keys_press_is_queued_input_until_the_frames_after_its_pick() {
     let mut view = fleet(&[EscortClass::Warship]);
     assert!(!view.input_queued(), "nothing pressed");
-    tap(&mut view, Key::Char('1'));
+    tap(&mut view, Key::Digit1);
     assert!(view.input_queued(), "pressed");
     view.tick(TICK);
     assert_eq!(
@@ -288,20 +329,20 @@ fn while_the_escort_menu_fades_1_to_4_pick_groups_not_stellars() {
     tap(&mut view, MENU_KEY);
     fading(&mut view);
     assert_eq!(
-        view.slot_key_polled(Key::Char('1'), false),
+        view.slot_key_polled(Key::Digit1, false),
         Some(false),
         "hidden from the slot block while it fades"
     );
     assert_eq!(
-        view.slot_key_polled(Key::Char('1'), true),
+        view.slot_key_polled(Key::Digit1, true),
         Some(true),
         "the menu's own loop polls it"
     );
-    tap(&mut view, Key::Char('2'));
+    tap(&mut view, Key::Digit2);
     view.tick(TICK);
     assert_eq!(picks_since(&view, 0), [], "the menu took it");
     assert_eq!(view.escort_menu().level(), Some(22), "no fighters: held");
-    tap(&mut view, Key::Char('4'));
+    tap(&mut view, Key::Digit4);
     assert_eq!(
         view.escort_menu().group(),
         EscortGroup::Class(EscortClass::Warship)
@@ -428,10 +469,10 @@ fn option_c_during_the_jump_is_return_to_hangar() {
 #[test]
 fn option_released_during_the_jump_lets_c_recall() {
     let mut view = fleet_jumping(&[EscortClass::Fighter], false);
-    view.input(&key(Key::Alt, true));
+    view.input(&key(Key::AltLeft, true));
     lit(&mut view, 0.0);
     view.tick(ms(300));
-    view.input(&key(Key::Alt, false));
+    view.input(&key(Key::AltLeft, false));
     let from = sent_count(&view);
     tap(&mut view, ESCORT_RECALL_KEY);
     assert_eq!(
@@ -811,7 +852,7 @@ fn the_map_opens_with_the_borders_setting_it_is_given() {
     assert!(labelled(&view, SHOW_BORDERS_LABEL));
     view.tick(TICK);
     assert_eq!(view.course_map().border_cells(), [], "none drawn");
-    tap(&mut view, Key::Char('b'));
+    tap(&mut view, Key::KeyB);
     assert!(labelled(&view, HIDE_BORDERS_LABEL));
     assert_eq!(govts_on(view.course_map()), [128, 129]);
     tap(&mut view, MAP);
@@ -824,7 +865,7 @@ fn faked_typing(view: &mut Faked, text: &str) {
         let k = if c == ' ' {
             Key::Space
         } else {
-            Key::Char(c.to_ascii_lowercase())
+            crate::input::letter_key(c).unwrap_or(Key::Unidentified)
         };
         view.input(&key(k, true));
         view.input(&Input::Text(c));

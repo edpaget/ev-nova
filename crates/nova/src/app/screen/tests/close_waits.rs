@@ -109,7 +109,7 @@ fn an_exchange_key_typed_during_the_ports_wait_opens_it_after_the_release() {
     let mut screen = landed_trader(&store);
     screen.input(&key(PLAYER_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
-    tap(&mut screen, Key::Char('t'));
+    tap(&mut screen, Key::KeyT);
     assert!(spaceport(&screen).open_trade().is_none(), "not yet");
     screen.input(&key(PLAYER_INFO_KEY, false));
     assert!(spaceport(&screen).open_trade().is_some(), "opened");
@@ -150,7 +150,7 @@ fn the_spaceports_offer_answered_with_i_down_holds_the_port_until_is_release() {
     screen.input(&key(MISSION_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
     assert!(spaceport(&screen).offer_dialog().is_none(), "answered");
-    tap(&mut screen, Key::Char('t'));
+    tap(&mut screen, Key::KeyT);
     screen.tick(TICK);
     assert!(
         spaceport(&screen).open_trade().is_none(),
@@ -246,7 +246,7 @@ fn an_answer_showing_a_movie_with_i_held_as_it_closes_keeps_the_offer_until_is_r
     assert_eq!(screen.showing(), Showing::MissionInfo);
     tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Offer);
-    tap(&mut screen, Key::Char('n'));
+    tap(&mut screen, Key::KeyN);
     assert!(screen.missions.is_some(), "the after-movie plays");
     for _ in 0..10 {
         screen.tick(Duration::from_millis(16));
@@ -267,7 +267,7 @@ fn losing_focus_leaves_an_unanswered_offer_over_flight_open() {
 #[test]
 fn losing_focus_keeps_an_answered_offer_drawn_under_its_after_movie() {
     let (mut screen, _reel) = holding_and_offered_in_flight();
-    tap(&mut screen, Key::Char('n'));
+    tap(&mut screen, Key::KeyN);
     assert!(screen.missions.is_some(), "the after-movie plays");
     screen.release_keys();
     assert!(screen.offer().is_some(), "still under the movie");
@@ -280,7 +280,7 @@ fn an_unlatched_key_down_as_the_player_infos_wait_ends_thrusts_in_flight() {
     let still = ship(&screen);
     screen.input(&key(PLAYER_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.input(&key(PLAYER_INFO_KEY, false));
     assert_eq!(screen.showing(), Showing::Flight);
     screen.tick(TICK * 3);
@@ -293,7 +293,7 @@ fn an_unlatched_key_down_as_an_offers_wait_ends_thrusts_in_flight() {
     let still = ship(&screen);
     screen.input(&key(MISSION_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.input(&key(MISSION_INFO_KEY, false));
     assert_eq!(screen.showing(), Showing::Flight);
     screen.tick(TICK * 3);

@@ -985,7 +985,7 @@ mod tests {
             assert!(noted.any_down());
             keys.note(&input);
         }
-        keys.note(&key(Key::Up, true));
+        keys.note(&key(Key::ArrowUp, true));
         keys.note(&Input::PointerButton {
             button: MouseButton::Right,
             pressed: false,

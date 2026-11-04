@@ -47,7 +47,7 @@ fn answer(view: &mut SpaceportView, answer: Key) {
 fn with_i_down_a_bar_offer_refused_stays_drawn_and_the_bar_takes_nothing_until_is_release() {
     let mut view = bar_offering();
     view.set_close_keys(I_DOWN);
-    answer(&mut view, Key::Char('n'));
+    answer(&mut view, Key::KeyN);
     view.tick(ms(100));
     assert!(offer_drawn(&view), "drawn through the wait");
     view.input(&key(Key::Escape));
@@ -62,7 +62,7 @@ fn with_i_down_a_bar_offer_refused_stays_drawn_and_the_bar_takes_nothing_until_i
 #[test]
 fn with_i_up_a_bar_offer_refused_goes_at_once() {
     let mut view = bar_offering();
-    answer(&mut view, Key::Char('n'));
+    answer(&mut view, Key::KeyN);
     assert!(!offer_drawn(&view));
     view.input(&key(Key::Escape));
     assert!(view.open_bar().is_none());
@@ -92,13 +92,13 @@ fn with_p_down_the_player_info_closed_with_return_waits_for_ps_release() {
     view.take_status_refresh();
     view.input(&key(Key::Enter));
     assert!(view.player_info().is_some(), "waiting");
-    view.input(&key(Key::Char('x')));
+    view.input(&key(Key::KeyX));
     assert!(!view.take_status_refresh(), "not before the release");
     assert_eq!(view.take_wait_replay(), []);
     view.input(&released(PLAYER_INFO_KEY));
     assert!(view.player_info().is_none(), "closed on the release");
     assert!(view.take_status_refresh(), "the status bar's refresh");
-    assert_eq!(view.take_wait_replay(), [key(Key::Char('x'))]);
+    assert_eq!(view.take_wait_replay(), [key(Key::KeyX)]);
     assert_eq!(view.take_wait_replay(), [], "once");
 }
 
@@ -119,14 +119,14 @@ fn losing_focus_ends_a_wait_with_nothing_to_replay() {
     });
     view.open_player_info(pilot_info());
     view.input(&key(Key::Enter));
-    view.input(&key(Key::Char('x')));
+    view.input(&key(Key::KeyX));
     view.release_keys();
     assert!(view.player_info().is_none());
     assert_eq!(view.take_wait_replay(), []);
 
     let mut view = bar_offering();
     view.set_close_keys(I_DOWN);
-    answer(&mut view, Key::Char('n'));
+    answer(&mut view, Key::KeyN);
     view.input(&key(Key::Escape));
     view.release_keys();
     assert!(!offer_drawn(&view));

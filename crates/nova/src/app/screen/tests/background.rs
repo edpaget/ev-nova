@@ -18,9 +18,9 @@ use super::wheel::{offering, text, wheel_over_text};
 fn coasting() -> AppScreen {
     let mut screen = AppScreen::new(data());
     fly(&mut screen);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.tick(TICK * 10);
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::ArrowUp, false));
     screen.tick(TICK);
     assert_ne!(
         ship(&screen).velocity,
@@ -102,12 +102,12 @@ fn away_a_key_and_the_wheel_do_nothing() {
     let mut screen =
         offering(Rulebook::default().with_override(RuleKey::DialogTextWheel, RuleSource::Bible));
     switch_out(&mut screen);
-    assert_eq!(screen.input(&key(Key::Down, true)), ScreenAction::None);
-    screen.input(&key(Key::Down, false));
+    assert_eq!(screen.input(&key(Key::ArrowDown, true)), ScreenAction::None);
+    screen.input(&key(Key::ArrowDown, false));
     wheel_over_text(&mut screen);
     assert_eq!(text(&screen).offset(), 0.0, "dropped");
     screen.focus_gained();
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     assert_eq!(
         text(&screen).offset(),
         nova_view::ui::desc::ARROW_UNITS,

@@ -47,7 +47,7 @@ fn opened_on(
 /// by Right.
 fn shuttle_on(reel: &Rc<MockMoviePlayer>) -> (ShipyardScreen, Rc<MockMoviePlayer>) {
     let (mut screen, main) = opened_on(shipyard(), reel, true);
-    press(&mut screen, Key::Right);
+    press(&mut screen, Key::ArrowRight);
     assert_eq!(screen.selected(), Some(0));
     (screen, main)
 }
@@ -148,13 +148,13 @@ fn a_new_selection_stops_it_and_starts_the_next_by_click_and_by_arrow() {
         [start("Ship.mov"), Call::Stop, start("Courier.mov")],
         "@0x60c4d-0x60cd2"
     );
-    press(&mut screen, Key::Right);
+    press(&mut screen, Key::ArrowRight);
     assert_eq!(screen.selected(), Some(3), "the Viper");
     assert_eq!(reel.calls()[3..], [Call::Stop], "names none: only stopped");
     assert!(pictured(&screen));
-    press(&mut screen, Key::Left);
-    press(&mut screen, Key::Left);
-    press(&mut screen, Key::Left);
+    press(&mut screen, Key::ArrowLeft);
+    press(&mut screen, Key::ArrowLeft);
+    press(&mut screen, Key::ArrowLeft);
     assert_eq!(screen.selected(), Some(0));
     assert_eq!(
         reel.calls()[4..],
@@ -168,7 +168,7 @@ fn the_same_ship_again_does_not_restart_it() {
     let reel = MockMoviePlayer::playing((32, 32), 3);
     let (mut screen, _) = shuttle_on(&reel);
     click_cell(&mut screen, 0);
-    press(&mut screen, Key::Up);
+    press(&mut screen, Key::ArrowUp);
     assert_eq!(screen.selected(), Some(0), "Up on the first row stays");
     assert_eq!(reel.calls(), [start("Ship.mov")]);
 }
@@ -326,7 +326,7 @@ fn an_offer_over_it_holds_it_and_so_does_a_covered_tick() {
     let main = MockMoviePlayer::playing((640, 480), 5);
     let mut screen = opened_with(shipyard(), &filmed()).with_offers(offer_templates());
     screen.set_offer_movies(movies(&main, &reel, true));
-    press(&mut screen, Key::Right);
+    press(&mut screen, Key::ArrowRight);
     screen.open_offer(prompt());
     assert!(screen.offer_dialog().is_some());
     holds_while_covered(&reel, &mut screen, |screen| press(screen, Key::Enter));
@@ -340,7 +340,7 @@ fn an_offer_over_it_holds_it_and_so_does_a_covered_tick() {
 fn with_movies_off_no_movie_starts_and_the_picture_is_drawn() {
     let reel = MockMoviePlayer::playing((32, 32), 3);
     let (mut screen, _) = opened_on(shipyard(), &reel, false);
-    press(&mut screen, Key::Right);
+    press(&mut screen, Key::ArrowRight);
     assert!(reel.calls().is_empty(), "@0x60282-0x6028b");
     assert_eq!(frames(&screen), []);
     assert!(pictured(&screen));

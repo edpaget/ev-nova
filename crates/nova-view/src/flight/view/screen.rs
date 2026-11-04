@@ -292,7 +292,7 @@ impl<
     /// its command.
     pub(super) fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
         let press = if jumping {
-            let option = self.held.contains(&Key::Alt);
+            let option = self.held.contains(&Key::AltLeft);
             let menu_open = self.escort_menu.is_open();
             press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
         } else {

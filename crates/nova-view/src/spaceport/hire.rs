@@ -88,7 +88,7 @@ use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 pub const HIRE_ITEM: usize = BUY_ITEM;
 /// Hires the selected ship, as Hire Escort does (`_ShipyardFilter`
 /// @0x60503).
-pub const HIRE_KEY: Key = Key::Char('h');
+pub const HIRE_KEY: Key = Key::KeyH;
 /// The first pilot description's `dësc`: ship n's is n - 128 after it.
 pub const FIRST_PILOT_DESC: i16 = 14_000;
 /// The first `shïp` ID.
@@ -917,7 +917,7 @@ mod tests {
     fn screen_of(art: &Rc<FakeArt>, list: HireList) -> HireScreen {
         let mut screen = opened_of(art, list);
         if screen.selected().is_none() {
-            screen.input(&key(Key::Right, false));
+            screen.input(&key(Key::ArrowRight, false));
         }
         screen
     }
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
         let mut screen = screen();
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         let picture = item(&screen, PICTURE_ITEM);
         let in_picture: Vec<_> = texts(&screen)
             .into_iter()
@@ -1025,7 +1025,7 @@ mod tests {
 
     #[test]
     fn the_named_values() {
-        assert_eq!((HIRE_ITEM, HIRE_KEY), (1, Key::Char('h')));
+        assert_eq!((HIRE_ITEM, HIRE_KEY), (1, Key::KeyH));
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
@@ -1067,7 +1067,7 @@ mod tests {
                 .all(|(text, _, _)| !text.starts_with("Pay:") && !text.contains("per day")),
             "no Pay line"
         );
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(
             screen.selected(),
             Some(1),
@@ -1164,7 +1164,7 @@ mod tests {
             "the picture item, not just the grid cell, shows PICT 5000"
         );
         let mut screen = screen;
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(*art.asked.borrow(), ["dësc 14000", "dësc 14012"]);
     }
 
@@ -1258,7 +1258,7 @@ mod tests {
                 art,
                 ButtonStyle::STOCK,
             );
-            bare.input(&key(Key::Right, false));
+            bare.input(&key(Key::ArrowRight, false));
             assert!(!enabled(&bare, INFO_LABEL));
             assert_eq!(bare.selected(), Some(0));
             bare.input(&key(INFO_KEY, false));
@@ -1444,8 +1444,8 @@ mod tests {
             contains(&drawn(&screen), &expected),
             "the grid cell shows PICT 5000"
         );
-        screen.input(&key(Key::Right, false));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(screen.selected(), Some(2));
         let picture = item(&screen, PICTURE_ITEM).min;
         assert!(
@@ -1495,7 +1495,7 @@ mod tests {
             assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
         assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, false));
         let commands = drawn(&screen);
         assert!(!contains(&commands, &bright_frame(&screen, 0)));
         assert!(contains(&commands, &bright_frame(&screen, 1)));
@@ -1544,7 +1544,7 @@ mod tests {
         assert_eq!(screen.top_row(), 0);
         click_item(&mut screen, SCROLL_DOWN_ITEM);
         assert_eq!(screen.top_row(), 1);
-        screen.input(&key(Key::Down, false));
+        screen.input(&key(Key::ArrowDown, false));
         assert_eq!(screen.selected(), Some(4));
     }
 
@@ -1711,10 +1711,10 @@ mod tests {
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
         for k in [
-            Key::Right,
-            Key::Down,
-            Key::Left,
-            Key::Up,
+            Key::ArrowRight,
+            Key::ArrowDown,
+            Key::ArrowLeft,
+            Key::ArrowUp,
             HIRE_KEY,
             INFO_KEY,
             Key::Enter,
@@ -1905,10 +1905,10 @@ mod tests {
     fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
         let mut screen = opened_of(&art(), long(30));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        press_key(&mut screen, Key::Left);
+        press_key(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(23), "the last shown");
         let mut short = opened_of(&art(), list());
-        press_key(&mut short, Key::Down);
+        press_key(&mut short, Key::ArrowDown);
         assert_eq!(short.selected(), Some(0), "the first shown");
         assert!(enabled(&short, HIRE_ESCORT));
     }
@@ -1935,10 +1935,13 @@ mod tests {
             (screen.selected(), enabled(&screen, HIRE_ESCORT))
         };
         let engine = nova_sim::Rulebook::default;
-        assert_eq!(arrowed(engine(), 3, &[Key::Down]), (Some(3), true));
+        assert_eq!(arrowed(engine(), 3, &[Key::ArrowDown]), (Some(3), true));
         assert_eq!(arrowed(engine(), 3, &[Key::PageDown]), (Some(3), true));
-        assert_eq!(arrowed(engine(), 5, &[Key::Up]), (Some(1), false));
-        assert_eq!(arrowed(engine(), 5, &[Key::Up, Key::Up]), (Some(1), false));
+        assert_eq!(arrowed(engine(), 5, &[Key::ArrowUp]), (Some(1), false));
+        assert_eq!(
+            arrowed(engine(), 5, &[Key::ArrowUp, Key::ArrowUp]),
+            (Some(1), false)
+        );
         assert_eq!(
             arrowed(engine(), 5, &[Key::PageUp, Key::PageUp]),
             (Some(1), false)
@@ -1948,8 +1951,11 @@ mod tests {
             nova_sim::Rulebook::default()
                 .with_override(nova_sim::RuleKey::GridArrows, nova_sim::RuleSource::Bible)
         };
-        assert_eq!(arrowed(clamped(), 3, &[Key::Down]), (Some(5), true));
-        assert_eq!(arrowed(clamped(), 5, &[Key::Up, Key::Up]), (Some(0), true));
+        assert_eq!(arrowed(clamped(), 3, &[Key::ArrowDown]), (Some(5), true));
+        assert_eq!(
+            arrowed(clamped(), 5, &[Key::ArrowUp, Key::ArrowUp]),
+            (Some(0), true)
+        );
     }
 
     /// The hire screen's buttons take Tab's focus only with the focus

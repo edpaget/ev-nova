@@ -1534,7 +1534,7 @@ mod tests {
             )
         );
         app.screen.diagnostics = vec![Diagnostic::Sim(unflown(167))];
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert!(
             written
                 .text()
@@ -1550,11 +1550,11 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         app.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.screen.diagnostics, [], "taken all the same");
         let mut broken = self::app(&window).with_diagnostics(Box::new(Broken));
         broken.screen.diagnostics = vec![Diagnostic::Sim(unflown(181))];
-        handle(&mut broken, &mut window, key(Key::Up, true));
+        handle(&mut broken, &mut window, key(Key::ArrowUp, true));
         assert_eq!(broken.screen.diagnostics, []);
         assert_eq!(broken.take_warnings(), Vec::<String>::new());
     }
@@ -1613,32 +1613,32 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, true)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, true)),
             Control::Continue
         );
         let held = WindowEvent::Key {
-            key: Key::Up,
+            key: Key::ArrowUp,
             pressed: true,
             repeat: true,
         };
         handle(&mut app, &mut window, held);
-        handle(&mut app, &mut window, key(Key::Up, false));
+        handle(&mut app, &mut window, key(Key::ArrowUp, false));
         handle(&mut app, &mut window, key(Key::Escape, false));
         assert_eq!(
             app.screen().inputs,
             [
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: false
                 },
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: true
                 },
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: false,
                     repeat: false
                 },
@@ -1677,7 +1677,7 @@ mod tests {
             ..RecordingScreen::default()
         };
         let mut app = App::new(&window, NoImages, screen);
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.screen().quits, 0);
         assert_eq!(
             handle(&mut app, &mut window, key(Key::Enter, true)),
@@ -1693,10 +1693,10 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         for (which, pressed) in [
-            (Key::Alt, true),
-            (Key::Function(4), true),
-            (Key::Function(4), false),
-            (Key::Alt, false),
+            (Key::AltLeft, true),
+            (Key::F4, true),
+            (Key::F4, false),
+            (Key::AltLeft, false),
         ] {
             assert_eq!(
                 handle(&mut app, &mut window, key(which, pressed)),
@@ -1716,7 +1716,7 @@ mod tests {
             NoImages,
             RecordingScreen {
                 keeps_open: true,
-                quit_on: Some(Key::Char('y')),
+                quit_on: Some(Key::KeyY),
                 ..RecordingScreen::default()
             },
         );
@@ -1727,7 +1727,7 @@ mod tests {
         assert_eq!(app.screen().quits, 0, "not quitting");
         assert_eq!(app.take_warnings(), ["close 1"], "what it reported");
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Char('y'), true)),
+            handle(&mut app, &mut window, key(Key::KeyY, true)),
             Control::Exit,
             "the answer quits"
         );
@@ -1761,7 +1761,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Char('p'), true)),
+            handle(&mut app, &mut window, key(Key::KeyP, true)),
             Control::Continue
         );
         assert_eq!(
@@ -1772,7 +1772,7 @@ mod tests {
             app.screen().inputs,
             [
                 Input::Key {
-                    key: Key::Char('p'),
+                    key: Key::KeyP,
                     pressed: true,
                     repeat: false
                 },
@@ -1816,7 +1816,7 @@ mod tests {
         };
         let mut app = App::new(&window, NoImages, screen);
         assert_eq!(app.take_warnings(), Vec::<String>::new(), "none taken yet");
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(app.take_warnings(), ["first"]);
         app.screen.warnings.push("second".to_owned());
         handle(
@@ -1843,7 +1843,7 @@ mod tests {
     fn losing_focus_releases_the_screens_keys_and_carries_on() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
-        handle(&mut app, &mut window, key(Key::Right, true));
+        handle(&mut app, &mut window, key(Key::ArrowRight, true));
         assert_eq!(app.screen().releases, 0);
         assert_eq!(
             handle(&mut app, &mut window, WindowEvent::FocusLost),
@@ -2044,7 +2044,7 @@ mod tests {
         Handled { control, routing }
     }
 
-    const BACKQUOTE: Key = Key::Char('`');
+    const BACKQUOTE: Key = Key::Backquote;
 
     fn visible(app: &TestApp) -> bool {
         app.dev_overlay().expect("an overlay").visible()
@@ -2105,7 +2105,7 @@ mod tests {
             "shown from the start"
         );
         app.screen.hides_pointer = true;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         assert_eq!(
             window.pointer_shown,
             Vec::<bool>::new(),
@@ -2246,7 +2246,7 @@ mod tests {
         }
         assert_eq!(app.screen().inputs.len(), 1, "no resync");
         app.screen.hides_pointer = false;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         app.screen.hides_pointer = true;
         redraw_plain(&mut app, &mut window);
         redraw_plain(&mut app, &mut window);
@@ -2254,7 +2254,7 @@ mod tests {
             app.screen().inputs[1..],
             [
                 Input::Key {
-                    key: Key::Up,
+                    key: Key::ArrowUp,
                     pressed: true,
                     repeat: false,
                 },
@@ -2271,7 +2271,7 @@ mod tests {
         handle(&mut app, &mut window, moved(100.0, 50.0));
         redraw_plain(&mut app, &mut window);
         app.screen.hides_pointer = true;
-        handle(&mut app, &mut window, key(Key::Up, true));
+        handle(&mut app, &mut window, key(Key::ArrowUp, true));
         redraw_plain(&mut app, &mut window);
         assert_eq!(
             app.screen().inputs.last(),
@@ -2340,7 +2340,7 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = overlay_app(&window);
         routed(&mut app, &mut window, key(BACKQUOTE, true));
-        for k in [Key::Escape, Key::Tab, Key::Right, Key::Char('d')] {
+        for k in [Key::Escape, Key::Tab, Key::ArrowRight, Key::KeyD] {
             for pressed in [true, false] {
                 assert_eq!(
                     routed(&mut app, &mut window, key(k, pressed)),
@@ -2613,7 +2613,7 @@ mod tests {
         let (mut app, log) = sounding(&window);
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(*log.borrow(), [cued(DOWN)]);
         app.handle(
             WindowEvent::Redraw {
@@ -2651,7 +2651,7 @@ mod tests {
         };
         let mut app = App::new(&window, NoImages, screen);
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().sounds, [], "not left to pile up");
         let redraw = WindowEvent::Redraw {
             elapsed: Duration::from_millis(16),
@@ -2728,14 +2728,14 @@ mod tests {
         let (mut app, log, audio) = keyed(&window);
         let mut gpu = RecordingGpu::new();
         audio.set_playing(cue_of(DOWN).sound, true);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(*log.borrow(), [cued(DOWN)]);
         assert_eq!(app.screen().ran, 0, "600 playing");
         let redraw = |ms| WindowEvent::Redraw {
             elapsed: Duration::from_millis(ms),
         };
         app.handle(redraw(16), &mut window, &mut gpu);
-        app.handle(key(Key::Up, false), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, false), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 0, "still playing");
         audio.set_playing(cue_of(DOWN).sound, false);
         app.handle(redraw(32), &mut window, &mut gpu);
@@ -2761,7 +2761,7 @@ mod tests {
         let (mut app, log, audio) = keyed(&window);
         audio.set_playing(cue_of(DOWN).sound, true);
         app.audio.as_mut().expect("audio").set_sound(false);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "sound off");
         assert_eq!(*log.borrow(), [AudioCommand::StopEffects], "nothing played");
 
@@ -2773,7 +2773,7 @@ mod tests {
             sounds: Vec::new(),
         };
         let mut app = App::new(&window, NoImages, screen);
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(app.screen().ran, 1, "no audio");
         assert_eq!(app.screen().sounds, [], "the sounds let go");
     }
@@ -2799,12 +2799,12 @@ mod tests {
         let mut app = app(&window);
         app.screen.asks_quit = true;
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, true)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, true)),
             Control::Exit
         );
         assert_eq!(app.screen.quits, 1);
         assert_eq!(
-            handle(&mut app, &mut window, key(Key::Up, false)),
+            handle(&mut app, &mut window, key(Key::ArrowUp, false)),
             Control::Continue,
             "asked once"
         );
@@ -2985,7 +2985,7 @@ mod tests {
         .with_audio(core);
         log.borrow_mut().clear();
         let mut gpu = RecordingGpu::new();
-        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        app.handle(key(Key::ArrowUp, true), &mut window, &mut gpu);
         assert_eq!(
             *log.borrow(),
             [
@@ -3027,7 +3027,11 @@ mod tests {
         )
         .with_audio(core);
         log.borrow_mut().clear();
-        app.handle(key(Key::Up, true), &mut window, &mut RecordingGpu::new());
+        app.handle(
+            key(Key::ArrowUp, true),
+            &mut window,
+            &mut RecordingGpu::new(),
+        );
         assert_eq!(
             *log.borrow(),
             [
@@ -3205,11 +3209,11 @@ mod tests {
     use crate::config::Os;
 
     /// The Windows shortcut, Alt+Enter.
-    const SHORTCUT: [Key; 2] = [Key::Alt, Key::Enter];
+    const SHORTCUT: [Key; 2] = [Key::AltLeft, Key::Enter];
 
     /// macOS's Control+Command+F, which its View menu's key equivalent
     /// takes before the window.
-    const MAC_FULL_SCREEN: [Key; 3] = [Key::Control, Key::Command, Key::Char('f')];
+    const MAC_FULL_SCREEN: [Key; 3] = [Key::ControlLeft, Key::MetaLeft, Key::KeyF];
 
     const BORDERLESS: Option<FullscreenKind> = Some(FullscreenKind::Borderless);
 
@@ -3278,14 +3282,14 @@ mod tests {
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Alt, true)],
+            [key_input(Key::AltLeft, true)],
             "the modifier only"
         );
-        handle(&mut app, &mut window, key(Key::Alt, false));
+        handle(&mut app, &mut window, key(Key::AltLeft, false));
         handle(&mut app, &mut window, WindowEvent::Text('g'));
         assert_eq!(
             app.screen().inputs[1..],
-            [key_input(Key::Alt, false), Input::Text('g')],
+            [key_input(Key::AltLeft, false), Input::Text('g')],
             "later text arrives"
         );
     }
@@ -3306,13 +3310,13 @@ mod tests {
         assert_eq!(
             app.screen().inputs,
             [
-                key_input(Key::Control, true),
-                key_input(Key::Command, true),
-                key_input(Key::Char('f'), true),
+                key_input(Key::ControlLeft, true),
+                key_input(Key::MetaLeft, true),
+                key_input(Key::KeyF, true),
                 Input::Text('f'),
-                key_input(Key::Char('f'), false),
-                key_input(Key::Command, false),
-                key_input(Key::Control, false),
+                key_input(Key::KeyF, false),
+                key_input(Key::MetaLeft, false),
+                key_input(Key::ControlLeft, false),
             ]
         );
     }
@@ -3349,12 +3353,15 @@ mod tests {
     fn alt_enter_and_f11_toggle_on_windows() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        chord(&mut app, &mut window, &[Key::Alt, Key::Enter]);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::AltLeft, Key::Enter]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS, None]);
         assert_eq!(
             app.screen().inputs,
-            [key_input(Key::Alt, true), key_input(Key::Alt, false)]
+            [
+                key_input(Key::AltLeft, true),
+                key_input(Key::AltLeft, false)
+            ]
         );
     }
 
@@ -3450,7 +3457,7 @@ mod tests {
             key(nova_view::devtools::TOGGLE_KEY, true),
         );
         assert!(visible(&app));
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
     }
 
@@ -3458,7 +3465,7 @@ mod tests {
     fn losing_focus_forgets_the_shortcuts_modifiers() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        handle(&mut app, &mut window, key(Key::Alt, true));
+        handle(&mut app, &mut window, key(Key::AltLeft, true));
         handle(&mut app, &mut window, WindowEvent::FocusLost);
         handle(&mut app, &mut window, key(Key::Enter, true));
         assert_eq!(window.fullscreen, NOT_FULLSCREEN);
@@ -3469,7 +3476,7 @@ mod tests {
     fn without_a_keeper_the_shortcut_still_toggles_and_a_failed_save_is_a_warning() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window).with_os(Os::Windows);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
         assert_eq!(app.take_warnings(), Vec::<String>::new());
         let store = MemorySettings::new();
@@ -3477,7 +3484,7 @@ mod tests {
             .with_os(Os::Windows)
             .with_settings(keeper(&store));
         store.fail_writes(true);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         handle(&mut app, &mut window, reported(false));
         let message = "nova: cannot save the settings: the disk is full".to_owned();
         assert_eq!(app.take_warnings(), [message.clone(), message]);
@@ -3639,10 +3646,10 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(window.fullscreen, NOT_FULLSCREEN);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [exclusive(fhd())]);
         assert!(stored(&store).fullscreen);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [exclusive(fhd()), None]);
         assert_eq!(window.size_requests, [(1024, 768)]);
         let saved = stored(&store);
@@ -3677,7 +3684,7 @@ mod tests {
         fn input(&mut self, input: &Input) -> ScreenAction {
             match *input {
                 Input::Key {
-                    key: Key::Char('p'),
+                    key: Key::KeyP,
                     pressed: true,
                     ..
                 } => self.open = true,
@@ -3753,7 +3760,7 @@ mod tests {
         let mut app = display_app(&window, &[]);
         handle_display(&mut app, &mut window, WindowEvent::FocusGained);
         assert_eq!(app.screen().offers, [], "not open");
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         let listed = vec![qhd(), fhd()];
         assert_eq!(
             app.screen().offers,
@@ -3763,7 +3770,7 @@ mod tests {
                 FullscreenKind::Borderless
             )]
         );
-        press_on(&mut app, &mut window, Key::Up);
+        press_on(&mut app, &mut window, Key::ArrowUp);
         handle_display(
             &mut app,
             &mut window,
@@ -3775,7 +3782,7 @@ mod tests {
         press_on(&mut app, &mut window, Key::Escape);
         app.fullscreen.set_kind(fhd_on(DELL));
         window.modes.clear();
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers[1],
             (
@@ -3792,7 +3799,7 @@ mod tests {
         let mut window = on_monitor();
         let mut app = display_app(&window, &[]).with_os(Os::MacOs);
         app.fullscreen.set_kind(fhd_on(DELL));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers,
             [(
@@ -3855,7 +3862,7 @@ mod tests {
         let store = MemorySettings::new();
         let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
             .with_settings(keeper(&store));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [exclusive(qhd())]);
         let saved = stored(&store);
@@ -3901,7 +3908,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         app.take_warnings();
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         assert_eq!(
             app.screen().offers,
             [(
@@ -3943,7 +3950,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(app.take_warnings().len(), 1);
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         let (_, current, chosen) = &app.screen().offers[0];
         assert_eq!(
             (*current, *chosen),
@@ -3966,7 +3973,7 @@ mod tests {
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
         assert_eq!(app.take_warnings().len(), 1);
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         press_on(&mut app, &mut window, Key::Space);
         let saved = stored(&store);
         assert!(saved.fullscreen);
@@ -3988,7 +3995,7 @@ mod tests {
             .with_os(Os::Windows)
             .with_settings(keeper(&store));
         app.restore_window(&mut window);
-        chord(&mut app, &mut window, &[Key::Function(11)]);
+        chord(&mut app, &mut window, &[Key::F11]);
         assert_eq!(window.fullscreen, [BORDERLESS]);
         let warnings = app.take_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
@@ -4004,7 +4011,7 @@ mod tests {
         let store = MemorySettings::new();
         let mut app = display_app(&window, &[choosing(FullscreenKind::Exclusive(qhd()))])
             .with_settings(keeper(&store));
-        press_on(&mut app, &mut window, Key::Char('p'));
+        press_on(&mut app, &mut window, Key::KeyP);
         window.modes.clear();
         press_on(&mut app, &mut window, Key::Space);
         assert_eq!(window.fullscreen, [BORDERLESS]);
@@ -4018,8 +4025,8 @@ mod tests {
         type Quit = fn(&mut TestApp, &mut FakeWindow) -> Control;
         let close: Quit = |app, window| handle(app, window, WindowEvent::CloseRequested);
         let screen_quit: Quit = |app, window| {
-            app.screen.quit_on = Some(Key::Char('q'));
-            handle(app, window, key(Key::Char('q'), true))
+            app.screen.quit_on = Some(Key::KeyQ);
+            handle(app, window, key(Key::KeyQ, true))
         };
         let quit_on_tick: Quit = |app, window| {
             app.screen.asks_quit = true;
@@ -4050,7 +4057,7 @@ mod tests {
         let mut app = app(&window).with_os(Os::Windows);
         handle(&mut app, &mut window, WindowEvent::CloseRequested);
         let mut borderless = self::app(&window).with_os(Os::Windows);
-        chord(&mut borderless, &mut window, &[Key::Function(11)]);
+        chord(&mut borderless, &mut window, &[Key::F11]);
         handle(&mut borderless, &mut window, WindowEvent::CloseRequested);
         assert_eq!(window.fullscreen, [BORDERLESS]);
     }

@@ -580,14 +580,14 @@ impl Screen for AssignmentDialog {
     /// choice. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
-            key: Key::Char(letter),
+            key,
             pressed: true,
             repeat,
         } = *input
         {
-            let choice = match letter.to_ascii_lowercase() {
-                'm' => Some(Assignment::MyShip),
-                'e' => Some(Assignment::Escort),
+            let choice = match key {
+                Key::KeyM => Some(Assignment::MyShip),
+                Key::KeyE => Some(Assignment::Escort),
                 _ => None,
             };
             if let Some(choice) = choice {
@@ -980,7 +980,7 @@ mod tests {
             Rc::new(MonoMetrics),
         )
         .expect("builds");
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(scrolled(&dialog), Some(1));
         let shown_rows: Vec<String> = placed(&dialog).into_iter().map(|run| run.0).collect();
         assert_eq!(
@@ -993,7 +993,7 @@ mod tests {
             at: center(dialog.dialog(), TEXT_ITEM),
         });
         assert_eq!(scrolled(&dialog), Some(2));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(scrolled(&dialog), Some(1));
         assert_eq!(dialog.take_take(), None, "scrolling takes nothing");
     }
@@ -1002,7 +1002,7 @@ mod tests {
     fn on_stock_item_5_its_rows_fit_and_nothing_moves_them() {
         let mut dialog = dialog(loaded());
         let before = placed(&dialog);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         dialog.input(&Input::Scroll {
             delta: ScrollDelta::Lines(1.0),
             at: center(dialog.dialog(), TEXT_ITEM),
@@ -1316,9 +1316,9 @@ mod tests {
             .expect("builds");
         let first =
             |dialog: &AssignmentDialog| dialog.dialog().text(QUESTION_ITEM).map(ScrollText::first);
-        dialog.input(&key(Key::Down));
+        dialog.input(&key(Key::ArrowDown));
         assert_eq!(first(&dialog), Some(1));
-        dialog.input(&key(Key::Up));
+        dialog.input(&key(Key::ArrowUp));
         assert_eq!(first(&dialog), Some(0));
     }
 
@@ -1465,10 +1465,10 @@ mod tests {
     #[test]
     fn m_and_e_choose_and_return_and_escape_do_not() {
         for (pressed, choice) in [
-            (Key::Char('m'), Assignment::MyShip),
-            (Key::Char('M'), Assignment::MyShip),
-            (Key::Char('e'), Assignment::Escort),
-            (Key::Char('E'), Assignment::Escort),
+            (Key::KeyM, Assignment::MyShip),
+            (Key::KeyM, Assignment::MyShip),
+            (Key::KeyE, Assignment::Escort),
+            (Key::KeyE, Assignment::Escort),
         ] {
             let mut dialog = assignment();
             dialog.input(&Input::Key {
@@ -1482,7 +1482,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{pressed:?}");
         }
         let mut dialog = assignment();
-        for pressed in [Key::Enter, Key::Escape, Key::Char('x')] {
+        for pressed in [Key::Enter, Key::Escape, Key::KeyX] {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_choice(), None, "{pressed:?}");
         }
