@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use nova_data::graphics::{PICT, decode_pict};
+use nova_data::graphics::{PICT, decode_pict, pict_frame};
 use nova_data::records::govt::Govt;
 use nova_data::records::nebula::Nebula;
 use nova_data::records::stellar::Stellar;
@@ -115,16 +115,27 @@ fn nebula(
             let Some(resource) = data.resource(PICT, id) else {
                 continue;
             };
-            match decode_pict(resource.resource.data()) {
-                Ok(image) => pictures.push(NebulaPicture {
-                    id,
-                    // 0 to 6.
-                    slot: slot as u8,
-                    width: image.width(),
-                    height: image.height(),
-                }),
-                Err(err) => problems.push(format!("nëbu {}: PICT {id}: {err}", entry.id)),
-            }
+            let bytes = resource.resource.data();
+            let mut problem = |err| problems.push(format!("nëbu {}: PICT {id}: {err}", entry.id));
+            // Too short for a frame: `QDGetPictureBounds` would read past
+            // the handle, which can't be replicated, so it's dropped.
+            let frame = match pict_frame(bytes) {
+                Ok(frame) => frame,
+                Err(err) => {
+                    problem(err);
+                    continue;
+                }
+            };
+            // Undecodable contents still count, by the frame.
+            let decoded = decode_pict(bytes).map_err(&mut problem).is_ok();
+            pictures.push(NebulaPicture {
+                id,
+                // 0 to 6.
+                slot: slot as u8,
+                width: frame.width(),
+                height: frame.height(),
+                decoded,
+            });
         }
     }
     NebulaEntry {
@@ -450,19 +461,22 @@ mod tests {
                         id: 9500,
                         slot: 0,
                         width: 15,
-                        height: 12
+                        height: 12,
+                        decoded: true,
                     },
                     NebulaPicture {
                         id: 9502,
                         slot: 2,
                         width: 60,
-                        height: 50
+                        height: 50,
+                        decoded: true,
                     },
                     NebulaPicture {
                         id: 9506,
                         slot: 6,
                         width: 120,
-                        height: 100
+                        height: 100,
+                        decoded: true,
                     },
                 ],
             }]
@@ -533,22 +547,44 @@ mod tests {
     }
 
     #[test]
-    fn an_undecodable_nebula_picture_is_skipped_with_a_problem() {
+    fn an_undecodable_nebula_picture_with_a_frame_is_kept_undecoded_with_a_problem() {
+        // `_MapDialogUpdate` takes `QDGetPictureBounds` of any handle
+        // (@0xfa79), however its contents draw: the 0x8200 (QuickTime)
+        // picture counts, at its frame's size.
+        let mut quicktime = picture(30, 20);
+        quicktime[14..16].copy_from_slice(&[0x82, 0x00]);
         let mut short = nebula(0, 0, 10, 10);
         short.pop();
         let data = store(&[
             (Nebula::TYPE, 128, None, nebula(0, 0, 10, 10)),
             (Nebula::TYPE, 129, Some("Short"), short),
-            (PICT, 9500, None, b"not a picture".to_vec()),
+            (PICT, 9500, None, quicktime),
             (PICT, 9501, None, picture(4, 4)),
         ]);
         let galaxy = data.galaxy();
-        let ids: Vec<i16> = galaxy.nebulae[0].pictures.iter().map(|p| p.id).collect();
-        assert_eq!(ids, [9501]);
+        assert_eq!(
+            galaxy.nebulae[0].pictures,
+            [
+                NebulaPicture {
+                    id: 9500,
+                    slot: 0,
+                    width: 30,
+                    height: 20,
+                    decoded: false,
+                },
+                NebulaPicture {
+                    id: 9501,
+                    slot: 1,
+                    width: 4,
+                    height: 4,
+                    decoded: true,
+                },
+            ]
+        );
         assert_eq!(galaxy.nebulae.len(), 1);
         assert_eq!(galaxy.problems.len(), 2, "{:?}", galaxy.problems);
-        assert!(
-            galaxy.problems[0].starts_with("nëbu 128: PICT 9500: "),
+        assert_eq!(
+            galaxy.problems[0], "nëbu 128: PICT 9500: unsupported PICT opcode 0x8200 at byte 0xe",
             "{:?}",
             galaxy.problems
         );
@@ -556,6 +592,24 @@ mod tests {
             galaxy.problems[1].starts_with("nëbu 129 \"Short\""),
             "{:?}",
             galaxy.problems
+        );
+    }
+
+    #[test]
+    fn a_nebula_picture_too_short_for_its_frame_is_dropped_with_a_problem() {
+        // `QDGetPictureBounds` would read past the handle: not
+        // replicable.
+        let data = store(&[
+            (Nebula::TYPE, 128, None, nebula(0, 0, 10, 10)),
+            (PICT, 9500, None, vec![0; 9]),
+            (PICT, 9501, None, picture(4, 4)),
+        ]);
+        let galaxy = data.galaxy();
+        let ids: Vec<i16> = galaxy.nebulae[0].pictures.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [9501]);
+        assert_eq!(
+            galaxy.problems,
+            ["nëbu 128: PICT 9500: unexpected end of data at byte 0x8"]
         );
     }
 

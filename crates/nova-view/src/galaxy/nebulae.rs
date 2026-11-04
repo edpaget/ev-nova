@@ -16,8 +16,16 @@
 //!    the engine's, the highest of its seven slots, `PICT` 9500 + 7i + k,
 //!    whose bounds fit the rect in both width and height, with no early
 //!    break; slot 0 when none does; none drawn when that slot is missing
-//!    (@0xfa4f-0xfadf). [`RuleKey::NebulaPicture`]'s other reading is
-//!    [`PicturePick::SmallestThatCovers`], the map's earlier rule.
+//!    (@0xfa4f-0xfadf). The bounds are the `picFrame`'s
+//!    (`QDGetPictureBounds` @0xfa79), compared as signed differences, and
+//!    only a null handle is skipped: a picture whose contents don't decode
+//!    counts by its frame, and an empty or inverted frame fits any rect.
+//!    Such a pick draws nothing here: the original draws its contents
+//!    through QuickDraw, which can't be replicated.
+//!    [`RuleKey::NebulaPicture`]'s other reading is
+//!    [`PicturePick::SmallestThatCovers`], the map's earlier rule, which
+//!    chooses among the decoded pictures alone, as it did when the catalog
+//!    dropped the rest.
 //! 4. **The clip**: the picture stretched over the whole rect, drawn only
 //!    in the rect's overlap with item 3 (`SectRect` @0xfb02).
 //! 5. **The blend**: in a full update, copied over what is beneath with
@@ -91,8 +99,8 @@ pub enum PicturePick {
     /// when none does, none when slot 0 is missing.
     #[default]
     LargestThatFits,
-    /// The other reading: the smallest at least as wide as the rect, or
-    /// else the widest.
+    /// The other reading: the smallest decoded picture at least as wide
+    /// as the rect, or else the widest decoded one.
     SmallestThatCovers,
 }
 
@@ -161,11 +169,12 @@ pub fn choose(nebula: &NebulaEntry, rect: IRect, pick: PicturePick) -> Option<Ne
         i64::from(rect.right) - i64::from(rect.left),
         i64::from(rect.bottom) - i64::from(rect.top),
     );
-    let pictures = nebula.pictures.iter();
     match pick {
         PicturePick::LargestThatFits => {
             // The last slot that fits, from a choice that starts at 0
-            // (@0xfa5d-0xfac4).
+            // (@0xfa5d-0xfac4), each frame's size compared signed,
+            // decoded or not.
+            let pictures = nebula.pictures.iter();
             let slot = pictures
                 .clone()
                 .filter(|p| i64::from(p.width) <= width && i64::from(p.height) <= height)
@@ -174,12 +183,17 @@ pub fn choose(nebula: &NebulaEntry, rect: IRect, pick: PicturePick) -> Option<Ne
                 .unwrap_or(0);
             pictures.into_iter().find(|p| p.slot == slot).copied()
         }
-        PicturePick::SmallestThatCovers => pictures
-            .clone()
-            .filter(|p| i64::from(p.width) >= width)
-            .min_by_key(|p| p.width)
-            .or_else(|| pictures.max_by_key(|p| p.width))
-            .copied(),
+        PicturePick::SmallestThatCovers => {
+            // Only the decoded pictures, as when the catalog dropped the
+            // rest; an inverted or empty frame is never decoded.
+            let pictures = nebula.pictures.iter().filter(|p| p.decoded);
+            pictures
+                .clone()
+                .filter(|p| i64::from(p.width) >= width)
+                .min_by_key(|p| p.width)
+                .or_else(|| pictures.max_by_key(|p| p.width))
+                .copied()
+        }
     }
 }
 
@@ -199,7 +213,9 @@ pub fn draw_nebulae(
         let Some(clip) = rect.intersection(frame.area) else {
             continue;
         };
-        let Some(picture) = choose(nebula, rect, pick) else {
+        // An undecoded pick: the original draws its contents through
+        // QuickDraw, which can't be replicated.
+        let Some(picture) = choose(nebula, rect, pick).filter(|picture| picture.decoded) else {
             continue;
         };
         let whole = placed(rect, frame.origin);
@@ -243,12 +259,22 @@ mod tests {
         }
     }
 
-    fn picture(slot: u8, width: u32, height: u32) -> NebulaPicture {
+    fn picture(slot: u8, width: i32, height: i32) -> NebulaPicture {
         NebulaPicture {
             id: 9500 + i16::from(slot),
             slot,
             width,
             height,
+            decoded: true,
+        }
+    }
+
+    /// A picture in `slot` whose frame is `width` × `height` and whose
+    /// contents didn't decode.
+    fn undecoded(slot: u8, width: i32, height: i32) -> NebulaPicture {
+        NebulaPicture {
+            decoded: false,
+            ..picture(slot, width, height)
         }
     }
 
@@ -486,6 +512,79 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_counts_an_undecoded_picture_by_its_frame() {
+        // @0xfa66-0xfac4 skips only a null handle: slot 2's frame fits,
+        // so it wins over decodable slot 1, though nothing draws it.
+        let holpa = nebula(
+            0,
+            0,
+            251,
+            298,
+            vec![
+                picture(0, 63, 75),
+                picture(1, 126, 149),
+                undecoded(2, 251, 298),
+            ],
+        );
+        let choice = choose(
+            &holpa,
+            IRect::new(0, 0, 300, 300),
+            PicturePick::LargestThatFits,
+        );
+        assert_eq!(choice, Some(undecoded(2, 251, 298)));
+        assert_eq!(
+            chosen(&holpa, (200, 200), PicturePick::LargestThatFits),
+            Some(1),
+            "too large to fit"
+        );
+    }
+
+    #[test]
+    fn the_engine_fits_an_inverted_or_empty_frame_in_any_rect() {
+        // (right − left) and (bottom − top) compare signed (`cmpl`,
+        // `jg`): 0 or less fits any rect, here one 1 × 1.
+        for (width, height) in [(-5, 1), (1, -5), (0, 0), (-65535, -65535)] {
+            let odd = nebula(
+                0,
+                0,
+                10,
+                10,
+                vec![picture(0, 63, 75), undecoded(3, width, height)],
+            );
+            assert_eq!(
+                chosen(&odd, (1, 1), PicturePick::LargestThatFits),
+                Some(3),
+                "{width} × {height}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_reading_never_chooses_an_undecoded_or_inverted_picture() {
+        // As before undecoded pictures counted: they were dropped then.
+        let holpa = nebula(
+            0,
+            0,
+            100,
+            100,
+            vec![
+                picture(0, 50, 50),
+                undecoded(1, 100, 100),
+                picture(2, 200, 200),
+                undecoded(3, -5, -5),
+                undecoded(4, 400, 400),
+            ],
+        );
+        let pick = PicturePick::SmallestThatCovers;
+        assert_eq!(chosen(&holpa, (100, 100), pick), Some(2), "not slot 1");
+        assert_eq!(chosen(&holpa, (40, 40), pick), Some(0));
+        assert_eq!(chosen(&holpa, (300, 300), pick), Some(2), "not slot 4");
+        let none = nebula(0, 0, 100, 100, vec![undecoded(0, 50, 50)]);
+        assert_eq!(chosen(&none, (40, 40), pick), None);
+        assert_eq!(chosen(&none, (100, 100), pick), None);
+    }
+
+    #[test]
     fn a_nebula_with_no_pictures_has_none_to_choose() {
         let bare = nebula(0, 0, 100, 100, Vec::new());
         for pick in [
@@ -622,6 +721,28 @@ mod tests {
     fn a_nebula_with_no_picture_to_draw_is_skipped() {
         let missing = nebula(-100, -50, 100, 100, vec![picture(1, 500, 500)]);
         assert_eq!(drawn(&[missing], MapUpdate::Full), []);
+    }
+
+    #[test]
+    fn a_nebula_whose_pick_is_undecoded_draws_nothing() {
+        // The original draws its contents through QuickDraw; ours can't
+        // decode them.
+        let inside = nebula(
+            -100,
+            -50,
+            100,
+            100,
+            vec![picture(0, 50, 50), undecoded(1, 100, 100)],
+        );
+        for update in [MapUpdate::Full, MapUpdate::Partial] {
+            assert_eq!(
+                drawn(std::slice::from_ref(&inside), update),
+                [],
+                "{update:?}"
+            );
+        }
+        let fallback = nebula(-100, -50, 100, 100, vec![undecoded(0, 500, 500)]);
+        assert_eq!(drawn(&[fallback], MapUpdate::Full), [], "slot 0's fallback");
     }
 
     #[test]

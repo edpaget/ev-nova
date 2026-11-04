@@ -37,8 +37,8 @@ pub struct SystemEntry {
     pub stellars: Vec<StellarEntry>,
 }
 
-/// One of a nebula's pictures: its `PICT` ID, its slot and its size in
-/// pixels.
+/// One of a nebula's pictures: its `PICT` ID, its slot, its frame's size
+/// and whether its contents decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NebulaPicture {
     /// The `PICT`'s ID.
@@ -46,10 +46,16 @@ pub struct NebulaPicture {
     /// Its slot among the nebula's seven, 0 to 6: k in `PICT` 9500 + 7i +
     /// k. The map falls back to slot 0 when no picture fits.
     pub slot: u8,
-    /// Its width in pixels.
-    pub width: u32,
-    /// Its height in pixels.
-    pub height: u32,
+    /// Its `picFrame`'s width in pixels, right − left, signed: 0 or less
+    /// for an empty or inverted frame, which only an undecoded picture
+    /// has.
+    pub width: i32,
+    /// Its `picFrame`'s height in pixels, bottom − top, signed.
+    pub height: i32,
+    /// Whether its contents decoded. An undecoded picture still counts in
+    /// the engine's choice by its frame (`QDGetPictureBounds` @0xfa79),
+    /// but nothing draws it.
+    pub decoded: bool,
 }
 
 /// One nebula: the map rectangle it covers and the pictures that can fill

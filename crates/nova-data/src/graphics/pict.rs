@@ -78,8 +78,7 @@ const VERSION_2_WORD: u16 = 0x02FF;
 /// ```
 pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
     let mut r = Reader::new(data);
-    r.skip(2)?; // picSize: meaningless for pictures over 32 KB
-    let frame = QdRect::read(&mut r)?;
+    let frame = read_frame(&mut r)?;
     let version = Version::read(&mut r)?;
     let (width, height) = frame.size()?;
     check_budget(u64::from(width) * u64::from(height), data.len())?;
@@ -112,6 +111,73 @@ pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
         }
     }
     Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
+}
+
+/// A `PICT`'s `picFrame`, as QuickDraw's `QDGetPictureBounds` gives it:
+/// the words as stored, never checked, so a frame may be empty or
+/// inverted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PictFrame {
+    /// The top edge.
+    pub top: i16,
+    /// The left edge.
+    pub left: i16,
+    /// The bottom edge.
+    pub bottom: i16,
+    /// The right edge.
+    pub right: i16,
+}
+
+impl PictFrame {
+    /// `right − left`, signed and without 16-bit overflow: 0 or less for
+    /// an empty or inverted frame.
+    #[must_use]
+    pub fn width(self) -> i32 {
+        i32::from(self.right) - i32::from(self.left)
+    }
+
+    /// `bottom − top`, signed and without 16-bit overflow.
+    #[must_use]
+    pub fn height(self) -> i32 {
+        i32::from(self.bottom) - i32::from(self.top)
+    }
+}
+
+/// Reads a `PICT`'s `picFrame` (bytes 2-10) alone, however its opcodes
+/// would decode: [`GraphicsError::UnexpectedEnd`] when the data is too
+/// short to hold it. [`decode_pict`] reads its frame the same way.
+///
+/// # Example
+///
+/// ```
+/// use nova_data::graphics::{PictFrame, decode_pict, pict_frame};
+///
+/// // A 3 × 2 frame, then an opcode the decoder doesn't support.
+/// let pict = [0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0x00, 0x11, 0x02, 0xFF, 0x82, 0x00];
+/// let frame = pict_frame(&pict).expect("a frame");
+/// assert_eq!((frame.width(), frame.height()), (3, 2));
+/// assert!(decode_pict(&pict).is_err());
+/// ```
+pub fn pict_frame(data: &[u8]) -> Result<PictFrame, GraphicsError> {
+    let QdRect {
+        top,
+        left,
+        bottom,
+        right,
+    } = read_frame(&mut Reader::new(data))?;
+    Ok(PictFrame {
+        top,
+        left,
+        bottom,
+        right,
+    })
+}
+
+/// Skips `picSize` and reads `picFrame`, leaving `r` at the version
+/// opcode.
+fn read_frame(r: &mut Reader<'_>) -> Result<QdRect, GraphicsError> {
+    r.skip(2)?; // picSize: meaningless for pictures over 32 KB
+    QdRect::read(r)
 }
 
 const NOP: u16 = 0x0000;
@@ -472,6 +538,41 @@ mod tests {
         let mac_roman = nova_rsrc::ResType::from_mac_roman("PICT").expect("Mac Roman type");
         assert_eq!(PICT, mac_roman);
         assert_eq!(PICT.bytes(), *b"PICT");
+    }
+
+    #[test]
+    fn the_frame_reads_alone_signed_whatever_follows_it() {
+        // picFrame (top 1, left −2, bottom 4, right 3): 5 × 3.
+        let mut bytes = vec![0x00, 0x00, 0x00, 0x01, 0xFF, 0xFE, 0x00, 0x04, 0x00, 0x03];
+        let frame = pict_frame(&bytes).expect("a frame");
+        assert_eq!(
+            frame,
+            PictFrame {
+                top: 1,
+                left: -2,
+                bottom: 4,
+                right: 3
+            }
+        );
+        assert_eq!((frame.width(), frame.height()), (5, 3));
+        bytes.extend_from_slice(b"no version");
+        assert_eq!(pict_frame(&bytes), Ok(frame), "the opcodes unread");
+        // Inverted: right left of left, bottom above top.
+        let inverted = [0, 0, 0x7F, 0xFF, 0x7F, 0xFF, 0x80, 0x00, 0x80, 0x00];
+        let frame = pict_frame(&inverted).expect("a frame");
+        assert_eq!((frame.width(), frame.height()), (-65535, -65535));
+    }
+
+    #[test]
+    fn a_picture_too_short_for_its_frame_has_none() {
+        assert_eq!(
+            pict_frame(&[0; 9]),
+            Err(GraphicsError::UnexpectedEnd { offset: 8 })
+        );
+        assert_eq!(
+            decode_pict(&[0; 9]),
+            Err(GraphicsError::UnexpectedEnd { offset: 8 })
+        );
     }
 
     /// The smallest valid picture, written out by hand.

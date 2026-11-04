@@ -897,6 +897,7 @@ impl GalaxyCatalog for FakeCatalog {
             slot,
             width: side,
             height: side,
+            decoded: true,
         };
         let nebulae = if self.nebula {
             vec![crate::galaxy::NebulaEntry {

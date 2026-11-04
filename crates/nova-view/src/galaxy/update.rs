@@ -355,6 +355,7 @@ mod tests {
                 slot: 0,
                 width: 40,
                 height: 40,
+                decoded: true,
             }],
         }
     }
