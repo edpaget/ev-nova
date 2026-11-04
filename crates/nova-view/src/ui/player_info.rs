@@ -96,7 +96,7 @@ use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, Key, ModifierHeld, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
 use crate::spaceport::layout::DONE_LABEL;
@@ -173,8 +173,9 @@ pub const JETTISON_ITEM: usize = 7;
 /// The player info key: the original's default `playerInfoKey`
 /// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
 pub const PLAYER_INFO_KEY: Key = Key::KeyP;
-/// The key that, held, makes Tab go back (`shiftKey`, 0x0200).
-pub const BACKWARDS_KEY: Key = Key::ShiftLeft;
+/// The keys that, held, make Tab go back: either Shift, as
+/// `_PlayerInfoFilter` reads the `shiftKey` bit (0x0200, @0x53b1e).
+pub const BACKWARDS_KEYS: [Key; 2] = crate::input::SHIFT_KEYS;
 
 /// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
 /// asks for the player info screen where the original's filters read the
@@ -583,7 +584,7 @@ pub struct PlayerInfoScreen {
     tracked: Option<PlayerInfoButton>,
     tracker: ButtonTracker,
     /// Whether Shift is held.
-    backwards: bool,
+    backwards: ModifierHeld,
     jettison: bool,
     closed: bool,
     /// The close's wait for [`PLAYER_INFO_KEY`]'s release
@@ -617,7 +618,7 @@ impl PlayerInfoScreen {
             tab: Tab::General,
             tracked: None,
             tracker: ButtonTracker::default(),
-            backwards: false,
+            backwards: ModifierHeld::either(BACKWARDS_KEYS),
             jettison: false,
             closed: false,
             wait: KeyWait::new(PLAYER_INFO_KEY, false),
@@ -890,14 +891,7 @@ impl Screen for PlayerInfoScreen {
             return ScreenAction::None;
         }
         self.wait.note(input);
-        if let Input::Key {
-            key: BACKWARDS_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.backwards = pressed;
-        }
+        self.backwards.follow(input);
         if self.confirm.is_some() {
             self.confirm_input(input);
             return ScreenAction::None;
@@ -908,7 +902,7 @@ impl Screen for PlayerInfoScreen {
                 pressed: true,
                 ..
             } if self.laid.is_ok() => {
-                self.tab = if self.backwards {
+                self.tab = if self.backwards.held() {
                     self.tab.previous()
                 } else {
                     self.tab.next()
@@ -975,7 +969,7 @@ impl Screen for PlayerInfoScreen {
     }
 
     fn release_keys(&mut self) {
-        self.backwards = false;
+        self.backwards.let_go();
         if self.wait.release() {
             self.closed = true;
         }
@@ -1821,6 +1815,23 @@ mod tests {
         );
         click_button(&mut screen, PlayerInfoButton::Tab(Tab::General));
         assert_eq!(screen.tab(), Tab::General);
+    }
+
+    /// `_PlayerInfoFilter` reads `shiftKey` (@0x53b1e), which either
+    /// Shift sets.
+    #[test]
+    fn either_shift_takes_tab_back_until_both_are_let_go() {
+        let mut screen = screen();
+        screen.input(&press(Key::ShiftRight));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Honors, "back with the right Shift");
+        screen.input(&press(Key::ShiftLeft));
+        screen.input(&key(Key::ShiftRight, false, false));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Extras, "the left one still down");
+        screen.input(&key(Key::ShiftLeft, false, false));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Honors, "forward once both are up");
     }
 
     #[test]

@@ -114,7 +114,10 @@ pub use draw::{Blend, DrawCommand, DrawLayer, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
-pub use input::{Input, Key, MouseButton, ScrollDelta, key_letter, letter_key};
+pub use input::{
+    COMMAND_KEYS, CONTROL_KEYS, Input, Key, ModifierHeld, MouseButton, OPTION_KEYS, SHIFT_KEYS,
+    ScrollDelta, key_letter, letter_key,
+};
 pub use menu_command::MenuCommand;
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
 pub use navigator::Navigator;

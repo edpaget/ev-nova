@@ -101,7 +101,7 @@ use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, ModifierHeld, SHIFT_KEYS};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -297,8 +297,9 @@ pub struct TradeScreen {
     /// Whether its dialogs' buttons take the keyboard focus.
     focus_ring: FocusRing,
     /// Whether Shift is held, so that Tab steps back under
-    /// [`FocusRing::Off`] (`_TradeFilter` @0x4e18a).
-    backwards: bool,
+    /// [`FocusRing::Off`] (`_TradeFilter` @0x4e18a): either Shift, as the
+    /// filter reads the `shiftKey` bit.
+    backwards: ModifierHeld,
     sounds: Vec<Sound>,
 }
 
@@ -344,7 +345,7 @@ impl TradeScreen {
             closed: false,
             style,
             focus_ring: FocusRing::default(),
-            backwards: false,
+            backwards: ModifierHeld::either(SHIFT_KEYS),
             sounds: Vec::new(),
         };
         let first = positions(&screen.market).into_iter().flatten().next();
@@ -812,14 +813,7 @@ impl Screen for TradeScreen {
     fn input(&mut self, input: &Input) -> ScreenAction {
         // Shift is followed under the offer and the quantity dialog too,
         // so a release there is not lost.
-        if let Input::Key {
-            key: Key::ShiftLeft,
-            pressed,
-            ..
-        } = *input
-        {
-            self.backwards = pressed;
-        }
+        self.backwards.follow(input);
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -870,7 +864,7 @@ impl Screen for TradeScreen {
                 key: Key::Tab,
                 pressed: true,
                 repeat: false,
-            } if self.focus_ring == FocusRing::Off => self.step(!self.backwards),
+            } if self.focus_ring == FocusRing::Off => self.step(!self.backwards.held()),
             Input::Key {
                 key: Key::ArrowUp,
                 pressed: true,
@@ -957,7 +951,7 @@ impl Screen for TradeScreen {
     /// Lets go of Alt and Shift, and of the keys held in the quantity
     /// dialog.
     fn release_keys(&mut self) {
-        self.backwards = false;
+        self.backwards.let_go();
         self.quantity.release_keys();
     }
 
@@ -1782,6 +1776,23 @@ mod tests {
         assert_eq!(screen.dialog().and_then(Dialog::focus), None, "no ring");
         assert!(!screen.closed());
         assert_eq!(screen.take_order(), None);
+    }
+
+    /// `_TradeFilter` reads `shiftKey` (@0x4e18a), which either Shift
+    /// sets.
+    #[test]
+    fn either_shift_takes_tab_back_until_both_are_let_go() {
+        let mut screen = screen_of(gappy()).with_focus_ring(FocusRing::Off);
+        press(&mut screen, Key::ShiftRight);
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "back with the right Shift");
+        press(&mut screen, Key::ShiftLeft);
+        screen.input(&key(Key::ShiftRight, false, false));
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(3), "the left one still down");
+        screen.input(&key(Key::ShiftLeft, false, false));
+        press(&mut screen, Key::Tab);
+        assert_eq!(screen.selected(), Some(2), "forward once both are up");
     }
 
     #[test]

@@ -173,6 +173,9 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 ///   from the original's following the lock state. winit 0.30.13 sends no
 ///   Caps Lock key on macOS (its `key_to_modifier` maps Alt, Control,
 ///   Super and Shift alone), so there it never arrives.
+/// - The right Shift is its own key: flight and the map's click poll the
+///   left Shift's key code alone, where the trade, the player info and
+///   the map's Tab take either.
 /// - The keypad's Enter is its own key: the intro and flight's `ackComm`
 ///   poll Return's key code alone, where the dialogs take both.
 /// - F11 is the fullscreen shortcut off a Mac. F12 is flight's frame-rate
@@ -190,9 +193,6 @@ pub fn map_key(key: PhysicalKey) -> Key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
                 // Command, Super off a Mac.
                 PhysicalKey::Code(KeyCode::SuperLeft) => Key::MetaLeft,
-                // Either Shift: flight's target select back, the map's
-                // Tab back and click, the trade's and player info's Shift.
-                PhysicalKey::Code(KeyCode::ShiftRight) => Key::ShiftLeft,
                 // Either Alt, Option on a Mac.
                 PhysicalKey::Code(KeyCode::AltRight) => Key::AltLeft,
                 // Either Control: flight's secondary fire key.
@@ -214,7 +214,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN,
         KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Minus, Period,
         Quote, Semicolon, Slash, AltLeft, Backspace, CapsLock, ContextMenu, ControlLeft, Enter,
-        ShiftLeft, Space, Tab, Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5,
+        ShiftLeft, ShiftRight, Space, Tab, Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5,
         NonConvert, Delete, End, Help, Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft,
         ArrowRight, ArrowUp, NumLock, Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5,
         Numpad6, Numpad7, Numpad8, Numpad9, NumpadAdd, NumpadBackspace, NumpadClear,
@@ -313,7 +313,7 @@ mod tests {
             (KeyCode::ControlLeft, Key::ControlLeft),
             (KeyCode::ControlRight, Key::ControlLeft),
             (KeyCode::ShiftLeft, Key::ShiftLeft),
-            (KeyCode::ShiftRight, Key::ShiftLeft),
+            (KeyCode::ShiftRight, Key::ShiftRight),
             (KeyCode::KeyR, Key::KeyR),
             (KeyCode::KeyK, Key::KeyK),
             (KeyCode::KeyX, Key::KeyX),
@@ -556,8 +556,7 @@ mod tests {
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.
-    const FOLDS: [(KeyCode, KeyCode); 5] = [
-        (KeyCode::ShiftRight, KeyCode::ShiftLeft),
+    const FOLDS: [(KeyCode, KeyCode); 4] = [
         (KeyCode::AltRight, KeyCode::AltLeft),
         (KeyCode::ControlRight, KeyCode::ControlLeft),
         (KeyCode::SuperRight, KeyCode::SuperLeft),
@@ -817,11 +816,11 @@ mod tests {
         (Key::MetaLeft, KeyCode::SuperRight),
         // The player info's Tab goes back with Shift held.
         (
-            nova_view::ui::player_info::BACKWARDS_KEY,
+            nova_view::ui::player_info::BACKWARDS_KEYS[0],
             KeyCode::ShiftLeft,
         ),
         (
-            nova_view::ui::player_info::BACKWARDS_KEY,
+            nova_view::ui::player_info::BACKWARDS_KEYS[1],
             KeyCode::ShiftRight,
         ),
     ];

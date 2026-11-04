@@ -604,6 +604,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let docked = self.frame.docked();
         match key {
             Key::ShiftLeft
+            | Key::ShiftRight
             | Key::ControlLeft
             | Key::AltLeft
             | Key::MetaLeft

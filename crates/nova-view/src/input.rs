@@ -88,6 +88,78 @@ pub fn letter_key(letter: char) -> Option<Key> {
         .find_map(|&(key, l)| (l == letter).then_some(key))
 }
 
+/// Shift's two keys, left first.
+pub const SHIFT_KEYS: [Key; 2] = [Key::ShiftLeft, Key::ShiftRight];
+/// Option's (Alt's) two keys, left first.
+pub const OPTION_KEYS: [Key; 2] = [Key::AltLeft, Key::AltRight];
+/// Control's two keys, left first.
+pub const CONTROL_KEYS: [Key; 2] = [Key::ControlLeft, Key::ControlRight];
+/// Command's two keys (the Windows or Super keys off a Mac), left first.
+pub const COMMAND_KEYS: [Key; 2] = [Key::MetaLeft, Key::MetaRight];
+
+/// Whether a modifier is held, as a screen's original reads it.
+///
+/// The original reads a modifier two ways. A `_KeyCheck` or
+/// `_QuickKeyCheck` poll tests one key code, so one key: build it with
+/// [`ModifierHeld::only`] and the left key. An `EventRecord.modifiers`
+/// bit (`shiftKey`, `optionKey`, `controlKey`, `cmdKey`) is set by either
+/// key, as Mac OS X sets no right-hand bit: build it with
+/// [`ModifierHeld::either`] and the pair ([`SHIFT_KEYS`] and the rest).
+/// Each key is followed on its own, so letting go of one while the other
+/// is down keeps the modifier held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifierHeld {
+    /// The keys read; both the same for one key.
+    keys: [Key; 2],
+    /// Which of them are down.
+    down: [bool; 2],
+}
+
+impl ModifierHeld {
+    /// A modifier read by its bit: held while either of `keys` is.
+    #[must_use]
+    pub const fn either(keys: [Key; 2]) -> Self {
+        Self {
+            keys,
+            down: [false; 2],
+        }
+    }
+
+    /// A modifier polled by `key`'s key code: held while `key` is.
+    #[must_use]
+    pub const fn only(key: Key) -> Self {
+        Self::either([key, key])
+    }
+
+    /// Follows `input`'s presses, repeats and releases of the keys read,
+    /// and says whether it was one of them.
+    pub fn follow(&mut self, input: &Input) -> bool {
+        let Input::Key { key, pressed, .. } = *input else {
+            return false;
+        };
+        let mut read = false;
+        for (each, down) in self.keys.iter().zip(&mut self.down) {
+            if *each == key {
+                *down = pressed;
+                read = true;
+            }
+        }
+        read
+    }
+
+    /// Whether the modifier is held.
+    #[must_use]
+    pub fn held(&self) -> bool {
+        self.down.contains(&true)
+    }
+
+    /// Lets go of both keys, as when the keys are released for the
+    /// screen.
+    pub fn let_go(&mut self) {
+        self.down = [false; 2];
+    }
+}
+
 /// A mouse button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MouseButton {
@@ -244,6 +316,77 @@ mod tests {
         for unmoved in [key, Input::Text('a'), Input::PointerLeft] {
             assert_eq!(unmoved.translated(by), unmoved);
         }
+    }
+
+    fn press(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    fn release(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: false,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn a_modifier_read_by_its_bit_is_held_while_either_key_is() {
+        for (left, right) in [
+            (Key::ShiftLeft, Key::ShiftRight),
+            (Key::AltLeft, Key::AltRight),
+            (Key::ControlLeft, Key::ControlRight),
+            (Key::MetaLeft, Key::MetaRight),
+        ] {
+            let mut held = ModifierHeld::either([left, right]);
+            assert!(!held.held());
+            assert!(held.follow(&press(right)), "{right}");
+            assert!(held.held(), "{right}");
+            assert!(held.follow(&press(left)));
+            assert!(held.follow(&release(right)));
+            assert!(held.held(), "{left} still down");
+            assert!(held.follow(&release(left)));
+            assert!(!held.held(), "both up");
+        }
+    }
+
+    #[test]
+    fn a_modifier_polled_by_its_key_code_is_held_while_that_key_is() {
+        let mut held = ModifierHeld::only(Key::ShiftLeft);
+        assert!(!held.follow(&press(Key::ShiftRight)));
+        assert!(!held.held(), "the other key isn't polled");
+        assert!(held.follow(&press(Key::ShiftLeft)));
+        assert!(held.held());
+        assert!(held.follow(&release(Key::ShiftLeft)));
+        assert!(!held.held());
+    }
+
+    #[test]
+    fn a_held_modifier_follows_repeats_ignores_other_input_and_can_be_let_go() {
+        let mut held = ModifierHeld::either([Key::AltLeft, Key::AltRight]);
+        assert!(held.follow(&Input::Key {
+            key: Key::AltRight,
+            pressed: true,
+            repeat: true,
+        }));
+        assert!(held.held(), "a repeat holds it");
+        assert!(!held.follow(&press(Key::KeyB)));
+        assert!(!held.follow(&Input::Text('b')));
+        assert!(held.held(), "other input changes nothing");
+        held.let_go();
+        assert!(!held.held());
+    }
+
+    #[test]
+    fn the_modifier_pairs_are_their_left_and_right_keys() {
+        assert_eq!(SHIFT_KEYS, [Key::ShiftLeft, Key::ShiftRight]);
+        assert_eq!(OPTION_KEYS, [Key::AltLeft, Key::AltRight]);
+        assert_eq!(CONTROL_KEYS, [Key::ControlLeft, Key::ControlRight]);
+        assert_eq!(COMMAND_KEYS, [Key::MetaLeft, Key::MetaRight]);
     }
 
     use keyboard_types::Code;

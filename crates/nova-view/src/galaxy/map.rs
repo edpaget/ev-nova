@@ -291,7 +291,8 @@ use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
 use crate::{
-    Color, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
+    Color, DrawList, Font, ImageKey, Input, Key, ModifierHeld, MouseButton, Point, SHIFT_KEYS,
+    Screen, ScreenAction,
 };
 
 /// How far the pointer may travel between pressing and releasing the left
@@ -601,8 +602,12 @@ pub struct GalaxyMap {
     /// What the map draws: the viewer's from the start, an in-flight
     /// map's once shown ([`GalaxyMap::show_drawing`]).
     picture: Option<MapPicture>,
-    /// Whether Shift is held.
-    shift: bool,
+    /// Whether Shift is held for Tab: either Shift, as `_MapFilter`
+    /// reads the `shiftKey` bit (@0x13ee4).
+    tab_shift: ModifierHeld,
+    /// Whether Shift is held for a click: the left Shift alone, as
+    /// `_DoSystemMap` polls its key code (`_KeyCheck(0x38)` @0x13071).
+    click_shift: ModifierHeld,
     /// A Tab, `\`, Return, C or Clear Route on an in-flight map, not yet
     /// taken.
     request: Option<Request>,
@@ -701,7 +706,8 @@ impl GalaxyMap {
             metrics: None,
             offered: Vec::new(),
             picture,
-            shift: false,
+            tab_shift: ModifierHeld::either(SHIFT_KEYS),
+            click_shift: ModifierHeld::only(Key::ShiftLeft),
             request: None,
             gate_pick: None,
             find: None,
@@ -1274,7 +1280,9 @@ impl GalaxyMap {
             (Look::Viewer(view), Key::Equal | Key::NumpadAdd) => view.zoom_in(),
             (Look::Viewer(view), Key::Minus) => view.zoom_out(),
             (_, Key::Tab | Key::Backslash) if self.mode != MapMode::Viewer => {
-                self.request = Some(Request::Cycle(MapCycle { back: self.shift }));
+                self.request = Some(Request::Cycle(MapCycle {
+                    back: self.tab_shift.held(),
+                }));
             }
             // C, either case, its repeats too, whatever Clear Route's
             // flag (`_MapFilter` @0x14268).
@@ -1429,7 +1437,7 @@ impl GalaxyMap {
                 self.pending = Some(PendingPress {
                     at,
                     hits,
-                    shift: self.shift,
+                    shift: self.click_shift.held(),
                 });
                 return;
             }
@@ -1918,14 +1926,8 @@ impl std::fmt::Debug for MapMetrics {
 impl GalaxyMap {
     /// [`Screen::input`]'s work, before the borders settle.
     fn take_input(&mut self, input: &Input) {
-        if let Input::Key {
-            key: Key::ShiftLeft,
-            pressed,
-            ..
-        } = *input
-        {
-            self.shift = pressed;
-        }
+        self.tab_shift.follow(input);
+        self.click_shift.follow(input);
         if self.finding() {
             self.find_input(input);
             return;
@@ -2076,7 +2078,8 @@ impl Screen for GalaxyMap {
 
     /// Forgets Shift as held.
     fn release_keys(&mut self) {
-        self.shift = false;
+        self.tab_shift.let_go();
+        self.click_shift.let_go();
     }
 }
 
@@ -3470,6 +3473,35 @@ mod tests {
     }
 
     // Tab, `\` and Return on the in-flight maps.
+
+    /// `_MapFilter` reads `shiftKey` for Tab (@0x13ee4), which either Shift
+    /// sets, where the click polls the left Shift's key code alone
+    /// (`_KeyCheck(0x38)` @0x13071).
+    #[test]
+    fn either_shift_takes_tab_back_but_only_the_left_one_is_a_clicks_shift() {
+        let mut map = course_map();
+        map.input(&press(Key::ShiftRight));
+        map.input(&press(Key::Tab));
+        assert_eq!(map.take_cycle(), Some(MapCycle { back: true }), "Tab back");
+        map.input(&press(Key::ShiftLeft));
+        map.input(&release(Key::ShiftRight));
+        map.input(&press(Key::Tab));
+        assert_eq!(
+            map.take_cycle(),
+            Some(MapCycle { back: true }),
+            "the left one still down"
+        );
+        map.input(&release(Key::ShiftLeft));
+        let (mut map, beta) = on_beta();
+        map.input(&press(Key::ShiftRight));
+        map.input(&button(MouseButton::Left, true, beta));
+        assert!(!map.take_press().expect("held").shift, "the right Shift");
+        map.input(&button(MouseButton::Left, false, beta));
+        map.input(&press(Key::ShiftLeft));
+        map.input(&release(Key::ShiftRight));
+        map.input(&button(MouseButton::Left, true, beta));
+        assert!(map.take_press().expect("held").shift, "the left Shift");
+    }
 
     #[test]
     fn tab_and_backslash_ask_the_course_and_hypergate_maps_to_cycle_repeats_too() {

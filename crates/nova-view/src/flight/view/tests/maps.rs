@@ -429,6 +429,7 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
     view.open_map_by_key();
     for k in [
         Key::ShiftLeft,
+        Key::ShiftRight,
         Key::ControlLeft,
         Key::AltLeft,
         Key::MetaLeft,

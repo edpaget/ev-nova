@@ -79,6 +79,21 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
 // Target Select.
 
 #[test]
+fn the_right_shift_doesnt_turn_flights_target_select_back() {
+    // `_HandlePlayer` polls the left Shift's key code alone
+    // (`_QuickKeyCheck(0x38)` @0x69f74).
+    let mut view = fleet(&[EscortClass::Fighter]);
+    let from = sent_count(&view);
+    view.input(&key(Key::ShiftRight, true));
+    tap(&mut view, TARGET_KEY);
+    view.input(&key(Key::ShiftRight, false));
+    assert_eq!(
+        sent_since(&view, from),
+        [FlightCommand::SelectTarget(TargetPick::Next)]
+    );
+}
+
+#[test]
 fn shift_tab_in_flight_selects_the_previous_ship() {
     // `_HandlePlayer` @0x69f74 reads Shift at the Tab press and walks
     // back (`_FindPrevShipInSystem`, which reads Option itself).
