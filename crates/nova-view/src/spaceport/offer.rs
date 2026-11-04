@@ -1114,6 +1114,7 @@ fn queues_an_event(input: &Input) -> bool {
                         | Key::ShiftLeft
                         | Key::ShiftRight
                         | Key::MetaLeft
+                        | Key::MetaRight
                         | Key::CapsLock
                 )
         }
@@ -1439,6 +1440,7 @@ mod tests {
             Key::ShiftLeft,
             Key::ShiftRight,
             Key::MetaLeft,
+            Key::MetaRight,
             Key::CapsLock,
         ];
         for left in modifiers.map(key).into_iter().chain([released]) {

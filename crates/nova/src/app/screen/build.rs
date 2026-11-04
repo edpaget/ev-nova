@@ -38,7 +38,10 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
     HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
-use nova_view::{Input, Key, LaunchPrefs, Navigator, Prefs, Screen, ScreenAction, Showing};
+use nova_view::{
+    COMMAND_KEYS, Input, Key, LaunchPrefs, ModifierHeld, Navigator, Prefs, Screen, ScreenAction,
+    Showing,
+};
 
 use super::port_dialogs::refresh_spaceport;
 use super::{
@@ -119,7 +122,7 @@ impl AppScreen {
             new_pilot_intro: None,
             button_down: false,
             player_info: None,
-            command_held: false,
+            command_held: ModifierHeld::either(COMMAND_KEYS),
             held_chords: super::held_chords::HeldChords::default(),
             live: super::live_input::LiveInput::default(),
             keys_held: MenuKeys::default(),

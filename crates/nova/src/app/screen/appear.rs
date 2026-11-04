@@ -56,7 +56,7 @@ impl AppScreen {
         self.appear.as_ref()?;
         self.note_pointer(input);
         self.note_keys(input);
-        let command_held = self.command_held;
+        let command_held = self.command_held.held();
         match self.appear.as_mut()?.input(input, command_held) {
             Verdict::Pass => None,
             Verdict::Drop | Verdict::Held => Some(ScreenAction::None),
@@ -98,7 +98,7 @@ impl AppScreen {
         if appear.release_keys() != Verdict::Held {
             return false;
         }
-        self.command_held = false;
+        self.command_held.let_go();
         self.keys_held = MenuKeys::default();
         true
     }

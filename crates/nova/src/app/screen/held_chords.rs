@@ -150,7 +150,7 @@ impl AppScreen {
     /// The command `key` chords, with Command held, while keys are held
     /// back.
     fn held_command(&self, key: Key) -> Option<MenuCommand> {
-        if !self.command_held || !self.holds_back_keys() {
+        if !self.command_held.held() || !self.holds_back_keys() {
             return None;
         }
         chord_command(key)

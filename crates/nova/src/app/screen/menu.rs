@@ -60,7 +60,7 @@ impl AppScreen {
             ..
         } = *input
             && self.dialogs.is_some()
-            && !self.command_held
+            && !self.command_held.held()
         {
             // A held key's repeats act as presses: `_MainScreenKey`
             // reads the character alone, never the event's kind (@0x1abaf),
@@ -90,7 +90,7 @@ impl AppScreen {
         // A Command key goes to the original's menus (`MenuKey`, offered
         // first by `_DoMainScreen` @0x1b259-0x1b2bb), never to
         // `_MainScreenKey`, so it neither clicks nor chooses.
-        if matches!(input, Input::Text(_)) && self.command_held {
+        if matches!(input, Input::Text(_)) && self.command_held.held() {
             return ScreenAction::None;
         }
         match *input {

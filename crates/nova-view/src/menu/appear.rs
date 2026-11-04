@@ -44,7 +44,7 @@ use std::time::Duration;
 
 use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
-use crate::{Color, DrawList, Input, Key, MouseButton};
+use crate::{COMMAND_KEYS, Color, DrawList, Input, MouseButton};
 
 /// What an [`Appear`] does with an input or a close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +156,9 @@ impl Appear {
     pub fn input(&mut self, input: &Input, command_held: bool) -> Verdict {
         let verdict = match (self.kind, input) {
             (Kind::LiveReturn, _) => Verdict::Pass,
-            (Kind::StartUp, Input::Key { key, .. }) if *key == Key::MetaLeft || command_held => {
+            (Kind::StartUp, Input::Key { key, .. })
+                if COMMAND_KEYS.contains(key) || command_held =>
+            {
                 Verdict::Held
             }
             (Kind::Return, Input::Key { .. } | Input::Text(_)) => Verdict::Held,
@@ -236,7 +238,7 @@ fn fading() -> Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawCommand, Point};
+    use crate::{DrawCommand, Key, Point};
 
     const VIEW: (f32, f32) = (1024.0, 768.0);
 
@@ -418,6 +420,18 @@ mod tests {
             [Pass; 13],
             "the other reading's return takes everything"
         );
+    }
+
+    #[test]
+    fn at_start_up_either_command_key_is_held() {
+        for command in [Key::MetaLeft, Key::MetaRight] {
+            let mut appear = Appear::start_up();
+            assert_eq!(
+                appear.input(&key(command, true), false),
+                Verdict::Held,
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

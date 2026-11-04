@@ -435,6 +435,7 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
         Key::AltLeft,
         Key::AltRight,
         Key::MetaLeft,
+        Key::MetaRight,
         Key::CapsLock,
     ] {
         assert!(!faked_map_tap(&mut view, k), "{k:?}");

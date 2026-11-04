@@ -188,7 +188,8 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 ///   standard function keys" is set, and fn-F12 reaches the game
 ///   otherwise.
 /// - Command is winit's Super (the Windows key off a Mac), so it arrives
-///   as `Key::MetaLeft`.
+///   as `Key::MetaLeft` or `Key::MetaRight`. Flight polls the left
+///   Command's key code alone, where the menus' chords take either.
 #[must_use]
 pub fn map_key(key: PhysicalKey) -> Key {
     /// The arms for keys winit and `Key` name alike.
@@ -198,9 +199,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
                 // Command, Super off a Mac.
                 PhysicalKey::Code(KeyCode::SuperLeft) => Key::MetaLeft,
-                // Either Command: what flight's jettison and eject keys
-                // need held.
-                PhysicalKey::Code(KeyCode::SuperRight) => Key::MetaLeft,
+                PhysicalKey::Code(KeyCode::SuperRight) => Key::MetaRight,
                 // `-` or the keypad's: the map's zoom out.
                 PhysicalKey::Code(KeyCode::NumpadSubtract) => Key::Minus,
                 // winit's `KeyCode` is `#[non_exhaustive]`; its legacy
@@ -330,7 +329,7 @@ mod tests {
             (KeyCode::KeyG, Key::KeyG),
             (KeyCode::KeyQ, Key::KeyQ),
             (KeyCode::SuperLeft, Key::MetaLeft),
-            (KeyCode::SuperRight, Key::MetaLeft),
+            (KeyCode::SuperRight, Key::MetaRight),
             (KeyCode::CapsLock, Key::CapsLock),
             (KeyCode::Backquote, Key::Backquote),
             (KeyCode::Backslash, Key::Backslash),
@@ -557,10 +556,7 @@ mod tests {
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.
-    const FOLDS: [(KeyCode, KeyCode); 2] = [
-        (KeyCode::SuperRight, KeyCode::SuperLeft),
-        (KeyCode::NumpadSubtract, KeyCode::Minus),
-    ];
+    const FOLDS: [(KeyCode, KeyCode); 1] = [(KeyCode::NumpadSubtract, KeyCode::Minus)];
 
     #[test]
     fn two_keys_are_one_key_only_where_map_key_folds_them() {
@@ -816,9 +812,10 @@ mod tests {
         (Key::ArrowRight, KeyCode::ArrowRight),
         (Key::ArrowUp, KeyCode::ArrowUp),
         (Key::ArrowDown, KeyCode::ArrowDown),
-        // Flight's jettison key's modifier.
+        // Flight's jettison key's modifier, and the menus' Command.
         (Key::MetaLeft, KeyCode::SuperLeft),
-        (Key::MetaLeft, KeyCode::SuperRight),
+        // The menus' Command.
+        (Key::MetaRight, KeyCode::SuperRight),
         // The player info's Tab goes back with Shift held.
         (
             nova_view::ui::player_info::BACKWARDS_KEYS[0],

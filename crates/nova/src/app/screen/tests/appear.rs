@@ -154,6 +154,23 @@ fn command_q_during_the_start_up_fade_quits_once_it_ends() {
     assert!(screen.take_quit());
 }
 
+/// The menus' Command chords read `cmdKey` (`_DoMainScreen` @0x1b25d,
+/// `_IterateInGameEventLoop` @0x56a6b), which either Command sets: the
+/// right one is Command too, and Command stays held until both are up.
+#[test]
+fn either_command_held_makes_q_quit() {
+    let store = MemoryPilots::new();
+    let mut screen = opening(&store);
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::MetaRight, true));
+    screen.input(&key(Key::MetaLeft, false));
+    screen.input(&key(Key::KeyQ, true));
+    screen.input(&key(Key::KeyQ, false));
+    screen.input(&key(Key::MetaRight, false));
+    screen.tick(Duration::from_millis(1000));
+    assert!(screen.take_quit(), "the right Command still down");
+}
+
 #[test]
 fn command_comma_during_the_start_up_fade_opens_the_preferences_once_it_ends() {
     let store = MemoryPilots::new();

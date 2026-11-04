@@ -375,11 +375,11 @@ impl AppScreen {
         };
         let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
         let chord = chord_command(key) == Some(MenuCommand::Preferences);
-        let taken = (chord && self.command_held) || (key == Key::KeyP && away);
+        let taken = (chord && self.command_held.held()) || (key == Key::KeyP && away);
         if !taken || self.dialogs.is_none() {
             return false;
         }
-        let menu_key = self.side == Side::MainMenu && key == Key::KeyP && !self.command_held;
+        let menu_key = self.side == Side::MainMenu && key == Key::KeyP && !self.command_held.held();
         if pressed && (!repeat || menu_key) {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
@@ -650,7 +650,7 @@ impl AppScreen {
         if let Input::Key {
             key, pressed: true, ..
         } = *input
-            && self.command_held
+            && self.command_held.held()
             && chord_command(key) == Some(MenuCommand::Quit)
         {
             return ScreenAction::Quit;
@@ -710,9 +710,9 @@ impl AppScreen {
 
     /// Keeps whether Command and the physical S, L and E keys are held.
     pub(super) fn note_keys(&mut self, input: &Input) {
+        self.command_held.follow(input);
         if let Input::Key { key, pressed, .. } = *input {
             match key {
-                Key::MetaLeft => self.command_held = pressed,
                 Key::KeyS => self.keys_held.s = pressed,
                 Key::KeyL => self.keys_held.l = pressed,
                 Key::KeyE => self.keys_held.e = pressed,

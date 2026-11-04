@@ -49,7 +49,7 @@ impl AppScreen {
             }
             return ScreenAction::None;
         };
-        let around = !self.command_held;
+        let around = !self.command_held.held();
         let command_key = |pressed| Input::Key {
             key: Key::MetaLeft,
             pressed,

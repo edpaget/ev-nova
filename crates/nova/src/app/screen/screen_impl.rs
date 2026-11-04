@@ -636,7 +636,7 @@ impl AppScreen {
             }
             return;
         }
-        self.command_held = false;
+        self.command_held.let_go();
         self.keys_held = MenuKeys::default();
         // A mission dialog's map over flight sits among the overlays, in
         // front of the dialog it opened from, so flight lets go too: its

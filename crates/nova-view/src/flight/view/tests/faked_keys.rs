@@ -187,6 +187,15 @@ fn each_key_asks_the_session_for_its_command() {
         "Command-5"
     );
     view.input(&key(Key::MetaLeft, false));
+    // `_HandlePlayer` polls the left Command's key code alone
+    // (`_QuickKeyCheck(0x37)` @0x69dbc).
+    view.input(&key(Key::MetaRight, true));
+    assert_eq!(
+        view.command_of(NEAREST_STELLAR_COMMAND_KEY),
+        None,
+        "the right Command"
+    );
+    view.input(&key(Key::MetaRight, false));
     tap(&mut view, MENU_KEY);
     assert!(view.escort_menu().is_open());
     assert_eq!(view.command_of(Key::Digit1), Some(PlayerCommand::Escort));

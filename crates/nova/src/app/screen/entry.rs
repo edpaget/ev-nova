@@ -172,7 +172,7 @@ impl AppScreen {
         self.entry.as_ref()?;
         self.note_pointer(input);
         self.note_keys(input);
-        let command_held = self.command_held;
+        let command_held = self.command_held.held();
         let entering = self.entry.as_mut()?;
         if entering.core.input(input, command_held) == Verdict::Text
             && let Some(text) = &mut entering.text
@@ -231,7 +231,7 @@ impl AppScreen {
         if let Some(text) = &mut entering.text {
             text.release_keys();
         }
-        self.command_held = false;
+        self.command_held.let_go();
         self.keys_held = super::MenuKeys::default();
         true
     }

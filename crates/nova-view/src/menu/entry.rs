@@ -79,7 +79,7 @@ use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
 use crate::screen::Showing;
 use crate::sound::UiSound;
-use crate::{Color, DrawList, Input, Key};
+use crate::{COMMAND_KEYS, Color, DrawList, Input, Key};
 
 /// What an [`Entry`] does with an input or a close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -369,7 +369,7 @@ impl Entry {
                 key,
                 pressed: true,
                 repeat: false,
-            } if command_held && key != Key::MetaLeft => {
+            } if command_held && !COMMAND_KEYS.contains(&key) => {
                 self.held.push(Deferred::Command(key));
                 Verdict::Held
             }
@@ -766,6 +766,19 @@ mod tests {
             entry.handed_over(),
             [Deferred::Command(Key::KeyQ), Deferred::Close]
         );
+    }
+
+    #[test]
+    fn the_right_command_is_a_command_key_and_no_chord() {
+        let mut entry = Entry::new(None);
+        assert_eq!(
+            entry.input(&key(Key::MetaRight, true), false),
+            Verdict::Drop
+        );
+        assert_eq!(entry.input(&key(Key::MetaRight, true), true), Verdict::Drop);
+        assert_eq!(entry.input(&key(Key::KeyQ, true), true), Verdict::Held);
+        entry.tick(SECOND);
+        assert_eq!(entry.handed_over(), [Deferred::Command(Key::KeyQ)]);
     }
 
     #[test]

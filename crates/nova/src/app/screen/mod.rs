@@ -376,7 +376,9 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DialogResources, HaggleDialog, PlunderDialog, PrefsDialog,
     YesNoDialog,
 };
-use nova_view::{Color, Input, Key, LaunchPrefs, MenuCommand, Navigator, Point, Prefs, Sound};
+use nova_view::{
+    Color, Input, Key, LaunchPrefs, MenuCommand, ModifierHeld, Navigator, Point, Prefs, Sound,
+};
 use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
@@ -735,8 +737,10 @@ pub struct AppScreen {
     button_down: bool,
     /// The player info screen over flight, while it is open.
     player_info: Option<PlayerInfoScreen>,
-    /// Whether Command is held, for Command+comma.
-    command_held: bool,
+    /// Whether Command is held, for Command+comma and the other chords:
+    /// either Command, as the original's menus read the `cmdKey` bit
+    /// (`_DoMainScreen` @0x1b25d, `_IterateInGameEventLoop` @0x56a6b).
+    command_held: ModifierHeld,
     /// The menu chords held while a dialog holds back its keys for a
     /// held press, until its replay has run (see `held_chords`).
     held_chords: held_chords::HeldChords,
