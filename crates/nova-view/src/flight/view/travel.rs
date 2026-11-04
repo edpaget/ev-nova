@@ -377,7 +377,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Only [`MapOpening::Plain`] keeps any flight key held: any other
     /// map's releases go to the screen under it, not to flight, so a key
     /// kept there would outlive the take-off.
+    ///
+    /// The opening's tidy of the course goes first
+    /// ([`FlightCommand::OpenSystemMap`], `_DoSystemMap` @0x12338-0x12394),
+    /// whoever opens the map: a command, not part of the ask, as it can
+    /// change the course the frame shows, so Clear Route reads the course
+    /// the tidy left, as @0x12396-0x123c3 does.
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
+        let _ = self.send(FlightCommand::OpenSystemMap);
         let marks = by.marks_from();
         let open = match self.sim.screen(ScreenAsk::MapOpening { marks }) {
             ScreenAnswer::MapOpening(open) => Some(open),

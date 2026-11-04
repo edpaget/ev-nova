@@ -56,8 +56,9 @@ pub(super) fn faked_stage(view: &Faked) -> &'static str {
     }
 }
 
-/// The commands `view` sent since `from` of them, the message line's
-/// and the settings' left out.
+/// The commands `view` sent since `from` of them, the message line's,
+/// the settings' and the map's opening ([`FlightCommand::OpenSystemMap`])
+/// left out.
 pub(super) fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
     view.sim.applied()[from..]
         .iter()
@@ -71,6 +72,7 @@ pub(super) fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
                     | FlightCommand::SetDoubleTimeKey(_)
                     | FlightCommand::SetSoundQuiet(_)
                     | FlightCommand::SetSpriteLoad(_)
+                    | FlightCommand::OpenSystemMap
             )
         })
         .cloned()

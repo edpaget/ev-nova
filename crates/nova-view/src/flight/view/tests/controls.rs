@@ -71,8 +71,8 @@ fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
     let over = npc_on_screen(&view, id);
     assert!(over.x < VIEW_SIZE.0 - STATUS_BAR_WIDTH, "{over:?} in space");
     view.click_in_space(over);
-    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { at, drawn }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     let world = view.camera().screen_to_world(over);
     assert_eq!(*at, Vec2::new(world.x, world.y));
@@ -86,8 +86,8 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
     let (mut view, _) = faked_with_npc();
     // The camera centres on the player, so its ship is drawn at the centre.
     view.click_in_space(PLAYER_AT);
-    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { at, drawn }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     assert_eq!(*at, Vec2::ZERO, "the player's ship's centre");
     assert!(drawn.player.is_some(), "boxed");
@@ -331,8 +331,8 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
         "{boxed:?} at {was:?}"
     );
     view.click_in_space(was);
-    let [FlightCommand::ClickInSpace { drawn, .. }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { drawn, .. }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "the box sent");
 }

@@ -182,8 +182,8 @@ fn a_click_and_a_hover_send_the_box_the_hull_is_drawn_in() {
         .camera()
         .world_to_screen(at(rect.left + 30.0, rect.top + 30.0));
     view.click_in_space(over);
-    let [FlightCommand::ClickInSpace { drawn, .. }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { drawn, .. }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     let boxed = drawn.npc(NPC_0).expect("boxed");
     assert_eq!(boxed.rect, rect, "clicked");

@@ -148,8 +148,8 @@ fn a_click_where_a_ship_is_drawn_sends_its_box_there_and_its_brackets_frame_it()
                 faked_ship_sprites(&view)
             );
             view.click_in_space(drawn_at);
-            let [FlightCommand::ClickInSpace { at: clicked, drawn }] = sent(&view) else {
-                panic!("{:?}", sent(&view));
+            let [FlightCommand::ClickInSpace { at: clicked, drawn }] = view.sim.applied() else {
+                panic!("{:?}", view.sim.applied());
             };
             assert_eq!(*clicked, Vec2::new(-300.0, 0.0), "{source:?} {size:?}");
             let boxed = drawn
