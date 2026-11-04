@@ -344,6 +344,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_at_the_starts_place_under_another_id_removes_the_start() {
+        // A full course of 132 and 133 in turn, with no hop at 131's place,
+        // so nothing refills slot 0; 134 shares 131's place. The original
+        // compares the two positions (@0x1348b-0x134ab), not the IDs.
+        let full: Vec<i16> = (0..ROUTE_HOPS).map(|hop| 132 + (hop % 2) as i16).collect();
+        for (start, pick) in [(134, 131), (131, 134)] {
+            assert_eq!(
+                click_from(Some(start), &full, pick, &places(&[]), &[130]),
+                RouteEdit {
+                    start: None,
+                    course: ids(&full),
+                    appended: false,
+                    length: 0,
+                },
+                "start {start}, pick {pick}"
+            );
+        }
+    }
+
+    #[test]
     fn no_remove_when_the_start_is_elsewhere() {
         assert_eq!(
             click_from(Some(132), &[133, 131], 133, &places(&[]), &[130]),
