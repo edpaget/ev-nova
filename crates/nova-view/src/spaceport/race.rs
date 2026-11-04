@@ -31,7 +31,8 @@
 //! - **Help** asks for `dësc` 32764's text
 //!   ([`RaceScreen::take_help_request`]), which whoever holds the session
 //!   loads and shows over it (@0x48b89-0x48bd3).
-//! - **A racer** (@0x48bdc-0x48e7b): with Option (Alt) held, the quantity
+//! - **A racer** (@0x48bdc-0x48e7b): with the left Option (Alt) held
+//!   ([`ASK_KEY`], whose key code `_KeyCheck(0x3a)` polls), the quantity
 //!   dialog asks for the bet ([`Purpose::Bet`], opening at the asked
 //!   bet's most), asked even when a winner is shown, and Cancel gives 0;
 //!   otherwise the house bet. Then, with a winner shown or an asked 0, the
@@ -58,7 +59,7 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, ModifierHeld};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -127,6 +128,10 @@ impl std::fmt::Debug for MetricsHandle {
         f.write_str("TextMetrics")
     }
 }
+
+/// Held as a racer is clicked, asks for the bet: the left Option alone,
+/// as `_DoRaceDialog` polls its key code (`_KeyCheck(0x3a)` @0x48be9).
+pub const ASK_KEY: Key = Key::AltLeft;
 
 /// The race dialog, open over the bar.
 #[derive(Clone, Debug)]
@@ -200,7 +205,7 @@ impl RaceScreen {
             laid,
             style,
             focus_ring: FocusRing::default(),
-            quantity: QuantityAsk::new(quantity, style),
+            quantity: QuantityAsk::new(quantity, style, ModifierHeld::only(ASK_KEY)),
             asked_max,
             shown: None,
             chosen: None,
@@ -811,6 +816,17 @@ mod tests {
         screen.no_race();
         assert_eq!(looks(&screen), [RacerLook::Normal; 4]);
         assert_eq!(screen.leave_label(), CANCEL_LABEL, "no race ran");
+    }
+
+    /// `_DoRaceDialog` polls the left Option's key code alone
+    /// (`_KeyCheck(0x3a)` @0x48be9).
+    #[test]
+    fn with_the_right_option_held_a_racer_bets_the_house_bet() {
+        let mut screen = open();
+        screen.input(&key(Key::AltRight, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(screen.quantity().is_none(), "nothing asked");
+        assert_eq!(screen.take_bet(), Some((1, Bet::House)));
     }
 
     #[test]

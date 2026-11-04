@@ -80,7 +80,7 @@
 //! a click where it is, or B, still buys when it is enabled
 //! (`_TrackOutfitButtons` @0x2a1ec-0x2a202, `_OutfitFilter`
 //! @0x5817a-0x58190), silently. With Option held (Alt
-//! here, [`COUNT_KEY`]), Buy or Sell asks for a count instead, as
+//! here, [`COUNT_KEYS`]), Buy or Sell asks for a count instead, as
 //! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
 //! for a sale): when the outfitter says it asks
 //! ([`Outfitter::count_asked`], by the engine's reading of
@@ -180,7 +180,7 @@ use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
-use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
+use super::trade::{BUY_LABEL, MAX_LOT_KEYS, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -188,7 +188,7 @@ use crate::flight::escorts::NUMBER_WORDS;
 use crate::flight::view::is_map_press;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, ModifierHeld};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -235,12 +235,13 @@ pub use super::grid::{
 pub const BUY_KEY: Key = Key::KeyB;
 /// Sells one, as Sell does: the original's default.
 pub const SELL_KEY: Key = Key::KeyS;
-/// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
-/// the original's Option does (`_DoOutfitDialog` tests `optionKey` alone,
-/// `testb $0x8`), unless the other reading of
+/// Held, either of them makes a Buy or Sell ask for a count in the
+/// quantity dialog, as the original's Option does (`_DoOutfitDialog`
+/// tests the event's `optionKey` bit alone, `testb $0x8` @0x5c0c0,
+/// @0x5c5e3, which either Option sets), unless the other reading of
 /// [`RuleKey::OutfitCount`](nova_sim::RuleKey::OutfitCount) has it change
-/// nothing. The exchange's key ([`MAX_LOT_KEY`]).
-pub const COUNT_KEY: Key = MAX_LOT_KEY;
+/// nothing. The exchange's keys ([`MAX_LOT_KEYS`]).
+pub const COUNT_KEYS: [Key; 2] = MAX_LOT_KEYS;
 
 /// The first outfit's `PICT`; outfit n's is n - 128 after it.
 pub const FIRST_PICTURE: i16 = 6000;
@@ -605,7 +606,7 @@ impl OutfitterScreen {
             arrow_moves,
             order: None,
             held: None,
-            quantity: QuantityAsk::new(quantity.ok(), style),
+            quantity: QuantityAsk::new(quantity.ok(), style, ModifierHeld::either(COUNT_KEYS)),
             alert: ModalHost::default(),
             alert_template: alert.ok(),
             offering: None,
@@ -3460,7 +3461,7 @@ mod tests {
         let commands = drawn(&screen);
         assert!(contains(&commands, &frame(&screen, 0)));
         assert!(!contains(&commands, &frame(&screen, 1)), "one cell");
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         press(&mut screen, SELL_KEY);
         assert_eq!(field_text(&screen), Some("2"), "the blaster's count");
     }
@@ -3617,7 +3618,7 @@ mod tests {
         press(&mut screen, SELL_KEY);
         click_item(&mut screen, BUY_ITEM);
         click_item(&mut screen, SELL_ITEM);
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         press(&mut screen, BUY_KEY);
         press(&mut screen, SELL_KEY);
         assert_eq!(screen.take_order(), None);
@@ -4032,24 +4033,41 @@ mod tests {
 
     /// Clicks `button` with Alt held, then lets Alt go.
     fn alt_click(screen: &mut OutfitterScreen, button: usize) {
-        press(screen, COUNT_KEY);
+        press(screen, COUNT_KEYS[0]);
         click_item(screen, button);
-        screen.input(&key(COUNT_KEY, false, false));
+        screen.input(&key(COUNT_KEYS[0], false, false));
+    }
+
+    /// `_DoOutfitDialog` reads `optionKey` from the event (@0x5c0c0,
+    /// @0x5c5e3), which either Option sets.
+    #[test]
+    fn either_option_is_held_until_both_are_let_go() {
+        let mut screen = counting_screen();
+        screen.input(&key(Key::AltRight, true, false));
+        assert!(screen.alt_held(), "the right Option");
+        screen.input(&key(Key::AltLeft, true, false));
+        screen.input(&key(Key::AltRight, false, false));
+        assert!(screen.alt_held(), "the left one still down");
+        screen.input(&key(Key::AltLeft, false, false));
+        assert!(!screen.alt_held());
+        screen.input(&key(Key::AltRight, true, false));
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "the right Option asks");
     }
 
     #[test]
     fn alt_held_follows_alt() {
         let mut screen = counting_screen();
         assert!(!screen.alt_held());
-        screen.input(&key(COUNT_KEY, true, false));
+        screen.input(&key(COUNT_KEYS[0], true, false));
         assert!(screen.alt_held());
-        screen.input(&key(COUNT_KEY, false, false));
+        screen.input(&key(COUNT_KEYS[0], false, false));
         assert!(!screen.alt_held());
     }
 
     #[test]
     fn with_alt_held_buy_opens_the_quantity_dialog_at_the_engines_maximum_titled_buy() {
-        assert_eq!(COUNT_KEY, Key::AltLeft);
+        assert_eq!(COUNT_KEYS, [Key::AltLeft, Key::AltRight]);
         let mut screen = counting_screen();
         assert!(screen.quantity().is_none());
         alt_click(&mut screen, BUY_ITEM);
@@ -4071,7 +4089,7 @@ mod tests {
     #[test]
     fn alt_s_opens_a_sell_dialog_at_the_count_owned_and_its_s_types_nothing() {
         let mut screen = counting_screen();
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         // As a Mac sends Option-S: the key, then the character it types.
         press(&mut screen, SELL_KEY);
         screen.input(&Input::Text('ß'));
@@ -4178,7 +4196,7 @@ mod tests {
         alt_click(&mut screen, BUY_ITEM);
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         press(&mut screen, SELL_KEY);
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
@@ -4261,13 +4279,13 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_lets_go_of_alt() {
         let mut screen = counting_screen();
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         screen.release_keys();
         click_item(&mut screen, BUY_ITEM);
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
         // Let go while the dialog is open.
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         click_item(&mut screen, BUY_ITEM);
         screen.release_keys();
         let cancel = quantity_item(&screen, 4);
@@ -4281,12 +4299,12 @@ mod tests {
     fn alt_is_followed_while_the_dialog_is_open() {
         let mut screen = counting_screen();
         alt_click(&mut screen, BUY_ITEM);
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
         click_item(&mut screen, BUY_ITEM);
         assert!(screen.quantity().is_some(), "Alt went down in the dialog");
-        screen.input(&key(COUNT_KEY, false, false));
+        screen.input(&key(COUNT_KEYS[0], false, false));
         let cancel = quantity_item(&screen, 4);
         click(&mut screen, cancel);
         click_item(&mut screen, BUY_ITEM);
@@ -4911,9 +4929,9 @@ mod tests {
     fn alt_let_go_while_the_alert_is_open_is_followed() {
         let [(row, _), ..] = refused_in_the_loop();
         let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
-        press(&mut screen, COUNT_KEY);
+        press(&mut screen, COUNT_KEYS[0]);
         screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
-        screen.input(&key(COUNT_KEY, false, false));
+        screen.input(&key(COUNT_KEYS[0], false, false));
         press(&mut screen, Key::Escape);
         press(&mut screen, SELL_KEY);
         assert!(screen.quantity().is_none());

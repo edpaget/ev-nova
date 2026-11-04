@@ -79,6 +79,21 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
 // Target Select.
 
 #[test]
+fn the_right_option_doesnt_turn_flights_target_select_to_escorts() {
+    // `_FindNextShipInSystem` polls the left Option's key code alone
+    // (`_KeyCheck(0x3a)` @0xa5c8).
+    let mut view = fleet(&[EscortClass::Fighter]);
+    let from = sent_count(&view);
+    view.input(&key(Key::AltRight, true));
+    tap(&mut view, TARGET_KEY);
+    view.input(&key(Key::AltRight, false));
+    assert_eq!(
+        sent_since(&view, from),
+        [FlightCommand::SelectTarget(TargetPick::Next)]
+    );
+}
+
+#[test]
 fn the_right_shift_doesnt_turn_flights_target_select_back() {
     // `_HandlePlayer` polls the left Shift's key code alone
     // (`_QuickKeyCheck(0x38)` @0x69f74).

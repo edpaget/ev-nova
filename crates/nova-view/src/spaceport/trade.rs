@@ -101,7 +101,7 @@ use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, ModifierHeld, SHIFT_KEYS};
+use crate::input::{Input, Key, ModifierHeld, OPTION_KEYS, SHIFT_KEYS};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -146,11 +146,12 @@ pub const SELL_LABEL: &str = "Sell";
 pub const BUY_KEY: Key = Key::KeyB;
 /// Sells, as Sell does: the original's default.
 pub const SELL_KEY: Key = Key::KeyS;
-/// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
-/// the original's Option does, or by the other reading of
-/// [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount) trade the most
-/// at once.
-pub const MAX_LOT_KEY: Key = Key::AltLeft;
+/// Held, either of them makes a Buy or Sell ask for a count in the
+/// quantity dialog, as the original's Option does, or by the other reading
+/// of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount) trade the
+/// most at once: either Option, as `_DoTradeDialog` reads the event's
+/// `optionKey` bit (@0x5e211, @0x5e45c).
+pub const MAX_LOT_KEYS: [Key; 2] = OPTION_KEYS;
 
 /// The dialog's font: `_smallTextFont`, Geneva (@0x4cf4b-0x4cf72).
 pub const TEXT_FONT: Font = Font::Geneva;
@@ -338,7 +339,7 @@ impl TradeScreen {
             colors: ListColors::STOCK,
             selected: 0,
             top: 0,
-            quantity: QuantityAsk::new(quantity.ok(), style),
+            quantity: QuantityAsk::new(quantity.ok(), style, ModifierHeld::either(MAX_LOT_KEYS)),
             offering: None,
             asks: KeyAsks::default(),
             order: None,
@@ -854,9 +855,9 @@ impl Screen for TradeScreen {
             return ScreenAction::None;
         }
         match *input {
-            Input::Key {
-                key: MAX_LOT_KEY, ..
-            } => self.quantity.follow_alt(input),
+            Input::Key { key, .. } if MAX_LOT_KEYS.contains(&key) => {
+                self.quantity.follow_alt(input);
+            }
             // Tab steps the selection only under the engine reading; the
             // focus ring keeps it otherwise. Press-only, though the
             // original steps on autoKey too (@0x4e0c3).
@@ -1193,7 +1194,7 @@ mod tests {
         );
         assert_eq!((BUY_LABEL, SELL_LABEL), ("Buy", "Sell"));
         assert_eq!(
-            (BUY_KEY, SELL_KEY, MAX_LOT_KEY),
+            (BUY_KEY, SELL_KEY, MAX_LOT_KEYS[0]),
             (Key::KeyB, Key::KeyS, Key::AltLeft)
         );
         assert_eq!((TEXT_FONT, TEXT_SIZE), (Font::Geneva, 9.0));
@@ -2054,7 +2055,7 @@ mod tests {
             rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
             ..market()
         });
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(
             screen.take_order(),
@@ -2065,19 +2066,19 @@ mod tests {
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Max))
         );
-        screen.input(&key(MAX_LOT_KEY, true, true));
+        screen.input(&key(MAX_LOT_KEYS[0], true, true));
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Max))
         );
-        screen.input(&key(MAX_LOT_KEY, false, false));
+        screen.input(&key(MAX_LOT_KEYS[0], false, false));
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
             Some(order(0, FOOD, Direction::Buy, Lot::Click))
         );
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         screen.release_keys();
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(
@@ -2119,9 +2120,30 @@ mod tests {
     /// Opens the quantity dialog on the selected row with Alt and a click
     /// on `button`, Alt then let go.
     fn alt_click(screen: &mut TradeScreen, button: usize) {
-        press(screen, MAX_LOT_KEY);
+        press(screen, MAX_LOT_KEYS[0]);
         click_item(screen, button);
-        screen.input(&key(MAX_LOT_KEY, false, false));
+        screen.input(&key(MAX_LOT_KEYS[0], false, false));
+    }
+
+    /// `_DoTradeDialog` reads `optionKey` from the event (@0x5e211,
+    /// @0x5e45c), which either Option sets.
+    #[test]
+    fn either_option_held_asks_for_a_count_until_both_are_let_go() {
+        let mut screen = screen();
+        press(&mut screen, Key::AltRight);
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "the right Option asks");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        press(&mut screen, Key::AltLeft);
+        screen.input(&key(Key::AltRight, false, false));
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "the left one still down");
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        screen.input(&key(Key::AltLeft, false, false));
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none(), "both up: no count asked");
     }
 
     #[test]
@@ -2154,7 +2176,7 @@ mod tests {
     #[test]
     fn alt_s_opens_a_sale_dialog_its_s_typing_nothing_and_return_trades_the_most() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         // As a Mac sends Option-S: the key, then the character it types.
         press(&mut screen, SELL_KEY);
         screen.input(&Input::Text('ß'));
@@ -2169,7 +2191,7 @@ mod tests {
             "only the first typed character is dropped"
         );
         let mut screen = self::screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         typed(&mut screen, "s");
         press(&mut screen, Key::Enter);
         assert_eq!(
@@ -2223,9 +2245,9 @@ mod tests {
     #[test]
     fn alt_let_go_in_the_dialog_is_let_go_after_it() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         click_item(&mut screen, BUY_ITEM);
-        screen.input(&key(MAX_LOT_KEY, false, false));
+        screen.input(&key(MAX_LOT_KEYS[0], false, false));
         press(&mut screen, Key::Enter);
         assert_eq!(
             screen.take_order(),
@@ -2240,7 +2262,7 @@ mod tests {
         click_item(&mut screen, BUY_ITEM);
         screen.take_order();
         alt_click(&mut screen, BUY_ITEM);
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         press(&mut screen, Key::Enter);
         screen.take_order();
         press(&mut screen, BUY_KEY);
@@ -2251,7 +2273,7 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_in_the_dialog_lets_go_of_alt() {
         let mut screen = screen();
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         click_item(&mut screen, BUY_ITEM);
         screen.release_keys();
         press(&mut screen, Key::Enter);
@@ -2294,7 +2316,7 @@ mod tests {
     #[test]
     fn below_a_most_under_nothing_the_dialog_opens_and_only_cancel_leaves() {
         let mut screen = waste(1000);
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.quantity().map(|asking| asking.field().text()),
@@ -2309,7 +2331,7 @@ mod tests {
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), None);
         let mut screen = waste(0);
-        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, MAX_LOT_KEYS[0]);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert!(screen.quantity().is_none(), "0 of 0 confirmed");
@@ -2630,7 +2652,7 @@ mod tests {
                 key(k, true, true),
                 key(k, false, false),
                 key(BUY_KEY, true, false),
-                key(MAX_LOT_KEY, true, false),
+                key(MAX_LOT_KEYS[0], true, false),
                 key(Key::ArrowDown, true, false),
             ] {
                 screen.input(&other);

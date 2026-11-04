@@ -432,6 +432,7 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
         Key::ShiftRight,
         Key::ControlLeft,
         Key::AltLeft,
+        Key::AltRight,
         Key::MetaLeft,
         Key::CapsLock,
     ] {

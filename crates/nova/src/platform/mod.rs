@@ -176,6 +176,9 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 /// - The right Shift is its own key: flight and the map's click poll the
 ///   left Shift's key code alone, where the trade, the player info and
 ///   the map's Tab take either.
+/// - The right Option (Alt) is its own key: flight and the race poll the
+///   left Option's key code alone, where the exchange's and the
+///   outfitter's counts take either, as does Alt-Enter.
 /// - The keypad's Enter is its own key: the intro and flight's `ackComm`
 ///   poll Return's key code alone, where the dialogs take both.
 /// - F11 is the fullscreen shortcut off a Mac. F12 is flight's frame-rate
@@ -193,8 +196,6 @@ pub fn map_key(key: PhysicalKey) -> Key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
                 // Command, Super off a Mac.
                 PhysicalKey::Code(KeyCode::SuperLeft) => Key::MetaLeft,
-                // Either Alt, Option on a Mac.
-                PhysicalKey::Code(KeyCode::AltRight) => Key::AltLeft,
                 // Either Control: flight's secondary fire key.
                 PhysicalKey::Code(KeyCode::ControlRight) => Key::ControlLeft,
                 // Either Command: what flight's jettison and eject keys
@@ -213,7 +214,7 @@ pub fn map_key(key: PhysicalKey) -> Key {
         Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Equal, IntlBackslash, IntlRo, IntlYen,
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN,
         KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Minus, Period,
-        Quote, Semicolon, Slash, AltLeft, Backspace, CapsLock, ContextMenu, ControlLeft, Enter,
+        Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock, ContextMenu, ControlLeft, Enter,
         ShiftLeft, ShiftRight, Space, Tab, Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5,
         NonConvert, Delete, End, Help, Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft,
         ArrowRight, ArrowUp, NumLock, Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5,
@@ -309,7 +310,7 @@ mod tests {
             (KeyCode::KeyP, Key::KeyP),
             (KeyCode::KeyB, Key::KeyB),
             (KeyCode::AltLeft, Key::AltLeft),
-            (KeyCode::AltRight, Key::AltLeft),
+            (KeyCode::AltRight, Key::AltRight),
             (KeyCode::ControlLeft, Key::ControlLeft),
             (KeyCode::ControlRight, Key::ControlLeft),
             (KeyCode::ShiftLeft, Key::ShiftLeft),
@@ -556,8 +557,7 @@ mod tests {
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.
-    const FOLDS: [(KeyCode, KeyCode); 4] = [
-        (KeyCode::AltRight, KeyCode::AltLeft),
+    const FOLDS: [(KeyCode, KeyCode); 3] = [
         (KeyCode::ControlRight, KeyCode::ControlLeft),
         (KeyCode::SuperRight, KeyCode::SuperLeft),
         (KeyCode::NumpadSubtract, KeyCode::Minus),
@@ -804,8 +804,14 @@ mod tests {
     const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
-        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
-        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
+        (
+            nova_view::spaceport::trade::MAX_LOT_KEYS[0],
+            KeyCode::AltLeft,
+        ),
+        (
+            nova_view::spaceport::trade::MAX_LOT_KEYS[1],
+            KeyCode::AltRight,
+        ),
         // The outfitter's grid selection.
         (Key::ArrowLeft, KeyCode::ArrowLeft),
         (Key::ArrowRight, KeyCode::ArrowRight),

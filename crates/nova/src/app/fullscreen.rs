@@ -39,7 +39,7 @@
 //! the player quit in. On macOS, never exclusive, focus and exit leave
 //! the native Space alone.
 
-use nova_view::{FullscreenKind, Key, VideoMode, listed_modes};
+use nova_view::{FullscreenKind, Input, Key, ModifierHeld, OPTION_KEYS, VideoMode, listed_modes};
 
 use crate::app::WindowPort;
 use crate::config::Os;
@@ -57,10 +57,19 @@ pub(crate) enum Shortcut {
     Swallowed,
 }
 
-/// The modifier the shortcut uses, as held down.
-#[derive(Clone, Copy, Debug, Default)]
+/// The modifier the shortcut uses, as held down: either Alt, as the
+/// platform's convention has it (the shortcut is the engine's own).
+#[derive(Clone, Copy, Debug)]
 struct Modifiers {
-    alt: bool,
+    alt: ModifierHeld,
+}
+
+impl Default for Modifiers {
+    fn default() -> Self {
+        Self {
+            alt: ModifierHeld::either(OPTION_KEYS),
+        }
+    }
 }
 
 /// Whether and how the game is fullscreen, the kind to enter, the
@@ -191,9 +200,11 @@ impl Fullscreen {
     /// not flicker, but it is swallowed with the press it repeats.
     pub(crate) fn key(&mut self, key: Key, pressed: bool, repeat: bool) -> Shortcut {
         self.drop_text = false;
-        if key == Key::AltLeft {
-            self.held_modifiers.alt = pressed;
-        }
+        self.held_modifiers.alt.follow(&Input::Key {
+            key,
+            pressed,
+            repeat,
+        });
         if self.held == Some(key) {
             if !pressed {
                 self.held = None;
@@ -217,7 +228,7 @@ impl Fullscreen {
         match self.os {
             Os::MacOs => false,
             Os::Windows | Os::Other => {
-                (matches!(key, Key::Enter | Key::NumpadEnter) && self.held_modifiers.alt)
+                (matches!(key, Key::Enter | Key::NumpadEnter) && self.held_modifiers.alt.held())
                     || key == Key::F11
             }
         }
@@ -510,6 +521,7 @@ mod tests {
         for os in [Os::Windows, Os::Other] {
             assert!(toggles(os, &[Key::AltLeft, Key::Enter]), "{os:?}");
             assert!(toggles(os, &[Key::AltLeft, Key::NumpadEnter]), "{os:?}");
+            assert!(toggles(os, &[Key::AltRight, Key::Enter]), "{os:?}");
             assert!(toggles(os, &[Key::F11]), "{os:?}");
             assert!(!toggles(os, &[Key::Enter]), "{os:?}");
             assert!(!toggles(os, &[Key::F10]), "{os:?}");

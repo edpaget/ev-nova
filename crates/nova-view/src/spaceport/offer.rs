@@ -1108,6 +1108,7 @@ fn queues_an_event(input: &Input) -> bool {
                 && !matches!(
                     key,
                     Key::AltLeft
+                        | Key::AltRight
                         | Key::ControlLeft
                         | Key::ShiftLeft
                         | Key::ShiftRight
@@ -1431,6 +1432,7 @@ mod tests {
         };
         let modifiers = [
             Key::AltLeft,
+            Key::AltRight,
             Key::ControlLeft,
             Key::ShiftLeft,
             Key::ShiftRight,

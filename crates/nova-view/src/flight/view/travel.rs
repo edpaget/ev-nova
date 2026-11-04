@@ -607,6 +607,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             | Key::ShiftRight
             | Key::ControlLeft
             | Key::AltLeft
+            | Key::AltRight
             | Key::MetaLeft
             | Key::CapsLock
             | Key::Enter
