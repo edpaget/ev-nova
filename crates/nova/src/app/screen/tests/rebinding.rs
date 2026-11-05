@@ -165,3 +165,67 @@ fn a_spaceport_built_before_the_bindings_reads_them() {
     screen.input(&key(Key::KeyQ, true));
     assert!(spaceport(&screen).player_info().is_some(), "Q");
 }
+
+/// The bindings with the pad's focus-down moved from the d-pad's down to
+/// North.
+fn focus_down_on_north() -> SharedBindings {
+    use nova_view::PadButton;
+    use nova_view::keymap::{PadBinding, PadEntry};
+    let mut rebound = Bindings::default();
+    rebound.gamepad.bind(
+        UiCommand::FocusDown.into(),
+        PadBinding::Entry(PadEntry::plain(PadButton::North)),
+    );
+    shared(rebound)
+}
+
+/// Where the main menu's pad focus is after the d-pad's down, then after
+/// North, each tapped with the pad told.
+fn menu_focus_after_down_then_north(
+    screen: &mut AppScreen,
+) -> (Option<MenuChoice>, Option<MenuChoice>) {
+    use nova_view::{ControllerFamily, Device, PadButton, Surroundings};
+    let tap = |screen: &mut AppScreen, button| {
+        screen.input(&Input::PadButton {
+            button,
+            pressed: true,
+        });
+        screen.input(&Input::PadButton {
+            button,
+            pressed: false,
+        });
+    };
+    let highlight = |screen: &AppScreen| screen.main_menu().expect("a main menu").pad_highlight();
+    screen.input(&Input::Surroundings(Surroundings {
+        device: Device::Gamepad(ControllerFamily::Generic),
+    }));
+    tap(screen, PadButton::DPadDown);
+    let after_down = highlight(screen);
+    tap(screen, PadButton::North);
+    (after_down, highlight(screen))
+}
+
+#[test]
+fn a_main_menu_built_before_the_bindings_reads_them() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store).with_bindings(focus_down_on_north());
+    assert_eq!(
+        menu_focus_after_down_then_north(&mut screen),
+        (Some(MenuChoice::NewPilot), Some(MenuChoice::OpenPilot)),
+        "the d-pad's down no longer moves it; North does"
+    );
+}
+
+#[test]
+fn a_main_menu_built_after_the_bindings_reads_them() {
+    let store = MemoryPilots::new();
+    let mut screen = with_dialogs(data())
+        .with_bindings(focus_down_on_north())
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    assert_eq!(
+        menu_focus_after_down_then_north(&mut screen),
+        (Some(MenuChoice::NewPilot), Some(MenuChoice::OpenPilot)),
+        "the d-pad's down no longer moves it; North does"
+    );
+}
