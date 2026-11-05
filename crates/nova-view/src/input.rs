@@ -303,6 +303,17 @@ impl PadButton {
         Self::RightStickRight,
     ];
 
+    /// The buttons a gamepad entry may hold as its layer, Select then
+    /// Start: the keys screen catches either as a held layer, and the
+    /// saved form reads no other.
+    pub const LAYERS: [Self; 2] = [Self::Select, Self::Start];
+
+    /// The button named `name` ([`PadButton::name`]), if any.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|button| button.name() == name)
+    }
+
     /// The button's SDL-style position name (`south`, `leftshoulder`,
     /// `dpup`, `+lefty`), as phase 12 saves it. A stick direction is its
     /// axis's name with the direction's sign, as SDL's mappings write a
@@ -384,6 +395,12 @@ impl PadAxis {
             Self::RightX => "rightx",
             Self::RightY => "righty",
         }
+    }
+
+    /// The axis named `name` ([`PadAxis::name`]), if any.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|axis| axis.name() == name)
     }
 
     /// The other axis of the same stick: Y for X, X for Y.
@@ -660,6 +677,27 @@ mod tests {
             PadAxis::ALL.iter().map(|axis| axis.name()).collect();
         assert_eq!(axes.len(), 4);
         assert_eq!(PadAxis::RightX.name(), "rightx");
+    }
+
+    #[test]
+    fn every_pad_button_and_axis_parses_back_from_its_name() {
+        for button in PadButton::ALL {
+            assert_eq!(PadButton::from_name(button.name()), Some(button));
+        }
+        for axis in PadAxis::ALL {
+            assert_eq!(PadAxis::from_name(axis.name()), Some(axis));
+        }
+        for unknown in ["a", "South", "leftx+", "", "leftx", "back+south"] {
+            assert_eq!(PadButton::from_name(unknown), None, "{unknown}");
+        }
+        for unknown in ["LeftX", "+leftx", "leftx~", ""] {
+            assert_eq!(PadAxis::from_name(unknown), None, "{unknown}");
+        }
+    }
+
+    #[test]
+    fn the_layer_buttons_are_select_and_start() {
+        assert_eq!(PadButton::LAYERS, [PadButton::Select, PadButton::Start]);
     }
 
     #[test]
