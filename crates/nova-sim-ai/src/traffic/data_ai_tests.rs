@@ -117,3 +117,42 @@ fn a_ship_spawned_with_word_1_to_4_reads_it() {
     assert_eq!(ship.ai_type, AiType::Interceptor);
     assert!(!ship.no_ai && !ship.kept_escort_ai);
 }
+
+#[test]
+fn a_ship_spawned_with_word_0_or_below_answers_no_hit() {
+    use crate::ai::answer_flag::{FlagRules, Verdict, verdict};
+    use crate::ai::fixture::{PIRATES, TRADERS, govts};
+    use crate::combat::fixture::strike;
+    use crate::combat::{ShipRef, Strike};
+    let govts = govts(0, 0);
+    for word in [0, -1] {
+        // A pirate with an AI after it, to hit it.
+        let traffic = spawned(&[word, 3], word);
+        let mut npcs = traffic.npcs().to_vec();
+        npcs[0].govt = Some(TRADERS);
+        npcs[1].govt = Some(PIRATES);
+        let hit = strike(ShipRef::Npc(npcs[0].id), ShipRef::Npc(npcs[1].id));
+        let judge = |npcs: &[Npc], hit: &Strike| {
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&[], npcs)
+            };
+            let mut chance = Draws::of(&[]);
+            verdict(hit, &around, FlagRules::default(), &mut chance)
+        };
+        let astray = Strike {
+            intended: false,
+            weight: 10.0,
+            ..hit
+        };
+        for hit in [hit, astray] {
+            assert_eq!(
+                judge(&npcs, &hit),
+                Verdict::default(),
+                "{word}: no answer and no stray provocation (@0x3b459)"
+            );
+        }
+        npcs[0].no_ai = false;
+        assert!(judge(&npcs, &hit).answers, "a ship with an AI answers it");
+    }
+}

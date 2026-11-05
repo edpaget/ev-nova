@@ -596,23 +596,32 @@ pub struct Npc {
     /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
     pub odds: f32,
     /// Whether it has no AI: the original's AI type 0 or below (+0x88):
-    /// the player's eject hulk, -1 (`_HandlePlayer` @0x6f31f), a spawn whose
-    /// word is 0 or below in plug-in data
+    /// the player's eject hulk, -1 (`_HandlePlayer` @0x6f31f), a spawn
+    /// whose word is 0 or below in plug-in data
     /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)), and a former
-    /// escort whose class word is ([`Npc::settle_original_ai_type`]). Its [`ai_type`](Npc::ai_type) stays its class's
-    /// `InherentAI`, as the engine's [`AiType`] has no "none". A ship
-    /// with no AI never thinks (`_AIDispatch`'s gate, `_DoPlayGameWork`
-    /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
-    /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
-    /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
-    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
+    /// escort whose class word is 0 or below, written by `_EscortAI`'s
+    /// lost parent (@0x83c4a, [`Npc::settle_original_ai_type`]). Its
+    /// [`ai_type`](Npc::ai_type) stays its class's `InherentAI`, as the
+    /// engine's [`AiType`] has no "none". A ship with no AI never thinks
+    /// (`_AIDispatch`'s gate, `_DoPlayGameWork` @0x4427e), reads odds 0
+    /// (the odds pass @0x44307-0x4431f), answers no hit (`_DamageShip`
+    /// @0x3b459), and reads as no AI type to the readers that test
+    /// another ship's (`_InterceptorAI` @0x8cd4e, `_BraveTraderAI`
+    /// @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
     /// [`Npc::original_ai_type`] reads it. Never saved.
     pub no_ai: bool,
     /// Whether it keeps the original's AI type 6 after the disabled reset
     /// took it out of its fleet (`_AIDispatch` @0x8feda leaves +0x88 alone)
     /// until its first think once whole (`_EscortAI` @0x8394b-0x8397b,
     /// @0x83c4a), or for its whole stay if it thinks as a miner
-    /// (@0x8ff76-0x8ff8d). See [`Npc::original_ai_type`]. Never saved.
+    /// (@0x8ff76-0x8ff8d). Set too for a spawn whose word in plug-in
+    /// data is above 4
+    /// ([`SpawnAi::escort_ai`](crate::traffic::spawn_ai::SpawnAi::escort_ai),
+    /// set by [`Traffic::add`](crate::traffic::Traffic::add)), and kept
+    /// after its first think once whole when its class's `InherentAI` is
+    /// itself above 4 (the lost parent's write @0x83c4a,
+    /// [`Npc::settle_original_ai_type`]). See [`Npc::original_ai_type`].
+    /// Never saved.
     pub kept_escort_ai: bool,
     /// Whether it is a mission escort let go while the player breaks up:
     /// its +0x9a of -1 from its think to the next dispatch, which leads it
