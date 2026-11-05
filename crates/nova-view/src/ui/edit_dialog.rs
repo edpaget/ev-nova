@@ -236,6 +236,33 @@ impl<P: Confirm> Screen for EditDialog<P> {
     }
 }
 
+/// An edit dialog's row in the pad's every-screen table: OK and Cancel
+/// are its targets; the field is none, as a click on it only places the
+/// caret (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+#[cfg(test)]
+pub(crate) struct EditProbe<P: Confirm>(pub(crate) EditDialog<P>);
+
+#[cfg(test)]
+impl<P: Confirm> super::pad_focus::every_screen::PadProbe for EditProbe<P> {
+    fn screen(&mut self) -> &mut dyn Screen {
+        &mut self.0
+    }
+
+    fn controls(&self) -> Vec<(&'static str, crate::geometry::Bounds)> {
+        let items = self.0.items;
+        let bounds = |item| self.0.dialog.item_bounds(item).expect("an item");
+        vec![("OK", bounds(items.ok)), ("Cancel", bounds(items.cancel))]
+    }
+
+    fn outcome(&mut self) -> String {
+        format!("{:?} {}", self.0.take_outcome(), self.0.field().text())
+    }
+
+    fn default_control(&self) -> Option<&'static str> {
+        Some("OK")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;

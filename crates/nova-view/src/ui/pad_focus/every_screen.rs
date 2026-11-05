@@ -89,6 +89,9 @@ fn rows() -> Vec<Row> {
         ("mission texts", crate::ui::mission_dialogs::pad_probe),
         ("preferences", crate::ui::prefs::pad_probe),
         ("keys screen", crate::ui::keys::pad_probe),
+        ("trade's quantity", crate::ui::quantity::pad_probe),
+        ("race's bet", crate::ui::quantity::bet_pad_probe),
+        ("shipyard's naming", crate::ui::text_input::pad_probe),
     ]
 }
 

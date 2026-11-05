@@ -99,6 +99,17 @@ enum Held {
     Thumb { press: Point, at: Point },
 }
 
+/// A part of a [`RowList`] the pad can press ([`RowList::pad_cells`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListCell {
+    /// Row `n` (from 0), shown.
+    Row(usize),
+    /// The bar's up arrow.
+    Up,
+    /// The bar's down arrow.
+    Down,
+}
+
 /// Rows of text a line high each, in a view from the top of a box, run as
 /// the List Manager runs the game's lists (see the
 /// [`list_bar`](super::list_bar) module for the source).
@@ -465,6 +476,50 @@ impl RowList {
         };
         self.selected = Some(next);
         self.auto_scroll();
+    }
+
+    /// What the pad can press in the list, in order: each row shown
+    /// (clipped to the view), then, while the bar shows, its up and down
+    /// arrows. The bar's page areas and thumb are left out, as a press
+    /// can't drag.
+    #[must_use]
+    pub fn pad_cells(&self) -> Vec<(ListCell, Bounds)> {
+        let rows = (self.first..self.first.saturating_add(self.shown)).filter_map(|index| {
+            self.row_bounds(index).map(|row| {
+                let clipped = Bounds {
+                    min: row.min,
+                    max: Point::new(row.max.x, row.max.y.min(self.view.max.y)),
+                };
+                (ListCell::Row(index), clipped)
+            })
+        });
+        let arrows = self.bar.into_iter().flat_map(|bar| {
+            [(ListCell::Up, BarPart::Up), (ListCell::Down, BarPart::Down)]
+                .into_iter()
+                .filter_map(move |(cell, part)| bar.arrow(part).map(|rect| (cell, rect)))
+        });
+        rows.chain(arrows).collect()
+    }
+
+    /// Presses `cell` by key, as a click (a press and release) on it
+    /// does: a row is selected (none when it is a heading or past the
+    /// rows), and an arrow scrolls a row. [`ListPress::Ignored`] while a
+    /// pointer press is held, or for a cell not in [`RowList::pad_cells`].
+    pub fn press_cell(&mut self, cell: ListCell) -> ListPress {
+        if self.held.is_some() || !self.pad_cells().iter().any(|(c, _)| *c == cell) {
+            return ListPress::Ignored;
+        }
+        self.pressed = self.selected;
+        match cell {
+            ListCell::Row(row) => {
+                self.selected = (row < self.rows.len() && !self.is_heading(row)).then_some(row);
+            }
+            ListCell::Up => self.scroll_by(-1),
+            ListCell::Down => self.scroll_by(1),
+        }
+        ListPress::Released {
+            changed: self.selected != self.pressed,
+        }
     }
 
     /// The pointer's input: a left press on the bar or in the view starts
@@ -934,6 +989,76 @@ mod tests {
         let over = RowList::new(names(8), TALL, &MonoMetrics, room);
         assert_eq!(over.view(), TALL, "the box itself (@0xa07a6)");
         assert_eq!(over.bar().map(|bar| bar.min.x), Some(110.0), "right of it");
+    }
+
+    /// A click's press and release at `rect`'s centre on `rows`.
+    fn clicked(rows: &mut RowList, rect: Bounds) -> ListPress {
+        rows.input(&press(rect.center()));
+        rows.input(&release(rect.center()))
+    }
+
+    #[test]
+    fn pressing_a_row_by_key_selects_it_as_a_click_does() {
+        for list in [tall(10), list(2), tall(10).with_headings(&[2])] {
+            for (cell, rect) in list.pad_cells() {
+                if !matches!(cell, ListCell::Row(_)) {
+                    continue;
+                }
+                let mut keyed = list.clone();
+                let mut pointed = list.clone();
+                assert_eq!(
+                    keyed.press_cell(cell),
+                    clicked(&mut pointed, rect),
+                    "{cell:?}"
+                );
+                assert_eq!(keyed, pointed, "{cell:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pressing_the_bar_arrows_by_key_steps_as_a_click_does() {
+        let mut list = tall(10);
+        list.press_cell(ListCell::Down);
+        for cell in [ListCell::Up, ListCell::Down] {
+            let rect = list
+                .pad_cells()
+                .into_iter()
+                .find(|(c, _)| *c == cell)
+                .map(|(_, rect)| rect)
+                .expect("an arrow");
+            let mut keyed = list.clone();
+            let mut pointed = list.clone();
+            assert_eq!(keyed.press_cell(cell), clicked(&mut pointed, rect));
+            assert_eq!(keyed, pointed, "{cell:?}");
+            assert_ne!(keyed.first(), list.first(), "{cell:?} scrolled");
+        }
+    }
+
+    #[test]
+    fn the_visible_rows_and_bar_arrows_are_the_lists_cells() {
+        let cells: Vec<ListCell> = tall(10).pad_cells().into_iter().map(|(c, _)| c).collect();
+        let mut expected: Vec<ListCell> = (0..7).map(ListCell::Row).collect();
+        expected.extend([ListCell::Up, ListCell::Down]);
+        assert_eq!(cells, expected);
+        let mut scrolled = tall(10);
+        scrolled.press_cell(ListCell::Down);
+        assert_eq!(
+            scrolled.pad_cells()[0].0,
+            ListCell::Row(1),
+            "follows a scroll"
+        );
+        let short: Vec<ListCell> = list(2).pad_cells().into_iter().map(|(c, _)| c).collect();
+        assert_eq!(short, [ListCell::Row(0), ListCell::Row(1)], "no bar");
+        // A partly shown last row is clipped to the view.
+        let partly = list(6).pad_cells();
+        assert_eq!(partly[3].1.max.y, BOX.max.y);
+        assert_eq!(partly[3].0, ListCell::Row(3));
+        assert_eq!(
+            list(6).press_cell(ListCell::Row(5)),
+            ListPress::Ignored,
+            "not shown"
+        );
     }
 
     #[test]

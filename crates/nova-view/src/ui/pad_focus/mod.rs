@@ -488,16 +488,8 @@ pub const fn from_pad(input: &Input) -> bool {
 /// device only when it changes or the screen opens, so a screen opened
 /// inside another that forgot it would hold back the pad's focus.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the spaceport's screens take it up next")
-)]
 pub struct Told(Option<Surroundings>);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the spaceport's screens take it up next")
-)]
 impl Told {
     /// Keeps `input` if it is the surroundings; whether it was.
     pub const fn keep(&mut self, input: &Input) -> bool {
@@ -518,6 +510,10 @@ impl Told {
 
     /// The device kept; the keyboard before any.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the spaceport view reads it next")
+    )]
     pub fn device(self) -> Device {
         self.0.map_or(Device::Keyboard, |kept| kept.device)
     }

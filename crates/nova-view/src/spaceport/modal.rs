@@ -17,6 +17,7 @@ use crate::screen::Screen;
 use crate::sound::Sound;
 use crate::ui::desc::DescDialog;
 use crate::ui::edit_dialog::{Confirm, EditDialog};
+use crate::ui::pad_focus::Told;
 
 /// A dialog a screen hosts modally: a [`Screen`] that reports, once, what
 /// the player chose. Reporting an outcome is what closes it.
@@ -63,6 +64,9 @@ impl Modal for DescDialog {
 #[derive(Clone, Debug)]
 pub struct ModalHost<T, D> {
     open: Option<(T, D)>,
+    /// The surroundings the host was told last, which each dialog it
+    /// opens is told as it opens (the pad's focus shows in it at once).
+    told: Told,
     /// What the dialog left as it closed, until taken.
     unclaimed: Vec<Input>,
 }
@@ -72,14 +76,17 @@ impl<T, D> Default for ModalHost<T, D> {
     fn default() -> Self {
         Self {
             open: None,
+            told: Told::default(),
             unclaimed: Vec::new(),
         }
     }
 }
 
 impl<T, D: Modal> ModalHost<T, D> {
-    /// Opens `dialog` for `payload`, in place of any dialog open.
-    pub fn open(&mut self, payload: T, dialog: D) {
+    /// Opens `dialog` for `payload`, in place of any dialog open, telling
+    /// it the surroundings the host was told last.
+    pub fn open(&mut self, payload: T, mut dialog: D) {
+        self.told.tell(&mut dialog);
         self.open = Some((payload, dialog));
     }
 
@@ -99,11 +106,31 @@ impl<T, D: Modal> ModalHost<T, D> {
     /// `sounds`. Once the dialog reports an outcome, the host closes and
     /// gives `(payload, outcome)`. When the host is closed it does nothing
     /// and gives `None`.
+    ///
+    /// The surroundings are kept whether a dialog is open or not
+    /// ([`ModalHost::follow_surroundings`]), so a host forwards them here
+    /// even while nothing is open.
     pub fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> Option<(T, D::Outcome)> {
+        if self.follow_surroundings(input) {
+            return None;
+        }
         let (_, dialog) = self.open.as_mut()?;
         dialog.input(input);
         sounds.extend(dialog.take_sounds());
         self.close_on_outcome()
+    }
+
+    /// Keeps `input` if it is the surroundings, and tells the open dialog;
+    /// whether it was. The surroundings are no player input: nothing
+    /// closes on them.
+    pub fn follow_surroundings(&mut self, input: &Input) -> bool {
+        if !self.told.keep(input) {
+            return false;
+        }
+        if let Some((_, dialog)) = &mut self.open {
+            dialog.input(input);
+        }
+        true
     }
 
     /// Closes once the dialog reports an outcome, keeping what it left
@@ -288,6 +315,36 @@ mod tests {
     const UP: Sound = Sound::Ui(UiSound::ButtonUp);
     const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
     const ALERT: Sound = Sound::Ui(UiSound::Alert);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings { device })
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    #[test]
+    fn a_dialog_opened_is_told_what_the_host_was_told() {
+        let mut host = ModalHost::default();
+        let (before, log) = FakeDialog::new([None::<u32>]);
+        host.open("row", before);
+        assert!(log.borrow().inputs.is_empty(), "nothing told yet");
+        host.input(&told(crate::input::Device::Mouse), &mut Vec::new());
+        host.input(&told(PAD), &mut Vec::new());
+        let (fake, log) = FakeDialog::new([None::<u32>]);
+        host.open("row", fake);
+        assert_eq!(log.borrow().inputs, [told(PAD)]);
+    }
+
+    #[test]
+    fn an_open_dialog_follows_the_surroundings() {
+        let mut host = ModalHost::default();
+        let (fake, log) = FakeDialog::new([Some(1_u32), Some(2)]);
+        host.open("row", fake);
+        assert_eq!(host.input(&told(PAD), &mut Vec::new()), None, "no outcome");
+        assert!(host.is_open(), "the surroundings close nothing");
+        assert_eq!(log.borrow().inputs, [told(PAD)]);
+    }
 
     #[test]
     fn a_closed_host_takes_no_input_draws_nothing_and_gives_nothing() {

@@ -233,6 +233,9 @@ fn fallback_template() -> DialogTemplate {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{bet_pad_probe, pad_probe};
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -302,6 +305,35 @@ mod tests {
 
     fn dialog() -> QuantityDialog {
         dialog_of(12, "Buy")
+    }
+
+    /// Its row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// The race's bet's row: the quantity dialog titled Bet.
+    pub(crate) fn bet_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog_of(
+            40,
+            nova_sim::gamble::BET,
+        )))
+    }
+
+    /// The surroundings are no player input: the flush of the opening
+    /// key's character waits past them.
+    #[test]
+    fn the_surroundings_are_no_player_input() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = dialog();
+        let before = dialog.field().text().to_owned();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        dialog.input(&Input::Text('7'));
+        assert_eq!(dialog.field().text(), before, "still flushed");
+        assert_eq!(dialog.take_outcome(), None);
     }
 
     fn key(key: Key) -> Input {

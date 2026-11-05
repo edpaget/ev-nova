@@ -196,6 +196,9 @@ fn fallback_template() -> DialogTemplate {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -265,6 +268,27 @@ mod tests {
             Rc::new(MonoMetrics),
         )
         .expect("builds")
+    }
+
+    /// Its row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// The surroundings are no player input: the flush of the opening
+    /// key's character waits past them.
+    #[test]
+    fn the_surroundings_are_no_player_input() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = dialog();
+        let before = dialog.field().text().to_owned();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        dialog.input(&Input::Text('7'));
+        assert_eq!(dialog.field().text(), before, "still flushed");
+        assert_eq!(dialog.take_outcome(), None);
     }
 
     fn key(key: Key) -> Input {
