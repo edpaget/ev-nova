@@ -166,6 +166,7 @@ use nova::movie::{movie_folders, movie_player};
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
 use nova::platform::{Dialogs, Runner, event_loop, system_keyboard_access};
 use nova::rulebook::eight_bit_reading;
+use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
 use nova::startup::{
     DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
@@ -203,13 +204,14 @@ fn open_audio(
     audio
 }
 
-/// The pilot keeper over the pilots directory `env` names, or none, with a
-/// warning to `report`, when there is nowhere to save them.
+/// The pilot keeper over `ruleset`'s pilots directory `env` names, or
+/// none, with a warning to `report`, when there is nowhere to save them.
 fn open_pilots(
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    ruleset: Ruleset,
     report: &mut Report,
 ) -> Option<PilotKeeper<Box<dyn PilotStore>>> {
-    let pilots = pilots_dir(Os::current(), env)
+    let pilots = pilots_dir(Os::current(), env, ruleset)
         .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
     if pilots.is_none() {
         report.warn("nova: there is nowhere to save pilots (no home directory); saving nothing");
@@ -326,16 +328,16 @@ fn main() -> ExitCode {
     // Dialog and menu text is laid out by the faces the window draws it in.
     let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
     // Before the keeper reads any, so the last pilot opens from the new
-    // place.
+    // place. Only stock pilots were ever saved there.
     if let (Some(old), Some(new)) = (
         legacy_pilots_dir(Os::current(), env),
-        pilots_dir(Os::current(), env),
+        pilots_dir(Os::current(), env, Ruleset::Stock),
     ) {
         for line in report_lines(&move_pilots(&mut DiskFiles, &old, &new)) {
             report.warn(&line);
         }
     }
-    let pilots = open_pilots(env, &mut report);
+    let pilots = open_pilots(env, Ruleset::Stock, &mut report);
     let seed = run_seed();
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     // The effects' own: drawing on it never changes the simulation's draws.

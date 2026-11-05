@@ -6,6 +6,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::ruleset::Ruleset;
+
 /// The operating systems whose settings go in different places.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
@@ -62,16 +64,24 @@ pub fn settings_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<P
 ///   `$HOME/.local/share/nova/Pilots` without an absolute one, as pilots
 ///   are the player's data, not configuration. They were beside the
 ///   settings before; see [`legacy_pilots_dir`].
-pub fn pilots_dir(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+///
+/// That is the stock game's [`PILOTS_DIR`]; each other ruleset's pilots go
+/// in its own folder beside it ([`Profile::pilots`](crate::ruleset::Profile::pilots)),
+/// so one game's pilots never open over the other's data.
+pub fn pilots_dir(
+    os: Os,
+    env: impl Fn(&str) -> Option<OsString>,
+    ruleset: Ruleset,
+) -> Option<PathBuf> {
     let base = match os {
         Os::Windows | Os::MacOs => nova_dir(os, env)?,
         Os::Other => xdg_dir(&env, "XDG_DATA_HOME", &[".local", "share"])?.join("nova"),
     };
-    Some(base.join(PILOTS_DIR))
+    Some(base.join(ruleset.profile().pilots))
 }
 
 /// Where earlier versions saved pilots on `os`, which launch moves them
-/// out of into [`pilots_dir`], or `None` where they were never anywhere
+/// out of into the stock game's [`pilots_dir`], or `None` where they were never anywhere
 /// else (macOS and Windows), when the variables it needs are unset (or
 /// empty), or when it is the same directory as [`pilots_dir`] (say
 /// `XDG_DATA_HOME` is `XDG_CONFIG_HOME`).
@@ -83,7 +93,7 @@ pub fn legacy_pilots_dir(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Opti
         return None;
     }
     let old = nova_dir(os, &env)?.join(PILOTS_DIR);
-    (pilots_dir(os, &env).as_ref() != Some(&old)).then_some(old)
+    (pilots_dir(os, &env, Ruleset::Stock).as_ref() != Some(&old)).then_some(old)
 }
 
 /// The startup log's name, in the `nova` logs directory.
@@ -271,16 +281,16 @@ mod tests {
     fn mac_and_windows_pilots_are_saved_beside_the_settings() {
         let vars = env(&[("HOME", "/Users/p"), ("XDG_CONFIG_HOME", "/xdg")]);
         assert_eq!(
-            pilots_dir(Os::MacOs, vars),
+            pilots_dir(Os::MacOs, vars, Ruleset::Stock),
             Some(pilots("/Users/p", &["Library", "Application Support"]))
         );
         let vars = env(&[("APPDATA", "C:/Roaming"), ("HOME", "/home/p")]);
         assert_eq!(
-            pilots_dir(Os::Windows, vars),
+            pilots_dir(Os::Windows, vars, Ruleset::Stock),
             Some(pilots("C:/Roaming", &[]))
         );
         for os in [Os::MacOs, Os::Windows, Os::Other] {
-            assert_eq!(pilots_dir(os, env(&[])), None, "{os:?}");
+            assert_eq!(pilots_dir(os, env(&[]), Ruleset::Stock), None, "{os:?}");
         }
         assert_eq!(PILOTS_DIR, "Pilots");
     }
@@ -292,7 +302,10 @@ mod tests {
             ("XDG_CONFIG_HOME", "/xdg-config"),
             ("XDG_DATA_HOME", "/xdg-data"),
         ]);
-        assert_eq!(pilots_dir(Os::Other, vars), Some(pilots("/xdg-data", &[])));
+        assert_eq!(
+            pilots_dir(Os::Other, vars, Ruleset::Stock),
+            Some(pilots("/xdg-data", &[]))
+        );
     }
 
     #[test]
@@ -303,20 +316,43 @@ mod tests {
             env(&[("HOME", "/home/p"), ("XDG_DATA_HOME", "rel/dir")]),
         ] {
             assert_eq!(
-                pilots_dir(Os::Other, vars),
+                pilots_dir(Os::Other, vars, Ruleset::Stock),
                 Some(pilots("/home/p", &[".local", "share"]))
             );
         }
         let vars = env(&[("XDG_DATA_HOME", "rel/dir")]);
-        assert_eq!(pilots_dir(Os::Other, vars), None);
+        assert_eq!(pilots_dir(Os::Other, vars, Ruleset::Stock), None);
         let vars = env(&[("HOME", ""), ("XDG_DATA_HOME", "")]);
-        assert_eq!(pilots_dir(Os::Other, vars), None);
+        assert_eq!(pilots_dir(Os::Other, vars, Ruleset::Stock), None);
     }
 
     #[test]
     fn an_absolute_xdg_data_home_needs_no_home() {
         let vars = env(&[("XDG_DATA_HOME", "/xdg-data")]);
-        assert_eq!(pilots_dir(Os::Other, vars), Some(pilots("/xdg-data", &[])));
+        assert_eq!(
+            pilots_dir(Os::Other, vars, Ruleset::Stock),
+            Some(pilots("/xdg-data", &[]))
+        );
+    }
+
+    #[test]
+    fn each_ruleset_saves_its_pilots_in_its_own_folder_beside_the_stock_one() {
+        let vars = env(&[
+            ("HOME", "/home/p"),
+            ("APPDATA", "C:/Roaming"),
+            ("XDG_DATA_HOME", "/xdg-data"),
+        ]);
+        for os in [Os::MacOs, Os::Windows, Os::Other] {
+            let stock = pilots_dir(os, &vars, Ruleset::Stock).expect("a place");
+            assert_eq!(stock.file_name(), Some(PILOTS_DIR.as_ref()), "{os:?}");
+            let parent = stock.parent().expect("the nova directory");
+            assert_eq!(
+                pilots_dir(os, &vars, Ruleset::NewGame),
+                Some(parent.join(Ruleset::NewGame.profile().pilots)),
+                "{os:?}"
+            );
+            assert_eq!(pilots_dir(os, env(&[]), Ruleset::NewGame), None, "{os:?}");
+        }
     }
 
     #[test]
@@ -356,7 +392,10 @@ mod tests {
             ("XDG_CONFIG_HOME", "/xdg"),
             ("XDG_DATA_HOME", "/xdg"),
         ]);
-        assert_eq!(pilots_dir(Os::Other, &vars), Some(pilots("/xdg", &[])));
+        assert_eq!(
+            pilots_dir(Os::Other, &vars, Ruleset::Stock),
+            Some(pilots("/xdg", &[]))
+        );
         assert_eq!(legacy_pilots_dir(Os::Other, &vars), None);
     }
 
