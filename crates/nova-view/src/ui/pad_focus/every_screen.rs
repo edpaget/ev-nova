@@ -92,6 +92,11 @@ fn rows() -> Vec<Row> {
         ("trade's quantity", crate::ui::quantity::pad_probe),
         ("race's bet", crate::ui::quantity::bet_pad_probe),
         ("shipyard's naming", crate::ui::text_input::pad_probe),
+        ("offer", crate::spaceport::offer::pad::pad_probe),
+        (
+            "offer, overflowing",
+            crate::spaceport::offer::pad::pad_probe_overflowing,
+        ),
     ]
 }
 

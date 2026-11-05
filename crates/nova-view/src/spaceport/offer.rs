@@ -145,6 +145,8 @@ use std::time::Duration;
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
 mod close;
+#[cfg(test)]
+pub(crate) mod pad;
 
 use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
@@ -164,6 +166,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_command, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
+use crate::ui::pad_focus::Told;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::text_shrink::{shrink_after_placing, wrapped_height};
 
@@ -867,6 +870,9 @@ pub(crate) struct VenueOffers {
     unclaimed: Vec<Input>,
     /// The bindings each offer dialog opened reads its keys through.
     bindings: SharedBindings,
+    /// The surroundings the venue was told last, which each offer dialog
+    /// is told as it opens (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+    told: Told,
 }
 
 impl VenueOffers {
@@ -888,6 +894,7 @@ impl VenueOffers {
             restarted: false,
             unclaimed: Vec::new(),
             bindings: SharedBindings::default(),
+            told: Told::default(),
         }
     }
 
@@ -966,12 +973,12 @@ impl VenueOffers {
             .templates
             .layout(prompt.graphic)
             .map(|template| (template, metrics));
-        self.dialog = Some(
-            OfferDialog::new(layout, prompt, style)
-                .with_focus_ring(self.focus_ring)
-                .with_bindings(self.bindings.clone())
-                .with_movies(&self.movies),
-        );
+        let mut dialog = OfferDialog::new(layout, prompt, style)
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.bindings.clone())
+            .with_movies(&self.movies);
+        self.told.tell(&mut dialog);
+        self.dialog = Some(dialog);
     }
 
     /// The offer dialog, while it is open.
@@ -1050,7 +1057,17 @@ impl VenueOffers {
     /// Gives `input` to the offer dialog, if it is open, adding its sounds,
     /// and any it made as it ticked, to `sounds`; answered, it closes.
     /// Whether it took the input.
+    ///
+    /// The surroundings are kept, and told the dialog open and the one
+    /// answered, but never taken: the venue's holder tells its own screens
+    /// too.
     pub(crate) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
+        if self.told.keep(input) {
+            for dialog in self.dialog.iter_mut().chain(self.answered.iter_mut()) {
+                dialog.input(input);
+            }
+            return false;
+        }
         sounds.append(&mut self.sounds);
         if self.answer_input(input) {
             return true;
