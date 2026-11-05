@@ -505,7 +505,8 @@ mod tests {
                 Context::EscortMenu,
                 Context::Flight,
                 Context::Play,
-                Context::Pause
+                Context::Pause,
+                Context::App
             ]
         );
         assert_eq!(
@@ -522,7 +523,7 @@ mod tests {
         assert!(!reader.held(EscortMenuCommand::Group1));
         assert_eq!(
             reader.active(),
-            vec![Context::Flight, Context::Play, Context::Pause]
+            vec![Context::Flight, Context::Play, Context::Pause, Context::App]
         );
     }
 

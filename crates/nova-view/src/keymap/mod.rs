@@ -62,7 +62,9 @@
 //!   as a key goes down. A release lets go of what its press meant.
 //! - **Contexts active together are data.** Each screen's list
 //!   ([`contexts`]) has its own context first, then the shared UI context
-//!   everywhere but flight and the intro. An entry may be conditional, switched by the
+//!   everywhere but flight and the intro, and last the app's own (Caps
+//!   Lock's double time), which the app's router reads on every screen,
+//!   flight included. An entry may be conditional, switched by the
 //!   screen ([`CommandReader::set_active`]): the escort menu's group keys
 //!   are on only while the menu shows, and shadow flight's stellar slots
 //!   then, as `_QuickKeyCheck` hides 1-4 (@0xa106-0xa124). The clash
@@ -84,11 +86,11 @@ pub mod reader;
 
 pub use bindings::{Bindings, Clash, Devices, is_modifier_input};
 pub use command::{
-    AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
-    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, Kind, MapCommand,
-    MissionComputerCommand, OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand,
-    PlayerInfoCommand, PortCommand, RaceCommand, ShipyardCommand, SystemViewCommand, TradeCommand,
-    UiCommand,
+    AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
+    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, Kind,
+    MainMenuCommand, MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand,
+    PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand,
+    ShipyardCommand, SystemViewCommand, TradeCommand, UiCommand,
 };
 pub use contexts::ScreenContexts;
 pub use keyboard::{Binding, KeyCombo, KeyMap, KeysDown, Modifiers};

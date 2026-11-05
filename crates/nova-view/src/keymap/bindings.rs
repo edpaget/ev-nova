@@ -196,9 +196,10 @@ pub fn is_modifier_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::command::{
-        BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, IntroCommand, MapCommand,
-        MissionComputerCommand, OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand,
-        PlayerInfoCommand, PortCommand, RaceCommand, TradeCommand, UiCommand,
+        AppCommand, BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, IntroCommand,
+        MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand, PauseCommand,
+        PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand, TradeCommand,
+        UiCommand,
     };
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
@@ -451,6 +452,17 @@ mod tests {
             base.clashes_with(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyL)),
             vec![Command::Flight(FlightCommand::LandDock)]
         );
+    }
+
+    #[test]
+    fn double_time_s_key_clashes_with_every_screen_s_commands() {
+        let caps = KeyCombo::key(Key::CapsLock);
+        let found = Bindings::default().clashes_with(FlightCommand::Accelerate, caps);
+        assert_eq!(found, vec![Command::App(AppCommand::DoubleTime)]);
+        let found = Bindings::default().clashes_with(UiCommand::Confirm, caps);
+        assert_eq!(found, vec![Command::App(AppCommand::DoubleTime)]);
+        let found = Bindings::default().clashes_with(MainScreenCommand::Fly, caps);
+        assert_eq!(found, vec![Command::App(AppCommand::DoubleTime)]);
     }
 
     #[test]

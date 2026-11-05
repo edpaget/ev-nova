@@ -6,10 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{
-    AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
-    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, MapCommand,
-    MissionComputerCommand, OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand,
-    PlayerInfoCommand, PortCommand, RaceCommand, ShipyardCommand, TradeCommand, UiCommand,
+    AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
+    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, MainMenuCommand,
+    MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand, PauseCommand,
+    PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand, ShipyardCommand,
+    TradeCommand, UiCommand,
 };
 use super::contexts::shadows;
 use crate::input::{Input, Key};
@@ -406,6 +407,29 @@ const fn default_binding(command: Command) -> Binding {
         Command::Map(command) => default_map(command),
         Command::Intro(command) => default_intro(command),
         Command::SystemView(command) => match command {},
+        Command::App(AppCommand::DoubleTime) => bare(Key::CapsLock),
+        Command::MainScreen(command) => default_main_screen(command),
+        Command::MainMenu(command) => default_main_menu(command),
+    }
+}
+
+/// The main screen's defaults: F, I and P.
+const fn default_main_screen(command: MainScreenCommand) -> Binding {
+    match command {
+        MainScreenCommand::Fly => bare(Key::KeyF),
+        MainScreenCommand::About => bare(Key::KeyI),
+        MainScreenCommand::Preferences => bare(Key::KeyP),
+    }
+}
+
+/// The main menu's defaults: A, X, and the S, L and E keys it polls.
+const fn default_main_menu(command: MainMenuCommand) -> Binding {
+    match command {
+        MainMenuCommand::About => bare(Key::KeyA),
+        MainMenuCommand::Text => bare(Key::KeyX),
+        MainMenuCommand::OpenGuardS => bare(Key::KeyS),
+        MainMenuCommand::OpenGuardL => bare(Key::KeyL),
+        MainMenuCommand::EnterShip => bare(Key::KeyE),
     }
 }
 
@@ -627,7 +651,8 @@ pub const fn sides(context: Context) -> Sides {
         | Context::Play
         | Context::Pause
         | Context::Race
-        | Context::Intro => Sides::LeftOnly,
+        | Context::Intro
+        | Context::App => Sides::LeftOnly,
         Context::Ui
         | Context::Comm
         | Context::Haggle
@@ -643,7 +668,9 @@ pub const fn sides(context: Context) -> Sides {
         | Context::Hire
         | Context::MissionComputer
         | Context::Map
-        | Context::SystemView => Sides::Either,
+        | Context::SystemView
+        | Context::MainScreen
+        | Context::MainMenu => Sides::Either,
     }
 }
 
@@ -1154,6 +1181,40 @@ mod tests {
     #[test]
     fn the_system_view_has_no_command_of_its_own() {
         assert_eq!(defaults(Context::SystemView), vec![]);
+    }
+
+    #[test]
+    fn the_app_s_default_is_caps_lock() {
+        assert_eq!(
+            defaults(Context::App),
+            vec![row(AppCommand::DoubleTime, Key::CapsLock, NO)]
+        );
+    }
+
+    #[test]
+    fn the_main_screen_s_defaults_are_f_i_and_p() {
+        assert_eq!(
+            defaults(Context::MainScreen),
+            vec![
+                row(MainScreenCommand::Fly, Key::KeyF, NO),
+                row(MainScreenCommand::About, Key::KeyI, NO),
+                row(MainScreenCommand::Preferences, Key::KeyP, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_main_menu_s_defaults_are_a_x_and_the_s_l_and_e_keys() {
+        assert_eq!(
+            defaults(Context::MainMenu),
+            vec![
+                row(MainMenuCommand::About, Key::KeyA, NO),
+                row(MainMenuCommand::Text, Key::KeyX, NO),
+                row(MainMenuCommand::OpenGuardS, Key::KeyS, NO),
+                row(MainMenuCommand::OpenGuardL, Key::KeyL, NO),
+                row(MainMenuCommand::EnterShip, Key::KeyE, NO),
+            ]
+        );
     }
 
     #[test]

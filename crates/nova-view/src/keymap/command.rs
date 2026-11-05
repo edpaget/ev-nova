@@ -171,6 +171,15 @@ contexts! {
     Intro(IntroCommand),
     /// The system view's WASD, the fixed twins of the shared arrows.
     SystemView(SystemViewCommand),
+    /// The app's own, which its router reads on every screen, flight
+    /// included: Caps Lock's double time.
+    App(AppCommand),
+    /// The main screen's keys the app's router reads on the main menu and
+    /// the developer's sides: Fly, About and Preferences.
+    MainScreen(MainScreenCommand),
+    /// The main menu's keys the app's router reads beside the menu's
+    /// typed letters (`_MainScreenKey` @0x1aba0).
+    MainMenu(MainMenuCommand),
 }
 
 context_commands! {
@@ -641,6 +650,53 @@ context_commands! {
     /// and D, the fixed twins of the shared arrows it pans with.
     #[allow(clippy::empty_enums, reason = "a context of twins alone")]
     SystemViewCommand in SystemView {}
+}
+
+context_commands! {
+    /// The app's own commands, read by its router whatever is shown.
+    AppCommand in App {
+        /// Turn double time on or off, on each press (Caps Lock, whose
+        /// lock state the original follows, `_QuickKeyCheck(0x39)`
+        /// @0x463c3).
+        DoubleTime: Pressed,
+    }
+}
+
+context_commands! {
+    /// The main screen's keys the app's router reads on the main menu,
+    /// the ship browser and the galaxy viewer. They are the engine's own
+    /// but for Preferences, which on the main menu is `_MainScreenKey`'s
+    /// P (@0x1ac59).
+    MainScreenCommand in MainScreen {
+        /// Enter flight from the ship browser or the galaxy viewer (F).
+        Fly: Pressed,
+        /// Open the About text (I).
+        About: Pressed,
+        /// Open the Preferences (P).
+        Preferences: Pressed,
+    }
+}
+
+context_commands! {
+    /// The main menu's keys the app's router reads beside the menu's own
+    /// letters, which it reads as typed characters (`_MainScreenKey`
+    /// @0x1aba0).
+    MainMenuCommand in MainMenu {
+        /// Show the About text, after a click (A, @0x1ac70).
+        About: Pressed,
+        /// Show `dësc` 32766, after a click (X, @0x1ac7e).
+        Text: Pressed,
+        /// Held, Open Pilot does nothing: the S key, which
+        /// `_MainScreenKey` polls by key code (`_KeyCheck(0x01)`
+        /// @0x1abd3). No other code reads it, so its purpose is unknown.
+        OpenGuardS: Held,
+        /// Held, Open Pilot does nothing: the L key (`_KeyCheck(0x25)`
+        /// @0x1abf5), beside S.
+        OpenGuardL: Held,
+        /// Held as Enter Ship is typed, the choice waits for its release
+        /// (the E key, `_QuickKeyCheck(0x0e)` @0x1ac32-0x1ac57).
+        EnterShip: Held,
+    }
 }
 
 impl Command {

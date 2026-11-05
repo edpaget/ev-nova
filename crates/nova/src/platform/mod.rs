@@ -728,6 +728,7 @@ mod tests {
             Key::PageDown => KeyCode::PageDown,
             Key::NumpadEnter => KeyCode::NumpadEnter,
             Key::AltRight => KeyCode::AltRight,
+            Key::CapsLock => KeyCode::CapsLock,
             other => panic!("no physical key listed for {other:?}"),
         }
     }

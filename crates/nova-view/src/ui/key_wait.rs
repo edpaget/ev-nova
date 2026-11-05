@@ -22,7 +22,7 @@
 //! play keys' commands (Galaxy Map, Player Info, Mission Info), read
 //! through the key map the wait is given ([`WaitKeys::set_bindings`]).
 
-use crate::keymap::{Command, CommandReader, SharedBindings, contexts};
+use crate::keymap::{AppCommand, Command, CommandReader, SharedBindings, contexts};
 use crate::{Input, Key};
 
 /// The keys typed while a close waits for `waited`'s release, for the
@@ -63,7 +63,8 @@ impl WaitKeys {
 
     /// Takes `input` if it is a key the queue keeps, repeats included, in
     /// order. The waited key's own never queues, as it is down throughout,
-    /// and the router ran Caps Lock's double time on its press. A release
+    /// and neither does double time's (Caps Lock by default, read through
+    /// the bindings), as the router ran it on its press. A release
     /// goes in only behind something of its key, a press or a repeat:
     /// otherwise the screen never saw that key. So what is queued says
     /// whether a key it saw is still down.
@@ -85,7 +86,7 @@ impl WaitKeys {
             return;
         };
         self.typing = false;
-        if Some(key) == self.waited || key == Key::CapsLock {
+        if Some(key) == self.waited || self.is_double_time(input) {
             return;
         }
         if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
@@ -132,6 +133,13 @@ impl WaitKeys {
 }
 
 impl WaitKeys {
+    /// Whether the key of `input` means the app's double time, which the
+    /// router reads on every screen.
+    fn is_double_time(&self, input: &Input) -> bool {
+        let reader = CommandReader::new(contexts::KEY_WAIT).with_bindings(self.bindings.clone());
+        reader.means(input) == Some(Command::App(AppCommand::DoubleTime))
+    }
+
     /// The keys `keys` press or repeat as a shared play key, read in
     /// order through the bindings, the waited key aside.
     fn live_keys(&self, keys: &[Input]) -> Vec<Key> {
@@ -336,6 +344,20 @@ mod tests {
             let keys = [press(key), repeat(key), release(key)];
             assert_eq!(left_by(&keys), [], "{key:?}");
         }
+    }
+
+    #[test]
+    fn it_takes_none_of_double_time_s_key_as_the_bindings_have_it() {
+        use crate::keymap::AppCommand;
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(AppCommand::DoubleTime, KeyCombo::key(Key::F13)),
+        ));
+        let keys = [press(Key::F13), release(Key::F13), press(Key::CapsLock)];
+        for input in &keys {
+            queue.take(input);
+        }
+        assert_eq!(queue.finish(), [press(Key::CapsLock)]);
     }
 
     #[test]

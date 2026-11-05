@@ -2,7 +2,10 @@
 //!
 //! A screen reads an ordered list of [`Context`]s: its own first, then
 //! the shared UI context ([`Context::Ui`]) on every screen but flight and
-//! the intro (which polls Return's key code alone, [`INTRO`]). Two
+//! the intro (which polls Return's key code alone, [`INTRO`]), and last
+//! the app's own ([`Context::App`]), which the app's router reads
+//! whatever is shown, flight included, so a key bound there clashes with
+//! every other context's. Two
 //! contexts are **active together** when some list holds both, and the
 //! clash query ([`Bindings::clashes`](super::Bindings::clashes)) checks
 //! every pair of commands over that. An entry may be **conditional**: on
@@ -60,6 +63,7 @@ pub const FLIGHT: ScreenContexts = ScreenContexts {
         on(Context::Flight),
         on(Context::Play),
         on(Context::Pause),
+        on(Context::App),
     ],
 };
 
@@ -67,44 +71,49 @@ pub const FLIGHT: ScreenContexts = ScreenContexts {
 /// `Dialog`).
 pub const DIALOG: ScreenContexts = ScreenContexts {
     name: "dialog",
-    entries: &[on(Context::Ui)],
+    entries: &[on(Context::Ui), on(Context::App)],
 };
 
 /// The comm dialog: its Close letter, then the shared UI keys.
 pub const COMM: ScreenContexts = ScreenContexts {
     name: "comm",
-    entries: &[on(Context::Comm), on(Context::Ui)],
+    entries: &[on(Context::Comm), on(Context::Ui), on(Context::App)],
 };
 
 /// The haggle dialog: Accept and Lower, then the shared UI keys.
 pub const HAGGLE: ScreenContexts = ScreenContexts {
     name: "haggle",
-    entries: &[on(Context::Haggle), on(Context::Ui)],
+    entries: &[on(Context::Haggle), on(Context::Ui), on(Context::App)],
 };
 
 /// The planet comm dialog: its buttons' letters, then the shared UI keys.
 pub const PLANET_COMM: ScreenContexts = ScreenContexts {
     name: "planet comm",
-    entries: &[on(Context::PlanetComm), on(Context::Ui)],
+    entries: &[on(Context::PlanetComm), on(Context::Ui), on(Context::App)],
 };
 
 /// The escort dialog: its buttons' letters, then the shared UI keys.
 pub const ESCORT_DIALOG: ScreenContexts = ScreenContexts {
     name: "escort dialog",
-    entries: &[on(Context::EscortDialog), on(Context::Ui)],
+    entries: &[on(Context::EscortDialog), on(Context::Ui), on(Context::App)],
 };
 
 /// The captured ship's assignment: M and E, then the shared UI keys.
 pub const ASSIGNMENT: ScreenContexts = ScreenContexts {
     name: "assignment",
-    entries: &[on(Context::Assignment), on(Context::Ui)],
+    entries: &[on(Context::Assignment), on(Context::Ui), on(Context::App)],
 };
 
 /// The player info screen: Shift-Tab, the shared play keys (its own key
 /// closes it, `_PlayerInfoFilter` @0x53ba3) and the shared UI keys.
 pub const PLAYER_INFO: ScreenContexts = ScreenContexts {
     name: "player info",
-    entries: &[on(Context::PlayerInfo), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::PlayerInfo),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// A text dialog ("Desc Dialog"): the shared play keys, as
@@ -112,7 +121,7 @@ pub const PLAYER_INFO: ScreenContexts = ScreenContexts {
 /// keys.
 pub const DESC: ScreenContexts = ScreenContexts {
     name: "desc",
-    entries: &[on(Context::Play), on(Context::Ui)],
+    entries: &[on(Context::Play), on(Context::Ui), on(Context::App)],
 };
 
 /// A close's wait for its key's release (the `ui` module's `key_wait`):
@@ -121,7 +130,7 @@ pub const DESC: ScreenContexts = ScreenContexts {
 /// keys of the screen it waits on.
 pub const KEY_WAIT: ScreenContexts = ScreenContexts {
     name: "key wait",
-    entries: &[on(Context::Play), on(Context::Ui)],
+    entries: &[on(Context::Play), on(Context::Ui), on(Context::App)],
 };
 
 /// The spaceport: its buttons' letters, the shared play keys
@@ -129,14 +138,24 @@ pub const KEY_WAIT: ScreenContexts = ScreenContexts {
 /// and player info) and the shared UI keys.
 pub const PORT: ScreenContexts = ScreenContexts {
     name: "spaceport",
-    entries: &[on(Context::Port), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Port),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The Trade Center: Buy, Sell, Option and Shift-Tab, the shared play
 /// keys (`_TradeFilter` @0x4e0e7, @0x4e109) and the shared UI keys.
 pub const TRADE: ScreenContexts = ScreenContexts {
     name: "trade center",
-    entries: &[on(Context::Trade), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Trade),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The outfitter: Buy, Sell and Option, the shared play keys
@@ -144,7 +163,12 @@ pub const TRADE: ScreenContexts = ScreenContexts {
 /// the shared UI keys.
 pub const OUTFITTER: ScreenContexts = ScreenContexts {
     name: "outfitter",
-    entries: &[on(Context::Outfitter), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Outfitter),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The shipyard and its Info panel: Buy Ship, the shared play keys
@@ -152,7 +176,12 @@ pub const OUTFITTER: ScreenContexts = ScreenContexts {
 /// shared UI keys.
 pub const SHIPYARD: ScreenContexts = ScreenContexts {
     name: "shipyard",
-    entries: &[on(Context::Shipyard), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Shipyard),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The bar and the hire screen it hosts: its letters, the shared play
@@ -160,14 +189,19 @@ pub const SHIPYARD: ScreenContexts = ScreenContexts {
 /// shared UI keys.
 pub const BAR: ScreenContexts = ScreenContexts {
     name: "bar",
-    entries: &[on(Context::Bar), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Bar),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The hire screen: Hire Escort and the shared UI keys; the bar reads its
 /// play keys for it.
 pub const HIRE: ScreenContexts = ScreenContexts {
     name: "hire",
-    entries: &[on(Context::Hire), on(Context::Ui)],
+    entries: &[on(Context::Hire), on(Context::Ui), on(Context::App)],
 };
 
 /// The mission computer: Leave and Accept, the shared play keys
@@ -178,6 +212,7 @@ pub const MISSION_COMPUTER: ScreenContexts = ScreenContexts {
         on(Context::MissionComputer),
         on(Context::Play),
         on(Context::Ui),
+        on(Context::App),
     ],
 };
 
@@ -185,7 +220,7 @@ pub const MISSION_COMPUTER: ScreenContexts = ScreenContexts {
 /// reads the map key and its own, @0x9d715) and the shared UI keys.
 pub const MISSION_INFO: ScreenContexts = ScreenContexts {
     name: "mission info",
-    entries: &[on(Context::Play), on(Context::Ui)],
+    entries: &[on(Context::Play), on(Context::Ui), on(Context::App)],
 };
 
 /// A mission offer: the shared play keys (`_SingleMissionFilter`
@@ -193,13 +228,13 @@ pub const MISSION_INFO: ScreenContexts = ScreenContexts {
 /// characters, no commands.
 pub const OFFER: ScreenContexts = ScreenContexts {
     name: "offer",
-    entries: &[on(Context::Play), on(Context::Ui)],
+    entries: &[on(Context::Play), on(Context::Ui), on(Context::App)],
 };
 
 /// The bar race: its Option and the shared UI keys.
 pub const RACE: ScreenContexts = ScreenContexts {
     name: "race",
-    entries: &[on(Context::Race), on(Context::Ui)],
+    entries: &[on(Context::Race), on(Context::Ui), on(Context::App)],
 };
 
 /// The galaxy viewer, the developer's map: its own keys and the shared UI
@@ -208,7 +243,7 @@ pub const RACE: ScreenContexts = ScreenContexts {
 /// navigator's.
 pub const GALAXY_VIEWER: ScreenContexts = ScreenContexts {
     name: "galaxy viewer",
-    entries: &[on(Context::Map), on(Context::Ui)],
+    entries: &[on(Context::Map), on(Context::Ui), on(Context::App)],
 };
 
 /// The course and hypergate maps over flight or the spaceport: their own
@@ -216,33 +251,38 @@ pub const GALAXY_VIEWER: ScreenContexts = ScreenContexts {
 /// @0x144ea) and the shared UI keys.
 pub const COURSE_MAP: ScreenContexts = ScreenContexts {
     name: "course map",
-    entries: &[on(Context::Map), on(Context::Play), on(Context::Ui)],
+    entries: &[
+        on(Context::Map),
+        on(Context::Play),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// The navigator over the viewer and the system view: Escape, the shared
 /// Back, goes from a system back to the map.
 pub const NAVIGATOR: ScreenContexts = ScreenContexts {
     name: "navigator",
-    entries: &[on(Context::Ui)],
+    entries: &[on(Context::Ui), on(Context::App)],
 };
 
 /// The system view: WASD, its own context's twins of the shared arrows,
 /// and the shared UI keys (the arrows pan, Space recentres).
 pub const SYSTEM_VIEW: ScreenContexts = ScreenContexts {
     name: "system view",
-    entries: &[on(Context::SystemView), on(Context::Ui)],
+    entries: &[on(Context::SystemView), on(Context::Ui), on(Context::App)],
 };
 
 /// The ship browser: the shared arrows.
 pub const SHIP_BROWSER: ScreenContexts = ScreenContexts {
     name: "ship browser",
-    entries: &[on(Context::Ui)],
+    entries: &[on(Context::Ui), on(Context::App)],
 };
 
 /// The saved pilots' list: the shared arrows, Confirm and Back.
 pub const PILOT_LIST: ScreenContexts = ScreenContexts {
     name: "pilot list",
-    entries: &[on(Context::Ui)],
+    entries: &[on(Context::Ui), on(Context::App)],
 };
 
 /// The intro screen: its own Return and Space, and the Pause key, its
@@ -251,14 +291,30 @@ pub const PILOT_LIST: ScreenContexts = ScreenContexts {
 /// doesn't end a picture.
 pub const INTRO: ScreenContexts = ScreenContexts {
     name: "intro",
-    entries: &[on(Context::Intro), on(Context::Pause)],
+    entries: &[on(Context::Intro), on(Context::Pause), on(Context::App)],
 };
 
 /// A movie playing (`_PlayQTMovie`): the shared Activate (Space) and
 /// Confirm (Return, the keypad's Enter its twin) skip it.
 pub const MOVIE: ScreenContexts = ScreenContexts {
     name: "movie",
-    entries: &[on(Context::Ui)],
+    entries: &[on(Context::Ui), on(Context::App)],
+};
+
+/// The app's router on the main menu and the developer's sides (the ship
+/// browser and the galaxy viewer): the main menu's keys it reads beside
+/// the menu's typed letters, the main screen's Fly, About and
+/// Preferences, the shared UI keys (Tab switches sides, Back goes back
+/// or quits) and the app's own. In flight it reads Pause through
+/// [`FLIGHT`]'s list, and on a map its own Back.
+pub const ROUTER: ScreenContexts = ScreenContexts {
+    name: "router",
+    entries: &[
+        on(Context::MainMenu),
+        on(Context::MainScreen),
+        on(Context::Ui),
+        on(Context::App),
+    ],
 };
 
 /// Every key-reading screen's list.
@@ -291,6 +347,7 @@ pub const SCREENS: &[ScreenContexts] = &[
     PILOT_LIST,
     INTRO,
     MOVIE,
+    ROUTER,
 ];
 
 /// Whether `shadowing`, listed first, wins the keys it binds over
@@ -329,6 +386,18 @@ mod tests {
             assert_eq!(
                 has_ui,
                 !["flight", "intro"].contains(&screen.name),
+                "{}",
+                screen.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_screen_reads_the_app_s_context_last() {
+        for screen in SCREENS {
+            assert_eq!(
+                screen.entries.last(),
+                Some(&on(Context::App)),
                 "{}",
                 screen.name
             );
