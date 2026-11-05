@@ -38,6 +38,9 @@
 //! control the player can't see. A screen that opens others keeps what it
 //! was told ([`Told`]) and tells each screen it holds or opens
 //! (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+//! The app tells the main menu even while a screen hides it, as it
+//! lives as long as the app, and the intro's text as it opens
+//! (rdm:phase/key-bindings/phase-11-gamepad-menus).
 //!
 //! # Where additions go
 //!

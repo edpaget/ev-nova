@@ -28,7 +28,7 @@
 //! the last New Pilot's in this run, or the first `chär`'s), and flight
 //! shows with a frozen, key-ignoring first frame and fades in from black;
 //! with no game, or a pilot dying, it plays snd 153 and stays. Escape on the menu does
-//! nothing. Quit quits after [`QUIT_DELAY`], and each of the menu's keys
+//! nothing, and so does the pad's East. Quit quits after [`QUIT_DELAY`], and each of the menu's keys
 //! first waits for its click to play (see `menu_input`); a click on Enter
 //! Ship, Preferences or About does what E, P or A does, and a held P, A
 //! or X repeats as a press. X's text and the About text read the pilot
