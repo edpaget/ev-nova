@@ -13,7 +13,8 @@ use std::time::Duration;
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::dialog::outline;
@@ -81,6 +82,9 @@ pub struct PilotList {
     tracked: Option<Target>,
     tracker: ButtonTracker,
     outcome: Option<PilotListOutcome>,
+    /// Its keys, the shared arrows, Confirm and Back, as commands
+    /// ([`contexts::PILOT_LIST`]).
+    reader: CommandReader,
 }
 
 impl std::fmt::Debug for PilotList {
@@ -122,7 +126,15 @@ impl PilotList {
             tracked: None,
             tracker: ButtonTracker::default(),
             outcome: None,
+            reader: CommandReader::new(contexts::PILOT_LIST),
         }
+    }
+
+    /// The list reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// The pilots' keys, in order.
@@ -200,13 +212,15 @@ impl PilotList {
             .clamp((index + 1).saturating_sub(VISIBLE_ROWS), index);
     }
 
-    fn key(&mut self, key: Key, repeat: bool) {
+    /// A command's press or repeat: Down and Up move the selection, their
+    /// repeats too; Confirm opens it and Back cancels, on a press alone.
+    fn command(&mut self, command: UiCommand, repeat: bool) {
         let last = self.keys.len().checked_sub(1);
-        match (key, self.selected, last) {
-            (Key::ArrowDown, Some(at), Some(last)) => self.select((at + 1).min(last)),
-            (Key::ArrowUp, Some(at), _) => self.select(at.saturating_sub(1)),
-            (Key::Enter | Key::NumpadEnter, ..) if !repeat => self.open_selected(),
-            (Key::Escape, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
+        match (command, self.selected, last) {
+            (UiCommand::Down, Some(at), Some(last)) => self.select((at + 1).min(last)),
+            (UiCommand::Up, Some(at), _) => self.select(at.saturating_sub(1)),
+            (UiCommand::Confirm, ..) if !repeat => self.open_selected(),
+            (UiCommand::Back, ..) if !repeat => self.outcome = Some(PilotListOutcome::Cancel),
             _ => {}
         }
     }
@@ -268,12 +282,15 @@ impl PilotList {
 impl Screen for PilotList {
     /// The list is modal: it takes every input, and never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(CommandInput {
+            command: Command::Ui(command),
+            pressed: true,
+            repeat,
+        }) = self.reader.follow(input)
+        {
+            self.command(command, repeat);
+        }
         match *input {
-            Input::Key {
-                key,
-                pressed: true,
-                repeat,
-            } => self.key(key, repeat),
             Input::Key { .. }
             | Input::Text(_)
             | Input::PointerLeft
@@ -353,7 +370,7 @@ impl Screen for PilotList {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
@@ -689,6 +706,33 @@ mod tests {
                 r#"PilotList { keys: ["Ada"], selected: Some(0), error: Some("broken"), .."#
             ),
             "{debug}"
+        );
+    }
+
+    #[test]
+    fn a_rebound_down_confirm_and_back_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Down, KeyCombo::key(Key::KeyJ))
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyO))
+                .rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut pilots = list(&["Ada", "Bob"]).with_bindings(bindings.clone());
+        pilots.input(&key(Key::ArrowDown, false));
+        pilots.input(&key(Key::Enter, false));
+        assert_eq!(pilots.take_outcome(), None, "Down and Return no longer act");
+        pilots.input(&key(Key::KeyJ, false));
+        pilots.input(&key(Key::KeyO, false));
+        assert_eq!(pilots.take_outcome(), open("Bob"), "J and O do");
+        let mut pilots = list(&["Ada"]).with_bindings(bindings);
+        pilots.input(&key(Key::Escape, false));
+        assert_eq!(pilots.take_outcome(), None, "Escape no longer cancels");
+        pilots.input(&key(Key::KeyQ, false));
+        assert_eq!(
+            pilots.take_outcome(),
+            Some(PilotListOutcome::Cancel),
+            "Q does"
         );
     }
 

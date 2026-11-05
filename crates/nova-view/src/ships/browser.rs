@@ -20,8 +20,9 @@ use nova_sim::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
 use crate::draw::{crossed_box, lights_tint};
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
-use crate::{Color, DrawList, Font, ImageKey, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Font, ImageKey, Input, Point, Screen, ScreenAction};
 
 /// Where the ship's centre goes, in the 1024x768 logical space. The base,
 /// glow and lights frames are all centred here: a layer frame is often
@@ -74,6 +75,9 @@ pub struct ShipBrowser<C> {
     elapsed: Duration,
     /// What random running lights roll on.
     blink_rolls: HashedRolls,
+    /// Its keys, the shared arrows, as commands
+    /// ([`contexts::SHIP_BROWSER`]).
+    keys: CommandReader,
 }
 
 impl<C: ShipCatalog> ShipBrowser<C> {
@@ -88,7 +92,15 @@ impl<C: ShipCatalog> ShipBrowser<C> {
             current,
             elapsed: Duration::ZERO,
             blink_rolls: HashedRolls::new(0),
+            keys: CommandReader::new(contexts::SHIP_BROWSER),
         }
+    }
+
+    /// The browser reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The selected ship, if there are any.
@@ -223,22 +235,29 @@ fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
 }
 
 impl<C: ShipCatalog> Screen for ShipBrowser<C> {
-    /// Right or Down shows the next ship and Left or Up the previous one,
-    /// wrapping round; holding the key keeps stepping, once per key repeat.
-    /// Everything else, and every key release, is ignored; the browser never
-    /// quits (Escape is the app's).
+    /// The shared Right or Down shows the next ship and Left or Up the
+    /// previous one, wrapping round; holding the key keeps stepping, once
+    /// per key repeat. Everything else, and every key release, is
+    /// ignored; the browser never quits (Escape is the app's).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key, pressed: true, ..
-        } = input
+        if let Some(CommandInput {
+            command: Command::Ui(command),
+            pressed: true,
+            ..
+        }) = self.keys.follow(input)
         {
-            match key {
-                Key::ArrowRight | Key::ArrowDown => self.select(true),
-                Key::ArrowLeft | Key::ArrowUp => self.select(false),
+            match command {
+                UiCommand::Right | UiCommand::Down => self.select(true),
+                UiCommand::Left | UiCommand::Up => self.select(false),
                 _ => {}
             }
         }
         ScreenAction::None
+    }
+
+    /// Lets go of the keys held.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
     }
 
     fn tick(&mut self, dt: Duration) {
@@ -481,6 +500,24 @@ mod tests {
             visited.push(browser.selected().expect("a ship").0);
         }
         assert_eq!(visited, [129, 130, 129]);
+    }
+
+    #[test]
+    fn a_rebound_right_steps_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let catalog = three_ships();
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL)),
+        );
+        let mut browser = ShipBrowser::new(&catalog).with_bindings(bindings);
+        browser.input(&press(Key::ArrowRight));
+        assert_eq!(
+            browser.selected(),
+            Some(ShipId(128)),
+            "Right no longer steps"
+        );
+        browser.input(&press(Key::KeyL));
+        assert_eq!(browser.selected(), Some(ShipId(129)), "L does");
     }
 
     #[test]
