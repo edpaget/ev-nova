@@ -90,6 +90,7 @@ pub mod menu_command;
 pub mod movie;
 pub mod movie_frame;
 pub mod navigator;
+pub mod outline;
 pub mod oval;
 pub mod preferences;
 pub mod scaling;

@@ -273,8 +273,8 @@ pub enum DrawCommand {
         color: Color,
     },
     /// A filled triangle in one colour, as an outline is drawn where a
-    /// ship or stellar has no sprite. Like a line or a dot, a clipped one
-    /// is drawn uncut.
+    /// ship or stellar has no sprite ([`outline`](crate::outline)). Like a
+    /// line or a dot, a clipped one is drawn uncut.
     Triangle {
         /// Its corners.
         corners: [Point; 3],
