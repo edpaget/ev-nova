@@ -59,13 +59,13 @@
 //! The replay settles within the call that ends the hold, before the frame
 //! is drawn, so no boundary the player sees is crossed.
 
-use std::collections::HashSet;
 use std::mem;
 
 use nova_view::flight::FlightView;
+use nova_view::keymap::KeysDown;
 use nova_view::{Input, Key, MenuCommand, Screen, ScreenAction};
 
-use super::map_wait_keys::{FlushMark, note_down};
+use super::map_wait_keys::{FlushMark, let_go_of};
 use super::routing::Front;
 use super::{AppScreen, Side, chord_command};
 
@@ -171,7 +171,7 @@ impl AppScreen {
         }
         let queue = mem::take(&mut self.held_chords.queue);
         let mut mark = self.held_chords.mark.take();
-        let mut down = HashSet::new();
+        let mut down = KeysDown::default();
         let mut held = queue.into_iter();
         while let Some(item) = held.next() {
             if mark.is_some_and(|before| self.chord_mark().flushed_since(before)) {
@@ -182,12 +182,12 @@ impl AppScreen {
             let action = match item {
                 HeldChord::Command(command) => self.run_menu_command(command),
                 HeldChord::Input(input) => {
-                    note_down(&mut down, &input);
+                    down.follow(&input);
                     self.rerouted_input(&input)
                 }
                 HeldChord::LetGo => {
                     self.let_go_of_keys();
-                    down.clear();
+                    down.let_go();
                     ScreenAction::None
                 }
             };
@@ -202,25 +202,19 @@ impl AppScreen {
     /// replayed and not yet let go, and the let-goes, in order; nothing
     /// else of `rest`, as the map's wait keeps only those
     /// (`map_wait_keys`).
-    fn let_go_of_held(&mut self, rest: impl Iterator<Item = HeldChord>, mut down: HashSet<Key>) {
+    fn let_go_of_held(&mut self, rest: impl Iterator<Item = HeldChord>, mut down: KeysDown) {
         for item in rest {
             match item {
-                HeldChord::Input(
-                    input @ Input::Key {
-                        key,
-                        pressed: false,
-                        ..
-                    },
-                ) => {
-                    if down.remove(&key) {
+                HeldChord::Input(input) => {
+                    if let_go_of(&mut down, &input) {
                         let _ = self.rerouted_input(&input);
                     }
                 }
                 HeldChord::LetGo => {
                     self.let_go_of_keys();
-                    down.clear();
+                    down.let_go();
                 }
-                _ => {}
+                HeldChord::Command(_) => {}
             }
         }
     }

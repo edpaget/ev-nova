@@ -56,10 +56,9 @@
 //!
 //! [`FlightView::take_back_live_input`]: nova_view::flight::FlightView::take_back_live_input
 
-use std::collections::HashSet;
-
 use nova_view::flight::LiveKeys;
-use nova_view::{Input, Key, MouseButton};
+use nova_view::keymap::{Command, KeysDown, contexts};
+use nova_view::{CommandReader, Input, MouseButton, SharedBindings};
 
 use super::{AppScreen, Side};
 
@@ -69,10 +68,10 @@ use super::{AppScreen, Side};
 /// when last settled.
 #[derive(Clone, Debug, Default)]
 pub(super) struct LiveInput {
-    keys: HashSet<Key>,
+    keys: KeysDown,
     button: bool,
     away: bool,
-    down_before: HashSet<Key>,
+    down_before: KeysDown,
 }
 
 /// Where flight's input is, for [`LiveInput::settle`].
@@ -93,12 +92,8 @@ impl LiveInput {
     /// its release won't come.
     pub(super) fn note(&mut self, input: &Input) {
         match *input {
-            Input::Key { key, pressed, .. } => {
-                if pressed {
-                    self.keys.insert(key);
-                } else {
-                    self.keys.remove(&key);
-                }
+            Input::Key { .. } => {
+                self.keys.follow(input);
             }
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -110,9 +105,15 @@ impl LiveInput {
         }
     }
 
-    /// Whether `key` is physically down, as live input has told.
-    pub(super) fn is_down(&self, key: Key) -> bool {
-        self.keys.contains(&key)
+    /// Whether the keys physically down, as live input has told, hold
+    /// `command` of the shared play keys (`contexts::KEY_WAIT`'s list)
+    /// through `bindings`: a key a close waits on.
+    pub(super) fn holds(&self, command: impl Into<Command>, bindings: &SharedBindings) -> bool {
+        let mut reader = CommandReader::new(contexts::KEY_WAIT).with_bindings(bindings.clone());
+        for press in self.keys.presses() {
+            reader.follow(&press);
+        }
+        reader.held(command)
     }
 
     /// Forgets everything down: the input is lost, and the releases may
@@ -120,7 +121,7 @@ impl LiveInput {
     /// as a latched key down then read its latch set, whatever happened
     /// after.
     pub(super) fn forget(&mut self) {
-        self.keys.clear();
+        self.keys.let_go();
         self.button = false;
     }
 
@@ -140,7 +141,9 @@ impl LiveInput {
         let back = self.away && now == FlightInput::Back;
         let away = now == FlightInput::Away;
         if away && !self.away {
-            self.down_before.extend(self.keys.iter().copied());
+            for press in self.keys.presses() {
+                self.down_before.follow(&press);
+            }
         }
         self.away = away;
         back
@@ -149,8 +152,8 @@ impl LiveInput {
     /// What is down for flight to take back ([`LiveKeys`]).
     pub(super) fn taken(&self) -> LiveKeys {
         LiveKeys {
-            down: self.keys.iter().copied().collect(),
-            down_before: self.down_before.iter().copied().collect(),
+            down: self.keys.clone(),
+            down_before: self.down_before.clone(),
             button: self.button,
         }
     }
@@ -223,6 +226,14 @@ impl AppScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nova_view::Key;
+
+    impl LiveInput {
+        /// Whether `key` is physically down, as live input has told.
+        fn is_down(&self, key: Key) -> bool {
+            self.keys.is_down(key)
+        }
+    }
 
     fn key(key: Key, pressed: bool) -> Input {
         Input::Key {
@@ -241,7 +252,7 @@ mod tests {
     }
 
     fn down(live: &LiveInput) -> Vec<Key> {
-        let mut keys: Vec<Key> = live.keys.iter().copied().collect();
+        let mut keys: Vec<Key> = live.keys.keys().collect();
         keys.sort_by_key(|key| format!("{key:?}"));
         keys
     }

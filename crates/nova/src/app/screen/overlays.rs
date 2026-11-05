@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightStart, FlightView, MapOpener};
-use nova_view::keymap::{AppCommand, Command, PauseCommand};
+use nova_view::keymap::{AppCommand, Command, PauseCommand, PlayCommand};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -17,7 +17,7 @@ use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
 use nova_view::ui::player_info::{
-    BackgroundSizes, PLAYER_INFO_DIALOG, PLAYER_INFO_KEY, PlayerInfoScreen, YES_NO_DIALOG,
+    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
 };
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
@@ -623,7 +623,7 @@ impl AppScreen {
                 BackgroundSizes::read(&self.data),
             )
             .with_focus_ring(self.dialog_focus_ring())
-            .with_key_held(self.live.is_down(PLAYER_INFO_KEY)),
+            .with_key_held(self.live.holds(PlayCommand::PlayerInfo, &self.bindings)),
         );
     }
 
