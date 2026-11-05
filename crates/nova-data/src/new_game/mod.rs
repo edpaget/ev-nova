@@ -84,6 +84,8 @@
 //! IDs aren't pinned: adding a data file renumbers what follows it, and a
 //! pilot saved before can load into another place ([`ids`]).
 
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod ids;

@@ -8,6 +8,14 @@ jump_points:
     position: [1200, 0]
     to: verge/hearth-road
     stability: stable
+  - id: side-road
+    position: [0, 1300]
+    to: verge/side-road
+    stability: stable
+  - id: drift-road
+    position: [-1200, 0]
+    to: drift/hearth-road
+    stability: stable
 ---
 
-The Guild's home system.
+The Guild's home system. Two roads lead to the Verge.
