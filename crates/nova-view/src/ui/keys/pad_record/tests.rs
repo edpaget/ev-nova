@@ -562,6 +562,26 @@ fn a_key_press_ends_a_pad_recording() {
 }
 
 #[test]
+fn return_s_auto_repeat_keeps_a_pad_recording_it_started() {
+    let mut screen = gamepad_tab();
+    select(&mut screen, Fc::Autopilot);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.recording(), Some(Fc::Autopilot.into()));
+    screen.input(&Input::Key {
+        key: Key::Enter,
+        pressed: true,
+        repeat: true,
+    });
+    assert_eq!(
+        screen.recording(),
+        Some(Fc::Autopilot.into()),
+        "a repeat of the held Return"
+    );
+    pad(&mut screen, P::LeftStick);
+    assert_eq!(on_pad(&screen, Fc::Autopilot), plain(P::LeftStick));
+}
+
+#[test]
 fn the_gamepad_cells_name_the_family_last_told() {
     let mut screen = screen();
     tap(&mut screen, Key::ArrowRight);
