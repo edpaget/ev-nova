@@ -160,12 +160,25 @@ pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
     }
 }
 
-/// The end of each count wait among `npcs` whose think was `due` this
-/// tick: once its AI wait no longer runs (+0x4c > 0.0 @0x8d474), goal 0 (`_HighLevelAIHandler`
-/// @0x8d497-0x8d4a3), [`Goal::Idle`].
+/// The count-wait block at `_HighLevelAIHandler`'s head
+/// (@0x8d462-0x8d4ac) for each ship among `npcs` in goal 0x16 whose think
+/// was `due` this tick, whatever its type. While its AI wait runs (+0x4c >
+/// 0.0 @0x8d474) the block writes +0x70 -1 (@0x8d480), which clears
+/// [`Npc::target`], so a hit's target is held only until the ship's next
+/// run; its other writes there need nothing here: +0xba 0 is the low
+/// level's every frame, +0x6c -1 is in [`travel`](crate::ai::travel)'s
+/// "Not written", and sub 1 is the stop the count wait flies
+/// ([`autopilot`](crate::traffic::autopilot)). Once the wait no longer
+/// runs, goal 0 and sub 0 with +0x70 kept (@0x8d497-0x8d4a3),
+/// [`Goal::Idle`].
 pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
     for (npc, _) in npcs.iter_mut().zip(due).filter(|(_, due)| **due) {
-        if npc.goal == Goal::CountWait && !ai_wait::running(npc.ai_wait) {
+        if npc.goal != Goal::CountWait {
+            continue;
+        }
+        if ai_wait::running(npc.ai_wait) {
+            npc.target = None;
+        } else {
             npc.goal = Goal::Idle;
         }
     }
@@ -491,6 +504,40 @@ mod tests {
             [Goal::Idle, Goal::CountWait, Goal::CountWait, Goal::Hold],
             "another goal at none left is no count wait to end"
         );
+    }
+
+    #[test]
+    fn a_running_count_wait_clears_the_target_for_every_type() {
+        // The block at the handler's head reads no type: while +0x4c runs
+        // it writes +0x70 -1 (@0x8d480).
+        let mut warship = waiting(1, 30);
+        warship.ai_type = crate::traffic::npc::AiType::Warship;
+        warship.target = Some(n(5));
+        let mut escort = waiting(2, 30);
+        escort.leader = Some(NpcId(5));
+        escort.target = Some(n(6));
+        let mut npcs = vec![warship, escort];
+        lapse(&mut npcs, &[true, true]);
+        for npc in &npcs {
+            assert_eq!(npc.goal, Goal::CountWait, "{:?}", npc.id);
+            assert_eq!(npc.target, None, "{:?}", npc.id);
+        }
+    }
+
+    #[test]
+    fn a_count_wait_ending_keeps_the_target_and_one_not_due_keeps_both() {
+        // With +0x4c out the block writes goal 0 and sub 0 and keeps +0x70
+        // (@0x8d497-0x8d4a3).
+        let mut out = waiting(1, 0);
+        out.target = Some(n(5));
+        let mut not_due = waiting(2, 30);
+        not_due.target = Some(n(6));
+        let mut npcs = vec![out, not_due];
+        lapse(&mut npcs, &[true, false]);
+        assert_eq!(npcs[0].goal, Goal::Idle);
+        assert_eq!(npcs[0].target, Some(n(5)), "the wait out keeps +0x70");
+        assert_eq!(npcs[1].goal, Goal::CountWait);
+        assert_eq!(npcs[1].target, Some(n(6)), "no high level ran");
     }
 
     #[test]

@@ -1270,29 +1270,45 @@ impl Npc {
         self.target.or(self.goal.inspecting())
     }
 
-    /// The ship the threat tests read as the one it fights: its goal's
-    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6),
-    /// idle ([`Goal::Idle`], state 0), leaving ([`Goal::JumpOut`], state
-    /// 2), landing ([`Goal::Land`], state 1) or entering a gate
-    /// ([`Goal::EnterGate`], state 0x14) the target it holds. The
-    /// original's tests read +0x70 and spare only states 5, 7, 9, 0xa,
-    /// 0xb, 0xc, 0xf and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
-    /// `_IsThreatToShip` @0x82024-0x82055, `_ExtendedIsThreatToShip`
-    /// @0x81ace-0x81b03): a trader keeps a hit's target through its stop,
-    /// idle, leave, landing and gate entry (@0x8d803-0x8d80f, @0x3bcf6; see
-    /// [`trader_target`](crate::ai::trader_target::trader_target)), and the
-    /// attack block's ally drop keeps it for any type it idles (@0x8e2d2,
-    /// [`Decision::holds_target`](crate::ai::Decision::holds_target)), so
-    /// such a ship threatens the ally it spared. A pirate's target step
-    /// keeps its target in those goals too. In the other goals that leave
-    /// the quarry none, +0x70 is -1 or the state is one the tests spare.
+    /// The ship the threat tests read as the one it fights, the original's
+    /// +0x70: none in a goal they spare ([`Goal::spares_player_threat`]),
+    /// otherwise its goal's quarry ([`Goal::quarry`]) or else the target it
+    /// holds.
+    ///
+    /// The three tests spare one set, states 5, 7, 9, 0xa, 0xb, 0xc, 0xf
+    /// and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_IsThreatToShip`
+    /// @0x82024-0x82055, `_ExtendedIsThreatToShip` @0x81ace-0x81b03), and
+    /// read +0x70 in every other. A hit of no nominal damage writes it in
+    /// any state (`_DamageShip` @0x3bcf6). The states whose goal names no
+    /// ship hold it so:
+    ///
+    /// - **Idle (0), stopped (6), landing (1), leaving (2), gate entry
+    ///   (0x14):** a trader keeps a hit's target (@0x8d803-0x8d80f; see
+    ///   [`trader_target`](crate::ai::trader_target::trader_target)), the
+    ///   attack block's ally drop keeps it for any type it idles (@0x8e2d2,
+    ///   [`Decision::holds_target`](crate::ai::Decision::holds_target)),
+    ///   and a warship holds it in goal 2 with its warp under way
+    ///   (@0x8bb75-0x8bb7c).
+    /// - **Mining (0x10), scooping (0x11):** the high level writes none
+    ///   (@0x8f832-0x8f903, @0x8faf3-0x8fafd); the miner's think writes -1
+    ///   only on its stop, leaves and disable, and order 0x14's fire clears
+    ///   it (@0x8843a).
+    /// - **The regroup pause (0x13):** no think and no high level run
+    ///   (@0x8fe73-0x8feb5), so +0x70 is kept from before it.
+    /// - **The drift (0xe) and the count wait (0x16):** the high level
+    ///   clears it (@0x8eb85, @0x8d480; see
+    ///   [`plunder::drift`](crate::traffic::plunder::drift) and
+    ///   [`board_wait::lapse`](crate::traffic::board_wait::lapse)), so it
+    ///   holds a hit's target only until the ship's next run.
+    ///   `_IsThreatToPlayer` spares a ship whose wait runs
+    ///   ([`Npc::threatens_player_or_led`]); `_ExtendedIsThreatToShip`
+    ///   doesn't.
     #[must_use]
     pub fn fought(&self) -> Option<ShipRef> {
-        match self.goal {
-            Goal::Wait | Goal::Idle | Goal::JumpOut | Goal::Land(_) | Goal::EnterGate(_) => {
-                self.target
-            }
-            goal => goal.quarry(),
+        if self.goal.spares_player_threat() {
+            None
+        } else {
+            self.goal.quarry().or(self.target)
         }
     }
 
@@ -1329,9 +1345,9 @@ impl Npc {
     /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
     /// active ship in slots 1-63, other than itself, whose leader is
     /// `ship` (@0x81ab2-0x81b59). Here [`Npc::active_not_disabled`]
-    /// stands for the active and disabled tests and [`Npc::fought`] (the quarry of an
-    /// attack, snipe or flight, or a stop's kept target) for the AI states
-    /// and the target. Unlike `_IsThreatToPlayer`, there is
+    /// stands for the active and disabled tests and [`Npc::fought`] (none
+    /// in a spared state, else the goal's quarry or the target it holds)
+    /// for the AI states and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
     /// [`Npc::threatens`] keeps it, since its readers
     /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target);
@@ -1418,8 +1434,10 @@ impl Npc {
     /// coming out of a gate or jumping in has one, and so does a flying
     /// pirate docked or holding after a plunder, or a ship it took into
     /// its fleet), and
-    /// [`Npc::fought`] (the quarry of an attack, snipe or flight, or a
-    /// stop's kept target) for the AI states and the target.
+    /// [`Npc::fought`] (none in a spared state, else the goal's quarry or
+    /// the target it holds) for the AI states and the target. A drifting
+    /// or count-waiting ship holds a hit's target only until its next run
+    /// ([`Npc::fought`]), and this test spares it while its wait runs.
     ///
     /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
     /// that fails this test but targets an active ship the player leads

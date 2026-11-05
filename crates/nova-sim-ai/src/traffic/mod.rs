@@ -248,6 +248,8 @@ pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
 pub mod formation_places;
+#[cfg(test)]
+mod fought_tests;
 mod frame_target;
 #[cfg(test)]
 mod gate_approach_tests;
@@ -266,6 +268,8 @@ pub mod held_burst;
 mod held_burst_tests;
 #[cfg(test)]
 mod held_target_tests;
+#[cfg(test)]
+mod held_wait_target_tests;
 #[cfg(test)]
 mod hit_goal_tests;
 #[cfg(test)]

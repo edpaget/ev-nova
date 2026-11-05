@@ -361,12 +361,13 @@ pub enum Goal {
     /// [`idle`]). It fights nothing: its quarry is none.
     Hold,
     /// Mine asteroid slot 0: the original's state 16, which a miner takes
-    /// (see [`miner`]). Its quarry is none, it doesn't scoop, and
-    /// `_ExtendedIsThreatToPlayer` doesn't spare it (16 is none of its
-    /// states). `_HighLevelAIHandler` flies it as order 1, a stop, while
-    /// slot 0 is empty (@0x8f879), as order 0x13, a chase, outside the
-    /// mining box of slot 0, and as order 0x14 inside it, holding by slot 0
-    /// and firing its untargeted gun at it (@0x8f832-0x8f903; see
+    /// (see [`miner`]). Its quarry is none, it doesn't scoop, and the
+    /// threat tests don't spare it (16 is none of their states), so they
+    /// read the target it holds ([`Npc::fought`]). `_HighLevelAIHandler`
+    /// flies it as order 1, a stop, while slot 0 is empty (@0x8f879), as
+    /// order 0x13, a chase, outside the mining box of slot 0, and as order
+    /// 0x14 inside it, holding by slot 0 and firing its untargeted gun at
+    /// it (@0x8f832-0x8f903; see
     /// [`mine_orders`], [`fire_untargeted`] and
     /// [`mine_flight`](crate::traffic::mine_flight)). Its shots and beams
     /// pass through every ship (`_AIShipIsAttackingAsteroid` @0x8982b; see
@@ -375,8 +376,9 @@ pub enum Goal {
     /// Scoop up asteroid boxes: the original's state 0x11, which a miner
     /// that can scoop takes while a scoopable box is in space (see
     /// [`miner`]), and the one goal that scoops ([`Goal::scooping`]). Its
-    /// quarry is none, and `_ExtendedIsThreatToPlayer` doesn't spare it
-    /// (0x11 is none of its states). `_HighLevelAIHandler` flies it as
+    /// quarry is none, and the threat tests don't spare it (0x11 is none
+    /// of their states), so they read the target it holds
+    /// ([`Npc::fought`]). `_HighLevelAIHandler` flies it as
     /// order 0x15 (@0x8faf3-0x8fafd), steering to the nearest scoopable box
     /// (see [`mine_orders`] and [`mine_flight`](crate::traffic::mine_flight)).
     Scoop,
@@ -402,21 +404,29 @@ pub enum Goal {
     /// original's +0x4c, apart from the goal, so a goal that replaces it
     /// keeps the wait; see [`board_wait`](crate::traffic::board_wait)). It
     /// brakes, targets and fires nothing, and fights nothing: its quarry is
-    /// none.
+    /// none. Its high level clears the target while the wait runs
+    /// (@0x8d480), so the threat tests, which don't spare it, read only a
+    /// hit's target, until the ship's next run ([`Npc::fought`]).
     CountWait,
     /// Drift off from the ship it plundered: a pirate's goal 0xe
     /// (`_HighLevelAIHandler` @0x8eb6b-0x8ebd4), its ticks the AI wait
     /// [`Npc::ai_wait`] its plunder set (see
     /// [`plunder`](crate::traffic::plunder)). It targets and fights
     /// nothing, fires nothing, and moves on at its velocity 0.7 pixels a
-    /// tick further along its heading, until its wait reads none.
+    /// tick further along its heading, until its wait reads none. Its high
+    /// level clears the target (@0x8eb85), so the threat tests, which don't
+    /// spare it, read only a hit's target, until the ship's next run
+    /// ([`Npc::fought`]).
     Drift,
     /// The regroup pause, the original's goal 0x13: a ship of a fleet
     /// whose lead was lost waits to take up its new lead's orders, deciding
     /// nothing and running no high level, flying and firing the substate
     /// it kept, until a 1-in-100 draw each tick releases it (see
     /// [`regroup`]). Every reader of the goal but the escort orders leaves
-    /// it to its default: no attack, no fight, not in form, not spared.
+    /// it to its default: no attack, no fight, not in form, not spared. It
+    /// keeps the target it held, which the threat tests read
+    /// ([`Npc::fought`]): no think or high level writes it
+    /// (@0x8fe73-0x8feb5).
     Regroup {
         /// The substate it keeps flying.
         kept: regroup::Kept,
@@ -550,7 +560,10 @@ impl Goal {
     /// target, as `_ExtendedIsThreatToPlayer` leaves out the original's
     /// goals 7, 9, 0xf, 0xa, 0xb, 5, 0xc and 0x12 (@0x81bf3-0x81c28, again
     /// @0x81c55-0x81c8a; see
-    /// [`Npc::threatens_player_extended`]). The engine's goals for them:
+    /// [`Npc::threatens_player_extended`]). `_IsThreatToPlayer`
+    /// (@0x7f536-0x7f56b), `_IsThreatToShip` (@0x82024-0x82055) and
+    /// `_ExtendedIsThreatToShip` (@0x81ace-0x81b03) spare the same set,
+    /// which [`Npc::fought`] reads for them. The engine's goals for them:
     ///
     /// | Original goal | Set at | Engine goal |
     /// |---|---|---|

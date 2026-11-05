@@ -186,14 +186,17 @@ impl Behaviour for PirateWarship {
         fire::trigger(npc, around, self.fire)
     }
 
-    /// The ship its fight is about; none in its count wait or its drift,
-    /// which `_HighLevelAIHandler` clears every frame (@0x8d480,
-    /// @0x8eb85); and for any
-    /// other goal the target it holds, which its think keeps with a goal it
-    /// keeps (see the module docs).
+    /// The ship its fight is about; none in its drift, which
+    /// `_HighLevelAIHandler` clears (@0x8eb85, as
+    /// [`plunder::drift`](crate::traffic::plunder::drift) does for every
+    /// type); and for any other goal the target it holds, which its think
+    /// keeps with a goal it keeps (see the module docs). Its count wait
+    /// keeps it here too: the handler's head clears it while the wait runs
+    /// (@0x8d480) and keeps it as the wait runs out (@0x8d497-0x8d4a3), for
+    /// every type, in [`board_wait::lapse`](crate::traffic::board_wait::lapse).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::CountWait | Goal::Drift => None,
+            Goal::Drift => None,
             goal => goal.quarry().or(npc.target),
         }
     }
@@ -1421,7 +1424,13 @@ mod tests {
         assert_eq!(target(Goal::Attack(n(2)), None), Some(n(2)));
         assert_eq!(target(IDLE, Some(n(3))), Some(n(3)), "kept with its goal");
         assert_eq!(target(Goal::Idle, None), None);
-        assert_eq!(target(Goal::CountWait, Some(n(3))), None);
+        assert_eq!(
+            target(Goal::CountWait, Some(n(3))),
+            Some(n(3)),
+            "the head's clear is `board_wait::lapse`'s, and the wait out keeps +0x70 \
+             (@0x8d497-0x8d4a3)"
+        );
+        assert_eq!(target(Goal::Drift, Some(n(3))), None, "@0x8eb85");
     }
 
     #[test]
