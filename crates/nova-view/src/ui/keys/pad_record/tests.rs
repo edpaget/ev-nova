@@ -320,6 +320,19 @@ fn select_then_start_records_the_chord() {
 }
 
 #[test]
+fn start_then_select_records_the_chord_as_pause_holds_it_and_unbinds_pause() {
+    let mut screen = gamepad_tab();
+    recording(&mut screen, Fc::Autopilot);
+    down(&mut screen, P::Start);
+    down(&mut screen, P::Select);
+    assert_eq!(
+        on_pad(&screen, Fc::Autopilot),
+        PadBinding::Entry(PadEntry::on(P::Select, P::Start))
+    );
+    assert_eq!(on_pad(&screen, PauseCommand::Pause), PadBinding::Unbound);
+}
+
+#[test]
 fn a_flight_command_rebound_to_south_or_east_leaves_the_pad_navigating_and_closing() {
     for button in [P::South, P::East] {
         let mut screen = gamepad_tab();

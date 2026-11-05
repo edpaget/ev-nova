@@ -7,7 +7,9 @@
 //!   half axis). Under a layer, the layer's name, `+`, then the button's:
 //!   `back+south`, `start+dpup`, `back++righty`. Only Select (`back`) and
 //!   Start (`start`) are layers ([`PadButton::LAYERS`]). Parsing tries
-//!   their prefixes first, so `+lefty` alone is a plain direction.
+//!   their prefixes first, so `+lefty` alone is a plain direction. The
+//!   chord of the two layers saves as `back+start` and loads from
+//!   `start+back` too, as the one entry ([`PadEntry::canonical`]).
 //! - An axis is its name ([`PadAxis::name`]), with `~` when inverted, as
 //!   SDL's mappings mark one: `leftx`, `righty~`.
 //! - An unbound command is `""`.
@@ -47,7 +49,7 @@ impl FromStr for PadEntry {
             if let Some(button) = button
                 && button != layer
             {
-                return Ok(Self::on(layer, button));
+                return Ok(Self::on(layer, button).canonical());
             }
         }
         PadButton::from_name(text)
@@ -233,6 +235,14 @@ mod tests {
             assert_eq!(binding.to_string(), text);
             assert_eq!(text.parse::<PadEntry>(), Ok(binding), "{text}");
         }
+    }
+
+    #[test]
+    fn the_layer_chord_loads_from_either_order_and_saves_as_back_then_start() {
+        let chord = PadEntry::on(P::Select, P::Start);
+        assert_eq!("start+back".parse::<PadEntry>(), Ok(chord));
+        assert_eq!("back+start".parse::<PadEntry>(), Ok(chord));
+        assert_eq!(chord.to_string(), "back+start");
     }
 
     #[test]

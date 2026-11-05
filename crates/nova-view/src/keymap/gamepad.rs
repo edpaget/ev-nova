@@ -3,7 +3,10 @@
 //! names a `Key`.
 //!
 //! - [`PadEntry`] is a pad button and the layer button it needs held, as
-//!   a `KeyCombo` is a key and its modifiers.
+//!   a `KeyCombo` is a key and its modifiers. The chord of the two layer
+//!   buttons has one form whichever goes down first, Select's layer and
+//!   Start as Pause's default ([`PadEntry::canonical`]), which every
+//!   table entry is kept in.
 //! - [`PadMap`] binds each command to an entry, to a stick axis (an
 //!   [`Kind::Axis`](super::Kind::Axis) command, read inverted or not:
 //!   [`AxisBinding`]) or to nothing, with the default table that
@@ -84,6 +87,23 @@ impl PadEntry {
         Self {
             button,
             layer: Some(layer),
+        }
+    }
+
+    /// The entry in its one form: the chord of the two layer buttons
+    /// ([`PadButton::LAYERS`]) held in either order is Select's layer and
+    /// Start, as Pause's default holds it (`back+start` saved), so a chord
+    /// recorded or saved Start first is the same entry. Any other entry is
+    /// itself. [`PadMap::bind`] and the saved form's parse keep every
+    /// entry of a table in this form, so the clash query's grouping and
+    /// the lookup compare entries by equality.
+    #[must_use]
+    pub const fn canonical(self) -> Self {
+        match (self.layer, self.button) {
+            (Some(PadButton::Start), PadButton::Select) => {
+                Self::on(PadButton::Select, PadButton::Start)
+            }
+            _ => self,
         }
     }
 }
@@ -192,8 +212,13 @@ impl PadMap {
         }
     }
 
-    /// Binds `command` to `binding`.
+    /// Binds `command` to `binding`, an entry in its one form
+    /// ([`PadEntry::canonical`]).
     pub fn bind(&mut self, command: Command, binding: PadBinding) {
+        let binding = match binding {
+            PadBinding::Entry(entry) => PadBinding::Entry(entry.canonical()),
+            other => other,
+        };
         self.bindings.insert(command, binding);
     }
 
@@ -745,8 +770,8 @@ pub(super) fn fresh_press(input: &Input) -> Option<Input> {
 /// and the d-pad leave the d-pad's own thrust and turn alone.
 ///
 /// An entry matches exactly: a layer held never falls back to the
-/// button's plain entry. Two layer buttons pressed together match an
-/// entry naming them in either order.
+/// button's plain entry. Two layer buttons pressed together, in either
+/// order, match the chord's one entry ([`PadEntry::canonical`]).
 fn meanings(
     map: &PadMap,
     button: PadButton,
@@ -763,13 +788,8 @@ fn meanings(
     {
         return derived;
     }
-    let pressed = PadEntry { button, layer };
-    let met = |entry: PadEntry| {
-        entry == pressed
-            || (layers.contains(&entry.button)
-                && entry.layer == Some(button)
-                && layer == Some(entry.button))
-    };
+    let pressed = PadEntry { button, layer }.canonical();
+    let met = |entry: PadEntry| entry == pressed;
     let on = |context: Context| -> Vec<Command> {
         context
             .commands()
@@ -1608,6 +1628,52 @@ mod tests {
         assert_eq!(pad.press(P::LeftStickDown), None, "flight reads its axis");
         let state = moved(Gamepad::default(), &pad.map, PadAxis::LeftY, -1.0);
         assert_eq!(axis_amount(&pad.map, &state, throttle), 1.0, "thrusts");
+    }
+
+    #[test]
+    fn the_layer_chord_named_in_either_order_is_one_entry() {
+        let reversed = PadEntry {
+            button: P::Select,
+            layer: Some(P::Start),
+        };
+        assert_eq!(reversed.canonical(), PadEntry::on(P::Select, P::Start));
+        assert_eq!(
+            PadEntry::on(P::Select, P::Start).canonical(),
+            PadEntry::on(P::Select, P::Start)
+        );
+        for other in [
+            PadEntry::on(P::Start, P::South),
+            PadEntry::on(P::Select, P::North),
+            PadEntry::plain(P::Start),
+            PadEntry::plain(P::South),
+        ] {
+            assert_eq!(other.canonical(), other, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn a_command_bound_to_the_layer_chord_reversed_clashes_with_pause() {
+        let autopilot = flight(FlightCommand::Autopilot);
+        let pause = Command::Pause(PauseCommand::Pause);
+        let mut map = PadMap::default();
+        map.bind(
+            autopilot,
+            PadBinding::Entry(PadEntry {
+                button: P::Select,
+                layer: Some(P::Start),
+            }),
+        );
+        assert_eq!(
+            map.entry(autopilot),
+            Some(PadEntry::on(P::Select, P::Start))
+        );
+        assert_eq!(
+            map.clashes(),
+            vec![Clash {
+                first: autopilot.min(pause),
+                second: autopilot.max(pause),
+            }]
+        );
     }
 
     #[test]
