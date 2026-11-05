@@ -764,10 +764,4 @@ exclude_re = [
     # that to `escort_menu.is_open()` at the start of every input, before
     # the press reaches `escort_command`, so the guard always holds there.
     "nova-view/src/flight/view/cockpit\\.rs:[0-9]+:[0-9]+: replace match guard self\\.escort_menu\\.is_open\\(\\) with true in FlightView<C, S>::escort_command$",
-    # Enter Ship's wait letting go of the router's keys bound to it: on
-    # E's release `hold_input` has just followed that release, and on a
-    # focus loss `let_go_of_keys` queued `Held::ReleaseKeys` first, whose
-    # replay at the click's end lets go of every noted key before anything
-    # reads the router's keys (the click's hold takes inputs unread).
-    "nova/src/app/screen/menu\\.rs:[0-9]+:[0-9]+: replace AppScreen::let_go_of_router_command with \\(\\)$",
 ]

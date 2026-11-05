@@ -188,24 +188,7 @@ impl AppScreen {
     /// Enter Ship's key is let go of while E's wait holds: it clicks, and
     /// Enter Ship waits on the click.
     pub(super) fn e_released(&mut self) {
-        self.let_go_of_router_command(Command::MainMenu(MainMenuCommand::EnterShip));
         self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
-    }
-
-    /// Lets go of every key the router's keys hold `command` by, as their
-    /// releases would.
-    fn let_go_of_router_command(&mut self, command: Command) {
-        for press in self.keys.down() {
-            if let Input::Key { key, .. } = press
-                && self.keys.meanings(&press).contains(&command)
-            {
-                self.keys.follow(&Input::Key {
-                    key,
-                    pressed: false,
-                    repeat: false,
-                });
-            }
-        }
     }
 
     /// New Pilot, as `_MainScreenChoice(0)` runs it: with a game in
