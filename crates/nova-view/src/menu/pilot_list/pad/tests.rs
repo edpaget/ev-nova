@@ -218,3 +218,20 @@ pub(crate) fn pad_probe() -> Box<dyn PadProbe> {
 pub(crate) fn empty_pad_probe() -> Box<dyn PadProbe> {
     Box::new(Probe(list(0)))
 }
+
+#[test]
+fn told_the_pad_after_a_scroll_the_focus_starts_on_the_selected_rows_slot() {
+    let mut list = list(14);
+    for _ in 0..12 {
+        tap(&mut list, PadButton::LeftStickDown);
+    }
+    assert_eq!(list.selected(), Some(12));
+    list.input(&told(PAD));
+    assert_eq!(
+        list.pad_highlight(),
+        Some(PadTarget::Row(9)),
+        "pilot 12, scrolled by 3"
+    );
+    tap(&mut list, PadButton::South);
+    assert_eq!(list.take_outcome(), Some(opened(12)));
+}
