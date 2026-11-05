@@ -10,7 +10,7 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! seven keys, as a jump point's gate is the only way in or out of a
+//! eight keys, as a jump point's gate is the only way in or out of a
 //! system:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
@@ -24,10 +24,15 @@
 //!   the higher-ID system lists is still drawn),
 //!   [`RuleKey::MapLaneStyle`] (each lane drawn in its stability's look,
 //!   one-way lanes arrowed) and [`RuleKey::GateCourse`] (a gate taken
-//!   along the course keeps the rest of it).
+//!   along the course keeps the rest of it);
+//! - J's: [`RuleKey::GateAutopilot`] (J with a system selected that a
+//!   jump point here serves engages the gate autopilot, which flies the
+//!   course gate by gate with the player's own controls; J never starts a
+//!   hyperspace jump, as the new game has none).
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
-//! hop at a time. A settings `"rule_overrides"` entry still moves each.
+//! hop at a time, so a course is plotted a lane at a time and J flies it.
+//! A settings `"rule_overrides"` entry still moves each.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -63,8 +68,9 @@ const STOCK: Profile = Profile {
     pilots: PILOTS_DIR,
 };
 
-/// The new game's profile: its traffic's three gate readings and its map
-/// and courses' four (see the module docs), and pilots of its own.
+/// The new game's profile: its traffic's three gate readings, its map
+/// and courses' four and J's gate autopilot (see the module docs), and
+/// pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -74,6 +80,7 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::MapLinkPairing, RuleSource::Bible),
         (RuleKey::MapLaneStyle, RuleSource::Bible),
         (RuleKey::GateCourse, RuleSource::Bible),
+        (RuleKey::GateAutopilot, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -140,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_seven_gate_lane_and_map_keys() {
+    fn the_new_game_pins_the_other_reading_of_its_eight_gate_lane_map_and_autopilot_keys() {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
             [
@@ -151,7 +158,19 @@ mod tests {
                 (RuleKey::MapLinkPairing, RuleSource::Bible),
                 (RuleKey::MapLaneStyle, RuleSource::Bible),
                 (RuleKey::GateCourse, RuleSource::Bible),
+                (RuleKey::GateAutopilot, RuleSource::Bible),
             ]
+        );
+    }
+
+    #[test]
+    fn the_new_game_leaves_the_map_plotting_at_the_shift_click() {
+        assert!(
+            !Ruleset::NewGame
+                .profile()
+                .readings
+                .iter()
+                .any(|(key, _)| *key == RuleKey::MapPlotting)
         );
     }
 }
