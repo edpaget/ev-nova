@@ -378,6 +378,76 @@ mod tests {
         assert_eq!(pick_write(&npc, &around, flee), TravelWrite::Clear);
     }
 
+    // The other reading of `DestinationReach`: a stellar past 999 on an axis
+    // is out of the engine's reach and within the other's.
+
+    /// `sites` around a ship whose destinations reach as `reach` says.
+    fn reaching(sites: &[LandingSite], reach: RuleSource) -> Surroundings<'_> {
+        Surroundings {
+            destination_reach: reach,
+            ..Surroundings::new(sites, &[])
+        }
+    }
+
+    #[test]
+    fn by_the_other_reach_a_far_planet_is_picked_and_by_the_engines_it_jumps_out() {
+        let sites = [planet(128, 1500.0, 0.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Bible), &mut chance),
+            Goal::Land(StellarId(128))
+        );
+        assert_eq!(chance.asked, [1]);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Engine), &mut chance),
+            Goal::JumpOut
+        );
+        assert!(chance.asked.is_empty(), "out of reach: no pick");
+    }
+
+    #[test]
+    fn by_the_other_reach_a_far_gate_is_entered_and_by_the_engines_it_jumps_out() {
+        let sites = [gate_at(300, 1500.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Bible), &mut chance),
+            Goal::EnterGate(StellarId(300))
+        );
+        assert_eq!(chance.asked, [1]);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Engine), &mut chance),
+            Goal::JumpOut
+        );
+        assert!(chance.asked.is_empty(), "out of reach: no pick");
+    }
+
+    #[test]
+    fn the_pick_writes_a_far_stellar_by_the_other_reach_and_clears_by_the_engines() {
+        // Provoked in state 0, the block writes what its pick found
+        // (@0x8b0ef); a ship that jumps out found nothing.
+        let npc = holding(ship(), Goal::Idle);
+        let flee = Goal::Flee(crate::combat::ShipRef::Player);
+        for far in [planet(128, 1500.0, 0.0), gate_at(300, 1500.0)] {
+            let sites = [far];
+            let bible = reaching(&sites, RuleSource::Bible);
+            assert_eq!(
+                pick_write(&npc, &bible, flee),
+                TravelWrite::Set(far.id),
+                "{far:?}"
+            );
+            let engine = reaching(&sites, RuleSource::Engine);
+            assert_eq!(pick_write(&npc, &engine, flee), TravelWrite::Clear);
+            let thought = idle(&npc, &engine, &mut Draws::of(&[]));
+            assert_eq!(
+                pick_write(&npc, &engine, thought),
+                TravelWrite::Clear,
+                "{far:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_provoked_ship_in_another_state_writes_none() {
         let sites = sites();
