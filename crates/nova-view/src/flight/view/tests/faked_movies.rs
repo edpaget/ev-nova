@@ -258,6 +258,20 @@ fn a_skip_ends_the_landing_movie_and_what_else_was_pressed_waits_for_the_spacepo
 }
 
 #[test]
+fn the_movie_flight_plays_skips_on_the_keys_flight_reads() {
+    use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+    let (view, _) = filming(filmed(&[129], &[]), true);
+    let mut view = view.with_bindings(SharedBindings::new(
+        Bindings::default().rebound(UiCommand::Activate, KeyCombo::key(Key::KeyT)),
+    ));
+    land_on_mars(&mut view);
+    view.input(&key(Key::Space, true));
+    assert!(view.playing(), "Space no longer skips");
+    view.input(&key(Key::KeyT, true));
+    assert!(!view.playing(), "T does");
+}
+
+#[test]
 fn a_cinematic_movie_hides_the_pointer_once_its_fade_out_is_over() {
     let cinematic = DescMovie::from_desc("Port.mov", 0x0004).expect("named");
     let catalog = FakeCatalog {

@@ -69,6 +69,7 @@ use crate::draw::fill_rect;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
+use crate::keymap::SharedBindings;
 use crate::movie::{MovieStage, Movies};
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -95,6 +96,13 @@ pub(super) enum AfterMovie {
 pub(super) struct FlightMovie {
     stage: MovieStage,
     then: AfterMovie,
+}
+
+impl FlightMovie {
+    /// The movie's stage reading its skip keys through `bindings`.
+    pub(super) fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.stage.set_bindings(bindings);
+    }
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -200,6 +208,7 @@ impl<
             .catalog
             .description_movie(id)
             .and_then(|movie| self.movies.stage(&movie))
+            .map(|stage| stage.with_bindings(self.keys.bindings().clone()))
         else {
             return false;
         };

@@ -56,6 +56,11 @@ impl WaitKeys {
         self.bindings = bindings;
     }
 
+    /// Waits on `waited` from now on, or on no key.
+    pub(crate) fn set_waited(&mut self, waited: Option<Key>) {
+        self.waited = waited;
+    }
+
     /// Takes `input` if it is a key the queue keeps, repeats included, in
     /// order. The waited key's own never queues, as it is down throughout,
     /// and the router ran Caps Lock's double time on its press. A release
@@ -194,7 +199,7 @@ impl KeyWait {
     /// Waits on `key` from now on, as down or up as the one before.
     pub(crate) fn set_key(&mut self, key: Option<Key>) {
         self.key = key;
-        self.queue.waited = key;
+        self.queue.set_waited(key);
     }
 
     /// Follows `key` up and down: a press or a repeat sets it down, a

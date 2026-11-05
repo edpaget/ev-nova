@@ -121,6 +121,7 @@ mod outputs;
 mod painted_ships;
 mod particle_pixels;
 mod port_screen_map;
+mod rebinding;
 mod rescue;
 mod ship_drawing;
 mod shots;

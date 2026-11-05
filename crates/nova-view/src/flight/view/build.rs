@@ -24,7 +24,7 @@ use crate::flight::hud::{self};
 use crate::flight::sim_adapter::SessionFlight;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
-use crate::keymap::{CommandReader, contexts};
+use crate::keymap::{CommandReader, SharedBindings, contexts};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
@@ -234,6 +234,35 @@ impl<C, S: FlightSim> FlightView<C, S> {
             metrics: Some(Metrics(metrics)),
             ..self
         }
+    }
+
+    /// The flight reading its keys through `bindings`, the app's
+    /// ([`FlightView::set_bindings`]).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads flight's keys through `bindings` from the next input on, and
+    /// hands them to all it builds that reads keys: the course map, its
+    /// wait for the map key's release, and the movie playing or to come.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.map.set_bindings(bindings.clone());
+        self.wait_keys.set_bindings(bindings.clone());
+        self.wait_keys
+            .set_waited(super::map_wait::map_key(&bindings));
+        if let Some(movie) = &mut self.movie {
+            movie.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self.latched_down.retain(|&command| self.keys.held(command));
+    }
+
+    /// The bindings flight reads its keys through.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
     }
 
     /// The flight with the course map at `zoom`, the run's: `_mapZoom` is
