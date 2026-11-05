@@ -59,7 +59,7 @@
 //! [`handler_head::slot_test`]). A flight under way (+0x50 above 0)
 //! whose +0x70 went is taken to goal 2 by the hold before goal 3's block
 //! in the original (@0x8d535-0x8d56b), keeping +0x96; the engine zeroes
-//! it, which rdm:phase/npc-ai-2 records.
+//! it (rdm:phase/npc-ai-2/phase-2-flight-under-way-target-gone-keeps-provocation).
 //!
 //! **Goal 4's high level** then takes a kept attack or snipe, or a brave
 //! trader's own attack, as it takes every type's
