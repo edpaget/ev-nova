@@ -74,6 +74,7 @@
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
 //!   draws with egui only in its `dev-tools` build.
 
+pub mod bound_names;
 pub mod color;
 pub mod colorize;
 pub mod devtools;
@@ -117,8 +118,8 @@ pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{
-    COMMAND_KEYS, CONTROL_KEYS, Input, Key, ModifierHeld, MouseButton, OPTION_KEYS, SHIFT_KEYS,
-    ScrollDelta, key_letter, letter_key,
+    COMMAND_KEYS, CONTROL_KEYS, Device, Input, Key, ModifierHeld, MouseButton, OPTION_KEYS,
+    SHIFT_KEYS, ScrollDelta, key_letter, letter_key,
 };
 pub use key_names::{KeyNames, NoKeyNames, combo_name, key_name};
 pub use keymap::{

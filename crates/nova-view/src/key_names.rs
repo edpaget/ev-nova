@@ -308,15 +308,22 @@ const MODIFIER_WORDS: [(Modifiers, &str); 4] = [
     (Modifiers::COMMAND, "Cmd-"),
 ];
 
-/// The name of `combo`: its modifiers' words, then its key's name
-/// ([`key_name`]): `Cmd-K`, `Ctrl-Alt-Shift-Cmd-Q`, `Ctrl`.
+/// The words `modifiers` are spelled with before a key, in the
+/// original's order: `Ctrl-Alt-`, or nothing for none.
+#[must_use]
+pub fn modifier_words(modifiers: Modifiers) -> String {
+    MODIFIER_WORDS
+        .iter()
+        .filter(|&&(flag, _)| modifiers.contains(flag))
+        .map(|&(_, word)| word)
+        .collect()
+}
+
+/// The name of `combo`: its modifiers' words ([`modifier_words`]), then
+/// its key's name ([`key_name`]): `Cmd-K`, `Ctrl-Alt-Shift-Cmd-Q`, `Ctrl`.
 #[must_use]
 pub fn combo_name(names: &dyn KeyNames, combo: KeyCombo) -> String {
-    let mut name: String = MODIFIER_WORDS
-        .iter()
-        .filter(|&&(flag, _)| combo.modifiers.contains(flag))
-        .map(|&(_, word)| word)
-        .collect();
+    let mut name = modifier_words(combo.modifiers);
     name.push_str(&key_name(names, combo.key));
     name
 }
