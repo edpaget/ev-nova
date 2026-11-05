@@ -8,6 +8,7 @@ use std::rc::Rc;
 use super::bindings::{Bindings, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
+use super::keyboard::{self, Modifiers};
 use crate::input::Input;
 
 /// The app's bindings, shared by every screen: a cheap clone over one
@@ -191,6 +192,52 @@ impl CommandReader {
                 pressed: true,
                 repeat: false,
             })
+        })
+    }
+
+    /// Every command the key of `input` (a press, a repeat or a release)
+    /// holds while it is down, with the modifiers held now, without
+    /// following it: what [`CommandReader::held`] would gain with it down.
+    /// A screen that keeps its own state per command (a latch on each)
+    /// asks this of a key going down or up. Empty for any other input.
+    #[must_use]
+    pub fn meanings(&self, input: &Input) -> Vec<Command> {
+        let Input::Key { key, .. } = *input else {
+            return Vec::new();
+        };
+        let mut devices = self.devices.clone();
+        devices.follow(&Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        });
+        let active = self.active();
+        self.bindings.with(|bindings| {
+            keyboard::meanings(&bindings.keyboard, key, devices.keyboard(), &active)
+        })
+    }
+
+    /// Whether the key of `input` (a press, a repeat or a release) is
+    /// down; false for any other input.
+    #[must_use]
+    pub fn is_down(&self, input: &Input) -> bool {
+        self.devices.keyboard().holds(input)
+    }
+
+    /// A fresh press of each key down, in order: what a screen hands back
+    /// to the reader after letting go of some of them.
+    #[must_use]
+    pub fn down(&self) -> Vec<Input> {
+        self.devices.keyboard().presses().collect()
+    }
+
+    /// Whether a modifier key is down, as the active contexts read the
+    /// modifier keys ([`keyboard::sides`]): for a screen whose original
+    /// holds an action back while any modifier is down.
+    #[must_use]
+    pub fn modifier_down(&self) -> bool {
+        self.active().into_iter().any(|context| {
+            self.devices.keyboard().modifiers(keyboard::sides(context)) != Modifiers::NONE
         })
     }
 
@@ -439,6 +486,61 @@ mod tests {
         );
         assert_eq!(reader.means(&Input::Text('a')), None);
         assert!(reader.held(FlightCommand::TargetSelect), "nothing followed");
+    }
+
+    #[test]
+    fn meanings_lists_every_command_a_key_would_hold_with_the_modifiers_held() {
+        let mut reader = CommandReader::new(FLIGHT);
+        assert_eq!(
+            reader.meanings(&press(Key::Tab)),
+            vec![Command::Flight(FlightCommand::TargetSelect)]
+        );
+        reader.follow(&press(Key::ShiftLeft));
+        assert_eq!(
+            reader.meanings(&release(Key::Tab)),
+            vec![
+                Command::Flight(FlightCommand::TargetSelect),
+                Command::Flight(FlightCommand::TargetSelectBack),
+            ],
+            "a release asks what its key holds down"
+        );
+        assert_eq!(reader.meanings(&press(Key::KeyX)), vec![], "X alone");
+        assert_eq!(reader.meanings(&Input::Text('a')), vec![]);
+        assert!(
+            !reader.held(FlightCommand::TargetSelect),
+            "nothing followed"
+        );
+    }
+
+    #[test]
+    fn is_down_and_down_say_which_keys_the_reader_holds() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.follow(&press(Key::KeyX));
+        reader.follow(&repeat(Key::ArrowUp));
+        assert!(reader.is_down(&press(Key::KeyX)));
+        assert!(
+            reader.is_down(&release(Key::ArrowUp)),
+            "any input of its key"
+        );
+        assert!(!reader.is_down(&press(Key::KeyJ)));
+        assert!(!reader.is_down(&Input::Text('x')));
+        assert_eq!(reader.down(), vec![press(Key::KeyX), press(Key::ArrowUp)]);
+    }
+
+    #[test]
+    fn modifier_down_reads_the_modifier_keys_as_the_active_contexts_do() {
+        let mut flight = CommandReader::new(FLIGHT);
+        assert!(!flight.modifier_down());
+        flight.follow(&press(Key::AltRight));
+        assert!(!flight.modifier_down(), "flight reads the left keys alone");
+        flight.follow(&press(Key::ShiftLeft));
+        assert!(flight.modifier_down());
+        let mut dialog = CommandReader::new(DIALOG);
+        dialog.follow(&press(Key::MetaRight));
+        assert!(dialog.modifier_down(), "a dialog reads either");
+        dialog.follow(&press(Key::KeyA));
+        dialog.follow(&release(Key::MetaRight));
+        assert!(!dialog.modifier_down());
     }
 
     #[test]

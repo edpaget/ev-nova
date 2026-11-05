@@ -760,6 +760,23 @@ impl KeysDown {
         self.down.iter().copied()
     }
 
+    /// A fresh press of each key down, in order: what a screen follows to
+    /// take these keys into its own reader.
+    pub fn presses(&self) -> impl Iterator<Item = Input> + '_ {
+        self.keys().map(|key| Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        })
+    }
+
+    /// Whether the key of `input`, a press, repeat or release, is down;
+    /// false for any other input.
+    #[must_use]
+    pub fn holds(&self, input: &Input) -> bool {
+        matches!(*input, Input::Key { key, .. } if self.is_down(key))
+    }
+
     /// The modifiers held, as `sides` reads them.
     #[must_use]
     pub fn modifiers(&self, sides: Sides) -> Modifiers {
@@ -774,6 +791,15 @@ impl KeysDown {
     /// Lets go of every key.
     pub fn let_go(&mut self) {
         self.down.clear();
+    }
+}
+
+impl FromIterator<Key> for KeysDown {
+    /// The keys `keys` down.
+    fn from_iter<I: IntoIterator<Item = Key>>(keys: I) -> Self {
+        Self {
+            down: keys.into_iter().collect(),
+        }
     }
 }
 
@@ -1272,6 +1298,20 @@ mod tests {
         assert_eq!(keys.keys().count(), 3);
         keys.let_go();
         assert_eq!(keys.keys().count(), 0);
+    }
+
+    #[test]
+    fn keys_down_hand_back_a_press_of_each_key_and_say_whether_an_input_s_is_down() {
+        let keys: KeysDown = [Key::KeyJ, Key::ArrowUp].into_iter().collect();
+        assert_eq!(
+            keys.presses().collect::<Vec<_>>(),
+            vec![press(Key::KeyJ), press(Key::ArrowUp)],
+            "in the keys' order"
+        );
+        assert!(keys.holds(&press(Key::KeyJ)));
+        assert!(keys.holds(&release(Key::ArrowUp)));
+        assert!(!keys.holds(&press(Key::KeyB)));
+        assert!(!keys.holds(&Input::Text('j')));
     }
 
     #[test]
