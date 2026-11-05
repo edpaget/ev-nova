@@ -11,11 +11,11 @@
 use std::sync::Arc;
 
 use nova_view::{FullscreenKind, MonitorMode, VideoMode};
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalInsets, PhysicalSize};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Fullscreen, Window};
 
-use crate::app::WindowPort;
+use crate::app::{PxRect, WindowPort};
 
 /// The value paired with the deepest of `modes` that has `want`'s size and
 /// refresh rate, if any has.
@@ -40,6 +40,33 @@ fn monitor_mode(handle: &winit::monitor::VideoModeHandle) -> MonitorMode {
             refresh_millihertz: handle.refresh_rate_millihertz(),
         },
         bit_depth: handle.bit_depth(),
+    }
+}
+
+/// The part of a `surface` that `insets` leave uncovered, as the window
+/// port's safe area: from the surface's top-left, `left` across and `top`
+/// down, as wide and tall as the insets on both sides leave it. Insets
+/// too large for the surface leave an empty rect at its edge, never one
+/// outside it.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "`WinitWindow::safe_area` forwards to it from winit 0.31"
+    )
+)]
+pub(crate) fn safe_rect(surface: PhysicalSize<u32>, insets: PhysicalInsets<u32>) -> PxRect {
+    PxRect {
+        x: insets.left.min(surface.width),
+        y: insets.top.min(surface.height),
+        width: surface
+            .width
+            .saturating_sub(insets.left)
+            .saturating_sub(insets.right),
+        height: surface
+            .height
+            .saturating_sub(insets.top)
+            .saturating_sub(insets.bottom),
     }
 }
 
@@ -192,6 +219,59 @@ mod tests {
             (at(fhd(60), 24), "24"),
         ];
         assert_eq!(deepest(modes, fhd(60)), Some("32"));
+    }
+
+    fn insets(top: u32, left: u32, bottom: u32, right: u32) -> PhysicalInsets<u32> {
+        PhysicalInsets::new(top, left, bottom, right)
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> PxRect {
+        PxRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn no_insets_leave_the_whole_surface_safe() {
+        let surface = PhysicalSize::new(1024, 768);
+        assert_eq!(
+            safe_rect(surface, insets(0, 0, 0, 0)),
+            rect(0, 0, 1024, 768)
+        );
+    }
+
+    #[test]
+    fn a_notch_s_top_inset_moves_the_top_down() {
+        let surface = PhysicalSize::new(2560, 1664);
+        assert_eq!(
+            safe_rect(surface, insets(64, 0, 0, 0)),
+            rect(0, 64, 2560, 1600)
+        );
+    }
+
+    #[test]
+    fn insets_on_every_side_shrink_it_from_each() {
+        let surface = PhysicalSize::new(2388, 1668);
+        assert_eq!(
+            safe_rect(surface, insets(48, 20, 40, 30)),
+            rect(20, 48, 2338, 1580)
+        );
+    }
+
+    #[test]
+    fn insets_larger_than_the_surface_leave_an_empty_rect_at_its_edge() {
+        let surface = PhysicalSize::new(100, 80);
+        assert_eq!(
+            safe_rect(surface, insets(90, 70, 0, 50)),
+            rect(70, 80, 0, 0)
+        );
+        assert_eq!(
+            safe_rect(surface, insets(10, 120, 5, 0)),
+            rect(100, 10, 0, 65)
+        );
     }
 
     #[test]

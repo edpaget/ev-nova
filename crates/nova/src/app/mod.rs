@@ -176,6 +176,7 @@ pub mod last_device;
 mod loop_event;
 mod menu;
 mod pads;
+mod px_rect;
 mod scaling;
 pub mod screen;
 mod updates;
@@ -184,6 +185,7 @@ mod wheel;
 pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
 pub use loop_event::LoopEvent;
 pub use menu::{MenuPick, MenuPort, MenuSync};
+pub use px_rect::PxRect;
 pub use screen::{AppScreen, Showing, start_screen};
 pub use updates::{Chosen, NoUpdater, Updater, UpdaterSource, choose};
 pub use wheel::WheelDelta;
@@ -245,6 +247,20 @@ pub trait WindowPort {
     /// default.
     fn request_inner_size(&mut self, size_px: (u32, u32)) {
         let _ = size_px;
+    }
+    /// The part of the window the game may draw controls in: what no
+    /// notch, rounded corner or system bar covers. It is in physical
+    /// pixels from the window's top-left, as [`WindowPort::size_px`]. The
+    /// platform announces no change to it, so a reader asks again on each
+    /// resize or redraw. The whole window by default.
+    fn safe_area(&self) -> PxRect {
+        let (width, height) = self.size_px();
+        PxRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
     }
 }
 
@@ -1590,6 +1606,20 @@ mod tests {
     /// The line `unflown(weapon)` is written as.
     fn unflown_line(weapon: i16) -> String {
         format!("nova: {}\n", unflown(weapon))
+    }
+
+    #[test]
+    fn a_window_s_safe_area_is_the_whole_window_by_default() {
+        let window = FakeWindow::new((800, 600), 2.0);
+        assert_eq!(
+            window.safe_area(),
+            PxRect {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600
+            }
+        );
     }
 
     #[test]
