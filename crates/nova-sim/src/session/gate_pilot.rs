@@ -55,14 +55,15 @@
 use crate::catalog::{LandingSite, StellarId, SystemId};
 use crate::combat::hull::Condition;
 use crate::flight::Controls;
+use crate::flight_frame::GatePilotShown;
 use crate::gate_pilot::{self, Craft, Gate};
 use crate::geometry::Vec2;
-use crate::landing::is_landable;
+use crate::landing::{LandingRefusal, is_landable};
 use crate::navigation::NavMode;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 
-use super::{Chart, Session, Statics};
+use super::{Chart, LandPress, Session, Statics};
 
 /// The gate autopilot while it is engaged (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +153,48 @@ impl Session {
         steer.controls
     }
 
+    /// The land key, telling the gate autopilot's press from the
+    /// player's (see the module docs): [`Session::land_requesting`]'s
+    /// press and whether it made a dock request.
+    pub(crate) fn press_land_key(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+        let own = self.ship.gate_pilot.is_some_and(|pilot| pilot.asked_land);
+        let press = self.land_requesting();
+        let ended = !own || press.0.is_err_and(ends_on);
+        if ended {
+            self.ship.gate_pilot = None;
+        } else if let Some(pilot) = self.ship.gate_pilot.as_mut() {
+            pilot.asked_land = false;
+        }
+        press
+    }
+
+    /// After a hypergate's entry, `entered` or refused: the autopilot
+    /// flies on to the course's next hop, or is done (see the module
+    /// docs).
+    pub(super) fn gate_pilot_after_exit(&mut self, entered: bool) {
+        let Some(pilot) = self.ship.gate_pilot.as_mut() else {
+            return;
+        };
+        let next = self.chart.course_shown(&self.pilot).first().copied();
+        match next {
+            Some(hop) if entered && pilot.along_course => {
+                pilot.to = hop;
+                pilot.asked_land = false;
+            }
+            _ => self.ship.gate_pilot = None,
+        }
+    }
+
+    /// The gate autopilot as the frame shows it, `None` while it isn't
+    /// engaged.
+    #[must_use]
+    pub fn gate_pilot_shown(&self) -> Option<GatePilotShown> {
+        self.ship.gate_pilot.map(|pilot| GatePilotShown {
+            to: pilot.to,
+            press_land: pilot.asked_land,
+        })
+    }
+
     /// Whether the gate autopilot is engaged.
     pub(crate) fn gate_pilot_engaged(&self) -> bool {
         self.ship.gate_pilot.is_some()
@@ -188,6 +231,19 @@ impl Session {
             && self.ship.condition == Condition::Intact
             && self.pod.is_none()
     }
+}
+
+/// Whether the dock request's `refusal` of the autopilot's own press
+/// ends the autopilot: a refusal it can't fly through.
+fn ends_on(refusal: LandingRefusal) -> bool {
+    matches!(
+        refusal,
+        LandingRefusal::NotLandable { .. }
+            | LandingRefusal::Denied { .. }
+            | LandingRefusal::CannotPayFee { .. }
+            | LandingRefusal::Cloaked
+            | LandingRefusal::Disabled
+    )
 }
 
 impl Chart {
@@ -599,5 +655,366 @@ mod tests {
         assert_eq!(jump(&mut session), Answer::GatePilot(SystemId(131)));
         assert_eq!(session.nav_mode(), NavMode::Stellar(Some(StellarId(300))));
         assert_eq!(session.preparing_jump(), None);
+    }
+
+    // The frame, whose L is whose, and the exits.
+
+    /// [`along_the_course`] with the course `hops` from drift and
+    /// [`RuleKey::GateCourse`] by `course`, J pressed toward the first.
+    fn coursed(course: RuleSource, hops: &[SystemId]) -> Session {
+        let rules = Rulebook::default()
+            .with_override(RuleKey::GateLanes, RuleSource::Bible)
+            .with_override(RuleKey::GateCourse, course)
+            .with_override(RuleKey::GateAutopilot, RuleSource::Bible);
+        let mut session = Session::start_ruled(&laned(), &rules).expect("starts");
+        session.pilot.course = hops.to_vec();
+        session.pilot.course_start = Some(DRIFT);
+        session.cue_course();
+        session.take_sounds();
+        assert_eq!(jump(&mut session), Answer::GatePilot(hops[0]));
+        session
+    }
+
+    fn shown(session: &Session) -> Option<GatePilotShown> {
+        let mut frame = crate::flight_frame::FlightFrame::default();
+        session.fill_frame(&mut frame);
+        frame.gate_pilot
+    }
+
+    fn land(session: &mut Session) -> Answer {
+        crate::session::apply::tests::apply(session, FlightCommand::Land)
+    }
+
+    /// Runs `command` on `session` with [`laned`] shared.
+    fn apply_laned(session: &mut Session, command: FlightCommand) -> Answer {
+        session.apply(
+            command,
+            &mut crate::session::apply::ApplyCollaborators {
+                catalog: Some(&laned()),
+                chance: &mut crate::chance::NeverFires,
+                law: &crate::legal::NovaLaw::default(),
+                boarding_rule: &crate::board::NovaBoarding::default(),
+                hail_options: &crate::hail::HailOptions::default(),
+            },
+        )
+    }
+
+    /// `session`, over drift's gate 300 along the course, through its
+    /// autopilot's two presses to the entry awaiting its pick.
+    fn pressed_through(session: &mut Session) {
+        session.pilot_controls(Controls::default());
+        assert!(matches!(
+            land(session),
+            Answer::LandPress(LandPress::Outcome(
+                crate::landing::LandOutcome::Requested { .. }
+            ))
+        ));
+        session.dock_approach();
+        session.pilot_controls(Controls::default());
+        assert_eq!(
+            land(session),
+            Answer::LandPress(LandPress::AtGate {
+                stellar: StellarId(300),
+                kind: crate::gate::GateKind::Hypergate,
+            })
+        );
+    }
+
+    #[test]
+    fn the_frame_shows_the_autopilot_and_press_land_only_on_a_step_it_asks() {
+        let mut far = engaged();
+        assert_eq!(
+            shown(&far),
+            Some(GatePilotShown {
+                to: VERGE,
+                press_land: false,
+            })
+        );
+        far.pilot_controls(Controls::default());
+        assert_eq!(shown(&far).map(|shown| shown.press_land), Some(false));
+        let mut over = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        over.pilot_controls(Controls::default());
+        assert_eq!(
+            shown(&over),
+            Some(GatePilotShown {
+                to: HEARTH,
+                press_land: true,
+            })
+        );
+        assert_eq!(shown(&autopiloted()), None);
+    }
+
+    #[test]
+    fn the_autopilots_own_presses_request_then_enter_and_keep_it_engaged() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        session.pilot_controls(Controls::default());
+        let requested = land(&mut session);
+        assert!(
+            matches!(
+                requested,
+                Answer::LandPress(LandPress::Outcome(
+                    crate::landing::LandOutcome::Requested { .. }
+                ))
+            ),
+            "{requested:?}"
+        );
+        assert!(session.gate_pilot_engaged());
+        assert_eq!(shown(&session).map(|shown| shown.press_land), Some(false));
+        session.dock_approach();
+        session.pilot_controls(Controls::default());
+        assert_eq!(
+            land(&mut session),
+            Answer::LandPress(LandPress::AtGate {
+                stellar: StellarId(300),
+                kind: crate::gate::GateKind::Hypergate,
+            })
+        );
+        assert!(session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn an_ask_lasts_one_step_and_a_land_with_none_standing_is_the_players() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        session.pilot_controls(Controls::default());
+        land(&mut session);
+        // The request stands near: this step asks nothing.
+        session.pilot_controls(Controls::default());
+        assert_eq!(shown(&session).map(|shown| shown.press_land), Some(false));
+        let before = session.port.dock;
+        let answer = land(&mut session);
+        assert!(!session.gate_pilot_engaged(), "the player's L lets go");
+        assert!(
+            matches!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::TooFar { .. },
+                    ..
+                }
+            ),
+            "{answer:?}"
+        );
+        assert_eq!(session.port.dock, before, "acts as L does");
+    }
+
+    #[test]
+    fn a_players_land_with_no_ask_ever_lets_go() {
+        let mut session = engaged();
+        session.pilot_controls(Controls::default());
+        land(&mut session);
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    /// [`coursed`] toward hearth with drift's gate 300 changed by
+    /// `change`, as shown and as listed, its first step asking for L.
+    fn asking_at(change: impl Fn(&mut crate::catalog::LandingSite)) -> Session {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        let chart = &mut session.chart;
+        for site in chart.sites.iter_mut().chain(&mut chart.listed) {
+            if site.id == StellarId(300) {
+                change(site);
+            }
+        }
+        session.pilot_controls(Controls::default());
+        assert_eq!(shown(&session).map(|shown| shown.press_land), Some(true));
+        session
+    }
+
+    #[test]
+    fn a_denied_press_disengages() {
+        let mut session = asking_at(|site| site.min_status = 100);
+        let answer = land(&mut session);
+        assert!(
+            matches!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::Denied { .. },
+                    ..
+                }
+            ),
+            "{answer:?}"
+        );
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn a_fee_the_pilot_cannot_pay_disengages() {
+        let mut session = asking_at(|site| site.fee = 1_000_000);
+        session.pilot.cash = 0;
+        let answer = land(&mut session);
+        assert!(
+            matches!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::CannotPayFee { .. },
+                    ..
+                }
+            ),
+            "{answer:?}"
+        );
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn engaging_or_flying_while_cloaked_makes_no_press_and_keeps_steering() {
+        let mut session = selecting(autopiloted(), HEARTH);
+        session.ship.cloak.cloak = CLOAKED;
+        assert_eq!(jump(&mut session), Answer::GatePilot(HEARTH));
+        session.pilot_controls(Controls::default());
+        assert!(session.gate_pilot_engaged(), "keeps flying");
+        assert_eq!(shown(&session).map(|shown| shown.press_land), Some(false));
+        let mut flying = engaged();
+        flying.ship.cloak.cloak = CLOAKED;
+        flying.ship.player.heading = 0.0;
+        assert_eq!(
+            flying.pilot_controls(Controls::default()),
+            Controls {
+                thrust: true,
+                ..Controls::default()
+            },
+            "steers on"
+        );
+        assert!(!flying.ship.gate_pilot.is_some_and(|pilot| pilot.asked_land));
+    }
+
+    #[test]
+    fn a_final_refusal_of_its_own_press_disengages_and_a_keep_flying_one_does_not() {
+        for (refusal, engaged_after) in [
+            (
+                LandingRefusal::NotLandable {
+                    stellar: StellarId(300),
+                    station: false,
+                },
+                false,
+            ),
+            (LandingRefusal::Cloaked, false),
+            (LandingRefusal::Disabled, false),
+            (
+                LandingRefusal::TooFar {
+                    stellar: StellarId(300),
+                    station: false,
+                },
+                true,
+            ),
+            (
+                LandingRefusal::TooFast {
+                    stellar: StellarId(300),
+                    station: false,
+                    speed: 1.0,
+                },
+                true,
+            ),
+        ] {
+            assert_eq!(!ends_on(refusal), engaged_after, "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn after_an_exit_along_the_course_it_flies_on_to_the_next_hops_gate() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        pressed_through(&mut session);
+        assert!(matches!(
+            apply_laned(&mut session, FlightCommand::EnterHypergate(Some(HEARTH))),
+            Answer::Arrived { system: HEARTH, .. }
+        ));
+        assert!(session.gate_pilot_engaged());
+        assert_eq!(shown(&session).map(|shown| shown.to), Some(VERGE));
+        session.pilot_controls(Controls::default());
+        // Out of 310 at (-1200, 0): 312 at (0, 1300) is nearer than 311.
+        assert_eq!(session.nav_mode(), NavMode::Stellar(Some(StellarId(312))));
+    }
+
+    #[test]
+    fn the_last_hops_exit_disengages_with_the_course_empty_and_the_nav_off() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH]);
+        pressed_through(&mut session);
+        apply_laned(&mut session, FlightCommand::EnterHypergate(Some(HEARTH)));
+        assert!(!session.gate_pilot_engaged());
+        assert_eq!(session.course(), []);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
+    fn by_the_engines_gate_course_the_first_exit_disengages() {
+        let mut session = coursed(RuleSource::Engine, &[HEARTH, VERGE]);
+        pressed_through(&mut session);
+        apply_laned(&mut session, FlightCommand::EnterHypergate(Some(HEARTH)));
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn an_exit_toward_its_selection_alone_is_done() {
+        let mut session = selecting(autopiloted(), HEARTH);
+        assert_eq!(jump(&mut session), Answer::GatePilot(HEARTH));
+        pressed_through(&mut session);
+        apply_laned(&mut session, FlightCommand::EnterHypergate(Some(HEARTH)));
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn a_cancelled_entry_disengages() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        pressed_through(&mut session);
+        assert!(matches!(
+            apply_laned(&mut session, FlightCommand::EnterHypergate(None)),
+            Answer::GateRefused(_)
+        ));
+        assert!(!session.gate_pilot_engaged());
+        assert_eq!(session.course(), [HEARTH, VERGE]);
+    }
+
+    #[test]
+    fn an_entry_with_none_pending_leaves_it_engaged() {
+        let mut session = coursed(RuleSource::Bible, &[HEARTH, VERGE]);
+        apply_laned(&mut session, FlightCommand::EnterHypergate(Some(HEARTH)));
+        assert!(session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn a_wormholes_entry_disengages() {
+        let holes = crate::session::tests::wormholes();
+        let mut session = crate::session::tests::at_wormhole(&holes);
+        session.ship.gate_pilot = Some(GatePilot {
+            to: SystemId(131),
+            along_course: false,
+            asked_land: false,
+        });
+        let _ = session.enter_wormhole(&holes, &mut crate::chance::NeverFires);
+        assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn stepped_from_drift_it_asks_to_request_then_to_enter_within_a_cap() {
+        let mut session = engaged();
+        session.at_gain(crate::speed_mult::SpeedMult::FULL);
+        let mut asked = 0;
+        for _ in 0..3_000 {
+            step(&mut session, false);
+            assert!(session.gate_pilot_engaged());
+            if shown(&session).is_some_and(|shown| shown.press_land) {
+                asked += 1;
+                let answer = land(&mut session);
+                if let Answer::LandPress(LandPress::AtGate { stellar, .. }) = answer {
+                    assert_eq!(stellar, GATE_TO_VERGE);
+                    assert_eq!(asked, 2, "one press to request, one to enter");
+                    assert!(session.gate_pilot_engaged());
+                    return;
+                }
+                assert!(
+                    matches!(
+                        answer,
+                        Answer::LandPress(LandPress::Outcome(
+                            crate::landing::LandOutcome::Requested { .. }
+                        ))
+                    ),
+                    "{answer:?}"
+                );
+            }
+        }
+        panic!("never asked to enter");
     }
 }

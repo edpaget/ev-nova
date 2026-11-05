@@ -14,8 +14,9 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, KeyFades, MapKey,
-    MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, GatePilotShown, Gates,
+    KeyFades, MapKey, MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport,
+    StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -541,6 +542,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         recharge_enabled,
         seen_intro,
         jump_readiness,
+        gate_pilot,
         texts_queued,
         gates,
         key_fades,
@@ -600,6 +602,14 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             JumpReadiness::Clear
         } else {
             JumpReadiness::Blocked
+        },
+        gate_pilot: if gate_pilot.is_some() {
+            None
+        } else {
+            Some(GatePilotShown {
+                to: other_system,
+                press_land: true,
+            })
         },
         texts_queued: texts_queued.wrapping_add(1),
         gates: if *gates == Gates::EVERY {
@@ -3009,6 +3019,10 @@ mod tests {
             recharge_enabled: true,
             seen_intro: true,
             jump_readiness: JumpReadiness::Underway,
+            gate_pilot: Some(GatePilotShown {
+                to: SystemId(131),
+                press_land: false,
+            }),
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
             key_fades: KeyFades::EVERY.with_unbidden(),
@@ -3044,6 +3058,7 @@ mod tests {
                 recharge_enabled,
                 seen_intro,
                 jump_readiness,
+                gate_pilot,
                 texts_queued,
                 gates,
                 key_fades,
@@ -3104,6 +3119,7 @@ mod tests {
             assert_ne!(other.recharge_enabled, *recharge_enabled);
             assert_ne!(other.seen_intro, *seen_intro);
             assert_ne!(other.jump_readiness, *jump_readiness);
+            assert_ne!(other.gate_pilot, *gate_pilot);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
             assert_ne!(other.key_fades, *key_fades);

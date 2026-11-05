@@ -1963,6 +1963,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         "jump_readiness",
         kept.jump_readiness == fresh.jump_readiness,
     );
+    check("gate_pilot", kept.gate_pilot == fresh.gate_pilot);
     check("texts_queued", kept.texts_queued == fresh.texts_queued);
     check("gates", kept.gates == fresh.gates);
     check("key_fades", kept.key_fades == fresh.key_fades);

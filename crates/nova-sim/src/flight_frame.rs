@@ -146,6 +146,10 @@ pub struct FlightFrame {
     /// Whether the ship can jump to the system selected, as the nav area
     /// draws it ([`Session::jump_readiness`](crate::Session::jump_readiness)).
     pub jump_readiness: JumpReadiness,
+    /// The gate autopilot while it is engaged, `None` otherwise
+    /// ([`Session::gate_pilot_shown`](crate::Session::gate_pilot_shown)):
+    /// the system it flies toward, and whether its last step asked for L.
+    pub gate_pilot: Option<GatePilotShown>,
     /// How many mission texts the session has queued, never reset
     /// ([`Session::texts_queued`](crate::Session::texts_queued)).
     pub texts_queued: u64,
@@ -279,6 +283,7 @@ impl Default for FlightFrame {
             recharge_enabled: false,
             seen_intro: false,
             jump_readiness: JumpReadiness::Blocked,
+            gate_pilot: None,
             texts_queued: 0,
             gates: Gates::EVERY,
             key_fades: KeyFades::EVERY,
@@ -587,6 +592,20 @@ impl std::fmt::Debug for Gates {
             .collect();
         f.debug_struct("Gates").field("refused", &refused).finish()
     }
+}
+
+/// The gate autopilot as a frame shows it, by
+/// [`RuleKey::GateAutopilot`](crate::RuleKey::GateAutopilot)'s other
+/// reading ([`FlightFrame::gate_pilot`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatePilotShown {
+    /// The system it flies toward: the hop it takes next.
+    pub to: SystemId,
+    /// Whether the frame's last step asked for L: a
+    /// [`FlightCommand::Land`] sent while it stands is the autopilot's own
+    /// press, and any other is the player's, which lets go of it. The view
+    /// sends `Land` for it after the frame's steps, without L's latch.
+    pub press_land: bool,
 }
 
 /// What the course map's drawing

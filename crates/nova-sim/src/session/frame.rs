@@ -38,6 +38,7 @@ impl Session {
             recharge_enabled,
             seen_intro,
             jump_readiness,
+            gate_pilot,
             texts_queued,
             gates,
             key_fades,
@@ -79,6 +80,7 @@ impl Session {
         *leave_due = self.run.leave_due(self.mode.landed());
         self.fill_router_facts(recharge_enabled, seen_intro);
         *jump_readiness = self.jump_readiness();
+        *gate_pilot = self.gate_pilot_shown();
         *texts_queued = self.texts_queued();
         *gates = Gates::from_fn(|command| self.takes(command));
         *key_fades = self.key_fades();
@@ -273,6 +275,10 @@ pub(super) mod tests {
             recharge_enabled: true,
             seen_intro: true,
             jump_readiness: JumpReadiness::Underway,
+            gate_pilot: Some(crate::flight_frame::GatePilotShown {
+                to: SystemId(999),
+                press_land: true,
+            }),
             texts_queued: u64::MAX,
             // Only the cloak taken: no state of the player's gives it.
             gates: Gates::from_fn(|command| command == PlayerCommand::Cloak),

@@ -3887,6 +3887,7 @@ impl Session {
             // arrival does (@0x6c4cd). Any other exit left no course.
             self.chart.cue_course(&self.pilot, &self.setup);
         }
+        self.gate_pilot_after_exit(entered.is_ok());
         entered
     }
 
@@ -3946,6 +3947,7 @@ impl Session {
         let here = self
             .take_gate(GateKind::Wormhole)
             .ok_or(GateRefusal::NotAtGate)?;
+        self.ship.gate_pilot = None;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
         let owner_of = |id| {
