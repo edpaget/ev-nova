@@ -232,8 +232,10 @@ mod tests {
     #[test]
     fn a_fight_is_kept_on_the_ship_its_target_names_live_breaking_up_disabled_or_held_gone() {
         // Any goal but 0 skips the idle block (@0x8b06c, @0x8b4d6), and the
-        // provoked test writes nothing unprovoked (@0x8b1ac, @0x8b616).
-        for goal in fights(n(2)) {
+        // provoked test writes nothing unprovoked (@0x8b1ac, @0x8b616). The
+        // target names NPC 9, not the quarry (NPC 2), so the fight is kept
+        // on +0x70's ship, not on the quarry it falls back to.
+        for (goal, on_target) in fights(n(2)).into_iter().zip(fights(n(9))) {
             for condition in [
                 Condition::Intact,
                 Condition::Disabled,
@@ -242,20 +244,25 @@ mod tests {
                     starting: false,
                 },
             ] {
-                let npcs = holding(goal, condition);
-                assert_eq!(kept_among(&npcs), Some(goal), "{goal:?} {condition:?}");
+                let [mut trader, pirate] = holding(goal, Condition::Intact);
+                trader.target = Some(n(9));
+                let mut other = ship(9, PIRATES, AiType::Warship, 300.0, 0.0);
+                other.condition = condition;
+                let npcs = [trader, pirate, other];
+                assert_eq!(kept_among(&npcs), Some(on_target), "{goal:?} {condition:?}");
             }
-            let [trader, mut pirate] = holding(goal, Condition::Intact);
-            pirate.berth = 2;
+            let [mut trader, _] = holding(goal, Condition::Intact);
+            trader.target = Some(n(9));
+            trader.berth = 3;
+            let mut away = ship(9, PIRATES, AiType::Warship, 300.0, 0.0);
+            away.berth = 2;
             let gone = [GoneShip {
-                ship: pirate,
+                ship: away,
                 freed: Freed::InDispatch,
             }];
-            let mut reader = trader;
-            reader.berth = 3;
             assert_eq!(
-                kept_with_gone(&reader, &gone),
-                Some(goal),
+                kept_with_gone(&trader, &gone),
+                Some(on_target),
                 "{goal:?}: held gone"
             );
         }
