@@ -219,11 +219,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The beep of the escort menu's close by Return or by its fade's end:
-    /// [`UiSound::EscortMenuToggled`] if E ([`MENU_KEY`]) is held, as the
-    /// close block reads the key live (@0x6e01e-0x6e04d), and none
-    /// otherwise.
+    /// [`UiSound::EscortMenuToggled`] if E ([`MENU_KEY`]) reads down, held
+    /// or latched past a close, as the close block reads the key live
+    /// (@0x6e01e-0x6e04d), and none otherwise.
     fn shut_escort_menu_by_key(&mut self) {
-        if self.held.contains(&MENU_KEY) {
+        if self.reads_down(MENU_KEY) {
             self.ui_sounds.push(UiSound::EscortMenuToggled);
         }
     }

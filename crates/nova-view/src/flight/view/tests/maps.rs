@@ -1133,6 +1133,32 @@ fn tab_held_holds_the_zoom_back() {
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
 }
 
+/// E, F, D, V, C and F12: `_HandlePlayer` reads each through
+/// `_QuickKeyCheck` on every pass that reaches its block, E @0x6dda9,
+/// F/D/V/C in the loop from @0x6e192 (@0x6e1b6), F12 @0x6e460, so each
+/// down sets `_quickKeyCheckResult` (@0xa145-0xa14c).
+const QUICK_CHECKED_PRESS_KEYS: [Key; 6] = [
+    crate::flight::escorts::MENU_KEY,
+    ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY,
+    FRAME_RATE_KEY,
+];
+
+#[test]
+fn escort_and_frame_rate_keys_held_hold_the_zoom_back() {
+    // The zoom reads `_quickKeyCheckResult` (@0x70f5d-0x70f65).
+    for k in QUICK_CHECKED_PRESS_KEYS {
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.input(&key(k, true));
+        assert!(view.floating.is_up(), "{k:?} keeps the map up");
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(16.0 / 9.0), "{k:?}");
+    }
+}
+
 #[test]
 fn x_and_k_held_alone_do_not_hold_the_zoom_back() {
     // Both are polled only with Command down (@0x6f2a5), as `-` is.
@@ -2579,6 +2605,19 @@ fn a_latched_key_held_across_a_close_holds_the_zoom_back() {
     held_across_a_close(&mut view, JUMP_KEY);
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+}
+
+#[test]
+fn escort_and_frame_rate_keys_latched_across_a_close_hold_the_zoom_back() {
+    // Latched past a close, each still reads down for `_QuickKeyCheck`
+    // (@0xa0f5), which sets `_quickKeyCheckResult` the zoom reads.
+    for k in QUICK_CHECKED_PRESS_KEYS {
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        held_across_a_close(&mut view, k);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(16.0 / 9.0), "{k:?}");
+    }
 }
 
 #[test]

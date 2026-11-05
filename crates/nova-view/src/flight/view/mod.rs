@@ -817,9 +817,12 @@ pub struct FlightOverlays {
 /// because they stay down: `_HandlePlayer`
 /// sets the cursor's byte on every frame one is held, and the zoom reads
 /// them held. A key that opens a dialog from its press isn't tracked, as
-/// the dialog takes its release. Being here doesn't make a key fade the
-/// cursor: [`FlightView::key_fades_cursor`] says which do.
-const FLIGHT_KEYS: [Key; 40] = [
+/// the dialog takes its release. E, F, D, V, C and F12 act on their press
+/// and are here only for `_quickKeyCheckResult`, which their reads set
+/// (@0x6dda9, @0x6e1b6, @0x6e460); they set no byte. Being here doesn't
+/// make a key fade the cursor: [`FlightView::key_fades_cursor`] says which
+/// do.
+const FLIGHT_KEYS: [Key; 46] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -860,22 +863,19 @@ const FLIGHT_KEYS: [Key; 40] = [
     JETTISON_KEY,
     PLAYER_INFO_KEY,
     MISSION_INFO_KEY,
-];
-
-/// The keys flight acts on only as they go down, which it doesn't track as
-/// held: the rest of [`every_key`] beyond [`FLIGHT_KEYS`]. The 1-5 the
-/// escort menu takes are [`FLIGHT_KEYS`]'s too.
-const PRESS_KEYS: [Key; 9] = [
-    FRAME_RATE_KEY,
     super::escorts::MENU_KEY,
     ESCORT_ATTACK_KEY,
     ESCORT_DEFEND_KEY,
     ESCORT_HOLD_KEY,
     ESCORT_RECALL_KEY,
-    ZOOM_OUT_KEY,
-    ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY,
+    FRAME_RATE_KEY,
 ];
+
+/// The keys flight acts on only as they go down, which it doesn't track as
+/// held: the rest of [`every_key`] beyond [`FLIGHT_KEYS`], the floating
+/// map's zoom keys. The 1-5 the escort menu takes are [`FLIGHT_KEYS`]'s
+/// too.
+const PRESS_KEYS: [Key; 3] = [ZOOM_OUT_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY];
 
 /// Every key flight reads, held or pressed. The platform's key map is
 /// tested against this, so no key here goes without a physical key.

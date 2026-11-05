@@ -237,6 +237,33 @@ fn return_closes_it_at_once_silent_and_beeps_with_e_held() {
 }
 
 #[test]
+fn e_pressed_and_kept_down_beeps_returns_close() {
+    // The close block reads E live (@0x6e01e-0x6e04d): E down through
+    // flight's input is held.
+    let mut view = escorted();
+    view.input(&key(MENU_KEY, true));
+    assert!(view.escort_menu().is_open());
+    ui_heard(&mut view);
+    view.input(&key(MENU_CLOSE_KEY, true));
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
+}
+
+#[test]
+fn e_latched_across_a_close_beeps_returns_close() {
+    // A latched E still reads down for `_QuickKeyCheck` (@0xa0f5).
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [MENU_KEY], [], false);
+    assert!(!view.held.contains(&MENU_KEY), "latched, not held");
+    ui_heard(&mut view);
+    press(&mut view, MENU_CLOSE_KEY);
+    assert!(!view.escort_menu().is_open());
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
+}
+
+#[test]
 fn e_during_the_fade_closes_it_with_its_beep() {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
