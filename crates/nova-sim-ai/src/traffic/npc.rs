@@ -617,7 +617,7 @@ pub struct Npc {
     /// (@0x8ff76-0x8ff8d). Set too for a spawn whose word in plug-in
     /// data is above 4
     /// ([`SpawnAi::escort_ai`](crate::traffic::spawn_ai::SpawnAi::escort_ai),
-    /// set by [`Traffic::add`](crate::traffic::Traffic::add)), and kept
+    /// set by `Traffic::add`), and kept
     /// after its first think once whole when its class's `InherentAI` is
     /// itself above 4 (the lost parent's write @0x83c4a,
     /// [`Npc::settle_original_ai_type`]). See [`Npc::original_ai_type`].
