@@ -2,20 +2,22 @@
 //!
 //! The navigator shows the map until the map asks to enter a system (by
 //! Return or its "Enter system" button), then that system's view. Escape
-//! goes back from the system to the map, which kept its view and
-//! selection. Escape on the map does nothing here: what it means there
-//! (quitting) is the app's router's to decide.
+//! (the shared Back, read through the navigator's bindings) goes back
+//! from the system to the map, which kept its view and selection. Escape
+//! on the map does nothing here: what it means there (quitting) is the
+//! app's router's to decide.
 
 use std::rc::Rc;
 use std::time::Duration;
 
 use crate::flight::SharedChance;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::system::{SystemCatalog, SystemView};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
-use crate::{DrawList, Input, Key, Screen, ScreenAction, Sound};
+use crate::{DrawList, Input, Screen, ScreenAction, Sound};
 
 /// The galaxy map and, while one is open, a system's view.
 #[derive(Clone, Debug)]
@@ -26,6 +28,9 @@ pub struct Navigator<C> {
     /// What each system view opened draws its stellars' random frames on
     /// ([`SystemView::with_chance`]).
     chance: SharedChance,
+    /// Its own key, Back, as a command ([`contexts::NAVIGATOR`]); the
+    /// map and each system view opened read the same bindings.
+    keys: CommandReader,
 }
 
 impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
@@ -37,6 +42,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
             map,
             system: None,
             chance: SharedChance::default(),
+            keys: CommandReader::new(contexts::NAVIGATOR),
         }
     }
 
@@ -60,6 +66,18 @@ impl<C: GalaxyCatalog + SystemCatalog> Navigator<C> {
 }
 
 impl<C> Navigator<C> {
+    /// The navigator reading its keys through `bindings`: its own, the
+    /// map's and each system view's.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.map.set_bindings(bindings.clone());
+        if let Some(view) = self.system.take() {
+            self.system = Some(view.with_bindings(bindings.clone()));
+        }
+        self.keys.set_bindings(bindings);
+        self
+    }
+
     /// The navigator with each system view it opens drawing its stellars'
     /// random frames on `chance` ([`SystemView::with_chance`]).
     #[must_use]
@@ -107,19 +125,14 @@ impl<C> Navigator<C> {
 }
 
 impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
-    /// In a system, an Escape press (not its repeats) goes back to the map,
-    /// and everything else goes to the system's view. On the map, Escape is
-    /// ignored, everything else goes to the map, and a request to enter a
-    /// system opens its view, abandoning any gesture on the map. Never
-    /// quits: that is the app's router's.
+    /// In a system, a Back press (not its repeats) goes back to the map,
+    /// and everything else goes to the system's view. On the map, Back's
+    /// key is ignored, going down or up, and everything else goes to the
+    /// map, and a request to enter a system opens its view, abandoning
+    /// any gesture on the map. Never quits: that is the app's router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        let escape = matches!(
-            input,
-            Input::Key {
-                key: Key::Escape,
-                ..
-            }
-        );
+        let escape = self.keys.means(input) == Some(Command::Ui(UiCommand::Back));
+        self.keys.follow(input);
         if let Some(view) = &mut self.system {
             if escape
                 && matches!(
@@ -142,7 +155,11 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
         let action = self.map.input(input);
         if let Some(id) = self.map.take_entry() {
             self.map.cancel_pointer();
-            self.system = Some(SystemView::new(&self.catalog, id).with_chance(self.chance.clone()));
+            self.system = Some(
+                SystemView::new(&self.catalog, id)
+                    .with_chance(self.chance.clone())
+                    .with_bindings(self.keys.bindings().clone()),
+            );
         }
         action
     }
@@ -161,6 +178,7 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
     }
 
     fn release_keys(&mut self) {
+        self.keys.let_go();
         self.shown_mut().release_keys();
     }
 
@@ -179,7 +197,7 @@ mod tests {
     use crate::galaxy::map::ENTER_BUTTON;
     use crate::galaxy::{Galaxy, SystemEntry, SystemId};
     use crate::system::{AnimationData, StellarContents, StellarId, StellarSheet, SystemContents};
-    use crate::{MouseButton, Point};
+    use crate::{Key, MouseButton, Point};
 
     /// Alpha (128) at (0, 0) and Beta (129) at (600, 0) on the map; inside,
     /// Alpha holds Alpha Prime at (0, 0) and Beta Beta Flicker, of 4
@@ -369,6 +387,35 @@ mod tests {
         assert_eq!(navigator.map().selected(), selected);
         assert_eq!(drawn(&navigator), drawn(navigator.map()));
         assert_eq!(navigator.map().clone().take_entry(), None, "taken");
+    }
+
+    #[test]
+    fn a_rebound_back_goes_back_on_its_new_key_alone_and_the_map_and_system_read_the_same() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyJ))
+                .rebound(UiCommand::Right, KeyCombo::key(Key::KeyL)),
+        );
+        let mut navigator = navigator().with_bindings(bindings);
+        select(&mut navigator, 128);
+        navigator.input(&press(Key::Enter));
+        assert_eq!(open(&navigator), None, "Return no longer enters");
+        navigator.input(&press(Key::KeyJ));
+        assert_eq!(open(&navigator), Some(SystemId(128)), "J does");
+        navigator.input(&press(Key::KeyL));
+        navigator.tick(Duration::from_millis(250));
+        let camera = navigator.system().expect("open").camera().center();
+        assert_eq!(camera, Point::new(240.0, 0.0), "L pans the system");
+        navigator.input(&press(Key::Escape));
+        assert_eq!(
+            open(&navigator),
+            Some(SystemId(128)),
+            "Escape no longer goes back"
+        );
+        navigator.input(&press(Key::KeyQ));
+        assert_eq!(open(&navigator), None, "Q does");
     }
 
     #[test]

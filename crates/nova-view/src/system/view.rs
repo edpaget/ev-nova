@@ -6,13 +6,17 @@
 //!
 //! Input:
 //!
-//! - The arrow keys, or `w`, `a`, `s` and `d`, move the camera at
-//!   [`CAMERA_SPEED`] while held: a press (or its key repeats) holds the
-//!   key and its release lets it go. Opposite keys cancel.
-//! - Space recentres the camera on the system's centre.
+//! - The shared arrows ([`UiCommand::Left`] and its kin), or their fixed
+//!   twins `w`, `a`, `s` and `d`, move the camera at [`CAMERA_SPEED`]
+//!   while held: a press (or its key repeats) holds the command and its
+//!   release lets it go. Opposite ways cancel.
+//! - The shared Activate (Space) recentres the camera on the system's
+//!   centre.
 //! - Escape is the navigator's, which goes back to the galaxy map.
+//!
+//! Each key is read through the view's bindings
+//! ([`SystemView::with_bindings`]); the keys named are the defaults.
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 use super::camera::{CAMERA_SPEED, Camera};
@@ -20,8 +24,9 @@ use super::catalog::{SystemCatalog, SystemId};
 use super::scene::{self, SystemScene};
 use super::starfield;
 use crate::flight::SharedChance;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
-use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Input, Point, Screen, ScreenAction};
 
 pub use super::scene::PLACEHOLDER_SIZE;
 
@@ -45,8 +50,9 @@ pub struct SystemView {
     camera: Camera,
     /// Time since the view opened, which drives the animations.
     elapsed: Duration,
-    /// The movement keys held down.
-    held: HashSet<Key>,
+    /// Its keys, as commands ([`contexts::SYSTEM_VIEW`]): the movement
+    /// commands held among them.
+    keys: CommandReader,
     /// What a stellar's random next frame (`Flags2` 0x0002) is drawn on.
     chance: SharedChance,
 }
@@ -63,7 +69,7 @@ impl SystemView {
             scene,
             camera,
             elapsed: Duration::ZERO,
-            held: HashSet::new(),
+            keys: CommandReader::new(contexts::SYSTEM_VIEW),
             chance: SharedChance::default(),
         }
     }
@@ -72,6 +78,13 @@ impl SystemView {
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The view reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The system, as laid out.
@@ -94,14 +107,10 @@ impl SystemView {
         stellar.sprite.as_ref().ok().map(|_| stellar.frames.shown())
     }
 
-    /// Whether either key for one way is held.
-    fn holding(&self, keys: [Key; 2]) -> bool {
-        keys.iter().any(|key| self.held.contains(key))
-    }
-
-    /// The camera's velocity on one axis, from the keys held for each way.
-    fn velocity(&self, back: [Key; 2], forward: [Key; 2]) -> f32 {
-        let way = i8::from(self.holding(forward)) - i8::from(self.holding(back));
+    /// The camera's velocity on one axis, from the commands held for each
+    /// way.
+    fn velocity(&self, back: UiCommand, forward: UiCommand) -> f32 {
+        let way = i8::from(self.keys.held(forward)) - i8::from(self.keys.held(back));
         f32::from(way) * CAMERA_SPEED
     }
 
@@ -146,26 +155,18 @@ impl SystemView {
     }
 }
 
-/// The keys that move the camera each way.
-const LEFT: [Key; 2] = [Key::ArrowLeft, Key::KeyA];
-const RIGHT: [Key; 2] = [Key::ArrowRight, Key::KeyD];
-const UP: [Key; 2] = [Key::ArrowUp, Key::KeyW];
-const DOWN: [Key; 2] = [Key::ArrowDown, Key::KeyS];
-
 impl Screen for SystemView {
-    /// Never quits, nor goes back: Escape is the navigator's.
+    /// Never quits, nor goes back: Escape is the navigator's. The
+    /// movement commands are held as their keys are; Activate's press or
+    /// repeat recentres.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key { key, pressed, .. } = *input {
-            let moves = [LEFT, RIGHT, UP, DOWN].iter().flatten().any(|&k| k == key);
-            if moves {
-                if pressed {
-                    self.held.insert(key);
-                } else {
-                    self.held.remove(&key);
-                }
-            } else if key == Key::Space && pressed {
-                self.camera.recentre();
-            }
+        if let Some(CommandInput {
+            command: Command::Ui(UiCommand::Activate),
+            pressed: true,
+            ..
+        }) = self.keys.follow(input)
+        {
+            self.camera.recentre();
         }
         ScreenAction::None
     }
@@ -177,7 +178,10 @@ impl Screen for SystemView {
         self.scene
             .step(ticks(self.elapsed) - before, &mut self.chance);
         let seconds = dt.as_secs_f32();
-        let (vx, vy) = (self.velocity(LEFT, RIGHT), self.velocity(UP, DOWN));
+        let (vx, vy) = (
+            self.velocity(UiCommand::Left, UiCommand::Right),
+            self.velocity(UiCommand::Up, UiCommand::Down),
+        );
         self.camera.move_by(vx * seconds, vy * seconds);
     }
 
@@ -187,9 +191,9 @@ impl Screen for SystemView {
         self.draw_overlay(list);
     }
 
-    /// Lets go of every movement key, so the camera stops.
+    /// Lets go of every movement command, so the camera stops.
     fn release_keys(&mut self) {
-        self.held.clear();
+        self.keys.let_go();
     }
 }
 
@@ -199,7 +203,6 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
-    use crate::ImageKey;
     use crate::draw::crossed_box;
     use crate::system::camera::{CAMERA_MARGIN, VIEW_CENTER};
     use crate::system::catalog::{
@@ -207,6 +210,7 @@ mod tests {
     };
     use crate::system::scene::PLACEHOLDER;
     use crate::{DrawCommand, Font, MouseButton};
+    use crate::{ImageKey, Key};
 
     /// Canned systems.
     struct FakeCatalog(Vec<SystemContents>);
@@ -416,6 +420,30 @@ mod tests {
         view.input(&held(Key::KeyA));
         ticks_of(&mut view, 1);
         assert_eq!(center(&view), at(-240.0, 0.0));
+    }
+
+    #[test]
+    fn a_rebound_right_and_activate_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Right, KeyCombo::key(Key::KeyL))
+                .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyC)),
+        );
+        let mut view = sol().with_bindings(bindings);
+        view.input(&key(Key::ArrowRight, true));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(0.0, 0.0), "Right no longer pans");
+        view.input(&key(Key::KeyL, true));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(240.0, 0.0), "L, held, does");
+        view.input(&key(Key::KeyL, false));
+        ticks_of(&mut view, 1);
+        assert_eq!(center(&view), at(240.0, 0.0), "let go of");
+        view.input(&key(Key::Space, true));
+        assert_eq!(center(&view), at(240.0, 0.0), "Space no longer recentres");
+        view.input(&key(Key::KeyC, true));
+        assert_eq!(center(&view), at(0.0, 0.0), "C does");
     }
 
     #[test]
