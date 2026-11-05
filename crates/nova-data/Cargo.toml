@@ -12,6 +12,9 @@ binrw.workspace = true
 encoding_rs.workspace = true
 # The new game's data format: its loader, read by the `new_game` adapter.
 nova-galaxy-format.workspace = true
+# The new game's media: its models read and drawn from above, the
+# stand-ins the store keeps for records with no sprite.
+nova-galaxy-media.workspace = true
 nova-rsrc.workspace = true
 serde.workspace = true
 # `AnyRecord::to_json`: a record's fields as JSON, for nova-dump and the

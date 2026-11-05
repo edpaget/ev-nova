@@ -1866,6 +1866,7 @@ dependencies = [
  "encoding_rs",
  "nova-data",
  "nova-galaxy-format",
+ "nova-galaxy-media",
  "nova-rsrc",
  "serde",
  "serde_json",

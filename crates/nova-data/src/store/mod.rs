@@ -213,6 +213,7 @@ mod ship_desc;
 mod shot_spin;
 mod spin_sprite;
 mod sprite;
+mod stand_in;
 mod stellar_sprite;
 #[cfg(test)]
 mod tests;
@@ -228,6 +229,7 @@ pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
     ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
+pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 
 /// Why the store could not be opened at all.
@@ -366,6 +368,9 @@ pub struct GameData {
     tests: Mutex<HashMap<Box<str>, ParsedTest>>,
     /// Each set expression parsed so far, by its text.
     sets: Mutex<HashMap<Box<str>, ParsedSet>>,
+    /// What each ship or stellar with no sprite draws instead: the new
+    /// game's ([`GameData::with_stand_ins`]); none in a stock store.
+    stand_ins: BTreeMap<StandInOf, StandIn>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -416,6 +421,7 @@ impl GameData {
             index,
             tests: Mutex::default(),
             sets: Mutex::default(),
+            stand_ins: BTreeMap::new(),
         })
     }
 
