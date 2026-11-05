@@ -33,9 +33,12 @@
 //! leaves item 2's place empty, and an option registered beyond them
 //! pushes Close Channel down. A click gives [`CommPress::Option`] (the
 //! option's place in the list) or [`CommPress::Close`]; so do the keys
-//! (`_CommFilter` @0x908ed): Return, Enter, Escape and E close the
-//! channel, and a letter key whose letter is an option's hotkey, whatever
-//! the hotkey's case, presses the first such option. The router passes
+//! (`_CommFilter` @0x908ed): Confirm (Return, Enter), Back (Escape) and
+//! the comm context's Close (E) close the channel, and a letter key whose
+//! letter is an option's hotkey, whatever the hotkey's case, presses the
+//! first such option. The hotkeys come from the options' titles, so they
+//! are no commands: like text entry, they are read from the key pressed,
+//! at its US position. The router passes
 //! each press to the flight and shows what came of it
 //! ([`CommDialog::set_hail`]).
 //!
@@ -62,8 +65,9 @@
 //!   #189) are dead in the original: nothing writes 0, and no caller
 //!   passes a non-zero argument. They are not built.
 //!
-//! Return, Enter and A accept, and L lowers; Escape does nothing, as in
-//! the original (`_HaggleFilter`).
+//! Confirm (Return, Enter) and the haggle context's Accept (A) accept,
+//! and Lower (L) lowers; Escape does nothing, as in the original
+//! (`_HaggleFilter`).
 //!
 //! Without the interface file, [`CommDialog::fallback`] and
 //! [`HaggleDialog::fallback`] lay out the same items themselves, over a
@@ -82,6 +86,9 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
+use crate::keymap::{
+    CommCommand, Command, CommandReader, HaggleCommand, SharedBindings, UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -150,9 +157,6 @@ pub const VALUE_COLUMN: f32 = 35.0;
 /// Pascal string at 0xd97c7, two spaces (@0x90642), in the label's grey,
 /// so it only moves the pen.
 pub const HOSTILE_GAP: &str = "  ";
-/// The comm dialog's key that closes the channel, besides Return, Enter
-/// and Escape.
-pub const CLOSE_KEY: char = 'e';
 /// The text's size, in Geneva: `_smallTextSize`, which `_InitStuff`
 /// sets to 9 (@0x1d3eb) with `_smallTextFont` Geneva (@0x1d3d1-0x1d3e1).
 /// `_CommDialogUpdate` sets both for the class line and the status runs
@@ -186,10 +190,6 @@ pub const LOWER_PRICE: &str = "Lower Price";
 pub const PAY_ME: &str = "Pay me";
 /// `STR#` 2002 #188.
 pub const PAY_US: &str = "Pay us";
-/// The haggle dialog's key that accepts, besides Return and Enter.
-pub const ACCEPT_KEY: char = 'a';
-/// The haggle dialog's key that lowers the price.
-pub const LOWER_KEY: char = 'l';
 
 /// A press in the comm dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -344,6 +344,8 @@ pub struct CommDialog {
     /// Each option's hotkey, in order.
     keys: Vec<Option<char>>,
     press: Option<CommPress>,
+    /// Its keys, as commands ([`contexts::COMM`]).
+    reader: CommandReader,
 }
 
 impl std::fmt::Debug for CommDialog {
@@ -404,14 +406,25 @@ impl CommDialog {
             dialog,
             keys: view.options.iter().map(|option| option.key).collect(),
             press: None,
+            reader: CommandReader::new(contexts::COMM),
         })
+    }
+
+    /// The comm dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// Shows `view`: the reply, the class and status, and the column of
     /// buttons rebuilt for its options.
     pub fn set_hail(&mut self, view: &HailView) {
         let ring = self.dialog.focus_ring();
-        self.dialog = layout(&self.template, view, self.style, &self.metrics).with_focus_ring(ring);
+        self.dialog = layout(&self.template, view, self.style, &self.metrics)
+            .with_focus_ring(ring)
+            .with_bindings(self.reader.bindings().clone());
         self.keys = view.options.iter().map(|option| option.key).collect();
         self.view = view.clone();
     }
@@ -451,19 +464,25 @@ impl CommDialog {
             .map(CommPress::Option)
     }
 
-    /// The press a key is, if any (see the module docs).
-    fn key_press(&self, key: Key) -> Option<CommPress> {
-        match key {
-            Key::Enter | Key::NumpadEnter | Key::Escape => Some(CommPress::Close),
-            _ => match crate::input::key_letter(key)? {
-                c if c.eq_ignore_ascii_case(&CLOSE_KEY) => Some(CommPress::Close),
-                c => self
-                    .keys
-                    .iter()
-                    .position(|key| key.is_some_and(|key| key.eq_ignore_ascii_case(&c)))
-                    .map(CommPress::Option),
-            },
-        }
+    /// The press a command is, if any: Confirm, Back and Close close the
+    /// channel (see the module docs).
+    fn command_press(command: Command) -> Option<CommPress> {
+        matches!(
+            command,
+            Command::Comm(CommCommand::Close) | Command::Ui(UiCommand::Confirm | UiCommand::Back)
+        )
+        .then_some(CommPress::Close)
+    }
+
+    /// The option whose hotkey `key`'s letter is, whatever its case, if
+    /// any: a letter taken from the button's own title, read from the key
+    /// pressed as text entry is (see the module docs).
+    fn letter_press(&self, key: Key) -> Option<CommPress> {
+        let c = crate::input::key_letter(key)?;
+        self.keys
+            .iter()
+            .position(|key| key.is_some_and(|key| key.eq_ignore_ascii_case(&c)))
+            .map(CommPress::Option)
     }
 }
 
@@ -683,12 +702,15 @@ impl Screen for CommDialog {
     /// event goes to the dialog, and a button activated is its press. It
     /// never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let command = self.reader.follow(input);
         if let Input::Key {
             key,
             pressed: true,
             repeat,
         } = *input
-            && let Some(press) = self.key_press(key)
+            && let Some(press) = command
+                .and_then(|command| Self::command_press(command.command))
+                .or_else(|| self.letter_press(key))
         {
             if !repeat {
                 self.press = Some(press);
@@ -739,6 +761,8 @@ pub struct HaggleDialog {
     price: i64,
     /// Whether a ship asks it ("Pay me"), not "Pay us".
     pay_me: bool,
+    /// Its keys, as commands ([`contexts::HAGGLE`]).
+    reader: CommandReader,
 }
 
 impl HaggleDialog {
@@ -811,7 +835,16 @@ impl HaggleDialog {
             choice: None,
             price,
             pay_me,
+            reader: CommandReader::new(contexts::HAGGLE),
         })
+    }
+
+    /// The haggle dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// Shows `price` asked, of a ship when `pay_me`.
@@ -883,26 +916,22 @@ fn haggle_template() -> DialogTemplate {
 }
 
 impl Screen for HaggleDialog {
-    /// A and L (not their repeats) choose; every other event goes to the
-    /// dialog, Return and Enter accepting, and a button activated is its
-    /// choice. Escape does nothing. It never quits.
+    /// Accept and Lower (A and L, not their repeats) choose; every other
+    /// event goes to the dialog, Confirm (Return, Enter) accepting, and a
+    /// button activated is its choice. Escape does nothing. It never
+    /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat,
-        } = *input
-            && let Some(c) = crate::input::key_letter(key)
-        {
-            let choice = if c.eq_ignore_ascii_case(&ACCEPT_KEY) {
-                Some(Haggle::Accept)
-            } else if c.eq_ignore_ascii_case(&LOWER_KEY) {
-                Some(Haggle::LowerPrice)
-            } else {
-                None
-            };
-            if !repeat && choice.is_some() {
-                self.choice = choice;
+        let choice = match self.reader.follow(input) {
+            Some(command) if command.pressed => match command.command {
+                Command::Haggle(HaggleCommand::Accept) => Some((Haggle::Accept, command.repeat)),
+                Command::Haggle(HaggleCommand::Lower) => Some((Haggle::LowerPrice, command.repeat)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((choice, repeat)) = choice {
+            if !repeat {
+                self.choice = Some(choice);
             }
             return ScreenAction::None;
         }
@@ -940,6 +969,7 @@ mod tests {
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
     use crate::input::MouseButton;
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
 
@@ -1214,6 +1244,30 @@ mod tests {
             dialog.input(&key(pressed));
             assert_eq!(dialog.take_press(), Some(CommPress::Close), "{pressed:?}");
         }
+    }
+
+    /// The comm dialog reads its keys through the key map it is given:
+    /// Close rebound to Q closes the channel on Q and no longer on E, and
+    /// the dialog it lays out again for a new hail reads the same.
+    #[test]
+    fn a_rebound_close_closes_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(CommCommand::Close, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut closing = dialog(&view()).with_bindings(bindings);
+        closing.input(&key(Key::KeyE));
+        assert_eq!(closing.take_press(), None, "E no longer closes");
+        closing.input(&key(Key::KeyQ));
+        assert_eq!(closing.take_press(), Some(CommPress::Close));
+        let shared = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F6)),
+        );
+        let mut rehailed = dialog(&view()).with_bindings(shared);
+        rehailed.set_hail(&view());
+        rehailed.input(&key(Key::Enter));
+        assert_eq!(rehailed.take_press(), None, "Return no longer closes");
+        rehailed.input(&key(Key::F6));
+        assert_eq!(rehailed.take_press(), Some(CommPress::Close));
     }
 
     /// A key that presses a button plays nothing in the original:
@@ -1880,6 +1934,20 @@ mod tests {
             assert_eq!(dialog.take_choice(), Some(choice), "{item}");
             assert_eq!(dialog.take_choice(), None, "once");
         }
+    }
+
+    /// The haggle dialog reads its keys through the key map it is given:
+    /// Lower rebound to Q lowers the price on Q and no longer on L.
+    #[test]
+    fn a_rebound_lower_lowers_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(HaggleCommand::Lower, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut dialog = haggle(3000).with_bindings(bindings);
+        dialog.input(&key(Key::KeyL));
+        assert_eq!(dialog.take_choice(), None, "L no longer lowers");
+        dialog.input(&key(Key::KeyQ));
+        assert_eq!(dialog.take_choice(), Some(Haggle::LowerPrice));
     }
 
     /// A key that chooses plays nothing in the original: `_CommFilter`

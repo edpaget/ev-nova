@@ -740,9 +740,21 @@ mod tests {
 
     #[test]
     fn every_letter_the_comm_dialog_and_its_haggle_read_comes_from_its_physical_key() {
-        use nova_view::ui::comm::{ACCEPT_KEY, CLOSE_KEY, LOWER_KEY};
+        use nova_view::keymap::{CommCommand, HaggleCommand};
+        let defaults = nova_view::KeyMap::default();
+        let letters = [
+            CommCommand::Close.into(),
+            HaggleCommand::Accept.into(),
+            HaggleCommand::Lower.into(),
+        ]
+        .map(|command| {
+            defaults
+                .combo(command)
+                .and_then(|combo| nova_view::key_letter(combo.key))
+                .expect("a letter by default")
+        });
         let options = nova_sim::HailOptions::nova(&nova_sim::Rulebook::default());
-        for letter in options.keys().chain([CLOSE_KEY, ACCEPT_KEY, LOWER_KEY]) {
+        for letter in options.keys().chain(letters) {
             assert_physical(letter);
         }
     }
