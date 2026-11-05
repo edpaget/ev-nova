@@ -1,7 +1,8 @@
 //! A course over game-bible's sample (the `data` folder `GAME_DATA`
-//! names), planned and flown by hand gate by gate, as `new_game_routes`
-//! flies the checked-in fixture, and each of the sample's lanes drawn in
-//! its look. Skips, passing, when `GAME_DATA` is unset.
+//! names), planned and flown gate by gate, by hand and on the gate
+//! autopilot, as `new_game_routes` flies the checked-in fixture, and each
+//! of the sample's lanes drawn in its look. Skips, passing, when
+//! `GAME_DATA` is unset.
 //!
 //! The sample's lanes: brightwater–luyten-crossing, brightwater–marrow,
 //! harrow-drift–marrow, kestrel-march–luyten-crossing,
@@ -14,7 +15,7 @@ use nova_sim::catalog::GateStability::{Dead, Stable, Unstable};
 use nova_sim::map_lanes::Back;
 
 use crate::common::game_data;
-use crate::new_game_routes::{fly_by_hand, flying_from, look_between, system};
+use crate::new_game_routes::{fly_by_hand, fly_on_autopilot, flying_from, look_between, system};
 use crate::new_game_travel::new_game_rules;
 
 /// The sample, mapped, with nothing wrong.
@@ -42,6 +43,25 @@ fn the_samples_longest_course_is_planned_and_flown_by_hand_gate_by_gate() {
         fly_by_hand(&game, &rules, &mut session),
         [ninefold, luyten, marrow, lantern]
     );
+}
+
+#[test]
+fn the_samples_longest_course_is_flown_on_the_autopilot_gate_by_gate() {
+    let Some(game) = sample() else { return };
+    let rules = new_game_rules();
+    let [ninefold, luyten, marrow, lantern] =
+        ["ninefold", "luyten-crossing", "marrow", "lantern"].map(|name| system(&game, name));
+    let mut session = flying_from(&game, &rules, ninefold);
+    assert_eq!(
+        session.plot_course(lantern),
+        Ok(&[luyten, marrow, lantern][..]),
+        "3 hops"
+    );
+    assert_eq!(
+        fly_on_autopilot(&game, &rules, &mut session),
+        [ninefold, luyten, marrow, lantern]
+    );
+    assert_eq!(session.course(), []);
 }
 
 #[test]

@@ -9,27 +9,35 @@
 //!   presses L to clear and L to enter, and picks the hop on the
 //!   hypergate map; it comes out at the partner's gate with the rest of
 //!   the course kept and its next hop cued. J never jumps.
+//! - **The autopilot**: J engages the gate autopilot, the frame's steps
+//!   fly the ship with no controls held, each L it asks for is sent, and
+//!   each hypergate entered for its system, as the view wires them; it
+//!   flies the course to its end and is never in a hyperspace jump.
 //! - **The map**: each lane drawn per direction in its stability's look.
 //! - **The stock rulebook** over the same data finds no link anywhere.
 //!
 //! Which readers follow the lanes, how a look is worked out and what the
 //! exit does to the course are nova-sim's rules, pinned there; this pins
-//! that the data, the ruleset and the session meet. [`fly_by_hand`] is
-//! shared with `sample_routes`, which flies game-bible's sample.
+//! that the data, the ruleset and the session meet. [`fly_by_hand`] and
+//! [`fly_on_autopilot`] are shared with `sample_routes`, which flies
+//! game-bible's sample.
 
 use nova::chance::SplitMix;
 use nova_data::GameData;
 use nova_data::new_game::NewGame;
 use nova_sim::catalog::GateStability::{Dead, Stable, Unstable};
-use nova_sim::flight_frame::{Answer, FlightCommand, FlightEvent, MapClick};
+use nova_sim::flight_frame::{
+    Answer, FlightCommand, FlightEvent, FlightFrame, MapClick, StepInput, StepReport,
+};
 use nova_sim::galaxy_map::MapMarks;
 use nova_sim::gate::GateKind;
 use nova_sim::hyperspace::{JumpRefusal, RouteError};
+use nova_sim::landing::LandOutcome;
 use nova_sim::map_lanes::{Back, LaneLook};
 use nova_sim::navigation::NavMode;
 use nova_sim::{
-    ApplyCollaborators, HailOptions, LandPress, NovaBoarding, NovaLaw, Rulebook, Session, SimSound,
-    SystemId,
+    ApplyCollaborators, HailOptions, LandPress, NovaAi, NovaBoarding, NovaLaw, Rulebook, Rules,
+    Session, SimSound, StepCollaborators, SystemId,
 };
 
 use crate::new_game_travel::{Gate, fixture, gates, new_game_rules, nova_of, pass};
@@ -145,6 +153,100 @@ pub(crate) fn fly_by_hand(
     visited
 }
 
+/// The most frame steps the autopilot may take to reach a gate, ask for
+/// clearance and enter it.
+const TICKS_PER_GATE: u32 = 4_000;
+
+/// `session`'s frame as it stands.
+fn frame_of(session: &Session) -> FlightFrame {
+    let mut frame = FlightFrame::default();
+    session.fill_frame(&mut frame);
+    frame
+}
+
+/// Flies `session`'s course on the gate autopilot over `game` by `rules`,
+/// wired as the view wires it: J pressed toward the system selected in
+/// mode 3 answers the autopilot engaged; then the session steps with no
+/// controls held, a step a frame; each time the frame asks for L, L is
+/// sent, and the press over a cleared hypergate enters it for the
+/// autopilot's system. Gives each system it comes out in. Each L it asks
+/// for counts as its own (it stays engaged after each), each exit comes
+/// out at the partner's gate, no frame is ever in a hyperspace jump, and
+/// each gate is reached within [`TICKS_PER_GATE`] steps. It ends when the
+/// autopilot lets go.
+pub(crate) fn fly_on_autopilot(
+    game: &NewGame,
+    rules: &Rulebook,
+    session: &mut Session,
+) -> Vec<SystemId> {
+    let gates = gates(game);
+    let NavMode::Hyperspace(Some(first)) = session.nav_mode() else {
+        panic!("a system selected in mode 3: {:?}", session.nav_mode());
+    };
+    assert_eq!(
+        apply(session, &game.data, FlightCommand::Jump),
+        Answer::GatePilot(first)
+    );
+    let behaviour = NovaAi::from_rulebook(rules);
+    let mut chance = SplitMix::new(7);
+    let input = StepInput {
+        window_width: 1024,
+        ..StepInput::default()
+    };
+    let mut report = StepReport::default();
+    let mut visited = vec![session.system()];
+    let mut ticks = 0;
+    loop {
+        let frame = frame_of(session);
+        assert!(!frame.jump_under_way, "never in a hyperspace jump");
+        let Some(shown) = frame.gate_pilot else {
+            return visited;
+        };
+        if shown.press_land {
+            match apply(session, &game.data, FlightCommand::Land) {
+                Answer::LandPress(LandPress::Outcome(LandOutcome::Requested { .. })) => {}
+                Answer::LandPress(LandPress::AtGate {
+                    stellar,
+                    kind: GateKind::Hypergate,
+                }) => {
+                    assert!(frame_of(session).gate_pilot.is_some(), "its own press");
+                    let road = gates
+                        .iter()
+                        .find(|road| road.stellar == stellar)
+                        .unwrap_or_else(|| panic!("{stellar:?} is a jump point"));
+                    assert!(
+                        matches!(
+                            apply(session, &game.data, FlightCommand::EnterHypergate(Some(shown.to))),
+                            Answer::Arrived { system, .. } if system == shown.to
+                        ),
+                        "{road:?}"
+                    );
+                    assert_eq!(session.system(), road.partner.1);
+                    assert_eq!(session.player().position, road.partner.2, "at the partner");
+                    visited.push(shown.to);
+                    ticks = 0;
+                    continue;
+                }
+                other => panic!("the autopilot's press answered {other:?}"),
+            }
+            assert!(frame_of(session).gate_pilot.is_some(), "its own press");
+        }
+        let mut collab = StepCollaborators {
+            catalog: &game.data,
+            behaviour: &behaviour,
+            rules: Rules::default(),
+            chance: &mut chance,
+        };
+        session.step(&input, 1, &mut collab, &mut report);
+        ticks += 1;
+        assert!(
+            ticks < TICKS_PER_GATE,
+            "no gate within {TICKS_PER_GATE} steps from {:?}",
+            session.system()
+        );
+    }
+}
+
 /// The look `session` gives the link between `a` and `b`, as the map
 /// draws it from whichever end it draws it.
 pub(crate) fn look_between(session: &Session, a: SystemId, b: SystemId) -> LaneLook {
@@ -179,6 +281,29 @@ fn a_shift_click_course_over_the_gates_is_flown_by_hand_keeping_the_course() {
         [drift, hearth, verge]
     );
     assert_eq!(session.course(), []);
+}
+
+#[test]
+fn a_shift_click_course_over_the_gates_is_flown_on_the_autopilot_gate_by_gate() {
+    let game = fixture();
+    let rules = new_game_rules();
+    let (drift, hearth, verge) = (
+        system(&game, "drift"),
+        system(&game, "hearth"),
+        system(&game, "verge"),
+    );
+    let mut session = flying_from(&game, &rules, drift);
+    for hop in [hearth, verge] {
+        shift_click(&mut session, &game.data, hop);
+    }
+    apply(&mut session, &game.data, FlightCommand::CueCourse);
+    assert_eq!(
+        fly_on_autopilot(&game, &rules, &mut session),
+        [drift, hearth, verge]
+    );
+    assert_eq!(session.course(), []);
+    assert_eq!(frame_of(&session).gate_pilot, None, "the autopilot off");
+    assert_eq!(session.nav_mode(), NavMode::Off);
 }
 
 #[test]
