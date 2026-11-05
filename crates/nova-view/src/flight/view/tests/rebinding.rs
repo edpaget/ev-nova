@@ -142,6 +142,14 @@ fn the_rebound_map_key_opens_the_course_map_and_its_release_ends_the_wait() {
 }
 
 #[test]
+fn flight_s_bindings_are_the_ones_it_was_given() {
+    let mut view = faked_sol(in_sol());
+    let shared = rebound(PlayCommand::GalaxyMap, Key::KeyT);
+    view.set_bindings(shared.clone());
+    assert_eq!(view.bindings().get(), shared.get());
+}
+
+#[test]
 fn the_course_map_and_a_port_maps_wait_read_flights_bindings() {
     let mut view = super::faked_shops::docked();
     let shared = rebound(PlayCommand::GalaxyMap, Key::KeyT);

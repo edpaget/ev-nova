@@ -1315,6 +1315,11 @@ mod tests {
         assert!(both.contains(NO));
         assert_eq!(both.count(), 2);
         assert_eq!(NO.count(), 0);
+        assert_eq!(
+            both.union(SHIFT),
+            both,
+            "a flag set on both sides stays set"
+        );
         assert!(KeyCombo::with(Key::KeyA, OPT).met_by(both));
         assert!(!KeyCombo::with(Key::KeyA, CMD).met_by(both));
     }

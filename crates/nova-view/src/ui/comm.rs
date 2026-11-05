@@ -1936,6 +1936,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_choice_key_let_go_chooses_nothing() {
+        for k in [Key::KeyA, Key::KeyL] {
+            let mut dialog = haggle(3000);
+            dialog.input(&Input::Key {
+                key: k,
+                pressed: true,
+                repeat: true,
+            });
+            dialog.input(&Input::Key {
+                key: k,
+                pressed: false,
+                repeat: false,
+            });
+            assert_eq!(
+                dialog.take_choice(),
+                None,
+                "{k:?}'s repeat, then its release"
+            );
+        }
+    }
+
     /// The haggle dialog reads its keys through the key map it is given:
     /// Lower rebound to Q lowers the price on Q and no longer on L.
     #[test]

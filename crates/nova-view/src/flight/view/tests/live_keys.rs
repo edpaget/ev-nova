@@ -412,6 +412,13 @@ fn a_latched_key_flight_still_holds_comes_back_as_no_press() {
 }
 
 #[test]
+fn a_press_key_flight_still_holds_and_not_down_before_comes_back_as_no_press() {
+    let mut view = in_flight();
+    view.hold_key(JUMP_KEY);
+    assert_eq!(back(&mut view, [JUMP_KEY], [], false), []);
+}
+
+#[test]
 fn a_site_anywhere_under_the_dialogs_latches_every_key_at_the_close() {
     // Preferences over an offer: `_SetAllKeyCmdFlags` follows the offer
     // (@0x622ac), and no `_HandlePlayer` pass runs between them.

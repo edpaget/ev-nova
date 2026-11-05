@@ -1599,6 +1599,28 @@ mod tests {
         assert!(screen.closed());
     }
 
+    /// Letting go of the keys forgets a modifier held: Leave on Shift-X
+    /// no longer leaves on X once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{
+            Bindings, KeyCombo, MissionComputerCommand, Modifiers, SharedBindings,
+        };
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            MissionComputerCommand::Leave,
+            KeyCombo::with(Key::KeyX, Modifiers::SHIFT),
+        ));
+        let mut let_go = screen().with_bindings(bindings.clone());
+        let_go.input(&key(Key::ShiftLeft));
+        let_go.release_keys();
+        let_go.input(&key(Key::KeyX));
+        assert!(!let_go.closed(), "Shift was let go of");
+        let mut held = screen().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft));
+        held.input(&key(Key::KeyX));
+        assert!(held.closed(), "Shift-X with Shift still held");
+    }
+
     #[test]
     fn a_accepts_the_selected_offer() {
         for ring in [FocusRing::Tab, FocusRing::Off] {
@@ -2764,6 +2786,26 @@ mod tests {
         assert!(!screen.closed(), "I no longer closes it");
         screen.input(&key(Key::KeyQ));
         assert!(screen.closed());
+    }
+
+    /// Letting go of the keys forgets a modifier held: Mission Info on
+    /// Shift-Q no longer closes it on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_mission_info_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            PlayCommand::MissionInfo,
+            KeyCombo::with(Key::KeyQ, Modifiers::SHIFT),
+        ));
+        let mut screen = info_screen().with_bindings(bindings.clone());
+        screen.input(&key(Key::ShiftLeft));
+        screen.release_keys();
+        screen.input(&key(Key::KeyQ));
+        assert!(!screen.closed(), "Shift was let go of");
+        let mut held = info_screen().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft));
+        held.input(&key(Key::KeyQ));
+        assert!(held.closed(), "Shift-Q with Shift still held");
     }
 
     /// `_MissionInfoFilter` gives Done for the key that opens the screen

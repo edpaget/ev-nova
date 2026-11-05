@@ -521,6 +521,17 @@ mod tests {
     }
 
     #[test]
+    fn its_bindings_are_the_ones_it_was_given() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(TradeCommand::MaxLot, KeyCombo::key(Key::KeyT)),
+        );
+        let mut ask = ask();
+        ask.set_bindings(bindings.clone());
+        assert_eq!(ask.bindings().get(), bindings.get());
+    }
+
+    #[test]
     fn opening_by_key_drops_the_typed_character_and_by_click_keeps_it() {
         let mut ask = ask();
         ask.open("row", Direction::Sell, 7, true, Rc::new(MonoMetrics));

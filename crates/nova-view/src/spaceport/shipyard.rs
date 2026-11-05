@@ -3018,6 +3018,28 @@ mod tests {
         assert!(screen.info_panel().is_none(), "X closes it");
     }
 
+    /// Letting go of the keys forgets a modifier held: Buy Ship on
+    /// Shift-Q no longer requests on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, ShipyardCommand};
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            ShipyardCommand::Buy,
+            KeyCombo::with(Key::KeyQ, Modifiers::SHIFT),
+        ));
+        let mut let_go = screen().with_bindings(bindings.clone());
+        press(&mut let_go, Key::ArrowRight);
+        press(&mut let_go, Key::ShiftLeft);
+        let_go.release_keys();
+        press(&mut let_go, Key::KeyQ);
+        assert_eq!(let_go.take_request(), None, "Shift was let go of");
+        let mut held = screen().with_bindings(bindings);
+        press(&mut held, Key::ArrowRight);
+        press(&mut held, Key::ShiftLeft);
+        press(&mut held, Key::KeyQ);
+        assert_eq!(held.take_request(), Some(ShipId(129)), "with Shift held");
+    }
+
     #[test]
     fn buy_ship_requests_the_selected_ship_and_b_only_on_a_press() {
         let mut screen = screen();

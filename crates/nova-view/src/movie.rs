@@ -1954,6 +1954,20 @@ mod tests {
     }
 
     #[test]
+    fn skips_a_movie_reads_the_skip_keys_through_the_bindings_given() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let stock = SharedBindings::default();
+        assert!(skips_a_movie(&press(Key::Space), &stock));
+        assert!(skips_a_movie(&click(true), &stock));
+        assert!(!skips_a_movie(&press(Key::KeyQ), &stock));
+        let rebound = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Activate, KeyCombo::key(Key::KeyQ)),
+        );
+        assert!(skips_a_movie(&press(Key::KeyQ), &rebound));
+        assert!(!skips_a_movie(&press(Key::Space), &rebound));
+    }
+
+    #[test]
     fn a_skip_flushes_what_was_queued() {
         let player = MockMoviePlayer::playing((160, 120), 30);
         let mut stage = staged(&player, 0x0004);

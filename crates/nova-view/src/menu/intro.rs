@@ -777,6 +777,21 @@ mod tests {
     }
 
     #[test]
+    fn keys_equal_by_what_is_down_not_by_their_bindings() {
+        use crate::keymap::{Bindings, IntroCommand, KeyCombo, SharedBindings};
+        let mut return_down = IntroKeys::default();
+        return_down.note(&key(Key::Enter, true));
+        assert_ne!(return_down, IntroKeys::default());
+        let mut space_down = IntroKeys::default();
+        space_down.note(&key(Key::Space, true));
+        assert_ne!(return_down, space_down);
+        let rebound = IntroKeys::default().with_bindings(SharedBindings::new(
+            Bindings::default().rebound(IntroCommand::Confirm, KeyCombo::key(Key::KeyT)),
+        ));
+        assert_eq!(rebound, IntroKeys::default());
+    }
+
+    #[test]
     fn a_key_held_through_the_fade_in_only_delays_the_timer() {
         let data = sized();
         let held = IntroKeys {

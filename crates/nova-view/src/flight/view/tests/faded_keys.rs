@@ -266,6 +266,24 @@ fn y_on_a_lit_collapse_carries_option_and_is_refused_in_silence() {
 }
 
 #[test]
+fn y_pressed_with_option_and_still_held_without_it_hails_without_option() {
+    let mut view = under_the_white();
+    view.input(&key(Key::AltLeft, true));
+    view.input(&key(HAIL_KEY, true));
+    view.input(&key(Key::AltLeft, false));
+    let from = sent_count(&view);
+    view.sim.queue_answer(Answer::Hailed(Hailed::Faded));
+    collapses_lit(&mut view);
+    assert_eq!(
+        sent(&view, from),
+        [FlightCommand::PressFaded(FadedPress::Hail {
+            option: false
+        })],
+        "Option as it is at the pass, Y still held"
+    );
+}
+
+#[test]
 fn y_on_a_lit_collapse_opens_a_persons_offer_and_ends_the_pass() {
     let mut view = under_the_white();
     tap(&mut view, HAIL_KEY);

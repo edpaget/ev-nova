@@ -1177,6 +1177,26 @@ mod tests {
         assert_eq!(screen.take_order(), Some(ShipId(128)));
     }
 
+    /// Letting go of the keys forgets a modifier held: Hire on Shift-Q
+    /// no longer asks on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, HireCommand, KeyCombo, Modifiers, SharedBindings};
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            HireCommand::Hire,
+            KeyCombo::with(Key::KeyQ, Modifiers::SHIFT),
+        ));
+        let mut let_go = screen().with_bindings(bindings.clone());
+        let_go.input(&key(Key::ShiftLeft, false));
+        let_go.release_keys();
+        let_go.input(&key(Key::KeyQ, false));
+        assert_eq!(let_go.take_order(), None, "Shift was let go of");
+        let mut held = screen().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft, false));
+        held.input(&key(Key::KeyQ, false));
+        assert_eq!(held.take_order(), Some(ShipId(128)), "with Shift held");
+    }
+
     #[test]
     fn h_or_hire_escort_asks_for_the_selected_ship_on_a_press_only() {
         let mut screen = screen();

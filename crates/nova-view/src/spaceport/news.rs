@@ -511,6 +511,26 @@ mod tests {
         assert!(screen.closed());
     }
 
+    /// Letting go of the keys forgets a modifier held: Back on Shift-Q
+    /// no longer closes it on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Back, KeyCombo::with(Key::KeyQ, Modifiers::SHIFT)),
+        );
+        let mut screen = open().with_bindings(bindings.clone());
+        screen.input(&key(Key::ShiftLeft, false));
+        screen.release_keys();
+        screen.input(&key(Key::KeyQ, false));
+        assert!(!screen.closed(), "Shift was let go of");
+        let mut held = open().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft, false));
+        held.input(&key(Key::KeyQ, false));
+        assert!(held.closed(), "Shift-Q with Shift still held");
+    }
+
     #[test]
     fn return_enter_or_escape_closes_it_on_a_press() {
         for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {

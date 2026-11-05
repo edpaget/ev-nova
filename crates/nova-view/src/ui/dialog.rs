@@ -1987,6 +1987,15 @@ mod tests {
     }
 
     #[test]
+    fn its_bindings_are_the_ones_it_was_given() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyT)),
+        );
+        let dialog = dialog(&yes_no(), &[]).with_bindings(bindings.clone());
+        assert_eq!(dialog.bindings().get(), bindings.get());
+    }
+
+    #[test]
     fn typed_text_activates_nothing() {
         let mut dialog = dialog(&yes_no(), &[]).with_cancel(Some(5));
         for c in ['\r', ' ', 'o', '\u{1b}'] {

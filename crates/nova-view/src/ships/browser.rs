@@ -520,6 +520,27 @@ mod tests {
         assert_eq!(browser.selected(), Some(ShipId(129)), "L does");
     }
 
+    /// Letting go of the keys forgets a modifier held: Right on Shift-L
+    /// no longer steps on L once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, UiCommand};
+        let catalog = three_ships();
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            UiCommand::Right,
+            KeyCombo::with(Key::KeyL, Modifiers::SHIFT),
+        ));
+        let mut browser = ShipBrowser::new(&catalog).with_bindings(bindings.clone());
+        browser.input(&press(Key::ShiftLeft));
+        browser.release_keys();
+        browser.input(&press(Key::KeyL));
+        assert_eq!(browser.selected(), Some(ShipId(128)), "Shift was let go of");
+        let mut held = ShipBrowser::new(&catalog).with_bindings(bindings);
+        held.input(&press(Key::ShiftLeft));
+        held.input(&press(Key::KeyL));
+        assert_eq!(held.selected(), Some(ShipId(129)), "with Shift held");
+    }
+
     #[test]
     fn down_and_up_mirror_right_and_left() {
         let catalog = three_ships();

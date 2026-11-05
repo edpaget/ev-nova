@@ -595,6 +595,20 @@ mod tests {
     }
 
     #[test]
+    fn a_key_is_read_through_the_bindings_it_is_given() {
+        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings};
+        let mut dialog = MapDialog::new((0, 0));
+        dialog.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(MapCommand::ZoomOut, KeyCombo::key(Key::KeyQ)),
+        ));
+        let zoom = dialog.place().zoom();
+        assert!(!dialog.key(Key::Minus), "- no longer zooms out");
+        assert_eq!(dialog.place().zoom(), zoom);
+        assert!(dialog.key(Key::KeyQ));
+        assert!(dialog.place().zoom() > zoom, "Q does");
+    }
+
+    #[test]
     fn a_drag_scrolls_from_where_it_started_until_released_or_cancelled() {
         let mut dialog = MapDialog::new((100, 100));
         dialog.pointer_moved(at(500.0, 500.0));

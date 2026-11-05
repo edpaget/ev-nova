@@ -499,6 +499,24 @@ mod tests {
         assert!(wait.input(&release(o)));
     }
 
+    /// A wait hands the bindings it is given to its queue: with Mission
+    /// Info rebound to O, what it leaves drops a let-go O, not I.
+    #[test]
+    fn a_wait_reads_its_queue_s_live_keys_through_the_bindings_it_is_given() {
+        let o = Key::KeyO;
+        let i = MISSION_INFO_KEY;
+        let mut wait = KeyWait::new(P, true);
+        wait.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(o)),
+        ));
+        assert!(!wait.close());
+        for input in [press(o), release(o), press(i), release(i), press(A)] {
+            assert!(!wait.input(&input));
+        }
+        assert!(wait.input(&release(P)));
+        assert_eq!(wait.take_replay(), [press(i), release(i), press(A)]);
+    }
+
     #[test]
     fn it_keeps_a_live_key_still_down() {
         for key in [PLAYER_INFO_KEY, MISSION_INFO_KEY] {

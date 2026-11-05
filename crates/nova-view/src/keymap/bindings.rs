@@ -343,6 +343,27 @@ mod tests {
     }
 
     #[test]
+    fn the_escort_menu_hides_a_key_it_binds_even_when_its_modifiers_are_not_held() {
+        let bindings = Bindings::default().rebound(
+            EscortMenuCommand::Group1,
+            KeyCombo::with(Key::Digit1, Modifiers::SHIFT),
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Digit1, MENU_SHOWN),
+            None,
+            "flight's slot 1 is shadowed on 1 while the menu shows"
+        );
+        assert_eq!(
+            means(&bindings, &[Key::ShiftLeft], Key::Digit1, MENU_SHOWN),
+            Some(Command::EscortMenu(EscortMenuCommand::Group1))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Digit1, FLYING),
+            flight(FlightCommand::StellarSlot1)
+        );
+    }
+
+    #[test]
     fn a_twin_resolves_to_its_command_and_a_bound_key_beats_it() {
         let bindings = Bindings::default();
         assert_eq!(

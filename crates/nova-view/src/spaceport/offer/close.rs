@@ -273,6 +273,23 @@ mod tests {
         assert!(dialog.disposed());
     }
 
+    /// Bindings handed to a dialog already waiting reach its close wait:
+    /// it waits on the key they bind the mission info key's command to.
+    #[test]
+    fn a_waiting_close_reads_bindings_handed_to_it() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings};
+        let mut dialog = answered();
+        assert!(!dialog.dispose(true));
+        let mut dialog = dialog.with_bindings(SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::F2)),
+        ));
+        assert!(dialog.waiting());
+        dialog.input(&release(I));
+        assert!(!dialog.disposed(), "I's release is no longer waited on");
+        dialog.input(&release(Key::F2));
+        assert!(dialog.disposed());
+    }
+
     #[test]
     fn disposed_with_i_down_it_waits_drawn_and_inert_for_is_release() {
         let mut dialog = answered();

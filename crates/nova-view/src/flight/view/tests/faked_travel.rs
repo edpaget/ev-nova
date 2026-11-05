@@ -1377,6 +1377,35 @@ fn the_hyperspace_hint_names_m_and_j() {
 }
 
 #[test]
+fn the_hints_name_the_keys_flight_s_bindings_bind() {
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
+    let bindings = SharedBindings::new(
+        Bindings::default()
+            .rebound(Fc::LandDock, KeyCombo::key(Key::KeyT))
+            .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyQ))
+            .rebound(Fc::HyperJump, KeyCombo::key(Key::KeyY)),
+    );
+    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+        stellar: StellarId(129),
+        station: false,
+    });
+    let mut view = faked(FlightFrame {
+        stellars: vec![record::stellar(StellarId(129))],
+        ..in_sol()
+    });
+    view.set_bindings(bindings);
+    view.sim.queue_event(FlightEvent::Message(hint));
+    view.relay_messages();
+    assert_eq!(view.message(), Some(land_hint(false, "Moon", "T").as_str()));
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::Tutorial(
+            nova_sim::TutorialHint::Hyperspace,
+        )));
+    view.relay_messages();
+    assert_eq!(view.message(), Some(hyperspace_hint("Q", "Y").as_str()));
+}
+
+#[test]
 fn far_enough_and_nothing_out_here_last_512() {
     let far = SimMessage::Tutorial(nova_sim::TutorialHint::FarEnough);
     let mut view = relaying(far.clone());
