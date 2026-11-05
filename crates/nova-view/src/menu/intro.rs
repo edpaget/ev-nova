@@ -43,6 +43,12 @@
 //! Return's key code alone, so the keypad's Enter neither ends a picture
 //! nor is waited for, and it reads none of the shared UI context's keys.
 //!
+//! **The pad** reads through the same bindings: South is the picture's
+//! Activate, as Space is, and Select + Start the Pause key's skip; a pad
+//! button held is waited for as a key is
+//! (rdm:phase/key-bindings/phase-11-gamepad-menus). The intro has no
+//! controls, so it has no pad focus.
+//!
 //! **The text** comes after the pictures, unless skipped, when the `chär`
 //! names one ([`IntroEnd::Done`]); the router loads, munges and shows it.
 //!
@@ -172,11 +178,12 @@ impl IntroKeys {
     }
 
     /// Notes what `input` does to the keys and the button, and says which
-    /// command a key's press, repeat or release meant, if any. A key
+    /// command a key's or a pad button's press, repeat or release meant,
+    /// if any. A key
     /// changing sets the three keys to their commands as held.
     pub fn note(&mut self, input: &Input) -> Option<CommandInput> {
         match *input {
-            Input::Key { .. } => {
+            Input::Key { .. } | Input::PadButton { .. } => {
                 let meant = self.reader.follow(input);
                 self.enter = self.reader.held(IntroCommand::Confirm);
                 self.space = self.reader.held(IntroCommand::Activate);
@@ -369,16 +376,18 @@ impl Intro {
             Stage::AwaitingRelease => self.poll_release(),
             Stage::Showing(_) => {
                 let ends = match *input {
-                    Input::Key { pressed: true, .. } => match meant.map(|meant| meant.command) {
-                        Some(Command::Pause(PauseCommand::Pause)) => {
-                            self.skip = true;
-                            true
+                    Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. } => {
+                        match meant.map(|meant| meant.command) {
+                            Some(Command::Pause(PauseCommand::Pause)) => {
+                                self.skip = true;
+                                true
+                            }
+                            Some(Command::Intro(
+                                IntroCommand::Confirm | IntroCommand::Activate,
+                            )) => true,
+                            _ => false,
                         }
-                        Some(Command::Intro(IntroCommand::Confirm | IntroCommand::Activate)) => {
-                            true
-                        }
-                        _ => false,
-                    },
+                    }
                     Input::PointerButton {
                         button: MouseButton::Left,
                         pressed: true,
@@ -853,6 +862,60 @@ mod tests {
         held.input(&click(false));
         held.tick(ms(500));
         assert_eq!(drawn(&held).1, Some(128), "on the release");
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    #[test]
+    fn south_ends_a_picture_as_space_does() {
+        use crate::input::PadButton;
+        let data = sized();
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        faded_in(&mut screen);
+        screen.tick(ms(100));
+        screen.input(&pad(PadButton::South, true));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, Some(128), "South ends it");
+        screen.input(&pad(PadButton::South, false));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).0.map(|(id, _)| id), Some(8201));
+        assert_eq!(screen.end(), None, "South skips nothing");
+    }
+
+    #[test]
+    fn select_and_start_skip_as_pause_does() {
+        use crate::input::PadButton;
+        let data = sized();
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        faded_in(&mut screen);
+        screen.tick(ms(100));
+        screen.input(&pad(PadButton::Select, true));
+        screen.input(&pad(PadButton::Start, true));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, Some(128), "fading out");
+        screen.tick(ms(500));
+        assert_eq!(screen.end(), Some(IntroEnd::Skipped), "no 8201, no text");
+    }
+
+    #[test]
+    fn a_south_held_as_the_intro_starts_is_waited_out() {
+        use crate::input::PadButton;
+        let data = sized();
+        let mut held = IntroKeys::default();
+        held.note(&pad(PadButton::South, true));
+        assert_ne!(held, IntroKeys::default(), "South is down");
+        let mut screen = begun(&two_pictures(), &data, held);
+        faded_in(&mut screen);
+        screen.tick(secs(30));
+        assert_eq!(drawn(&screen).1, None, "no timer while held");
+        screen.input(&pad(PadButton::South, false));
+        screen.tick(ms(1999));
+        assert_eq!(drawn(&screen).1, None, "timed from the release");
+        screen.tick(ms(1));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, Some(128));
     }
 
     #[test]

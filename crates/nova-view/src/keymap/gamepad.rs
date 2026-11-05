@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::bindings::{Change, Clash};
 use super::command::{
-    Command, Context, EscortMenuCommand, FlightCommand, MapCommand, OutfitterCommand, PauseCommand,
-    PlayCommand, RaceCommand, TradeCommand, UiCommand,
+    Command, Context, EscortMenuCommand, FlightCommand, IntroCommand, MapCommand, OutfitterCommand,
+    PauseCommand, PlayCommand, RaceCommand, TradeCommand, UiCommand,
 };
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
 use crate::input::{Input, PadAxis, PadButton};
@@ -233,6 +233,9 @@ const fn default_pad(command: Command) -> PadBinding {
         Command::Play(command) => default_play(command),
         Command::Map(command) => default_map(command),
         Command::Pause(PauseCommand::Pause) => on(PadButton::Select, PadButton::Start),
+        // South ends an intro picture as Space does
+        // (rdm:phase/key-bindings/phase-11-gamepad-menus).
+        Command::Intro(IntroCommand::Activate) => plain(PadButton::South),
         Command::Ui(command) => default_ui(command),
         // West held stands in for Option: a press of Buy or Sell (or a
         // racer) asks for a count, as an Option-click does
@@ -960,7 +963,20 @@ mod tests {
             // a map as `=` and `-` do.
             (Command::Map(MapCommand::ZoomIn), plain(P::RightTrigger)),
             (Command::Map(MapCommand::ZoomOut), plain(P::LeftTrigger)),
+            // rdm:phase/key-bindings/phase-11-gamepad-menus: South ends an
+            // intro picture as Space does.
+            (Command::Intro(IntroCommand::Activate), plain(P::South)),
         ]
+    }
+
+    #[test]
+    fn the_default_pad_table_binds_the_intros_activate_to_south() {
+        use crate::keymap::{CommandReader, contexts};
+        let mut reader = CommandReader::new(contexts::INTRO);
+        assert_eq!(
+            reader.follow(&press(P::South)).map(|meant| meant.command),
+            Some(Command::Intro(IntroCommand::Activate))
+        );
     }
 
     #[test]
