@@ -478,6 +478,19 @@ mod tests {
     }
 
     #[test]
+    fn by_the_other_reading_a_cancelled_entry_keeps_the_course_and_cues_nothing() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Bible, &[HEARTH, VERGE]);
+        assert_eq!(session.open_hypergate(&catalog), Ok(vec![HEARTH]));
+        assert!(
+            session
+                .enter_hypergate(None, &catalog, &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(session.course(), [HEARTH, VERGE]);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
     fn by_the_engine_a_hypergates_exit_along_the_course_restarts_it() {
         let (catalog, mut session) = at_drifts_gate(RuleSource::Engine, &[HEARTH, VERGE]);
         into_hearth(&catalog, &mut session);

@@ -194,6 +194,7 @@ fn calls_good_samaritan(npc: &Npc) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
     use crate::ai::Goal;
     use crate::board::{Boarding, NovaBoarding};
     use crate::catalog::{MissionId, ShipId};
@@ -787,5 +788,17 @@ mod tests {
             Mode::Flying,
             "@0x652ee sets no wait"
         );
+    }
+
+    #[test]
+    fn putting_the_player_somewhere_leaves_it_there_at_rest() {
+        let mut session = Session::start(&crate::testkit::catalog()).expect("starts");
+        session.ship.player.velocity = crate::geometry::Vec2::new(3.0, 4.0);
+        session.ship.player_speed = 5.0;
+        let at = crate::geometry::Vec2::new(-120.0, 75.0);
+        crate::fixture::put_player_at(&mut session, at);
+        assert_eq!(session.player().position, at);
+        assert_eq!(session.player().velocity, crate::geometry::Vec2::ZERO);
+        assert_eq!(session.ship.player_speed, 0.0);
     }
 }

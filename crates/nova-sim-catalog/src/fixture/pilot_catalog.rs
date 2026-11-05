@@ -646,6 +646,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_gates_stability_is_set_on_that_gate_alone() {
+        use crate::catalog::GateStability;
+        let gate = |id| GateSite {
+            id: StellarId(id),
+            position: crate::geometry::Vec2::ZERO,
+            flags2: 0,
+            links: [None; 8],
+            exit_angle: -1,
+            stability: GateStability::Stable,
+        };
+        let fake = FakePilotCatalog {
+            gates: vec![gate(150), gate(151)],
+            ..catalog()
+        }
+        .with_gate_stability(151, GateStability::Dead)
+        .with_gate_stability(999, GateStability::Unstable);
+        let stabilities: Vec<_> = fake.gates.iter().map(|site| site.stability).collect();
+        assert_eq!(stabilities, [GateStability::Stable, GateStability::Dead]);
+    }
+
+    #[test]
     fn the_fake_lists_a_stellar_only_under_the_systems_it_holds() {
         let fake = FakePilotCatalog {
             systems: vec![SystemId(131)],

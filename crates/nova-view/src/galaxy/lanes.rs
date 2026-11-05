@@ -209,6 +209,39 @@ mod tests {
     }
 
     #[test]
+    fn a_dash_ending_exactly_at_the_far_end_adds_no_empty_piece() {
+        let drawn = strokes(
+            &look(Some(Unstable), Back::Way(Some(Unstable))),
+            (0, 0),
+            (26, 0),
+            GREY,
+        );
+        let pieces: Vec<_> = drawn
+            .iter()
+            .map(|stroke| (stroke.from, stroke.to))
+            .collect();
+        assert_eq!(pieces, [((0, 0), (8, 0)), ((13, 0), (21, 0))]);
+    }
+
+    #[test]
+    fn a_dashed_way_of_no_length_is_one_dot() {
+        let drawn = strokes(
+            &look(Some(Dead), Back::Way(Some(Dead))),
+            (5, 5),
+            (5, 5),
+            GREY,
+        );
+        assert_eq!(
+            drawn,
+            [LaneStroke {
+                from: (5, 5),
+                to: (5, 5),
+                color: DEAD,
+            }]
+        );
+    }
+
+    #[test]
     fn a_dead_way_is_dotted_2_on_5_off() {
         let drawn = strokes(
             &look(Some(Dead), Back::Way(Some(Dead))),

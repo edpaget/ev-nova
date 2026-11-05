@@ -232,6 +232,16 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_hypergate_linking_a_stellar_that_is_no_gate_makes_its_lane() {
+        let systems = vec![star(1, (0.0, 0.0), &[]), star(3, (20.0, 0.0), &[])];
+        let sites = [gate(101, HYPERGATE, &[301]), gate(301, 0, &[])];
+        let mut galaxy = OverlaidGalaxy::new(systems, GalaxyOverlay::default())
+            .with_gates(&sites, &listed_by_hundreds(&sites));
+        galaxy.set_link_source(LinkSource::Gates);
+        assert_eq!(galaxy.link_slots(SystemId(1)), ids(&[3]));
+    }
+
+    #[test]
     fn hiding_a_system_drops_its_lanes() {
         let mut galaxy = by(LinkSource::Gates);
         let mut overlay = GalaxyOverlay::default();
