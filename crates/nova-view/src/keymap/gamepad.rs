@@ -197,6 +197,26 @@ impl PadMap {
         self.bindings.insert(command, PadBinding::Unbound);
     }
 
+    /// Whether `command` is one of the pad's fixed rows: the whole shared
+    /// UI context, which navigates every menu and dialog. The lookup and
+    /// the naming function read them, but nothing rebinds, clears or
+    /// saves them, so the player can't lock themselves out.
+    #[must_use]
+    pub fn is_fixed(command: Command) -> bool {
+        command.context() == Context::Ui
+    }
+
+    /// The fixed row ([`PadMap::is_fixed`]) whose entry is `entry`, in a
+    /// context active together with `command`'s, if any: what refuses
+    /// `command` that entry. A layered entry is never a fixed row's.
+    #[must_use]
+    pub fn fixed_holder(&self, command: Command, entry: PadEntry) -> Option<Command> {
+        Context::Ui
+            .commands()
+            .filter(|&fixed| self.entry(fixed) == Some(entry))
+            .find(|&fixed| clash_on(SCREENS, fixed, command))
+    }
+
     /// Every button some entry uses as its layer: a press of one alone
     /// binds nothing.
     #[must_use]
@@ -262,13 +282,7 @@ impl PadMap {
         for commands in by_input.values() {
             for (at, &first) in commands.iter().enumerate() {
                 for &second in &commands[at + 1..] {
-                    let (a, b) = (first.context(), second.context());
-                    if !router_shadows(first, second)
-                        && !router_shadows(second, first)
-                        && together_on(screens, a, b)
-                        && !shadows(a, b)
-                        && !shadows(b, a)
-                    {
+                    if clash_on(screens, first, second) {
                         clashes.push(Clash { first, second });
                     }
                 }
@@ -276,6 +290,18 @@ impl PadMap {
         }
         clashes
     }
+}
+
+/// Whether `first` and `second`, on one input, clash over `screens`:
+/// their contexts are active together, neither shadows the other, and
+/// neither is the router's deliberate shadow of the other.
+fn clash_on(screens: &[ScreenContexts], first: Command, second: Command) -> bool {
+    let (a, b) = (first.context(), second.context());
+    !router_shadows(first, second)
+        && !router_shadows(second, first)
+        && together_on(screens, a, b)
+        && !shadows(a, b)
+        && !shadows(b, a)
 }
 
 /// What a binding holds, for the clash query: an entry, or an axis
@@ -289,7 +315,7 @@ enum Held {
 }
 
 /// Every command's default on the pad: the phase's findings' table.
-const fn default_pad(command: Command) -> PadBinding {
+pub(super) const fn default_pad(command: Command) -> PadBinding {
     match command {
         Command::Flight(command) => default_flight(command),
         Command::EscortMenu(command) => default_escort_menu(command),

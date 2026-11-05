@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
-use super::bindings::Bindings;
+use super::bindings::{Bindings, Clash};
 use super::command::Command;
 use super::keyboard::{Binding, KeyCombo, KeyMap, Modifiers, default_binding};
 use crate::input::Key;
@@ -109,13 +109,22 @@ fn chosen(map: &KeyMap, named: &BTreeSet<Command>, command: Command) -> bool {
 /// is left ([`KeyMap::with_overrides`]' rules). Each one unbinds a bound
 /// command, so the settling ends.
 fn next_to_unbind(bindings: &Bindings, named: &BTreeSet<Command>) -> Option<Command> {
-    let chosen = |command| chosen(&bindings.keyboard, named, command);
-    let clashes = bindings.clashes();
+    settle(&bindings.clashes(), |command| {
+        chosen(&bindings.keyboard, named, command)
+    })
+}
+
+/// The command settling the next of `clashes` unbinds, if any, with
+/// `chosen` saying which commands the player chose: a clash of two
+/// chosen ones first, the later one unbound, then any other, where the
+/// defaulted one loses to a chosen one and otherwise the later one does.
+/// The keyboard's load rule ([`KeyMap::with_overrides`]) and the pad's
+/// (`PadMap::with_overrides`) both settle so.
+fn settle(clashes: &[Clash], chosen: impl Fn(Command) -> bool) -> Option<Command> {
     let clash = clashes
         .iter()
         .find(|clash| chosen(clash.first) && chosen(clash.second))
         .or_else(|| clashes.first())?;
-    // The defaulted one loses to a chosen one; otherwise the later one.
     Some(if chosen(clash.second) && !chosen(clash.first) {
         clash.first
     } else {
@@ -123,8 +132,12 @@ fn next_to_unbind(bindings: &Bindings, named: &BTreeSet<Command>) -> Option<Comm
     })
 }
 
+mod pad;
 #[cfg(test)]
 mod pinned;
+pub use pad::PadTextError;
+#[cfg(test)]
+mod pinned_pad;
 
 /// Each modifier flag with its W3C name, in the order a combo's text
 /// lists them.

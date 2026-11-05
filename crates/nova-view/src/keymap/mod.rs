@@ -170,4 +170,4 @@ pub use gamepad::{
 };
 pub use keyboard::{Binding, KeyCombo, KeyMap, Keyboard, KeysDown, Modifiers, is_modifier_input};
 pub use reader::{CommandInput, CommandReader, SharedBindings};
-pub use saved::ComboTextError;
+pub use saved::{ComboTextError, PadTextError};
