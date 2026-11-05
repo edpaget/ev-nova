@@ -150,9 +150,13 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 /// The game's key for a physical key, by its position: each key winit
 /// names is the `Key` of the same name, so every letter, digit,
 /// punctuation, function, keypad, navigation and editing key reaches the
-/// game. Only the pairs below are folded, the second key arriving as the
-/// first; a key winit can't identify, and winit's legacy `Meta`, `Hyper`
-/// and `Turbo` (which `Key` has only as deprecated names), are
+/// game. One pair is folded, the keypad's `-` arriving as `-`
+/// (`Key::Minus`): every site in the original reads the two key codes
+/// (0x1B and 0x4E) together, `_HandlePlayer` polling both and `_MapFilter`
+/// comparing the key code with both, so no screen tells them apart. Every
+/// other key is its own key, the right modifiers and the keypad's Enter
+/// included. A key winit can't identify, and winit's legacy `Meta`,
+/// `Hyper` and `Turbo` (which `Key` has only as deprecated names), are
 /// [`Key::Unidentified`].
 ///
 /// Which screen reads which key, where it isn't plain:
@@ -162,7 +166,8 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 /// - Backspace deletes the character before a text field's caret: Delete
 ///   on a Mac keyboard.
 /// - `=` is the unshifted `+` key on a US keyboard: with the keypad's `+`,
-///   the map's zoom in. The letter keys are read by position, as the
+///   the map's zoom in, where `-` and the keypad's `-` (the folded pair)
+///   are its zoom out. The letter keys are read by position, as the
 ///   original's `_PortFilter` and dialog filters read the Mac key code:
 ///   W, A, S and D move the system view whatever letters another layout
 ///   puts there.

@@ -7,8 +7,8 @@ use crate::geometry::Point;
 /// where a US keyboard has W, whatever the player's layout types there;
 /// [`key_letter`] and [`letter_key`] read that US letter.
 ///
-/// A pair of keys the platform folds arrives as its left or main key: the
-/// platform adapter's `map_key` says which pairs it folds. `MetaLeft` is
+/// A key the platform folds into another arrives as that other key: the
+/// platform adapter's `map_key` says which pair it folds. `MetaLeft` is
 /// Command on a Mac and the Windows or Super key elsewhere, `AltLeft`
 /// Option, and `Backspace` the Mac keyboard's Delete. Page Up, Page Down,
 /// Home and End are fn with an arrow on a Mac laptop. A key the platform
