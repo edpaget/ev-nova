@@ -695,6 +695,29 @@ mod tests {
         assert_eq!(key_code(Key::Unidentified), None);
     }
 
+    /// The Mac key code `nova_view` names a key's `STR#` 129 entry by is
+    /// the one winit reports the key at, for every key winit gives one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_key_s_str_129_code_is_the_mac_code_winit_reports_it_at() {
+        use winit::platform::scancode::PhysicalKeyExtScancode;
+        /// Every key `map_key` names alike, and the three it renames.
+        macro_rules! every_key {
+            ($_unused:tt; $($name:ident),* $(,)?) => {
+                [$(Key::$name,)* Key::MetaLeft, Key::MetaRight, Key::NumpadSubtract]
+            };
+        }
+        let mut checked = 0;
+        for key in same_names!(every_key!(())) {
+            if let Some(code) = key_code(key).and_then(PhysicalKeyExtScancode::to_scancode) {
+                let named = nova_view::bound_names::mac_code(key).map(u32::from);
+                assert_eq!(named, Some(code), "{key:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "{checked}");
+    }
+
     /// The pairs `map_key` folds: the second key arrives as the first's.
     const FOLDS: [(KeyCode, KeyCode); 1] = [(KeyCode::NumpadSubtract, KeyCode::Minus)];
 
