@@ -38,6 +38,10 @@ exclude_re = [
     # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
     "nova-win32/src/console\\.rs:",
     "nova-win32/src/winsparkle\\.rs:",
+    # The keyboard layout's key names (`key_label`, `keyboard_layout_language`):
+    # the windows-2025 leg runs `nova-win32/tests/it/key_label.rs` and nova's
+    # `the_windows_adapter_asks_win32_about_each_key_s_own_scancode`.
+    "nova-win32/src/key_label\\.rs:",
     "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
     # WinSparkle's Windows forwards, each one call into nova-win32: the
     # windows-2025 legs run `a_test_binary_has_no_dll_beside_it` and
@@ -331,6 +335,11 @@ exclude_re = [
     # nova-appkit's `tests/it` checks that, and can't tell the removal
     # from its absence. It is kept so nothing relies on that.
     "nova-appkit/src/apple_event_handler\\.rs:.*replace <impl Drop for AppleEvents>::drop with \\(\\)$",
+    # The current keyboard layout's drop guard releases the input source
+    # `key_label` copied. Without it the source leaks, one Core Foundation
+    # object per key named, and every answer stays the same, so no test can
+    # tell. It is kept so the game doesn't leak a source per key it names.
+    "nova-appkit/src/key_layout\\.rs:.*replace <impl Drop for CurrentLayout>::drop with \\(\\)$",
     # The startup dialogs (`platform/dialogs.rs`): rfd's open panel, error
     # alert and warnings sheet, which need a display and `NSApplication`
     # (and a person to dismiss them). The decisions around them (when to
