@@ -453,6 +453,11 @@ impl Screen for AppScreen {
         self.prefs_change.take()
     }
 
+    /// The bindings the keys screen's OK accepted, once.
+    fn take_bindings(&mut self) -> Option<nova_view::Bindings> {
+        self.bindings_change.take()
+    }
+
     /// Offers the open Preferences dialog the display modes, on the kind
     /// the game runs fullscreen in now and the kind chosen; with none
     /// open, nothing changes.

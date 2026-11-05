@@ -25,7 +25,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{FullscreenKind, Input, Screen, ScreenAction, VideoMode};
+use nova_view::{FullscreenKind, Input, KeyCombo, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -178,7 +178,9 @@ impl AppScreen {
     /// Opens the Preferences dialog over the side shown, on the player's
     /// preferences, listing the Scaling offered (native and Super-xBR
     /// before an offer), its focus ring as the keyboard access port
-    /// answers now ([`prefs_focus_ring`]), first cancelling the side's pointer gesture and
+    /// answers now ([`prefs_focus_ring`]), its keys screen naming keys
+    /// through the key names given and binding none of the menu chords
+    /// and key equivalents, first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -202,6 +204,9 @@ impl AppScreen {
                     .with_scaling(&self.scaling)
                     .with_focus_ring(prefs_focus_ring(access))
                     .with_bindings(self.bindings.clone())
+                    .with_key_names(Rc::clone(&self.key_names))
+                    .with_reserved_combos(self.reserved_combos())
+                    .with_rules(&self.rules)
             })
             .map(|dialog| {
                 if self.launch_prefs_wait() {
@@ -270,14 +275,33 @@ impl AppScreen {
         }
     }
 
+    /// Every combo the keys screen binds to nothing: the game's menu
+    /// chords, then the platform's menu bar key equivalents given.
+    fn reserved_combos(&self) -> Vec<KeyCombo> {
+        let mut reserved = super::menu_chord_combos();
+        for &combo in &self.reserved {
+            if !reserved.contains(&combo) {
+                reserved.push(combo);
+            }
+        }
+        reserved
+    }
+
     /// The Preferences dialog's input: each change, and the fullscreen
     /// kind picked as it closes, is kept, to be taken once, and the dialog
-    /// closes once OK is activated.
+    /// closes once OK is activated. The bindings its keys screen's OK
+    /// accepts go into the shared bindings at once, so every screen reads
+    /// them on its next input, and are kept to be taken once, for the app
+    /// to save.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
         let Some(dialog) = &mut self.preferences else {
             return ScreenAction::None;
         };
         dialog.input(input);
+        if let Some(bindings) = dialog.take_bindings() {
+            self.bindings.set(bindings.clone());
+            self.bindings_change = Some(bindings);
+        }
         let change = dialog.take_change();
         if let Some(kind) = dialog.take_display_choice() {
             self.display_choice = Some(kind);

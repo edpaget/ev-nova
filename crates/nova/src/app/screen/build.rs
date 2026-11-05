@@ -118,6 +118,9 @@ impl AppScreen {
                 Prefs::default().quicktime_movies,
             ),
             keyboard_access: Rc::new(crate::app::NoKeyboardAccessSetting),
+            key_names: Rc::new(nova_view::NoKeyNames),
+            reserved: Vec::new(),
+            bindings_change: None,
             fade_in: None,
             appear: None,
             entry: None,
@@ -726,6 +729,24 @@ impl AppScreen {
             keyboard_access: access,
             ..self
         }
+    }
+
+    /// The router whose keys screen names keys through `names`.
+    #[must_use]
+    pub fn with_key_names(self, names: Rc<dyn nova_view::KeyNames>) -> Self {
+        Self {
+            key_names: names,
+            ..self
+        }
+    }
+
+    /// The router whose keys screen binds none of `reserved`, the
+    /// platform's menu bar key equivalents, beside the game's own menu
+    /// chords ([`menu_chord_combos`](super::menu_chord_combos)), which it
+    /// never binds.
+    #[must_use]
+    pub fn with_reserved_combos(self, reserved: Vec<nova_view::KeyCombo>) -> Self {
+        Self { reserved, ..self }
     }
 
     /// The player's preferences, as last chosen.

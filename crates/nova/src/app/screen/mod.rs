@@ -442,6 +442,18 @@ pub const fn menu_chord(command: MenuCommand) -> Option<Key> {
     }
 }
 
+/// Each menu command's chord ([`menu_chord`]) with Command held, as a
+/// key combo: the keys the menus take on every platform, which the keys
+/// screen binds to nothing.
+#[must_use]
+pub fn menu_chord_combos() -> Vec<nova_view::KeyCombo> {
+    MenuCommand::ALL
+        .into_iter()
+        .filter_map(menu_chord)
+        .map(|key| nova_view::KeyCombo::with(key, nova_view::Modifiers::COMMAND))
+        .collect()
+}
+
 /// The menu command whose chord presses `key` ([`menu_chord`]), if any.
 #[must_use]
 pub fn chord_command(key: Key) -> Option<MenuCommand> {
@@ -719,6 +731,18 @@ pub struct AppScreen {
     /// [`NoKeyboardAccessSetting`](crate::app::NoKeyboardAccessSetting)'s
     /// unless another is given ([`AppScreen::with_keyboard_access`]).
     keyboard_access: Rc<dyn crate::app::KeyboardAccess>,
+    /// What the keys screen names keys with: [`NoKeyNames`](nova_view::NoKeyNames),
+    /// every key its US legend, unless another is given
+    /// ([`AppScreen::with_key_names`]).
+    key_names: Rc<dyn nova_view::KeyNames>,
+    /// The platform's menu bar key equivalents beyond the game's own menu
+    /// chords ([`menu_chord_combos`]), which the keys screen binds to
+    /// nothing ([`AppScreen::with_reserved_combos`]).
+    reserved: Vec<nova_view::KeyCombo>,
+    /// The bindings the keys screen's OK accepted since they were last
+    /// taken ([`Screen::take_bindings`](nova_view::Screen::take_bindings)),
+    /// for the app to save.
+    bindings_change: Option<nova_view::Bindings>,
     /// The fade back from black over the developer's side shown after a
     /// death without a main menu, while it plays.
     fade_in: Option<ScreenFade>,

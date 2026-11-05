@@ -14,6 +14,7 @@
 
 pub mod console;
 pub mod dialogs;
+mod key_names;
 mod keyboard_access;
 #[cfg(target_os = "macos")]
 mod menu_bar;
@@ -23,6 +24,7 @@ mod updater;
 mod window;
 
 pub use dialogs::Dialogs;
+pub use key_names::system_key_names;
 pub use keyboard_access::system_keyboard_access;
 pub use runner::{Runner, event_loop};
 #[cfg(target_os = "macos")]
@@ -235,6 +237,21 @@ pub fn map_key(key: PhysicalKey) -> Key {
         F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28,
         F29, F30, F31, F32, F33, F34, F35
     )
+}
+
+/// The running platform's menu bar key equivalents, as key combos, which
+/// the keys screen binds to nothing beside the game's own menu chords:
+/// the macOS menu bar's, and none elsewhere.
+#[must_use]
+pub fn menu_key_equivalents() -> Vec<nova_view::KeyCombo> {
+    #[cfg(target_os = "macos")]
+    {
+        menu_bar::key_equivalent_combos()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
 }
 
 /// The game's mouse button for winit's.
@@ -558,6 +575,53 @@ mod tests {
     #[test]
     fn every_navigation_and_editing_key_maps_to_its_key() {
         assert_maps(&NAVIGATION_CODES);
+    }
+
+    #[test]
+    fn every_key_map_key_produces_has_a_name_and_only_a_printing_one_asks_the_layout() {
+        use nova_view::key_names::fixture::FakeKeyNames;
+        use nova_view::key_names::{key_name, prints};
+        let others = [
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::SuperLeft,
+            KeyCode::SuperRight,
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Space,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+            KeyCode::CapsLock,
+            KeyCode::Fn,
+            KeyCode::ContextMenu,
+            KeyCode::MediaPlayPause,
+        ];
+        let codes = [
+            &LETTER_CODES[..],
+            &DIGIT_CODES,
+            &PUNCTUATION_CODES,
+            &FUNCTION_CODES,
+            &KEYPAD_CODES,
+            &NAVIGATION_CODES,
+        ]
+        .concat()
+        .into_iter()
+        .map(|(code, _)| PhysicalKey::Code(code))
+        .chain(others.map(PhysicalKey::Code))
+        .chain([PhysicalKey::Unidentified(
+            winit::keyboard::NativeKeyCode::Unidentified,
+        )]);
+        for physical in codes {
+            let key = map_key(physical);
+            let names = FakeKeyNames::new();
+            assert!(!key_name(&names, key).is_empty(), "{physical:?}");
+            let asked = !names.asked().is_empty();
+            assert_eq!(asked, prints(key), "{physical:?}");
+        }
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.

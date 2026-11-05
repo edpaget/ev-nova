@@ -570,9 +570,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// kind the player picked ([`Screen::take_display_choice`]) is held, to
     /// be entered and saved once the event is handled, which has the
     /// window; then a galaxy map borders setting
-    /// its map's close reports ([`Screen::take_map_borders_save`]) is
-    /// saved through the keeper with the other settings as they are. A
-    /// failed save is kept as a warning.
+    /// its map's close reports ([`Screen::take_map_borders_save`]), and
+    /// the key bindings the keys screen's OK accepted
+    /// ([`Screen::take_bindings`]), are each saved through the keeper with
+    /// the other settings as they are. A failed save is kept as a
+    /// warning.
     ///
     /// Then, unless the core is still waiting on a keyed click (its 600
     /// playing, [`AudioCore::click_waiting`]), the screen is told the
@@ -613,6 +615,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         {
             let settings = GameSettings {
                 map_borders,
+                ..keeper.settings()
+            };
+            if let Err(warning) = keeper.change(settings) {
+                self.warnings.push(warning);
+            }
+        }
+        if let Some(bindings) = self.screen.take_bindings()
+            && let Some(keeper) = &mut self.settings
+        {
+            let settings = GameSettings {
+                bindings,
                 ..keeper.settings()
             };
             if let Err(warning) = keeper.change(settings) {
@@ -3119,6 +3132,7 @@ mod tests {
     struct BordersScreen {
         save: Option<bool>,
         prefs: Option<Prefs>,
+        bindings: Option<nova_view::Bindings>,
     }
 
     impl Screen for BordersScreen {
@@ -3137,12 +3151,17 @@ mod tests {
         fn take_map_borders_save(&mut self) -> Option<bool> {
             self.save.take()
         }
+
+        fn take_bindings(&mut self) -> Option<nova_view::Bindings> {
+            self.bindings.take()
+        }
     }
 
     fn borders_app(window: &FakeWindow, store: &MemorySettings) -> App<NoImages, BordersScreen> {
         let screen = BordersScreen {
             save: None,
             prefs: None,
+            bindings: None,
         };
         App::new(window, NoImages, screen).with_settings(keeper(store))
     }
@@ -3173,6 +3192,42 @@ mod tests {
             "a later Preferences change keeps it"
         );
         assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_keys_screen_s_bindings_are_saved_with_the_other_settings_kept() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::holding(r#"{"music": false, "show_map_borders": false}"#);
+        let mut app = borders_app(&window, &store);
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 0, "none reported, none written");
+        app.screen.bindings = Some(nova_view::Bindings::default().rebound(
+            nova_view::keymap::FlightCommand::Accelerate,
+            nova_view::KeyCombo::key(Key::KeyT),
+        ));
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 1);
+        let saved = saved_json(&store);
+        assert_eq!(saved["bindings"]["keyboard"]["Flight.Accelerate"], "KeyT");
+        assert_eq!(saved["music"], false, "kept");
+        assert_eq!(saved["show_map_borders"], false, "kept");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_bindings_save_is_a_warning() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = borders_app(&window, &store);
+        store.fail_writes(true);
+        app.screen.bindings =
+            Some(nova_view::Bindings::default().unbound(nova_view::keymap::FlightCommand::Board));
+        app.handle(key(Key::Space, true), &mut window, &mut RecordingGpu::new());
+        assert_eq!(
+            app.take_warnings(),
+            ["nova: cannot save the settings: the disk is full".to_owned()]
+        );
     }
 
     #[test]

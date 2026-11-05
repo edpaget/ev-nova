@@ -156,7 +156,7 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova::app::LoopEvent;
-use nova::app::start_screen;
+use nova::app::{AppScreen, start_screen};
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
 use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
@@ -164,7 +164,9 @@ use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::movie::{movie_folders, movie_player};
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
-use nova::platform::{Dialogs, Runner, event_loop, system_keyboard_access};
+use nova::platform::{
+    Dialogs, Runner, event_loop, menu_key_equivalents, system_key_names, system_keyboard_access,
+};
 use nova::rulebook::eight_bit_reading;
 use nova::saves::FilePilots;
 use nova::startup::{
@@ -280,6 +282,17 @@ fn stderr_terminal() -> impl Terminal {
     nova::startup::StdTerminal
 }
 
+/// `screen` with what Preferences asks the platform: whether the player
+/// has turned on keyboard access to every control (its focus ring
+/// follows it), and, for the keys screen, the layout's key names and the
+/// menu bar's key equivalents, which it binds to nothing.
+fn with_platform(screen: AppScreen) -> AppScreen {
+    screen
+        .with_keyboard_access(system_keyboard_access())
+        .with_key_names(system_key_names())
+        .with_reserved_combos(menu_key_equivalents())
+}
+
 fn main() -> ExitCode {
     // First: on Windows nothing reaches a console before it is attached.
     let terminal = stderr_terminal();
@@ -356,10 +369,9 @@ fn main() -> ExitCode {
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
         .with_flight_overlays(overlays)
-        // Preferences' focus ring follows the system's full keyboard access.
-        .with_keyboard_access(system_keyboard_access())
         // Every disputed rule as the settings' rulebook chooses.
         .with_rulebook(&rulebook);
+    screen = with_platform(screen);
     let interface = open_interface_file(&dir, &mut report);
     if let Some(interface) = &interface {
         screen = screen.with_dialogs(Rc::<InterfaceData>::clone(interface), metrics);
