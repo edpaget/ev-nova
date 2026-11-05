@@ -571,6 +571,9 @@ impl Screen for DescDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{pad_probe, pad_probe_overflowing};
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
@@ -1536,6 +1539,66 @@ mod tests {
     /// Thirty lines in stock 3003's 262 high box: 98 is as far as they go.
     fn long_stock_desc() -> DescDialog {
         stock_desc(&("line\r".repeat(29) + "line"))
+    }
+
+    struct Probe(DescDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            let mut controls = vec![("Done", at(DONE_ITEM))];
+            if self
+                .0
+                .dialog()
+                .scroll_text()
+                .is_some_and(ScrollText::overflows)
+            {
+                controls.push(("Up", at(SCROLL_UP_ITEM)));
+                controls.push(("Down", at(SCROLL_DOWN_ITEM)));
+            }
+            controls
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}, at {}", self.0.closed(), self.0.scroll_offset())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// A short description's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(stock_desc("A short text.")))
+    }
+
+    /// An overflowing description's row, its arrows shown.
+    pub(crate) fn pad_probe_overflowing() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(long_stock_desc()))
+    }
+
+    #[test]
+    fn the_right_stick_pages_a_desc_text_as_page_up_and_down_do() {
+        let pad = |button, pressed| Input::PadButton { button, pressed };
+        let mut keyed = long_desc();
+        keyed.input(&key(Key::PageDown));
+        let mut padded = long_desc();
+        padded.input(&pad(crate::input::PadButton::RightStickDown, true));
+        padded.input(&pad(crate::input::PadButton::RightStickDown, false));
+        assert_eq!(padded.scroll_offset(), PAGE_UNITS);
+        assert_eq!(padded.scroll_offset(), keyed.scroll_offset());
+        padded.input(&pad(crate::input::PadButton::RightStickUp, true));
+        assert_eq!(padded.scroll_offset(), 0.0);
     }
 
     const TICK: Duration = Duration::from_nanos(16_666_666);

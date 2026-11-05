@@ -161,6 +161,9 @@ impl Screen for NoteDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
@@ -211,6 +214,41 @@ mod tests {
         template.items[0].kind = ItemSpec::User;
         template.items[2].kind = ItemSpec::User;
         template
+    }
+
+    struct Probe(NoteDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            vec![("OK", self.0.dialog().item_bounds(OK_ITEM).expect("OK"))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.closed())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The note's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(NoteDialog::new(
+            &template(),
+            "A note.",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )))
     }
 
     fn note(template: &DialogTemplate) -> NoteDialog {

@@ -97,6 +97,7 @@ use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
     STOCK_WORD, TextBacking, outline,
 };
+use super::pad_focus::from_pad;
 use super::prefs::{BACKDROP, BORDER};
 
 /// The comm dialog's `DLOG` (and `DITL`) ID.
@@ -698,11 +699,21 @@ fn smeared(list: &mut DrawList, text: &str, origin: Point, color: Color) {
 }
 
 impl Screen for CommDialog {
-    /// A key press (not a repeat) that is a press is one; every other
+    /// A key press (not a repeat) that is a press is one, and so is a pad
+    /// button's press of Confirm, Back or Close (East closes the channel),
+    /// though a pad button never reads as a hail letter; every other
     /// event goes to the dialog, and a button activated is its press. It
     /// never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         let command = self.reader.follow(input);
+        if from_pad(input)
+            && let Some(press) = command
+                .filter(|command| command.pressed)
+                .and_then(|command| Self::command_press(command.command))
+        {
+            self.press = Some(press);
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key,
             pressed: true,
@@ -962,6 +973,9 @@ impl Screen for HaggleDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{comm_pad_probe, haggle_pad_probe};
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::{EscortStatus, HailButton, NpcId};
@@ -1053,6 +1067,100 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Bounds {
         Bounds::at(Point::new(x, y), 166.0, 26.0)
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    #[test]
+    fn east_closes_the_channel_as_escape_does() {
+        let mut escaped = dialog(&view());
+        escaped.input(&key(Key::Escape));
+        let mut padded = dialog(&view());
+        padded.input(&pad(crate::input::PadButton::East, true));
+        assert_eq!(padded.take_press(), Some(CommPress::Close));
+        assert_eq!(escaped.take_press(), Some(CommPress::Close));
+        padded.input(&pad(crate::input::PadButton::East, false));
+        assert_eq!(padded.take_press(), None, "the release presses nothing");
+    }
+
+    #[test]
+    fn a_pad_press_never_reads_as_a_hail_letter() {
+        // Greetings' letter is G; no pad button types a letter, and the
+        // pad's South presses the focused button, not a letter's option.
+        let mut dialog = dialog(&view());
+        for button in [
+            crate::input::PadButton::North,
+            crate::input::PadButton::West,
+            crate::input::PadButton::LeftTrigger,
+        ] {
+            dialog.input(&pad(button, true));
+            dialog.input(&pad(button, false));
+            assert_eq!(dialog.take_press(), None, "{button:?}");
+        }
+    }
+
+    struct CommProbe(CommDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for CommProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![
+                ("Greetings", at(FIRST_ITEM)),
+                ("Request Assistance", at(MIDDLE_ITEM)),
+                ("Close Channel", at(CLOSE_ITEM)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_press())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            None
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The comm dialog's row in the pad's every-screen table.
+    pub(crate) fn comm_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(CommProbe(dialog(&view())))
+    }
+
+    struct HaggleProbe(HaggleDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for HaggleProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![("Accept", at(ACCEPT_ITEM)), ("Lower", at(LOWER_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_choice())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The haggle dialog's row in the pad's every-screen table.
+    pub(crate) fn haggle_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(HaggleProbe(haggle(1_000)))
     }
 
     #[test]

@@ -153,6 +153,9 @@ impl Screen for YesNoDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
@@ -199,6 +202,37 @@ mod tests {
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
+    }
+
+    struct Probe(YesNoDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![("OK", at(YES_ITEM)), ("Cancel", at(NO_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("answer {:?}", self.0.take_answer())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The Yes/No dialog's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(asking()))
     }
 
     fn key(key: Key) -> Input {

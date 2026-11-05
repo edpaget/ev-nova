@@ -54,6 +54,9 @@
 //!   dialog"): sound and music on or off, and their volumes.
 //! - [`keys`]: the keys screen ([`KeysScreen`]) Preferences' Key
 //!   Settings opens: every command's key, recorded, cleared or restored.
+//! - `pad_focus`: the pad's focus: the directional picker over a
+//!   screen's controls, the one focus a screen keeps for the pad and the
+//!   keyboard, and the pad's highlight.
 //! - [`mission_info`]: the key that asks for the mission info screen,
 //!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
@@ -97,6 +100,7 @@ pub mod mode_picker;
 pub mod new_pilot;
 pub mod note;
 mod own_keys;
+pub(crate) mod pad_focus;
 pub mod picker;
 pub mod picture_variant;
 pub mod planet_comm;

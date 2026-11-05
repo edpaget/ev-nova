@@ -32,6 +32,18 @@
 //! [`TradeScreen`](crate::spaceport::trade::TradeScreen),
 //! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)
 //! and [`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen)).
+//!
+//! # Pad focus
+//!
+//! A pad moves the same focus (the `pad` child module): the d-pad picks
+//! the nearest item that way and the shoulders step it in item order,
+//! under either [`FocusRing`] reading; South presses the focused item as a
+//! click does, on its release; East does what Escape does. The pad's
+//! highlight, a two-unit ring outside the item, shows only while the pad
+//! was the device used last ([`Input::Surroundings`]), and the keyboard's
+//! outline only a focus the keyboard placed, so a keyboard-only session
+//! draws what it always did. The original has no focus here, so this is a
+//! new feature with no `Rulebook` key.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -49,9 +61,12 @@ use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::held_keys::HeldKeys;
+use super::pad_focus::FocusState;
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
+
+mod pad;
 
 /// The logical screen dialogs are placed on: Nova's 1024 x 768.
 pub const SCREEN: (f32, f32) = (1024.0, 768.0);
@@ -361,6 +376,9 @@ struct Item {
     /// clicks and keys, but draws nothing and takes no focus
     /// ([`Dialog::set_drawn`]).
     drawn: bool,
+    /// Whether the template makes it a user item: a role-less one is a
+    /// click area, which the pad's focus can rest on.
+    user: bool,
     widget: Widget,
 }
 
@@ -420,8 +438,9 @@ pub struct Dialog {
     metrics: Rc<dyn TextMetrics>,
     default_item: Option<usize>,
     cancel_item: Option<usize>,
-    /// The focused button's index in `items`.
-    focus: Option<usize>,
+    /// The focused item's number (from 1), and who placed it: the
+    /// keyboard's Tab, or the pad (the `pad` module).
+    focus: FocusState<usize>,
     /// Whether Tab and Space move and press a focus.
     focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
@@ -431,6 +450,9 @@ pub struct Dialog {
     held: Option<usize>,
     /// The press held on a scroll arrow, if any.
     hold: Option<ArrowHold>,
+    /// Whether that press is the pad's South, which only South's release
+    /// ends (the `pad` module).
+    pad_hold: bool,
     /// The keys held back while a press is held, when the dialog holds
     /// them ([`Dialog::with_held_keys`]); none when keys act at once.
     /// Boxed, as most dialogs leave it out.
@@ -445,7 +467,7 @@ impl std::fmt::Debug for Dialog {
         f.debug_struct("Dialog")
             .field("bounds", &self.bounds)
             .field("items", &self.items)
-            .field("focus", &self.focus)
+            .field("focus", &self.focus.get())
             .finish_non_exhaustive()
     }
 }
@@ -507,6 +529,7 @@ impl Dialog {
                     template_enabled,
                     shown,
                     drawn: true,
+                    user: item.kind == ItemSpec::User,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
                 }
             })
@@ -520,12 +543,13 @@ impl Dialog {
             metrics,
             default_item: Some(1),
             cancel_item: None,
-            focus: None,
+            focus: FocusState::default(),
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
             held: None,
             hold: None,
+            pad_hold: false,
             held_keys: None,
             keys: CommandReader::new(contexts::DIALOG),
         }
@@ -586,11 +610,12 @@ impl Dialog {
     }
 
     /// Makes the buttons take the keyboard focus as `ring` says. Turning
-    /// the ring off drops any focus.
+    /// the ring off drops the keyboard's focus; the pad's stays, as the
+    /// pad keeps a focus under either reading.
     pub fn set_focus_ring(&mut self, ring: FocusRing) {
         self.focus_ring = ring;
-        if ring == FocusRing::Off {
-            self.focus = None;
+        if ring == FocusRing::Off && !self.focus.pad_moved() {
+            self.focus.set_by_keys(None);
         }
     }
 
@@ -773,10 +798,11 @@ impl Dialog {
         self.item(item).is_some_and(|item| item.shown)
     }
 
-    /// The focused button's item number (from 1), if any.
+    /// The focused item's number (from 1), if any, whether the keyboard
+    /// or the pad placed it.
     #[must_use]
     pub fn focus(&self) -> Option<usize> {
-        self.focus.map(|index| index + 1)
+        self.focus.get()
     }
 
     /// The first scrolling text, if any.
@@ -874,12 +900,19 @@ impl Dialog {
                 }
                 None
             }
+            Input::PadButton { .. } => self
+                .keys
+                .follow(input)
+                .and_then(|command| self.pad_command(command)),
+            Input::Surroundings(surroundings) => {
+                self.keys.follow(input);
+                self.surroundings(surroundings.device);
+                None
+            }
             Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
-            | Input::PadButton { .. }
-            | Input::PadAxis { .. }
-            | Input::Surroundings(_) => None,
+            | Input::PadAxis { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }
@@ -907,13 +940,23 @@ impl Dialog {
             _ if input.repeat => None,
             UiCommand::Confirm => self.activate(self.default_item),
             UiCommand::Back => self.activate(self.cancel_item),
-            UiCommand::Tab if self.focus_ring == FocusRing::Tab => {
+            // Under `FocusRing::Off` the keyboard keeps no focus: Tab,
+            // Activate and the pad's focus moves bound to keys do nothing,
+            // even over a focus the pad placed.
+            _ if self.focus_ring == FocusRing::Off => None,
+            UiCommand::Tab => {
                 self.focus_next();
                 None
             }
-            // Under `FocusRing::Off` nothing is ever focused, so Activate
-            // presses nothing.
-            UiCommand::Activate => self.activate(self.focus.map(|index| index + 1)),
+            UiCommand::Activate => self.activate(self.focus.get()),
+            UiCommand::FocusUp
+            | UiCommand::FocusDown
+            | UiCommand::FocusLeft
+            | UiCommand::FocusRight
+            | UiCommand::PrevFocus => {
+                self.keyed_focus_move(Command::Ui(command));
+                None
+            }
             _ => None,
         }
     }
@@ -924,13 +967,15 @@ impl Dialog {
     /// nothing would draw what the original never does.
     fn focus_next(&mut self) {
         let count = self.items.len();
-        let start = self.focus.map_or(0, |index| index + 1);
-        self.focus = (0..count)
+        // The focus is an item number, so it is the next one's index.
+        let start = self.focus.get().unwrap_or(0);
+        let next = (0..count)
             .map(|step| (start + step) % count)
             .find(|&index| {
                 let item = &self.items[index];
                 item.active() && item.drawn && item.is_button()
             });
+        self.focus.set_by_keys(next.map(|index| index + 1));
     }
 
     /// Picks the item under a press and tracks it. The pick and the
@@ -1113,6 +1158,7 @@ impl Dialog {
         self.tracker.cancel_pointer();
         self.tracked = None;
         self.hold = None;
+        self.pad_hold = false;
     }
 
     /// Draws the frame, if there is one, then each shown and drawn item in
@@ -1150,7 +1196,7 @@ impl Dialog {
                 Widget::Button(button) => {
                     let pressed = tracked || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
-                    if self.focus == Some(index) {
+                    if self.focus.keyboard_ring() == Some(index + 1) {
                         outline(list, item.bounds, self.style.up);
                     }
                 }
@@ -1177,6 +1223,7 @@ impl Dialog {
                 Widget::Blank => {}
             }
         }
+        self.draw_pad_highlight(list);
     }
 }
 
