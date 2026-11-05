@@ -129,3 +129,83 @@ fn the_pad_alone_moves_the_preferences_focus_flips_a_toggle_and_closes_it() {
         app.sent
     );
 }
+
+/// The pad alone in the spaceport: after landing, the pad's focus reaches
+/// the Trade Center, South opens it, East closes it, and East again takes
+/// off, through the router's telling the spaceport the device and the
+/// spaceport's telling the screen it opens. Over `trade`'s landed pilot.
+#[test]
+fn the_pad_alone_opens_a_service_closes_it_and_takes_off() {
+    use nova_sim::fixture::MemoryPilots;
+    use nova_view::spaceport::layout::SERVICE_ITEMS;
+    use nova_view::ui::dialog::Dialog;
+
+    let pads = FakeGamepads::new();
+    let store = MemoryPilots::new();
+    let mut game = crate::trade::Harness::landed_with_pads(&store, Box::new(pads.clone()));
+    let mut events = Vec::new();
+    let mut send = |game: &mut crate::trade::Harness, event: WindowEvent| {
+        events.push(event);
+        game.send(event);
+    };
+    let mut frame = |game: &mut crate::trade::Harness| {
+        game.frames += 1;
+        let elapsed = Duration::from_millis(16 * game.frames);
+        send(game, WindowEvent::Redraw { elapsed });
+    };
+    pads.push(vec![PadEvent::Connected(PAD)]);
+    frame(&mut game);
+    let mut tap = |game: &mut crate::trade::Harness, button: PadButton| {
+        for pressed in [true, false] {
+            pads.push(vec![PadEvent::Button {
+                pad: PAD,
+                button,
+                pressed,
+            }]);
+            frame(game);
+        }
+    };
+    let highlight = |game: &crate::trade::Harness| {
+        game.app
+            .screen()
+            .spaceport_view()
+            .and_then(|port| port.dialog())
+            .and_then(Dialog::pad_highlight)
+    };
+    // The Trade Center, the service this stellar offers.
+    let trade_center = SERVICE_ITEMS
+        .iter()
+        .find(|&&(service, _)| service == nova_sim::Service::TradeCenter)
+        .map(|&(_, item)| item);
+    let on_service = |item: Option<usize>| item.is_some() && item == trade_center;
+    let mut moves = 0;
+    while !on_service(highlight(&game)) {
+        assert!(
+            moves < 20,
+            "the pad reaches the Trade Center: {:?}",
+            highlight(&game)
+        );
+        tap(&mut game, PadButton::RightShoulder);
+        moves += 1;
+    }
+    let port = game.app.screen().spaceport_view().expect("landed");
+    assert_eq!(port.device(), Device::Gamepad(ControllerFamily::Generic));
+
+    let opened = |game: &crate::trade::Harness| {
+        let port = game.app.screen().spaceport_view().expect("landed");
+        port.open_trade().is_some()
+    };
+    tap(&mut game, PadButton::South);
+    assert!(opened(&game), "South opens the Trade Center");
+    tap(&mut game, PadButton::East);
+    assert!(!opened(&game), "East closes it");
+    assert_eq!(game.showing(), Showing::Spaceport);
+    tap(&mut game, PadButton::East);
+    assert_eq!(game.showing(), Showing::Flight, "East again takes off");
+    assert!(
+        events
+            .iter()
+            .all(|event| matches!(event, WindowEvent::Redraw { .. })),
+        "no key or pointer event after landing: {events:?}"
+    );
+}

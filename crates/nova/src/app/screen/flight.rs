@@ -9,6 +9,8 @@ use nova_sim::flight_frame::LoadedDesc;
 use nova_sim::{PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::FlightView;
+use nova_view::input::Input;
+use nova_view::screen::Screen;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::{BAR_DIALOG, BarTemplates, PICTURE_BAR_DIALOG};
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
@@ -134,6 +136,9 @@ impl AppScreen {
         if let Some(flight) = &self.flight {
             spaceport.set_recharge_enabled(flight.recharge_enabled());
         }
+        // Told the device used last before its first frame, as the app
+        // tells it only when the device changes.
+        spaceport.input(&Input::Surroundings(self.surroundings));
         self.drop_spaceport();
         self.spaceport = Some(spaceport);
         self.serve_descriptions();

@@ -105,3 +105,61 @@ fn an_overlay_a_tick_opens_is_told_the_surroundings() {
     assert_eq!(text.device(), PAD);
     assert!(text.pad_highlight().is_some());
 }
+
+#[test]
+fn the_spaceport_follows_the_surroundings() {
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    assert_eq!(spaceport(&screen).device(), Device::Keyboard);
+    screen.input(&told(PAD));
+    assert_eq!(spaceport(&screen).device(), PAD);
+    screen.input(&told(Device::Mouse));
+    assert_eq!(spaceport(&screen).device(), Device::Mouse);
+}
+
+#[test]
+fn a_spaceport_landed_on_after_the_pad_was_used_is_told_as_it_opens() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&told(PAD));
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    assert_eq!(spaceport(&screen).device(), PAD);
+}
+
+#[test]
+fn a_spaceport_under_another_screen_is_still_told() {
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    screen.menu_command(MenuCommand::Preferences);
+    assert_eq!(screen.showing(), Showing::Preferences);
+    screen.input(&told(PAD));
+    assert_eq!(spaceport(&screen).device(), PAD);
+}
+
+/// South fires the primary weapon in flight. Pressed there and held
+/// through the landing, its release at the spaceport takes nothing off,
+/// and nor does anything replayed for it; only a fresh South on Leave,
+/// where the pad's focus starts, does.
+#[test]
+fn a_south_held_through_the_landing_takes_off_only_when_pressed_again() {
+    use nova_view::PadButton;
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&told(PAD));
+    screen.input(&pad(PadButton::South, true));
+    screen.tick(TICK);
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    screen.tick(TICK * 5);
+    assert_eq!(screen.showing(), Showing::Spaceport, "held: no take-off");
+    screen.input(&pad(PadButton::South, false));
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Spaceport, "released: none");
+    let port = spaceport(&screen).dialog().expect("laid out");
+    assert_eq!(port.pad_highlight(), Some(LEAVE_ITEM), "the focus shows");
+    screen.input(&pad(PadButton::South, true));
+    assert_eq!(screen.showing(), Showing::Spaceport, "a press arms Leave");
+    screen.input(&pad(PadButton::South, false));
+    assert_eq!(screen.showing(), Showing::Flight, "its release takes off");
+}
