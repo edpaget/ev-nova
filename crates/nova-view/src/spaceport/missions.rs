@@ -111,19 +111,20 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::MapOpener;
-use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{
+    Command, CommandInput, CommandReader, MissionComputerCommand, PlayCommand, SharedBindings,
+    UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
-use crate::ui::mission_info::is_mission_info_press;
-use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::{BarRoom, ListPress, RowList};
 
 /// The mission computer's `DLOG` (and `DITL`) ID.
@@ -170,14 +171,19 @@ const NO_LIST: Bounds = Bounds {
     max: Point::new(0.0, 0.0),
 };
 
-/// The keys that leave the mission computer, besides Leave: Return (and
-/// Enter), Escape and L (`_MissionFilter` @0x9f885-0x9f8af, @0xa0212).
-pub const LEAVE_KEYS: [Key; 4] = [Key::Enter, Key::NumpadEnter, Key::Escape, Key::KeyL];
-
-/// The key that accepts the selected offer: A (key code 0x00), on a
-/// press only, giving Accept when a row is selected and nothing otherwise
-/// (`_MissionFilter` @0x9f8b4-0x9f8c7, @0xa0201).
-pub const ACCEPT_KEY: Key = Key::KeyA;
+/// Whether `command`, a fresh press, leaves the mission computer, as
+/// Leave does: Confirm (Return, and Enter its twin), Back (Escape) and
+/// the computer's own Leave (L), as `_MissionFilter` reads them
+/// (@0x9f885-0x9f8af, @0xa0212). The computer's Accept (A, key code 0x00)
+/// accepts the selected offer on a press only, giving Accept when a row
+/// is selected and nothing otherwise (@0x9f8b4-0x9f8c7, @0xa0201).
+fn leaves(command: Command) -> bool {
+    matches!(
+        command,
+        Command::Ui(UiCommand::Confirm | UiCommand::Back)
+            | Command::MissionComputer(MissionComputerCommand::Leave)
+    )
+}
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
 #[derive(Clone)]
@@ -225,28 +231,30 @@ fn list_pointer(
     (held || items.iter().any(|&item| on_list(dialog, item, input))).then(|| rows.input(input))
 }
 
-/// Which way `input` steps a mission list, forward (`true`) or back, if it
-/// does, with the dialog's focus ring `ring`. `_MissionFilter` steps on
+/// Which way `command`, what an input meant, steps a mission list,
+/// forward (`true`) or back, if it does, with the dialog's focus ring
+/// `ring`: the shared Tab, Down and Up. `_MissionFilter` steps on
 /// Tab (@0x9f8cc), Down (@0x9faf2) and Up (@0x9fce3), and
 /// `_MissionInfoFilter` on Tab and Down (@0x9d778) and Up (@0x9d9ac), each
 /// wrapping at the ends, and neither tests Shift. Tab steps only under the
 /// engine reading, where the focus ring doesn't take it, and on a press
 /// only, though the original steps on autoKey too; the arrows keep their
 /// repeats.
-fn list_step(ring: FocusRing, input: &Input) -> Option<bool> {
-    match *input {
-        Input::Key {
-            key: Key::Tab,
-            pressed: true,
-            repeat: false,
-        } if ring == FocusRing::Off => Some(true),
-        Input::Key {
-            key: key @ (Key::ArrowUp | Key::ArrowDown),
-            pressed: true,
-            ..
-        } => Some(key == Key::ArrowDown),
+fn list_step(ring: FocusRing, command: Option<CommandInput>) -> Option<bool> {
+    let command = command.filter(|command| command.pressed)?;
+    match command.command {
+        Command::Ui(UiCommand::Tab) if ring == FocusRing::Off && !command.repeat => Some(true),
+        Command::Ui(UiCommand::Up) => Some(false),
+        Command::Ui(UiCommand::Down) => Some(true),
         _ => None,
     }
+}
+
+/// `command`'s command when it is a fresh press, not a repeat or release.
+fn fresh(command: Option<CommandInput>) -> Option<Command> {
+    command
+        .filter(|command| command.pressed && !command.repeat)
+        .map(|command| command.command)
 }
 
 /// The mission computer, laid out.
@@ -277,6 +285,8 @@ pub struct MissionComputerScreen {
     /// taken.
     text_request: Option<MissionId>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::MISSION_COMPUTER`]).
+    keys: CommandReader,
 }
 
 impl MissionComputerScreen {
@@ -345,6 +355,7 @@ impl MissionComputerScreen {
             map_request: None,
             text_request: None,
             closed: false,
+            keys: CommandReader::new(contexts::MISSION_COMPUTER),
         };
         screen.set_computer(computer);
         screen
@@ -357,6 +368,17 @@ impl MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_focus_ring(ring);
         }
+        self
+    }
+
+    /// The mission computer reading its keys through `bindings`, its
+    /// dialog's too.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
         self
     }
 
@@ -523,41 +545,34 @@ impl Screen for MissionComputerScreen {
     /// list selects a row; everything else goes to the dialog. It never
     /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && LEAVE_KEYS.contains(&key)
-        {
-            self.closed = true;
-            return ScreenAction::None;
-        }
-        if is_map_press(input) {
-            self.map_request = Some(MapOpener::Computer(self.selected_mission()));
-            return ScreenAction::None;
-        }
-        if is_mission_info_press(input) {
-            self.info_requested = true;
-            return ScreenAction::None;
-        }
-        if is_player_info_press(input) {
-            self.player_info_requested = true;
-            return ScreenAction::None;
+        let command = self.keys.follow(input);
+        match fresh(command) {
+            Some(leave) if leaves(leave) => {
+                self.closed = true;
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
+                self.map_request = Some(MapOpener::Computer(self.selected_mission()));
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
+                self.info_requested = true;
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
+                self.player_info_requested = true;
+                return ScreenAction::None;
+            }
+            _ => {}
         }
         let Ok(laid) = &mut self.laid else {
             return ScreenAction::None;
         };
-        if let Input::Key {
-            key: ACCEPT_KEY,
-            pressed: true,
-            repeat: false,
-        } = *input
-        {
+        if fresh(command) == Some(Command::MissionComputer(MissionComputerCommand::Accept)) {
             self.accepted = self.selected_mission();
             return ScreenAction::None;
         }
-        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
+        if let Some(forward) = list_step(laid.dialog.focus_ring(), command) {
             if laid.rows.step_wrapping(forward) {
                 self.show_selected();
             }
@@ -589,6 +604,11 @@ impl Screen for MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
         }
+    }
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -687,6 +707,8 @@ pub struct MissionInfoScreen {
     /// the selected slot, until it is taken.
     map_request: Option<MapOpener>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::MISSION_INFO`]).
+    keys: CommandReader,
     sounds: Vec<Sound>,
 }
 
@@ -737,6 +759,7 @@ impl MissionInfoScreen {
             map_allowed: true,
             map_request: None,
             closed: false,
+            keys: CommandReader::new(contexts::MISSION_INFO),
             sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
         };
         screen.set_info(info);
@@ -751,6 +774,23 @@ impl MissionInfoScreen {
             laid.dialog.set_focus_ring(ring);
         }
         self
+    }
+
+    /// The mission info screen reading its keys through `bindings`
+    /// ([`MissionInfoScreen::set_bindings`]).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its keys, its dialog's too, through `bindings` from the next
+    /// input on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
     }
 
     /// The dialog, if it could be laid out.
@@ -921,7 +961,8 @@ impl Screen for MissionInfoScreen {
     /// list selects a row; everything else goes to the dialog. It never
     /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if is_map_press(input) {
+        let command = self.keys.follow(input);
+        if fresh(command) == Some(Command::Play(PlayCommand::GalaxyMap)) {
             if self.map_allowed {
                 self.map_request = Some(MapOpener::MissionInfo(
                     self.selected_row().map(|row| row.slot),
@@ -930,21 +971,19 @@ impl Screen for MissionInfoScreen {
             return ScreenAction::None;
         }
         let Ok(laid) = &mut self.laid else {
-            if let Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
+            if matches!(
+                fresh(command),
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            ) {
                 self.close();
             }
             return ScreenAction::None;
         };
-        if is_mission_info_press(input) {
+        if fresh(command) == Some(Command::Play(PlayCommand::MissionInfo)) {
             self.close();
             return ScreenAction::None;
         }
-        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
+        if let Some(forward) = list_step(laid.dialog.focus_ring(), command) {
             if laid.rows.step_wrapping(forward) {
                 self.show_selected();
             }
@@ -969,6 +1008,11 @@ impl Screen for MissionInfoScreen {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
         }
+    }
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1012,8 +1056,16 @@ impl Screen for MissionInfoScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::input::Key;
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
+
+    /// The keys that leave the mission computer by default, besides
+    /// Leave: Confirm's Return and its twin Enter, Back's Escape and the
+    /// computer's Leave, L.
+    const LEAVE_KEYS: [Key; 4] = [Key::Enter, Key::NumpadEnter, Key::Escape, Key::KeyL];
+    /// The computer's Accept by default: A.
+    const ACCEPT_KEY: Key = Key::KeyA;
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
@@ -1520,6 +1572,29 @@ mod tests {
         assert_eq!(screen.dialog().and_then(Dialog::focus), Some(ACCEPT_ITEM));
         screen.input(&key(Key::Space));
         assert_eq!(screen.take_accept(), Some(MissionId(130)));
+    }
+
+    /// The mission computer reads its keys through the key map it is
+    /// given: Accept rebound to Q accepts on Q and no longer on A, and
+    /// Leave rebound to X leaves on X and no longer on L.
+    #[test]
+    fn a_rebound_accept_and_leave_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, MissionComputerCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(MissionComputerCommand::Accept, KeyCombo::key(Key::KeyQ))
+                .rebound(MissionComputerCommand::Leave, KeyCombo::key(Key::KeyX)),
+        );
+        let mut screen = screen().with_bindings(bindings);
+        screen.input(&key(Key::ArrowDown));
+        screen.input(&key(Key::KeyA));
+        assert_eq!(screen.take_accept(), None, "A no longer accepts");
+        screen.input(&key(Key::KeyQ));
+        assert_eq!(screen.take_accept(), Some(MissionId(131)));
+        screen.input(&key(Key::KeyL));
+        assert!(!screen.closed(), "L no longer leaves");
+        screen.input(&key(Key::KeyX));
+        assert!(screen.closed());
     }
 
     #[test]
@@ -2672,6 +2747,21 @@ mod tests {
                 assert_eq!(screen.take_sounds(), [], "{k:?} ({ring:?})");
             }
         }
+    }
+
+    /// The mission info screen reads its keys through the key map it is
+    /// given: Mission Info rebound to Q closes it on Q and no longer on I.
+    #[test]
+    fn a_rebound_mission_info_key_closes_it_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = info_screen().with_bindings(bindings);
+        screen.input(&key(Key::KeyI));
+        assert!(!screen.closed(), "I no longer closes it");
+        screen.input(&key(Key::KeyQ));
+        assert!(screen.closed());
     }
 
     /// `_MissionInfoFilter` gives Done for the key that opens the screen

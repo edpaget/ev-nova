@@ -199,6 +199,9 @@ impl MissionDialogs {
                 dialog.set_bindings(bindings.clone());
             }
         }
+        if let Some(screen) = &mut self.info {
+            screen.set_bindings(bindings.clone());
+        }
         self.bindings = bindings;
         self
     }
@@ -500,7 +503,8 @@ impl MissionDialogs {
             .map(|template| (template, Rc::clone(&self.metrics)));
         let mut screen = MissionInfoScreen::new(layout, info, self.style)
             .with_map_allowed(map_allowed)
-            .with_focus_ring(self.focus_ring);
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.bindings.clone());
         self.sounds.extend(screen.take_sounds());
         self.info = Some(screen);
     }
@@ -1305,6 +1309,22 @@ mod tests {
             .lines()
             .join(" ");
         assert_eq!(text, "Loaded.");
+    }
+
+    /// The info screen opened after the dialogs are given their bindings
+    /// reads them: Mission Info rebound to Q closes it on Q, not on I.
+    #[test]
+    fn the_info_screen_reads_the_bindings_the_dialogs_were_given() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut dialogs = dialogs().with_bindings(bindings);
+        dialogs.open_info(info());
+        dialogs.input(&key(Key::KeyI));
+        assert!(dialogs.info().is_some(), "I no longer closes it");
+        dialogs.input(&key(Key::KeyQ));
+        assert!(dialogs.take_info_closed_laid_out(), "Q closes it");
     }
 
     #[test]
