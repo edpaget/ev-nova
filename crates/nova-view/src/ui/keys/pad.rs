@@ -33,7 +33,7 @@ use crate::input::{Device, Input};
 use crate::keymap::{Command, CommandInput, CommandReader, UiCommand};
 
 use super::super::dialog::outline;
-use super::super::pad_focus::{self, FocusMove, Target};
+use super::super::pad_focus::{self, PadRead, Target};
 use super::{KeysButton, KeysFocus, KeysScreen};
 
 impl KeysScreen {
@@ -86,19 +86,15 @@ impl KeysScreen {
             }
             return;
         }
-        if self.focus.pad_holds_back(input) {
-            return;
-        }
-        if let Some(mv) = FocusMove::of(input.command) {
-            if input.pressed {
+        match self.focus.read_pad(input) {
+            PadRead::Nothing => return,
+            PadRead::Move(mv) => {
                 self.drop_pad_press();
-                if let Some(next) =
-                    pad_focus::step(&self.pad_targets(), self.focus.get(), KeysFocus::List, mv)
-                {
-                    self.focus.set_by_pad(next);
-                }
+                self.focus
+                    .move_by_pad(&self.pad_targets(), KeysFocus::List, mv);
+                return;
             }
-            return;
+            PadRead::Press | PadRead::Release | PadRead::Other => {}
         }
         match (command, input.pressed) {
             (UiCommand::Up | UiCommand::Down, true) => {

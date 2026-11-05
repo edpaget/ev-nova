@@ -24,9 +24,9 @@
 
 use crate::draw::DrawList;
 use crate::input::{Device, Input, Surroundings};
-use crate::keymap::{Command, CommandInput, UiCommand};
+use crate::keymap::CommandInput;
 
-use super::super::pad_focus::{self, FocusMove, Target};
+use super::super::pad_focus::{self, FocusMove, PadRead, Target};
 use super::{PlayerInfoButton, PlayerInfoScreen};
 
 impl PlayerInfoScreen {
@@ -73,40 +73,37 @@ impl PlayerInfoScreen {
         let Some(command) = command else {
             return false;
         };
-        let direction = match FocusMove::of(command.command) {
-            Some(FocusMove::Toward(direction)) => Some(direction),
-            _ => None,
-        };
-        if direction.is_none() && command.command != Command::Ui(UiCommand::Activate) {
+        // The shoulders flip tabs here, as the screen's keys say.
+        if matches!(
+            FocusMove::of(command.command),
+            Some(FocusMove::Next | FocusMove::Previous)
+        ) {
             return false;
         }
-        if self.focus.pad_holds_back(command) {
-            return true;
-        }
-        if let Some(direction) = direction {
-            if command.pressed {
+        match self.focus.read_pad(command) {
+            PadRead::Other => false,
+            PadRead::Nothing => true,
+            PadRead::Move(mv) => {
                 self.drop_pad_press();
-                if let Some(next) = pad_focus::step(
-                    &self.pad_targets(),
-                    self.focus.get(),
-                    PlayerInfoButton::Done,
-                    FocusMove::Toward(direction),
-                ) {
-                    self.focus.set_by_pad(next);
-                }
+                self.focus
+                    .move_by_pad(&self.pad_targets(), PlayerInfoButton::Done, mv);
+                true
             }
-            return true;
+            PadRead::Press => {
+                self.press_focused();
+                true
+            }
+            PadRead::Release => {
+                if let Some(which) = self.tracked
+                    && self.tracker.release_keyed()
+                {
+                    let _ = self.tracker.take_sound();
+                    self.tracked = None;
+                    self.choose(which);
+                }
+                true
+            }
         }
-        if command.pressed {
-            self.press_focused();
-        } else if let Some(which) = self.tracked
-            && self.tracker.release_keyed()
-        {
-            let _ = self.tracker.take_sound();
-            self.tracked = None;
-            self.choose(which);
-        }
-        true
     }
 
     /// South went down: arms the focused button, drawn pressed.

@@ -37,9 +37,12 @@
 
 use crate::draw::DrawList;
 use crate::input::{Device, Input, Surroundings};
-use crate::keymap::{Command, CommandInput, UiCommand};
+use crate::keymap::{Command, CommandInput};
+// The tests name commands through `super::*`.
+#[cfg(test)]
+use crate::keymap::UiCommand;
 
-use super::super::pad_focus::{self, FocusMove, Target};
+use super::super::pad_focus::{self, FocusMove, PadRead, Target};
 use super::super::scroll_arrows::ArrowHold;
 use super::{Dialog, DialogEvent, FocusRing, Widget};
 
@@ -138,41 +141,31 @@ impl Dialog {
 
     /// Acts on what a pad button meant: see the module docs.
     pub(super) fn pad_command(&mut self, input: CommandInput) -> Option<DialogEvent> {
-        if self.focus.pad_holds_back(input) {
-            return None;
-        }
-        if let Some(mv) = FocusMove::of(input.command) {
-            if input.pressed {
+        match self.focus.read_pad(input) {
+            PadRead::Nothing => None,
+            PadRead::Move(mv) => {
                 self.drop_pad_press();
-                if let Some(next) = self.stepped(mv) {
-                    self.focus.set_by_pad(next);
+                if let Some(initial) = self.initial_target() {
+                    self.focus.move_by_pad(&self.pad_targets(), initial, mv);
                 }
+                None
             }
-            return None;
-        }
-        if input.command == Command::Ui(UiCommand::Activate) {
-            if input.pressed {
+            PadRead::Press => {
                 self.press_focused();
-                return None;
+                None
             }
-            return self.release_item_keyed();
+            PadRead::Release => self.release_item_keyed(),
+            PadRead::Other => self.command(input),
         }
-        self.command(input)
     }
 
     /// A focus move a key is bound to, under [`FocusRing::Tab`]: it moves
     /// the one focus as the pad's would, as the keyboard's.
     pub(super) fn keyed_focus_move(&mut self, command: Command) {
         debug_assert_eq!(self.focus_ring, FocusRing::Tab);
-        if let Some(next) = FocusMove::of(command).and_then(|mv| self.stepped(mv)) {
-            self.focus.set_by_keys(Some(next));
+        if let (Some(mv), Some(initial)) = (FocusMove::of(command), self.initial_target()) {
+            self.focus.move_by_keys(&self.pad_targets(), initial, mv);
         }
-    }
-
-    /// Where `mv` takes the focus.
-    fn stepped(&self, mv: FocusMove) -> Option<usize> {
-        let initial = self.initial_target()?;
-        pad_focus::step(&self.pad_targets(), self.focus.get(), initial, mv)
     }
 
     /// South went down: presses the focused item as a left press on it

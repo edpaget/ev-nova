@@ -43,6 +43,11 @@
 //! - A new screen lists its targets in its own module (a `pad` child
 //!   module where its file is large), with the initial target the pad's
 //!   focus starts on, and keeps its focus in a [`FocusState`].
+//! - It reads its pad commands through [`FocusState::read_pad`], which
+//!   keeps the hold-back rule above in one place, and moves its focus with
+//!   [`FocusState::move_by_pad`] (and a key's focus move with
+//!   [`FocusState::move_by_keys`]). What South presses, and dropping a
+//!   held press when the focus moves, stay the screen's own.
 //! - A layout whose geometry leads the picker astray adds explicit
 //!   neighbours ([`Target::with_neighbour`]) in that screen's module, and
 //!   says so in its docs.
@@ -120,6 +125,23 @@ impl FocusMove {
             _ => None,
         }
     }
+}
+
+/// What a pad command means to a screen with a pad focus
+/// ([`FocusState::read_pad`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PadRead {
+    /// Nothing: a press held back while the pad's focus can't show, or a
+    /// focus move's release.
+    Nothing,
+    /// A focus move's press.
+    Move(FocusMove),
+    /// South went down.
+    Press,
+    /// South came up.
+    Release,
+    /// Anything else, for the screen to act on as its key's.
+    Other,
 }
 
 /// One control the focus can rest on.
@@ -334,6 +356,50 @@ impl<T: Copy + Eq> FocusState<T> {
             && !self.pad_shown()
             && (FocusMove::of(input.command).is_some()
                 || input.command == Command::Ui(UiCommand::Activate))
+    }
+
+    /// What the pad's command `input` means to a screen with this focus,
+    /// under the module docs' "Nothing hidden acts": a held-back press, or
+    /// a focus move's release, is [`PadRead::Nothing`].
+    #[must_use]
+    pub fn read_pad(&self, input: CommandInput) -> PadRead {
+        if self.pad_holds_back(input) {
+            return PadRead::Nothing;
+        }
+        if let Some(mv) = FocusMove::of(input.command) {
+            return if input.pressed {
+                PadRead::Move(mv)
+            } else {
+                PadRead::Nothing
+            };
+        }
+        if input.command == Command::Ui(UiCommand::Activate) {
+            return if input.pressed {
+                PadRead::Press
+            } else {
+                PadRead::Release
+            };
+        }
+        PadRead::Other
+    }
+
+    /// Moves the focus where `mv` takes it among `targets` ([`step`], from
+    /// `initial` with nothing focused), as the pad's. Whether a target was
+    /// set: `false` only when there is none.
+    pub fn move_by_pad(&mut self, targets: &[Target<T>], initial: T, mv: FocusMove) -> bool {
+        step(targets, self.focus, initial, mv).is_some_and(|next| {
+            self.set_by_pad(next);
+            true
+        })
+    }
+
+    /// The same as [`FocusState::move_by_pad`], as the keyboard's: a focus
+    /// move a key is bound to under the Tab focus ring.
+    pub fn move_by_keys(&mut self, targets: &[Target<T>], initial: T, mv: FocusMove) -> bool {
+        step(targets, self.focus, initial, mv).is_some_and(|next| {
+            self.set_by_keys(Some(next));
+            true
+        })
     }
 
     /// The keyboard (or the screen itself) sets the focus.

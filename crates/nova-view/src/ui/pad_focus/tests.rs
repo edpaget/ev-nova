@@ -477,3 +477,103 @@ fn beyond_is_strict_each_way() {
     assert!(beyond(a, rect(40.0, 90.0, 1.0, 1.0), Direction::Down));
     assert!(beyond(a, rect(40.0, 10.0, 1.0, 1.0), Direction::Up));
 }
+
+#[test]
+fn an_untold_screen_reads_a_pads_move_or_south_as_nothing_and_the_rest_as_their_own() {
+    let state = FocusState::<u8>::default();
+    for command in [UiCommand::FocusUp, UiCommand::Tab, UiCommand::Activate] {
+        assert_eq!(state.read_pad(ui_input(command, true)), PadRead::Nothing);
+    }
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Back, true)),
+        PadRead::Other
+    );
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Up, true)),
+        PadRead::Other
+    );
+}
+
+#[test]
+fn a_move_acts_on_its_press_only() {
+    let mut state = FocusState::<u8>::default();
+    state.surroundings(PAD, None, false);
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::FocusLeft, true)),
+        PadRead::Move(FocusMove::Toward(Direction::Left))
+    );
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::PrevFocus, true)),
+        PadRead::Move(FocusMove::Previous)
+    );
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::FocusLeft, false)),
+        PadRead::Nothing
+    );
+}
+
+#[test]
+fn south_reads_as_press_then_release() {
+    let mut state = FocusState::<u8>::default();
+    state.surroundings(PAD, None, false);
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Activate, true)),
+        PadRead::Press
+    );
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Activate, false)),
+        PadRead::Release
+    );
+}
+
+#[test]
+fn a_release_passes_while_untold() {
+    let state = FocusState::<u8>::default();
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Activate, false)),
+        PadRead::Release
+    );
+    assert_eq!(
+        state.read_pad(ui_input(UiCommand::Back, false)),
+        PadRead::Other
+    );
+}
+
+#[test]
+fn moving_by_pad_places_the_pads_focus_from_the_initial_target() {
+    let targets = [
+        target(0, 0.0, 0.0),
+        target(1, 30.0, 0.0),
+        target(2, 60.0, 0.0),
+    ];
+    let mut state = FocusState::<u8>::default();
+    state.surroundings(PAD, None, false);
+    let right = FocusMove::Toward(Direction::Right);
+    assert!(state.move_by_pad(&targets, 1, right));
+    assert_eq!(state.get(), Some(1), "the first move lands on the initial");
+    assert!(state.pad_moved());
+    assert!(state.move_by_pad(&targets, 1, right));
+    assert_eq!(state.get(), Some(2));
+    assert_eq!(state.pad_highlight(), Some(2));
+}
+
+#[test]
+fn moving_by_keys_places_the_keyboards() {
+    let targets = [target(0, 0.0, 0.0), target(1, 30.0, 0.0)];
+    let mut state = FocusState::<u8>::default();
+    state.set_by_pad(0);
+    assert!(state.move_by_keys(&targets, 0, FocusMove::Next));
+    assert_eq!(state.get(), Some(1));
+    assert!(!state.pad_moved());
+    assert_eq!(state.keyboard_ring(), Some(1));
+}
+
+#[test]
+fn a_move_with_no_target_moves_nothing() {
+    let mut state = FocusState::<u8>::default();
+    state.set_by_keys(Some(4));
+    assert!(!state.move_by_pad(&[], 0, FocusMove::Next));
+    assert!(!state.move_by_keys(&[], 0, FocusMove::Next));
+    assert_eq!(state.get(), Some(4));
+    assert!(!state.pad_moved());
+}

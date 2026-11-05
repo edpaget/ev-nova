@@ -32,7 +32,7 @@ use crate::input::Device;
 use crate::keymap::{Command, CommandInput, UiCommand};
 
 use super::super::dialog::DialogEvent;
-use super::super::pad_focus::{self, FocusMove, Target};
+use super::super::pad_focus::{self, FocusMove, PadRead, Target};
 use super::super::volume::Arrow;
 use super::{Focus, FocusRing, KEY_SETTINGS_ITEM, OK_ITEM, PrefsDialog};
 
@@ -150,37 +150,31 @@ impl PrefsDialog {
     /// the one focus as the pad's would, as the keyboard's.
     pub(super) fn keyed_focus_move(&mut self, command: Command) {
         debug_assert_eq!(self.focus_ring, FocusRing::Tab);
-        if let Some(next) = FocusMove::of(command).and_then(|mv| self.stepped_focus(mv)) {
-            self.focus.set_by_keys(Some(next));
+        if let Some(mv) = FocusMove::of(command) {
+            self.focus
+                .move_by_keys(&self.pad_targets(), PrefsTarget::Part(Focus::Ok), mv);
         }
-    }
-
-    fn stepped_focus(&self, mv: FocusMove) -> Option<PrefsTarget> {
-        pad_focus::step(
-            &self.pad_targets(),
-            self.focus.get(),
-            PrefsTarget::Part(Focus::Ok),
-            mv,
-        )
     }
 
     /// Acts on what a pad button meant: see the module docs.
     pub(super) fn pad_command(&mut self, input: CommandInput) {
-        if self.focus.pad_holds_back(input) {
-            return;
-        }
-        if let Some(mv) = FocusMove::of(input.command) {
-            if input.pressed {
+        match self.focus.read_pad(input) {
+            PadRead::Nothing => {}
+            PadRead::Move(mv) => {
                 self.drop_pad_press();
-                if let Some(next) = self.stepped_focus(mv) {
-                    self.focus.set_by_pad(next);
-                }
+                self.focus
+                    .move_by_pad(&self.pad_targets(), PrefsTarget::Part(Focus::Ok), mv);
             }
-            return;
+            PadRead::Press => self.press_focused(),
+            PadRead::Release => self.release_pressed(),
+            PadRead::Other => self.pad_other(input),
         }
+    }
+
+    /// A pad command that is no focus move and no South: the steppers'
+    /// arrows on a focused stepper, and the rest as their keys'.
+    fn pad_other(&mut self, input: CommandInput) {
         match input.command {
-            Command::Ui(UiCommand::Activate) if input.pressed => self.press_focused(),
-            Command::Ui(UiCommand::Activate) => self.release_pressed(),
             Command::Ui(UiCommand::Up | UiCommand::Down | UiCommand::Left | UiCommand::Right) => {
                 if let Some(part) = self.focus().filter(|part| STEPPERS.contains(part)) {
                     self.part_command(part, input);
