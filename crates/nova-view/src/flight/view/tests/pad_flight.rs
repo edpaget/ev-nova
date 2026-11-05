@@ -321,3 +321,17 @@ fn focus_lost_forgets_the_chord_s_button_as_the_map_key() {
     view.input(&key(MAP, false));
     assert!(!view.map_open());
 }
+
+#[test]
+fn the_chord_s_button_let_go_of_is_no_longer_the_map_key() {
+    let mut view = chord_opened();
+    chord_released(&mut view, false);
+    // M closes the map, waiting for M; the stick tapped alone meanwhile
+    // means nothing, its release no map key's.
+    view.input(&key(MAP, true));
+    pad(&mut view, PadButton::RightStickUp, true);
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(view.map_open(), "still waiting for M");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
+}
