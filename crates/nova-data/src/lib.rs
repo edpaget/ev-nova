@@ -128,6 +128,15 @@
 //! [`new_game`] for what maps to what, the problems it reports and what
 //! isn't mapped yet.
 //!
+//! The bible has models, not sprites, so each hull, stellar and gate has
+//! a stand-in instead ([`StandIn`]): a model seen from above, a size box,
+//! a disc or a ring, worked out at load ([`new_game::looks`]) and kept on
+//! the store ([`store::GameData::stand_in`]); the stock store holds none.
+//! The models are read and drawn from above by `nova-galaxy-media`, the
+//! crate below this one that alone decodes glTF, which game-bible's
+//! `galaxy` tool can share. The view draws a stand-in where it has no
+//! sprite (`nova_view::outline`).
+//!
 //! # Interface resources
 //!
 //! The dialogs live in a separate interface file (`Nova-DF.rsrc`, or the
