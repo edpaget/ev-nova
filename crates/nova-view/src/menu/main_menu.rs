@@ -26,6 +26,13 @@
 //! winning (`_SWRLECollisionWithPoint`, @0x19626-0x19648); the tracker
 //! plays 600 and 601 as the original's does.
 //!
+//! **The pad** (the `pad` module). The d-pad moves a highlight over the
+//! buttons whose row shows, starting on New Pilot, and South presses the
+//! focused button as a primary press does, with 600 and 601, choosing it
+//! as a click does. The original's main screen has no focus, default or
+//! Tab (`_MainScreenKey` @0x1aba0), so this is a new feature; East does
+//! nothing, as Escape does.
+//!
 //! **Moving on its own**, in `_MainScreenAnimIdle`'s order: the logo
 //! picks a new frame every 5 Mac ticks ([`Logo`]), the slides step, and
 //! the rollover fades toward the button under the pointer ([`Rollover`]).
@@ -62,10 +69,14 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, MouseButton};
+use crate::keymap::{CommandReader, SharedBindings, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
+use crate::ui::pad_focus::{self, FocusState};
 use crate::ui::{Button, ButtonSkin, ButtonStyle};
+
+pub(crate) mod pad;
 use crate::view_shape::CLASSIC_SIZE;
 
 /// The stand-in's title, over its buttons.
@@ -142,8 +153,8 @@ impl MenuChoice {
 /// How a [`MenuChoice`] was made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChosenBy {
-    /// A click on its button, which has already made its sounds
-    /// (`_TrackMainScreenButtons` @0x195b9).
+    /// A press on its button, by the pointer or the pad's South, which
+    /// has already made its sounds (`_TrackMainScreenButtons` @0x195b9).
     Pointer,
     /// Its typed shortcut, which clicked with [`UiSound::ButtonKeyed`]:
     /// the original runs the choice only once that click has played
@@ -196,7 +207,13 @@ impl ArtLayout {
         })
     }
 
-    fn draw(&self, list: &mut DrawList, pressed: Option<usize>, panel: &PanelDraw<'_>) {
+    fn draw(
+        &self,
+        list: &mut DrawList,
+        pressed: Option<usize>,
+        panel: &PanelDraw<'_>,
+        highlight: Option<(Bounds, Color)>,
+    ) {
         let corner = self.background.top_corner;
         let (width, height) = CLASSIC_SIZE;
         fill_rect(
@@ -229,6 +246,9 @@ impl ArtLayout {
                 ImageKey::sprite(button.sprite, frame),
                 self.button_origin(index),
             );
+        }
+        if let Some((rect, color)) = highlight {
+            pad_focus::draw_highlight(list, rect, color);
         }
         self.rollover.draw(list, &self.art.rollover, corner);
     }
@@ -282,6 +302,13 @@ pub struct MainMenu {
     sounds: Vec<Sound>,
     /// The panel about the pilot loaded.
     panel: PilotPanelArea,
+    /// The pad's commands ([`contexts::MAIN_MENU`]); the menu acts only
+    /// on a pad button's (the `pad` module).
+    reader: CommandReader,
+    /// The pad's focus.
+    focus: FocusState<MenuChoice>,
+    /// Whether the press tracked is South's.
+    pad_pressed: bool,
 }
 
 impl std::fmt::Debug for MainMenu {
@@ -324,7 +351,22 @@ impl MainMenu {
             choice: None,
             sounds: Vec::new(),
             panel: PilotPanelArea::new(PanelLooks::stock(PanelLabels::default())),
+            reader: CommandReader::new(contexts::MAIN_MENU),
+            focus: FocusState::default(),
+            pad_pressed: false,
         }
+    }
+
+    /// The menu reading the pad through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads the pad through `bindings` from now on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.reader.set_bindings(bindings);
     }
 
     /// The menu with its pilot panel in `looks`, showing no pilot. A menu
@@ -488,6 +530,13 @@ impl MainMenu {
         self.choice.take()
     }
 
+    /// Finishes every slide at once, silently, as a primary press does.
+    fn skip_slides(&mut self) {
+        if let Layout::Art(layout) = &mut self.layout {
+            layout.slides.skip();
+        }
+    }
+
     /// The button whose art or rectangle is under `at`.
     fn hit(&self, at: Point) -> Option<usize> {
         match &self.layout {
@@ -534,6 +583,9 @@ impl Screen for MainMenu {
     /// every key. The router acts on the choice, holding a shortcut's for
     /// its click; the menu itself never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.pad_input(input) {
+            return ScreenAction::None;
+        }
         match *input {
             Input::Text(typed) => {
                 let choice = match typed.to_ascii_lowercase() {
@@ -554,13 +606,17 @@ impl Screen for MainMenu {
                 at,
             } => {
                 self.pointer = Some(at);
-                if pressed && let Layout::Art(layout) = &mut self.layout {
-                    layout.slides.skip();
+                if pressed {
+                    self.skip_slides();
                 }
                 let hit = self.hit(at);
                 let tracked = if pressed {
+                    self.pad_pressed = false;
                     self.tracker.cancel();
                     self.tracker.press(hit)
+                } else if self.pad_pressed {
+                    // South's press is let go of by South alone.
+                    Tracked::default()
                 } else {
                     self.tracker.release(hit)
                 };
@@ -576,6 +632,10 @@ impl Screen for MainMenu {
             | Input::PadButton { .. }
             | Input::PadAxis { .. }
             | Input::Surroundings(_) => {}
+            // A held South's press is the pad's: the pointer only aims
+            // the rollover meanwhile.
+            Input::PointerMoved(at) if self.pad_pressed => self.pointer = Some(at),
+            Input::PointerLeft if self.pad_pressed => self.pointer = None,
             Input::PointerMoved(at) => {
                 self.pointer = Some(at);
                 let hit = self.hit(at);
@@ -635,9 +695,10 @@ impl Screen for MainMenu {
             area: &self.panel,
             metrics: self.metrics.as_ref(),
         };
+        let highlight = self.pad_highlight_rect().map(|rect| (rect, self.style.up));
         let buttons = match &self.layout {
             Layout::Art(layout) => {
-                layout.draw(list, pressed, &panel);
+                layout.draw(list, pressed, &panel, highlight);
                 return;
             }
             Layout::StandIn(buttons) => buttons,
@@ -662,10 +723,14 @@ impl Screen for MainMenu {
                 list,
             );
         }
+        if let Some((rect, color)) = highlight {
+            pad_focus::draw_highlight(list, rect, color);
+        }
     }
 
     fn cancel_pointer(&mut self) {
         self.tracker.cancel();
+        self.pad_pressed = false;
     }
 
     /// The buttons' sounds as they are clicked or keyed, and the slides'.

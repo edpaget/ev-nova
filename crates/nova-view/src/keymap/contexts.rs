@@ -298,6 +298,14 @@ pub const PILOT_LIST: ScreenContexts = ScreenContexts {
     entries: &[on(Context::Ui), on(Context::App)],
 };
 
+/// The main menu: the shared UI context, of which it acts only on the
+/// pad's buttons (its focus), and the app's. The router reads its keys
+/// first ([`ROUTER`]).
+pub const MAIN_MENU: ScreenContexts = ScreenContexts {
+    name: "main menu",
+    entries: &[on(Context::Ui), on(Context::App)],
+};
+
 /// The intro screen: its own Return and Space, and the Pause key, its
 /// skip (`_ShowIntroScreen` @0x16d05). No shared UI: it polls Return's
 /// key code alone, so the keypad's Enter, the shared Confirm's twin,
@@ -359,6 +367,7 @@ pub const SCREENS: &[ScreenContexts] = &[
     SYSTEM_VIEW,
     SHIP_BROWSER,
     PILOT_LIST,
+    MAIN_MENU,
     INTRO,
     MOVIE,
     ROUTER,
