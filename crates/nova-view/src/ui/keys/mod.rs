@@ -9,17 +9,25 @@
 //!
 //! # Rows
 //!
-//! Every [`Command`], in declaration order, under a heading for each
-//! context ([`Context::label`]): flight first, in `Keys.nib`'s order, then
-//! the other contexts; a context with no command (the system view's) has
-//! no heading. Each command row is its label ([`Command::label`]) and one
-//! cell a device family: the keyboard's today, the command's name on the
+//! Every [`Command`] the shown tab lists ([`rows`]), in declaration
+//! order, under a heading for each context ([`Context::label`]): flight
+//! first, in `Keys.nib`'s order, then the other contexts; a context with
+//! no command listed (the system view's) has no heading. Each command row
+//! is its label ([`Command::label`]) and one cell, the shown tab's device
+//! family's. On the keyboard's tab it is the command's name on the
 //! keyboard through the one naming function ([`name_command`],
 //! [`Spelling::Bound`]: its combo's name), or "Click to record shortcut"
-//! when it is unbound, as
-//! an empty recorder reads (`-[SRRecorderCell drawWithFrame:inView:]`
-//! @0x5d76). A gamepad's cell goes beside it (the key-bindings roadmap's
-//! phase 12).
+//! when it is unbound, as an empty recorder reads
+//! (`-[SRRecorderCell drawWithFrame:inView:]` @0x5d76).
+//!
+//! # Gamepad tab
+//!
+//! Two tab labels on the title row, "Keyboard" and "Gamepad", switch the
+//! one cell column between the device families, as two cells don't fit
+//! the list. The gamepad tab lists every command but the shared UI
+//! context's (the pad's fixed rows), the stick axes with an invert row
+//! each, names each cell for the family of the pad used last, and records
+//! pad inputs: the `pad_record` module says how.
 //!
 //! # Fixed keys
 //!
@@ -27,20 +35,22 @@
 //! so its own controls answer whatever the key map holds:
 //!
 //! - Up and Down move the selection, repeats included, passing over the
-//!   headings.
+//!   headings. Left and Right show the keyboard's and the gamepad's tab.
 //! - Return, the keypad's Enter and Space start recording on the selected
 //!   row, as a click or Space starts a recorder (@0x53ee, @0x36ca-0x36e9),
 //!   or press the focused button.
 //! - Escape is Cancel.
 //! - Tab moves the focus: the list, Restore Defaults, Cancel, OK, and
 //!   round.
-//! - Delete and Backspace clear the selected command's key.
+//! - Delete and Backspace clear the selected command's binding on the
+//!   shown tab.
 //! - A click on a row selects it and, on its release over the row, starts
 //!   recording.
 //!
 //! # Recording
 //!
-//! The row shows "Type shortcut" (@0x5d0a). While it records, every key
+//! On the keyboard's tab (the gamepad tab's recorder is `pad_record`'s),
+//! the row shows "Type shortcut" (@0x5d0a). While it records, every key
 //! records, Escape, Backspace and Delete included, as the Keys window's
 //! recorders set `escapeKeysRecord` (@0x30a4-0x30c7): the fixed keys
 //! above act only outside a recording. A click anywhere but the
@@ -70,13 +80,17 @@
 //!
 //! # Buttons
 //!
-//! Restore Defaults sets every binding to [`KeyMap::default`](crate::keymap::KeyMap).
+//! Restore Defaults sets the shown tab's bindings to their defaults
+//! ([`KeyMap::default`](crate::keymap::KeyMap), or
+//! [`PadMap::default`](crate::keymap::PadMap) with its axes), leaving
+//! the other tab's.
 //! OK closes the screen, and [`KeysScreen::take_change`] gives the edited
 //! bindings once, if they differ from those it opened on; Cancel closes
 //! it with nothing to take, as `cancel:` reverts the recorders (@0xcff7c).
 
 mod edit;
 mod pad;
+mod pad_record;
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -85,17 +99,18 @@ use nova_sim::Rulebook;
 
 pub use edit::{Column, KeyEdit, PadRecorded, Recorded, Recording, left_key};
 
+use pad_record::capture_cell;
+
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::dialog::outline;
 use super::pad_focus::FocusState;
 use super::prefs::{BACKDROP, BORDER};
-use super::row_list::{BarRoom, ListPress, RowList};
+use super::row_list::{ListPress, RowList};
 use crate::bound_names::{Spelling, name_command};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
-use crate::input::Device;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{ControllerFamily, Device, Input, Key, MouseButton};
 use crate::key_names::KeyNames;
 use crate::keymap::keyboard::{Sides, is_modifier};
 use crate::keymap::{Bindings, Command, CommandReader, Context, KeyCombo, KeysDown, Kind};
@@ -122,31 +137,64 @@ pub const OK_AREA: (f32, f32, f32, f32) = (225.0, 245.0, 295.0, 265.0);
 pub const UNBOUND: &str = "Click to record shortcut";
 /// The recording row's cell.
 pub const RECORDING: &str = "Type shortcut";
+/// A command row's cell on the gamepad tab when the pad leaves it
+/// unbound.
+pub const PAD_UNBOUND: &str = "Not bound";
+/// The recording row's cell on the gamepad tab.
+pub const PAD_RECORDING: &str = "Press a button";
+/// The recording row's cell on the gamepad tab for an axis command.
+pub const AXIS_RECORDING: &str = "Push a stick";
+/// How long a recording on the gamepad tab waits for a pad press before
+/// it ends, binding nothing.
+pub const PAD_RECORD_TIMEOUT: Duration = Duration::from_secs(5);
+/// The tab labels' rectangles on the title row, from the screen's top
+/// left: the keyboard's, then the gamepad's ([`Column::ALL`]'s order).
+pub const TAB_AREAS: [(f32, f32, f32, f32); 2] =
+    [(222.0, 8.0, 272.0, 22.0), (278.0, 8.0, 325.0, 22.0)];
+/// The tab label not shown.
+const TAB_DIM: Color = Color::from_rgb24(0x0080_8080);
 /// A command row's indent under its heading.
 const INDENT: &str = "  ";
+/// An axis's invert row's label, under the axis's row.
+const INVERT: &str = "Invert";
 
 /// One row of the list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     /// A context's heading.
     Heading(Context),
-    /// A command, with one cell a device family.
+    /// A command, with its cell on the shown tab.
     Command(Command),
+    /// Whether the axis command's stick reads the other way, under its
+    /// row on the gamepad tab: "On" or "Off".
+    Invert(Command),
 }
 
-/// The rows: each context that has commands, its heading then its
-/// commands, in declaration order. A stick's axis commands
-/// ([`Kind::Axis`]) take no key, so they are left out until phase 12
-/// adds the gamepad's column.
+/// The rows on `column`'s tab: each context that has commands listed
+/// there, its heading then its commands, in declaration order.
+///
+/// - The keyboard's tab leaves out a stick's axis commands
+///   ([`Kind::Axis`]), which take no key.
+/// - The gamepad's leaves out the shared UI context, the pad's fixed rows
+///   ([`PadMap::is_fixed`](crate::keymap::PadMap::is_fixed)), and lists
+///   each axis command with its [`Row::Invert`] row under it.
 #[must_use]
-pub fn rows() -> Vec<Row> {
-    let keyed = |command: &Command| command.kind() != Kind::Axis;
+pub fn rows(column: Column) -> Vec<Row> {
+    let listed = |command: &Command| match column {
+        Column::Keyboard => command.kind() != Kind::Axis,
+        Column::Gamepad => !crate::keymap::PadMap::is_fixed(*command),
+    };
     Context::ALL
         .iter()
-        .filter(|context| context.commands().any(|command| keyed(&command)))
+        .filter(|context| context.commands().any(|command| listed(&command)))
         .flat_map(|&context| {
-            std::iter::once(Row::Heading(context))
-                .chain(context.commands().filter(keyed).map(Row::Command))
+            std::iter::once(Row::Heading(context)).chain(
+                context.commands().filter(listed).flat_map(move |command| {
+                    let invert = (column == Column::Gamepad && command.kind() == Kind::Axis)
+                        .then_some(Row::Invert(command));
+                    std::iter::once(Row::Command(command)).chain(invert)
+                }),
+            )
         })
         .collect()
 }
@@ -223,6 +271,13 @@ struct Capture {
     /// nothing pressed since, and the modifiers held as it went down: it
     /// records on its release.
     pending: Option<(Key, crate::keymap::Modifiers)>,
+    /// Whether it records a pad input, on the gamepad tab.
+    pad: bool,
+    /// The command that refused the last input pressed, if one did.
+    refused: Option<Command>,
+    /// How long it has waited since it started or since the last pad
+    /// press, on the gamepad tab.
+    waited: Duration,
 }
 
 /// Where a pointer press went, so the rest of its click follows it.
@@ -252,6 +307,13 @@ pub struct KeysScreen {
     style: ButtonStyle,
     rows: Vec<Row>,
     list: RowList,
+    /// The tab shown.
+    tab: Column,
+    /// The family the gamepad tab names its cells for: the last pad's the
+    /// screen was told, generic before any.
+    pad_family: ControllerFamily,
+    /// The pad buttons down, in the order pressed.
+    pads_down: Vec<crate::input::PadButton>,
     buttons: [Button; 3],
     trackers: [ButtonTracker; 3],
     /// The focus, always somewhere, and who placed it (the `pad` module).
@@ -271,6 +333,7 @@ impl std::fmt::Debug for KeysScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeysScreen")
             .field("edit", &self.edit)
+            .field("tab", &self.tab)
             .field("focus", &self.focus())
             .field("capture", &self.capture)
             .field("closed", &self.closed)
@@ -294,23 +357,9 @@ impl KeysScreen {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let rows = rows();
-        let labels = rows
-            .iter()
-            .map(|row| match row {
-                Row::Heading(context) => context.label().to_owned(),
-                Row::Command(command) => format!("{INDENT}{}", command.label()),
-            })
-            .collect();
-        let headings: Vec<usize> = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| matches!(row, Row::Heading(_)).then_some(index))
-            .collect();
+        let rows = rows(Column::Keyboard);
         let origin = bounds.min;
-        let list = RowList::new(labels, placed(origin, LIST_AREA), &metrics, BarRoom::Inside)
-            .with_column(KEY_COLUMN, Vec::new())
-            .with_headings(&headings);
+        let list = Self::list_of(&rows, origin, &metrics);
         let buttons = KeysButton::ALL
             .map(|button| Button::new(placed(origin, button.area()), button.label()));
         let mut focus = FocusState::default();
@@ -324,6 +373,9 @@ impl KeysScreen {
             style,
             rows,
             list,
+            tab: Column::Keyboard,
+            pad_family: ControllerFamily::Generic,
+            pads_down: Vec::new(),
             buttons,
             trackers: [ButtonTracker::default(); 3],
             focus,
@@ -365,10 +417,11 @@ impl KeysScreen {
         self.edit.draft()
     }
 
-    /// Whether a rebind left `command` unbound and it is still marked.
+    /// Whether a rebind left `command` unbound on the shown tab and it is
+    /// still marked.
     #[must_use]
     pub fn is_marked(&self, command: Command) -> bool {
-        self.edit.is_marked(Column::Keyboard, command)
+        self.edit.is_marked(self.tab, command)
     }
 
     /// The command being recorded, if any.
@@ -401,9 +454,9 @@ impl KeysScreen {
         self.change.take()
     }
 
-    /// The keyboard cell of `command`'s row: the draft's binding named on
-    /// the keyboard, which this column always shows (phase 12's pad column
-    /// passes the pad).
+    /// The keyboard tab's cell of `command`'s row: the draft's binding
+    /// named on the keyboard, which this tab always shows, whatever device
+    /// was used last.
     fn keyboard_cell(&self, command: Command) -> String {
         name_command(
             self.edit.draft(),
@@ -415,34 +468,52 @@ impl KeysScreen {
         .unwrap_or_else(|| UNBOUND.to_owned())
     }
 
-    /// Redraws every command row's cell and mark from the draft.
+    /// Redraws every command row's cell and mark from the draft, on the
+    /// shown tab.
     fn refresh(&mut self) {
         for index in 0..self.rows.len() {
-            if let Row::Command(command) = self.rows[index] {
-                let cell = if self.capture.is_some_and(|capture| capture.row == index) {
-                    RECORDING.to_owned()
-                } else {
-                    self.keyboard_cell(command)
-                };
-                self.list.set_cell(index, &cell);
-                self.list
-                    .set_marked(index, self.edit.is_marked(Column::Keyboard, command));
-            }
+            let (cell, marked) = match self.rows[index] {
+                Row::Heading(_) => continue,
+                Row::Command(command) => {
+                    let cell = match self.capture.filter(|capture| capture.row == index) {
+                        Some(capture) => capture_cell(capture),
+                        None => match self.tab {
+                            Column::Keyboard => self.keyboard_cell(command),
+                            Column::Gamepad => self.pad_cell(command),
+                        },
+                    };
+                    (cell, self.edit.is_marked(self.tab, command))
+                }
+                Row::Invert(command) => (self.invert_cell(command).to_owned(), false),
+            };
+            self.list.set_cell(index, &cell);
+            self.list.set_marked(index, marked);
         }
     }
 
-    /// Starts recording on the selected row, if it is a command's.
+    /// Starts recording on the selected row, if it is a command's, on the
+    /// shown tab; on an invert row, toggles its axis's inversion instead.
     fn start_capture(&mut self) {
         let Some(row) = self.list.selected() else {
             return;
         };
-        if let Some(&Row::Command(command)) = self.rows.get(row) {
-            self.capture = Some(Capture {
-                row,
-                command,
-                pending: None,
-            });
-            self.refresh();
+        match self.rows.get(row) {
+            Some(&Row::Command(command)) => {
+                self.capture = Some(Capture {
+                    row,
+                    command,
+                    pending: None,
+                    pad: self.tab == Column::Gamepad,
+                    refused: None,
+                    waited: Duration::ZERO,
+                });
+                self.refresh();
+            }
+            Some(&Row::Invert(command)) => {
+                self.edit.toggle_invert(command);
+                self.refresh();
+            }
+            Some(Row::Heading(_)) | None => {}
         }
     }
 
@@ -513,22 +584,28 @@ impl KeysScreen {
                 }
             }
             _ if repeat => {}
+            Key::ArrowLeft => self.switch_tab(Column::Keyboard),
+            Key::ArrowRight => self.switch_tab(Column::Gamepad),
             Key::Enter | Key::NumpadEnter | Key::Space => match self.focus() {
                 KeysFocus::List => self.start_capture(),
                 KeysFocus::Button(button) => self.press_button(button),
             },
             Key::Escape => self.press_button(KeysButton::Cancel),
             Key::Tab => self.focus.set_by_keys(Some(self.focus().next())),
-            Key::Backspace | Key::Delete => {
-                if self.focus() == KeysFocus::List
-                    && let Some(&Row::Command(command)) =
-                        self.list.selected().and_then(|row| self.rows.get(row))
-                {
-                    self.edit.clear_on(Column::Keyboard, command);
-                    self.refresh();
-                }
-            }
+            Key::Backspace | Key::Delete => self.clear_selected(),
             _ => {}
+        }
+    }
+
+    /// Clears the selected command's binding on the shown tab, as Delete
+    /// (or the pad's West) does, while the list has the focus.
+    fn clear_selected(&mut self) {
+        if self.focus() == KeysFocus::List
+            && let Some(&Row::Command(command)) =
+                self.list.selected().and_then(|row| self.rows.get(row))
+        {
+            self.edit.clear_on(self.tab, command);
+            self.refresh();
         }
     }
 
@@ -545,7 +622,7 @@ impl KeysScreen {
     fn press_button(&mut self, button: KeysButton) {
         match button {
             KeysButton::RestoreDefaults => {
-                self.edit.restore_defaults(Column::Keyboard);
+                self.edit.restore_defaults(self.tab);
                 self.refresh();
             }
             KeysButton::Cancel => {
@@ -577,6 +654,14 @@ impl KeysScreen {
                     return;
                 }
                 self.end_capture();
+            }
+            if let Some(column) = Column::ALL
+                .into_iter()
+                .find(|&column| self.tab_bounds(column).contains_half_open(at))
+            {
+                self.switch_tab(column);
+                self.press = None;
+                return;
             }
             self.press = if let Some(&button) = KeysButton::ALL
                 .iter()
@@ -649,7 +734,11 @@ impl Screen for KeysScreen {
             } => {
                 let held = self.keys.modifiers(Sides::Either);
                 self.keys.follow(input);
-                if self.capture.is_some() {
+                if self.capture.is_some_and(|capture| capture.pad) {
+                    if pressed && !repeat {
+                        self.end_capture();
+                    }
+                } else if self.capture.is_some() {
                     self.capture_key(key, pressed, repeat, held);
                 } else if pressed {
                     self.fixed_key(key, repeat);
@@ -666,9 +755,11 @@ impl Screen for KeysScreen {
         ScreenAction::None
     }
 
-    /// The list's held press scrolls on.
+    /// The list's held press scrolls on, and a recording on the gamepad
+    /// tab waits on toward its timeout.
     fn tick(&mut self, dt: Duration) {
         self.list.tick(dt);
+        self.wait_on(dt);
     }
 
     /// The backdrop and its outline, the title, the list, then the
@@ -686,6 +777,7 @@ impl Screen for KeysScreen {
             None,
             Color::WHITE,
         );
+        self.draw_tabs(list);
         self.list.draw(list);
         for button in KeysButton::ALL {
             let index = button.index();

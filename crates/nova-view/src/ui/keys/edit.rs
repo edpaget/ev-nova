@@ -48,6 +48,25 @@ pub enum Column {
     Gamepad,
 }
 
+impl Column {
+    /// The tabs, left to right.
+    pub const ALL: [Self; 2] = [Self::Keyboard, Self::Gamepad];
+
+    /// Its tab's label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Keyboard => "Keyboard",
+            Self::Gamepad => "Gamepad",
+        }
+    }
+
+    /// Its place in [`Column::ALL`].
+    pub(super) const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// What recording a pad binding did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PadRecorded {

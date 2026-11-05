@@ -129,7 +129,7 @@ fn every_command_is_listed_under_its_context_s_heading_with_its_key() {
         .iter()
         .filter_map(|row| match row {
             Row::Command(command) => Some(*command),
-            Row::Heading(_) => None,
+            Row::Heading(_) | Row::Invert(_) => None,
         })
         .collect();
     let keyed: Vec<Command> = Command::all()
@@ -154,6 +154,7 @@ fn every_command_is_listed_under_its_context_s_heading_with_its_key() {
                     format!("  {}", command.label())
                 );
             }
+            Row::Invert(command) => panic!("{command:?}: the keyboard's tab inverts nothing"),
         }
     }
     assert_eq!(kinds[0], Row::Heading(Context::Flight));

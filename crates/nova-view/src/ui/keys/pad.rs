@@ -10,14 +10,18 @@
 //!   Cancel and OK. The focus is always somewhere, the list at first, and
 //!   is kept when the player goes back to the keyboard
 //!   ([`FocusState::surroundings`]'s `keeps`).
-//! - **The d-pad and the shoulders** move it; **the left stick** steps
-//!   the list's selection as the arrow keys do.
+//! - **The d-pad** moves it; **the shoulders** show the keyboard's tab
+//!   (left) and the gamepad's (right), as Left and Right do; **the left
+//!   stick** steps the list's selection as the arrow keys do.
 //! - **South** on the list starts recording the selected row, as Space
-//!   does; on a button it presses it as a click does, on its release.
-//! - **East** is Cancel, as Escape is; during a recording it ends the
-//!   recording, as a click elsewhere does, since a pad can't record until
-//!   rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs. The pad's
-//!   other buttons record nothing.
+//!   does (on an invert row, toggles it); on a button it presses it as a
+//!   click does, on its release.
+//! - **East** is Cancel, as Escape is. During a recording on the
+//!   keyboard's tab it ends the recording, as a click elsewhere does, and
+//!   the pad's other buttons record nothing there; on the gamepad tab
+//!   every button records (`pad_record`).
+//! - **West**, outside a recording, clears the selected row on the shown
+//!   tab, as Delete does.
 //! - **Until the screen is told** the pad was the device used last, the
 //!   pad's focus moves and South do nothing, though the outline shows the
 //!   focus: one rule for every screen ([`pad_focus`]'s "Nothing hidden
@@ -34,7 +38,7 @@ use crate::keymap::{Command, CommandInput, CommandReader, UiCommand};
 
 use super::super::dialog::outline;
 use super::super::pad_focus::{self, PadRead, Target};
-use super::{KeysButton, KeysFocus, KeysScreen};
+use super::{Column, KeysButton, KeysFocus, KeysScreen};
 
 impl KeysScreen {
     /// The device the player used last, as the last surroundings it was
@@ -68,9 +72,16 @@ impl KeysScreen {
             self.reader.follow(input);
             self.focus
                 .surroundings(surroundings.device, Some(KeysFocus::List), true);
+            self.follow_family(surroundings);
             return;
         }
-        if let Some(command) = self.reader.follow(input) {
+        let taken = match *input {
+            Input::PadButton { button, pressed } => self.pad_button(button, pressed),
+            _ => false,
+        };
+        if let Some(command) = self.reader.follow(input)
+            && !taken
+        {
             self.pad_command(command);
         }
     }
@@ -85,6 +96,12 @@ impl KeysScreen {
                 self.end_capture();
             }
             return;
+        }
+        match (command, input.pressed) {
+            (UiCommand::PrevFocus, true) => return self.switch_tab(Column::Keyboard),
+            (UiCommand::Tab, true) => return self.switch_tab(Column::Gamepad),
+            (UiCommand::PrevFocus | UiCommand::Tab, false) => return,
+            _ => {}
         }
         match self.focus.read_pad(input) {
             PadRead::Nothing => return,
@@ -148,4 +165,4 @@ impl KeysScreen {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

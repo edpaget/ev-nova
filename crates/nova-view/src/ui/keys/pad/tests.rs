@@ -33,6 +33,25 @@ fn ringed(rect: Bounds, highlight: bool, screen: &KeysScreen) -> Vec<DrawCommand
     list.iter().cloned().collect()
 }
 
+/// Moves the pad's focus onto `button` with the d-pad: down off the
+/// list, then along the buttons. The shoulders switch tabs here.
+pub(in crate::ui::keys) fn focus_on(screen: &mut KeysScreen, button: KeysButton) {
+    for step in [
+        PadButton::DPadDown,
+        PadButton::DPadLeft,
+        PadButton::DPadLeft,
+    ]
+    .into_iter()
+    .chain([PadButton::DPadRight; 3])
+    {
+        if screen.focus() == KeysFocus::Button(button) {
+            return;
+        }
+        pad(screen, step);
+    }
+    assert_eq!(screen.focus(), KeysFocus::Button(button), "reached");
+}
+
 #[test]
 fn the_left_stick_steps_the_list_as_the_arrows_do() {
     let mut keyed = screen();
@@ -149,9 +168,7 @@ fn back_on_the_keyboard_the_outline_draws_where_the_pad_left_the_focus() {
 fn south_on_a_button_presses_it_on_its_release() {
     let mut screen = screen();
     screen.input(&told(PAD));
-    while screen.focus() != KeysFocus::Button(KeysButton::Cancel) {
-        pad(&mut screen, PadButton::RightShoulder);
-    }
+    focus_on(&mut screen, KeysButton::Cancel);
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
@@ -188,9 +205,7 @@ fn it_reports_the_device_it_was_told() {
 fn a_dpad_press_while_south_is_held_on_a_button_drops_the_press() {
     let mut screen = screen();
     screen.input(&told(PAD));
-    while screen.focus() != KeysFocus::Button(KeysButton::Cancel) {
-        pad(&mut screen, PadButton::RightShoulder);
-    }
+    focus_on(&mut screen, KeysButton::Cancel);
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
@@ -208,11 +223,7 @@ fn a_dpad_press_while_south_is_held_on_a_button_drops_the_press() {
 fn untold_the_pads_focus_moves_and_south_do_nothing_but_east_cancels() {
     let mut screen = screen();
     select(&mut screen, FlightCommand::Accelerate);
-    for button in [
-        PadButton::DPadRight,
-        PadButton::RightShoulder,
-        PadButton::LeftShoulder,
-    ] {
+    for button in [PadButton::DPadRight, PadButton::DPadDown] {
         pad(&mut screen, button);
         assert_eq!(screen.focus(), KeysFocus::List, "{button:?}");
     }
