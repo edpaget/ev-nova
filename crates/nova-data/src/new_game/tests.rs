@@ -868,6 +868,13 @@ fn a_hull_past_the_last_ship_id_is_a_problem_and_left_out() {
         ["ships/skiff.md: it is past the last shïp ID, 895; it is left out"]
     );
     assert_eq!(game.data.ids(Ship::TYPE).len(), 768);
+    assert!(game.ids.starts.is_empty(), "the skiff's start goes with it");
+    assert!(
+        !problems(&game)
+            .iter()
+            .any(|line| line.starts_with("starts/")),
+        "not reported again"
+    );
 }
 
 // Traffic.
@@ -993,4 +1000,20 @@ fn a_start_in_a_system_that_is_not_there_is_a_problem_and_left_out() {
         ["starts/first-flight.md: its system `gamma` is not in systems/; it is left out"]
     );
     assert_eq!(game.data.ids(Character::TYPE), Vec::<i16>::new());
+}
+
+#[test]
+fn a_start_in_a_ship_or_system_that_failed_to_load_is_left_out_unreported() {
+    for (file, text) in [
+        ("ships/skiff.md", "---\nname: Skiff\nstyle: nowhere\n---\n"),
+        ("systems/alpha.md", "---\nname: Alpha\n---\n"),
+    ] {
+        let game = loaded(&fixture::galaxy().with(file, text));
+        assert!(game.ids.starts.is_empty(), "{file}");
+        let lines = problems(&game);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("starts/")),
+            "{file}: {lines:?}"
+        );
+    }
 }
