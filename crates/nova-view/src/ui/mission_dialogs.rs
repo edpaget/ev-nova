@@ -43,6 +43,7 @@ use crate::draw::DrawList;
 use crate::flight::FlightView;
 use crate::flight::MapOpener;
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -144,6 +145,8 @@ pub struct MissionDialogs {
     /// Whether the screen under them is faded, and the front text's
     /// fade-in.
     screen: FadedScreen,
+    /// The bindings each text reads its keys through.
+    bindings: SharedBindings,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -183,7 +186,21 @@ impl MissionDialogs {
             left: Vec::new(),
             texts_closed: 0,
             screen: FadedScreen::default(),
+            bindings: SharedBindings::default(),
         }
+    }
+
+    /// These dialogs reading their keys through `bindings`: each text
+    /// queued, and each queued after it.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        for stage in &mut self.texts {
+            if let Stage::Text(dialog) = stage {
+                dialog.set_bindings(bindings.clone());
+            }
+        }
+        self.bindings = bindings;
+        self
     }
 
     /// The screen under these dialogs is faded, as its holder's fade
@@ -314,7 +331,10 @@ impl MissionDialogs {
             Rc::clone(&self.metrics),
         ) {
             self.texts.push_back(Stage::Text(Box::new(
-                dialog.with_map(map).with_focus_ring(self.focus_ring),
+                dialog
+                    .with_map(map)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.bindings.clone()),
             )));
         }
         if let Some(after) = movie(true) {
@@ -936,6 +956,30 @@ mod tests {
         dialogs.input(&key(Key::PageUp));
         assert_eq!(at(&dialogs), 0.0);
         assert!(dialogs.text().is_some(), "still open");
+    }
+
+    /// The texts read their keys through the key map the dialogs are
+    /// given, one queued before it as one queued after: Confirm rebound to
+    /// F6 closes each on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_closes_each_text_on_its_new_key_alone() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "One.")]);
+        let bindings =
+            crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+                crate::keymap::UiCommand::Confirm,
+                crate::keymap::KeyCombo::key(Key::F6),
+            ));
+        let mut dialogs = dialogs.with_bindings(bindings);
+        dialogs.show_texts(vec![brief(129, "Two.")]);
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(dialogs.text_stages(), 2, "Return no longer closes");
+        dialogs.input(&key(Key::F6));
+        assert_eq!(dialogs.text_stages(), 1, "F6 closes the first");
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(dialogs.text_stages(), 1);
+        dialogs.input(&key(Key::F6));
+        assert!(!dialogs.is_open(), "and the second");
     }
 
     /// `_ShowTextDialog`'s Up and Down reach a mission text (@0x5b0af-0x5b130).

@@ -21,12 +21,14 @@
 //! `_CenterWindow` moves the window again before it shows, so nothing of it
 //! is seen.
 //!
-//! Its keys are `_TextDialogFilter`'s (@0x51f77): Return, Enter and Escape
-//! close it, and Home, End, Page Up and Page Down scroll the text by the
-//! original's pixel amounts, each only while the text can scroll its way,
-//! on the press alone (the user's standing press-only decision). Up and
-//! Down scroll 10 px, repeats included, as the original's items 5 and 6
-//! do. See [`DescDialog`]'s `Screen::input`.
+//! Its keys are `_TextDialogFilter`'s (@0x51f77), read as commands through
+//! the key map ([`contexts::DESC`]): Confirm (Return, Enter) and Back
+//! (Escape) close it, and the shared UI context's Home, End, Page Up and
+//! Page Down scroll the text by the original's pixel amounts, each only
+//! while the text can scroll its way, on the press alone (the user's
+//! standing press-only decision). Up and Down scroll 10 px, repeats
+//! included, as the original's items 5 and 6 do. The map key is the
+//! shared play keys' Galaxy Map. See [`DescDialog`]'s `Screen::input`.
 //!
 //! The text moves by pixels, as `_ScrollDialogText` @0x51839 moves it, a
 //! partial line cut at the box ([`ScrollText::pixel_scrolled`]). Every text
@@ -52,10 +54,12 @@ use nova_sim::MapMarks;
 
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandInput, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -93,36 +97,60 @@ pub const HOME_END_UNITS: f32 = 9999.0;
 /// (the engine's logical units): 250 (@0x5206b, @0x52112).
 pub const PAGE_UNITS: f32 = 250.0;
 
-/// Scrolls `text` for a press of Home, End, Page Up or Page Down, as
-/// `_TextDialogFilter` @0x51f77 and `_SingleMissionFilter` @0x98d9a both
-/// do through `_ScrollDialogText`: while the text can scroll up
-/// (@0x51ff4, @0x98ef0), Home jumps [`HOME_END_UNITS`] and Page Up
-/// [`PAGE_UNITS`] toward its start; while it can scroll down (@0x52095,
-/// @0x98f43), End and Page Down the same toward its end, End then clearing
-/// "can scroll down" at once (@0x520f7, @0x98fa5). Whether it took
-/// `input`: a key that can't scroll its way, a repeat or a release isn't
-/// taken, and leaves the text untouched.
-pub(crate) fn page_key(text: &mut ScrollText, input: &Input) -> bool {
-    let Input::Key {
-        key,
+/// Scrolls `text` for a press of the shared UI context's Home, End, Page
+/// Up or Page Down, as `_TextDialogFilter` @0x51f77 and
+/// `_SingleMissionFilter` @0x98d9a both do through `_ScrollDialogText`:
+/// while the text can scroll up (@0x51ff4, @0x98ef0), Home jumps
+/// [`HOME_END_UNITS`] and Page Up [`PAGE_UNITS`] toward its start; while
+/// it can scroll down (@0x52095, @0x98f43), End and Page Down the same
+/// toward its end, End then clearing "can scroll down" at once (@0x520f7,
+/// @0x98fa5). Whether it took the command: one that can't scroll its way,
+/// a repeat or a release isn't taken, and leaves the text untouched.
+pub(crate) fn page_command(text: &mut ScrollText, input: CommandInput) -> bool {
+    let CommandInput {
+        command: Command::Ui(command),
         pressed: true,
         repeat: false,
+    } = input
+    else {
+        return false;
+    };
+    let units = match command {
+        UiCommand::Home if text.can_scroll_up() => -HOME_END_UNITS,
+        UiCommand::PageUp if text.can_scroll_up() => -PAGE_UNITS,
+        UiCommand::End if text.can_scroll_down() => HOME_END_UNITS,
+        UiCommand::PageDown if text.can_scroll_down() => PAGE_UNITS,
+        _ => return false,
+    };
+    text.scroll_units(units);
+    if command == UiCommand::End {
+        text.clear_can_scroll_down();
+    }
+    true
+}
+
+/// [`page_command`] for a key's `input`, as the default key map reads it:
+/// for the mission offer, until it reads its keys through the key map
+/// itself (rdm:phase/key-bindings/phase-2-command-key-map's step 4).
+pub(crate) fn page_key(text: &mut ScrollText, input: &Input) -> bool {
+    let Input::Key {
+        pressed, repeat, ..
     } = *input
     else {
         return false;
     };
-    let units = match key {
-        Key::Home if text.can_scroll_up() => -HOME_END_UNITS,
-        Key::PageUp if text.can_scroll_up() => -PAGE_UNITS,
-        Key::End if text.can_scroll_down() => HOME_END_UNITS,
-        Key::PageDown if text.can_scroll_down() => PAGE_UNITS,
-        _ => return false,
-    };
-    text.scroll_units(units);
-    if key == Key::End {
-        text.clear_can_scroll_down();
-    }
-    true
+    CommandReader::new(contexts::DESC)
+        .peek(input)
+        .is_some_and(|command| {
+            page_command(
+                text,
+                CommandInput {
+                    command,
+                    pressed,
+                    repeat,
+                },
+            )
+        })
 }
 
 /// The description's font, which both lays it out and measures it for
@@ -217,17 +245,19 @@ pub struct DescDialog {
     /// The picture variant's graphic, drawn in item 2 over
     /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
     picture: Option<i16>,
-    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
-    /// opens from it, or none when it opens no map.
+    /// The marks of the map the map key (the shared play keys' Galaxy
+    /// Map) opens from it, or none when it opens no map.
     map: Option<MapMarks>,
-    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
-    /// map, until it is taken.
+    /// Whether the map key asked for the map, until it is taken.
     map_requested: bool,
     closed: bool,
     reported: bool,
     /// What a replay queued after the key that closed it, until taken
     /// ([`DescDialog::take_unclaimed`]).
     unclaimed: Vec<Input>,
+    /// Its own keys, the map key and the page keys, as commands
+    /// ([`contexts::DESC`]).
+    keys: CommandReader,
 }
 
 impl DescDialog {
@@ -314,11 +344,25 @@ impl DescDialog {
             closed: false,
             reported: false,
             unclaimed: Vec::new(),
+            keys: CommandReader::new(contexts::DESC),
         }
     }
 
-    /// This dialog opening the map marked `map` on
-    /// [`MAP_KEY`](crate::flight::view::MAP_KEY), or none: only the
+    /// The dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its keys through `bindings` from the next input on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.dialog.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
+    }
+
+    /// This dialog opening the map marked `map` on the map key, or none:
+    /// only the
     /// accept's briefing does, as only `_DoMissionAccept` passes
     /// `_ShowTextDialog` a first argument of 1, which allows item 4
     /// (@0xa1f0e, @0x5b135-0x5b146); `_TextDialogFilter` gives item 4 for
@@ -328,8 +372,8 @@ impl DescDialog {
         Self { map, ..self }
     }
 
-    /// The marks of the map [`MAP_KEY`](crate::flight::view::MAP_KEY)
-    /// asked for since this was last taken, once: `_ShowTextDialog` opens
+    /// The marks of the map the map key asked for since this was last
+    /// taken, once: `_ShowTextDialog` opens
     /// the course map over the text (@0x5b14c-0x5b17d; see
     /// [`FlightView::open_dialog_map`](crate::flight::FlightView::open_dialog_map)),
     /// which stays open under it.
@@ -372,10 +416,18 @@ impl DescDialog {
 
     /// One input through the dialog's own path, its replay aside: the map
     /// key, the page keys, then the dialog, which closes on Done. While
-    /// the dialog holds its keys, everything goes straight to it.
+    /// the dialog holds its keys, everything goes straight to it, and its
+    /// replay brings each back here.
     fn own_input(&mut self, input: &Input) {
-        if !self.dialog.holds() {
-            if is_map_press(input) {
+        if !self.dialog.holds()
+            && let Some(command) = self.keys.follow(input)
+        {
+            let map_press = CommandInput {
+                command: Command::Play(PlayCommand::GalaxyMap),
+                pressed: true,
+                repeat: false,
+            };
+            if command == map_press {
                 self.map_requested = self.map.is_some();
                 if self.map_requested {
                     self.dialog.cancel_pointer();
@@ -385,7 +437,7 @@ impl DescDialog {
             if self
                 .dialog
                 .scroll_text_mut()
-                .is_some_and(|text| page_key(text, input))
+                .is_some_and(|text| page_command(text, command))
             {
                 return;
             }
@@ -452,9 +504,10 @@ impl DescDialog {
 }
 
 impl Screen for DescDialog {
-    /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
-    /// map when it opens one ([`DescDialog::take_map_request`]). The map
-    /// takes the pointer from then on, so that abandons any press here.
+    /// A press of the map key (the shared play keys' Galaxy Map) asks for
+    /// the map when it opens one ([`DescDialog::take_map_request`]). The
+    /// map takes the pointer from then on, so that abandons any press
+    /// here.
     ///
     /// Home, End, Page Up and Page Down scroll the text as
     /// `_TextDialogFilter` @0x51f77 does, through `_ScrollDialogText`
@@ -547,7 +600,8 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -1116,6 +1170,31 @@ mod tests {
         assert_eq!(desc.first_line(), 20, "250 / 12, rounded down");
         desc.input(&key(Key::PageDown));
         assert_eq!(desc.scroll_offset(), 500.0);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Page
+    /// Down rebound to N and the map key to Q act on their new keys and no
+    /// longer on Page Down and M.
+    #[test]
+    fn a_rebound_page_down_and_map_key_act_on_their_new_keys_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::PageDown, KeyCombo::key(Key::KeyN))
+                .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyQ)),
+        );
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: true,
+        };
+        let mut desc = long_desc().with_bindings(bindings).with_map(Some(marks));
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.scroll_offset(), 0.0, "Page Down no longer scrolls");
+        desc.input(&key(Key::KeyN));
+        assert_eq!(desc.scroll_offset(), 250.0);
+        desc.input(&key(Key::KeyM));
+        assert_eq!(desc.take_map_request(), None, "M no longer asks");
+        desc.input(&key(Key::KeyQ));
+        assert_eq!(desc.take_map_request(), Some(marks));
     }
 
     #[test]
