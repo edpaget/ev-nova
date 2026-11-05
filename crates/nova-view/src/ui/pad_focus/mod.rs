@@ -33,10 +33,11 @@
 //! A press that arrives before the surroundings doesn't make the focus
 //! appear either. The app tells each screen the device used last, and a
 //! screen that showed the highlight on its own would never be told when
-//! the player went back to the keyboard, leaving it stuck. So a screen the
-//! app doesn't tell yet (the spaceport's side, until
-//! rdm:phase/key-bindings/phase-9-gamepad-spaceport) ignores the pad's
-//! focus altogether, rather than act on a control the player can't see.
+//! the player went back to the keyboard, leaving it stuck. So a screen not
+//! told yet ignores the pad's focus altogether, rather than act on a
+//! control the player can't see. A screen that opens others keeps what it
+//! was told ([`Told`]) and tells each screen it holds or opens
+//! (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
 //!
 //! # Where additions go
 //!
@@ -517,10 +518,6 @@ impl Told {
 
     /// The device kept; the keyboard before any.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the spaceport view reads it next")
-    )]
     pub fn device(self) -> Device {
         self.0.map_or(Device::Keyboard, |kept| kept.device)
     }

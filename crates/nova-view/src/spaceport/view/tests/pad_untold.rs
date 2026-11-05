@@ -1,8 +1,8 @@
-//! Wiring: the app doesn't tell the spaceport's side the device used last
-//! yet (rdm:phase/key-bindings/phase-9-gamepad-spaceport), so the pad's
-//! focus never shows there, and its moves and South must act on nothing
-//! (`ui::pad_focus`'s "Nothing hidden acts", pinned in that module and in
-//! the dialog's).
+//! Wiring: a spaceport not told the device used last shows no pad focus,
+//! so the pad's moves and South must act on nothing (`ui::pad_focus`'s
+//! "Nothing hidden acts", pinned in that module and in the dialog's). The
+//! told side is in `pad_told`
+//! (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
 
 use super::*;
 use crate::input::PadButton;

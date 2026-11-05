@@ -209,6 +209,7 @@ use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::{ListColors, TradeScreen};
 
+mod pad;
 mod shop_texts;
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
@@ -229,7 +230,10 @@ use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
+use crate::ui::pad_focus::Told;
 use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen};
+#[cfg(test)]
+pub(crate) use tests::pad_told::pad_probe;
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
@@ -582,6 +586,10 @@ pub struct SpaceportView {
     /// Its keys, as commands ([`contexts::PORT`]), and the bindings every
     /// screen it opens reads. It follows every input, whatever is open.
     keys: CommandReader,
+    /// The surroundings the app told it last, which it tells every screen
+    /// it holds and each it opens (the `pad` module). On no sub-state of
+    /// its own: the spaceport holds them all.
+    told: Told,
 }
 
 impl SpaceportView {
@@ -687,6 +695,7 @@ impl SpaceportView {
             chance: SharedChance::default(),
             gambling: gamble::Gambling::default(),
             keys: CommandReader::new(contexts::PORT),
+            told: Told::default(),
         }
     }
 
@@ -1676,6 +1685,7 @@ impl SpaceportView {
                 .with_focus_ring(port.focus_ring)
                 .with_bindings(self.keys.bindings().clone()),
         )));
+        self.tell_open();
         self.port_dialog_opened = Some(PortDialog::MissionComputer);
     }
 
@@ -1917,6 +1927,7 @@ impl SpaceportView {
             .with_bindings(self.keys.bindings().clone())
             .with_key_held(self.close_keys.player_info),
         );
+        self.tell_player_info();
     }
 
     /// The player info screen open, if it is.
@@ -2234,6 +2245,7 @@ impl SpaceportView {
         bar.set_offer_movies(self.movies.clone());
         barkeeping.opened = true;
         self.open = Some(Open::Bar(Box::new(bar)));
+        self.tell_open();
         true
     }
 
@@ -2330,6 +2342,7 @@ impl SpaceportView {
                 ),
             },
         );
+        self.tell_open();
         self.give_offer_movies();
         self.port_dialog_opened = self.open.as_ref().and_then(Open::port_dialog);
     }
@@ -2356,6 +2369,11 @@ impl Screen for SpaceportView {
     /// What waits on the texts over it is settled after it
     /// ([`SpaceportView::settle_gamble`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The surroundings are no player input: they reach every screen it
+        // holds and nothing else runs (the `pad` module).
+        if self.follow_surroundings(input) {
+            return ScreenAction::None;
+        }
         let action = self.route_input(input);
         self.settle_gamble();
         action
@@ -2534,6 +2552,7 @@ impl SpaceportView {
         {
             self.sounds.extend(ambient.pressed().map(Sound::Ui));
         }
+        self.pad_press_landscape(input, fresh);
         if let Some(Command::Port(command)) = fresh
             && self.port.is_ok()
         {
@@ -2674,6 +2693,7 @@ pub(in crate::spaceport) mod tests {
     mod flushing_layers;
     mod held_keys;
     mod overlay_pointer;
+    pub(crate) mod pad_told;
     mod pad_untold;
     mod ship_movies;
 
