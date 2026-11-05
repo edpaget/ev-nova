@@ -13,7 +13,11 @@
 //! [`Session::apply`](crate::Session::apply) answers a command and
 //! [`Session::screen`](crate::Session::screen) a screen's ask. Each
 //! starts with what the first slice moved across the seam needs, the nav
-//! mode and the stellar keys, and grows as later slices move more.
+//! mode and the stellar keys, and grows as later slices move more. The
+//! gate autopilot (`RuleKey::GateAutopilot`'s other reading) reaches the
+//! view the same way: J's [`Answer::GatePilot`], and the frame's
+//! [`FlightFrame::gate_pilot`] with the press it asks the view to send
+//! ([`GatePilotShown`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 

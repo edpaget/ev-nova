@@ -76,6 +76,13 @@
 //!   a click on none is silent.
 //! - The land key ([`Session::land`], @0x6a8ed-0x6a932): with no stellar
 //!   selected in mode 2, mode 2 with the nearest, in silence.
+//! - The gate autopilot, by [`RuleKey::GateAutopilot`]'s other reading,
+//!   which has no original: as J engages it and at each step while it
+//!   flies, mode 2 with the gate it flies to, the brackets' fly-in
+//!   started, as the land key's own pick selects, and only when the nav
+//!   doesn't hold that gate already, so the dock request stands (see the
+//!   `gate_pilot` module). A stellar key's or a click's selection is
+//!   overridden at the next step.
 //! - Landing writes neither: the ship lands in mode 2, the land key
 //!   having selected first.
 //! - The take-off's tail ([`Session::take_off`], `_HandlePlayerDockRequest`

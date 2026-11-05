@@ -26,7 +26,11 @@
 //! ([`Session::warp_end_due`]: the arrival comes first) or the hold after
 //! the player's explosion has run out ([`Session::hold_expired`]):
 //!
-//! 1. each ship's state is recorded, which the view draws from;
+//! 1. each ship's state is recorded, which the view draws from; the
+//!    frame's gain is taken; and while the gate autopilot is engaged its
+//!    controls replace the input's (`Session::pilot_controls`, see the
+//!    `gate_pilot` module), once a step, so both passes below fly them,
+//!    as they fly a held key;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
 //!    [`Session::game_work`]), then its comm notes are taken;
 //! 3. the NPCs answer what the session left them

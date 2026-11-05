@@ -34,19 +34,57 @@
 //! nav doesn't hold it already, so the dock request stands; a player's
 //! stellar key or click is overridden at the next step.
 //!
-//! **Each step** ([`Session::pilot_controls`]) the autopilot's controls
-//! replace the player's for both of double time's passes (see the `step`
-//! module), so every flight rule applies to it as to a player.
+//! **Each step** ([`Session::pilot_controls`]) it re-targets (the hop,
+//! the gate, the selection) and its controls replace the player's for
+//! both of double time's passes (see the `step` module), so every flight
+//! rule applies to it as to a player. The step clears its ask for L and
+//! sets it again when the core's pilot asks; the frame shows it after
+//! the frame's steps (`FlightFrame::gate_pilot`,
+//! [`Session::gate_pilot_shown`]).
+//!
+//! **Whose L is whose** ([`Session::press_land_key`]). The session
+//! decides, and `FlightCommand::Land` stays a unit variant: a `Land` that
+//! arrives while the step's ask stands is the autopilot's own press. It
+//! acts as L does, uses up the ask, and the autopilot stays engaged
+//! unless the dock request refuses it finally. Any other `Land` is the
+//! player's: it acts as L does, and the autopilot lets go. A player's L
+//! read in the same frame the autopilot asked counts as the autopilot's;
+//! it does what the autopilot's press would have done, though the
+//! player's path may open the hypergate map where the autopilot's enters
+//! at once (the view's). The view sends the autopilot's press for it,
+//! without L's latch, and enters the hypergate for its system without the
+//! map; the view never says who pressed.
+//!
+//! **Cloaked.** The core's pilot never asks for L while the ship is
+//! cloaked, as the press would beep (`_ShipIsCloaked` @0x66a8e): the
+//! autopilot keeps steering to the gate and holds over it until the
+//! cloak is off, so engaging or flying while cloaked makes no press.
 //!
 //! **Letting go.** It disengages, with no sound, on any of these:
 //!
 //! - a steering key held: thrust, a turn key, reverse, face or the
 //!   afterburner. The player's controls fly that step;
+//! - the player's L, a `Land` with no ask standing;
 //! - a landing, a jump under way, the ship disabled, breaking up or
 //!   destroyed, or the escape pod;
 //! - the course cleared: it flies along the course, and the course is
 //!   empty without an exit;
-//! - no gate the system shows serves the hop (the course is kept).
+//! - no gate the system shows serves the hop (the course is kept);
+//! - the course done: a hypergate's exit with no course left, one off the
+//!   course (which restarts it), or any exit while it flies to J's
+//!   selection alone ([`Session::gate_pilot_after_exit`]). Under
+//!   [`RuleKey::GateCourse`]'s engine reading every exit restarts the
+//!   course, so the first exit is the end;
+//! - a final refusal of its own press, one it can't fly through:
+//!   `NotLandable`, `Denied`, `CannotPayFee`, `Cloaked` or `Disabled`.
+//!   `TooFar` and `TooFast` only mean "keep flying", and the pilot never
+//!   asks for a press they would answer;
+//! - a hypergate's entry refused (`Cancelled`, `NoLinks`), or a
+//!   wormhole's entry, whatever it comes to.
+//!
+//! **After an exit along the course** [`RuleKey::GateCourse`]'s other
+//! reading has dropped the hop and cued the next, and the autopilot flies
+//! on toward it, reselecting its gate at the next step.
 //!
 //! **Not saved.** It lives on the player's ship and no save keeps it, so
 //! a load (`RuleKey::InFlightSave`'s reading saves in flight) flies with
