@@ -86,3 +86,22 @@ fn a_flight_overlay_opened_by_a_pad_press_is_told_too() {
     assert_eq!(screen.showing(), Showing::PlayerInfo);
     assert_eq!(screen.flight_player_info().expect("open").device(), PAD);
 }
+
+/// An overlay opened outside any input (here mission texts queued over
+/// flight, as a tick's `settle_script` queues them) is told the
+/// surroundings by the tick that follows, before its first frame.
+#[test]
+fn an_overlay_a_tick_opens_is_told_the_surroundings() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&told(PAD));
+    screen.show_over_flight(vec![nova_view::ui::mission_dialogs::DescShown::str_text(
+        "Well done.",
+        None,
+    )]);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::MissionText);
+    let text = screen.flight_mission_text().expect("shown").dialog();
+    assert_eq!(text.device(), PAD);
+    assert!(text.pad_highlight().is_some());
+}
