@@ -3978,7 +3978,7 @@ mod tests {
 
     #[test]
     fn p_asks_for_the_player_info_from_the_shipyard_and_its_panel_not_its_prompt() {
-        let p = crate::ui::player_info::PLAYER_INFO_KEY;
+        let p = crate::keymap::test_keys::PLAYER_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_player_info_request());
         screen.input(&key(p, true, true));
@@ -4915,7 +4915,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_from_the_shipyard_and_its_panel_not_its_prompt() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -4947,7 +4947,7 @@ mod tests {
             Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
             ButtonStyle::STOCK,
         );
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(!screen.take_info_request());
     }
 
@@ -4955,7 +4955,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }
@@ -4970,7 +4970,7 @@ mod tests {
             Key::ArrowUp,
             Key::KeyB,
             Key::Space,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
             Key::Enter,
             Key::Escape,
         ] {

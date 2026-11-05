@@ -627,7 +627,8 @@ mod tests {
         Key::KeyF,
         Key::KeyI,
         Key::KeyP,
-        nova_view::ui::player_info::PLAYER_INFO_KEY,
+        // The player info key's default.
+        Key::KeyP,
         crate::app::screen::PREFERENCES_KEY,
         Key::KeyW,
         Key::KeyA,
@@ -641,7 +642,8 @@ mod tests {
         // Sell defaults.
         Key::KeyB,
         Key::KeyS,
-        nova_view::ui::mission_info::MISSION_INFO_KEY,
+        // The mission info key's default.
+        Key::KeyI,
         // The bar's Holovid and Gamble, and Gamble's twin.
         Key::KeyN,
         Key::KeyG,

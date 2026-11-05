@@ -9,8 +9,6 @@
 
 use super::jump_white::flying_on_a_mission;
 use super::*;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 /// Presses and lets go of `k`.
 fn tap(screen: &mut AppScreen, k: Key) {

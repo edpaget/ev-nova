@@ -2,7 +2,6 @@ use super::live_keys::texted_and_held;
 use super::map_wait_keys::{offered_docked, offered_over_flight};
 use super::*;
 use nova_view::spaceport::offer::ACCEPT_ITEM;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 /// The map key's default.
 const MAP_KEY: Key = Key::KeyM;

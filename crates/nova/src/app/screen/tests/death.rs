@@ -1489,7 +1489,7 @@ fn a_player_info_key_pressed_under_the_rescues_text_and_still_down_opens_it_afte
     let store = MemoryPilots::new();
     let mut screen = ejected(&store, Some(RESCUE_TEXT));
     until_rescue_text(&mut screen);
-    screen.input(&key(nova_view::ui::player_info::PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(screen.showing(), Showing::Flight, "the text closed");

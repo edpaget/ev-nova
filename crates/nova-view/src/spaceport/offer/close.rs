@@ -187,7 +187,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::button::ButtonStyle;
 
-    const I: crate::input::Key = crate::ui::mission_info::MISSION_INFO_KEY;
+    const I: crate::input::Key = crate::keymap::test_keys::MISSION_INFO_KEY;
 
     fn press(key: Key) -> Input {
         Input::Key {
@@ -424,7 +424,7 @@ mod timer_tests {
         assert!(!offers.take_request(), "not while it waits");
         assert!(offers.dialog().is_none());
         offers.input(
-            &key(crate::ui::mission_info::MISSION_INFO_KEY, false),
+            &key(crate::keymap::test_keys::MISSION_INFO_KEY, false),
             &mut Vec::new(),
         );
         offers.tick(Duration::from_millis(1), false);

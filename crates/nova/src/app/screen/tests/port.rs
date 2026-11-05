@@ -2384,8 +2384,8 @@ fn mission_info_closing_over_the_outfitter_redraws_the_bar_held_under_it() {
     click_port_item(&mut screen, 8);
     assert!(spaceport(&screen).open_outfitter().is_some(), "open");
     assert_eq!(fuel_width(&drawn(&screen)), Some(full), "held");
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+    screen.input(&key(MISSION_INFO_KEY, true));
+    screen.input(&key(MISSION_INFO_KEY, false));
     assert!(spaceport(&screen).mission_info().is_some(), "info open");
     assert_eq!(fuel_width(&drawn(&screen)), Some(full), "not as it opens");
     screen.input(&key(Key::Escape, true));
@@ -2518,8 +2518,8 @@ fn mission_info_closing_over_each_opener_shows_the_nav_its_abort_wrote() {
         assert_eq!(active(&screen).len(), 2, "{what}: both accepted");
         open(&mut screen);
         assert!(still_open(spaceport(&screen)), "{what}: open");
-        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
-        screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+        screen.input(&key(MISSION_INFO_KEY, true));
+        screen.input(&key(MISSION_INFO_KEY, false));
         let abort = spaceport(&screen)
             .mission_info()
             .and_then(MissionInfoScreen::dialog)

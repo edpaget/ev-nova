@@ -1,7 +1,6 @@
 use super::encounters::{boardable, boarding_data, hailable};
 use super::map_wait_keys::{game_data_fork_loaded, job, offered_over_flight};
 use super::*;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 /// Communicate's default key.
 const HAIL_KEY: Key = Key::KeyY;
@@ -453,7 +452,7 @@ fn an_i_and_a_return_held_back_on_the_flight_offer_answer_it_with_no_mission_act
         .clone();
     let refuse = item_on_screen(&screen, &offer, nova_view::spaceport::offer::REFUSE_ITEM);
     screen.input(&left(true, refuse));
-    tap(&mut screen, nova_view::ui::mission_info::MISSION_INFO_KEY);
+    tap(&mut screen, MISSION_INFO_KEY);
     tap(&mut screen, Key::Enter);
     assert_eq!(screen.showing(), Showing::Offer, "it waits");
     screen.input(&left(false, Point::new(1.0, 1.0)));

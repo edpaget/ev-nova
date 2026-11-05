@@ -8,8 +8,6 @@ use super::encounters::{board, boardable, boarding_data, hailable};
 use super::jump_white::flying_on_a_mission;
 use super::planet_comm::planet_data;
 use super::*;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 const AT: Point = Point::new(300.0, 300.0);
 const OTHER: Point = Point::new(320.0, 310.0);

@@ -52,8 +52,8 @@
 //!   the game runs fullscreen, its arrows stepping through the modes.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
-//! - [`mission_info`]: the key that asks for the mission info screen
-//!   ([`MISSION_INFO_KEY`](mission_info::MISSION_INFO_KEY)).
+//! - [`mission_info`]: the key that asks for the mission info screen,
+//!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
 //!   under them ([`MissionDialogs`](mission_dialogs::MissionDialogs)),
 //!   over the spaceport or over flight.

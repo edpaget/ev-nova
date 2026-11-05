@@ -373,8 +373,8 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
         Some(MissionId(131)),
         "offered on landing again, 129's accept having shifted 130 out"
     );
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+    screen.input(&key(MISSION_INFO_KEY, true));
+    screen.input(&key(MISSION_INFO_KEY, false));
     assert!(spaceport(&screen).mission_info().is_some(), "info open");
     screen.input(&key(Key::Escape, true));
     assert!(spaceport(&screen).mission_info().is_none(), "info closed");
@@ -1245,8 +1245,8 @@ fn hail_person(screen: &mut AppScreen, id: i16) {
 }
 
 fn press_mission_info(screen: &mut AppScreen) {
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, false));
+    screen.input(&key(MISSION_INFO_KEY, true));
+    screen.input(&key(MISSION_INFO_KEY, false));
 }
 
 #[test]
@@ -1433,7 +1433,7 @@ fn an_i_and_a_return_held_back_on_the_spaceports_offer_accept_with_no_mission_ac
         at,
     };
     screen.input(&left(true, refuse));
-    for k in [nova_view::ui::mission_info::MISSION_INFO_KEY, Key::Enter] {
+    for k in [MISSION_INFO_KEY, Key::Enter] {
         screen.input(&key(k, true));
         screen.input(&key(k, false));
     }

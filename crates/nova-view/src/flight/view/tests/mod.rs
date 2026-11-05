@@ -42,12 +42,12 @@ use crate::flight::sprite::rotation_frame;
 use crate::flight::target::Tag;
 use crate::flight::weapons;
 use crate::galaxy::MapMode;
+use crate::keymap::test_keys::MISSION_INFO_KEY;
+use crate::keymap::test_keys::PLAYER_INFO_KEY;
 use crate::sound::Sound;
 use crate::spaceport::PortDialog;
 use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
 use nova_sim::flight_frame::{

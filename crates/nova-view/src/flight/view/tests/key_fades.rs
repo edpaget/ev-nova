@@ -9,8 +9,8 @@ use super::faked_flight::{at_rest, hold, ticked};
 use super::faked_hud::changes;
 use super::faked_screen::{braking, in_flight};
 use super::*;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::keymap::test_keys::MISSION_INFO_KEY;
+use crate::keymap::test_keys::PLAYER_INFO_KEY;
 
 /// The cursor whole.
 const WHOLE: Option<u8> = Some(255);

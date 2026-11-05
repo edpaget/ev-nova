@@ -747,6 +747,7 @@ mod tests {
     use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::sound::UiSound;
@@ -754,7 +755,6 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
-    use crate::ui::mission_info::MISSION_INFO_KEY;
     use crate::ui::row_list::RowList;
     use nova_sim::DescMovie;
 

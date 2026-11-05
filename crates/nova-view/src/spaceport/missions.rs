@@ -1059,7 +1059,7 @@ impl Screen for MissionInfoScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::input::Key;
-    use crate::ui::mission_info::MISSION_INFO_KEY;
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
 
     /// The keys that leave the mission computer by default, besides
@@ -2711,7 +2711,7 @@ mod tests {
                 Key::ArrowUp,
                 Key::ArrowDown,
                 MISSION_INFO_KEY,
-                crate::ui::player_info::PLAYER_INFO_KEY,
+                crate::keymap::test_keys::PLAYER_INFO_KEY,
                 ACCEPT_KEY,
             ]
             .into_iter()

@@ -171,12 +171,7 @@ fn tapped(screen: &mut AppScreen, k: Key) {
 #[test]
 fn m_i_p_and_y_under_the_warps_white_leave_the_game_showing_flight() {
     let mut screen = lit();
-    for k in [
-        MAP,
-        nova_view::ui::mission_info::MISSION_INFO_KEY,
-        PLAYER_INFO_KEY,
-        Key::KeyY,
-    ] {
+    for k in [MAP, MISSION_INFO_KEY, PLAYER_INFO_KEY, Key::KeyY] {
         tapped(&mut screen, k);
         assert_eq!(screen.showing(), Showing::Flight, "{k:?}");
         screen.tick(TICK);
@@ -249,7 +244,7 @@ fn p_pressed_on_the_arrivals_pass_and_held_opens_its_dialog_from_the_tick() {
 fn i_held_through_the_arrival_opens_mission_info_from_the_tick() {
     let store = MemoryPilots::new();
     let mut screen = lit_on_a_mission(&store);
-    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+    screen.input(&key(MISSION_INFO_KEY, true));
     tick_past_the_arrival(&mut screen);
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::MissionInfo);

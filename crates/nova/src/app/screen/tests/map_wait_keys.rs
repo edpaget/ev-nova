@@ -1,6 +1,4 @@
 use super::*;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 // The keys typed while a map over a screen waits for M's release, replayed
 // to the screen under it at the close: the wiring of the flight's queue

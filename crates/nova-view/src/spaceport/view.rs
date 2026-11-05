@@ -2674,7 +2674,7 @@ pub(in crate::spaceport) mod tests {
     mod overlay_pointer;
     mod ship_movies;
 
-    use crate::ui::mission_info::MISSION_INFO_KEY;
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
     use nova_sim::landing::StellarFlags;
@@ -5515,7 +5515,7 @@ pub(in crate::spaceport) mod tests {
         };
         view.input(&button(true, at));
         view.input(&key(Key::Enter));
-        view.input(&key(crate::ui::mission_info::MISSION_INFO_KEY));
+        view.input(&key(crate::keymap::test_keys::MISSION_INFO_KEY));
         assert!(!view.take_mission_info_request(), "it waits");
         view.input(&button(false, Point::new(0.0, 0.0)));
         assert!(view.mission_text().is_none(), "closed by the release");
@@ -6407,9 +6407,10 @@ pub(in crate::spaceport) mod tests {
 
     // Player info.
 
+    use crate::keymap::test_keys::PLAYER_INFO_KEY;
     use crate::ui::player_info::{
-        BACKGROUND, BackgroundSizes, PLAYER_INFO_KEY, PictureSize, PlayerInfoButton,
-        PlayerInfoScreen as InfoScreen, Tab,
+        BACKGROUND, BackgroundSizes, PictureSize, PlayerInfoButton, PlayerInfoScreen as InfoScreen,
+        Tab,
     };
     use nova_sim::PlayerInfo;
 

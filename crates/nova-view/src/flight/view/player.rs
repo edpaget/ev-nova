@@ -36,7 +36,8 @@ pub(super) enum KeptPanel {
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Whether the player info key
+    /// ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo))
     /// asked for the player info screen since this was last taken, once:
     /// the router opens it on [`FlightView::open_player_info`] over the
     /// paused flight.
@@ -97,7 +98,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Presses [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Presses the player info key
+    /// ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo))
     /// outside a jump, its [`PlayerCommand`] taken: when the flight takes
     /// the press too ([`FlightView::press_player_info`]), asks the router
     /// for the player info screen, letting go of the flight keys
@@ -114,7 +116,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the flight takes a press of
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// the player info key
+    /// ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo))
     /// ([`FlightCommand::PressPlayerInfo`],
     /// `nova_sim::Session::press_player_info`, which beeps a refusal).
     /// Sent with no gate of its own: `Screen::input`'s press filter has
@@ -129,7 +132,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         )
     }
 
-    /// A press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// A press of the player info key
+    /// ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo))
     /// read on a pass with a jump under way: the flight refuses it with
     /// its beep ([`FlightView::press_player_info`], @0x702f7,
     /// @0x7039a-0x703bd), when the player's fate takes it.
@@ -139,7 +143,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) read
+    /// The player info key
+    /// ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo)) read
     /// on the pass a jump collapsed under the white
     /// ([`FadedPress::PlayerInfo`]): whether `_DoPlayerInfoDialog`'s guard
     /// refused it (@0x5a024), which lets go of the latched keys

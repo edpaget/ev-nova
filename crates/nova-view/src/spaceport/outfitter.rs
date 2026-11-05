@@ -5159,7 +5159,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_the_mission_info_screen() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut screen = counting_screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -5230,7 +5230,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }

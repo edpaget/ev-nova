@@ -1095,7 +1095,7 @@ impl Screen for BarScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use crate::ui::mission_info::MISSION_INFO_KEY;
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
@@ -2892,7 +2892,7 @@ mod tests {
             Key::Enter,
             Key::Escape,
             MISSION_INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ]
         .into_iter()
         .chain(HIRE_KEYS)

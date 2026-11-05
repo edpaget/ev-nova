@@ -1028,8 +1028,8 @@ mod tests {
             Key::KeyG,
             Key::KeyR,
             crate::Key::KeyM,
-            crate::ui::mission_info::MISSION_INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::MISSION_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ] {
             screen.input(&key(pressed, true, false));
         }

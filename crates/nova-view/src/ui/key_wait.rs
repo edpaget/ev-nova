@@ -270,9 +270,9 @@ impl KeyWait {
 mod tests {
     use super::*;
     const MAP_KEY: crate::Key = crate::Key::KeyM;
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
+    use crate::keymap::test_keys::PLAYER_INFO_KEY;
     use crate::keymap::{Bindings, KeyCombo, PlayCommand};
-    use crate::ui::mission_info::MISSION_INFO_KEY;
-    use crate::ui::player_info::PLAYER_INFO_KEY;
     use crate::{MouseButton, Point};
 
     fn press(key: Key) -> Input {

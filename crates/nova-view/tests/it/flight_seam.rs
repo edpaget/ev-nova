@@ -1661,7 +1661,8 @@ fn a_real_p_opens_the_sessions_player_info_and_the_pilot_panel_is_the_sessions()
     let data = data();
     let session = SessionBuilder::flying(&data).build();
     let mut view = FlightView::from_session(Rc::clone(&data), session.into(), &Rulebook::default());
-    tap(&mut view, nova_view::ui::player_info::PLAYER_INFO_KEY);
+    // The player info key's default.
+    tap(&mut view, Key::KeyP);
     assert!(
         view.take_player_info_request(),
         "the session took the press"

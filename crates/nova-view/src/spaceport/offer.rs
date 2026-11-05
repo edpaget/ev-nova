@@ -1706,9 +1706,9 @@ mod tests {
     #[test]
     fn a_letter_the_waited_keys_repeat_typed_chooses_nothing_after_the_wait() {
         const MAP_KEY: crate::Key = crate::Key::KeyM;
+        use crate::keymap::test_keys::MISSION_INFO_KEY;
+        use crate::keymap::test_keys::PLAYER_INFO_KEY;
         use crate::ui::key_wait::WaitKeys;
-        use crate::ui::mission_info::MISSION_INFO_KEY;
-        use crate::ui::player_info::PLAYER_INFO_KEY;
         for (waited, letter, label) in [
             (MAP_KEY, 'm', "Move it"),
             (PLAYER_INFO_KEY, 'p', "Proceed"),
@@ -2474,7 +2474,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_for_mission_info_before_the_labels_letters() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut dialog = offer();
         assert!(!dialog.take_info_request());
         dialog.input(&Input::Key {
@@ -2501,7 +2501,7 @@ mod tests {
     /// read before the labels' letters, so it doesn't choose I'm in.
     #[test]
     fn with_no_mission_listed_the_mission_info_key_asks_and_chooses_nothing() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut dialog = offer().with_missions_listed(false);
         typed(&mut dialog, i, 'i');
         assert!(!dialog.take_info_request());
@@ -2882,7 +2882,7 @@ mod tests {
         for k in [
             Key::Enter,
             Key::Escape,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ]
         .into_iter()
         .chain(('a'..='z').filter_map(crate::input::letter_key))

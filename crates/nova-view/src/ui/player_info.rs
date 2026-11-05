@@ -178,13 +178,6 @@ pub const CONTENT_ITEM: usize = 6;
 /// Jettison's item.
 pub const JETTISON_ITEM: usize = 7;
 
-/// The player info key: the original's default `playerInfoKey`
-/// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
-/// The screen and the spaceport's screens read [`PlayCommand::PlayerInfo`];
-/// the router compares this until it reads the key map
-/// (rdm:phase/key-bindings/phase-2-command-key-map's step 8).
-pub const PLAYER_INFO_KEY: Key = Key::KeyP;
-
 /// The key the player info key's command, [`PlayCommand::PlayerInfo`],
 /// is bound to in `bindings`, if any: what a close waits on. A key wait
 /// compares the key itself (the phase's fixed keys).
@@ -1044,6 +1037,8 @@ impl PlayerInfoScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::keymap::KeyMap;
+    use crate::keymap::test_keys::PLAYER_INFO_KEY;
     use nova_sim::player_info::CheatIds;
 
     use crate::keymap::{Bindings, KeyCombo};
@@ -1269,7 +1264,12 @@ mod tests {
         );
         assert_eq!(LABEL_COLOR, Color::rgba(192, 192, 192, 255));
         assert_eq!(TEXT_SIZE, 9.0);
-        assert_eq!(PLAYER_INFO_KEY, Key::KeyP);
+        assert_eq!(
+            KeyMap::default()
+                .combo(PlayCommand::PlayerInfo.into())
+                .map(|combo| combo.key),
+            Some(Key::KeyP)
+        );
     }
 
     #[test]

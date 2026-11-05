@@ -418,7 +418,7 @@ fn a_player_info_key_pressed_under_an_arrivals_defection_and_still_down_opens_it
         screen.tick(frame);
         faded_for += frame;
     }
-    screen.input(&key(nova_view::ui::player_info::PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     for _ in 0..600 {

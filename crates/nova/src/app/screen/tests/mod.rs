@@ -82,12 +82,19 @@ use nova_view::ui::Dialog;
 use nova_view::ui::comm::{CLOSE_ITEM, COMM_DIALOG, HAGGLE_DIALOG, LOWER_ITEM};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG};
-use nova_view::ui::player_info::{PLAYER_INFO_KEY, PlayerInfoButton, Tab};
+use nova_view::ui::player_info::{PlayerInfoButton, Tab};
 use nova_view::ui::plunder::{
     ASSIGNMENT_DIALOG, ESCORT_ITEM, MY_SHIP_ITEM, PLUNDER_DIALOG, PLUNDER_PICTURE,
 };
 use std::cell::RefCell;
 use std::collections::VecDeque;
+
+/// Player Info's default key, as the tests press it (the key map's
+/// default, pinned in nova-view).
+const PLAYER_INFO_KEY: Key = Key::KeyP;
+
+/// Mission Info's default key, as the tests press it.
+const MISSION_INFO_KEY: Key = Key::KeyI;
 
 mod about_movies;
 mod appear;

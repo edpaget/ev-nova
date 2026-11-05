@@ -7,8 +7,6 @@
 use super::map_wait_keys::{offered_docked, offered_over_flight};
 use super::missions::holding_and_offered_in_flight;
 use super::*;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 /// Presses and lets go of `k`.
 fn tap(screen: &mut AppScreen, k: Key) {

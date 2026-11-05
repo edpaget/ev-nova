@@ -83,6 +83,8 @@ pub mod command;
 pub mod contexts;
 pub mod keyboard;
 pub mod reader;
+#[cfg(test)]
+pub(crate) mod test_keys;
 
 pub use bindings::{Bindings, Clash, Devices, is_modifier_input};
 pub use command::{

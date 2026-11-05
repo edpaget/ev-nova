@@ -414,8 +414,8 @@ mod tests {
     #[test]
     fn m_i_and_p_during_a_hold_ask_at_the_release() {
         let map = crate::Key::KeyM;
-        let info = crate::ui::mission_info::MISSION_INFO_KEY;
-        let player = crate::ui::player_info::PLAYER_INFO_KEY;
+        let info = crate::keymap::test_keys::MISSION_INFO_KEY;
+        let player = crate::keymap::test_keys::PLAYER_INFO_KEY;
         let (mut offer, at) = held();
         offer.input(&key(map, false));
         assert!(!offer.take_map_request(), "it waits");
@@ -506,8 +506,8 @@ mod tests {
     fn a_key_queued_after_m_i_or_p_is_dropped() {
         for asking in [
             crate::Key::KeyM,
-            crate::ui::mission_info::MISSION_INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            crate::keymap::test_keys::MISSION_INFO_KEY,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
         ] {
             let (mut offer, at) = held();
             for k in [asking, Key::Enter] {
@@ -530,7 +530,7 @@ mod tests {
         use crate::spaceport::offer::OfferChoice;
         let (mut offer, at) = held();
         offer.set_missions_listed(false);
-        for k in [crate::ui::mission_info::MISSION_INFO_KEY, Key::Enter] {
+        for k in [crate::keymap::test_keys::MISSION_INFO_KEY, Key::Enter] {
             offer.input(&key(k, false));
         }
         offer.input(&left(false, at));
