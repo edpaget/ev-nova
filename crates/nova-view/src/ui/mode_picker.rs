@@ -84,6 +84,18 @@ impl ModePicker {
         Self(self.0.with_bindings(bindings))
     }
 
+    /// A pad button presses `arrow` as a click does, drawn pressed until
+    /// its release ([`Picker::press_keyed`]).
+    pub fn press_keyed(&mut self, arrow: Arrow) {
+        self.0.press_keyed(arrow);
+    }
+
+    /// The pad button's release: steps as a click on the arrow pressed
+    /// does ([`Picker::release_keyed`]); `true` when it changes.
+    pub fn release_keyed(&mut self) -> bool {
+        self.0.release_keyed()
+    }
+
     /// Abandons a click in progress without stepping.
     pub fn cancel_pointer(&mut self) {
         self.0.cancel_pointer();
@@ -158,6 +170,17 @@ mod tests {
             pressed,
             at,
         }
+    }
+
+    #[test]
+    fn a_keyed_press_on_an_arrow_steps_it_as_a_click_does() {
+        let mut picker = picker(FullscreenKind::Borderless);
+        picker.press_keyed(Arrow::Down);
+        assert!(picker.pressed(Arrow::Down));
+        assert_eq!(picker.selected(), FullscreenKind::Borderless);
+        assert!(picker.release_keyed());
+        assert_eq!(picker.selected(), exclusive(modes()[0]));
+        assert!(!picker.release_keyed());
     }
 
     fn click(picker: &mut ModePicker, at: Point) -> bool {

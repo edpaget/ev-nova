@@ -119,7 +119,7 @@ impl Dialog {
                 self.press_focused();
                 return None;
             }
-            return self.release_focused();
+            return self.release_item_keyed();
         }
         self.command(input)
     }
@@ -144,9 +144,19 @@ impl Dialog {
     /// at once and on each tick until South's release; anything else is
     /// armed, drawn pressed.
     fn press_focused(&mut self) {
-        let Some(item) = self.focus.get().filter(|&item| self.is_pad_target(item)) else {
+        if let Some(item) = self.focus.get().filter(|&item| self.is_pad_target(item)) {
+            self.press_item_keyed(item);
+        }
+    }
+
+    /// A pad button presses item `item` (from 1) as a left press on it
+    /// does: how a host that keeps the focus itself (Preferences, over its
+    /// OK and Key Settings) presses one of the dialog's buttons. Its
+    /// release is [`Dialog::release_item_keyed`].
+    pub(crate) fn press_item_keyed(&mut self, item: usize) {
+        if !self.item(item).is_some_and(|found| found.shown) {
             return;
-        };
+        }
         self.cancel_pointer();
         let index = item - 1;
         if let Widget::ScrollArrow(arrow) = self.items[index].widget
@@ -169,7 +179,7 @@ impl Dialog {
 
     /// South came up: ends its hold on an arrow, or activates the item its
     /// press armed, as a click's release does.
-    fn release_focused(&mut self) -> Option<DialogEvent> {
+    pub(crate) fn release_item_keyed(&mut self) -> Option<DialogEvent> {
         if self.pad_hold {
             self.hold = None;
             self.pad_hold = false;
