@@ -766,6 +766,18 @@ fn each_hull_is_a_ship_numbered_from_128_with_its_name() {
 }
 
 #[test]
+fn a_ship_with_mods_but_no_base_is_no_hull() {
+    let source = fixture::galaxy().with(
+        "ships/kitted.md",
+        "---\nname: Kitted\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
+         size: {length: 8, beam: 4, collision_radius: 4}\nmods: [gun-mount]\n---\n",
+    );
+    let game = loaded(&source);
+    assert!(!game.ids.ships.contains_key(&id("kitted")));
+    assert_eq!(game.data.ids(Ship::TYPE), [128], "the skiff alone");
+}
+
+#[test]
 fn a_variant_is_not_mapped_and_is_no_problem() {
     let game = loaded(&fixture::galaxy());
     assert!(!game.ids.ships.contains_key(&id("armed-skiff")));
