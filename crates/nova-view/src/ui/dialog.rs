@@ -68,6 +68,7 @@ use super::pad_focus::FocusState;
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
+use pad::PadSpot;
 
 mod pad;
 
@@ -342,6 +343,10 @@ pub struct DialogFrame {
 pub enum DialogEvent {
     /// Item `n` (from 1) was activated: clicked, or chosen with a key.
     Item(usize),
+    /// The pad's South pressed cell `n` (from 0) of the cells its host
+    /// gave ([`Dialog::set_pad_cells`]), as a click on it would; the host
+    /// acts on it as on its own hit test's.
+    Cell(usize),
 }
 
 /// What an item does on screen.
@@ -441,9 +446,15 @@ pub struct Dialog {
     metrics: Rc<dyn TextMetrics>,
     default_item: Option<usize>,
     cancel_item: Option<usize>,
-    /// The focused item's number (from 1), and who placed it: the
-    /// keyboard's Tab, or the pad (the `pad` module).
-    focus: FocusState<usize>,
+    /// The focused item or cell, and who placed it: the keyboard's Tab,
+    /// or the pad (the `pad` module).
+    focus: FocusState<PadSpot>,
+    /// The cells standing in for an item among the pad's targets, by item
+    /// number (from 1), as the host draws them ([`Dialog::set_pad_cells`]).
+    pad_cells: Option<(usize, Vec<Bounds>)>,
+    /// The items the host takes out of the pad's targets
+    /// ([`Dialog::without_pad_targets`]).
+    left_out: Vec<usize>,
     /// Whether Tab and Space move and press a focus.
     focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
@@ -470,7 +481,7 @@ impl std::fmt::Debug for Dialog {
         f.debug_struct("Dialog")
             .field("bounds", &self.bounds)
             .field("items", &self.items)
-            .field("focus", &self.focus.get())
+            .field("focus", &self.focus())
             .finish_non_exhaustive()
     }
 }
@@ -547,6 +558,8 @@ impl Dialog {
             default_item: Some(1),
             cancel_item: None,
             focus: FocusState::default(),
+            pad_cells: None,
+            left_out: Vec::new(),
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
@@ -805,7 +818,7 @@ impl Dialog {
     /// or the pad placed it.
     #[must_use]
     pub fn focus(&self) -> Option<usize> {
-        self.focus.get()
+        self.focus.get().and_then(PadSpot::item)
     }
 
     /// The first scrolling text, if any.
@@ -951,7 +964,7 @@ impl Dialog {
                 self.focus_next();
                 None
             }
-            UiCommand::Activate => self.activate(self.focus.get()),
+            UiCommand::Activate => self.activate(self.focus()),
             UiCommand::FocusUp
             | UiCommand::FocusDown
             | UiCommand::FocusLeft
@@ -971,14 +984,20 @@ impl Dialog {
     fn focus_next(&mut self) {
         let count = self.items.len();
         // The focus is an item number, so it is the next one's index.
-        let start = self.focus.get().unwrap_or(0);
+        // From a cell the pad placed, it goes on from the cells' item.
+        let start = match self.focus.get() {
+            Some(PadSpot::Item(item)) => item,
+            Some(PadSpot::Cell(_)) => self.pad_cells.as_ref().map_or(0, |(item, _)| *item),
+            None => 0,
+        };
         let next = (0..count)
             .map(|step| (start + step) % count)
             .find(|&index| {
                 let item = &self.items[index];
                 item.active() && item.drawn && item.is_button()
             });
-        self.focus.set_by_keys(next.map(|index| index + 1));
+        self.focus
+            .set_by_keys(next.map(|index| PadSpot::Item(index + 1)));
     }
 
     /// Picks the item under a press and tracks it. The pick and the
@@ -1199,7 +1218,7 @@ impl Dialog {
                 Widget::Button(button) => {
                     let pressed = tracked || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
-                    if self.focus.keyboard_ring() == Some(index + 1) {
+                    if self.focus.keyboard_ring() == Some(PadSpot::Item(index + 1)) {
                         outline(list, item.bounds, self.style.up);
                     }
                 }

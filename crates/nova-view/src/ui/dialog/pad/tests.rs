@@ -598,3 +598,157 @@ fn a_focus_greyed_out_shows_no_highlight_and_south_presses_nothing() {
     assert_eq!(drawn(&dialog), before);
     assert_eq!(dialog.input(&pad(PadButton::South, false)), None);
 }
+
+/// OK (1, the default) and Cancel (2) at the bottom, a user item (3)
+/// across the top that a host draws two cells in, and a dead user item
+/// (4) at the bottom left.
+fn celled() -> Dialog {
+    let template = DialogTemplate {
+        bounds: rect(0.0, 0.0, 300.0, 140.0),
+        placement: Placement::Fixed,
+        items: vec![
+            button(220.0, 110.0, "OK"),
+            button(140.0, 110.0, "Cancel"),
+            item(rect(10.0, 10.0, 280.0, 80.0), true, ItemSpec::User),
+            item(rect(10.0, 110.0, 40.0, 20.0), true, ItemSpec::User),
+        ],
+    };
+    let mut dialog = self::dialog(&template);
+    dialog.set_pad_cells(3, cells());
+    dialog
+}
+
+fn cells() -> Vec<Bounds> {
+    vec![rect(120.0, 20.0, 60.0, 60.0), rect(220.0, 20.0, 60.0, 60.0)]
+}
+
+fn spots(dialog: &Dialog) -> Vec<PadSpot> {
+    dialog.pad_spots().iter().map(|target| target.id).collect()
+}
+
+#[test]
+fn cells_stand_in_for_their_item_in_tab_order() {
+    let dialog = celled();
+    assert_eq!(
+        spots(&dialog),
+        [
+            PadSpot::Item(1),
+            PadSpot::Item(2),
+            PadSpot::Cell(0),
+            PadSpot::Cell(1),
+            PadSpot::Item(4),
+        ]
+    );
+    let mut none = celled();
+    none.set_pad_cells(3, Vec::new());
+    assert!(
+        !spots(&none).contains(&PadSpot::Item(3)),
+        "no cells, no item"
+    );
+}
+
+#[test]
+fn the_dpad_moves_between_cells_and_buttons() {
+    let mut dialog = celled();
+    dialog.input(&told(PAD));
+    assert_eq!(dialog.focus(), Some(1), "on the default");
+    tap(&mut dialog, PadButton::DPadUp);
+    assert_eq!(dialog.pad_highlight_cell(), Some(1));
+    assert_eq!(dialog.focus(), None, "a cell is no item");
+    tap(&mut dialog, PadButton::DPadLeft);
+    assert_eq!(dialog.pad_highlight_cell(), Some(0));
+    assert!(drawn(&dialog).ends_with(&highlight(cells()[0])));
+    tap(&mut dialog, PadButton::DPadDown);
+    assert_eq!(dialog.pad_highlight_cell(), None);
+    assert_eq!(dialog.pad_highlight(), Some(2));
+}
+
+#[test]
+fn south_on_a_cell_reports_it_on_the_press_silently() {
+    let mut dialog = celled();
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadUp);
+    assert_eq!(
+        dialog.input(&pad(PadButton::South, true)),
+        Some(DialogEvent::Cell(1))
+    );
+    assert_eq!(dialog.input(&pad(PadButton::South, false)), None);
+    assert_eq!(dialog.tracker.take_sound(), None);
+    assert_eq!(dialog.tracked, None, "nothing armed");
+}
+
+#[test]
+fn a_cell_gone_draws_no_highlight_and_the_next_move_lands_on_the_initial_target() {
+    let mut dialog = celled();
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadUp);
+    dialog.set_pad_cells(3, vec![cells()[0]]);
+    assert_eq!(dialog.pad_highlight_cell(), None);
+    assert_eq!(dialog.input(&pad(PadButton::South, true)), None);
+    tap(&mut dialog, PadButton::DPadLeft);
+    assert_eq!(dialog.pad_highlight(), Some(1), "the initial target");
+}
+
+#[test]
+fn keyboard_tab_never_visits_a_cell_and_goes_on_from_the_cells_item() {
+    let mut keyed = celled();
+    let mut order = Vec::new();
+    for _ in 0..3 {
+        keyed.input(&key(Key::Tab));
+        order.push(keyed.focus());
+    }
+    assert_eq!(order, [Some(1), Some(2), Some(1)], "buttons only");
+    let mut dialog = celled();
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadUp);
+    dialog.input(&told(Device::Keyboard));
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadUp);
+    assert_eq!(dialog.pad_highlight_cell(), Some(1));
+    dialog.input(&key(Key::Tab));
+    assert_eq!(dialog.focus(), Some(1), "on from item 3, wrapping to OK");
+}
+
+#[test]
+fn focus_names_items_only() {
+    let mut dialog = celled();
+    dialog.input(&told(PAD));
+    assert_eq!(dialog.focus(), Some(1));
+    tap(&mut dialog, PadButton::DPadUp);
+    assert_eq!(dialog.focus(), None);
+    assert_eq!(dialog.pad_highlight(), None);
+    assert!(format!("{dialog:?}").contains("focus: None"));
+}
+
+#[test]
+fn items_left_out_are_no_targets() {
+    let template = row();
+    let dialog = self::dialog(&template).without_pad_targets(&[2]);
+    assert_eq!(ids(&dialog), [1, 3]);
+    let dialog = celled().without_pad_targets(&[4]);
+    assert!(!spots(&dialog).contains(&PadSpot::Item(4)));
+    assert!(spots(&celled()).contains(&PadSpot::Item(4)));
+}
+
+#[test]
+fn a_dialog_laid_out_again_keeps_a_pad_focused_cell() {
+    let mut dialog = celled().without_pad_targets(&[4]);
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadUp);
+    let template = DialogTemplate {
+        bounds: rect(0.0, 0.0, 300.0, 140.0),
+        placement: Placement::Fixed,
+        items: vec![
+            button(220.0, 110.0, "OK"),
+            button(140.0, 110.0, "Cancel"),
+            item(rect(10.0, 10.0, 280.0, 80.0), true, ItemSpec::User),
+            item(rect(10.0, 110.0, 40.0, 20.0), true, ItemSpec::User),
+        ],
+    };
+    dialog.lay_out_again(self::dialog(&template));
+    assert_eq!(dialog.pad_highlight_cell(), Some(1));
+    assert!(
+        !spots(&dialog).contains(&PadSpot::Item(4)),
+        "still left out"
+    );
+}

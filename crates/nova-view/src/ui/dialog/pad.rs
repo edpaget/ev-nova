@@ -22,6 +22,19 @@
 //!   The press is silent, as a click is in every in-game dialog. A focus
 //!   move drops a held press silently, and a release whose press the
 //!   dialog never saw does nothing.
+//! - **Cells.** A host that draws rows or grid cells inside one user item
+//!   (the mission lists, the outfitter's and shipyard's grids) gives
+//!   them as cells ([`Dialog::set_pad_cells`]): they stand in for that
+//!   item among the targets, in its place in Tab order. South on a cell
+//!   reports [`DialogEvent::Cell`] on its press, silently, as a pointer
+//!   press acts on a grid or a list; the host runs its own press on it.
+//!   Keyboard Tab never visits a cell, and from a cell the pad placed it
+//!   goes on from the cells' item. A cell gone (a scroll, a shorter list)
+//!   is no target: it draws no highlight, and the next move lands on the
+//!   initial target.
+//! - **Items left out.** A host takes role-less user items whose click
+//!   does nothing out of the targets ([`Dialog::without_pad_targets`]), so
+//!   the d-pad never stops on a dead area.
 //! - **Everything else** a pad button means (Back, the left stick's Up
 //!   and Down) goes through [`Dialog::command`], as its key's does.
 //! - **The highlight** ([`pad_focus::draw_highlight`]) shows only while the
@@ -36,6 +49,7 @@
 //! this has a `Rulebook` key, and a focus move is silent.
 
 use crate::draw::DrawList;
+use crate::geometry::Bounds;
 use crate::input::{Device, Input, Surroundings};
 use crate::keymap::{Command, CommandInput};
 // The tests name commands through `super::*`.
@@ -46,7 +60,53 @@ use super::super::pad_focus::{self, FocusMove, PadRead, Target};
 use super::super::scroll_arrows::ArrowHold;
 use super::{Dialog, DialogEvent, FocusRing, Widget};
 
+/// A place the pad's focus can rest on in a [`Dialog`]: an item (from 1)
+/// or one of the host's cells (from 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PadSpot {
+    /// Item `n` (from 1).
+    Item(usize),
+    /// Cell `n` (from 0) of the host's cells.
+    Cell(usize),
+}
+
+impl PadSpot {
+    /// The item, if it is one.
+    pub(crate) const fn item(self) -> Option<usize> {
+        match self {
+            Self::Item(item) => Some(item),
+            Self::Cell(_) => None,
+        }
+    }
+}
+
 impl Dialog {
+    /// Makes `cells` (rects in logical units, in the host's order) stand
+    /// in for item `item` (from 1) among the pad's targets, in its place
+    /// in Tab order; the item itself is no target while it has cells. An
+    /// empty list leaves the item with none. The host gives them afresh
+    /// whenever they move: after a scroll, a relayout or a new listing.
+    pub fn set_pad_cells(&mut self, item: usize, cells: Vec<Bounds>) {
+        self.pad_cells = Some((item, cells));
+    }
+
+    /// The dialog with `items` (from 1) taken out of the pad's targets:
+    /// role-less user items whose click does nothing.
+    #[must_use]
+    pub fn without_pad_targets(mut self, items: &[usize]) -> Self {
+        self.left_out.extend_from_slice(items);
+        self
+    }
+
+    /// The cell the pad's highlight is on (from 0), if it shows.
+    #[must_use]
+    pub fn pad_highlight_cell(&self) -> Option<usize> {
+        match self.focus.pad_highlight() {
+            Some(spot @ PadSpot::Cell(cell)) if self.is_pad_target(spot) => Some(cell),
+            _ => None,
+        }
+    }
+
     /// The device the player used last, as the last surroundings it was
     /// told said; the keyboard before any.
     #[must_use]
@@ -68,6 +128,8 @@ impl Dialog {
         let mut laid = laid
             .with_focus_ring(self.focus_ring)
             .with_bindings(self.bindings().clone());
+        laid.pad_cells = self.pad_cells.take();
+        laid.left_out = std::mem::take(&mut self.left_out);
         laid.carry_pad_from(self);
         *self = laid;
     }
@@ -79,8 +141,8 @@ impl Dialog {
     fn carry_pad_from(&mut self, old: &Self) {
         self.focus.carry_pad_from(&old.focus);
         if self.focus.pad_moved()
-            && let Some(item) = self.focus.get()
-            && !self.is_pad_target(item)
+            && let Some(spot) = self.focus.get()
+            && !self.is_pad_target(spot)
         {
             self.focus.set_by_keys(None);
         }
@@ -95,41 +157,68 @@ impl Dialog {
     pub fn pad_highlight(&self) -> Option<usize> {
         self.focus
             .pad_highlight()
-            .filter(|&item| self.is_pad_target(item))
+            .filter(|&spot| self.is_pad_target(spot))
+            .and_then(PadSpot::item)
     }
 
-    /// The items the pad's focus can rest on, in item order: see the
-    /// module docs.
+    /// The items the pad's focus can rest on, in item order, leaving out
+    /// the cells and the item they stand in for: see the module docs.
+    #[cfg(test)]
     pub(crate) fn pad_targets(&self) -> Vec<Target<usize>> {
-        self.items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| {
-                item.active()
-                    && item.drawn
-                    && match &item.widget {
-                        Widget::Button(_) => true,
-                        Widget::ScrollArrow(arrow) => self
-                            .scroll_text()
-                            .is_some_and(|text| arrow.button(item.bounds, text).is_some()),
-                        Widget::Blank => item.user,
-                        Widget::Text { .. } | Widget::Picture(_) => false,
-                    }
-            })
-            .map(|(index, item)| Target::at(index + 1, item.bounds))
+        self.pad_spots()
+            .into_iter()
+            .filter_map(|target| target.id.item().map(|item| Target::at(item, target.bounds)))
             .collect()
     }
 
-    fn is_pad_target(&self, item: usize) -> bool {
-        self.pad_targets().iter().any(|target| target.id == item)
+    /// Everything the pad's focus can rest on, in Tab order: the items,
+    /// with the cells in their item's place.
+    pub(crate) fn pad_spots(&self) -> Vec<Target<PadSpot>> {
+        let mut spots = Vec::new();
+        for (index, item) in self.items.iter().enumerate() {
+            let number = index + 1;
+            if let Some((cells_item, cells)) = &self.pad_cells
+                && *cells_item == number
+            {
+                spots.extend(
+                    cells
+                        .iter()
+                        .enumerate()
+                        .map(|(cell, &bounds)| Target::at(PadSpot::Cell(cell), bounds)),
+                );
+                continue;
+            }
+            if self.left_out.contains(&number) {
+                continue;
+            }
+            let target = item.active()
+                && item.drawn
+                && match &item.widget {
+                    Widget::Button(_) => true,
+                    Widget::ScrollArrow(arrow) => self
+                        .scroll_text()
+                        .is_some_and(|text| arrow.button(item.bounds, text).is_some()),
+                    Widget::Blank => item.user,
+                    Widget::Text { .. } | Widget::Picture(_) => false,
+                };
+            if target {
+                spots.push(Target::at(PadSpot::Item(number), item.bounds));
+            }
+        }
+        spots
+    }
+
+    fn is_pad_target(&self, spot: PadSpot) -> bool {
+        self.pad_spots().iter().any(|target| target.id == spot)
     }
 
     /// Where the pad's focus starts: the default item when it is a
     /// target, otherwise the first target.
-    fn initial_target(&self) -> Option<usize> {
-        let targets = self.pad_targets();
+    fn initial_target(&self) -> Option<PadSpot> {
+        let targets = self.pad_spots();
         self.default_item
-            .filter(|&item| targets.iter().any(|target| target.id == item))
+            .map(PadSpot::Item)
+            .filter(|&spot| targets.iter().any(|target| target.id == spot))
             .or_else(|| targets.first().map(|target| target.id))
     }
 
@@ -146,14 +235,11 @@ impl Dialog {
             PadRead::Move(mv) => {
                 self.drop_pad_press();
                 if let Some(initial) = self.initial_target() {
-                    self.focus.move_by_pad(&self.pad_targets(), initial, mv);
+                    self.focus.move_by_pad(&self.pad_spots(), initial, mv);
                 }
                 None
             }
-            PadRead::Press => {
-                self.press_focused();
-                None
-            }
+            PadRead::Press => self.press_focused(),
             PadRead::Release => self.release_item_keyed(),
             PadRead::Other => self.command(input),
         }
@@ -164,17 +250,21 @@ impl Dialog {
     pub(super) fn keyed_focus_move(&mut self, command: Command) {
         debug_assert_eq!(self.focus_ring, FocusRing::Tab);
         if let (Some(mv), Some(initial)) = (FocusMove::of(command), self.initial_target()) {
-            self.focus.move_by_keys(&self.pad_targets(), initial, mv);
+            self.focus.move_by_keys(&self.pad_spots(), initial, mv);
         }
     }
 
     /// South went down: presses the focused item as a left press on it
     /// does. A scroll arrow whose flag is set starts a hold, which scrolls
     /// at once and on each tick until South's release; anything else is
-    /// armed, drawn pressed.
-    fn press_focused(&mut self) {
-        if let Some(item) = self.focus.get().filter(|&item| self.is_pad_target(item)) {
-            self.press_item_keyed(item);
+    /// armed, drawn pressed. A cell is reported at once, silently.
+    fn press_focused(&mut self) -> Option<DialogEvent> {
+        match self.focus.get().filter(|&spot| self.is_pad_target(spot))? {
+            PadSpot::Item(item) => {
+                self.press_item_keyed(item);
+                None
+            }
+            PadSpot::Cell(cell) => Some(DialogEvent::Cell(cell)),
         }
     }
 
@@ -240,7 +330,21 @@ impl Dialog {
 
     /// Draws the pad's highlight round the item it is on, if it shows.
     pub(super) fn draw_pad_highlight(&self, list: &mut DrawList) {
-        if let Some(bounds) = self.pad_highlight().and_then(|item| self.item_bounds(item)) {
+        let Some(spot) = self
+            .focus
+            .pad_highlight()
+            .filter(|&spot| self.is_pad_target(spot))
+        else {
+            return;
+        };
+        let bounds = match spot {
+            PadSpot::Item(item) => self.item_bounds(item),
+            PadSpot::Cell(cell) => self
+                .pad_cells
+                .as_ref()
+                .and_then(|(_, cells)| cells.get(cell).copied()),
+        };
+        if let Some(bounds) = bounds {
             pad_focus::draw_highlight(list, bounds, self.style.up);
         }
     }

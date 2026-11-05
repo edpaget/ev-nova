@@ -577,3 +577,52 @@ fn a_move_with_no_target_moves_nothing() {
     assert_eq!(state.get(), Some(4));
     assert!(!state.pad_moved());
 }
+
+#[test]
+fn told_keeps_the_last_surroundings_and_nothing_else() {
+    let mut told = Told::default();
+    assert!(!told.keep(&Input::PointerLeft));
+    assert!(!told.keep(&Input::PadButton {
+        button: PadButton::South,
+        pressed: true,
+    }));
+    assert_eq!(told, Told::default());
+    assert!(told.keep(&surroundings(PAD)));
+    assert!(told.keep(&surroundings(Device::Mouse)));
+    assert_eq!(told.device(), Device::Mouse);
+}
+
+#[test]
+fn told_tells_a_screen_what_it_kept_and_nothing_before_any() {
+    let mut screen = Recorder::default();
+    let mut told = Told::default();
+    told.tell(&mut screen);
+    assert!(screen.0.is_empty());
+    told.keep(&surroundings(PAD));
+    told.tell(&mut screen);
+    assert_eq!(screen.0, vec![surroundings(PAD)]);
+}
+
+#[test]
+fn told_reads_the_keyboard_before_any() {
+    assert_eq!(Told::default().device(), Device::Keyboard);
+}
+
+fn surroundings(device: Device) -> Input {
+    Input::Surroundings(crate::input::Surroundings { device })
+}
+
+/// A screen that records its inputs.
+#[derive(Default)]
+struct Recorder(Vec<Input>);
+
+impl crate::screen::Screen for Recorder {
+    fn input(&mut self, input: &Input) -> crate::screen::ScreenAction {
+        self.0.push(*input);
+        crate::screen::ScreenAction::None
+    }
+
+    fn tick(&mut self, _dt: std::time::Duration) {}
+
+    fn draw(&self, _list: &mut DrawList) {}
+}

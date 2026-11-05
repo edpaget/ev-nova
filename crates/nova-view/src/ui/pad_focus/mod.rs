@@ -58,8 +58,9 @@
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::Bounds;
-use crate::input::{Device, Input};
+use crate::input::{Device, Input, Surroundings};
 use crate::keymap::{Command, CommandInput, UiCommand};
+use crate::screen::Screen;
 
 use super::dialog::outline;
 
@@ -480,4 +481,44 @@ pub fn draw_highlight(list: &mut DrawList, rect: Bounds, color: Color) {
 #[must_use]
 pub const fn from_pad(input: &Input) -> bool {
     matches!(input, Input::PadButton { .. })
+}
+
+/// The surroundings a screen that opens others was told last, which it
+/// passes on to each screen it holds or opens: the app tells a screen the
+/// device only when it changes or the screen opens, so a screen opened
+/// inside another that forgot it would hold back the pad's focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the spaceport's screens take it up next")
+)]
+pub struct Told(Option<Surroundings>);
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the spaceport's screens take it up next")
+)]
+impl Told {
+    /// Keeps `input` if it is the surroundings; whether it was.
+    pub const fn keep(&mut self, input: &Input) -> bool {
+        if let Input::Surroundings(surroundings) = *input {
+            self.0 = Some(surroundings);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Tells `screen` the surroundings kept, if any.
+    pub fn tell(self, screen: &mut (impl Screen + ?Sized)) {
+        if let Some(surroundings) = self.0 {
+            screen.input(&Input::Surroundings(surroundings));
+        }
+    }
+
+    /// The device kept; the keyboard before any.
+    #[must_use]
+    pub fn device(self) -> Device {
+        self.0.map_or(Device::Keyboard, |kept| kept.device)
+    }
 }
