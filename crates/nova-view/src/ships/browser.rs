@@ -19,6 +19,7 @@ use std::time::Duration;
 use nova_sim::{HashedRolls, lights_level};
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
+use crate::bound_names::{Spelling, group, name_read};
 use crate::draw::{crossed_box, lights_tint};
 use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
@@ -277,9 +278,16 @@ impl<C: ShipCatalog> Screen for ShipBrowser<C> {
         };
         self.draw_ship(ship, list);
         draw_text(ship, list);
+        let browse = group(
+            [UiCommand::Left, UiCommand::Right]
+                .map(|command| name_read(&self.keys, command, Spelling::Bound)),
+            "/",
+        )
+        .map(|keys| format!(" - {keys} to browse"))
+        .unwrap_or_default();
         list.text(
             format!(
-                "Ship {} of {} (shïp {}) - Left/Right to browse",
+                "Ship {} of {} (shïp {}){browse}",
                 self.selected + 1,
                 self.ids.len(),
                 ship.id.0
@@ -875,6 +883,34 @@ mod tests {
             );
         }
         assert_eq!(text_color(&list, "Shuttle"), Color::WHITE);
+    }
+
+    /// The footer a browser of three ships draws, its keys read through
+    /// `bindings`, for the device its keys read.
+    fn footer_with(bindings: crate::keymap::Bindings) -> String {
+        let catalog = three_ships();
+        let browser = ShipBrowser::new(&catalog).with_bindings(SharedBindings::new(bindings));
+        texts(&drawn(&browser))
+            .into_iter()
+            .find(|text| text.starts_with("Ship 1 of 3"))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_footer_names_the_browse_keys_bound() {
+        use crate::keymap::{Bindings, KeyCombo};
+        assert_eq!(
+            footer_with(Bindings::default().rebound(UiCommand::Left, KeyCombo::key(Key::KeyA))),
+            "Ship 1 of 3 (shïp 128) - A/Right Arrow to browse"
+        );
+        assert_eq!(
+            footer_with(
+                Bindings::default()
+                    .unbound(UiCommand::Left)
+                    .unbound(UiCommand::Right)
+            ),
+            "Ship 1 of 3 (shïp 128)"
+        );
     }
 
     #[test]

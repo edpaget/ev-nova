@@ -15,7 +15,8 @@
 //! - Escape is the navigator's, which goes back to the galaxy map.
 //!
 //! Each key is read through the view's bindings
-//! ([`SystemView::with_bindings`]); the keys named are the defaults.
+//! ([`SystemView::with_bindings`]), and the help line ([`help_line`])
+//! names the keys bound, through the player's layout.
 
 use std::time::Duration;
 
@@ -23,10 +24,11 @@ use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
 use super::scene::{self, SystemScene};
 use super::starfield;
+use crate::bound_names::{Spelling, group, name_read};
 use crate::flight::SharedChance;
 use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::time::ticks;
-use crate::{Color, DrawList, Input, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
 pub use super::scene::PLACEHOLDER_SIZE;
 
@@ -40,8 +42,46 @@ const PROBLEMS: Point = Point::new(16.0, 98.0);
 const PROBLEMS_WRAP: f32 = 992.0;
 const HELP_AT: Point = Point::new(16.0, 744.0);
 const OVERLAY_SIZE: f32 = 14.0;
-/// The help line.
-pub const HELP: &str = "Arrows or WASD: move   Space: centre   Esc: back to the map";
+/// The help line, naming the keys `keys` reads for the device it reads,
+/// through the one naming function ([`name_read`]): "Arrows or WASD:
+/// move   Space: centre   Esc: back to the map" under the defaults and a
+/// US layout. WASD is the movement's fixed twins
+/// ([`KeyMap::TWINS`](crate::keymap::KeyMap::TWINS)), named through the
+/// layout, so AZERTY reads ZQSD. An unbound command's key is left out,
+/// and its entry with it when it was the only one.
+#[must_use]
+pub fn help_line(keys: &CommandReader) -> String {
+    let named = |command: UiCommand| name_read(keys, command, Spelling::Bound);
+    let arrows = group(
+        [
+            UiCommand::Up,
+            UiCommand::Down,
+            UiCommand::Left,
+            UiCommand::Right,
+        ]
+        .map(named),
+        "/",
+    );
+    let twins = group(
+        [
+            (UiCommand::Up, Key::KeyW),
+            (UiCommand::Left, Key::KeyA),
+            (UiCommand::Down, Key::KeyS),
+            (UiCommand::Right, Key::KeyD),
+        ]
+        .map(|(command, twin)| name_read(keys, command, Spelling::Twin(twin))),
+        "",
+    );
+    let movement: Vec<String> = [arrows, twins].into_iter().flatten().collect();
+    let movement = (!movement.is_empty()).then(|| format!("{}: move", movement.join(" or ")));
+    let centre = named(UiCommand::Activate).map(|key| format!("{key}: centre"));
+    let back = named(UiCommand::Back).map(|key| format!("{key}: back to the map"));
+    [movement, centre, back]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("   ")
+}
 
 /// A system's view.
 #[derive(Clone, Debug)]
@@ -151,7 +191,13 @@ impl SystemView {
                 Color::ERROR,
             );
         }
-        list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+        list.text(
+            help_line(&self.keys),
+            HELP_AT,
+            OVERLAY_SIZE,
+            None,
+            Color::DIM,
+        );
     }
 }
 
@@ -211,6 +257,53 @@ mod tests {
     use crate::system::scene::PLACEHOLDER;
     use crate::{DrawCommand, Font, MouseButton};
     use crate::{ImageKey, Key};
+
+    /// The help line under the default keys and a US layout.
+    const HELP: &str = "Arrows or WASD: move   Space: centre   Esc: back to the map";
+
+    /// The help line a view of Sol draws with `bindings`, named through
+    /// `names`, for the device its keys read.
+    fn help_drawn(
+        bindings: crate::keymap::Bindings,
+        names: crate::key_names::fixture::FakeKeyNames,
+    ) -> String {
+        let shared = SharedBindings::new(bindings).with_key_names(std::rc::Rc::new(names));
+        let list = drawn(&sol().with_bindings(shared));
+        texts(&list).last().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn the_help_line_names_the_movement_twins_through_the_layout() {
+        use crate::key_names::fixture::FakeKeyNames;
+        use crate::keymap::Bindings;
+        assert_eq!(help_drawn(Bindings::default(), FakeKeyNames::new()), HELP);
+        assert_eq!(
+            help_drawn(Bindings::default(), FakeKeyNames::azerty()),
+            "Arrows or ZQSD: move   Space: centre   Esc: back to the map"
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_a_rebound_command_and_drops_an_unbound_one() {
+        use crate::key_names::fixture::FakeKeyNames;
+        use crate::keymap::{Bindings, KeyCombo};
+        assert_eq!(
+            help_drawn(
+                Bindings::default()
+                    .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyC))
+                    .unbound(UiCommand::Back),
+                FakeKeyNames::new()
+            ),
+            "Arrows or WASD: move   C: centre"
+        );
+        assert_eq!(
+            help_drawn(
+                Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL)),
+                FakeKeyNames::new()
+            ),
+            "Up Arrow/Down Arrow/Left Arrow/L or WASD: move   Space: centre   Esc: back to the map"
+        );
+    }
 
     /// Canned systems.
     struct FakeCatalog(Vec<SystemContents>);

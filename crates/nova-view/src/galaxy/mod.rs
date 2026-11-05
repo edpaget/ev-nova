@@ -28,6 +28,8 @@
 //!   draws them and `_TrackMapButtons` tracks them.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
+//! - [`help`]: the viewer's help line and Enter label, naming the keys
+//!   the map reads.
 
 pub mod borders;
 pub mod buttons;
@@ -37,6 +39,7 @@ pub mod clip;
 pub mod data;
 pub mod dialog;
 pub mod find;
+pub mod help;
 pub mod map;
 pub mod model;
 pub mod nebulae;

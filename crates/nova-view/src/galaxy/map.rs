@@ -281,6 +281,7 @@ use super::click::{PendingPress, PressAnswer, hits};
 use super::clip::clip_opaque;
 use super::dialog::{DIALOG_ORIGIN, MapDialog, in_map_item, map_area};
 use super::find::{FindDialog, FindOutcome};
+use super::help::{enter_label, help_line};
 use super::model::GalaxyModel;
 use super::nebulae::{NebulaFrame, PicturePick, draw_nebulae};
 use super::panel::draw_panel;
@@ -391,8 +392,6 @@ const HELP_TOP: f32 = 616.0;
 const ZOOM_TOP: f32 = 636.0;
 const STACK_TOP: f32 = 656.0;
 const PROBLEMS_TOP: f32 = 676.0;
-/// The help line.
-pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find";
 /// The "Enter system" button, in the panel's right column under the
 /// problems line; shown only while a system is selected.
 pub const ENTER_BUTTON: Bounds = Bounds {
@@ -401,8 +400,7 @@ pub const ENTER_BUTTON: Bounds = Bounds {
 };
 /// The button's colour.
 pub const BUTTON: Color = Color::rgba(48, 48, 80, 255);
-/// The button's label, where it goes and its size.
-pub const ENTER_LABEL: &str = "Enter system (Return)";
+/// Where the button's label ([`enter_label`]) goes and its size.
 const ENTER_LABEL_AT: Point = Point::new(540.0, 720.0);
 const ENTER_LABEL_SIZE: f32 = 14.0;
 
@@ -1838,7 +1836,7 @@ impl GalaxyMap {
                 color,
             );
         };
-        right(list, HELP.to_owned(), HELP_TOP, Color::DIM);
+        right(list, help_line(&self.keys), HELP_TOP, Color::DIM);
         let percent = (view.scale() * 100.0).round();
         right(list, format!("Zoom {percent}%"), ZOOM_TOP, Color::DIM);
         if let Some(system) = selected {
@@ -1870,7 +1868,7 @@ impl GalaxyMap {
         }
         if self.has_enter_button() {
             list.text(
-                ENTER_LABEL,
+                enter_label(&self.keys),
                 ENTER_LABEL_AT,
                 ENTER_LABEL_SIZE,
                 None,
@@ -2157,6 +2155,11 @@ mod tests {
     use crate::galaxy::view::{MAP_CENTER, SCALES};
     use crate::text::fixture::MonoMetrics;
     use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
+
+    /// The help line under the default keys and a US layout.
+    const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find";
+    /// The Enter button's label under the default keys.
+    const ENTER_LABEL: &str = "Enter system (Return)";
     use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     fn at(x: f32, y: f32) -> Point {
@@ -3146,9 +3149,28 @@ mod tests {
     #[test]
     fn the_help_line_mentions_return() {
         assert_eq!(
-            HELP,
+            help_line(&map().keys),
             "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter   S: find"
         );
+        assert_eq!(help_line(&map().keys), HELP);
+    }
+
+    #[test]
+    fn the_help_line_and_the_enter_label_name_a_rebound_confirm() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let mut map = map();
+        map.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        click_on(&mut map, 129);
+        let texts = texts(&drawn(&map));
+        assert!(
+            texts.contains(
+                &"Arrows or drag: pan   +/-: zoom   Click: select   Q: enter   S: find".to_owned()
+            ),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&"Enter system (Q)".to_owned()), "{texts:?}");
     }
 
     // Plotting a course.

@@ -762,8 +762,11 @@ mod tests {
     use crate::galaxy::buttons::{CLEAR_ROUTE_LABEL, HIDE_BORDERS_LABEL, SHOW_BORDERS_LABEL};
     use crate::galaxy::catalog::SystemId;
     use crate::galaxy::click::PressAnswer;
-    use crate::galaxy::map::{BUTTON, ENTER_BUTTON, ENTER_LABEL, GalaxyMap, PANEL};
+    use crate::galaxy::map::{BUTTON, ENTER_BUTTON, GalaxyMap, PANEL};
     use crate::galaxy::testkit::{FakeCatalog, galaxy, system};
+
+    /// The viewer's Enter button's label under the default keys.
+    const ENTER_LABEL: &str = "Enter system (Return)";
     use crate::galaxy::view::{MapView, PAN_STEP, SCALES};
     use crate::ui::button::ButtonSkin;
     use crate::{Font, Input, MouseButton, Screen};
