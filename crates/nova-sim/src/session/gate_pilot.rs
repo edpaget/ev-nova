@@ -664,6 +664,11 @@ mod tests {
     /// 133 too, which no gate serves, by the gate autopilot's other
     /// reading, its ship flown out of the jump zone.
     fn gated_session() -> (crate::testkit::FakePilotCatalog, Session) {
+        gated_by(RuleSource::Bible)
+    }
+
+    /// [`gated_session`] by `autopilot` for [`RuleKey::GateAutopilot`].
+    fn gated_by(autopilot: RuleSource) -> (crate::testkit::FakePilotCatalog, Session) {
         let mut catalog = crate::session::tests::gated();
         for star in &mut catalog.star_map {
             if star.id == SystemId(130) {
@@ -671,7 +676,7 @@ mod tests {
             }
         }
         catalog.systems.push(SystemId(133));
-        let rules = Rulebook::default().with_override(RuleKey::GateAutopilot, RuleSource::Bible);
+        let rules = Rulebook::default().with_override(RuleKey::GateAutopilot, autopilot);
         let mut session = Session::start_ruled(&catalog, &rules).expect("starts");
         crate::testkit::fly_out(&mut session, &catalog);
         session.take_sounds();
@@ -684,6 +689,15 @@ mod tests {
         let mut session = selecting(session, SystemId(133));
         assert_eq!(jump(&mut session), Answer::Jumped(SystemId(133)));
         assert!(!session.gate_pilot_engaged());
+    }
+
+    #[test]
+    fn by_the_engine_j_toward_a_con_neighbour_a_gate_serves_still_jumps() {
+        let (_catalog, session) = gated_by(RuleSource::Engine);
+        let mut session = selecting(session, SystemId(131));
+        assert_eq!(jump(&mut session), Answer::Jumped(SystemId(131)));
+        assert!(!session.gate_pilot_engaged());
+        assert!(session.mode.jump().is_some(), "a jump under way");
     }
 
     #[test]
