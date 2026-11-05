@@ -452,6 +452,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn name_command_names_the_key_with_a_pad_last_used() {
+        // Until phase 12 names pad buttons, every device names the key.
+        let defaults = Bindings::default();
+        let pad = Device::Gamepad(crate::input::ControllerFamily::Generic);
+        for device in [Device::Mouse, pad] {
+            for spelling in [Spelling::Bound, Spelling::Prose, ENGINE, BIBLE] {
+                assert_eq!(
+                    name_command(
+                        &defaults,
+                        &NoKeyNames,
+                        FlightCommand::Board,
+                        device,
+                        spelling
+                    ),
+                    named(&defaults, &NoKeyNames, FlightCommand::Board, spelling),
+                    "{device:?} {spelling:?}"
+                );
+            }
+        }
+        let mut reader = CommandReader::new(contexts::FLIGHT);
+        reader.follow(&crate::Input::Surroundings(crate::input::Surroundings {
+            device: pad,
+        }));
+        assert_eq!(
+            name_read(&reader, FlightCommand::Board, Spelling::Bound).as_deref(),
+            Some("B")
+        );
+    }
+
     fn some(names: &[&str]) -> Vec<Option<String>> {
         names.iter().map(|&name| Some(name.to_owned())).collect()
     }

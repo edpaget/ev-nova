@@ -341,7 +341,8 @@ impl From<Bindings> for SavedBindings {
 
 impl From<SavedBindings> for Bindings {
     /// The key map nova-view's rules build from the keyboard's string
-    /// entries ([`KeyMap::from_table`]).
+    /// entries ([`KeyMap::from_table`]), and the default gamepad table,
+    /// which isn't saved until phase 12.
     fn from(saved: SavedBindings) -> Self {
         let entries = saved
             .keyboard
@@ -349,6 +350,7 @@ impl From<SavedBindings> for Bindings {
             .filter_map(|(name, text)| Some((name.as_str(), text.as_str()?)));
         Self {
             keyboard: KeyMap::from_table(entries),
+            ..Self::default()
         }
     }
 }
@@ -1776,6 +1778,7 @@ mod tests {
         let settings = GameSettings {
             bindings: Bindings {
                 keyboard: map.clone(),
+                ..Bindings::default()
             },
             ..GameSettings::default()
         };
@@ -1791,6 +1794,7 @@ mod tests {
             GameSettings {
                 bindings: Bindings {
                     keyboard: key_map_of(table.iter().map(|(n, t)| (n.as_str(), t.as_str()))),
+                    ..Bindings::default()
                 },
                 ..settings
             }

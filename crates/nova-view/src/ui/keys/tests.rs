@@ -128,7 +128,13 @@ fn every_command_is_listed_under_its_context_s_heading_with_its_key() {
             Row::Heading(_) => None,
         })
         .collect();
-    assert_eq!(commands, Command::all().collect::<Vec<_>>());
+    let keyed: Vec<Command> = Command::all()
+        .filter(|command| command.kind() != crate::keymap::Kind::Axis)
+        .collect();
+    assert_eq!(commands, keyed, "every command a key can take");
+    for axis in [FlightCommand::TurnAxis, FlightCommand::ThrottleAxis] {
+        assert!(!commands.contains(&axis.into()), "{axis:?} takes no key");
+    }
     let mut heading = None;
     for (index, row) in kinds.iter().enumerate() {
         match *row {

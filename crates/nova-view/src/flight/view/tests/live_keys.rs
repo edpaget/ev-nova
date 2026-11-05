@@ -310,6 +310,8 @@ fn every_latched_key_pressed_under_an_unlatching_dialog_comes_back_in_handle_pla
         .iter()
         .flat_map(|context| context.commands())
         .filter(|command| !UNLATCHED.contains(command) && *command != Command::Flight(Fc::ZoomOut))
+        // A stick's axes are read as amounts, never polled as a key.
+        .filter(|command| command.kind() != crate::keymap::Kind::Axis)
         .collect();
     let order: BTreeSet<Command> = POLL_ORDER.into_iter().collect();
     assert_eq!(order.len(), POLL_ORDER.len(), "no command twice");

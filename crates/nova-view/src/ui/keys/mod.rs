@@ -96,7 +96,7 @@ use crate::input::Device;
 use crate::input::{Input, Key, MouseButton};
 use crate::key_names::KeyNames;
 use crate::keymap::keyboard::{Sides, is_modifier};
-use crate::keymap::{Bindings, Command, Context, KeyCombo, KeysDown};
+use crate::keymap::{Bindings, Command, Context, KeyCombo, KeysDown, Kind};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -133,14 +133,18 @@ pub enum Row {
 }
 
 /// The rows: each context that has commands, its heading then its
-/// commands, in declaration order.
+/// commands, in declaration order. A stick's axis commands
+/// ([`Kind::Axis`]) take no key, so they are left out until phase 12
+/// adds the gamepad's column.
 #[must_use]
 pub fn rows() -> Vec<Row> {
+    let keyed = |command: &Command| command.kind() != Kind::Axis;
     Context::ALL
         .iter()
-        .filter(|context| context.commands().next().is_some())
+        .filter(|context| context.commands().any(|command| keyed(&command)))
         .flat_map(|&context| {
-            std::iter::once(Row::Heading(context)).chain(context.commands().map(Row::Command))
+            std::iter::once(Row::Heading(context))
+                .chain(context.commands().filter(keyed).map(Row::Command))
         })
         .collect()
 }

@@ -109,6 +109,9 @@ pub struct CommandReader {
     devices: Devices,
     /// The commands held.
     held: BTreeSet<Command>,
+    /// The device the player used last, as the app's last
+    /// [`Input::Surroundings`] said.
+    device: Device,
 }
 
 impl CommandReader {
@@ -122,6 +125,7 @@ impl CommandReader {
             switched_on: BTreeSet::new(),
             devices: Devices::default(),
             held: BTreeSet::new(),
+            device: Device::Keyboard,
         }
     }
 
@@ -144,13 +148,14 @@ impl CommandReader {
         &self.bindings
     }
 
-    /// The device whose input the screen's texts name: always the
-    /// keyboard for now. Phase 7 fills it from the input the reader
-    /// follows, the device used last, so every key-naming screen, which
-    /// already holds a reader, names the pad without a new call.
+    /// The device whose input the screen's texts name: the device the
+    /// player used last, as the app's last [`Input::Surroundings`] the
+    /// reader followed said; the keyboard before any. So every key-naming
+    /// screen, which already holds a reader, names the pad without a new
+    /// call.
     #[must_use]
     pub const fn device(&self) -> Device {
-        Device::Keyboard
+        self.device
     }
 
     /// Switches a conditional context of the screen's list on or off.
@@ -179,11 +184,25 @@ impl CommandReader {
     ///
     /// A press means the command [`Bindings::resolve`] finds; a repeat
     /// means what its press meant (or, with that forgotten, what it means
-    /// now); a release lets go of what its press meant.
+    /// now); a release lets go of what its press meant. A pad button reads
+    /// as a key does. A stick axis's move changes the axis amounts
+    /// ([`CommandReader::axis`]) and presses nothing, and the
+    /// surroundings set the device ([`CommandReader::device`]).
     pub fn follow(&mut self, input: &Input) -> Option<CommandInput> {
+        match *input {
+            Input::Surroundings(surroundings) => {
+                self.device = surroundings.device;
+                return None;
+            }
+            Input::PadAxis { .. } => {
+                self.follow_devices(input);
+                return None;
+            }
+            _ => {}
+        }
         let Change { pressed, repeat } = Devices::change(input)?;
         let meant = if pressed {
-            self.devices.follow(input);
+            self.follow_devices(input);
             let meant = if repeat {
                 self.devices.press_of(input).or_else(|| self.resolve(input))
             } else {
@@ -193,7 +212,7 @@ impl CommandReader {
             meant
         } else {
             let meant = self.devices.press_of(input);
-            self.devices.follow(input);
+            self.follow_devices(input);
             meant
         };
         self.recompute();
@@ -208,9 +227,11 @@ impl CommandReader {
     #[must_use]
     pub fn peek(&self, input: &Input) -> Option<Command> {
         let mut devices = self.devices.clone();
-        devices.follow(input);
         let active = self.active();
-        self.bindings.with(|b| b.resolve(input, &devices, &active))
+        self.bindings.with(|b| {
+            devices.follow(input, b);
+            b.resolve(input, &devices, &active)
+        })
     }
 
     /// The command the key of `input` (a press, a repeat or a release)
@@ -270,18 +291,29 @@ impl CommandReader {
             .with(|bindings| bindings.is_twin(input, command))
     }
 
-    /// Whether the key of `input` (a press, a repeat or a release) is
-    /// down; false for any other input.
+    /// Whether the key or pad button of `input` (a press, a repeat or a
+    /// release) is down; false for any other input.
     #[must_use]
     pub fn is_down(&self, input: &Input) -> bool {
         self.devices.keyboard().holds(input)
+            || matches!(*input, Input::PadButton { button, .. }
+                if self.devices.gamepad().is_down(button))
     }
 
-    /// A fresh press of each key down, in order: what a screen hands back
-    /// to the reader after letting go of some of them.
+    /// A fresh press of each key down, in order, then of each pad button
+    /// down, in the order pressed: what a screen hands back to the reader
+    /// after letting go of some of them.
     #[must_use]
     pub fn down(&self) -> Vec<Input> {
-        self.devices.keyboard().presses().collect()
+        let pad = self
+            .devices
+            .gamepad()
+            .buttons()
+            .map(|button| Input::PadButton {
+                button,
+                pressed: true,
+            });
+        self.devices.keyboard().presses().chain(pad).collect()
     }
 
     /// Whether a modifier key is down, as the active contexts read the
@@ -316,6 +348,29 @@ impl CommandReader {
         self.held.clear();
     }
 
+    /// How far the stick axis `command` is bound to is pushed, through
+    /// the flight dead zone: -1 to 1, none for a command bound to no
+    /// axis, and none after [`CommandReader::let_go`].
+    #[must_use]
+    pub fn axis(&self, command: impl Into<Command>) -> f32 {
+        let command = command.into();
+        self.bindings.with(|b| b.axis(command, &self.devices))
+    }
+
+    /// Whether a stick axis flight reads lies outside the flight dead
+    /// zone.
+    #[must_use]
+    pub fn flight_axis_pushed(&self) -> bool {
+        self.bindings.with(|b| b.flight_axis_pushed(&self.devices))
+    }
+
+    /// Follows `input` on the devices, a pad press taking its layer from
+    /// the bindings.
+    fn follow_devices(&mut self, input: &Input) {
+        let devices = &mut self.devices;
+        self.bindings.with(|b| devices.follow(input, b));
+    }
+
     /// What `input` means with the devices as they are.
     fn resolve(&self, input: &Input) -> Option<Command> {
         let active = self.active();
@@ -333,12 +388,13 @@ impl CommandReader {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::super::command::{EscortMenuCommand, FlightCommand, UiCommand};
     use super::super::contexts::{DIALOG, FLIGHT};
     use super::super::keyboard::KeyCombo;
     use super::*;
-    use crate::input::{Device, Key};
+    use crate::input::{ControllerFamily, Device, Key, PadAxis, PadButton, Surroundings};
 
     fn press(key: Key) -> Input {
         Input::Key {
@@ -670,6 +726,115 @@ mod tests {
         assert_eq!(reader.device(), Device::Keyboard);
         reader.follow(&press(Key::KeyL));
         assert_eq!(reader.device(), Device::Keyboard);
+    }
+
+    fn pad(button: PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    fn told(device: Device) -> Input {
+        Input::Surroundings(Surroundings { device })
+    }
+
+    fn axis(axis: PadAxis, value: f32) -> Input {
+        Input::PadAxis { axis, value }
+    }
+
+    #[test]
+    fn the_reader_device_follows_surroundings() {
+        let mut reader = CommandReader::new(FLIGHT);
+        let pad_used = Device::Gamepad(ControllerFamily::Generic);
+        assert_eq!(reader.follow(&told(pad_used)), None);
+        assert_eq!(reader.device(), pad_used);
+        reader.follow(&press(Key::KeyL));
+        assert_eq!(reader.device(), pad_used, "the app says, not the key");
+        reader.follow(&told(Device::Mouse));
+        assert_eq!(reader.device(), Device::Mouse);
+    }
+
+    #[test]
+    fn a_pad_button_presses_holds_and_releases_its_command_through_the_reader() {
+        let mut reader = CommandReader::new(FLIGHT);
+        let fire = Command::Flight(FlightCommand::FirePrimary);
+        assert_eq!(
+            reader.follow(&pad(PadButton::South, true)),
+            Some(CommandInput {
+                command: fire,
+                pressed: true,
+                repeat: false,
+            })
+        );
+        assert!(reader.held(fire));
+        assert!(reader.anything_down());
+        assert!(reader.is_down(&pad(PadButton::South, false)));
+        assert_eq!(reader.down(), vec![pad(PadButton::South, true)]);
+        assert_eq!(reader.means(&pad(PadButton::South, false)), Some(fire));
+        assert_eq!(reader.meanings(&pad(PadButton::South, true)), vec![fire]);
+        assert_eq!(
+            reader.bound_to(&pad(PadButton::South, true)),
+            vec![
+                Command::Flight(FlightCommand::HyperJump),
+                fire,
+                Command::Flight(FlightCommand::AttackTarget),
+            ],
+            "every layer's, in command order"
+        );
+        assert_eq!(
+            reader.follow(&pad(PadButton::South, false)),
+            Some(CommandInput {
+                command: fire,
+                pressed: false,
+                repeat: false,
+            })
+        );
+        assert!(!reader.held(fire));
+        assert!(!reader.anything_down());
+    }
+
+    #[test]
+    fn a_pad_layer_reaches_its_layered_command_through_the_reader() {
+        let mut reader = CommandReader::new(FLIGHT);
+        assert_eq!(reader.follow(&pad(PadButton::Select, true)), None);
+        let jump = Command::Flight(FlightCommand::HyperJump);
+        assert_eq!(reader.peek(&pad(PadButton::South, true)), Some(jump));
+        assert_eq!(
+            reader
+                .follow(&pad(PadButton::South, true))
+                .map(|c| c.command),
+            Some(jump)
+        );
+        assert!(reader.held(jump));
+        reader.follow(&pad(PadButton::Select, false));
+        assert!(!reader.held(jump), "the layer let go of first drops it");
+        assert_eq!(reader.follow(&pad(PadButton::South, false)), None);
+    }
+
+    #[test]
+    fn a_pad_axis_moves_the_axis_amount_and_presses_nothing() {
+        let mut reader = CommandReader::new(FLIGHT);
+        let turn = FlightCommand::TurnAxis;
+        assert_eq!(reader.axis(turn), 0.0);
+        assert!(!reader.flight_axis_pushed());
+        assert_eq!(reader.follow(&axis(PadAxis::RightX, 1.0)), None);
+        assert_eq!(reader.axis(turn), 1.0);
+        assert_eq!(reader.axis(FlightCommand::ThrottleAxis), 0.0);
+        assert!(reader.flight_axis_pushed());
+        assert!(!reader.anything_down(), "an axis holds no button");
+        assert_eq!(reader.held_commands().count(), 0);
+        reader.follow(&axis(PadAxis::RightX, 0.1));
+        assert_eq!(reader.axis(turn), 0.0, "in the dead zone");
+    }
+
+    #[test]
+    fn let_go_zeroes_the_axes() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.follow(&axis(PadAxis::LeftY, 1.0));
+        reader.follow(&pad(PadButton::DPadUp, true));
+        assert_eq!(reader.axis(FlightCommand::ThrottleAxis), 1.0);
+        reader.let_go();
+        assert_eq!(reader.axis(FlightCommand::ThrottleAxis), 0.0);
+        assert!(!reader.anything_down());
+        assert_eq!(reader.held_commands().count(), 0);
     }
 
     #[test]

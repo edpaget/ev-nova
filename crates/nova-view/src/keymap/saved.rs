@@ -61,6 +61,7 @@ impl KeyMap {
         let named: BTreeSet<Command> = overrides.iter().map(|&(command, _)| command).collect();
         let mut bindings = Bindings {
             keyboard: Self::from_entries(overrides),
+            ..Bindings::default()
         };
         while let Some(loser) = next_to_unbind(&bindings, &named) {
             bindings.keyboard.unbind(loser);
@@ -265,6 +266,7 @@ mod tests {
     fn clash_free(map: &KeyMap) -> bool {
         Bindings {
             keyboard: map.clone(),
+            ..Bindings::default()
         }
         .clashes()
         .is_empty()

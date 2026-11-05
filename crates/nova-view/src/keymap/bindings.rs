@@ -5,16 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{Command, Context};
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
+use super::gamepad::{self, Gamepad, PadMap};
 use super::keyboard::{self, KeyCombo, KeyMap, Keyboard, KeysDown};
 use crate::input::Input;
 
-/// One binding table per device family: the keyboard's today, the
-/// gamepad's beside it later (phase 12 saves it). The settings file
-/// saves each family's table on its own ([`KeyMap::to_table`]).
+/// One binding table per device family: the keyboard's and the
+/// gamepad's. The settings file saves each family's table on its own
+/// ([`KeyMap::to_table`]); the gamepad's is not saved until phase 12
+/// (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bindings {
     /// The keyboard's table.
     pub keyboard: KeyMap,
+    /// The gamepad's table.
+    pub gamepad: PadMap,
 }
 
 /// Two commands one combo means, in contexts active together.
@@ -44,19 +48,28 @@ impl Bindings {
     /// The command `input` means in the `active` contexts, in their
     /// order, with `devices` holding what was down before it: for a key
     /// press or repeat, the most specific command its key and the held
-    /// modifiers meet. A release, or any other input, means none here:
-    /// [`CommandReader`](super::CommandReader) reports a release as the
-    /// command its press meant.
+    /// modifiers meet; for a pad button's press, the command its entry
+    /// under the layer held meets. A release, or any other input, means
+    /// none here: [`CommandReader`](super::CommandReader) reports a
+    /// release as the command its press meant.
     #[must_use]
     pub fn resolve(&self, input: &Input, devices: &Devices, active: &[Context]) -> Option<Command> {
-        keyboard::resolve(&self.keyboard, input, devices.keyboard.down(), active)
+        match input {
+            Input::PadButton { .. } => {
+                gamepad::resolve(&self.gamepad, input, &devices.gamepad, active)
+            }
+            _ => keyboard::resolve(&self.keyboard, input, devices.keyboard.down(), active),
+        }
     }
 
     /// Every command `devices` hold down in the `active` contexts: each
-    /// one a key down means with the modifiers held.
+    /// one a key down means with the modifiers held, and each one a pad
+    /// button down means under its layer.
     #[must_use]
     pub fn held(&self, devices: &Devices, active: &[Context]) -> BTreeSet<Command> {
-        keyboard::held(&self.keyboard, devices.keyboard.down(), active)
+        let mut held = keyboard::held(&self.keyboard, devices.keyboard.down(), active);
+        held.extend(gamepad::held(&self.gamepad, &devices.gamepad, active));
+        held
     }
 
     /// Every command the device input of `input` (a press, a repeat or a
@@ -64,15 +77,47 @@ impl Bindings {
     /// it, in the `active` contexts. Empty for any other input.
     #[must_use]
     pub fn meanings(&self, input: &Input, devices: &Devices, active: &[Context]) -> Vec<Command> {
-        keyboard::meanings_with(&self.keyboard, input, devices.keyboard.down(), active)
+        match input {
+            Input::PadButton { .. } => {
+                gamepad::meanings_with(&self.gamepad, input, &devices.gamepad, active)
+            }
+            _ => keyboard::meanings_with(&self.keyboard, input, devices.keyboard.down(), active),
+        }
     }
 
     /// Every command of the `active` contexts bound to the device input
     /// of `input`, whatever else its binding needs held, then the active
-    /// contexts' fixed twins on it. Empty for any other input.
+    /// contexts' fixed twins on it (a key's). Empty for any other input.
     #[must_use]
     pub fn bound_to(&self, input: &Input, active: &[Context]) -> Vec<Command> {
-        keyboard::bound_to(&self.keyboard, input, active)
+        match input {
+            Input::PadButton { .. } => gamepad::bound_to(&self.gamepad, input, active),
+            _ => keyboard::bound_to(&self.keyboard, input, active),
+        }
+    }
+
+    /// How far the stick axis `command` is bound to is pushed, through
+    /// the flight dead zone, with `devices` as they are: -1 to 1, none
+    /// for a command bound to no axis.
+    #[must_use]
+    pub fn axis(&self, command: Command, devices: &Devices) -> f32 {
+        gamepad::axis_amount(&self.gamepad, &devices.gamepad, command)
+    }
+
+    /// Whether a stick axis flight reads lies outside the flight dead
+    /// zone, with `devices` as they are.
+    #[must_use]
+    pub fn flight_axis_pushed(&self, devices: &Devices) -> bool {
+        devices.gamepad.flight_axis_pushed(&self.gamepad)
+    }
+
+    /// Every pair of commands bound to one pad entry in contexts active
+    /// together on some screen ([`PadMap::clashes`]), kept apart from the
+    /// keyboard's ([`Bindings::clashes`]), so a key's rebind never
+    /// unbinds a pad entry. `PadMap::default()` has none.
+    #[must_use]
+    pub fn pad_clashes(&self) -> Vec<Clash> {
+        self.gamepad.clashes()
     }
 
     /// Whether the device input of `input` means `command` as one of its
@@ -183,12 +228,14 @@ fn clash_between(screens: &[ScreenContexts], a: Command, b: Command) -> bool {
     together_on(screens, a, b) && !shadows(a, b) && !shadows(b, a)
 }
 
-/// What every device holds down, and what each press meant. Today the
-/// keyboard's alone; phase 7 adds the gamepad's beside it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What every device holds down, and what each press meant: the
+/// keyboard's and the gamepad's, with the pad's stick axes.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Devices {
     /// The keyboard's state.
     keyboard: Keyboard,
+    /// The gamepad's state.
+    gamepad: Gamepad,
 }
 
 /// A device's input going down or up.
@@ -202,18 +249,18 @@ pub struct Change {
 }
 
 impl Devices {
-    /// How `input` changes what is down, if it is a device's input (a
-    /// key, today).
+    /// How `input` changes what is down, if it is a device's button (a
+    /// key or a pad button).
     #[must_use]
     pub fn change(input: &Input) -> Option<Change> {
-        keyboard::change(input)
+        keyboard::change(input).or_else(|| gamepad::change(input))
     }
 
     /// A fresh press of the device input `input` presses, repeats or
     /// releases; `None` for any other input.
     #[must_use]
     pub fn fresh_press(input: &Input) -> Option<Input> {
-        keyboard::fresh_press(input)
+        keyboard::fresh_press(input).or_else(|| gamepad::fresh_press(input))
     }
 
     /// Whether `input` is a modifier the `active` contexts read: a
@@ -223,28 +270,38 @@ impl Devices {
         keyboard::reads_modifier(input, active)
     }
 
-    /// Follows `input`'s change to what is down. Says whether it was a
-    /// device's input (a key, today).
-    pub fn follow(&mut self, input: &Input) -> bool {
-        self.keyboard.follow(input)
+    /// Follows `input`'s change to what is down, or a stick axis's move,
+    /// a pad press taking its layer from `bindings`' pad table. Says
+    /// whether it was a device's input.
+    pub fn follow(&mut self, input: &Input, bindings: &Bindings) -> bool {
+        self.keyboard.follow(input) || self.gamepad.follow(input, &bindings.gamepad)
     }
 
     /// Notes that `input`, a press, meant `command`.
     pub fn note_press(&mut self, input: &Input, command: Option<Command>) {
         self.keyboard.note_press(input, command);
+        self.gamepad.note_press(input, command);
     }
 
     /// What the press of the device input `input` presses, repeats or
     /// releases meant, if it was noted and is still down.
     #[must_use]
     pub fn press_of(&self, input: &Input) -> Option<Command> {
-        self.keyboard.press_of(input)
+        self.keyboard
+            .press_of(input)
+            .or_else(|| self.gamepad.press_of(input))
     }
 
-    /// Whether anything is down.
+    /// Whether anything is down: a key or a pad button.
     #[must_use]
     pub fn any_down(&self) -> bool {
-        self.keyboard.down().keys().next().is_some()
+        self.keyboard.down().keys().next().is_some() || self.gamepad.buttons().next().is_some()
+    }
+
+    /// The gamepad's state.
+    #[must_use]
+    pub const fn gamepad(&self) -> &Gamepad {
+        &self.gamepad
     }
 
     /// Whether a modifier is down, as any of the `active` contexts reads
@@ -260,9 +317,10 @@ impl Devices {
         self.keyboard.down()
     }
 
-    /// Lets go of everything.
+    /// Lets go of everything, the pad's axes centred.
     pub fn let_go(&mut self) {
         self.keyboard.let_go();
+        self.gamepad.let_go();
     }
 }
 
@@ -270,9 +328,9 @@ impl Devices {
 mod tests {
     use super::super::command::{
         AppCommand, BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, IntroCommand,
-        MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand, PauseCommand,
-        PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand, TradeCommand,
-        UiCommand,
+        Kind, MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand,
+        PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand,
+        TradeCommand, UiCommand,
     };
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
@@ -291,10 +349,10 @@ mod tests {
     fn means(bindings: &Bindings, held: &[Key], key: Key, active: &[Context]) -> Option<Command> {
         let mut devices = Devices::default();
         for &down in held {
-            devices.follow(&press(down));
+            devices.follow(&press(down), &Bindings::default());
         }
         let input = press(key);
-        devices.follow(&input);
+        devices.follow(&input, &Bindings::default());
         bindings.resolve(&input, &devices, active)
     }
 
@@ -513,7 +571,7 @@ mod tests {
         let bindings = Bindings::default();
         let mut devices = Devices::default();
         for key in [Key::AltLeft, Key::KeyA, Key::ArrowUp] {
-            devices.follow(&press(key));
+            devices.follow(&press(key), &Bindings::default());
         }
         let held = bindings.held(&devices, FLYING);
         assert!(held.contains(&Command::Flight(FlightCommand::FaceStellar)));
@@ -637,7 +695,7 @@ mod tests {
         let bindings = Bindings::default();
         let held = |key: Key, active: &[Context]| {
             let mut devices = Devices::default();
-            devices.follow(&press(key));
+            devices.follow(&press(key), &Bindings::default());
             bindings.held(&devices, active)
         };
         let trade = &[Context::Trade, Context::Play, Context::Ui];
@@ -749,7 +807,7 @@ mod tests {
         let course = &[Context::Map, Context::Play, Context::Ui];
         let held = |key: Key| {
             let mut devices = Devices::default();
-            devices.follow(&press(key));
+            devices.follow(&press(key), &Bindings::default());
             bindings.held(&devices, course)
         };
         assert!(held(Key::ShiftLeft).contains(&Command::Map(MapCommand::PlotCourse)));
@@ -899,7 +957,7 @@ mod tests {
             flight(FlightCommand::Board)
         );
         let mut devices = Devices::default();
-        devices.follow(&press(Key::KeyS));
+        devices.follow(&press(Key::KeyS), &Bindings::default());
         assert!(
             !bindings
                 .held(&devices, FLYING)
@@ -1054,7 +1112,7 @@ mod tests {
             KeyCombo::key(Key::Digit1),
             KeyCombo::key(Key::KeyF),
         ];
-        for command in Command::all() {
+        for command in Command::all().filter(|c| c.kind() != Kind::Axis) {
             for combo in combos {
                 let mut bindings = Bindings::default();
                 let unbound = bindings.assign(command, combo);
@@ -1069,7 +1127,7 @@ mod tests {
     fn devices_note_what_each_press_meant_until_its_release() {
         let mut devices = Devices::default();
         let down = press(Key::KeyX);
-        devices.follow(&down);
+        devices.follow(&down, &Bindings::default());
         assert!(devices.any_down());
         devices.note_press(&down, Some(Command::Flight(FlightCommand::Eject)));
         let up = Input::Key {
@@ -1081,10 +1139,10 @@ mod tests {
             devices.press_of(&up),
             Some(Command::Flight(FlightCommand::Eject))
         );
-        devices.follow(&up);
+        devices.follow(&up, &Bindings::default());
         assert_eq!(devices.press_of(&up), None);
         assert!(!devices.any_down());
-        devices.follow(&down);
+        devices.follow(&down, &Bindings::default());
         devices.note_press(&down, Some(Command::Flight(FlightCommand::Eject)));
         devices.note_press(&down, None);
         assert_eq!(devices.press_of(&down), None);

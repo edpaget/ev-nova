@@ -9,10 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::bindings::Change;
 use super::command::{
     AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
-    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, MainMenuCommand,
-    MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand, PauseCommand,
-    PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand, ShipyardCommand,
-    TradeCommand, UiCommand,
+    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, Kind,
+    MainMenuCommand, MainScreenCommand, MapCommand, MissionComputerCommand, OutfitterCommand,
+    PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand, RaceCommand,
+    ShipyardCommand, TradeCommand, UiCommand,
 };
 use super::contexts::shadows;
 use crate::input::{Input, Key};
@@ -290,11 +290,16 @@ impl KeyMap {
     /// cleared stays cleared), and each command no entry names takes its
     /// default, as `_loadKeys` gives a pref with no saved entry its
     /// constant (@0xcdde9-0xcde0c for weapon safety's S).
+    ///
+    /// An [`Kind::Axis`] command takes no key, so an entry for one is
+    /// passed over.
     pub fn from_entries(entries: impl IntoIterator<Item = (Command, Option<KeyCombo>)>) -> Self {
         let mut map = Self::default();
         for (command, combo) in entries {
-            map.bindings
-                .insert(command, combo.map_or(Binding::Unbound, Binding::Combo));
+            if command.kind() != Kind::Axis {
+                map.bindings
+                    .insert(command, combo.map_or(Binding::Unbound, Binding::Combo));
+            }
         }
         map
     }
@@ -331,9 +336,12 @@ impl KeyMap {
         None
     }
 
-    /// Binds `command` to `combo`.
+    /// Binds `command` to `combo`. An [`Kind::Axis`] command takes no
+    /// key and stays unbound.
     pub fn bind(&mut self, command: Command, combo: KeyCombo) {
-        self.bindings.insert(command, Binding::Combo(combo));
+        if command.kind() != Kind::Axis {
+            self.bindings.insert(command, Binding::Combo(combo));
+        }
     }
 
     /// Leaves `command` unbound.
@@ -623,6 +631,8 @@ const fn default_flight(command: FlightCommand) -> Binding {
         F::NearestStellar => chord(Key::Digit5, Modifiers::COMMAND),
         F::ZoomOut => bare(Key::Minus),
         F::ZoomIn => bare(Key::Equal),
+        // A stick's: the keyboard never binds an axis command.
+        F::TurnAxis | F::ThrottleAxis => Binding::Unbound,
     }
 }
 
@@ -1081,6 +1091,28 @@ mod tests {
     const SHIFT: Modifiers = Modifiers::SHIFT;
 
     #[test]
+    fn an_axis_command_takes_no_key() {
+        let axes = [FlightCommand::TurnAxis, FlightCommand::ThrottleAxis].map(Command::Flight);
+        for command in axes {
+            assert_eq!(command.kind(), Kind::Axis);
+            assert_eq!(KeyMap::default().binding(command), Binding::Unbound);
+            let mut map = KeyMap::default();
+            map.bind(command, KeyCombo::key(Key::KeyT));
+            assert_eq!(map.binding(command), Binding::Unbound, "bind leaves it");
+            let mut bindings = super::super::Bindings::default();
+            bindings.assign(command, KeyCombo::key(Key::KeyT));
+            assert_eq!(bindings.keyboard.combo(command), None, "assign leaves it");
+            let entries = KeyMap::from_entries([(command, Some(KeyCombo::key(Key::KeyT)))]);
+            assert_eq!(entries.binding(command), Binding::Unbound);
+        }
+        let saved = KeyMap::from_table([("Flight.TurnAxis", "KeyT")]);
+        assert_eq!(saved, KeyMap::default(), "a saved axis is passed over");
+        assert!(
+            Command::all().all(|c| c.kind() != Kind::Axis || KeyMap::default().combo(c).is_none())
+        );
+    }
+
+    #[test]
     fn flight_s_defaults_are_the_original_s() {
         use FlightCommand as F;
         assert_eq!(
@@ -1133,6 +1165,8 @@ mod tests {
                 row(F::NearestStellar, Key::Digit5, CMD),
                 row(F::ZoomOut, Key::Minus, NO),
                 row(F::ZoomIn, Key::Equal, NO),
+                (F::TurnAxis.into(), None),
+                (F::ThrottleAxis.into(), None),
             ]
         );
     }
@@ -1440,9 +1474,9 @@ mod tests {
     }
 
     #[test]
-    fn every_command_is_bound_by_default() {
+    fn every_command_but_an_axis_is_bound_by_default() {
         let map = KeyMap::default();
-        for command in Command::all() {
+        for command in Command::all().filter(|c| c.kind() != Kind::Axis) {
             assert!(map.combo(command).is_some(), "{command:?}");
         }
     }

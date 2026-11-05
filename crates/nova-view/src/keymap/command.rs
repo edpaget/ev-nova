@@ -27,6 +27,9 @@ pub enum Kind {
     Held,
     /// Acts once, on the press (land, hail, a dialog button).
     Pressed,
+    /// An analog amount read from a stick axis (flight's turn and
+    /// throttle): bound to a pad axis, never to a key or a button.
+    Axis,
 }
 
 /// Declares one context's command enum, with its `ALL` list in
@@ -411,6 +414,16 @@ context_commands! {
         /// Zoom the floating map in (`=`, key code 0x18, the keypad's `+`,
         /// 0x45, its twin).
         ZoomIn: Pressed "Zoom Map In",
+        /// Turn by a stick: the ship turns the fraction of its turn rate
+        /// the stick's axis is pushed, in its direction. Not the
+        /// original's: a pad's analog turn beside the turn keys, which a
+        /// key or d-pad press of a turn command beats.
+        TurnAxis: Axis "Turn (stick)",
+        /// Thrust by a stick: pushed forward, the ship thrusts at the
+        /// fraction of its acceleration the stick's axis is pushed; pulled
+        /// back past the press threshold, it holds Reverse Course. Not the
+        /// original's, as [`FlightCommand::TurnAxis`].
+        ThrottleAxis: Axis "Throttle (stick)",
     }
 }
 

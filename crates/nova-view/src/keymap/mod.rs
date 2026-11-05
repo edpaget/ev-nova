@@ -5,9 +5,10 @@
 //! the app's one [`Bindings`], never compared to a [`Key`](crate::Key).
 //! The keyboard is the first device: its table is [`KeyMap`], with the
 //! original's defaults (`_loadKeys` @0xcd5f8-0xce6c4, recorded in
-//! rdm:phase/key-bindings/phase-2-command-key-map's findings). Phase 7
-//! adds the gamepad's table beside it and an `Input` variant for it; no
-//! screen changes.
+//! rdm:phase/key-bindings/phase-2-command-key-map's findings). The
+//! gamepad's table, [`PadMap`], sits beside it, with the default table
+//! rdm:phase/key-bindings/phase-7-gamepad-input's findings record; a pad
+//! button reaches a screen as `Input::PadButton` and reads as a key does.
 //!
 //! # How it fits together
 //!
@@ -20,6 +21,11 @@
 //!   [`KeyMap`] with its defaults and its fixed twins
 //!   ([`KeyMap::TWINS`]), [`KeysDown`], the keys held, [`Keyboard`],
 //!   those and what each press meant, and the lookup over a key's input.
+//! - [`gamepad`] is the pad's side, the only one that holds a
+//!   `PadButton` or a `PadAxis`: [`PadEntry`] (a button and the layer it
+//!   needs), the [`PadMap`] with its defaults, [`Gamepad`], the buttons
+//!   down with their layers and the stick axes, the lookup over a pad
+//!   button's input and the flight dead zone ([`dead_zoned`]).
 //! - [`bindings`] holds every device's table ([`Bindings`]), the lookup
 //!   ([`Bindings::resolve`], [`Bindings::held`]), the clash query
 //!   ([`Bindings::clashes`], and [`Bindings::clashes_with`] for a rebind
@@ -83,6 +89,30 @@
 //!   [`SharedBindings`] and hands it to every screen it builds; a screen
 //!   built without one reads `KeyMap::default()`, so tests build screens
 //!   as before.
+//! - **Gamepad layers.** A [`PadEntry`] is a pad button and an optional
+//!   layer button held as it goes down. A button some entry uses as its
+//!   layer (Select and Start by default) binds nothing pressed alone. A
+//!   press's layer is the layer button already held as it went down, the
+//!   one pressed first when both are; a layer button pressed while the
+//!   other is held is itself a layered press, so Select and Start
+//!   together, in either order, reach Pause. A layer matches exactly:
+//!   with one held, a button with no entry on it means nothing, never its
+//!   plain entry. A pad button holds the command its press meant until it
+//!   or its layer goes up; a layer going up first drops it, and the
+//!   button means nothing until pressed again. This differs from the
+//!   keyboard on purpose: the keyboard recomputes what a key down means
+//!   as modifiers change, but a pad must not turn a layered hold into the
+//!   plain command as Select goes up.
+//! - **Stick axes.** Flight's turn and throttle are [`Kind::Axis`]
+//!   commands, bound to a stick axis on the pad and never to a key. Each
+//!   reads through the radial flight dead zone ([`dead_zoned`]). With no
+//!   layer held, the throttle axis's back direction (its stick pulled
+//!   back past the press threshold) holds Reverse Course, derived from
+//!   the axis binding rather than a row, so moving the throttle to the
+//!   other stick moves reverse with it; the other directions of the two
+//!   bound axes mean nothing in flight, which reads them as axes. The
+//!   pad's clashes ([`Bindings::pad_clashes`]) are kept apart from the
+//!   keyboard's, so a key's rebind never unbinds a pad entry.
 //! - **Saved form.** A command saves by its stable name, `Context.Variant`
 //!   ([`Command::name`]), and a combo as its W3C modifier names then
 //!   `Code`'s W3C key name, joined by `+` (`Meta+Digit5`), so the file
@@ -116,6 +146,7 @@
 pub mod bindings;
 pub mod command;
 pub mod contexts;
+pub mod gamepad;
 pub mod keyboard;
 pub mod reader;
 pub mod saved;
@@ -131,6 +162,7 @@ pub use command::{
     ShipyardCommand, SystemViewCommand, TradeCommand, UiCommand,
 };
 pub use contexts::ScreenContexts;
+pub use gamepad::{FLIGHT_DEAD_ZONE, Gamepad, PadBinding, PadEntry, PadMap, dead_zoned};
 pub use keyboard::{Binding, KeyCombo, KeyMap, Keyboard, KeysDown, Modifiers, is_modifier_input};
 pub use reader::{CommandInput, CommandReader, SharedBindings};
 pub use saved::ComboTextError;
