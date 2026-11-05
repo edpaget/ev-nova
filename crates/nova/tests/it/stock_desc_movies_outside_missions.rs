@@ -283,7 +283,7 @@ fn about_x_and_an_entry_through_the_stock_intro_start_no_movie() {
         }
         assert_ne!(driver.showing(), Showing::IntroText, "no intro text");
         if driver.showing() == Showing::Intro {
-            driver.press(nova_view::menu::intro::SKIP_KEY);
+            driver.press(nova_view::Key::Escape);
         }
         driver.redraw();
     }

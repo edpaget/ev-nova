@@ -77,6 +77,7 @@ use std::time::Duration;
 use super::intro::{Intro, IntroEnd, IntroKeys};
 use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
+use crate::keymap::SharedBindings;
 use crate::screen::Showing;
 use crate::sound::UiSound;
 use crate::{COMMAND_KEYS, Color, DrawList, Input, Key};
@@ -157,6 +158,14 @@ impl Entry {
         }
     }
 
+    /// The entry reading the intro's keys through `bindings`: the ones it
+    /// tracks for the intro, which the intro takes up as it begins.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys = self.keys.with_bindings(bindings);
+        self
+    }
+
     /// `dt` passes: the fade or the intro moves on.
     pub fn tick(&mut self, dt: Duration) {
         let faded = match &mut self.stage {
@@ -179,7 +188,7 @@ impl Entry {
         self.stage = match self.stage {
             Stage::FadingOut(_) => match &mut self.intro {
                 Some(intro) => {
-                    intro.begin(self.keys);
+                    intro.begin(self.keys.clone());
                     self.stage = Stage::Intro;
                     self.poll_intro();
                     return;
@@ -392,7 +401,7 @@ impl Entry {
     /// The keys and the button were let go of outside the game (the
     /// window losing focus).
     pub fn release_keys(&mut self) {
-        self.keys = IntroKeys::default();
+        self.keys.let_go();
         if let Some(intro) = &mut self.intro
             && self.stage == Stage::Intro
         {
@@ -456,7 +465,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource, SKIP_KEY};
+    use crate::menu::intro::{CharacterIntro, INTRO_SOUND, IntroPicture, IntroSource};
     use crate::sound::SoundId;
     use crate::{DrawCommand, MouseButton, Point};
 
@@ -659,8 +668,8 @@ mod tests {
         let mut entry = unseen(&pictures(Some(128)));
         entry.tick(SECOND);
         entry.tick(SECOND);
-        entry.input(&key(SKIP_KEY, true), false);
-        entry.input(&key(SKIP_KEY, false), false);
+        entry.input(&key(Key::Escape, true), false);
+        entry.input(&key(Key::Escape, false), false);
         entry.tick(SECOND);
         assert!(entry.handover_due());
         assert_eq!(entry.take_text_due(), None);
@@ -670,14 +679,36 @@ mod tests {
     #[test]
     fn the_skip_key_down_as_the_fade_ends_skips_after_the_first_picture() {
         let mut entry = unseen(&pictures(Some(128)));
-        entry.input(&key(SKIP_KEY, true), false);
+        entry.input(&key(Key::Escape, true), false);
         entry.tick(SECOND);
         assert_eq!(picture(&entry), Some(8200));
         entry.tick(SECOND);
         entry.tick(Duration::from_secs(10));
-        entry.input(&key(SKIP_KEY, false), false);
+        entry.input(&key(Key::Escape, false), false);
         entry.tick(SECOND);
         assert!(entry.handover_due());
+    }
+
+    #[test]
+    fn the_intro_reads_the_bindings_the_entry_was_given() {
+        use crate::keymap::{Bindings, KeyCombo, PauseCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PauseCommand::Pause, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut entry = unseen(&pictures(Some(128))).with_bindings(bindings.clone());
+        entry.input(&key(Key::KeyQ, true), false);
+        entry.tick(SECOND);
+        entry.input(&key(Key::KeyQ, false), false);
+        entry.tick(SECOND);
+        entry.tick(SECOND);
+        assert!(entry.handover_due(), "Q down as the fade ends skips");
+        let mut entry = unseen(&pictures(Some(128))).with_bindings(bindings);
+        entry.input(&key(Key::Escape, true), false);
+        entry.tick(SECOND);
+        entry.input(&key(Key::Escape, false), false);
+        entry.tick(SECOND);
+        entry.tick(SECOND);
+        assert!(!entry.handover_due(), "Escape no longer does");
     }
 
     #[test]

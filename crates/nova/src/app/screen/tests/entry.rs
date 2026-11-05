@@ -4,7 +4,7 @@
 
 use super::*;
 use nova_view::fade::DEATH_FADE_FOR;
-use nova_view::menu::intro::{INTRO_SOUND, SKIP_KEY};
+use nova_view::menu::intro::INTRO_SOUND;
 
 const SECOND: Duration = DEATH_FADE_FOR;
 
@@ -238,7 +238,7 @@ fn the_handovers_warm_up_frame_reads_the_coming_traffics_sheet_and_card_before_a
     for _ in 0..1000 {
         match screen.showing() {
             Showing::Flight => break,
-            Showing::Intro => tap(&mut screen, SKIP_KEY),
+            Showing::Intro => tap(&mut screen, Key::Escape),
             Showing::IntroText => tap(&mut screen, Key::Enter),
             _ => {}
         }
@@ -680,7 +680,7 @@ fn the_skip_key_during_the_first_picture_skips_the_second_and_the_text() {
     choose(&mut screen, MenuChoice::EnterShip);
     faded_out(&mut screen);
     picture_in(&mut screen);
-    tap(&mut screen, SKIP_KEY);
+    tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Intro, "its fade out");
     screen.tick(SECOND);
     assert_eq!(screen.showing(), Showing::Flight, "no 8201, no text");

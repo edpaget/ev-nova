@@ -1515,7 +1515,7 @@ pub(crate) fn through_entry(screen: &mut AppScreen) {
             return;
         }
         let tap = match screen.showing() {
-            Showing::Intro => Some(nova_view::menu::intro::SKIP_KEY),
+            Showing::Intro => Some(nova_view::Key::Escape),
             Showing::IntroText => Some(Key::Enter),
             _ => None,
         };

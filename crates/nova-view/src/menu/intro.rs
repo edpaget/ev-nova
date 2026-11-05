@@ -30,12 +30,18 @@
 //!
 //! **The skip key** is the player's Pause key, `keyPrefs`+0x2e
 //! (`pauseKey`, `_loadKeys` @0xce1ec), whose default is Escape (0x35,
-//! @0xce1c9): [`SKIP_KEY`]. Once the key-bindings roadmap gives the engine
-//! a key map, it reads the Pause command's key. A skip is latched if the
-//! key is down as the main screen's fade ends (@0x16d05-0x16d16), or at
-//! any poll of a picture's waits (@0x16fdc-0x16fed, @0x16ffc-0x17012). It
-//! ends the current picture, once the keys are up, and passes over the
-//! rest of the pictures and the text.
+//! @0xce1c9): the intro reads [`PauseCommand::Pause`]. A skip is latched
+//! if the key is down as the main screen's fade ends (@0x16d05-0x16d16),
+//! or at any poll of a picture's waits (@0x16fdc-0x16fed,
+//! @0x16ffc-0x17012). It ends the current picture, once the keys are up,
+//! and passes over the rest of the pictures and the text.
+//!
+//! **Return and Space** are the intro's own commands
+//! ([`IntroCommand::Confirm`] and [`IntroCommand::Activate`]), read with
+//! the Pause key through the bindings the keys are given
+//! ([`IntroKeys::with_bindings`]; [`contexts::INTRO`]). The intro polls
+//! Return's key code alone, so the keypad's Enter neither ends a picture
+//! nor is waited for, and it reads none of the shared UI context's keys.
 //!
 //! **The text** comes after the pictures, unless skipped, when the `chär`
 //! names one ([`IntroEnd::Done`]); the router loads, munges and shows it.
@@ -53,15 +59,14 @@ use std::time::Duration;
 
 use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
+use crate::keymap::{
+    Command, CommandInput, CommandReader, IntroCommand, PauseCommand, SharedBindings, contexts,
+};
 use crate::sound::{SoundId, UiSound};
-use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point};
+use crate::{Color, DrawList, ImageKey, Input, MouseButton, Point};
 
 /// The intro pictures' sound, snd 30003 (@0x16e9b).
 pub const INTRO_SOUND: SoundId = SoundId(30_003);
-
-/// The key that skips the intro: the Pause key's default, Escape (0x35,
-/// `_loadKeys` @0xce1c9).
-pub const SKIP_KEY: Key = Key::Escape;
 
 /// How long each picture fades in and out: `_FadeScreenIn`'s and
 /// `_FadeScreenOut`'s second.
@@ -118,34 +123,65 @@ pub trait IntroSource {
 }
 
 /// The keys and button the intro waits on, down or up, as the inputs put
-/// them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// them: each key as its command is held, read through the keys'
+/// bindings ([`IntroKeys::with_bindings`]).
+#[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)] // One for each key or button, down or up.
 pub struct IntroKeys {
     /// The primary button.
     pub primary: bool,
-    /// Return.
+    /// Return ([`IntroCommand::Confirm`]).
     pub enter: bool,
-    /// Space.
+    /// Space ([`IntroCommand::Activate`]).
     pub space: bool,
-    /// The skip key ([`SKIP_KEY`]).
+    /// The skip key ([`PauseCommand::Pause`]).
     pub skip: bool,
+    /// The keys, as the intro's commands ([`contexts::INTRO`]).
+    reader: CommandReader,
 }
 
+impl Default for IntroKeys {
+    /// Everything up, read through the default bindings.
+    fn default() -> Self {
+        Self {
+            primary: false,
+            enter: false,
+            space: false,
+            skip: false,
+            reader: CommandReader::new(contexts::INTRO),
+        }
+    }
+}
+
+impl PartialEq for IntroKeys {
+    /// The same keys and button down, whatever they are read through.
+    fn eq(&self, other: &Self) -> bool {
+        (self.primary, self.enter, self.space, self.skip)
+            == (other.primary, other.enter, other.space, other.skip)
+    }
+}
+
+impl Eq for IntroKeys {}
+
 impl IntroKeys {
-    /// Notes what `input` does to the keys and the button.
-    pub fn note(&mut self, input: &Input) {
+    /// The keys read through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.reader.set_bindings(bindings);
+        self
+    }
+
+    /// Notes what `input` does to the keys and the button, and says which
+    /// command a key's press, repeat or release meant, if any. A key
+    /// changing sets the three keys to their commands as held.
+    pub fn note(&mut self, input: &Input) -> Option<CommandInput> {
         match *input {
-            Input::Key { key, pressed, .. } => {
-                if key == Key::Enter {
-                    self.enter = pressed;
-                }
-                if key == Key::Space {
-                    self.space = pressed;
-                }
-                if key == SKIP_KEY {
-                    self.skip = pressed;
-                }
+            Input::Key { .. } => {
+                let meant = self.reader.follow(input);
+                self.enter = self.reader.held(IntroCommand::Confirm);
+                self.space = self.reader.held(IntroCommand::Activate);
+                self.skip = self.reader.held(PauseCommand::Pause);
+                return meant;
             }
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -154,6 +190,16 @@ impl IntroKeys {
             } => self.primary = pressed,
             _ => {}
         }
+        None
+    }
+
+    /// Lets go of the keys and the button, keeping the bindings.
+    pub fn let_go(&mut self) {
+        self.reader.let_go();
+        self.primary = false;
+        self.enter = false;
+        self.space = false;
+        self.skip = false;
     }
 
     /// Whether any of them is down.
@@ -259,8 +305,8 @@ impl Intro {
         if self.stage != Stage::Waiting {
             return;
         }
-        self.keys = keys;
         self.skip = keys.skip;
+        self.keys = keys;
         self.at = 0;
         self.start_picture();
     }
@@ -318,19 +364,21 @@ impl Intro {
     /// picture's timed wait, a Return, Space or primary press ends it,
     /// and a skip key press latches a skip and ends it.
     pub fn input(&mut self, input: &Input) {
-        self.keys.note(input);
+        let meant = self.keys.note(input);
         match self.stage {
             Stage::AwaitingRelease => self.poll_release(),
             Stage::Showing(_) => {
                 let ends = match *input {
-                    Input::Key {
-                        key, pressed: true, ..
-                    } => {
-                        if key == SKIP_KEY {
+                    Input::Key { pressed: true, .. } => match meant.map(|meant| meant.command) {
+                        Some(Command::Pause(PauseCommand::Pause)) => {
                             self.skip = true;
+                            true
                         }
-                        matches!(key, Key::Enter | Key::Space) || key == SKIP_KEY
-                    }
+                        Some(Command::Intro(IntroCommand::Confirm | IntroCommand::Activate)) => {
+                            true
+                        }
+                        _ => false,
+                    },
                     Input::PointerButton {
                         button: MouseButton::Left,
                         pressed: true,
@@ -349,7 +397,7 @@ impl Intro {
     /// The keys and the button were let go of outside the game (the
     /// window losing focus): each counts as up.
     pub fn release_keys(&mut self) {
-        self.keys = IntroKeys::default();
+        self.keys.let_go();
         if self.stage == Stage::AwaitingRelease {
             self.poll_release();
         }
@@ -456,7 +504,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::DrawCommand;
+    use crate::{DrawCommand, Key};
 
     const VIEW: (f32, f32) = (1024.0, 768.0);
 
@@ -798,11 +846,44 @@ mod tests {
         let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
         faded_in(&mut screen);
         screen.tick(ms(100));
-        screen.input(&key(SKIP_KEY, true));
+        screen.input(&key(Key::Escape, true));
         screen.tick(ms(500));
         assert_eq!(drawn(&screen).1, Some(128), "fading out");
         screen.tick(ms(500));
         assert_eq!(screen.end(), Some(IntroEnd::Skipped), "no 8201, no text");
+    }
+
+    #[test]
+    fn a_rebound_pause_and_confirm_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, IntroCommand, KeyCombo, PauseCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(PauseCommand::Pause, KeyCombo::key(Key::KeyQ))
+                .rebound(IntroCommand::Confirm, KeyCombo::key(Key::KeyJ)),
+        );
+        let data = sized();
+        let keys = IntroKeys::default().with_bindings(bindings);
+        let mut screen = begun(&two_pictures(), &data, keys.clone());
+        faded_in(&mut screen);
+        screen.tick(ms(100));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Enter, true));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, None, "neither Escape nor Return ends it");
+        screen.input(&key(Key::KeyJ, true));
+        screen.tick(ms(500));
+        assert_eq!(drawn(&screen).1, Some(128), "J ends it");
+        screen.tick(ms(500));
+        assert_eq!(
+            drawn(&screen).0.map(|(id, _)| id),
+            Some(8201),
+            "J skips nothing"
+        );
+        let mut screen = begun(&two_pictures(), &data, keys);
+        faded_in(&mut screen);
+        screen.input(&key(Key::KeyQ, true));
+        screen.tick(PICTURE_FADE_FOR);
+        assert_eq!(screen.end(), Some(IntroEnd::Skipped), "Q skips");
     }
 
     #[test]
@@ -817,7 +898,7 @@ mod tests {
         faded_in(&mut screen);
         screen.tick(secs(10));
         assert_eq!(drawn(&screen).1, None, "waits for the release");
-        screen.input(&key(SKIP_KEY, false));
+        screen.input(&key(Key::Escape, false));
         screen.tick(ms(500));
         assert_eq!(drawn(&screen).1, Some(128));
         screen.tick(ms(500));
@@ -828,9 +909,9 @@ mod tests {
     fn the_skip_key_held_into_the_release_wait_latches_a_skip() {
         let data = sized();
         let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
-        screen.input(&key(SKIP_KEY, true));
+        screen.input(&key(Key::Escape, true));
         faded_in(&mut screen);
-        screen.input(&key(SKIP_KEY, false));
+        screen.input(&key(Key::Escape, false));
         screen.tick(PICTURE_FADE_FOR);
         assert_eq!(screen.end(), Some(IntroEnd::Skipped));
     }
@@ -892,7 +973,7 @@ mod tests {
         screen.begin(IntroKeys::default());
         assert!(screen.hides_pointer());
         faded_in(&mut screen);
-        screen.input(&key(SKIP_KEY, true));
+        screen.input(&key(Key::Escape, true));
         assert!(screen.hides_pointer(), "fading out");
         screen.tick(PICTURE_FADE_FOR);
         assert!(!screen.hides_pointer(), "finished");
@@ -982,7 +1063,7 @@ mod tests {
                 },
             ),
             (
-                key(SKIP_KEY, true),
+                key(Key::Escape, true),
                 IntroKeys {
                     skip: true,
                     ..IntroKeys::default()
@@ -1012,7 +1093,7 @@ mod tests {
         for input in [
             key(Key::Enter, false),
             key(Key::Space, false),
-            key(SKIP_KEY, false),
+            key(Key::Escape, false),
             click(false),
         ] {
             keys.note(&input);
@@ -1022,7 +1103,8 @@ mod tests {
 
     #[test]
     fn the_skip_key_is_escape_the_sound_30003_and_the_fades_a_second() {
-        assert_eq!(SKIP_KEY, Key::Escape);
+        let skip = crate::keymap::KeyMap::default().combo(PauseCommand::Pause.into());
+        assert_eq!(skip.map(|combo| combo.key), Some(Key::Escape));
         assert_eq!(INTRO_SOUND, SoundId(30_003));
         assert_eq!(PICTURE_FADE_FOR, secs(1));
         assert_eq!(

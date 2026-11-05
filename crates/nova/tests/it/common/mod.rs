@@ -179,7 +179,7 @@ pub fn through_entry(harness: &mut impl EntryHarness) {
             return;
         }
         let tap = match harness.router().showing() {
-            Showing::Intro => Some(nova_view::menu::intro::SKIP_KEY),
+            Showing::Intro => Some(nova_view::Key::Escape),
             Showing::IntroText => Some(nova_view::Key::Enter),
             _ => None,
         };
