@@ -9,10 +9,18 @@
 //!   [`RELEASE_THRESHOLD`]. Between the two it stays as it was, so a
 //!   stick resting at the threshold doesn't chatter.
 //! - A trigger's value presses and lets go of its button the same way.
-//! - Pads merge: a button is down while any pad holds it, and reaches
-//!   the screens only as the first pad presses it and the last lets go.
-//! - A lost pad lets go of everything it held and sends none for each
-//!   stick axis, as the router's `release_keys` lets go on a focus loss.
+//! - Pads merge: a button (a trigger's among them) is down while any pad
+//!   holds it, and reaches the screens only as the first pad presses it
+//!   and the last lets go. A stick axis routes the value of the pad
+//!   pushing it furthest from the centre, ties going to the lower
+//!   [`PadId`], so an idle pad's jitter (a second controller, or Steam's
+//!   virtual pad beside the real one) never overrides the pad in use.
+//!   Its directions press off that merged value, so the directions held
+//!   always agree with the value routed.
+//! - A lost pad lets go of every button it held that no other pad holds,
+//!   and routes each stick axis again over the pads left, none when no
+//!   other pad pushes it, as the router's `release_keys` lets go on a
+//!   focus loss.
 //!
 //! The thresholds and their reasons are recorded in
 //! rdm:phase/key-bindings/phase-7-gamepad-input's findings.
@@ -31,18 +39,24 @@ pub const PRESS_THRESHOLD: f32 = 0.5;
 /// [`PRESS_THRESHOLD`] is the hysteresis.
 pub const RELEASE_THRESHOLD: f32 = 0.4;
 
-/// One pad's buttons down, those its values press among them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// One pad's buttons down and the last value of each of its stick axes.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Pad {
-    /// Every button down on it.
+    /// Every button down on it, its triggers' among them. Its stick
+    /// directions aren't: they press off the merged sticks.
     down: BTreeSet<PadButton>,
+    /// The last value it reported for each stick axis.
+    axes: BTreeMap<PadAxis, f32>,
 }
 
-/// The pads' state, merged into one set of buttons down.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The pads' state, merged into one set of buttons down and one value a
+/// stick axis.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PadInputs {
     /// Each connected pad.
     pads: BTreeMap<PadId, Pad>,
+    /// The stick directions the merged sticks press.
+    directions: BTreeSet<PadButton>,
 }
 
 impl PadInputs {
@@ -60,10 +74,11 @@ impl PadInputs {
         }
     }
 
-    /// Whether any pad holds `button` down.
+    /// Whether any pad holds `button` down, or the merged sticks press it.
     #[must_use]
     pub fn is_down(&self, button: PadButton) -> bool {
-        self.pads.values().any(|pad| pad.down.contains(&button))
+        self.directions.contains(&button)
+            || self.pads.values().any(|pad| pad.down.contains(&button))
     }
 
     /// Follows one event.
@@ -79,25 +94,49 @@ impl PadInputs {
                 pressed,
             } => self.set(pad, button, pressed, out),
             PadEvent::Axis { pad, axis, value } => {
-                out.push(Input::PadAxis { axis, value });
-                for positive in [true, false] {
-                    let along = if positive { value } else { -value };
-                    self.threshold(pad, axis.direction(positive), along, out);
-                }
+                self.pads.entry(pad).or_default().axes.insert(axis, value);
+                self.route(axis, out);
             }
             PadEvent::Trigger { pad, button, value } => {
-                self.threshold(pad, button, value, out);
+                if let Some(pressed) = crossing(value) {
+                    self.set(pad, button, pressed, out);
+                }
             }
         }
     }
 
-    /// Presses `button` on `pad` at `value` past [`PRESS_THRESHOLD`], lets
-    /// it go under [`RELEASE_THRESHOLD`], and leaves it between.
-    fn threshold(&mut self, pad: PadId, button: PadButton, value: f32, out: &mut Vec<Input>) {
-        if value >= PRESS_THRESHOLD {
-            self.set(pad, button, true, out);
-        } else if value < RELEASE_THRESHOLD {
-            self.set(pad, button, false, out);
+    /// The value of `axis` on the pad pushing it furthest, the lower
+    /// [`PadId`] on a tie; none when no pad pushes it.
+    fn merged(&self, axis: PadAxis) -> f32 {
+        self.pads
+            .values()
+            .filter_map(|pad| pad.axes.get(&axis).copied())
+            .fold(0.0, |furthest, value| {
+                if value.abs() > furthest.abs() {
+                    value
+                } else {
+                    furthest
+                }
+            })
+    }
+
+    /// Tells the screens `axis`'s merged value, and presses or lets go of
+    /// its two directions by it.
+    fn route(&mut self, axis: PadAxis, out: &mut Vec<Input>) {
+        let value = self.merged(axis);
+        out.push(Input::PadAxis { axis, value });
+        for positive in [true, false] {
+            let along = if positive { value } else { -value };
+            if let Some(pressed) = crossing(along) {
+                let button = axis.direction(positive);
+                let was = self.is_down(button);
+                if pressed {
+                    self.directions.insert(button);
+                } else {
+                    self.directions.remove(&button);
+                }
+                self.tell(button, was, out);
+            }
         }
     }
 
@@ -111,13 +150,20 @@ impl PadInputs {
         } else {
             held.remove(&button);
         }
-        if self.is_down(button) != was {
+        self.tell(button, was, out);
+    }
+
+    /// Tells the screens of `button` if it is no longer down or up as it
+    /// `was`.
+    fn tell(&self, button: PadButton, was: bool, out: &mut Vec<Input>) {
+        let pressed = self.is_down(button);
+        if pressed != was {
             out.push(Input::PadButton { button, pressed });
         }
     }
 
     /// Forgets `pad`: lets go of each button it held that no other pad
-    /// holds, and sends none for each stick axis.
+    /// holds, and routes each stick axis over the pads left.
     fn lose(&mut self, pad: PadId, out: &mut Vec<Input>) {
         let Some(lost) = self.pads.remove(&pad) else {
             return;
@@ -131,8 +177,21 @@ impl PadInputs {
             }
         }
         for axis in PadAxis::ALL {
-            out.push(Input::PadAxis { axis, value: 0.0 });
+            self.route(axis, out);
         }
+    }
+}
+
+/// Whether a stick direction or trigger at `value` is pressed: `true`
+/// at [`PRESS_THRESHOLD`] or past it, `false` under [`RELEASE_THRESHOLD`],
+/// and `None` between, where it stays as it was.
+fn crossing(value: f32) -> Option<bool> {
+    if value >= PRESS_THRESHOLD {
+        Some(true)
+    } else if value < RELEASE_THRESHOLD {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -404,6 +463,97 @@ mod tests {
         assert_eq!(polls[0], [pressed(PadButton::South, true)], "once");
         assert_eq!(polls[1], [], "the other still holds it");
         assert_eq!(buttons(&polls[2]), [pressed(PadButton::South, false)]);
+    }
+
+    #[test]
+    fn two_pads_route_the_stick_pushed_furthest() {
+        let fake = FakeGamepads::with([
+            vec![
+                PadEvent::Connected(ONE),
+                PadEvent::Connected(TWO),
+                axis(ONE, PadAxis::RightX, 0.6),
+            ],
+            vec![axis(TWO, PadAxis::RightX, 0.01)],
+            vec![axis(TWO, PadAxis::RightX, -0.9)],
+            vec![axis(TWO, PadAxis::RightX, -0.2)],
+        ]);
+        let mut inputs = PadInputs::new();
+        let polls = polled(&fake, &mut inputs, 4);
+        assert_eq!(
+            polls[0],
+            [
+                value(PadAxis::RightX, 0.6),
+                pressed(PadButton::RightStickRight, true)
+            ]
+        );
+        assert_eq!(
+            polls[1],
+            [value(PadAxis::RightX, 0.6)],
+            "the idle pad's jitter"
+        );
+        assert_eq!(
+            polls[2],
+            [
+                value(PadAxis::RightX, -0.9),
+                pressed(PadButton::RightStickRight, false),
+                pressed(PadButton::RightStickLeft, true)
+            ],
+            "the other pad pushed further the other way"
+        );
+        assert_eq!(
+            polls[3],
+            [
+                value(PadAxis::RightX, 0.6),
+                pressed(PadButton::RightStickRight, true),
+                pressed(PadButton::RightStickLeft, false)
+            ],
+            "and let back"
+        );
+    }
+
+    #[test]
+    fn two_pads_pushed_equally_far_route_the_lower_ids() {
+        let fake = FakeGamepads::with([vec![
+            PadEvent::Connected(ONE),
+            PadEvent::Connected(TWO),
+            axis(TWO, PadAxis::LeftY, -0.7),
+            axis(ONE, PadAxis::LeftY, 0.7),
+        ]]);
+        let mut inputs = PadInputs::new();
+        let polls = polled(&fake, &mut inputs, 1);
+        let routed: Vec<Input> = polls[0]
+            .iter()
+            .copied()
+            .filter(|input| matches!(input, Input::PadAxis { .. }))
+            .collect();
+        assert_eq!(routed.last(), Some(&value(PadAxis::LeftY, 0.7)));
+        assert!(inputs.is_down(PadButton::LeftStickUp));
+        assert!(!inputs.is_down(PadButton::LeftStickDown));
+    }
+
+    #[test]
+    fn losing_one_of_two_pads_routes_the_others_stick() {
+        let fake = FakeGamepads::with([
+            vec![
+                PadEvent::Connected(ONE),
+                PadEvent::Connected(TWO),
+                axis(ONE, PadAxis::RightX, 0.6),
+                axis(TWO, PadAxis::RightX, 0.01),
+                axis(TWO, PadAxis::LeftY, 0.3),
+            ],
+            vec![PadEvent::Disconnected(TWO)],
+            vec![PadEvent::Disconnected(ONE)],
+        ]);
+        let mut inputs = PadInputs::new();
+        let polls = polled(&fake, &mut inputs, 3);
+        assert_eq!(buttons(&polls[1]), [], "the stick the other pad holds");
+        assert!(polls[1].contains(&value(PadAxis::RightX, 0.6)));
+        assert!(polls[1].contains(&value(PadAxis::LeftY, 0.0)));
+        assert_eq!(
+            buttons(&polls[2]),
+            [pressed(PadButton::RightStickRight, false)]
+        );
+        assert!(polls[2].contains(&value(PadAxis::RightX, 0.0)));
     }
 
     #[test]
