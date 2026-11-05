@@ -57,6 +57,14 @@
 //!    ([`MapDrawing::named`]); +0x1ed and the known flag aren't read. The
 //!    view draws every one at a zoom ≤ 1.1 and only the selection's above.
 //!
+//! By [`RuleKey::GateLanes`]' other reading every "Con slot" above is
+//! one of the systems a system's gate lanes reach
+//! ([`OverlaidGalaxy::link_slots`]): the three link sets draw the lanes.
+//! By [`RuleKey::MapLaneStyle`]'s other reading each drawn link also gets
+//! its look ([`MapDrawing::lanes`], the [`map_lanes`](crate::map_lanes)
+//! module), which the view draws in place of the grey; the engine's
+//! reading leaves the drawing as `_DrawMap` makes it.
+//!
 //! `_MapDialogUpdate` then brackets the selection and draws the names a
 //! second time, on the course and hypergate maps only
 //! (@0xfc9c-0x1001f): the view's.
@@ -91,6 +99,8 @@
 //! mission system (@0x12f82-0x12f8a).
 //!
 //! [`RuleKey::MapLinkPairing`]: crate::RuleKey::MapLinkPairing
+//! [`RuleKey::GateLanes`]: crate::RuleKey::GateLanes
+//! [`RuleKey::MapLaneStyle`]: crate::RuleKey::MapLaneStyle
 //! [`gate::hypergate_offers`]: crate::gate::hypergate_offers
 //! [`Session::mark_known`]: crate::Session::mark_known
 

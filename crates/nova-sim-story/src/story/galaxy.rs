@@ -16,6 +16,12 @@
 //!   ([`GalaxyOverlay::set_inactive`], [`inactive_by`]). Whether it is
 //!   explored is kept beside it and never saved, and the map draws it
 //!   only while it is both ([`OverlaidGalaxy::nebula_shown`]).
+//! - The links between systems come from the systems' Con slots, or by
+//!   [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading
+//!   from the gate lanes its hypergates make ([`LinkSource`],
+//!   [`OverlaidGalaxy::lanes`], [`OverlaidGalaxy::link_slots`]); the
+//!   lanes are built with the map, under either source (see the
+//!   `galaxy_links` module).
 //! - A system's visibility is written from its `Visibility` at each
 //!   galaxy refresh ([`GalaxyOverlay::refresh_visibility`]), overwriting
 //!   every system's; `Some(true)` is the player's move's reveal alone.

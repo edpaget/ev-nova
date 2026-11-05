@@ -43,7 +43,9 @@
 //! members, a level-2 head charts them. A load's rebuild shares by the
 //! rule `Session::load` was given.
 //!
-//! **A new pilot** ([`Chart::explore_start_neighbours`]): `_DoNewPilot`
+//! **A new pilot** ([`Chart::explore_start_neighbours`]; by
+//! [`RuleKey::GateLanes`]' other reading the start system's "Con slots"
+//! are the systems its gate lanes reach): `_DoNewPilot`
 //! clears every level, then, for each of the start system's Con slots
 //! naming a visible system, sets the head of that system's place to level
 //! 1 (@0x18f97-0x19003, @0x18fe6), and last the start system's head

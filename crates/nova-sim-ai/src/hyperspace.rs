@@ -47,6 +47,16 @@
 //!   other reading's planner. One difference is left as it is: the
 //!   original draws a link one system alone lists only once that system
 //!   passes the map's exploration test.
+//! - **Two link sources.** [`StarMap::with_hidden`] takes each system's
+//!   links from its `sÿst` Con slots, the original's only source.
+//!   [`StarMap::with_lanes`] takes them from the gate lanes its hypergates
+//!   make ([`gate_lanes`](crate::gate_lanes)) instead, as
+//!   [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading (the
+//!   new game's) has every link reader read them: its listed links,
+//!   jumps, neighbours, drawn links and routes follow the lanes, while
+//!   its [`StarMap::con_slots`] and [`StarMap::usable_con_slots`] stay the
+//!   systems' own. The galaxy picks one per overlay
+//!   (`nova_sim::story::OverlaidGalaxy::set_link_source`).
 //! - [`check_jump`] gives the next system on the route, or the first
 //!   [`JumpRefusal`] that applies, in this order: there is no destination,
 //!   the ship is nearer the system's centre than its jump distance

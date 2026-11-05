@@ -53,6 +53,13 @@
 //! its own, and a new pilot explores each visible neighbour itself. The
 //! session applies these at its sites (its `explored` module).
 //!
+//! The known pass ([`known_from`]) and a new pilot's neighbours read a
+//! system's links through the galaxy's
+//! [`link_slots`](crate::story::OverlaidGalaxy::link_slots): its Con
+//! slots, or by [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other
+//! reading the systems its gate lanes reach. The map walk follows the
+//! star map's jumps, which that reading builds from the lanes too.
+//!
 //! The original's walk also explores the nebulae near each system
 //! (`_ExploreNebulaeFromSystem`, not its head's): the session raises
 //! `Explored` for each system reached and dispatches it at once (see the

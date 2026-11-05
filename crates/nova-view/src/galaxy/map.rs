@@ -199,6 +199,13 @@
 //! 3. **Every other link** in the same greys, the mode-3 slot's in
 //!    [`DIM_GREEN`] (@0xe9da-0xebd2).
 //! 4. **The mode-3 link** in [`DIM_GREEN`] (@0xebd8-0xed31).
+//!
+//!    By `RuleKey::MapLaneStyle`'s other reading, the new game's, each
+//!    link of 2 and 3 with a look ([`MapPicture::lanes`]) is drawn in it
+//!    instead of the grey: each way in its gate lane's stability's colour
+//!    and dash, in two halves where the ways differ, and an arrowhead on
+//!    a one-way link ([`lanes`](super::lanes)). The hypergate map's links
+//!    and the selected and mode-3 links keep their colours.
 //! 5. **Each system**: its point's rect inset by −[`SYSTEM_INSET_ZOOMED`]
 //!    at pen 2 when the zoom ≤ 0.5, otherwise −[`SYSTEM_INSET`] at pen 1
 //!    (@0xeeec-0xef68), an oval painted black (@0xef70-0xef85) and framed

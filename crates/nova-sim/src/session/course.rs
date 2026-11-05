@@ -26,6 +26,14 @@
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
 //!
+//! **A gate's exit** (the `entry` module's gate row): a hypergate's or
+//! wormhole's exit restarts the course at the system entered
+//! (@0x63e1d-0x63e3c, @0x64713-0x64731). By [`RuleKey::GateCourse`]'s
+//! other reading, the new game's, a hypergate's exit into the system
+//! standing for the course's first hop drops that hop as an arrival
+//! that made one does, and `Session::enter_hypergate` cues the next once
+//! the nav is off; any other exit, and every wormhole's, restarts.
+//!
 //! **A load** ([`course_on_load`]): by [`RuleKey::LoadedCourse`]'s engine
 //! reading a pilot opened from a save flies with no course, as the
 //! original's open clears `_hyperRoute` and never restores it; by the

@@ -21,6 +21,17 @@
 //! current system (`_DrawMap` @0xebd8-0xed31), and selects it as it
 //! opens ([`Session::map_preselection`], `_DoSystemMap` @0x124ac-0x124ff).
 //!
+//! **Gate lanes.** By [`RuleKey::GateLanes`]' other reading, the new
+//! game's, the current system's "Con slots" below are the systems its
+//! gate lanes reach, each once
+//! ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)),
+//! and a slot noted (+0x6c, `travel::of_slot`) is a lane's index: Hyper
+//! Select, the map's Tab cycle and the floating map step through the
+//! lanes, the cue selects a first hop a lane reaches, and J's selection is
+//! none, as no lane is a hyperspace link, so J refuses silently with a
+//! selection. A hypergate's exit along the course cues its next hop by
+//! [`RuleKey::GateCourse`]'s other reading (see the `course` module).
+//!
 //! **Setters** (mode / selection):
 //!
 //! - Flight start, a new or a loaded pilot, and the escape pod's rescue

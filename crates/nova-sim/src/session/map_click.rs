@@ -31,6 +31,11 @@
 //!   whose stand-in links to the source is accepted too, as its jumps
 //!   read the link both ways.
 //!
+//! By [`RuleKey::GateLanes`]' other reading the source's "Con slots" are
+//! the systems its gate lanes reach, and its jumps follow the lanes, so a
+//! click selects a lane neighbour and a Shift-click extends the course a
+//! lane at a time.
+//!
 //! The pick is the accepted hit's stand-in (@0x1314b); with none the
 //! press drags (@0x13154), which no visible hit gives.
 //!

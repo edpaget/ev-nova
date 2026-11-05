@@ -7,7 +7,7 @@
 //! known pass and new pilot read the Con slots alone (see
 //! [`hyperspace`](crate::hyperspace)), and a hypergate's links show only
 //! on the hypergate map, as one gate's arrows ([`gate`](crate::gate)). By
-//! `RuleKey::GateLanes`' other reading every
+//! [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading every
 //! one of those readers reads these lanes instead, through the star map
 //! built from them ([`StarMap::with_lanes`](crate::hyperspace::StarMap::with_lanes));
 //! no Con link is made, and no
