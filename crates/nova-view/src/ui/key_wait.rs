@@ -320,6 +320,16 @@ mod tests {
             [press(B)],
             "the waited key's"
         );
+        assert_eq!(
+            left_by(&[
+                press(PLAYER_INFO_KEY),
+                Input::Text('p'),
+                press(A),
+                release(PLAYER_INFO_KEY),
+            ]),
+            [press(A)],
+            "not the next key's"
+        );
     }
 
     #[test]
