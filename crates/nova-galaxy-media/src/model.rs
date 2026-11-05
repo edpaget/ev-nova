@@ -496,4 +496,31 @@ mod tests {
     fn a_broken_model_is_an_error() {
         assert!(model("m.glb", b"glTF nonsense", no_files).is_err());
     }
+
+    #[test]
+    fn a_file_a_model_names_is_found_beside_it() {
+        assert_eq!(beside("media/p", "hull.bin"), Ok("media/p/hull.bin".into()));
+        assert_eq!(
+            beside("media/p", "sub/hull.bin"),
+            Ok("media/p/sub/hull.bin".into())
+        );
+        assert_eq!(beside("", "hull.bin"), Ok("hull.bin".into()));
+    }
+
+    #[test]
+    fn a_model_may_name_no_uri_and_nothing_outside_its_folder() {
+        for uri in [
+            "",
+            "data:application/octet-stream;base64,AA",
+            "a%20b.bin",
+            "a\\b.bin",
+            "./a.bin",
+            "a//b.bin",
+            "../a.bin",
+            "a/..",
+        ] {
+            let err = beside("media/p", uri).unwrap_err();
+            assert!(err.contains(&format!("`{uri}`")), "{uri}: {err}");
+        }
+    }
 }

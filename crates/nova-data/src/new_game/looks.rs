@@ -443,6 +443,24 @@ mod tests {
     }
 
     #[test]
+    fn an_asset_that_failed_to_load_is_not_reported_again() {
+        let game = loaded(&fixture::galaxy().with("assets/hull.md", "---\nkind: [\n---\n"));
+        assert_eq!(
+            ship(&game, "skiff"),
+            Some(StandIn::Outline(
+                size_box(skiff_size(), LEAGUE_PRIMARY).scaled(PX_PER_METRE)
+            ))
+        );
+        assert!(
+            problems(&game)
+                .iter()
+                .all(|p| p.starts_with("assets/hull.md")),
+            "{:?}",
+            problems(&game)
+        );
+    }
+
+    #[test]
     fn a_hull_with_no_size_has_no_stand_in() {
         let source = with_hull().with(
             "ships/skiff.md",
