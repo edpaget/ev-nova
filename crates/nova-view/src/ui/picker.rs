@@ -11,12 +11,14 @@
 use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, SharedBindings, UiCommand, contexts};
 use crate::scaling::Scaling;
 use crate::video_mode::FullscreenKind;
 
 use super::button::ButtonTracker;
 use super::dialog::outline;
+use super::own_keys::OwnKeys;
 use super::volume::{Arrow, COLOR, TEXT_SIZE, draw_arrow};
 
 /// Each arrow's width.
@@ -103,6 +105,8 @@ pub struct Picker<T> {
     /// The arrow a press is held on, and its tracking.
     tracked: Option<Arrow>,
     tracker: ButtonTracker,
+    /// Its keys, when sent straight to it ([`Picker::input`]).
+    keys: OwnKeys,
 }
 
 impl<T: PickerEntry> Picker<T> {
@@ -116,9 +120,18 @@ impl<T: PickerEntry> Picker<T> {
             selected: 0,
             tracked: None,
             tracker: ButtonTracker::default(),
+            keys: OwnKeys::new(contexts::DIALOG),
         };
         picker.set_entries(entries, current);
         picker
+    }
+
+    /// The picker reading the keys sent straight to it through
+    /// `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// Offers `entries`, in order, selecting `current`, or the first entry
@@ -184,28 +197,36 @@ impl<T: PickerEntry> Picker<T> {
     /// - A click on an arrow (a press and a release on it, tracked as a
     ///   button tracks it) steps the selection: up toward the list's
     ///   start, down toward its end, stopping at either.
-    /// - Up and Down step it the same way, key repeats included. The
-    ///   owner sends keys only while the picker has the focus.
+    /// - Up and Down (the shared UI context's) step it the same way, key
+    ///   repeats included ([`Picker::command`]). The owner sends keys only
+    ///   while the picker has the focus.
     pub fn input(&mut self, input: &Input) -> bool {
         let step = match *input {
-            Input::Key {
-                key: Key::ArrowUp,
-                pressed: true,
-                ..
-            } => Some(Arrow::Up),
-            Input::Key {
-                key: Key::ArrowDown,
-                pressed: true,
-                ..
-            } => Some(Arrow::Down),
-            Input::Key { .. }
-            | Input::Text(_)
+            Input::Key { .. } => {
+                return self
+                    .keys
+                    .follow(input)
+                    .is_some_and(|command| self.command(command));
+            }
+            Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         };
         step.is_some_and(|arrow| self.step(arrow))
+    }
+
+    /// Steps it on the shared UI context's Up or Down, pressed or
+    /// repeated, as [`Picker::input`] does for their keys; `true` when
+    /// the selection changes.
+    pub fn command(&mut self, input: CommandInput) -> bool {
+        let arrow = match input.command {
+            Command::Ui(UiCommand::Up) => Arrow::Up,
+            Command::Ui(UiCommand::Down) => Arrow::Down,
+            _ => return false,
+        };
+        input.pressed && self.step(arrow)
     }
 
     /// The arrow a click on it activates, if this input completes one.
@@ -268,6 +289,8 @@ impl<T: PickerEntry> Picker<T> {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
+    use crate::keymap::{Bindings, KeyCombo};
 
     fn row() -> Bounds {
         Bounds {
@@ -305,6 +328,21 @@ mod tests {
         assert_eq!(picker.selected(), SHARP);
         picker.set_entries(vec![SHARP, NATIVE], NATIVE);
         assert_eq!(picker.selected(), NATIVE);
+    }
+
+    /// The picker reads the keys sent to it through the key map it is
+    /// given: Down rebound to J steps it on J and no longer on the down
+    /// arrow.
+    #[test]
+    fn a_rebound_down_steps_it_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Down, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut picker = Picker::new(row(), vec![NATIVE, SHARP], NATIVE).with_bindings(bindings);
+        assert!(!picker.input(&key(Key::ArrowDown)));
+        assert_eq!(picker.selected(), NATIVE, "the arrow no longer steps it");
+        assert!(picker.input(&key(Key::KeyJ)));
+        assert_eq!(picker.selected(), SHARP);
     }
 
     #[test]

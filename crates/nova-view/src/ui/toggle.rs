@@ -1,5 +1,6 @@
 //! A check box: an on/off toggle with a label, clicked like a button or
-//! flipped with Space while it has the focus.
+//! flipped with the shared UI context's Activate (Space) while it has the
+//! focus.
 //!
 //! The original drew its check boxes with the system's control; there is
 //! no stock graphic, so a toggle draws a small outlined box at the left of
@@ -10,11 +11,13 @@ use crate::color::Color;
 use crate::draw::{DrawList, crossed_box};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, SharedBindings, UiCommand, contexts};
 use crate::text::TextMetrics;
 
 use super::button::ButtonTracker;
 use super::dialog::outline;
+use super::own_keys::OwnKeys;
 
 /// The box's side.
 pub const BOX_SIZE: f32 = 12.0;
@@ -39,6 +42,8 @@ pub struct Toggle {
     on: bool,
     enabled: bool,
     tracker: ButtonTracker,
+    /// Its keys, when sent straight to it ([`Toggle::input`]).
+    keys: OwnKeys,
 }
 
 impl Toggle {
@@ -52,7 +57,16 @@ impl Toggle {
             on,
             enabled: true,
             tracker: ButtonTracker::default(),
+            keys: OwnKeys::new(contexts::DIALOG),
         }
+    }
+
+    /// The toggle reading the keys sent straight to it through
+    /// `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// A greyed toggle: off, drawn dim, ignoring every input.
@@ -124,19 +138,20 @@ impl Toggle {
     ///
     /// - A click (a press and a release on it, tracked as a button tracks
     ///   it) flips it; a press let go of elsewhere does not.
-    /// - A Space press flips it; its repeats and release do not. The owner
-    ///   sends keys only while the toggle has the focus.
+    /// - An Activate press (Space) flips it; its repeats and release do
+    ///   not ([`Toggle::command`]). The owner sends keys only while the
+    ///   toggle has the focus.
     ///
     /// A greyed toggle ignores everything.
     pub fn input(&mut self, input: &Input) -> bool {
         let flips = match *input {
-            Input::Key {
-                key: Key::Space,
-                pressed: true,
-                repeat: false,
-            } => self.enabled,
-            Input::Key { .. }
-            | Input::Text(_)
+            Input::Key { .. } => {
+                return self
+                    .keys
+                    .follow(input)
+                    .is_some_and(|command| self.command(command));
+            }
+            Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => false,
@@ -146,6 +161,23 @@ impl Toggle {
                 self.tracker.track(self.rect, self.enabled, input)
             }
         };
+        if flips {
+            self.on = !self.on;
+        }
+        flips
+    }
+
+    /// Flips it on the shared UI context's Activate, pressed and not
+    /// repeated, as [`Toggle::input`] does for its key; `true` when it
+    /// flips. A greyed toggle ignores it.
+    pub fn command(&mut self, input: CommandInput) -> bool {
+        let flips = self.enabled
+            && input
+                == CommandInput {
+                    command: Command::Ui(UiCommand::Activate),
+                    pressed: true,
+                    repeat: false,
+                };
         if flips {
             self.on = !self.on;
         }
@@ -189,7 +221,8 @@ impl Toggle {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
 
     fn at(x: f32, y: f32) -> Point {
@@ -220,6 +253,20 @@ mod tests {
             pressed,
             repeat,
         }
+    }
+
+    /// The toggle reads the keys sent to it through the key map it is
+    /// given: Activate rebound to T flips it on T and no longer on Space.
+    #[test]
+    fn a_rebound_activate_flips_it_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Activate, KeyCombo::key(Key::KeyT)),
+        );
+        let mut toggle = music(false).with_bindings(bindings);
+        assert!(!toggle.input(&key(Key::Space, true, false)));
+        assert!(!toggle.on(), "Space no longer flips it");
+        assert!(toggle.input(&key(Key::KeyT, true, false)));
+        assert!(toggle.on());
     }
 
     fn click(toggle: &mut Toggle, at: Point) -> bool {

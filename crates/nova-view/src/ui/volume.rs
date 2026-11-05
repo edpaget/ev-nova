@@ -18,11 +18,13 @@ use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, SharedBindings, UiCommand, contexts};
 use crate::sound::MAX_LEVEL;
 
 use super::button::ButtonTracker;
 use super::dialog::outline;
+use super::own_keys::OwnKeys;
 
 /// The label's and the number's size, in Geneva.
 pub const TEXT_SIZE: f32 = 12.0;
@@ -104,6 +106,8 @@ pub struct VolumeControl {
     /// The arrow a press is held on, and its tracking.
     tracked: Option<Arrow>,
     tracker: ButtonTracker,
+    /// Its keys, when sent straight to it ([`VolumeControl::input`]).
+    keys: OwnKeys,
 }
 
 impl VolumeControl {
@@ -117,7 +121,16 @@ impl VolumeControl {
             level: level.min(MAX_LEVEL),
             tracked: None,
             tracker: ButtonTracker::default(),
+            keys: OwnKeys::new(contexts::DIALOG),
         }
+    }
+
+    /// The control reading the keys sent straight to it through
+    /// `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// Where its parts are.
@@ -167,29 +180,38 @@ impl VolumeControl {
     /// - A click on an arrow (a press and a release on it, tracked as a
     ///   button tracks it) steps the level one up or down, within 0
     ///   through [`MAX_LEVEL`].
-    /// - Up and Right raise it one, and Down and Left lower it one, key
-    ///   repeats included. The owner sends keys only while the control
-    ///   has the focus.
+    /// - Up and Right (the shared UI context's) raise it one, and Down
+    ///   and Left lower it one, key repeats included
+    ///   ([`VolumeControl::command`]). The owner sends keys only while the
+    ///   control has the focus.
     pub fn input(&mut self, input: &Input) -> bool {
         let step = match *input {
-            Input::Key {
-                key: Key::ArrowUp | Key::ArrowRight,
-                pressed: true,
-                ..
-            } => Some(Arrow::Up),
-            Input::Key {
-                key: Key::ArrowDown | Key::ArrowLeft,
-                pressed: true,
-                ..
-            } => Some(Arrow::Down),
-            Input::Key { .. }
-            | Input::Text(_)
+            Input::Key { .. } => {
+                return self
+                    .keys
+                    .follow(input)
+                    .is_some_and(|command| self.command(command));
+            }
+            Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         };
         step.is_some_and(|arrow| self.step(arrow))
+    }
+
+    /// Steps it on the shared UI context's Up or Right (raising) and Down
+    /// or Left (lowering), pressed or repeated, as
+    /// [`VolumeControl::input`] does for their keys; `true` when the level
+    /// changes.
+    pub fn command(&mut self, input: CommandInput) -> bool {
+        let arrow = match input.command {
+            Command::Ui(UiCommand::Up | UiCommand::Right) => Arrow::Up,
+            Command::Ui(UiCommand::Down | UiCommand::Left) => Arrow::Down,
+            _ => return false,
+        };
+        input.pressed && self.step(arrow)
     }
 
     /// The arrow a click on it activates, if this input completes one.
@@ -273,7 +295,8 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::image::ImageKey;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -321,6 +344,21 @@ mod tests {
             pressed: true,
             repeat,
         }
+    }
+
+    /// The control reads the keys sent to it through the key map it is
+    /// given: Right rebound to K raises it on K and no longer on the right
+    /// arrow.
+    #[test]
+    fn a_rebound_right_raises_it_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyK)),
+        );
+        let mut control = control(3).with_bindings(bindings);
+        assert!(!control.input(&key(Key::ArrowRight, false)));
+        assert_eq!(control.level(), 3, "the arrow no longer raises it");
+        assert!(control.input(&key(Key::KeyK, false)));
+        assert_eq!(control.level(), 4);
     }
 
     fn drawn(control: &VolumeControl, focused: bool) -> Vec<DrawCommand> {

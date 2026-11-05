@@ -91,7 +91,8 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::preferences::{LaunchPrefs, Prefs};
 use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
@@ -388,6 +389,11 @@ impl ScalingList {
         self.stepped |= self.picker.input(input);
     }
 
+    /// Sends a command to the list, noting a step.
+    fn command(&mut self, input: CommandInput) {
+        self.stepped |= self.picker.command(input);
+    }
+
     /// The scaling picked: the one chosen, when the player stepped the
     /// list and it is not `running`.
     fn picked(&self, running: Scaling) -> Option<Scaling> {
@@ -445,6 +451,9 @@ pub struct PrefsDialog {
     target: Option<Target>,
     changed: bool,
     closed: bool,
+    /// Its keys, as the shared UI context's commands
+    /// ([`contexts::DIALOG`]), which it hands to the part focused.
+    keys: CommandReader,
 }
 
 impl std::fmt::Debug for PrefsDialog {
@@ -579,7 +588,16 @@ impl PrefsDialog {
             target: None,
             changed: false,
             closed: false,
+            keys: CommandReader::new(contexts::DIALOG),
         })
+    }
+
+    /// The dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The preferences as the dialog shows them.
@@ -665,33 +683,48 @@ impl PrefsDialog {
         std::mem::take(&mut self.changed).then(|| self.prefs())
     }
 
-    fn key(&mut self, key: Key, repeat: bool, input: &Input) {
-        match (key, self.focus) {
-            (Key::Tab, _) => {
+    /// Acts on a command pressed or repeated: Tab moves the focus,
+    /// Confirm and Back go to the dialog, Activate on OK closes it, and
+    /// the rest go to the part focused.
+    fn command(&mut self, input: CommandInput) {
+        let CommandInput {
+            command: Command::Ui(command),
+            pressed: true,
+            repeat,
+        } = input
+        else {
+            return;
+        };
+        match (command, self.focus) {
+            (UiCommand::Tab, _) => {
                 if !repeat && self.focus_ring == FocusRing::Tab {
                     self.focus = Some(self.focus.map_or(Focus::Music, Focus::next));
                 }
             }
-            (Key::Enter | Key::NumpadEnter | Key::Escape, _) => self.dialog_input(input),
-            (Key::Space, Some(Focus::Ok)) => {
+            (UiCommand::Confirm | UiCommand::Back, _) => {
+                if self.dialog.command(input) == Some(DialogEvent::Item(OK_ITEM)) {
+                    self.close();
+                }
+            }
+            (UiCommand::Activate, Some(Focus::Ok)) => {
                 if !repeat {
                     self.close();
                 }
             }
-            (_, Some(Focus::Music)) => self.changed |= self.music.input(input),
-            (_, Some(Focus::Sound)) => self.changed |= self.sound.input(input),
-            (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
-            (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
-            (_, Some(Focus::ShipAnimations)) => self.changed |= self.animations.input(input),
-            (_, Some(Focus::EngineGlows)) => self.changed |= self.glows.input(input),
-            (_, Some(Focus::RunningLights)) => self.changed |= self.lights.input(input),
-            (_, Some(Focus::WeaponEffects)) => self.changed |= self.weapons.input(input),
-            (_, Some(Focus::SmokeTrails)) => self.changed |= self.smoke.input(input),
-            (_, Some(Focus::ParallaxStarfield)) => self.changed |= self.parallax.input(input),
-            (_, Some(Focus::Display)) => self.stepped |= self.display.input(input),
-            (_, Some(Focus::Scaling)) => self.scaling_list.input(input),
-            (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
-            (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.input(input),
+            (_, Some(Focus::Music)) => self.changed |= self.music.command(input),
+            (_, Some(Focus::Sound)) => self.changed |= self.sound.command(input),
+            (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.command(input),
+            (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.command(input),
+            (_, Some(Focus::ShipAnimations)) => self.changed |= self.animations.command(input),
+            (_, Some(Focus::EngineGlows)) => self.changed |= self.glows.command(input),
+            (_, Some(Focus::RunningLights)) => self.changed |= self.lights.command(input),
+            (_, Some(Focus::WeaponEffects)) => self.changed |= self.weapons.command(input),
+            (_, Some(Focus::SmokeTrails)) => self.changed |= self.smoke.command(input),
+            (_, Some(Focus::ParallaxStarfield)) => self.changed |= self.parallax.command(input),
+            (_, Some(Focus::Display)) => self.stepped |= self.display.command(input),
+            (_, Some(Focus::Scaling)) => self.scaling_list.command(input),
+            (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.command(input),
+            (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.command(input),
             _ => {}
         }
     }
@@ -931,13 +964,12 @@ impl Screen for PrefsDialog {
     /// It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         match *input {
-            Input::Key {
-                key,
-                pressed: true,
-                repeat,
-            } => self.key(key, repeat, input),
-            Input::Key { .. }
-            | Input::Text(_)
+            Input::Key { .. } => {
+                if let Some(command) = self.keys.follow(input) {
+                    self.command(command);
+                }
+            }
+            Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => {}
@@ -1099,7 +1131,8 @@ pub mod fixture {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemTemplate, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE};
     use crate::ui::mode_picker::PickerRects;
@@ -1716,6 +1749,30 @@ mod tests {
         dialog.input(&key(Key::ArrowDown));
         assert_eq!(dialog.prefs().sound.music_level, 0, "OK is focused");
         assert!(!dialog.closed());
+    }
+
+    /// The dialog reads its keys through the key map it is given: Back
+    /// rebound to F6 closes it on F6 and no longer on Escape, and Tab
+    /// rebound to F7 moves the focus to the music toggle, which Activate
+    /// then flips.
+    #[test]
+    fn a_rebound_back_closes_it_and_a_rebound_tab_focuses_on_their_new_keys_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Back, KeyCombo::key(Key::F6))
+                .rebound(UiCommand::Tab, KeyCombo::key(Key::F7)),
+        );
+        let mut dialog = prefs().with_bindings(bindings);
+        dialog.input(&key(Key::Escape));
+        assert!(!dialog.closed(), "Escape no longer closes it");
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Space));
+        assert_eq!(dialog.take_prefs(), None, "Tab no longer focuses");
+        dialog.input(&key(Key::F7));
+        dialog.input(&key(Key::Space));
+        assert!(dialog.take_prefs().is_some_and(|prefs| prefs.sound.music));
+        dialog.input(&key(Key::F6));
+        assert!(dialog.closed());
     }
 
     #[test]
