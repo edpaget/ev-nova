@@ -2,6 +2,10 @@
 
 use crate::geometry::Point;
 
+mod glyphs;
+
+pub use glyphs::{pad_axis_name, pad_button_name};
+
 /// A physical key, by its position: `keyboard_types`' `Code`, which names
 /// each key for what it types on a US keyboard. `Key::KeyW` is the key
 /// where a US keyboard has W, whatever the player's layout types there;
@@ -195,14 +199,26 @@ pub enum Device {
     Gamepad(ControllerFamily),
 }
 
-/// The family a gamepad belongs to, which phase 12 reads to name its
-/// buttons with that family's labels and glyphs. Every pad is
-/// [`ControllerFamily::Generic`] until then.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The family a gamepad belongs to, which names its buttons with that
+/// family's labels ([`pad_button_name`]). `nova` reads it from the pad's
+/// vendor id; a pad of no known family is
+/// [`ControllerFamily::Generic`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ControllerFamily {
+    /// Microsoft's pads: A, B, X, Y.
+    Xbox,
+    /// Sony's pads: Cross, Circle, Square, Triangle.
+    PlayStation,
+    /// Nintendo's pads: B, A, Y, X by position (A on the East).
+    Nintendo,
     /// A pad named by position alone.
     #[default]
     Generic,
+}
+
+impl ControllerFamily {
+    /// Every family, in declaration order.
+    pub const ALL: [Self; 4] = [Self::Xbox, Self::PlayStation, Self::Nintendo, Self::Generic];
 }
 
 /// What the app tells every screen about where it runs, as data: sent as
