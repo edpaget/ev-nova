@@ -22,16 +22,22 @@
 //!   stays up, and takes clicks and zooms, until it is hidden once more
 //!   than 500 ticks have passed ([`FloatingMap::expire`], `_HandleComm`
 //!   @0x30262-0x30285) or by the acknowledge key.
-//! - **The zoom** is an index into the course map's [`SCALES`], starting
-//!   at 16/9, the inverse of the original's `_floatingMapZoom` 0.5625
-//!   (data @0xde948). `-` steps it toward 27/64 and `=` toward 64/27
-//!   (`_HandlePlayer` @0x70f4e-0x71110), each saying whether it moved. The
-//!   original's zoom steps by ×4/3 while it is below 2.0 and by ×0.75
-//!   while it is above 0.5, which reaches exactly these seven.
+//! - **The zoom** is `_floatingMapZoom` (data 0xde948, 0.5625), a double
+//!   that `_HandlePlayer` (@0x70fbb-0x710bc) multiplies by the decimal
+//!   1.333333 on `-` while it is below 2.0, and by 0.75 on `=` or keypad
+//!   `+` while it is above 0.5, the course map's own rules, which it
+//!   shares ([`MapZoom`]). From 0.5625 that reaches 0.421875 in and
+//!   0.7499998125, 0.9999995…, 1.3333323…, 1.777776… and 2.3703674… out,
+//!   not the exact powers of 4/3, and a step out then in drifts (to
+//!   0.562499859375). Its points ([`transform`]) and click boxes ([`hit`])
+//!   divide by the drifting double, as the original's do, so either can
+//!   sit a pixel from where the exact power would put it. A show guards
+//!   it as `_ShowFloatingMap` does (@0x11445-0x11480): 0 or less, or NaN,
+//!   becomes 1.0.
 //! - **A click** ([`hit`], `_HandlePlayer` @0x6a130-0x6a762) on the
 //!   current system's centre ±8 picks it; otherwise the first of its links
-//!   whose box, trunc(centre + (link − current) / zoom) ±8 (±12 at the
-//!   largest scale, where the zoom ≤ 0.5), holds the point picks that
+//!   whose box, trunc(centre + (link − current) / zoom) ±8 (±12 at a
+//!   zoom ≤ 0.5, @0x6a2c8-0x6a316), holds the point picks that
 //!   link; anything else in the frame is a miss, which the flight
 //!   swallows.
 //! - **Drawing** ([`draw`]): the frame's border in `cölr` `FloatingMap`,
@@ -116,9 +122,6 @@
 //!
 //! # Left out, each with its address and reason
 //!
-//! - `_ShowFloatingMap` @0x11445-0x11480, the zoom reset to 1.0 when it
-//!   is ≤ 0: the zoom starts at 0.5625 and only ever multiplies by
-//!   positive steps.
 //! - `_DrawMapInFloatingFrame` @0x1139b-0x113d5, the 8-bit order (the
 //!   map, then the border): ours renders one depth.
 //! - `_PostAnimateHandler` @0x38d87-0x38e3c and `_FloaterEraseCallback`
@@ -143,7 +146,8 @@
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::galaxy::SystemId;
-use crate::galaxy::view::{SCALES, Transform};
+use crate::galaxy::place::{MapZoom, ZOOM_IN_LIMIT};
+use crate::galaxy::view::Transform;
 use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 use crate::text::LINE_HEIGHT;
 
@@ -159,12 +163,10 @@ pub const FULL: u8 = 32;
 pub const FADED_AT: u128 = 150;
 /// The ticks a show keeps the map up: it is hidden once more have passed.
 pub const SHOWN_FOR: u128 = 500;
-/// The zoom index the map starts at: 16/9 in [`SCALES`].
-pub const START_ZOOM: usize = 5;
 /// Half a click box's side: the current system's centre box, and a link's
-/// box below the largest scale.
+/// box above a zoom of 0.5.
 pub const BOX_HALF: f32 = 8.0;
-/// Half a link's click box's side at the largest scale (see
+/// Half a link's click box's side at a zoom of 0.5 or less (see
 /// [`FloatingMap::big_boxes`]).
 pub const BIG_BOX_HALF: f32 = 12.0;
 
@@ -172,18 +174,6 @@ pub const BIG_BOX_HALF: f32 = 12.0;
 /// is 16 × 16, and one up to twice that is still clipped rather than
 /// dropped.
 const ICON_REACH: f32 = 16.0;
-
-/// The original's zooms, the inverses of [`SCALES`], as the click boxes
-/// divide by them.
-const ZOOMS: [f64; 7] = [
-    64.0 / 27.0,
-    16.0 / 9.0,
-    4.0 / 3.0,
-    1.0,
-    0.75,
-    0.5625,
-    0.421_875,
-];
 
 /// The frame in a window of `view` (width, height): see the module docs.
 #[must_use]
@@ -211,7 +201,7 @@ pub fn centre(frame: Bounds) -> Point {
     )
 }
 
-/// Where the map at zoom index `zoom` draws a world point: `current`, the
+/// Where the map at `zoom` draws a world point: `current`, the
 /// current system's position, at the frame's [`centre`], each position
 /// divided by the original's zoom as `_DrawMap` divides
 /// ([`Transform::divided`]): `_DrawMapInFloatingFrame` runs `_DrawMap`
@@ -219,21 +209,21 @@ pub fn centre(frame: Bounds) -> Point {
 /// port is the frame's whole top-left.
 #[must_use]
 #[allow(clippy::cast_possible_truncation)] // Screen pixels.
-pub fn transform(frame: Bounds, current: Point, zoom: usize) -> Transform {
+pub fn transform(frame: Bounds, current: Point, zoom: f64) -> Transform {
     let port = (frame.min.x as i32, frame.min.y as i32);
     let at = centre(frame);
     let centre = (at.x as i32 - port.0, at.y as i32 - port.1);
-    Transform::divided(port, centre, current, ZOOMS[zoom])
+    Transform::divided(port, centre, current, zoom)
 }
 
 /// The floating map's state: up or not, when it was last shown, and its
 /// zoom.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloatingMap {
     /// The Mac tick it was last shown at, while it is up.
     shown_at: Option<u128>,
-    /// The index of its scale in [`SCALES`].
-    zoom: usize,
+    /// `_floatingMapZoom`.
+    zoom: MapZoom,
     /// The system selected as it was last shown (`_selSystem`).
     preselection: Option<SystemId>,
 }
@@ -245,12 +235,13 @@ impl Default for FloatingMap {
 }
 
 impl FloatingMap {
-    /// Down, at [`START_ZOOM`].
+    /// Down, at `_floatingMapZoom`'s data initialiser (0xde948), 0.5625
+    /// ([`INITIAL_ZOOM`](crate::galaxy::place::INITIAL_ZOOM)).
     #[must_use]
     pub fn new() -> Self {
         Self {
             shown_at: None,
-            zoom: START_ZOOM,
+            zoom: MapZoom::new(),
             preselection: None,
         }
     }
@@ -268,9 +259,12 @@ impl FloatingMap {
         self.preselection
     }
 
-    /// Shows it at Mac tick `now`, restarting its clock.
+    /// Shows it at Mac tick `now`, restarting its clock, with
+    /// `_ShowFloatingMap`'s guard on the zoom (@0x11445-0x11480,
+    /// [`MapZoom::opened`]).
     pub fn show(&mut self, now: u128) {
         self.shown_at = Some(now);
+        self.zoom.opened();
     }
 
     /// Hides it.
@@ -304,35 +298,29 @@ impl FloatingMap {
         Some(left.min(u128::from(FULL)) as u8)
     }
 
-    /// The index of its scale in [`SCALES`].
+    /// The zoom, `_floatingMapZoom`: map units per screen pixel.
     #[must_use]
-    pub fn zoom(&self) -> usize {
-        self.zoom
+    pub fn zoom(&self) -> f64 {
+        self.zoom.get()
     }
 
-    /// Steps to the next smaller scale, if there is one: whether it did.
+    /// `-`: one step out ([`MapZoom::zoom_out`]); whether it moved.
     pub fn zoom_out(&mut self) -> bool {
-        let moved = self.zoom > 0;
-        if moved {
-            self.zoom -= 1;
-        }
-        moved
+        self.zoom.zoom_out()
     }
 
-    /// Steps to the next larger scale, if there is one: whether it did.
+    /// `=` or keypad `+`: one step in ([`MapZoom::zoom_in`]); whether it
+    /// moved.
     pub fn zoom_in(&mut self) -> bool {
-        let moved = self.zoom + 1 < SCALES.len();
-        if moved {
-            self.zoom += 1;
-        }
-        moved
+        self.zoom.zoom_in()
     }
 
-    /// Whether the click boxes are the big ones: where the original's zoom
-    /// is ≤ 0.5, the largest scale alone.
+    /// Whether the click boxes are the big ones: where the zoom is ≤ 0.5
+    /// (`0.5 >= zoom`, @0x6a2c8-0x6a2e0), 0.421875 alone of the zooms
+    /// reachable from 0.5625.
     #[must_use]
     pub fn big_boxes(&self) -> bool {
-        ZOOMS[self.zoom] <= 0.5
+        self.zoom() <= ZOOM_IN_LIMIT
     }
 }
 
@@ -375,7 +363,7 @@ pub fn hit(
     if boxed(middle.x, middle.y, BOX_HALF) {
         return Hit::Centre;
     }
-    let zoom = ZOOMS[map.zoom];
+    let zoom = map.zoom();
     let half = if map.big_boxes() {
         BIG_BOX_HALF
     } else {
@@ -753,6 +741,7 @@ fn cut(have: (f32, f32), gone: (f32, f32)) -> Vec<(f32, f32)> {
 mod tests {
     use super::*;
     use crate::ImageKey;
+    use crate::galaxy::place::{INITIAL_ZOOM, MapZoom};
     use crate::galaxy::view::Divide;
 
     fn at(x: f32, y: f32) -> Point {
@@ -843,10 +832,10 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_new_map_down_at_16_9() {
+    fn the_default_is_the_new_map_down_at_0_5625() {
         assert_eq!(FloatingMap::default(), FloatingMap::new());
         assert!(!FloatingMap::default().is_up());
-        assert_eq!(FloatingMap::default().zoom(), START_ZOOM);
+        assert_eq!(FloatingMap::default().zoom(), INITIAL_ZOOM);
     }
 
     #[test]
@@ -864,37 +853,43 @@ mod tests {
     // The zoom.
 
     #[test]
-    fn the_zoom_starts_at_16_9_and_steps_within_the_seven_scales() {
+    fn the_zoom_steps_as_map_zoom_does_within_its_limits() {
         let mut map = FloatingMap::new();
-        assert_eq!(map.zoom(), 5);
-        assert_eq!(SCALES[map.zoom()], 16.0 / 9.0);
-        for expected in [4, 3, 2, 1, 0] {
-            assert!(map.zoom_out());
-            assert_eq!(map.zoom(), expected);
+        let mut zoom = MapZoom::new();
+        assert!(map.zoom_out());
+        zoom.zoom_out();
+        assert_eq!(map.zoom(), zoom.get(), "one step out");
+        assert!(map.zoom_in());
+        assert_eq!(map.zoom(), 0.562_499_859_375, "back in, drifted");
+        assert!(map.zoom_in());
+        assert!(map.big_boxes());
+        let mut map = FloatingMap::new();
+        assert!(!map.big_boxes());
+        assert!(map.zoom_in());
+        assert_eq!(map.zoom(), 0.421_875);
+        assert!(map.big_boxes(), "at 0.421875");
+        assert!(!map.zoom_in(), "0.421875 is not above 0.5");
+        assert_eq!(map.zoom(), 0.421_875);
+        let mut map = FloatingMap::new();
+        while map.zoom_out() {
             assert!(!map.big_boxes());
         }
-        assert!(!map.zoom_out(), "the smallest");
-        assert_eq!(map.zoom(), 0);
-        for expected in 1..=6 {
-            assert!(map.zoom_in());
-            assert_eq!(map.zoom(), expected);
-            assert_eq!(map.big_boxes(), expected == 6, "{expected}");
-        }
-        assert!(!map.zoom_in(), "the largest");
-        assert_eq!(map.zoom(), 6);
+        assert_eq!(map.zoom(), 2.370_367_407_408_889_6, "refused past 2.0");
     }
 
     #[test]
-    fn the_original_zooms_are_the_scales_inverses() {
-        for (zoom, scale) in ZOOMS.iter().zip(SCALES) {
-            assert!((zoom * f64::from(scale) - 1.0).abs() < 1e-6, "{zoom}");
-        }
-        assert_eq!(ZOOMS[START_ZOOM], 0.5625);
+    fn showing_guards_a_zoom_of_0_or_less() {
+        let mut map = FloatingMap {
+            zoom: MapZoom::at(0.0),
+            ..FloatingMap::new()
+        };
+        map.show(0);
+        assert_eq!(map.zoom(), 1.0);
     }
 
     #[test]
     fn the_transform_centres_the_current_system_at_the_zoom() {
-        let transform = transform(stock(), at(40.0, -10.0), 2);
+        let transform = transform(stock(), at(40.0, -10.0), 1.333_332_333_333_583_6);
         assert_eq!(transform.world_to_screen(at(40.0, -10.0)), at(686.0, 278.0));
         assert_eq!(transform.world_to_screen(at(80.0, -10.0)), at(716.0, 278.0));
     }
@@ -905,7 +900,7 @@ mod tests {
         // (128, 128) in the port. (37 / 0.421875 + 128) − 37 / 0.421875
         // is a hair under 128: the current system lands a pixel up and
         // left of the frame's centre.
-        let transform = transform(stock(), at(37.0, 37.0), 6);
+        let transform = transform(stock(), at(37.0, 37.0), 0.421_875);
         assert_eq!(
             transform.divide,
             Some(Divide {
@@ -916,17 +911,32 @@ mod tests {
         assert_eq!(transform.pixel(at(37.0, 37.0)), (685, 277));
     }
 
+    #[test]
+    fn the_drifted_zoom_places_a_point_a_pixel_from_the_exact_tables() {
+        // One step out is 0.7499998125, not 0.75: −3 / 0.7499998125 is a
+        // hair under −4, so 128 − 4.000001 truncates to 123, where the
+        // exact 3/4 puts it at 124.
+        let mut map = FloatingMap::new();
+        map.zoom_out();
+        let here = at(0.0, 0.0);
+        let drifted = transform(stock(), here, map.zoom());
+        assert_eq!(drifted.pixel(at(-3.0, 0.0)), (681, 278));
+        let exact = transform(stock(), here, 0.75);
+        assert_eq!(exact.pixel(at(-3.0, 0.0)), (682, 278));
+    }
+
     // The click.
 
     const NEAR: SystemId = SystemId(134);
     const NEXT: SystemId = SystemId(135);
 
-    fn zoomed(index: usize) -> FloatingMap {
+    /// A new map stepped `outs` times out, then `ins` times in.
+    fn zoomed(outs: usize, ins: usize) -> FloatingMap {
         let mut map = FloatingMap::new();
-        while map.zoom() > index {
+        for _ in 0..outs {
             map.zoom_out();
         }
-        while map.zoom() < index {
+        for _ in 0..ins {
             map.zoom_in();
         }
         map
@@ -958,7 +968,7 @@ mod tests {
     fn a_links_box_is_at_its_scaled_offset_truncated() {
         let map = FloatingMap::new();
         let here = at(10.0, 20.0);
-        // 9 right and 18 down at 16/9: 16 and 32, so (702, 310).
+        // 9 right and 18 down at 0.5625: 16 and 32, so (702, 310).
         let links = [(NEAR, at(19.0, 38.0))];
         assert_eq!(
             hit(&map, stock(), at(694.0, 302.0), here, &links),
@@ -1006,8 +1016,8 @@ mod tests {
     fn the_boxes_follow_the_zoom_and_are_12_either_way_at_the_largest_scale() {
         let here = at(0.0, 0.0);
         let links = [(NEAR, at(48.0, 0.0))];
-        // 48 × 3/4 = 36: (722, 278), ±8.
-        let map = zoomed(2);
+        // 48 / 1.3333323 = 36.00003: (722, 278), ±8.
+        let map = zoomed(3, 0);
         assert_eq!(
             hit(&map, stock(), at(714.0, 278.0), here, &links),
             Hit::Link(NEAR)
@@ -1016,8 +1026,8 @@ mod tests {
             hit(&map, stock(), at(713.9, 278.0), here, &links),
             Hit::Miss
         );
-        // 48 × 64/27 = 113.78: (799, 278), ±12.
-        let map = zoomed(6);
+        // 48 / 0.421875 = 113.78: (799, 278), ±12.
+        let map = zoomed(0, 1);
         assert_eq!(
             hit(&map, stock(), at(787.0, 278.0), here, &links),
             Hit::Link(NEAR)
@@ -1034,8 +1044,8 @@ mod tests {
             hit(&map, stock(), at(799.0, 290.0), here, &links),
             Hit::Miss
         );
-        // At 16/9 the box is ±8 again.
-        let map = zoomed(5);
+        // At 0.5625 the box is ±8 again.
+        let map = zoomed(0, 0);
         let links = [(NEAR, at(45.0, 0.0))];
         assert_eq!(
             hit(&map, stock(), at(758.0, 286.0), here, &links),
@@ -1043,6 +1053,37 @@ mod tests {
         );
         assert_eq!(
             hit(&map, stock(), at(758.0, 285.9), here, &links),
+            Hit::Link(NEAR)
+        );
+    }
+
+    #[test]
+    fn a_links_click_box_sits_where_the_drifted_zoom_puts_it() {
+        // One step out, a link 3 left and 15 down lands at
+        // trunc(686 − 4.000001) = 681 across, where the exact 3/4 puts it
+        // at 682, and at 298 down, clear of the centre box's 270-286.
+        let here = at(0.0, 0.0);
+        let link = at(-3.0, 15.0);
+        let links = [(NEAR, link)];
+        let drifted = zoomed(1, 0);
+        let exact = FloatingMap {
+            zoom: MapZoom::at(0.75),
+            ..FloatingMap::new()
+        };
+        let (x, y) = transform(stock(), here, drifted.zoom()).pixel(link);
+        let (exact_x, _) = transform(stock(), here, exact.zoom()).pixel(link);
+        assert_eq!((x, y, exact_x), (681, 298, 682));
+        let (x, y) = (x as f32, y as f32);
+        let leading = at(x - BOX_HALF, y);
+        let trailing = at(x + BOX_HALF, y);
+        assert_eq!(
+            hit(&drifted, stock(), leading, here, &links),
+            Hit::Link(NEAR)
+        );
+        assert_eq!(hit(&drifted, stock(), trailing, here, &links), Hit::Miss);
+        assert_eq!(hit(&exact, stock(), leading, here, &links), Hit::Miss);
+        assert_eq!(
+            hit(&exact, stock(), trailing, here, &links),
             Hit::Link(NEAR)
         );
     }

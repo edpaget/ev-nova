@@ -753,7 +753,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The frame shows that drawing until the next show: its course and
     /// mode-3 link are those of the last show, not live, as the
     /// original's frame image is drawn only then (at a show, Hyper Select,
-    /// a click and a zoom, each of which shows it again here).
+    /// a click, each of which shows it again here, and a zoom, which
+    /// redraws it, [`FlightView::redraw_floating_map`]).
     ///
     /// So it asks at every show, and a show comes on every frame while H
     /// or `\` is held ([`FlightView::floating_frame`]): the flight steps
@@ -763,15 +764,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight that answers nothing (one that failed to start) changes
     /// neither the picture nor the preselection.
     fn show_floating_map(&mut self) {
+        if let Some(shown) = self.redraw_floating_map() {
+            self.floating.preselect(shown.preselection);
+        }
+    }
+
+    /// Redraws the floating map as a zoom does (`_HandlePlayer` @0x71013,
+    /// @0x71094): its clock restarted (`TickCount` into 0x3b51e0), then
+    /// `_DrawMapInFloatingFrame` alone, which draws the map afresh but,
+    /// unlike `_ShowFloatingMap`, leaves `_selSystem` as the last show set
+    /// it (@0x1147b-0x114c8). The drawing is the show's ask's
+    /// ([`FlightView::show_floating_map`]), returned for a show to take
+    /// the system it preselects; `None` when the flight answers nothing.
+    ///
+    /// `_DrawMapInFloatingFrame` doesn't run `_RecalcMissionSystsForMap`
+    /// (`_ShowFloatingMap` does, @0x114ea), where ours' drawing carries
+    /// the mission systems as they stand: they differ only when a
+    /// mission's systems changed since the last show while the map is up
+    /// with H and `\` let go, and the drawing is one snapshot of the
+    /// flight with no stale mission systems to keep.
+    fn redraw_floating_map(&mut self) -> Option<Box<nova_sim::flight_frame::FloatingMap>> {
         self.floating.show(self.mac_now());
         // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
         // system as it draws (@0x11338-0x1136d), so the course map opens
         // there next.
         self.map.recentre();
-        if let ScreenAnswer::FloatingMap(shown) = self.sim.screen(ScreenAsk::FloatingMap) {
-            self.floating.preselect(shown.preselection);
-            self.floating_picture = Some(MapPicture::of(&shown.drawing));
-        }
+        let ScreenAnswer::FloatingMap(shown) = self.sim.screen(ScreenAsk::FloatingMap) else {
+            return None;
+        };
+        self.floating_picture = Some(MapPicture::of(&shown.drawing));
+        Some(shown)
     }
 
     /// The floating map's work each frame, as `_HandlePlayer` does it
@@ -843,7 +865,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// X or K held alone doesn't count: `_HandlePlayer` checks each only
     /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
     /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One
-    /// that changes the scale shows the map again and raises
+    /// that changes the zoom redraws the map
+    /// ([`FlightView::redraw_floating_map`]) and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
@@ -862,7 +885,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.floating.zoom_in()
         };
         if moved {
-            self.show_floating_map();
+            self.redraw_floating_map();
             self.ui_sounds.push(UiSound::FloatingMapZoomed);
         }
     }

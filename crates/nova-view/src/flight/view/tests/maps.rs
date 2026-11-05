@@ -1,4 +1,5 @@
 use super::*;
+use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::galaxy::update::MapUpdate;
 use nova_sim::MapClicked;
 use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
@@ -1264,6 +1265,40 @@ fn a_zoom_shows_the_map_again() {
 }
 
 #[test]
+fn a_zoom_redraws_without_preselecting() {
+    // The zoom redraws with `_DrawMapInFloatingFrame` alone (@0x71013,
+    // @0x71094), not `_ShowFloatingMap`, so `_selSystem` stays as the last
+    // show set it (@0x1147b-0x114c8); the clock restarts all the same.
+    let mut view = floating_over(near_catalog(), in_sol(), near_places());
+    view.sim
+        .queue_screen(floating_shown(near_drawing(), Some(130)));
+    let mut named = near_drawing();
+    named.named.push(SystemId(134));
+    for _ in 0..2 {
+        view.sim
+            .queue_screen(floating_shown(named.clone(), Some(134)));
+    }
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(floating_names(&floating_drawn(&view)), ["Sol"]);
+    floating_frame_of(&mut view, mac_ticks(140));
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(view.floating.preselection(), Some(SystemId(130)), "kept");
+    assert_eq!(
+        floating_names(&floating_drawn(&view)),
+        ["Sol", "Proxima Near"],
+        "the new drawing"
+    );
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255), "the clock restarted");
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        view.floating.preselection(),
+        Some(SystemId(134)),
+        "a show preselects"
+    );
+}
+
+#[test]
 fn the_map_is_drawn_after_the_double_time_icon_and_before_the_escort_menu() {
     // The escort menu's rows are the frame's.
     let mut frame = among(Vec::new());
@@ -2505,7 +2540,11 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
     view.track_held(&key(HYPER_SELECT_KEY, false));
     hold(&mut view, STELLAR_SLOT_KEYS[2][1]);
     floating_tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
+    assert_eq!(
+        view.floating.zoom(),
+        INITIAL_ZOOM * ZOOM_OUT_STEP,
+        "F3 is not polled"
+    );
 }
 
 /// The port's course map, open over a flight docked at Earth whose map

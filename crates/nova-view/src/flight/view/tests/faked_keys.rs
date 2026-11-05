@@ -10,7 +10,7 @@ use super::faked_screen::{faked_stage, picks_since, sent_count, sent_since};
 use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
-use crate::flight::floating;
+use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::time::sixtieths;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::navigation::NavMode;
@@ -713,14 +713,18 @@ fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
                 .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
             "warping {warping}"
         );
-        assert_eq!(view.floating.zoom(), 4, "warping {warping}");
+        assert_eq!(
+            view.floating.zoom(),
+            INITIAL_ZOOM * ZOOM_OUT_STEP,
+            "warping {warping}"
+        );
     }
     let mut view = super::maps::floating_in(in_sol());
     view.change_sim(|sim| sim.refuse(PlayerCommand::Nav));
     view.floating.show(sixtieths(view.elapsed));
     view.take_sounds();
     tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(view.floating.zoom(), floating::START_ZOOM);
+    assert_eq!(view.floating.zoom(), INITIAL_ZOOM);
     assert!(
         !view
             .take_sounds()

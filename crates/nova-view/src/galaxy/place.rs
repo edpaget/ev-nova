@@ -13,6 +13,8 @@
 //!   [`ZOOM_IN_LIMIT`]) (@0x12803-0x12838, @0x12a36-0x12a6b). The flags
 //!   are worked out before each step (@0x13c6f-0x13cb4), so from 0.5625
 //!   the reachable zooms are 0.421875 up to 2.3703674…, seven in all.
+//!   [`MapZoom`] holds the zoom and these rules, which the floating map's
+//!   `_floatingMapZoom` (data 0xde948) shares.
 //! - **The scroll** is the galaxy point drawn at item 3's centre. The
 //!   arrows move it [`ARROW_STEP`] units, unscaled (@0x142a3, @0x142c3,
 //!   @0x14370, @0x14417), a drag sets it from the press's start
@@ -41,10 +43,84 @@ pub const ARROW_STEP: i32 = 10;
 /// The zoom the open's guard gives a zoom of 0 or less (0xdd0c0).
 const GUARD_ZOOM: f64 = 1.0;
 
+/// A map's zoom, held as the original holds `_mapZoom` and
+/// `_floatingMapZoom`: a double that each step multiplies, so it drifts
+/// from the exact powers of 4/3 (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MapZoom(f64);
+
+impl Default for MapZoom {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MapZoom {
+    /// At [`INITIAL_ZOOM`], the first map of a run.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(INITIAL_ZOOM)
+    }
+
+    /// At `zoom`, whatever it is.
+    #[must_use]
+    pub const fn at(zoom: f64) -> Self {
+        Self(zoom)
+    }
+
+    /// The zoom: map units per screen pixel.
+    #[must_use]
+    pub fn get(self) -> f64 {
+        self.0
+    }
+
+    /// The open's guard (`_DoSystemMap` @0x12305-0x1234d,
+    /// `_ShowFloatingMap` @0x11445-0x11480): a zoom of 0 or less becomes
+    /// 1.0, as does a NaN, which `cmpnlesd` finds not above 0; any other
+    /// is kept.
+    pub fn opened(&mut self) {
+        if self.0.is_nan() || self.0 <= 0.0 {
+            self.0 = GUARD_ZOOM;
+        }
+    }
+
+    /// `_canZoomIn`: the zoom above [`ZOOM_IN_LIMIT`].
+    #[must_use]
+    pub fn can_zoom_in(self) -> bool {
+        self.0 > ZOOM_IN_LIMIT
+    }
+
+    /// `_canZoomOut`: the zoom below [`ZOOM_OUT_LIMIT`].
+    #[must_use]
+    pub fn can_zoom_out(self) -> bool {
+        self.0 < ZOOM_OUT_LIMIT
+    }
+
+    /// One step in, multiplying by [`ZOOM_IN_STEP`], when
+    /// [`MapZoom::can_zoom_in`]; whether the zoom moved.
+    pub fn zoom_in(&mut self) -> bool {
+        let can = self.can_zoom_in();
+        if can {
+            self.0 *= ZOOM_IN_STEP;
+        }
+        can
+    }
+
+    /// One step out, multiplying by [`ZOOM_OUT_STEP`], when
+    /// [`MapZoom::can_zoom_out`]; whether the zoom moved.
+    pub fn zoom_out(&mut self) -> bool {
+        let can = self.can_zoom_out();
+        if can {
+            self.0 *= ZOOM_OUT_STEP;
+        }
+        can
+    }
+}
+
 /// An in-flight map's zoom and scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapPlace {
-    zoom: f64,
+    zoom: MapZoom,
     scroll: (i32, i32),
 }
 
@@ -53,7 +129,7 @@ impl MapPlace {
     #[must_use]
     pub fn new(scroll: (i32, i32)) -> Self {
         Self {
-            zoom: INITIAL_ZOOM,
+            zoom: MapZoom::new(),
             scroll,
         }
     }
@@ -61,13 +137,16 @@ impl MapPlace {
     /// The same place at `zoom`.
     #[must_use]
     pub fn with_zoom(self, zoom: f64) -> Self {
-        Self { zoom, ..self }
+        Self {
+            zoom: MapZoom::at(zoom),
+            ..self
+        }
     }
 
     /// The zoom: map units per screen pixel.
     #[must_use]
     pub fn zoom(&self) -> f64 {
-        self.zoom
+        self.zoom.get()
     }
 
     /// The galaxy point drawn at the map's centre.
@@ -76,44 +155,33 @@ impl MapPlace {
         self.scroll
     }
 
-    /// The open's guard (@0x12305-0x1234d): a zoom of 0 or less becomes
-    /// 1.0; any other is kept.
+    /// The open's guard ([`MapZoom::opened`]).
     pub fn opened(&mut self) {
-        if self.zoom <= 0.0 {
-            self.zoom = GUARD_ZOOM;
-        }
+        self.zoom.opened();
     }
 
-    /// `_canZoomIn`: the zoom above [`ZOOM_IN_LIMIT`].
+    /// `_canZoomIn` ([`MapZoom::can_zoom_in`]).
     #[must_use]
     pub fn can_zoom_in(&self) -> bool {
-        self.zoom > ZOOM_IN_LIMIT
+        self.zoom.can_zoom_in()
     }
 
-    /// `_canZoomOut`: the zoom below [`ZOOM_OUT_LIMIT`].
+    /// `_canZoomOut` ([`MapZoom::can_zoom_out`]).
     #[must_use]
     pub fn can_zoom_out(&self) -> bool {
-        self.zoom < ZOOM_OUT_LIMIT
+        self.zoom.can_zoom_out()
     }
 
-    /// Item 5: one step in, when [`MapPlace::can_zoom_in`]; whether the
-    /// zoom moved.
+    /// Item 5: one step in ([`MapZoom::zoom_in`]); whether the zoom
+    /// moved.
     pub fn zoom_in(&mut self) -> bool {
-        let can = self.can_zoom_in();
-        if can {
-            self.zoom *= ZOOM_IN_STEP;
-        }
-        can
+        self.zoom.zoom_in()
     }
 
-    /// Item 4: one step out, when [`MapPlace::can_zoom_out`]; whether
-    /// the zoom moved.
+    /// Item 4: one step out ([`MapZoom::zoom_out`]); whether the zoom
+    /// moved.
     pub fn zoom_out(&mut self) -> bool {
-        let can = self.can_zoom_out();
-        if can {
-            self.zoom *= ZOOM_OUT_STEP;
-        }
-        can
+        self.zoom.zoom_out()
     }
 
     /// Moves the scroll by (`dx`, `dy`) galaxy units, as the arrows do.
@@ -136,7 +204,7 @@ impl MapPlace {
     pub fn drag(&mut self, start: (i32, i32), from: Point, to: Point) {
         let axis = |start: i32, from: f32, to: f32| {
             let travel = f64::from(to.floor()) - f64::from(from.floor());
-            (f64::from(start) - travel * self.zoom).trunc() as i32
+            (f64::from(start) - travel * self.zoom()).trunc() as i32
         };
         self.scroll = (axis(start.0, from.x, to.x), axis(start.1, from.y, to.y));
     }
@@ -150,7 +218,7 @@ impl MapPlace {
     #[must_use]
     pub fn transform(&self, port: (i32, i32), centre: (i32, i32)) -> Transform {
         let scroll = Point::new(self.scroll.0 as f32, self.scroll.1 as f32);
-        Transform::divided(port, centre, scroll, self.zoom)
+        Transform::divided(port, centre, scroll, self.zoom())
     }
 }
 
@@ -178,31 +246,48 @@ mod tests {
     }
 
     #[test]
-    fn opening_makes_a_zoom_of_0_or_less_1_and_keeps_any_other() {
+    fn a_new_zoom_is_0_5625() {
+        assert_eq!(MapZoom::new().get(), 0.5625);
+        assert_eq!(MapZoom::default(), MapZoom::new());
+        assert_eq!(MapZoom::at(1.5).get(), 1.5);
+    }
+
+    #[test]
+    fn opening_makes_a_zoom_of_0_or_less_or_nan_1_and_keeps_any_other() {
         for (zoom, opened) in [(0.0, 1.0), (-1.0, 1.0), (0.5625, 0.5625), (1e-9, 1e-9)] {
-            let mut place = zoomed(zoom);
-            place.opened();
-            assert_eq!(place.zoom(), opened, "{zoom}");
+            let mut at = MapZoom::at(zoom);
+            at.opened();
+            assert_eq!(at.get(), opened, "{zoom}");
         }
+        let mut nan = MapZoom::at(f64::NAN);
+        nan.opened();
+        assert_eq!(nan.get(), 1.0, "`cmpnlesd` takes NaN as not above 0");
+    }
+
+    #[test]
+    fn opening_a_place_guards_its_zoom() {
+        let mut place = zoomed(0.0);
+        place.opened();
+        assert_eq!(place.zoom(), 1.0);
     }
 
     #[test]
     fn one_step_in_from_0_5625_reaches_0_421875_and_a_second_is_refused() {
-        let mut place = MapPlace::new((0, 0));
-        assert!(place.zoom_in());
-        assert_eq!(place.zoom(), 0.421_875);
-        assert!(!place.can_zoom_in());
-        assert!(!place.zoom_in(), "0.421875 is not above 0.5");
-        assert_eq!(place.zoom(), 0.421_875);
+        let mut zoom = MapZoom::new();
+        assert!(zoom.zoom_in());
+        assert_eq!(zoom.get(), 0.421_875);
+        assert!(!zoom.can_zoom_in());
+        assert!(!zoom.zoom_in(), "0.421875 is not above 0.5");
+        assert_eq!(zoom.get(), 0.421_875);
     }
 
     #[test]
     fn five_steps_out_multiply_by_1_333333_and_a_sixth_is_refused() {
-        let mut place = MapPlace::new((0, 0));
+        let mut zoom = MapZoom::new();
         let mut zooms = Vec::new();
         for _ in 0..5 {
-            assert!(place.zoom_out());
-            zooms.push(place.zoom());
+            assert!(zoom.zoom_out());
+            zooms.push(zoom.get());
         }
         assert_eq!(
             zooms,
@@ -214,38 +299,55 @@ mod tests {
                 2.370_367_407_408_889_6,
             ]
         );
-        assert!(!place.can_zoom_out());
-        assert!(!place.zoom_out(), "2.37 is not below 2.0");
-        assert_eq!(place.zoom(), 2.370_367_407_408_889_6);
+        assert!(!zoom.can_zoom_out());
+        assert!(!zoom.zoom_out(), "2.37 is not below 2.0");
+        assert_eq!(zoom.get(), 2.370_367_407_408_889_6);
     }
 
     #[test]
     fn the_flags_at_each_bound() {
-        assert!(!zoomed(0.421_875).can_zoom_in());
-        assert!(zoomed(0.5625).can_zoom_in());
-        assert!(!zoomed(0.5).can_zoom_in(), "the limit itself");
-        assert!(!zoomed(2.370_367_407_408_889_6).can_zoom_out());
-        assert!(zoomed(1.777_776).can_zoom_out());
-        assert!(!zoomed(2.0).can_zoom_out(), "the limit itself");
+        assert!(!MapZoom::at(0.421_875).can_zoom_in());
+        assert!(MapZoom::at(0.5625).can_zoom_in());
+        assert!(!MapZoom::at(0.5).can_zoom_in(), "the limit itself");
+        assert!(!MapZoom::at(2.370_367_407_408_889_6).can_zoom_out());
+        assert!(MapZoom::at(1.777_776).can_zoom_out());
+        assert!(!MapZoom::at(2.0).can_zoom_out(), "the limit itself");
     }
 
     #[test]
     fn the_limits_are_tested_before_a_step_so_one_steps_past_each() {
-        let mut place = zoomed(0.500_000_1);
-        assert!(place.zoom_in());
-        assert_eq!(place.zoom(), 0.500_000_1 * 0.75, "below the limit");
-        let mut place = zoomed(1.999_999);
-        assert!(place.zoom_out());
-        assert_eq!(place.zoom(), 1.999_999 * 1.333_333, "above the limit");
+        let mut zoom = MapZoom::at(0.500_000_1);
+        assert!(zoom.zoom_in());
+        assert_eq!(zoom.get(), 0.500_000_1 * 0.75, "below the limit");
+        let mut zoom = MapZoom::at(1.999_999);
+        assert!(zoom.zoom_out());
+        assert_eq!(zoom.get(), 1.999_999 * 1.333_333, "above the limit");
     }
 
     #[test]
     fn a_step_in_and_one_out_drift_rather_than_cancel() {
+        let mut zoom = MapZoom::new();
+        zoom.zoom_out();
+        zoom.zoom_in();
+        assert_eq!(zoom.get(), 0.562_499_859_375);
+        assert_ne!(zoom.get(), 0.5625);
+    }
+
+    #[test]
+    fn a_place_steps_its_zoom_as_map_zoom_does() {
         let mut place = MapPlace::new((0, 0));
-        place.zoom_out();
-        place.zoom_in();
-        assert_ne!(place.zoom(), 0.5625);
-        assert!((place.zoom() - 0.5625).abs() < 1e-6);
+        let mut zoom = MapZoom::new();
+        assert!(place.zoom_out());
+        zoom.zoom_out();
+        assert_eq!(place.zoom(), zoom.get());
+        assert!(place.can_zoom_in());
+        assert!(place.zoom_in());
+        assert!(place.zoom_in());
+        assert!(!place.can_zoom_in());
+        assert!(!place.zoom_in());
+        let mut place = zoomed(2.0);
+        assert!(!place.can_zoom_out());
+        assert!(!place.zoom_out());
     }
 
     #[test]
