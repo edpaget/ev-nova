@@ -130,6 +130,11 @@ fn rows() -> Vec<Row> {
         ("spaceport", crate::spaceport::view::pad_probe),
         ("galaxy map", crate::galaxy::pad::tests::pad_probe),
         ("map's find", crate::galaxy::find::tests::pad_probe),
+        ("pilot list", crate::menu::pilot_list::pad::tests::pad_probe),
+        (
+            "pilot list, empty",
+            crate::menu::pilot_list::pad::tests::empty_pad_probe,
+        ),
         ("new pilot", crate::ui::new_pilot::pad::tests::pad_probe),
         (
             "new pilot, built-in",

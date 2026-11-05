@@ -6,6 +6,11 @@
 //! and Return or Open opens it. Cancel or Escape closes the list. An empty
 //! list says so, and the router can show a line in the error colour, such
 //! as why a pilot could not be opened.
+//!
+//! The pad reaches each pilot shown, Cancel and Open, starting on the
+//! selected pilot, as Navigation Services' file list starts with the
+//! keyboard focus; South presses as a click does, silently (the `pad`
+//! module; rdm:phase/key-bindings/phase-11-gamepad-menus).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -18,8 +23,13 @@ use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiComm
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::dialog::outline;
+use crate::ui::pad_focus::{self, FocusState};
 use crate::ui::prefs::{BACKDROP, BORDER};
 use crate::ui::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+
+pub(crate) mod pad;
+
+pub use pad::PadTarget;
 
 /// The panel's title.
 pub const TITLE: &str = "Open Pilot";
@@ -85,6 +95,8 @@ pub struct PilotList {
     /// Its keys, the shared arrows, Confirm and Back, as commands
     /// ([`contexts::PILOT_LIST`]).
     reader: CommandReader,
+    /// The pad's focus (the `pad` module).
+    focus: FocusState<PadTarget>,
 }
 
 impl std::fmt::Debug for PilotList {
@@ -127,6 +139,7 @@ impl PilotList {
             tracker: ButtonTracker::default(),
             outcome: None,
             reader: CommandReader::new(contexts::PILOT_LIST),
+            focus: FocusState::default(),
         }
     }
 
@@ -282,22 +295,29 @@ impl PilotList {
 impl Screen for PilotList {
     /// The list is modal: it takes every input, and never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let meant = self.reader.follow(input);
+        if let Some(meant) = meant
+            && pad_focus::from_pad(input)
+            && self.pad_command(meant)
+        {
+            return ScreenAction::None;
+        }
         if let Some(CommandInput {
             command: Command::Ui(command),
             pressed: true,
             repeat,
-        }) = self.reader.follow(input)
+        }) = meant
         {
             self.command(command, repeat);
         }
         match *input {
+            Input::Surroundings(surroundings) => self.pad_surroundings(surroundings.device),
             Input::Key { .. }
             | Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::PadButton { .. }
             | Input::PadAxis { .. }
-            | Input::Surroundings(_)
             | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
@@ -360,6 +380,7 @@ impl Screen for PilotList {
             let pressed = self.tracked == Some(target) && self.tracker.pressed();
             button.draw(pressed, &ButtonSkin::NOVA, &self.style, &self.metrics, list);
         }
+        self.draw_pad_highlight(list);
     }
 
     fn cancel_pointer(&mut self) {
