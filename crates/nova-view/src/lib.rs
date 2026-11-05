@@ -85,6 +85,7 @@ pub mod galaxy;
 pub mod geometry;
 pub mod image;
 pub mod input;
+pub mod keymap;
 pub mod menu;
 pub mod menu_command;
 pub mod movie;
@@ -117,6 +118,10 @@ pub use image::{ImageKey, ImageKind};
 pub use input::{
     COMMAND_KEYS, CONTROL_KEYS, Input, Key, ModifierHeld, MouseButton, OPTION_KEYS, SHIFT_KEYS,
     ScrollDelta, key_letter, letter_key,
+};
+pub use keymap::{
+    Bindings, Command, CommandInput, CommandReader, Context, KeyCombo, KeyMap, Modifiers,
+    SharedBindings,
 };
 pub use menu_command::MenuCommand;
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
