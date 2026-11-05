@@ -642,9 +642,10 @@ mod tests {
         Key::KeyB,
         Key::KeyS,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
-        nova_view::spaceport::bar::NEWS_KEYS[0],
-        nova_view::spaceport::bar::GAMBLE_KEYS[0],
-        nova_view::spaceport::bar::GAMBLE_KEYS[1],
+        // The bar's Holovid and Gamble, and Gamble's twin.
+        Key::KeyN,
+        Key::KeyG,
+        Key::KeyR,
         nova_view::spaceport::PORT_KEYS[0].0,
         nova_view::spaceport::PORT_KEYS[1].0,
         nova_view::spaceport::PORT_KEYS[2].0,

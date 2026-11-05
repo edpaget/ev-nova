@@ -9,6 +9,11 @@
 //! row, Holovid (item 3, #12) and Leave (item 1, #1) on the next. The
 //! screen enables its buttons itself, as the stock items are all disabled.
 //!
+//! Its keys are read through the key map ([`contexts::BAR`]): the letters
+//! below are [`BarCommand`]s' defaults, each second letter a fixed twin,
+//! and the map, player info and mission info keys the shared
+//! [`PlayCommand`]s.
+//!
 //! Gamble is always enabled (`_DrawBarButtons` @0x26e7f). Clicked, or with
 //! G or R (`_BarFilter`'s Mac virtual keys 0x05 and 0x0F, @0x47b1c-0x47b31;
 //! presses, never repeats), it asks what it opens
@@ -68,7 +73,7 @@
 //! there shows in the picture variant, `DLOG` 1021 (266 x 306), over
 //! `PICT` 8504, with the picture in item 8 above the text in item 7, as
 //! `_DoBarDialog` picks it (@0x48f96-0x4902e). No stock bar text has one.
-//! The map key ([`MAP_KEY`], a press, never a repeat) asks for the course
+//! The map key ([`PlayCommand::GalaxyMap`], a press, never a repeat) asks for the course
 //! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
 //! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
 //! only while the bar is laid out and neither the news, the hire screen
@@ -102,10 +107,12 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::PortScreen;
-use crate::flight::view::{MAP_KEY, is_map_press};
 use crate::font::Font;
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    BarCommand, Command, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts,
+};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -113,9 +120,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
-use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
-use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
 pub const BAR_DIALOG: i16 = 1013;
@@ -165,18 +170,6 @@ pub const TEXT_ITEM: usize = 7;
 pub const GAMBLE_LABEL: &str = "Gamble";
 /// `STR#` 150 #12.
 pub const HOLOVID_LABEL: &str = "Holovid";
-
-/// The keys that press Hire Escort (`_BarFilter`: Mac virtual keys 4 and
-/// 14).
-pub const HIRE_KEYS: [Key; 2] = [Key::KeyH, Key::KeyE];
-
-/// The keys that press Gamble (`_BarFilter`: Mac virtual keys 0x05 and
-/// 0x0F, @0x47b1c-0x47b31).
-pub const GAMBLE_KEYS: [Key; 2] = [Key::KeyG, Key::KeyR];
-
-/// The keys that press Holovid, the News button (`_BarFilter`: Mac
-/// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
-pub const NEWS_KEYS: [Key; 2] = [Key::KeyN, Key::KeyW];
 
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
@@ -250,7 +243,7 @@ struct Asks {
     news: bool,
     /// What Gamble opens: Gamble was pressed.
     gamble: bool,
-    /// The course map [`MAP_KEY`] asked for: the bar's, or the hire
+    /// The course map the map key asked for: the bar's, or the hire
     /// screen's.
     map: Option<PortMap>,
 }
@@ -290,6 +283,10 @@ pub struct BarScreen {
     desc: i16,
     /// The bar's `dësc`, shown since this was last taken, to be loaded.
     description_request: Option<i16>,
+    /// Its keys, as commands ([`contexts::BAR`]): its letters, the play
+    /// keys it reads for itself and its hire screen, and the shared UI
+    /// keys. It follows every input, whatever is open over the bar.
+    keys: CommandReader,
     sounds: Vec<Sound>,
 }
 
@@ -377,8 +374,21 @@ impl BarScreen {
             movies: Movies::none(),
             asks: Asks::default(),
             closed: false,
+            keys: CommandReader::new(contexts::BAR),
             sounds: Vec::new(),
         }
+    }
+
+    /// The bar reading its keys through `bindings`: its own, its
+    /// dialog's, and those of each screen it opens after it (the hire
+    /// screen, the news, the race).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The bar with its news shown in the news dialog laid out by
@@ -410,7 +420,8 @@ impl BarScreen {
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
         let shown = shown_news_picture(picture, |id| self.hiring.catalog.picture_exists(id));
-        let mut screen = NewsScreen::new(layout, news, shown);
+        let mut screen =
+            NewsScreen::new(layout, news, shown).with_bindings(self.keys.bindings().clone());
         self.sounds.extend(screen.take_sounds());
         self.news = Some(screen);
     }
@@ -457,7 +468,8 @@ impl BarScreen {
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
         self.race = Some(
             RaceScreen::new(layout, self.race_templates.1.clone(), self.style, asked_max)
-                .with_focus_ring(self.focus_ring),
+                .with_focus_ring(self.focus_ring)
+                .with_bindings(self.keys.bindings().clone()),
         );
     }
 
@@ -730,7 +742,7 @@ impl BarScreen {
         std::mem::take(&mut self.asks.hire)
     }
 
-    /// The course map [`MAP_KEY`] has asked for since this was last
+    /// The course map the map key has asked for since this was last
     /// asked, once: the bar's ([`PortMap::Bar`], `_BarFilter`'s item 8),
     /// or the hire screen's, the shipyard dialog in hire mode
     /// ([`PortScreen::Shipyard`], `_ShipyardFilter` item 3,
@@ -799,7 +811,8 @@ impl BarScreen {
             Rc::clone(&self.hiring.catalog),
             self.style,
         )
-        .with_focus_ring(self.focus_ring);
+        .with_focus_ring(self.focus_ring)
+        .with_bindings(self.keys.bindings().clone());
         hire.set_movies(self.movies.clone());
         self.hire = Some(hire);
     }
@@ -828,21 +841,17 @@ impl BarScreen {
         }
     }
 
-    /// A press (never a repeat) of `key` on the bar laid out, in
-    /// `_BarFilter`'s order: the map key asks for the course map, and Hire
-    /// Escort's, Holovid's and Gamble's keys press them. Whether it was one
-    /// of them.
-    fn press_key(&mut self, key: Key) -> bool {
-        if key == MAP_KEY {
-            self.asks.map = Some(PortMap::Bar);
-        } else if HIRE_KEYS.contains(&key) {
-            self.ask();
-        } else if NEWS_KEYS.contains(&key) {
-            self.asks.news = true;
-        } else if GAMBLE_KEYS.contains(&key) {
-            self.asks.gamble = true;
-        } else {
-            return false;
+    /// A press (never a repeat) of `command`'s key on the bar laid out,
+    /// in `_BarFilter`'s order: the map key asks for the course map, and
+    /// Hire Escort's, Holovid's and Gamble's keys press them. Whether it
+    /// was one of them.
+    fn press_key(&mut self, command: Command) -> bool {
+        match command {
+            Command::Play(PlayCommand::GalaxyMap) => self.asks.map = Some(PortMap::Bar),
+            Command::Bar(BarCommand::Hire) => self.ask(),
+            Command::Bar(BarCommand::News) => self.asks.news = true,
+            Command::Bar(BarCommand::Gamble) => self.asks.gamble = true,
+            _ => return false,
         }
         true
     }
@@ -880,6 +889,11 @@ impl Screen for BarScreen {
     /// input while open; otherwise every input goes to the bar. It never
     /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let fresh = self
+            .keys
+            .follow(input)
+            .filter(|command| command.pressed && !command.repeat)
+            .map(|command| command.command);
         if let Some(race) = &mut self.race {
             race.input(input);
             self.sounds.extend(race.take_sounds());
@@ -908,7 +922,7 @@ impl Screen for BarScreen {
         // info (`_ShipyardFilter` @0x608ed, `_ShipDescFilter` @0x51108).
         if let Some(hire) = &self.hire
             && hire.dialog().is_some()
-            && is_map_press(input)
+            && fresh == Some(Command::Play(PlayCommand::GalaxyMap))
         {
             self.asks.map = Some(PortMap::Screen(if hire.info_panel().is_some() {
                 PortScreen::ShipDescription
@@ -917,7 +931,9 @@ impl Screen for BarScreen {
             }));
             return ScreenAction::None;
         }
-        if is_player_info_press(input) && (self.hire.is_some() || self.laid.is_ok()) {
+        if fresh == Some(Command::Play(PlayCommand::PlayerInfo))
+            && (self.hire.is_some() || self.laid.is_ok())
+        {
             self.asks.player_info = true;
             return ScreenAction::None;
         }
@@ -929,7 +945,7 @@ impl Screen for BarScreen {
             .hire
             .as_ref()
             .is_some_and(|hire| hire.dialog().is_some())
-            && is_mission_info_press(input)
+            && fresh == Some(Command::Play(PlayCommand::MissionInfo))
         {
             self.asks.info = true;
             return ScreenAction::None;
@@ -944,26 +960,20 @@ impl Screen for BarScreen {
             return ScreenAction::None;
         }
         if self.laid.is_err() {
-            if let Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
+            if matches!(
+                fresh,
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            ) {
                 self.closed = true;
             }
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && self.press_key(key)
+        if let Some(command) = fresh
+            && self.press_key(command)
         {
             return ScreenAction::None;
         }
-        if is_mission_info_press(input) {
+        if fresh == Some(Command::Play(PlayCommand::MissionInfo)) {
             self.asks.info = true;
             return ScreenAction::None;
         }
@@ -1052,8 +1062,10 @@ impl Screen for BarScreen {
         }
     }
 
-    /// Lets go of the keys the race holds: Alt, and its asked bet's.
+    /// Lets go of its keys, and of those the race holds: Alt, and its
+    /// asked bet's.
     fn release_keys(&mut self) {
+        self.keys.let_go();
         if let Some(race) = &mut self.race {
             race.release_keys();
         }
@@ -1085,6 +1097,18 @@ mod tests {
     use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
 
     use super::*;
+    use crate::flight::view::MAP_KEY;
+    use crate::input::Key;
+
+    /// Hire Escort's key and its twin, as the key map has them
+    /// ([`BarCommand::Hire`]; `_BarFilter`'s Mac virtual keys 4 and 14).
+    const HIRE_KEYS: [Key; 2] = [Key::KeyH, Key::KeyE];
+    /// Gamble's key and its twin ([`BarCommand::Gamble`]; 0x05 and 0x0F,
+    /// @0x47b1c-0x47b31).
+    const GAMBLE_KEYS: [Key; 2] = [Key::KeyG, Key::KeyR];
+    /// Holovid's key and its twin ([`BarCommand::News`]; 0x2D and 0x0D,
+    /// @0x47b33-0x47b48).
+    const NEWS_KEYS: [Key; 2] = [Key::KeyN, Key::KeyW];
     use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::{Bounds, Point};
     use crate::input::MouseButton;
@@ -1652,6 +1676,23 @@ mod tests {
         assert!(screen.race_screen().is_none());
         screen.tick(ms(0));
         assert!(screen.take_offer_request(), "at once once it closes");
+    }
+
+    /// The bar reads its keys through the key map it is given: Hire rebound
+    /// to Q asks on Q and no longer on H, while its twin E stays.
+    #[test]
+    fn a_rebound_hire_asks_on_its_new_key_and_its_twin_alone() {
+        use crate::keymap::{BarCommand, Bindings, KeyCombo, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(BarCommand::Hire, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = bar().with_bindings(bindings);
+        screen.input(&key(Key::KeyH, false));
+        assert!(!screen.take_hire_request(), "H no longer hires");
+        screen.input(&key(Key::KeyQ, false));
+        assert!(screen.take_hire_request());
+        screen.input(&key(Key::KeyE, false));
+        assert!(screen.take_hire_request(), "the twin stays");
     }
 
     #[test]

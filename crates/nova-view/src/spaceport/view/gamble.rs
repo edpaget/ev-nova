@@ -235,7 +235,7 @@ mod tests {
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MoviePlayer, Movies};
     use crate::screen::Screen;
-    use crate::spaceport::bar::{GAMBLE_ITEM, GAMBLE_KEYS};
+    use crate::spaceport::bar::GAMBLE_ITEM;
     use crate::spaceport::race::{FIRST_RACER_ITEM, HELP_ITEM, RaceScreen, RacerLook};
     use crate::spaceport::view::tests::{click_item, key, venues};
     use crate::ui::dialog::{Dialog, ItemSpec, ItemTemplate, Placement};
@@ -337,7 +337,7 @@ mod tests {
         click(&mut view, gamble);
         assert!(view.take_gamble_request());
         assert!(!view.take_gamble_request(), "once");
-        for pressed in GAMBLE_KEYS {
+        for pressed in [Key::KeyG, Key::KeyR] {
             view.input(&key(pressed));
             assert!(view.take_gamble_request(), "{pressed:?}");
         }

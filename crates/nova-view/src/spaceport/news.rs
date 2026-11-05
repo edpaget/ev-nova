@@ -39,7 +39,8 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -88,6 +89,8 @@ pub struct NewsScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::DIALOG`]): Confirm and Back.
+    keys: CommandReader,
     sounds: Vec<Sound>,
 }
 
@@ -138,8 +141,16 @@ impl NewsScreen {
         Self {
             laid,
             closed: false,
+            keys: CommandReader::new(contexts::DIALOG),
             sounds: vec![Sound::Ui(UiSound::NewsOpened)],
         }
+    }
+
+    /// The news reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The dialog's frame on the screen, if it could be laid out.
@@ -182,15 +193,22 @@ impl NewsScreen {
 }
 
 impl Screen for NewsScreen {
-    /// Return, Enter or Escape closes it, and so does a press inside its
-    /// frame; nothing else does anything. It never quits.
+    /// Return, Enter or Escape (Confirm or Back) closes it, and so does a
+    /// press inside its frame; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let command = self.keys.follow(input);
+        if let Some(command) = command
+            && command.pressed
+            && !command.repeat
+            && matches!(
+                command.command,
+                Command::Ui(UiCommand::Confirm | UiCommand::Back)
+            )
+        {
+            self.close();
+            return ScreenAction::None;
+        }
         match *input {
-            Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => self.close(),
             Input::PointerButton {
                 pressed: true, at, ..
             } if self.bounds().is_some_and(|bounds| bounds.contains(at)) => self.close(),
@@ -200,6 +218,11 @@ impl Screen for NewsScreen {
     }
 
     fn tick(&mut self, _dt: Duration) {}
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
+    }
 
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
@@ -240,7 +263,7 @@ impl Screen for NewsScreen {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::Placement;
 
@@ -471,6 +494,21 @@ mod tests {
         assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::NewsClosed)]);
         screen.input(&key(Key::Escape, false));
         assert_eq!(screen.take_sounds(), [], "closing once");
+    }
+
+    /// The news reads its keys through the key map it is given: Back
+    /// rebound to Q closes it on Q and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_it_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = open().with_bindings(bindings);
+        screen.input(&key(Key::Escape, false));
+        assert!(!screen.closed(), "Escape no longer closes it");
+        screen.input(&key(Key::KeyQ, false));
+        assert!(screen.closed());
     }
 
     #[test]
