@@ -340,6 +340,26 @@ impl KeyMap {
     pub fn unbind(&mut self, command: Command) {
         self.bindings.insert(command, Binding::Unbound);
     }
+
+    /// Every command whose binding follows `command`'s, directly or
+    /// through another that does ([`Binding::Follows`]), in command order:
+    /// the commands a rebind of `command` moves with it.
+    #[must_use]
+    pub fn followers(&self, command: Command) -> Vec<Command> {
+        let mut found = BTreeSet::new();
+        let mut bases = vec![command];
+        while let Some(base) = bases.pop() {
+            for (&other, &binding) in &self.bindings {
+                if matches!(binding, Binding::Follows { base: of, .. } if of == base)
+                    && other != command
+                    && found.insert(other)
+                {
+                    bases.push(other);
+                }
+            }
+        }
+        found.into_iter().collect()
+    }
 }
 
 /// A [`Twin`] that needs no modifier, for the const table.

@@ -91,15 +91,63 @@ impl Bindings {
     }
 
     /// The commands that would clash with `command` were it bound to
-    /// `combo`.
+    /// `combo`, in command order: worked out on the bindings the rebind
+    /// would make, so a command that follows `command`
+    /// ([`Binding::Follows`](super::Binding::Follows)) and moves with it
+    /// counts too. Each is the other side of a [`Bindings::clashes`] pair
+    /// that involves `command` or one of its followers. A follower that
+    /// clashes with `command` itself is named, and of two followers that
+    /// clash, the later: with Target Select on Shift-T, its Shift variant
+    /// means what it does, as Shift-Option-T its Option variant does.
     #[must_use]
     pub fn clashes_with(&self, command: impl Into<Command>, combo: KeyCombo) -> Vec<Command> {
         let command = command.into();
+        self.clone().rebound(command, combo).losers_to(command)
+    }
+
+    /// Binds `command` to `combo` on the keyboard, then unbinds, one at a
+    /// time and first in command order, each command that clashes with it
+    /// or with a command following it, until none does: so `command`, and
+    /// each follower that keeps its key, is never unbound. A variant whose
+    /// base is unbound so loses its key too, still following its base.
+    /// Returns, in command order, every command this left unbound that
+    /// was bound before, those variants included: the keys screen marks
+    /// them.
+    pub fn assign(&mut self, command: impl Into<Command>, combo: KeyCombo) -> Vec<Command> {
+        let command = command.into();
+        let before = self.clone();
+        self.keyboard.bind(command, combo);
+        while let Some(&loser) = self.losers_to(command).first() {
+            self.keyboard.unbind(loser);
+        }
         Command::all()
-            .filter(|&other| other != command)
-            .filter(|&other| self.keyboard.combo(other) == Some(combo))
-            .filter(|&other| clash_between(SCREENS, command, other))
+            .filter(|&other| {
+                before.keyboard.combo(other).is_some() && self.keyboard.combo(other).is_none()
+            })
             .collect()
+    }
+
+    /// The commands that clash with `command`, or with one of its
+    /// followers, as these bindings stand, in command order.
+    fn losers_to(&self, command: Command) -> Vec<Command> {
+        let mut moved = self.keyboard.followers(command);
+        moved.push(command);
+        let mut losers = BTreeSet::new();
+        for Clash { first, second } in self.clashes() {
+            match (moved.contains(&first), moved.contains(&second)) {
+                (true, false) => {
+                    losers.insert(second);
+                }
+                (false, true) => {
+                    losers.insert(first);
+                }
+                (true, true) => {
+                    losers.insert(if second == command { first } else { second });
+                }
+                (false, false) => {}
+            }
+        }
+        losers.into_iter().collect()
     }
 
     /// [`Bindings::clashes`] over `screens`.
@@ -857,6 +905,164 @@ mod tests {
                 .held(&devices, FLYING)
                 .contains(&Command::Flight(FlightCommand::WeaponSafety))
         );
+    }
+
+    #[test]
+    fn a_rebind_s_followers_clash_too() {
+        // ClosestTarget on W moves ClosestShip to Option-W, which is
+        // SelectSecondaryBack's key.
+        let w = KeyCombo::key(Key::KeyW);
+        assert_eq!(
+            Bindings::default().clashes_with(FlightCommand::ClosestTarget, w),
+            vec![
+                Command::Flight(FlightCommand::SelectSecondary),
+                Command::Flight(FlightCommand::SelectSecondaryBack),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rebind_onto_its_own_variant_s_combo_clashes_with_the_variant() {
+        // Shift-T moves TargetSelectBack onto Shift-T itself, and
+        // TargetEscortBack onto TargetEscort's Shift-Option-T: of two
+        // followers, the later loses.
+        let shift_t = KeyCombo::with(Key::KeyT, Modifiers::SHIFT);
+        assert_eq!(
+            Bindings::default().clashes_with(FlightCommand::TargetSelect, shift_t),
+            vec![
+                Command::Flight(FlightCommand::TargetSelectBack),
+                Command::Flight(FlightCommand::TargetEscortBack),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clash_the_rebind_does_not_touch_is_not_reported() {
+        let q = KeyCombo::key(Key::KeyQ);
+        let clashing = Bindings::default()
+            .rebound(HaggleCommand::Lower, q)
+            .rebound(UiCommand::Confirm, q);
+        assert_eq!(
+            clashing.clashes_with(FlightCommand::Board, KeyCombo::key(Key::F13)),
+            vec![]
+        );
+    }
+
+    fn combo(bindings: &Bindings, command: impl Into<Command>) -> Option<KeyCombo> {
+        bindings.keyboard.combo(command.into())
+    }
+
+    #[test]
+    fn assigning_a_spaceport_command_escape_unbinds_back() {
+        let mut bindings = Bindings::default();
+        let escape = KeyCombo::key(Key::Escape);
+        let unbound = bindings.assign(PortCommand::Bar, escape);
+        assert_eq!(unbound, vec![Command::Ui(UiCommand::Back)]);
+        assert_eq!(combo(&bindings, PortCommand::Bar), Some(escape));
+        assert_eq!(combo(&bindings, UiCommand::Back), None);
+        assert_eq!(
+            combo(&bindings, PauseCommand::Pause),
+            Some(escape),
+            "Pause is never active with the spaceport"
+        );
+    }
+
+    #[test]
+    fn assigning_a_flight_command_a_spaceport_key_leaves_both() {
+        let mut bindings = Bindings::default();
+        let o = KeyCombo::key(Key::KeyO);
+        assert_eq!(bindings.assign(FlightCommand::Board, o), vec![]);
+        assert_eq!(combo(&bindings, FlightCommand::Board), Some(o));
+        assert_eq!(combo(&bindings, PortCommand::Outfitter), Some(o));
+    }
+
+    #[test]
+    fn assigning_target_select_shift_t_unbinds_its_own_shift_variant() {
+        let mut bindings = Bindings::default();
+        let shift_t = KeyCombo::with(Key::KeyT, Modifiers::SHIFT);
+        assert_eq!(
+            bindings.assign(FlightCommand::TargetSelect, shift_t),
+            vec![
+                Command::Flight(FlightCommand::TargetSelectBack),
+                Command::Flight(FlightCommand::TargetEscortBack),
+            ]
+        );
+        assert_eq!(combo(&bindings, FlightCommand::TargetSelect), Some(shift_t));
+        assert_eq!(combo(&bindings, FlightCommand::TargetSelectBack), None);
+        assert_eq!(
+            combo(&bindings, FlightCommand::TargetEscort),
+            Some(KeyCombo::with(
+                Key::KeyT,
+                Modifiers::SHIFT.union(Modifiers::OPTION)
+            )),
+            "the Option variant follows onto Shift-Option-T and keeps it"
+        );
+        assert_eq!(combo(&bindings, FlightCommand::TargetEscortBack), None);
+        assert_eq!(bindings.clashes(), vec![]);
+    }
+
+    #[test]
+    fn assigning_closest_target_w_unbinds_select_secondary_and_its_variant_with_it() {
+        let mut bindings = Bindings::default();
+        let unbound = bindings.assign(FlightCommand::ClosestTarget, KeyCombo::key(Key::KeyW));
+        assert_eq!(
+            unbound,
+            vec![
+                Command::Flight(FlightCommand::SelectSecondary),
+                Command::Flight(FlightCommand::SelectSecondaryBack),
+            ]
+        );
+        assert_eq!(
+            bindings
+                .keyboard
+                .binding(FlightCommand::SelectSecondaryBack.into()),
+            KeyMap::default().binding(FlightCommand::SelectSecondaryBack.into()),
+            "the variant still follows its base, which lost its key"
+        );
+        assert_eq!(
+            combo(&bindings, FlightCommand::ClosestShip),
+            Some(KeyCombo::with(Key::KeyW, Modifiers::OPTION))
+        );
+    }
+
+    #[test]
+    fn assigning_reports_only_commands_it_unbound() {
+        let mut bindings = Bindings::default().unbound(UiCommand::Back);
+        assert_eq!(
+            bindings.assign(PortCommand::Bar, KeyCombo::key(Key::Escape)),
+            vec![],
+            "Back was unbound already"
+        );
+        let mut bindings = Bindings::default().unbound(PortCommand::Bar);
+        assert_eq!(
+            bindings.assign(PortCommand::Bar, KeyCombo::key(Key::F13)),
+            vec![],
+            "the command itself goes from unbound to bound"
+        );
+    }
+
+    #[test]
+    fn no_assign_from_the_defaults_leaves_a_clash() {
+        let combos = [
+            KeyCombo::key(Key::KeyW),
+            KeyCombo::key(Key::Escape),
+            KeyCombo::key(Key::Enter),
+            KeyCombo::key(Key::Tab),
+            KeyCombo::with(Key::KeyT, Modifiers::SHIFT),
+            KeyCombo::with(Key::KeyK, Modifiers::COMMAND),
+            KeyCombo::key(Key::CapsLock),
+            KeyCombo::key(Key::Digit1),
+            KeyCombo::key(Key::KeyF),
+        ];
+        for command in Command::all() {
+            for combo in combos {
+                let mut bindings = Bindings::default();
+                let unbound = bindings.assign(command, combo);
+                assert_eq!(bindings.clashes(), vec![], "{command:?} on {combo:?}");
+                assert_eq!(bindings.keyboard.combo(command), Some(combo), "{command:?}");
+                assert!(!unbound.contains(&command), "{command:?}");
+            }
+        }
     }
 
     #[test]
