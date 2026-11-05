@@ -960,6 +960,14 @@ fn only_the_screen_shown_ticks() {
     assert_eq!(screen.ship_browser().frame(), Some(3));
 }
 
+/// The router's hints under the default keys and a US layout: over the
+/// ships and the map with dialogs and without, and over the main menu
+/// with and without.
+const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about   P: preferences";
+const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
+const MENU_HINT: &str = "Tab: ships / galaxy map   I: about   P: preferences";
+const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
+
 /// The hint line of a router with no dialogs.
 fn hint() -> DrawCommand {
     DrawCommand::Text {

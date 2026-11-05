@@ -284,13 +284,20 @@ fn stderr_terminal() -> impl Terminal {
 
 /// `screen` with what Preferences asks the platform: whether the player
 /// has turned on keyboard access to every control (its focus ring
-/// follows it), and, for the keys screen, the layout's key names and the
-/// menu bar's key equivalents, which it binds to nothing.
+/// follows it), and, for the keys screen, the menu bar's key equivalents,
+/// which it binds to nothing. The layout's key names ride on the bindings
+/// ([`player_bindings`]).
 fn with_platform(screen: AppScreen) -> AppScreen {
     screen
         .with_keyboard_access(system_keyboard_access())
-        .with_key_names(system_key_names())
         .with_reserved_combos(menu_key_equivalents())
+}
+
+/// The app's one handle on `saved`, the keys the settings file saves,
+/// with the player's layout on it, which names them wherever a text names
+/// a key: the one place the layout is wired.
+fn player_bindings(saved: nova_view::Bindings) -> SharedBindings {
+    SharedBindings::new(saved).with_key_names(system_key_names())
 }
 
 fn main() -> ExitCode {
@@ -364,7 +371,7 @@ fn main() -> ExitCode {
         .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
         // The keys the settings file saves, read by every screen built.
-        .with_bindings(SharedBindings::new(settings.bindings.clone()))
+        .with_bindings(player_bindings(settings.bindings.clone()))
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))

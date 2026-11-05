@@ -174,6 +174,41 @@ fn the_hint_offers_i_only_with_dialogs() {
     );
 }
 
+/// The hint a router with dialogs draws over the ships, reading `bindings`
+/// named through `names`, for the device its keys read.
+fn hint_with(bindings: nova_view::Bindings, names: Rc<dyn nova_view::KeyNames>) -> String {
+    let shared = nova_view::SharedBindings::new(bindings).with_key_names(names);
+    hint_text(&with_dialogs(data()).with_bindings(shared))
+}
+
+#[test]
+fn the_hint_names_the_keys_bound() {
+    use nova_view::keymap::MainScreenCommand;
+    let fly_on_g = nova_view::Bindings::default()
+        .rebound(MainScreenCommand::Fly, nova_view::KeyCombo::key(Key::KeyG));
+    assert_eq!(
+        hint_with(fly_on_g, Rc::new(nova_view::NoKeyNames)),
+        "Tab: ships / galaxy map   G: fly   I: about   P: preferences"
+    );
+    let unbound = nova_view::Bindings::default().unbound(MainScreenCommand::About);
+    assert_eq!(
+        hint_with(unbound, Rc::new(nova_view::NoKeyNames)),
+        "Tab: ships / galaxy map   F: fly   P: preferences"
+    );
+}
+
+#[test]
+fn the_hint_names_the_keys_through_the_layout_the_bindings_carry() {
+    use nova_view::keymap::MainScreenCommand;
+    let fly_on_q = nova_view::Bindings::default()
+        .rebound(MainScreenCommand::Fly, nova_view::KeyCombo::key(Key::KeyQ));
+    let azerty = nova_view::key_names::fixture::FakeKeyNames::azerty();
+    assert_eq!(
+        hint_with(fly_on_q, Rc::new(azerty)),
+        "Tab: ships / galaxy map   A: fly   I: about   P: preferences"
+    );
+}
+
 #[test]
 fn a_missing_dialog_or_text_opens_nothing() {
     let mut screen = AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));

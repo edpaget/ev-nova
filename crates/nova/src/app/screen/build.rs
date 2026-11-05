@@ -118,7 +118,6 @@ impl AppScreen {
                 Prefs::default().quicktime_movies,
             ),
             keyboard_access: Rc::new(crate::app::NoKeyboardAccessSetting),
-            key_names: Rc::new(nova_view::NoKeyNames),
             reserved: Vec::new(),
             bindings_change: None,
             fade_in: None,
@@ -149,7 +148,9 @@ impl AppScreen {
     /// every screen it has built or builds from now on: its own keys,
     /// the ship browser's, the galaxy viewer's, each flight's (its dialogs,
     /// maps and the spaceport's with it) and every dialog it opens. The
-    /// app's edge gives it once, at start-up; a later change refills the
+    /// app's edge gives it once, at start-up, with the player's layout on
+    /// it ([`SharedBindings::with_key_names`]), which every text that
+    /// names a key reads, the keys screen's too; a later change refills the
     /// same handle ([`SharedBindings::set`]), which every screen reads on
     /// its next input.
     #[must_use]
@@ -727,15 +728,6 @@ impl AppScreen {
     pub fn with_keyboard_access(self, access: Rc<dyn crate::app::KeyboardAccess>) -> Self {
         Self {
             keyboard_access: access,
-            ..self
-        }
-    }
-
-    /// The router whose keys screen names keys through `names`.
-    #[must_use]
-    pub fn with_key_names(self, names: Rc<dyn nova_view::KeyNames>) -> Self {
-        Self {
-            key_names: names,
             ..self
         }
     }

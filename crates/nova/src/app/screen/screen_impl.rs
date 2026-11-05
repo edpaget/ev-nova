@@ -8,9 +8,9 @@ use nova_view::{
     ScreenAction, Showing, Sound, UiSound, VideoMode, ViewShape,
 };
 
+use super::hint::router_hint;
 use super::{
-    AppScreen, CLASSIC_VIEW, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS,
-    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, Side,
+    AppScreen, CLASSIC_VIEW, ENTERED, HINT_AT, HINT_COLOR, HINT_SIZE, Held, LANDED, MenuHold, Side,
 };
 
 impl Screen for AppScreen {
@@ -219,14 +219,7 @@ impl Screen for AppScreen {
         } else {
             self.shown().draw(list);
         }
-        let hint = match (self.side, self.dialogs.is_some()) {
-            (Side::Ships | Side::Galaxy, true) => Some(HINT),
-            (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
-            (Side::MainMenu, true) => Some(MENU_HINT),
-            (Side::MainMenu, false) => Some(MENU_HINT_WITHOUT_DIALOGS),
-            (Side::Flight | Side::Spaceport, _) => None,
-        };
-        if let Some(hint) = hint {
+        if let Some(hint) = router_hint(&self.keys, self.side, self.dialogs.is_some()) {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
         // The dialogs, in their 1024 x 768 frame, centred over a widened

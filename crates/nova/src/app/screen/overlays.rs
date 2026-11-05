@@ -204,7 +204,7 @@ impl AppScreen {
                     .with_scaling(&self.scaling)
                     .with_focus_ring(prefs_focus_ring(access))
                     .with_bindings(self.bindings.clone())
-                    .with_key_names(Rc::clone(&self.key_names))
+                    .with_key_names(Rc::clone(self.bindings.names()))
                     .with_reserved_combos(self.reserved_combos())
                     .with_rules(&self.rules)
             })

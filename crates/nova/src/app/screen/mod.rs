@@ -394,6 +394,7 @@ mod escort_dialog;
 mod flight;
 mod game;
 mod held_chords;
+mod hint;
 mod jump_white;
 mod launch;
 mod live_input;
@@ -410,15 +411,9 @@ mod routing;
 mod screen_impl;
 mod ship_name_dialog;
 
-/// The hint the router draws over every screen, where it goes, its size and
-/// its colour. Every screen leaves that corner free. The hint offers I
-/// and P only when the router has dialogs, and so they do something;
-/// without them it draws [`HINT_WITHOUT_DIALOGS`].
-pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about   P: preferences";
-pub const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
-/// The hint the router draws over the main menu, with dialogs and without.
-pub const MENU_HINT: &str = "Tab: ships / galaxy map   I: about   P: preferences";
-pub const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
+/// Where the hint the router draws over the ships, the map and the main
+/// menu goes ([`hint::router_hint`], naming the keys bound), its size and
+/// its colour. Every screen leaves that corner free.
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
@@ -731,10 +726,6 @@ pub struct AppScreen {
     /// [`NoKeyboardAccessSetting`](crate::app::NoKeyboardAccessSetting)'s
     /// unless another is given ([`AppScreen::with_keyboard_access`]).
     keyboard_access: Rc<dyn crate::app::KeyboardAccess>,
-    /// What the keys screen names keys with: [`NoKeyNames`](nova_view::NoKeyNames),
-    /// every key its US legend, unless another is given
-    /// ([`AppScreen::with_key_names`]).
-    key_names: Rc<dyn nova_view::KeyNames>,
     /// The platform's menu bar key equivalents beyond the game's own menu
     /// chords ([`menu_chord_combos`]), which the keys screen binds to
     /// nothing ([`AppScreen::with_reserved_combos`]).

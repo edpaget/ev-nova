@@ -166,9 +166,10 @@ fn select_jettison(screen: &mut AppScreen) {
 }
 
 #[test]
-fn the_keys_screen_names_keys_through_the_key_names_given() {
+fn the_keys_screen_names_keys_through_the_key_names_the_bindings_carry() {
     let names = nova_view::key_names::fixture::FakeKeyNames::azerty();
-    let mut screen = with_dialogs(data()).with_key_names(Rc::new(names));
+    let mut screen = with_dialogs(data())
+        .with_bindings(nova_view::SharedBindings::default().with_key_names(Rc::new(names)));
     open_keys(&mut screen);
     let keys = keys(&screen).expect("open");
     let row = keys
