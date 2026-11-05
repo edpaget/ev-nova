@@ -1,8 +1,9 @@
 //! A press held on the mission computer's list ends as mission info or
 //! player info opens over it: the overlay takes the release, so the list
 //! is let go of before it is covered, as the course map's opening lets go
-//! (`open_port_map` in `nova::app`). Keys the original holds back during
-//! the press are left out (rdm:phase/play-feel-8-fidelity/phase-8-what-play-feel-8-phase-10-left-out).
+//! (`open_port_map` in `nova::app`). The keys that open them from the
+//! computer wait for the press's release (the `mission_keys` module), so
+//! only whoever flies the ship opens them during one.
 
 use super::*;
 use crate::spaceport::missions::MissionComputerScreen;

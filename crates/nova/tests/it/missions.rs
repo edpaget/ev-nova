@@ -2340,6 +2340,90 @@ impl Game {
     }
 }
 
+/// A press on the open computer's first row, `keys` tapped while it is
+/// held, then its release.
+fn held_on_computer_row_0(game: &mut Game, keys: &[Key]) {
+    let row = game
+        .spaceport()
+        .mission_computer()
+        .and_then(MissionComputerScreen::rows)
+        .and_then(|rows| rows.row_bounds(0))
+        .expect("row 0 shown")
+        .center();
+    game.send(WindowEvent::PointerMoved {
+        px: (f64::from(row.x), f64::from(row.y)),
+    });
+    let button = |pressed| WindowEvent::PointerButton {
+        button: nova_view::MouseButton::Left,
+        pressed,
+    };
+    game.send(button(true));
+    for &key in keys {
+        game.tap(key);
+    }
+    game.send(button(false));
+}
+
+/// The open computer's selected row.
+fn computer_selected(game: &Game) -> Option<usize> {
+    game.spaceport()
+        .mission_computer()
+        .and_then(MissionComputerScreen::rows)
+        .and_then(nova_view::ui::RowList::selected)
+}
+
+#[test]
+fn an_a_held_during_a_computer_press_accepts_at_the_release_and_the_reopen_drops_the_rest() {
+    // Three offers with no BriefText: the run, the errand and a second
+    // run, so two are left after the accept.
+    let data = game_data_built(&mission(128, -1, 201), bar_job(), "Go.", |fork| {
+        fork.resource(
+            Mission::TYPE,
+            140,
+            Some(b"Second run"),
+            &mission(128, -1, 201),
+        )
+    });
+    let store = MemoryPilots::new();
+    let pilot = Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    let mut game = Game::with_data(&store, &pilot, data);
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    let listed = |game: &Game| {
+        game.spaceport()
+            .mission_computer()
+            .map(|computer| computer.computer().rows.len())
+    };
+    assert_eq!(listed(&game), Some(3));
+    held_on_computer_row_0(&mut game, &[Key::Char('a'), Key::Down]);
+    assert!(
+        game.active().iter().any(|&(_, m)| m == MissionId(128)),
+        "accepted at the release"
+    );
+    assert_eq!(game.shown_text(), None, "no BriefText");
+    assert_eq!(listed(&game), Some(2), "the computer again");
+    assert_eq!(
+        computer_selected(&game),
+        Some(0),
+        "the reopen flushed the Down (@0xa3a1c)"
+    );
+}
+
+#[test]
+fn with_no_mission_listed_an_i_held_on_the_computer_lets_the_keys_after_it_run() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    held_on_computer_row_0(&mut game, &[Key::Char('i'), Key::Escape]);
+    assert!(
+        game.spaceport().mission_computer().is_none(),
+        "I opened nothing (@0xa3e94-0xa3ebf), and the Escape left"
+    );
+}
+
 #[test]
 fn m_on_the_mission_computer_opens_flights_map_with_its_offers_marks_and_closes_back_to_it() {
     let store = MemoryPilots::new();

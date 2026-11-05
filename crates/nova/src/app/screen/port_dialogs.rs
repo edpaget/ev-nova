@@ -75,7 +75,9 @@ pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightVi
     }
 }
 
-/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
+/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer,
+/// told whether the mission info screen lists a mission
+/// (`MissionComputerScreen::set_missions_listed`), and
 /// the bar's Hire Escort with the ships for hire (none for hire, its text
 /// playing the last `dësc` loaded's after-movie, #224 @0x5e8da), then
 /// tells `flight` of
@@ -89,6 +91,7 @@ pub(super) fn open_port_dialogs(
     if spaceport.take_mission_computer_request() {
         let computer = flight.open_mission_computer();
         spaceport.open_mission_computer_after(computer, flight.sim().loaded_after_movie());
+        spaceport.set_computer_missions_listed(!flight.mission_info().rows.is_empty());
     }
     if spaceport.take_hire_request()
         && let Some(list) = flight.escorts_for_hire()

@@ -140,11 +140,14 @@ impl AppScreen {
             }
             // An accept shows its texts, then the computer again, as the
             // original closes it and opens it again; one left with nothing
-            // available closes silently.
+            // available closes silently. Whether it took the mission, and
+            // whether any mission is listed now, place the keys a press
+            // held back after the accept.
             if let Some(mission) = accepted {
-                let _ = flight.accept_mission(mission);
+                let taken = flight.accept_mission(mission).is_ok();
                 spaceport.show_mission_texts(flight.take_mission_texts());
-                spaceport.set_mission_computer(flight.open_mission_computer());
+                spaceport.set_computer_missions_listed(!flight.mission_info().rows.is_empty());
+                spaceport.set_mission_computer(flight.open_mission_computer(), taken);
             }
             // The refill says nothing, as `_DoPortDialog` says nothing;
             // Recharge's button follows below.

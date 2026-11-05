@@ -184,6 +184,7 @@ use nova_sim::{
 };
 
 mod close_keys;
+mod computer_keys;
 mod flushing_layers;
 mod gamble;
 
@@ -1698,19 +1699,6 @@ impl SpaceportView {
         }
     }
 
-    /// After an accept, the mission computer open shows `computer`; or,
-    /// refused, it closes with nothing said, as the original's re-entry
-    /// does (`_reenterMissionDialog` @0xa380a, @0xa3910).
-    pub fn set_mission_computer(&mut self, computer: Result<MissionComputer, ComputerRefusal>) {
-        let Some(Open::Computer(screen)) = &mut self.open else {
-            return;
-        };
-        match computer {
-            Ok(computer) => screen.set_computer(computer),
-            Err(_) => self.close_open(),
-        }
-    }
-
     /// Shows each of `texts` in "Desc Dialog", one after another as Done
     /// closes each, over whatever is open, each taking every input until
     /// it closes (`_ShowTextDialog` @0x5a752), and each offer movie among
@@ -1960,15 +1948,22 @@ impl SpaceportView {
     }
 
     /// After an abort, the mission info screen shows `info`, closing once
-    /// nothing is left; the offer under it, if any, is told whether
-    /// anything is still listed ([`SpaceportView::set_offer_missions_listed`]).
+    /// nothing is left; the offer or the mission computer under it, if
+    /// any, is told whether anything is still listed
+    /// ([`SpaceportView::set_offer_missions_listed`],
+    /// [`SpaceportView::set_computer_missions_listed`]).
     pub fn set_mission_info(&mut self, info: MissionInfo) {
-        self.set_offer_missions_listed(!info.rows.is_empty());
+        let listed = !info.rows.is_empty();
+        self.set_offer_missions_listed(listed);
+        self.set_computer_missions_listed(listed);
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.set_info(info);
             self.sounds.extend(dialogs.take_sounds());
         }
         self.note_info_closed();
+        // The keys an abort's replay held back, run on the info rebuilt,
+        // may close it and leave a rest for what is beneath.
+        self.pass_unclaimed();
     }
 
     /// Notes the mission info screen's close since the mission dialogs
@@ -2409,7 +2404,8 @@ impl Screen for SpaceportView {
                 Some(Open::Trade(screen)) => screen.holds_back_keys(),
                 Some(Open::Outfitter(screen)) => screen.holds_back_keys(),
                 Some(Open::Shipyard(screen)) => screen.holds_back_keys(),
-                _ => false,
+                Some(Open::Computer(screen)) => screen.holds_back_keys(),
+                Some(Open::Service(_)) | None => false,
             }
     }
 }
@@ -2450,10 +2446,12 @@ impl SpaceportView {
                 self.sounds.extend(screen.take_sounds());
             }
             self.play_alert_after();
+            let left = self.take_left_computers_rest();
             if self.open.as_ref().is_some_and(Open::closed) && !self.texts_queued() {
                 self.close_open();
             }
             self.note_closings(before);
+            self.route_left(&left);
             return ScreenAction::None;
         }
         // `_PortFilter`'s first key check (@0x4f165-0x4f185).
@@ -2530,6 +2528,9 @@ impl SpaceportView {
             dialogs.tick(dt);
             self.sounds.extend(dialogs.take_sounds());
         }
+        // The mission info screen's tick can close it, running the keys a
+        // cancelled press held back.
+        self.note_info_closed();
         self.pass_unclaimed();
         self.dispose_answered_offer();
         self.close_alerted_outfitter();
@@ -2554,9 +2555,11 @@ impl SpaceportView {
             } else {
                 open.screen_mut().tick(dt);
                 // The outfitter's alert can close as it ticks, running the
-                // keys a cancelled press held back.
+                // keys a cancelled press held back, and so can the mission
+                // computer.
                 self.play_alert_after();
                 self.close_alerted_outfitter();
+                self.close_left_computer();
             }
         }
     }
@@ -2633,6 +2636,7 @@ pub(in crate::spaceport) mod tests {
     mod close_keys;
     mod flushing_layers;
     mod held_keys;
+    mod mission_screen_keys;
     mod overlay_pointer;
     mod ship_movies;
 
@@ -5179,12 +5183,12 @@ pub(in crate::spaceport) mod tests {
             rows: Vec::new(),
             ..offers()
         };
-        view.set_mission_computer(Ok(fewer.clone()));
+        view.set_mission_computer(Ok(fewer.clone()), true);
         assert_eq!(
             view.mission_computer().map(MissionComputerScreen::computer),
             Some(&fewer)
         );
-        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable), true);
         assert!(view.mission_computer().is_none(), "closed");
         assert_eq!(shown_text(&view), None, "silently");
     }
@@ -5202,7 +5206,7 @@ pub(in crate::spaceport) mod tests {
             movie: None,
             map: None,
         }]);
-        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable), true);
         assert!(view.mission_computer().is_none(), "closed");
         assert_eq!(
             view.take_port_dialog_closed(),
