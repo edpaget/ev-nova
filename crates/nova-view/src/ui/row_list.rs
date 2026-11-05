@@ -512,7 +512,8 @@ impl RowList {
         self.pressed = self.selected;
         match cell {
             ListCell::Row(row) => {
-                self.selected = (row < self.rows.len() && !self.is_heading(row)).then_some(row);
+                // Only rows shown are cells, so `row` is listed.
+                self.selected = (!self.is_heading(row)).then_some(row);
             }
             ListCell::Up => self.scroll_by(-1),
             ListCell::Down => self.scroll_by(1),

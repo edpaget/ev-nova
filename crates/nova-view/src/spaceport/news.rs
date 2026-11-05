@@ -230,7 +230,9 @@ impl Screen for NewsScreen {
                     }
                     return ScreenAction::None;
                 }
-                PadRead::Press if self.focus.get().is_some() && self.bounds().is_some() => {
+                // Told the pad, the focus is on the frame whenever there is
+                // one: a press without its dialog presses nothing.
+                PadRead::Press if self.bounds().is_some() => {
                     self.close();
                     return ScreenAction::None;
                 }
@@ -381,6 +383,21 @@ mod tests {
             });
         }
         assert!(screen.closed(), "East");
+    }
+
+    #[test]
+    fn without_its_dialog_south_presses_nothing_and_east_still_closes_it() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), None);
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        for (button, closes) in [(PadButton::South, false), (PadButton::East, true)] {
+            for pressed in [true, false] {
+                screen.input(&Input::PadButton { button, pressed });
+            }
+            assert_eq!(screen.closed(), closes, "{button:?}");
+        }
     }
 
     fn texts(screen: &NewsScreen) -> Vec<String> {

@@ -79,6 +79,16 @@ fn told_the_dpad_reaches_a_service_and_south_opens_it() {
 }
 
 #[test]
+fn the_spaceport_says_the_device_it_was_told() {
+    let mut view = earth();
+    assert_eq!(view.device(), Device::Keyboard, "before any");
+    view.input(&told(PAD));
+    assert_eq!(view.device(), PAD);
+    view.input(&told(Device::Mouse));
+    assert_eq!(view.device(), Device::Mouse);
+}
+
+#[test]
 fn told_east_leaves_as_escape_does() {
     let mut view = earth();
     view.input(&told(PAD));

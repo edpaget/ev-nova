@@ -325,6 +325,22 @@ mod tests {
     }
 
     #[test]
+    fn a_south_release_ends_no_pointer_press_on_done() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = bar();
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: DONE_BUTTON.center(),
+        });
+        screen.input(&pad(PadButton::South, false));
+        assert!(!screen.closed(), "a release whose press the pad never made");
+    }
+
+    #[test]
     fn keyboard_space_still_does_nothing() {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let mut screen = bar();
