@@ -108,6 +108,7 @@ mod kept_frame;
 mod key_fades;
 mod landing;
 mod layers;
+mod leaving_cursor;
 mod live_keys;
 mod map_borders;
 mod map_find;

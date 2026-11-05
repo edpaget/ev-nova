@@ -58,6 +58,10 @@
 //!   leaves nothing to replay ([`FlightView::take_movie_replay`]): a
 //!   latched key pressed under the movie waits for its release.
 //!
+//! Both the landing and an accepted hypergate entry hide flight's cursor
+//! with a zero fade (`_HideCursorSprite` @0x6326f, @0x639b1), movies on or
+//! off; a wormhole's entry and a refused one don't.
+//!
 //! Neither function plays a sound.
 
 #[cfg(doc)]
@@ -214,7 +218,13 @@ impl<
     /// The landing on `stellar` the press answered: with movies on, its
     /// `dësc` is loaded and its movie played first (see the module docs);
     /// otherwise, or with none to play, it lands at once.
+    ///
+    /// The cursor is hidden first, movies on or off, as
+    /// `_PlayerLandOnStellar` calls `_HideCursorSprite` (@0x6326f) before
+    /// its Movies test, so back in flight a same-point pointer doesn't
+    /// show it.
     pub(super) fn land_with_movie(&mut self, stellar: StellarId) {
+        self.hide_cursor();
         if self.movies.on() && self.play_desc_movie(stellar.0, AfterMovie::Land(stellar)) {
             return;
         }
@@ -226,6 +236,13 @@ impl<
     /// ([`ScreenAsk::GateEntryDesc`]) is loaded and its movie played
     /// first; with movies off, an entry that would be refused, or no movie
     /// to play, at once.
+    ///
+    /// An accepted hypergate entry hides the cursor, as
+    /// `_PlayerEnterHypergate` calls `_HideCursorSprite` (@0x639b1) past
+    /// its refusals and before its movie: before the movie when the flight
+    /// names one, otherwise on the entry's arrival
+    /// (`FlightView::after_movie`), settled within the same input, before
+    /// any frame. A wormhole's entry hides none (`_PlayerEnterWormhole`).
     pub(super) fn enter_with_movie(&mut self, entry: GateEntry) {
         let then = match entry {
             GateEntry::Hypergate(choice) => AfterMovie::EnterHypergate(choice),
@@ -234,9 +251,13 @@ impl<
         if self.movies.on()
             && let ScreenAnswer::GateEntryDesc(Some(id)) =
                 self.sim.screen(ScreenAsk::GateEntryDesc(entry))
-            && self.play_desc_movie(id, then)
         {
-            return;
+            if let GateEntry::Hypergate(_) = entry {
+                self.hide_cursor();
+            }
+            if self.play_desc_movie(id, then) {
+                return;
+            }
         }
         self.after_movie(then);
     }
@@ -248,6 +269,7 @@ impl<
             AfterMovie::EnterHypergate(choice) => {
                 match self.send(FlightCommand::EnterHypergate(choice)) {
                     Answer::Arrived { combat, .. } => {
+                        self.hide_cursor();
                         let effect = JumpEffect::emerging(self.hyperspace_effects);
                         self.came_through(effect, &combat);
                     }

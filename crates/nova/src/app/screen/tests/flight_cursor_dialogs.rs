@@ -165,3 +165,17 @@ fn a_focus_loss_keeps_the_fade_so_a_same_point_move_shows_the_cursor() {
     screen.input(&Input::PointerMoved(AT));
     assert_eq!(flight(&screen).cursor_at(), Some(AT));
 }
+
+#[test]
+fn a_landing_hides_flights_cursor_until_the_pointer_moves_after_take_off() {
+    // `_PlayerLandOnStellar` hides the sprite (@0x6326f); the landing's
+    // hide is flight's own, which the router's `switch_to` keeps.
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    create(&mut screen, "Ada");
+    pointed(&mut screen);
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    screen.input(&key(Key::Escape, true));
+    hidden_until_moved(&mut screen, Showing::Flight, |_| {});
+}
