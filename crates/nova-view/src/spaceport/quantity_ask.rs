@@ -214,6 +214,17 @@ impl<T> QuantityAsk<T> {
         self.host.input(input, sounds)
     }
 
+    /// Keeps `input` if it is the surroundings, telling the dialog open
+    /// and each one opened after; whether it was. Its host calls it with
+    /// every input, open or not, before anything else.
+    pub fn follow_surroundings(&mut self, input: &Input) -> bool {
+        if !matches!(input, Input::Surroundings(_)) {
+            return false;
+        }
+        self.keys.follow(input);
+        self.host.follow_surroundings(input)
+    }
+
     /// Draws the open dialog: call it last, over the screen.
     pub fn draw(&self, list: &mut DrawList) {
         self.host.draw(list);

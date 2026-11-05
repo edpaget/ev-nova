@@ -97,6 +97,9 @@ fn rows() -> Vec<Row> {
             "offer, overflowing",
             crate::spaceport::offer::pad::pad_probe_overflowing,
         ),
+        ("service", crate::spaceport::service::pad_probe),
+        ("news", crate::spaceport::news::pad_probe),
+        ("race", crate::spaceport::race::pad_probe),
     ]
 }
 

@@ -26,6 +26,11 @@
 //! @0x48183-0x4819c, `PtInRect` @0x481df); a press outside it does
 //! nothing. Without its dialog it says why, and Return or Escape still
 //! closes it.
+//!
+//! With the pad (rdm:phase/key-bindings/phase-9-gamepad-spaceport), the
+//! frame is the one target: South's press closes it, as a press inside
+//! does, and East closes it as Escape does. Until the news is told the pad
+//! was the device used last, the d-pad and South do nothing.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -47,6 +52,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::DialogTemplate;
+use crate::ui::pad_focus::{FocusState, PadRead, Target, draw_highlight, from_pad};
 use crate::ui::text_box::TextBox;
 
 /// The news dialog's `DLOG` ID.
@@ -93,6 +99,8 @@ pub struct NewsScreen {
     /// Its keys, as commands ([`contexts::DIALOG`]): Confirm and Back.
     keys: CommandReader,
     sounds: Vec<Sound>,
+    /// The pad's focus, on the frame or nothing.
+    focus: FocusState<()>,
 }
 
 impl NewsScreen {
@@ -144,6 +152,7 @@ impl NewsScreen {
             closed: false,
             keys: CommandReader::new(contexts::DIALOG),
             sounds: vec![Sound::Ui(UiSound::NewsOpened)],
+            focus: FocusState::default(),
         }
     }
 
@@ -198,6 +207,31 @@ impl Screen for NewsScreen {
     /// press inside its frame; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         let command = self.keys.follow(input);
+        if let Input::Surroundings(surroundings) = *input {
+            let initial = self.bounds().map(|_| ());
+            self.focus.surroundings(surroundings.device, initial, false);
+            return ScreenAction::None;
+        }
+        if from_pad(input)
+            && let Some(command) = command
+        {
+            match self.focus.read_pad(command) {
+                PadRead::Other => {}
+                PadRead::Move(mv) => {
+                    if let Some(frame) = self.bounds() {
+                        self.focus.move_by_pad(&[Target::at((), frame)], (), mv);
+                    }
+                    return ScreenAction::None;
+                }
+                PadRead::Press if self.focus.get().is_some() && self.bounds().is_some() => {
+                    self.close();
+                    return ScreenAction::None;
+                }
+                PadRead::Press | PadRead::Release | PadRead::Nothing => {
+                    return ScreenAction::None;
+                }
+            }
+        }
         if let Some(command) = command
             && command.pressed
             && !command.repeat
@@ -241,6 +275,9 @@ impl Screen for NewsScreen {
                     fill_rect(list, text.rect(), Color::BLACK);
                     text.draw(list);
                 }
+                if self.focus.pad_highlight().is_some() {
+                    draw_highlight(list, laid.bounds, Color::WHITE);
+                }
             }
             Err(reason) => {
                 list.text(
@@ -262,6 +299,9 @@ impl Screen for NewsScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 mod tests {
@@ -292,6 +332,48 @@ mod tests {
 
     fn open() -> NewsScreen {
         NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news(), None)
+    }
+
+    struct Probe(NewsScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            vec![("frame", self.0.bounds().expect("laid out"))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.closed())
+        }
+    }
+
+    /// The news's row in the pad's every-screen table, its opening beep
+    /// already taken, as it is no press's.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut news = open();
+        news.take_sounds();
+        Box::new(Probe(news))
+    }
+
+    #[test]
+    fn untold_the_dpad_and_south_do_nothing_but_east_closes() {
+        use crate::input::PadButton;
+        let mut screen = open();
+        for button in [PadButton::DPadUp, PadButton::South, PadButton::East] {
+            assert!(!screen.closed(), "{button:?}");
+            screen.input(&Input::PadButton {
+                button,
+                pressed: true,
+            });
+            screen.input(&Input::PadButton {
+                button,
+                pressed: false,
+            });
+        }
+        assert!(screen.closed(), "East");
     }
 
     fn texts(screen: &NewsScreen) -> Vec<String> {

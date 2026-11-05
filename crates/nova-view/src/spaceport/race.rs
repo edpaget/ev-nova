@@ -403,6 +403,14 @@ impl Screen for RaceScreen {
     /// Enter and Escape press Leave, and a click presses the button it is
     /// released on; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The surroundings are no player input: they reach the dialog and
+        // the bet's, open or opened later, and do nothing else.
+        if self.quantity.follow_surroundings(input) {
+            if let Ok(laid) = &mut self.laid {
+                laid.dialog.input(input);
+            }
+            return ScreenAction::None;
+        }
         if self.quantity.is_open() {
             if let Some((racer, asked)) = self.quantity.answer(input, &mut self.sounds) {
                 self.place(racer, Bet::Asked(i64::from(asked)));
@@ -492,6 +500,9 @@ impl Screen for RaceScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 mod tests {
@@ -723,6 +734,60 @@ mod tests {
             assert_eq!(screen.leave_label(), DONE_LABEL);
             assert_eq!(screen.dialog().map(Dialog::focus_ring), Some(ring));
         }
+    }
+
+    struct Probe(RaceScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            const NAMES: [&str; 6] = ["Leave", "Help", "racer 0", "racer 1", "racer 2", "racer 3"];
+            let dialog = self.0.dialog().expect("laid out");
+            let mut items = vec![LEAVE_ITEM, HELP_ITEM];
+            items.extend((0..usize::from(RACERS)).map(|racer| FIRST_RACER_ITEM + racer));
+            NAMES
+                .into_iter()
+                .zip(items)
+                .map(|(name, item)| (name, dialog.item_bounds(item).expect("an item")))
+                .collect()
+        }
+
+        fn outcome(&mut self) -> String {
+            format!(
+                "closed {} help {} bet {:?}",
+                self.0.closed, self.0.help, self.0.bet
+            )
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Leave")
+        }
+    }
+
+    /// The race's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(open()))
+    }
+
+    #[test]
+    fn the_bet_dialog_opens_told_the_device_the_race_was_told() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut screen = open();
+        screen.input(&Input::Surroundings(Surroundings { device: pad }));
+        screen.input(&key(Key::AltLeft, true, false));
+        let racer = centre(&screen, FIRST_RACER_ITEM);
+        screen.input(&pointer(true, racer));
+        screen.input(&pointer(false, racer));
+        let bet = screen
+            .quantity()
+            .and_then(QuantityAsk::dialog)
+            .expect("asking");
+        assert_eq!(bet.dialog().device(), pad);
+        assert_eq!(bet.dialog().pad_highlight(), Some(OK_ITEM), "on OK");
     }
 
     #[test]
