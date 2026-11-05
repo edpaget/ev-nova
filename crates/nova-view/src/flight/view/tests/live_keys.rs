@@ -493,13 +493,25 @@ fn i_pressed_in_the_frame_an_offer_is_accepted_at_once_waits() {
 }
 
 #[test]
+fn a_dialog_over_flight_ends_the_wait_after_a_site_with_no_dialog() {
+    // The room refusal's text, say: what the router replays at its close
+    // acts on its press, the press window after a close being left out.
+    let mut view = in_flight();
+    view.latch_at_site();
+    unlatching_dialog_opens(&mut view);
+    let from = sent(&view).len();
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "{:?}", &sent(&view)[from..]);
+}
+
+#[test]
 fn a_minus_pressed_after_a_site_with_no_dialog_holds_but_doesnt_zoom() {
     // `_SetAllKeyCmdFlags` sets `_mapZoomFlag` (@0x61ef8); the
     // self-destruct chord reads `-` with no latch.
     let mut view = super::maps::floating_near(in_sol());
     super::maps::floating_tap(&mut view, HYPERSPACE_MODE_KEY);
     let shown = super::maps::near_dot(&view);
-    view.latch_at_close();
+    view.latch_at_site();
     view.input(&key(ZOOM_OUT_KEY, true));
     assert_eq!(super::maps::near_dot(&view), shown, "no zoom");
     assert!(!view.ui_sounds.contains(&UiSound::FloatingMapZoomed));
@@ -796,6 +808,76 @@ fn l_pressed_under_a_dialog_presses_the_land_key_at_its_close() {
             &sent(&view)[from..]
         );
     }
+}
+
+// The escort commands F, D, V and C have a latch of their own too
+// (`*0x3b5650` = 0x316954, set @0x6e1cf, cleared on release @0x6e2d7),
+// which `_SetAllKeyCmdFlags` never sets: it writes the escort menu's
+// group block at 0x316958 (@0x61efd-0x61f44).
+
+/// The escort commands `view` sent from `from` of its commands on.
+fn escort_commands_since(view: &Faked, from: usize) -> Vec<nova_sim::EscortCommand> {
+    sent(view)[from..]
+        .iter()
+        .filter_map(|sent| match sent {
+            FlightCommand::CommandEscorts { command, .. } => Some(*command),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_escort_command_pressed_under_a_sites_dialog_and_still_down_commands_on_the_next_step() {
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [ESCORT_ATTACK_KEY], [], false), []);
+    assert!(view.held.contains(&ESCORT_ATTACK_KEY), "held, not latched");
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert_eq!(
+        escort_commands_since(&view, from),
+        [nova_sim::EscortCommand::Attack]
+    );
+    view.tick(TICK);
+    view.tick(TICK);
+    assert_eq!(escort_commands_since(&view, from).len(), 1, "once");
+}
+
+#[test]
+fn an_escort_command_that_acted_before_a_dialog_waits_for_its_release() {
+    let mut view = in_flight();
+    view.input(&key(ESCORT_ATTACK_KEY, true));
+    let from = sent(&view).len();
+    dialog_opens(&mut view);
+    let _ = back(&mut view, [ESCORT_ATTACK_KEY], [ESCORT_ATTACK_KEY], false);
+    view.tick(TICK);
+    assert_eq!(escort_commands_since(&view, from), [], "its latch set");
+    view.input(&key(ESCORT_ATTACK_KEY, false));
+    view.tick(TICK);
+    view.input(&key(ESCORT_ATTACK_KEY, true));
+    assert_eq!(
+        escort_commands_since(&view, from),
+        [nova_sim::EscortCommand::Attack],
+        "let go and pressed afresh"
+    );
+}
+
+#[test]
+fn an_escort_command_pressed_under_an_unlatching_dialog_comes_back_held_not_as_a_press() {
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(
+        back(&mut view, [ESCORT_DEFEND_KEY, FRAME_RATE_KEY], [], false),
+        [],
+        "F12 after D's poll waits for it"
+    );
+    assert_eq!(view.after_poll, [FRAME_RATE_KEY]);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert_eq!(
+        escort_commands_since(&view, from),
+        [nova_sim::EscortCommand::Defend]
+    );
 }
 
 #[test]

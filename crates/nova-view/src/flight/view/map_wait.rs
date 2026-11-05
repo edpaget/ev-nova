@@ -23,7 +23,7 @@
 //!   reading down meanwhile for every read that skips their latch (the
 //!   `latched_reads` module): `_HandlePlayer` sets its 22 latches and the
 //!   escort menu's 5 after M's map (`_SetAllKeyCmdFlags` @0x61e6d, called
-//!   @0x6a898), but not B's and L's. The same
+//!   @0x6a898), but not B's, L's and the escort commands'. The same
 //!   poll reads them after every other dialog over flight, which takes
 //!   flight's input from the router instead: the router keeps what is
 //!   physically down under it and hands it back as the last one closes
@@ -68,8 +68,9 @@
 
 use super::dialog_map::MapOpening;
 use super::{
-    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS,
-    FlightView, JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
+    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY, ESCORT_RECALL_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS, FlightView,
+    JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
 };
 use crate::flight::sim_port::FlightSim;
 use crate::{Input, Key};
@@ -90,8 +91,9 @@ use crate::{Input, Key};
 /// `_weapCloseTargFlag` R (0xdee50), `_weapSelectFlag` W (0xdee54),
 /// `_jumpTryFlag` J (0xdee44), `_ackCommFlag` Return (0xdedf4),
 /// `_playerInfoFlag` P (0xdedd4), `_commTryFlag` Y (0xdee0c),
-/// `_missionInfoFlag` I (0xdee00) and `_cloakFlag` U (0xdedfc). B and L
-/// have latches of their own that it doesn't set ([`OWN_LATCH_KEYS`]).
+/// `_missionInfoFlag` I (0xdee00) and `_cloakFlag` U (0xdedfc). B, L and
+/// the escort commands have latches of their own that it doesn't set
+/// ([`OWN_LATCH_KEYS`]).
 /// A latched key held past the close still reads down for every read
 /// that skips its latch (the `latched_reads` module).
 pub(super) const UNLATCHED_KEYS: [Key; 15] = [
@@ -115,16 +117,27 @@ pub(super) const UNLATCHED_KEYS: [Key; 15] = [
 /// The keys whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets: L's
 /// `_dockTryFlag` (0xdee34), set only as L makes a dock request
 /// (@0x6a953) and cleared on a pass L is up or its gate closed
-/// (@0x6a95d), and B's `_boardTryFlag` (0xdee18), set by a board attempt
+/// (@0x6a95d); B's `_boardTryFlag` (0xdee18), set by a board attempt
 /// past its no-target and cloak returns (@0x6504c) and cleared on a pass
-/// B is up (@0x6a9a3). So across a close, a map or a gate's movie they
-/// are read as the unlatched keys are: held whenever physically down and
-/// read on every pass, their own latches deciding
-/// ([`FlightView::board_latch`], the `faded_keys` module's L latch). One
-/// first pressed under the dialog acts at the next pass, its latch clear;
-/// one that acted before it waits for its release, even let go and
-/// pressed again under it, which no pass saw.
-pub(super) const OWN_LATCH_KEYS: [Key; 2] = [LAND_KEY, BOARD_KEY];
+/// B is up (@0x6a9a3); and the escort commands F, D, V and C, one byte
+/// each at 0x316954 (set @0x6e1cf, cleared on release @0x6e2d7), which
+/// the site's group block writes at 0x316958 (@0x61efd-0x61f44) never
+/// reach ([`CommandLatches`](crate::flight::escorts::CommandLatches)). So
+/// across a close, a map or a gate's movie they are read as the unlatched
+/// keys are: held whenever physically down and read on every pass, their
+/// own latches deciding ([`FlightView::board_latch`], the `faded_keys`
+/// module's L latch, [`FlightView::escort_commands_frame`]). One first
+/// pressed under the dialog acts at the next pass, its latch clear; one
+/// that acted before it waits for its release, even let go and pressed
+/// again under it, which no pass saw.
+pub(super) const OWN_LATCH_KEYS: [Key; 6] = [
+    LAND_KEY,
+    BOARD_KEY,
+    ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY,
+];
 
 /// Whether flight reads `key` down across a close with no latch of
 /// `_SetAllKeyCmdFlags`' in its way: [`UNLATCHED_KEYS`] and

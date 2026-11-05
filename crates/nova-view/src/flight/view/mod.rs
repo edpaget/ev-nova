@@ -806,7 +806,8 @@ pub struct FlightOverlays {
 /// ([`FlightView::latched_down`]), but still reads down for every read
 /// that skips its latch (the `latched_reads` module); which keys have no
 /// latch is the `map_wait` module's `UNLATCHED_KEYS`, and which have
-/// latches no site sets, B and L, its `OWN_LATCH_KEYS`. The original's
+/// latches no site sets, B, L and the escort commands, its
+/// `OWN_LATCH_KEYS`. The original's
 /// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
 /// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
@@ -817,9 +818,12 @@ pub struct FlightOverlays {
 /// because they stay down: `_HandlePlayer`
 /// sets the cursor's byte on every frame one is held, and the zoom reads
 /// them held. A key that opens a dialog from its press isn't tracked, as
-/// the dialog takes its release. E, F, D, V, C and F12 act on their press
-/// and are here only for `_quickKeyCheckResult`, which their reads set
-/// (@0x6dda9, @0x6e1b6, @0x6e460); they set no byte. Being here doesn't
+/// the dialog takes its release. E and F12 act on their press and are
+/// here only for `_quickKeyCheckResult`, which their reads set (@0x6dda9,
+/// @0x6e460); they set no byte. F, D, V and C act on their press and,
+/// held, at the next poll their own latches let them
+/// ([`FlightView::escort_commands_frame`]), and set
+/// `_quickKeyCheckResult` too (@0x6e1b6). Being here doesn't
 /// make a key fade the cursor: [`FlightView::key_fades_cursor`] says which
 /// do.
 const FLIGHT_KEYS: [Key; 46] = [
@@ -1454,6 +1458,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// key poll, so the dialogs it opened latch every key down at their
     /// close (see the `dialog_latch` module).
     latch_at_close: bool,
+    /// Whether a `_SetAllKeyCmdFlags` site ran with flight keeping its
+    /// input since, up to the next key poll: a latched key pressed then
+    /// waits (`FlightView::wait_after_site`).
+    latched_at_site: bool,
     /// The press keys a hand-back left for the next key poll, in
     /// `_HandlePlayer`'s order, as a slot key before them acts only there
     /// (see the `dialog_latch` module). A release drops its key.
@@ -1479,6 +1487,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// The escort commands' own latches (0x316954..0x316957), which no
+    /// `_SetAllKeyCmdFlags` site sets ([`FlightView::escort_commands_frame`]).
+    escort_commands: crate::flight::escorts::CommandLatches,
     /// A tap of the jettison chord since the last step, `Some(all)`, for
     /// the next step to jettison once ([`FlightView::jettison`]).
     jettison_tapped: Option<bool>,

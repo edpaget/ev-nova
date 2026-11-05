@@ -148,6 +148,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
+/// The escort commands' keys in the order of `_HandlePlayer`'s loop over
+/// them and of their latches (`_keyPrefs` +0x60, +0x62, +0x64, +0x66,
+/// @0x6e1b6).
+pub(super) const ESCORT_COMMAND_KEYS: [Key; 4] = [
+    ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY,
+];
+
 /// The escort menu, over the [`FlightSim`] port: its keys read the fleet
 /// from the kept frame
 /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)) and
@@ -164,26 +174,66 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A press of `key`, if it is one of the escort menu's: E, Return,
     /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
-    /// Hangar). Whether it was one.
+    /// Hangar), each of which, fresh, follows its release, so its own
+    /// latch was clear: it commands and sets it
+    /// ([`CommandLatches::press`](crate::flight::escorts::CommandLatches::press)).
+    /// Whether it was one.
     pub(super) fn escort_key(&mut self, key: Key) -> bool {
+        if let Some(index) = ESCORT_COMMAND_KEYS
+            .iter()
+            .position(|&command| command == key)
+        {
+            self.escort_commands.press(index);
+            self.command_escorts(self.escort_command(index));
+            return true;
+        }
         let group = GROUP_KEYS.iter().position(|&group| group == key);
         match key {
             MENU_KEY => self.toggle_escort_menu(),
             MENU_CLOSE_KEY => self.acknowledge(),
-            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
-            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
-            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
-            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
-                EscortCommand::Dock
-            } else {
-                EscortCommand::Recall
-            }),
             _ => match group {
                 Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
                 _ => return false,
             },
         }
         true
+    }
+
+    /// The escort command at `index` of `_HandlePlayer`'s loop over them
+    /// (@0x6e1af-0x6e2e2, [`ESCORT_COMMAND_KEYS`]): Attack, Defend, Hold,
+    /// and Recall, or Return to Hangar with Option down (@0x6e207).
+    fn escort_command(&self, index: usize) -> EscortCommand {
+        match index {
+            0 => EscortCommand::Attack,
+            1 => EscortCommand::Defend,
+            2 => EscortCommand::Hold,
+            _ if self.held.contains(&Key::Alt) => EscortCommand::Dock,
+            _ => EscortCommand::Recall,
+        }
+    }
+
+    /// One poll of the escort commands' keys, after J's block, as their
+    /// loop (@0x6e1af-0x6e2e2) comes after J's read (@0x6b0e6): each held
+    /// with its own latch clear commands the escorts, and sets the latch;
+    /// each up clears it
+    /// ([`CommandLatches::poll`](crate::flight::escorts::CommandLatches::poll)).
+    /// So a key first pressed under a dialog and still down at its close
+    /// commands here, as no `_SetAllKeyCmdFlags` site sets these latches
+    /// (the `map_wait` module's `OWN_LATCH_KEYS`); a fresh press commanded
+    /// already ([`FlightView::escort_key`]). While the flight refuses the
+    /// escort keys ([`FlightView::takes`]) the poll does nothing, the
+    /// latches left as they were, as the Board key's frame does.
+    pub(super) fn escort_commands_frame(&mut self) {
+        if !self.takes(PlayerCommand::Escort) {
+            return;
+        }
+        let down = ESCORT_COMMAND_KEYS.map(|key| self.held.contains(&key));
+        let fire = self.escort_commands.poll(down);
+        for (index, fire) in fire.into_iter().enumerate() {
+            if fire {
+                self.command_escorts(self.escort_command(index));
+            }
+        }
     }
 
     /// E: opens or closes the escort menu, or says the player has no
@@ -507,7 +557,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// input in flight (a gate's exit, the course map opened over a
     /// screen) let go of `held` alone, as their releases still come here,
     /// and the course map opened in flight and a gate's exit keep the
-    /// keys read with no latch, B and L among them
+    /// keys read with no latch of a site's, B, L and the escort commands
+    /// among them
     /// ([`FlightView::open_map_as`], `FlightView::came_through`). The
     /// latched keys flight saw down are forgotten too, as their releases
     /// go elsewhere: the next hand-back says again which are down. The
@@ -516,6 +567,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (the `dialog_latch` module); a site's dialog opens through
     /// [`FlightView::let_go_into_dialog`].
     pub(super) fn let_go_of_input(&mut self) {
+        self.latched_at_site = false;
         self.held.clear();
         self.latched_down.clear();
         self.after_poll.clear();

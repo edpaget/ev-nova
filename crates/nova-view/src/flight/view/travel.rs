@@ -81,6 +81,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // (`FlightCommand::gate`).
         self.board_frame(board);
         self.jump_frame(jump);
+        self.escort_commands_frame();
     }
 
     /// The course map's close, the hypergate's entry left to

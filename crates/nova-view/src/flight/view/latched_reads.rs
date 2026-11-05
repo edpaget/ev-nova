@@ -54,11 +54,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_missionInfoFlag` (0xdee00, I's) and `_weapTargetSelectFlag`
     /// (0xdede8, [`FlightView::target_latch`]). The other pointers it
     /// sets latch keys ours acts on at their press (M, R, W, Return, E,
-    /// F12, P, Y, the escort commands, the zooms), which a latched key
-    /// reaches only after its release, or U, whose edge the step reads.
-    /// B's and L's latches (`_boardTryFlag` 0xdee18, `_dockTryFlag`
-    /// 0xdee34) are not among them (the `map_wait` module's
-    /// `OWN_LATCH_KEYS`). A latch whose keys are up clears at the next
+    /// F12, P, Y, the zooms), which a latched key reaches only after its
+    /// release, or U, whose edge the step reads. B's, L's and the escort
+    /// commands' latches (`_boardTryFlag` 0xdee18, `_dockTryFlag`
+    /// 0xdee34, 0x316954..0x316957) are not among them (the `map_wait`
+    /// module's `OWN_LATCH_KEYS`). A latch whose keys are up clears at the next
     /// poll, and a fresh press clears its own, so setting them all is
     /// safe.
     pub(super) fn set_every_latch(&mut self) {

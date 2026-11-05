@@ -27,9 +27,10 @@
 //!
 //! - The latched keys flight gives back, pressed under a dialog no site
 //!   follows and still down, are replayed to it as fresh presses, in the
-//!   order it gives them ([`AppScreen::replay_live_presses`]). B and L are
-//!   never among them: no site sets their latches, so flight holds them
-//!   as it holds the unlatched keys and reads them at its next pass. A press key
+//!   order it gives them ([`AppScreen::replay_live_presses`]). B, L and
+//!   the escort commands F, D, V and C are never among them: no site sets
+//!   their latches, so flight holds them as it holds the unlatched keys
+//!   and reads them at its next pass. A press key
 //!   acts at the close's entry point, where the original acts at the next
 //!   pass's `_HandlePlayer`; no frame is drawn between the two, as flight
 //!   steps only in a tick and the close's tick steps none, so this

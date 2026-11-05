@@ -688,6 +688,23 @@ fn f_d_v_and_c_send_their_commands_and_say_what_each_changed() {
 }
 
 #[test]
+fn option_c_held_across_a_sites_close_docks_at_the_next_step() {
+    // C's own latch (0x316957) is no `_SetAllKeyCmdFlags` site's, and the
+    // commands' loop reads Option for Return to Hangar (@0x6e207).
+    let mut view = escorted();
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [Key::Alt, ESCORT_RECALL_KEY], [], false);
+    let before = sent_but_lines(&view).len();
+    view.tick(TICK);
+    let commands: Vec<FlightCommand> = sent_but_lines(&view)[before..]
+        .iter()
+        .filter(|sent| matches!(sent, FlightCommand::CommandEscorts { .. }))
+        .cloned()
+        .collect();
+    assert_eq!(commands, [command(EscortGroup::All, EscortCommand::Dock)]);
+}
+
+#[test]
 fn option_c_sends_return_to_hangar_and_c_alone_recall_to_the_menus_group() {
     let mut view = faked(fleet_of(&[EscortClass::Fighter, EscortClass::Warship]));
     view.sim

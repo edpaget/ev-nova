@@ -109,6 +109,44 @@ pub const GROUP_KEYS: [Key; 5] = [
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
 pub const MENU_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The escort commands' own latches, one byte each at `*0x3b5650` =
+/// 0x316954..0x316957, indexed by `_HandlePlayer`'s loop over the
+/// commands (@0x6e1af-0x6e2e2) in its order: Attack (F, `_keyPrefs`
+/// +0x60), Defend (D, +0x62), Hold (V, +0x64) and Recall (C, +0x66, Return
+/// to Hangar with Option, @0x6e207). A key down with its latch clear
+/// fires its command (test @0x6e1c3) and sets the latch (@0x6e1cf, before
+/// `_IssueNewEscortCommand`, so whatever the command did); a key up
+/// clears it (@0x6e2d7). `_SetAllKeyCmdFlags` (@0x61e6d) never sets them:
+/// its group block writes are the escort menu's 1-5 at 0x316958
+/// (@0x61efd-0x61f44).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandLatches([bool; 4]);
+
+impl CommandLatches {
+    /// One poll of the four keys, `down` whether each reads down, in the
+    /// loop's order: which of them fire.
+    pub fn poll(&mut self, down: [bool; 4]) -> [bool; 4] {
+        let mut fire = [false; 4];
+        for ((latch, down), fire) in self.0.iter_mut().zip(down).zip(&mut fire) {
+            *fire = down && !*latch;
+            *latch = down;
+        }
+        fire
+    }
+
+    /// A fresh press of command `index`, which follows its release, so
+    /// its latch was clear: it fires, and sets the latch.
+    pub fn press(&mut self, index: usize) {
+        self.0[index] = true;
+    }
+
+    /// Whether command `index`'s latch is set.
+    #[must_use]
+    pub fn is_set(&self, index: usize) -> bool {
+        self.0[index]
+    }
+}
 /// The frame's top-left corner, in the window.
 pub const MENU_AT: Point = Point::new(15.0, 150.0);
 /// The frame's width.
@@ -1377,5 +1415,42 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_command_key_down_with_its_latch_clear_fires_once_and_waits_for_its_release() {
+        let mut latches = CommandLatches::default();
+        assert_eq!(
+            latches.poll([true, false, true, false]),
+            [true, false, true, false]
+        );
+        assert_eq!(latches.poll([true, false, true, false]), [false; 4]);
+        assert_eq!(
+            latches.poll([true, true, false, false]),
+            [false, true, false, false]
+        );
+        assert!(latches.is_set(0) && latches.is_set(1));
+        assert!(!latches.is_set(2), "cleared on its release");
+        assert_eq!(
+            latches.poll([false, false, true, false]),
+            [false, false, true, false]
+        );
+        assert!(!latches.is_set(0) && !latches.is_set(1));
+    }
+
+    #[test]
+    fn a_fresh_press_fires_and_sets_its_latch_alone() {
+        let mut latches = CommandLatches::default();
+        for i in 0..4 {
+            latches.press(i);
+            assert!(latches.is_set(i));
+            let mut down = [false; 4];
+            down[i] = true;
+            assert_eq!(latches.poll(down), [false; 4], "held after it: {i}");
+            assert!(latches.is_set(i));
+        }
+        // Its release clears it.
+        latches.poll([false; 4]);
+        assert!((0..4).all(|i| !latches.is_set(i)));
     }
 }
