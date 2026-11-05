@@ -388,5 +388,23 @@ mod tests {
         assert!(!flag_of(&traffic, id), "its own");
         let berth = traffic.npcs()[0].berth;
         assert_eq!(traffic.berth_scoop(berth), Some(true), "left as it was");
+
+        let mut traffic = every_berth(false);
+        traffic.set_reused_slot_scoop(RuleSource::Bible);
+        let mut scooper = npc(0, ShipStats::new(FAST, &[]));
+        scooper.can_scoop = true;
+        let id = traffic.add_npc_unscooped(scooper);
+        assert!(flag_of(&traffic, id), "its own over the berth's false");
+        let berth = traffic.npcs()[0].berth;
+        assert_eq!(traffic.berth_scoop(berth), Some(false), "left as it was");
+
+        let mut fresh = Traffic::new();
+        fresh.set_reused_slot_scoop(RuleSource::Bible);
+        let mut scooper = npc(0, ShipStats::new(FAST, &[]));
+        scooper.can_scoop = true;
+        let id = fresh.add_npc_unscooped(scooper);
+        assert!(flag_of(&fresh, id), "its own over the zero fill");
+        let berth = fresh.npcs()[0].berth;
+        assert_eq!(fresh.berth_scoop(berth), None, "nothing written");
     }
 }
