@@ -948,10 +948,13 @@ fn unlike_nav(nav: NavMode) -> NavMode {
 ///   [`FlightCommand::BeginFade`] and [`FlightCommand::EndPlay`] are
 ///   refused, and the frame after them equals the frame before;
 /// - **a jump's answer is its kind**: [`FlightCommand::Jump`] answers
-///   [`Answer::Jumped`], [`Answer::JumpRefused`] or [`Answer::Refused`]; a
-///   refusal leaves [`FlightFrame::jump_under_way`] as it was (a disabled
-///   ship's J is refused mid-jump too), and after [`Answer::Jumped`] a
-///   jump is under way. Checked last, as a jump begun changes the flight;
+///   [`Answer::Jumped`], [`Answer::JumpRefused`], [`Answer::GatePilot`] or
+///   [`Answer::Refused`]; a refusal leaves [`FlightFrame::jump_under_way`]
+///   as it was (a disabled ship's J is refused mid-jump too), after
+///   [`Answer::Jumped`] a jump is under way, and after
+///   [`Answer::GatePilot`] the frame shows the gate autopilot flying
+///   toward its system ([`FlightFrame::gate_pilot`]) and no jump under way.
+///   Checked last, as a jump begun changes the flight;
 /// - **no plunder without a boarding**: with no boarding under way
 ///   ([`ScreenAsk::Boarding`] answered [`ScreenAnswer::Nothing`]), a take
 ///   in the plunder dialog ([`FlightCommand::Plunder`]) is refused, and
@@ -1326,7 +1329,15 @@ fn check_jump(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
                 once.jump_under_way, after.jump_under_way
             ))
         }
-        Answer::Jumped(_) | Answer::JumpRefused { .. } | Answer::Refused => Ok(()),
+        Answer::GatePilot(to) if after.gate_pilot.is_none_or(|shown| shown.to != to) => Err(
+            format!("{clause}: {answer:?} with no autopilot shown for it"),
+        ),
+        Answer::GatePilot(_) if after.jump_under_way => {
+            Err(format!("{clause}: {answer:?} with a jump under way"))
+        }
+        Answer::Jumped(_) | Answer::JumpRefused { .. } | Answer::Refused | Answer::GatePilot(_) => {
+            Ok(())
+        }
         _ => Err(format!("{clause}: it answered {answer:?}")),
     }
 }
@@ -2196,6 +2207,13 @@ mod tests {
         RefusalJumps,
         /// A jump answered as begun leaves none under way.
         JumpsNowhere,
+        /// J answered as the gate autopilot engaged shows no autopilot.
+        PilotsUnshown,
+        /// J answered as the gate autopilot engaged puts a jump under way.
+        PilotJumps,
+        /// No fault: J engages the gate autopilot, shown in the frame
+        /// after it with no jump under way.
+        PilotsShown,
         /// A screen ask is answered with a plain text, whatever it asks.
         ScreenAnswersAnotherKind,
         /// A screen ask changes the frame.
@@ -2327,6 +2345,16 @@ mod tests {
                     }
                 }
                 Fault::JumpsNowhere if jump => Answer::Jumped(SystemId(131)),
+                Fault::PilotsUnshown if jump => Answer::GatePilot(SystemId(131)),
+                Fault::PilotJumps | Fault::PilotsShown if jump => {
+                    let frame = self.fake.frame_mut();
+                    frame.gate_pilot = Some(GatePilotShown {
+                        to: SystemId(131),
+                        press_land: false,
+                    });
+                    frame.jump_under_way = matches!(self.fault, Fault::PilotJumps);
+                    Answer::GatePilot(SystemId(131))
+                }
                 Fault::AnswersTheSelect if select => Answer::Stellar(StellarId(128)),
                 Fault::SelectChangesTheFrame if select => {
                     self.fake.set_frame(stellar(129));
@@ -2796,6 +2824,8 @@ mod tests {
                 "took the jump under way from false to true",
             ),
             (Fault::JumpsNowhere, "with no jump under way"),
+            (Fault::PilotsUnshown, "with no autopilot shown for it"),
+            (Fault::PilotJumps, "with a jump under way"),
         ] {
             let clause = clause(fault);
             assert!(
@@ -2804,6 +2834,17 @@ mod tests {
             );
             assert!(clause.contains(says), "{fault:?}: {clause}");
         }
+    }
+
+    #[test]
+    fn j_engaging_the_gate_autopilot_shown_after_it_meets_the_contract() {
+        assert_eq!(
+            check_contract(
+                &mut Broken::new(Fault::PilotsShown),
+                &FlightOpening::default()
+            ),
+            Ok(())
+        );
     }
 
     #[test]

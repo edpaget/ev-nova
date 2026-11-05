@@ -26,7 +26,7 @@ fn film() -> DescMovie {
 
 /// The catalog's `dësc`s `ids`, each naming [`film`], and `dësc`s
 /// `plain`, naming none.
-fn filmed(ids: &[i16], plain: &[i16]) -> FakeCatalog {
+pub(super) fn filmed(ids: &[i16], plain: &[i16]) -> FakeCatalog {
     FakeCatalog {
         descriptions: ids
             .iter()
@@ -48,7 +48,7 @@ fn load(id: i16) -> FlightCommand {
 
 /// A view in Sol over `catalog`, its movies played through a mock player
 /// while `on`.
-fn filming(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMoviePlayer>) {
+pub(super) fn filming(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMoviePlayer>) {
     let player = MockMoviePlayer::playing((100, 80), ADVANCES);
     let view = faked_in(catalog, sol()).with_movies(Movies::new(player.clone(), on));
     (view, player)
@@ -66,7 +66,7 @@ fn land_on_mars(view: &mut Faked) {
 }
 
 /// Ticks `view` until its movie has run out: [`ADVANCES`] ticks.
-fn run_out(view: &mut Faked) {
+pub(super) fn run_out(view: &mut Faked) {
     for _ in 0..ADVANCES {
         assert!(view.playing(), "still playing");
         view.tick(TICK);
