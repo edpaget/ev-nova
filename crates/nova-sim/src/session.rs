@@ -822,7 +822,7 @@ use crate::shipyard::{
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
+use crate::story::{Fate, LinkSource, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 #[cfg(test)]
@@ -1265,10 +1265,12 @@ impl Session {
         // Built first, from the star map and the saved overlay alone: the
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
-        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone())
+            .with_gates(&catalog.gate_sites(), &listed);
         galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        galaxy.set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1525,6 +1527,9 @@ impl Session {
         self.chart.galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        self.chart
+            .galaxy
+            .set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         self.space
             .combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
@@ -28751,7 +28756,11 @@ pub(super) mod tests {
             session.open_hypergate(&catalog),
             Err(GateRefusal::NotAtGate)
         );
-        assert_eq!(*catalog.gate_reads.borrow(), 0, "not read at the start");
+        assert_eq!(
+            *catalog.gate_reads.borrow(),
+            1,
+            "read once at the start, for the galaxy's lanes"
+        );
     }
 
     #[test]

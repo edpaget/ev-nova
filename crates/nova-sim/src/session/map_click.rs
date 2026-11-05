@@ -253,10 +253,12 @@ impl Chart {
 
     /// The systems standing for `source`'s first [`CON_SLOTS`] Con slots,
     /// in order: each set, in the catalog and with a visible system at its
-    /// place (`_FindActiveCoLocatedSystem`).
+    /// place (`_FindActiveCoLocatedSystem`). By [`RuleKey::GateLanes`]'
+    /// other reading the slots are the systems its gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)).
     fn links(&self, source: SystemId) -> impl Iterator<Item = SystemId> + '_ {
         self.galaxy
-            .con_slots(source)
+            .link_slots(source)
             .iter()
             .take(CON_SLOTS)
             .filter(|&&slot| self.galaxy.exists(slot))

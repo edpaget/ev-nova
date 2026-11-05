@@ -337,10 +337,13 @@ impl MapState<'_> {
         self.galaxy.map().places().head(system).unwrap_or(system)
     }
 
-    /// `system`'s first 16 Con slots, raw.
+    /// `system`'s first 16 Con slots, raw: by
+    /// [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading,
+    /// the systems its gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`]).
     fn slots(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
         self.galaxy
-            .con_slots(system)
+            .link_slots(system)
             .iter()
             .copied()
             .take(CON_SLOTS)

@@ -285,11 +285,13 @@ impl Chart {
     /// when it is visible (+0x1eb); otherwise none. An empty slot (−1),
     /// whose +0x1eb the original reads out of bounds, selects none. The
     /// floating map's names read it above a zoom of 1.1 (`_DrawMap`
-    /// @0xf52b-0xf533).
+    /// @0xf52b-0xf533). By [`RuleKey::GateLanes`]' other reading the slots
+    /// are the systems the current system's gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)).
     #[must_use]
     fn floating_preselection(&self, pilot: &Pilot) -> Option<SystemId> {
         let slot = self.hyper_slot(pilot)?;
-        let system = *self.galaxy.con_slots(pilot.system).get(slot)?;
+        let system = *self.galaxy.link_slots(pilot.system).get(slot)?;
         (self.galaxy.exists(system) && self.galaxy.visible(system)).then_some(system)
     }
 

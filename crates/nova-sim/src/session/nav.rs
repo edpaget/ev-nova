@@ -226,6 +226,7 @@ use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
 use crate::pilot::Pilot;
 use crate::sound::SimSound;
+use crate::story::LinkSource;
 use crate::{RuleKey, RuleSource, StellarPick};
 
 /// How many Con slots a `sÿst` has, `Con1-Con16`: the slots the
@@ -643,7 +644,14 @@ impl Chart {
 
     /// The system J jumps to: the one selected in mode 3, resolved by
     /// place, when the ship can jump there from here (@0x6b11e-0x6b131).
+    /// By [`RuleKey::GateLanes`]' other reading none: the links are gate
+    /// lanes, and none is a hyperspace link, so J refuses with no
+    /// destination, silently with a selection, and never starts a
+    /// pre-jump.
     pub(super) fn jump_selection(&self, pilot: &Pilot, setup: &Setup) -> Option<SystemId> {
+        if self.galaxy.link_source() == LinkSource::Gates {
+            return None;
+        }
         let NavMode::Hyperspace(Some(selected)) = self.nav_mode() else {
             return None;
         };
