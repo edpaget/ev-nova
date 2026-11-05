@@ -26,6 +26,7 @@
 //!   held for the map's owner to answer.
 //! - [`buttons`]: the in-flight maps' six buttons, as `_DrawMapButtons`
 //!   draws them and `_TrackMapButtons` tracks them.
+//! - [`pad`]: the in-flight maps' pad focus over their six buttons.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
 //! - [`help`]: the viewer's help line and Enter label, naming the keys
@@ -43,6 +44,7 @@ pub mod help;
 pub mod map;
 pub mod model;
 pub mod nebulae;
+pub mod pad;
 pub mod panel;
 pub mod place;
 pub mod update;

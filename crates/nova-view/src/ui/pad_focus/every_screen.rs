@@ -128,6 +128,8 @@ fn rows() -> Vec<Row> {
             crate::spaceport::hire::pad::tests::info_pad_probe,
         ),
         ("spaceport", crate::spaceport::view::pad_probe),
+        ("galaxy map", crate::galaxy::pad::tests::pad_probe),
+        ("map's find", crate::galaxy::find::tests::pad_probe),
     ]
 }
 
@@ -216,7 +218,7 @@ impl Run {
 
 /// Whether `drawn` holds the pad's highlight round `rect`: the top edges
 /// of its two rings, in any colour.
-fn highlights(drawn: &[DrawCommand], rect: Bounds) -> bool {
+pub(crate) fn highlights(drawn: &[DrawCommand], rect: Bounds) -> bool {
     let top = |ring: Bounds| {
         drawn.iter().any(|command| {
             matches!(*command, DrawCommand::Line { from, to, width, .. }

@@ -172,7 +172,7 @@ pub fn fallback() -> DialogTemplate {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::draw::{DrawCommand, DrawList};
     use crate::input::{Input, Key, MouseButton};
@@ -298,6 +298,25 @@ mod tests {
         assert_eq!(dialog.take_outcome(), None);
         assert_eq!(click(&mut dialog, CANCEL_ITEM), []);
         assert_eq!(dialog.take_outcome(), Some(FindOutcome::Cancel));
+    }
+
+    /// Its row in the pad's every-screen table: Find and Cancel.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// No cancel item: East, as Escape, does nothing.
+    #[test]
+    fn east_does_nothing_as_escape_does() {
+        use crate::input::PadButton;
+        use crate::ui::pad_focus::every_screen::{PAD, pad, told};
+        let mut dialog = dialog();
+        typed(&mut dialog, "sol");
+        dialog.input(&told(PAD));
+        dialog.input(&pad(PadButton::East, true));
+        dialog.input(&pad(PadButton::East, false));
+        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(dialog.field().text(), "sol");
     }
 
     #[test]

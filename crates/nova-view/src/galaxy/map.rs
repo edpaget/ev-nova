@@ -284,6 +284,7 @@ use super::find::{FindDialog, FindOutcome};
 use super::help::{enter_label, help_line};
 use super::model::GalaxyModel;
 use super::nebulae::{NebulaFrame, PicturePick, draw_nebulae};
+use super::pad::{MapPad, PadStep};
 use super::panel::draw_panel;
 use super::place::MapPlace;
 use super::update::MapUpdate;
@@ -634,6 +635,8 @@ pub struct GalaxyMap {
     nebula_pick: PicturePick,
     /// The government borders ([`borders`](super::borders)).
     borders: MapBorders,
+    /// The pad's focus over an in-flight map's buttons ([`pad`](super::pad)).
+    pad: MapPad,
 }
 
 /// How a map is laid out: the viewer full-screen with its own pan and
@@ -725,6 +728,7 @@ impl GalaxyMap {
             sounds: Vec::new(),
             nebula_pick: PicturePick::LargestThatFits,
             borders,
+            pad: MapPad::default(),
         };
         map.settle_borders();
         map
@@ -1178,6 +1182,7 @@ impl GalaxyMap {
     /// (@0x12458) and draws (@0x125a5).
     pub fn opened(&mut self) {
         if let Look::Dialog(dialog) = &mut self.look {
+            self.pad.opened(dialog.buttons_mut());
             dialog.place_mut().opened();
             dialog.redraw();
             self.borders.opened(dialog);
@@ -1282,6 +1287,13 @@ impl GalaxyMap {
             Look::Viewer(_) => false,
             Look::Dialog(dialog) => dialog.clear_route(),
         }
+    }
+
+    /// The device the player used last, as the map was told; the
+    /// keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> crate::input::Device {
+        self.pad.device()
     }
 
     /// The galaxy as the map lays it out.
@@ -1419,6 +1431,7 @@ impl GalaxyMap {
             .unwrap_or_else(|| FindDialog::fallback(self.style, Rc::clone(metrics)))
             .with_bindings(self.keys.bindings().clone());
         dialog.flush_typed_key();
+        self.pad.told().tell(&mut dialog);
         self.find = Some(dialog);
         self.press = None;
         self.armed = false;
@@ -1632,6 +1645,8 @@ impl GalaxyMap {
         if let Some(panel) = &self.panel {
             draw_panel(list, panel, DIALOG_ORIGIN, metrics);
         }
+        self.pad
+            .draw(dialog.buttons(), &dialog.state(), self.style.up, list);
     }
 
     /// Draws what `_DrawMap` draws over the nebulae, through `transform`,
@@ -2028,6 +2043,23 @@ impl GalaxyMap {
             self.find_input(input);
             return;
         }
+        if let Look::Dialog(dialog) = &mut self.look {
+            let state = dialog.state();
+            match self.pad.read(input, meant, dialog.buttons_mut(), &state) {
+                None => {}
+                Some(PadStep::Taken) => return,
+                Some(PadStep::Press(button)) => {
+                    self.press_button(button);
+                    return;
+                }
+                Some(PadStep::Command(command)) => {
+                    if command.pressed {
+                        self.command(command.command, command.repeat);
+                    }
+                    return;
+                }
+            }
+        }
         self.button_input(input);
         // Presses and their repeats; a release does nothing.
         if let Some(CommandInput {
@@ -2087,7 +2119,19 @@ impl GalaxyMap {
 impl Screen for GalaxyMap {
     /// Never quits: Escape is the navigator's. While Find is open, it
     /// takes every input.
+    ///
+    /// The surroundings are no player input: the map's reader follows
+    /// them, the pad's focus keeps them, and Find is told while open.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Surroundings(_) = input {
+            self.keys.follow(input);
+            let buttons = matches!(self.look, Look::Dialog(_));
+            self.pad.surroundings(input, buttons);
+            if let Some(dialog) = &mut self.find {
+                dialog.input(input);
+            }
+            return ScreenAction::None;
+        }
         self.take_input(input);
         self.settle_borders();
         ScreenAction::None
@@ -2130,6 +2174,7 @@ impl Screen for GalaxyMap {
         self.pending = None;
         self.awaiting = None;
         self.armed = false;
+        self.pad.forget_press();
         if let Look::Dialog(dialog) = &mut self.look
             && dialog.cancel_pointer()
         {
@@ -2146,9 +2191,13 @@ impl Screen for GalaxyMap {
         self.take_ui_sounds().into_iter().map(Sound::Ui).collect()
     }
 
-    /// Forgets the keys held, Shift among them.
+    /// Forgets the keys held, Shift among them, and a button South
+    /// pressed.
     fn release_keys(&mut self) {
         self.keys.let_go();
+        if let Look::Dialog(dialog) = &mut self.look {
+            self.pad.let_go(dialog.buttons_mut());
+        }
     }
 }
 
