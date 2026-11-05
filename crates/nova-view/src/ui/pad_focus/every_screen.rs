@@ -86,6 +86,7 @@ fn rows() -> Vec<Row> {
             "player info's question",
             crate::ui::player_info::confirm_pad_probe,
         ),
+        ("mission texts", crate::ui::mission_dialogs::pad_probe),
     ]
 }
 

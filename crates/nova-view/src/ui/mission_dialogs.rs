@@ -42,7 +42,7 @@ use crate::draw::DrawList;
 #[cfg(doc)]
 use crate::flight::FlightView;
 use crate::flight::MapOpener;
-use crate::input::Input;
+use crate::input::{Device, Input, Surroundings};
 use crate::keymap::SharedBindings;
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
@@ -147,6 +147,9 @@ pub struct MissionDialogs {
     screen: FadedScreen,
     /// The bindings each text reads its keys through.
     bindings: SharedBindings,
+    /// What the app last told them about where they run: each text is
+    /// told as it comes to the front ([`MissionDialogs::ready_front`]).
+    surroundings: Surroundings,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -187,7 +190,15 @@ impl MissionDialogs {
             texts_closed: 0,
             screen: FadedScreen::default(),
             bindings: SharedBindings::default(),
+            surroundings: Surroundings::default(),
         }
+    }
+
+    /// The device the player used last, as the app last told them; the
+    /// keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> Device {
+        self.surroundings.device
     }
 
     /// These dialogs reading their keys through `bindings`: each text and
@@ -358,11 +369,16 @@ impl MissionDialogs {
     /// Readies what is in front, other than a movie: lets go of the marks
     /// of the texts done, drops an empty text on an unfaded screen, and
     /// begins the fade-in of a text, or an empty one, on a faded screen.
+    /// A text in front is told the device the player used last, so the
+    /// pad's highlight shows on it at once.
     fn ready_front(&mut self) {
         loop {
             self.pop_closed();
-            match self.texts.front() {
-                Some(Stage::Text(_)) => {
+            match self.texts.front_mut() {
+                Some(Stage::Text(text)) => {
+                    if text.dialog().device() != self.surroundings.device {
+                        text.input(&Input::Surroundings(self.surroundings));
+                    }
                     self.screen.show_text();
                     return;
                 }
@@ -640,8 +656,18 @@ impl MissionDialogs {
 
 impl Screen for MissionDialogs {
     /// The movie or text shown takes every input until it ends or Done
-    /// closes it; otherwise the mission info screen does. It never quits.
+    /// closes it; otherwise the mission info screen does. The
+    /// surroundings are kept for each text to come, and reach the text in
+    /// front and the mission info screen beneath. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Surroundings(surroundings) = *input {
+            self.surroundings = surroundings;
+            if let Some(info) = &mut self.info {
+                info.input(input);
+            }
+            self.ready_front();
+            return ScreenAction::None;
+        }
         self.front_input(input);
         self.settle();
         ScreenAction::None
@@ -735,6 +761,9 @@ impl Screen for MissionDialogs {
         matches!(self.texts.front(), Some(Stage::Text(text)) if text.holds_back_keys())
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -887,6 +916,81 @@ mod tests {
             pressed: true,
             repeat: false,
         }
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings { device })
+    }
+
+    fn tap(dialogs: &mut MissionDialogs, button: crate::input::PadButton) {
+        for pressed in [true, false] {
+            dialogs.input(&Input::PadButton { button, pressed });
+        }
+    }
+
+    #[test]
+    fn each_text_brought_to_the_front_is_told_the_device() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts([brief(128, "First."), brief(129, "Second.")]);
+        dialogs.input(&told(PAD));
+        let front = |dialogs: &MissionDialogs| dialogs.text().expect("a text").dialog().clone();
+        assert_eq!(front(&dialogs).pad_highlight(), Some(DONE_ITEM));
+        tap(&mut dialogs, crate::input::PadButton::South);
+        assert_eq!(dialogs.take_texts_closed(), 1);
+        let second = front(&dialogs);
+        assert_eq!(second.device(), PAD);
+        assert_eq!(second.pad_highlight(), Some(DONE_ITEM), "at once");
+    }
+
+    #[test]
+    fn the_dialogs_keep_the_device_for_each_text_to_come() {
+        let mut dialogs = dialogs();
+        assert_eq!(dialogs.device(), crate::input::Device::Keyboard);
+        dialogs.open_info(info());
+        dialogs.input(&told(PAD));
+        assert_eq!(dialogs.device(), PAD);
+        dialogs.input(&told(crate::input::Device::Mouse));
+        assert_eq!(dialogs.device(), crate::input::Device::Mouse);
+    }
+
+    struct Probe(MissionDialogs);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let dialog = self.0.text().expect("a text").dialog();
+            let at = |item| dialog.item_bounds(item).expect("item");
+            vec![("Done", at(DONE_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.take_texts_closed())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            let mut dialogs = dialogs().with_focus_ring(ring);
+            dialogs.show_texts([brief(128, "A mission.")]);
+            self.0 = dialogs;
+            true
+        }
+    }
+
+    /// The mission texts' row in the pad's every-screen table, over
+    /// flight: the front text's Done.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut dialogs = dialogs();
+        dialogs.show_texts([brief(128, "A mission.")]);
+        Box::new(Probe(dialogs))
     }
 
     fn click(dialogs: &mut MissionDialogs, at: Point) {
