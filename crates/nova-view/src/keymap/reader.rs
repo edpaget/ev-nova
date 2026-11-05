@@ -8,36 +8,72 @@ use std::rc::Rc;
 use super::bindings::{Bindings, Change, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
-use crate::input::Input;
+use crate::input::{Device, Input};
+use crate::key_names::{KeyNames, NoKeyNames};
 
 /// The app's bindings, shared by every screen: a cheap clone over one
 /// table, which the app edge refills (phase 3 at launch, phase 4 on the
 /// keys screen's OK) and every running screen then reads on its next
 /// input.
-#[derive(Clone, Debug, Default)]
-pub struct SharedBindings(Rc<RefCell<Bindings>>);
+///
+/// It carries the app's [`KeyNames`] beside the table, so every screen
+/// that names a key ([`crate::bound_names`]) reads the player's layout
+/// through the handle it already holds. The app edge gives it once
+/// ([`SharedBindings::with_key_names`]) before handing the handle out.
+#[derive(Clone, Debug)]
+pub struct SharedBindings {
+    /// The table every clone reads.
+    bindings: Rc<RefCell<Bindings>>,
+    /// The player's layout, which names each bound key.
+    names: Rc<dyn KeyNames>,
+}
+
+impl Default for SharedBindings {
+    /// A handle over the default bindings, naming keys by their US
+    /// legends ([`NoKeyNames`]).
+    fn default() -> Self {
+        Self::new(Bindings::default())
+    }
+}
 
 impl SharedBindings {
-    /// A handle over `bindings`.
+    /// A handle over `bindings`, naming keys by their US legends
+    /// ([`NoKeyNames`]) until [`SharedBindings::with_key_names`] gives it
+    /// the layout's.
     #[must_use]
     pub fn new(bindings: Bindings) -> Self {
-        Self(Rc::new(RefCell::new(bindings)))
+        Self {
+            bindings: Rc::new(RefCell::new(bindings)),
+            names: Rc::new(NoKeyNames),
+        }
     }
 
-    /// Replaces the bindings every clone reads.
+    /// This handle, naming keys through `names`, over the same table.
+    #[must_use]
+    pub fn with_key_names(self, names: Rc<dyn KeyNames>) -> Self {
+        Self { names, ..self }
+    }
+
+    /// The layout that names each bound key.
+    #[must_use]
+    pub fn names(&self) -> &Rc<dyn KeyNames> {
+        &self.names
+    }
+
+    /// Replaces the bindings every clone reads; the names stay.
     pub fn set(&self, bindings: Bindings) {
-        *self.0.borrow_mut() = bindings;
+        *self.bindings.borrow_mut() = bindings;
     }
 
     /// A copy of the bindings as they are now.
     #[must_use]
     pub fn get(&self) -> Bindings {
-        self.0.borrow().clone()
+        self.bindings.borrow().clone()
     }
 
     /// Reads the bindings as they are now.
     pub fn with<R>(&self, read: impl FnOnce(&Bindings) -> R) -> R {
-        read(&self.0.borrow())
+        read(&self.bindings.borrow())
     }
 }
 
@@ -106,6 +142,15 @@ impl CommandReader {
     #[must_use]
     pub fn bindings(&self) -> &SharedBindings {
         &self.bindings
+    }
+
+    /// The device whose input the screen's texts name: always the
+    /// keyboard for now. Phase 7 fills it from the input the reader
+    /// follows, the device used last, so every key-naming screen, which
+    /// already holds a reader, names the pad without a new call.
+    #[must_use]
+    pub const fn device(&self) -> Device {
+        Device::Keyboard
     }
 
     /// Switches a conditional context of the screen's list on or off.
@@ -293,7 +338,7 @@ mod tests {
     use super::super::contexts::{DIALOG, FLIGHT};
     use super::super::keyboard::KeyCombo;
     use super::*;
-    use crate::input::Key;
+    use crate::input::{Device, Key};
 
     fn press(key: Key) -> Input {
         Input::Key {
@@ -620,11 +665,46 @@ mod tests {
     }
 
     #[test]
+    fn a_new_reader_names_the_keyboard() {
+        let mut reader = CommandReader::new(FLIGHT);
+        assert_eq!(reader.device(), Device::Keyboard);
+        reader.follow(&press(Key::KeyL));
+        assert_eq!(reader.device(), Device::Keyboard);
+    }
+
+    #[test]
     fn other_input_follows_nothing() {
         let mut reader = CommandReader::new(DIALOG);
         assert_eq!(reader.follow(&Input::Text('a')), None);
         assert_eq!(reader.follow(&Input::PointerLeft), None);
         assert!(!reader.anything_down());
+    }
+
+    #[test]
+    fn shared_bindings_name_keys_through_no_layout_by_default() {
+        assert_eq!(
+            format!("{:?}", SharedBindings::default().names()),
+            "NoKeyNames"
+        );
+        assert_eq!(
+            format!("{:?}", SharedBindings::new(Bindings::default()).names()),
+            "NoKeyNames"
+        );
+    }
+
+    #[test]
+    fn shared_bindings_keep_their_names_through_a_refill_and_a_clone() {
+        use crate::key_names::fixture::FakeKeyNames;
+        let shared = SharedBindings::default().with_key_names(Rc::new(FakeKeyNames::azerty()));
+        let clone = shared.clone();
+        shared.set(Bindings::default().unbound(FlightCommand::Eject));
+        for each in [&shared, &clone] {
+            assert_eq!(each.names().name(Key::KeyW), Some("z".to_owned()));
+        }
+        assert_eq!(
+            clone.get(),
+            Bindings::default().unbound(FlightCommand::Eject)
+        );
     }
 
     #[test]

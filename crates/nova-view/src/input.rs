@@ -173,6 +173,22 @@ pub enum MouseButton {
     Other,
 }
 
+/// The device whose input a text names: what a screen asks its
+/// [`CommandReader`](crate::CommandReader) for
+/// ([`device`](crate::CommandReader::device)), and what every key-naming
+/// text passes to [`name_command`](crate::bound_names::name_command).
+///
+/// Only the keyboard today. Phase 7
+/// (rdm:phase/key-bindings/phase-7-gamepad-input) adds `Mouse` and
+/// `Gamepad(family)`, the device the player used last, and phase 14 adds
+/// `Touch`. No call site changes then, as each asks its reader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Device {
+    /// The keyboard: a command is named by its key.
+    #[default]
+    Keyboard,
+}
+
 /// How far a wheel or trackpad scroll moves the text under the pointer,
 /// toward the text's end for a positive amount.
 #[derive(Clone, Copy, Debug, PartialEq)]
