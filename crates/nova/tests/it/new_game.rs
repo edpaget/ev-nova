@@ -1,7 +1,8 @@
 //! The app over game data with no records, as a new game whose folder
-//! loads nothing starts (and every new game, for now, has no `chär` to
-//! fly from): frames draw, with only missing pictures to report, and New
-//! Pilot doesn't panic.
+//! loads nothing starts: frames draw, with only missing pictures to
+//! report, and New Pilot, with no `chär` to fly from, refuses without
+//! panicking. A folder with a start (`starts/`) flies: the checked-in
+//! fixture's is flown in `new_game_travel`.
 
 use std::rc::Rc;
 
