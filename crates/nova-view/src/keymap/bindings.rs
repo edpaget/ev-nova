@@ -1124,6 +1124,25 @@ mod tests {
     }
 
     #[test]
+    fn the_pad_s_clashes_are_its_table_s_own() {
+        assert_eq!(Bindings::default().pad_clashes(), vec![]);
+        let mut bindings = Bindings::default();
+        bindings.gamepad.bind(
+            Command::Flight(FlightCommand::LandDock),
+            super::super::PadBinding::Entry(super::super::PadEntry::plain(
+                crate::input::PadButton::South,
+            )),
+        );
+        assert_eq!(
+            bindings.pad_clashes(),
+            bindings.gamepad.clashes(),
+            "the pad table's"
+        );
+        assert_eq!(bindings.pad_clashes().len(), 1);
+        assert_eq!(bindings.clashes(), vec![], "the keyboard's are apart");
+    }
+
+    #[test]
     fn devices_note_what_each_press_meant_until_its_release() {
         let mut devices = Devices::default();
         let down = press(Key::KeyX);

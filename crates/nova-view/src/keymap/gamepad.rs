@@ -509,8 +509,11 @@ pub(super) fn fresh_press(input: &Input) -> Option<Input> {
 ///    reads as an axis means Reverse Course (the throttle's back
 ///    direction) or nothing.
 /// 3. A shadowing context's commands on the entry, if any.
-/// 4. Otherwise every other active context's, leaving out a shadowed
-///    context's commands on an entry its shadowing context binds.
+/// 4. Otherwise every other active context's.
+///
+/// Unlike a key, a pad button a shadowing context binds under another
+/// layer stays the shadowed context's: the escort menu's groups on Start
+/// and the d-pad leave the d-pad's own thrust and turn alone.
 ///
 /// An entry matches exactly: a layer held never falls back to the
 /// button's plain entry. Two layer buttons pressed together match an
@@ -545,11 +548,6 @@ fn meanings(
             .collect()
     };
     let shadowing = |context: Context| active.iter().any(|&other| shadows(context, other));
-    let shadowed_here = |context: Context| {
-        active
-            .iter()
-            .any(|&other| shadows(other, context) && !on(other).is_empty())
-    };
     let first: Vec<Command> = active
         .iter()
         .filter(|&&context| shadowing(context))
@@ -560,7 +558,7 @@ fn meanings(
     }
     active
         .iter()
-        .filter(|&&context| !shadowing(context) && !shadowed_here(context))
+        .filter(|&&context| !shadowing(context))
         .flat_map(|&context| on(context))
         .collect()
 }
@@ -953,6 +951,61 @@ mod tests {
         );
         let mut off_flight = Pad::new(&[Context::Play]);
         assert_eq!(off_flight.press(P::LeftStickDown), None);
+    }
+
+    #[test]
+    fn a_press_holds_only_its_own_entrys_command() {
+        let mut pad = Pad::new(FLYING);
+        pad.press(P::South);
+        assert_eq!(
+            pad.held(),
+            BTreeSet::from([flight(FlightCommand::FirePrimary)]),
+            "not the Select and Start chord's Pause"
+        );
+    }
+
+    #[test]
+    fn while_the_escort_menu_shows_the_buttons_it_leaves_keep_their_commands() {
+        let mut pad = Pad::new(MENU_SHOWN);
+        pad.press(P::Start);
+        assert_eq!(
+            pad.press(P::South),
+            Some(flight(FlightCommand::AttackTarget))
+        );
+        let mut plain = Pad::new(MENU_SHOWN);
+        assert_eq!(
+            plain.press(P::DPadUp),
+            Some(flight(FlightCommand::Accelerate)),
+            "the menu's Start-and-up shadows no plain up"
+        );
+    }
+
+    #[test]
+    fn what_a_button_not_yet_down_means_takes_the_layer_held() {
+        let mut pad = Pad::new(FLYING);
+        pad.press(P::Select);
+        assert_eq!(
+            meanings_with(&pad.map, &press(P::South), &pad.state, FLYING),
+            vec![flight(FlightCommand::HyperJump)]
+        );
+        assert_eq!(
+            resolve(&pad.map, &press(P::South), &pad.state, FLYING),
+            Some(flight(FlightCommand::HyperJump)),
+            "resolved before it is followed"
+        );
+    }
+
+    #[test]
+    fn a_plain_entry_on_a_direction_flight_doesnt_read_works_with_no_layer() {
+        let mut pad = Pad::new(FLYING);
+        pad.map.bind(
+            flight(FlightCommand::ZoomIn),
+            PadBinding::Entry(PadEntry::plain(P::RightStickUp)),
+        );
+        assert_eq!(
+            pad.press(P::RightStickUp),
+            Some(flight(FlightCommand::ZoomIn))
+        );
     }
 
     #[test]
