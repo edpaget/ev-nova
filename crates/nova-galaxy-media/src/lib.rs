@@ -1,7 +1,7 @@
 //! The new game's media, read as data: a glTF model's triangles,
 //! materials and footprint ([`model`](mod@model)), how a model sits on a
-//! ship (`placement`), and the model seen from above as painted, shaded
-//! triangles, or a ship's size box when it has no model (`outline`).
+//! ship ([`placement`]), and the model seen from above as painted, shaded
+//! triangles, or a ship's size box when it has no model ([`outline`]).
 //!
 //! The engine draws these silhouettes where the new game has no sprite
 //! (`nova-data` builds them at load), and game-bible's `galaxy` tool draws
@@ -29,7 +29,9 @@
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod model;
+pub mod outline;
 pub mod placement;
 
 pub use model::{Bounds, Face, Model, NoModel, model, read_model};
+pub use outline::{BARE, Outline, Triangle, painted, rgb, silhouette, size_box, top_down};
 pub use placement::Placement;
