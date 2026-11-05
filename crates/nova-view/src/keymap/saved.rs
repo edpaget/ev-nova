@@ -8,10 +8,11 @@
 //! the file survives a winit upgrade and no name table is ours. No `Code`
 //! name holds a `+`, so splitting on it never breaks a key's name.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
+use super::bindings::Bindings;
 use super::command::Command;
 use super::keyboard::{Binding, KeyCombo, KeyMap, Modifiers, default_binding};
 use crate::input::Key;
@@ -32,6 +33,64 @@ impl KeyMap {
             })
             .collect()
     }
+
+    /// The key map saved `overrides` give: each command they name takes
+    /// its combo, or is unbound for `None`, and every other command its
+    /// default ([`KeyMap::from_entries`]). Then each clash
+    /// ([`Bindings::clashes`]) is settled by unbinding one command, until
+    /// none is left:
+    ///
+    /// - A clash between two *chosen* commands settles first, the later
+    ///   one in `Command`'s declaration order unbound, as phase 4's keys
+    ///   screen does. A command is chosen when the overrides name it, or
+    ///   when it follows a base they name: a rebound base carries its
+    ///   variant, and that is the player's choice too.
+    /// - Then a chosen command's clash with one that kept its default
+    ///   unbinds the defaulted one: the player's choice wins, as when a
+    ///   later build gives a saved key to another command by default.
+    /// - Two defaulted commands never clash (`KeyMap::default()` has no
+    ///   clash), but if they did, the later one would be unbound.
+    ///
+    /// The clashes are found again after every unbind, so a command never
+    /// loses its key over a clash an earlier unbind already settled.
+    pub fn with_overrides(
+        overrides: impl IntoIterator<Item = (Command, Option<KeyCombo>)>,
+    ) -> Self {
+        let overrides: Vec<_> = overrides.into_iter().collect();
+        let named: BTreeSet<Command> = overrides.iter().map(|&(command, _)| command).collect();
+        let mut bindings = Bindings {
+            keyboard: Self::from_entries(overrides),
+        };
+        while let Some(loser) = next_to_unbind(&bindings, &named) {
+            bindings.keyboard.unbind(loser);
+        }
+        bindings.keyboard
+    }
+}
+
+/// Whether `command` is the player's choice in `map`: `named` names it,
+/// or it follows a base `named` names.
+fn chosen(map: &KeyMap, named: &BTreeSet<Command>, command: Command) -> bool {
+    named.contains(&command)
+        || matches!(map.binding(command), Binding::Follows { base, .. } if named.contains(&base))
+}
+
+/// The command settling the next of `bindings`' clashes unbinds, if any
+/// is left ([`KeyMap::with_overrides`]' rules). Each one unbinds a bound
+/// command, so the settling ends.
+fn next_to_unbind(bindings: &Bindings, named: &BTreeSet<Command>) -> Option<Command> {
+    let chosen = |command| chosen(&bindings.keyboard, named, command);
+    let clashes = bindings.clashes();
+    let clash = clashes
+        .iter()
+        .find(|clash| chosen(clash.first) && chosen(clash.second))
+        .or_else(|| clashes.first())?;
+    // The defaulted one loses to a chosen one; otherwise the later one.
+    Some(if chosen(clash.second) && !chosen(clash.first) {
+        clash.first
+    } else {
+        clash.second
+    })
 }
 
 #[cfg(test)]
@@ -102,8 +161,13 @@ impl FromStr for KeyCombo {
 #[cfg(test)]
 mod tests {
     use crate::input::Key;
-    use crate::keymap::keyboard::{KeyCombo, KeyMap, Modifiers};
-    use crate::keymap::{Command, FlightCommand};
+    use std::collections::BTreeSet;
+
+    use super::chosen;
+    use crate::keymap::keyboard::{Binding, KeyCombo, KeyMap, Modifiers};
+    use crate::keymap::{
+        Bindings, Command, EscortMenuCommand, FlightCommand, PlayCommand, PortCommand,
+    };
 
     fn flight(command: FlightCommand) -> Command {
         Command::Flight(command)
@@ -152,6 +216,167 @@ mod tests {
         map.bind(accelerate, KeyCombo::key(Key::KeyW));
         map.bind(accelerate, KeyCombo::key(Key::ArrowUp));
         assert!(map.overrides().is_empty());
+    }
+
+    /// A map that rebinds and unbinds, with no clash.
+    fn rebound_and_unbound() -> KeyMap {
+        let mut map = KeyMap::default();
+        map.bind(
+            flight(FlightCommand::Accelerate),
+            KeyCombo::with(Key::KeyG, Modifiers::SHIFT),
+        );
+        map.bind(
+            flight(FlightCommand::TargetSelect),
+            KeyCombo::key(Key::KeyQ),
+        );
+        map.unbind(flight(FlightCommand::Afterburner));
+        map
+    }
+
+    fn clash_free(map: &KeyMap) -> bool {
+        Bindings {
+            keyboard: map.clone(),
+        }
+        .clashes()
+        .is_empty()
+    }
+
+    #[test]
+    fn a_map_s_overrides_build_it_again() {
+        let map = rebound_and_unbound();
+        assert!(clash_free(&map));
+        assert_eq!(KeyMap::with_overrides(map.overrides()), map);
+    }
+
+    #[test]
+    fn no_overrides_build_the_default_map() {
+        assert_eq!(KeyMap::with_overrides([]), KeyMap::default());
+    }
+
+    #[test]
+    fn two_saved_commands_on_one_key_keep_it_for_the_one_declared_first() {
+        let q = KeyCombo::key(Key::KeyQ);
+        let autopilot = flight(FlightCommand::Autopilot);
+        let board = flight(FlightCommand::Board);
+        for entries in [
+            [(autopilot, Some(q)), (board, Some(q))],
+            [(board, Some(q)), (autopilot, Some(q))],
+        ] {
+            let map = KeyMap::with_overrides(entries);
+            assert_eq!(map.combo(autopilot), Some(q), "{entries:?}");
+            assert_eq!(map.binding(board), Binding::Unbound, "{entries:?}");
+            assert!(clash_free(&map));
+        }
+    }
+
+    #[test]
+    fn a_saved_command_on_a_later_default_s_key_keeps_it() {
+        let z = KeyCombo::key(Key::KeyZ);
+        let map = KeyMap::with_overrides([(flight(FlightCommand::Accelerate), Some(z))]);
+        assert_eq!(map.combo(flight(FlightCommand::Accelerate)), Some(z));
+        assert_eq!(
+            map.binding(flight(FlightCommand::Afterburner)),
+            Binding::Unbound
+        );
+    }
+
+    #[test]
+    fn a_saved_command_on_an_earlier_default_s_key_keeps_it() {
+        let up = KeyCombo::key(Key::ArrowUp);
+        let map = KeyMap::with_overrides([(flight(FlightCommand::Afterburner), Some(up))]);
+        assert_eq!(map.combo(flight(FlightCommand::Afterburner)), Some(up));
+        assert_eq!(
+            map.binding(flight(FlightCommand::Accelerate)),
+            Binding::Unbound
+        );
+    }
+
+    #[test]
+    fn commands_in_contexts_never_active_together_share_a_key() {
+        let o = KeyCombo::key(Key::KeyO);
+        let map = KeyMap::with_overrides([(flight(FlightCommand::Board), Some(o))]);
+        assert_eq!(map.combo(flight(FlightCommand::Board)), Some(o));
+        assert_eq!(map.combo(Command::Port(PortCommand::Outfitter)), Some(o));
+    }
+
+    #[test]
+    fn a_clash_an_earlier_unbind_settled_unbinds_nothing_more() {
+        // Play is active with both Flight and Port, which are never active
+        // together. Unbinding the Play command settles its clash with the
+        // Port command's default too, so the Port command keeps its key.
+        let o = KeyCombo::key(Key::KeyO);
+        let autopilot = flight(FlightCommand::Autopilot);
+        let galaxy_map = Command::Play(PlayCommand::GalaxyMap);
+        let outfitter = Command::Port(PortCommand::Outfitter);
+        assert_eq!(KeyMap::default().combo(outfitter), Some(o));
+        let map = KeyMap::with_overrides([(autopilot, Some(o)), (galaxy_map, Some(o))]);
+        assert_eq!(map.combo(autopilot), Some(o));
+        assert_eq!(map.binding(galaxy_map), Binding::Unbound);
+        assert_eq!(map.combo(outfitter), Some(o));
+    }
+
+    #[test]
+    fn a_clash_of_two_saved_commands_settles_before_one_with_a_default() {
+        // The escort menu's group shadows flight, so it never clashes with
+        // Land; the map key clashes with both. Settling the two saved ones
+        // first unbinds the map key, and Land keeps its default.
+        let l = KeyCombo::key(Key::KeyL);
+        let land = flight(FlightCommand::LandDock);
+        let group = Command::EscortMenu(EscortMenuCommand::Group1);
+        let galaxy_map = Command::Play(PlayCommand::GalaxyMap);
+        assert_eq!(KeyMap::default().combo(land), Some(l));
+        let map = KeyMap::with_overrides([(group, Some(l)), (galaxy_map, Some(l))]);
+        assert_eq!(map.combo(group), Some(l));
+        assert_eq!(map.binding(galaxy_map), Binding::Unbound);
+        assert_eq!(map.combo(land), Some(l));
+        assert!(clash_free(&map));
+    }
+
+    #[test]
+    fn a_saved_base_carries_its_variant_onto_a_defaulted_combo() {
+        // Communicate on Command-K takes Jettison Cargo's key, and its
+        // Option variant, Hail Stellar, takes Jettison Non-Mission's.
+        let meta_k = KeyCombo::with(Key::KeyK, Modifiers::COMMAND);
+        let alt_meta_k = KeyCombo::with(Key::KeyK, Modifiers::COMMAND.union(Modifiers::OPTION));
+        let jettison_non_mission = flight(FlightCommand::JettisonNonMission);
+        assert_eq!(
+            KeyMap::default().combo(jettison_non_mission),
+            Some(alt_meta_k)
+        );
+        let map = KeyMap::with_overrides([(flight(FlightCommand::Communicate), Some(meta_k))]);
+        assert_eq!(
+            map.combo(flight(FlightCommand::HailStellar)),
+            Some(alt_meta_k)
+        );
+        assert_eq!(map.combo(jettison_non_mission), None);
+        assert!(clash_free(&map));
+    }
+
+    #[test]
+    fn a_variant_whose_base_was_saved_is_chosen() {
+        let named = BTreeSet::from([flight(FlightCommand::TargetSelect)]);
+        let map = KeyMap::default();
+        assert!(chosen(&map, &named, flight(FlightCommand::TargetSelect)));
+        assert!(chosen(
+            &map,
+            &named,
+            flight(FlightCommand::TargetSelectBack)
+        ));
+        assert!(!chosen(&map, &named, flight(FlightCommand::ClosestShip)));
+        assert!(!chosen(&map, &named, flight(FlightCommand::Accelerate)));
+    }
+
+    #[test]
+    fn a_command_settling_unbinds_saves_as_unbound() {
+        let z = KeyCombo::key(Key::KeyZ);
+        let map = KeyMap::with_overrides([(flight(FlightCommand::Accelerate), Some(z))]);
+        assert_eq!(
+            map.overrides().into_iter().collect::<Vec<_>>(),
+            vec![
+                (flight(FlightCommand::Accelerate), Some(z)),
+                (flight(FlightCommand::Afterburner), None),
+            ]
+        );
     }
 
     #[test]
