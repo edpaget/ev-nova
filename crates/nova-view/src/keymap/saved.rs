@@ -66,6 +66,34 @@ impl KeyMap {
         }
         bindings.keyboard
     }
+
+    /// The overrides ([`KeyMap::overrides`]) as text: each command's name
+    /// and its combo's text, `""` for an unbound one.
+    #[must_use]
+    pub fn to_table(&self) -> BTreeMap<String, String> {
+        self.overrides()
+            .into_iter()
+            .map(|(command, combo)| {
+                let text = combo.map(|combo| combo.to_string()).unwrap_or_default();
+                (command.name().to_owned(), text)
+            })
+            .collect()
+    }
+
+    /// The key map a saved table gives, through
+    /// [`KeyMap::with_overrides`]: `""` unbinds its command. An entry
+    /// whose name no command has, or whose text is no combo, is dropped,
+    /// so its command keeps its default.
+    pub fn from_table<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        Self::with_overrides(entries.into_iter().filter_map(|(name, text)| {
+            let command = Command::from_name(name)?;
+            if text.is_empty() {
+                Some((command, None))
+            } else {
+                text.parse().ok().map(|combo| (command, Some(combo)))
+            }
+        }))
+    }
 }
 
 /// Whether `command` is the player's choice in `map`: `named` names it,
@@ -376,6 +404,64 @@ mod tests {
                 (flight(FlightCommand::Accelerate), Some(z)),
                 (flight(FlightCommand::Afterburner), None),
             ]
+        );
+    }
+
+    #[test]
+    fn the_table_names_each_override_with_its_text() {
+        let table = rebound_and_unbound().to_table();
+        assert_eq!(
+            table.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("Flight.Accelerate".to_owned(), "Shift+KeyG".to_owned()),
+                ("Flight.Afterburner".to_owned(), String::new()),
+                ("Flight.TargetSelect".to_owned(), "KeyQ".to_owned()),
+            ]
+        );
+        assert!(KeyMap::default().to_table().is_empty());
+    }
+
+    #[test]
+    fn a_map_s_table_builds_it_again() {
+        let map = rebound_and_unbound();
+        let table = map.to_table();
+        assert_eq!(
+            KeyMap::from_table(
+                table
+                    .iter()
+                    .map(|(name, text)| (name.as_str(), text.as_str()))
+            ),
+            map
+        );
+    }
+
+    #[test]
+    fn an_empty_text_loads_unbound() {
+        let map = KeyMap::from_table([("Flight.Board", "")]);
+        assert_eq!(map.binding(flight(FlightCommand::Board)), Binding::Unbound);
+    }
+
+    #[test]
+    fn an_unknown_name_or_key_leaves_its_command_at_its_default() {
+        let map = KeyMap::from_table([
+            ("Flight.Nope", "KeyQ"),
+            ("Flight.Accelerate", "KeyQQ"),
+            ("Flight.Board", "KeyN"),
+        ]);
+        let mut expected = KeyMap::default();
+        expected.bind(flight(FlightCommand::Board), KeyCombo::key(Key::KeyN));
+        assert_eq!(map, expected);
+    }
+
+    #[test]
+    fn a_table_s_clashes_settle_as_its_overrides_do() {
+        let map = KeyMap::from_table([("Flight.Accelerate", "KeyZ")]);
+        assert_eq!(
+            map,
+            KeyMap::with_overrides([(
+                flight(FlightCommand::Accelerate),
+                Some(KeyCombo::key(Key::KeyZ))
+            )])
         );
     }
 
