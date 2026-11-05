@@ -132,6 +132,7 @@ mod rebinding;
 mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
+mod surroundings;
 mod wheel;
 mod widescreen;
 

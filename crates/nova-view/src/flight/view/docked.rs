@@ -25,6 +25,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.cursor.shown_at()
     }
 
+    /// The device flight's reader names, as the app's last
+    /// [`Input::Surroundings`](crate::Input::Surroundings) said
+    /// ([`CommandReader::device`](crate::keymap::CommandReader::device)):
+    /// for the router's tests to check it tells a flight them, as nothing
+    /// flight shows names the pad yet.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub const fn device(&self) -> crate::input::Device {
+        self.keys.device()
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {

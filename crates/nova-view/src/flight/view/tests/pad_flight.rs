@@ -219,6 +219,7 @@ fn the_surroundings_reach_flight_s_reader() {
         device: used,
     }));
     assert_eq!(view.keys.device(), used);
+    assert_eq!(view.device(), used, "what flight says it names");
 }
 
 /// A view in Sol with its course map opened by the pad's chord, Start
