@@ -62,7 +62,7 @@ use nova_sim::RuleSource;
 
 use crate::input::{Device, Key};
 use crate::key_names::{FIXED_NAMES, KeyNames, combo_name, key_name, modifier_words};
-use crate::keymap::{Bindings, Command, CommandReader, KeyCombo};
+use crate::keymap::{Bindings, Command, CommandReader, KeyCombo, UiCommand};
 
 pub use str129::{STR_129, mac_code, str129_name};
 
@@ -211,6 +211,13 @@ pub fn group(names: impl IntoIterator<Item = Option<String>>, separator: &str) -
     }
     Some(names.join(separator))
 }
+
+/// The shared Confirm and Back, which every screen that couldn't lay
+/// itself out reads to leave, in the order its prompt names them.
+pub const CONFIRM_OR_BACK: [Command; 2] = [
+    Command::Ui(UiCommand::Confirm),
+    Command::Ui(UiCommand::Back),
+];
 
 /// A fallback prompt's last sentence, for a screen that couldn't lay
 /// itself out: ` Press Return or Escape to close it.`, leading space

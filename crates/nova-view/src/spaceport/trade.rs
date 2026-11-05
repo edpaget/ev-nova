@@ -95,6 +95,7 @@ use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect, rule};
 use crate::font::Font;
@@ -908,7 +909,8 @@ impl Screen for TradeScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the trade center: {reason}. Press Return or Escape to close it."
+                        "Cannot show the trade center: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -2704,6 +2706,32 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let screen = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text: "Cannot show the trade center: no DLOG 1001. Press Q or Escape to close it."
+                    .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
     }
 
     // The trade center's mission offers.

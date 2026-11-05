@@ -126,6 +126,13 @@ impl<T> QuantityAsk<T> {
         self.keys.bindings()
     }
 
+    /// The host's keys it follows, for a text that names one of them
+    /// ([`crate::bound_names`]).
+    #[must_use]
+    pub const fn keys(&self) -> &CommandReader {
+        &self.keys
+    }
+
     /// Follows a key's press, repeat or release, and says which of the
     /// host's commands it pressed, repeated or let go of, if any.
     pub fn follow_alt(&mut self, input: &Input) -> Option<CommandInput> {
