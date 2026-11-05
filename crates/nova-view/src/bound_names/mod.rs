@@ -60,9 +60,9 @@ pub mod str129;
 
 use nova_sim::RuleSource;
 
-use crate::input::{Device, Key};
+use crate::input::{ControllerFamily, Device, Key, pad_axis_name, pad_button_name};
 use crate::key_names::{FIXED_NAMES, KeyNames, combo_name, key_name, modifier_words};
-use crate::keymap::{Bindings, Command, CommandReader, KeyCombo, UiCommand};
+use crate::keymap::{Bindings, Command, CommandReader, KeyCombo, PadBinding, UiCommand};
 
 pub use str129::{STR_129, mac_code, str129_name};
 
@@ -87,10 +87,13 @@ pub enum Spelling {
 /// `bindings` and the player's layout `names`. `None` for a command with
 /// no binding on the device, where the spelling reads one.
 ///
-/// Every device names the keyboard's key for now: the mouse has no
-/// binding of its own, and pad buttons get names (by the pad's family)
-/// in phase 12 (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs), so
-/// no text changes with the device last used until then.
+/// - On the keyboard and the mouse (which has no binding of its own), the
+///   key, in `spelling`.
+/// - On a pad of a family, the pad's input ([`name_on_pad`]) in every
+///   spelling but [`Spelling::Twin`], which names nothing on a pad: a
+///   twin is a second keyboard key beside the command, whose own entry
+///   already names the pad's input. A rebindable command the player left
+///   unbound on the pad names its key in `spelling`.
 #[must_use]
 pub fn name_command(
     bindings: &Bindings,
@@ -101,20 +104,74 @@ pub fn name_command(
 ) -> Option<String> {
     let command = command.into();
     match device {
-        Device::Keyboard | Device::Mouse | Device::Gamepad(_) => {
-            let combo = || bindings.keyboard.combo(command);
-            match spelling {
-                Spelling::Bound | Spelling::Str129(RuleSource::Bible) => {
-                    combo().map(|combo| combo_name(names, combo))
-                }
-                Spelling::Prose => combo().map(|combo| prose_name(names, combo)),
-                Spelling::Str129(RuleSource::Engine) => {
-                    combo().map(|combo| str129_combo_name(names, combo))
-                }
-                Spelling::Fixed(text) => Some(text.to_owned()),
-                Spelling::Twin(key) => Some(key_name(names, key)),
-            }
+        Device::Keyboard | Device::Mouse => key_spelled(bindings, names, command, spelling),
+        Device::Gamepad(_) if matches!(spelling, Spelling::Twin(_)) => None,
+        Device::Gamepad(family) => name_on_pad(bindings, command, family)
+            .or_else(|| key_spelled(bindings, names, command, spelling)),
+    }
+}
+
+/// What `command` is called on the keyboard, as `spelling` spells it.
+fn key_spelled(
+    bindings: &Bindings,
+    names: &dyn KeyNames,
+    command: Command,
+    spelling: Spelling,
+) -> Option<String> {
+    let combo = || bindings.keyboard.combo(command);
+    match spelling {
+        Spelling::Bound | Spelling::Str129(RuleSource::Bible) => {
+            combo().map(|combo| combo_name(names, combo))
         }
+        Spelling::Prose => combo().map(|combo| prose_name(names, combo)),
+        Spelling::Str129(RuleSource::Engine) => {
+            combo().map(|combo| str129_combo_name(names, combo))
+        }
+        Spelling::Fixed(text) => Some(text.to_owned()),
+        Spelling::Twin(key) => Some(key_name(names, key)),
+    }
+}
+
+/// The commands the pad names by another's input, each with that other:
+/// the shared Confirm, unbound on the pad, by Activate's South, as the pad
+/// confirms by pressing the focused control and the focus starts on the
+/// default (rdm:phase/key-bindings/phase-8-gamepad-focus).
+pub const PAD_STAND_INS: [(Command, Command); 1] = [(
+    Command::Ui(UiCommand::Confirm),
+    Command::Ui(UiCommand::Activate),
+)];
+
+/// What `command` is called on a pad of `family`, by `bindings`' pad
+/// table, with no fallback to the keyboard: its entry's button
+/// ([`pad_button_name`]), after its layer's name and `+` when it has one
+/// (`View+A`); its axis ([`pad_axis_name`]); or, unbound, its stand-in's
+/// ([`PAD_STAND_INS`]). `None` when none of those binds it. The keys
+/// screen's gamepad tab names its cells so.
+#[must_use]
+pub fn name_on_pad(
+    bindings: &Bindings,
+    command: impl Into<Command>,
+    family: ControllerFamily,
+) -> Option<String> {
+    let command = command.into();
+    let pad = &bindings.gamepad;
+    let binding = match pad.binding(command) {
+        PadBinding::Unbound => PAD_STAND_INS
+            .iter()
+            .find(|&&(stood_for, _)| stood_for == command)
+            .map(|&(_, stand_in)| pad.binding(stand_in))?,
+        binding => binding,
+    };
+    match binding {
+        PadBinding::Entry(entry) => {
+            let button = pad_button_name(family, entry.button);
+            Some(entry.layer.map_or_else(
+                || button.to_owned(),
+                |layer| format!("{}+{button}", pad_button_name(family, layer)),
+            ))
+        }
+        PadBinding::Axis(axis) => Some(pad_axis_name(family, axis.axis).to_owned()),
+        PadBinding::Unbound => None,
     }
 }
 
@@ -246,10 +303,12 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::input::{ControllerFamily, PadAxis, PadButton};
     use crate::key_names::NoKeyNames;
     use crate::key_names::fixture::FakeKeyNames;
     use crate::keymap::{
-        EscortMenuCommand, FlightCommand, Modifiers, SharedBindings, UiCommand, contexts,
+        AxisBinding, EscortMenuCommand, FlightCommand, Modifiers, PadBinding, PadEntry, PadMap,
+        SharedBindings, UiCommand, contexts,
     };
 
     fn named(
@@ -452,33 +511,283 @@ mod tests {
         );
     }
 
+    const XBOX: Device = Device::Gamepad(ControllerFamily::Xbox);
+
+    fn told(reader: &mut CommandReader, device: Device) {
+        reader.follow(&crate::Input::Surroundings(crate::input::Surroundings {
+            device,
+        }));
+    }
+
+    const SPELLINGS: [Spelling; 4] = [Spelling::Bound, Spelling::Prose, ENGINE, BIBLE];
+
     #[test]
-    fn name_command_names_the_key_with_a_pad_last_used() {
-        // Until phase 12 names pad buttons, every device names the key.
+    fn with_a_pad_last_used_a_command_names_its_pad_input() {
         let defaults = Bindings::default();
-        let pad = Device::Gamepad(crate::input::ControllerFamily::Generic);
-        for device in [Device::Mouse, pad] {
-            for spelling in [Spelling::Bound, Spelling::Prose, ENGINE, BIBLE] {
+        for spelling in SPELLINGS {
+            for (family, fire) in [
+                (ControllerFamily::Xbox, "A"),
+                (ControllerFamily::PlayStation, "Cross"),
+                (ControllerFamily::Nintendo, "B"),
+                (ControllerFamily::Generic, "South"),
+            ] {
                 assert_eq!(
                     name_command(
                         &defaults,
                         &NoKeyNames,
-                        FlightCommand::Board,
-                        device,
+                        FlightCommand::FirePrimary,
+                        Device::Gamepad(family),
                         spelling
-                    ),
-                    named(&defaults, &NoKeyNames, FlightCommand::Board, spelling),
-                    "{device:?} {spelling:?}"
+                    )
+                    .as_deref(),
+                    Some(fire),
+                    "{family:?} {spelling:?}"
                 );
             }
         }
+        let rebound = Bindings {
+            gamepad: {
+                let mut pad = PadMap::default();
+                pad.bind(
+                    FlightCommand::FirePrimary.into(),
+                    PadBinding::Entry(PadEntry::plain(PadButton::North)),
+                );
+                pad
+            },
+            ..Bindings::default()
+        };
+        assert_eq!(
+            name_command(
+                &rebound,
+                &NoKeyNames,
+                FlightCommand::FirePrimary,
+                XBOX,
+                Spelling::Bound
+            )
+            .as_deref(),
+            Some("Y"),
+            "the pad's own binding"
+        );
         let mut reader = CommandReader::new(contexts::FLIGHT);
-        reader.follow(&crate::Input::Surroundings(crate::input::Surroundings {
-            device: pad,
-        }));
+        told(&mut reader, XBOX);
         assert_eq!(
             name_read(&reader, FlightCommand::Board, Spelling::Bound).as_deref(),
+            Some("View+B")
+        );
+    }
+
+    #[test]
+    fn a_rebindable_command_unbound_on_the_pad_names_its_key() {
+        let mut bindings = Bindings::default();
+        bindings.gamepad.unbind(FlightCommand::Board.into());
+        for spelling in SPELLINGS {
+            assert_eq!(
+                name_command(&bindings, &NoKeyNames, FlightCommand::Board, XBOX, spelling),
+                named(&bindings, &NoKeyNames, FlightCommand::Board, spelling),
+                "{spelling:?}"
+            );
+        }
+        assert_eq!(
+            name_on_pad(&bindings, FlightCommand::Board, ControllerFamily::Xbox),
+            None
+        );
+        let both = bindings.unbound(FlightCommand::Board);
+        assert_eq!(
+            name_command(
+                &both,
+                &NoKeyNames,
+                FlightCommand::Board,
+                XBOX,
+                Spelling::Bound
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_navigation_commands_name_their_fixed_buttons() {
+        let defaults = Bindings::default();
+        let pad =
+            |command: Command| name_command(&defaults, &NoKeyNames, command, XBOX, Spelling::Prose);
+        assert_eq!(pad(UiCommand::Confirm.into()).as_deref(), Some("A"));
+        assert_eq!(pad(UiCommand::Activate.into()).as_deref(), Some("A"));
+        assert_eq!(pad(UiCommand::Back.into()).as_deref(), Some("B"));
+        assert_eq!(
+            PAD_STAND_INS,
+            [(UiCommand::Confirm.into(), UiCommand::Activate.into())]
+        );
+        let mut no_home = Bindings::default();
+        no_home.keyboard.unbind(UiCommand::Home.into());
+        assert_eq!(
+            name_command(
+                &no_home,
+                &NoKeyNames,
+                UiCommand::Home,
+                XBOX,
+                Spelling::Bound
+            ),
+            None,
+            "no stand-in for Home"
+        );
+    }
+
+    #[test]
+    fn a_layered_entry_names_its_layer_then_its_button() {
+        let defaults = Bindings::default();
+        assert_eq!(
+            name_on_pad(&defaults, FlightCommand::HyperJump, ControllerFamily::Xbox).as_deref(),
+            Some("View+A")
+        );
+        assert_eq!(
+            name_on_pad(
+                &defaults,
+                FlightCommand::HyperJump,
+                ControllerFamily::Nintendo
+            )
+            .as_deref(),
+            Some("Minus+B")
+        );
+        assert_eq!(
+            name_on_pad(
+                &defaults,
+                FlightCommand::StellarSlot1,
+                ControllerFamily::Xbox
+            )
+            .as_deref(),
+            Some("Menu+D-Up")
+        );
+    }
+
+    #[test]
+    fn an_axis_names_its_stick() {
+        let mut bindings = Bindings::default();
+        bindings.gamepad.bind(
+            FlightCommand::TurnAxis.into(),
+            PadBinding::Axis(AxisBinding::inverted(PadAxis::LeftX)),
+        );
+        assert_eq!(
+            name_on_pad(&bindings, FlightCommand::TurnAxis, ControllerFamily::Xbox).as_deref(),
+            Some("L Stick X")
+        );
+        assert_eq!(
+            name_command(
+                &bindings,
+                &NoKeyNames,
+                FlightCommand::TurnAxis,
+                XBOX,
+                Spelling::Bound
+            )
+            .as_deref(),
+            Some("L Stick X")
+        );
+    }
+
+    #[test]
+    fn with_the_mouse_last_used_every_spelling_names_the_key() {
+        let defaults = Bindings::default();
+        for spelling in SPELLINGS
+            .into_iter()
+            .chain([Spelling::Fixed("1"), Spelling::Twin(Key::KeyW)])
+        {
+            for command in [
+                Command::Flight(FlightCommand::Board),
+                Command::Ui(UiCommand::Back),
+            ] {
+                assert_eq!(
+                    name_command(&defaults, &NoKeyNames, command, Device::Mouse, spelling),
+                    named(&defaults, &NoKeyNames, command, spelling),
+                    "{command:?} {spelling:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_twin_names_nothing_on_a_pad() {
+        let twin = Spelling::Twin(Key::KeyW);
+        let defaults = Bindings::default();
+        assert_eq!(
+            name_command(&defaults, &NoKeyNames, UiCommand::Up, XBOX, twin),
+            None
+        );
+        assert_eq!(
+            name_command(
+                &defaults,
+                &NoKeyNames,
+                UiCommand::Up,
+                Device::Keyboard,
+                twin
+            )
+            .as_deref(),
+            Some("W")
+        );
+    }
+
+    #[test]
+    fn fixed_and_str129_name_the_pad_input() {
+        let defaults = Bindings::default();
+        assert_eq!(
+            name_command(
+                &defaults,
+                &NoKeyNames,
+                EscortMenuCommand::Group1,
+                XBOX,
+                Spelling::Fixed("1")
+            )
+            .as_deref(),
+            Some("Menu+D-Up")
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(EscortMenuCommand::Group1.into());
+        assert_eq!(
+            name_command(
+                &unbound,
+                &NoKeyNames,
+                EscortMenuCommand::Group1,
+                XBOX,
+                Spelling::Fixed("1")
+            )
+            .as_deref(),
+            Some("1"),
+            "left unbound on the pad, the original's text"
+        );
+        for rule in [ENGINE, BIBLE] {
+            assert_eq!(
+                name_command(&defaults, &NoKeyNames, FlightCommand::LandDock, XBOX, rule)
+                    .as_deref(),
+                Some("B"),
+                "{rule:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn press_clause_names_south_and_east_on_a_pad() {
+        let mut reader = CommandReader::new(contexts::DIALOG);
+        told(&mut reader, XBOX);
+        assert_eq!(
+            press_clause(&reader, &CONFIRM_OR_BACK, "close it"),
+            " Press A or B to close it."
+        );
+        told(&mut reader, Device::Gamepad(ControllerFamily::Generic));
+        assert_eq!(
+            press_clause(&reader, &CONFIRM_OR_BACK, "close it"),
+            " Press South or East to close it."
+        );
+    }
+
+    #[test]
+    fn after_a_key_press_the_reader_names_the_key_again() {
+        let mut reader = CommandReader::new(contexts::FLIGHT);
+        told(&mut reader, XBOX);
+        assert_eq!(
+            name_read(&reader, FlightCommand::LandDock, Spelling::Bound).as_deref(),
             Some("B")
+        );
+        told(&mut reader, Device::Keyboard);
+        assert_eq!(
+            name_read(&reader, FlightCommand::LandDock, Spelling::Bound).as_deref(),
+            Some("L")
         );
     }
 
