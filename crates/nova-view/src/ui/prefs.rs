@@ -63,8 +63,16 @@
 //!   [`Prefs::scaling`] only when the player stepped it to another
 //!   scaling than the one running.
 //! - The one other check box, "Check For Updates", is drawn greyed and
-//!   unchecked, and Key Settings is a greyed button: those options do
-//!   not work yet.
+//!   unchecked: that option does not work yet.
+//! - Key Settings opens the keys screen ([`KeysScreen`]) over the dialog,
+//!   as the original's Preferences window holds the Keys tabs. While it
+//!   is open it takes every input, tick and click, and draws over the
+//!   dialog; once its OK closes it, the dialog keeps the bindings it
+//!   accepted, to be taken once ([`Screen::take_bindings`]). Whoever
+//!   opens the dialog gives it what the keys screen needs: the key names
+//!   ([`PrefsDialog::with_key_names`]), the menu bar's key equivalents
+//!   ([`PrefsDialog::with_reserved_combos`]) and the rules
+//!   ([`PrefsDialog::with_rules`]).
 //! - Every other item is hidden.
 //!
 //! The dialog has no stock frame: it is drawn over a dark backdrop with a
@@ -87,16 +95,21 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::Rulebook;
+
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::Input;
-use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
+use crate::key_names::{KeyNames, NoKeyNames};
+use crate::keymap::{
+    Bindings, Command, CommandInput, CommandReader, KeyCombo, SharedBindings, UiCommand, contexts,
+};
 use crate::preferences::{LaunchPrefs, Prefs};
 use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::SoundPrefs;
+use crate::sound::{Sound, SoundPrefs};
 use crate::text::TextMetrics;
 use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
@@ -106,6 +119,7 @@ use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, Role, STATIC_TEXT_COLOR,
     STATIC_TEXT_SIZE, outline,
 };
+use super::keys::KeysScreen;
 use super::mode_picker::ModePicker;
 use super::picker::Picker;
 use super::scroll_text::ScrollText;
@@ -118,7 +132,7 @@ pub const PREFS_DIALOG: i16 = 4003;
 /// The OK button's item: it closes the dialog.
 pub const OK_ITEM: usize = 1;
 
-/// The Key Settings button's item, greyed.
+/// The Key Settings button's item: it opens the keys screen.
 pub const KEY_SETTINGS_ITEM: usize = 16;
 
 /// The music toggle's item ("Intro Music" in the stock dialog).
@@ -266,6 +280,8 @@ pub enum Focus {
     EffectsVolume,
     /// The music volume.
     MusicVolume,
+    /// The Key Settings button.
+    KeySettings,
     /// The OK button.
     Ok,
 }
@@ -286,7 +302,8 @@ impl Focus {
             Self::Display => Self::Scaling,
             Self::Scaling => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
-            Self::MusicVolume => Self::Ok,
+            Self::MusicVolume => Self::KeySettings,
+            Self::KeySettings => Self::Ok,
             Self::Ok => Self::Music,
         }
     }
@@ -454,6 +471,17 @@ pub struct PrefsDialog {
     /// Its keys, as the shared UI context's commands
     /// ([`contexts::DIALOG`]), which it hands to the part focused.
     keys: CommandReader,
+    /// The keys screen, while it is open over the dialog.
+    keys_screen: Option<KeysScreen>,
+    /// The bindings the keys screen's OK accepted, until taken.
+    bindings_change: Option<Bindings>,
+    /// What the keys screen names keys with.
+    key_names: Rc<dyn KeyNames>,
+    /// The menu bar's key equivalents, which the keys screen binds to
+    /// nothing.
+    reserved: Vec<KeyCombo>,
+    /// The rules the keys screen records by.
+    rules: Rulebook,
 }
 
 impl std::fmt::Debug for PrefsDialog {
@@ -481,15 +509,8 @@ impl PrefsDialog {
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
         let roles: Vec<(usize, Role)> = (1..=template.items.len())
-            .filter(|&item| item != OK_ITEM)
-            .map(|item| {
-                let role = if item == KEY_SETTINGS_ITEM {
-                    Role::Greyed
-                } else {
-                    Role::Hidden
-                };
-                (item, role)
-            })
+            .filter(|&item| item != OK_ITEM && item != KEY_SETTINGS_ITEM)
+            .map(|item| (item, Role::Hidden))
             .collect();
         let dialog = Dialog::new(template, &roles, Rc::clone(&metrics))
             .with_buttons(ButtonSkin::NOVA, style)
@@ -589,7 +610,72 @@ impl PrefsDialog {
             changed: false,
             closed: false,
             keys: CommandReader::new(contexts::DIALOG),
+            keys_screen: None,
+            bindings_change: None,
+            key_names: Rc::new(NoKeyNames),
+            reserved: Vec::new(),
+            rules: Rulebook::default(),
         })
+    }
+
+    /// The dialog whose keys screen names keys through `names`. Without
+    /// it, every key reads its US legend.
+    #[must_use]
+    pub fn with_key_names(mut self, names: Rc<dyn KeyNames>) -> Self {
+        self.key_names = names;
+        self
+    }
+
+    /// The dialog whose keys screen binds none of `reserved`, the menu
+    /// bar's key equivalents.
+    #[must_use]
+    pub fn with_reserved_combos(mut self, reserved: Vec<KeyCombo>) -> Self {
+        self.reserved = reserved;
+        self
+    }
+
+    /// The dialog whose keys screen records as `rules` read the
+    /// `recorded_modifiers` rule.
+    #[must_use]
+    pub fn with_rules(mut self, rules: &Rulebook) -> Self {
+        self.rules = *rules;
+        self
+    }
+
+    /// The keys screen, while it is open.
+    #[must_use]
+    pub fn keys_screen(&self) -> Option<&KeysScreen> {
+        self.keys_screen.as_ref()
+    }
+
+    /// Opens the keys screen over the dialog, on the bindings it reads.
+    fn open_keys_screen(&mut self) {
+        self.cancel_pointer();
+        self.keys.let_go();
+        self.keys_screen = Some(KeysScreen::new(
+            self.dialog.bounds(),
+            self.keys.bindings().get(),
+            Rc::clone(&self.key_names),
+            self.reserved.clone(),
+            &self.rules,
+            self.style,
+            Rc::clone(&self.metrics),
+        ));
+    }
+
+    /// Sends `input` to the open keys screen, keeping what its OK
+    /// accepted once it closes.
+    fn keys_screen_input(&mut self, input: &Input) {
+        let Some(screen) = &mut self.keys_screen else {
+            return;
+        };
+        screen.input(input);
+        if screen.closed() {
+            if let Some(bindings) = screen.take_change() {
+                self.bindings_change = Some(bindings);
+            }
+            self.keys_screen = None;
+        }
     }
 
     /// The dialog reading its keys through `bindings`.
@@ -711,6 +797,11 @@ impl PrefsDialog {
                     self.close();
                 }
             }
+            (UiCommand::Activate, Some(Focus::KeySettings)) => {
+                if !repeat {
+                    self.open_keys_screen();
+                }
+            }
             (_, Some(Focus::Music)) => self.changed |= self.music.command(input),
             (_, Some(Focus::Sound)) => self.changed |= self.sound.command(input),
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.command(input),
@@ -790,8 +881,10 @@ impl PrefsDialog {
     }
 
     fn dialog_input(&mut self, input: &Input) {
-        if self.dialog.input(input) == Some(DialogEvent::Item(OK_ITEM)) {
-            self.close();
+        match self.dialog.input(input) {
+            Some(DialogEvent::Item(OK_ITEM)) => self.close(),
+            Some(DialogEvent::Item(KEY_SETTINGS_ITEM)) => self.open_keys_screen(),
+            _ => {}
         }
     }
 
@@ -945,24 +1038,32 @@ impl PrefsDialog {
 
 impl Screen for PrefsDialog {
     /// - A click on a toggle flips it, and a click on a volume's arrow
-    ///   steps it. A click on OK closes the dialog; the greyed check boxes
-    ///   and Key Settings do nothing.
+    ///   steps it. A click on OK closes the dialog, and one on Key
+    ///   Settings opens the keys screen; the greyed check boxes do
+    ///   nothing.
     /// - A click on the display picker's or the Scaling list's arrows
     ///   steps it.
     /// - Under [`FocusRing::Tab`], Tab moves the focus (music, sound,
     ///   Hyperspace Effects, QuickTime Movies, then down the left column:
     ///   Ship Animations, Engine Glows, Running Lights, Weapon Effects,
     ///   Smoke Trails, Parallax Starfield; the display picker, the Scaling list,
-    ///   the sound volume, the music volume, OK, and round). Space flips a
-    ///   focused toggle or activates OK; the arrow keys step a focused
+    ///   the sound volume, the music volume, Key Settings, OK, and
+    ///   round). Space flips a focused toggle, opens the keys screen on
+    ///   Key Settings or activates OK; the arrow keys step a focused
     ///   volume, and Up and Down the focused picker, repeats included.
     ///   Under [`FocusRing::Off`] nothing takes the focus, so Tab, Space
     ///   and the arrows do nothing.
     /// - Return and Escape close it. Closing, whichever way, reports each
     ///   picker's choice if it differs from the one the dialog opened on.
     ///
+    /// While the keys screen is open, every input is its.
+    ///
     /// It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.keys_screen.is_some() {
+            self.keys_screen_input(input);
+            return ScreenAction::None;
+        }
         match *input {
             Input::Key { .. } => {
                 if let Some(command) = self.keys.follow(input) {
@@ -978,13 +1079,19 @@ impl Screen for PrefsDialog {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// Nothing of its own moves; the keys screen's list, while it is
+    /// open, does.
+    fn tick(&mut self, dt: Duration) {
+        if let Some(screen) = &mut self.keys_screen {
+            screen.tick(dt);
+        }
+    }
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
     /// box, the ten toggles, the display picker, the Scaling list,
     /// then the two volumes, and the relaunch notice while it shows.
-    /// The focused part is outlined.
+    /// The focused part is outlined. The keys screen, while it is open,
+    /// is drawn over it all.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
         fill_rect(list, bounds, BACKDROP);
@@ -1020,12 +1127,23 @@ impl Screen for PrefsDialog {
         if self.relaunch_notice_shown() {
             self.notice.draw(list);
         }
-        if let (true, Some(ok)) = (focused(Focus::Ok), self.dialog.item_bounds(OK_ITEM)) {
-            outline(list, ok, self.style.up);
+        for (part, item) in [
+            (Focus::KeySettings, KEY_SETTINGS_ITEM),
+            (Focus::Ok, OK_ITEM),
+        ] {
+            if let (true, Some(button)) = (focused(part), self.dialog.item_bounds(item)) {
+                outline(list, button, self.style.up);
+            }
+        }
+        if let Some(screen) = &self.keys_screen {
+            screen.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
+        if let Some(screen) = &mut self.keys_screen {
+            screen.cancel_pointer();
+        }
         self.dialog.cancel_pointer();
         self.music.cancel_pointer();
         self.sound.cancel_pointer();
@@ -1044,9 +1162,30 @@ impl Screen for PrefsDialog {
         self.target = None;
     }
 
+    /// Lets go of the keys held, the keys screen's too.
+    fn release_keys(&mut self) {
+        if let Some(screen) = &mut self.keys_screen {
+            screen.release_keys();
+        }
+        self.keys.let_go();
+    }
+
+    /// The keys screen's sounds, while it is open: none, as the
+    /// original's Keys window plays none.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.keys_screen
+            .as_mut()
+            .map_or_else(Vec::new, Screen::take_sounds)
+    }
+
     /// The preferences once after each change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
+    }
+
+    /// The bindings the keys screen's OK accepted, once.
+    fn take_bindings(&mut self) -> Option<Bindings> {
+        self.bindings_change.take()
     }
 
     /// The kind picked, once after the dialog closed on a pick.
@@ -1642,17 +1781,12 @@ mod tests {
     }
 
     #[test]
-    fn the_greyed_check_boxes_and_key_settings_do_nothing() {
+    fn the_greyed_check_boxes_do_nothing() {
         let mut dialog = prefs();
         let points: Vec<Point> = dialog
             .inert()
             .iter()
             .map(|toggle| toggle.rect().center())
-            .chain([dialog
-                .dialog()
-                .item_bounds(KEY_SETTINGS_ITEM)
-                .expect("Key Settings")
-                .center()])
             .collect();
         for point in points {
             click(&mut dialog, point);
@@ -1668,11 +1802,158 @@ mod tests {
         assert!(dialog.inert().iter().all(|toggle| !toggle.on()));
     }
 
+    fn key_settings(dialog: &PrefsDialog) -> Point {
+        dialog
+            .dialog()
+            .item_bounds(KEY_SETTINGS_ITEM)
+            .expect("Key Settings")
+            .center()
+    }
+
+    fn release(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: false,
+            repeat: false,
+        }
+    }
+
+    fn tap(dialog: &mut PrefsDialog, k: Key) {
+        dialog.input(&key(k));
+        dialog.input(&release(k));
+    }
+
+    #[test]
+    fn a_click_on_key_settings_opens_the_keys_screen_over_the_dialog() {
+        let mut dialog = prefs();
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        let screen = dialog.keys_screen().expect("open");
+        assert!(!screen.closed());
+        let mut over = DrawList::new();
+        screen.draw(&mut over);
+        let over: Vec<DrawCommand> = over.iter().cloned().collect();
+        assert!(drawn(&dialog).ends_with(&over), "drawn over the dialog");
+        tap(&mut dialog, Key::Escape);
+        assert!(dialog.keys_screen().is_none(), "its Cancel closes it");
+        assert!(!dialog.closed(), "and leaves the dialog open");
+        assert_eq!(dialog.take_bindings(), None);
+    }
+
+    #[test]
+    fn space_on_the_focused_key_settings_opens_the_keys_screen() {
+        let mut dialog = prefs();
+        for _ in 0..15 {
+            dialog.input(&key(Key::Tab));
+        }
+        assert_eq!(dialog.focus(), Some(Focus::KeySettings));
+        dialog.input(&held(Key::Space));
+        assert!(dialog.keys_screen().is_none(), "a repeat");
+        dialog.input(&key(Key::Space));
+        assert!(dialog.keys_screen().is_some());
+    }
+
+    #[test]
+    fn the_keys_screen_takes_every_input_while_open() {
+        let mut dialog = prefs();
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        tap(&mut dialog, Key::Enter);
+        assert_eq!(
+            dialog.keys_screen().and_then(KeysScreen::recording),
+            Some(crate::keymap::FlightCommand::Accelerate.into()),
+            "Return records, and doesn't close the dialog"
+        );
+        assert!(!dialog.closed());
+        let ok = ok(&dialog);
+        click(&mut dialog, ok);
+        assert!(
+            dialog.keys_screen().is_none(),
+            "the click went to the keys screen"
+        );
+        assert!(!dialog.closed());
+        dialog.input(&key(Key::Escape));
+        assert!(dialog.closed(), "the dialog's own keys again");
+    }
+
+    #[test]
+    fn the_keys_screen_s_ok_leaves_its_bindings_to_take_once() {
+        let mut dialog = prefs();
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        tap(&mut dialog, Key::Enter);
+        tap(&mut dialog, Key::KeyT);
+        let ok = dialog
+            .keys_screen()
+            .expect("open")
+            .button_bounds(crate::ui::keys::KeysButton::Ok)
+            .center();
+        click(&mut dialog, ok);
+        assert!(dialog.keys_screen().is_none());
+        let bindings = dialog.take_bindings().expect("the edit");
+        assert_eq!(
+            bindings
+                .keyboard
+                .combo(crate::keymap::FlightCommand::Accelerate.into()),
+            Some(KeyCombo::key(Key::KeyT))
+        );
+        assert_eq!(dialog.take_bindings(), None, "once");
+        assert_eq!(dialog.take_sounds(), [], "the keys screen plays none");
+    }
+
+    #[test]
+    fn the_keys_screen_opens_on_the_bindings_names_and_reserved_combos_given() {
+        let rebound = Bindings::default().rebound(
+            crate::keymap::FlightCommand::Accelerate,
+            KeyCombo::key(Key::KeyW),
+        );
+        let mut dialog = prefs()
+            .with_bindings(SharedBindings::new(rebound.clone()))
+            .with_key_names(Rc::new(crate::key_names::fixture::FakeKeyNames::azerty()))
+            .with_reserved_combos(vec![KeyCombo::key(Key::KeyJ)])
+            .with_rules(&Rulebook::default());
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        let screen = dialog.keys_screen().expect("open");
+        assert_eq!(screen.draft(), &rebound);
+        assert_eq!(
+            screen.row_list().cell(1),
+            Some("Z"),
+            "Accelerate on the W position"
+        );
+        tap(&mut dialog, Key::Enter);
+        tap(&mut dialog, Key::KeyJ);
+        assert_eq!(
+            dialog.keys_screen().map(KeysScreen::draft),
+            Some(&rebound),
+            "J is reserved"
+        );
+    }
+
+    #[test]
+    fn a_held_press_on_the_keys_screen_is_let_go_with_the_dialog_s() {
+        let mut dialog = prefs();
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        let ok = dialog
+            .keys_screen()
+            .expect("open")
+            .button_bounds(crate::ui::keys::KeysButton::Ok)
+            .center();
+        dialog.input(&button(true, ok));
+        dialog.cancel_pointer();
+        dialog.input(&button(false, ok));
+        assert!(dialog.keys_screen().is_some(), "the press was let go");
+        dialog.tick(Duration::from_millis(16));
+        dialog.release_keys();
+        assert!(dialog.keys_screen().is_some());
+    }
+
     #[test]
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..16 {
+        for _ in 0..17 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -1693,6 +1974,7 @@ mod tests {
                 Focus::Scaling,
                 Focus::EffectsVolume,
                 Focus::MusicVolume,
+                Focus::KeySettings,
                 Focus::Ok,
                 Focus::Music,
             ]
@@ -1783,7 +2065,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..15 {
+        for _ in 0..16 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -1974,7 +2256,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..15 {
+        for _ in 0..16 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -2036,7 +2318,7 @@ mod tests {
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
         assert_eq!(commands, expected.iter().cloned().collect::<Vec<_>>());
-        // OK, and Key Settings greyed.
+        // OK and Key Settings, both enabled.
         let labels: Vec<(String, Color)> = commands
             .iter()
             .filter_map(|command| match command {
@@ -2050,10 +2332,10 @@ mod tests {
             labels,
             [
                 ("OK".to_owned(), ButtonStyle::STOCK.up),
-                ("Key Settings".to_owned(), ButtonStyle::STOCK.grey),
+                ("Key Settings".to_owned(), ButtonStyle::STOCK.up),
             ]
         );
-        assert!(commands.iter().any(|command| matches!(
+        assert!(!commands.iter().any(|command| matches!(
             command,
             DrawCommand::StretchedPicture { image, .. } if *image == ButtonSkin::NOVA.disabled.left
         )));
@@ -2090,17 +2372,23 @@ mod tests {
                 .windows(volume.len())
                 .any(|window| window == volume)
         );
-        dialog.input(&key(Key::Tab));
-        let mut ring = DrawList::new();
-        outline(
-            &mut ring,
-            dialog.dialog().item_bounds(OK_ITEM).expect("OK"),
-            ButtonStyle::STOCK.up,
-        );
-        let commands = drawn(&dialog);
-        assert_eq!(commands.len(), unfocused.len() + 4);
-        let ring: Vec<DrawCommand> = ring.iter().cloned().collect();
-        assert_eq!(commands[commands.len() - 4..], ring[..], "outlined last");
+        for (item, name) in [(KEY_SETTINGS_ITEM, "Key Settings"), (OK_ITEM, "OK")] {
+            dialog.input(&key(Key::Tab));
+            let mut ring = DrawList::new();
+            outline(
+                &mut ring,
+                dialog.dialog().item_bounds(item).expect(name),
+                ButtonStyle::STOCK.up,
+            );
+            let commands = drawn(&dialog);
+            assert_eq!(commands.len(), unfocused.len() + 4, "{name}");
+            let ring: Vec<DrawCommand> = ring.iter().cloned().collect();
+            assert_eq!(
+                commands[commands.len() - 4..],
+                ring[..],
+                "{name} outlined last"
+            );
+        }
     }
 
     #[test]
@@ -2266,7 +2554,7 @@ mod tests {
         let mut dialog = offered();
         focus_display(&mut dialog);
         dialog.input(&key(Key::ArrowDown));
-        for _ in 0..4 {
+        for _ in 0..5 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Ok));

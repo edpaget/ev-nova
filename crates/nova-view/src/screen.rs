@@ -7,6 +7,7 @@ use nova_sim::SimDiagnostic;
 
 use crate::draw::DrawList;
 use crate::input::Input;
+use crate::keymap::Bindings;
 use crate::menu_command::MenuCommand;
 use crate::preferences::Prefs;
 use crate::scaling::Scaling;
@@ -185,6 +186,13 @@ pub trait Screen {
     /// The preferences the player has chosen since they were last taken,
     /// if they changed: each change is reported once. None by default.
     fn take_prefs(&mut self) -> Option<Prefs> {
+        None
+    }
+    /// The key bindings the player accepted on the keys screen since they
+    /// were last taken, if they changed: each change is reported once.
+    /// A [`Bindings`] holds every device family's table, so a later
+    /// family's edit rides in it. None by default.
+    fn take_bindings(&mut self) -> Option<Bindings> {
         None
     }
     /// The display modes the current monitor offers for exclusive
@@ -377,6 +385,7 @@ mod tests {
         let screen: &mut dyn Screen = &mut counter;
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_prefs(), None);
+        assert_eq!(screen.take_bindings(), None);
         assert_eq!(screen.now_showing(), None);
     }
 
