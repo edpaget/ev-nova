@@ -23,7 +23,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// device used last follows what the pads did, and the screen is told
     /// of a change, then given what each event means, as a key is routed.
     /// While the developer overlay shows, the pads' input goes nowhere, as
-    /// keys go to the overlay alone. With no gamepads, nothing.
+    /// keys go to the overlay alone, though the screen is still told a
+    /// change of device, as a key's press tells it under the overlay. With
+    /// no gamepads, nothing.
     pub(super) fn poll_gamepads(&mut self) -> Control {
         let Some(pads) = &mut self.gamepads else {
             return Control::Continue;
@@ -36,11 +38,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         }
         let mut inputs = Vec::new();
         self.pad_inputs.feed(&events, &mut inputs);
-        if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
-            return Control::Continue;
-        }
         if changed.is_some() && self.tell_device() == Control::Exit {
             return Control::Exit;
+        }
+        if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
+            return Control::Continue;
         }
         for input in inputs {
             if self.route(input) == Control::Exit {

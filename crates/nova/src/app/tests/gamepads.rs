@@ -1,7 +1,8 @@
 //! The gamepads: polled once a frame on a redraw, before the screen's
 //! tick; what they did routed as screen input; the device used last told
-//! as surroundings when it changes; and what they did in the background
-//! dropped as the focus comes back.
+//! as surroundings when it changes; what they did in the background
+//! dropped as the focus comes back; and their input dropped while the
+//! developer overlay shows.
 
 use nova_view::{ControllerFamily, Device, PadAxis, PadButton, Surroundings};
 
@@ -176,5 +177,65 @@ fn a_screen_quitting_on_a_pad_press_exits() {
             }
         ),
         Control::Exit
+    );
+}
+
+/// Shows or hides the developer overlay with a tap of its toggle key.
+fn toggle_overlay(app: &mut TestApp, window: &mut FakeWindow) {
+    for pressed in [true, false] {
+        handle(app, window, key(nova_view::devtools::TOGGLE_KEY, pressed));
+    }
+}
+
+#[test]
+fn the_pads_input_goes_nowhere_while_the_overlay_shows_and_its_release_follows_once_it_hides() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let pads = FakeGamepads::with([vec![PadEvent::Connected(ONE)]]);
+    let mut app = app(&window)
+        .with_gamepads(Box::new(pads.clone()))
+        .with_dev_overlay();
+    redraw_at(&mut app, &mut window, 16);
+    toggle_overlay(&mut app, &mut window);
+    assert!(app.dev_overlay().is_some_and(DevOverlay::visible));
+    pads.push(vec![south(true)]);
+    redraw_at(&mut app, &mut window, 32);
+    let pad_input = |input: &Input| matches!(input, Input::PadButton { .. });
+    assert!(
+        !app.screen().inputs.iter().any(pad_input),
+        "{:?}",
+        app.screen().inputs
+    );
+    assert_eq!(
+        app.screen().surroundings,
+        [told(PAD)],
+        "the device used is still told, as a key's is under the overlay"
+    );
+    toggle_overlay(&mut app, &mut window);
+    redraw_at(&mut app, &mut window, 48);
+    assert!(
+        !app.screen().inputs.iter().any(pad_input),
+        "no press made up for the button still down"
+    );
+    pads.push(vec![south(false)]);
+    redraw_at(&mut app, &mut window, 64);
+    let pads_inputs: Vec<&Input> = app
+        .screen()
+        .inputs
+        .iter()
+        .filter(|input| pad_input(input))
+        .collect();
+    assert_eq!(
+        pads_inputs,
+        [&Input::PadButton {
+            button: PadButton::South,
+            pressed: false
+        }],
+        "its release follows the press the pad state kept, as a key's \
+         release after the overlay reaches the screen"
+    );
+    assert_eq!(
+        app.screen().surroundings,
+        [told(PAD), told(Device::Keyboard)],
+        "the toggle key's press told the keyboard, and a release tells nothing"
     );
 }
