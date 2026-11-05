@@ -18,7 +18,7 @@ use nova_data::records::system::System;
 use nova_data::{Record, ShipId, StandIn, StandInOf, StellarId};
 use nova_galaxy_format::id::PointRef;
 use nova_galaxy_format::load::Galaxy;
-use nova_galaxy_format::model::{StellarKind, Visual};
+use nova_galaxy_format::model::{StellarKind, Visual, jump_stability};
 use nova_galaxy_format::source::DirSource;
 
 use crate::common::game_data;
@@ -124,6 +124,55 @@ fn every_jump_point_has_a_gate_linked_to_its_partner_s() {
             );
             assert_eq!(spob.hyper_link[0], partner, "{at}");
             assert_eq!(spob.hyper_link[1..], [None; 7], "{at}");
+        }
+    }
+}
+
+#[test]
+fn every_gate_keeps_its_points_stability() {
+    let Some((game, galaxy)) = sample() else {
+        return;
+    };
+    for (system, doc) in &galaxy.systems {
+        for point in &doc.data.jump_points {
+            let at = PointRef::new(system, &point.id);
+            let spob = StellarId(game.ids.gates[&at]);
+            assert_eq!(
+                game.data.gate_stability(spob),
+                Some(point.stability),
+                "{at}"
+            );
+        }
+    }
+}
+
+#[test]
+fn each_linked_pair_of_gates_jumps_as_well_as_the_points_do() {
+    let Some((game, galaxy)) = sample() else {
+        return;
+    };
+    let point_of = |at: &PointRef| {
+        galaxy.systems[&at.system()]
+            .data
+            .jump_points
+            .iter()
+            .find(|point| PointRef::new(&at.system(), &point.id) == *at)
+            .expect("a point")
+    };
+    for (system, doc) in &galaxy.systems {
+        for point in &doc.data.jump_points {
+            let at = PointRef::new(system, &point.id);
+            let stored = |of: &PointRef| {
+                game.data
+                    .gate_stability(StellarId(game.ids.gates[of]))
+                    .expect("stored")
+            };
+            assert_eq!(
+                stored(&at).worse(stored(&point.to)),
+                jump_stability(point, point_of(&point.to)),
+                "{at} to {}",
+                point.to
+            );
         }
     }
 }

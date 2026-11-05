@@ -40,7 +40,7 @@ pub(crate) fn new_game_rules() -> Rulebook {
 }
 
 /// The checked-in fixture, mapped.
-fn fixture() -> NewGame {
+pub(crate) fn fixture() -> NewGame {
     new_game::open(&new_game::fixture::folder()).expect("the fixture lists")
 }
 
@@ -97,7 +97,12 @@ pub(crate) fn gates(game: &NewGame) -> Vec<Gate> {
 
 /// One pass of the game's work with no keys held, the traffic deciding
 /// as Nova's AI does by `rules`.
-fn pass(session: &mut Session, data: &GameData, rules: &Rulebook, chance: &mut SplitMix) {
+pub(crate) fn pass(
+    session: &mut Session,
+    data: &GameData,
+    rules: &Rulebook,
+    chance: &mut SplitMix,
+) {
     let rescued = session.game_work(
         Controls::default(),
         data,
@@ -267,7 +272,7 @@ pub(crate) fn systems(gates: &[Gate]) -> BTreeSet<SystemId> {
 pub(crate) const TRAFFIC_TICKS: u32 = 30_000;
 
 /// The Nova ID `table` gives the bible id `id`.
-fn nova_of<K: ToString>(table: &std::collections::BTreeMap<K, i16>, id: &str) -> i16 {
+pub(crate) fn nova_of<K: ToString>(table: &std::collections::BTreeMap<K, i16>, id: &str) -> i16 {
     let (_, &nova) = table
         .iter()
         .find(|(key, _)| key.to_string() == id)

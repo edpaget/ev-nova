@@ -82,6 +82,15 @@ impl Session {
             self.chart.target = Some(id);
         }
     }
+
+    /// Puts the player's ship at `at`, at rest, its heading kept, for the
+    /// tests' fixture (`fixture::put_player_at`): no original moves it so.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn put_player_at(&mut self, at: crate::geometry::Vec2) {
+        self.ship.player.position = at;
+        self.ship.player.velocity = crate::geometry::Vec2::ZERO;
+        self.ship.player_speed = 0.0;
+    }
 }
 
 impl Outbox {
