@@ -1071,3 +1071,65 @@ fn a_waiting_key_sets_only_its_own_latch() {
         &sent(&view)[from..]
     );
 }
+
+// A dialog an input opens (Preferences, About) may follow a press in the
+// same frame, after the tick's poll: a latched key ours acted on at its
+// press was read as the original's poll reads it, its latch set, and one
+// ours reads only at the poll (the slot block, the cloak) wasn't.
+
+#[test]
+fn a_slot_key_pressed_after_the_poll_and_before_an_unlatching_dialog_selects_after_its_close() {
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    view.tick(TICK);
+    view.input(&key(slot, true));
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [slot], [], false);
+    assert_eq!(replay, [press(slot)]);
+    for input in &replay {
+        view.input(input);
+    }
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        sent(&view)[from..]
+            .iter()
+            .any(|command| matches!(command, FlightCommand::SelectStellar(_))),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+}
+
+#[test]
+fn a_press_key_flight_acted_on_after_the_poll_waits_for_its_release() {
+    let mut view = in_flight();
+    view.tick(TICK);
+    let from = sent(&view).len();
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "J acted on its press");
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [JUMP_KEY], [], false), []);
+    assert!(view.latched_down.contains(&JUMP_KEY), "J waits");
+}
+
+#[test]
+fn a_press_read_before_the_last_poll_is_forgotten_by_it() {
+    // The poll that read J up cleared its latch.
+    let mut view = in_flight();
+    view.input(&key(JUMP_KEY, true));
+    view.input(&key(JUMP_KEY, false));
+    view.tick(TICK);
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [JUMP_KEY], [], false), [press(JUMP_KEY)]);
+}
+
+#[test]
+fn the_presses_flight_read_count_once_at_a_hand_back() {
+    let mut view = in_flight();
+    view.tick(TICK);
+    view.input(&key(JUMP_KEY, true));
+    unlatching_dialog_opens(&mut view);
+    let _ = back(&mut view, [], [], false);
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [JUMP_KEY], [], false), [press(JUMP_KEY)]);
+}

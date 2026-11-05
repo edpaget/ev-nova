@@ -1462,6 +1462,11 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// input since, up to the next key poll: a latched key pressed then
     /// waits (`FlightView::wait_after_site`).
     latched_at_site: bool,
+    /// The latched keys whose press flight took since its last key poll
+    /// (`FlightView::note_read_on_press`): read as the original's poll
+    /// reads them, their latches set, so one still down at the close of a
+    /// dialog no site follows waits for its release.
+    read_on_press: HashSet<Key>,
     /// The press keys a hand-back left for the next key poll, in
     /// `_HandlePlayer`'s order, as a slot key before them acts only there
     /// (see the `dialog_latch` module). A release drops its key.

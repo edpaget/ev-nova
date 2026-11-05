@@ -356,10 +356,11 @@ impl<
         {
             self.press_button_latched(at);
         }
-        if let Some(key) = self.press_taken(press, jumping)
-            && let Some(action) = self.press_key(key, input)
-        {
-            return action;
+        if let Some(key) = self.press_taken(press, jumping) {
+            self.note_read_on_press(key);
+            if let Some(action) = self.press_key(key, input) {
+                return action;
+            }
         }
         // A press that ran a site with no dialog (Y's offer accepted at
         // once) is down as the site latches every key.

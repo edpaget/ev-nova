@@ -626,6 +626,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             latched_down: HashSet::new(),
             latch_at_close: false,
             latched_at_site: false,
+            read_on_press: HashSet::new(),
             after_poll: Vec::new(),
             nav_latch: false,
             select_latch: false,

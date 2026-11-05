@@ -73,21 +73,20 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Input, Key, Screen as _};
 
 /// What is physically down as the last dialog over flight closes, as the
-/// router saw it: the keys down now, those down before flight's input
-/// went away, and whether the primary button is down.
+/// router saw it: the keys down now, those down at flight's last poll,
+/// and whether the primary button is down. The router passes the physical
+/// state; flight knows which latched keys it read on their press since
+/// that poll ([`FlightView::note_read_on_press`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveKeys {
     /// The keys down now.
     pub down: Vec<Key>,
-    /// The keys down at flight's last poll (a tick it had its input) or
-    /// as its input went away, whatever happened to them after: a latched
+    /// The keys down at flight's last poll (a tick it had its input, or
+    /// the last hand-back), whatever happened to them after: a latched
     /// one read its latch set, as the original's poll before the dialog
-    /// would, and no poll saw its release since. A latched key polled
-    /// from `held` (J, the slot keys) pressed between flight's last poll
-    /// and the dialog's opening, in the same frame, counts too, where the
-    /// original's latch is clear: ours acts on the other latched keys'
-    /// presses rather than at the poll, so the two can't be told apart
-    /// (rdm:phase/play-feel-8-fidelity/phase-11-latched-keys-under-unlatching-dialogs-left-outs).
+    /// would, and no poll saw its release since. A key pressed after that
+    /// poll and before the dialog opened, in the same frame, isn't here:
+    /// flight says itself whether it read it on its press.
     pub down_before: Vec<Key>,
     /// Whether the primary button is down now.
     pub button: bool,
@@ -240,6 +239,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// latched at their press ([`FlightView::wait_after_site`]).
     pub(super) fn settle_dialog_latch(&mut self) {
         self.latched_at_site = false;
+        self.read_on_press.clear();
         if std::mem::take(&mut self.latch_at_close) {
             self.keep_unlatched_keys();
         }
@@ -259,13 +259,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///
     /// - With a site marked, every latched key of `live.down` waits for
     ///   its release ([`FlightView::latched_down`]), every latch set
-    ///   ([`FlightView::set_every_latch`]), and nothing comes back. So with flight's own map open (a dialog no site follows,
+    ///   ([`FlightView::set_every_latch`]), and nothing comes back. So
+    ///   with flight's own map open (a dialog no site follows,
     ///   Preferences, closing over it): `_HandlePlayer` doesn't poll
     ///   under the map, whose close is a site (M's @0x6a898, the
     ///   hypergate's @0x6387a). No dialog opens over a flight movie, as
     ///   the movie takes every key.
-    /// - With none, those also down before the input went away
-    ///   (`live.down_before`) wait, and every other latched key of
+    /// - With none, those also down at flight's last poll
+    ///   (`live.down_before`), or whose press flight read since
+    ///   ([`FlightView::note_read_on_press`]), wait, and every other
+    ///   latched key of
     ///   `live.down` is read as a fresh press, in `_HandlePlayer`'s poll
     ///   order (the module's `POLL_ORDER`). One flight still holds is no
     ///   fresh press, but `-`, which it holds for the self-destruct chord
@@ -296,11 +299,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.set_every_latch();
             return Vec::new();
         }
-        let waiting = live
-            .down
-            .iter()
-            .copied()
-            .filter(|key| live.down_before.contains(key));
+        let read = std::mem::take(&mut self.read_on_press);
+        let waits = |key: &Key| live.down_before.contains(key) || read.contains(key);
+        let waiting: Vec<Key> = live.down.iter().copied().filter(waits).collect();
         self.latch_held_keys(waiting);
         let mut presses = Vec::new();
         let mut polled_before = false;
@@ -313,7 +314,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             // `-` is held for its chord whatever its zoom's latch says.
             let still_held = self.held.contains(&key) && !UNLATCHED_KEYS.contains(&key);
-            if live.down_before.contains(&key) || still_held {
+            if waits(&key) || still_held {
                 continue;
             }
             let at_poll = self.acts_at_the_poll(key);
@@ -325,6 +326,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
             polled_before |= at_poll;
         }
         presses
+    }
+
+    /// Notes that flight took a press of `key` since its last key poll: a
+    /// latched key ours acts on at its press, as the original's poll reads
+    /// it, its latch set, so one still down at the close of a dialog no
+    /// site follows waits for its release (`live.down_before`'s keys
+    /// aside, [`FlightView::take_back_live_input`]). Not the keys read only
+    /// at the poll ([`FlightView::acts_at_the_poll`]) nor those with
+    /// latches of their own ([`OWN_LATCH_KEYS`]): a press of one after the
+    /// poll and before an input's dialog in the same frame (Preferences
+    /// by Command-`,`, About) leaves its latch clear. The next key poll
+    /// forgets them ([`FlightView::settle_dialog_latch`]), as does the
+    /// hand-back that reads them.
+    pub(super) fn note_read_on_press(&mut self, key: Key) {
+        if POLL_ORDER.contains(&key)
+            && !OWN_LATCH_KEYS.contains(&key)
+            && !self.acts_at_the_poll(key)
+        {
+            self.read_on_press.insert(key);
+        }
     }
 
     /// Whether `key`'s own latch is set, one of [`OWN_LATCH_KEYS`]: L's
