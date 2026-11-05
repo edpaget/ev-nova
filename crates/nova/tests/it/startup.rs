@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use nova::platform::console::{ConsoleTerminal, StderrGoes};
+use nova::ruleset::Ruleset;
 use nova::startup::{
     Answer, DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
     resolve_pick, run,
@@ -108,8 +109,12 @@ impl FatalAlert for Alerts {
     }
 }
 
-/// One launch with no argument and no `NOVA_DATA`.
+/// One launch, with no argument, `NOVA_DATA` or `GAME_DATA` unless a test
+/// sets them.
 struct Machine {
+    args: Vec<OsString>,
+    nova_data: Option<OsString>,
+    game_data: Option<OsString>,
     disk: Disk,
     panel: Panel,
     alerts: Alerts,
@@ -124,6 +129,9 @@ struct Machine {
 impl Machine {
     fn new(store: &MemorySettings, holding: &[&Path], picks: &[&Path]) -> Self {
         Self {
+            args: Vec::new(),
+            nova_data: None,
+            game_data: None,
             disk: Disk {
                 holding: holding.iter().map(|dir| dir.to_path_buf()).collect(),
                 asked: RefCell::default(),
@@ -162,8 +170,9 @@ impl Machine {
         };
         run(
             Launch {
-                args: Vec::<OsString>::new(),
-                nova_data: None,
+                args: self.args.clone(),
+                nova_data: self.nova_data.clone(),
+                game_data: self.game_data.clone(),
                 usual: usual(),
                 terminal,
                 log: Some(Box::new(self.log.clone())),
@@ -429,6 +438,7 @@ fn a_named_directory_wins_over_the_remembered_one() {
         Launch {
             args: vec![named.clone().into_os_string()],
             nova_data: Some(OsString::from("/env")),
+            game_data: None,
             usual: usual(),
             terminal: &terminal,
             log: None,
@@ -454,6 +464,7 @@ fn an_event_loop_that_cannot_be_made_is_fatal_before_anything_is_asked() {
         Launch {
             args: Vec::new(),
             nova_data: None,
+            game_data: None,
             usual: usual(),
             terminal: &terminal,
             log: None,
@@ -480,6 +491,7 @@ fn more_than_one_argument_is_a_usage_error() {
         Launch {
             args: vec![OsString::from("/a"), OsString::from("/b")],
             nova_data: None,
+            game_data: None,
             usual: usual(),
             terminal: &terminal,
             log: None,
@@ -494,4 +506,100 @@ fn more_than_one_argument_is_a_usage_error() {
     .err();
     assert_eq!(code, Some(2));
     assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+}
+
+// The new game, chosen by `GAME_DATA`.
+
+/// The new game's data folder the tests name in `GAME_DATA`.
+fn new_game_dir() -> PathBuf {
+    Path::new("/Games").join("New Game")
+}
+
+/// The warning a new-game start gives for `dir`, its data unread.
+fn not_loaded(dir: &Path) -> String {
+    format!(
+        "nova: the new game's data in {} is not loaded yet; starting with no galaxy",
+        dir.display()
+    )
+}
+
+#[test]
+fn without_game_data_or_with_it_empty_the_stock_game_starts_as_before() {
+    for game_data in [None, Some(OsString::new())] {
+        let found = usual()[0].clone();
+        let mut machine = Machine::new(&MemorySettings::new(), &[&found], &[]);
+        machine.game_data = game_data.clone();
+        let started = machine.launch().expect("starts");
+        assert_eq!(started.ruleset, Ruleset::Stock, "{game_data:?}");
+        assert_eq!(started.dir, found);
+        assert_eq!(started.data, found);
+        assert_eq!(*machine.disk.asked.borrow(), [found]);
+    }
+}
+
+#[test]
+fn game_data_starts_the_new_game_over_empty_data_without_looking_for_nova_files() {
+    let store = MemorySettings::new();
+    let mut machine = Machine::new(&store, &[], &[]);
+    machine.game_data = Some(new_game_dir().into_os_string());
+    machine.nova_data = Some(OsString::from("/env/Nova Files"));
+    let mut started = machine.launch().expect("starts");
+    assert_eq!(started.ruleset, Ruleset::NewGame);
+    assert_eq!(started.dir, new_game_dir());
+    assert_eq!(started.data, PathBuf::default(), "the data's default");
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(machine.panel.prompts, Vec::<String>::new(), "never asked");
+    assert_eq!(machine.alerts.0, Vec::<String>::new());
+    assert_eq!(store.writes(), 0, "nothing saved");
+    let warning = not_loaded(&new_game_dir());
+    assert_eq!(
+        machine.log.0.borrow()[1..],
+        *std::slice::from_ref(&warning),
+        "after the header"
+    );
+    assert_eq!(machine.stderr.text(), format!("{warning}\n"));
+    assert_eq!(started.report.take_alert(), Some(warning));
+}
+
+#[test]
+fn the_new_game_keeps_the_remembered_nova_files() {
+    let remembered = Path::new("/Games").join("Nova Files");
+    let store = remembering(&remembered);
+    let before = (store.text(), store.writes());
+    let mut machine = Machine::new(&store, &[&remembered], &[]);
+    machine.game_data = Some(new_game_dir().into_os_string());
+    let started = machine.launch().expect("starts");
+    assert_eq!(started.ruleset, Ruleset::NewGame);
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!((store.text(), store.writes()), before, "untouched");
+}
+
+#[test]
+fn the_new_game_still_reads_the_settings() {
+    let store = MemorySettings::holding(r#"{"rules": "nonsense"}"#);
+    let mut machine = Machine::new(&store, &[], &[]);
+    machine.game_data = Some(new_game_dir().into_os_string());
+    machine.launch().expect("starts");
+    assert_eq!(
+        machine.log.0.borrow()[1..],
+        [
+            "nova: the saved \"rules\" in memory is not \"engine\" or \"bible\"; ignoring it"
+                .to_owned(),
+            not_loaded(&new_game_dir()),
+        ]
+    );
+}
+
+#[test]
+fn a_nova_files_argument_with_game_data_is_a_usage_error() {
+    let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
+    machine.terminal = true;
+    machine.game_data = Some(new_game_dir().into_os_string());
+    machine.args = vec![OsString::from("/Games/Nova Files")];
+    assert_eq!(machine.launch().err(), Some(2));
+    let usage = "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory, \
+                 or GAME_DATA to the new game's data)";
+    assert_eq!(machine.log.0.borrow()[1..], [usage.to_owned()]);
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(machine.panel.prompts, Vec::<String>::new());
 }
