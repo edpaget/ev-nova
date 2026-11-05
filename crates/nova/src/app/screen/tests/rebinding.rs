@@ -99,3 +99,18 @@ fn a_rebound_about_text_key_opens_it_and_a_no_longer_does() {
     screen.keyed_click_ended();
     assert_eq!(screen.showing(), Showing::About, "K");
 }
+
+#[test]
+fn the_player_info_opened_by_its_rebound_key_waits_for_that_key_s_release() {
+    use nova_view::keymap::PlayCommand;
+    let rebound = Bindings::default().rebound(PlayCommand::PlayerInfo, KeyCombo::key(Key::KeyQ));
+    let mut screen = with_dialogs(data()).with_bindings(shared(rebound));
+    fly(&mut screen);
+    screen.input(&key(Key::KeyQ, true));
+    assert_eq!(screen.showing(), Showing::PlayerInfo);
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(screen.showing(), Showing::PlayerInfo, "waiting");
+    screen.input(&key(Key::KeyQ, false));
+    assert_eq!(screen.showing(), Showing::Flight, "closed on Q's release");
+}

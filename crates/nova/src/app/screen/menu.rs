@@ -252,7 +252,8 @@ impl AppScreen {
         self.new_pilot = Some(
             dialog
                 .with_rules(&self.rules)
-                .with_defaults(&defaults.name, &defaults.nickname),
+                .with_defaults(&defaults.name, &defaults.nickname)
+                .with_bindings(self.bindings.clone()),
         );
     }
 
@@ -265,7 +266,8 @@ impl AppScreen {
             None => (Vec::new(), None),
         };
         let metrics = Rc::clone(&self.menu.as_ref().expect(MENU).metrics);
-        let mut list = PilotList::new(keys, self.data.button_style(), metrics);
+        let mut list = PilotList::new(keys, self.data.button_style(), metrics)
+            .with_bindings(self.bindings.clone());
         if let Some(error) = error {
             list.show_error(&error);
             self.warnings.push(error);
@@ -492,7 +494,8 @@ impl AppScreen {
                 self.data.button_style(),
                 Rc::clone(&dialogs.metrics),
             )
-            .with_focus_ring(self.dialog_focus_ring()),
+            .with_focus_ring(self.dialog_focus_ring())
+            .with_bindings(self.bindings.clone()),
         )
     }
 

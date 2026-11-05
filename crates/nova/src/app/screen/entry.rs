@@ -121,7 +121,7 @@ impl AppScreen {
         self.appear = None;
         let intro = self.entry_intro();
         self.entry = Some(Entering {
-            core: Entry::new(intro),
+            core: Entry::new(intro).with_bindings(self.bindings.clone()),
             text: None,
         });
     }

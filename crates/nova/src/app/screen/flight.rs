@@ -49,7 +49,8 @@ impl AppScreen {
             None => Err(NO_INTERFACE.to_owned()),
         };
         let mut spaceport =
-            SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
+            SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG))
+                .with_bindings(self.bindings.clone());
         // The exchange, the outfitter, the shipyard and the room to hire,
         // read together as the spaceport opens.
         let shops = self

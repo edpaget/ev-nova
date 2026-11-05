@@ -57,6 +57,6 @@ impl AppScreen {
         if by_key {
             dialog.flush_typed_key();
         }
-        dialog
+        dialog.with_bindings(self.bindings.clone())
     }
 }

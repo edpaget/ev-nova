@@ -52,7 +52,7 @@ use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
-struct FakeWindow;
+pub(crate) struct FakeWindow;
 
 impl WindowPort for FakeWindow {
     fn size_px(&self) -> (u32, u32) {
@@ -175,7 +175,7 @@ fn spin(image: i16) -> Vec<u8> {
 
 /// Alpha (128) and Alpha Prime, small, at its centre. The `chär` holds
 /// `cash`.
-fn game_data(cash: i32) -> Rc<GameData> {
+pub(crate) fn game_data(cash: i32) -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character(cash)),
         (Ship::TYPE, 128, ship()),
@@ -238,7 +238,7 @@ fn ditl(items: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Stock "Spaceport" (`DLOG` 1000), whose item 4 is Recharge's.
-fn interface() -> InterfaceData {
+pub(crate) fn interface() -> InterfaceData {
     let spaceport: Vec<Vec<u8>> = [
         ((242, 551, 200, 25), true),
         ((452, 549, 68, 30), false),

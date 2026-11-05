@@ -201,6 +201,7 @@ impl AppScreen {
                 dialog
                     .with_scaling(&self.scaling)
                     .with_focus_ring(prefs_focus_ring(access))
+                    .with_bindings(self.bindings.clone())
             })
             .map(|dialog| {
                 if self.launch_prefs_wait() {
@@ -493,7 +494,8 @@ impl AppScreen {
                 self.data.button_style(),
             )
             .with_movies(self.movies.clone())
-            .with_focus_ring(self.dialog_focus_ring()),
+            .with_focus_ring(self.dialog_focus_ring())
+            .with_bindings(self.bindings.clone()),
         )
     }
 
@@ -623,6 +625,7 @@ impl AppScreen {
                 BackgroundSizes::read(&self.data),
             )
             .with_focus_ring(self.dialog_focus_ring())
+            .with_bindings(self.bindings.clone())
             .with_key_held(self.live.holds(PlayCommand::PlayerInfo, &self.bindings)),
         );
     }
@@ -714,6 +717,7 @@ impl AppScreen {
         self.offer = Some(
             OfferDialog::new(layout, prompt, self.data.button_style())
                 .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone())
                 .with_movies(&self.movies)
                 .with_missions_listed(listed),
         );
@@ -867,7 +871,11 @@ impl AppScreen {
                 CommDialog::fallback(view, style, metrics)
             }
         };
-        self.comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.comm = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The comm dialog's input: each option pressed goes through flight,
@@ -927,7 +935,11 @@ impl AppScreen {
                 HaggleDialog::fallback(price, pay_me, style, metrics)
             }
         };
-        self.haggle = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.haggle = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The haggle dialog's input: the choice goes through flight; a price
@@ -1005,7 +1017,11 @@ impl AppScreen {
                 PlunderDialog::fallback(shown, style, metrics)
             }
         };
-        self.plunder = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.plunder = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The plunder dialog's input: each press goes through flight, a
@@ -1064,7 +1080,11 @@ impl AppScreen {
                 AssignmentDialog::fallback(style, metrics)
             }
         };
-        self.assignment = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.assignment = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The assignment dialog's input: the choice goes through flight, and

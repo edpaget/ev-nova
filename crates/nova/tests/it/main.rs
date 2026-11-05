@@ -35,6 +35,7 @@ mod galaxy_map;
 mod gamble;
 mod hire;
 mod hyperspace;
+mod key_bindings;
 mod land_key;
 mod landing;
 mod menu_commands;

@@ -63,7 +63,11 @@ impl AppScreen {
                 PlanetCommDialog::fallback(view, sprite, style, metrics)
             }
         };
-        self.planet_comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.planet_comm = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The planet comm dialog's input: each press goes through flight, and
