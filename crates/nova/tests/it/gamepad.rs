@@ -30,6 +30,8 @@ struct Harness {
     gpu: RecordingGpu,
     pads: FakeGamepads,
     frames: u64,
+    /// Every window event sent.
+    sent: Vec<WindowEvent>,
 }
 
 impl Harness {
@@ -44,6 +46,7 @@ impl Harness {
             gpu: RecordingGpu::new(),
             pads,
             frames: 0,
+            sent: Vec::new(),
         };
         harness.key(Key::KeyF, true);
         harness.key(Key::KeyF, false);
@@ -53,6 +56,7 @@ impl Harness {
     }
 
     fn send(&mut self, event: WindowEvent) {
+        self.sent.push(event);
         assert_eq!(
             self.app.handle(event, &mut FakeWindow, &mut self.gpu),
             Control::Continue,
@@ -182,5 +186,73 @@ fn select_and_start_leave_flight() {
         harness.app.screen().showing(),
         Showing::Flight,
         "the router's Pause took the pad's chord"
+    );
+}
+
+/// The pad alone on the course map (rdm:phase/key-bindings/phase-10-gamepad-map):
+/// the chord opens it, a trigger pulled past the threshold zooms it, the
+/// d-pad moves the focus off Done and back, and South closes it, with no
+/// key or pointer event sent. Where the focus lands and what each button
+/// does are nova-view's; this pins that the trigger's axis becomes the
+/// map's zoom through the app's poll.
+#[test]
+fn the_pad_alone_opens_the_map_zooms_it_moves_to_done_and_closes_it() {
+    let mut harness = Harness::flying();
+    let button = |button, pressed| PadEvent::Button {
+        pad: PAD,
+        button,
+        pressed,
+    };
+    let map_open = |harness: &Harness| {
+        harness
+            .app
+            .screen()
+            .flight_view()
+            .is_some_and(nova_view::flight::FlightView::map_open)
+    };
+    let zoom = |harness: &Harness| {
+        harness
+            .app
+            .screen()
+            .flight_view()
+            .and_then(nova_view::flight::FlightView::course_map_zoom)
+    };
+    let sent_before = harness.sent.len();
+    harness.pads.push(vec![PadEvent::Connected(PAD)]);
+    harness.frames(1);
+    for (pad_button, pressed) in [
+        (PadButton::Start, true),
+        (PadButton::RightStickUp, true),
+        (PadButton::RightStickUp, false),
+        (PadButton::Start, false),
+    ] {
+        harness.pads.push(vec![button(pad_button, pressed)]);
+        harness.frames(1);
+    }
+    assert!(map_open(&harness), "the chord opened the map");
+
+    let before = zoom(&harness);
+    for value in [1.0, 0.0] {
+        harness.pads.push(vec![PadEvent::Trigger {
+            pad: PAD,
+            button: PadButton::RightTrigger,
+            value,
+        }]);
+        harness.frames(1);
+    }
+    assert_ne!(zoom(&harness), before, "the right trigger zoomed in");
+
+    for pad_button in [PadButton::DPadLeft, PadButton::DPadRight, PadButton::South] {
+        for pressed in [true, false] {
+            harness.pads.push(vec![button(pad_button, pressed)]);
+            harness.frames(1);
+        }
+    }
+    assert!(!map_open(&harness), "South on Done closed it");
+    assert!(
+        harness.sent[sent_before..]
+            .iter()
+            .all(|event| matches!(event, WindowEvent::Redraw { .. })),
+        "no key or pointer event"
     );
 }
