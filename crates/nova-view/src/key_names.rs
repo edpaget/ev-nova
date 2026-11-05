@@ -22,11 +22,16 @@
 //!   named by its W3C name, `Code`'s `Display`.
 //! - **A key that prints** ([`PRINTING_KEYS`]: the letters, the digits,
 //!   the punctuation and the keypad's digits and signs) asks the port, and
-//!   its answer is upper-cased, as the transformer upper-cases what the
-//!   layout gives (@0xad05, @0xae3f). An answer that is `None`, empty, a
-//!   control character or a dead key's combining mark falls back to the
-//!   key's US legend ([`us_legend`]); a key with no US legend (the
-//!   international keys) to its W3C name. So every key has a name.
+//!   shows the answer's first character, upper-cased, as the transformer
+//!   keeps the first unit `UCKeyTranslate` gives
+//!   (`stringWithCharacters:length:` with length 1, @0xae21) and
+//!   upper-cases it (@0xad05, @0xae3f). The engine keeps a whole `char`,
+//!   so a character beyond the BMP isn't cut in half as the original's
+//!   UTF-16 unit would be. An answer that is `None` or empty, or whose
+//!   first character is a control character or a dead key's combining
+//!   mark, falls back to the key's US legend ([`us_legend`]); a key with
+//!   no US legend (the international keys) to its W3C name. So every key
+//!   has a name.
 //! - **A keypad key** reads `Pad ` before its character, as the
 //!   transformer's `Pad %@` does (@0xad72, @0xaeac).
 //!
@@ -53,8 +58,8 @@ pub trait KeyNames: Debug {
 }
 
 /// A [`KeyNames`] that can never say, so every key reads its US legend:
-/// the game's, until a platform adapter reads the layout (the
-/// key-bindings roadmap's phase 5).
+/// the game's where no platform adapter reads the layout (Linux), and
+/// what the macOS adapter amounts to off the main thread.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NoKeyNames;
 
@@ -262,10 +267,15 @@ fn combining(c: char) -> bool {
     )
 }
 
-/// The port's answer, if it is a name to show: not empty, and holding
-/// no control character and no combining mark.
-fn shown(answer: Option<String>) -> Option<String> {
-    answer.filter(|name| !name.is_empty() && !name.chars().any(|c| c.is_control() || combining(c)))
+/// The character of the port's answer to show, if there is one: its
+/// first, as the original keeps the layout's first unit alone
+/// (`stringWithCharacters:length:` with length 1, @0xae21), unless that
+/// is a control character or a combining mark.
+fn shown(answer: Option<String>) -> Option<char> {
+    answer?
+        .chars()
+        .next()
+        .filter(|&c| !c.is_control() && !combining(c))
 }
 
 /// The name of `key`, as the player's layout gives it through `names`
@@ -279,7 +289,7 @@ pub fn key_name(names: &dyn KeyNames, key: Key) -> String {
         return key.to_string();
     }
     let character = shown(names.name(key))
-        .map(|name| name.to_uppercase())
+        .map(|c| c.to_uppercase().collect::<String>())
         .or_else(|| us_legend(key))
         .unwrap_or_else(|| key.to_string());
     if on_keypad(key) {
@@ -372,12 +382,13 @@ pub mod fixture {
     /// Checks the port's contract against `names`, which [`FakeKeyNames`]
     /// meets: every key that prints ([`PRINTING_KEYS`]) gets an answer
     /// without a panic, a `Some` is never empty, and asking twice in a row
-    /// gives the same answer. A layout that knows no key meets it.
+    /// gives the same answer. A layout that knows no key meets it. It takes
+    /// an adapter behind the port's trait object too, as the game wires it.
     ///
     /// # Errors
     ///
     /// The first key whose answer breaks the contract, and how.
-    pub fn check_contract(names: &impl KeyNames) -> Result<(), String> {
+    pub fn check_contract<N: KeyNames + ?Sized>(names: &N) -> Result<(), String> {
         for key in PRINTING_KEYS {
             let first = names.name(key);
             if first.as_deref() == Some("") {
@@ -432,7 +443,8 @@ mod tests {
             Some(""),
             Some("\u{1b}"),
             Some("\u{0302}"),
-            Some("a\u{7f}"),
+            Some("\u{7f}a"),
+            Some("\u{0302}e"),
         ] {
             let mut names = FakeKeyNames::new();
             if let Some(answer) = answer {
@@ -441,6 +453,23 @@ mod tests {
             assert_eq!(key_name(&names, Key::KeyW), "W", "{answer:?}");
             assert_eq!(key_name(&names, Key::Backslash), "\\", "{answer:?}");
         }
+    }
+
+    #[test]
+    fn a_layout_answer_longer_than_one_character_shows_its_first() {
+        let names = FakeKeyNames::new()
+            .with(Key::KeyW, "zx")
+            .with(Key::Quote, "´e")
+            .with(Key::Minus, "ß")
+            .with(Key::KeyE, "a\u{7f}");
+        assert_eq!(key_name(&names, Key::KeyW), "Z");
+        assert_eq!(key_name(&names, Key::Quote), "´");
+        assert_eq!(
+            key_name(&names, Key::Minus),
+            "SS",
+            "the first character, then upper-cased"
+        );
+        assert_eq!(key_name(&names, Key::KeyE), "A", "what follows is dropped");
     }
 
     #[test]
@@ -524,6 +553,13 @@ mod tests {
     fn the_fake_and_the_no_names_layout_meet_the_contract() {
         assert_eq!(check_contract(&FakeKeyNames::azerty()), Ok(()));
         assert_eq!(check_contract(&NoKeyNames), Ok(()));
+    }
+
+    #[test]
+    fn the_contract_checks_an_adapter_behind_the_port_s_trait_object() {
+        let names: std::rc::Rc<dyn KeyNames> =
+            std::rc::Rc::new(FakeKeyNames::new().with(Key::KeyB, ""));
+        assert!(check_contract(&*names).unwrap_err().contains("KeyB"));
     }
 
     #[test]
