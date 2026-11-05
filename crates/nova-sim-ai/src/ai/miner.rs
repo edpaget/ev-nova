@@ -173,7 +173,7 @@ impl Behaviour for MinerAi {
 /// every think that reaches them, a leave already held too; [`MINES`]
 /// alone keeps a state 2 it held, writing none.
 fn writes_leave(npc: &Npc, goal: Goal) -> bool {
-    goal == Goal::JumpOut && !(npc.miner & MINES != 0 && npc.miner & SCOOPS == 0)
+    goal == Goal::JumpOut && npc.miner & MINER_BITS != MINES
 }
 
 /// `npc`'s goal among `around`, as `_MinerAI` decides it (see the module

@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The leave write's +0x50 floor (`if 0 > +0x50`): `<=` also writes 0.0
+    # over a stage of exactly 0.0 (or -0.0, which compares equal to it), so
+    # the stage reads the same either way.
+    "nova-sim-ai/src/traffic/leave_write\\.rs:[0-9]+:[0-9]+: replace < with <= in Npc::takes_leave_write$",
     # An inertialess plunderer's matched speed floored at none: `<=` also
     # sets a speed of exactly none to 0.0. A 0.0 stays 0.0; only a -0.0,
     # which needs a -0.0 speed already and no gain or acceleration, would
