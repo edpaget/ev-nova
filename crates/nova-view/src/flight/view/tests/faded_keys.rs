@@ -725,6 +725,45 @@ fn y_let_go_during_double_times_held_arrival_does_nothing() {
 }
 
 #[test]
+fn m_pressed_in_double_times_held_arrival_does_not_open_the_map() {
+    let mut view = under_the_white();
+    arrives_held(&mut view, |view| {
+        view.input(&key(MAP_KEY, true));
+    });
+    view.tick(TICK);
+    assert!(!view.map_open(), "@0x6a89f latched it");
+}
+
+#[test]
+fn p_pressed_in_double_times_held_arrival_acts_after_it() {
+    let mut view = under_the_white();
+    let from = sent_count(&view);
+    arrives_held(&mut view, |view| {
+        view.input(&key(PLAYER_INFO_KEY, true));
+    });
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), [FlightCommand::PressPlayerInfo]);
+}
+
+#[test]
+fn a_kept_i_that_opens_its_screen_runs_no_step_that_tick() {
+    let mut view = under_the_white();
+    view.input(&key(MISSION_INFO_KEY, true));
+    arrives(&mut view);
+    let stepped = view.sim.steps();
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(
+            MissionInfo::default(),
+        )));
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped, "the screen comes first");
+    assert!(view.take_mission_info_request().is_some());
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped + 1, "and then on");
+}
+
+#[test]
 fn a_press_on_the_arrivals_faded_frame_opens_the_map() {
     let mut view = under_the_white();
     arrives(&mut view);
