@@ -7,8 +7,8 @@
 use crate::source::MemSource;
 
 /// Two linked systems in one region, a station, a storyline with one
-/// mission offered there and the news it releases, and a small fleet with its asset manifest (see
-/// [`fleet`]). The manifest names `media/export/pack/hull.glb`,
+/// mission offered there and the news it releases, a small fleet with its asset manifest (see
+/// [`fleet`]), and a start in the skiff in `alpha`. The manifest names `media/export/pack/hull.glb`,
 /// `surface.png` and `LICENSE.txt`, which aren't included.
 #[must_use]
 pub fn galaxy() -> MemSource {
@@ -36,6 +36,10 @@ pub fn galaxy() -> MemSource {
             "stellars/alpha-prime.md",
             "---\nname: Alpha Prime\nkind: planet\nsystem: alpha\nposition: [50, 0]\n\
              visual: {asset: surface}\n---\n",
+        )
+        .with(
+            "starts/first-flight.md",
+            "---\nname: First flight\nsystem: alpha\nship: skiff\ncash: 1000\n---\n",
         )
         .with("storylines/errands.md", "---\ntitle: Errands\nkind: minor\nfaction: league\n---\n")
         .with(

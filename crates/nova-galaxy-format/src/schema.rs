@@ -8,7 +8,9 @@ use schemars::generate::SchemaSettings;
 
 use crate::asset::{Asset, Budget};
 use crate::fleet::{Livery, ModKit, Outfit, Ship};
-use crate::model::{Character, Faction, Kind, Mission, News, Region, Stellar, Storyline, System};
+use crate::model::{
+    Character, Faction, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
+};
 
 /// Each kind's schema as `(file name, pretty JSON)`, in folder order.
 #[must_use]
@@ -28,6 +30,7 @@ pub fn schemas() -> Vec<(String, String)> {
         one::<Livery>(),
         one::<Asset>(),
         one::<Budget>(),
+        one::<Start>(),
     ]
 }
 
@@ -64,6 +67,7 @@ mod tests {
                 "livery.schema.json",
                 "asset.schema.json",
                 "budget.schema.json",
+                "start.schema.json",
             ]
         );
     }
