@@ -45,11 +45,11 @@ use super::update::MapUpdate;
 use super::view::{Bounds, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
-use crate::keymap::{Command, CommandReader, MapCommand, SharedBindings, UiCommand, contexts};
+use crate::keymap::{Command, MapCommand, UiCommand};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::center_window;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point};
+use crate::{Color, DrawList, ImageKey, Point};
 
 /// The map's `DLOG` and `DITL`, "Map" (`_DoSystemMap`'s `GetNewDialog`,
 /// @0x121e5).
@@ -151,8 +151,7 @@ fn whole_pixel(at: Point) -> (i32, i32) {
 /// What the in-flight maps keep of the dialog: where they look
 /// ([`MapPlace`]), the buttons' trackers, the borders setting their
 /// Borders button reads, `showClearRouteButton`, which enables Clear
-/// Route, a drag in progress, which update item 3 shows, and the
-/// bindings its keys are read through.
+/// Route, a drag in progress, and which update item 3 shows.
 #[derive(Clone, Debug)]
 pub struct MapDialog {
     place: MapPlace,
@@ -165,9 +164,6 @@ pub struct MapDialog {
     update: MapUpdate,
     /// Whether item 3 was redrawn since this was last taken.
     fresh: bool,
-    /// The bindings [`MapDialog::key`] reads a key through, as the course
-    /// map's commands ([`contexts::COURSE_MAP`]).
-    bindings: SharedBindings,
 }
 
 impl MapDialog {
@@ -184,13 +180,7 @@ impl MapDialog {
             drag: None,
             update: MapUpdate::Full,
             fresh: false,
-            bindings: SharedBindings::default(),
         }
-    }
-
-    /// Reads its keys through `bindings` from the next one on.
-    pub fn set_bindings(&mut self, bindings: SharedBindings) {
-        self.bindings = bindings;
     }
 
     /// Where it looks.
@@ -282,21 +272,6 @@ impl MapDialog {
             self.redraw();
         }
         true
-    }
-
-    /// A press or repeat of `key`, with no modifier held: the command its
-    /// bindings say it means ([`MapDialog::command`]), and whether it was
-    /// taken.
-    pub fn key(&mut self, key: Key) -> bool {
-        let press = Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        };
-        CommandReader::new(contexts::COURSE_MAP)
-            .with_bindings(self.bindings.clone())
-            .peek(&press)
-            .is_some_and(|command| self.command(command))
     }
 
     /// Moves the scroll by (`dx`, `dy`): an arrow, which always redraws.
@@ -408,11 +383,11 @@ impl MapDialog {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::DrawCommand;
     use crate::galaxy::buttons::{MapButton, ORDER};
     use crate::geometry::intersection;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{Placement, SCREEN};
+    use crate::{DrawCommand, Key};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -568,44 +543,33 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_scroll_10_units_and_the_zoom_keys_step_with_the_limits() {
+    fn the_arrows_scroll_10_units_and_the_zoom_commands_step_with_the_limits() {
         let mut dialog = MapDialog::new((0, 0));
-        for (key, scroll) in [
-            (Key::ArrowRight, (10, 0)),
-            (Key::ArrowDown, (10, 10)),
-            (Key::ArrowLeft, (0, 10)),
-            (Key::ArrowUp, (0, 0)),
+        for (command, scroll) in [
+            (UiCommand::Right, (10, 0)),
+            (UiCommand::Down, (10, 10)),
+            (UiCommand::Left, (0, 10)),
+            (UiCommand::Up, (0, 0)),
         ] {
-            assert!(dialog.key(key));
-            assert_eq!(dialog.place().scroll(), scroll, "{key:?}");
+            assert!(dialog.command(command.into()));
+            assert_eq!(dialog.place().scroll(), scroll, "{command:?}");
         }
-        assert!(dialog.key(Key::Equal));
+        assert!(dialog.command(MapCommand::ZoomIn.into()));
         assert_eq!(dialog.place().zoom(), 0.421_875);
-        assert!(dialog.key(Key::NumpadAdd), "taken, though refused");
+        assert!(
+            dialog.command(MapCommand::ZoomIn.into()),
+            "taken, though refused"
+        );
         assert_eq!(dialog.place().zoom(), 0.421_875);
         let mut zooms = Vec::new();
         for _ in 0..8 {
-            dialog.key(Key::Minus);
+            dialog.command(MapCommand::ZoomOut.into());
             zooms.push(dialog.place().zoom());
         }
         assert!(zooms[6] > 2.0 && zooms[6] < 3.0, "{zooms:?}");
         assert_eq!(zooms[7], zooms[6], "refused past 2.0");
-        assert!(!dialog.key(Key::KeyX));
-        assert!(!dialog.key(Key::Tab));
-    }
-
-    #[test]
-    fn a_key_is_read_through_the_bindings_it_is_given() {
-        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings};
-        let mut dialog = MapDialog::new((0, 0));
-        dialog.set_bindings(SharedBindings::new(
-            Bindings::default().rebound(MapCommand::ZoomOut, KeyCombo::key(Key::KeyQ)),
-        ));
-        let zoom = dialog.place().zoom();
-        assert!(!dialog.key(Key::Minus), "- no longer zooms out");
-        assert_eq!(dialog.place().zoom(), zoom);
-        assert!(dialog.key(Key::KeyQ));
-        assert!(dialog.place().zoom() > zoom, "Q does");
+        assert!(!dialog.command(MapCommand::Borders.into()));
+        assert!(!dialog.command(UiCommand::Tab.into()));
     }
 
     #[test]
@@ -710,25 +674,25 @@ mod tests {
             assert_eq!(dialog.update(), MapUpdate::Partial);
             dialog
         };
-        for key in [
-            Key::ArrowLeft,
-            Key::ArrowRight,
-            Key::ArrowUp,
-            Key::ArrowDown,
-            Key::Minus,
+        for command in [
+            Command::Ui(UiCommand::Left),
+            Command::Ui(UiCommand::Right),
+            Command::Ui(UiCommand::Up),
+            Command::Ui(UiCommand::Down),
+            Command::Map(MapCommand::ZoomOut),
         ] {
             let mut dialog = partial();
-            dialog.key(key);
-            assert_eq!(dialog.update(), MapUpdate::Full, "{key:?}");
+            dialog.command(command);
+            assert_eq!(dialog.update(), MapUpdate::Full, "{command:?}");
         }
         let mut dialog = partial();
-        dialog.key(Key::Equal);
+        dialog.command(MapCommand::ZoomIn.into());
         assert_eq!(dialog.update(), MapUpdate::Full, "a step in taken");
         let mut dialog = partial();
         dialog.place_mut().zoom_in();
-        dialog.key(Key::NumpadAdd);
+        dialog.command(MapCommand::ZoomIn.into());
         assert_eq!(dialog.update(), MapUpdate::Partial, "refused at the limit");
-        dialog.key(Key::KeyX);
+        dialog.command(MapCommand::Borders.into());
         assert_eq!(dialog.update(), MapUpdate::Partial, "not taken");
     }
 
@@ -739,7 +703,7 @@ mod tests {
         dialog.redraw();
         assert!(dialog.take_fresh());
         assert!(!dialog.take_fresh(), "taken");
-        dialog.key(Key::ArrowLeft);
+        dialog.command(UiCommand::Left.into());
         assert!(dialog.take_fresh(), "an arrow redraws");
         dialog.press(at(400.0, 300.0));
         dialog.pointer_moved(at(380.0, 300.0));

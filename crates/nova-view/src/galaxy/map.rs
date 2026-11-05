@@ -739,12 +739,9 @@ impl GalaxyMap {
         self
     }
 
-    /// Reads its keys through `bindings` from the next one on: its own,
-    /// an in-flight map's dialog's and Find's.
+    /// Reads its keys through `bindings` from the next one on: its own
+    /// and Find's.
     pub fn set_bindings(&mut self, bindings: SharedBindings) {
-        if let Look::Dialog(dialog) = &mut self.look {
-            dialog.set_bindings(bindings.clone());
-        }
         if let Some(find) = self.find.take() {
             self.find = Some(find.with_bindings(bindings.clone()));
         }
