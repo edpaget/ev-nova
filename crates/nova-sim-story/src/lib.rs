@@ -78,7 +78,7 @@
 // `nova-sim-catalog`, `nova-sim-state`, `nova-sim-combat` and
 // `nova-sim-ai`.
 #[allow(unused_imports)]
-use nova_sim_ai::{ai, cargo_box, escort, gate, hail, hyperspace, scan, traffic};
+use nova_sim_ai::{ai, cargo_box, escort, gate, gate_lanes, hail, hyperspace, scan, traffic};
 #[allow(unused_imports)]
 use nova_sim_base::{RuleKey, chance, geometry, reserves, rulebook, rules};
 #[allow(unused_imports)]

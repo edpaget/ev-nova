@@ -212,7 +212,10 @@ const CON_SLOTS: usize = 16;
 /// each of its first 16 Con slots by place, a slot naming a system the
 /// catalog does not hold, or with none visible at its place, marking
 /// nothing (`_HandleStellarSystemVisibility` @0x32b91-0x32c10,
-/// `_AutoSetExploration` @0xdb06-0xdbd4).
+/// `_AutoSetExploration` @0xdb06-0xdbd4). The slots are the galaxy's
+/// [`link_slots`](OverlaidGalaxy::link_slots): by
+/// [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading, the
+/// systems its gate lanes reach.
 #[must_use]
 pub fn known_from(galaxy: &OverlaidGalaxy, explored: &BTreeSet<SystemId>) -> BTreeSet<SystemId> {
     let mut known = BTreeSet::new();
@@ -221,7 +224,7 @@ pub fn known_from(galaxy: &OverlaidGalaxy, explored: &BTreeSet<SystemId>) -> BTr
             continue;
         }
         known.insert(system);
-        for &slot in galaxy.con_slots(system).iter().take(CON_SLOTS) {
+        for &slot in galaxy.link_slots(system).iter().take(CON_SLOTS) {
             if galaxy.exists(slot)
                 && let Some(link) = galaxy.same_place(slot)
             {

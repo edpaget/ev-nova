@@ -88,13 +88,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    GovtId, LandingSite, ListedStellar, NebulaId, NebulaRecord, StarSystem, StellarId, SystemId,
-    SystemVisibility,
+    GateSite, GovtId, LandingSite, ListedStellar, NebulaId, NebulaRecord, StarSystem, StellarId,
+    SystemId, SystemVisibility,
 };
 use crate::control::Gate;
+use crate::gate_lanes::GateLanes;
 use crate::geometry::Vec2;
 use crate::hyperspace::{CoLocated, Places, StarMap};
 use crate::legal::CrimeMap;
+pub use crate::story::galaxy_links::LinkSource;
 
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -412,6 +414,18 @@ pub struct OverlaidGalaxy {
     overlay: GalaxyOverlay,
     /// Which visible system stands for a place two share.
     colocated: CoLocated,
+    /// Where the links between systems come from
+    /// ([`OverlaidGalaxy::set_link_source`]).
+    pub(super) link_source: LinkSource,
+    /// The hypergates, and the gates they link to, the lanes are built
+    /// from ([`OverlaidGalaxy::with_gates`]).
+    pub(super) gates: Vec<GateSite>,
+    /// Every stellar some system lists, with its listers, by ascending ID:
+    /// where each gate is.
+    pub(super) listed: Vec<ListedStellar>,
+    /// The lanes the hypergates make on the overlaid galaxy
+    /// ([`OverlaidGalaxy::lanes`]).
+    pub(super) lanes: GateLanes,
     /// The overlaid map.
     map: StarMap,
     /// The rescues kept until the next refresh: each stellar no system
@@ -436,22 +450,29 @@ impl OverlaidGalaxy {
             .iter()
             .map(|system| (system.id, system.govt))
             .collect();
-        let colocated = CoLocated::default();
-        let map = Self::build(&systems, &overlay, colocated);
-        Self {
+        let mut galaxy = Self {
             systems,
             govts,
             overlay,
-            colocated,
-            map,
+            colocated: CoLocated::default(),
+            link_source: LinkSource::default(),
+            gates: Vec::new(),
+            listed: Vec::new(),
+            lanes: GateLanes::default(),
+            map: StarMap::default(),
             rescued: BTreeMap::new(),
             awaiting_rebuild: false,
-        }
+        };
+        galaxy.rebuild();
+        galaxy
     }
 
-    /// The map of `systems` under `overlay`, resolved as `colocated` says.
-    fn build(systems: &[StarSystem], overlay: &GalaxyOverlay, colocated: CoLocated) -> StarMap {
-        let overlaid = systems
+    /// Builds the lanes and the map again from the catalog's systems, the
+    /// overlay, the resolution of a shared place and the link source.
+    pub(super) fn rebuild(&mut self) {
+        let overlay = &self.overlay;
+        let overlaid: Vec<StarSystem> = self
+            .systems
             .iter()
             .cloned()
             .map(|mut system| {
@@ -461,7 +482,21 @@ impl OverlaidGalaxy {
                 system
             })
             .collect();
-        StarMap::with_hidden(overlaid, &overlay.hidden(), colocated)
+        let hidden = overlay.hidden();
+        let places = Places::new(&overlaid, &hidden, self.colocated);
+        // Where a gate is, owner-first, without the holder's rescue (see
+        // the `gate_lanes` module).
+        let system_of = |gate: StellarId| {
+            let listers = listers_of(&self.listed, gate);
+            owner_on(&places, overlay, listers).or_else(|| found_on(&places, listers))
+        };
+        self.lanes = GateLanes::new(&self.gates, system_of, &places);
+        self.map = match self.link_source {
+            LinkSource::Con => StarMap::with_hidden(overlaid, &hidden, self.colocated),
+            LinkSource::Gates => {
+                StarMap::with_lanes(overlaid, &hidden, self.colocated, &self.lanes)
+            }
+        };
     }
 
     /// Which visible system stands for a place two share
@@ -478,8 +513,8 @@ impl OverlaidGalaxy {
         if colocated == self.colocated {
             return false;
         }
-        self.map = Self::build(&self.systems, &self.overlay, colocated);
         self.colocated = colocated;
+        self.rebuild();
         true
     }
 
@@ -496,8 +531,8 @@ impl OverlaidGalaxy {
         if overlay == self.overlay {
             return false;
         }
-        self.map = Self::build(&self.systems, &overlay, self.colocated);
         self.overlay = overlay;
+        self.rebuild();
         true
     }
 
@@ -694,12 +729,7 @@ impl OverlaidGalaxy {
     /// owner.
     #[must_use]
     pub fn owner(&self, listers: &[SystemId]) -> Option<SystemId> {
-        listers.iter().copied().find(|&system| {
-            self.exists(system)
-                && self.visible(system)
-                && self.overlay.system(system).visible != Some(true)
-                && self.same_place(system) == Some(system)
-        })
+        owner_on(self.map.places(), &self.overlay, listers)
     }
 
     /// The system the original's `_FindSystemFromStellar` (0x7ec1-0x7f64)
@@ -714,11 +744,7 @@ impl OverlaidGalaxy {
     /// owner-first readers ([`system_of`](Self::system_of)).
     #[must_use]
     pub fn find_system_from_stellar(&self, listers: &[SystemId]) -> Option<SystemId> {
-        listers
-            .iter()
-            .copied()
-            .find(|&system| self.exists(system) && self.visible(system))
-            .or_else(|| listers.first().copied())
+        found_on(self.map.places(), listers)
     }
 
     /// The system kept as `stellar`'s rescuer until the next refresh, if
@@ -951,6 +977,27 @@ impl CrimeMap for OverlaidGalaxy {
     fn govt(&self, system: SystemId) -> Option<GovtId> {
         OverlaidGalaxy::govt(self, system)
     }
+}
+
+/// The owner of a stellar `listers` list, on `places` under `overlay`
+/// ([`OverlaidGalaxy::owner`]).
+fn owner_on(places: &Places, overlay: &GalaxyOverlay, listers: &[SystemId]) -> Option<SystemId> {
+    listers.iter().copied().find(|&system| {
+        places.contains(system)
+            && places.visible(system)
+            && overlay.system(system).visible != Some(true)
+            && places.stand_in(system) == Some(system)
+    })
+}
+
+/// The system `_FindSystemFromStellar` gives a stellar `listers` list, on
+/// `places` ([`OverlaidGalaxy::find_system_from_stellar`]).
+fn found_on(places: &Places, listers: &[SystemId]) -> Option<SystemId> {
+    listers
+        .iter()
+        .copied()
+        .find(|&system| places.contains(system) && places.visible(system))
+        .or_else(|| listers.first().copied())
 }
 
 /// Where a stellar is, as the original's owner-first readers find it:
