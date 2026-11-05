@@ -50,9 +50,16 @@
 //! 32 and draws it (@0x5664a-0x56658) with no stamp and no sound: a fade
 //! under way starts again from 32, its timeout still running from the old
 //! stamp. A fade that reached 0 earlier in the same `_HandlePlayer` has
-//! shut the menu already (`jle` @0x6e386, @0x6e444). The step reports each
-//! clear ([`StepRun::class_orders_cleared`](crate::flight_frame::StepRun::class_orders_cleared))
-//! for the view to show the menu again. Its rows show each class's kept
+//! shut the menu already (`jle` @0x6e386, @0x6e444). Each pass records its
+//! escort-menu block ([`Space::escort_menu_block`]): whether an escort flew
+//! as the fade counted them (@0x6df59-0x6dfd0), just before the
+//! bookkeeping, and whether the bookkeeping cleared a class. The step
+//! reports it with the pass
+//! ([`PassReport::escort_menu`](crate::flight_frame::PassReport::escort_menu)),
+//! and the view fades the menu once for each pass reported, showing it again
+//! after a clearing pass's drop. A destroyed player's pass takes the dead
+//! branch (0x6870d-0x6888c), returning before both (@0x68853, @0x6888c):
+//! it records none and settles nothing. Its rows show each class's kept
 //! order as the bookkeeping leaves it ([`Space::standing_class_order`]).
 //!
 //! **Ordering.** A command arrives between steps
@@ -71,6 +78,7 @@
 //!   both of double time's passes
 //!   (rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders).
 
+use super::outbox::Outbox;
 use super::{Space, Statics};
 use crate::escort::{EscortClass, EscortOrder};
 use crate::pilot::Pilot;
@@ -107,6 +115,32 @@ impl Space {
             .map(|npc| npc.id)
             .collect();
         self.escorts.commanded.extend(kept);
+    }
+
+    /// `_HandlePlayer`'s escort-menu block on the pass under way, recorded
+    /// in `out` for the pass's report (see the module docs): whether an
+    /// escort flies as the fade counts them (@0x6df59-0x6dfd0), then the
+    /// class-order bookkeeping ([`Space::settle_class_orders`]), the
+    /// escorts' records in `pilot`, their classes read through `statics`.
+    /// A clear the pass's launch reported already stands. A `dead` player
+    /// returns before both (@0x68853, @0x6888c), and the pass records
+    /// none.
+    pub(super) fn escort_menu_block(
+        &mut self,
+        pilot: &mut Pilot,
+        statics: &Statics,
+        out: &mut Outbox,
+        dead: bool,
+    ) {
+        if dead {
+            out.escort_menu = None;
+            return;
+        }
+        let escorts_flying = self.escorts_flying();
+        let cleared = self.settle_class_orders(pilot, statics);
+        let record = out.escort_menu.get_or_insert_default();
+        record.escorts_flying = escorts_flying;
+        record.class_orders_cleared |= cleared;
     }
 
     /// `_HandlePlayer`'s class-order bookkeeping (see the module docs),
@@ -244,6 +278,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::escort::{EscortClass, EscortCommand, EscortGroup, EscortOrder};
     use crate::flight::Controls;
+    use crate::flight_frame::EscortMenuPass;
     use crate::pilot::Escort;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
@@ -719,26 +754,43 @@ mod tests {
         assert_eq!(kept(&session, EscortClass::Warship), None);
     }
 
-    // On each pass (`_DoPlayGameWork` @0x43e19).
+    // On each pass (`_DoPlayGameWork` @0x43e19); `Session::step` reports
+    // each pass's record (see the `step` module's tests).
 
-    #[test]
-    fn the_advance_pass_clears_a_class_and_reports_it() {
-        let catalog = carrying();
-        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
-        command(&mut session, WARSHIPS, EscortCommand::Dock);
-        assert!(!session.out.class_orders_cleared, "not by the command");
-        session.take_sounds();
-        work(&mut session, &catalog, Controls::default());
-        assert_eq!(kept(&session, EscortClass::Warship), None);
-        assert!(session.out.class_orders_cleared);
-        assert!(session.take_sounds().is_empty(), "silent");
-        session.out.class_orders_cleared = false;
-        work(&mut session, &catalog, Controls::default());
-        assert!(!session.out.class_orders_cleared, "nothing more to clear");
+    /// The escort-menu block the pass just run recorded.
+    fn recorded(session: &Session) -> Option<EscortMenuPass> {
+        session.out.escort_menu
     }
 
     #[test]
-    fn double_times_second_pass_clears_a_class_and_reports_it() {
+    fn a_pass_records_its_clear_silently() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        command(&mut session, WARSHIPS, EscortCommand::Dock);
+        assert_eq!(recorded(&session), None, "not by the command");
+        session.take_sounds();
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(kept(&session, EscortClass::Warship), None);
+        assert_eq!(
+            recorded(&session),
+            Some(EscortMenuPass {
+                escorts_flying: true,
+                class_orders_cleared: true,
+            })
+        );
+        assert!(session.take_sounds().is_empty(), "silent");
+        // Taken, as the pass's report takes it.
+        session.out.escort_menu = None;
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(
+            recorded(&session).map(|pass| pass.class_orders_cleared),
+            Some(false),
+            "nothing more to clear"
+        );
+    }
+
+    #[test]
+    fn double_times_second_pass_records_its_clear() {
         let catalog = carrying();
         let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
         work(&mut session, &catalog, Controls::default());
@@ -750,7 +802,36 @@ mod tests {
             &mut NeverFires,
         );
         assert_eq!(kept(&session, EscortClass::Warship), None);
-        assert!(session.out.class_orders_cleared);
+        assert!(recorded(&session).is_some_and(|pass| pass.class_orders_cleared));
+    }
+
+    #[test]
+    fn a_pass_records_whether_an_escort_flies_as_the_fade_counts_them() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        work(&mut session, &catalog, Controls::default());
+        assert!(recorded(&session).is_some_and(|pass| pass.escorts_flying));
+        session.drop_fleet_escort(0);
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(recorded(&session), Some(EscortMenuPass::default()));
+    }
+
+    #[test]
+    fn a_destroyed_players_pass_reaches_neither_the_menu_nor_the_bookkeeping() {
+        // `_HandlePlayer`'s dead branch (0x6870d-0x6888c) returns
+        // (@0x68853, @0x6888c) before the fade (@0x6df4a) and the
+        // bookkeeping (@0x6e2e8).
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        command(&mut session, WARSHIPS, EscortCommand::Dock);
+        session.ship.condition = crate::combat::hull::Condition::Destroyed;
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(recorded(&session), None);
+        assert_eq!(
+            kept(&session, EscortClass::Warship),
+            Some(EscortOrder::Dock),
+            "left kept"
+        );
     }
 
     // Entering a system, by `RuleKey::EscortOrders`.

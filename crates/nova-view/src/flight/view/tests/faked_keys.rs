@@ -276,7 +276,7 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
 /// `view`'s escort menu past its timeout and 10 steps into its fade.
 fn fading(view: &mut Faked) {
     view.step_stellars(crate::flight::escorts::MENU_TIMEOUT + TICK);
-    view.update_escort_menu(10);
+    super::faked_escorts::single_steps(view, 10);
     assert_eq!(view.escort_menu().level(), Some(22), "fading");
 }
 
@@ -451,6 +451,21 @@ fn the_escort_menu_times_out_during_the_streak() {
     view.tick(wait);
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open as the streak begins");
+    // Each tick's step: one pass through `_HandlePlayer`'s fade, the
+    // escort flying.
+    let step = nova_sim::flight_frame::StepReport {
+        steps: vec![nova_sim::flight_frame::StepRun {
+            passes: vec![nova_sim::flight_frame::PassReport {
+                escort_menu: Some(nova_sim::flight_frame::EscortMenuPass {
+                    escorts_flying: true,
+                    class_orders_cleared: false,
+                }),
+                ..nova_sim::flight_frame::PassReport::default()
+            }],
+            ..nova_sim::flight_frame::StepRun::default()
+        }],
+        stopped: false,
+    };
     let mut faded = false;
     for _ in 0..60 {
         if !view.escort_menu().is_open() {
@@ -458,6 +473,7 @@ fn the_escort_menu_times_out_during_the_streak() {
         }
         faded |= view.escort_menu().level() < Some(32);
         assert!(view.jump_under_way(), "shut before the ship arrives");
+        view.sim.queue_report(step.clone());
         view.tick(TICK);
     }
     assert!(faded, "it fades through the streak");

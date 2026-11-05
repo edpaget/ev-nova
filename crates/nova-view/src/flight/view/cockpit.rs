@@ -244,35 +244,32 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Runs the escort menu's frame for the `steps` flight steps the tick
-    /// ran ([`EscortMenu::run_steps`]): one level of its fade for each, as
-    /// `_HandlePlayer` drops one a frame, every frame, the warp's
-    /// included, as the original runs it on every frame of a jump
-    /// (@0x6df4a), with the escorts flying as the kept frame shows them
-    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)),
-    /// and shown in full again after each step of the tick's report that
-    /// cleared an escort class's kept order
-    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`):
-    /// `Screen::tick` calls it right after the frame's steps, which fill
-    /// the kept frame afresh. The fade's end beeps as Return's close does
-    /// ([`FlightView::shut_escort_menu_by_key`]).
+    /// Runs the escort menu over the passes of the tick's step report
+    /// that reached `_HandlePlayer`'s escort-menu block
+    /// ([`EscortMenu::run_passes`],
+    /// `nova_sim::flight_frame::PassReport::escort_menu`): for each, it
+    /// takes the escorts flying as that pass counted them, fades a level,
+    /// and shows in full again when that pass cleared an escort class's
+    /// kept order, before the next pass's drop. `_DoPlayGameWork` calls
+    /// `_HandlePlayer` on both of double time's passes (@0x43e19) and
+    /// nothing gates the fade (@0x6df4a-0x6e052) on the pass, so it fades a
+    /// level on each, through a jump's warp too. `Screen::tick` calls it
+    /// right after the frame's steps. The fade's end beeps as Return's
+    /// close does ([`FlightView::shut_escort_menu_by_key`]).
     ///
-    /// In double time the original fades a level on each pass:
-    /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
-    /// pass argument, and nothing gates the fade (@0x6df4a-0x6e052) on the
-    /// pass. Ours drops one a step, the re-show after the step's drop:
-    /// rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders.
-    pub(super) fn update_escort_menu(&mut self, steps: u32) {
-        let flying = self.frame.hud.escorts_flying;
-        let cleared = self
+    /// A step the session didn't run (stopped for the warp's end or the
+    /// hold's expiry) has no pass and drops nothing, as the original's
+    /// arrival returns before the fade (@0x6c625) and shuts the menu
+    /// anyway (@0x6c50e). The steps `FlightView::arrival_frame` runs after
+    /// a waited arrival come after this, on a menu the arrival has shut.
+    pub(super) fn update_escort_menu(&mut self) {
+        let passes = self
             .step_report
             .steps
             .iter()
-            .map(|run| run.class_orders_cleared);
-        if self
-            .escort_menu
-            .run_steps(self.elapsed, steps, cleared, flying)
-        {
+            .flat_map(|run| &run.passes)
+            .filter_map(|pass| pass.escort_menu);
+        if self.escort_menu.run_passes(self.elapsed, passes) {
             self.shut_escort_menu_by_key();
         }
     }

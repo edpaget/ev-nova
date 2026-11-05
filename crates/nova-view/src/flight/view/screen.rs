@@ -276,7 +276,7 @@ impl<
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
-        self.update_escort_menu(steps);
+        self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps, keyed);
         self.start_jump_effect();

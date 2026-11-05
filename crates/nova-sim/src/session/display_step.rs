@@ -8,9 +8,12 @@
 //! both passes:
 //!
 //! 1. The death timer ticks (@0x6d7e6-0x6d7f8,
-//!    [`Condition::count_down`]); then the escort classes' kept orders
-//!    are settled (@0x6e2e8-0x6e452, see the `class_orders` module), each
-//!    clear reported to the step.
+//!    [`Condition::count_down`]); then the escort menu's block: the
+//!    escorts flying counted as its fade counts them (@0x6df59-0x6dfd0),
+//!    and the escort classes' kept orders settled (@0x6e2e8-0x6e452), both
+//!    recorded for the pass's report (see the `class_orders` module). A
+//!    player destroyed at the pass's head takes the dead branch and
+//!    reaches neither, recording none (@0x68853, @0x6888c).
 //! 2. The klaxon (@0x6f1e4-0x6f227): [`SimSound::Klaxon`] while the
 //!    timer, after its tick, is above 1.0. A timer the display set on the
 //!    last pass has ticked, so the klaxon sounds from the pass after the
@@ -72,12 +75,8 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         self.ship.condition.count_down();
-        if self
-            .space
-            .settle_class_orders(&mut self.pilot, &self.statics)
-        {
-            self.out.class_orders_cleared = true;
-        }
+        self.space
+            .escort_menu_block(&mut self.pilot, &self.statics, &mut self.out, head.dead);
         if matches!(
             self.ship.condition,
             Condition::Dying {

@@ -1686,12 +1686,6 @@ pub struct StepRun {
     /// are folded back into its own streams as the next step begins.
     /// Empty in single time.
     pub second_pass_lines: Vec<RaisedLine>,
-    /// Whether `_HandlePlayer`'s class-order bookkeeping cleared an escort
-    /// class's kept order on this step's passes (@0x6e37d, @0x6e43f), each
-    /// clear showing the escort menu in full again, unstamped, while it
-    /// shows (`_ShowEscortMenu` @0x5664a, called @0x6e388 and @0x6e446).
-    /// It plays no sound.
-    pub class_orders_cleared: bool,
     /// Whether a jump collapsed on this step's passes with the screen
     /// faded to white: `_screenFaded` is up and +0x50 at −1 for the key
     /// blocks of that one pass (@0x689ea, the flag falling @0x6841f on the
@@ -1760,6 +1754,29 @@ pub struct PassReport {
     /// The wrap of the player at the pass's head, if it ran, which the
     /// view carries its own effects by.
     pub wrap: Option<PlayerWrap>,
+    /// What `_HandlePlayer`'s escort-menu block read on this pass (the
+    /// fade @0x6df4a-0x6e052) and whether the class-order bookkeeping
+    /// after it cleared an order (@0x6e2e8-0x6e452): the view runs the
+    /// menu's fade once for each pass that reports one. `None` when the
+    /// pass returned before both, a destroyed player's dead branch
+    /// (@0x68853, @0x6888c).
+    pub escort_menu: Option<EscortMenuPass>,
+}
+
+/// `_HandlePlayer`'s escort-menu block on one pass, as
+/// [`PassReport::escort_menu`] reports it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EscortMenuPass {
+    /// Whether an escort flew as the fade counted them (@0x6df59-0x6dfd0),
+    /// before the pass's bookkeeping, a disabled ship never counted.
+    pub escorts_flying: bool,
+    /// Whether the class-order bookkeeping cleared an escort class's kept
+    /// order (@0x6e37d, @0x6e43f), a lone launch's clear included (see the
+    /// session's `fighters` module): each clear shows the escort menu in
+    /// full again, unstamped, while it shows (`_ShowEscortMenu` @0x5664a,
+    /// called @0x6e388 and @0x6e446), after this pass's drop and before
+    /// the next pass's. It plays no sound.
+    pub class_orders_cleared: bool,
 }
 
 /// A ship as a [`FlightFrame`] and a [`PassReport`] carry it: one record

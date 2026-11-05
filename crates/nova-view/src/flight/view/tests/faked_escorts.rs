@@ -12,7 +12,9 @@ use super::faked_travel::{faked_lasts, sent_but_lines};
 use super::faked_world::{world, world_list};
 use super::*;
 use crate::flight::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_TIMEOUT, MENU_WIDTH};
-use nova_sim::flight_frame::{FlightEvent, FrameHud, StepReport, StepRun};
+use nova_sim::flight_frame::{
+    EscortMenuPass, FlightEvent, FrameHud, PassReport, StepReport, StepRun,
+};
 use nova_sim::{Commanded, EscortCommand, EscortGroup, EscortOrder, SimSound, TargetPick};
 
 /// A frame in Sol, the player alone, the escort rows of `present` shown
@@ -68,18 +70,64 @@ fn ui_heard(view: &mut Faked) -> Vec<UiSound> {
         .collect()
 }
 
-/// `dt` of flight time, then the escort menu's frame of one flight step,
-/// as a frame's tick runs it.
-fn menu_tick(view: &mut Faked, dt: Duration) {
-    view.step_stellars(dt);
-    view.update_escort_menu(1);
+/// A pass that reached `_HandlePlayer`'s escort-menu block, with an
+/// escort flying as `view`'s frame shows, clearing a class's kept order
+/// as `cleared` says.
+fn menu_pass(view: &Faked, cleared: bool) -> EscortMenuPass {
+    EscortMenuPass {
+        escorts_flying: view.frame.hud.escorts_flying,
+        class_orders_cleared: cleared,
+    }
 }
 
-/// Runs the escort menu's frames, one flight step each, until it shuts:
-/// how many it took, at most 40.
+/// A tick's flight steps as `Screen::tick` runs them, the flight
+/// reporting one step for each of `steps`, a pass for each escort-menu
+/// block it holds (`None` for a pass that reached none): the steps, then
+/// the escort menu's frame.
+fn steps_reporting(view: &mut Faked, steps: &[Vec<Option<EscortMenuPass>>]) {
+    let steps: Vec<StepRun> = steps
+        .iter()
+        .map(|passes| StepRun {
+            passes: passes
+                .iter()
+                .map(|&escort_menu| PassReport {
+                    escort_menu,
+                    ..PassReport::default()
+                })
+                .collect(),
+            ..StepRun::default()
+        })
+        .collect();
+    let count = u32::try_from(steps.len()).expect("a few steps");
+    view.sim.queue_report(StepReport {
+        steps,
+        stopped: false,
+    });
+    view.run_steps(count, None);
+    view.update_escort_menu();
+}
+
+/// `n` single-time steps as a tick runs them, each one pass that clears
+/// nothing, with an escort flying as `view`'s frame shows: then the
+/// escort menu's frame.
+pub(super) fn single_steps(view: &mut Faked, n: u32) {
+    let step = vec![Some(menu_pass(view, false))];
+    let steps = vec![step; usize::try_from(n).expect("a few")];
+    steps_reporting(view, &steps);
+}
+
+/// `dt` of flight time, then the escort menu's frame of one single-time
+/// flight step, as a frame's tick runs it.
+fn menu_tick(view: &mut Faked, dt: Duration) {
+    view.step_stellars(dt);
+    single_steps(view, 1);
+}
+
+/// Runs the escort menu's frames, one single-time flight step each, until
+/// it shuts: how many it took, at most 40.
 fn steps_to_shut(view: &mut Faked) -> u32 {
     for steps in 1..=40 {
-        view.update_escort_menu(1);
+        single_steps(view, 1);
         if !view.escort_menu().is_open() {
             return steps;
         }
@@ -190,9 +238,9 @@ fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
     menu_tick(&mut view, MENU_TIMEOUT);
     assert_eq!(view.escort_menu().level(), Some(32), "480 ticks: not yet");
     view.step_stellars(TICK);
-    view.update_escort_menu(0);
+    single_steps(&mut view, 0);
     assert_eq!(view.escort_menu().level(), Some(32), "no step, no drop");
-    view.update_escort_menu(2);
+    single_steps(&mut view, 2);
     assert_eq!(view.escort_menu().level(), Some(30), "a level a step");
     assert_eq!(steps_to_shut(&mut view), 30);
     assert_eq!(ui_heard(&mut view), []);
@@ -212,7 +260,7 @@ fn with_e_held_through_the_timeout_the_fades_end_beeps_once() {
         [UiSound::EscortMenuToggled],
         "the close beeps while E is down (@0x6e01e-0x6e04d)"
     );
-    view.update_escort_menu(1);
+    single_steps(&mut view, 1);
     assert_eq!(ui_heard(&mut view), [], "once");
 }
 
@@ -316,7 +364,7 @@ fn a_command_during_the_fade_shows_the_menu_in_full_again() {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
     menu_tick(&mut view, MENU_TIMEOUT + TICK);
-    view.update_escort_menu(9);
+    single_steps(&mut view, 9);
     assert_eq!(view.escort_menu().level(), Some(22));
     view.sim
         .queue_answer(commanded(EscortGroup::All, EscortCommand::Hold, false));
@@ -930,25 +978,16 @@ fn title_alpha(view: &Faked) -> Option<u8> {
 // The menu shown again as the flight clears a class's kept order
 // (`_ShowEscortMenu` @0x5664a, from `_HandlePlayer` @0x6e388, @0x6e446).
 
-/// A tick's flight steps as `Screen::tick` runs them, the flight
-/// reporting one step for each of `cleared`, which says whether that
-/// step cleared an escort class's kept order: the steps, then the escort
-/// menu's frame.
+/// A tick's single-time flight steps as `Screen::tick` runs them, the
+/// flight reporting one step of one pass for each of `cleared`, which says
+/// whether that pass cleared an escort class's kept order: the steps, then
+/// the escort menu's frame.
 fn steps_clearing(view: &mut Faked, cleared: &[bool]) {
-    let steps = cleared
+    let steps: Vec<_> = cleared
         .iter()
-        .map(|&class_orders_cleared| StepRun {
-            class_orders_cleared,
-            ..StepRun::default()
-        })
+        .map(|&cleared| vec![Some(menu_pass(view, cleared))])
         .collect();
-    view.sim.queue_report(StepReport {
-        steps,
-        stopped: false,
-    });
-    let count = u32::try_from(cleared.len()).expect("a few steps");
-    view.run_steps(count, None);
-    view.update_escort_menu(count);
+    steps_reporting(view, &steps);
 }
 
 /// A view whose escort menu is open, past its timeout and faded to
@@ -957,7 +996,7 @@ fn faded_to(level: u8) -> Faked {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
     menu_tick(&mut view, MENU_TIMEOUT + TICK);
-    view.update_escort_menu(u32::from(31 - level));
+    single_steps(&mut view, u32::from(31 - level));
     assert_eq!(view.escort_menu().level(), Some(level));
     ui_heard(&mut view);
     view
@@ -1032,16 +1071,99 @@ fn a_fade_that_ends_on_the_step_that_cleared_stays_shut() {
     assert_eq!(ui_heard(&mut view), [], "it faded out silently");
 }
 
+// Double time: `_DoPlayGameWork` calls `_HandlePlayer` on both passes
+// (@0x43e19), and nothing gates the fade (@0x6df4a-0x6e052) on the pass.
+
+/// `n` double-time steps as a tick runs them, each two passes that clear
+/// nothing, with an escort flying as `view`'s frame shows: then the
+/// escort menu's frame.
+fn double_steps(view: &mut Faked, n: usize) {
+    let step = vec![Some(menu_pass(view, false)); 2];
+    steps_reporting(view, &vec![step; n]);
+}
+
+#[test]
+fn in_double_time_the_menu_fades_a_level_on_each_pass_and_shuts_16_steps_after_its_timeout() {
+    for held in [false, true] {
+        let mut view = escorted();
+        press(&mut view, MENU_KEY);
+        if held {
+            view.held.insert(MENU_KEY);
+        }
+        ui_heard(&mut view);
+        view.step_stellars(MENU_TIMEOUT + TICK);
+        double_steps(&mut view, 1);
+        assert_eq!(view.escort_menu().level(), Some(30), "two levels a step");
+        double_steps(&mut view, 14);
+        assert_eq!(view.escort_menu().level(), Some(2), "15 steps");
+        assert_eq!(ui_heard(&mut view), []);
+        double_steps(&mut view, 1);
+        assert!(!view.escort_menu().is_open(), "the 16th step shuts it");
+        let beep = if held {
+            vec![UiSound::EscortMenuToggled]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(ui_heard(&mut view), beep, "E held: {held}");
+    }
+}
+
+#[test]
+fn a_clear_on_double_times_advance_pass_leaves_31_and_on_its_second_32() {
+    for (passes, level) in [([true, false], 31), ([false, true], 32)] {
+        let mut view = faded_to(22);
+        let step: Vec<_> = passes
+            .iter()
+            .map(|&cleared| Some(menu_pass(&view, cleared)))
+            .collect();
+        steps_reporting(&mut view, &[step]);
+        assert_eq!(view.escort_menu().level(), Some(level), "{passes:?}");
+        assert_eq!(ui_heard(&mut view), [], "silently");
+    }
+}
+
+#[test]
+fn a_double_step_whose_second_pass_counts_none_flying_fades_on_that_pass_only() {
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    press(&mut view, GROUP_KEYS[3]);
+    let flying = Some(menu_pass(&view, false));
+    let none = Some(EscortMenuPass::default());
+    view.step_stellars(TICK);
+    steps_reporting(&mut view, &[vec![flying, none]]);
+    assert_eq!(view.escort_menu().level(), Some(31), "not timed out: once");
+    assert_eq!(view.escort_menu().group(), EscortGroup::All);
+}
+
+#[test]
+fn a_pass_that_reached_no_menu_block_drops_nothing() {
+    let mut view = faded_to(22);
+    let fading = Some(menu_pass(&view, false));
+    steps_reporting(&mut view, &[vec![None], vec![None, fading]]);
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(21),
+        "the one pass that did"
+    );
+}
+
+#[test]
+fn a_tick_with_no_step_reported_drops_nothing() {
+    let mut view = faded_to(22);
+    steps_reporting(&mut view, &[]);
+    assert_eq!(view.escort_menu().level(), Some(22));
+}
+
 #[test]
 fn the_menu_is_drawn_at_its_fades_level() {
     let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
     press(&mut view, MENU_KEY);
     assert_eq!(title_alpha(&view), Some(255), "in full");
     view.step_stellars(MENU_TIMEOUT + TICK);
-    view.update_escort_menu(16);
+    single_steps(&mut view, 16);
     assert_eq!(view.escort_menu().level(), Some(16));
     assert_eq!(title_alpha(&view), Some(128), "at 16/32");
-    view.update_escort_menu(16);
+    single_steps(&mut view, 16);
     assert_eq!(title_alpha(&view), None, "shut");
 }
 

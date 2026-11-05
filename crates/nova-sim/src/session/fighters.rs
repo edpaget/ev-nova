@@ -227,8 +227,8 @@ impl Session {
     /// player targets `target` (see the module docs): its number.
     ///
     /// A lone launch's clear of a kept Return to Hangar
-    /// ([`Space::clear_lone_return`]) is reported as the class-order
-    /// bookkeeping's clears are: `_LaunchFighter` writes -1 (@0x3db4d), and
+    /// ([`Space::clear_lone_return`]) is recorded for its pass's report as
+    /// the class-order bookkeeping's clears are: `_LaunchFighter` writes -1 (@0x3db4d), and
     /// the bookkeeping later in the same `_HandlePlayer` clears -1 to 0
     /// (@0x6e42d-0x6e446), as the new fighter is unmarked and no other
     /// ship is the player's, showing the escort menu again while it shows
@@ -240,7 +240,10 @@ impl Session {
             .ship_record(npc.ship)
             .map(|record| record.escort_type);
         if self.space.clear_lone_return(escort_type) {
-            self.out.class_orders_cleared = true;
+            self.out
+                .escort_menu
+                .get_or_insert_default()
+                .class_orders_cleared = true;
         }
         let target = target
             .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
@@ -1549,10 +1552,22 @@ pub(super) mod tests {
         );
         launch(&mut session, &catalog);
         assert_eq!(session.space.escorts.class_orders, [None; 4]);
-        assert!(session.out.class_orders_cleared, "reported");
+        assert!(
+            session
+                .out
+                .escort_menu
+                .is_some_and(|pass| pass.class_orders_cleared),
+            "reported"
+        );
         let mut session = alone(&catalog);
         launch(&mut session, &catalog);
-        assert!(!session.out.class_orders_cleared, "none kept: none cleared");
+        assert!(
+            session
+                .out
+                .escort_menu
+                .is_some_and(|pass| !pass.class_orders_cleared),
+            "none kept: none cleared"
+        );
     }
 
     #[test]

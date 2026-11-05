@@ -178,6 +178,11 @@ pub(super) struct PlayerHead {
     /// (-0x2cb), which the cloak key and upkeep read (see the
     /// `player_cloak` module).
     pub(super) disabled: bool,
+    /// Whether the player was destroyed, so `_HandlePlayer` takes its dead
+    /// branch (0x6870d-0x6888c) and returns (@0x68853, @0x6888c) before
+    /// the escort menu's block and the class-order bookkeeping (see the
+    /// `class_orders` module).
+    pub(super) dead: bool,
 }
 
 impl PlayerHead {
@@ -186,6 +191,7 @@ impl PlayerHead {
         Self {
             dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
             disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
+            dead: condition == Condition::Destroyed,
         }
     }
 }
