@@ -523,4 +523,22 @@ mod tests {
             assert!(err.contains(&format!("`{uri}`")), "{uri}: {err}");
         }
     }
+
+    #[test]
+    fn each_face_keeps_its_corners_where_its_node_puts_them() {
+        // A 4 by 1 by 2 box moved to (0.5, 3, -1): its first face is the
+        // -x side's first triangle, corners 0, 1 and 3 of the cuboid.
+        let model = model(
+            "m.glb",
+            &fixture::glb([4.0, 1.0, 2.0], [0.5, 3.0, -1.0]),
+            no_files,
+        )
+        .unwrap();
+        assert_eq!(model.bounds.min, [-1.5, 2.5, -2.0]);
+        assert_eq!(model.bounds.max, [2.5, 3.5, 0.0]);
+        assert_eq!(
+            model.faces[0].points,
+            [[-1.5, 2.5, -2.0], [-1.5, 2.5, 0.0], [-1.5, 3.5, 0.0]]
+        );
+    }
 }

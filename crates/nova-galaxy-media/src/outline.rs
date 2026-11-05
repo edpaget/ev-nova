@@ -523,4 +523,18 @@ mod tests {
         assert_eq!(bare, size_box(size(30.0, 12.0), BARE));
         assert_eq!(BARE, [0xb8, 0xbc, 0xc4]);
     }
+
+    #[test]
+    fn a_face_s_up_is_its_normal_s_share_along_y() {
+        // Sides (1, 2, 3) and (2, 1, 5): normal (7, 1, -3), up 1/√59,
+        // lit 0.6 + 0.4 × 0.130.
+        let model = faces(&[[[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [2.0, 1.0, 5.0]]]);
+        let outline = silhouette(
+            &model,
+            &Placement::new(&model, Front::PlusZ, 2.0),
+            &BTreeMap::new(),
+        );
+        let lit = (255.0 * (0.6 + 0.4 / 59.0_f64.sqrt())).round() as u8;
+        assert_eq!(outline.triangles[0].color, [lit; 3]);
+    }
 }

@@ -125,4 +125,14 @@ mod tests {
         assert_eq!(unscaled.beam(), 2.0);
         assert_eq!(p.beam(), 4.0, "the 8 m placement is twice as big");
     }
+
+    #[test]
+    fn a_model_off_the_origin_is_centred_on_its_footprint() {
+        // The 2 by 4 box moved to (2, 0, 1.5), a metre a unit.
+        let glb = crate::fixture::glb([2.0, 1.0, 4.0], [2.0, 0.0, 1.5]);
+        let model = model("m.glb", &glb, |_| None).unwrap();
+        let p = Placement::new(&model, Front::PlusZ, 4.0);
+        assert_eq!(p.ship([2.0, 0.0, 1.5]), [0.0, 0.0]);
+        assert_eq!(p.ship([3.0, 0.0, 3.5]), [-1.0, 2.0]);
+    }
 }

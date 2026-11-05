@@ -180,3 +180,34 @@ pub fn gltf_with_bin(size: [f32; 3], bin_uri: &str) -> (String, Vec<u8>) {
     );
     (json, bin)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_glb_s_header_gives_its_whole_length() {
+        let glb = glb([2.0, 1.0, 4.0], [0.0; 3]);
+        let total = u32::from_le_bytes(glb[8..12].try_into().unwrap());
+        assert_eq!(total as usize, glb.len());
+    }
+
+    #[test]
+    fn a_glb_s_chunks_are_padded_to_four_bytes() {
+        for materials in [
+            &[][..],
+            &[("hull", [1.0; 4])],
+            &[("a", [1.0; 4]), ("bb", [1.0; 4])],
+        ] {
+            let glb = glb_with_materials([2.0, 1.0, 4.0], [0.0; 3], materials);
+            let word = |at: usize| u32::from_le_bytes(glb[at..at + 4].try_into().unwrap()) as usize;
+            let json = word(12);
+            let bin = word(20 + json);
+            assert_eq!(json % 4, 0, "{materials:?}");
+            assert_eq!(bin % 4, 0, "{materials:?}");
+            assert_eq!(&glb[16..20], b"JSON");
+            assert_eq!(&glb[24 + json..28 + json], b"BIN\0");
+            assert_eq!(28 + json + bin, glb.len());
+        }
+    }
+}

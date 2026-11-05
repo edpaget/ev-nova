@@ -16,6 +16,12 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A face exactly MIN_UP (0.05) up: kept by `<`, dropped by `<=`. A face
+    # whose corners are floats (rationals) has a rational normal, and none is
+    # exactly 0.05 up (x² + z² = 399 y² has no rational solution but 0), so
+    # only rounding could land on it. Faces just above and well below are
+    # pinned (`a_face_just_up_enough_is_kept`, `faces_that_face_sideways_are_dropped`).
+    "nova-galaxy-media/src/outline\\.rs:[0-9]+:[0-9]+: replace < with <= in silhouette$",
     # A hull's size in pixels is its metres times `PX_PER_METRE`, which is
     # 1.0 for now: multiplying and dividing by 1.0 give the same pixels.
     "nova-data/src/new_game/fleet\\.rs:[0-9]+:[0-9]+: replace \\* with / in pixels$",

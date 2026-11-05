@@ -138,7 +138,8 @@ pub fn extent(outline: &Outline, scale: f32) -> (u32, u32) {
 }
 
 /// The circle of `radius` round `centre` as [`SEGMENTS`] chords, each
-/// from one point on it to the next, going round once.
+/// from one point on it to the next, going round once clockwise on the
+/// screen (y down) from the point to the right of the centre.
 fn round(centre: Point, radius: f32) -> impl Iterator<Item = (Point, Point)> {
     let at = move |step: u16| {
         let (sin, cos) = (f32::from(step) * std::f32::consts::TAU / f32::from(SEGMENTS)).sin_cos();
@@ -436,5 +437,17 @@ mod tests {
             }],
         };
         assert_eq!(extent(&small, 1.0), (7, 7));
+    }
+
+    #[test]
+    fn a_disc_goes_round_clockwise_from_the_right() {
+        let mut list = DrawList::new();
+        disc(&mut list, at(100.0, 50.0), 10.0, RED);
+        let Some(DrawCommand::Triangle { corners, .. }) = list.iter().next() else {
+            panic!("a triangle");
+        };
+        let (sin, cos) = (std::f32::consts::TAU / f32::from(SEGMENTS)).sin_cos();
+        assert_eq!(corners[1], at(110.0, 50.0));
+        assert_eq!(corners[2], at(100.0 + 10.0 * cos, 50.0 + 10.0 * sin));
     }
 }
