@@ -34,7 +34,8 @@
 //!   @0xa4c76). Ours draws it on the flight's chance; the range is the
 //!   original's, the draws are not.
 //! - **A press on the landscape** (`_PortFilter` maps it to item 5,
-//!   @0x4f2b4-0x4f2d1) plays it once more, unless it loops
+//!   @0x4f2b4-0x4f2d1, its `PtInRect` @0x4f2c3 half-open, so the item's
+//!   right column and bottom row miss) plays it once more, unless it loops
 //!   (`_DoPortDialog` @0x5fe2a-0x5fe5e). It does not touch the wait.
 //! - **Leaving** halts it (`ST_HaltSound` @0x601d2-0x601eb).
 //!

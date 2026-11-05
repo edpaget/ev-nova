@@ -190,14 +190,18 @@ impl std::fmt::Debug for MetricsHandle {
 }
 
 /// Whether `input` goes to the list in `dialog`'s item `list`: a press on
-/// it.
+/// it, half-open as each filter's `PtInRect` on the item's rect is
+/// (`_MissionFilter` @0x9fff6 for item 2 and @0xa01c5 for item 3,
+/// `_MissionInfoFilter` @0x9dc50 for item 2), so the item's right column
+/// and bottom row miss. `LClick` then tests `rView` half-open itself
+/// ([`RowList::input`]).
 fn on_list(dialog: &Dialog, list: usize, input: &Input) -> bool {
     match *input {
         Input::PointerButton {
             pressed: true, at, ..
         } => dialog
             .item_bounds(list)
-            .is_some_and(|bounds| bounds.contains(at)),
+            .is_some_and(|bounds| bounds.contains_half_open(at)),
         _ => false,
     }
 }
@@ -3108,5 +3112,110 @@ mod tests {
         assert_eq!(screen.take_accept(), None, "A accepts nothing");
         screen.input(&key(Key::Char('m')));
         assert_eq!(screen.take_map_request(), Some(MapOpener::Computer(None)));
+    }
+
+    // The item gates' `PtInRect`s: half-open on each list item.
+
+    #[test]
+    fn on_list_takes_an_items_left_and_top_edges_but_not_its_right_or_bottom() {
+        let screen = screen_of(many_offers(13));
+        let dialog = screen.dialog().expect("laid out");
+        for item in [LIST_ITEM, BAR_ITEM] {
+            let at = dialog.item_bounds(item).expect("an item");
+            let mid = at.center();
+            for (point, hit) in [
+                (at.min, true),
+                (Point::new(at.max.x - 1.0, at.max.y - 1.0), true),
+                (Point::new(at.max.x, mid.y), false),
+                (Point::new(mid.x, at.max.y), false),
+            ] {
+                assert_eq!(
+                    on_list(dialog, item, &button(true, point)),
+                    hit,
+                    "item {item} at {point:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_press_on_item_3s_right_or_bottom_edge_misses_the_computers_bar() {
+        let mut screen = screen_of(many_offers(13));
+        let _ = screen.take_text_request();
+        let item_3 = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(BAR_ITEM))
+            .expect("an item");
+        for edge in [
+            Point::new(item_3.max.x, 400.0),
+            Point::new(470.0, item_3.max.y),
+        ] {
+            screen.input(&button(true, edge));
+            screen.input(&button(false, edge));
+            assert_eq!(screen.rows().map(RowList::first), Some(0), "{edge:?}");
+            assert_eq!(screen.take_text_request(), None, "{edge:?}");
+        }
+        let inside = Point::new(item_3.max.x - 1.0, item_3.max.y - 7.0);
+        screen.input(&button(true, inside));
+        assert_eq!(
+            screen.rows().map(RowList::first),
+            Some(1),
+            "a pixel inside, the down arrow"
+        );
+        screen.input(&button(false, inside));
+    }
+
+    #[test]
+    fn a_press_on_item_2s_right_or_bottom_edge_misses_the_info_bar() {
+        let mut screen = info_screen_of(many_info(10));
+        let item_2 = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_LIST_ITEM))
+            .expect("an item");
+        for edge in [
+            Point::new(item_2.max.x, item_2.center().y),
+            Point::new(item_2.max.x - 8.0, item_2.max.y),
+        ] {
+            screen.input(&button(true, edge));
+            screen.input(&button(false, edge));
+            assert_eq!(first_shown(&screen), Some(0), "{edge:?}");
+        }
+        let inside = Point::new(item_2.max.x - 1.0, item_2.max.y - 1.0);
+        screen.input(&button(true, inside));
+        assert_eq!(
+            first_shown(&screen),
+            Some(1),
+            "a pixel inside, the down arrow"
+        );
+        screen.input(&button(false, inside));
+    }
+
+    #[test]
+    fn a_press_on_the_list_items_top_left_corner_selects_the_first_row() {
+        let mut computer = screen_of(many_offers(3));
+        click_at(&mut computer, computer_row_at(1.0));
+        let _ = computer.take_text_request();
+        let corner = computer
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(LIST_ITEM))
+            .expect("an item")
+            .min;
+        click_at(&mut computer, corner);
+        assert_eq!(computer.rows().and_then(RowList::selected), Some(0));
+        assert_eq!(computer.take_text_request(), Some(MissionId(130)));
+
+        let mut info = info_screen_of(many_info(3));
+        info.input(&button(true, info_row_at(1.0)));
+        info.input(&button(false, info_row_at(1.0)));
+        let _ = info.take_text_request();
+        let corner = info
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_LIST_ITEM))
+            .expect("an item")
+            .min;
+        info.input(&button(true, corner));
+        info.input(&button(false, corner));
+        assert_eq!(info.rows().and_then(RowList::selected), Some(0));
+        assert_eq!(info.take_text_request(), Some(0));
     }
 }

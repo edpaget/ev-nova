@@ -413,7 +413,10 @@ impl RowList {
         u64::try_from(sixtieths(self.clock)).unwrap_or(u64::MAX)
     }
 
-    /// A left press at `at`.
+    /// A left press at `at`. Off the bar, it is the list's only if it
+    /// lies in the view, half-open as `LClick`'s `PtInRect` on `rView` is
+    /// (`ListMgrPACK.a` `ListClick`): the view's right column and bottom row
+    /// miss.
     fn press(&mut self, at: Point) -> ListPress {
         if self.held.is_some() {
             return ListPress::Tracking;
@@ -535,6 +538,9 @@ impl RowList {
     /// (`OneClick`, `ClearAll`), and each later one deselects the last cell
     /// picked and selects the new (`NoMods`); with one selection, which
     /// nothing else moves while the press is held, both leave just that.
+    /// The row is computed as `ClickArea` does it (`ListMgrPACK.a`), the
+    /// offset into the view `div` the row height, so the edge two rows
+    /// share goes to the lower row.
     fn pick(&mut self, at: Point, cell: &mut Option<usize>) {
         let bottom = (self.view.max.y - 1.0).max(self.view.min.y);
         let offset = (at.y.clamp(self.view.min.y, bottom) - self.view.min.y) / self.line_height;
@@ -1026,6 +1032,38 @@ mod tests {
             "a release with nothing held"
         );
         assert_eq!(rows.selected(), Some(2));
+    }
+
+    #[test]
+    fn a_press_on_the_edge_two_rows_share_goes_to_the_lower_row() {
+        let mut rows = list(3);
+        for (y, row) in [(32.0, 1), (31.0, 0), (44.0, 2), (43.0, 1), (20.0, 0)] {
+            let at = Point::new(50.0, y);
+            rows.input(&press(at));
+            assert_eq!(rows.selected(), Some(row), "y {y}: LClick's div");
+            rows.input(&release(at));
+        }
+    }
+
+    #[test]
+    fn a_press_on_the_views_right_edge_misses_and_its_left_edge_hits() {
+        let mut rows = list(3);
+        let row_2 = Point::new(50.0, 50.0);
+        rows.input(&press(row_2));
+        rows.input(&release(row_2));
+        assert_eq!(
+            rows.input(&press(Point::new(BOX.max.x, 25.0))),
+            ListPress::Ignored,
+            "the right edge"
+        );
+        assert_eq!(rows.selected(), Some(2));
+        assert_eq!(rows.input(&press(BOX.min)), ListPress::Tracking, "top-left");
+        assert_eq!(rows.selected(), Some(0));
+        rows.input(&release(BOX.min));
+        let last_column = Point::new(BOX.max.x - 1.0, 50.0);
+        assert_eq!(rows.input(&press(last_column)), ListPress::Tracking);
+        assert_eq!(rows.selected(), Some(2), "a pixel inside");
+        rows.input(&release(last_column));
     }
 
     #[test]

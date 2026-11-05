@@ -2478,10 +2478,12 @@ impl SpaceportView {
             Ok(port),
             Some(ambient),
         ) = (*input, &self.port, &self.ambient)
+            // `_PortFilter`'s `PtInRect` on item 5 (@0x4f2c3, item 5 @0x4f2cc):
+            // half-open, so the landscape's right column and bottom row miss.
             && port
                 .dialog
                 .item_bounds(LANDSCAPE_ITEM)
-                .is_some_and(|landscape| landscape.contains(at))
+                .is_some_and(|landscape| landscape.contains_half_open(at))
         {
             self.sounds.extend(ambient.pressed().map(Sound::Ui));
         }
@@ -7742,6 +7744,28 @@ pub(in crate::spaceport) mod tests {
         let mut looped = view_of(&sounding(LOOPS));
         click(&mut looped, landscape);
         assert_eq!(looped.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_press_on_the_landscapes_right_or_bottom_edge_plays_nothing() {
+        let mut view = kane();
+        frame(&mut view);
+        let landscape = item(&view, LANDSCAPE_ITEM);
+        let mid = landscape.center();
+        for edge in [
+            Point::new(landscape.max.x, mid.y),
+            Point::new(mid.x, landscape.max.y),
+        ] {
+            click(&mut view, edge);
+            assert_eq!(view.take_sounds(), [], "PtInRect is half-open: {edge:?}");
+        }
+        for inside in [
+            landscape.min,
+            Point::new(landscape.max.x - 1.0, landscape.max.y - 1.0),
+        ] {
+            click(&mut view, inside);
+            assert_eq!(view.take_sounds(), ambient(false), "{inside:?}");
+        }
     }
 
     #[test]
