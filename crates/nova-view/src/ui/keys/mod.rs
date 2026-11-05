@@ -76,6 +76,7 @@
 //! it with nothing to take, as `cancel:` reverts the recorders (@0xcff7c).
 
 mod edit;
+mod pad;
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -86,6 +87,7 @@ pub use edit::{KeyEdit, Recorded, Recording, left_key};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::dialog::outline;
+use super::pad_focus::FocusState;
 use super::prefs::{BACKDROP, BORDER};
 use super::row_list::{BarRoom, ListPress, RowList};
 use crate::bound_names::{Spelling, name_command};
@@ -96,7 +98,7 @@ use crate::input::Device;
 use crate::input::{Input, Key, MouseButton};
 use crate::key_names::KeyNames;
 use crate::keymap::keyboard::{Sides, is_modifier};
-use crate::keymap::{Bindings, Command, Context, KeyCombo, KeysDown, Kind};
+use crate::keymap::{Bindings, Command, CommandReader, Context, KeyCombo, KeysDown, Kind};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -252,7 +254,12 @@ pub struct KeysScreen {
     list: RowList,
     buttons: [Button; 3],
     trackers: [ButtonTracker; 3],
-    focus: KeysFocus,
+    /// The focus, always somewhere, and who placed it (the `pad` module).
+    focus: FocusState<KeysFocus>,
+    /// The button South's press is held on, until its release.
+    pad_pressed: Option<KeysButton>,
+    /// The pad's reader, for pad inputs only: the keys are read raw.
+    reader: CommandReader,
     keys: KeysDown,
     capture: Option<Capture>,
     press: Option<Press>,
@@ -264,7 +271,7 @@ impl std::fmt::Debug for KeysScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeysScreen")
             .field("edit", &self.edit)
-            .field("focus", &self.focus)
+            .field("focus", &self.focus())
             .field("capture", &self.capture)
             .field("closed", &self.closed)
             .finish_non_exhaustive()
@@ -306,6 +313,9 @@ impl KeysScreen {
             .with_headings(&headings);
         let buttons = KeysButton::ALL
             .map(|button| Button::new(placed(origin, button.area()), button.label()));
+        let mut focus = FocusState::default();
+        focus.set_by_keys(Some(KeysFocus::List));
+        let reader = Self::pad_reader(bindings.clone());
         let mut screen = Self {
             bounds,
             edit: KeyEdit::new(bindings, reserved, Recording::from_rulebook(rules)),
@@ -316,7 +326,9 @@ impl KeysScreen {
             list,
             buttons,
             trackers: [ButtonTracker::default(); 3],
-            focus: KeysFocus::List,
+            focus,
+            pad_pressed: None,
+            reader,
             keys: KeysDown::default(),
             capture: None,
             press: None,
@@ -365,10 +377,10 @@ impl KeysScreen {
         self.capture.map(|capture| capture.command)
     }
 
-    /// What has the keyboard focus.
+    /// What has the focus, whether the keyboard or the pad placed it.
     #[must_use]
     pub fn focus(&self) -> KeysFocus {
-        self.focus
+        self.focus.get().unwrap_or(KeysFocus::List)
     }
 
     /// A button's rectangle on the screen.
@@ -495,19 +507,19 @@ impl KeysScreen {
     fn fixed_key(&mut self, key: Key, repeat: bool) {
         match key {
             Key::ArrowUp | Key::ArrowDown => {
-                if self.focus == KeysFocus::List {
+                if self.focus() == KeysFocus::List {
                     self.list.step_wrapping(key == Key::ArrowDown);
                 }
             }
             _ if repeat => {}
-            Key::Enter | Key::NumpadEnter | Key::Space => match self.focus {
+            Key::Enter | Key::NumpadEnter | Key::Space => match self.focus() {
                 KeysFocus::List => self.start_capture(),
                 KeysFocus::Button(button) => self.press_button(button),
             },
             Key::Escape => self.press_button(KeysButton::Cancel),
-            Key::Tab => self.focus = self.focus.next(),
+            Key::Tab => self.focus.set_by_keys(Some(self.focus().next())),
             Key::Backspace | Key::Delete => {
-                if self.focus == KeysFocus::List
+                if self.focus() == KeysFocus::List
                     && let Some(&Row::Command(command)) =
                         self.list.selected().and_then(|row| self.rows.get(row))
                 {
@@ -517,6 +529,15 @@ impl KeysScreen {
             }
             _ => {}
         }
+    }
+
+    /// Lets go of every press held, activating nothing.
+    fn cancel_pointer_press(&mut self) {
+        self.list.cancel_pointer();
+        for tracker in &mut self.trackers {
+            tracker.cancel_pointer();
+        }
+        self.press = None;
     }
 
     /// Does what `button` does.
@@ -563,7 +584,7 @@ impl KeysScreen {
                 self.trackers[button.index()].input(&self.buttons[button.index()], input);
                 Some(Press::Button(button))
             } else if self.list.input(input) == ListPress::Tracking {
-                self.focus = KeysFocus::List;
+                self.focus.set_by_keys(Some(KeysFocus::List));
                 let on_bar = self
                     .list
                     .bar()
@@ -633,12 +654,11 @@ impl Screen for KeysScreen {
                 }
             }
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
+            Input::PadButton { .. } | Input::Surroundings(_) => self.pad_input(input),
             Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
-            | Input::PadButton { .. }
             | Input::PadAxis { .. }
-            | Input::Surroundings(_)
             | Input::Scroll { .. } => {}
         }
         ScreenAction::None
@@ -675,20 +695,13 @@ impl Screen for KeysScreen {
                 list,
             );
         }
-        let focused = match self.focus {
-            KeysFocus::List => self.list.view(),
-            KeysFocus::Button(button) => self.buttons[button.index()].rect,
-        };
-        outline(list, focused, self.style.up);
+        self.draw_focus(list);
     }
 
     /// Lets go of the press held, anywhere, activating nothing.
     fn cancel_pointer(&mut self) {
-        self.list.cancel_pointer();
-        for tracker in &mut self.trackers {
-            tracker.cancel_pointer();
-        }
-        self.press = None;
+        self.cancel_pointer_press();
+        self.pad_pressed = None;
     }
 
     /// Lets go of the keys held, as when the window loses the keyboard.
@@ -696,6 +709,9 @@ impl Screen for KeysScreen {
         self.keys.let_go();
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 mod tests;

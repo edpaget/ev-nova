@@ -88,6 +88,7 @@ fn rows() -> Vec<Row> {
         ),
         ("mission texts", crate::ui::mission_dialogs::pad_probe),
         ("preferences", crate::ui::prefs::pad_probe),
+        ("keys screen", crate::ui::keys::pad_probe),
     ]
 }
 

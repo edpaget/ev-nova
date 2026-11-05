@@ -19,7 +19,11 @@ fn cmd_q() -> KeyCombo {
     KeyCombo::with(Key::KeyQ, Modifiers::COMMAND)
 }
 
-fn screen_with(bindings: Bindings, names: Rc<dyn KeyNames>, rules: &Rulebook) -> KeysScreen {
+pub(super) fn screen_with(
+    bindings: Bindings,
+    names: Rc<dyn KeyNames>,
+    rules: &Rulebook,
+) -> KeysScreen {
     KeysScreen::new(
         bounds(),
         bindings,
@@ -32,7 +36,7 @@ fn screen_with(bindings: Bindings, names: Rc<dyn KeyNames>, rules: &Rulebook) ->
 }
 
 /// The screen on the default bindings, by the engine's reading.
-fn screen() -> KeysScreen {
+pub(super) fn screen() -> KeysScreen {
     screen_with(
         Bindings::default(),
         Rc::new(NoKeyNames),
@@ -46,7 +50,7 @@ fn held_screen() -> KeysScreen {
     screen_with(Bindings::default(), Rc::new(NoKeyNames), &rules)
 }
 
-fn key(key: Key, pressed: bool) -> Input {
+pub(super) fn key(key: Key, pressed: bool) -> Input {
     Input::Key {
         key,
         pressed,
@@ -55,7 +59,7 @@ fn key(key: Key, pressed: bool) -> Input {
 }
 
 /// `k` pressed and let go.
-fn tap(screen: &mut KeysScreen, k: Key) {
+pub(super) fn tap(screen: &mut KeysScreen, k: Key) {
     screen.input(&key(k, true));
     screen.input(&key(k, false));
 }
@@ -78,7 +82,7 @@ fn click(screen: &mut KeysScreen, at: Point) {
 }
 
 /// Selects `command`'s row with Down, from wherever the selection is.
-fn select(screen: &mut KeysScreen, command: impl Into<Command>) {
+pub(super) fn select(screen: &mut KeysScreen, command: impl Into<Command>) {
     let row = screen.row_of(command.into()).expect("a row");
     for _ in 0..screen.row_kinds().len() {
         if screen.row_list().selected() == Some(row) {
@@ -778,4 +782,56 @@ fn the_platform_s_key_names_name_the_rows() {
     );
     assert_eq!(cell(&screen, FlightCommand::SelectSecondary), "Ü");
     assert_eq!(cell(&screen, FlightCommand::Accelerate), "Up Arrow");
+}
+
+struct Probe(KeysScreen);
+
+impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+    fn screen(&mut self) -> &mut dyn Screen {
+        &mut self.0
+    }
+
+    fn controls(&self) -> Vec<(&'static str, Bounds)> {
+        let mut controls = vec![("list", self.0.row_list().view())];
+        for button in KeysButton::ALL {
+            controls.push((button.label(), self.0.button_bounds(button)));
+        }
+        controls
+    }
+
+    fn outcome(&mut self) -> String {
+        format!(
+            "recording {:?}, closed {}, change {}, draft {:?}",
+            self.0.recording(),
+            self.0.closed(),
+            self.0.take_change().is_some(),
+            self.0.draft() == &Bindings::default()
+        )
+    }
+
+    /// The list compares with Space, as a click there selects the row
+    /// under it.
+    fn click(&self, name: &'static str, rect: Bounds) -> Vec<Input> {
+        if name == "list" {
+            return vec![key(Key::Space, true), key(Key::Space, false)];
+        }
+        let at = rect.center();
+        [true, false]
+            .map(|pressed| Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            })
+            .to_vec()
+    }
+}
+
+/// The keys screen's row in the pad's every-screen table: opened on a
+/// binding off its default, so Restore Defaults shows, with Accelerate's
+/// row selected.
+pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+    let bindings = Bindings::default().rebound(FlightCommand::Accelerate, KeyCombo::key(Key::KeyT));
+    let mut screen = screen_with(bindings, Rc::new(NoKeyNames), &Rulebook::default());
+    select(&mut screen, FlightCommand::Accelerate);
+    Box::new(Probe(screen))
 }
