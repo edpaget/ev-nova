@@ -461,19 +461,73 @@ fn the_left_stick_scrolls_the_text_as_the_arrows_do() {
 
 #[test]
 fn a_dialog_laid_out_again_keeps_the_pads_focused_item_and_device() {
-    let mut old = dialog(&row());
-    old.input(&told(PAD));
-    tap(&mut old, PadButton::DPadLeft);
-    let mut new = dialog(&row());
-    new.carry_pad_from(&old);
-    assert_eq!(new.device(), PAD);
-    assert_eq!(new.focus(), Some(2));
-    assert_eq!(new.pad_highlight(), Some(2));
-    assert_eq!(new.keys.device(), PAD, "its reader names the pad too");
-    let keyboard = dialog(&row());
-    let mut fresh = dialog(&row());
-    fresh.carry_pad_from(&keyboard);
-    assert_eq!((fresh.device(), fresh.focus()), (Device::Keyboard, None));
+    let mut dialog = self::dialog(&row());
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadLeft);
+    dialog.lay_out_again(self::dialog(&row()));
+    assert_eq!(dialog.device(), PAD);
+    assert_eq!(dialog.focus(), Some(2));
+    assert_eq!(dialog.pad_highlight(), Some(2));
+    assert_eq!(dialog.keys.device(), PAD, "its reader names the pad too");
+    tap(&mut dialog, PadButton::DPadLeft);
+    assert_eq!(
+        tap(&mut dialog, PadButton::South),
+        Some(DialogEvent::Item(3))
+    );
+    let mut keyboard = self::dialog(&row());
+    keyboard.lay_out_again(self::dialog(&row()));
+    assert_eq!(
+        (keyboard.device(), keyboard.focus()),
+        (Device::Keyboard, None)
+    );
+}
+
+#[test]
+fn a_dialog_laid_out_again_keeps_its_focus_ring_and_bindings() {
+    use crate::keymap::{Bindings, KeyCombo, SharedBindings};
+    let bindings = SharedBindings::new(
+        Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyT)),
+    );
+    let mut dialog = dialog_with(bindings).with_focus_ring(FocusRing::Off);
+    dialog.lay_out_again(self::dialog(&row()));
+    assert_eq!(dialog.focus_ring(), FocusRing::Off);
+    assert_eq!(dialog.input(&key(Key::Enter)), None, "Return is rebound");
+    assert_eq!(dialog.input(&key(Key::KeyT)), Some(DialogEvent::Item(1)));
+}
+
+#[test]
+fn the_pads_focus_on_an_item_gone_from_the_new_layout_starts_again() {
+    let mut dialog = self::dialog(&row());
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadLeft);
+    tap(&mut dialog, PadButton::DPadLeft);
+    assert_eq!(dialog.focus(), Some(3));
+    let without_other = Dialog::new(&row(), &[(3, Role::Hidden)], Rc::new(MonoMetrics));
+    dialog.lay_out_again(without_other);
+    assert_eq!(dialog.focus(), Some(1), "the initial target, the default");
+    assert_eq!(dialog.pad_highlight(), Some(1));
+}
+
+#[test]
+fn a_dialog_told_the_pad_with_nothing_focused_shows_the_pads_focus_once_laid_out_again() {
+    let mut dialog = Dialog::new(&row(), &[(1, Role::Hidden)], Rc::new(MonoMetrics));
+    dialog.input(&told(PAD));
+    assert_eq!(dialog.focus(), Some(2), "the first target");
+    dialog.lay_out_again(self::dialog(&row()));
+    assert_eq!(dialog.pad_highlight(), Some(2), "still a target");
+    let mut empty = Dialog::new(
+        &row(),
+        &[(1, Role::Hidden), (2, Role::Hidden), (3, Role::Hidden)],
+        Rc::new(MonoMetrics),
+    );
+    empty.input(&told(PAD));
+    assert_eq!(empty.focus(), None, "nothing to focus");
+    empty.lay_out_again(self::dialog(&row()));
+    assert_eq!(
+        empty.pad_highlight(),
+        Some(1),
+        "lands on the new initial target"
+    );
 }
 
 #[test]

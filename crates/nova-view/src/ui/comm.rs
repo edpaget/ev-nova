@@ -420,12 +420,11 @@ impl CommDialog {
     }
 
     /// Shows `view`: the reply, the class and status, and the column of
-    /// buttons rebuilt for its options.
+    /// buttons rebuilt for its options, keeping the focus ring and the
+    /// pad's device and focused item ([`Dialog::lay_out_again`]).
     pub fn set_hail(&mut self, view: &HailView) {
-        let ring = self.dialog.focus_ring();
-        self.dialog = layout(&self.template, view, self.style, &self.metrics)
-            .with_focus_ring(ring)
-            .with_bindings(self.reader.bindings().clone());
+        self.dialog
+            .lay_out_again(layout(&self.template, view, self.style, &self.metrics));
         self.keys = view.options.iter().map(|option| option.key).collect();
         self.view = view.clone();
     }
@@ -1071,6 +1070,31 @@ mod tests {
 
     fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
         Input::PadButton { button, pressed }
+    }
+
+    fn tap(screen: &mut impl Screen, button: crate::input::PadButton) {
+        screen.input(&pad(button, true));
+        screen.input(&pad(button, false));
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    #[test]
+    fn a_new_hail_keeps_the_pads_device_and_focus() {
+        use crate::input::{PadButton, Surroundings};
+        let mut dialog = dialog(&view());
+        dialog.input(&Input::Surroundings(Surroundings { device: PAD }));
+        tap(&mut dialog, PadButton::RightShoulder);
+        tap(&mut dialog, PadButton::South);
+        assert_eq!(dialog.take_press(), Some(CommPress::Option(1)));
+        let focused = dialog.dialog().focus();
+        dialog.set_hail(&view());
+        assert_eq!(dialog.dialog().device(), PAD);
+        assert_eq!(dialog.dialog().pad_highlight(), focused);
+        tap(&mut dialog, PadButton::RightShoulder);
+        tap(&mut dialog, PadButton::South);
+        assert_eq!(dialog.take_press(), Some(CommPress::Option(0)));
     }
 
     #[test]

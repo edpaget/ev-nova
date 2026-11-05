@@ -27,6 +27,10 @@
 //! - **The highlight** ([`pad_focus::draw_highlight`]) shows only while the
 //!   pad was the device used last; the keyboard's ring shows only a focus
 //!   the keyboard placed.
+//! - **A dialog laid out again** while it stays open (a new hail, a new
+//!   view, a relabel) goes through [`Dialog::lay_out_again`], which keeps
+//!   the device it was told and the pad's focused item: the app tells an
+//!   open screen the device only when it changes.
 //!
 //! The original has no focus here (`_MyModalDialog` @0x59954), so none of
 //! this has a `Rulebook` key, and a focus move is silent.
@@ -47,11 +51,37 @@ impl Dialog {
         self.focus.device()
     }
 
+    /// Becomes `laid`, the same dialog laid out afresh (a new reply, new
+    /// labels, a new column of buttons), keeping what this one was given
+    /// and told: its focus ring, its bindings, the device the player used
+    /// last and the item the pad focused.
+    ///
+    /// Every host that rebuilds its dialog while it stays open goes
+    /// through here. The app tells a screen the device only when it
+    /// changes or the screen opens, so a rebuilt dialog that forgot it
+    /// would hold back every pad focus move and South from then on
+    /// ([`pad_focus`]'s "Nothing hidden acts").
+    pub fn lay_out_again(&mut self, laid: Self) {
+        let mut laid = laid
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.bindings().clone());
+        laid.carry_pad_from(self);
+        *self = laid;
+    }
+
     /// Takes the device `old` was told and the item the pad focused on
-    /// it: how a host that lays its dialog out again keeps the pad's
-    /// place, as it keeps the focus ring.
-    pub fn carry_pad_from(&mut self, old: &Self) {
+    /// it, while that item is still a target here. While the pad shows,
+    /// a focus not carried starts again on the initial target, as the
+    /// pad's surroundings place it.
+    fn carry_pad_from(&mut self, old: &Self) {
         self.focus.carry_pad_from(&old.focus);
+        if self.focus.pad_moved()
+            && let Some(item) = self.focus.get()
+            && !self.is_pad_target(item)
+        {
+            self.focus.set_by_keys(None);
+        }
+        self.surroundings(old.device());
         self.keys.follow(&Input::Surroundings(Surroundings {
             device: old.device(),
         }));

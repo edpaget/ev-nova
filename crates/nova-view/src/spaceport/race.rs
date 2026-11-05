@@ -138,9 +138,6 @@ pub struct RaceScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     style: ButtonStyle,
-    /// Whether its buttons take the keyboard focus, kept across each
-    /// relabel that lays it out again.
-    focus_ring: FocusRing,
     /// The asked bet's dialog, and whether Alt is held.
     quantity: QuantityAsk<u8>,
     /// The most an asked bet can stake.
@@ -203,7 +200,6 @@ impl RaceScreen {
         Self {
             laid,
             style,
-            focus_ring: FocusRing::default(),
             quantity: QuantityAsk::new(quantity, style, contexts::RACE, RaceCommand::Ask),
             asked_max,
             shown: None,
@@ -221,7 +217,6 @@ impl RaceScreen {
     /// (the `dialog_focus_ring` rule).
     #[must_use]
     pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
-        self.focus_ring = ring;
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_focus_ring(ring);
         }
@@ -372,14 +367,15 @@ impl RaceScreen {
         }
     }
 
-    /// Rebuilds the dialog when Leave's label changes.
+    /// Rebuilds the dialog when Leave's label changes, keeping its focus
+    /// ring, its bindings and the pad's device and focused item
+    /// ([`Dialog::lay_out_again`]).
     fn relabel(&mut self) {
         let label = self.leave_label();
         let style = self.style;
         if let Ok(laid) = &mut self.laid {
-            laid.dialog = laid_dialog(&laid.template, label, &laid.metrics.0, style);
-            laid.dialog.set_focus_ring(self.focus_ring);
-            laid.dialog.set_bindings(self.quantity.bindings().clone());
+            let relabelled = laid_dialog(&laid.template, label, &laid.metrics.0, style);
+            laid.dialog.lay_out_again(relabelled);
         }
     }
 }
@@ -727,6 +723,17 @@ mod tests {
             assert_eq!(screen.leave_label(), DONE_LABEL);
             assert_eq!(screen.dialog().map(Dialog::focus_ring), Some(ring));
         }
+    }
+
+    #[test]
+    fn a_relabel_keeps_the_device_it_was_told() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut screen = open();
+        screen.input(&Input::Surroundings(Surroundings { device: pad }));
+        screen.show_result(0, 5_000);
+        assert_eq!(screen.dialog().map(Dialog::device), Some(pad));
+        assert!(screen.dialog().and_then(Dialog::pad_highlight).is_some());
     }
 
     #[test]

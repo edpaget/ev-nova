@@ -148,7 +148,9 @@ pub struct MissionDialogs {
     /// The bindings each text reads its keys through.
     bindings: SharedBindings,
     /// What the app last told them about where they run: each text is
-    /// told as it comes to the front ([`MissionDialogs::ready_front`]).
+    /// told as it comes to the front ([`MissionDialogs::ready_front`]),
+    /// and the mission info screen as it opens
+    /// ([`MissionDialogs::open_info_with_map`]).
     surroundings: Surroundings,
 }
 
@@ -519,7 +521,8 @@ impl MissionDialogs {
     /// [`MissionDialogs::open_info`], its map key opening the map when
     /// `map_allowed`: not when it opens over an offer or the mission
     /// computer, as `_missionDialog` is set then
-    /// ([`MissionInfoScreen::with_map_allowed`]).
+    /// ([`MissionInfoScreen::with_map_allowed`]). It opens told the
+    /// device the player used last, so the pad's highlight shows at once.
     pub fn open_info_with_map(&mut self, info: MissionInfo, map_allowed: bool) {
         if info.rows.is_empty() {
             return;
@@ -532,6 +535,9 @@ impl MissionDialogs {
             .with_map_allowed(map_allowed)
             .with_focus_ring(self.focus_ring)
             .with_bindings(self.bindings.clone());
+        // Told as it opens, as each text is: the app tells the dialogs
+        // only when the device changes, or as they open.
+        screen.input(&Input::Surroundings(self.surroundings));
         self.sounds.extend(screen.take_sounds());
         self.info = Some(screen);
     }
@@ -962,6 +968,24 @@ mod tests {
         assert_eq!(dialogs.device(), PAD);
         dialogs.input(&told(crate::input::Device::Mouse));
         assert_eq!(dialogs.device(), crate::input::Device::Mouse);
+    }
+
+    #[test]
+    fn the_mission_info_screen_opens_told_the_device() {
+        let mut dialogs = dialogs();
+        dialogs.input(&told(PAD));
+        dialogs.open_info(info());
+        let screen = dialogs.info().expect("open");
+        assert_eq!(
+            screen.dialog().map(crate::ui::dialog::Dialog::device),
+            Some(PAD)
+        );
+        assert!(
+            screen
+                .dialog()
+                .and_then(crate::ui::dialog::Dialog::pad_highlight)
+                .is_some()
+        );
     }
 
     struct Probe(MissionDialogs);

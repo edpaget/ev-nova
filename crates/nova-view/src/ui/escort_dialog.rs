@@ -325,12 +325,8 @@ impl EscortDialog {
     /// Shows `view`: its lines and its buttons' labels and greying,
     /// keeping the focus ring and the pad's device and focused item.
     pub fn set_view(&mut self, view: &EscortDialogView) {
-        let ring = self.dialog.focus_ring();
-        let mut dialog = layout(&self.template, view, self.style, &self.metrics)
-            .with_focus_ring(ring)
-            .with_bindings(self.reader.bindings().clone());
-        dialog.carry_pad_from(&self.dialog);
-        self.dialog = dialog;
+        self.dialog
+            .lay_out_again(layout(&self.template, view, self.style, &self.metrics));
         self.view = view.clone();
     }
 

@@ -137,9 +137,6 @@ pub struct PlanetCommDialog {
     view: PlanetCommView,
     sprite: Option<StellarFrame>,
     dialog: Dialog,
-    /// Whether its buttons take the keyboard focus, kept across each
-    /// [`PlanetCommDialog::set_view`] that lays it out again.
-    focus_ring: FocusRing,
     press: Option<PlanetCommItem>,
     /// Whether the pointer went down on item 3 while it is hidden.
     hidden_pressed: bool,
@@ -219,7 +216,6 @@ impl PlanetCommDialog {
             view: view.clone(),
             sprite,
             dialog,
-            focus_ring: FocusRing::default(),
             press: None,
             hidden_pressed: false,
             reader: CommandReader::new(contexts::PLANET_COMM),
@@ -238,7 +234,6 @@ impl PlanetCommDialog {
     /// as `ring` says (the `dialog_focus_ring` rule).
     #[must_use]
     pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
-        self.focus_ring = ring;
         self.dialog.set_focus_ring(ring);
         self
     }
@@ -246,11 +241,8 @@ impl PlanetCommDialog {
     /// Shows `view`: its reply, its buttons and its status line, keeping
     /// the focus ring and the pad's device and focused item.
     pub fn set_view(&mut self, view: &PlanetCommView) {
-        let mut dialog = layout(&self.template, view, self.style, &self.metrics)
-            .with_bindings(self.reader.bindings().clone());
-        dialog.set_focus_ring(self.focus_ring);
-        dialog.carry_pad_from(&self.dialog);
-        self.dialog = dialog;
+        self.dialog
+            .lay_out_again(layout(&self.template, view, self.style, &self.metrics));
         self.view = view.clone();
     }
 
