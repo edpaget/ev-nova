@@ -279,22 +279,23 @@ fn the_other_refusals_mark_no_site() {
 }
 
 #[test]
-fn a_pickup_that_fits_latches_the_keys_held_at_the_next_pass() {
+fn a_pickup_that_fits_latches_the_keys_held_at_once() {
+    // `_SetAllKeyCmdFlags` (@0x6535a) runs in the pass, before J's read
+    // (@0x6b0e6).
     let picked = MissionBoardLine::Retrieved { cargo: None };
     let mut view = sol();
     view.sim
         .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(picked.clone()))));
     view.held.insert(JUMP_KEY);
     view.board();
-    view.tick(TICK);
     assert!(view.latched_down.contains(&JUMP_KEY), "latched");
+    assert!(!view.held.contains(&JUMP_KEY));
     // A failed mission's ship takes the same pickup, then the plunder.
     let mut view = sol();
     view.sim.queue_event(FlightEvent::BoardLine(picked));
     view.sim.queue_answer(Answer::Boarded(Boarding::Repelled));
     view.held.insert(JUMP_KEY);
     view.board();
-    view.tick(TICK);
     assert!(
         view.latched_down.contains(&JUMP_KEY),
         "latched by the pickup"

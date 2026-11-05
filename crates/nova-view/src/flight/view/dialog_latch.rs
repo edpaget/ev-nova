@@ -34,15 +34,20 @@
 //! The mark lasts until the hand-back takes it, so a site anywhere under
 //! the dialogs that close together latches the close: Preferences opened
 //! over an offer latches, as no `_HandlePlayer` pass runs between the
-//! offer's `_SetAllKeyCmdFlags` and the close. A site that opened no
-//! dialog (a pickup that fits, an offer accepted at once, a dialog not
-//! loaded) still latched what was down, so the next pass's key poll
-//! latches the keys held then and drops the mark
-//! ([`FlightView::settle_dialog_latch`]), which also keeps it from
-//! latching a later dialog no site follows. The original latches in the
-//! same pass, so a latched key polled later in that pass doesn't act;
-//! ours latches one pass later
-//! (rdm:phase/play-feel-8-fidelity/phase-11-latched-keys-under-unlatching-dialogs-left-outs).
+//! offer's `_SetAllKeyCmdFlags` and the close. A site that can open no
+//! dialog (a pickup that fits, an offer accepted at once, a refusal whose
+//! text the flight queues, a key read on a faded pass) latches the keys
+//! held as it runs ([`FlightView::latch_at_site`]), so a latched key
+//! polled later in that pass doesn't act, and a latched key pressed
+//! before the next pass's poll waits for its release
+//! ([`FlightView::wait_after_site`]), as no poll has cleared its latch.
+//! That poll drops the mark ([`FlightView::settle_dialog_latch`]), which
+//! keeps it from latching a later dialog no site follows. A latched key
+//! pressed between a site's dialog's close and the next poll acts on its
+//! press, where the original's latch is still set; so do two latched
+//! presses of one frame, which ours acts on in their arrival order
+//! rather than the poll's
+//! (rdm:phase/flight-controls-2/phase-6-what-flight-controls-phase-16-left-out).
 //!
 //! Under either rule B and L ([`OWN_LATCH_KEYS`]) are read as the
 //! unlatched keys are: held whenever down, their own latches deciding at
@@ -57,7 +62,7 @@ use super::{
     FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JUMP_KEY,
     LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY,
     NEAREST_STELLAR_KEY, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY,
+    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
 };
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY};
@@ -164,6 +169,55 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.latch_at_close = true;
     }
 
+    /// Runs a `_SetAllKeyCmdFlags` site that may open no dialog (a pickup
+    /// that fits, an offer accepted at once, a refusal whose text the
+    /// flight queues, a key read on the pass a jump collapsed under the
+    /// white): the keys held are latched now, in the pass, as the site
+    /// latches them before any later read of it
+    /// ([`FlightView::keep_unlatched_keys`]), and the site is marked
+    /// ([`FlightView::latch_at_close`]), so a dialog it queued, or one
+    /// opened before the next poll, latches at its close, and a latched
+    /// key pressed before that poll waits ([`FlightView::wait_after_site`]).
+    pub(super) fn latch_at_site(&mut self) {
+        self.keep_unlatched_keys();
+        self.latch_at_close();
+    }
+
+    /// A key `input` presses or repeats while a site that opened no dialog
+    /// is still marked ([`FlightView::latch_at_site`]), up to the next
+    /// poll: whether it was taken here. A latched key's latch is set
+    /// (`_SetAllKeyCmdFlags` @0x61e6d), and only a poll that reads it up
+    /// clears it, so one pressed now reads down with its latch set at that
+    /// poll and waits for its release: it is noted latched
+    /// ([`FlightView::latch_held_keys`]) and not acted on. `-` is held
+    /// for the self-destruct chord, which reads it with no latch
+    /// (@0x6fdb4-0x6fdfc), but doesn't zoom, as `_mapZoomFlag` is set
+    /// (@0x61ef8); a zoom in key is dropped. The keys flight reads live
+    /// ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]) pass. A site's dialog
+    /// takes flight's input before any press reaches it, so this bites
+    /// only after a site that opened none.
+    pub(super) fn wait_after_site(&mut self, input: &Input) -> bool {
+        let Input::Key {
+            key, pressed: true, ..
+        } = *input
+        else {
+            return false;
+        };
+        if !self.latch_at_close {
+            return false;
+        }
+        if key == ZOOM_OUT_KEY {
+            self.track_held(input);
+            return true;
+        }
+        if !POLL_ORDER.contains(&key) || OWN_LATCH_KEYS.contains(&key) {
+            return false;
+        }
+        // The zoom in keys are no flight keys: dropped.
+        self.latch_held_keys([key]);
+        true
+    }
+
     /// Lets go of flight's input for a dialog a `_SetAllKeyCmdFlags` site
     /// follows ([`FlightView::let_go_of_input`], then
     /// [`FlightView::latch_at_close`]).
@@ -175,8 +229,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Settles a site's mark at the start of a pass's key poll: still set,
     /// the site opened no dialog that took flight's input, and
     /// `_SetAllKeyCmdFlags` still latched what was down, so the keys held
-    /// are latched ([`FlightView::keep_unlatched_keys`]) and the mark is
-    /// dropped.
+    /// are latched ([`FlightView::keep_unlatched_keys`]), for a site whose
+    /// dialog never opened, and the mark is dropped: from this poll on a
+    /// latched key's press acts again. A site run on a press stands for
+    /// the pass whose poll that press is, as ours' press keys do
+    /// throughout, so the keys pressed after it and before this poll were
+    /// latched at their press ([`FlightView::wait_after_site`]).
     pub(super) fn settle_dialog_latch(&mut self) {
         if std::mem::take(&mut self.latch_at_close) {
             self.keep_unlatched_keys();

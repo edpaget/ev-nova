@@ -143,7 +143,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// guard touches (@0x7052e).
     pub(super) fn press_faded_mission_info(&mut self) {
         match self.send(FlightCommand::PressFaded(FadedPress::MissionInfo)) {
-            Answer::MissionInfo(MissionInfoPress::Faded) => self.keep_unlatched_keys(),
+            Answer::MissionInfo(MissionInfoPress::Faded) => self.latch_at_site(),
             Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             _ => {}
         }

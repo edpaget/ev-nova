@@ -617,7 +617,7 @@ fn near_places() -> FloatingLinks {
 
 /// [`floating_in`] over [`near_catalog`], its first show drawing
 /// [`near_drawing`], Proxima Near (134) linked at (40, 30) too.
-fn floating_near(frame: FlightFrame) -> Faked {
+pub(super) fn floating_near(frame: FlightFrame) -> Faked {
     let mut view = floating_over(near_catalog(), frame, near_places());
     view.sim.queue_screen(floating_shown(near_drawing(), None));
     view
@@ -640,7 +640,7 @@ fn floating_key(view: &mut Faked, k: Key, pressed: bool) {
 }
 
 /// Presses and lets go of `k`, as [`floating_key`] does.
-fn floating_tap(view: &mut Faked, k: Key) {
+pub(super) fn floating_tap(view: &mut Faked, k: Key) {
     floating_key(view, k, true);
     floating_key(view, k, false);
 }
@@ -1093,7 +1093,7 @@ fn minus_zooms_out_a_step_with_snd_150() {
 }
 
 /// Where the floating map draws Proxima Near now.
-fn near_dot(view: &Faked) -> Point {
+pub(super) fn near_dot(view: &Faked) -> Point {
     floating_dots(&floating_drawn(view))[1]
 }
 

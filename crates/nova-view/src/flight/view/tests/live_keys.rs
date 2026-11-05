@@ -221,8 +221,9 @@ fn a_dialog_opening_forgets_the_latched_keys() {
     let mut view = in_flight();
     dialog_opens(&mut view);
     back(&mut view, [JUMP_KEY], [], false);
-    // The next dialog, or a focus loss, takes the releases elsewhere.
-    dialog_opens(&mut view);
+    // The next dialog, or a focus loss, takes the releases elsewhere. (A
+    // site's dialog would keep flight's input until its close.)
+    unlatching_dialog_opens(&mut view);
     view.input(&held(JUMP_KEY));
     assert!(view.held.contains(&JUMP_KEY), "a first sight, as before");
 }
@@ -416,6 +417,95 @@ fn a_site_that_opened_no_dialog_latches_the_keys_held_at_the_next_pass_and_no_la
     let slot = STELLAR_SLOT_KEYS[0][0];
     unlatching_dialog_opens(&mut view);
     assert_eq!(back(&mut view, [slot], [], false), [press(slot)]);
+}
+
+// A site that opens no dialog (a pickup that fits, an offer accepted at
+// once) runs `_SetAllKeyCmdFlags` in its pass: a latched key read later
+// in that pass, or pressed before the next pass's poll, waits.
+
+/// The flight's answer to the next command: a mission ship's pickup that
+/// fits (`_DoMissionCargoPickup` @0x6533d, site @0x6535a).
+fn picks_up(view: &mut Faked) {
+    view.sim
+        .queue_answer(Answer::Boarded(nova_sim::Boarding::MissionShip(Some(
+            MissionBoardLine::Retrieved { cargo: None },
+        ))));
+}
+
+#[test]
+fn b_and_j_pressed_under_an_unlatching_dialog_board_a_pickup_and_j_waits() {
+    // B @0x6a98b boards, the pickup's site @0x6535a latches J before its
+    // read @0x6b0e6.
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [BOARD_KEY, JUMP_KEY], [], false), []);
+    let from = sent(&view).len();
+    picks_up(&mut view);
+    view.tick(TICK);
+    assert!(
+        sent(&view)[from..].contains(&FlightCommand::Board),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+    assert!(!jumped_since(&view, from), "{:?}", &sent(&view)[from..]);
+    assert!(view.latched_down.contains(&JUMP_KEY), "J latched");
+}
+
+#[test]
+fn a_latched_key_pressed_after_a_pickup_that_fits_waits_for_its_release() {
+    let mut view = in_flight();
+    picks_up(&mut view);
+    view.input(&key(BOARD_KEY, true));
+    let from = sent(&view).len();
+    view.input(&key(JUMP_KEY, true));
+    assert!(!jumped_since(&view, from), "pressed before the next poll");
+    view.tick(TICK);
+    assert!(!jumped_since(&view, from), "held at the poll");
+    view.input(&key(JUMP_KEY, false));
+    view.tick(TICK);
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "let go and pressed afresh");
+}
+
+#[test]
+fn i_pressed_in_the_frame_an_offer_is_accepted_at_once_waits() {
+    // Y's site @0x622ac runs before I's read @0x70411.
+    let mut view = in_flight();
+    view.sim
+        .queue_answer(Answer::Hailed(nova_sim::Hailed::Offer(
+            nova_sim::VenueOffer::Accepted {
+                mission: MissionId(130),
+                accepted: Ok(0),
+            },
+        )));
+    view.input(&key(HAIL_KEY, true));
+    assert!(view.latched_down.contains(&HAIL_KEY), "Y down at its site");
+    assert!(!view.held.contains(&HAIL_KEY));
+    let from = sent(&view).len();
+    view.input(&key(MISSION_INFO_KEY, true));
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::PressMissionInfo),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+    assert!(view.latched_down.contains(&MISSION_INFO_KEY));
+}
+
+#[test]
+fn a_minus_pressed_after_a_site_with_no_dialog_holds_but_doesnt_zoom() {
+    // `_SetAllKeyCmdFlags` sets `_mapZoomFlag` (@0x61ef8); the
+    // self-destruct chord reads `-` with no latch.
+    let mut view = super::maps::floating_near(in_sol());
+    super::maps::floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let shown = super::maps::near_dot(&view);
+    view.latch_at_close();
+    view.input(&key(ZOOM_OUT_KEY, true));
+    assert_eq!(super::maps::near_dot(&view), shown, "no zoom");
+    assert!(!view.ui_sounds.contains(&UiSound::FloatingMapZoomed));
+    assert!(view.held.contains(&ZOOM_OUT_KEY), "held for its chord");
+    view.input(&key(ZOOM_IN_KEY, true));
+    assert_eq!(super::maps::near_dot(&view), shown, "no zoom in");
 }
 
 #[test]

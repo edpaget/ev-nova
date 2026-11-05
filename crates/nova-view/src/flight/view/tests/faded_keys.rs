@@ -424,6 +424,22 @@ fn p_faded_latches_y_and_i_and_y_faded_latches_i() {
 }
 
 #[test]
+fn p_pressed_after_y_faded_and_before_the_next_poll_waits() {
+    // Y's `_SetAllKeyCmdFlags` (@0x622ac) set P's latch: a press no poll
+    // has read since finds it set.
+    let mut view = under_the_white();
+    tap(&mut view, HAIL_KEY);
+    view.sim.queue_answer(Answer::Hailed(Hailed::Faded));
+    collapses_lit(&mut view);
+    let from = sent_count(&view);
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.input(&key(PLAYER_INFO_KEY, true));
+    assert!(!view.take_player_info_request(), "P waits");
+    assert_eq!(sent(&view, from), []);
+    assert!(view.latched_down.contains(&PLAYER_INFO_KEY));
+}
+
+#[test]
 fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
     let mut view = under_the_white();
     collapses_lit(&mut view);
@@ -431,16 +447,20 @@ fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
     view.sim.queue_answer(Answer::PlayerInfoPressed(true));
     tap(&mut view, PLAYER_INFO_KEY);
     assert!(view.take_player_info_request());
+    // Each dialog closes, its site's mark taken, before the next press.
+    let _ = view.take_back_live_input(LiveKeys::default());
     view.sim
         .queue_answer(Answer::Hailed(Hailed::Comm(faked_hail_view())));
     tap(&mut view, HAIL_KEY);
     assert!(view.take_hail().is_some());
+    let _ = view.take_back_live_input(LiveKeys::default());
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(
             MissionInfo::default(),
         )));
     tap(&mut view, MISSION_INFO_KEY);
     assert!(view.take_mission_info_request().is_some());
+    let _ = view.take_back_live_input(LiveKeys::default());
     tap(&mut view, MAP_KEY);
     assert!(view.map_open());
     assert_eq!(

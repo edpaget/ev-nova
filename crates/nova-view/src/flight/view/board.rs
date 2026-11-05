@@ -37,11 +37,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///
     /// `_HandlePlayerBoardAttempt`'s sites mark the close
     /// ([`FlightView::latch_at_close`]): the plunder's (@0x659f1,
-    /// @0x65f3e) and the offer's (@0x65956) as they open, and the cargo
+    /// @0x65f3e) and the offer's (@0x65956) as they open. The cargo
     /// pickup's (@0x6535a), which follows `_DoMissionCargoPickup` whatever
-    /// it answered: a pickup that fits, whose line names the cargo and
-    /// which opens nothing, and one refused for room, whose text the
-    /// flight queues
+    /// it answered, latches the keys held at once, in the pass, and marks
+    /// too ([`FlightView::latch_at_site`]): a pickup that fits, whose line
+    /// names the cargo and which opens nothing, and one refused for room,
+    /// whose text the flight queues
     /// ([`BoardRefusal::sets_every_latch`](nova_sim::board::BoardRefusal::sets_every_latch)).
     pub(super) fn board(&mut self) -> bool {
         let answer = self.send(FlightCommand::Board);
@@ -55,7 +56,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             Answer::BoardRefused(refusal) => {
                 if refusal.sets_every_latch() {
-                    self.latch_at_close();
+                    self.latch_at_site();
                 }
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say_for(text, BOARD_REFUSAL_TICKS);
@@ -67,10 +68,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Says a mission ship's board `line`, named by the flight: a pickup's
-    /// marks its site (@0x6535a).
+    /// runs its site (@0x6535a, [`FlightView::latch_at_site`]).
     fn said_board_line(&mut self, line: MissionBoardLine) {
         if matches!(line, MissionBoardLine::Retrieved { .. }) {
-            self.latch_at_close();
+            self.latch_at_site();
         }
         let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
         self.say_for(said, BOARD_LINE_TICKS);

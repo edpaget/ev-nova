@@ -343,7 +343,7 @@ impl<
         if faded {
             self.ui_sounds.push(UiSound::MapOpened);
             self.ui_sounds.push(UiSound::MapClosed);
-            self.keep_unlatched_keys();
+            self.latch_at_site();
         } else {
             let down = self.held.contains(&MAP_KEY);
             self.open_map_by_key();

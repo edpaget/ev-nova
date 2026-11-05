@@ -344,6 +344,9 @@ impl<
             }
             return ScreenAction::None;
         }
+        if self.wait_after_site(input) {
+            return ScreenAction::None;
+        }
         if let Input::PointerButton {
             button: MouseButton::Left,
             pressed: true,
@@ -353,67 +356,83 @@ impl<
         {
             self.press_button_latched(at);
         }
-        match self.press_taken(press, jumping) {
-            Some(LAND_KEY) => {
+        if let Some(key) = self.press_taken(press, jumping)
+            && let Some(action) = self.press_key(key, input)
+        {
+            return action;
+        }
+        // A press that ran a site with no dialog (Y's offer accepted at
+        // once) is down as the site latches every key.
+        if !self.wait_after_site(input) {
+            self.track_held(input);
+        }
+        ScreenAction::None
+    }
+
+    /// A press of `key` that [`FlightView::press_taken`] let through, `input`
+    /// its event: what [`Screen::input`] answers when the press opened
+    /// something that takes the key's release, so it isn't tracked as
+    /// held, or none.
+    fn press_key(&mut self, key: Key, input: &Input) -> Option<ScreenAction> {
+        match key {
+            LAND_KEY => {
                 self.press_land();
                 // The hypergate's map takes its release, as M's does.
                 if self.map_open {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(BOARD_KEY) => {
+            BOARD_KEY => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
                 self.board_frame(true);
                 // The plunder screen or a boarding offer's dialog opened:
                 // it takes B's release, so B isn't held.
                 if self.pending_boarding || self.pending_offer.is_some() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(HAIL_KEY) => {
+            HAIL_KEY => {
                 self.hail();
                 if self.hail_opened() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(MAP_KEY) => {
+            MAP_KEY => {
                 self.open_map_by_key();
-                return ScreenAction::None;
+                return Some(ScreenAction::None);
             }
-            Some(JUMP_KEY) => {
+            JUMP_KEY => {
                 // A fresh press follows a release, which clears the latch.
                 self.jump_latch = false;
                 self.jump_frame(true);
             }
-            Some(JETTISON_KEY) => self.jettison(),
-            Some(MISSION_INFO_KEY) => {
+            JETTISON_KEY => self.jettison(),
+            MISSION_INFO_KEY => {
                 self.press_mission_info();
                 if self.pending_mission_info.is_some() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
-            Some(PLAYER_INFO_KEY) => {
+            FRAME_RATE_KEY => self.toggle_frame_rate(),
+            PLAYER_INFO_KEY => {
                 let action = self.ask_player_info();
                 if !self.pending_player_info {
                     self.track_held(input);
                 }
-                return action;
+                return Some(action);
             }
-            Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
-            Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
+            key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY) => self.hyperspace_key(key),
+            key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY) => {
                 self.zoom_floating_map(key);
             }
-            Some(TARGET_KEY) => self.press_target_latched(),
-            Some(key) if self.escort_key(key) => {}
-            Some(NEAREST_KEY) => self.press_nearest_key(),
-            Some(SELECT_KEY) => self.press_weapon_select(),
-            Some(key) => self.nav_key(key),
-            None => {}
+            TARGET_KEY => self.press_target_latched(),
+            key if self.escort_key(key) => {}
+            NEAREST_KEY => self.press_nearest_key(),
+            SELECT_KEY => self.press_weapon_select(),
+            key => self.nav_key(key),
         }
-        self.track_held(input);
-        ScreenAction::None
+        None
     }
 
     /// Draws the scene and its HUD, the fades left out: whether there was
