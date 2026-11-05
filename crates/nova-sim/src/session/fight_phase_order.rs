@@ -131,6 +131,7 @@ fn the_players_point_defence_fires_before_its_trigger_and_launches_before_its_re
         let mut session = with_an_npc_at(&catalog, 750, 550, 180);
         // The player's class, of no mass in the fixture, given one.
         session.ship.fit.hull.mass = 40.0;
+        session.ship.fit.hull.signed_mass = 40;
         session.ship.fit.armament = Armament::new([
             (WeaponSpec::new(&quad()), 1),
             (WeaponSpec::new(&kicking), 1),

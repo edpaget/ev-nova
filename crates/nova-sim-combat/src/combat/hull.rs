@@ -230,11 +230,17 @@ pub struct HullSpec {
     pub breakup: Option<Explosion>,
     /// The explosion that destroys it, its `Explode2`.
     pub explosion: Option<Explosion>,
-    /// Its mass, in tons; none below none.
+    /// Its mass, in tons; none below none. Every reader but the joust,
+    /// the succession, the heaviest pick and the recoil gates on it above
+    /// 0 or 99, where the original's signed reading agrees.
     pub mass: f32,
-    /// Its `Mass` field as the data has it, signed, which the joust
-    /// compares (`_LowLevelAIHandler` @0x861ac, @0x8623a; see
-    /// `nova_sim::ai::pursuit`).
+    /// Its `Mass` field as the data has it, signed, which the original
+    /// reads where it differs from the clamped [`HullSpec::mass`]: the
+    /// joust (`_LowLevelAIHandler` @0x861ac, @0x8623a; see
+    /// `nova_sim::ai::pursuit`), the succession (see
+    /// `nova_sim::traffic::succession`), the heaviest pick (see
+    /// `nova_sim::ai::candidates`) and the recoil
+    /// ([`ai_fire::recoil`](super::ai_fire::recoil)).
     pub signed_mass: i16,
     /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
     /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
@@ -463,7 +469,8 @@ impl HullSpec {
     /// for a ship of [`DEATH_SIZE_MASS`] tons or more, and none for a
     /// lighter one or a planet-type one ([`HullSpec::planet_type`]). It is
     /// also the reach of the shockwave the explosion makes (see
-    /// [`shockwave`](super::shockwave)).
+    /// [`shockwave`](super::shockwave)). The original compares the signed
+    /// `Mass` (0x2d92b), so a negative one dies as small as the clamped 0.
     #[must_use]
     pub fn death_size(&self) -> f32 {
         if self.mass >= DEATH_SIZE_MASS && !self.planet_type {

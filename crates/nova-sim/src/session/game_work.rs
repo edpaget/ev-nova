@@ -1142,6 +1142,7 @@ mod tests {
         let mut session = warmed(&catalog);
         // The player's class, of no mass in the fixture, given one.
         session.ship.fit.hull.mass = 40.0;
+        session.ship.fit.hull.signed_mass = 40;
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
