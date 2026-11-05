@@ -1,6 +1,8 @@
 //! A list of one-line rows in a box, one of them selected, with a scroll
 //! bar when they don't fit: the mission computer's and the mission info
-//! screen's lists, as the List Manager runs them ([`RowList`]).
+//! screen's lists, as the List Manager runs them ([`RowList`]). The keys
+//! screen's list adds three things the List Manager's lists don't use: a
+//! second column, heading rows and marked rows.
 
 use std::time::Duration;
 
@@ -19,6 +21,10 @@ pub const ROW_SIZE: f32 = 10.0;
 pub const ROW_COLOR: Color = Color::WHITE;
 /// The selected row's highlight.
 pub const SELECTED: Color = Color::rgba(48, 64, 112, 255);
+/// A heading row's colour ([`RowList::with_headings`]).
+pub const HEADING_COLOR: Color = Color::DIM;
+/// A marked row's colour ([`RowList::set_marked`]).
+pub const MARKED_COLOR: Color = Color::ERROR;
 
 /// How far `_SetupMissionInfoList` narrows the view for its bar
 /// (`rView.right -= 15`, @0x9df84-0x9df90).
@@ -133,9 +139,23 @@ enum Held {
 ///   so one past the rows reads as none.
 ///
 /// Nothing is drawn outside the view and the bar.
+///
+/// Three additions serve the keys screen and change nothing for a list
+/// that doesn't use them: a second column of text, drawn at an offset
+/// from each row's left ([`RowList::with_column`]); heading rows, drawn in
+/// [`HEADING_COLOR`], which a press never selects and a step passes over
+/// ([`RowList::with_headings`]); and marked rows, drawn in
+/// [`MARKED_COLOR`] ([`RowList::set_marked`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowList {
     rows: Vec<String>,
+    /// The second column, if any: its offset from the view's left and
+    /// each row's text.
+    column: Option<(f32, Vec<String>)>,
+    /// Which rows are headings, by index; none when empty.
+    headings: Vec<bool>,
+    /// Which rows are marked, by index.
+    marked: Vec<bool>,
     view: Bounds,
     bar: Option<ListBar>,
     line_height: f32,
@@ -177,6 +197,9 @@ impl RowList {
         let selected = (!rows.is_empty()).then_some(0);
         Self {
             extent: rows.len(),
+            column: None,
+            headings: Vec::new(),
+            marked: vec![false; rows.len()],
             rows,
             bar: overflows.then(|| ListBar::beside(view)),
             view,
@@ -199,10 +222,78 @@ impl RowList {
         self
     }
 
+    /// This list with a second column, `cells` (one a row, the rest
+    /// empty), drawn `at` from the view's left.
+    #[must_use]
+    pub fn with_column(mut self, at: f32, mut cells: Vec<String>) -> Self {
+        cells.resize(self.rows.len(), String::new());
+        self.column = Some((at, cells));
+        self
+    }
+
+    /// This list with the rows at `indices` as headings, and the first row
+    /// that is no heading selected (none when every row is one).
+    #[must_use]
+    pub fn with_headings(mut self, indices: &[usize]) -> Self {
+        self.headings = (0..self.rows.len())
+            .map(|index| indices.contains(&index))
+            .collect();
+        self.selected = (0..self.rows.len()).find(|&index| !self.is_heading(index));
+        self
+    }
+
     /// Every row.
     #[must_use]
     pub fn rows(&self) -> &[String] {
         &self.rows
+    }
+
+    /// Sets row `index`'s text; nothing past the rows.
+    pub fn set_row(&mut self, index: usize, text: &str) {
+        if let Some(row) = self.rows.get_mut(index) {
+            text.clone_into(row);
+        }
+    }
+
+    /// Row `index`'s second-column text, if the list has the column and
+    /// the row.
+    #[must_use]
+    pub fn cell(&self, index: usize) -> Option<&str> {
+        self.column
+            .as_ref()
+            .and_then(|(_, cells)| cells.get(index))
+            .map(String::as_str)
+    }
+
+    /// Sets row `index`'s second-column text; nothing without the column
+    /// or past the rows.
+    pub fn set_cell(&mut self, index: usize, text: &str) {
+        if let Some(cell) = self
+            .column
+            .as_mut()
+            .and_then(|(_, cells)| cells.get_mut(index))
+        {
+            text.clone_into(cell);
+        }
+    }
+
+    /// Whether row `index` is a heading.
+    #[must_use]
+    pub fn is_heading(&self, index: usize) -> bool {
+        self.headings.get(index).copied().unwrap_or(false)
+    }
+
+    /// Marks row `index`, or not; nothing past the rows.
+    pub fn set_marked(&mut self, index: usize, marked: bool) {
+        if let Some(mark) = self.marked.get_mut(index) {
+            *mark = marked;
+        }
+    }
+
+    /// Whether row `index` is marked.
+    #[must_use]
+    pub fn is_marked(&self, index: usize) -> bool {
+        self.marked.get(index).copied().unwrap_or(false)
     }
 
     /// The selected index, if any: past the rows when a step over the
@@ -334,10 +425,26 @@ impl RowList {
     /// and the back step the last (@0x9d839, @0x9da60; `_MissionFilter`
     /// @0x9f949, @0x9fcfa). Returns whether the selection changed: never
     /// with nothing to step over, nor from the only one.
+    ///
+    /// A heading is stepped over, as many steps as it takes, so a list of
+    /// headings alone selects nothing.
     pub fn step_wrapping(&mut self, forward: bool) -> bool {
+        let before = self.selected;
+        for _ in 0..self.extent {
+            self.step_once(forward);
+            if !self.selected.is_some_and(|index| self.is_heading(index)) {
+                return self.selected != before;
+            }
+        }
+        self.selected = before;
+        false
+    }
+
+    /// One step of [`RowList::step_wrapping`], headings and all.
+    fn step_once(&mut self, forward: bool) {
         let count = self.extent;
         if count == 0 {
-            return false;
+            return;
         }
         let before = self.selected;
         if let Some(index) = before {
@@ -358,7 +465,6 @@ impl RowList {
         };
         self.selected = Some(next);
         self.auto_scroll();
-        self.selected != before
     }
 
     /// The pointer's input: a left press on the bar or in the view starts
@@ -542,7 +648,7 @@ impl RowList {
         if *cell == Some(row) {
             return;
         }
-        self.selected = (row < self.rows.len()).then_some(row);
+        self.selected = (row < self.rows.len() && !self.is_heading(row)).then_some(row);
         *cell = Some(row);
     }
 
@@ -588,18 +694,31 @@ impl RowList {
         }
         for (index, text) in self.rows.iter().enumerate() {
             if let Some(row) = self.row_bounds(index) {
-                let command = DrawCommand::Text {
-                    text: text.clone(),
-                    font: Font::Geneva,
-                    origin: row.min,
-                    size: ROW_SIZE,
-                    wrap_width: None,
-                    color: ROW_COLOR,
-                };
-                if row.max.y > view.max.y {
-                    list.clipped(view, command);
+                let color = if self.is_heading(index) {
+                    HEADING_COLOR
+                } else if self.is_marked(index) {
+                    MARKED_COLOR
                 } else {
-                    list.push(command);
+                    ROW_COLOR
+                };
+                let cell = self
+                    .column
+                    .as_ref()
+                    .map(|(at, cells)| (Point::new(row.min.x + at, row.min.y), &cells[index]));
+                for (origin, text) in std::iter::once((row.min, text)).chain(cell) {
+                    let command = DrawCommand::Text {
+                        text: text.clone(),
+                        font: Font::Geneva,
+                        origin,
+                        size: ROW_SIZE,
+                        wrap_width: None,
+                        color,
+                    };
+                    if row.max.y > view.max.y {
+                        list.clipped(view, command);
+                    } else {
+                        list.push(command);
+                    }
                 }
             }
         }
@@ -1437,6 +1556,101 @@ mod tests {
         let mut rows = list(2);
         rows.clear_selection();
         assert_eq!(drawn(&rows).len(), 2, "the two rows' text alone");
+    }
+
+    /// Each text drawn, with where and in what colour.
+    fn coloured(rows: &RowList) -> Vec<(String, Point, Color)> {
+        drawn(rows)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } => Some((text, origin, color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_second_column_draws_each_row_s_cell_at_its_offset() {
+        let mut rows = list(2).with_column(40.0, vec!["A".into(), "B".into()]);
+        rows.set_cell(1, "C");
+        assert_eq!(rows.cell(1), Some("C"));
+        assert_eq!(rows.cell(2), None);
+        assert_eq!(
+            texts(&rows),
+            [
+                ("Row 0".to_owned(), Point::new(10.0, 20.0)),
+                ("A".to_owned(), Point::new(50.0, 20.0)),
+                ("Row 1".to_owned(), Point::new(10.0, 32.0)),
+                ("C".to_owned(), Point::new(50.0, 32.0)),
+            ]
+        );
+        rows.set_row(0, "Renamed");
+        assert_eq!(rows.rows()[0], "Renamed");
+    }
+
+    #[test]
+    fn a_partly_shown_row_s_cell_is_clipped_to_the_view_too() {
+        let rows = list(4).with_column(40.0, (0..4).map(|n| format!("c{n}")).collect());
+        let clipped = drawn(&rows)
+            .into_iter()
+            .filter(|command| matches!(command, DrawCommand::Clipped { .. }))
+            .count();
+        assert_eq!(clipped, 2, "the fourth row's text and its cell");
+    }
+
+    #[test]
+    fn a_heading_is_drawn_dim_never_selected_and_stepped_over() {
+        let mut rows = list(3).with_headings(&[0, 2]);
+        assert_eq!(rows.selected(), Some(1), "the first row that is no heading");
+        assert!(rows.is_heading(0));
+        assert!(!rows.is_heading(1));
+        assert!(!rows.step_wrapping(true), "the one row left to select");
+        assert_eq!(rows.selected(), Some(1));
+        rows.input(&press(Point::new(20.0, 21.0)));
+        rows.input(&release(Point::new(20.0, 21.0)));
+        assert_eq!(
+            rows.selected(),
+            None,
+            "a press on a heading selects nothing"
+        );
+        assert_eq!(coloured(&rows)[0].2, HEADING_COLOR);
+        assert_eq!(coloured(&rows)[1].2, ROW_COLOR);
+        let mut all = list(2).with_headings(&[0, 1]);
+        assert_eq!(all.selected(), None);
+        assert!(!all.step_wrapping(true), "nothing to select");
+        assert_eq!(all.selected(), None);
+    }
+
+    #[test]
+    fn stepping_wraps_over_headings_both_ways() {
+        let mut rows = tall(5).with_headings(&[0, 3]);
+        assert_eq!(rows.selected(), Some(1));
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(2));
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(4), "past the heading at 3");
+        assert!(rows.step_wrapping(true));
+        assert_eq!(rows.selected(), Some(1), "round, past the heading at 0");
+        assert!(rows.step_wrapping(false));
+        assert_eq!(rows.selected(), Some(4));
+    }
+
+    #[test]
+    fn a_marked_row_draws_its_text_and_cell_in_the_marked_colour() {
+        let mut rows = list(2).with_column(40.0, vec!["A".into(), "B".into()]);
+        rows.set_marked(1, true);
+        assert!(rows.is_marked(1));
+        let colours: Vec<Color> = coloured(&rows).into_iter().map(|(.., c)| c).collect();
+        assert_eq!(colours, [ROW_COLOR, ROW_COLOR, MARKED_COLOR, MARKED_COLOR]);
+        rows.set_marked(1, false);
+        assert!(!rows.is_marked(1));
+        rows.set_marked(9, true);
+        assert!(!rows.is_marked(9), "no such row");
     }
 
     #[test]
