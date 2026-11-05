@@ -188,7 +188,8 @@ use crate::flight::escorts::NUMBER_WORDS;
 use crate::flight::view::is_map_press;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, ModifierHeld};
+use crate::input::{Input, Key};
+use crate::keymap::{OutfitterCommand, contexts};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -606,7 +607,12 @@ impl OutfitterScreen {
             arrow_moves,
             order: None,
             held: None,
-            quantity: QuantityAsk::new(quantity.ok(), style, ModifierHeld::either(COUNT_KEYS)),
+            quantity: QuantityAsk::new(
+                quantity.ok(),
+                style,
+                contexts::OUTFITTER,
+                OutfitterCommand::Count,
+            ),
             alert: ModalHost::default(),
             alert_template: alert.ok(),
             offering: None,

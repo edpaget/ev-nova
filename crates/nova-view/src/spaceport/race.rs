@@ -32,7 +32,8 @@
 //!   ([`RaceScreen::take_help_request`]), which whoever holds the session
 //!   loads and shows over it (@0x48b89-0x48bd3).
 //! - **A racer** (@0x48bdc-0x48e7b): with the left Option (Alt) held
-//!   ([`ASK_KEY`], whose key code `_KeyCheck(0x3a)` polls), the quantity
+//!   ([`RaceCommand::Ask`] through the key map, whose default is the key
+//!   code `_KeyCheck(0x3a)` polls), the quantity
 //!   dialog asks for the bet ([`Purpose::Bet`], opening at the asked
 //!   bet's most), asked even when a winner is shown, and Cancel gives 0;
 //!   otherwise the house bet. Then, with a winner shown or an asked 0, the
@@ -59,7 +60,8 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, ModifierHeld};
+use crate::input::Input;
+use crate::keymap::{Command, RaceCommand, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
@@ -128,10 +130,6 @@ impl std::fmt::Debug for MetricsHandle {
         f.write_str("TextMetrics")
     }
 }
-
-/// Held as a racer is clicked, asks for the bet: the left Option alone,
-/// as `_DoRaceDialog` polls its key code (`_KeyCheck(0x3a)` @0x48be9).
-pub const ASK_KEY: Key = Key::AltLeft;
 
 /// The race dialog, open over the bar.
 #[derive(Clone, Debug)]
@@ -205,7 +203,7 @@ impl RaceScreen {
             laid,
             style,
             focus_ring: FocusRing::default(),
-            quantity: QuantityAsk::new(quantity, style, ModifierHeld::only(ASK_KEY)),
+            quantity: QuantityAsk::new(quantity, style, contexts::RACE, RaceCommand::Ask),
             asked_max,
             shown: None,
             chosen: None,
@@ -226,6 +224,19 @@ impl RaceScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_focus_ring(ring);
         }
+        self
+    }
+
+    /// The race reading its keys through `bindings`: its Option
+    /// ([`RaceCommand::Ask`], held as a racer is clicked, asks for the bet:
+    /// the left Option alone by default, as `_DoRaceDialog` polls its key
+    /// code, `_KeyCheck(0x3a)` @0x48be9), and its dialogs'.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.quantity.set_bindings(bindings);
         self
     }
 
@@ -367,6 +378,7 @@ impl RaceScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog = laid_dialog(&laid.template, label, &laid.metrics.0, style);
             laid.dialog.set_focus_ring(self.focus_ring);
+            laid.dialog.set_bindings(self.quantity.bindings().clone());
         }
     }
 }
@@ -400,13 +412,15 @@ impl Screen for RaceScreen {
             }
             return ScreenAction::None;
         }
-        self.quantity.follow_alt(input);
+        let command = self.quantity.follow_alt(input);
         let Ok(laid) = &mut self.laid else {
-            if let Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
+            if let Some(command) = command
+                && command.pressed
+                && !command.repeat
+                && matches!(
+                    command.command,
+                    Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                )
             {
                 self.closed = true;
             }
@@ -484,7 +498,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::ItemTemplate;
     use crate::ui::quantity::{CANCEL_ITEM, OK_ITEM};
@@ -843,6 +857,28 @@ mod tests {
         click_quantity(&mut screen, OK_ITEM);
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_bet(), Some((1, Bet::Asked(5_000))));
+    }
+
+    /// The race reads its Option through the key map it is given: Ask
+    /// rebound to Q asks on Q held and no longer on the left Option.
+    #[test]
+    fn a_rebound_ask_asks_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, RaceCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(RaceCommand::Ask, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = open().with_bindings(bindings);
+        screen.input(&key(Key::AltLeft, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(
+            screen.quantity().is_none(),
+            "the left Option no longer asks"
+        );
+        assert_eq!(screen.take_bet(), Some((1, Bet::House)));
+        screen.input(&key(Key::AltLeft, false, false));
+        screen.input(&key(Key::KeyQ, true, false));
+        click(&mut screen, racer_item(2));
+        assert!(screen.quantity().is_some(), "Q asks");
     }
 
     #[test]

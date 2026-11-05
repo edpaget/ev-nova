@@ -4,24 +4,27 @@
 //! [`QuantityAsk`] opens the dialog (`DLOG` 1003, or its fallback) at the
 //! most a trade allows, OK titled Buy or Sell and asking [`PROMPT`] (or,
 //! for the bar race's bet, titled Bet and asking the amount to bet), and
-//! drops the typed key when B or S opened it. It follows Alt (the keys
-//! its host reads, [`MAX_LOT_KEYS`] or the race's left Option alone),
-//! which is held to ask for a count, both while the
-//! dialog is open and, through [`QuantityAsk::follow_alt`], while it is
-//! not. A count above 0 confirmed there is given back with what it
-//! counts; 0 or Cancel closes it with nothing ([`QuantityAsk::input`]),
-//! or with a count of 0 ([`QuantityAsk::answer`]).
+//! drops the typed key when B or S opened it. It follows Alt, its host's
+//! held command (the exchange's
+//! [`TradeCommand::MaxLot`](crate::keymap::TradeCommand::MaxLot), the
+//! outfitter's [`OutfitterCommand::Count`](crate::keymap::OutfitterCommand::Count)
+//! or the race's [`RaceCommand::Ask`](crate::keymap::RaceCommand::Ask)),
+//! read through the key map as its host's screen list reads it, which is
+//! held to ask for a count, both while the dialog is open and, through
+//! [`QuantityAsk::follow_alt`], while it is not. A count above 0
+//! confirmed there is given back with what it counts; 0 or Cancel closes
+//! it with nothing ([`QuantityAsk::input`]), or with a count of 0
+//! ([`QuantityAsk::answer`]).
 
 use std::rc::Rc;
 
 use nova_sim::{Direction, gamble};
 
 use super::modal::ModalHost;
-#[cfg(any(doc, test))]
-use super::trade::MAX_LOT_KEYS;
 use super::trade::{BUY_LABEL, SELL_LABEL};
 use crate::draw::DrawList;
-use crate::input::{Input, ModifierHeld};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, ScreenContexts, SharedBindings};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
@@ -80,35 +83,59 @@ pub struct QuantityAsk<T> {
     /// The dialog's template, if the interface file has one.
     template: Option<DialogTemplate>,
     style: ButtonStyle,
-    /// Whether Alt is held, as the host reads it.
-    alt: ModifierHeld,
+    /// The keys it follows, read as its host's screen list reads them.
+    keys: CommandReader,
+    /// The host's command held for Alt.
+    alt: Command,
 }
 
 impl<T> QuantityAsk<T> {
-    /// Nothing open and Alt not held: `alt` is how the host reads it,
-    /// either Option for the exchange's and the outfitter's `optionKey`
-    /// bit, the left one for the race's key-code poll. The dialog is laid
-    /// out by `template` (or, without one, its fallback), its buttons
+    /// Nothing open and Alt not held: `alt` is the host's command held
+    /// for it, read through `screen`, the host's screen list, over the
+    /// default bindings until given the app's
+    /// ([`QuantityAsk::set_bindings`]): the exchange's and the
+    /// outfitter's Option, either key, as they read the `optionKey` bit,
+    /// or the race's left one, as it polls the key code. The dialog is
+    /// laid out by `template` (or, without one, its fallback), its buttons
     /// labelled in `style`.
     #[must_use]
-    pub fn new(template: Option<DialogTemplate>, style: ButtonStyle, alt: ModifierHeld) -> Self {
+    pub fn new(
+        template: Option<DialogTemplate>,
+        style: ButtonStyle,
+        screen: ScreenContexts,
+        alt: impl Into<Command>,
+    ) -> Self {
         Self {
             host: ModalHost::default(),
             template,
             style,
-            alt,
+            keys: CommandReader::new(screen),
+            alt: alt.into(),
         }
     }
 
-    /// Follows Alt's presses, repeats and releases.
-    pub fn follow_alt(&mut self, input: &Input) {
-        self.alt.follow(input);
+    /// Reads Alt, and the keys of each dialog it opens from then on,
+    /// through `bindings`.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.keys.set_bindings(bindings);
+    }
+
+    /// The bindings it reads.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
+    }
+
+    /// Follows a key's press, repeat or release, and says which of the
+    /// host's commands it pressed, repeated or let go of, if any.
+    pub fn follow_alt(&mut self, input: &Input) -> Option<CommandInput> {
+        self.keys.follow(input)
     }
 
     /// Whether Alt is held.
     #[must_use]
     pub fn alt_held(&self) -> bool {
-        self.alt.held()
+        self.keys.held(self.alt)
     }
 
     /// Opens the dialog over the screen for `payload`: OK titled and the
@@ -139,7 +166,8 @@ impl<T> QuantityAsk<T> {
             .ok()
         });
         let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, prompt, self.style, metrics));
+            .unwrap_or_else(|| QuantityDialog::fallback(max, title, prompt, self.style, metrics))
+            .with_bindings(self.keys.bindings().clone());
         if by_key {
             dialog.flush_typed_key();
         }
@@ -175,7 +203,7 @@ impl<T> QuantityAsk<T> {
         if !self.is_open() {
             return None;
         }
-        self.follow_alt(input);
+        self.keys.follow(input);
         self.host.input(input, sounds)
     }
 
@@ -191,7 +219,7 @@ impl<T> QuantityAsk<T> {
 
     /// Lets go of Alt, and of the keys held in the open dialog.
     pub fn release_keys(&mut self) {
-        self.alt.let_go();
+        self.keys.let_go();
         self.host.release_keys();
     }
 }
@@ -202,6 +230,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
+    use crate::keymap::{RaceCommand, TradeCommand, contexts};
     use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -235,7 +264,8 @@ mod tests {
         QuantityAsk::new(
             Some(template()),
             ButtonStyle::STOCK,
-            ModifierHeld::either(MAX_LOT_KEYS),
+            contexts::TRADE,
+            TradeCommand::MaxLot,
         )
     }
 
@@ -351,7 +381,8 @@ mod tests {
             let mut ask = QuantityAsk::new(
                 template,
                 ButtonStyle::STOCK,
-                ModifierHeld::either(MAX_LOT_KEYS),
+                contexts::TRADE,
+                TradeCommand::MaxLot,
             );
             ask.open("row", Direction::Buy, 7, false, Rc::clone(&metrics));
             let bounds = ask.dialog().expect("open").dialog().bounds();
@@ -438,16 +469,16 @@ mod tests {
     fn alt_is_followed_while_open_and_while_closed() {
         let mut ask = ask();
         assert!(!ask.alt_held());
-        ask.follow_alt(&key(MAX_LOT_KEYS[0], true));
+        ask.follow_alt(&key(Key::AltLeft, true));
         assert!(ask.alt_held());
         ask.follow_alt(&key(Key::KeyB, false));
         assert!(ask.alt_held(), "another key changes nothing");
         ask.open("row", Direction::Buy, 7, false, Rc::new(MonoMetrics));
-        ask.input(&key(MAX_LOT_KEYS[0], false), &mut Vec::new());
+        ask.input(&key(Key::AltLeft, false), &mut Vec::new());
         assert!(!ask.alt_held());
         ask.input(
             &Input::Key {
-                key: MAX_LOT_KEYS[0],
+                key: Key::AltLeft,
                 pressed: true,
                 repeat: true,
             },
@@ -455,7 +486,7 @@ mod tests {
         );
         assert!(ask.alt_held(), "a repeat holds it");
         assert!(ask.is_open());
-        ask.follow_alt(&key(MAX_LOT_KEYS[0], false));
+        ask.follow_alt(&key(Key::AltLeft, false));
         assert!(!ask.alt_held());
     }
 
@@ -467,7 +498,8 @@ mod tests {
         let mut left = QuantityAsk::<&str>::new(
             Some(template()),
             ButtonStyle::STOCK,
-            ModifierHeld::only(Key::AltLeft),
+            contexts::RACE,
+            RaceCommand::Ask,
         );
         left.follow_alt(&key(Key::AltRight, true));
         assert!(!left.alt_held(), "the left Option alone");
@@ -478,11 +510,11 @@ mod tests {
     #[test]
     fn releasing_the_keys_lets_go_of_alt_open_or_closed() {
         let mut ask = ask();
-        ask.follow_alt(&key(MAX_LOT_KEYS[0], true));
+        ask.follow_alt(&key(Key::AltLeft, true));
         ask.release_keys();
         assert!(!ask.alt_held());
         ask.open("row", Direction::Buy, 7, false, Rc::new(MonoMetrics));
-        ask.input(&key(MAX_LOT_KEYS[0], true), &mut Vec::new());
+        ask.input(&key(Key::AltLeft, true), &mut Vec::new());
         ask.release_keys();
         assert!(!ask.alt_held());
         assert!(ask.is_open(), "it stays open");
@@ -503,7 +535,7 @@ mod tests {
     fn input_while_closed_changes_nothing() {
         let mut ask = ask();
         let mut sounds = vec![Sound::Ui(UiSound::ButtonUp)];
-        assert_eq!(ask.input(&key(MAX_LOT_KEYS[0], true), &mut sounds), None);
+        assert_eq!(ask.input(&key(Key::AltLeft, true), &mut sounds), None);
         assert!(!ask.alt_held(), "only follow_alt follows it when closed");
         assert_eq!(sounds, [Sound::Ui(UiSound::ButtonUp)]);
         assert!(!ask.is_open());

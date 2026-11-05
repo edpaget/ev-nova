@@ -102,6 +102,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key, ModifierHeld, OPTION_KEYS, SHIFT_KEYS};
+use crate::keymap::{TradeCommand, contexts};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -339,7 +340,7 @@ impl TradeScreen {
             colors: ListColors::STOCK,
             selected: 0,
             top: 0,
-            quantity: QuantityAsk::new(quantity.ok(), style, ModifierHeld::either(MAX_LOT_KEYS)),
+            quantity: QuantityAsk::new(quantity.ok(), style, contexts::TRADE, TradeCommand::MaxLot),
             offering: None,
             asks: KeyAsks::default(),
             order: None,
