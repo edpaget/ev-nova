@@ -12,10 +12,13 @@ use crate::session::Session;
 impl Session {
     /// Runs the travel `command`, handed `collab`, and answers it:
     ///
-    /// - [`FlightCommand::Jump`] runs [`Session::begin_jump`]: answered
-    ///   [`Answer::Jumped`] with the system bound for, or
-    ///   [`Answer::JumpRefused`] with why and whether the player is told
-    ///   ([`Session::jump_refusal_told`]), its beep raised when told.
+    /// - [`FlightCommand::Jump`] engages the gate autopilot when it would
+    ///   ([`Session::engage_gate_pilot`]), answered [`Answer::GatePilot`]
+    ///   with the system it flies toward; otherwise it runs
+    ///   [`Session::begin_jump`]: answered [`Answer::Jumped`] with the
+    ///   system bound for, or [`Answer::JumpRefused`] with why and whether
+    ///   the player is told ([`Session::jump_refusal_told`]), its beep
+    ///   raised when told.
     /// - [`FlightCommand::Land`] runs [`Session::land`]: answered
     ///   [`Answer::LandPress`], or [`Answer::LandRefused`] with why and
     ///   the gate the refusal's stellar is ([`Session::gate_kind`]).
@@ -53,11 +56,14 @@ impl Session {
     ) -> Answer {
         let chance = &mut *collab.chance;
         match command {
-            FlightCommand::Jump => match self.begin_jump() {
-                Ok(to) => Answer::Jumped(to),
-                Err(refusal) => Answer::JumpRefused {
-                    told: self.jump_refusal_told(refusal),
-                    refusal,
+            FlightCommand::Jump => match self.engage_gate_pilot() {
+                Some(to) => Answer::GatePilot(to),
+                None => match self.begin_jump() {
+                    Ok(to) => Answer::Jumped(to),
+                    Err(refusal) => Answer::JumpRefused {
+                        told: self.jump_refusal_told(refusal),
+                        refusal,
+                    },
                 },
             },
             FlightCommand::Land => match self.land_requesting() {

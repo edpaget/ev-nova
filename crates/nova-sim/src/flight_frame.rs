@@ -1338,6 +1338,13 @@ pub enum Answer {
         /// Whether the player is told.
         told: bool,
     },
+    /// The system the gate autopilot a [`FlightCommand::Jump`] engaged
+    /// flies toward, by [`RuleKey::GateAutopilot`](crate::RuleKey::GateAutopilot)'s
+    /// other reading: no jump begins, and the ship flies by the
+    /// autopilot's controls to the gate serving that hop (see
+    /// [`Session::engage_gate_pilot`](crate::Session::engage_gate_pilot)).
+    /// J while it is engaged answers the same again.
+    GatePilot(SystemId),
     /// What a [`FlightCommand::Land`] did, when it was not refused: always
     /// a dock request made, which sets L's latch `_dockTryFlag`.
     LandPress(LandPress),

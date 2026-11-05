@@ -176,8 +176,9 @@ impl Session {
             ..StepRun::default()
         };
         self.adjust_time();
+        let controls = self.pilot_controls(input.controls);
         let rescued = self.game_work(
-            input.controls,
+            controls,
             catalog,
             collab.behaviour,
             collab.rules,
@@ -200,7 +201,7 @@ impl Session {
         run.between_passes = Some(self.frame_between_passes());
         self.out.second_pass = Some(Vec::new());
         self.tick_again(
-            input.controls,
+            controls,
             collab.behaviour,
             collab.rules,
             &mut *collab.chance,

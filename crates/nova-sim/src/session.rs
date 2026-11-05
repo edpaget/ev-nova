@@ -530,6 +530,7 @@ mod gate_escorts;
 mod gate_follow;
 #[cfg(test)]
 mod gate_partner;
+mod gate_pilot;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;
@@ -3070,14 +3071,16 @@ impl Session {
     }
 
     /// Whether the ship can jump to the system selected: under
-    /// way once J has been accepted, until the ship arrives; otherwise
-    /// clear when J would be accepted now, and blocked when it would be
-    /// refused. The nav area draws the destination by this.
+    /// way once J has been accepted, until the ship arrives, or while the
+    /// gate autopilot J engaged flies (see the `gate_pilot` module);
+    /// otherwise clear when J would be accepted now or would engage the
+    /// autopilot, and blocked when it would be refused. The nav area draws
+    /// the destination by this.
     #[must_use]
     pub(crate) fn jump_readiness(&self) -> JumpReadiness {
-        if self.mode.jump().is_some() {
+        if self.mode.jump().is_some() || self.gate_pilot_engaged() {
             JumpReadiness::Underway
-        } else if self.check_next_jump().is_ok() {
+        } else if self.gate_pilot_would_engage() || self.check_next_jump().is_ok() {
             JumpReadiness::Clear
         } else {
             JumpReadiness::Blocked

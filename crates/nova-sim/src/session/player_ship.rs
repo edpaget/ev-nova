@@ -106,6 +106,9 @@ pub(super) struct PlayerShip {
     /// (`_SavePilotFile` @0x1935f, @0x6354b, @0x692c4), so a load treats the
     /// top-up as owned, as a landing's fold would.
     pub(super) held_stock: BTreeMap<OutfitId, u16>,
+    /// The gate autopilot while it is engaged (see the `gate_pilot`
+    /// module). Never saved: a load flies with none.
+    pub(super) gate_pilot: Option<super::gate_pilot::GatePilot>,
 }
 
 /// What the player's ship's class and outfits give it, rewritten only by
@@ -314,6 +317,7 @@ impl PlayerShip {
             },
             cloak: super::player_cloak::PlayerCloak::default(),
             held_stock: BTreeMap::new(),
+            gate_pilot: None,
         }
     }
 
