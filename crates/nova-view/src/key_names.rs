@@ -38,9 +38,10 @@
 //! # Spelling
 //!
 //! The original draws the fixed names and the modifiers as glyphs (⌘, ↩,
-//! ⇥, ←). The engine spells them in words, as flight's `HELP` line
-//! does, so the keys screen and every other place that names a key share
-//! one spelling: "Return", "Tab", "Up Arrow", and the modifiers as
+//! ⇥, ←). The engine spells them in words, so the keys screen and every
+//! other place that names a key share one spelling, each through the one
+//! naming function ([`crate::bound_names`]): "Return", "Tab", "Up
+//! Arrow", and the modifiers as
 //! `Ctrl-`, `Alt-`, `Shift-` and `Cmd-` before the key, in the original's
 //! ⌃⌥⇧⌘ order (`SRStringForCocoaModifierFlags` @0xbe39). The glyphs are
 //! left to rdm:phase/front-end/phase-15-keys-window-left-outs.
