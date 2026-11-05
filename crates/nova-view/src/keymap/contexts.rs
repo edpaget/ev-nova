@@ -14,8 +14,19 @@
 //! all the same. A context may **shadow** another ([`shadows`]): listed
 //! first, it wins the keys it binds, so the other's commands on those keys
 //! neither resolve nor clash with it.
+//!
+//! The app's router reads every key before the developer's sides
+//! ([`ROUTED`]: the ship browser, and the galaxy viewer and system view
+//! under the navigator), with its own reader ([`ROUTER`]). It acts on the
+//! main screen's Fly and About and the shared Tab and Back there, and
+//! hands every other key to the screen, so its contexts that act
+//! ([`ROUTER_OVER`]) count as active together with each routed screen's,
+//! though no routed list holds them: holding them would make the screen's
+//! own reader resolve the router's keys. One pair is a deliberate shadow
+//! ([`router_shadows`]): the router's Fly wins F, by default, over the
+//! viewer's Find, which still finds through its S twin.
 
-use super::command::Context;
+use super::command::{Command, Context, MainScreenCommand, MapCommand};
 
 /// One context of a screen's list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,7 +251,8 @@ pub const RACE: ScreenContexts = ScreenContexts {
 /// The galaxy viewer, the developer's map: its own keys and the shared UI
 /// keys (the arrows pan, Return enters a system). The map key means
 /// nothing there, and its Tab and Escape are the app's router's and the
-/// navigator's.
+/// navigator's. The router reads each key first ([`ROUTED`]), its Fly
+/// winning F over Find ([`router_shadows`]).
 pub const GALAXY_VIEWER: ScreenContexts = ScreenContexts {
     name: "galaxy viewer",
     entries: &[on(Context::Map), on(Context::Ui), on(Context::App)],
@@ -273,7 +285,8 @@ pub const SYSTEM_VIEW: ScreenContexts = ScreenContexts {
     entries: &[on(Context::SystemView), on(Context::Ui), on(Context::App)],
 };
 
-/// The ship browser: the shared arrows.
+/// The ship browser: the shared arrows. The router reads each key first
+/// ([`ROUTED`]).
 pub const SHIP_BROWSER: ScreenContexts = ScreenContexts {
     name: "ship browser",
     entries: &[on(Context::Ui), on(Context::App)],
@@ -306,7 +319,8 @@ pub const MOVIE: ScreenContexts = ScreenContexts {
 /// the menu's typed letters, the main screen's Fly, About and
 /// Preferences, the shared UI keys (Tab switches sides, Back goes back
 /// or quits) and the app's own. In flight it reads Pause through
-/// [`FLIGHT`]'s list, and on a map its own Back.
+/// [`FLIGHT`]'s list, and on a map its own Back. On the developer's sides
+/// it reads each key before the screen shown ([`ROUTED`]).
 pub const ROUTER: ScreenContexts = ScreenContexts {
     name: "router",
     entries: &[
@@ -350,6 +364,17 @@ pub const SCREENS: &[ScreenContexts] = &[
     ROUTER,
 ];
 
+/// The screens whose keys the app's router reads first (`nova`'s
+/// `AppScreen::route`, on the ship browser's and the galaxy's sides): it
+/// takes what [`ROUTER_OVER`]'s contexts mean to it and hands the rest on.
+pub const ROUTED: &[ScreenContexts] = &[GALAXY_VIEWER, NAVIGATOR, SYSTEM_VIEW, SHIP_BROWSER];
+
+/// The router's contexts that act on a [`ROUTED`] screen's keys: the main
+/// screen's (Fly enters flight, About opens its dialog), the shared UI
+/// context's (Tab switches sides, Back goes back or quits) and the app's.
+/// Not the main menu's: the router hands its keys on there.
+pub const ROUTER_OVER: &[Context] = &[Context::MainScreen, Context::Ui, Context::App];
+
 /// Whether `shadowing`, listed first, wins the keys it binds over
 /// `shadowed`.
 #[must_use]
@@ -360,11 +385,33 @@ pub const fn shadows(shadowing: Context, shadowed: Context) -> bool {
     )
 }
 
-/// Whether `a` and `b` are active together on one of `screens`.
+/// Whether the router's `shadowing`, read before a [`ROUTED`] screen's
+/// keys, wins its key over the screen's `shadowed` by design, so the two
+/// don't clash: the main screen's Fly over the galaxy viewer's Find, both
+/// on F by default. The router enters flight on F; the viewer still finds
+/// through S, the twin `_MapFilter` reads beside F (@0x144b9-0x144d6).
+#[must_use]
+pub const fn router_shadows(shadowing: Command, shadowed: Command) -> bool {
+    matches!(
+        (shadowing, shadowed),
+        (
+            Command::MainScreen(MainScreenCommand::Fly),
+            Command::Map(MapCommand::Find)
+        )
+    )
+}
+
+/// Whether `a` and `b` are active together on one of `screens`: both on
+/// its list, or, on a [`ROUTED`] screen, one of them the router's
+/// ([`ROUTER_OVER`]).
 #[must_use]
 pub fn together_on(screens: &[ScreenContexts], a: Context, b: Context) -> bool {
     screens.iter().any(|screen| {
-        let holds = |context| screen.entries.iter().any(|entry| entry.context == context);
+        let routed = ROUTED.contains(screen);
+        let holds = |context| {
+            screen.entries.iter().any(|entry| entry.context == context)
+                || (routed && ROUTER_OVER.contains(&context))
+        };
         holds(a) && holds(b)
     })
 }
@@ -418,6 +465,43 @@ mod tests {
         assert!(together(Context::EscortMenu, Context::Flight));
         assert!(together(Context::Flight, Context::Pause));
         assert!(!together(Context::Flight, Context::Ui));
+    }
+
+    #[test]
+    fn the_router_s_acting_contexts_are_active_together_with_each_routed_screen_s() {
+        for screen in ROUTED {
+            for entry in screen.entries {
+                for &router in ROUTER_OVER {
+                    assert!(
+                        together_on(&[*screen], router, entry.context),
+                        "{router:?} on the {}",
+                        screen.name
+                    );
+                }
+            }
+        }
+        assert!(together(Context::MainScreen, Context::Map));
+        assert!(
+            !together(Context::MainMenu, Context::Map),
+            "the router hands the main menu's keys on"
+        );
+        assert!(
+            !together_on(&[COURSE_MAP], Context::MainScreen, Context::Map),
+            "flight's map isn't routed"
+        );
+    }
+
+    #[test]
+    fn only_the_router_s_fly_shadows_by_design_and_only_the_viewer_s_find() {
+        let fly = Command::MainScreen(MainScreenCommand::Fly);
+        let find = Command::Map(MapCommand::Find);
+        assert!(router_shadows(fly, find));
+        assert!(!router_shadows(find, fly));
+        assert!(!router_shadows(fly, Command::Map(MapCommand::Borders)));
+        assert!(!router_shadows(
+            Command::MainScreen(MainScreenCommand::About),
+            find
+        ));
     }
 
     #[test]

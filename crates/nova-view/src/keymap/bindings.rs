@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{Command, Context};
-use super::contexts::{SCREENS, ScreenContexts, shadows, together_on};
+use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
 use super::keyboard::{self, KeyCombo, KeyMap, Keyboard, KeysDown};
 use crate::input::Input;
 
@@ -124,8 +124,12 @@ impl Bindings {
 }
 
 /// Whether two commands on one combo clash over `screens`: their
-/// contexts are active together and neither shadows the other.
+/// contexts are active together, neither shadows the other, and neither
+/// command is the router's deliberate shadow of the other.
 fn clash_between(screens: &[ScreenContexts], a: Command, b: Command) -> bool {
+    if router_shadows(a, b) || router_shadows(b, a) {
+        return false;
+    }
     let (a, b) = (a.context(), b.context());
     together_on(screens, a, b) && !shadows(a, b) && !shadows(b, a)
 }
@@ -750,6 +754,48 @@ mod tests {
         let bindings =
             Bindings::default().rebound(EscortMenuCommand::Group1, KeyCombo::key(Key::KeyL));
         assert_eq!(bindings.clashes(), vec![]);
+    }
+
+    #[test]
+    fn the_router_s_fly_shadows_the_galaxy_viewer_s_find_by_design() {
+        let f = KeyCombo::key(Key::KeyF);
+        assert_eq!(
+            Bindings::default().clashes_with(MapCommand::Find, f),
+            vec![],
+            "the router reads F first; the viewer finds through S"
+        );
+        let q = KeyCombo::key(Key::KeyQ);
+        let both = Bindings::default()
+            .rebound(MainScreenCommand::Fly, q)
+            .rebound(MapCommand::Find, q);
+        assert_eq!(both.clashes(), vec![], "wherever the two go");
+    }
+
+    #[test]
+    fn a_map_command_on_a_key_the_router_reads_on_the_galaxy_viewer_clashes() {
+        let f = KeyCombo::key(Key::KeyF);
+        let bindings = Bindings::default().rebound(MapCommand::Borders, f);
+        assert_eq!(
+            bindings.clashes(),
+            vec![
+                Clash {
+                    first: Command::Map(MapCommand::Borders),
+                    second: Command::Map(MapCommand::Find),
+                },
+                Clash {
+                    first: Command::Map(MapCommand::Borders),
+                    second: Command::MainScreen(MainScreenCommand::Fly),
+                },
+            ]
+        );
+        assert_eq!(
+            Bindings::default().clashes_with(MapCommand::ZoomIn, f),
+            vec![
+                Command::Map(MapCommand::Find),
+                Command::MainScreen(MainScreenCommand::Fly),
+            ],
+            "not flight's Attack Target, which no map reads"
+        );
     }
 
     #[test]

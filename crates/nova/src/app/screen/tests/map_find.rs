@@ -39,6 +39,18 @@ fn ui(sounds: Vec<Sound>) -> Vec<Sound> {
         .collect()
 }
 
+/// The router reads F before the viewer, as its Fly, so the viewer's Find
+/// never sees it (`nova_view::keymap::contexts::router_shadows`); S finds.
+#[test]
+fn f_on_the_viewer_flies_before_the_viewer_finds() {
+    let mut screen = on_the_viewer();
+    screen.input(&key(Key::KeyF, true));
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert!(!screen.galaxy_map().finding());
+    screen.input(&key(Key::KeyF, false));
+    assert!(!screen.galaxy_map().finding(), "nor its release");
+}
+
 #[test]
 fn s_opens_find_on_the_viewer_and_it_takes_every_key() {
     let mut screen = on_the_viewer();
