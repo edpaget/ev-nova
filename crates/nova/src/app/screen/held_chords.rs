@@ -106,6 +106,10 @@ pub(super) struct HeldChords {
     /// original's held loops run nothing else, so it is where they stand
     /// as the call that ends the hold begins.
     mark: Option<ChordMark>,
+    /// The tests' probe: each command the replay ran, with the screen in
+    /// front as it ran, for a chord whose effect leaves nothing to see.
+    #[cfg(test)]
+    replayed: Vec<(MenuCommand, nova_view::Showing)>,
 }
 
 /// What says that something opened that flushes the queue: the
@@ -218,7 +222,14 @@ impl AppScreen {
             }
             mark = Some(self.chord_mark());
             let action = match item {
-                HeldChord::Command(command) => self.run_menu_command(command),
+                HeldChord::Command(command) => {
+                    #[cfg(test)]
+                    {
+                        let showing = self.showing();
+                        self.held_chords.replayed.push((command, showing));
+                    }
+                    self.run_menu_command(command)
+                }
                 HeldChord::Input(input) => {
                     note_down(&mut down, &input);
                     self.rerouted_input(&input)
@@ -261,6 +272,19 @@ impl AppScreen {
                 _ => {}
             }
         }
+    }
+
+    /// Whether the router holds chords for a replay: the tests' probe.
+    #[cfg(test)]
+    pub(super) fn holds_chords(&self) -> bool {
+        !self.held_chords.queue.is_empty()
+    }
+
+    /// The commands the held chords' replays ran, with the screen in front
+    /// as each ran: the tests' probe.
+    #[cfg(test)]
+    pub(super) fn replayed_chords(&self) -> &[(MenuCommand, nova_view::Showing)] {
+        &self.held_chords.replayed
     }
 
     /// Where the screens stand for [`ChordMark`]: the Preferences don't

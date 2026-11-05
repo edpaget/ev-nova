@@ -36,13 +36,22 @@ fn command_comma_during_the_spaceports_maps_wait_opens_the_preferences_at_ms_rel
 /// Past the close, the chord reaches the offer under the map, and does
 /// what Command-comma typed over it does: the offer in front takes it
 /// today, which rdm:phase/front-end/phase-14-preferences-over-flight-dialogs
-/// changes to open the Preferences.
+/// changes to open the Preferences. As that leaves nothing of the chord to
+/// see, the router's record of the commands it replayed shows it ran,
+/// with the offer in front.
 #[test]
 fn command_comma_during_a_dialogs_maps_wait_over_flight_goes_to_the_offer_at_ms_release() {
     let mut screen = offer_map_waiting();
     command_comma(&mut screen);
     still_waiting(&screen);
+    assert!(screen.holds_chords(), "held for the close");
     end_the_wait(&mut screen);
+    assert!(!screen.holds_chords(), "nothing left held");
+    assert_eq!(
+        screen.replayed_chords(),
+        [(MenuCommand::Preferences, Showing::Offer)],
+        "run once, the offer in front"
+    );
     assert!(screen.offer().is_some(), "the offer still open");
 
     let mut typed = offered_over_flight();
