@@ -80,14 +80,16 @@ const POLLS: usize = 8;
 ///   number;
 /// - a trigger's value is `LeftTrigger`'s or `RightTrigger`'s, and a
 ///   button event is never a trigger or a stick direction (the core makes
-///   those from the values).
+///   those from the values);
+/// - a pad's ids, when given, name a vendor other than 0 (no USB or
+///   Bluetooth vendor is 0): an adapter that reads none reports `None`.
 ///
 /// # Errors
 ///
 /// The first broken clause, described.
 pub fn check_contract(pads: &mut impl Gamepads) -> Result<(), String> {
     let mut connected: BTreeSet<PadId> = BTreeSet::new();
-    let sentinel = PadEvent::Connected(PadId(usize::MAX));
+    let sentinel = PadEvent::connected(PadId(usize::MAX));
     for poll in 0..POLLS {
         let mut out = vec![sentinel];
         pads.poll(&mut out);
@@ -105,9 +107,12 @@ pub fn check_contract(pads: &mut impl Gamepads) -> Result<(), String> {
 fn check_event(event: &PadEvent, connected: &mut BTreeSet<PadId>) -> Result<(), String> {
     let pad = event.pad();
     match *event {
-        PadEvent::Connected(_) => {
+        PadEvent::Connected { ids, .. } => {
             if !connected.insert(pad) {
                 return Err(format!("{pad:?} connected twice"));
+            }
+            if ids.is_some_and(|ids| ids.vendor == 0) {
+                return Err(format!("{pad:?} connected with vendor 0: {event:?}"));
             }
             return Ok(());
         }
@@ -152,6 +157,7 @@ fn is_trigger(button: PadButton) -> bool {
 mod tests {
     use nova_view::PadAxis;
 
+    use super::super::PadIds;
     use super::*;
 
     const ONE: PadId = PadId(1);
@@ -166,12 +172,12 @@ mod tests {
 
     #[test]
     fn the_fake_reports_each_batch_on_its_own_poll_and_counts_polls() {
-        let fake = FakeGamepads::with([vec![PadEvent::Connected(ONE)], vec![]]);
+        let fake = FakeGamepads::with([vec![PadEvent::connected(ONE)], vec![]]);
         fake.push(vec![button(PadButton::South, true)]);
         let mut handed = fake.clone();
         let mut out = Vec::new();
         handed.poll(&mut out);
-        assert_eq!(out, [PadEvent::Connected(ONE)]);
+        assert_eq!(out, [PadEvent::connected(ONE)]);
         handed.poll(&mut out);
         assert_eq!(out.len(), 1, "an empty batch");
         handed.poll(&mut out);
@@ -184,7 +190,7 @@ mod tests {
     #[test]
     fn the_fake_passes_the_gamepads_contract() {
         let mut fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), button(PadButton::South, true)],
+            vec![PadEvent::connected(ONE), button(PadButton::South, true)],
             vec![
                 PadEvent::Axis {
                     pad: ONE,
@@ -197,7 +203,14 @@ mod tests {
                     value: 1.0,
                 },
             ],
-            vec![PadEvent::Disconnected(ONE), PadEvent::Connected(ONE)],
+            vec![PadEvent::Disconnected(ONE), PadEvent::connected(ONE)],
+            vec![PadEvent::connected_with(
+                PadId(2),
+                PadIds {
+                    vendor: 0x045E,
+                    product: 0x0B12,
+                },
+            )],
         ]);
         assert_eq!(check_contract(&mut fake), Ok(()));
         assert_eq!(check_contract(&mut FakeGamepads::new()), Ok(()));
@@ -227,14 +240,14 @@ mod tests {
         breaks(vec![vec![button(PadButton::South, true)]], "not connected");
         breaks(
             vec![
-                vec![PadEvent::Connected(ONE)],
+                vec![PadEvent::connected(ONE)],
                 vec![PadEvent::Disconnected(ONE)],
                 vec![button(PadButton::East, false)],
             ],
             "not connected",
         );
         breaks(
-            vec![vec![PadEvent::Connected(ONE), PadEvent::Connected(ONE)]],
+            vec![vec![PadEvent::connected(ONE), PadEvent::connected(ONE)]],
             "connected twice",
         );
         breaks(vec![vec![PadEvent::Disconnected(ONE)]], "lost while not");
@@ -245,7 +258,7 @@ mod tests {
         };
         for value in [1.5, -1.01, f32::NAN] {
             breaks(
-                vec![vec![PadEvent::Connected(ONE), axis(value)]],
+                vec![vec![PadEvent::connected(ONE), axis(value)]],
                 "an axis value",
             );
         }
@@ -257,7 +270,7 @@ mod tests {
         for value in [-0.1, 1.1, f32::NAN] {
             breaks(
                 vec![vec![
-                    PadEvent::Connected(ONE),
+                    PadEvent::connected(ONE),
                     trigger(PadButton::LeftTrigger, value),
                 ]],
                 "a trigger value",
@@ -265,14 +278,24 @@ mod tests {
         }
         breaks(
             vec![vec![
-                PadEvent::Connected(ONE),
+                PadEvent::connected(ONE),
                 trigger(PadButton::South, 0.5),
             ]],
             "reported as a trigger",
         );
+        breaks(
+            vec![vec![PadEvent::connected_with(
+                ONE,
+                PadIds {
+                    vendor: 0,
+                    product: 0x0B12,
+                },
+            )]],
+            "vendor 0",
+        );
         for wrong in [PadButton::LeftStickDown, PadButton::RightTrigger] {
             breaks(
-                vec![vec![PadEvent::Connected(ONE), button(wrong, true)]],
+                vec![vec![PadEvent::connected(ONE), button(wrong, true)]],
                 "reported as a button",
             );
         }

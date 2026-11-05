@@ -53,7 +53,7 @@ fn each_redraw_polls_the_gamepads_once() {
 fn a_pads_events_reach_the_screen_before_its_tick() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
     let pads = FakeGamepads::with([vec![
-        PadEvent::Connected(ONE),
+        PadEvent::connected(ONE),
         south(true),
         PadEvent::Axis {
             pad: ONE,
@@ -102,7 +102,7 @@ fn the_screen_hears_surroundings_when_the_device_changes() {
         WindowEvent::PointerMoved { px: (6.0, 5.0) },
     );
     assert_eq!(app.screen().surroundings, [told(Device::Mouse)], "once");
-    pads.push(vec![PadEvent::Connected(ONE), south(true)]);
+    pads.push(vec![PadEvent::connected(ONE), south(true)]);
     redraw_at(&mut app, &mut window, 16);
     assert_eq!(app.screen().surroundings, [told(Device::Mouse), told(PAD)]);
     handle(&mut app, &mut window, key(Key::KeyA, false));
@@ -124,9 +124,25 @@ fn the_screen_hears_surroundings_when_the_device_changes() {
 }
 
 #[test]
+fn the_screen_hears_the_family_of_the_pad_connected() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let xbox = crate::gamepad::PadIds {
+        vendor: 0x045E,
+        product: 0x0B12,
+    };
+    let pads = FakeGamepads::with([vec![PadEvent::connected_with(ONE, xbox), south(true)]]);
+    let mut app = app(&window).with_gamepads(Box::new(pads));
+    redraw_at(&mut app, &mut window, 16);
+    assert_eq!(
+        app.screen().surroundings,
+        [told(Device::Gamepad(ControllerFamily::Xbox))]
+    );
+}
+
+#[test]
 fn presses_queued_while_unfocused_are_dropped_on_focus_gained() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
-    let pads = FakeGamepads::with([vec![PadEvent::Connected(ONE)]]);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE)]]);
     let mut app = app(&window).with_gamepads(Box::new(pads.clone()));
     redraw_at(&mut app, &mut window, 16);
     handle(&mut app, &mut window, WindowEvent::FocusLost);
@@ -165,7 +181,7 @@ fn with_no_gamepads_a_redraw_routes_nothing() {
 #[test]
 fn a_screen_quitting_on_a_pad_press_exits() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
-    let pads = FakeGamepads::with([vec![PadEvent::Connected(ONE), south(true)]]);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE), south(true)]]);
     let mut app = app(&window).with_gamepads(Box::new(pads));
     app.screen.asks_quit = true;
     assert_eq!(
@@ -190,7 +206,7 @@ fn toggle_overlay(app: &mut TestApp, window: &mut FakeWindow) {
 #[test]
 fn the_pads_input_goes_nowhere_while_the_overlay_shows_and_its_release_follows_once_it_hides() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
-    let pads = FakeGamepads::with([vec![PadEvent::Connected(ONE)]]);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE)]]);
     let mut app = app(&window)
         .with_gamepads(Box::new(pads.clone()))
         .with_dev_overlay();

@@ -116,7 +116,7 @@ fn a_pad_connected_mid_flight_turns_the_ship_at_about_half_its_turn_rate_with_th
 
     let mut padded = Harness::flying();
     padded.pads.push(vec![
-        PadEvent::Connected(PAD),
+        PadEvent::connected(PAD),
         PadEvent::Axis {
             pad: PAD,
             axis: PadAxis::RightX,
@@ -136,7 +136,7 @@ fn a_pad_connected_mid_flight_turns_the_ship_at_about_half_its_turn_rate_with_th
 fn a_pad_lost_mid_flight_stops_its_thrust_and_turn() {
     let mut harness = Harness::flying();
     harness.pads.push(vec![
-        PadEvent::Connected(PAD),
+        PadEvent::connected(PAD),
         PadEvent::Axis {
             pad: PAD,
             axis: PadAxis::LeftY,
@@ -171,7 +171,7 @@ fn select_and_start_leave_flight() {
         pressed,
     };
     harness.pads.push(vec![
-        PadEvent::Connected(PAD),
+        PadEvent::connected(PAD),
         button(PadButton::Select, true),
     ]);
     harness.frames(1);
@@ -218,7 +218,7 @@ fn the_pad_alone_opens_the_map_zooms_it_moves_to_done_and_closes_it() {
             .and_then(nova_view::flight::FlightView::course_map_zoom)
     };
     let sent_before = harness.sent.len();
-    harness.pads.push(vec![PadEvent::Connected(PAD)]);
+    harness.pads.push(vec![PadEvent::connected(PAD)]);
     harness.frames(1);
     for (pad_button, pressed) in [
         (PadButton::Start, true),

@@ -11,7 +11,9 @@
 //! reports as hat axes into the d-pad's buttons, applied in gilrs's
 //! documented order for its own filters (the filter, then
 //! `Gilrs::update`). It reports each pad found at the first poll as
-//! connected, as gilrs registers those without an event, names buttons
+//! connected, as gilrs registers those without an event, with the vendor
+//! and product ids gilrs reads (`IOKit`'s `kIOHIDVendorIDKey`, evdev's
+//! `input_id`, Windows.Gaming.Input's `HardwareVendorId`), names buttons
 //! and axes by position ([`pad_button`], [`pad_trigger`], [`pad_axis`]),
 //! and forwards each trigger's value rather than gilrs's own press.
 
@@ -21,7 +23,7 @@ use gilrs::ev::filter::{Filter, axis_dpad_to_button};
 use gilrs::{Axis, Button, EventType, GamepadId, Gilrs, GilrsBuilder};
 use nova_view::{PadAxis, PadButton};
 
-use crate::gamepad::{Gamepads, PadEvent, PadId};
+use crate::gamepad::{Gamepads, PadEvent, PadId, PadIds};
 
 /// The gamepads, read through gilrs.
 pub struct GilrsGamepads {
@@ -62,7 +64,11 @@ impl Gamepads for GilrsGamepads {
     fn poll(&mut self, out: &mut Vec<PadEvent>) {
         if !self.started {
             self.started = true;
-            let found: Vec<PadId> = self.gilrs.gamepads().map(|(id, _)| pad_id(id)).collect();
+            let found: Vec<(PadId, Option<PadIds>)> = self
+                .gilrs
+                .gamepads()
+                .map(|(id, pad)| (pad_id(id), pad_ids(pad.vendor_id(), pad.product_id())))
+                .collect();
             self.forward.found(found, out);
         }
         while let Some(event) = self
@@ -74,7 +80,11 @@ impl Gamepads for GilrsGamepads {
                 continue;
             }
             self.gilrs.update(&event);
-            self.forward.event(pad_id(event.id), event.event, out);
+            let ids = self
+                .gilrs
+                .connected_gamepad(event.id)
+                .and_then(|pad| pad_ids(pad.vendor_id(), pad.product_id()));
+            self.forward.event(pad_id(event.id), ids, event.event, out);
         }
     }
 }
@@ -91,24 +101,36 @@ struct Forward {
 }
 
 impl Forward {
-    /// Reports each pad of `found` connected, unless it is already.
-    fn found(&mut self, found: impl IntoIterator<Item = PadId>, out: &mut Vec<PadEvent>) {
-        for pad in found {
-            self.connect(pad, out);
+    /// Reports each pad of `found`, with its ids, connected, unless it is
+    /// already.
+    fn found(
+        &mut self,
+        found: impl IntoIterator<Item = (PadId, Option<PadIds>)>,
+        out: &mut Vec<PadEvent>,
+    ) {
+        for (pad, ids) in found {
+            self.connect(pad, ids, out);
         }
     }
 
-    /// Reports `pad` connected, unless it is already.
-    fn connect(&mut self, pad: PadId, out: &mut Vec<PadEvent>) {
+    /// Reports `pad` connected with `ids`, unless it is already.
+    fn connect(&mut self, pad: PadId, ids: Option<PadIds>, out: &mut Vec<PadEvent>) {
         if self.connected.insert(pad) {
-            out.push(PadEvent::Connected(pad));
+            out.push(PadEvent::Connected { pad, ids });
         }
     }
 
-    /// What gilrs's `event` on `pad` is in core terms, appended to `out`.
-    fn event(&mut self, pad: PadId, event: EventType, out: &mut Vec<PadEvent>) {
+    /// What gilrs's `event` on `pad`, whose ids are `ids`, is in core
+    /// terms, appended to `out`.
+    fn event(
+        &mut self,
+        pad: PadId,
+        ids: Option<PadIds>,
+        event: EventType,
+        out: &mut Vec<PadEvent>,
+    ) {
         match event {
-            EventType::Connected => self.connect(pad, out),
+            EventType::Connected => self.connect(pad, ids, out),
             EventType::Disconnected => {
                 if self.connected.remove(&pad) {
                     out.push(PadEvent::Disconnected(pad));
@@ -116,7 +138,7 @@ impl Forward {
             }
             EventType::ButtonPressed(button, _) | EventType::ButtonReleased(button, _) => {
                 if let Some(button) = pad_button(button) {
-                    self.connect(pad, out);
+                    self.connect(pad, ids, out);
                     let pressed = matches!(event, EventType::ButtonPressed(..));
                     out.push(PadEvent::Button {
                         pad,
@@ -127,7 +149,7 @@ impl Forward {
             }
             EventType::ButtonChanged(button, value, _) => {
                 if let Some(button) = pad_trigger(button) {
-                    self.connect(pad, out);
+                    self.connect(pad, ids, out);
                     out.push(PadEvent::Trigger {
                         pad,
                         button,
@@ -137,7 +159,7 @@ impl Forward {
             }
             EventType::AxisChanged(axis, value, _) => {
                 if let Some(axis) = pad_axis(axis) {
-                    self.connect(pad, out);
+                    self.connect(pad, ids, out);
                     out.push(PadEvent::Axis {
                         pad,
                         axis,
@@ -148,6 +170,16 @@ impl Forward {
             _ => {}
         }
     }
+}
+
+/// The ids gilrs reads for a pad (`Gamepad::vendor_id`, `product_id`),
+/// as the port's: `None` unless both are read and the vendor isn't 0,
+/// which Linux's evdev reports for a virtual device.
+fn pad_ids(vendor: Option<u16>, product: Option<u16>) -> Option<PadIds> {
+    vendor
+        .filter(|&vendor| vendor != 0)
+        .zip(product)
+        .map(|(vendor, product)| PadIds { vendor, product })
 }
 
 /// gilrs's pad number as the port's.
@@ -268,7 +300,7 @@ mod tests {
     fn forwarded(forward: &mut Forward, events: &[EventType]) -> Vec<PadEvent> {
         let mut out = Vec::new();
         for &event in events {
-            forward.event(ONE, event, &mut out);
+            forward.event(ONE, None, event, &mut out);
         }
         out
     }
@@ -295,7 +327,7 @@ mod tests {
         assert_eq!(
             forwarded(&mut forward, &events),
             [
-                PadEvent::Connected(ONE),
+                PadEvent::connected(ONE),
                 PadEvent::Button {
                     pad: ONE,
                     button: PadButton::South,
@@ -347,8 +379,8 @@ mod tests {
     fn a_pad_is_reported_connected_once_before_anything_of_its_own() {
         let mut forward = Forward::default();
         let mut out = Vec::new();
-        forward.found([ONE], &mut out);
-        assert_eq!(out, [PadEvent::Connected(ONE)]);
+        forward.found([(ONE, None)], &mut out);
+        assert_eq!(out, [PadEvent::connected(ONE)]);
         assert_eq!(
             forwarded(&mut forward, &[EventType::Connected]),
             [],
@@ -360,12 +392,12 @@ mod tests {
                 &mut unseen,
                 &[EventType::ButtonPressed(Button::North, code())]
             )[0],
-            PadEvent::Connected(ONE),
+            PadEvent::connected(ONE),
             "an event from a pad not yet reported reports it first"
         );
         assert_eq!(
             forwarded(&mut Forward::default(), &[EventType::Connected]),
-            [PadEvent::Connected(ONE)],
+            [PadEvent::connected(ONE)],
             "gilrs's own connect"
         );
         let mut lost = Forward::default();
@@ -376,6 +408,37 @@ mod tests {
                 &[EventType::Connected, EventType::Connected]
             ),])),
             Ok(())
+        );
+    }
+
+    const XBOX_IDS: PadIds = PadIds {
+        vendor: 0x045E,
+        product: 0x0B12,
+    };
+
+    #[test]
+    fn the_ids_gilrs_reads_are_carried_and_a_missing_or_zero_vendor_gives_none() {
+        assert_eq!(pad_ids(Some(0x045E), Some(0x0B12)), Some(XBOX_IDS));
+        assert_eq!(pad_ids(None, Some(0x0B12)), None);
+        assert_eq!(pad_ids(Some(0x045E), None), None);
+        assert_eq!(pad_ids(Some(0), Some(0x0B12)), None, "no vendor is 0");
+        let mut out = Vec::new();
+        let mut forward = Forward::default();
+        forward.found([(ONE, Some(XBOX_IDS))], &mut out);
+        assert_eq!(out, [PadEvent::connected_with(ONE, XBOX_IDS)]);
+        let mut unseen = Forward::default();
+        let mut out = Vec::new();
+        unseen.event(
+            ONE,
+            Some(XBOX_IDS),
+            EventType::ButtonPressed(Button::North, code()),
+            &mut out,
+        );
+        assert_eq!(out[0], PadEvent::connected_with(ONE, XBOX_IDS));
+        assert_eq!(
+            check_contract(&mut Replay(vec![out])),
+            Ok(()),
+            "a pad with ids keeps the contract"
         );
     }
 

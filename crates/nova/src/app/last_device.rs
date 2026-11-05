@@ -6,20 +6,24 @@
 //!
 //! - `Keyboard` on a key's press;
 //! - `Mouse` on a pointer button, a move or a scroll;
-//! - `Gamepad(Generic)` on a pad button's press, a trigger pulled past
+//! - `Gamepad(family)` on a pad button's press, a trigger pulled past
 //!   the press threshold, or a stick leaving the flight dead zone (analog
 //!   flight input below the press threshold is real input). A stick
 //!   moving within the dead zone, or staying outside it, changes nothing.
 //!
-//! Releases change nothing. The family is `Generic` until phase 12
-//! (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs) reads it from
-//! the pad.
+//! Releases change nothing. The family is the pad's, read from the ids
+//! its connect carried ([`family_of`]) and forgotten when it is lost; a
+//! pad connected with no ids is generic. A use of a pad of another
+//! family than the last is a change, so the screens are told it. A
+//! screen's pad button, which comes from the pads merged, is taken to be
+//! the last pad used's.
 
 use std::collections::BTreeMap;
 
 use nova_view::keymap::dead_zoned;
 use nova_view::{ControllerFamily, Device, Input, PadAxis};
 
+use crate::gamepad::family::family_of;
 use crate::gamepad::inputs::PRESS_THRESHOLD;
 use crate::gamepad::{PadEvent, PadId};
 
@@ -30,10 +34,12 @@ pub struct LastDevice {
     device: Device,
     /// Each pad's last value of each stick axis.
     axes: BTreeMap<(PadId, PadAxis), f32>,
+    /// Each connected pad's family, from its ids ([`family_of`]).
+    families: BTreeMap<PadId, ControllerFamily>,
+    /// The family of the pad used last, which a screen's merged pad
+    /// button ([`Input::PadButton`]) is taken to be; generic before any.
+    last_family: ControllerFamily,
 }
-
-/// The device a pad's use makes it.
-const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
 impl LastDevice {
     /// The keyboard, before any input.
@@ -57,7 +63,7 @@ impl LastDevice {
             | Input::PointerMoved(_)
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => Device::Mouse,
-            Input::PadButton { pressed: true, .. } => PAD,
+            Input::PadButton { pressed: true, .. } => Device::Gamepad(self.last_family),
             _ => return None,
         };
         self.switch(used)
@@ -70,13 +76,23 @@ impl LastDevice {
             PadEvent::Button { pressed: true, .. } => true,
             PadEvent::Trigger { value, .. } => value >= PRESS_THRESHOLD,
             PadEvent::Axis { pad, axis, value } => self.leaves_dead_zone(pad, axis, value),
-            PadEvent::Disconnected(pad) => {
-                self.axes.retain(|&(of, _), _| of != pad);
+            PadEvent::Connected { pad, ids } => {
+                self.families.insert(pad, family_of(ids));
                 false
             }
-            PadEvent::Button { .. } | PadEvent::Connected(_) => false,
+            PadEvent::Disconnected(pad) => {
+                self.axes.retain(|&(of, _), _| of != pad);
+                self.families.remove(&pad);
+                false
+            }
+            PadEvent::Button { .. } => false,
         };
-        if used { self.switch(PAD) } else { None }
+        if !used {
+            return None;
+        }
+        let pad = event.pad();
+        self.last_family = self.families.get(&pad).copied().unwrap_or_default();
+        self.switch(Device::Gamepad(self.last_family))
     }
 
     /// Whether `pad`'s stick, with `axis` moved to `value`, has just left
@@ -105,6 +121,9 @@ mod tests {
     use super::*;
 
     const ONE: PadId = PadId(0);
+
+    /// A pad of no known family.
+    const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
     fn key(pressed: bool) -> Input {
         Input::Key {
@@ -164,7 +183,7 @@ mod tests {
             button: PadButton::South,
             pressed: true,
         };
-        assert_eq!(last.pad_event(&PadEvent::Connected(ONE)), None);
+        assert_eq!(last.pad_event(&PadEvent::connected(ONE)), None);
         assert_eq!(last.pad_event(&press), Some(PAD));
         let mut screen_side = LastDevice::new();
         assert_eq!(
@@ -174,6 +193,87 @@ mod tests {
             }),
             Some(PAD)
         );
+    }
+
+    const TWO: PadId = PadId(1);
+
+    fn connected(pad: PadId, vendor: u16) -> PadEvent {
+        PadEvent::connected_with(pad, crate::gamepad::PadIds { vendor, product: 1 })
+    }
+
+    fn south(pad: PadId) -> PadEvent {
+        PadEvent::Button {
+            pad,
+            button: PadButton::South,
+            pressed: true,
+        }
+    }
+
+    const XBOX: Device = Device::Gamepad(ControllerFamily::Xbox);
+
+    #[test]
+    fn a_pad_s_use_says_its_family() {
+        let mut last = LastDevice::new();
+        assert_eq!(last.pad_event(&connected(ONE, 0x045E)), None);
+        assert_eq!(last.pad_event(&south(ONE)), Some(XBOX));
+        assert_eq!(last.device(), XBOX);
+        assert_eq!(
+            last.input(&Input::PadButton {
+                button: PadButton::South,
+                pressed: true
+            }),
+            None,
+            "a merged press is the last pad's family"
+        );
+        let mut trigger = LastDevice::new();
+        trigger.pad_event(&connected(ONE, 0x054C));
+        assert_eq!(
+            trigger.pad_event(&PadEvent::Trigger {
+                pad: ONE,
+                button: PadButton::LeftTrigger,
+                value: 1.0
+            }),
+            Some(Device::Gamepad(ControllerFamily::PlayStation))
+        );
+        let mut stick = LastDevice::new();
+        stick.pad_event(&connected(ONE, 0x057E));
+        assert_eq!(
+            stick.pad_event(&stick_of(ONE, PadAxis::LeftX, outside())),
+            Some(Device::Gamepad(ControllerFamily::Nintendo))
+        );
+    }
+
+    fn stick_of(pad: PadId, axis: PadAxis, value: f32) -> PadEvent {
+        PadEvent::Axis { pad, axis, value }
+    }
+
+    #[test]
+    fn a_second_pad_of_another_family_switches_the_family() {
+        let mut last = LastDevice::new();
+        last.pad_event(&connected(ONE, 0x045E));
+        last.pad_event(&connected(TWO, 0x054C));
+        assert_eq!(last.pad_event(&south(ONE)), Some(XBOX));
+        assert_eq!(
+            last.pad_event(&south(TWO)),
+            Some(Device::Gamepad(ControllerFamily::PlayStation))
+        );
+        assert_eq!(last.pad_event(&south(TWO)), None, "no change");
+        last.pad_event(&PadEvent::Disconnected(TWO));
+        last.pad_event(&PadEvent::connected(TWO));
+        assert_eq!(
+            last.pad_event(&south(TWO)),
+            Some(PAD),
+            "found again with no ids, generic"
+        );
+    }
+
+    #[test]
+    fn a_key_after_the_pad_switches_back_to_the_keyboard() {
+        let mut last = LastDevice::new();
+        last.pad_event(&connected(ONE, 0x045E));
+        last.pad_event(&south(ONE));
+        assert_eq!(last.input(&key(true)), Some(Device::Keyboard));
+        assert_eq!(last.pad_event(&south(ONE)), Some(XBOX));
     }
 
     #[test]

@@ -16,6 +16,9 @@
 //!   the screens: buttons pass through, a stick or trigger past the press
 //!   threshold presses a button (with hysteresis), two pads merge, and a
 //!   lost pad lets go of everything it held.
+//! - [`family`] ([`family::family_of`]) decides which `nova_view`
+//!   `ControllerFamily` a pad is from the vendor and product ids
+//!   ([`PadIds`]) its connect carries, which the adapter only forwards.
 //!
 //! Where an addition goes: a new kind of thing a pad reports is a
 //! [`PadEvent`] variant, given in core terms by every adapter and checked
@@ -23,6 +26,7 @@
 //! [`inputs`]'s, pinned by its tests; what the device last used is, is
 //! `app::last_device`'s. An adapter forwards and decides nothing.
 
+pub mod family;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod inputs;
@@ -33,11 +37,27 @@ use nova_view::{PadAxis, PadButton};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PadId(pub usize);
 
+/// A pad's USB (or Bluetooth) vendor and product ids, as its adapter
+/// reads them: what [`family::family_of`] tells its family by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PadIds {
+    /// The vendor's id, never 0.
+    pub vendor: u16,
+    /// The product's id.
+    pub product: u16,
+}
+
 /// One thing a pad did, in the core's terms.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PadEvent {
-    /// The pad connected, or was found connected as the port started.
-    Connected(PadId),
+    /// The pad connected, or was found connected as the port started,
+    /// with its ids when the adapter reads them.
+    Connected {
+        /// The pad.
+        pad: PadId,
+        /// Its vendor and product ids, `None` when the adapter reads none.
+        ids: Option<PadIds>,
+    },
     /// The pad was lost.
     Disconnected(PadId),
     /// A button went down or up: a face button, a shoulder, the d-pad,
@@ -75,11 +95,27 @@ pub enum PadEvent {
 }
 
 impl PadEvent {
+    /// `pad` connected, with no ids read.
+    #[must_use]
+    pub const fn connected(pad: PadId) -> Self {
+        Self::Connected { pad, ids: None }
+    }
+
+    /// `pad` connected, with its `ids`: what a script of the fake
+    /// (`fixture::FakeGamepads`) connects a pad of a family with.
+    #[must_use]
+    pub const fn connected_with(pad: PadId, ids: PadIds) -> Self {
+        Self::Connected {
+            pad,
+            ids: Some(ids),
+        }
+    }
+
     /// The pad the event is about.
     #[must_use]
     pub const fn pad(&self) -> PadId {
         match *self {
-            Self::Connected(pad)
+            Self::Connected { pad, .. }
             | Self::Disconnected(pad)
             | Self::Button { pad, .. }
             | Self::Axis { pad, .. }

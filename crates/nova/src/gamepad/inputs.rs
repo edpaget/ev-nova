@@ -84,7 +84,7 @@ impl PadInputs {
     /// Follows one event.
     fn follow(&mut self, event: &PadEvent, out: &mut Vec<Input>) {
         match *event {
-            PadEvent::Connected(pad) => {
+            PadEvent::Connected { pad, .. } => {
                 self.pads.entry(pad).or_default();
             }
             PadEvent::Disconnected(pad) => self.lose(pad, out),
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn an_axis_past_the_threshold_presses_its_stick_direction() {
         let fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), axis(ONE, PadAxis::LeftY, -0.49)],
+            vec![PadEvent::connected(ONE), axis(ONE, PadAxis::LeftY, -0.49)],
             vec![axis(ONE, PadAxis::LeftY, -0.5)],
             vec![axis(ONE, PadAxis::RightX, 0.9)],
         ]);
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn back_under_the_release_threshold_releases_it() {
         let fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), axis(ONE, PadAxis::LeftX, 0.7)],
+            vec![PadEvent::connected(ONE), axis(ONE, PadAxis::LeftX, 0.7)],
             vec![axis(ONE, PadAxis::LeftX, 0.39)],
         ]);
         let mut inputs = PadInputs::new();
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn between_the_two_thresholds_it_stays_as_it_was() {
         let fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), axis(ONE, PadAxis::RightY, 0.45)],
+            vec![PadEvent::connected(ONE), axis(ONE, PadAxis::RightY, 0.45)],
             vec![axis(ONE, PadAxis::RightY, 0.5)],
             vec![axis(ONE, PadAxis::RightY, 0.45)],
             vec![axis(ONE, PadAxis::RightY, 0.4)],
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn a_stick_swung_across_lets_go_of_one_way_and_presses_the_other() {
         let fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), axis(ONE, PadAxis::LeftX, -1.0)],
+            vec![PadEvent::connected(ONE), axis(ONE, PadAxis::LeftX, -1.0)],
             vec![axis(ONE, PadAxis::LeftX, 1.0)],
         ]);
         let mut inputs = PadInputs::new();
@@ -334,7 +334,7 @@ mod tests {
             value,
         };
         let fake = FakeGamepads::with([
-            vec![PadEvent::Connected(ONE), trigger(0.3)],
+            vec![PadEvent::connected(ONE), trigger(0.3)],
             vec![trigger(0.5)],
             vec![trigger(0.45)],
             vec![trigger(0.1)],
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn an_axis_emits_its_value_for_the_view() {
         let fake = FakeGamepads::with([vec![
-            PadEvent::Connected(ONE),
+            PadEvent::connected(ONE),
             axis(ONE, PadAxis::RightX, 0.25),
             axis(ONE, PadAxis::LeftY, -0.1),
         ]]);
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn buttons_pass_through() {
         let fake = FakeGamepads::with([vec![
-            PadEvent::Connected(ONE),
+            PadEvent::connected(ONE),
             PadEvent::Button {
                 pad: ONE,
                 button: PadButton::South,
@@ -391,7 +391,7 @@ mod tests {
     fn losing_a_pad_releases_every_button_and_direction_it_held_and_zeroes_its_axes() {
         let fake = FakeGamepads::with([
             vec![
-                PadEvent::Connected(ONE),
+                PadEvent::connected(ONE),
                 PadEvent::Button {
                     pad: ONE,
                     button: PadButton::DPadUp,
@@ -428,7 +428,7 @@ mod tests {
         let fake = FakeGamepads::with([
             vec![],
             vec![],
-            vec![PadEvent::Connected(TWO), axis(TWO, PadAxis::RightX, 0.5)],
+            vec![PadEvent::connected(TWO), axis(TWO, PadAxis::RightX, 0.5)],
         ]);
         let mut inputs = PadInputs::new();
         let polls = polled(&fake, &mut inputs, 3);
@@ -450,8 +450,8 @@ mod tests {
         };
         let fake = FakeGamepads::with([
             vec![
-                PadEvent::Connected(ONE),
-                PadEvent::Connected(TWO),
+                PadEvent::connected(ONE),
+                PadEvent::connected(TWO),
                 south(ONE, true),
                 south(TWO, true),
             ],
@@ -469,8 +469,8 @@ mod tests {
     fn two_pads_route_the_stick_pushed_furthest() {
         let fake = FakeGamepads::with([
             vec![
-                PadEvent::Connected(ONE),
-                PadEvent::Connected(TWO),
+                PadEvent::connected(ONE),
+                PadEvent::connected(TWO),
                 axis(ONE, PadAxis::RightX, 0.6),
             ],
             vec![axis(TWO, PadAxis::RightX, 0.01)],
@@ -514,8 +514,8 @@ mod tests {
     #[test]
     fn two_pads_pushed_equally_far_route_the_lower_ids() {
         let fake = FakeGamepads::with([vec![
-            PadEvent::Connected(ONE),
-            PadEvent::Connected(TWO),
+            PadEvent::connected(ONE),
+            PadEvent::connected(TWO),
             axis(TWO, PadAxis::LeftY, -0.7),
             axis(ONE, PadAxis::LeftY, 0.7),
         ]]);
@@ -535,8 +535,8 @@ mod tests {
     fn losing_one_of_two_pads_routes_the_others_stick() {
         let fake = FakeGamepads::with([
             vec![
-                PadEvent::Connected(ONE),
-                PadEvent::Connected(TWO),
+                PadEvent::connected(ONE),
+                PadEvent::connected(TWO),
                 axis(ONE, PadAxis::RightX, 0.6),
                 axis(TWO, PadAxis::RightX, 0.01),
                 axis(TWO, PadAxis::LeftY, 0.3),

@@ -114,7 +114,7 @@ fn the_pad_alone_moves_the_preferences_focus_flips_a_toggle_and_closes_it() {
     assert_eq!(app.harness.showing(), Showing::Preferences);
     let after_menu = app.sent.len();
 
-    app.pads.push(vec![PadEvent::Connected(PAD)]);
+    app.pads.push(vec![PadEvent::connected(PAD)]);
     app.frame();
     let mut moves = 0;
     while !app.harness.dialog().focus().is_some_and(toggle) {
@@ -169,7 +169,7 @@ fn the_pad_alone_opens_a_service_closes_it_and_takes_off() {
         let elapsed = Duration::from_millis(16 * game.frames);
         send(game, WindowEvent::Redraw { elapsed });
     };
-    pads.push(vec![PadEvent::Connected(PAD)]);
+    pads.push(vec![PadEvent::connected(PAD)]);
     frame(&mut game);
     let mut tap = |game: &mut crate::trade::Harness, button: PadButton| {
         for pressed in [true, false] {
@@ -253,7 +253,7 @@ fn the_pad_alone_opens_preferences_from_the_main_menu_and_closes_it() {
     let store = seeded();
     let mut app = Padded::on_main_menu(&store);
     assert_eq!(app.harness.showing(), Showing::MainMenu);
-    app.pads.push(vec![PadEvent::Connected(PAD)]);
+    app.pads.push(vec![PadEvent::connected(PAD)]);
     app.frame();
     let menu = |app: &Padded| {
         app.harness
@@ -302,7 +302,7 @@ impl PadPilots {
         let pads = FakeGamepads::new();
         let game = crate::pilots::Harness::opening_with_pads(store, Box::new(pads.clone()));
         let mut padded = Self { game, pads };
-        padded.pads.push(vec![PadEvent::Connected(PAD)]);
+        padded.pads.push(vec![PadEvent::connected(PAD)]);
         padded.game.frame();
         padded
     }
