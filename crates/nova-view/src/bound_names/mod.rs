@@ -5,9 +5,13 @@
 //! A text names a command, never a key: the bindings say which key that
 //! is, the player's layout ([`KeyNames`]) what it is called, and the
 //! device ([`Device`], from the screen's [`CommandReader::device`]) which
-//! table to read. Only the keyboard is named today. Phase 12
-//! (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs) names the pad's
-//! buttons through the same call, so no text is written twice.
+//! table to read. With a pad used last, the same call names the pad's
+//! input for its family ([`name_on_pad`]), so no text is written twice: a
+//! pad entry is its button's name after its layer's (`View+A`), an axis
+//! its stick's (`L Stick X`), and the shared Confirm, unbound on the pad,
+//! Activate's South ([`PAD_STAND_INS`]). A rebindable command the player
+//! left unbound on the pad names its key, a [`Spelling::Twin`] names
+//! nothing on a pad, and the mouse names the keys.
 //!
 //! # How a text spells its key ([`Spelling`])
 //!
@@ -36,19 +40,19 @@
 //! Recorded by rdm:phase/key-bindings/phase-6-bound-key-names's findings,
 //! with the original's addresses there.
 //!
-//! | # | Text | Commands named | Spelling |
-//! |---|---|---|---|
-//! | 1 | flight's land hint (`flight::view`, `_HandlePlayer` @0x70b01-0x70b1b) | Land | [`Spelling::Str129`] |
-//! | 2 | flight's hyperspace hint (@0x70c3d-0x70cb2) | Galaxy Map, Hyper Jump | [`Spelling::Str129`] |
-//! | 3 | the escort menu's rows (`flight::escorts`, `_DrawEscortMenuInFrame` @0x5649a) | Group 1-5 | [`Spelling::Fixed`], the row's digit |
-//! | 4 | flight's help line, a developer overlay | about twenty flight and play commands, Pause | [`Spelling::Bound`] |
-//! | 5 | the galaxy map's help line | the arrows, zoom, Confirm, Find | [`Spelling::Bound`], [`Spelling::Twin`] S, [`Spelling::Fixed`] `+` (the keypad's) |
-//! | 6 | the galaxy map's Enter label | Confirm | [`Spelling::Bound`] |
-//! | 7 | the system view's help line | the arrows, Activate, Back | [`Spelling::Bound`], [`Spelling::Twin`] WASD |
-//! | 8 | the ship browser's footer | Left, Right | [`Spelling::Bound`] |
-//! | 9 | `nova`'s router hint (`nova::app::screen`) | Tab, Fly, About, Preferences | [`Spelling::Bound`] |
-//! | 10-21 | the twelve "Cannot show …" fallback prompts | each screen's Confirm and Back, or its own | [`Spelling::Prose`] ([`press_clause`]) |
-//! | 22 | the keys screen's rows (`ui::keys`) | every command | [`Spelling::Bound`], the keyboard's column |
+//! | # | Text | Commands named | Spelling | With a pad last used |
+//! |---|---|---|---|---|
+//! | 1 | flight's land hint (`flight::view`, `_HandlePlayer` @0x70b01-0x70b1b) | Land | [`Spelling::Str129`] | its entry (`B`) |
+//! | 2 | flight's hyperspace hint (@0x70c3d-0x70cb2) | Galaxy Map, Hyper Jump | [`Spelling::Str129`] | their entries |
+//! | 3 | the escort menu's rows (`flight::escorts`, `_DrawEscortMenuInFrame` @0x5649a) | Group 1-5 | [`Spelling::Fixed`], the row's digit | their entries (`Menu+D-Up`), the digit when unbound |
+//! | 4 | flight's help line, a developer overlay | about twenty flight and play commands, Pause | [`Spelling::Bound`] | their entries |
+//! | 5 | the galaxy map's help line | the arrows, zoom, Confirm, Find | [`Spelling::Bound`], [`Spelling::Twin`] S, [`Spelling::Fixed`] `+` (the keypad's) | the left stick, the triggers, Activate's South; no twin |
+//! | 6 | the galaxy map's Enter label | Confirm | [`Spelling::Bound`] | Activate's South |
+//! | 7 | the system view's help line | the arrows, Activate, Back | [`Spelling::Bound`], [`Spelling::Twin`] WASD | the left stick, South, East; no twins |
+//! | 8 | the ship browser's footer | Left, Right | [`Spelling::Bound`] | the left stick |
+//! | 9 | `nova`'s router hint (`nova::app::screen`) | Tab, Fly, About, Preferences | [`Spelling::Bound`] | the right shoulder; the keys of the rest, unbound on the pad |
+//! | 10-21 | the twelve "Cannot show …" fallback prompts | each screen's Confirm and Back, or its own | [`Spelling::Prose`] ([`press_clause`]) | South and East |
+//! | 22 | the keys screen's rows (`ui::keys`) | every command | [`Spelling::Bound`], the keyboard's tab | the gamepad tab's [`name_on_pad`] |
 //!
 //! Left as text: flight help's `Cmd-,` (the menu bar's Preferences
 //! chord, not a command), the macOS menu bar's own key equivalents (drawn

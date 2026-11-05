@@ -183,8 +183,8 @@ fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
 }
 
 /// Flight's help line ([`help_line`]) as the keys of `bindings`, named
-/// through `names`, give it, for the device flight's keys read: phase 12
-/// reruns it with the pad.
+/// through `names`, give it, on the keyboard (`help_on_pad` in the
+/// flying tests reads it with a pad used last).
 fn help_with(
     bindings: crate::keymap::Bindings,
     names: Rc<dyn crate::key_names::KeyNames>,

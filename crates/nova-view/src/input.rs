@@ -184,10 +184,9 @@ pub enum MouseButton {
 /// to [`name_command`](crate::bound_names::name_command).
 ///
 /// The app decides which it is (`nova`'s device-last-used module) and
-/// tells the screens through [`Input::Surroundings`]. Phase 12
-/// (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs) adds pad families
-/// and names pad buttons; phase 14 adds `Touch`. No call site changes
-/// then, as each asks its reader.
+/// tells the screens through [`Input::Surroundings`]. A pad is named by
+/// its family ([`pad_button_name`]); phase 14 adds `Touch`. No call site
+/// changes then, as each asks its reader.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Device {
     /// The keyboard: a command is named by its key.
@@ -233,7 +232,7 @@ pub struct Surroundings {
 
 /// A gamepad button, by its position on the pad (SDL's names: South is
 /// the bottom face button, whatever its label), never by its printed
-/// label: phase 12 names it by the pad's family. Each stick's four
+/// label: [`pad_button_name`] names it by the pad's family. Each stick's four
 /// directions are buttons too, pressed as the stick passes the press
 /// threshold (`nova`'s pad module decides when), so a screen reads a
 /// stick as it reads the d-pad.
@@ -331,7 +330,7 @@ impl PadButton {
     }
 
     /// The button's SDL-style position name (`south`, `leftshoulder`,
-    /// `dpup`, `+lefty`), as phase 12 saves it. A stick direction is its
+    /// `dpup`, `+lefty`), as the saved pad table holds it. A stick direction is its
     /// axis's name with the direction's sign, as SDL's mappings write a
     /// half axis.
     #[must_use]
@@ -402,7 +401,7 @@ impl PadAxis {
     pub const ALL: [Self; 4] = [Self::LeftX, Self::LeftY, Self::RightX, Self::RightY];
 
     /// The axis's SDL name (`leftx`, `lefty`, `rightx`, `righty`), as
-    /// phase 12 saves a binding to it.
+    /// the saved pad table holds a binding to it.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {

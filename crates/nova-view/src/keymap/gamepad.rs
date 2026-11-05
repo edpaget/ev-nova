@@ -5,7 +5,8 @@
 //! - [`PadEntry`] is a pad button and the layer button it needs held, as
 //!   a `KeyCombo` is a key and its modifiers.
 //! - [`PadMap`] binds each command to an entry, to a stick axis (an
-//!   [`Kind::Axis`](super::Kind::Axis) command) or to nothing, with the default table that
+//!   [`Kind::Axis`](super::Kind::Axis) command, read inverted or not:
+//!   [`AxisBinding`]) or to nothing, with the default table that
 //!   rdm:phase/key-bindings/phase-7-gamepad-input's findings record for
 //!   flight, and rdm:phase/key-bindings/phase-8-gamepad-focus's for the
 //!   shared UI context: the same buttons again, in a context no screen
@@ -17,6 +18,10 @@
 //! - The lookup over a pad button's input ([`resolve`], [`held`],
 //!   [`meanings_with`], [`bound_to`]) and the flight dead zone
 //!   ([`FLIGHT_DEAD_ZONE`], [`dead_zoned`], [`axis_amount`]).
+//! - The fixed rows ([`PadMap::is_fixed`]: the shared UI context, which
+//!   nothing rebinds) and what refuses a rebind ([`PadMap::fixed_holder`],
+//!   [`PadMap::axis_holder`]), for the keys screen's rule
+//!   ([`Bindings::assign_pad`](super::Bindings::assign_pad)).
 //!
 //! The press threshold, where a stick or trigger presses a button, is
 //! `nova`'s: its pad module turns axis values into [`PadButton`] presses

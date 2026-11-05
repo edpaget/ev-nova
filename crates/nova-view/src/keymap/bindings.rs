@@ -11,8 +11,7 @@ use crate::input::Input;
 
 /// One binding table per device family: the keyboard's and the
 /// gamepad's. The settings file saves each family's table on its own
-/// ([`KeyMap::to_table`]); the gamepad's is not saved until phase 12
-/// (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs).
+/// ([`KeyMap::to_table`], [`PadMap::to_table`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bindings {
     /// The keyboard's table.

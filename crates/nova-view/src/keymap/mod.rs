@@ -30,15 +30,18 @@
 //!   ([`Bindings::resolve`], [`Bindings::held`]), the clash query
 //!   ([`Bindings::clashes`], and [`Bindings::clashes_with`] for a rebind
 //!   not yet made) and the keys screen's rebind rule
-//!   ([`Bindings::assign`]), with [`Devices`], what each device holds,
+//!   ([`Bindings::assign`], and [`Bindings::assign_pad`] for the pad), with
+//!   [`Devices`], what each device holds,
 //!   handing each input to its device's side. Neither names a `Key`.
 //! - [`contexts`] lists each key-reading screen's contexts, in order.
 //! - [`reader`] is what a screen holds: a [`CommandReader`] over the
 //!   app's [`SharedBindings`].
-//! - [`saved`] is the key map's saved form: a combo's text, the bindings
-//!   that differ from the defaults ([`KeyMap::overrides`]), the map they
-//!   build again ([`KeyMap::with_overrides`]) and the text table the
-//!   settings file holds ([`KeyMap::to_table`], [`KeyMap::from_table`]).
+//! - [`saved`] is each table's saved form: a combo's or a pad binding's
+//!   text, the bindings that differ from the defaults
+//!   ([`KeyMap::overrides`], [`PadMap::overrides`]), the table they build
+//!   again ([`KeyMap::with_overrides`], [`PadMap::with_overrides`]) and the
+//!   text table the settings file holds ([`KeyMap::to_table`],
+//!   [`PadMap::to_table`] and their `from_table`).
 //!
 //! # Decisions
 //!
@@ -113,9 +116,14 @@
 //!   back past the press threshold) holds Reverse Course, derived from
 //!   the axis binding rather than a row, so moving the throttle to the
 //!   other stick moves reverse with it; the other directions of the two
-//!   bound axes mean nothing in flight, which reads them as axes. The
-//!   pad's clashes ([`Bindings::pad_clashes`]) are kept apart from the
-//!   keyboard's, so a key's rebind never unbinds a pad entry.
+//!   bound axes mean nothing in flight, which reads them as axes. An axis
+//!   may read inverted ([`AxisBinding`]): its amount is negated, and
+//!   Reverse Course moves to the direction whose amount reads negative.
+//!   The pad's clashes ([`Bindings::pad_clashes`]) are kept apart from
+//!   the keyboard's, so a key's rebind never unbinds a pad entry. Two
+//!   commands on one axis clash, and so does an axis with a plain entry
+//!   on one of its directions in a context active together, which flight
+//!   would leave dead.
 //! - **Saved form.** A command saves by its stable name, `Context.Variant`
 //!   ([`Command::name`]), and a combo as its W3C modifier names then
 //!   `Code`'s W3C key name, joined by `+` (`Meta+Digit5`), so the file
@@ -125,6 +133,12 @@
 //!   holds every default's name and text, so a rename or a
 //!   `keyboard-types` upgrade can't change the file unnoticed. An unknown
 //!   name or key loads as nothing saved: its command keeps its default.
+//!   The pad's table saves beside it the same way, a binding as its
+//!   position's text: `south`, `back+south` (on Select's layer),
+//!   `+lefty` (a stick direction), `righty~` (an inverted axis). Its fixed
+//!   rows are never saved, and a saved entry a fixed row or a flight axis
+//!   would refuse loads as nothing saved
+//!   (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs's findings).
 //! - **Conflict rules on load.** A saved table can clash: two saved
 //!   commands on one key, or a saved key a later build gives another
 //!   command by default. [`KeyMap::with_overrides`] unbinds one command a
@@ -143,6 +157,13 @@
 //!   one combo, the later loses. The original refuses the key instead
 //!   (rdm:phase/key-bindings/phase-4-keys-screen's findings); the
 //!   roadmap chose this rule.
+//! - **The pad's rebind rule.** [`Bindings::assign_pad`] works the same
+//!   way over the pad's clashes, axes included, but refuses, naming the
+//!   holder, a fixed row, an entry a fixed row holds in a context active
+//!   together (South, East, the d-pad, the shoulders and the sticks'
+//!   rows on a spaceport command), and a plain entry on a direction of a
+//!   stick a flight axis reads. Flight is never active with the shared
+//!   UI context, so its commands take South and East freely.
 //!
 //! [`Kind`]: command::Kind
 

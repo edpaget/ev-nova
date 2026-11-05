@@ -1312,7 +1312,7 @@ mod tests {
     }
 
     /// The row texts the opened menu draws, naming its keys through
-    /// `keys`: for each device `keys` reads, phase 12 reruns it.
+    /// `keys`, for the device `keys` reads.
     fn row_texts(keys: &CommandReader) -> Vec<String> {
         let mut list = DrawList::new();
         opened().draw(&mut list, &rows(), COLORS, None, keys);
