@@ -99,6 +99,7 @@ impl LastDevice {
 
 #[cfg(test)]
 mod tests {
+    use nova_view::keymap::FLIGHT_DEAD_ZONE;
     use nova_view::{Key, MouseButton, PadButton, Point, ScrollDelta};
 
     use super::*;
@@ -178,7 +179,7 @@ mod tests {
     #[test]
     fn a_stick_just_past_the_dead_zone_below_the_press_threshold_makes_it_gamepad() {
         let mut last = LastDevice::new();
-        let just_past = nova_view::keymap::FLIGHT_DEAD_ZONE + 0.01;
+        let just_past = FLIGHT_DEAD_ZONE + 0.01;
         assert!(just_past < PRESS_THRESHOLD);
         assert_eq!(
             last.pad_event(&stick(PadAxis::RightX, just_past)),
@@ -186,10 +187,22 @@ mod tests {
         );
     }
 
+    /// Values on one axis that `nova_view`'s dead zone reads as none, the
+    /// stick centred across: fractions of its published radius.
+    fn inside() -> [f32; 4] {
+        [0.3, 0.6, -0.8, 0.0].map(|share| share * FLIGHT_DEAD_ZONE)
+    }
+
+    /// A value on one axis that `nova_view`'s dead zone reads as pushed:
+    /// halfway from its radius to full deflection.
+    fn outside() -> f32 {
+        f32::midpoint(FLIGHT_DEAD_ZONE, 1.0)
+    }
+
     #[test]
     fn a_stick_inside_the_dead_zone_does_not() {
         let mut last = LastDevice::new();
-        for value in [0.05, 0.1, -0.12, 0.0] {
+        for value in inside() {
             assert_eq!(last.pad_event(&stick(PadAxis::LeftY, value)), None);
         }
         assert_eq!(last.device(), Device::Keyboard);
@@ -198,37 +211,43 @@ mod tests {
     #[test]
     fn a_stick_staying_outside_the_dead_zone_does_not_switch_it_back() {
         let mut last = LastDevice::new();
-        last.pad_event(&stick(PadAxis::LeftY, 0.8));
+        let further = f32::midpoint(outside(), 1.0);
+        last.pad_event(&stick(PadAxis::LeftY, outside()));
         last.input(&key(true));
-        assert_eq!(last.pad_event(&stick(PadAxis::LeftY, 0.9)), None);
+        assert_eq!(last.pad_event(&stick(PadAxis::LeftY, further)), None);
         assert_eq!(last.device(), Device::Keyboard);
         last.pad_event(&stick(PadAxis::LeftY, 0.0));
         assert_eq!(
-            last.pad_event(&stick(PadAxis::LeftY, -0.6)),
+            last.pad_event(&stick(PadAxis::LeftY, -outside())),
             Some(PAD),
             "back in, then out again"
         );
     }
 
     #[test]
-    fn the_dead_zone_is_the_sticks_radial_one() {
-        let mut last = LastDevice::new();
-        assert_eq!(last.pad_event(&stick(PadAxis::LeftX, 0.12)), None);
-        assert_eq!(
-            last.pad_event(&stick(PadAxis::LeftY, 0.12)),
-            Some(PAD),
-            "0.12 both ways is past 0.15 from the centre"
-        );
+    fn the_stick_leaves_the_dead_zone_as_nova_view_reads_both_its_axes() {
+        let shares = [0.0, 0.5, 0.8, -0.8, 1.2, -2.0];
+        for x in shares.map(|share| share * FLIGHT_DEAD_ZONE) {
+            for y in shares.map(|share| share * FLIGHT_DEAD_ZONE) {
+                let pushed = |x, y| dead_zoned(x, y) != (0.0, 0.0);
+                let mut last = LastDevice::new();
+                let first = last.pad_event(&stick(PadAxis::LeftX, x));
+                assert_eq!(first, pushed(x, 0.0).then_some(PAD), "({x}, 0)");
+                let second = last.pad_event(&stick(PadAxis::LeftY, y));
+                let leaves = pushed(x, y) && !pushed(x, 0.0);
+                assert_eq!(second, leaves.then_some(PAD), "({x}, {y})");
+            }
+        }
     }
 
     #[test]
     fn a_lost_pad_forgets_its_sticks() {
         let mut last = LastDevice::new();
-        last.pad_event(&stick(PadAxis::RightX, 0.9));
+        last.pad_event(&stick(PadAxis::RightX, outside()));
         last.input(&key(true));
         last.pad_event(&PadEvent::Disconnected(ONE));
         assert_eq!(
-            last.pad_event(&stick(PadAxis::RightX, 0.9)),
+            last.pad_event(&stick(PadAxis::RightX, outside())),
             Some(PAD),
             "a pad found again starts centred"
         );
