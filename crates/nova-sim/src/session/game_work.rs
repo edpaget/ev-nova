@@ -431,7 +431,7 @@ impl Session {
         // (@0x444ad), slot by slot.
         let motion = match thought {
             Some(Some(marks)) => Motion::Fly(marks),
-            Some(None) => Motion::Populated,
+            Some(None) => Motion::Unpopulated,
             None => Motion::Again,
         };
         let displayed = self.ship_loop(behaviour, start, motion, pass, rules, chance);
@@ -496,15 +496,18 @@ impl Session {
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
     /// says and drawing on `chance`: on the first pass in a system not
-    /// yet set up, its population ([`Session::populate`]), which moves
-    /// from the next; otherwise the session's work before the AI and the
-    /// traffic's think up to the first slot's
+    /// yet set up, its population first ([`Session::populate`]), as
+    /// `_HandlePlayer`'s `_SetupShipsInSystem` comes before the AI loop
+    /// (@0x69114), which dispatches every ship it set up, and the ship
+    /// loop flies them (@0x44270-0x442ae, @0x44483); then the session's
+    /// work before the AI and the traffic's think up to the first slot's
     /// ([`Traffic::open_think`]: the arrivals, as `_EnterMoreShips` comes
     /// before the loop, @0x44237, and the succession and formations, whose
     /// marking pass runs before every dispatch), and the fleets it brings said
     /// (`Space::announce_fleets`). Each slot's think comes in
     /// [`Session::dispatch_npcs`]. What its motion is read against, when
-    /// it opened.
+    /// it opened: none while the jump is under way with the system due,
+    /// as no system is set up then and the reset emptied the traffic.
     ///
     /// [`Traffic::open_think`]: crate::traffic::Traffic::open_think
     fn traffic_think(
@@ -515,11 +518,11 @@ impl Session {
     ) -> Option<TrafficMarks> {
         if self.space.traffic_due {
             // No system is set up while the jump is under way.
-            if self.jumping().is_none() {
-                self.populate(catalog, chance);
-                self.take_entry_gate_pass(chance);
+            if self.jumping().is_some() {
+                return None;
             }
-            return None;
+            self.populate(catalog, chance);
+            self.take_entry_gate_pass(chance);
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
         self.step_traffic(|traffic, world| {
@@ -1485,5 +1488,81 @@ mod tests {
         assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
         assert_eq!(read, [leaver], "the higher slot's think that pass");
         assert_eq!(reads(&mut session), [leaver], "its record stands");
+    }
+
+    // The populating frame.
+
+    #[test]
+    fn the_populating_frame_runs_every_ships_think() {
+        // `_DoPlayGameWork`'s AI loop (@0x44270-0x442ae) dispatches every
+        // ship `_SetupShipsInSystem` set up before it, with no test of a
+        // fresh setup.
+        let catalog = crate::session::tests::trafficked(130, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        let behaviour = Recording::default();
+        pass(&mut session, &catalog, Controls::default(), &behaviour);
+        let ids: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(ids.len(), 2, "set up");
+        let thought: Vec<NpcId> = behaviour.take().iter().map(|seen| seen.id).collect();
+        assert_eq!(thought, ids);
+    }
+
+    #[test]
+    fn the_populating_frame_sets_up_each_mission_ship_once() {
+        // The frame's `_EnterMoreShips` (@0x44237) runs after the setup,
+        // and counts the ships it set up as come.
+        use crate::session::mission_ships::tests::{
+            accepted, marked, shipping, ships_catalog, take_off,
+        };
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        // A relocation's reset, as a load in flight leaves it.
+        session.space.traffic_due = true;
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        assert_eq!(marked(&session), [0, 0]);
+    }
+
+    #[test]
+    fn a_jump_under_way_with_the_system_due_sets_up_nothing_and_flies_nothing() {
+        use crate::testkit::{begin_jump_now, fly_out};
+        let catalog = crate::session::tests::trafficked(130, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
+        session.space.traffic_due = true;
+        let before: Vec<(NpcId, crate::flight::ShipState)> = session
+            .npcs()
+            .iter()
+            .map(|npc| (npc.id, npc.state))
+            .collect();
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        let after: Vec<(NpcId, crate::flight::ShipState)> = session
+            .npcs()
+            .iter()
+            .map(|npc| (npc.id, npc.state))
+            .collect();
+        assert_eq!(after, before, "nothing set up or flown");
+        assert!(session.space.traffic_due);
     }
 }

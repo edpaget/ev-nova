@@ -98,9 +98,9 @@ pub(super) enum Motion {
     /// The advance pass's fly half, read against the marks its think
     /// left.
     Fly(TrafficMarks),
-    /// None: the advance pass populated the system, whose ships move from
-    /// the next.
-    Populated,
+    /// None: the system awaits its population while the jump is under
+    /// way, and the reset emptied the traffic.
+    Unpopulated,
     /// Double time's second pass's fly half.
     Again,
 }
@@ -164,7 +164,7 @@ impl Session {
             Motion::Again if again_marks.is_some() => {
                 Some(self.begin_fly(&BTreeSet::new(), FlyHalf::Again))
             }
-            Motion::Again | Motion::Populated => None,
+            Motion::Again | Motion::Unpopulated => None,
         };
         let mut shown = vec![ShipRef::Player];
         let mut displayed = BTreeSet::new();
@@ -242,7 +242,7 @@ impl Session {
                 self.settle_line_queue(rules.law, chance);
                 self.traffic_tail(&mut &mut *chance);
             }
-            Motion::Populated => {
+            Motion::Unpopulated => {
                 self.traffic_tail(&mut &mut *chance);
             }
             Motion::Again => {
@@ -1023,8 +1023,8 @@ mod tests {
 
     #[test]
     fn nothing_flies_on_a_second_pass_before_the_system_is_set_up() {
-        // Before the advance pass populates the system, its ships move
-        // from the next pass.
+        // Before an advance pass populates the system, no ship moves:
+        // double time's second pass flies nothing set up.
         let catalog = armed();
         let mut session = Session::start(&catalog).expect("starts");
         let at = Vec2::new(300.0, 0.0);

@@ -16865,7 +16865,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_tick_that_populates_the_system_moves_no_one() {
+    fn the_tick_that_populates_the_system_dispatches_and_flies_every_ship_it_sets_up() {
+        // `_DoPlayGameWork`'s AI loop (@0x44270-0x442ae) dispatches every
+        // ship `_SetupShipsInSystem` set up, and its ship loop (@0x44483)
+        // flies each, that frame: as a frame after a setup outside it.
         let catalog = trafficked(130, 2, 1);
         let mut ticked = Session::start(&catalog).expect("starts");
         work_with(
@@ -16878,13 +16881,25 @@ pub(super) mod tests {
         );
         let mut populated = Session::start(&catalog).expect("starts");
         populated.populate(&catalog, &mut NeverFires);
-        // The pass's ship loop displays them (@0x444ad), rolling their
-        // displays, but moves none.
         let states = |session: &Session| -> Vec<ShipState> {
             session.npcs().iter().map(|npc| npc.state).collect()
         };
-        assert_eq!(states(&ticked), states(&populated));
+        let set_up = states(&populated);
+        work_with(
+            &mut populated,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(npc_ids(&ticked), npc_ids(&populated));
+        for id in npc_ids(&ticked) {
+            let word = ticked.space.traffic.word_of(id);
+            assert!(word.is_some(), "{id:?} dispatched");
+        }
+        assert_ne!(states(&ticked), set_up, "flown");
+        assert_eq!(states(&ticked), states(&populated));
     }
 
     #[test]

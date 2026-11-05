@@ -1650,9 +1650,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_first_traffic_tick_places_each_escort_on_its_slot_beside_the_player() {
+    fn populating_places_each_escort_on_its_slot_beside_the_player() {
+        // As the setup leaves them, before the frame's AI loop dispatches
+        // and flies them.
         let catalog = fleeted();
-        let session = flying(&catalog, RuleSource::Bible);
+        let mut session = Session::fly(&catalog, escorted(&catalog))
+            .expect("flies")
+            .with_rules(
+                Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible),
+            );
+        session.populate(&catalog, &mut NeverFires);
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
         assert_eq!(session.npcs().len(), 2, "no traffic but them");
