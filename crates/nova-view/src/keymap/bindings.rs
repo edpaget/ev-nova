@@ -674,6 +674,23 @@ mod tests {
     }
 
     #[test]
+    fn a_twin_ranks_by_its_own_modifiers_not_its_command_s_binding() {
+        let bindings = Bindings::default()
+            .rebound(UiCommand::Tab, KeyCombo::with(Key::Tab, Modifiers::CONTROL))
+            .rebound(MapCommand::TabBack, KeyCombo::key(Key::KeyQ));
+        let course = &[Context::Map, Context::Play, Context::Ui];
+        assert_eq!(
+            means(&bindings, &[Key::ShiftLeft], Key::Backslash, course),
+            Some(Command::Map(MapCommand::TabBack)),
+            "Shift-\\ is Shift-Tab's twin, needing Shift, whatever Tab is bound to"
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Backslash, course),
+            Some(Command::Ui(UiCommand::Tab))
+        );
+    }
+
+    #[test]
     fn the_map_s_left_shift_alone_is_held_to_plot_the_course() {
         let bindings = Bindings::default();
         let course = &[Context::Map, Context::Play, Context::Ui];

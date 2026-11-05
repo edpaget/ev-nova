@@ -677,7 +677,17 @@ pub const fn sides(context: Context) -> Sides {
 }
 
 /// Every command `key` means with the modifiers `keys` holds, over the
-/// `active` contexts in their order:
+/// `active` contexts in their order: the commands of [`matched`].
+fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<Command> {
+    matched(map, key, keys, active)
+        .into_iter()
+        .map(|(command, _)| command)
+        .collect()
+}
+
+/// Every command `key` means with the modifiers `keys` holds, over the
+/// `active` contexts in their order, each with the modifiers what it
+/// matched through needs (its combo's, or its twin's):
 ///
 /// 1. A shadowing context's commands on the key ([`shadows`]), if any is
 ///    met: it wins its keys.
@@ -689,14 +699,20 @@ pub const fn sides(context: Context) -> Sides {
 ///
 /// Every command returned is held while the key stays down; a press
 /// means the most specific of them ([`most_specific`]).
-fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<Command> {
-    let met = |context: Context| -> Vec<Command> {
+fn matched(
+    map: &KeyMap,
+    key: Key,
+    keys: &KeysDown,
+    active: &[Context],
+) -> Vec<(Command, Modifiers)> {
+    let met = |context: Context| -> Vec<(Command, Modifiers)> {
         let held = keys.modifiers(sides(context));
         context
             .commands()
-            .filter(|&command| {
+            .filter_map(|command| {
                 map.combo(command)
-                    .is_some_and(|combo| combo.key == key && combo.met_by(held))
+                    .filter(|combo| combo.key == key && combo.met_by(held))
+                    .map(|combo| (command, combo.modifiers))
             })
             .collect()
     };
@@ -709,7 +725,7 @@ fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<
                     .any(|command| map.combo(command).is_some_and(|combo| combo.key == key))
         })
     };
-    let first: Vec<Command> = active
+    let first: Vec<(Command, Modifiers)> = active
         .iter()
         .filter(|&&context| shadowing(context))
         .flat_map(|&context| met(context))
@@ -717,7 +733,7 @@ fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<
     if !first.is_empty() {
         return first;
     }
-    let bound: Vec<Command> = active
+    let bound: Vec<(Command, Modifiers)> = active
         .iter()
         .filter(|&&context| !shadowing(context) && !shadowed_here(context))
         .flat_map(|&context| met(context))
@@ -732,23 +748,20 @@ fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<
                 && active.contains(&twin.context)
                 && keys.modifiers(sides(twin.context)).contains(twin.modifiers)
         })
-        .map(|twin| twin.command)
+        .map(|twin| (twin.command, twin.modifiers))
         .collect()
 }
 
-/// The command a press means among `meanings`, which [`meanings`] lists
-/// in the active contexts' order: the one whose combo needs the most
-/// modifiers, so Option-A beats A, and the first of those.
-fn most_specific(map: &KeyMap, meanings: &[Command]) -> Option<Command> {
-    let needs = |command: Command| {
-        map.combo(command)
-            .map_or(0, |combo| combo.modifiers.count())
-    };
-    meanings
+/// The command a press means among `matched`, which [`matched`] lists in
+/// the active contexts' order: the one whose match needs the most
+/// modifiers, so Option-A beats A and Shift-`\` the map's Shift-Tab twin
+/// beats its Tab twin, and the first of those.
+fn most_specific(matched: &[(Command, Modifiers)]) -> Option<Command> {
+    matched
         .iter()
-        .copied()
         .rev()
-        .max_by_key(|&command| needs(command))
+        .max_by_key(|(_, needs)| needs.count())
+        .map(|&(command, _)| command)
 }
 
 /// The command `input` means in the `active` contexts, with `keys` down
@@ -767,7 +780,7 @@ pub(super) fn resolve(
     else {
         return None;
     };
-    most_specific(map, &meanings(map, key, keys, active))
+    most_specific(&matched(map, key, keys, active))
 }
 
 /// Every command the keys down hold in the `active` contexts: each one a
