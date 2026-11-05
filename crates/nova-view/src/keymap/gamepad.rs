@@ -6,7 +6,10 @@
 //!   a `KeyCombo` is a key and its modifiers.
 //! - [`PadMap`] binds each command to an entry, to a stick axis (an
 //!   [`Kind::Axis`](super::Kind::Axis) command) or to nothing, with the default table that
-//!   rdm:phase/key-bindings/phase-7-gamepad-input's findings record.
+//!   rdm:phase/key-bindings/phase-7-gamepad-input's findings record for
+//!   flight, and rdm:phase/key-bindings/phase-8-gamepad-focus's for the
+//!   shared UI context: the same buttons again, in a context no screen
+//!   lists with flight's, so the two never clash.
 //! - [`Gamepad`] is the pad's device state: the buttons down, each with
 //!   the layer its press went down under, what each press meant (as a
 //!   hold, and as what its release ends), and the last value of each
@@ -23,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::bindings::{Change, Clash};
 use super::command::{
-    Command, Context, EscortMenuCommand, FlightCommand, PauseCommand, PlayCommand,
+    Command, Context, EscortMenuCommand, FlightCommand, PauseCommand, PlayCommand, UiCommand,
 };
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
 use crate::input::{Input, PadAxis, PadButton};
@@ -98,9 +101,10 @@ pub struct PadMap {
 }
 
 impl Default for PadMap {
-    /// The default table the phase's findings record: the shooter layout's
+    /// The default table the phases' findings record: the shooter layout's
     /// two flight axes, the d-pad and the buttons for flight's commonest
-    /// commands, and two layers, Select and Start, for the rest.
+    /// commands, and two layers, Select and Start, for the rest; and the
+    /// shared UI context's plain rows.
     fn default() -> Self {
         Self {
             bindings: Command::all()
@@ -227,7 +231,37 @@ const fn default_pad(command: Command) -> PadBinding {
         Command::EscortMenu(command) => default_escort_menu(command),
         Command::Play(command) => default_play(command),
         Command::Pause(PauseCommand::Pause) => on(PadButton::Select, PadButton::Start),
+        Command::Ui(command) => default_ui(command),
         _ => PadBinding::Unbound,
+    }
+}
+
+/// The shared UI context's defaults (rdm:phase/key-bindings/phase-8-gamepad-focus's
+/// findings): the d-pad moves the focus, the shoulders step it in Tab
+/// order, South presses the focused control, East goes back, the left
+/// stick does what the arrow keys do and the right stick pages. Confirm
+/// stays the keyboard's Return: South presses the focused control, and
+/// the pad's focus starts on the default button. All are plain, so a
+/// held layer never leaks a focus move.
+const fn default_ui(command: UiCommand) -> PadBinding {
+    use PadButton as P;
+    use UiCommand as U;
+    match command {
+        U::FocusUp => plain(P::DPadUp),
+        U::FocusDown => plain(P::DPadDown),
+        U::FocusLeft => plain(P::DPadLeft),
+        U::FocusRight => plain(P::DPadRight),
+        U::PrevFocus => plain(P::LeftShoulder),
+        U::Tab => plain(P::RightShoulder),
+        U::Activate => plain(P::South),
+        U::Back => plain(P::East),
+        U::Up => plain(P::LeftStickUp),
+        U::Down => plain(P::LeftStickDown),
+        U::Left => plain(P::LeftStickLeft),
+        U::Right => plain(P::LeftStickRight),
+        U::PageUp => plain(P::RightStickUp),
+        U::PageDown => plain(P::RightStickDown),
+        U::Confirm | U::Home | U::End => PadBinding::Unbound,
     }
 }
 
@@ -693,8 +727,8 @@ mod tests {
     use super::super::command::Kind;
     use super::super::keyboard::Binding;
     use super::*;
-    use crate::keymap::command::UiCommand;
     use PadButton as P;
+    use UiCommand as U;
 
     const FLYING: &[Context] = &[Context::Flight, Context::Play, Context::Pause];
     const MENU_SHOWN: &[Context] = &[
@@ -813,7 +847,8 @@ mod tests {
     }
 
     /// The findings' default table, row by row, as
-    /// rdm:phase/key-bindings/phase-7-gamepad-input records it. Every
+    /// rdm:phase/key-bindings/phase-7-gamepad-input records it and
+    /// rdm:phase/key-bindings/phase-8-gamepad-focus adds the UI rows. Every
     /// command not listed is unbound.
     fn findings_table() -> Vec<(Command, PadBinding)> {
         use EscortMenuCommand as E;
@@ -882,7 +917,94 @@ mod tests {
             (Command::EscortMenu(E::Group4), st(P::DPadLeft)),
             (Command::EscortMenu(E::Group5), st(P::LeftStick)),
             (Command::Pause(PauseCommand::Pause), on(P::Select, P::Start)),
+            (ui(U::FocusUp), plain(P::DPadUp)),
+            (ui(U::FocusDown), plain(P::DPadDown)),
+            (ui(U::FocusLeft), plain(P::DPadLeft)),
+            (ui(U::FocusRight), plain(P::DPadRight)),
+            (ui(U::PrevFocus), plain(P::LeftShoulder)),
+            (ui(U::Tab), plain(P::RightShoulder)),
+            (ui(U::Activate), plain(P::South)),
+            (ui(U::Back), plain(P::East)),
+            (ui(U::Up), plain(P::LeftStickUp)),
+            (ui(U::Down), plain(P::LeftStickDown)),
+            (ui(U::Left), plain(P::LeftStickLeft)),
+            (ui(U::Right), plain(P::LeftStickRight)),
+            (ui(U::PageUp), plain(P::RightStickUp)),
+            (ui(U::PageDown), plain(P::RightStickDown)),
         ]
+    }
+
+    fn ui(command: UiCommand) -> Command {
+        Command::Ui(command)
+    }
+
+    #[test]
+    fn the_default_pad_table_binds_the_shared_ui_context_as_phase_8_says() {
+        let pad = PadMap::default();
+        let expected = |command: UiCommand| match command {
+            U::FocusUp => plain(P::DPadUp),
+            U::FocusDown => plain(P::DPadDown),
+            U::FocusLeft => plain(P::DPadLeft),
+            U::FocusRight => plain(P::DPadRight),
+            U::PrevFocus => plain(P::LeftShoulder),
+            U::Tab => plain(P::RightShoulder),
+            U::Activate => plain(P::South),
+            U::Back => plain(P::East),
+            U::Up => plain(P::LeftStickUp),
+            U::Down => plain(P::LeftStickDown),
+            U::Left => plain(P::LeftStickLeft),
+            U::Right => plain(P::LeftStickRight),
+            U::PageUp => plain(P::RightStickUp),
+            U::PageDown => plain(P::RightStickDown),
+            U::Confirm | U::Home | U::End => PadBinding::Unbound,
+        };
+        for command in Context::Ui.commands() {
+            let Command::Ui(ui) = command else {
+                unreachable!("the Ui context lists Ui commands")
+            };
+            assert_eq!(pad.binding(command), expected(ui), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn in_a_dialog_the_pad_reads_as_the_ui_commands() {
+        use crate::keymap::{CommandReader, contexts};
+        let pressed = |buttons: &[PadButton]| -> Option<Command> {
+            let mut reader = CommandReader::new(contexts::DIALOG);
+            let mut meant = None;
+            for &button in buttons {
+                meant = reader.follow(&press(button)).map(|c| c.command);
+            }
+            meant
+        };
+        for (button, command) in [
+            (P::DPadUp, U::FocusUp),
+            (P::DPadDown, U::FocusDown),
+            (P::DPadLeft, U::FocusLeft),
+            (P::DPadRight, U::FocusRight),
+            (P::LeftShoulder, U::PrevFocus),
+            (P::RightShoulder, U::Tab),
+            (P::South, U::Activate),
+            (P::East, U::Back),
+            (P::LeftStickUp, U::Up),
+            (P::LeftStickDown, U::Down),
+            (P::LeftStickLeft, U::Left),
+            (P::LeftStickRight, U::Right),
+            (P::RightStickUp, U::PageUp),
+            (P::RightStickDown, U::PageDown),
+        ] {
+            assert_eq!(pressed(&[button]), Some(ui(command)), "{button:?}");
+        }
+        assert_eq!(pressed(&[P::RightStickLeft]), None);
+        assert_eq!(pressed(&[P::RightStickRight]), None);
+        assert_eq!(pressed(&[P::Select]), None, "a layer alone");
+        assert_eq!(pressed(&[P::Start]), None, "a layer alone");
+        assert_eq!(
+            pressed(&[P::Start, P::DPadUp]),
+            None,
+            "a held layer never leaks a focus move"
+        );
+        assert_eq!(pressed(&[P::Select, P::South]), None);
     }
 
     #[test]
@@ -1106,7 +1228,8 @@ mod tests {
         );
         assert_eq!(
             bound_to(&pad.map, &press(P::LeftStickDown), &[Context::Ui]),
-            vec![]
+            vec![ui(U::Down)],
+            "the UI's own row, not Reverse Course"
         );
         let mut off_flight = Pad::new(&[Context::Play]);
         assert_eq!(off_flight.press(P::LeftStickDown), None);
