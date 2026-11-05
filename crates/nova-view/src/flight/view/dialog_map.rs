@@ -183,9 +183,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// module docs).
     ///
     /// Each dialog opens it only on the map key (a fresh press of
-    /// [`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)), so it
-    /// opens with [`MAP_KEY`](super::MAP_KEY) held, and a close before its release waits
-    /// for it ([`FlightView::close_map`]).
+    /// [`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)),
+    /// so it opens with the map key held, and a close before its release
+    /// waits for it ([`FlightView::close_map`]).
     pub fn open_dialog_map(&mut self, opener: MapOpener) {
         self.open_map_as(MapOpening::Dialog(opener));
         self.map_key_held = true;

@@ -14,12 +14,16 @@
 //! nebulae are drawn, as each change to it is told; the geometry stays the
 //! catalog's.
 //!
-//! Input (presses only, except the left button's release):
+//! Input (presses only, except the left button's release). Each key is
+//! read through the map's bindings ([`GalaxyMap::with_bindings`]) as a
+//! command: the map's own ([`MapCommand`]) or the shared UI context's.
+//! The keys named here are their defaults, and the second keys (S beside
+//! F, the keypad's `+` beside `=`, `\` beside Tab) their fixed twins.
 //!
 //! - On the viewer the arrow keys pan the view by [`PAN_STEP`]; `=` or
 //!   `+` zooms in and `-` zooms out. On an in-flight map the arrows scroll
 //!   10 units and `-`, `=` and `+` step the zoom within its limits
-//!   ([`MapDialog::key`]); each repeats while held.
+//!   ([`MapDialog::command`]); each repeats while held.
 //! - On the viewer, pressing the left button above its panel and moving
 //!   the pointer drags the map by the pointer's moves. Releasing it after
 //!   moving no more than [`CLICK_SLOP`] is a click instead: it selects
@@ -285,15 +289,16 @@ use super::update::MapUpdate;
 use super::view::{Bounds, MAP_CENTER, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
+use crate::keymap::{
+    Command, CommandInput, CommandReader, MapCommand, ScreenContexts, SharedBindings, UiCommand,
+    contexts,
+};
 use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
-use crate::{
-    Color, DrawList, Font, ImageKey, Input, Key, ModifierHeld, MouseButton, Point, SHIFT_KEYS,
-    Screen, ScreenAction,
-};
+use crate::{Color, DrawList, Font, ImageKey, Input, MouseButton, Point, Screen, ScreenAction};
 
 /// How far the pointer may travel between pressing and releasing the left
 /// button for the press to count as a click rather than a drag.
@@ -602,12 +607,13 @@ pub struct GalaxyMap {
     /// What the map draws: the viewer's from the start, an in-flight
     /// map's once shown ([`GalaxyMap::show_drawing`]).
     picture: Option<MapPicture>,
-    /// Whether Shift is held for Tab: either Shift, as `_MapFilter`
-    /// reads the `shiftKey` bit (@0x13ee4).
-    tab_shift: ModifierHeld,
-    /// Whether Shift is held for a click: the left Shift alone, as
+    /// Its keys, as commands: the viewer's ([`contexts::GALAXY_VIEWER`])
+    /// or an in-flight map's ([`contexts::COURSE_MAP`]). Shift-Tab is
+    /// [`MapCommand::TabBack`], read with either Shift as `_MapFilter`
+    /// reads the `shiftKey` bit (@0x13ee4), and a click's Shift
+    /// [`MapCommand::PlotCourse`], held, the left Shift alone as
     /// `_DoSystemMap` polls its key code (`_KeyCheck(0x38)` @0x13071).
-    click_shift: ModifierHeld,
+    keys: CommandReader,
     /// A Tab, `\`, Return, C or Clear Route on an in-flight map, not yet
     /// taken.
     request: Option<Request>,
@@ -689,6 +695,11 @@ impl GalaxyMap {
             });
             borders.show_sources(BorderSources::unfiltered(systems, model.govts().clone()));
         }
+        let screen: ScreenContexts = if viewer {
+            contexts::GALAXY_VIEWER
+        } else {
+            contexts::COURSE_MAP
+        };
         let mut map = Self {
             mode,
             model,
@@ -706,8 +717,7 @@ impl GalaxyMap {
             metrics: None,
             offered: Vec::new(),
             picture,
-            tab_shift: ModifierHeld::either(SHIFT_KEYS),
-            click_shift: ModifierHeld::only(Key::ShiftLeft),
+            keys: CommandReader::new(screen),
             request: None,
             gate_pick: None,
             find: None,
@@ -720,6 +730,40 @@ impl GalaxyMap {
         };
         map.settle_borders();
         map
+    }
+
+    /// The map reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its keys through `bindings` from the next one on: its own,
+    /// an in-flight map's dialog's and Find's.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        if let Look::Dialog(dialog) = &mut self.look {
+            dialog.set_bindings(bindings.clone());
+        }
+        if let Some(find) = self.find.take() {
+            self.find = Some(find.with_bindings(bindings.clone()));
+        }
+        self.keys.set_bindings(bindings);
+    }
+
+    /// The bindings it reads its keys through.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
+    }
+
+    /// The command `input` would press, repeat or let go of on the map,
+    /// without taking it: for an owner that decides what reaches the map
+    /// by what it means (the course map's close on a key `_MapFilter`
+    /// doesn't take).
+    #[must_use]
+    pub fn peek(&self, input: &Input) -> Option<Command> {
+        self.keys.peek(input)
     }
 
     /// What the map is for.
@@ -1255,12 +1299,43 @@ impl GalaxyMap {
 }
 
 impl GalaxyMap {
-    /// Handles a key press or repeat: the viewer pans and zooms through
-    /// its view, an in-flight map as the dialog does ([`MapDialog::key`]).
-    fn key(&mut self, key: Key) {
+    /// Handles a command's press or repeat: the viewer pans and zooms
+    /// through its view, an in-flight map as the dialog does
+    /// ([`MapDialog::command`]). Return, Space and Find act on a press
+    /// alone; the rest on their repeats too.
+    fn command(&mut self, command: Command, repeat: bool) {
+        match command {
+            // Return enters once, however long it is held.
+            Command::Ui(UiCommand::Confirm) => {
+                if !repeat {
+                    if self.mode == MapMode::Viewer {
+                        self.enter();
+                    } else {
+                        self.request = Some(Request::Close);
+                    }
+                }
+                return;
+            }
+            // Once, on key-down, as `_MapFilter` takes Space (@0x140e0).
+            Command::Ui(UiCommand::Activate) => {
+                if !repeat {
+                    self.centre_on_current();
+                }
+                return;
+            }
+            // F and S, any case, on key-down: the Find button
+            // (@0x144b9-0x144d6).
+            Command::Map(MapCommand::Find) => {
+                if !repeat {
+                    self.open_find();
+                }
+                return;
+            }
+            _ => {}
+        }
         if let Look::Dialog(dialog) = &mut self.look {
             let before = *dialog.place();
-            if dialog.key(key) {
+            if dialog.command(command) {
                 // An arrow or a zoom step taken (@0x14301, @0x143af,
                 // @0x1445f, @0x129e0, @0x12c13).
                 if *dialog.place() != before {
@@ -1269,24 +1344,31 @@ impl GalaxyMap {
                 return;
             }
         }
-        match (&mut self.look, key) {
+        match (&mut self.look, command) {
             // B, either case, its repeats too (@0x14251): item 9.
-            (Look::Dialog(dialog), Key::KeyB) => self.borders.toggle(dialog),
-            (Look::Viewer(_), Key::KeyB) => self.borders.toggle_viewer(),
-            (Look::Viewer(view), Key::ArrowLeft) => view.pan(-PAN_STEP, 0.0),
-            (Look::Viewer(view), Key::ArrowRight) => view.pan(PAN_STEP, 0.0),
-            (Look::Viewer(view), Key::ArrowUp) => view.pan(0.0, -PAN_STEP),
-            (Look::Viewer(view), Key::ArrowDown) => view.pan(0.0, PAN_STEP),
-            (Look::Viewer(view), Key::Equal | Key::NumpadAdd) => view.zoom_in(),
-            (Look::Viewer(view), Key::Minus) => view.zoom_out(),
-            (_, Key::Tab | Key::Backslash) if self.mode != MapMode::Viewer => {
+            (Look::Dialog(dialog), Command::Map(MapCommand::Borders)) => {
+                self.borders.toggle(dialog);
+            }
+            (Look::Viewer(_), Command::Map(MapCommand::Borders)) => self.borders.toggle_viewer(),
+            (Look::Viewer(view), Command::Ui(UiCommand::Left)) => view.pan(-PAN_STEP, 0.0),
+            (Look::Viewer(view), Command::Ui(UiCommand::Right)) => view.pan(PAN_STEP, 0.0),
+            (Look::Viewer(view), Command::Ui(UiCommand::Up)) => view.pan(0.0, -PAN_STEP),
+            (Look::Viewer(view), Command::Ui(UiCommand::Down)) => view.pan(0.0, PAN_STEP),
+            (Look::Viewer(view), Command::Map(MapCommand::ZoomIn)) => view.zoom_in(),
+            (Look::Viewer(view), Command::Map(MapCommand::ZoomOut)) => view.zoom_out(),
+            // Tab or `\`, with Shift back.
+            (_, Command::Ui(UiCommand::Tab) | Command::Map(MapCommand::TabBack))
+                if self.mode != MapMode::Viewer =>
+            {
                 self.request = Some(Request::Cycle(MapCycle {
-                    back: self.tab_shift.held(),
+                    back: command == Command::Map(MapCommand::TabBack),
                 }));
             }
             // C, either case, its repeats too, whatever Clear Route's
             // flag (`_MapFilter` @0x14268).
-            (Look::Dialog(_), Key::KeyC) => self.request = Some(Request::ClearRoute),
+            (Look::Dialog(_), Command::Map(MapCommand::ClearRoute)) => {
+                self.request = Some(Request::ClearRoute);
+            }
             _ => {}
         }
     }
@@ -1329,7 +1411,8 @@ impl GalaxyMap {
             .find_template
             .as_ref()
             .and_then(|template| FindDialog::new(template, self.style, Rc::clone(metrics)).ok())
-            .unwrap_or_else(|| FindDialog::fallback(self.style, Rc::clone(metrics)));
+            .unwrap_or_else(|| FindDialog::fallback(self.style, Rc::clone(metrics)))
+            .with_bindings(self.keys.bindings().clone());
         dialog.flush_typed_key();
         self.find = Some(dialog);
         self.press = None;
@@ -1437,7 +1520,7 @@ impl GalaxyMap {
                 self.pending = Some(PendingPress {
                     at,
                     hits,
-                    shift: self.click_shift.held(),
+                    shift: self.keys.held(MapCommand::PlotCourse),
                 });
                 return;
             }
@@ -1926,49 +2009,22 @@ impl std::fmt::Debug for MapMetrics {
 impl GalaxyMap {
     /// [`Screen::input`]'s work, before the borders settle.
     fn take_input(&mut self, input: &Input) {
-        self.tab_shift.follow(input);
-        self.click_shift.follow(input);
+        let meant = self.keys.follow(input);
         if self.finding() {
             self.find_input(input);
             return;
         }
         self.button_input(input);
+        // Presses and their repeats; a release does nothing.
+        if let Some(CommandInput {
+            command,
+            pressed: true,
+            repeat,
+        }) = meant
+        {
+            self.command(command, repeat);
+        }
         match *input {
-            // Return enters once, however long it is held.
-            Input::Key {
-                key: Key::Enter | Key::NumpadEnter,
-                pressed: true,
-                repeat,
-            } => {
-                if !repeat {
-                    if self.mode == MapMode::Viewer {
-                        self.enter();
-                    } else {
-                        self.request = Some(Request::Close);
-                    }
-                }
-            }
-            // Once, on key-down, as `_MapFilter` takes Space (@0x140e0).
-            Input::Key {
-                key: Key::Space,
-                pressed: true,
-                repeat,
-            } => {
-                if !repeat {
-                    self.centre_on_current();
-                }
-            }
-            // F and S, any case, on key-down: the Find button
-            // (@0x144b9-0x144d6).
-            Input::Key {
-                key: Key::KeyF | Key::KeyS,
-                pressed: true,
-                repeat: false,
-            } => self.open_find(),
-            // Repeats too: holding a key keeps panning or zooming.
-            Input::Key {
-                key, pressed: true, ..
-            } => self.key(key),
             Input::PointerButton {
                 button: MouseButton::Left,
                 pressed,
@@ -2076,10 +2132,9 @@ impl Screen for GalaxyMap {
         self.take_ui_sounds().into_iter().map(Sound::Ui).collect()
     }
 
-    /// Forgets Shift as held.
+    /// Forgets the keys held, Shift among them.
     fn release_keys(&mut self) {
-        self.tab_shift.let_go();
-        self.click_shift.let_go();
+        self.keys.let_go();
     }
 }
 
@@ -2373,6 +2428,28 @@ mod tests {
             assert_eq!(map.input(&press(Key::Minus)), ScreenAction::None);
         }
         assert_eq!(view_of(&map).zoom(), fitted - 1);
+    }
+
+    #[test]
+    fn a_rebound_zoom_in_and_left_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(MapCommand::ZoomIn, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Left, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut map = map().with_bindings(bindings);
+        let (fitted, start) = (view_of(&map).zoom(), view_of(&map).center());
+        map.input(&press(Key::KeyQ));
+        assert_eq!(view_of(&map).zoom(), fitted + 1, "Q zooms in");
+        map.input(&press(Key::Equal));
+        assert_eq!(view_of(&map).zoom(), fitted + 1, "= no longer does");
+        map.input(&press(Key::NumpadAdd));
+        assert_eq!(view_of(&map).zoom(), fitted + 2, "its twin stays");
+        map.input(&press(Key::ArrowLeft));
+        assert_eq!(view_of(&map).center(), start, "Left no longer pans");
+        map.input(&press(Key::KeyJ));
+        assert!(view_of(&map).center().x < start.x, "J pans left");
     }
 
     #[test]
@@ -3559,6 +3636,27 @@ mod tests {
             assert!(!map.take_close(), "taken");
             assert_eq!(map.take_entry(), None);
         }
+    }
+
+    #[test]
+    fn a_rebound_confirm_and_clear_route_ask_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ))
+                .rebound(MapCommand::ClearRoute, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut map = course_map().with_bindings(bindings);
+        map.input(&press(Key::Enter));
+        assert!(!map.take_close(), "Return no longer closes it");
+        map.input(&press(Key::KeyQ));
+        assert!(map.take_close(), "Q does");
+        map.input(&press(Key::NumpadEnter));
+        assert!(map.take_close(), "its twin stays");
+        map.input(&press(Key::KeyC));
+        assert!(!map.take_clear_route(), "C no longer clears it");
+        map.input(&press(Key::KeyJ));
+        assert!(map.take_clear_route(), "J does");
     }
 
     #[test]

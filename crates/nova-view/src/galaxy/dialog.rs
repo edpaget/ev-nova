@@ -45,10 +45,11 @@ use super::update::MapUpdate;
 use super::view::{Bounds, Transform};
 use crate::draw::fill_rect;
 use crate::flight::radar::IRect;
+use crate::keymap::{Command, CommandReader, MapCommand, SharedBindings, UiCommand, contexts};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::center_window;
-use crate::{Color, DrawList, ImageKey, Key, Point};
+use crate::{Color, DrawList, ImageKey, Input, Key, Point};
 
 /// The map's `DLOG` and `DITL`, "Map" (`_DoSystemMap`'s `GetNewDialog`,
 /// @0x121e5).
@@ -150,8 +151,9 @@ fn whole_pixel(at: Point) -> (i32, i32) {
 /// What the in-flight maps keep of the dialog: where they look
 /// ([`MapPlace`]), the buttons' trackers, the borders setting their
 /// Borders button reads, `showClearRouteButton`, which enables Clear
-/// Route, a drag in progress, and which update item 3 shows.
-#[derive(Clone, Debug, PartialEq)]
+/// Route, a drag in progress, which update item 3 shows, and the
+/// bindings its keys are read through.
+#[derive(Clone, Debug)]
 pub struct MapDialog {
     place: MapPlace,
     buttons: MapButtons,
@@ -163,6 +165,9 @@ pub struct MapDialog {
     update: MapUpdate,
     /// Whether item 3 was redrawn since this was last taken.
     fresh: bool,
+    /// The bindings [`MapDialog::key`] reads a key through, as the course
+    /// map's commands ([`contexts::COURSE_MAP`]).
+    bindings: SharedBindings,
 }
 
 impl MapDialog {
@@ -179,7 +184,13 @@ impl MapDialog {
             drag: None,
             update: MapUpdate::Full,
             fresh: false,
+            bindings: SharedBindings::default(),
         }
+    }
+
+    /// Reads its keys through `bindings` from the next one on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.bindings = bindings;
     }
 
     /// Where it looks.
@@ -249,27 +260,43 @@ impl MapDialog {
         self.place.transform(port, MAP_ITEM_CENTRE)
     }
 
-    /// A key press or repeat (`_MapFilter`): the arrows scroll
-    /// [`ARROW_STEP`] units (@0x142a3, @0x142c3, @0x14370, @0x14417),
-    /// `-` is item 4 and `=` or `+` item 5, each stepping only while its
-    /// flag allows (@0x14271-0x14293). Each arrow redraws item 3 (left and
-    /// right @0x142fc, up @0x143aa, down @0x1445a), and so does a zoom
+    /// A command's press or repeat (`_MapFilter`): the shared arrows
+    /// scroll [`ARROW_STEP`] units (@0x142a3, @0x142c3, @0x14370,
+    /// @0x14417), and the map's zoom out (`-`) is item 4 and its zoom in
+    /// (`=`, or the keypad's `+`) item 5, each stepping only while its
+    /// flag allows (@0x14271-0x14293). Each arrow redraws item 3 (left
+    /// and right @0x142fc, up @0x143aa, down @0x1445a), and so does a zoom
     /// step taken (@0x128d9, @0x12b0c); a refused one redraws nothing
-    /// (@0x12803-0x12816). Whether it took the key.
-    pub fn key(&mut self, key: Key) -> bool {
-        let redraw = match key {
-            Key::ArrowLeft => self.scroll_by(-ARROW_STEP, 0),
-            Key::ArrowRight => self.scroll_by(ARROW_STEP, 0),
-            Key::ArrowUp => self.scroll_by(0, -ARROW_STEP),
-            Key::ArrowDown => self.scroll_by(0, ARROW_STEP),
-            Key::Minus => self.place.zoom_out(),
-            Key::Equal | Key::NumpadAdd => self.place.zoom_in(),
+    /// (@0x12803-0x12816). Whether it took the command.
+    pub fn command(&mut self, command: Command) -> bool {
+        let redraw = match command {
+            Command::Ui(UiCommand::Left) => self.scroll_by(-ARROW_STEP, 0),
+            Command::Ui(UiCommand::Right) => self.scroll_by(ARROW_STEP, 0),
+            Command::Ui(UiCommand::Up) => self.scroll_by(0, -ARROW_STEP),
+            Command::Ui(UiCommand::Down) => self.scroll_by(0, ARROW_STEP),
+            Command::Map(MapCommand::ZoomOut) => self.place.zoom_out(),
+            Command::Map(MapCommand::ZoomIn) => self.place.zoom_in(),
             _ => return false,
         };
         if redraw {
             self.redraw();
         }
         true
+    }
+
+    /// A press or repeat of `key`, with no modifier held: the command its
+    /// bindings say it means ([`MapDialog::command`]), and whether it was
+    /// taken.
+    pub fn key(&mut self, key: Key) -> bool {
+        let press = Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        };
+        CommandReader::new(contexts::COURSE_MAP)
+            .with_bindings(self.bindings.clone())
+            .peek(&press)
+            .is_some_and(|command| self.command(command))
     }
 
     /// Moves the scroll by (`dx`, `dy`): an arrow, which always redraws.
@@ -927,6 +954,34 @@ mod tests {
         }
         assert!(zoom(&map) > 2.0);
         assert_eq!(enabled(&map), [false, true], "- past 2.0");
+    }
+
+    #[test]
+    fn a_rebound_zoom_out_and_up_step_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(MapCommand::ZoomOut, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Up, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut map = course_map().with_bindings(bindings);
+        let (zoomed, scroll) = (zoom(&map), map.place().expect("in flight").scroll());
+        map.input(&press(Key::Minus));
+        assert_eq!(zoom(&map), zoomed, "- no longer steps out");
+        map.input(&press(Key::KeyQ));
+        assert!(zoom(&map) > zoomed, "Q does");
+        map.input(&press(Key::ArrowUp));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            scroll,
+            "Up no longer scrolls"
+        );
+        map.input(&press(Key::KeyJ));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            (scroll.0, scroll.1 - ARROW_STEP),
+            "J does"
+        );
     }
 
     /// In Alpha, with the course to Beta, every system drawn and named.

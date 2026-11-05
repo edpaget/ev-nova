@@ -15,9 +15,10 @@ use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{MapCycle, MapMode, PendingPress, PressAnswer};
+use crate::keymap::{Command, MapCommand, UiCommand, is_modifier_input};
 use crate::system::catalog::SystemCatalog;
 use crate::view_shape::classic_offset;
-use crate::{DrawList, Input, Key, Point, Screen, UiSound};
+use crate::{DrawList, Input, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
 use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
@@ -507,13 +508,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.map_key_held = pressed;
         }
         if let Input::Key {
-            key,
             pressed: true,
             repeat: false,
+            ..
         } = *input
             && self.map_key_held
             && !self.map.finding()
-            && !self.map_filter_takes(key)
+            && !self.map_filter_takes(input)
         {
             return true;
         }
@@ -593,41 +594,38 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.retake_nav();
     }
 
-    /// Whether `_MapFilter` takes `key` before its map-key close, which a
-    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
-    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
-    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
-    /// later phases port are taken already, so none of them closes the
-    /// map. A modifier is taken too: a Mac sends no key-down for one
-    /// alone, so the filter never sees it.
-    fn map_filter_takes(&self, key: Key) -> bool {
-        let docked = self.frame.docked();
-        match key {
-            Key::ShiftLeft
-            | Key::ShiftRight
-            | Key::ControlLeft
-            | Key::ControlRight
-            | Key::AltLeft
-            | Key::AltRight
-            | Key::MetaLeft
-            | Key::MetaRight
-            | Key::CapsLock
-            | Key::Enter
-            | Key::NumpadEnter
-            | Key::Escape
-            | Key::Space
-            | Key::ArrowLeft
-            | Key::ArrowRight
-            | Key::ArrowUp
-            | Key::ArrowDown
-            | Key::KeyB
-            | Key::KeyC
-            | Key::Minus
-            | Key::Equal
-            | Key::NumpadAdd
-            | Key::KeyF
-            | Key::KeyS => true,
-            Key::Tab | Key::Backslash => !docked,
+    /// Whether `_MapFilter` takes `input`'s key before its map-key close,
+    /// which a key it takes never reaches (@0x13cdd-0x144d6): what the
+    /// map reads it as, through its bindings
+    /// ([`GalaxyMap::peek`](crate::galaxy::GalaxyMap::peek)). That is
+    /// Confirm (Return, Enter), Back (Escape), Tab and Shift-Tab (Tab and
+    /// `\`, off a planet, @0x13d20), Activate (Space), the arrows and
+    /// every map command (B, C, `-`, `=` and `+`, the keypad's too, F and
+    /// S); not the shared scroll keys nor the play keys, the map key's own
+    /// press among them. The keys later phases port are taken already, so
+    /// none of them closes the map. A modifier is taken too
+    /// ([`is_modifier_input`]): a Mac sends no key-down for one alone, so
+    /// the filter never sees it.
+    fn map_filter_takes(&self, input: &Input) -> bool {
+        if is_modifier_input(input) {
+            return true;
+        }
+        match self.map.peek(input) {
+            Some(Command::Ui(UiCommand::Tab) | Command::Map(MapCommand::TabBack)) => {
+                !self.frame.docked()
+            }
+            Some(
+                Command::Map(_)
+                | Command::Ui(
+                    UiCommand::Confirm
+                    | UiCommand::Back
+                    | UiCommand::Up
+                    | UiCommand::Down
+                    | UiCommand::Left
+                    | UiCommand::Right
+                    | UiCommand::Activate,
+                ),
+            ) => true,
             _ => false,
         }
     }

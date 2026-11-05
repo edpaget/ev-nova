@@ -443,6 +443,24 @@ fn a_modifier_is_no_key_down_and_never_closes_the_map() {
 }
 
 #[test]
+fn the_map_key_closes_on_what_the_map_s_bindings_leave_untaken() {
+    use crate::keymap::{Bindings, KeyCombo, MapCommand, SharedBindings};
+    let mut view = faked_sol(in_sol());
+    view.map.set_bindings(SharedBindings::new(
+        Bindings::default().rebound(MapCommand::Borders, KeyCombo::key(Key::KeyQ)),
+    ));
+    view.open_map_by_key();
+    assert!(
+        !faked_map_tap(&mut view, Key::KeyQ),
+        "Q, the map's Borders now"
+    );
+    assert!(
+        faked_map_tap(&mut view, Key::KeyB),
+        "B, no longer the map's"
+    );
+}
+
+#[test]
 fn in_port_tab_or_backslash_with_the_map_key_held_closes_the_map() {
     // Both fall through on a planet (@0x13d20).
     for k in [Key::Tab, Key::Backslash] {

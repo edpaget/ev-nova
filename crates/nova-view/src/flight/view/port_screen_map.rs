@@ -94,8 +94,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::close_map`]'s in port, then the caller's restore (see
     /// the module docs).
     ///
-    /// Each screen opens it only on the map key, so it opens with
-    /// [`MAP_KEY`](super::MAP_KEY) held, and a close before its release
+    /// Each screen opens it only on the map key
+    /// ([`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)),
+    /// so it opens with the map key held, and a close before its release
     /// waits for it ([`FlightView::close_map`]).
     pub fn open_port_screen_map(&mut self, screen: PortScreen) {
         self.open_map_as(MapOpening::Port(screen));
