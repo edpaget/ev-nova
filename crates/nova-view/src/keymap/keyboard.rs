@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{
-    Command, Context, EscortMenuCommand, FlightCommand, PauseCommand, PlayCommand, UiCommand,
+    AssignmentCommand, CommCommand, Command, Context, EscortDialogCommand, EscortMenuCommand,
+    FlightCommand, HaggleCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand,
+    UiCommand,
 };
 use super::contexts::shadows;
 use crate::input::{Input, Key};
@@ -165,7 +167,7 @@ impl KeyMap {
     /// The fixed twins, read beside the bindable commands whatever they
     /// are bound to. A command bound to the same key in an active context
     /// beats a twin.
-    pub const TWINS: [Twin; 7] = [
+    pub const TWINS: [Twin; 9] = [
         // `_loadKeys` hard-codes F1-F4 at `_keyPrefs`+0x34..+0x3a
         // (@0xce6c8-0xce6da), read beside 1-4 by `_HandlePlayer`
         // @0x69d92.
@@ -207,6 +209,18 @@ impl KeyMap {
             Context::Ui,
             Key::NumpadEnter,
             Command::Ui(UiCommand::Confirm),
+        ),
+        // `_PlanetCommFilter` reads B beside O for Offer Bribe and T beside
+        // D for Demand Tribute (@0x911a9).
+        twin(
+            Context::PlanetComm,
+            Key::KeyB,
+            Command::PlanetComm(PlanetCommCommand::OfferBribe),
+        ),
+        twin(
+            Context::PlanetComm,
+            Key::KeyT,
+            Command::PlanetComm(PlanetCommCommand::DemandTribute),
         ),
     ];
 
@@ -308,6 +322,54 @@ const fn default_binding(command: Command) -> Binding {
         Command::Play(command) => default_play(command),
         Command::Pause(PauseCommand::Pause) => bare(Key::Escape),
         Command::Ui(command) => default_ui(command),
+        Command::Comm(CommCommand::Close) => bare(Key::KeyE),
+        Command::Haggle(command) => default_haggle(command),
+        Command::PlanetComm(command) => default_planet_comm(command),
+        Command::EscortDialog(command) => default_escort_dialog(command),
+        Command::Assignment(command) => default_assignment(command),
+        Command::PlayerInfo(PlayerInfoCommand::TabBack) => Binding::Follows {
+            base: Command::Ui(UiCommand::Tab),
+            plus: Modifiers::SHIFT,
+        },
+    }
+}
+
+/// The haggle dialog's defaults: A and L (`_HaggleFilter` @0x91d9d).
+const fn default_haggle(command: HaggleCommand) -> Binding {
+    match command {
+        HaggleCommand::Accept => bare(Key::KeyA),
+        HaggleCommand::Lower => bare(Key::KeyL),
+    }
+}
+
+/// The planet comm dialog's defaults, each its button's initial
+/// (`_PlanetCommFilter` @0x911a9).
+const fn default_planet_comm(command: PlanetCommCommand) -> Binding {
+    match command {
+        PlanetCommCommand::Close => bare(Key::KeyE),
+        PlanetCommCommand::Greetings => bare(Key::KeyG),
+        PlanetCommCommand::OfferBribe => bare(Key::KeyO),
+        PlanetCommCommand::DemandTribute => bare(Key::KeyD),
+        PlanetCommCommand::Release => bare(Key::KeyR),
+    }
+}
+
+/// The escort dialog's defaults (`_EscortFilter` @0x950e9).
+const fn default_escort_dialog(command: EscortDialogCommand) -> Binding {
+    match command {
+        EscortDialogCommand::Close => bare(Key::KeyC),
+        EscortDialogCommand::Release => bare(Key::KeyR),
+        EscortDialogCommand::Upgrade => bare(Key::KeyU),
+        EscortDialogCommand::Sell => bare(Key::KeyS),
+    }
+}
+
+/// The captured ship's assignment's defaults: M and E
+/// (`_CapturedAssignmentFilter` @0x51782).
+const fn default_assignment(command: AssignmentCommand) -> Binding {
+    match command {
+        AssignmentCommand::MyShip => bare(Key::KeyM),
+        AssignmentCommand::Escort => bare(Key::KeyE),
     }
 }
 
@@ -408,7 +470,13 @@ const fn default_ui(command: UiCommand) -> Binding {
 pub const fn sides(context: Context) -> Sides {
     match context {
         Context::Flight | Context::EscortMenu | Context::Play | Context::Pause => Sides::LeftOnly,
-        Context::Ui => Sides::Either,
+        Context::Ui
+        | Context::Comm
+        | Context::Haggle
+        | Context::PlanetComm
+        | Context::EscortDialog
+        | Context::Assignment
+        | Context::PlayerInfo => Sides::Either,
     }
 }
 
@@ -681,6 +749,79 @@ mod tests {
     }
 
     #[test]
+    fn the_comm_dialog_s_default_is_e() {
+        assert_eq!(
+            defaults(Context::Comm),
+            vec![row(CommCommand::Close, Key::KeyE, NO)]
+        );
+    }
+
+    #[test]
+    fn the_haggle_dialog_s_defaults_are_a_and_l() {
+        assert_eq!(
+            defaults(Context::Haggle),
+            vec![
+                row(HaggleCommand::Accept, Key::KeyA, NO),
+                row(HaggleCommand::Lower, Key::KeyL, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_planet_comm_dialog_s_defaults_are_its_buttons_initials() {
+        use PlanetCommCommand as P;
+        assert_eq!(
+            defaults(Context::PlanetComm),
+            vec![
+                row(P::Close, Key::KeyE, NO),
+                row(P::Greetings, Key::KeyG, NO),
+                row(P::OfferBribe, Key::KeyO, NO),
+                row(P::DemandTribute, Key::KeyD, NO),
+                row(P::Release, Key::KeyR, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_escort_dialog_s_defaults_are_c_r_u_and_s() {
+        use EscortDialogCommand as E;
+        assert_eq!(
+            defaults(Context::EscortDialog),
+            vec![
+                row(E::Close, Key::KeyC, NO),
+                row(E::Release, Key::KeyR, NO),
+                row(E::Upgrade, Key::KeyU, NO),
+                row(E::Sell, Key::KeyS, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_assignment_s_defaults_are_m_and_e() {
+        assert_eq!(
+            defaults(Context::Assignment),
+            vec![
+                row(AssignmentCommand::MyShip, Key::KeyM, NO),
+                row(AssignmentCommand::Escort, Key::KeyE, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_player_info_s_default_is_shift_tab_following_the_shared_tab() {
+        assert_eq!(
+            defaults(Context::PlayerInfo),
+            vec![row(PlayerInfoCommand::TabBack, Key::Tab, SHIFT)]
+        );
+        let mut map = KeyMap::default();
+        map.bind(UiCommand::Tab.into(), KeyCombo::key(Key::KeyQ));
+        assert_eq!(
+            combo(&map, PlayerInfoCommand::TabBack),
+            Some(KeyCombo::with(Key::KeyQ, SHIFT))
+        );
+    }
+
+    #[test]
     fn every_command_is_bound_by_default() {
         let map = KeyMap::default();
         for command in Command::all() {
@@ -849,5 +990,6 @@ mod tests {
         assert_eq!(sides(Context::Flight), Sides::LeftOnly);
         assert_eq!(sides(Context::EscortMenu), Sides::LeftOnly);
         assert_eq!(sides(Context::Ui), Sides::Either);
+        assert_eq!(sides(Context::PlayerInfo), Sides::Either);
     }
 }

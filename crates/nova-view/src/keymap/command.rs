@@ -136,6 +136,19 @@ contexts! {
     /// The shared UI commands every screen but flight reads: Confirm,
     /// Back, the arrows, Tab, Space and the scroll keys.
     Ui(UiCommand),
+    /// The comm dialog's own letter (`_CommFilter` @0x908ed).
+    Comm(CommCommand),
+    /// The haggle dialog's letters (`_HaggleFilter` @0x91d9d).
+    Haggle(HaggleCommand),
+    /// The planet comm dialog's letters (`_PlanetCommFilter` @0x911a9).
+    PlanetComm(PlanetCommCommand),
+    /// The escort dialog's letters (`_EscortFilter` @0x950e9).
+    EscortDialog(EscortDialogCommand),
+    /// The captured ship's assignment's letters
+    /// (`_CapturedAssignmentFilter` @0x51782).
+    Assignment(AssignmentCommand),
+    /// The player info screen's own (`_PlayerInfoFilter` @0x53ae9).
+    PlayerInfo(PlayerInfoCommand),
 }
 
 context_commands! {
@@ -307,6 +320,77 @@ context_commands! {
         PageUp: Pressed,
         /// Scroll down a page.
         PageDown: Pressed,
+    }
+}
+
+context_commands! {
+    /// The comm dialog's own letter. Its hail options' letters come from
+    /// their buttons' titles, so they are no commands: the dialog reads
+    /// them from the key pressed, as text entry is.
+    CommCommand in Comm {
+        /// Close the channel (E, beside Return and Escape).
+        Close: Pressed,
+    }
+}
+
+context_commands! {
+    /// The haggle dialog's letters.
+    HaggleCommand in Haggle {
+        /// Accept the price (A, beside Return).
+        Accept: Pressed,
+        /// Lower the price (L).
+        Lower: Pressed,
+    }
+}
+
+context_commands! {
+    /// The planet comm dialog's letters, one a button; each presses its
+    /// button only while the dialog shows it.
+    PlanetCommCommand in PlanetComm {
+        /// Close the channel (E, beside Return and Escape).
+        Close: Pressed,
+        /// Greetings (G).
+        Greetings: Pressed,
+        /// Offer Bribe (O, B its twin).
+        OfferBribe: Pressed,
+        /// Demand Tribute (D, T its twin).
+        DemandTribute: Pressed,
+        /// Release (R).
+        Release: Pressed,
+    }
+}
+
+context_commands! {
+    /// The escort dialog's letters.
+    EscortDialogCommand in EscortDialog {
+        /// Close the channel (C, beside Return and Escape).
+        Close: Pressed,
+        /// Release the escort (R).
+        Release: Pressed,
+        /// Upgrade the escort, or cancel the upgrade (U).
+        Upgrade: Pressed,
+        /// Sell the escort, or cancel the sale (S).
+        Sell: Pressed,
+    }
+}
+
+context_commands! {
+    /// The captured ship's assignment's letters.
+    AssignmentCommand in Assignment {
+        /// Use As My Ship (M).
+        MyShip: Pressed,
+        /// Use As Escort (E).
+        Escort: Pressed,
+    }
+}
+
+context_commands! {
+    /// The player info screen's own commands.
+    PlayerInfoCommand in PlayerInfo {
+        /// The previous tab: the shared Tab with Shift, as
+        /// `_PlayerInfoFilter` reads the `shiftKey` bit beside Tab
+        /// (@0x53b1e), so a rebound Tab keeps it.
+        TabBack: Pressed,
     }
 }
 

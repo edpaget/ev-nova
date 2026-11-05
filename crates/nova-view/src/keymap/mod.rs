@@ -84,7 +84,9 @@ pub mod reader;
 
 pub use bindings::{Bindings, Clash, Devices, is_modifier_input};
 pub use command::{
-    Command, Context, EscortMenuCommand, FlightCommand, Kind, PauseCommand, PlayCommand, UiCommand,
+    AssignmentCommand, CommCommand, Command, Context, EscortDialogCommand, EscortMenuCommand,
+    FlightCommand, HaggleCommand, Kind, PauseCommand, PlanetCommCommand, PlayCommand,
+    PlayerInfoCommand, UiCommand,
 };
 pub use contexts::ScreenContexts;
 pub use keyboard::{Binding, KeyCombo, KeyMap, KeysDown, Modifiers};

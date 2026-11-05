@@ -196,7 +196,8 @@ pub fn is_modifier_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::command::{
-        EscortMenuCommand, FlightCommand, PauseCommand, PlayCommand, UiCommand,
+        EscortMenuCommand, FlightCommand, HaggleCommand, PauseCommand, PlanetCommCommand,
+        PlayCommand, PlayerInfoCommand, UiCommand,
     };
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
@@ -448,11 +449,61 @@ mod tests {
 
     #[test]
     fn commands_of_contexts_never_active_together_do_not_clash() {
-        let bindings = Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyL));
+        // F13, which no screen binds, so only flight's L could meet it.
+        let bindings = Bindings::default()
+            .rebound(FlightCommand::LandDock, KeyCombo::key(Key::F13))
+            .rebound(UiCommand::Confirm, KeyCombo::key(Key::F13));
         assert_eq!(bindings.clashes(), vec![]);
         assert_eq!(
-            bindings.clashes_with(UiCommand::Back, KeyCombo::key(Key::KeyL)),
+            bindings.clashes_with(UiCommand::Back, KeyCombo::key(Key::F13)),
             vec![Command::Ui(UiCommand::Confirm)]
+        );
+    }
+
+    #[test]
+    fn a_dialog_s_letter_clashes_with_a_shared_ui_command_on_its_key() {
+        let bindings = Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyL));
+        assert_eq!(
+            bindings.clashes(),
+            vec![Clash {
+                first: Command::Ui(UiCommand::Confirm),
+                second: Command::Haggle(HaggleCommand::Lower),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_planet_comm_s_second_letters_are_twins_of_its_buttons() {
+        let bindings = Bindings::default();
+        let planet_comm = &[Context::PlanetComm, Context::Ui];
+        assert_eq!(
+            means(&bindings, &[], Key::KeyB, planet_comm),
+            Some(Command::PlanetComm(PlanetCommCommand::OfferBribe))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::KeyT, planet_comm),
+            Some(Command::PlanetComm(PlanetCommCommand::DemandTribute))
+        );
+        let rebound = bindings.rebound(PlanetCommCommand::OfferBribe, KeyCombo::key(Key::KeyQ));
+        assert_eq!(
+            means(&rebound, &[], Key::KeyB, planet_comm),
+            Some(Command::PlanetComm(PlanetCommCommand::OfferBribe)),
+            "the twin stays put"
+        );
+        assert_eq!(means(&rebound, &[], Key::KeyO, planet_comm), None);
+    }
+
+    #[test]
+    fn shift_tab_on_the_player_info_takes_tab_back_and_tab_alone_the_shared_tab() {
+        let bindings = Bindings::default();
+        let player_info = &[Context::PlayerInfo, Context::Play, Context::Ui];
+        assert_eq!(
+            means(&bindings, &[Key::ShiftRight], Key::Tab, player_info),
+            Some(Command::PlayerInfo(PlayerInfoCommand::TabBack))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Tab, player_info),
+            Some(Command::Ui(UiCommand::Tab))
         );
     }
 

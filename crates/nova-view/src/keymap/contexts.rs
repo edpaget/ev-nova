@@ -69,8 +69,73 @@ pub const DIALOG: ScreenContexts = ScreenContexts {
     entries: &[on(Context::Ui)],
 };
 
+/// The comm dialog: its Close letter, then the shared UI keys.
+pub const COMM: ScreenContexts = ScreenContexts {
+    name: "comm",
+    entries: &[on(Context::Comm), on(Context::Ui)],
+};
+
+/// The haggle dialog: Accept and Lower, then the shared UI keys.
+pub const HAGGLE: ScreenContexts = ScreenContexts {
+    name: "haggle",
+    entries: &[on(Context::Haggle), on(Context::Ui)],
+};
+
+/// The planet comm dialog: its buttons' letters, then the shared UI keys.
+pub const PLANET_COMM: ScreenContexts = ScreenContexts {
+    name: "planet comm",
+    entries: &[on(Context::PlanetComm), on(Context::Ui)],
+};
+
+/// The escort dialog: its buttons' letters, then the shared UI keys.
+pub const ESCORT_DIALOG: ScreenContexts = ScreenContexts {
+    name: "escort dialog",
+    entries: &[on(Context::EscortDialog), on(Context::Ui)],
+};
+
+/// The captured ship's assignment: M and E, then the shared UI keys.
+pub const ASSIGNMENT: ScreenContexts = ScreenContexts {
+    name: "assignment",
+    entries: &[on(Context::Assignment), on(Context::Ui)],
+};
+
+/// The player info screen: Shift-Tab, the shared play keys (its own key
+/// closes it, `_PlayerInfoFilter` @0x53ba3) and the shared UI keys.
+pub const PLAYER_INFO: ScreenContexts = ScreenContexts {
+    name: "player info",
+    entries: &[on(Context::PlayerInfo), on(Context::Play), on(Context::Ui)],
+};
+
+/// A text dialog ("Desc Dialog"): the shared play keys, as
+/// `_TextDialogFilter` reads the map key (@0x51fa6), and the shared UI
+/// keys.
+pub const DESC: ScreenContexts = ScreenContexts {
+    name: "desc",
+    entries: &[on(Context::Play), on(Context::Ui)],
+};
+
+/// A close's wait for its key's release (the `ui` module's `key_wait`):
+/// the shared play keys, which the filters under it read live
+/// (`_PortFilter` @0x4f171-0x4f1c5 and its kin), beside the shared UI
+/// keys of the screen it waits on.
+pub const KEY_WAIT: ScreenContexts = ScreenContexts {
+    name: "key wait",
+    entries: &[on(Context::Play), on(Context::Ui)],
+};
+
 /// Every key-reading screen's list.
-pub const SCREENS: &[ScreenContexts] = &[FLIGHT, DIALOG];
+pub const SCREENS: &[ScreenContexts] = &[
+    FLIGHT,
+    DIALOG,
+    COMM,
+    HAGGLE,
+    PLANET_COMM,
+    ESCORT_DIALOG,
+    ASSIGNMENT,
+    PLAYER_INFO,
+    DESC,
+    KEY_WAIT,
+];
 
 /// Whether `shadowing`, listed first, wins the keys it binds over
 /// `shadowed`.
