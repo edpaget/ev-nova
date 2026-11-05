@@ -346,6 +346,27 @@ fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() 
 }
 
 #[test]
+fn an_unlatched_key_let_go_under_the_player_info_a_replay_opened_reads_up_in_flight() {
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    screen.input(&key(Key::Up, true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    end_the_wait(&mut screen);
+    assert_eq!(
+        screen.showing(),
+        Showing::PlayerInfo,
+        "opened by the replay"
+    );
+    screen.input(&key(Key::Up, false));
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, Key::Char('n'));
+    assert_eq!(screen.showing(), Showing::Flight, "both closed");
+    screen.tick(TICK * 3);
+    assert_eq!(ship(&screen).velocity, still.velocity, "no thrust");
+}
+
+#[test]
 fn an_unlatched_key_still_down_at_a_take_off_reads_down_in_flight() {
     let mut screen = with_dialogs(data());
     land(&mut screen);

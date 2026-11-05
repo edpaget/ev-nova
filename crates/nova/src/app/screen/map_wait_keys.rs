@@ -24,7 +24,12 @@
 //! - Past the last dialog, nothing reads them: flight polls its keys live
 //!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec). What is
 //!   still down of them reads as down there, so it goes to flight's held
-//!   keys ([`FlightView::hold_live_key`]).
+//!   keys ([`FlightView::hold_live_key`]). It goes there whatever the
+//!   stop left in front: with a dialog or the spaceport over flight, its
+//!   input is away, and as it comes back
+//!   [`FlightView::take_back_live_input`] drops every live hold and holds
+//!   again only what is down then, so a key let go meanwhile is never
+//!   left held.
 //!
 //! Past either end, the queued release of every press already replayed
 //! still goes, only so what took the press isn't left holding it: the
@@ -113,9 +118,7 @@ impl AppScreen {
             let _ = self.routed_input(&input);
             if self.showing() == Showing::Flight || self.flush_mark().flushed_since(before) {
                 self.let_go_of_replayed(keys, down);
-                if self.showing() == Showing::Flight
-                    && let Some(flight) = &mut self.flight
-                {
+                if let Some(flight) = &mut self.flight {
                     for key in still_down {
                         flight.hold_live_key(key);
                     }
