@@ -914,6 +914,33 @@ mod tests {
     }
 
     #[test]
+    fn with_a_pad_last_used_the_footer_names_its_stick_and_an_unbound_one_its_key() {
+        use crate::keymap::Bindings;
+        let on_pad = |bindings: Bindings| {
+            let catalog = three_ships();
+            let mut browser =
+                ShipBrowser::new(&catalog).with_bindings(SharedBindings::new(bindings));
+            browser.input(&Input::Surroundings(crate::input::Surroundings {
+                device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+            }));
+            texts(&drawn(&browser))
+                .into_iter()
+                .find(|text| text.starts_with("Ship 1 of 3"))
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            on_pad(Bindings::default()),
+            "Ship 1 of 3 (shïp 128) - L Stick Left/L Stick Right to browse"
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Left.into());
+        assert_eq!(
+            on_pad(unbound),
+            "Ship 1 of 3 (shïp 128) - Left Arrow/L Stick Right to browse"
+        );
+    }
+
+    #[test]
     fn the_footer_counts_from_the_selected_ship() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);

@@ -1353,6 +1353,84 @@ mod tests {
         );
     }
 
+    /// A flight reader over `bindings`, told `family`'s pad was used
+    /// last.
+    fn told_pad(bindings: Bindings, family: crate::input::ControllerFamily) -> CommandReader {
+        let mut keys =
+            CommandReader::new(contexts::FLIGHT).with_bindings(SharedBindings::new(bindings));
+        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings {
+            device: crate::input::Device::Gamepad(family),
+        }));
+        keys
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_rows_name_its_group_entries_and_an_unbound_one_its_digit() {
+        let named = |keys: &[&str]| -> Vec<String> {
+            EscortGroup::ALL
+                .iter()
+                .zip(keys)
+                .map(|(group, key)| format!("{key}) {}", group.menu_label()))
+                .collect()
+        };
+        let xbox = told_pad(Bindings::default(), crate::input::ControllerFamily::Xbox);
+        assert_eq!(
+            row_texts(&xbox),
+            named(&[
+                "Menu+D-Up",
+                "Menu+D-Right",
+                "Menu+D-Down",
+                "Menu+D-Left",
+                "Menu+LS"
+            ])
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(EscortMenuCommand::Group2.into());
+        let keys = told_pad(unbound, crate::input::ControllerFamily::Xbox);
+        assert_eq!(
+            row_texts(&keys),
+            named(&["Menu+D-Up", "2", "Menu+D-Down", "Menu+D-Left", "Menu+LS"])
+        );
+    }
+
+    /// How far each row's text, drawn with [`Fixed`]'s metrics through
+    /// `keys`, reaches past the left of its order's label, if any does.
+    fn row_overlaps(keys: &CommandReader) -> Vec<f32> {
+        let mut list = DrawList::new();
+        opened().draw(&mut list, &rows(), COLORS, Some(&Fixed), keys);
+        let texts: Vec<(String, Point)> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match &**command {
+                    DrawCommand::Text { text, origin, .. } => Some((text.clone(), *origin)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        texts
+            .iter()
+            .filter(|(text, _)| text.contains(") "))
+            .filter_map(|(row, at)| {
+                let label = texts.iter().find(|(text, origin)| {
+                    !text.contains(") ") && origin.y == at.y && origin.x > at.x
+                })?;
+                let reach = at.x + Fixed.width(Font::Geneva, MENU_TEXT_SIZE, row);
+                (reach > label.1.x).then_some(reach - label.1.x)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_keyboard_s_row_digits_clear_their_orders() {
+        // A pad's names (`Menu+D-Up`) reach into the orders with these
+        // metrics: rdm:phase/front-end/phase-17-escort-menu-pad-names.
+        assert_eq!(
+            row_overlaps(&CommandReader::new(contexts::FLIGHT)),
+            Vec::<f32>::new()
+        );
+    }
+
     #[test]
     fn the_stock_colours_are_cölr_128s() {
         assert_eq!(EscortMenuColors::STOCK.border, Color::from_rgb24(789_516));

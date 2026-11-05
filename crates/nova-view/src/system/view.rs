@@ -283,6 +283,34 @@ mod tests {
         );
     }
 
+    /// The help line drawn over `bindings`, told an Xbox pad was used
+    /// last.
+    fn help_on_pad(bindings: crate::keymap::Bindings) -> String {
+        let mut view = sol().with_bindings(SharedBindings::new(bindings));
+        view.input(&Input::Surroundings(crate::input::Surroundings {
+            device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+        }));
+        texts(&drawn(&view)).last().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_help_line_names_its_buttons_and_drops_the_twins() {
+        use crate::keymap::Bindings;
+        assert_eq!(
+            help_on_pad(Bindings::default()),
+            "L Stick Up/L Stick Down/L Stick Left/L Stick Right: move   A: centre   \
+             B: back to the map"
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Activate.into());
+        assert_eq!(
+            help_on_pad(unbound),
+            "L Stick Up/L Stick Down/L Stick Left/L Stick Right: move   Space: centre   \
+             B: back to the map",
+            "unbound on the pad, its key"
+        );
+    }
+
     #[test]
     fn the_help_line_names_a_rebound_command_and_drops_an_unbound_one() {
         use crate::key_names::fixture::FakeKeyNames;

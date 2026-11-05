@@ -145,6 +145,34 @@ mod tests {
         assert_eq!(enter_label(&keys), "Enter system");
     }
 
+    /// [`keys`], told an Xbox pad was used last.
+    fn told_pad(bindings: Bindings) -> CommandReader {
+        let mut keys = keys(bindings, FakeKeyNames::new());
+        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings {
+            device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+        }));
+        keys
+    }
+
+    #[test]
+    fn with_a_pad_last_used_the_help_and_the_label_name_its_buttons() {
+        let keys = told_pad(Bindings::default());
+        assert_eq!(
+            help_line(&keys),
+            "L Stick Up/L Stick Down/L Stick Left/L Stick Right or drag: pan   RT/LT: zoom   \
+             Click: select   A: enter",
+            "the twin S names nothing on a pad"
+        );
+        assert_eq!(enter_label(&keys), "Enter system (A)");
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(MapCommand::ZoomOut.into());
+        assert!(
+            help_line(&told_pad(unbound.clone())).contains("   RT/-: zoom   "),
+            "unbound on the pad, its key: {}",
+            help_line(&told_pad(unbound))
+        );
+    }
+
     #[test]
     fn find_names_its_twin_through_the_layout() {
         let keys = keys(

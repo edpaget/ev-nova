@@ -2623,6 +2623,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_close_prompt_names_south_and_east_with_a_pad_last_used() {
+        use crate::input::ControllerFamily as F;
+        let unplaced = |bindings: Bindings, family: crate::input::ControllerFamily| {
+            let mut screen = PlayerInfoScreen::new(
+                Err("no DLOG 1017".to_owned()),
+                Ok(yes_no()),
+                info(),
+                ButtonStyle::STOCK,
+                stock(),
+            )
+            .with_bindings(SharedBindings::new(bindings));
+            screen.input(&Input::Surroundings(crate::input::Surroundings {
+                device: crate::input::Device::Gamepad(family),
+            }));
+            texts(&screen)
+        };
+        assert_eq!(
+            unplaced(Bindings::default(), F::Xbox),
+            ["Cannot show the player info: no DLOG 1017. Press A or B to close it."]
+        );
+        assert_eq!(
+            unplaced(Bindings::default(), F::Generic),
+            ["Cannot show the player info: no DLOG 1017. Press South or East to close it."]
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Back.into());
+        assert_eq!(
+            unplaced(unbound, F::PlayStation),
+            ["Cannot show the player info: no DLOG 1017. Press Cross or Escape to close it."],
+            "unbound on the pad, its key"
+        );
+    }
+
     /// `_EVYesNoDialog` @0x5558c, the Jettison question, runs the
     /// Toolbox's standard filter, which maps no Tab or Space; Tab still
     /// steps the pages (`_PlayerInfoFilter` @0x53b14-0x53b80) under both

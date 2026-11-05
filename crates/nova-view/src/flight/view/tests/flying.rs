@@ -386,6 +386,42 @@ fn the_help_line_names_each_command_s_key_through_the_layout() {
     assert!(!rebound.contains("J: jump"), "{rebound}");
 }
 
+/// Flight's help line over `bindings`, read by a reader told `family`'s
+/// pad was used last.
+fn help_on_pad(
+    bindings: crate::keymap::Bindings,
+    family: crate::input::ControllerFamily,
+) -> String {
+    let mut keys = crate::keymap::CommandReader::new(crate::keymap::contexts::FLIGHT)
+        .with_bindings(crate::keymap::SharedBindings::new(bindings));
+    keys.follow(&Input::Surroundings(crate::input::Surroundings {
+        device: crate::input::Device::Gamepad(family),
+    }));
+    help_line(&keys)
+}
+
+#[test]
+fn with_a_pad_last_used_the_help_line_names_its_buttons_and_an_unbound_one_its_key() {
+    use crate::input::ControllerFamily;
+    use crate::keymap::{Bindings, FlightCommand as Fc};
+    let xbox = help_on_pad(Bindings::default(), ControllerFamily::Xbox);
+    for entry in [
+        "D-Up/D-Down/D-Left/D-Right: fly   ",
+        "   Y: face target   A: fire   ",
+        "   View+A: jump   ",
+        "   Cmd-,: preferences   View+Menu: leave",
+    ] {
+        assert!(xbox.contains(entry), "{entry}: {xbox}");
+    }
+    let mut unbound = Bindings::default();
+    unbound.gamepad.unbind(Fc::Autopilot.into());
+    let generic = help_on_pad(unbound, ControllerFamily::Generic);
+    assert!(
+        generic.contains("   A: face target   South: fire   "),
+        "the key, unbound on the pad: {generic}"
+    );
+}
+
 #[test]
 fn the_drawn_help_line_names_the_keys_the_view_reads() {
     use crate::key_names::fixture::FakeKeyNames;

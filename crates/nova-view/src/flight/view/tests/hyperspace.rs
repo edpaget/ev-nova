@@ -1,4 +1,5 @@
 use super::*;
+use crate::input::Device;
 use crate::key_names::fixture::FakeKeyNames;
 use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
 use nova_sim::flight_frame::FlightEvent;
@@ -20,9 +21,13 @@ fn the_land_hint_words_a_station_as_docking() {
 
 /// The text of the tutorial's land hint (for the Moon) and its
 /// hyperspace hint, as a view reading `bindings` (with their layout)
-/// under `rules` words them, for the device its keys read. Phase 12
-/// reruns it with the pad.
+/// under `rules` words them, for the device its keys read.
 fn hints(bindings: SharedBindings, rules: &Rulebook) -> (String, String) {
+    hints_on(bindings, rules, Device::Keyboard)
+}
+
+/// [`hints`] with the view told `device` was used last.
+fn hints_on(bindings: SharedBindings, rules: &Rulebook, device: Device) -> (String, String) {
     let mut fake = FakeFlight::new();
     fake.set_frame(FlightFrame {
         stellars: vec![record::stellar(StellarId(129))],
@@ -30,6 +35,7 @@ fn hints(bindings: SharedBindings, rules: &Rulebook) -> (String, String) {
     });
     let mut view = scripted_over(catalog(), fake, rules);
     view.set_bindings(bindings);
+    view.input(&Input::Surroundings(crate::input::Surroundings { device }));
     let mut said = |hint| {
         view.sim
             .queue_event(FlightEvent::Message(SimMessage::Tutorial(hint)));
@@ -102,6 +108,37 @@ fn the_hints_name_the_key_from_str_129_by_default_and_through_the_layout_under_t
     assert_eq!(engine, land_hint(false, "Moon", "Up"));
     let (bible, _) = hints_named(on_up, FakeKeyNames::new(), true);
     assert_eq!(bible, land_hint(false, "Moon", "Up Arrow"));
+}
+
+/// An Xbox pad, used last.
+const XBOX: Device = Device::Gamepad(crate::input::ControllerFamily::Xbox);
+
+#[test]
+fn with_a_pad_last_used_the_hints_name_its_buttons_and_an_unbound_one_its_key() {
+    for bible in [false, true] {
+        let mut rules = Rulebook::default();
+        if bible {
+            rules = rules.with_override(RuleKey::HintKeyNames, RuleSource::Bible);
+        }
+        let (land, hyperspace) = hints_on(SharedBindings::new(Bindings::default()), &rules, XBOX);
+        assert_eq!(land, land_hint(false, "Moon", "B"), "bible {bible}");
+        assert_eq!(hyperspace, hyperspace_hint("Menu+R Stick Up", "View+A"));
+    }
+    let mut rebound = Bindings::default();
+    rebound.gamepad.bind(
+        Fc::LandDock.into(),
+        crate::keymap::PadBinding::Entry(crate::keymap::PadEntry::plain(
+            crate::input::PadButton::North,
+        )),
+    );
+    rebound.gamepad.unbind(Fc::HyperJump.into());
+    let (land, hyperspace) = hints_on(SharedBindings::new(rebound), &Rulebook::default(), XBOX);
+    assert_eq!(land, land_hint(false, "Moon", "Y"));
+    assert_eq!(
+        hyperspace,
+        hyperspace_hint("Menu+R Stick Up", "J"),
+        "unbound on the pad, its key"
+    );
 }
 
 #[test]
