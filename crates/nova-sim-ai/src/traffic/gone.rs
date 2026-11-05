@@ -1457,6 +1457,27 @@ mod tests {
         }
 
         #[test]
+        fn a_later_slots_trader_calls_on_its_last_think_of_a_flight_whose_target_went() {
+            // Its `_HandleShip` let go of the slot (@0x33865-0x33888), so its
+            // goal 3 skips the provoked test with +0x70 -1 (@0x8b616) and
+            // calls for help and reinforcements (@0x8b6cc, @0x8b6dc) before
+            // the high level ends the flight zeroed (@0x8e228-0x8e23d).
+            let (mut traffic, trader, attacker) = fleeing_a_warship((100.0, 0.0), 3, 2, 1);
+            traffic.remove_destroyed(attacker);
+            tick(&mut traffic);
+            let after = trader_of(&traffic, trader);
+            assert_eq!(after.goal, Goal::Idle);
+            assert_eq!(after.provoked, 0.0);
+            assert_eq!(
+                calls(&mut traffic),
+                [
+                    (trader, CommCall::Distress),
+                    (trader, CommCall::Reinforcements)
+                ]
+            );
+        }
+
+        #[test]
         fn a_gone_attackers_place_is_forgotten_where_a_slot_test_clears_it() {
             // Read: the attack ends keeping the provocation.
             let read = |traffic: &Traffic, trader| trader_of(traffic, trader).provoked == 10.0;

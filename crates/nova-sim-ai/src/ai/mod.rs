@@ -1336,8 +1336,8 @@ impl Behaviour for Peaceful {
 /// - A goal it can still fly is kept: a stellar that is still there and
 ///   landable, a gate it enters that is still there, a jump out, a hold,
 ///   or a wait. A trader's think keeps more before it reaches the block
-///   (a plunder, a fight on a ship still here, [`trader_keep`]). A leaving ship (state 2) keeps leaving whether or not it
-///   can jump: no type's idle block tests it again (`_WimpyTraderAI`
+///   (a plunder, a fight, [`trader_keep`]). A leaving ship (state 2)
+///   keeps leaving whether or not it can jump: no type's idle block tests it again (`_WimpyTraderAI`
 ///   @0x8b06c, `_BraveTraderAI` @0x8b4d6 and `_InterceptorAI` @0x8d010
 ///   pick only in state 0); the warship's and the pirate's own re-tests
 ///   are theirs ([`warship`], [`pirate`]). A waiting ship ([`Goal::Wait`],
