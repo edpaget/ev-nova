@@ -41,6 +41,11 @@
 //! opening a menu, which with two items comes to the same. Neither `CNTL`
 //! nor `MENU` is read: the strings are the stock ones.
 //!
+//! **The pad** reaches OK, Cancel, Strict Play, both fields and the gender
+//! control (the `pad` module): a field is a focus stop, which South
+//! focuses as a click does, and OK is where the pad's focus starts, so a
+//! pad-only player accepts the drawn default names with one South.
+//!
 //! The dialog has no stock frame: like the Preferences dialog, it is drawn
 //! over a dark backdrop with a 1-unit outline.
 
@@ -235,9 +240,10 @@ impl NewPilotDialog {
                 "DITL {NEW_PILOT_DIALOG} has no item {NAME_ITEM} for the pilot's name"
             ));
         }
-        let dialog = Dialog::new(template, &[], Rc::clone(&metrics))
+        let mut dialog = Dialog::new(template, &[], Rc::clone(&metrics))
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(OK_ITEM));
+        pad::include(&mut dialog);
         let field_rect = dialog.item_bounds(NAME_ITEM).expect("checked above");
         let strict_play = dialog
             .item_shown(STRICT_PLAY_ITEM)
@@ -613,6 +619,8 @@ impl Screen for NewPilotDialog {
     }
 }
 
+pub(crate) mod pad;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,7 +649,7 @@ mod tests {
     /// and Nickname labels (5, 6), a parked label (7), the Full Name and
     /// Nickname fields (8, 9), a parked field (10), a control (11), the
     /// title (12), a parked control (13) and an icon (14).
-    fn stock() -> DialogTemplate {
+    pub(super) fn stock() -> DialogTemplate {
         let text = |s: &str| ItemSpec::StaticText(s.to_owned());
         let field = || ItemSpec::EditText("Edit Text".to_owned());
         DialogTemplate {

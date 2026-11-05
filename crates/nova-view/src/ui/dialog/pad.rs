@@ -39,6 +39,12 @@
 //! - **Items left out.** A host takes role-less user items whose click
 //!   does nothing out of the targets ([`Dialog::set_pad_left_out`], the
 //!   whole set each call), so the d-pad never stops on a dead area.
+//! - **Items taken in.** A host that acts on a click on a check box, an
+//!   edit-text field or a control (New Pilot's Strict Play, fields and
+//!   gender) takes them into the targets ([`Dialog::set_pad_included`],
+//!   the whole set each call). South arms one as it arms a button, and
+//!   its release reports [`DialogEvent::Item`], as a click's does
+//!   (rdm:phase/key-bindings/phase-11-gamepad-menus).
 //! - **Everything else** a pad button means (Back, the left stick's Up
 //!   and Down) goes through [`Dialog::command`], as its key's does.
 //! - **The highlight** ([`pad_focus::draw_highlight`]) shows only while the
