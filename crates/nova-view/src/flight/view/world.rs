@@ -49,7 +49,7 @@ use crate::system::scene::{self, SystemScene};
 use crate::{Color, DrawList, Point};
 
 use super::stars;
-use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
+use super::{FlightView, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world over the scene laid out
@@ -115,10 +115,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         (shown < u128::from(message.ticks)).then_some(message.text.as_str())
     }
 
-    /// Draws the [`HELP`] line when its overlay is on.
+    /// Draws the help line ([`help_line`](super::help_line)) when its overlay is on, naming the keys flight reads.
     pub(super) fn draw_help(&self, list: &mut DrawList) {
         if self.overlays.help {
-            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+            list.text(
+                super::help_line(&self.keys),
+                HELP_AT,
+                OVERLAY_SIZE,
+                None,
+                Color::DIM,
+            );
         }
     }
 

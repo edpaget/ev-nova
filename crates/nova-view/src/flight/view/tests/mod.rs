@@ -178,6 +178,27 @@ fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
     list
 }
 
+/// Flight's help line ([`help_line`]) as the keys of `bindings`, named
+/// through `names`, give it, for the device flight's keys read: phase 12
+/// reruns it with the pad.
+fn help_with(
+    bindings: crate::keymap::Bindings,
+    names: Rc<dyn crate::key_names::KeyNames>,
+) -> String {
+    let shared = crate::keymap::SharedBindings::new(bindings).with_key_names(names);
+    help_line(
+        &crate::keymap::CommandReader::new(crate::keymap::contexts::FLIGHT).with_bindings(shared),
+    )
+}
+
+/// Flight's help line under the default bindings and a US layout.
+fn default_help() -> String {
+    help_with(
+        crate::keymap::Bindings::default(),
+        Rc::new(crate::key_names::NoKeyNames),
+    )
+}
+
 fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
     DrawCommand::Text {
         text: text.to_owned(),

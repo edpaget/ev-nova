@@ -149,7 +149,7 @@ fn a_fights_world_and_its_target_layer_are_world_and_every_text_overlay() {
     assert_all_in(&list, world, sprite_of(651));
     // The title and help, and every text.
     assert_all_in(&list, DrawLayer::Overlay, is_text);
-    assert!(texts(&list).contains(&HELP.to_owned()));
+    assert!(texts(&list).contains(&default_help()));
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_
         |command| matches!(command, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)),
     );
     assert_all_in(&list, overlay, is_text);
-    assert!(texts(&list).contains(&HELP.to_owned()));
+    assert!(texts(&list).contains(&default_help()));
     assert!(world_end(&list) < hud_at(&list), "the world under the HUD");
 }
 

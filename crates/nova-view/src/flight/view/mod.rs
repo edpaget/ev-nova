@@ -646,7 +646,7 @@
 //! [`NOTHING_OUT_HERE`]
 //! (`_HandlePlayer` @0x6b231-0x6b3d9), and
 //! opening the escort menu only when it says [`NO_ESCORTS`](super::escorts::NO_ESCORTS)
-//! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
+//! (@0x6dedb-0x6df29). The system's title and the help line ([`help_line`]) are the
 //! port's own, drawn only when turned on ([`FlightOverlays`],
 //! [`FlightView::with_overlays`]).
 //!
@@ -727,6 +727,7 @@ mod frame_rate;
 mod gamble;
 mod gates;
 mod hail;
+mod help;
 mod hyperspace;
 mod inbox;
 mod interface;
@@ -756,6 +757,7 @@ mod world;
 pub use dialog_latch::LiveKeys;
 pub use dialog_map::MapOpener;
 pub use gamble::RaceShown;
+pub use help::help_line;
 pub use messages::*;
 pub use port_screen_map::PortScreen;
 
@@ -766,15 +768,13 @@ const HELP_AT: Point = Point::new(16.0, 744.0);
 const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
-/// The help line.
-pub const HELP: &str = "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave";
 /// The developer settings flight carries: two overlays the original does
 /// not draw, and cheat mode. All are off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlightOverlays {
     /// The system's name and `sÿst` ID at the top left.
     pub title: bool,
-    /// The [`HELP`] line of keys at the bottom.
+    /// The help line of keys at the bottom ([`help_line`]).
     pub help: bool,
     /// The original's cheat mode (`_cheatsActive`, which nothing in 1.1
     /// turns on): the player info shows its IDs

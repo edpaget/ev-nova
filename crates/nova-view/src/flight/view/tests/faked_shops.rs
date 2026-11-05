@@ -1151,7 +1151,11 @@ fn command_k_jettisons_everything_on_the_next_step() {
     assert_eq!(sent_but_lines(&view), [], "no command");
     assert_eq!(JETTISON_KEY, Key::KeyK);
     assert_eq!(MISSION_FAILED, "Mission failed.");
-    assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
+    assert!(
+        default_help().contains("Cmd-K: jettison"),
+        "{}",
+        default_help()
+    );
 }
 
 #[test]

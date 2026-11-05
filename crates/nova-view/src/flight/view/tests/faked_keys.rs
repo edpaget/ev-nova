@@ -629,7 +629,11 @@ fn p_with_the_map_open_does_nothing() {
     assert_eq!(sent_since(&view, from), []);
     assert!(!view.take_player_info_request());
     assert!(view.map_open());
-    assert!(HELP.contains("P: player info"), "{HELP}");
+    assert!(
+        default_help().contains("P: player info"),
+        "{}",
+        default_help()
+    );
 }
 
 #[test]

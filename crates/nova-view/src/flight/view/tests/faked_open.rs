@@ -125,7 +125,7 @@ fn the_unstarted_flight_shows_help_only_when_turned_on() {
         cheats: false,
     });
     let list = drawn(&view);
-    let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
+    let help = overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM);
     assert_eq!(list.iter().last(), Some(&help));
     assert_eq!(list.iter().count(), 2, "the error line and the help");
 }

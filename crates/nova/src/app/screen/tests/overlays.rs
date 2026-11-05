@@ -1243,8 +1243,11 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
 
 #[test]
 fn the_flight_help_offers_p_and_command_comma() {
-    assert!(nova_view::flight::view::HELP.contains("P: player info"));
-    assert!(nova_view::flight::view::HELP.contains("Cmd-,: preferences"));
+    let help = nova_view::flight::view::help_line(&nova_view::CommandReader::new(
+        nova_view::keymap::contexts::FLIGHT,
+    ));
+    assert!(help.contains("P: player info"), "{help}");
+    assert!(help.contains("Cmd-,: preferences"), "{help}");
 }
 
 /// A [`KeyboardAccess`] answering what it holds, counting its asks.

@@ -1448,7 +1448,7 @@ fn the_metrics_debug_as_their_name() {
 #[test]
 fn the_help_line_names_the_combat_keys() {
     for name in ["Space", "Ctrl", "W", "Tab", "R:"] {
-        assert!(HELP.contains(name), "{name}: {HELP}");
+        assert!(default_help().contains(name), "{name}: {}", default_help());
     }
 }
 

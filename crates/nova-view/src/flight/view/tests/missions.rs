@@ -29,5 +29,9 @@ pub(super) fn rocky(base: FakeCatalog) -> FakeCatalog {
 
 #[test]
 fn the_help_line_names_mission_info() {
-    assert!(HELP.contains("P: player info   I: mission info"), "{HELP}");
+    assert!(
+        default_help().contains("P: player info   I: mission info"),
+        "{}",
+        default_help()
+    );
 }

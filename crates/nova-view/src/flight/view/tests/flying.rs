@@ -243,7 +243,7 @@ fn the_title_and_help_are_not_drawn_by_default() {
     assert_eq!(view.overlays(), TITLED);
     let texts = texts(&flown(&barred(catalog(), among(Vec::new()))));
     assert!(!texts.contains(&"Sol (sÿst 130)".to_owned()), "{texts:?}");
-    assert!(!texts.contains(&HELP.to_owned()), "{texts:?}");
+    assert!(!texts.contains(&default_help()), "{texts:?}");
 }
 
 /// The flight's draw list's commands up to the HUD's first, whose
@@ -269,7 +269,7 @@ fn the_title_draws_when_turned_on() {
         Some(&overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE)),
         "over the flight, under the HUD"
     );
-    assert!(!texts(&list).contains(&HELP.to_owned()));
+    assert!(!texts(&list).contains(&default_help()));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn the_help_line_draws_when_turned_on() {
     let before = before_the_hud(&list);
     assert_eq!(
         before.last(),
-        Some(&overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM)),
+        Some(&overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM)),
         "over the flight, under the HUD"
     );
     assert!(!texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
@@ -293,7 +293,7 @@ fn the_help_line_draws_when_turned_on() {
         before[before.len() - 2..],
         [
             overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE),
-            overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
+            overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM),
         ],
         "the title, then the help"
     );
@@ -362,10 +362,47 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         ]
     );
     assert_eq!(
-        HELP,
+        default_help(),
         "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
     );
     assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
+}
+
+#[test]
+fn the_help_line_names_each_command_s_key_through_the_layout() {
+    use crate::key_names::fixture::FakeKeyNames;
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo};
+    let azerty = help_with(Bindings::default(), Rc::new(FakeKeyNames::azerty()));
+    assert!(azerty.contains("   Z: weapon   "), "{azerty}");
+    assert!(
+        azerty.contains("   Q: face target   "),
+        "AZERTY prints q at the US A: {azerty}"
+    );
+    let rebound = help_with(
+        Bindings::default().rebound(Fc::HyperJump, KeyCombo::key(Key::KeyK)),
+        Rc::new(crate::key_names::NoKeyNames),
+    );
+    assert!(rebound.contains("   K: jump   "), "{rebound}");
+    assert!(!rebound.contains("J: jump"), "{rebound}");
+}
+
+#[test]
+fn the_help_line_leaves_out_an_unbound_command_and_groups_what_is_left() {
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo};
+    let names = || -> Rc<dyn crate::key_names::KeyNames> { Rc::new(crate::key_names::NoKeyNames) };
+    let unbound = help_with(Bindings::default().unbound(Fc::Board), names());
+    assert!(!unbound.contains("board"), "{unbound}");
+    assert!(unbound.contains("R: nearest   Y: hail"), "{unbound}");
+    let one_escort = help_with(Bindings::default().unbound(Fc::DefendMe), names());
+    assert!(one_escort.contains("   F/V/C: escorts   "), "{one_escort}");
+    let turned = help_with(
+        Bindings::default().rebound(Fc::Accelerate, KeyCombo::key(Key::KeyW)),
+        names(),
+    );
+    assert!(
+        turned.starts_with("W/Down Arrow/Left Arrow/Right Arrow: fly   "),
+        "{turned}"
+    );
 }
 
 #[test]
@@ -753,7 +790,7 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
     assert_eq!(bar.iter().next(), Some(&background));
     assert_eq!(dots_on_radar(&bar), [(926, 96)], "the blank radar");
     assert_eq!(sprites(&bar), [], "no stellars or ship");
-    assert!(!texts(&bar).contains(&HELP.to_owned()), "no help line");
+    assert!(!texts(&bar).contains(&default_help()), "no help line");
     let flown = flown(&view);
     let from = flown
         .iter()

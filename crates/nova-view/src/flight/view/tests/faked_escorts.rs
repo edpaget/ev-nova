@@ -864,7 +864,9 @@ fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
         .expect("its border");
     let help = commands
         .iter()
-        .position(|command| **command == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
+        .position(|command| {
+            **command == overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM)
+        })
         .expect("the help line");
     let player = commands
         .iter()
