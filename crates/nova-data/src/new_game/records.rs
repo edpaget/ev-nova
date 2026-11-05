@@ -162,10 +162,11 @@ pub fn rgb(color: &Color) -> u32 {
 /// outpost, and uninhabited (no refuelling) without `refuel`.
 #[must_use]
 pub fn stellar_flags(kind: StellarKind, services: &[Service]) -> u32 {
-    let mut bits = 0;
-    if !services.is_empty() {
-        bits |= flags::CAN_LAND;
-    }
+    let mut bits = if services.is_empty() {
+        0
+    } else {
+        flags::CAN_LAND
+    };
     for service in services {
         bits |= match service {
             Service::Bar => flags::BAR,
@@ -233,6 +234,17 @@ mod tests {
         assert_eq!(inhabited(Service::Outfitter), land | flags::OUTFITTER);
         assert_eq!(inhabited(Service::Shipyard), land | flags::SHIPYARD);
         assert_eq!(inhabited(Service::Refuel), land);
+    }
+
+    #[test]
+    fn a_service_listed_twice_is_listed_once() {
+        assert_eq!(
+            stellar_flags(
+                StellarKind::Planet,
+                &[Service::Bar, Service::Bar, Service::Refuel]
+            ),
+            flags::CAN_LAND | flags::BAR
+        );
     }
 
     #[test]

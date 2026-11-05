@@ -140,13 +140,13 @@ fn system(
 ) -> Entry<AnyRecord> {
     let doc = &galaxy.systems[id];
     let (x_pos, y_pos) = position(doc.data.map, "map position", &doc.path, problems);
-    let mut inside: Vec<(i16, &Id)> = ids
+    // In ID order: the table iterates in id order, which numbered them.
+    let inside: Vec<(i16, &Id)> = ids
         .stellars
         .iter()
         .filter(|(stellar, _)| galaxy.stellars[*stellar].data.system == *id)
         .map(|(stellar, &nova)| (nova, stellar))
         .collect();
-    inside.sort_unstable();
     if inside.len() > NAV_SLOTS {
         let out: Vec<String> = inside[NAV_SLOTS..]
             .iter()
