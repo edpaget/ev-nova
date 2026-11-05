@@ -181,6 +181,14 @@
 //! [`GameData::ship_description`] finds a ship's `dësc` by the Bible's
 //! convention, [`ship_desc_id`]: `dësc` 13000 to 13767 describe `shïp` 128
 //! to 895. Many ships (mostly variants) have none, which is not an error.
+//!
+//! # Records decoded elsewhere
+//!
+//! [`GameData::from_decoded`] builds a store from records that arrive
+//! decoded, with no resource bytes behind them: the new game's data.
+//! Every record is attributed to one file, the
+//! folder they were read from, and is read like any decoded record; but
+//! [`GameData::resource`] is `None` for each, as there are no bytes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -195,6 +203,7 @@ use crate::error::{DecodeError, DecodeWarning};
 use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
+mod decoded;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
@@ -469,6 +478,9 @@ impl GameData {
     }
 
     /// The winning copy of resource (`ty`, `id`).
+    ///
+    /// `None` for a record of a store built from decoded records
+    /// ([`GameData::from_decoded`]): it lists the ID, but has no bytes.
     #[must_use]
     pub fn resource(&self, ty: ResType, id: i16) -> Option<StoreResource<'_>> {
         let source = self.winner(self.slot(ty, id)?);
