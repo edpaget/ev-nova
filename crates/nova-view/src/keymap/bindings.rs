@@ -120,6 +120,68 @@ impl Bindings {
         self.gamepad.clashes()
     }
 
+    /// Binds `command` to `binding` on the pad, the keys screen's
+    /// gamepad rule, then unbinds, one at a time and first in command
+    /// order, each command that clashes with it ([`PadMap::clashes`],
+    /// axes included), until none does. Returns, in command order, every
+    /// command this left unbound that was bound before: the keys screen
+    /// marks them.
+    ///
+    /// # Errors
+    ///
+    /// Nothing changes, and the error names the command that refuses
+    /// it, when `command` is a fixed row ([`PadMap::is_fixed`], itself),
+    /// when a fixed row holds `binding`'s entry in a context active
+    /// together ([`PadMap::fixed_holder`]), or when the entry is a plain
+    /// direction of a stick an axis command reads in a context active
+    /// together ([`PadMap::axis_holder`]).
+    pub fn assign_pad(
+        &mut self,
+        command: Command,
+        binding: gamepad::PadBinding,
+    ) -> Result<Vec<Command>, Command> {
+        if PadMap::is_fixed(command) {
+            return Err(command);
+        }
+        if let gamepad::PadBinding::Entry(entry) = binding
+            && let Some(holder) = self
+                .gamepad
+                .fixed_holder(command, entry)
+                .or_else(|| self.gamepad.axis_holder(command, entry))
+        {
+            return Err(holder);
+        }
+        let before = self.gamepad.clone();
+        self.gamepad.bind(command, binding);
+        while let Some(loser) = self.pad_loser_to(command) {
+            self.gamepad.unbind(loser);
+        }
+        Ok(Command::all()
+            .filter(|&other| {
+                before.binding(other) != gamepad::PadBinding::Unbound
+                    && self.gamepad.binding(other) == gamepad::PadBinding::Unbound
+            })
+            .collect())
+    }
+
+    /// The first command, in command order, whose pad binding clashes
+    /// with `command`'s, if any.
+    fn pad_loser_to(&self, command: Command) -> Option<Command> {
+        self.gamepad
+            .clashes()
+            .into_iter()
+            .filter_map(|Clash { first, second }| {
+                if first == command {
+                    Some(second)
+                } else if second == command {
+                    Some(first)
+                } else {
+                    None
+                }
+            })
+            .min()
+    }
+
     /// Whether the device input of `input` means `command` as one of its
     /// fixed twins, not through its binding.
     #[must_use]
@@ -1150,6 +1212,193 @@ mod tests {
         );
         assert_eq!(bindings.pad_clashes().len(), 1);
         assert_eq!(bindings.clashes(), vec![], "the keyboard's are apart");
+    }
+
+    fn plain(button: crate::input::PadButton) -> super::super::PadBinding {
+        super::super::PadBinding::Entry(super::super::PadEntry::plain(button))
+    }
+
+    fn axis(axis: crate::input::PadAxis) -> super::super::PadBinding {
+        super::super::PadBinding::Axis(super::super::AxisBinding::plain(axis))
+    }
+
+    fn pad_of(bindings: &Bindings, command: impl Into<Command>) -> super::super::PadBinding {
+        bindings.gamepad.binding(command.into())
+    }
+
+    #[test]
+    fn assigning_a_pad_entry_unbinds_the_command_holding_it_in_a_context_active_together() {
+        use crate::input::PadButton as P;
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::Autopilot.into(), plain(P::West)),
+            Ok(vec![FlightCommand::ClosestTarget.into()])
+        );
+        assert_eq!(pad_of(&bindings, FlightCommand::Autopilot), plain(P::West));
+        assert_eq!(
+            pad_of(&bindings, FlightCommand::ClosestTarget),
+            super::super::PadBinding::Unbound
+        );
+        assert_eq!(
+            pad_of(&bindings, TradeCommand::MaxLot),
+            plain(P::West),
+            "the Trade Center is never active with flight"
+        );
+        assert_eq!(bindings.pad_clashes(), vec![]);
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::Board.into(), plain(P::RightStick)),
+            Ok(vec![FlightCommand::SelectSecondary.into()]),
+            "only what lost a binding"
+        );
+    }
+
+    #[test]
+    fn a_flight_command_takes_south_and_east_leaving_the_ui_rows() {
+        use crate::input::PadButton as P;
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::Autopilot.into(), plain(P::South)),
+            Ok(vec![FlightCommand::FirePrimary.into()])
+        );
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::Board.into(), plain(P::East)),
+            Ok(vec![FlightCommand::LandDock.into()])
+        );
+        assert_eq!(pad_of(&bindings, UiCommand::Activate), plain(P::South));
+        assert_eq!(pad_of(&bindings, UiCommand::Back), plain(P::East));
+        assert_eq!(pad_of(&bindings, IntroCommand::Activate), plain(P::South));
+    }
+
+    #[test]
+    fn a_spaceport_command_on_south_or_a_dpad_direction_is_refused_naming_its_holder() {
+        use crate::input::PadButton as P;
+        let mut bindings = Bindings::default();
+        let before = bindings.clone();
+        assert_eq!(
+            bindings.assign_pad(PortCommand::Bar.into(), plain(P::South)),
+            Err(UiCommand::Activate.into())
+        );
+        assert_eq!(
+            bindings.assign_pad(PortCommand::Bar.into(), plain(P::DPadDown)),
+            Err(UiCommand::FocusDown.into())
+        );
+        assert_eq!(bindings, before, "nothing changed");
+    }
+
+    #[test]
+    fn a_layered_entry_is_no_fixed_rows_entry() {
+        use crate::input::PadButton as P;
+        let mut bindings = Bindings::default();
+        let layered =
+            super::super::PadBinding::Entry(super::super::PadEntry::on(P::Select, P::South));
+        assert_eq!(
+            bindings.assign_pad(PortCommand::Bar.into(), layered),
+            Ok(vec![])
+        );
+        assert_eq!(pad_of(&bindings, PortCommand::Bar), layered);
+    }
+
+    #[test]
+    fn double_time_on_south_is_refused() {
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(
+                AppCommand::DoubleTime.into(),
+                plain(crate::input::PadButton::South)
+            ),
+            Err(UiCommand::Activate.into()),
+            "the app's context is active with the shared UI's"
+        );
+    }
+
+    #[test]
+    fn a_fixed_row_cannot_be_assigned() {
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(
+                UiCommand::Activate.into(),
+                plain(crate::input::PadButton::North)
+            ),
+            Err(UiCommand::Activate.into())
+        );
+        assert_eq!(
+            bindings.assign_pad(UiCommand::Back.into(), super::super::PadBinding::Unbound),
+            Err(UiCommand::Back.into())
+        );
+        assert_eq!(bindings, Bindings::default());
+    }
+
+    #[test]
+    fn assigning_an_axis_unbinds_the_other_axis_on_it() {
+        use crate::input::PadAxis;
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::TurnAxis.into(), axis(PadAxis::LeftY)),
+            Ok(vec![FlightCommand::ThrottleAxis.into()])
+        );
+        assert_eq!(
+            pad_of(&bindings, FlightCommand::TurnAxis),
+            axis(PadAxis::LeftY)
+        );
+    }
+
+    #[test]
+    fn a_button_command_on_a_direction_a_flight_axis_reads_is_refused_naming_the_axis() {
+        use crate::input::PadButton as P;
+        let mut bindings = Bindings::default();
+        let before = bindings.clone();
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::FirePrimary.into(), plain(P::RightStickLeft)),
+            Err(FlightCommand::TurnAxis.into())
+        );
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::FirePrimary.into(), plain(P::LeftStickDown)),
+            Err(FlightCommand::ThrottleAxis.into())
+        );
+        assert_eq!(
+            bindings.assign_pad(PlayCommand::GalaxyMap.into(), plain(P::RightStickRight)),
+            Err(FlightCommand::TurnAxis.into()),
+            "the play keys are active with flight"
+        );
+        assert_eq!(bindings, before, "nothing changed");
+        let layered = super::super::PadBinding::Entry(super::super::PadEntry::on(
+            P::Start,
+            P::RightStickLeft,
+        ));
+        assert_eq!(
+            bindings.assign_pad(PlayCommand::GalaxyMap.into(), layered),
+            Ok(vec![]),
+            "a layered direction is no axis's"
+        );
+        assert_eq!(
+            bindings.assign_pad(PortCommand::Bar.into(), plain(P::RightStickLeft)),
+            Ok(vec![]),
+            "the spaceport is never active with flight"
+        );
+    }
+
+    #[test]
+    fn an_axis_moved_onto_a_stick_with_plain_entries_unbinds_them() {
+        use crate::input::{PadAxis, PadButton as P};
+        let mut bindings = Bindings::default();
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::ZoomIn.into(), plain(P::LeftStickLeft)),
+            Ok(vec![])
+        );
+        assert_eq!(
+            bindings.assign_pad(IntroCommand::Activate.into(), plain(P::LeftStickRight)),
+            Ok(vec![])
+        );
+        assert_eq!(
+            bindings.assign_pad(FlightCommand::TurnAxis.into(), axis(PadAxis::LeftX)),
+            Ok(vec![FlightCommand::ZoomIn.into()])
+        );
+        assert_eq!(
+            pad_of(&bindings, IntroCommand::Activate),
+            plain(P::LeftStickRight),
+            "the intro is never active with flight"
+        );
+        assert_eq!(bindings.pad_clashes(), vec![]);
     }
 
     #[test]

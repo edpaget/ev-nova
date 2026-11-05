@@ -217,6 +217,23 @@ impl PadMap {
             .find(|&fixed| clash_on(SCREENS, fixed, command))
     }
 
+    /// The axis command whose stick axis a plain `entry` on a stick
+    /// direction lies on, in a context active together with `command`'s,
+    /// if any: flight reads that stick as an axis, so with no layer held
+    /// the direction means nothing else ([`meanings`]), and the keys
+    /// screen refuses `command` the entry rather than bind it dead. A
+    /// layered entry, or one off the sticks, lies on no axis.
+    #[must_use]
+    pub fn axis_holder(&self, command: Command, entry: PadEntry) -> Option<Command> {
+        if entry.layer.is_some() {
+            return None;
+        }
+        let (axis, _) = entry.button.stick_direction()?;
+        Command::all()
+            .filter(|&reader| reader != command && self.axis(reader) == Some(axis))
+            .find(|&reader| together_on(SCREENS, reader.context(), command.context()))
+    }
+
     /// Every button some entry uses as its layer: a press of one alone
     /// binds nothing.
     #[must_use]
@@ -260,8 +277,10 @@ impl PadMap {
 
     /// Every pair of commands bound to one entry, or to one stick axis
     /// (inverted or not), in contexts active together on some screen, a
-    /// shadowing context's pairs with the one it shadows left out.
-    /// `PadMap::default()` has none.
+    /// shadowing context's pairs with the one it shadows left out; then
+    /// each axis command with each command whose plain entry lies on one
+    /// of its axis's directions in a context active together
+    /// ([`PadMap::axis_holder`]). `PadMap::default()` has none.
     #[must_use]
     pub fn clashes(&self) -> Vec<Clash> {
         self.clashes_on(SCREENS)
@@ -285,6 +304,26 @@ impl PadMap {
                     if clash_on(screens, first, second) {
                         clashes.push(Clash { first, second });
                     }
+                }
+            }
+        }
+        for reader in Command::all() {
+            let Some(axis) = self.axis(reader) else {
+                continue;
+            };
+            for other in Command::all() {
+                let on_axis = self.entry(other).is_some_and(|entry| {
+                    entry.layer.is_none()
+                        && entry
+                            .button
+                            .stick_direction()
+                            .is_some_and(|(along, _)| along == axis)
+                });
+                if on_axis && together_on(screens, reader.context(), other.context()) {
+                    clashes.push(Clash {
+                        first: reader.min(other),
+                        second: reader.max(other),
+                    });
                 }
             }
         }

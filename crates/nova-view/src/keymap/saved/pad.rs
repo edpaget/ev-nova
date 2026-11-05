@@ -144,7 +144,9 @@ impl PadMap {
     /// dropped, its command keeping its default, when its command is a
     /// fixed row, its binding is of the other kind (an entry on an axis
     /// command, or an axis on another), or its entry is a fixed row's in
-    /// a context active together ([`PadMap::fixed_holder`]). Then each
+    /// a context active together ([`PadMap::fixed_holder`]) or a plain
+    /// direction of a stick an axis reads, the axes loaded first
+    /// ([`PadMap::axis_holder`]): the keys screen refuses those. Then each
     /// clash ([`PadMap::clashes`]) settles by the keyboard's rules
     /// ([`KeyMap::with_overrides`](crate::keymap::KeyMap::with_overrides)):
     /// of two saved commands the later in declaration order is unbound,
@@ -152,9 +154,17 @@ impl PadMap {
     pub fn with_overrides(overrides: impl IntoIterator<Item = (Command, PadBinding)>) -> Self {
         let mut map = Self::default();
         let mut named = BTreeSet::new();
-        for (command, binding) in overrides {
+        let (entries, rest): (Vec<_>, Vec<_>) = overrides
+            .into_iter()
+            .partition(|&(_, binding)| matches!(binding, PadBinding::Entry(_)));
+        // The axes first, so an entry is held against the sticks as they
+        // load, as the keys screen holds it.
+        for (command, binding) in rest.into_iter().chain(entries) {
             let held = match binding {
-                PadBinding::Entry(entry) => map.fixed_holder(command, entry).is_some(),
+                PadBinding::Entry(entry) => {
+                    map.fixed_holder(command, entry).is_some()
+                        || map.axis_holder(command, entry).is_some()
+                }
                 PadBinding::Axis(_) | PadBinding::Unbound => false,
             };
             if !Self::is_fixed(command) && fits(command, binding) && !held {
@@ -433,6 +443,35 @@ mod tests {
             earlier.binding(flight(FlightCommand::Autopilot)),
             PadBinding::Unbound,
             "a defaulted command declared later loses too"
+        );
+    }
+
+    #[test]
+    fn a_saved_plain_entry_on_a_direction_a_flight_axis_reads_loads_as_its_default() {
+        assert_eq!(
+            PadMap::from_table([("Flight.FirePrimary", "-rightx")]),
+            PadMap::default()
+        );
+        for table in [
+            [("Flight.ZoomIn", "-leftx"), ("Flight.TurnAxis", "leftx")],
+            [("Flight.TurnAxis", "leftx"), ("Flight.ZoomIn", "-leftx")],
+        ] {
+            let map = PadMap::from_table(table);
+            assert_eq!(
+                map.axis_binding(flight(FlightCommand::TurnAxis)),
+                Some(AxisBinding::plain(PadAxis::LeftX)),
+                "{table:?}"
+            );
+            assert_eq!(
+                map.binding(flight(FlightCommand::ZoomIn)),
+                PadMap::default().binding(flight(FlightCommand::ZoomIn)),
+                "{table:?}: the axis keeps its stick, as the keys screen refuses the entry"
+            );
+        }
+        let layered = PadMap::from_table([("Flight.ZoomIn", "start+-rightx")]);
+        assert_eq!(
+            layered.entry(flight(FlightCommand::ZoomIn)),
+            Some(PadEntry::on(P::Start, P::RightStickLeft))
         );
     }
 
