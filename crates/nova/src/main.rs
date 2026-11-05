@@ -417,3 +417,19 @@ fn main() -> ExitCode {
         None => ExitCode::SUCCESS,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_player_s_bindings_are_the_saved_ones_named_through_the_platform_s_layout() {
+        let saved = nova_view::Bindings::default().unbound(nova_view::keymap::FlightCommand::Eject);
+        let bindings = player_bindings(saved.clone());
+        assert_eq!(bindings.get(), saved);
+        assert_eq!(
+            format!("{:?}", bindings.names()),
+            format!("{:?}", system_key_names())
+        );
+    }
+}
