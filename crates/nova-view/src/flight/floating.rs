@@ -878,6 +878,16 @@ mod tests {
     }
 
     #[test]
+    fn the_big_boxes_take_the_limit_itself() {
+        let at = |zoom| FloatingMap {
+            zoom: MapZoom::at(zoom),
+            ..FloatingMap::new()
+        };
+        assert!(at(0.5).big_boxes(), "the limit itself");
+        assert!(!at(0.500_000_1).big_boxes(), "just above the limit");
+    }
+
+    #[test]
     fn showing_guards_a_zoom_of_0_or_less() {
         let mut map = FloatingMap {
             zoom: MapZoom::at(0.0),
