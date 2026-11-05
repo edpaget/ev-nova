@@ -56,7 +56,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 /// A 1024 x 768 window at scale 1, where window pixels are logical
 /// units, on a monitor named [`MONITOR`] offering [`raw_modes`]; it
 /// records each fullscreen request.
-struct FakeWindow {
+pub(crate) struct FakeWindow {
     fullscreen: Vec<Option<FullscreenKind>>,
 }
 
@@ -204,7 +204,7 @@ fn game_data() -> Rc<GameData> {
 
 /// The settings saved before the game starts: music on, the effects at
 /// level 4 and the music at level 6.
-fn seeded() -> MemorySettings {
+pub(crate) fn seeded() -> MemorySettings {
     let store = MemorySettings::new();
     let (mut keeper, _) = SettingsKeeper::open(store.clone());
     keeper
@@ -234,19 +234,19 @@ fn seeded() -> MemorySettings {
     store
 }
 
-struct Harness {
-    app: App<GameImages<Rc<GameData>>>,
-    window: FakeWindow,
-    gpu: RecordingGpu,
-    log: AudioLog,
-    frames: u64,
+pub(crate) struct Harness {
+    pub(crate) app: App<GameImages<Rc<GameData>>>,
+    pub(crate) window: FakeWindow,
+    pub(crate) gpu: RecordingGpu,
+    pub(crate) log: AudioLog,
+    pub(crate) frames: u64,
 }
 
 impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
     /// read through it start the audio core and the router. It runs as on
     /// Windows, whatever the host, so its monitor offers exclusive modes.
-    fn new(store: &MemorySettings) -> Self {
+    pub(crate) fn new(store: &MemorySettings) -> Self {
         Self::with_table(store, SoundTable::ORIGINAL)
     }
 
@@ -307,7 +307,7 @@ impl Harness {
         }
     }
 
-    fn send(&mut self, event: WindowEvent) {
+    pub(crate) fn send(&mut self, event: WindowEvent) {
         let control = self.app.handle(event, &mut self.window, &mut self.gpu);
         assert_eq!(control, Control::Continue, "{event:?}");
     }
@@ -369,11 +369,11 @@ impl Harness {
         }
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
-    fn dialog(&self) -> &PrefsDialog {
+    pub(crate) fn dialog(&self) -> &PrefsDialog {
         self.app.screen().preferences().expect("open")
     }
 

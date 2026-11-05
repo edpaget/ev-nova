@@ -45,6 +45,7 @@ mod movies;
 mod navigation;
 mod news;
 mod outfitter;
+mod pad_focus;
 mod person_join;
 mod persons;
 mod pilot_move;
