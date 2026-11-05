@@ -466,6 +466,7 @@ impl MissionComputerScreen {
         laid.dialog
             .set_greyed(ACCEPT_ITEM, self.computer.rows.is_empty());
         self.show_selected();
+        self.sync_pad_cells();
     }
 
     /// The mission selected, if any.
@@ -579,6 +580,7 @@ impl Screen for MissionComputerScreen {
             if laid.rows.step_wrapping(forward) {
                 self.show_selected();
             }
+            self.sync_pad_cells();
             return ScreenAction::None;
         }
         // Item 3 goes to the bar (the second `LClick`, @0xa01c5-0xa01e7);
@@ -592,12 +594,17 @@ impl Screen for MissionComputerScreen {
             if press == (ListPress::Released { changed: true }) {
                 self.show_selected();
             }
+            self.sync_pad_cells();
             return ScreenAction::None;
         }
-        let event = laid.dialog.input(input);
-        if let Some(DialogEvent::Item(item)) = event {
-            self.activate(item);
+        match laid.dialog.input(input) {
+            Some(DialogEvent::Item(item)) => self.activate(item),
+            Some(DialogEvent::Cell(cell)) if pad::press_cell(&mut laid.rows, cell) => {
+                self.show_selected();
+            }
+            Some(DialogEvent::Cell(_)) | None => {}
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -607,6 +614,7 @@ impl Screen for MissionComputerScreen {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
         }
+        self.sync_pad_cells();
     }
 
     /// Lets go of the keys its reader holds.
@@ -894,6 +902,7 @@ impl MissionInfoScreen {
         }
         laid.dialog.set_text(INFO_DATE_ITEM, &self.info.today);
         self.show_selected();
+        self.sync_pad_cells();
     }
 
     /// The pick at the selected place, if any.
@@ -991,18 +1000,24 @@ impl Screen for MissionInfoScreen {
             if laid.rows.step_wrapping(forward) {
                 self.show_selected();
             }
+            self.sync_pad_cells();
             return ScreenAction::None;
         }
         if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, &[INFO_LIST_ITEM], input) {
             if press == (ListPress::Released { changed: true }) {
                 self.show_selected();
             }
+            self.sync_pad_cells();
             return ScreenAction::None;
         }
-        let event = laid.dialog.input(input);
-        if let Some(DialogEvent::Item(item)) = event {
-            self.activate(item);
+        match laid.dialog.input(input) {
+            Some(DialogEvent::Item(item)) => self.activate(item),
+            Some(DialogEvent::Cell(cell)) if pad::press_cell(&mut laid.rows, cell) => {
+                self.show_selected();
+            }
+            Some(DialogEvent::Cell(_)) | None => {}
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -1012,6 +1027,7 @@ impl Screen for MissionInfoScreen {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
         }
+        self.sync_pad_cells();
     }
 
     /// Lets go of the keys its reader holds.
@@ -1057,6 +1073,8 @@ impl Screen for MissionInfoScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+pub(crate) mod pad;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1157,7 +1175,7 @@ mod tests {
         }
     }
 
-    fn screen_of(computer: MissionComputer) -> MissionComputerScreen {
+    pub(super) fn screen_of(computer: MissionComputer) -> MissionComputerScreen {
         MissionComputerScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
             computer,
@@ -1165,7 +1183,7 @@ mod tests {
         )
     }
 
-    fn screen() -> MissionComputerScreen {
+    pub(super) fn screen() -> MissionComputerScreen {
         screen_of(computer())
     }
 
@@ -1989,7 +2007,7 @@ mod tests {
         )
     }
 
-    fn info_screen() -> MissionInfoScreen {
+    pub(super) fn info_screen() -> MissionInfoScreen {
         MissionInfoScreen::new(
             Ok((info_template(), Rc::new(MonoMetrics))),
             info(),
@@ -2205,7 +2223,7 @@ mod tests {
         three
     }
 
-    fn info_screen_of(info: MissionInfo) -> MissionInfoScreen {
+    pub(super) fn info_screen_of(info: MissionInfo) -> MissionInfoScreen {
         MissionInfoScreen::new(
             Ok((info_template(), Rc::new(MonoMetrics))),
             info,
@@ -3033,7 +3051,7 @@ mod tests {
     }
 
     /// `count` missions in slots 0 on, the even ones abortable.
-    fn many_info(count: u8) -> MissionInfo {
+    pub(super) fn many_info(count: u8) -> MissionInfo {
         MissionInfo::shown(
             (0..count)
                 .map(|slot| {
@@ -3186,7 +3204,7 @@ mod tests {
     }
 
     /// `count` offers, 130 on.
-    fn many_offers(count: i16) -> MissionComputer {
+    pub(super) fn many_offers(count: i16) -> MissionComputer {
         MissionComputer {
             rows: (0..count)
                 .map(|n| row(130 + n, &format!("Offer {n}"), &format!("Text {n}.")))
