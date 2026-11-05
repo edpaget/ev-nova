@@ -57,6 +57,7 @@ pub mod grid_arrows;
 mod grid_clicks;
 pub mod hire;
 pub mod layout;
+mod mission_keys;
 pub mod missions;
 pub mod modal;
 pub mod news;
