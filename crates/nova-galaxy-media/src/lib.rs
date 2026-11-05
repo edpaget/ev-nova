@@ -29,5 +29,7 @@
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod model;
+pub mod placement;
 
-pub use model::{Bounds, Face, Model, model};
+pub use model::{Bounds, Face, Model, NoModel, model, read_model};
+pub use placement::Placement;

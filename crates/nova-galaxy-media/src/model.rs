@@ -1,12 +1,16 @@
 //! A glTF model's triangles, materials and footprint, read as data
-//! ([`model`]).
+//! ([`model`]), and the model an asset's files hold ([`read_model`]).
 //! Only data is read: no image is decoded, and no file a model names is
 //! fetched except through the caller.
 //!
-//! Ported from game-bible's `galaxy` tool (`media.rs` `model`).
+//! Ported from game-bible's `galaxy` tool (`media.rs` `model`, and
+//! `check/art.rs` `model_of`).
 
 use gltf::Gltf;
 use gltf::mesh::Mode;
+use nova_galaxy_format::asset::{Asset, Front};
+use nova_galaxy_format::media::is_lfs_pointer;
+use nova_galaxy_format::source::Source;
 
 /// The box a model fills, in its own units, after its nodes' transforms.
 /// glTF axes: +Y is up, +Z is the front, +X is the model's left.
@@ -161,6 +165,49 @@ pub fn model(
     })
 }
 
+/// Why an asset has no model to draw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NoModel {
+    /// None of its files is a model (`.glb` or `.gltf`): a placeholder
+    /// with no files, or a texture.
+    None,
+    /// Its model file is a Git LFS pointer: the checkout hasn't fetched
+    /// it.
+    Pointer,
+    /// Its model file is missing or doesn't read as a model; why, naming
+    /// the file.
+    Unreadable(String),
+}
+
+/// The model `asset`'s files export, read through `source`, and which way
+/// it faces: the first of its `.glb` and `.gltf` files that reads,
+/// whatever its `placeholder` flag (as the contact sheet's `model_of`).
+/// Without one, why: the first model file's failure, or
+/// [`NoModel::None`] when it names no model file.
+pub fn read_model(source: &impl Source, asset: &Asset) -> Result<(Model, Front), NoModel> {
+    let mut why = NoModel::None;
+    for file in asset
+        .files
+        .iter()
+        .filter(|f| matches!(f.extension().as_str(), "glb" | "gltf"))
+    {
+        let path = file.as_str();
+        let read = match source.bytes(path) {
+            Ok(Some(bytes)) if is_lfs_pointer(&bytes) => Err(NoModel::Pointer),
+            Ok(Some(bytes)) => model(path, &bytes, |p| source.bytes(p).ok().flatten())
+                .map_err(|e| NoModel::Unreadable(format!("`{path}`: {e}"))),
+            Ok(None) => Err(NoModel::Unreadable(format!("`{path}` does not exist"))),
+            Err(e) => Err(NoModel::Unreadable(format!("`{path}`: {e}"))),
+        };
+        match read {
+            Ok(model) => return Ok((model, asset.front)),
+            Err(failed) if why == NoModel::None => why = failed,
+            Err(_) => {}
+        }
+    }
+    Err(why)
+}
+
 /// The data-folder path of `uri`, a file named from a model in `folder`.
 fn beside(folder: &str, uri: &str) -> Result<String, String> {
     let plain = !uri.is_empty()
@@ -211,6 +258,8 @@ fn apply(m: &Matrix, p: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use nova_galaxy_format::source::MemSource;
+
     use super::*;
     use crate::fixture;
 
@@ -297,6 +346,151 @@ mod tests {
         let (json, _) = fixture::gltf_with_bin([1.0; 3], "../other/hull.bin");
         let err = model("media/export/pack/hull.gltf", json.as_bytes(), no_files).unwrap_err();
         assert!(err.contains("../other/hull.bin"), "{err}");
+    }
+
+    /// An asset of `kind` (a model unless it says) holding `files`.
+    fn asset(files: &[&str], front: &str) -> Asset {
+        let yaml = format!(
+            "---\nkind: model\nplaceholder: false\nfiles: [{}]\nfront: \"{front}\"\n---\n",
+            files.join(", ")
+        );
+        nova_galaxy_format::frontmatter::parse::<Asset>(&yaml)
+            .unwrap()
+            .0
+    }
+
+    const POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1\noid sha256:ab\nsize 12\n";
+
+    #[test]
+    fn an_asset_s_model_is_the_first_of_its_files_that_reads() {
+        let source = MemSource::default()
+            .with_bytes("media/export/p/flat.png", b"\x89PNG")
+            .with_bytes(
+                "media/export/p/a.glb",
+                &fixture::glb([2.0, 1.0, 4.0], [0.0; 3]),
+            )
+            .with_bytes("media/export/p/b.glb", &fixture::glb([1.0; 3], [0.0; 3]));
+        let asset = asset(
+            &[
+                "media/export/p/flat.png",
+                "media/export/p/a.glb",
+                "media/export/p/b.glb",
+            ],
+            "-z",
+        );
+        let (model, front) = read_model(&source, &asset).unwrap();
+        assert_eq!(model.bounds.size(), [2.0, 1.0, 4.0]);
+        assert_eq!(front, Front::MinusZ);
+    }
+
+    #[test]
+    fn a_model_after_one_that_fails_is_read() {
+        let source = MemSource::default()
+            .with_bytes("media/export/p/a.glb", POINTER)
+            .with_bytes(
+                "media/export/p/b.GLTF",
+                fixture::gltf_with_bin([1.0; 3], "b.bin").0.as_bytes(),
+            )
+            .with_bytes(
+                "media/export/p/b.bin",
+                &fixture::gltf_with_bin([1.0; 3], "b.bin").1,
+            );
+        let asset = asset(&["media/export/p/a.glb", "media/export/p/b.GLTF"], "+z");
+        let (model, front) = read_model(&source, &asset).unwrap();
+        assert_eq!(model.external, ["media/export/p/b.bin"]);
+        assert_eq!(front, Front::PlusZ);
+    }
+
+    #[test]
+    fn an_asset_with_no_model_file_has_none() {
+        let placeholder = nova_galaxy_format::frontmatter::parse::<Asset>(
+            "---\nkind: model\nplaceholder: true\n---\n",
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            read_model(&MemSource::default(), &placeholder),
+            Err(NoModel::None)
+        );
+        let texture = MemSource::default().with_bytes("media/export/p/flat.png", b"\x89PNG");
+        let asset = asset(&["media/export/p/flat.png", "media/export/p/a.bin"], "+z");
+        assert_eq!(read_model(&texture, &asset), Err(NoModel::None));
+    }
+
+    #[test]
+    fn an_lfs_pointer_is_a_pointer() {
+        let source = MemSource::default().with_bytes("media/export/p/a.glb", POINTER);
+        let asset = asset(&["media/export/p/a.glb"], "+z");
+        assert_eq!(read_model(&source, &asset), Err(NoModel::Pointer));
+    }
+
+    #[test]
+    fn an_undecodable_model_is_unreadable_naming_its_file() {
+        let source = MemSource::default().with_bytes("media/export/p/a.glb", b"glTF nonsense");
+        let asset = asset(&["media/export/p/a.glb"], "+z");
+        let Err(NoModel::Unreadable(why)) = read_model(&source, &asset) else {
+            panic!("unreadable");
+        };
+        assert!(
+            why.starts_with("`media/export/p/a.glb`: not a readable glTF model"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn a_missing_model_is_unreadable_naming_its_file() {
+        let asset = asset(&["media/export/p/a.glb"], "+z");
+        assert_eq!(
+            read_model(&MemSource::default(), &asset),
+            Err(NoModel::Unreadable(
+                "`media/export/p/a.glb` does not exist".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn the_first_failure_is_the_reason() {
+        let source = MemSource::default()
+            .with_bytes("media/export/p/a.glb", POINTER)
+            .with_bytes("media/export/p/b.glb", b"nonsense");
+        let asset = asset(&["media/export/p/a.glb", "media/export/p/b.glb"], "+z");
+        assert_eq!(read_model(&source, &asset), Err(NoModel::Pointer));
+        let asset = asset_of(&["media/export/p/b.glb", "media/export/p/a.glb"]);
+        assert!(matches!(
+            read_model(&source, &asset),
+            Err(NoModel::Unreadable(_))
+        ));
+    }
+
+    fn asset_of(files: &[&str]) -> Asset {
+        asset(files, "+z")
+    }
+
+    /// A source whose reads fail.
+    struct Broken;
+
+    impl Source for Broken {
+        fn files(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> std::io::Result<Vec<nova_galaxy_format::source::SourceFile>> {
+            Ok(Vec::new())
+        }
+
+        fn bytes(&self, _: &str) -> std::io::Result<Option<Vec<u8>>> {
+            Err(std::io::Error::other("the disk is on fire"))
+        }
+    }
+
+    #[test]
+    fn a_failed_read_is_unreadable_naming_its_file() {
+        assert_eq!(
+            read_model(&Broken, &asset_of(&["media/export/p/a.glb"])),
+            Err(NoModel::Unreadable(
+                "`media/export/p/a.glb`: the disk is on fire".into()
+            ))
+        );
     }
 
     #[test]
