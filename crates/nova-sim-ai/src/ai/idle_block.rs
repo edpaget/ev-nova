@@ -118,7 +118,7 @@ pub fn visited_here(npc: &Npc, around: &Surroundings) -> bool {
 /// other reading of
 /// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
 /// a ship that would jump enters a usable gate instead, drawn on `chance`
-/// ([`gate_out`]).
+/// (`gate_out`).
 pub fn leave_or_wait(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if !leave::can_jump(npc, around.jump_fuel) {
         return Goal::Wait;
