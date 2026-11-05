@@ -110,6 +110,10 @@ fn rows() -> Vec<Row> {
             "mission info",
             crate::spaceport::missions::pad::tests::info_pad_probe,
         ),
+        (
+            "outfitter",
+            crate::spaceport::outfitter::pad::tests::pad_probe,
+        ),
     ]
 }
 

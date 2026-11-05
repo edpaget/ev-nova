@@ -1013,6 +1013,7 @@ impl OutfitterScreen {
     fn selected_changed(&mut self) {
         self.regrey();
         self.show(true);
+        self.sync_pad_cells();
     }
 
     /// Whether the grid's presses and arrows follow `_OutfitFilter`, by
@@ -1325,6 +1326,9 @@ impl Screen for OutfitterScreen {
     /// open (Alt still followed), or else to the quantity dialog while it
     /// is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.tell_held(input) {
+            return ScreenAction::None;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -1397,11 +1401,13 @@ impl Screen for OutfitterScreen {
         } else if !self.press_grid(input)
             && let Ok(laid) = &mut self.laid
         {
-            let event = laid.dialog.input(input);
-            if let Some(DialogEvent::Item(item)) = event {
-                self.activate(item);
+            match laid.dialog.input(input) {
+                Some(DialogEvent::Item(item)) => self.activate(item),
+                Some(DialogEvent::Cell(cell)) => self.press_pad_cell(cell),
+                None => {}
             }
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -1417,6 +1423,7 @@ impl Screen for OutfitterScreen {
         if self.alert.tick(dt).is_some() {
             self.pass_alerts_unclaimed();
         }
+        self.sync_pad_cells();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1488,6 +1495,8 @@ impl Screen for OutfitterScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+pub(crate) mod pad;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1690,11 +1699,11 @@ mod tests {
         }
     }
 
-    fn screen_of(outfitter: Outfitter) -> OutfitterScreen {
+    pub(super) fn screen_of(outfitter: Outfitter) -> OutfitterScreen {
         screen_with(outfitter, &art())
     }
 
-    fn screen() -> OutfitterScreen {
+    pub(super) fn screen() -> OutfitterScreen {
         screen_of(outfitter())
     }
 
@@ -1746,7 +1755,7 @@ mod tests {
         screen.input(&key(k, true, false));
     }
 
-    fn click(screen: &mut OutfitterScreen, at: Point) {
+    pub(super) fn click(screen: &mut OutfitterScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -1756,7 +1765,7 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut OutfitterScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut OutfitterScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }
@@ -2372,7 +2381,7 @@ mod tests {
     }
 
     /// `count` outfits, numbered from 200, each 10 credits and a ton.
-    fn long(count: usize) -> Outfitter {
+    pub(super) fn long(count: usize) -> Outfitter {
         Outfitter {
             rows: (0..count)
                 .map(|n| {
@@ -4077,11 +4086,11 @@ mod tests {
         }
     }
 
-    fn counting_screen() -> OutfitterScreen {
+    pub(super) fn counting_screen() -> OutfitterScreen {
         screen_of(counting())
     }
 
-    fn quantity_item(screen: &OutfitterScreen, number: usize) -> Point {
+    pub(super) fn quantity_item(screen: &OutfitterScreen, number: usize) -> Point {
         screen
             .quantity()
             .expect("asking")
@@ -4101,7 +4110,7 @@ mod tests {
             .collect()
     }
 
-    fn field_text(screen: &OutfitterScreen) -> Option<&str> {
+    pub(super) fn field_text(screen: &OutfitterScreen) -> Option<&str> {
         screen.quantity().map(|asking| asking.field().text())
     }
 
@@ -4117,7 +4126,7 @@ mod tests {
     }
 
     /// Clicks `button` with Alt held, then lets Alt go.
-    fn alt_click(screen: &mut OutfitterScreen, button: usize) {
+    pub(super) fn alt_click(screen: &mut OutfitterScreen, button: usize) {
         press(screen, Key::AltLeft);
         click_item(screen, button);
         screen.input(&key(Key::AltLeft, false, false));
@@ -4809,7 +4818,7 @@ mod tests {
 
     /// A sale of the rack refused with `refusal`, naming the rack, the
     /// widgets and the Vipers, `plural` or not.
-    fn rack_alert(refusal: OutfitRefusal, plural: bool) -> SaleAlert {
+    pub(super) fn rack_alert(refusal: OutfitRefusal, plural: bool) -> SaleAlert {
         SaleAlert {
             outfit: OutfitId(128),
             refusal,
