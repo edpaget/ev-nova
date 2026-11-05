@@ -33,8 +33,8 @@
 //!   is no target: it draws no highlight, and the next move lands on the
 //!   initial target.
 //! - **Items left out.** A host takes role-less user items whose click
-//!   does nothing out of the targets ([`Dialog::without_pad_targets`]), so
-//!   the d-pad never stops on a dead area.
+//!   does nothing out of the targets ([`Dialog::set_pad_left_out`], the
+//!   whole set each call), so the d-pad never stops on a dead area.
 //! - **Everything else** a pad button means (Back, the left stick's Up
 //!   and Down) goes through [`Dialog::command`], as its key's does.
 //! - **The highlight** ([`pad_focus::draw_highlight`]) shows only while the
@@ -90,17 +90,12 @@ impl Dialog {
         self.pad_cells = Some((item, cells));
     }
 
-    /// The dialog with `items` (from 1) taken out of the pad's targets:
-    /// role-less user items whose click does nothing.
-    #[must_use]
-    pub fn without_pad_targets(mut self, items: &[usize]) -> Self {
-        self.left_out.extend_from_slice(items);
-        self
-    }
-
-    /// Takes `items` (from 1), and only them, out of the pad's targets,
-    /// for a host whose dead areas change as it runs (the trade center's
-    /// empty slots).
+    /// Takes `items` (from 1), and only them, out of the pad's targets:
+    /// role-less user items whose click does nothing. Each call replaces
+    /// the items the last one left out, so a host whose dead areas change
+    /// as it runs (the trade center's empty slots) gives the whole set
+    /// afresh, and an empty list leaves none out. The set outlives
+    /// [`Dialog::lay_out_again`].
     pub fn set_pad_left_out(&mut self, items: Vec<usize>) {
         self.left_out = items;
     }

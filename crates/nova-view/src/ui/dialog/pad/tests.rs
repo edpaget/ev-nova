@@ -723,16 +723,30 @@ fn focus_names_items_only() {
 #[test]
 fn items_left_out_are_no_targets() {
     let template = row();
-    let dialog = self::dialog(&template).without_pad_targets(&[2]);
+    let mut dialog = self::dialog(&template);
+    dialog.set_pad_left_out(vec![2]);
     assert_eq!(ids(&dialog), [1, 3]);
-    let dialog = celled().without_pad_targets(&[4]);
+    let mut dialog = celled();
+    dialog.set_pad_left_out(vec![4]);
     assert!(!spots(&dialog).contains(&PadSpot::Item(4)));
     assert!(spots(&celled()).contains(&PadSpot::Item(4)));
 }
 
 #[test]
+fn items_left_out_again_replace_those_left_out_before() {
+    let template = row();
+    let mut dialog = self::dialog(&template);
+    dialog.set_pad_left_out(vec![2]);
+    dialog.set_pad_left_out(vec![3]);
+    assert_eq!(ids(&dialog), [1, 2], "item 2 a target again");
+    dialog.set_pad_left_out(Vec::new());
+    assert_eq!(ids(&dialog), [1, 2, 3]);
+}
+
+#[test]
 fn a_dialog_laid_out_again_keeps_a_pad_focused_cell() {
-    let mut dialog = celled().without_pad_targets(&[4]);
+    let mut dialog = celled();
+    dialog.set_pad_left_out(vec![4]);
     dialog.input(&told(PAD));
     tap(&mut dialog, PadButton::DPadUp);
     let template = DialogTemplate {

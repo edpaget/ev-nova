@@ -452,8 +452,8 @@ pub struct Dialog {
     /// The cells standing in for an item among the pad's targets, by item
     /// number (from 1), as the host draws them ([`Dialog::set_pad_cells`]).
     pad_cells: Option<(usize, Vec<Bounds>)>,
-    /// The items the host takes out of the pad's targets
-    /// ([`Dialog::without_pad_targets`]).
+    /// The items the host takes out of the pad's targets, the whole set
+    /// it gave last ([`Dialog::set_pad_left_out`]).
     left_out: Vec<usize>,
     /// Whether Tab and Space move and press a focus.
     focus_ring: FocusRing,
