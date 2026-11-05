@@ -147,10 +147,10 @@ impl MapPad {
                 self.focus.move_by_pad(&targets, INITIAL, mv);
                 PadStep::Taken
             }
+            // A disabled button arms nothing, so its release presses
+            // nothing.
             PadRead::Press => {
-                if let Some(button) = self.focus.get()
-                    && targets.iter().any(|target| target.id == button)
-                {
+                if let Some(button) = self.focus.get() {
                     buttons.press_keyed(button, state);
                     self.armed = Some(button);
                 }

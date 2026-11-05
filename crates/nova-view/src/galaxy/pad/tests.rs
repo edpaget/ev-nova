@@ -413,3 +413,16 @@ const fn name(button: MapButton) -> &'static str {
 pub(crate) fn pad_probe() -> Box<dyn PadProbe> {
     Box::new(MapProbe(map()))
 }
+
+#[test]
+fn a_cancelled_south_press_leaves_a_later_click_alone() {
+    let mut map = map();
+    map.input(&told(PAD));
+    map.input(&pad(PadButton::South, true));
+    map.cancel_pointer();
+    let find = rect(MapButton::Find).center();
+    map.input(&pointer(true, find));
+    tap(&mut map, PadButton::DPadLeft);
+    map.input(&pointer(false, find));
+    assert!(map.finding(), "the click on Find still opens it");
+}
