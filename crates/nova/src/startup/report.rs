@@ -9,9 +9,10 @@
 //! ([`Report::take_alert`]). [`Fatal`] maps each fatal startup error to its
 //! exit code and message.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::build_id::{BUILD_ID, describe};
 use crate::cli::Usage;
@@ -216,6 +217,14 @@ impl StartupLog for FileLog {
 pub enum Fatal {
     /// The command line was not understood.
     Usage,
+    /// `GAME_DATA` named the new game's data `dir`, which takes no
+    /// arguments, and these `args` were given anyway.
+    ArgumentsWithGameData {
+        /// Where `GAME_DATA` points.
+        dir: PathBuf,
+        /// The arguments given.
+        args: Vec<OsString>,
+    },
     /// No `Nova Files` were found or picked.
     NotFound(NotFound),
     /// None were found, and a quit arrived while the player was asked.
@@ -265,6 +274,7 @@ impl Fatal {
     pub fn exit(&self) -> Exit {
         let (code, message) = match self {
             Self::Usage => (2, Usage.to_string()),
+            Self::ArgumentsWithGameData { dir, args } => (2, arguments_with_game_data(dir, args)),
             Self::NotFound(not_found) | Self::Quit(not_found) => (2, not_found.to_string()),
             Self::Unreadable(error) | Self::EventLoop(error) => (1, format!("nova: {error}")),
             Self::Open(failure) => return crate::exit::exit(Some(failure)),
@@ -273,6 +283,24 @@ impl Fatal {
             code,
             message: Some(message),
         }
+    }
+}
+
+/// Why `args` were refused while `GAME_DATA` names `dir`: one is taken
+/// for a `Nova Files` folder the player meant to open, more for a mistake.
+fn arguments_with_game_data(dir: &Path, args: &[OsString]) -> String {
+    let start = format!(
+        "nova: GAME_DATA is set to {}, so the new game starts and takes no",
+        dir.display()
+    );
+    if let [arg] = args {
+        format!(
+            "{start} Nova Files argument; unset GAME_DATA to open {}, or drop the argument",
+            arg.to_string_lossy()
+        )
+    } else {
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        format!("{start} arguments; drop {}", args.join(", "))
     }
 }
 
@@ -524,6 +552,43 @@ mod tests {
             Fatal::Open(failure.clone()).exit(),
             crate::exit::exit(Some(&failure))
         );
+    }
+
+    #[test]
+    fn an_argument_with_game_data_names_both_and_exits_as_a_usage_error() {
+        let dir = Path::new("/Games").join("New Game");
+        let one = Fatal::ArgumentsWithGameData {
+            dir: dir.clone(),
+            args: vec!["/Games/Nova Files".into()],
+        };
+        assert_eq!(
+            one.exit(),
+            Exit {
+                code: 2,
+                message: Some(format!(
+                    "nova: GAME_DATA is set to {}, so the new game starts and takes no Nova \
+                     Files argument; unset GAME_DATA to open /Games/Nova Files, or drop the \
+                     argument",
+                    dir.display()
+                )),
+            }
+        );
+        let two = Fatal::ArgumentsWithGameData {
+            dir: dir.clone(),
+            args: vec!["a".into(), "b c".into()],
+        };
+        assert_eq!(
+            two.exit(),
+            Exit {
+                code: 2,
+                message: Some(format!(
+                    "nova: GAME_DATA is set to {}, so the new game starts and takes no \
+                     arguments; drop a, b c",
+                    dir.display()
+                )),
+            }
+        );
+        assert!(two.shows_alert());
     }
 
     #[test]

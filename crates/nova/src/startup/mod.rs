@@ -146,7 +146,8 @@ where
     }
     if let Some(dir) = game_dir {
         if !args.is_empty() {
-            return Err(report.fail(&Fatal::Usage, alert));
+            let fatal = Fatal::ArgumentsWithGameData { dir, args };
+            return Err(report.fail(&fatal, alert));
         }
         report.warn(&not_loaded(&dir));
         return Ok(Started {

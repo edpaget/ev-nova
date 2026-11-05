@@ -591,15 +591,18 @@ fn the_new_game_still_reads_the_settings() {
 }
 
 #[test]
-fn a_nova_files_argument_with_game_data_is_a_usage_error() {
+fn a_nova_files_argument_with_game_data_says_game_data_rejected_it() {
     let mut machine = Machine::new(&MemorySettings::new(), &[], &[]);
     machine.terminal = true;
     machine.game_data = Some(new_game_dir().into_os_string());
     machine.args = vec![OsString::from("/Games/Nova Files")];
     assert_eq!(machine.launch().err(), Some(2));
-    let usage = "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory, \
-                 or GAME_DATA to the new game's data)";
-    assert_eq!(machine.log.0.borrow()[1..], [usage.to_owned()]);
+    let rejected = format!(
+        "nova: GAME_DATA is set to {}, so the new game starts and takes no Nova Files \
+         argument; unset GAME_DATA to open /Games/Nova Files, or drop the argument",
+        new_game_dir().display()
+    );
+    assert_eq!(machine.log.0.borrow()[1..], [rejected]);
     assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
     assert_eq!(machine.panel.prompts, Vec::<String>::new());
 }
