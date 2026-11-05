@@ -96,6 +96,10 @@ pub(in crate::flight) struct FakeCatalog {
     pub(in crate::flight) ships: Vec<ShipRecord>,
     /// The ships whose sheets were asked for.
     pub(in crate::flight) sheets_asked: RefCell<Vec<ShipId>>,
+    /// Each ship type's outline: none, by default.
+    pub(in crate::flight) outlines: Vec<(i16, crate::outline::Outline)>,
+    /// The ships whose outlines were asked for.
+    pub(in crate::flight) outlines_asked: RefCell<Vec<ShipId>>,
     /// Each batch of ships whose target cards were asked for.
     pub(in crate::flight) cards_asked: RefCell<Vec<Vec<ShipId>>>,
     /// Each system's traffic: none, by default.
@@ -323,6 +327,8 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
         junk: Vec::new(),
         ships: Vec::new(),
         sheets_asked: RefCell::default(),
+        outlines: Vec::new(),
+        outlines_asked: RefCell::default(),
         cards_asked: RefCell::default(),
         traffic: Vec::new(),
         dudes: Vec::new(),
@@ -951,6 +957,15 @@ impl ShipSprites for FakeCatalog {
             }),
             other => panic!("asked for shïp {other}'s sheet"),
         }
+    }
+
+    /// The outline [`FakeCatalog::outlines`] gives the ship, if any.
+    fn ship_outline(&self, id: ShipId) -> Option<crate::outline::Outline> {
+        self.outlines_asked.borrow_mut().push(id);
+        self.outlines
+            .iter()
+            .find(|(ship, _)| *ship == id.0)
+            .map(|(_, outline)| outline.clone())
     }
 }
 

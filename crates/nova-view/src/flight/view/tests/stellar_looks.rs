@@ -242,6 +242,31 @@ fn a_rebuild_that_changes_the_stellars_shown_lays_the_scene_out_again() {
 }
 
 #[test]
+fn a_hull_with_no_sheet_reads_its_outline_when_the_ship_changes() {
+    let dart = crate::outline::Outline {
+        triangles: vec![crate::outline::OutlineTriangle {
+            corners: [at(0.0, 4.0), at(1.0, -2.0), at(-1.0, -2.0)],
+            color: Color::WHITE,
+        }],
+    };
+    let catalog = FakeCatalog {
+        outlines: vec![(130, dart.clone())],
+        ..shipbuying()
+    };
+    let mut view = faked_from(catalog, showing(130, sol()));
+    assert_eq!(view.outline, None, "ship 128 has a sheet");
+    changed(&mut view, |frame| frame.ships[0].class = ShipId(130));
+    raising(&mut view, &[SessionEvent::ShipChanged]);
+    caught_up(&mut view);
+    assert_eq!(view.outline, Some(dart), "ship 130 has none");
+    changed(&mut view, |frame| frame.ships[0].class = ShipId(129));
+    raising(&mut view, &[SessionEvent::ShipChanged]);
+    caught_up(&mut view);
+    assert_eq!(view.outline, None, "ship 129 has a sheet");
+    assert_eq!(*view.catalog().outlines_asked.borrow(), [ShipId(130)]);
+}
+
+#[test]
 fn with_the_map_open_a_catch_up_still_lays_out_and_reads_the_hull() {
     let mut view = faked_from(shipbuying(), showing(130, sol()));
     queue_map(&mut view, None, sol_drawing());

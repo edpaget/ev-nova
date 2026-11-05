@@ -3,8 +3,9 @@
 //! would be, and the [`disc`] and [`ring`] a stellar with no model draws.
 //!
 //! The new game has no sprites, so its data gives each ship type and
-//! stellar a stand-in ([`StellarStandIn`]; a ship's is an outline), which
-//! the view draws where it would draw the crossed box.
+//! stellar a stand-in ([`StellarStandIn`]; a ship's is an outline). Flight
+//! draws a ship's where it would draw the crossed box
+//! ([`ShipSprites::ship_outline`](crate::flight::catalog::ShipSprites::ship_outline)).
 //! Everything is drawn as [`DrawCommand::Triangle`]s, in the list's layer.
 //!
 //! An outline's corners are in its own space: x to starboard, y to the
@@ -65,7 +66,7 @@ pub enum StellarStandIn {
 const SEGMENTS: u16 = 32;
 
 /// A ring's inner radius, as a share of its outer.
-const RING_INNER: f32 = 0.75;
+pub const RING_INNER: f32 = 0.75;
 
 /// Draws `outline` centred on `centre`, turned to `heading` (degrees
 /// clockwise, 0 facing up the screen) and multiplied by `scale`: its

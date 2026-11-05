@@ -27,6 +27,7 @@ use crate::flight::murk::SeenMurk;
 use crate::flight::ship_layers::{Place, ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sim_port::FlightSim;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
+use crate::outline::{self, Outline};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::ticks;
@@ -294,7 +295,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The box NPC `npc` is drawn in, or none when its slot never laid out
     /// (see [`FlightView::drawn_boxes`]).
     fn npc_box(&self, npc: &FrameShip) -> Option<nova_sim::DrawnBox> {
-        let size = drawn_size(self.npc_sheets.get(&npc.framed?));
+        let framed = npc.framed?;
+        let size = drawn_size(self.npc_sheets.get(&framed), self.npc_outlines.get(&framed));
         let camera = self.camera();
         let rect = match npc.hover {
             nova_sim::HoverPlace::Own => camera.sprite_rect(self.shown_npc(npc).0, size),
@@ -310,9 +312,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     fn player_box(&self) -> nova_sim::DrawnBox {
         let player = self.drawn().player();
         let size = if player.framed == Some(player.class) {
-            drawn_size(Some(&self.sheet))
+            drawn_size(Some(&self.sheet), self.outline.as_ref())
         } else {
-            drawn_size(player.framed.and_then(|ship| self.npc_sheets.get(&ship)))
+            self.npc_drawn_size(player.framed)
         };
         nova_sim::DrawnBox::at(self.camera().sprite_rect(self.shown_position(), size))
     }
@@ -391,7 +393,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws NPC `npc` where `place` puts each of its sprites (see
     /// [`ShipDraw::draw`]) facing `heading` with its own ship's sheet,
-    /// or a crossed box when its sheet cannot be read, as its cloak leaves
+    /// or when its sheet cannot be read its type's outline turned to
+    /// `heading` ([`draw_outline`]), or else a crossed box, as its cloak leaves
     /// it ([`CloakDraw`], see [`cloak_fade`](crate::flight::cloak_fade)):
     /// jittered and faint while fading, faint or, but for a lit weapon
     /// glow, not at all at a full fade. One
@@ -451,13 +454,25 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         .shown(npc.ship, ship.drawn.alt, live, ship.hull);
                 ship.draw(list, place, alt);
             }
-            _ => crossed_box(
-                list,
-                place(placeholder_size()),
-                PLACEHOLDER_SIZE,
-                PLACEHOLDER,
-            ),
+            _ => match self.npc_outlines.get(&npc.class) {
+                Some(outline) => draw_outline(list, outline, place, heading),
+                None => crossed_box(
+                    list,
+                    place(placeholder_size()),
+                    PLACEHOLDER_SIZE,
+                    PLACEHOLDER,
+                ),
+            },
         }
+    }
+
+    /// The frame size of ships of type `framed` ([`drawn_size`]): its
+    /// sheet's, its outline's or the crossed box's.
+    fn npc_drawn_size(&self, framed: Option<nova_sim::ShipId>) -> (u32, u32) {
+        drawn_size(
+            framed.and_then(|ship| self.npc_sheets.get(&ship)),
+            framed.and_then(|ship| self.npc_outlines.get(&ship)),
+        )
     }
 
     /// NPC `npc` as drawn with `sheet` facing `heading`, its hull at
@@ -519,9 +534,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`weapon_glow`](crate::flight::weapon_glow)), alt layer and shield
     /// flash, never murked, on the frames its display picked (see the
     /// [`ship_layers`](crate::flight::ship_layers) module), all as the
-    /// frame's record of it says; or, when its sheet cannot be read, a
-    /// crossed box and the reason. The box stands in for the sprite and a
-    /// missing sheet has no layers, so only a ship drawn in full has one.
+    /// frame's record of it says; or, when its sheet cannot be read, its
+    /// type's outline turned to its shown heading ([`draw_outline`]), or
+    /// else a crossed box and the reason. The outline or box stands in for
+    /// the sprite and a missing sheet has no layers, so only a ship drawn
+    /// in full has one.
     pub(super) fn draw_ship(&self, list: &mut DrawList, place: Place<'_>, drawn: ShipDrawn) {
         if drawn == ShipDrawn::Hidden {
             self.held_alts.borrow_mut().forget(ShipRef::Player);
@@ -566,6 +583,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 ship.draw(list, place, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
+            Err(_) if let Some(outline) = &self.outline => {
+                draw_outline(list, outline, place, self.shown_heading());
+            }
             Err(reason) => {
                 let at = place(placeholder_size());
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -773,9 +793,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
             && let Some(npc) = self.drawn().ship(ShipRef::Npc(target.npc))
         {
             let (at, _) = self.shown_npc(npc);
-            let sprite = drawn_size(npc.framed.and_then(|ship| self.npc_sheets.get(&ship)));
+            let sprite = self.npc_drawn_size(npc.framed);
             let at = camera.whole_point(at);
             brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
         }
     }
+}
+
+/// Draws a ship whose sheet cannot be read by its `outline`, turned to
+/// `heading` and centred where `place` puts a frame that holds it at every
+/// heading ([`outline::extent`]), at the outline's own scale: a ship's is
+/// in pixels already.
+fn draw_outline(list: &mut DrawList, outline: &Outline, place: Place<'_>, heading: f32) {
+    outline::draw(
+        list,
+        outline,
+        place(outline::extent(outline, 1.0)),
+        heading,
+        1.0,
+    );
 }

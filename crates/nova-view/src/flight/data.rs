@@ -15,7 +15,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite, SheetScan, shot_spin_id};
+use nova_data::{GameData, LayerError, LayerSprite, SheetScan, StandIn, StandInOf, shot_spin_id};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -30,6 +30,7 @@ use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::outline::{Outline, OutlineTriangle};
 use crate::sheet_image::SheetImage;
 
 /// Scans the sheet and its layers on every call, reading their sizes,
@@ -72,6 +73,36 @@ impl ShipSprites for GameData {
             base_transp: field(|anim| anim.base_transp),
             solid: sheet.info.has_runs,
         })
+    }
+
+    /// The ship type's stand-in when it is an outline (only the new game
+    /// has stand-ins), in the view's points and colours.
+    fn ship_outline(&self, id: ShipId) -> Option<Outline> {
+        match self.stand_in(StandInOf::Ship(id))? {
+            StandIn::Outline(outline) => Some(view_outline(outline)),
+            StandIn::Disc { .. } | StandIn::Ring { .. } => None,
+        }
+    }
+}
+
+/// `outline`, as the data draws it (`f64` corners, RGB bytes), in the
+/// view's points and opaque colours.
+pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
+    // A pixel's place in an `f32`: what the view draws in.
+    #[allow(clippy::cast_possible_truncation)]
+    let point = |[x, y]: [f64; 2]| Point::new(x as f32, y as f32);
+    Outline {
+        triangles: outline
+            .triangles
+            .iter()
+            .map(|triangle| {
+                let [r, g, b] = triangle.color;
+                OutlineTriangle {
+                    corners: triangle.corners.map(point),
+                    color: Color::rgba(r, g, b, 255),
+                }
+            })
+            .collect(),
     }
 }
 
@@ -404,6 +435,59 @@ mod tests {
 
     fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
         bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// A new game's store whose ship 128 is an outline of one triangle,
+    /// ship 129 a disc and stellar 130 an outline.
+    fn with_stand_ins() -> GameData {
+        let triangle = nova_data::Outline {
+            triangles: vec![nova_data::OutlineTriangle {
+                corners: [[0.5, 4.0], [2.0, -4.0], [-2.25, -4.0]],
+                color: [0xc0, 0x80, 0x40],
+            }],
+        };
+        GameData::from_decoded(std::path::PathBuf::from("game"), Vec::new()).with_stand_ins(
+            std::collections::BTreeMap::from([
+                (
+                    StandInOf::Ship(ShipId(128)),
+                    StandIn::Outline(triangle.clone()),
+                ),
+                (
+                    StandInOf::Ship(ShipId(129)),
+                    StandIn::Disc { color: [1; 3] },
+                ),
+                (
+                    StandInOf::Stellar(nova_data::StellarId(130)),
+                    StandIn::Outline(triangle),
+                ),
+            ]),
+        )
+    }
+
+    #[test]
+    fn a_ship_s_outline_is_its_stand_in_in_view_points_and_colours() {
+        assert_eq!(
+            with_stand_ins().ship_outline(ShipId(128)),
+            Some(Outline {
+                triangles: vec![OutlineTriangle {
+                    corners: [
+                        Point::new(0.5, 4.0),
+                        Point::new(2.0, -4.0),
+                        Point::new(-2.25, -4.0)
+                    ],
+                    color: Color::rgba(0xc0, 0x80, 0x40, 255),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn a_ship_whose_stand_in_is_no_outline_or_that_has_none_has_no_outline() {
+        let data = with_stand_ins();
+        assert_eq!(data.ship_outline(ShipId(129)), None, "a disc");
+        assert_eq!(data.ship_outline(ShipId(130)), None, "a stellar's");
+        assert_eq!(GameData::default().ship_outline(ShipId(128)), None, "stock");
+        assert_eq!(store(&[]).ship_outline(ShipId(128)), None, "stock, loaded");
     }
 
     /// A `shän` with base image `base`, `sets` sets of `frames_per`

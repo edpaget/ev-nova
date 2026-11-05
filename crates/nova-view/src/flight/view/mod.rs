@@ -686,7 +686,7 @@ use nova_sim::{
 use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, SpeedMult, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
-use super::catalog::{Looks, ShipSheet, TargetCard};
+use super::catalog::{Looks, ShipSheet, ShipSprites, TargetCard};
 use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{EscortMenu, EscortMenuColors};
@@ -703,6 +703,7 @@ use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
+use crate::outline::{self, Outline};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
@@ -1408,6 +1409,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     kept_frames: KeptFrames,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
+    /// What the player's ship draws in place of `sheet` when it cannot be
+    /// shown: its type's outline, read with the sheet, only when the sheet
+    /// failed ([`outline_for`]); `None` draws the crossed box.
+    outline: Option<Outline>,
     /// The class `sheet` and `status_bar` were read for; `None` when the
     /// session failed.
     sheet_ship: Option<ShipId>,
@@ -1650,6 +1655,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     glow_rolls: HashedRolls,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
+    /// The outline of each NPC ship type whose sheet cannot be shown and
+    /// that has one, read once with its sheet ([`outline_for`]).
+    npc_outlines: BTreeMap<ShipId, Outline>,
     /// Each NPC's place a step before the frame's, in the system's order
     /// as the step reported them ([`StepRun::before`](nova_sim::flight_frame::StepRun::before)).
     npc_previous: Vec<(NpcId, ShipPlace)>,
@@ -1998,13 +2006,30 @@ impl std::fmt::Debug for Metrics {
     }
 }
 
-/// The frame size of an NPC drawn by `sheet`, the one read for its ship
-/// type if any: its crossed box's when the sheet could not be read.
-fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
-    match sheet {
-        Some(Ok(sheet)) => sheet.size(),
+/// The frame size of a ship drawn by `sheet`, the one read for its ship
+/// type if any; when the sheet could not be read, the square that holds
+/// its `outline` at every heading ([`outline::extent`]), or else its
+/// crossed box's.
+fn drawn_size(sheet: Option<&Result<ShipSheet, String>>, outline: Option<&Outline>) -> (u32, u32) {
+    match (sheet, outline) {
+        (Some(Ok(sheet)), _) => sheet.size(),
+        (_, Some(outline)) => outline::extent(outline, 1.0),
         _ => placeholder_size(),
     }
+}
+
+/// What ship type `ship` draws in place of `sheet`: its outline, asked of
+/// `catalog` only when the sheet cannot be read, so a ship with a sheet
+/// never reads one.
+fn outline_for<C: ShipSprites + ?Sized>(
+    catalog: &C,
+    ship: ShipId,
+    sheet: &Result<ShipSheet, String>,
+) -> Option<Outline> {
+    sheet
+        .as_ref()
+        .err()
+        .and_then(|_| catalog.ship_outline(ship))
 }
 
 /// The crossed box's size, as a frame's.
@@ -2126,16 +2151,17 @@ fn step_flashes(
 }
 
 /// The ships among a pass's `ships` breaking up, each with its sprite's
-/// width from `player`'s sheet or the NPCs' `sheets` (a placeholder's
-/// without one).
+/// width from the player's sheet and outline or the NPCs' sheets and
+/// outlines, as [`drawn_size`] sizes them (a placeholder's without
+/// either).
 fn dying(
     ships: &[FrameShip],
-    player: &Result<ShipSheet, String>,
+    (player, player_outline): (&Result<ShipSheet, String>, Option<&Outline>),
     sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
+    outlines: &BTreeMap<ShipId, Outline>,
 ) -> Vec<Dying> {
-    let width = |sheet: Option<&Result<ShipSheet, String>>| match sheet {
-        Some(Ok(sheet)) => sheet.frame_width as f32,
-        _ => PLACEHOLDER_SIZE,
+    let width = |sheet: Option<&Result<ShipSheet, String>>, outline: Option<&Outline>| {
+        drawn_size(sheet, outline).0 as f32
     };
     ships
         .iter()
@@ -2145,10 +2171,10 @@ fn dying(
                 starting,
             } => Some(Dying {
                 at: point(ship.position),
-                sprite_width: width(match ship.ship {
-                    ShipRef::Player => Some(player),
-                    ShipRef::Npc(_) => sheets.get(&ship.class),
-                }),
+                sprite_width: match ship.ship {
+                    ShipRef::Player => width(Some(player), player_outline),
+                    ShipRef::Npc(_) => width(sheets.get(&ship.class), outlines.get(&ship.class)),
+                },
                 explosion: ship.breakup,
                 ticks_left,
                 starting,

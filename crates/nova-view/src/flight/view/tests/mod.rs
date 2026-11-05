@@ -122,6 +122,7 @@ mod particle_pixels;
 mod port_screen_map;
 mod rescue;
 mod ship_drawing;
+mod ship_outlines;
 mod shots;
 mod stars;
 mod stellar_looks;

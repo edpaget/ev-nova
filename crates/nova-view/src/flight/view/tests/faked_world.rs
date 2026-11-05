@@ -14,6 +14,7 @@ pub(super) fn world_by(catalog: FakeCatalog, frame: FlightFrame, rules: &Ruleboo
     let mut view = scripted_over(catalog, scripted_flight(frame), rules);
     let class = view.frame.player().class;
     view.sheet = view.catalog.ship_sheet(class);
+    view.outline = super::super::outline_for(&view.catalog, class, &view.sheet);
     view.sheet_ship = Some(class);
     view.looks = looks;
     view.read_npc_sheets();
