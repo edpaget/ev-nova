@@ -141,7 +141,7 @@ mod tests {
     use super::*;
     use crate::catalog::{HullRecord, ShipId, SystemId};
     use crate::chance::NeverFires;
-    use crate::escort::{EscortCommand, EscortGroup, FormationSlot, KEEP_FORMATION};
+    use crate::escort::{EscortCommand, EscortGroup, EscortOrder, FormationSlot, KEEP_FORMATION};
     use crate::fleet::OrderWord;
     use crate::gate::{GateArrivalRule, GateKind};
     use crate::geometry::Vec2;
@@ -292,7 +292,11 @@ mod tests {
             jump_to(&mut session, &catalog, 131);
             assert_eq!(hired_npc(&session).mode, Mode::JumpingIn { tick: 0 });
             assert_eq!(hired_npc(&session).order_word, OrderWord(4), "kept");
-            assert_eq!(hired_npc(&session).escort_order(), None, "reset");
+            assert_eq!(
+                hired_npc(&session).escort_order(),
+                Some(EscortOrder::Hold),
+                "kept to the next pass's bookkeeping"
+            );
             session.command_escorts(EscortGroup::All, command, &mut NeverFires);
             assert_eq!(hired_npc(&session).order_word, OrderWord(word));
             assert_eq!(

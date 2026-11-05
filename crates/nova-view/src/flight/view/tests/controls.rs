@@ -71,8 +71,8 @@ fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
     let over = npc_on_screen(&view, id);
     assert!(over.x < VIEW_SIZE.0 - STATUS_BAR_WIDTH, "{over:?} in space");
     view.click_in_space(over);
-    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { at, drawn }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     let world = view.camera().screen_to_world(over);
     assert_eq!(*at, Vec2::new(world.x, world.y));
@@ -86,8 +86,8 @@ fn a_click_on_the_players_own_ship_lets_go_of_the_target_with_the_clear_beep() {
     let (mut view, _) = faked_with_npc();
     // The camera centres on the player, so its ship is drawn at the centre.
     view.click_in_space(PLAYER_AT);
-    let [FlightCommand::ClickInSpace { at, drawn }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { at, drawn }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     assert_eq!(*at, Vec2::ZERO, "the player's ship's centre");
     assert!(drawn.player.is_some(), "boxed");
@@ -174,7 +174,7 @@ fn a_button_press_shows_the_cursor_where_it_is() {
         "no pointer yet"
     );
     view.cursor_input(&Input::PointerButton {
-        button: MouseButton::Right,
+        button: MouseButton::Left,
         pressed: true,
         at: NOWHERE,
     });
@@ -182,6 +182,87 @@ fn a_button_press_shows_the_cursor_where_it_is() {
         cursor_sprites(&super::faked_world::world_list(&view)),
         [(0, NOWHERE)]
     );
+}
+
+/// The buttons `Button()` doesn't read (@0x3803b): only the primary one
+/// holds the cursor.
+const OTHER_BUTTONS: [MouseButton; 3] =
+    [MouseButton::Right, MouseButton::Middle, MouseButton::Other];
+
+#[test]
+fn another_button_press_shows_the_cursor_where_the_pointer_is() {
+    for button in OTHER_BUTTONS {
+        let mut view = super::faked_flight::at_rest(catalog());
+        view.cursor_input(&Input::PointerButton {
+            button,
+            pressed: true,
+            at: NOWHERE,
+        });
+        assert_eq!(
+            cursor_sprites(&super::faked_world::world_list(&view)),
+            [(0, NOWHERE)],
+            "{button:?}"
+        );
+    }
+}
+
+#[test]
+fn releasing_another_button_keeps_the_primary_hold() {
+    for other in OTHER_BUTTONS {
+        let mut view = super::faked_flight::at_rest(catalog());
+        view.cursor_input(&Input::PointerMoved(NOWHERE));
+        let press = |button, pressed| Input::PointerButton {
+            button,
+            pressed,
+            at: NOWHERE,
+        };
+        view.cursor_input(&press(MouseButton::Left, true));
+        view.cursor_input(&press(other, true));
+        view.cursor_input(&press(other, false));
+        super::faked_flight::ticked(&mut view, 40);
+        assert_eq!(faked_cursor_alpha(&view), Some(255), "{other:?}");
+    }
+}
+
+#[test]
+fn a_button_other_than_the_primary_does_not_hold_the_cursor() {
+    for button in OTHER_BUTTONS {
+        let mut view = super::faked_flight::at_rest(catalog());
+        view.cursor_input(&Input::PointerMoved(NOWHERE));
+        view.cursor_input(&Input::PointerButton {
+            button,
+            pressed: true,
+            at: NOWHERE,
+        });
+        super::faked_flight::ticked(&mut view, 40);
+        assert!(
+            faked_cursor_alpha(&view).is_some_and(|alpha| alpha < 255),
+            "{button:?}: idle"
+        );
+    }
+}
+
+#[test]
+fn a_press_of_another_button_where_the_pointer_rests_does_not_restamp() {
+    for button in OTHER_BUTTONS {
+        let mut view = super::faked_flight::at_rest(catalog());
+        view.cursor_input(&Input::PointerMoved(NOWHERE));
+        super::faked_flight::ticked(&mut view, 40);
+        let fading = faked_cursor_alpha(&view).expect("shown");
+        assert!(fading < 255, "fading first");
+        for pressed in [true, false] {
+            view.cursor_input(&Input::PointerButton {
+                button,
+                pressed,
+                at: NOWHERE,
+            });
+        }
+        super::faked_flight::ticked(&mut view, 1);
+        assert!(
+            faked_cursor_alpha(&view).is_some_and(|alpha| alpha <= fading),
+            "{button:?}: not restamped"
+        );
+    }
 }
 
 #[test]
@@ -331,8 +412,8 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
         "{boxed:?} at {was:?}"
     );
     view.click_in_space(was);
-    let [FlightCommand::ClickInSpace { drawn, .. }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { drawn, .. }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "the box sent");
 }

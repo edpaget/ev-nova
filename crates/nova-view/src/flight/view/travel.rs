@@ -84,6 +84,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // (`FlightCommand::gate`).
         self.board_frame(board);
         self.jump_frame(jump);
+        self.escort_commands_frame();
     }
 
     /// The course map's close, the hypergate's entry left to
@@ -377,7 +378,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Only [`MapOpening::Plain`] keeps any flight key held: any other
     /// map's releases go to the screen under it, not to flight, so a key
     /// kept there would outlive the take-off.
+    ///
+    /// The opening's tidy of the course goes first
+    /// ([`FlightCommand::OpenSystemMap`], `_DoSystemMap` @0x12338-0x12394),
+    /// whoever opens the map: a command, not part of the ask, as it can
+    /// change the course the frame shows, so Clear Route reads the course
+    /// the tidy left, as @0x12396-0x123c3 does.
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
+        let _ = self.send(FlightCommand::OpenSystemMap);
         let marks = by.marks_from();
         let open = match self.sim.screen(ScreenAsk::MapOpening { marks }) {
             ScreenAnswer::MapOpening(open) => Some(open),
@@ -450,6 +458,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         self.map.show_border_sources(borders);
         self.map_seen = Some(self.frame.map_key.clone());
+        self.show_map_panel(panel);
+    }
+
+    /// Shows `panel` on the course map, in cheat mode
+    /// ([`MapPanel::with_cheats`](nova_sim::map_panel::MapPanel::with_cheats))
+    /// when the cheats setting is on ([`FlightOverlays::cheats`](super::FlightOverlays::cheats)),
+    /// as `_MapDialogUpdate` reads `_cheatsActive`.
+    fn show_map_panel(&mut self, panel: nova_sim::map_panel::MapPanel) {
+        let panel = if self.overlays.cheats {
+            panel.with_cheats()
+        } else {
+            panel
+        };
         self.map.show_panel(panel);
     }
 
@@ -463,7 +484,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             selected: self.map.selected(),
             hypergate: offered,
         }) {
-            self.map.show_panel(*panel);
+            self.show_map_panel(*panel);
         }
     }
 
@@ -600,7 +621,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// feeds ([`FlightView::note_pad`]), as flight's own reader never sees
     /// the chord's Start go down there. Its release is the map key's
     /// whichever of the chord's buttons goes up first.
-    pub(super) fn is_map_key(&self, input: &Input) -> bool {
+    #[must_use]
+    pub fn is_map_key(&self, input: &Input) -> bool {
         let reader = if matches!(input, Input::PadButton { .. }) && !self.plain_map_open() {
             &self.pad_down
         } else {

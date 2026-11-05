@@ -5,11 +5,13 @@
 //!
 //! **Readers.** The nav area draws by the mode (`_DrawStatusNav` −1 / 2 /
 //! 3 @0x4a044, @0x4a09e, @0x4a198), and the radar hides its centre arrow
-//! in mode 3, whatever the selection (@0x49cf5). J jumps only in mode 3
-//! to the system selected, when the ship can jump there
-//! (@0x6b11e-0x6b131): [`Session::begin_jump`] and
-//! [`Session::jump_readiness`] read the selection, resolved by place, not
-//! the course. The stellar selection ([`Session::nav_target`]) is read in
+//! in mode 3, whatever the selection (@0x49cf5). J jumps in mode 3
+//! whenever the selection stands in a Con slot (+0x6c ≠ −1,
+//! @0x6b11e-0x6b131): a self-listed slot and one with no visible system
+//! at its place too ([`Chart::jump_selection`]).
+//! [`Session::begin_jump`] and [`Session::jump_readiness`] read the
+//! selection, not the course; the nav area and the map read it resolved
+//! by place. The stellar selection ([`Session::nav_target`]) is read in
 //! mode 2 only: by the nav brackets (`_HandleNavTargetSprites`
 //! @0x2fcbf-0x2fccf), the land key (@0x6a8ed, @0x6a945), the person
 //! offers and hailing (`_HandlePlayerCommunication` @0x61fac-0x61fbf).
@@ -42,8 +44,9 @@
 //!   can jump to from here, mode 3 with it selected (@0xe33c-0xe34d).
 //!   When the first hop has no visible system at its place, by
 //!   [`RuleKey::CueUnplacedHop`]'s engine reading, mode 3 with the first
-//!   Con slot that has none either, which reads as no destination (a −1
-//!   = −1 match, @0xe334). Otherwise nothing changes. It makes no sound.
+//!   Con slot that has none either (a −1 = −1 match, @0xe334), which the
+//!   nav area and the map read as no destination, and J jumps to unless
+//!   the slot names no `sÿst`. Otherwise nothing changes. It makes no sound.
 //! - Hyper Select, `\` ([`Session::select_next_system`],
 //!   @0x69bb2-0x69cec): with a Con slot that holds a link,
 //!   [`SimSound::HyperSelected`] (@0x69c89), and mode 3 with the next such
@@ -641,14 +644,44 @@ impl Chart {
         self.nav.stellar()
     }
 
-    /// The system J jumps to: the one selected in mode 3, resolved by
-    /// place, when the ship can jump there from here (@0x6b11e-0x6b131).
+    /// The system J jumps to. `_HandlePlayer`'s gate tests only mode 3
+    /// and +0x6c ≠ −1 (@0x6b11e-0x6b131), and no later read of +0x6c asks
+    /// whether the slot is valid, so J goes ahead whenever the selection
+    /// stands in one of the current system's Con slots
+    /// ([`Chart::selected_slot`]): a slot naming the current system
+    /// itself, which jumps back into it, and a slot whose system has no
+    /// visible system at its place, which jumps into that hidden system
+    /// for the refresh to move the player out (@0x998f1-0x999a4). It
+    /// gives the system standing for the slot's place when there is one,
+    /// else the slot's raw target (@0x6bd3a-0x6bd47): both share a place,
+    /// so the bearing is the same.
+    ///
+    /// A slot naming an ID with no `sÿst` (the cue's dead slot, such as
+    /// 999) is left out: the original reads a record no `sÿst` filled for
+    /// the bearing (@0x6b097-0x6b0a2, @0x6bc33-0x6bc56) and writes the ID
+    /// to +0x74 (@0x6be0b), which can't be replicated, so J refuses it.
+    ///
+    /// By [`HyperlinkRule::BothWays`](crate::hyperspace::HyperlinkRule::BothWays)
+    /// J also takes a selection with no slot that the rule's jumps hold,
+    /// a system linking to this one alone; by the engine's rule those
+    /// jumps all stand in a slot already.
     pub(super) fn jump_selection(&self, pilot: &Pilot, setup: &Setup) -> Option<SystemId> {
-        let NavMode::Hyperspace(Some(selected)) = self.nav_mode() else {
+        if !matches!(self.nav, NavMode::Hyperspace(Some(_))) {
             return None;
-        };
-        let jumps = self.galaxy.map().jumps(pilot.system, setup.hyperlinks);
-        jumps.contains(&selected).then_some(selected)
+        }
+        let stand_in = self.nav_mode().hyperspace();
+        let by_slot = self
+            .selected_link(pilot)
+            .filter(|&raw| self.galaxy.exists(raw))
+            .map(|raw| stand_in.unwrap_or(raw));
+        by_slot.or_else(|| {
+            stand_in.filter(|system| {
+                self.galaxy
+                    .map()
+                    .jumps(pilot.system, setup.hyperlinks)
+                    .contains(system)
+            })
+        })
     }
 
     /// Writes the nav mode and its selection, as each of the original's
@@ -810,10 +843,13 @@ impl Chart {
     /// with no `sÿst`, gives mode 3 with that slot, raw, and the slot noted
     /// (@0xe33c-0xe34d). An ID outside 128-2175 is an empty slot, as the
     /// loader sets it to −1 (`_LoadObjectData` @0x7806d-0x780b8). The
-    /// selection reads as none ([`Session::nav_mode`]), J refuses it, and
-    /// the map draws no mode-3 link for it, as `_DrawMap` skips a slot
-    /// resolving to −1 (@0xec25-0xec2b). By the other reading nothing
-    /// changes.
+    /// selection reads as none ([`Session::nav_mode`]), and the map draws
+    /// no mode-3 link for it, as `_DrawMap` skips a slot
+    /// resolving to −1 (@0xec25-0xec2b). J takes a slot to a hidden
+    /// system, jumping into the slot's raw system, which the refresh's move
+    /// then leaves for the chain head at its place (@0x99929-0x999a4); it
+    /// refuses an ID with no `sÿst` ([`Chart::jump_selection`]). By the
+    /// other reading nothing changes.
     fn cue_unplaced_hop(&mut self, pilot: &Pilot, setup: &Setup) {
         if setup.rules.source_for(RuleKey::CueUnplacedHop) != RuleSource::Engine {
             return;
@@ -991,6 +1027,19 @@ impl Chart {
         })
     }
 
+    /// The raw Con target of the slot the mode-3 selection stands in
+    /// ([`Chart::selected_slot`]), as the original reads `sÿst` +0xa
+    /// indexed by +0x6c, unresolved (@0x6b090-0x6b097, @0x6bd3a-0x6bd47):
+    /// `None` outside mode 3, with nothing selected, or when no Con slot
+    /// stands for the selection.
+    pub(super) fn selected_link(&self, pilot: &Pilot) -> Option<SystemId> {
+        let NavMode::Hyperspace(Some(selected)) = self.nav else {
+            return None;
+        };
+        let slot = self.selected_slot(pilot, selected)?;
+        self.galaxy.con_slots(pilot.system).get(slot).copied()
+    }
+
     /// What +0x6c holds as the map's cycle starts, the slot it steps on
     /// from (see [`Session::cycle_map_selection`]): in mode 3 the slot the
     /// selection stands in; in mode 2 with a stellar, by the engine's
@@ -1141,7 +1190,9 @@ mod tests {
     use crate::control::SetExpr;
     use crate::flight::Controls;
     use crate::gate::GateRefusal;
-    use crate::hyperspace::{HyperSelectRule, JumpReadiness, JumpRefusal, RouteError};
+    use crate::hyperspace::{
+        HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, RouteError,
+    };
     use crate::landing::LandOutcome;
     use crate::pilot::Pilot;
     use crate::session::LandPress;
@@ -1704,6 +1755,146 @@ mod tests {
         }
     }
 
+    /// The bearing J's pre-jump turn aims for, read just after J, while
+    /// the ship still brakes (`Jump::PreJump`).
+    fn pre_jump_bearing(session: &Session) -> Option<i16> {
+        match session.mode.jump() {
+            Some(Jump::PreJump { bearing, .. }) => bearing,
+            other => panic!("not braking for the jump: {other:?}"),
+        }
+    }
+
+    /// The date and fuel after a plain jump from 130 to `to` over
+    /// `catalog`: one jump's days and fuel, whatever the distance.
+    fn plain_jump(catalog: &FakePilotCatalog, to: i16) -> (crate::GameDate, f32) {
+        let mut session = Session::start(catalog).expect("starts");
+        session.chart.nav = hyperspace(to);
+        fly_out(&mut session, catalog);
+        assert_eq!(begin_jump_now(&mut session, catalog), Ok(SystemId(to)));
+        session.arrive(catalog, &mut NeverFires).expect("arrives");
+        (session.date(), session.pilot.reserves.fuel.now)
+    }
+
+    #[test]
+    fn j_jumps_on_a_self_listed_slot_back_into_the_system() {
+        // `hub`'s 130 lists itself in slot 3. J's gate tests only mode 3
+        // and +0x6c ≠ −1 (@0x6b11e-0x6b131), and the jump goes to the
+        // slot's raw target (@0x6bd3a-0x6bd47).
+        use crate::jump_arrival::ARRIVAL_RADIUS;
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts").with_rules(
+            Rulebook::default().with_override(RuleKey::JumpArrival, RuleSource::Engine),
+        );
+        for _ in 0..4 {
+            session.select_next_system();
+        }
+        assert_eq!(session.chart.nav, hyperspace(130));
+        assert_eq!(
+            session.chart.selected_slot(&session.pilot, SystemId(130)),
+            Some(3)
+        );
+        fly_out(&mut session, &catalog);
+        session.take_sounds();
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+        assert_eq!(session.begin_jump(), Ok(SystemId(130)));
+        assert_eq!(pre_jump_bearing(&session), Some(0), "one place gives 0");
+        assert!(
+            !session.take_sounds().contains(&SimSound::Refused),
+            "no refusal beep"
+        );
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(130)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(130))
+        );
+        assert_eq!(
+            (session.date(), session.pilot.reserves.fuel.now),
+            plain_jump(&catalog, 134),
+            "one jump's days and fuel"
+        );
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        // Bearing 0, so 1350 out at 180 (@0x6bc0d-0x6bccd).
+        let expected = crate::trig::accel(180, ARRIVAL_RADIUS);
+        assert!(
+            (session.player().position - expected).length() < 1e-3,
+            "{:?}",
+            session.player().position
+        );
+    }
+
+    #[test]
+    fn j_jumps_on_a_slot_with_no_visible_system_and_the_refresh_brings_the_player_out() {
+        // 130 lists 131 and 132; the course's 132 is hidden with nothing
+        // at its place, so the cue writes its slot (@0xe334).
+        let fixture = || {
+            let mut catalog = catalog();
+            catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 132]);
+            hideable(&mut catalog);
+            catalog
+        };
+        let catalog = fixture();
+        let mut session = unplaced(fixture(), RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.chart.nav, hyperspace(132));
+        assert_eq!(
+            session.nav_mode(),
+            NavMode::Hyperspace(None),
+            "precondition"
+        );
+        fly_out(&mut session, &catalog);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+        assert_eq!(session.begin_jump(), Ok(SystemId(132)));
+        // The turn reads the raw target's own position (@0x6b097-0x6b0a2).
+        let to_132 = crate::trig::intercept_angle(
+            crate::geometry::Vec2::ZERO,
+            crate::geometry::Vec2::new(600.0, 600.0),
+        );
+        assert_eq!(pre_jump_bearing(&session), Some(to_132));
+        assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(132)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert!(
+            session.galaxy().visible(SystemId(132)),
+            "the chain head made visible (@0x999a4)"
+        );
+        assert_eq!(
+            (session.date(), session.pilot.reserves.fuel.now),
+            plain_jump(&catalog, 131),
+            "one jump's days and fuel"
+        );
+    }
+
+    #[test]
+    fn j_still_refuses_a_slot_naming_no_system_record() {
+        // `hub`'s 999 has no `sÿst`: the original's J reads memory no
+        // record filled (@0x6b097-0x6b0a2, @0x6be0b), so ours refuses it.
+        let mut session = unplaced(hub(), RuleSource::Engine);
+        session.cue_course();
+        assert_eq!(session.chart.nav, hyperspace(999));
+        fly_out(&mut session, &hub());
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    #[test]
+    fn by_both_ways_j_takes_a_back_link_with_no_slot() {
+        // 136 lists 130, and 130 has no slot for 136.
+        let catalog = hub();
+        for (rule, expected) in [
+            (HyperlinkRule::Engine, Err(JumpRefusal::NoDestination)),
+            (HyperlinkRule::BothWays, Ok(SystemId(136))),
+        ] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_hyperlinks(rule);
+            session.chart.nav = hyperspace(136);
+            fly_out(&mut session, &catalog);
+            assert_eq!(session.begin_jump(), expected, "{rule:?}");
+        }
+    }
+
     // The arrival, the landing and the take-off.
 
     #[test]
@@ -2155,8 +2346,6 @@ mod tests {
             "no link drawn"
         );
         assert_eq!(session.take_sounds(), [], "silent");
-        fly_out(&mut session, &hub());
-        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert!(session.cycle_map_selection());
         assert_eq!(session.chart.nav, hyperspace(135), "after the slot noted");
     }

@@ -1,9 +1,12 @@
 //! The program edge shared by the stock-data test modules.
 //!
-//! This module is the only place `NOVA_DATA` and `NOVA_DATA_REZ` are read.
-//! The game data is copyrighted and never committed, so each stock test asks
-//! [`nova_data`] for the Mac `Nova Files` directory (or [`nova_data_rez`] for
-//! the Windows one, of `.rez` files) and skips, passing, when it is unset.
+//! This module is the only place `NOVA_DATA`, `NOVA_DATA_REZ` and
+//! `GAME_DATA` are read. The game data is copyrighted and never committed,
+//! so each stock test asks [`nova_data`] for the Mac `Nova Files` directory
+//! (or [`nova_data_rez`] for the Windows one, of `.rez` files) and skips,
+//! passing, when it is unset. The new game's sample data lives in the
+//! game-bible checkout, so the sample tests ask [`game_data`] for its
+//! `data` folder and skip the same way.
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +20,12 @@ pub fn nova_data() -> Option<PathBuf> {
 /// (after printing a skip message) when it is unset.
 pub fn nova_data_rez() -> Option<PathBuf> {
     env_dir("NOVA_DATA_REZ")
+}
+
+/// The new game's data folder named by `GAME_DATA` (game-bible's `data`),
+/// or `None` (after printing a skip message) when it is unset.
+pub fn game_data() -> Option<PathBuf> {
+    env_dir("GAME_DATA")
 }
 
 fn env_dir(var: &str) -> Option<PathBuf> {

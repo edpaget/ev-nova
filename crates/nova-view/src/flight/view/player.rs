@@ -154,7 +154,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let answer = self.send(FlightCommand::PressFaded(FadedPress::PlayerInfo));
         let faded = answer == Answer::PlayerInfoFaded;
         if faded {
-            self.keep_unlatched_keys();
+            self.latch_at_site();
         }
         faded
     }

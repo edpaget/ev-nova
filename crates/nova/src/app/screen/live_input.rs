@@ -18,18 +18,20 @@
 //! Ours has no live read: flight sees only the events it is given, and
 //! while a dialog is over it, or the spaceport takes its place, the router
 //! gives them to that instead, so flight lets go of its keys as one opens.
-//! So the router keeps what is down meanwhile, and what was down as
-//! flight's input went away ([`LiveInput`]), and, as flight shows again
-//! with nothing in front, hands both to flight once
+//! So the router keeps what is down meanwhile, and what was down at
+//! flight's last poll ([`LiveInput`]), and, as flight shows again with
+//! nothing in front, hands both to flight once
 //! ([`FlightView::take_back_live_input`]), which keeps of them what it
-//! reads live and decides which close's rule applies: the router passes
+//! reads live and decides which close's rule applies, and which latched
+//! keys it read on their press since that poll: the router passes
 //! physical state only. Leaving flight any other way hands nothing back.
 //!
 //! - The latched keys flight gives back, pressed under a dialog no site
 //!   follows and still down, are replayed to it as fresh presses, in the
-//!   order it gives them ([`AppScreen::replay_live_presses`]). B and L are
-//!   never among them: no site sets their latches, so flight holds them
-//!   as it holds the unlatched keys and reads them at its next pass. A press key
+//!   order it gives them ([`AppScreen::replay_live_presses`]). B, L and
+//!   the escort commands F, D, V and C are never among them: no site sets
+//!   their latches, so flight holds them as it holds the unlatched keys
+//!   and reads them at its next pass. A press key
 //!   acts at the close's entry point, where the original acts at the next
 //!   pass's `_HandlePlayer`; no frame is drawn between the two, as flight
 //!   steps only in a tick and the close's tick steps none, so this
@@ -63,9 +65,9 @@ use nova_view::{CommandReader, Input, MouseButton, SharedBindings};
 use super::{AppScreen, Side};
 
 /// The keys and the primary button physically down, as live input has
-/// told, the keys down at flight's last poll or as its input last went
-/// away ([`LiveKeys::down_before`]), and whether flight's input was away
-/// when last settled.
+/// told, the keys down at flight's last poll
+/// ([`LiveKeys::down_before`]), and whether flight's input was away when
+/// last settled.
 #[derive(Clone, Debug, Default)]
 pub(super) struct LiveInput {
     keys: KeysDown,
@@ -119,9 +121,8 @@ impl LiveInput {
     }
 
     /// Forgets everything down: the input is lost, and the releases may
-    /// never come. What was down before flight's input went away stays,
-    /// as a latched key down then read its latch set, whatever happened
-    /// after.
+    /// never come. What was down at flight's last poll stays, as a
+    /// latched key down then read its latch set, whatever happened after.
     pub(super) fn forget(&mut self) {
         self.keys.let_go();
         self.button = false;
@@ -135,19 +136,14 @@ impl LiveInput {
     }
 
     /// Takes where flight's input is `now`: whether it has just come back
-    /// from away, so is to be handed back, once. On the step into away,
-    /// what is down joins what the last poll read: ours acts on some
-    /// latched keys' presses (Y, P, Tab and the rest) rather than at the
-    /// poll, so one pressed since was read as the original's poll would.
+    /// from away, so is to be handed back, once. What is down on the step
+    /// into away doesn't join what the last poll read: of the latched
+    /// keys pressed since, flight knows which it read on their press
+    /// (`FlightView::take_back_live_input`), and the router passes the
+    /// physical state only.
     pub(super) fn settle(&mut self, now: FlightInput) -> bool {
         let back = self.away && now == FlightInput::Back;
-        let away = now == FlightInput::Away;
-        if away && !self.away {
-            for press in self.keys.presses() {
-                self.down_before.follow(&press);
-            }
-        }
-        self.away = away;
+        self.away = now == FlightInput::Away;
         back
     }
 
@@ -318,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn it_keeps_what_was_down_at_flights_last_poll_and_as_its_input_went_away() {
+    fn it_keeps_what_was_down_at_flights_last_poll() {
         let (j, one, two) = (Key::KeyJ, Key::Digit1, Key::Digit2);
         let mut live = LiveInput::default();
         live.note(&key(j, true));
@@ -327,13 +323,13 @@ mod tests {
         live.note(&key(j, false));
         live.note(&key(one, true));
         live.settle(FlightInput::Away);
-        assert_eq!(down_before(&live), [one, j], "the poll's and the step's");
+        assert_eq!(down_before(&live), [j], "the poll's, not the step's");
         live.note(&key(two, true));
         live.settle(FlightInput::Away);
-        assert_eq!(down_before(&live), [one, j], "not while away");
+        assert_eq!(down_before(&live), [j], "not while away");
         assert_eq!(down(&live), [one, two]);
         live.forget();
-        assert_eq!(down_before(&live), [one, j], "kept");
+        assert_eq!(down_before(&live), [j], "kept");
         live.settle(FlightInput::Back);
         live.poll();
         assert_eq!(down_before(&live), [], "the next poll's");

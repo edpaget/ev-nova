@@ -50,7 +50,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }));
         let faded = answer == Answer::Hailed(Hailed::Faded);
         if faded {
-            self.keep_unlatched_keys();
+            self.latch_at_site();
         }
         self.take_hail_answer(answer);
         faded || self.hail_opened()
@@ -99,14 +99,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// queued in the flight, its before-movie first, for the router to
     /// show over flight. Either way `_SetAllKeyCmdFlags` follows
     /// `_OfferOneMission` (@0x622ac, @0x65956 through the board), so the
-    /// close latches every key down ([`FlightView::latch_at_close`]): the
-    /// offer's, its accept texts', or with neither the next pass's.
+    /// offer's close latches every key down
+    /// ([`FlightView::latch_at_close`]), and a mission accepted at once
+    /// latches the keys held then, in the pass, and its accept texts'
+    /// close ([`FlightView::latch_at_site`]).
     pub(super) fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
             self.let_go_into_dialog();
         } else {
-            self.latch_at_close();
+            self.latch_at_site();
         }
     }
 

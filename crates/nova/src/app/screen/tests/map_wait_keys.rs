@@ -6,14 +6,14 @@ use super::*;
 // real router.
 
 /// Presses and lets go of `k`.
-fn tap(screen: &mut AppScreen, k: Key) {
+pub(super) fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, true));
     screen.input(&key(k, false));
 }
 
 /// Taps the letter key `k` as the platform sends it: its press, the
 /// character it types, its release.
-fn type_tap(screen: &mut AppScreen, k: Key) {
+pub(super) fn type_tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, true));
     screen.input(&Input::Text(
         nova_view::key_letter(k).expect("a letter key"),
@@ -23,7 +23,7 @@ fn type_tap(screen: &mut AppScreen, k: Key) {
 
 /// Opens the map from what is shown and lets M go, then starts its wait:
 /// M down again on the open map.
-fn start_the_wait(screen: &mut AppScreen) {
+pub(super) fn start_the_wait(screen: &mut AppScreen) {
     tap(screen, MAP);
     assert!(flight(screen).map_open(), "opened");
     screen.input(&key(MAP, true));
@@ -31,7 +31,7 @@ fn start_the_wait(screen: &mut AppScreen) {
 }
 
 /// Lets M go, ending the wait.
-fn end_the_wait(screen: &mut AppScreen) {
+pub(super) fn end_the_wait(screen: &mut AppScreen) {
     screen.input(&key(MAP, false));
     assert!(!flight(screen).map_open(), "closed");
 }
@@ -119,6 +119,29 @@ fn a_key_tapped_during_a_wait_on_the_exchanges_map_acts_on_it_after_the_close() 
     assert_eq!(free(&screen), before, "not yet");
     end_the_wait(&mut screen);
     assert!(free(&screen) < before, "bought");
+}
+
+#[test]
+fn a_count_typed_during_a_wait_on_the_exchanges_map_is_ordered_after_the_close() {
+    // `_DoQuantityDialog` (@0x56d5b) never flushes, so its `ModalDialog`
+    // reads the queued digit into the count.
+    let store = MemoryPilots::new();
+    let mut screen = landed_trader(&store);
+    click_port_item(&mut screen, 7);
+    start_the_wait(&mut screen);
+    screen.input(&key(Key::AltLeft, true));
+    screen.input(&key(Key::KeyB, true));
+    screen.input(&Input::Text('b'));
+    screen.input(&key(Key::KeyB, false));
+    screen.input(&key(Key::Digit5, true));
+    screen.input(&Input::Text('5'));
+    screen.input(&key(Key::Digit5, false));
+    tap(&mut screen, Key::Enter);
+    screen.input(&key(Key::AltLeft, false));
+    assert_eq!(pilot(&screen).held(FOOD), 0, "nothing bought yet");
+    end_the_wait(&mut screen);
+    assert_eq!(pilot(&screen).held(FOOD), 5, "the count typed, not 10");
+    assert_eq!(pilot(&screen).cash(), 1000 - 5 * 75);
 }
 
 #[test]
@@ -266,7 +289,7 @@ fn a_key_that_closes_the_exchange_passes_the_next_on_to_the_spaceport() {
 }
 
 /// [`offered_over_flight`] with its map open and waiting.
-fn offer_map_waiting() -> AppScreen {
+pub(super) fn offer_map_waiting() -> AppScreen {
     let mut screen = offered_over_flight();
     screen.input(&key(MAP, true));
     screen.input(&key(Key::Escape, true));
@@ -328,6 +351,27 @@ fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() 
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
+}
+
+#[test]
+fn an_unlatched_key_let_go_under_the_player_info_a_replay_opened_reads_up_in_flight() {
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    screen.input(&key(Key::ArrowUp, true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    end_the_wait(&mut screen);
+    assert_eq!(
+        screen.showing(),
+        Showing::PlayerInfo,
+        "opened by the replay"
+    );
+    screen.input(&key(Key::ArrowUp, false));
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    tap(&mut screen, Key::Enter);
+    type_tap(&mut screen, Key::KeyN);
+    assert_eq!(screen.showing(), Showing::Flight, "both closed");
+    screen.tick(TICK * 3);
+    assert_eq!(ship(&screen).velocity, still.velocity, "no thrust");
 }
 
 #[test]

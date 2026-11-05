@@ -270,6 +270,23 @@ fn the_pickup_refused_for_room_latches_its_texts_close() {
 }
 
 #[test]
+fn the_pickup_refused_for_room_latches_the_keys_held_at_once_and_holds_back_a_press() {
+    // `_SetAllKeyCmdFlags` (@0x6535a) runs in the pass, the refusal's text
+    // only queued: J held is latched now, and Tab pressed before the next
+    // poll finds its latch set.
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoRoomForCargo));
+    view.hold_key(JUMP_KEY);
+    view.board();
+    assert!(view.latched_key(JUMP_KEY), "held: latched");
+    assert!(!view.holds_key(JUMP_KEY));
+    view.input(&key(TARGET_KEY, true));
+    assert!(view.latched_key(TARGET_KEY), "pressed: waits");
+    assert!(!view.holds_key(TARGET_KEY));
+}
+
+#[test]
 fn the_other_refusals_mark_no_site() {
     let mut view = sol();
     view.sim
@@ -279,22 +296,23 @@ fn the_other_refusals_mark_no_site() {
 }
 
 #[test]
-fn a_pickup_that_fits_latches_the_keys_held_at_the_next_pass() {
+fn a_pickup_that_fits_latches_the_keys_held_at_once() {
+    // `_SetAllKeyCmdFlags` (@0x6535a) runs in the pass, before J's read
+    // (@0x6b0e6).
     let picked = MissionBoardLine::Retrieved { cargo: None };
     let mut view = sol();
     view.sim
         .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(picked.clone()))));
     view.hold_key(JUMP_KEY);
     view.board();
-    view.tick(TICK);
     assert!(view.latched_key(JUMP_KEY), "latched");
+    assert!(!view.holds_key(JUMP_KEY));
     // A failed mission's ship takes the same pickup, then the plunder.
     let mut view = sol();
     view.sim.queue_event(FlightEvent::BoardLine(picked));
     view.sim.queue_answer(Answer::Boarded(Boarding::Repelled));
     view.hold_key(JUMP_KEY);
     view.board();
-    view.tick(TICK);
     assert!(view.latched_key(JUMP_KEY), "latched by the pickup");
 }
 

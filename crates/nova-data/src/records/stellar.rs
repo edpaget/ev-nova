@@ -27,7 +27,7 @@ pub struct Stellar {
     /// Bible `Type` (offset 0x04, i16): graphic, 0-255 (`spïn` 1000+).
     pub graphic_type: i16,
     /// Bible `Flags` (offset 0x06, u32): services and commodity price
-    /// levels.
+    /// levels; the service bits are in [`flags`].
     pub flags: Flags32,
     /// Bible `Tribute` (offset 0x0A, i16): daily tribute when dominated; -1
     /// or 0 for the default.
@@ -119,10 +119,51 @@ impl Record for Stellar {
     const SIZE: Option<usize> = Some(1118);
 }
 
+/// The Bible's service bits of [`Stellar::flags`], the one place they are
+/// spelled out: the new game's mapping sets them, and
+/// `nova_sim_state::StellarFlags` reads them for landing.
+pub mod flags {
+    /// Can land or dock here.
+    pub const CAN_LAND: u32 = 0x01;
+    /// Has a commodity exchange.
+    pub const TRADE_CENTER: u32 = 0x02;
+    /// Has an outfitter.
+    pub const OUTFITTER: u32 = 0x04;
+    /// Has a shipyard.
+    pub const SHIPYARD: u32 = 0x08;
+    /// Is a station, not a planet.
+    pub const STATION: u32 = 0x10;
+    /// Is uninhabited: no refuelling, no services, and `MinStatus` is
+    /// ignored.
+    pub const UNINHABITED: u32 = 0x20;
+    /// Has a bar.
+    pub const BAR: u32 = 0x40;
+    /// Can be landed on only once it has been destroyed.
+    pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::buf;
+
+    #[test]
+    fn the_flag_bits_are_the_bibles() {
+        use flags::*;
+        assert_eq!(
+            [
+                CAN_LAND,
+                TRADE_CENTER,
+                OUTFITTER,
+                SHIPYARD,
+                STATION,
+                UNINHABITED,
+                BAR,
+                ONLY_WHEN_DESTROYED
+            ],
+            [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80]
+        );
+    }
 
     #[test]
     fn fields_sit_at_their_bible_offsets() {

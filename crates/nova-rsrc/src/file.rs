@@ -66,6 +66,18 @@ impl ResourceFile {
         }
     }
 
+    /// A file holding no resources, read as a fork: what a store of
+    /// records decoded elsewhere attributes them to, as there are no
+    /// bytes to read them from.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            bytes: Vec::new(),
+            types: Vec::new(),
+            format: Format::Fork,
+        }
+    }
+
     fn new(bytes: Vec<u8>, index: parse::Index, format: Format) -> Self {
         Self {
             bytes,
@@ -304,6 +316,17 @@ mod tests {
                 .resource(DESC, 0, None, b"desc")
                 .attributes(0x20),
         )
+    }
+
+    #[test]
+    fn the_empty_file_holds_no_resources() {
+        let file = ResourceFile::empty();
+        assert_eq!(file.types().count(), 0);
+        assert_eq!(file.len(), 0);
+        assert!(file.is_empty());
+        assert_eq!(file.iter().count(), 0);
+        assert!(file.get(PICT, 128).is_none());
+        assert_eq!(file.format(), Format::Fork);
     }
 
     #[test]

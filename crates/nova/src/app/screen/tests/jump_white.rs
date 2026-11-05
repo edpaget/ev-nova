@@ -205,6 +205,9 @@ fn m_on_a_collapse_under_the_white_opens_nothing_and_a_tap_after_it_opens_the_ma
         .collect();
     assert_eq!(beeps, [UiSound::MapOpened, UiSound::MapClosed]);
     screen.input(&key(MAP, false));
+    // `_SetAllKeyCmdFlags` (@0x6a898) set M's latch: only the next poll,
+    // reading M up, clears it.
+    screen.tick(TICK);
     tapped(&mut screen, MAP);
     assert_eq!(screen.showing(), Showing::FlightMap, "a plain press");
 }

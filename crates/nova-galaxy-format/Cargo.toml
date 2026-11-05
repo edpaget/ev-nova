@@ -1,0 +1,29 @@
+[package]
+name = "nova-galaxy-format"
+description = "The new game's data format: ids, kinds, front matter, the loader and its schemas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No workspace dependency, only crates.io crates: game-bible's `galaxy`
+# tool builds this crate alone through a git dependency, where the
+# workspace's `[patch.crates-io]` doesn't apply.
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Real folders for the directory adapter's contract test.
+tempfile.workspace = true
+
+[features]
+# The small in-memory test galaxy (`fixture`) and the `Source` contract
+# check, for other crates' tests.
+fixture = []
+
+[lints]
+workspace = true

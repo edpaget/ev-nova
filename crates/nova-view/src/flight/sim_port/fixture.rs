@@ -68,11 +68,13 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// intro seen) are its frame's ([`FakeFlight::set_frame`]); the port's,
 /// the comm's and the pilot's screens are screen asks like any other. It
 /// answers the message line's commands ([`FlightCommand::CommShown`],
-/// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
-/// and the settings ([`FlightCommand::SetWindowWidth`],
+/// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`]),
+/// the settings ([`FlightCommand::SetWindowWidth`],
 /// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`],
-/// [`FlightCommand::SetSpriteLoad`]) done without taking an answer from the queue, as these follow-ups
-/// ride along with the commands a test is about. Told to fail
+/// [`FlightCommand::SetSpriteLoad`]) and the map's opening
+/// ([`FlightCommand::OpenSystemMap`]) done without taking an answer from
+/// the queue, as these follow-ups ride along with the commands a test is
+/// about. Told to fail
 /// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`]),
 /// it refuses every command but a description's load, still recording
 /// each, and answers every screen nothing, leaving its queue as it is.
@@ -190,9 +192,10 @@ impl FakeFlight {
 
     /// Answers the next command not yet answered with `answer`: the
     /// message line's commands ([`FlightCommand::CommShown`],
-    /// [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
-    /// take none, and are answered done, so the answers a test queues line
-    /// up with the commands it is about.
+    /// [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`]),
+    /// the settings and the map's opening
+    /// ([`FlightCommand::OpenSystemMap`]) take none, and are answered done,
+    /// so the answers a test queues line up with the commands it is about.
     pub fn queue_answer(&mut self, answer: Answer) {
         self.answers.push_back((answer, None, Vec::new()));
     }
@@ -392,6 +395,7 @@ impl FlightSim for FakeFlight {
                 | FlightCommand::SetDoubleTimeKey(_)
                 | FlightCommand::SetSoundQuiet(_)
                 | FlightCommand::SetSpriteLoad(_)
+                | FlightCommand::OpenSystemMap
         );
         self.applied.push(command);
         if self.failure.is_some() {
@@ -2861,6 +2865,21 @@ mod tests {
             Answer::Jumped(SystemId(131))
         );
         assert_eq!(fake.applied(), [&line[..], &[FlightCommand::Jump]].concat());
+    }
+
+    #[test]
+    fn the_fake_answers_the_maps_opening_done_without_its_queue() {
+        let mut fake = FakeFlight::new();
+        fake.queue_answer(Answer::Jumped(SystemId(131)));
+        assert_eq!(fake.apply(FlightCommand::OpenSystemMap), Answer::Done);
+        assert_eq!(
+            fake.apply(FlightCommand::Jump),
+            Answer::Jumped(SystemId(131))
+        );
+        assert_eq!(
+            fake.applied(),
+            [FlightCommand::OpenSystemMap, FlightCommand::Jump]
+        );
     }
 
     #[test]

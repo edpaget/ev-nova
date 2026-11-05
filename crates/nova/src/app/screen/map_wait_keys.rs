@@ -7,7 +7,9 @@
 //! (@0x13a2e-0x13a46, @0x13c44-0x13c53), so they reach whoever reads the
 //! queue next: [`FlightView::take_map_replay`] hands them over, and
 //! `nova_view`'s `map_wait` module says which. Each goes through the
-//! router in turn, as the original's next loop reads the queue:
+//! router in turn, as the original's next loop reads the queue. A
+//! replayed [`Input::Text`] goes to the screen as a key does; past a stop
+//! only releases go, so it is dropped there.
 //!
 //! - A key that closes a dialog back to another passes the rest on.
 //! - A key that opens something that flushes drops the rest, as each
@@ -22,7 +24,12 @@
 //! - Past the last dialog, nothing reads them: flight polls its keys live
 //!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec). What is
 //!   still down of them reads as down there, so it goes to flight's held
-//!   keys ([`FlightView::hold_live_key`]).
+//!   keys ([`FlightView::hold_live_key`]). It goes there whatever the
+//!   stop left in front: with a dialog or the spaceport over flight, its
+//!   input is away, and as it comes back
+//!   [`FlightView::take_back_live_input`] drops every live hold and holds
+//!   again only what is down then, so a key let go meanwhile is never
+//!   left held.
 //!
 //! Past either end, the queued release of every press already replayed
 //! still goes, only so what took the press isn't left holding it: the
@@ -74,14 +81,16 @@ impl AppScreen {
     }
 
     /// Replays what the map that just closed left for the screen under
-    /// it ([`FlightView::take_map_replay`]), as the module docs say.
+    /// it ([`FlightView::take_map_replay`]), as the module docs say. They
+    /// came before any chord held through the wait, so they replay ahead
+    /// of it ([`AppScreen::ahead_of_held_chords`]).
     pub(super) fn replay_map_wait_keys(&mut self) {
         let replay = self
             .flight
             .as_mut()
             .map(FlightView::take_map_replay)
             .unwrap_or_default();
-        self.replay_wait_keys(replay);
+        self.ahead_of_held_chords(|screen| screen.replay_wait_keys(replay));
     }
 
     /// Replays what a wait left, `replay`, as the module docs say. With
@@ -108,9 +117,7 @@ impl AppScreen {
             let _ = self.routed_input(&input);
             if self.showing() == Showing::Flight || self.flush_mark().flushed_since(before) {
                 self.let_go_of_replayed(keys, down);
-                if self.showing() == Showing::Flight
-                    && let Some(flight) = &mut self.flight
-                {
+                if let Some(flight) = &mut self.flight {
                     for press in still_down.presses() {
                         flight.hold_live_key(&press);
                     }

@@ -417,9 +417,9 @@ fn each_hails_dialog_latches_every_key_at_its_close() {
 }
 
 #[test]
-fn an_offer_accepted_at_once_latches_the_keys_held_at_the_next_pass() {
+fn an_offer_accepted_at_once_latches_the_keys_held_at_once() {
     // `_SetAllKeyCmdFlags` follows `_OfferOneMission` whatever it showed
-    // (@0x622ac).
+    // (@0x622ac), in the pass.
     let mut view = sol();
     view.sim
         .queue_answer(Answer::Hailed(Hailed::Offer(VenueOffer::Accepted {
@@ -428,7 +428,6 @@ fn an_offer_accepted_at_once_latches_the_keys_held_at_the_next_pass() {
         })));
     view.hold_key(JUMP_KEY);
     view.hail();
-    view.tick(TICK);
     assert!(view.latched_key(JUMP_KEY), "latched");
     assert!(!view.holds_key(JUMP_KEY));
 }

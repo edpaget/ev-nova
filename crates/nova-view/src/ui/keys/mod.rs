@@ -613,21 +613,22 @@ impl KeysScreen {
                     self.press = None;
                 }
             }
-            Some(Press::List { rows }) => {
-                if let ListPress::Released { .. } = self.list.input(input) {
-                    self.press = None;
-                    let on_selected = release.is_some_and(|at| {
-                        self.list
-                            .selected()
-                            .and_then(|row| self.list.row_bounds(row))
-                            .is_some_and(|row| row.contains_half_open(at))
-                    });
-                    if rows && on_selected {
-                        self.start_capture();
-                    }
+            Some(Press::List { rows }) if self.list.input(input) == ListPress::Released => {
+                self.press = None;
+                // The list lights the row pressed; the selection follows
+                // it at the release.
+                self.list.read_back();
+                let on_selected = release.is_some_and(|at| {
+                    self.list
+                        .selected()
+                        .and_then(|row| self.list.row_bounds(row))
+                        .is_some_and(|row| row.contains_half_open(at))
+                });
+                if rows && on_selected {
+                    self.start_capture();
                 }
             }
-            None => {}
+            Some(Press::List { .. }) | None => {}
         }
     }
 }

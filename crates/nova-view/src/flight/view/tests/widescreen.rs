@@ -169,8 +169,8 @@ fn a_click_left_of_the_widened_bar_is_in_space_and_one_on_it_is_not() {
     // (`session::apply::tests::a_click_in_space_on_a_ship_drawn_answers_the_ship_it_targets`).
     let mut view = npc_at(1100.0 - 585.0);
     view.click_in_space(at(1100.0, 384.0));
-    let [FlightCommand::ClickInSpace { at: clicked, .. }] = sent(&view) else {
-        panic!("{:?}", sent(&view));
+    let [FlightCommand::ClickInSpace { at: clicked, .. }] = view.sim.applied() else {
+        panic!("{:?}", view.sim.applied());
     };
     assert_eq!(*clicked, Vec2::new(1100.0 - 585.0, 0.0), "drawn at x 1100");
     let mut view = npc_at(1180.0 - 585.0);

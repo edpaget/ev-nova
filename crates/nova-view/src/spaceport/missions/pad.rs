@@ -9,8 +9,8 @@
 //!   over a list that fits. The pad's focus starts on the default: Leave,
 //!   or the info screen's Done.
 //! - **South on a cell** presses it as a click does
-//!   ([`RowList::press_cell`]): a row is selected and its text shown, an
-//!   arrow scrolls a row.
+//!   ([`RowList::press_cell`]): a row is lit and read back, so selected
+//!   and its text shown, an arrow scrolls a row.
 //! - **The cells follow the list**: they are given afresh at the end of
 //!   every input and tick and after each new listing, so a scroll moves
 //!   them. The focus stays on its slot while the rows scroll under it,
@@ -27,7 +27,7 @@
 //!   the arrows do, and the d-pad never scrolls.
 
 use crate::ui::dialog::Dialog;
-use crate::ui::row_list::{ListPress, RowList};
+use crate::ui::row_list::{ListCell, ListPress, RowList};
 
 use super::{BAR_ITEM, INFO_LIST_ITEM, LIST_ITEM, MissionComputerScreen, MissionInfoScreen};
 
@@ -38,12 +38,19 @@ fn sync(dialog: &mut Dialog, rows: &RowList, item: usize) {
 }
 
 /// Presses cell `cell` of `rows` as a click does; whether the selection
-/// changed.
+/// changed. A row's press reads the selection back after, as the filters
+/// read back a click in item 2 (`_MissionFilter` @0xa0025-0xa007a,
+/// `_MissionInfoFilter` @0x9dc82-0x9dcd6); an arrow's reads nothing back,
+/// as the computer's bar lies in item 3, whose click nothing reads back
+/// (@0xa01e7), and the info screen's leaves the highlight on the
+/// selection.
 pub(super) fn press_cell(rows: &mut RowList, cell: usize) -> bool {
     let Some((cell, _)) = rows.pad_cells().get(cell).copied() else {
         return false;
     };
-    rows.press_cell(cell) == (ListPress::Released { changed: true })
+    rows.press_cell(cell) == ListPress::Released
+        && matches!(cell, ListCell::Row(_))
+        && rows.read_back()
 }
 
 impl MissionComputerScreen {

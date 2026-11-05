@@ -10,6 +10,8 @@ mod file;
 mod fonts;
 mod graphics;
 mod interface;
+mod new_game;
+mod sample_galaxy;
 mod sound;
 mod stock;
 mod stock_expr;

@@ -455,13 +455,14 @@ mod tests {
         let panel = MapPanel {
             strip: crate::map_panel::Strip::HypergatePrompt {
                 prompt: String::new(),
-                date: String::new(),
+                date: crate::map_panel::PanelDate::Text(String::new()),
             },
             column: crate::map_panel::Column {
                 title: String::new(),
                 body: crate::map_panel::ColumnBody::Unknown,
             },
             words: crate::map_panel::PanelWords::default(),
+            numbers: crate::map_panel::CheatNumbers::default(),
         };
         vec![
             ScreenAnswer::Galaxy(GalaxyShown::default()),

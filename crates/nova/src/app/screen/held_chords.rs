@@ -1,6 +1,7 @@
 //! The menu chords typed while a dialog holds back its keys for a held
-//! press, held by the router until the dialog's replay has run. All
-//! addresses are in `EV Nova.app`'s `EV Nova` (i386).
+//! press, or while a map waits for M's release, held by the router until
+//! the dialog's or the map's replay has run. All addresses are in
+//! `EV Nova.app`'s `EV Nova` (i386).
 //!
 //! **The original.** A text dialog's and the offer's held loops and
 //! trackers read no events (`_TextDialogFilter` @0x52172-0x5237f,
@@ -16,6 +17,16 @@
 //! `_HandleQuitEvent` (@0xcc958). Quitting never asks here, by the user's
 //! decision, so the quit happens once the chord is read, with no sound.
 //!
+//! `_DoSystemMap`'s wait for M's release (@0x13a2e-0x13a46) reads no
+//! events either: it calls only `_BusyIdle` (@0x5981, empty) and
+//! `_KeyCheck` (@0xa19b-0xa1dc, a `GetKeys` snapshot), so neither
+//! `_AppEventHandler` nor `_PrefAEVTHandler` (@0x5617b) runs in it, and
+//! its closing `FlushEvents(7, 0)` (@0x13c44-0x13c53) keeps key-downs.
+//! Every map shares the loop: the spaceport's, a mission dialog's over
+//! flight and flight's own. The chord is read after the close by the
+//! next loop, the screen's `_MyModalDialog` or flight's
+//! `_IterateInGameEventLoop` (@0x568b4), after the keys typed before it.
+//!
 //! **The hold.** The router takes the chords before the screen in front
 //! sees them ([`AppScreen::route`]), so it holds them itself while
 //! [`AppScreen::holds_back_keys`] reads true:
@@ -27,6 +38,11 @@
 //!   in order. Pointer input still goes to the front, so the release that
 //!   ends the press reaches the dialog. The keys before the chord are the
 //!   dialog's own, held back by it, so its replay runs first.
+//! - While a map waits, the map key (M by default, as flight reads it,
+//!   [`FlightView::is_map_key`]) passes the queue too, so its release reaches
+//!   the map and ends the wait. The keys the wait took before the chord
+//!   replay to the screen under it at the close with the queue set aside
+//!   ([`AppScreen::ahead_of_held_chords`]), so they go first.
 //! - [`Screen::release_keys`] while the queue isn't empty adds a let-go,
 //!   in its place, so a key queued after the chord and let go of while
 //!   the window had lost its keys isn't left down once it replays.
@@ -90,6 +106,10 @@ pub(super) struct HeldChords {
     /// original's held loops run nothing else, so it is where they stand
     /// as the call that ends the hold begins.
     mark: Option<ChordMark>,
+    /// The tests' probe: each command the replay ran, with the screen in
+    /// front as it ran, for a chord whose effect leaves nothing to see.
+    #[cfg(test)]
+    replayed: Vec<(MenuCommand, nova_view::Showing)>,
 }
 
 /// What says that something opened that flushes the queue: the
@@ -110,10 +130,14 @@ impl ChordMark {
 
 impl AppScreen {
     /// Whether keys typed now would come after keys a screen holds back
-    /// for a held press ([`Screen::holds_back_keys`]): the overlay in
+    /// for a held press ([`Screen::holds_back_keys`]) or a map's wait:
+    /// always while a map waits for M's release, else the overlay in
     /// front's, the spaceport's when it is in front or shown with nothing
     /// in front, and none otherwise.
     pub(super) fn holds_back_keys(&self) -> bool {
+        if self.map_waits() {
+            return true;
+        }
         let spaceport = || self.spaceport.as_ref().is_some_and(Screen::holds_back_keys);
         match self.front() {
             Some(Front::Overlay(overlay)) => self.overlay_holds_back_keys(overlay),
@@ -123,13 +147,27 @@ impl AppScreen {
         }
     }
 
+    /// Whether a map waits for M's release ([`FlightView::map_waiting`]).
+    fn map_waits(&self) -> bool {
+        self.flight.as_ref().is_some_and(FlightView::map_waiting)
+    }
+
     /// Holds `input` for the replay, if it is a chord typed while keys are
-    /// held back or anything typed after one: whether it did.
+    /// held back or anything typed after one but M during a map's wait:
+    /// whether it did.
     pub(super) fn hold_chord(&mut self, input: &Input) -> bool {
         if !matches!(input, Input::Key { .. } | Input::Text(_)) {
             return false;
         }
         if !self.held_chords.queue.is_empty() {
+            if self.map_waits()
+                && self
+                    .flight
+                    .as_ref()
+                    .is_some_and(|flight| flight.is_map_key(input))
+            {
+                return false;
+            }
             self.held_chords.queue.push(HeldChord::Input(*input));
             return true;
         }
@@ -156,6 +194,15 @@ impl AppScreen {
         chord_command(key)
     }
 
+    /// Runs `replay`, keys typed before the held chords, with the queue
+    /// set aside, so its nested routes see it empty and the keys reach
+    /// the screens rather than queue behind the chords.
+    pub(super) fn ahead_of_held_chords(&mut self, replay: impl FnOnce(&mut Self)) {
+        let held = mem::take(&mut self.held_chords);
+        replay(self);
+        self.held_chords = held;
+    }
+
     /// Adds a let-go to the held chords, if any are held.
     pub(super) fn hold_let_go(&mut self) {
         if !self.held_chords.queue.is_empty() {
@@ -180,7 +227,14 @@ impl AppScreen {
             }
             mark = Some(self.chord_mark());
             let action = match item {
-                HeldChord::Command(command) => self.run_menu_command(command),
+                HeldChord::Command(command) => {
+                    #[cfg(test)]
+                    {
+                        let showing = self.showing();
+                        self.held_chords.replayed.push((command, showing));
+                    }
+                    self.run_menu_command(command)
+                }
                 HeldChord::Input(input) => {
                     down.follow(&input);
                     self.rerouted_input(&input)
@@ -217,6 +271,19 @@ impl AppScreen {
                 HeldChord::Command(_) => {}
             }
         }
+    }
+
+    /// Whether the router holds chords for a replay: the tests' probe.
+    #[cfg(test)]
+    pub(super) fn holds_chords(&self) -> bool {
+        !self.held_chords.queue.is_empty()
+    }
+
+    /// The commands the held chords' replays ran, with the screen in front
+    /// as each ran: the tests' probe.
+    #[cfg(test)]
+    pub(super) fn replayed_chords(&self) -> &[(MenuCommand, nova_view::Showing)] {
+        &self.held_chords.replayed
     }
 
     /// Where the screens stand for [`ChordMark`]: the Preferences don't

@@ -317,17 +317,22 @@ context_commands! {
         TargetSelect: Held "Target Select",
         /// Target the nearest threat (`closeTarg`, +0x16).
         ClosestTarget: Held "Closest Target",
-        /// Open or close the escort menu (`escortMenuKey`, +0x54).
-        EscortMenu: Pressed "Escort Menu",
-        /// The escorts attack the target (`escortCmdKey0`, +0x60).
-        AttackTarget: Pressed "Attack Target",
+        /// Open or close the escort menu (`escortMenuKey`, +0x54): acts
+        /// on its press, and is held only for `_quickKeyCheckResult`,
+        /// which its read sets (@0x6dda9); it sets no cursor byte.
+        EscortMenu: Held "Escort Menu",
+        /// The escorts attack the target (`escortCmdKey0`, +0x60). Each
+        /// escort command acts on its press and, held, at the next poll
+        /// its own latch lets it (0x316954.., @0x6e1af-0x6e2e2), and sets
+        /// `_quickKeyCheckResult` (@0x6e1b6); it sets no cursor byte.
+        AttackTarget: Held "Attack Target",
         /// The escorts defend the player (`escortCmdKey1`, +0x62).
-        DefendMe: Pressed "Defend Me",
+        DefendMe: Held "Defend Me",
         /// The escorts hold position (`escortCmdKey2`, +0x64).
-        HoldPosition: Pressed "Hold Position",
+        HoldPosition: Held "Hold Position",
         /// The escorts return to formation (`escortCmdKey3`, +0x66,
         /// "Recall: (option = dock)").
-        Recall: Pressed "Recall",
+        Recall: Held "Recall",
         /// Clear the message line, close the escort menu and hide the
         /// floating map (`ackComm`, +0x0c).
         Acknowledge: Held "Acknowledge",
@@ -360,7 +365,9 @@ context_commands! {
         /// Toggle the frame-rate readout (`framerateKey`, +0x68, F12, key
         /// code 0x6f, `_loadKeys` @0xce6a1-0xce6c4): a press, no modifier
         /// read (`_HandlePlayer` @0x6e454-0x6e4bd), during a jump too.
-        ShowFramerate: Pressed "Show Framerate",
+        /// Held only for `_quickKeyCheckResult`, which its read sets
+        /// (@0x6e460); it sets no cursor byte.
+        ShowFramerate: Held "Show Framerate",
         /// Autopilot with Option: face the navigation stellar.
         FaceStellar: Held "Face Stellar",
         /// Select Secondary with Option: the weapon before, in `wëap` ID
@@ -382,7 +389,7 @@ context_commands! {
         /// Communicate with Option: hail the navigation stellar.
         HailStellar: Held "Hail Stellar",
         /// Recall with Option: Return to Hangar.
-        RecallToHangar: Pressed "Return to Hangar",
+        RecallToHangar: Held "Return to Hangar",
         /// Jettison Cargo with Option too: all but the mission cargo.
         JettisonNonMission: Held "Jettison Non-Mission Cargo",
         /// Select the stellar in the system's first nav slot: key code
@@ -866,16 +873,14 @@ mod tests {
             FlightCommand::Eject,
             FlightCommand::FaceStellar,
             FlightCommand::JettisonNonMission,
-        ] {
-            assert_eq!(Command::from(held).kind(), Kind::Held, "{held:?}");
-        }
-        for pressed in [
             FlightCommand::ShowFramerate,
             FlightCommand::EscortMenu,
             FlightCommand::Recall,
             FlightCommand::RecallToHangar,
-            FlightCommand::ZoomIn,
         ] {
+            assert_eq!(Command::from(held).kind(), Kind::Held, "{held:?}");
+        }
+        for pressed in [FlightCommand::ZoomIn, FlightCommand::ZoomOut] {
             assert_eq!(Command::from(pressed).kind(), Kind::Pressed, "{pressed:?}");
         }
         assert_eq!(Command::from(UiCommand::Confirm).kind(), Kind::Pressed);

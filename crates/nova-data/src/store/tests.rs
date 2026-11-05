@@ -555,3 +555,14 @@ const _: fn() = || {
     fn is<T: Send + Sync>() {}
     is::<GameData>();
 };
+
+#[test]
+fn the_default_store_is_empty() {
+    let data = GameData::default();
+    assert!(data.files().is_empty());
+    assert!(data.failed().is_empty());
+    assert!(data.ignored().is_empty());
+    assert_eq!(data.types().count(), 0);
+    assert_eq!(data.ids(Ship::TYPE), [0_i16; 0]);
+    assert!(data.resource(Ship::TYPE, 128).is_none());
+}

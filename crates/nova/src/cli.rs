@@ -1,12 +1,16 @@
 //! The command line: which `Nova Files` directory to load, if the player
-//! named one.
+//! named one. The new game, which `GAME_DATA` chooses
+//! ([`crate::ruleset::chosen`]), takes no argument.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 /// The command line was not understood.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory)")]
+#[error(
+    "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory, or GAME_DATA \
+     to the new game's data)"
+)]
 pub struct Usage;
 
 /// The `Nova Files` directory the player named: the one positional
@@ -57,10 +61,11 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_line_names_the_argument_and_the_variable() {
+    fn the_usage_line_names_the_argument_and_the_variables() {
         assert_eq!(
             Usage.to_string(),
-            "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory)"
+            "usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory, or \
+             GAME_DATA to the new game's data)"
         );
     }
 

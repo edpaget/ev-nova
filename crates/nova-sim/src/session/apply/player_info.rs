@@ -104,9 +104,16 @@ mod tests {
             "nothing opens in a jump"
         );
         // `_HandlePlayer` zeroes the gain once the refusing dialog returns
-        // (@0x70357), at once, so no frame is held.
+        // (@0x70357), at once, so no frame is held, after the opening
+        // frame's ramp, and the rest of that frame is owed (see the
+        // `opening_rest` module).
+        before.time.frame();
         before.time.zero_unheld();
-        assert_eq!(jumping, before, "and nothing changes but the gain");
+        before.opening_rest_owed = true;
+        assert_eq!(
+            jumping, before,
+            "and nothing changes but the gain and the rest owed"
+        );
     }
 
     #[test]

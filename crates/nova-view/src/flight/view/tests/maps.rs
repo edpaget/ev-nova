@@ -1,11 +1,13 @@
 use super::*;
+use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::galaxy::update::MapUpdate;
 use nova_sim::MapClicked;
 use nova_sim::flight_frame::{FlightEvent, FloatingLinks};
 use nova_sim::galaxy_map::{MapDrawing, MapLink};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_panel::{
-    Column, ColumnBody, Listing, MapPanel, PanelWords, Ports, Services, Strip,
+    CheatNumbers, Column, ColumnBody, Listing, MapPanel, PanelDate, PanelWords, Ports, Services,
+    Strip, zoom_readout,
 };
 
 // Tab, `\`, Return and the map key on the in-flight maps (`_MapFilter`).
@@ -637,7 +639,7 @@ fn near_places() -> FloatingLinks {
 
 /// [`floating_in`] over [`near_catalog`], its first show drawing
 /// [`near_drawing`], Proxima Near (134) linked at (40, 30) too.
-fn floating_near(frame: FlightFrame) -> Faked {
+pub(super) fn floating_near(frame: FlightFrame) -> Faked {
     let mut view = floating_over(near_catalog(), frame, near_places());
     view.sim.queue_screen(floating_shown(near_drawing(), None));
     view
@@ -660,7 +662,7 @@ fn floating_key(view: &mut Faked, k: Key, pressed: bool) {
 }
 
 /// Presses and lets go of `k`, as [`floating_key`] does.
-fn floating_tap(view: &mut Faked, k: Key) {
+pub(super) fn floating_tap(view: &mut Faked, k: Key) {
     floating_key(view, k, true);
     floating_key(view, k, false);
 }
@@ -1113,7 +1115,7 @@ fn minus_zooms_out_a_step_with_snd_150() {
 }
 
 /// Where the floating map draws Proxima Near now.
-fn near_dot(view: &Faked) -> Point {
+pub(super) fn near_dot(view: &Faked) -> Point {
     floating_dots(&floating_drawn(view))[1]
 }
 
@@ -1152,6 +1154,32 @@ fn tab_held_holds_the_zoom_back() {
     floating_key(&mut view, TARGET_KEY, true);
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+}
+
+/// E, F, D, V, C and F12: `_HandlePlayer` reads each through
+/// `_QuickKeyCheck` on every pass that reaches its block, E @0x6dda9,
+/// F/D/V/C in the loop from @0x6e192 (@0x6e1b6), F12 @0x6e460, so each
+/// down sets `_quickKeyCheckResult` (@0xa145-0xa14c).
+const QUICK_CHECKED_PRESS_KEYS: [Key; 6] = [
+    MENU_KEY,
+    ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY,
+    FRAME_RATE_KEY,
+];
+
+#[test]
+fn escort_and_frame_rate_keys_held_hold_the_zoom_back() {
+    // The zoom reads `_quickKeyCheckResult` (@0x70f5d-0x70f65).
+    for k in QUICK_CHECKED_PRESS_KEYS {
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.input(&key(k, true));
+        assert!(view.floating.is_up(), "{k:?} keeps the map up");
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(16.0 / 9.0), "{k:?}");
+    }
 }
 
 #[test]
@@ -1256,6 +1284,40 @@ fn a_zoom_shows_the_map_again() {
     floating_tap(&mut view, ZOOM_OUT_KEY);
     floating_frame_of(&mut view, mac_ticks(118));
     assert_eq!(alpha_of(&view), Some(255));
+}
+
+#[test]
+fn a_zoom_redraws_without_preselecting() {
+    // The zoom redraws with `_DrawMapInFloatingFrame` alone (@0x71013,
+    // @0x71094), not `_ShowFloatingMap`, so `_selSystem` stays as the last
+    // show set it (@0x1147b-0x114c8); the clock restarts all the same.
+    let mut view = floating_over(near_catalog(), in_sol(), near_places());
+    view.sim
+        .queue_screen(floating_shown(near_drawing(), Some(130)));
+    let mut named = near_drawing();
+    named.named.push(SystemId(134));
+    for _ in 0..2 {
+        view.sim
+            .queue_screen(floating_shown(named.clone(), Some(134)));
+    }
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(floating_names(&floating_drawn(&view)), ["Sol"]);
+    floating_frame_of(&mut view, mac_ticks(140));
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(view.floating.preselection(), Some(SystemId(130)), "kept");
+    assert_eq!(
+        floating_names(&floating_drawn(&view)),
+        ["Sol", "Proxima Near"],
+        "the new drawing"
+    );
+    floating_frame_of(&mut view, mac_ticks(118));
+    assert_eq!(alpha_of(&view), Some(255), "the clock restarted");
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    assert_eq!(
+        view.floating.preselection(),
+        Some(SystemId(134)),
+        "a show preselects"
+    );
 }
 
 #[test]
@@ -1835,13 +1897,14 @@ fn info_panel(ports: Ports, title: &str, body: ColumnBody) -> MapPanel {
         strip: Strip::Info {
             ports,
             hazards: String::new(),
-            date: String::new(),
+            date: PanelDate::Text(String::new()),
         },
         column: Column {
             title: title.to_owned(),
             body,
         },
         words: PanelWords::from_list(&panel_strings().1),
+        numbers: CheatNumbers::default(),
     }
 }
 
@@ -1910,6 +1973,97 @@ fn the_course_maps_panel_is_the_flights_for_the_system_selected_and_lists_its_po
     assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("Earth"));
 }
 
+/// A view over a scripted flight in Sol with the cheats setting `cheats`
+/// and the course map open, its flight answering with `panel`.
+fn faked_panel_cheats(panel: MapPanel, cheats: bool) -> Faked {
+    let mut view = faked(in_sol()).with_overlays(FlightOverlays {
+        cheats,
+        ..FlightOverlays::default()
+    });
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_screen(redrawn_with(sol_drawing(), panel));
+    view.open_map();
+    view
+}
+
+/// An unexplored system's panel carrying `sÿst` 131's numbers, dated.
+fn numbered_panel() -> MapPanel {
+    MapPanel {
+        strip: Strip::Info {
+            ports: Ports::Unknown,
+            hazards: "<Unknown>".to_owned(),
+            date: PanelDate::Text("Jun 23, 1177".to_owned()),
+        },
+        numbers: CheatNumbers {
+            system: 131,
+            govt: None,
+            legal_record: 0,
+        },
+        ..info_panel(Ports::Unknown, "Selected System:", ColumnBody::Unknown)
+    }
+}
+
+#[test]
+fn with_cheats_on_the_course_map_shows_the_panel_in_cheat_mode_and_the_zoom_readout() {
+    // `_cheatsActive` (0xdeb60): the flight's panel, cheat mode applied by
+    // the core; the date's place reads the readout of the map's own zoom.
+    let view = faked_panel_cheats(numbered_panel(), true);
+    let readout = zoom_readout(place_of(&view.map).0).to_string();
+    assert_eq!(view.map.panel(), Some(&numbered_panel().with_cheats()));
+    let list = map_drawn(&view);
+    assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("131"));
+    let texts: Vec<String> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&readout), "{texts:?}");
+    assert!(!texts.contains(&"Jun 23, 1177".to_owned()), "{texts:?}");
+}
+
+#[test]
+fn with_cheats_off_the_course_map_shows_the_flights_panel_unchanged() {
+    let view = faked_panel_cheats(numbered_panel(), false);
+    assert_eq!(view.map.panel(), Some(&numbered_panel()));
+    let list = map_drawn(&view);
+    assert_eq!(panel_text(&list, PORTS_AT).as_deref(), Some("<Unknown>"));
+}
+
+#[test]
+fn with_cheats_on_a_panel_taken_alone_is_in_cheat_mode_too() {
+    // A click's panels, taken after the redraw ([`ScreenAsk::MapPanel`]).
+    let mut view = faked_panel_cheats(numbered_panel(), true);
+    let alpha = faked_on_map(&mut view, 131);
+    view.sim.queue_answer(Answer::Clicked(MapClicked {
+        selected: Some(SystemId(131)),
+        gate_pick: None,
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: true,
+    }));
+    let explored = MapPanel {
+        numbers: CheatNumbers {
+            system: 131,
+            govt: Some(140),
+            legal_record: -5,
+        },
+        ..info_panel(
+            Ports::None,
+            "Destination System:",
+            ColumnBody::Uninhabited {
+                name: "Alpha".to_owned(),
+            },
+        )
+    };
+    queue_redraw_and_panel(&mut view, sol_drawing(), &explored);
+    faked_map_click(&mut view, alpha);
+    assert_eq!(panels_asked(&view).last(), Some(&panel_for(131)));
+    assert_eq!(view.map.panel(), Some(&explored.with_cheats()));
+}
+
 #[test]
 fn the_course_maps_panel_follows_a_click_to_the_flights_panel_for_it() {
     // Phase 16: `_MapDialogUpdate` @0x10b3f-0x10c76.
@@ -1959,7 +2113,7 @@ fn the_hypergate_maps_panel_is_asked_with_its_offers_and_draws_the_prompt_then_t
     let prompt = MapPanel {
         strip: Strip::HypergatePrompt {
             prompt: "Pick a destination".to_owned(),
-            date: String::new(),
+            date: PanelDate::Text(String::new()),
         },
         ..info_panel(Ports::None, "Current System:", ColumnBody::Unknown)
     };
@@ -2408,7 +2562,11 @@ fn a_slot_key_held_during_a_jump_does_not_hold_the_zoom_back() {
     view.track_held(&key(HYPER_SELECT_KEY, false));
     hold(&mut view, STELLAR_SLOT_KEYS[2][1]);
     floating_tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(view.floating.zoom(), 4, "F3 is not polled");
+    assert_eq!(
+        view.floating.zoom(),
+        INITIAL_ZOOM * ZOOM_OUT_STEP,
+        "F3 is not polled"
+    );
 }
 
 /// The port's course map, open over a flight docked at Earth whose map
@@ -2508,6 +2666,19 @@ fn a_latched_key_held_across_a_close_holds_the_zoom_back() {
     held_across_a_close(&mut view, JUMP_KEY);
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+}
+
+#[test]
+fn escort_and_frame_rate_keys_latched_across_a_close_hold_the_zoom_back() {
+    // Latched past a close, each still reads down for `_QuickKeyCheck`
+    // (@0xa0f5), which sets `_quickKeyCheckResult` the zoom reads.
+    for k in QUICK_CHECKED_PRESS_KEYS {
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        held_across_a_close(&mut view, k);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(16.0 / 9.0), "{k:?}");
+    }
 }
 
 #[test]

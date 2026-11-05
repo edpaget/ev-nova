@@ -9,9 +9,10 @@
 //! ([`Report::take_alert`]). [`Fatal`] maps each fatal startup error to its
 //! exit code and message.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::build_id::{BUILD_ID, describe};
 use crate::cli::Usage;
@@ -216,6 +217,22 @@ impl StartupLog for FileLog {
 pub enum Fatal {
     /// The command line was not understood.
     Usage,
+    /// `GAME_DATA` named the new game's data `dir`, which takes no
+    /// arguments, and these `args` were given anyway.
+    ArgumentsWithGameData {
+        /// Where `GAME_DATA` points.
+        dir: PathBuf,
+        /// The arguments given.
+        args: Vec<OsString>,
+    },
+    /// `GAME_DATA` named the new game's data `dir`, which could not be
+    /// listed (missing, or not a folder): why.
+    NewGameUnreadable {
+        /// Where `GAME_DATA` points.
+        dir: PathBuf,
+        /// Why it could not be listed.
+        error: String,
+    },
     /// No `Nova Files` were found or picked.
     NotFound(NotFound),
     /// None were found, and a quit arrived while the player was asked.
@@ -258,13 +275,21 @@ impl Fatal {
         !matches!(self, Self::Quit(_))
     }
 
-    /// The exit code and message: 2 for the usage error and for no data
+    /// The exit code and message: 2 for the usage error, for no data
     /// found (cancelled or quit while asking), as a usage error always
-    /// was; 1 for the rest.
+    /// was, and for a `GAME_DATA` that names no folder; 1 for the rest.
     #[must_use]
     pub fn exit(&self) -> Exit {
         let (code, message) = match self {
             Self::Usage => (2, Usage.to_string()),
+            Self::ArgumentsWithGameData { dir, args } => (2, arguments_with_game_data(dir, args)),
+            Self::NewGameUnreadable { dir, error } => (
+                2,
+                format!(
+                    "nova: listing the new game's data directory {} (GAME_DATA): {error}",
+                    dir.display()
+                ),
+            ),
             Self::NotFound(not_found) | Self::Quit(not_found) => (2, not_found.to_string()),
             Self::Unreadable(error) | Self::EventLoop(error) => (1, format!("nova: {error}")),
             Self::Open(failure) => return crate::exit::exit(Some(failure)),
@@ -273,6 +298,24 @@ impl Fatal {
             code,
             message: Some(message),
         }
+    }
+}
+
+/// Why `args` were refused while `GAME_DATA` names `dir`: one is taken
+/// for a `Nova Files` folder the player meant to open, more for a mistake.
+fn arguments_with_game_data(dir: &Path, args: &[OsString]) -> String {
+    let start = format!(
+        "nova: GAME_DATA is set to {}, so the new game starts and takes no",
+        dir.display()
+    );
+    if let [arg] = args {
+        format!(
+            "{start} Nova Files argument; unset GAME_DATA to open {}, or drop the argument",
+            arg.to_string_lossy()
+        )
+    } else {
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+        format!("{start} arguments; drop {}", args.join(", "))
     }
 }
 
@@ -524,6 +567,63 @@ mod tests {
             Fatal::Open(failure.clone()).exit(),
             crate::exit::exit(Some(&failure))
         );
+    }
+
+    #[test]
+    fn an_argument_with_game_data_names_both_and_exits_as_a_usage_error() {
+        let dir = Path::new("/Games").join("New Game");
+        let one = Fatal::ArgumentsWithGameData {
+            dir: dir.clone(),
+            args: vec!["/Games/Nova Files".into()],
+        };
+        assert_eq!(
+            one.exit(),
+            Exit {
+                code: 2,
+                message: Some(format!(
+                    "nova: GAME_DATA is set to {}, so the new game starts and takes no Nova \
+                     Files argument; unset GAME_DATA to open /Games/Nova Files, or drop the \
+                     argument",
+                    dir.display()
+                )),
+            }
+        );
+        let two = Fatal::ArgumentsWithGameData {
+            dir: dir.clone(),
+            args: vec!["a".into(), "b c".into()],
+        };
+        assert_eq!(
+            two.exit(),
+            Exit {
+                code: 2,
+                message: Some(format!(
+                    "nova: GAME_DATA is set to {}, so the new game starts and takes no \
+                     arguments; drop a, b c",
+                    dir.display()
+                )),
+            }
+        );
+        assert!(two.shows_alert());
+    }
+
+    #[test]
+    fn a_game_data_folder_that_cannot_be_listed_names_both_and_exits_as_no_data_found() {
+        let dir = Path::new("/Games").join("New Game");
+        let fatal = Fatal::NewGameUnreadable {
+            dir: dir.clone(),
+            error: "gone".to_owned(),
+        };
+        assert_eq!(
+            fatal.exit(),
+            Exit {
+                code: 2,
+                message: Some(format!(
+                    "nova: listing the new game's data directory {} (GAME_DATA): gone",
+                    dir.display()
+                )),
+            }
+        );
+        assert!(fatal.shows_alert());
     }
 
     #[test]

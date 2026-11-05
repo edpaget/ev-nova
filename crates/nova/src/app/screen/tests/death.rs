@@ -371,6 +371,45 @@ fn with_no_abort_text_flight_flies_on_once_the_black_fades_in() {
     assert!(flies_on(&mut screen), "flying on");
 }
 
+/// The router over [`ejected`] with its `dësc`, the `dësc` closed, ticked
+/// until the rescue's closing fade is under way.
+fn under_the_closing_fade(store: &MemoryPilots) -> AppScreen {
+    let mut screen = ejected(store, Some(RESCUE_TEXT));
+    until_rescue_text(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    screen.tick(TICK);
+    until_fading_in(&mut screen);
+    assert!(flight(&screen).rescuing(), "the closing fade");
+    screen
+}
+
+#[test]
+fn a_p_tapped_under_the_rescues_closing_fade_opens_nothing_after_it() {
+    // The rescue leaves for the pass loop (@0x692ce), whose flight drops
+    // every queued key-down without Command (@0x56a6b, @0x56cec) and
+    // polls P live, up by then.
+    let store = MemoryPilots::new();
+    let mut screen = under_the_closing_fade(&store);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    until_uncovered(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight);
+}
+
+#[test]
+fn a_p_pressed_under_the_rescues_closing_fade_and_still_down_opens_the_player_info_after_it() {
+    let store = MemoryPilots::new();
+    let mut screen = under_the_closing_fade(&store);
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tick_until(&mut screen, rescue_bound(), |screen| {
+        !screen.flight_view().is_some_and(FlightView::rescuing)
+    });
+    // Handed back as a fresh press, read at the next pass's poll.
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::PlayerInfo);
+}
+
 #[test]
 fn the_rescue_shows_its_desc_over_flight_and_stops_stepping() {
     let store = MemoryPilots::new();

@@ -4,7 +4,7 @@
 //! Only `Session` methods read `Session::speed_mult` here; each sub-state
 //! method takes the gain as a plain parameter:
 //!
-//! - `Session::player_display_step` hands it to the player's cloak fade
+//! - `Session::player_display_rest` hands it to the player's cloak fade
 //!   (`PlayerShip::step_cloak_fade`) and frame
 //!   (`PlayerShip::display_frames`, through `Moment::gain` to its sets and
 //!   lights);

@@ -88,7 +88,8 @@
 //! on standard error, and the game runs without them.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
-//! directory. Either wins over everything below. Without them the game
+//! directory, or `GAME_DATA` to the new game's data. Either of the first
+//! two wins over everything below. Without them the game
 //! opens the `Nova Files` it remembers (the `"nova_files"` key of the
 //! settings file), else those of `EV Nova.app` in `/Applications` or
 //! `~/Applications` on macOS, when the loader loads at least one data file
@@ -100,6 +101,19 @@
 //! `osascript`'s `quit app`) while the panel is up ends the launch as its
 //! Cancel does, with exit status 2 and the same "found no EV Nova data"
 //! line on standard error and in the startup log, but with no alert.
+//!
+//! `GAME_DATA`, set and not empty, starts the new game instead of EV Nova
+//! ([`nova::ruleset`]): `NOVA_DATA` is ignored, an argument is a usage
+//! error, and no `Nova Files` are looked for, asked for or remembered.
+//! The folder is read in the bible's format (`nova_data::new_game`): its
+//! factions, systems and stellars become the game's records. Each file
+//! that doesn't load or map is a warning, as are media that are Git LFS
+//! pointers (with the `git lfs` commands that fetch them) and a folder
+//! with no systems; the game starts with what loaded (and the missing
+//! interface file and music warn as they do anywhere). A folder that
+//! can't be listed ends the launch with exit status 2. Its pilots are
+//! saved in `New Game Pilots`, beside `Pilots`, so a stock pilot never
+//! opens over the new game's data. An empty `GAME_DATA` is unset.
 //!
 //! Every startup error and warning goes to standard error and to the
 //! startup log, which starts with the version and the build ID `nova` was
@@ -168,6 +182,7 @@ use nova::platform::{
     Dialogs, Runner, event_loop, menu_key_equivalents, system_key_names, system_keyboard_access,
 };
 use nova::rulebook::eight_bit_reading;
+use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
 use nova::startup::{
     DiskData, Fatal, FileLog, Launch, Report, Started, StartupLog, Terminal, usual_places,
@@ -206,13 +221,26 @@ fn open_audio(
     audio
 }
 
-/// The pilot keeper over the pilots directory `env` names, or none, with a
-/// warning to `report`, when there is nowhere to save them.
+/// The pilot keeper over `ruleset`'s pilots directory `env` names, or
+/// none, with a warning to `report`, when there is nowhere to save them.
+/// First moves the pilots an earlier version saved elsewhere into the
+/// stock game's directory, each line of the move to `report`.
 fn open_pilots(
     env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    ruleset: Ruleset,
     report: &mut Report,
 ) -> Option<PilotKeeper<Box<dyn PilotStore>>> {
-    let pilots = pilots_dir(Os::current(), env)
+    // Before the keeper reads any, so the last pilot opens from the new
+    // place. Only stock pilots were ever saved there.
+    if let (Some(old), Some(new)) = (
+        legacy_pilots_dir(Os::current(), &env),
+        pilots_dir(Os::current(), &env, Ruleset::Stock),
+    ) {
+        for line in report_lines(&move_pilots(&mut DiskFiles, &old, &new)) {
+            report.warn(&line);
+        }
+    }
+    let pilots = pilots_dir(Os::current(), env, ruleset)
         .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
     if pilots.is_none() {
         report.warn("nova: there is nowhere to save pilots (no home directory); saving nothing");
@@ -324,6 +352,7 @@ fn main() -> ExitCode {
         Launch {
             args: std::env::args_os().skip(1).collect(),
             nova_data: env("NOVA_DATA"),
+            game_data: env("GAME_DATA"),
             usual: usual_places(Os::current(), env),
             terminal: &terminal,
             log: log_path(Os::current(), env)
@@ -339,6 +368,7 @@ fn main() -> ExitCode {
         || event_loop().map_err(|error| error.to_string()),
     );
     let Started {
+        ruleset,
         mut report,
         event_loop,
         rulebook,
@@ -362,17 +392,7 @@ fn main() -> ExitCode {
     let data = Rc::new(data);
     // Dialog and menu text is laid out by the faces the window draws it in.
     let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
-    // Before the keeper reads any, so the last pilot opens from the new
-    // place.
-    if let (Some(old), Some(new)) = (
-        legacy_pilots_dir(Os::current(), env),
-        pilots_dir(Os::current(), env),
-    ) {
-        for line in report_lines(&move_pilots(&mut DiskFiles, &old, &new)) {
-            report.warn(&line);
-        }
-    }
-    let pilots = open_pilots(env, &mut report);
+    let pilots = open_pilots(env, ruleset, &mut report);
     let seed = run_seed();
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     // The effects' own: drawing on it never changes the simulation's draws.

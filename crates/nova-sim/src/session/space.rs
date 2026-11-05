@@ -198,7 +198,9 @@ pub(super) struct Escorts {
     /// pilot loaded by the other reading,
     /// [`Space::keep_record_orders`]), and mission escorts are never
     /// saved; reset with their orders on entering a system by the
-    /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders),
+    /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders)
+    /// (a jump's arrival a pass later, by the engine's
+    /// [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders)),
     /// and cleared in flight, with the orders of the class's escorts, once
     /// no ship of the class the player leads has taken a command since it
     /// was placed (see the `class_orders` module).
@@ -214,6 +216,15 @@ pub(super) struct Escorts {
     /// release keeps the number, as the original keeps the slot's byte.
     /// Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
+    /// Whether the next class-order bookkeeping is skipped, once: set by a
+    /// jump's arrival under the engine's readings of
+    /// [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders)
+    /// and [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders),
+    /// which keeps the orders through the arrival's pass as `_HandlePlayer`
+    /// returns on the arrival frame (@0x6c625) before the bookkeeping
+    /// (@0x6e2e8); taken by the first bookkeeping after it, and cleared by
+    /// every other entry (see the `class_orders` module). Never saved.
+    pub(super) skip_bookkeeping: bool,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
@@ -283,6 +294,7 @@ impl Space {
                 restock: false,
                 class_orders: [None; 4],
                 commanded: BTreeSet::new(),
+                skip_bookkeeping: false,
                 quote_clock: persons::QuoteClock::default(),
             },
             voice: crate::voice::VoiceChannel::default(),

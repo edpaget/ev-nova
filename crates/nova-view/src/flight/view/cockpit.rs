@@ -181,6 +181,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 }
 
+/// Where `command` stands in `_HandlePlayer`'s loop over the escort
+/// commands and their latches (`_keyPrefs` +0x60, +0x62, +0x64, +0x66,
+/// @0x6e1b6): Attack Target, Defend Me, Hold Position, then Recall, whose
+/// Option variant, Return to Hangar, is the same key's read (@0x6e207).
+pub(super) const fn escort_command_index(command: Command) -> Option<usize> {
+    match command {
+        Command::Flight(F::AttackTarget) => Some(0),
+        Command::Flight(F::DefendMe) => Some(1),
+        Command::Flight(F::HoldPosition) => Some(2),
+        Command::Flight(F::Recall | F::RecallToHangar) => Some(3),
+        _ => None,
+    }
+}
+
 /// The escort menu, over the [`FlightSim`] port: its keys read the fleet
 /// from the kept frame
 /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows)) and
@@ -197,17 +211,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A press of `command`, if it is one of the escort menu's: the menu
     /// key, Acknowledge, the groups while the menu is open, and the four
-    /// escort commands (Recall with Option, Return to Hangar). Whether it
-    /// was one.
+    /// escort commands (Recall with Option, Return to Hangar), each of
+    /// which, fresh, follows its release, so its own latch was clear: it
+    /// commands and sets it
+    /// ([`CommandLatches::press`](crate::flight::escorts::CommandLatches::press)).
+    /// Whether it was one.
     pub(super) fn escort_command(&mut self, command: Command) -> bool {
+        if let Some(index) = escort_command_index(command) {
+            self.escort_commands.press(index);
+            self.command_escorts(match command {
+                Command::Flight(F::AttackTarget) => EscortCommand::Attack,
+                Command::Flight(F::DefendMe) => EscortCommand::Defend,
+                Command::Flight(F::HoldPosition) => EscortCommand::Hold,
+                Command::Flight(F::RecallToHangar) => EscortCommand::Dock,
+                _ => EscortCommand::Recall,
+            });
+            return true;
+        }
         match command {
             Command::Flight(F::EscortMenu) => self.toggle_escort_menu(),
             Command::Flight(F::Acknowledge) => self.acknowledge(),
-            Command::Flight(F::AttackTarget) => self.command_escorts(EscortCommand::Attack),
-            Command::Flight(F::DefendMe) => self.command_escorts(EscortCommand::Defend),
-            Command::Flight(F::HoldPosition) => self.command_escorts(EscortCommand::Hold),
-            Command::Flight(F::Recall) => self.command_escorts(EscortCommand::Recall),
-            Command::Flight(F::RecallToHangar) => self.command_escorts(EscortCommand::Dock),
             Command::EscortMenu(group) if self.escort_menu.is_open() => {
                 let n = EscortMenuCommand::ALL
                     .iter()
@@ -218,6 +241,51 @@ impl<C, S: FlightSim> FlightView<C, S> {
             _ => return false,
         }
         true
+    }
+
+    /// The escort command at `index` of `_HandlePlayer`'s loop over them
+    /// (@0x6e1af-0x6e2e2, [`escort_command_index`]): Attack, Defend, Hold,
+    /// and Recall, or Return to Hangar with Option down (@0x6e207), as
+    /// flight holds Recall's Option variant.
+    fn escort_order(&self, index: usize) -> EscortCommand {
+        match index {
+            0 => EscortCommand::Attack,
+            1 => EscortCommand::Defend,
+            2 => EscortCommand::Hold,
+            _ if self.held(F::RecallToHangar) => EscortCommand::Dock,
+            _ => EscortCommand::Recall,
+        }
+    }
+
+    /// One poll of the escort commands' keys, after J's block, as their
+    /// loop (@0x6e1af-0x6e2e2) comes after J's read (@0x6b0e6): each held
+    /// with its own latch clear commands the escorts, and sets the latch;
+    /// each up clears it
+    /// ([`CommandLatches::poll`](crate::flight::escorts::CommandLatches::poll)).
+    /// So a key first pressed under a dialog and still down at its close
+    /// commands here, as no `_SetAllKeyCmdFlags` site sets these latches
+    /// (the `map_wait` module's `OWN_LATCH`); a fresh press commanded
+    /// already ([`FlightView::escort_command`]). While the flight refuses the
+    /// escort keys ([`FlightView::takes`]) the poll does nothing, the
+    /// latches left as they were, as the Board key's frame does.
+    pub(super) fn escort_commands_frame(&mut self) {
+        if !self.takes(PlayerCommand::Escort) {
+            return;
+        }
+        let mut down = [false; 4];
+        for command in self.keys.held_commands() {
+            if let Some(index) = escort_command_index(command)
+                && self.held(command)
+            {
+                down[index] = true;
+            }
+        }
+        let fire = self.escort_commands.poll(down);
+        for (index, fire) in fire.into_iter().enumerate() {
+            if fire {
+                self.command_escorts(self.escort_order(index));
+            }
+        }
     }
 
     /// E: opens or closes the escort menu, or says the player has no
@@ -257,10 +325,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The beep of the escort menu's close by Return or by its fade's end:
     /// [`UiSound::EscortMenuToggled`] if the menu key ([`F::EscortMenu`])
-    /// is held, as the close block reads the key live (@0x6e01e-0x6e04d),
-    /// and none otherwise.
+    /// reads down, held or latched past a close, as the close block reads
+    /// the key live (@0x6e01e-0x6e04d), and none otherwise.
     fn shut_escort_menu_by_key(&mut self) {
-        if self.held(F::EscortMenu) {
+        if self.reads_down(F::EscortMenu) {
             self.ui_sounds.push(UiSound::EscortMenuToggled);
         }
     }
@@ -281,34 +349,32 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Runs the escort menu's frame for the `steps` flight steps the tick
-    /// ran ([`EscortMenu::run_steps`]): one level of its fade for each, as
-    /// `_HandlePlayer` drops one a frame, every frame, the warp's
-    /// included, as the original runs it on every frame of a jump
-    /// (@0x6df4a), with the escorts flying as the kept frame shows them
-    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)),
-    /// and shown in full again after each step of the tick's report that
-    /// cleared an escort class's kept order
-    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`):
-    /// `Screen::tick` calls it right after the frame's steps, which fill
-    /// the kept frame afresh. The fade's end beeps as Return's close does
-    /// ([`FlightView::shut_escort_menu_by_key`]).
+    /// Runs the escort menu over the passes of the tick's step report
+    /// that reached `_HandlePlayer`'s escort-menu block
+    /// ([`EscortMenu::run_passes`],
+    /// `nova_sim::flight_frame::PassReport::escort_menu`): for each, it
+    /// takes the escorts flying as that pass counted them, fades a level,
+    /// and shows in full again when that pass cleared an escort class's
+    /// kept order, before the next pass's drop. `_DoPlayGameWork` calls
+    /// `_HandlePlayer` on both of double time's passes (@0x43e19) and
+    /// nothing gates the fade (@0x6df4a-0x6e052) on the pass, so it fades a
+    /// level on each, through a jump's warp too. `Screen::tick` calls it
+    /// right after the frame's steps. The fade's end beeps as Return's
+    /// close does ([`FlightView::shut_escort_menu_by_key`]).
     ///
-    /// In double time the original fades a level on each pass:
-    /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
-    /// pass argument, and nothing gates the fade (@0x6df4a-0x6e052) on the
-    /// pass. Ours drops one a step, the re-show after the step's drop:
-    /// rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders.
-    pub(super) fn update_escort_menu(&mut self, steps: u32) {
-        let flying = self.frame.hud.escorts_flying;
-        let cleared = self
+    /// A step the session didn't run (stopped for the warp's end or the
+    /// hold's expiry) has no pass and drops nothing, as the original's
+    /// arrival returns before the fade (@0x6c625) and shuts the menu
+    /// anyway (@0x6c50e). The steps `FlightView::arrival_frame` runs after
+    /// a waited arrival come after this, on a menu the arrival has shut.
+    pub(super) fn update_escort_menu(&mut self) {
+        let passes = self
             .step_report
             .steps
             .iter()
-            .map(|run| run.class_orders_cleared);
-        let shut = self
-            .escort_menu
-            .run_steps(self.elapsed, steps, cleared, flying);
+            .flat_map(|run| &run.passes)
+            .filter_map(|pass| pass.escort_menu);
+        let shut = self.escort_menu.run_passes(self.elapsed, passes);
         self.sync_escort_keys();
         if shut {
             self.shut_escort_menu_by_key();
@@ -565,7 +631,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// input in flight (a gate's exit, the course map opened over a
     /// screen) let go of the held keys alone ([`FlightView::let_go_of_held`]), as their releases still come here,
     /// and the course map opened in flight and a gate's exit keep the
-    /// keys read with no latch, B and L among them
+    /// keys read with no latch of a site's, B, L and the escort commands
+    /// among them
     /// ([`FlightView::open_map_as`], `FlightView::came_through`). The
     /// latched keys flight saw down are forgotten too, as their releases
     /// go elsewhere: the next hand-back says again which are down. The
@@ -574,6 +641,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (the `dialog_latch` module); a site's dialog opens through
     /// [`FlightView::let_go_into_dialog`].
     pub(super) fn let_go_of_input(&mut self) {
+        self.latched_at_site = false;
         self.keys.let_go();
         self.latched_down.clear();
         self.after_poll.clear();
@@ -869,7 +937,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The frame shows that drawing until the next show: its course and
     /// mode-3 link are those of the last show, not live, as the
     /// original's frame image is drawn only then (at a show, Hyper Select,
-    /// a click and a zoom, each of which shows it again here).
+    /// a click, each of which shows it again here, and a zoom, which
+    /// redraws it, [`FlightView::redraw_floating_map`]).
     ///
     /// So it asks at every show, and a show comes on every frame while H
     /// or `\` is held ([`FlightView::floating_frame`]): the flight steps
@@ -879,15 +948,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight that answers nothing (one that failed to start) changes
     /// neither the picture nor the preselection.
     fn show_floating_map(&mut self) {
+        if let Some(shown) = self.redraw_floating_map() {
+            self.floating.preselect(shown.preselection);
+        }
+    }
+
+    /// Redraws the floating map as a zoom does (`_HandlePlayer` @0x71013,
+    /// @0x71094): its clock restarted (`TickCount` into 0x3b51e0), then
+    /// `_DrawMapInFloatingFrame` alone, which draws the map afresh but,
+    /// unlike `_ShowFloatingMap`, leaves `_selSystem` as the last show set
+    /// it (@0x1147b-0x114c8). The drawing is the show's ask's
+    /// ([`FlightView::show_floating_map`]), returned for a show to take
+    /// the system it preselects; `None` when the flight answers nothing.
+    ///
+    /// `_DrawMapInFloatingFrame` doesn't run `_RecalcMissionSystsForMap`
+    /// (`_ShowFloatingMap` does, @0x114ea), where ours' drawing carries
+    /// the mission systems as they stand: they differ only when a
+    /// mission's systems changed since the last show while the map is up
+    /// with H and `\` let go, and the drawing is one snapshot of the
+    /// flight with no stale mission systems to keep.
+    fn redraw_floating_map(&mut self) -> Option<Box<nova_sim::flight_frame::FloatingMap>> {
         self.floating.show(self.mac_now());
         // `_DrawMapInFloatingFrame` sets `_mapScroll` to the current
         // system as it draws (@0x11338-0x1136d), so the course map opens
         // there next.
         self.map.recentre();
-        if let ScreenAnswer::FloatingMap(shown) = self.sim.screen(ScreenAsk::FloatingMap) {
-            self.floating.preselect(shown.preselection);
-            self.floating_picture = Some(MapPicture::of(&shown.drawing));
-        }
+        let ScreenAnswer::FloatingMap(shown) = self.sim.screen(ScreenAsk::FloatingMap) else {
+            return None;
+        };
+        self.floating_picture = Some(MapPicture::of(&shown.drawing));
+        Some(shown)
     }
 
     /// The floating map's work each frame, as `_HandlePlayer` does it
@@ -961,7 +1051,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x6f2a5), so alone they hold no command and never set
     /// `_quickKeyCheckResult`, and Command itself holds the zoom back, as
     /// any modifier does ([`CommandReader::modifier_down`](crate::keymap::CommandReader::modifier_down)).
-    /// One that changes the scale shows the map again and raises
+    /// One that changes the zoom redraws the map
+    /// ([`FlightView::redraw_floating_map`]) and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating(&mut self, pressed: F) {
@@ -983,7 +1074,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.floating.zoom_in()
         };
         if moved {
-            self.show_floating_map();
+            self.redraw_floating_map();
             self.ui_sounds.push(UiSound::FloatingMapZoomed);
         }
     }

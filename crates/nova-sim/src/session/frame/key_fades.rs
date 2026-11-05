@@ -14,9 +14,15 @@ impl Session {
     /// [`PlayerCommand::FrameRate`] taken, which is taken wherever a key
     /// block runs. `_IsDisabled` and `_IsDying` are the next pass's
     /// [`PlayerHead`], as the countdown and the cloak key read them, and
-    /// the countdown drops by the next pass's gain.
+    /// the countdown drops by the next pass's gain. The auto-eject reads
+    /// the death timer as the next pass's tick leaves it, since
+    /// `_HandlePlayer` arms at @0x6f27b and sets `_keyPressedThisFrame` at
+    /// @0x6f2cb after the count-down, as `chord_fades` reads the
+    /// countdown's next pass.
     pub(super) fn key_fades(&self) -> KeyFades {
         let head = PlayerHead::of(self.ship.condition);
+        let mut next = self.ship.condition;
+        next.count_down();
         KeyFades::of(KeyFacts {
             handlers: self.takes(PlayerCommand::FrameRate),
             disabled: head.disabled,
@@ -29,7 +35,7 @@ impl Session {
                 .fate
                 .self_destruct
                 .chord_fades(head.dying, self.next_speed_mult()),
-            auto_eject: self.ship.auto_eject_fires(&self.pilot, &self.statics),
+            auto_eject: self.ship.auto_eject_fires(next, &self.pilot, &self.statics),
         })
     }
 }
@@ -159,6 +165,47 @@ mod tests {
         assert!(fades(&session).unbidden(), "armed");
         session.set_player_condition(Condition::Disabled);
         assert!(!fades(&session).unbidden(), "not breaking up");
+    }
+
+    /// A session flying a ship of `DeathDelay` `death_delay` that carries
+    /// auto-eject.
+    fn auto_ejecting(death_delay: u32) -> Session {
+        const AUTO: i16 = 187;
+        let mut stock = catalog();
+        stock.outfits.push(outfit(AUTO, &[(MOD_AUTO_EJECT, 0)]));
+        let mut session = Session::start(&stock).expect("starts");
+        session.ship.fit.hull.death_delay = death_delay;
+        session.pilot.outfits.insert(OutfitId(AUTO), 1);
+        session
+    }
+
+    #[test]
+    fn auto_eject_fades_on_the_frame_before_the_pass_that_arms_it() {
+        let mut session = auto_ejecting(120);
+        session.set_player_condition(Condition::Dying {
+            ticks_left: 61,
+            starting: false,
+        });
+        assert!(fades(&session).unbidden(), "the next pass reads 60");
+        session.set_player_condition(Condition::Dying {
+            ticks_left: 62,
+            starting: false,
+        });
+        assert!(!fades(&session).unbidden(), "the next pass reads 61");
+    }
+
+    #[test]
+    fn a_breakup_with_its_timer_unset_fades_unbidden() {
+        let mut session = auto_ejecting(120);
+        session.set_player_condition(Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        });
+        assert!(fades(&session).unbidden(), "dying, unset");
+        let mut session = auto_ejecting(120);
+        assert!(!fades(&session).unbidden(), "intact");
+        session.pilot.reserves.armor.now = 0.0;
+        assert!(fades(&session).unbidden(), "armour gone");
     }
 
     #[test]

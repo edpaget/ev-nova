@@ -1,6 +1,11 @@
 //! Keys that wait for a held press's release, in the dialogs that ask for
 //! it ([`Dialog::with_held_keys`](super::Dialog::with_held_keys)): "Desc
-//! Dialog" and the offer dialog.
+//! Dialog", the offer dialog, and the mission computer's and the mission
+//! info screen's buttons; and in the List Manager's lists
+//! ([`RowList`](super::RowList)), which always hold them while a press is
+//! held on their rows or their bar (`LClick`'s `clickScan` reads no
+//! events). The mission screens' rules for what follows a closing key are
+//! in `spaceport::mission_keys`.
 //!
 //! The original reads no events while the mouse button is held in those
 //! dialogs. `_TextDialogFilter`'s and `_SingleMissionFilter`'s held loops

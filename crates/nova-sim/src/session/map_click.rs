@@ -1,7 +1,9 @@
 //! A click on the in-flight course and hypergate maps, and Clear Route,
 //! as `_DoSystemMap` takes item 3 (@0x12dd4-0x137e8) and item 8
-//! (@0x12c69-0x12dbf): [`Session::map_click`] and [`Session::clear_route`].
-//! All addresses are in `EV Nova.app`'s `EV Nova` (i386).
+//! (@0x12c69-0x12dbf): [`Session::map_click`] and [`Session::clear_route`];
+//! and what the map's opening does to the course
+//! ([`Session::open_system_map`]). All addresses are in `EV Nova.app`'s
+//! `EV Nova` (i386).
 //!
 //! **The hit test** is the view's: the visible systems whose 20 × 20 box
 //! (the point inset by −10, @0x12f3e, `PtInRect` @0x12f53) holds the
@@ -22,8 +24,9 @@
 //!   as a mission system is @0x13061-0x1306b; [`MapPress::green`]) or
 //!   flagged;
 //! - otherwise the source is, with Shift (`_KeyCheck(0x38)` @0x13071) and
-//!   a course, its last hop, raw, and a hit at that hop's position is
-//!   accepted (@0x1308b-0x130af); without, the current system;
+//!   the stale length above 1, `route[len − 1]`, raw, and a hit at that
+//!   hop's position is accepted (@0x13081-0x130af); with the length at
+//!   or below 1, or without Shift, the current system (@0x130b4);
 //! - then each of the source's first 16 Con slots that is set and has a
 //!   visible system at its place (`_FindActiveCoLocatedSystem`): a hit
 //!   that system is, or stands at the position of, is accepted as that
@@ -60,16 +63,31 @@
 //! **Clear Route** (@0x12c69-0x12dbf), from its button or C, under both
 //! readings: the course cleared, `showClearRouteButton` cleared and the
 //! selection let go with the mode kept (+0x6c = −1), then the nav area
-//! redrawn (`_DrawStatus` @0x12dba).
+//! redrawn (`_DrawStatus` @0x12dba). It sets the stale length to 1
+//! (@0x12dbf).
+//!
+//! **The stale length** is `_DoSystemMap`'s length local (-0x9c(%ebp)),
+//! counting slot 0, which only Clear Route and the Shift-click write
+//! ([`RouteEdit::length`](map_route::RouteEdit::length)), never the
+//! opening. It is 2 after a wrap, so the Shift branch then reads the hop
+//! just written in slot 1, not the last hop, and 0 after a remove, so it
+//! reads the current system. Before an opening's first write the
+//! original reads uninitialised stack, which isn't replicated: ours
+//! leaves it unset there and reads the course's real last hop. By the
+//! other reading of [`RuleKey::MapPlotting`] the planner writes no
+//! length, and the acceptance stays the original's.
+//!
+//! **The opening** (@0x12338-0x12394), under both readings, by whichever
+//! opener: the course tidied ([`map_route::tidy`]) and the stale length
+//! unset, before the opening reads the course for
+//! `showClearRouteButton` (@0x12396-0x123c3).
 //!
 //! Nothing here plays a sound or makes a random draw.
 //!
-//! **Left out** (rdm:task/do-system-map-left-out-branches): the length
-//! the acceptance's Shift branch reads is a stale local of `_DoSystemMap`
-//! (-0x9c(%ebp), @0x13081-0x13090), where ours reads the course's real
-//! last hop; the hypergate map's mode 4 writes (@0x13702-0x13734); and
-//! the position compare of a link that resolves to −1, which reads system
-//! −1 out of bounds (@0x130f0-0x13113): ours skips the link.
+//! **Left out** (rdm:task/do-system-map-left-out-branches): the hypergate
+//! map's mode 4 writes (@0x13702-0x13734); and the position compare of a
+//! link that resolves to −1, which reads system −1 out of bounds
+//! (@0x130f0-0x13113): ours skips the link.
 
 use super::nav::CON_SLOTS;
 use super::{Chart, Session, Setup};
@@ -136,6 +154,15 @@ impl Session {
     /// (`_DrawStatus` @0x12dba).
     pub(crate) fn clear_route(&mut self) {
         self.chart.clear_route(&mut self.pilot);
+    }
+
+    /// An in-flight map opens (`_DoSystemMap` @0x12338-0x12394): the
+    /// course tidied ([`map_route::tidy`]) and the stale length unset (see
+    /// the module docs), under both readings of [`RuleKey::MapPlotting`].
+    /// Every opening runs it, before the opening reads the course for
+    /// `showClearRouteButton` (@0x12396-0x123c3).
+    pub(crate) fn open_system_map(&mut self) {
+        self.chart.open_system_map(&mut self.pilot);
     }
 }
 
@@ -206,7 +233,29 @@ impl Chart {
     /// (`_DrawStatus` @0x12dba).
     fn clear_route(&mut self, pilot: &mut Pilot) {
         pilot.restart_course(pilot.system);
+        self.map_length = Some(1);
         self.deselect();
+    }
+
+    /// An in-flight map opens: the course tidied and the stale length
+    /// unset ([`Session::open_system_map`]).
+    fn open_system_map(&mut self, pilot: &mut Pilot) {
+        map_route::tidy(&mut pilot.course_start, &mut pilot.course);
+        self.map_length = None;
+    }
+
+    /// The source the acceptance's Shift branch reads, with a course, by
+    /// the stale length (@0x13081-0x130af): `route[len − 1]` when the
+    /// length is above 1, and none, for the current system, at or below
+    /// it. Unset, the course's last hop. A length past the course falls
+    /// back to the current system: no Shift-click or Clear Route leaves
+    /// one while the map is open, as nothing else touches the course then.
+    fn shift_source(&self, pilot: &Pilot) -> Option<SystemId> {
+        match self.map_length {
+            None => pilot.course.last().copied(),
+            Some(length) if length <= 1 => None,
+            Some(length) => pilot.course.get(length - 2).copied(),
+        }
     }
 
     /// The system `hit` is accepted as, and its gate flag, or `None` when
@@ -232,8 +281,8 @@ impl Chart {
             return Some((hit, flagged));
         }
         let places = self.galaxy.map().places();
-        let source = match pilot.course.last() {
-            Some(&last) if press.shift => {
+        let source = match self.shift_source(pilot) {
+            Some(last) if press.shift => {
                 if places.together(last, hit) {
                     return Some((hit, false));
                 }
@@ -292,6 +341,7 @@ impl Chart {
         );
         pilot.course = edit.course;
         pilot.course_start = edit.start;
+        self.map_length = Some(edit.length);
         MapClicked {
             selected: edit.appended.then_some(pick),
             gate_pick: None,
@@ -386,7 +436,7 @@ mod tests {
     #[test]
     fn no_hit_accepted_gives_none_and_changes_nothing() {
         let mut session = hub_session();
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         assert_eq!(click(&mut session, &[]), None);
         assert_eq!(click(&mut session, &[132, 133, 136]), None);
         assert_eq!(session.nav_mode(), NavMode::Off);
@@ -443,7 +493,7 @@ mod tests {
     fn the_green_system_selects_in_mode_3_in_flight_when_the_ship_can_jump_there() {
         let mut session = hub_session();
         session.chart.known.clear();
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         let hits = ids(&[134]);
         let press = MapPress {
             green: Some(SystemId(134)),
@@ -472,7 +522,7 @@ mod tests {
     #[test]
     fn with_shift_and_a_course_an_unknown_system_the_last_hop_links_to_is_accepted() {
         let mut session = hub_session();
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         assert_eq!(click(&mut session, &[132]), None, "not without Shift");
         assert!(shift_click(&mut session, &[132]).is_some());
     }
@@ -488,7 +538,7 @@ mod tests {
     #[test]
     fn with_shift_and_a_course_an_unknown_system_at_the_last_hops_position_is_accepted() {
         let mut session = Session::start(&with_137()).expect("starts");
-        session.pilot.course = ids(&[131, 132]);
+        session.set_course(ids(&[131, 132]));
         assert!(!session.is_known(SystemId(137)));
         assert_eq!(click(&mut session, &[137]), None, "not without Shift");
         assert!(shift_click(&mut session, &[137]).is_some());
@@ -527,7 +577,7 @@ mod tests {
     #[test]
     fn a_plain_click_on_a_linked_system_selects_it_in_mode_3_and_keeps_the_course() {
         let mut session = hub_session();
-        session.pilot.course = ids(&[131, 132]);
+        session.set_course(ids(&[131, 132]));
         assert_eq!(click(&mut session, &[134]), selects(134));
         assert_eq!(session.nav_mode(), hyperspace(134));
         assert_eq!(session.course(), ids(&[131, 132]), "the course untouched");
@@ -557,7 +607,7 @@ mod tests {
             let mut session = hub_session();
             session.mark_known([SystemId(133)]);
             session.chart.nav = before;
-            session.pilot.course = ids(&[131]);
+            session.set_course(ids(&[131]));
             assert_eq!(click(&mut session, &[133]), selects(133), "{before:?}");
             assert_eq!(session.nav_mode(), after, "{before:?}");
             assert_eq!(session.course(), ids(&[131]), "{before:?}");
@@ -656,7 +706,7 @@ mod tests {
     #[test]
     fn the_hypergate_map_ignores_shift() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         assert_eq!(
             gate_click(&mut session, &[131], &[131, 132], true),
             gate_picks(131, Some(131))
@@ -687,7 +737,7 @@ mod tests {
     fn a_shift_click_on_an_unlinked_system_changes_nothing() {
         let mut session = hub_session();
         session.mark_known([SystemId(133)]);
-        session.pilot.course = ids(&[134]);
+        session.set_course(ids(&[134]));
         assert_eq!(shift_click(&mut session, &[133]), shifted(None));
         assert_eq!(session.course(), ids(&[134]));
     }
@@ -706,13 +756,13 @@ mod tests {
     #[test]
     fn a_shift_click_is_refused_from_an_unexplored_hop_to_an_unknown_system() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         assert!(!session.is_known(SystemId(132)));
         assert_eq!(shift_click(&mut session, &[132]), shifted(None));
         assert_eq!(session.course(), ids(&[131]));
         session.pilot.explore(SystemId(131));
         assert_eq!(shift_click(&mut session, &[132]), shifted(Some(132)));
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         session.pilot.explored.clear();
         session.mark_known([SystemId(132)]);
         assert_eq!(
@@ -725,7 +775,7 @@ mod tests {
     #[test]
     fn a_shift_click_on_a_hop_cuts_the_course_and_puts_it_back() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.pilot.course = ids(&[131, 132]);
+        session.set_course(ids(&[131, 132]));
         assert_eq!(shift_click(&mut session, &[131]), shifted(Some(131)));
         assert_eq!(session.course(), ids(&[131]));
     }
@@ -734,7 +784,7 @@ mod tests {
     fn a_shift_click_on_the_last_hop_leaves_the_course_as_it_was() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.pilot.explore(SystemId(131));
-        session.pilot.course = ids(&[131, 132]);
+        session.set_course(ids(&[131, 132]));
         assert_eq!(shift_click(&mut session, &[132]), shifted(Some(132)));
         assert_eq!(session.course(), ids(&[131, 132]));
     }
@@ -742,8 +792,7 @@ mod tests {
     #[test]
     fn a_shift_click_at_the_current_systems_place_clears_the_course() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.pilot.course = ids(&[131, 132]);
-        session.pilot.course_start = Some(SystemId(130));
+        session.set_course(ids(&[131, 132]));
         session.chart.nav = hyperspace(131);
         assert_eq!(shift_click(&mut session, &[130]), shifted(None));
         assert_eq!(session.course(), []);
@@ -752,8 +801,8 @@ mod tests {
     }
 
     /// 130 lists 131 and 200; 131 to 162 in a line, each listing the
-    /// next; all known.
-    fn line() -> Session {
+    /// next.
+    fn line_catalog() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map = (0..=32)
             .map(|step: i16| {
@@ -767,10 +816,56 @@ mod tests {
             })
             .chain([star(200, (0.0, 50.0), &[])])
             .collect();
-        let mut session = Session::start(&catalog).expect("starts");
+        catalog
+    }
+
+    /// `catalog`'s session with 131 to 162 and 200 known, and 131 to 161
+    /// explored.
+    fn line_session(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
         session.mark_known((131..=162).chain([200]).map(SystemId));
         for id in 131..=161 {
             session.pilot.explore(SystemId(id));
+        }
+        session
+    }
+
+    /// [`line_catalog`]'s session.
+    fn line() -> Session {
+        line_session(&line_catalog())
+    }
+
+    /// The full course 131 to 161.
+    fn full_line() -> Vec<SystemId> {
+        let full: Vec<SystemId> = (131..=161).map(SystemId).collect();
+        assert_eq!(full.len(), ROUTE_HOPS);
+        full
+    }
+
+    /// [`line`] with three systems unknown (+0x1ec clear), each listed by
+    /// one system alone: 201 by 200, 202 by 161 and 203 by 130.
+    fn line_with_ends() -> Session {
+        let mut catalog = line_catalog();
+        for (id, links) in [
+            (130, &[131, 200, 203][..]),
+            (161, &[162, 202]),
+            (200, &[201]),
+        ] {
+            catalog
+                .star_map
+                .iter_mut()
+                .find(|system| system.id == SystemId(id))
+                .expect("in the line")
+                .links = ids(links);
+        }
+        catalog.star_map.extend([
+            star(201, (100.0, 50.0), &[]),
+            star(202, (300.0, 50.0), &[]),
+            star(203, (0.0, -50.0), &[]),
+        ]);
+        let mut session = line_session(&catalog);
+        for id in 201..=203 {
+            session.chart.known.remove(&SystemId(id));
         }
         session
     }
@@ -780,7 +875,7 @@ mod tests {
         let mut session = line();
         let full: Vec<i16> = (131..=161).collect();
         assert_eq!(full.len(), ROUTE_HOPS);
-        session.pilot.course = ids(&full);
+        session.set_course(ids(&full));
         assert_eq!(
             shift_click(&mut session, &[162]),
             shifted(None),
@@ -791,6 +886,105 @@ mod tests {
         let mut wrapped = ids(&full);
         wrapped[0] = SystemId(200);
         assert_eq!(session.course(), wrapped);
+    }
+
+    // The remove, the tidy at the opening and the stale length.
+
+    #[test]
+    fn a_shift_click_at_a_full_courses_start_elsewhere_removes_it_and_the_opening_shifts_the_course()
+     {
+        // An `N` moved the player from 200 to 130, keeping the course.
+        let mut session = line();
+        session.set_course(full_line());
+        session.pilot.course_start = Some(SystemId(200));
+        assert_eq!(shift_click(&mut session, &[200]), shifted(None));
+        assert_eq!(session.pilot.course_start(), None, "slot 0 removed");
+        assert_eq!(session.course(), full_line(), "the hops kept");
+        session.open_system_map();
+        assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
+        assert_eq!(session.course(), &full_line()[1..]);
+    }
+
+    #[test]
+    fn after_a_wrap_the_shift_branch_accepts_by_the_hop_written_not_the_last_hop() {
+        let mut session = line_with_ends();
+        session.set_course(full_line());
+        assert_eq!(shift_click(&mut session, &[200]), shifted(Some(200)));
+        assert_eq!(
+            shift_click(&mut session, &[202]),
+            None,
+            "161, the last hop, lists 202"
+        );
+        assert!(
+            shift_click(&mut session, &[201]).is_some(),
+            "200, route[1], lists 201"
+        );
+    }
+
+    #[test]
+    fn before_an_openings_first_shift_click_the_shift_branch_reads_the_last_hop() {
+        let mut session = line_with_ends();
+        session.set_course(full_line());
+        assert_eq!(shift_click(&mut session, &[201]), None, "200 isn't a hop");
+        assert!(shift_click(&mut session, &[202]).is_some(), "161 lists 202");
+    }
+
+    #[test]
+    fn a_reopened_map_reads_the_last_hop_again() {
+        let mut session = line_with_ends();
+        session.set_course(full_line());
+        assert_eq!(shift_click(&mut session, &[200]), shifted(Some(200)));
+        session.open_system_map();
+        assert!(shift_click(&mut session, &[202]).is_some(), "161 lists 202");
+    }
+
+    #[test]
+    fn after_a_remove_the_shift_branch_reads_the_current_system() {
+        let mut session = line_with_ends();
+        session.set_course(full_line());
+        session.pilot.course_start = Some(SystemId(200));
+        assert_eq!(shift_click(&mut session, &[200]), shifted(None));
+        assert_eq!(
+            shift_click(&mut session, &[202]),
+            None,
+            "161, the last hop, lists 202"
+        );
+        assert!(
+            shift_click(&mut session, &[203]).is_some(),
+            "130, the current system, lists 203"
+        );
+    }
+
+    #[test]
+    fn after_clear_route_the_shift_branch_reads_the_current_system() {
+        let mut session = hub_session();
+        session.clear_route();
+        session.set_course(ids(&[131]));
+        assert!(!session.is_known(SystemId(132)));
+        assert_eq!(
+            shift_click(&mut session, &[132]),
+            None,
+            "131, the last hop, lists 132"
+        );
+    }
+
+    #[test]
+    fn the_opening_clears_a_start_with_no_hops() {
+        let mut session = hub_session();
+        session.clear_route();
+        assert_eq!(session.pilot.course_start(), Some(session.system()));
+        session.open_system_map();
+        assert_eq!(session.pilot.course_start(), None);
+        assert_eq!(session.course(), []);
+    }
+
+    #[test]
+    fn the_opening_keeps_a_started_course() {
+        let mut session = hub_session();
+        session.set_course(ids(&[131, 132]));
+        session.open_system_map();
+        assert_eq!(session.pilot.course_start(), Some(session.system()));
+        assert_eq!(session.course(), ids(&[131, 132]));
     }
 
     #[test]
@@ -808,7 +1002,7 @@ mod tests {
     #[test]
     fn clear_route_empties_the_course_and_lets_go_of_the_selection_keeping_the_mode() {
         let mut session = hub_session();
-        session.pilot.course = ids(&[131, 132]);
+        session.set_course(ids(&[131, 132]));
         session.pilot.course_start = Some(SystemId(133));
         session.chart.nav = hyperspace(131);
         session.clear_route();
@@ -822,7 +1016,7 @@ mod tests {
 
         let mut session = hub_session();
         land_now(&mut session).expect("lands");
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         session.clear_route();
         assert_eq!(session.course(), []);
         assert_eq!(session.nav_mode(), NavMode::Stellar(None), "docked");
@@ -860,7 +1054,7 @@ mod tests {
     fn by_the_other_reading_a_click_with_no_route_clears_the_course() {
         let mut session = by_the_planner(hub_session());
         session.mark_known([SystemId(133)]);
-        session.pilot.course = ids(&[131]);
+        session.set_course(ids(&[131]));
         let clicked = click(&mut session, &[133]).expect("accepted");
         assert_eq!(clicked.clear_route, Some(false), "turned off");
         assert!(clicked.course_changed);

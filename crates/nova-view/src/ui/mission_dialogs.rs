@@ -632,11 +632,26 @@ impl MissionDialogs {
 
     /// Closes the mission info screen, noting its close
     /// ([`MissionDialogs::take_info_closed`]), and, when it was laid out,
-    /// that too ([`MissionDialogs::take_info_closed_laid_out`]).
+    /// that too ([`MissionDialogs::take_info_closed_laid_out`]). What its
+    /// replay queued after the key or click that closed it goes to what
+    /// shows next ([`MissionInfoScreen::take_unclaimed`]), as
+    /// `_DoMissionInfoDialog` flushes nothing as it closes (@0x9e744),
+    /// unless that is a text, whose `_ShowTextDialog` flushes it as it
+    /// opens (@0x5ae67).
     fn close_info(&mut self) {
-        if let Some(info) = self.info.take() {
-            self.info_closed = true;
-            self.info_closed_laid_out |= info.problem().is_none();
+        let Some(mut info) = self.info.take() else {
+            return;
+        };
+        self.info_closed = true;
+        self.info_closed_laid_out |= info.problem().is_none();
+        let rest = info.take_unclaimed();
+        if matches!(self.texts.front(), Some(Stage::Text(_))) {
+            return;
+        }
+        if self.is_open() {
+            self.pass_on(rest);
+        } else {
+            self.left.extend(rest);
         }
     }
 
@@ -719,6 +734,10 @@ impl Screen for MissionDialogs {
             None => {
                 if let Some(info) = &mut self.info {
                     info.tick(dt);
+                    self.sounds.extend(info.take_sounds());
+                    if info.closed() {
+                        self.close_info();
+                    }
                 }
             }
         }
@@ -749,11 +768,19 @@ impl Screen for MissionDialogs {
         }
     }
 
-    /// Lets go of the keys the text shown holds back, which runs them on
-    /// the next tick ([`DescDialog`]'s `Screen::release_keys`).
+    /// Lets go of the keys the text shown holds back, or, with no text or
+    /// movie, the mission info screen's, which runs them on the next tick
+    /// ([`DescDialog`]'s and [`MissionInfoScreen`]'s
+    /// `Screen::release_keys`).
     fn release_keys(&mut self) {
-        if let Some(Stage::Text(text)) = self.texts.front_mut() {
-            text.release_keys();
+        match self.texts.front_mut() {
+            Some(Stage::Text(text)) => text.release_keys(),
+            Some(Stage::Movie(_) | Stage::Empty | Stage::Closed) => {}
+            None => {
+                if let Some(info) = &mut self.info {
+                    info.release_keys();
+                }
+            }
         }
     }
 
@@ -770,9 +797,14 @@ impl Screen for MissionDialogs {
     }
 
     /// The text in front's readout ([`DescDialog`]'s
-    /// [`Screen::holds_back_keys`]).
+    /// [`Screen::holds_back_keys`]), or, with no text or movie, the
+    /// mission info screen's.
     fn holds_back_keys(&self) -> bool {
-        matches!(self.texts.front(), Some(Stage::Text(text)) if text.holds_back_keys())
+        match self.texts.front() {
+            Some(Stage::Text(text)) => text.holds_back_keys(),
+            Some(Stage::Movie(_) | Stage::Empty | Stage::Closed) => false,
+            None => self.info.as_ref().is_some_and(Screen::holds_back_keys),
+        }
     }
 }
 
@@ -1320,6 +1352,138 @@ mod tests {
         let mut dialogs = dialogs();
         dialogs.open_info_with_map(info(), false);
         dialogs
+    }
+
+    // Keys held back by a press on the mission info screen with no text
+    // over it (`spaceport::mission_keys`).
+
+    /// The middle of the info screen's first row.
+    fn info_row_0(dialogs: &MissionDialogs) -> Point {
+        dialogs
+            .info()
+            .and_then(MissionInfoScreen::rows)
+            .and_then(|rows| rows.row_bounds(0))
+            .expect("row 0")
+            .center()
+    }
+
+    /// A press on the info screen's first row, `keys` while it is held.
+    fn held_on_info(dialogs: &mut MissionDialogs, keys: &[Input]) -> Point {
+        let at = info_row_0(dialogs);
+        dialogs.input(&left(true, at));
+        for input in keys {
+            dialogs.input(input);
+        }
+        at
+    }
+
+    #[test]
+    fn the_info_screens_rest_after_a_held_close_is_left_for_what_is_beneath() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        let at = held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::ArrowDown)]);
+        assert!(dialogs.info().is_some(), "it waits");
+        dialogs.input(&left(false, at));
+        assert!(dialogs.info().is_none());
+        assert!(dialogs.take_info_closed());
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)], "@0x9e744");
+        assert_eq!(dialogs.take_unclaimed(), []);
+    }
+
+    #[test]
+    fn the_info_screen_holds_back_keys_with_no_text_over_it() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        assert!(!dialogs.holds_back_keys());
+        held_on_info(&mut dialogs, &[key(Key::Escape)]);
+        assert!(dialogs.holds_back_keys(), "during the press");
+        dialogs.release_keys();
+        assert!(dialogs.holds_back_keys(), "abandoned, until the tick");
+        assert!(dialogs.info().is_some());
+        dialogs.tick(Duration::ZERO);
+        assert!(!dialogs.holds_back_keys());
+    }
+
+    #[test]
+    fn a_tick_replay_that_closes_the_info_screen_closes_it() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        held_on_info(&mut dialogs, &[key(Key::Escape), key(Key::ArrowDown)]);
+        dialogs.cancel_pointer();
+        assert!(dialogs.info().is_some());
+        dialogs.tick(Duration::ZERO);
+        assert!(dialogs.info().is_none(), "closed by the tick");
+        assert!(dialogs.take_info_closed());
+        assert!(dialogs.take_info_closed_laid_out());
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)]);
+    }
+
+    #[test]
+    fn set_info_after_an_abort_runs_the_held_keys_and_a_close_among_them_closes_it() {
+        let mut two = info();
+        two.rows.push(InfoRow {
+            slot: 5,
+            name: "Walk".to_owned(),
+            failed: false,
+            text: "Stroll.".to_owned(),
+            abortable: false,
+        });
+        let mut dialogs = dialogs();
+        dialogs.open_info(two.clone());
+        let abort = dialogs
+            .info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(ABORT_ITEM))
+            .expect("Abort")
+            .center();
+        dialogs.input(&left(true, abort));
+        dialogs.input(&key(Key::Escape));
+        dialogs.input(&key(Key::ArrowDown));
+        dialogs.input(&left(false, abort));
+        assert_eq!(dialogs.take_abort(), Some(2));
+        assert!(dialogs.info().is_some(), "the Escape waits for the answer");
+        two.rows.remove(0);
+        dialogs.set_info(two);
+        assert!(
+            dialogs.info().is_none(),
+            "the Escape ran on the rebuilt list"
+        );
+        assert!(dialogs.take_info_closed());
+        assert_eq!(dialogs.take_left(), [key(Key::ArrowDown)]);
+    }
+
+    #[test]
+    fn an_abort_a_tick_replays_keeps_a_close_after_it_until_the_answer() {
+        let mut two = info();
+        two.rows.push(InfoRow {
+            slot: 5,
+            name: "Walk".to_owned(),
+            failed: false,
+            text: "Stroll.".to_owned(),
+            abortable: false,
+        });
+        let mut dialogs = dialogs();
+        dialogs.open_info(two.clone());
+        held_on_info(
+            &mut dialogs,
+            &[
+                key(Key::Tab),
+                key(Key::Tab),
+                key(Key::Space),
+                key(Key::Escape),
+            ],
+        );
+        dialogs.cancel_pointer();
+        dialogs.tick(Duration::ZERO);
+        assert!(dialogs.info().is_some(), "the Escape waits for the answer");
+        assert_eq!(dialogs.take_abort(), Some(2));
+        two.rows.remove(0);
+        dialogs.set_info(two);
+        assert!(
+            dialogs.info().is_none(),
+            "the Escape ran on the rebuilt list"
+        );
+        assert!(dialogs.take_info_closed());
     }
 
     #[test]

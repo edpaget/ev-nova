@@ -23,6 +23,10 @@
 //!   place of its default (see [`nova_sim::rule_values`]). `"rules"`
 //!   doesn't move these.
 //!
+//! A ruleset pins some readings of its own between `"rules"` and
+//! `"rule_overrides"` ([`ruleset_rulebook`]); the stock game pins none, so
+//! its rulebook is the settings' alone ([`game_rulebook`]).
+//!
 //! The rules and their keys are listed once, in
 //! [`nova_sim::rulebook`] and [`nova_sim::rule_values`]; a rule added
 //! there is read here with no change. None of this is part of the pilot
@@ -56,15 +60,34 @@ pub const RULE_VALUES: &str = "rule_values";
 /// not an object, a value naming no numeric rule, and a number that is
 /// not a JSON whole number from 1 to `u32::MAX`, which leaves that rule
 /// at its default.
+#[must_use]
 pub fn game_rulebook(store: Option<&mut (dyn SettingsStore + '_)>) -> (Rulebook, Vec<String>) {
+    ruleset_rulebook(store, &[])
+}
+
+/// [`game_rulebook`] for a ruleset pinning `readings` (its
+/// [`Profile`](crate::ruleset::Profile)'s): the settings' [`RULES`] (else
+/// each rule's default), then `readings`, then the settings'
+/// [`RULE_OVERRIDES`] and [`RULE_VALUES`]. So the global `"rules"` doesn't
+/// move a reading the game pins, but a per-key override still does. The
+/// readings apply too when there are no settings it can use.
+pub fn ruleset_rulebook(
+    store: Option<&mut (dyn SettingsStore + '_)>,
+    readings: &[(RuleKey, RuleSource)],
+) -> (Rulebook, Vec<String>) {
+    let pin = |rulebook: Rulebook| {
+        readings.iter().fold(rulebook, |book, &(key, source)| {
+            book.with_override(key, source)
+        })
+    };
     let Some(store) = store else {
-        return (Rulebook::default(), Vec::new());
+        return (pin(Rulebook::default()), Vec::new());
     };
     let Ok(Some(text)) = store.read() else {
-        return (Rulebook::default(), Vec::new());
+        return (pin(Rulebook::default()), Vec::new());
     };
     let Ok(Value::Object(settings)) = serde_json::from_str::<Value>(&text) else {
-        return (Rulebook::default(), Vec::new());
+        return (pin(Rulebook::default()), Vec::new());
     };
     let location = store.location();
     let mut warnings = Vec::new();
@@ -82,6 +105,7 @@ pub fn game_rulebook(store: Option<&mut (dyn SettingsStore + '_)>) -> (Rulebook,
         .get(RULES)
         .and_then(|value| source(value, &format!("\"{RULES}\"")))
         .map_or_else(Rulebook::default, Rulebook::new);
+    rulebook = pin(rulebook);
     let mut unknown = Vec::new();
     match settings.get(RULE_OVERRIDES) {
         None => {}
@@ -201,6 +225,103 @@ mod tests {
 
     fn bible() -> Rulebook {
         Rulebook::new(RuleSource::Bible)
+    }
+
+    /// Readings of the tests' own, one each way, as a ruleset pins them.
+    const PINNED: &[(RuleKey, RuleSource)] = &[
+        (RuleKey::CrimeGains, RuleSource::Bible),
+        (RuleKey::DialogFocusRing, RuleSource::Engine),
+    ];
+
+    fn pinned_of(text: &str) -> (Rulebook, Vec<String>) {
+        ruleset_rulebook(Some(&mut MemorySettings::holding(text)), PINNED)
+    }
+
+    /// `rulebook` with [`PINNED`]'s readings.
+    fn pinned(rulebook: Rulebook) -> Rulebook {
+        rulebook
+            .with_override(RuleKey::CrimeGains, RuleSource::Bible)
+            .with_override(RuleKey::DialogFocusRing, RuleSource::Engine)
+    }
+
+    #[test]
+    fn a_ruleset_s_readings_apply_without_settings_it_can_use() {
+        assert_eq!(
+            ruleset_rulebook(None, PINNED),
+            (pinned(by_default()), vec![])
+        );
+        assert_eq!(
+            ruleset_rulebook(Some(&mut MemorySettings::new()), PINNED),
+            (pinned(by_default()), vec![]),
+            "nothing saved"
+        );
+        for text in ["{}", "not json", "[1, 2]"] {
+            assert_eq!(pinned_of(text), (pinned(by_default()), vec![]), "{text}");
+        }
+        let mut store = MemorySettings::holding(r#"{"rules": "bible"}"#);
+        store.fail_reads(true);
+        assert_eq!(
+            ruleset_rulebook(Some(&mut store), PINNED),
+            (pinned(by_default()), vec![])
+        );
+    }
+
+    #[test]
+    fn the_rules_move_every_rule_but_a_ruleset_s_readings() {
+        let (rulebook, warnings) = pinned_of(r#"{"rules": "engine"}"#);
+        assert_eq!((rulebook, warnings), (pinned(engine()), vec![]));
+        assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Bible);
+        assert_eq!(
+            rulebook.source_for(RuleKey::CronPostHoldoff),
+            RuleSource::Engine
+        );
+        let (rulebook, _) = pinned_of(r#"{"rules": "bible"}"#);
+        assert_eq!(
+            rulebook.source_for(RuleKey::DialogFocusRing),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            rulebook.source_for(RuleKey::EightBitSheet),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn an_override_beats_a_ruleset_s_reading_both_ways() {
+        let (rulebook, warnings) = pinned_of(
+            r#"{"rule_overrides": {"crime_gains": "engine", "dialog_focus_ring": "bible"}}"#,
+        );
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Engine);
+        assert_eq!(
+            rulebook.source_for(RuleKey::DialogFocusRing),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn a_ruleset_s_readings_leave_the_values_alone() {
+        let (rulebook, warnings) = pinned_of(r#"{"rule_values": {"thrust_divisor": 3000}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            pinned(by_default()).with_value(RuleValue::ThrustDivisor, n(3000))
+        );
+    }
+
+    #[test]
+    fn with_no_readings_a_ruleset_s_rulebook_is_the_settings_alone() {
+        for text in [
+            "{}",
+            r#"{"rules": "bible", "rule_overrides": {"crime_gains": "engine"}}"#,
+            r#"{"rules": "nonsense"}"#,
+        ] {
+            assert_eq!(
+                ruleset_rulebook(Some(&mut MemorySettings::holding(text)), &[]),
+                rulebook_of(text),
+                "{text}"
+            );
+        }
     }
 
     #[test]

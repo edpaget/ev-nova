@@ -22,8 +22,9 @@
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding (`nova_sim::NovaAi`) | interceptors only |
 //! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing (`nova_sim::hail::nova`) | they answer Greetings "No response.", and the middle button works |
 //! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." (`nova_sim::hail::reply`) | it is shown as written\* |
-//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
-//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`) | the orders are kept\* |
+//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation: **the default — a deliberate departure from the original**†††††††††††††††††††† |
+//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`); at a jump's arrival the reset comes from the class-order bookkeeping a pass later (see [`ArrivalOrders`](RuleKey::ArrivalOrders)) | the orders are kept\* |
+//! | [`ArrivalOrders`](RuleKey::ArrivalOrders) | `arrival_orders` | under `escort_orders`' engine reading, a jump's arrival keeps the escort classes' orders through its pass, whose class-order bookkeeping it skips (`_HandlePlayer` returns @0x6c625 before @0x6e2e8): a mission escort set up in the new system thinks once under its class's order (`_EscortAI` @0x83afb), the hired escorts and fighters gliding past their think (`_AIDispatch` @0x8fcf5), and the next pass's bookkeeping clears every class, every ship placed being unmarked (`_RespawnEscort` @0x3d546; see `nova_sim::Session`) | the port's earlier reading: every escort's order is reset as it enters, before any think\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed (`nova_sim::Session`) | every fighter out goes back into its bay on arrival and on landing\* |
 //! | [`FighterNoBay`](RuleKey::FighterNoBay) | `fighter_no_bay` | a fighter whose carrier has no bay for it stays out at its carrier, steering and thrusting at it, and docks the first tick a bay is there (`_AIAddFighterToParent` @0x80384; `nova_sim::Session`) | it docks and is lost, with a save due\* |
@@ -259,7 +260,7 @@
 //! | [`StrayShootPenalty`](RuleKey::StrayShootPenalty) | `stray_shoot_penalty` | the player's stray hit on a governed ship is forgiven 3 times in 4 only when the ship's government's `ShootPenalty` is 0 or below (`_DamageShip` @0x3b80a-0x3b847; see `nova_sim::ai::answer_flag`) | `ShootPenalty` is "currently ignored": every governed ship rolls |
 //! | [`IndependentKin`](RuleKey::IndependentKin) | `independent_kin` | two independents are kin, as their governments compare -1 to -1, so an independent NPC lets another independent's hit, or the player's, pass (`_DamageShip` @0x3b4cd-0x3b4fc; see `nova_sim::ai::answer_flag`) | independents are no government, and answer each other\* |
 //! | [`MapPlotting`](RuleKey::MapPlotting) | `map_plotting` | a click on the in-flight course map selects the system it accepts, and in flight selects it in nav mode 3 when the current system links to it and lets go of the selection otherwise; a Shift-click adds to the course a hop at a time; the course's first hop is cued as the map closes (`_DoSystemMap` @0x1325e-0x137c7, @0x13c16; `nova_sim::Session::map_click`). Under both readings the hit test, which hits count, the hypergate map's clicks and Clear Route are the original's | a click plots the shortest course to the system and cues its first hop at once (`nova_sim::Session::plot_course`)\* |
-//! | [`CueUnplacedHop`](RuleKey::CueUnplacedHop) | `cue_unplaced_hop` | a course whose first hop has no visible system at its place cues the first of the current system's Con slots whose own system has none either: mode 3 with a selection that reads as no destination (`_CueNextHyperRouteDest` @0xe2fa-0xe34d, a −1 = −1 match; `nova_sim::Session::cue_course`) | the cue changes nothing\* |
+//! | [`CueUnplacedHop`](RuleKey::CueUnplacedHop) | `cue_unplaced_hop` | a course whose first hop has no visible system at its place cues the first of the current system's Con slots whose own system has none either: mode 3 with a selection the nav area and the map read as no destination, and J jumps to unless the slot names no `sÿst` (`_CueNextHyperRouteDest` @0xe2fa-0xe34d, a −1 = −1 match; `nova_sim::Session::cue_course`) | the cue changes nothing\* |
 //! | [`NebulaPicture`](RuleKey::NebulaPicture) | `nebula_picture` | the in-flight map fills a nebula's rect with the largest of its seven pictures that fits it in width and height, slot 0 when none does and none drawn when slot 0 is missing, stretched to the rect (`_MapDialogUpdate` @0xfa4f-0xfadf; `nova_view`'s `GalaxyMap`) | the smallest picture at least as wide as the rect, else the widest, stretched to it: the map's earlier reading, which shrinks rather than enlarges\* |
 //! | [`MapBorderPace`](RuleKey::MapBorderPace) | `map_border_pace` | the in-flight map's borders run their fine pass's null events back to back, as `_MyModalDialog`'s sleep-0 loop delivers them (@0x59965-0x5997e, @0x126c1), so the map's next tick finishes the pass and redraws (`_MapFilter` @0x1463a-0x1479a; `nova_sim::map_borders`) | one null event a tick, a contributing system each\* |
 //! | [`MapFindBorders`](RuleKey::MapFindBorders) | `map_find_borders` | Find's centring runs no borders pass, so the borders stay drawn from cells worked out for the old scroll (`_DoSystemSearch` @0x1208c-0x120aa; `nova_sim::map_borders`) | Find's centring runs the coarse pass, as Space does\* |
@@ -299,7 +300,7 @@
 //! | [`StaleStellarSprite`](RuleKey::StaleStellarSprite) | `stale_stellar_sprite` | a deadly stellar hidden since it was last shown still kills by the sprite slot it last took, as nothing but `_HandleStellarSystemVisibility` writes its sprite pointer (spöb +0, @0x32fc8) and `_HandleDeadlyStellars` tests any listed stellar holding one (@0x39d1d): the slot's owner now, at that stellar's place and frame, or, unowned, graphic type 0's frame at the slot's last screen place, which follows the player (see [`deadly_stellar`](crate::deadly_stellar) and `nova_sim::story::sprite_pool`) | a hidden stellar kills nothing\* |
 //! | [`RleCollisionWalk`](RuleKey::RleCollisionWalk) | `rle_collision_walk` | two sprites touch as `_BlitPixieRLECollision` walks their run-length tokens (@0xc0c8d-0xc0ebe): a solid run (op 4) is passed with no width and its fill word read as a token, so a run never touches and later tokens on its line are read the run's length to the left; on a tie the second sprite steps first, so the first's drawn pixel at x − 1 touches the second's at x; and an 8-bit sheet's byte counts are read as pixels (see [`sprite_mask`](crate::sprite_mask)) | drawn pixels touch only where both sprites draw the same pixel, runs included\* |
 //! | [`ShotContact`](RuleKey::ShotContact) | `shot_contact` | a shot touches a ship or an asteroid by the two sprites' rects where the last pass placed them, strictly overlapping (`_SWCollideSpriteLayer` @0xacc30-0xacc81), then a ship by `_SWRadiusCollision` when the speed multiplier is 2.0 or more or the ship is 32 wide or less and otherwise, an asteroid always, by `_SWRLECollision` over their pixel masks, the hit at the shot's position, so a shot faster than its target's extent can pass through it (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler` @0x36a0e; see `nova_sim::combat::contact`) | the shot's swept path from its last place against the ship's 0.33-width disc or the asteroid's radius, hitting where it entered it\* |
-//! | [`SpeedMultRamp`](RuleKey::SpeedMultRamp) | `speed_mult_ramp` | the frames after a landing's tail (`_PlayerLandOnStellar` @0x6375e), the info dialogs (`_HandlePlayer` @0x70357, @0x704e8), the escort, comm and planet comm dialogs' closes (@0x95693, @0x9690e, @0x97af2) and a game entry after one that ended landed run at the ramp from 0.0: held, then (3 × old + 1) / 4 a frame (`_HandleTimeAdjustment` @0x33332-0x3349b; see [`speed_mult`](crate::speed_mult)) | every frame at full gain\* |
+//! | [`SpeedMultRamp`](RuleKey::SpeedMultRamp) | `speed_mult_ramp` | the frames after a landing's tail (`_PlayerLandOnStellar` @0x6375e), the info dialogs (`_HandlePlayer` @0x70357, @0x704e8), the escort, comm and planet comm dialogs' closes (@0x95693, @0x9690e, @0x97af2) and a game entry after one that ended landed run at the ramp from 0.0: held, then (3 × old + 1) / 4 a frame (`_HandleTimeAdjustment` @0x33332-0x3349b; see [`speed_mult`](crate::speed_mult)), and the frame a dialog opens on runs its rest, from `_HandlePlayer`'s key block on, at 0.0 as the first step after the dialog's zero (see `nova_sim`'s `opening_rest` module) | every frame at full gain, whole\* |
 //! | [`MissionInfoRebuild`](RuleKey::MissionInfoRebuild) | `mission_info_rebuild` | after an abort the rows are rebuilt from the shown missions, but each picks the active slot at its place in slot order, hidden ones (`Flags` 0x0400) counted, so a step can select past the rows, and the screen stays open while any mission is active (`_DoMissionInfoDialog` @0x9e5f9-0x9e60a, @0x9e69f-0x9e6d8; `nova_sim::Session::mission_info_after_abort`) | each row picks the mission it names, and the screen closes once none is shown: **the default — the original's table is a bug that loses stock missions**††††††††††††††††††† |
 //! | [`NpcJumpFuel`](RuleKey::NpcJumpFuel) | `npc_jump_fuel` | an NPC whose class's `Fuel` is above 99 and that no other ship tractors can jump with an empty tank; only a ship whose person starts with zero fuel (`përs` `Flags2` 0x0001) needs 100 fuel now (`_AIShipHasFuelForJump` @0x7f48f-0x7f500; see `nova_sim::ai::leave`) | every NPC also needs 100 fuel now\* |
 //! | [`OddsCache`](RuleKey::OddsCache) | `odds_cache` | each reader of a ship's odds (the warship's and interceptor's odds retreat, `_WarshipAI` @0x8bd22, `_InterceptorAI` @0x8d1cd; the call for reinforcements, `_AICallForReinforcements` @0x7f60d, @0x7f69b; a fleet leader's orders to its warships, `_AIIssueEscortOrders` @0x89a5d) reads its slot's cached odds (+0xc914): -1 from its spawn until `_DoPlayGameWork`'s odds pass reaches it, refreshing one slot a frame after the thinks (@0x442b0-0x44336, @0x44542-0x44553; see `nova_sim_ai::traffic::odds_cache`) | each reader works the odds out fresh at its read\* |
@@ -325,7 +326,7 @@
 //! | [`AreaCloakHold`](RuleKey::AreaCloakHold) | `area_cloak_hold` | `_HandleShip`'s frame hold asks `_ShipCanCloak`, which reads only the ship's own items, so an escort riding its leader's area cloak (`ModVal` 0x1000 of a `ModType` 17 mod) with no cloak of its own is uncloaked the frame it reads cloaked and never stays cloaked; no stock outfit has the bit (`_HandleShip` @0x3413d-0x3415f, `_HasAreaCloak` @0x3d49-0x3e24, `_HasCloak` @0x964c-0x96bf; see `nova_sim_combat::area_cloak`) | the hold counts the ride as a cloak it can keep, so the escort stays cloaked while it rides ("ships in formation with a ship carrying this cloaking device will also be cloaked") |
 //! | [`NewPilotVisibility`](RuleKey::NewPilotVisibility) | `new_pilot_visibility` | a new pilot's neighbour pass reads the visible flags the run's last galaxy refresh left: a pilot loaded, made or flown earlier in the run, or at launch with no pilot the refresh of clear bits, as `_DoNewPilot` tests +0x1eb (@0x18fc5) before its own refresh (@0x1925e; launch @0x4740c; see `nova_sim::Session::begin`) | it reads the new pilot's own refresh\* |
 //!
-//! \* The Bible says nothing of `long_advice`, `escort_orders`,
+//! \* The Bible says nothing of `long_advice`, `escort_orders`, `arrival_orders`,
 //! `fighter_launch`, `fighter_recall`, `fighter_no_bay`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
@@ -717,6 +718,14 @@
 //! bugs says. The Bible says nothing of it; the engine's reading restores
 //! the original's table.
 //!
+//! †††††††††††††††††††† `escort_ai` follows the other reading by default too, by the user's
+//! choice: under the original's formation an escort hired with no
+//! standing command fires only its best turret at a threat, so a warship
+//! with fixed guns looks idle until the player gives it an order. By the
+//! Bible's `InherentAI`, a warship or interceptor fights the threat to the
+//! player on its own. The engine's reading restores the original's
+//! formation.
+//!
 //! # Numeric values
 //!
 //! A few rules take a number rather than a source: each [`RuleValue`],
@@ -855,10 +864,30 @@ rule_keys! {
     /// What becomes of the escorts' standing orders when the player
     /// enters a system (a jump's arrival, a take-off, a pilot loaded): by
     /// the engine, every one is reset to formation; otherwise they are
-    /// kept. The Bible is silent here, so the other reading is the
-    /// intended behaviour, not anything the Bible says (see
-    /// `nova_sim::Session::with_rules`).
+    /// kept. At a jump's arrival the engine's reset comes from the
+    /// class-order bookkeeping a pass later, every ship placed being
+    /// unmarked (see [`RuleKey::ArrivalOrders`]). The Bible is silent
+    /// here, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see `nova_sim::Session::with_rules`).
     EscortOrders => "escort_orders",
+    /// When a jump's arrival resets the escort classes' orders, under
+    /// [`RuleKey::EscortOrders`]' engine reading (by its other reading
+    /// the orders stand through every entry). By the engine, as the
+    /// original: the orders stand through the arrival's pass, whose
+    /// class-order bookkeeping is skipped, as `_HandlePlayer` returns on
+    /// the arrival frame (@0x6c625) before the bookkeeping (@0x6e2e8).
+    /// So a mission escort set up in the new system thinks once under its
+    /// class's kept order (`_EscortAI` copies it @0x83afb), taking a
+    /// target or holding; the hired escorts and fighters glide in past
+    /// their think (`_AIDispatch` @0x8fcf5, goal 8) and never act on it.
+    /// The next pass's bookkeeping clears every class, as every ship
+    /// placed is unmarked (`_RespawnEscort` @0x3d546). By the other
+    /// reading, the port's earlier one, every escort's order is reset as
+    /// it enters, before any think. A take-off, a gate's exit and a pilot
+    /// flown reset at entry under both, as their bookkeeping runs before
+    /// any think. The Bible says nothing of it (see `nova_sim::Session`'s
+    /// `escorts` and `class_orders` modules).
+    ArrivalOrders => "arrival_orders",
     /// What a fighter the player launches from a bay does first: by the
     /// engine, it takes the standing order of the first ship of its class
     /// already in the fleet (Return to Hangar excepted) and no target, so
@@ -3426,7 +3455,8 @@ rule_keys! {
     /// (@0xe2fa) and compares it with each Con slot's own resolution
     /// (@0xe334), so the first slot that is set and whose system has no
     /// visible system at its place either matches: mode 3 with that slot,
-    /// which reads as no destination (@0xe33c-0xe34d). By the other
+    /// which the nav area and the map read as no destination, and J jumps
+    /// to unless the slot names no `sÿst` (@0xe33c-0xe34d). By the other
     /// reading the cue changes nothing. The Bible says nothing of it, so
     /// the other reading is the intended behaviour, not anything the Bible
     /// says.
@@ -4492,10 +4522,13 @@ rule_keys! {
     /// after one that ended landed; the next frame keeps it and each after
     /// ramps (3 × old + 1) / 4, 0.25, 0.4375, … (`_HandleTimeAdjustment`
     /// @0x33332-0x3349b; see the
-    /// [`speed_mult`](crate::speed_mult) module). By the other reading,
-    /// the port's earlier one: every frame runs at full gain, the first
-    /// after a landing, a dialog or a game entry included. The Bible says
-    /// nothing of it.
+    /// [`speed_mult`](crate::speed_mult) module). The frame a dialog opens
+    /// on runs its rest, from `_HandlePlayer`'s key block on, at that 0.0,
+    /// as the first step after the dialog's zero (see `nova_sim`'s
+    /// `opening_rest` module). By the other reading, the port's earlier
+    /// one: every frame runs at full gain, whole, the first after a
+    /// landing, a dialog or a game entry included. The Bible says nothing
+    /// of it.
     SpeedMultRamp => "speed_mult_ramp",
     /// Which mission each row of the mission info screen picks after an
     /// abort (read by `nova_sim::Session::mission_info_after_abort`). By
@@ -4567,7 +4600,7 @@ impl RuleKey {
     }
 
     /// The source this rule follows when the settings choose none: the
-    /// engine's, but for the two cron holdoff keys, the breakup stall, the
+    /// engine's, but for the escort AI, the two cron holdoff keys, the breakup stall, the
     /// unlisted stellar, the beam cone quirks, the seeker lock angle, the
     /// ship debris, the combat caps, the sound voices, the dialog focus
     /// ring and the new pilot's empty name, which follow the other reading as
@@ -4575,7 +4608,8 @@ impl RuleKey {
     #[must_use]
     pub const fn default_source(self) -> RuleSource {
         match self {
-            Self::CronZeroDurationHoldoff
+            Self::EscortAi
+            | Self::CronZeroDurationHoldoff
             | Self::CronPostHoldoff
             | Self::BreakupStall
             | Self::UnlistedStellar
@@ -4801,6 +4835,7 @@ mod tests {
         assert_eq!(
             bible,
             [
+                RuleKey::EscortAi,
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::BreakupStall,
@@ -5901,6 +5936,18 @@ mod tests {
         assert_eq!(
             RuleKey::ALL.iter().rev().nth(110),
             Some(&RuleKey::SeekerLockAngle)
+        );
+    }
+
+    #[test]
+    fn the_escort_ai_rule_defaults_to_the_bibles_inherent_ai() {
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::EscortAi),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::EscortAi),
+            RuleSource::Engine
         );
     }
 
@@ -7012,6 +7059,7 @@ mod tests {
                 RuleKey::LongAdvice,
                 RuleKey::EscortAi,
                 RuleKey::EscortOrders,
+                RuleKey::ArrivalOrders,
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
                 RuleKey::FighterNoBay,
@@ -8947,6 +8995,21 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&rule));
+    }
+
+    #[test]
+    fn the_arrival_orders_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ArrivalOrders;
+        assert_eq!(rule.key(), "arrival_orders");
+        assert_eq!(RuleKey::from_key("arrival_orders"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
     }
 
     #[test]

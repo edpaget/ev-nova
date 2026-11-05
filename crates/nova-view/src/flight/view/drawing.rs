@@ -30,7 +30,7 @@ use crate::flight::weapons::{self, BeamShown, ShotShown};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::scene::{PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::time::ticks;
-use crate::{Color, DrawList, Input, Point};
+use crate::{Color, DrawList, Input, MouseButton, Point};
 
 use super::sprites::{Sprite, sprite_stack};
 use super::{
@@ -205,7 +205,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What `input` tells the cursor: a pointer move or button press shows
-    /// it where the pointer is, a button holds it whole until its release,
+    /// it where the pointer is, the primary button holds it whole until its
+    /// release (`_Button`, the Toolbox `Button()`, reads no other, @0x3803b),
+    /// another button's press or release shows it only where the pointer
+    /// has moved to ([`HoverCursor::read`](crate::flight::cursor::HoverCursor::read)),
     /// and the pointer leaving the window hides it; a key pressed that
     /// fades it ([`FlightView::key_fades_cursor`]) does so at the next
     /// flight step. A key typed into the open map doesn't: no frame runs
@@ -216,12 +219,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match *input {
             Input::PointerMoved(at) => self.cursor.pointer(at),
             Input::PointerButton {
-                pressed: true, at, ..
+                button: MouseButton::Left,
+                pressed: true,
+                at,
             } => {
                 self.cursor.pointer(at);
                 self.cursor.button(true);
             }
-            Input::PointerButton { pressed: false, .. } => self.cursor.button(false),
+            Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: false,
+                ..
+            } => self.cursor.button(false),
+            Input::PointerButton { at, .. } => self.cursor.read(at),
             Input::PointerLeft => self.cursor.left(),
             Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. }
                 if !self.map_open && self.press_fades_cursor(input) =>

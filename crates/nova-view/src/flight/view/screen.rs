@@ -271,7 +271,7 @@ impl<
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
-        self.update_escort_menu(steps);
+        self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps, keyed);
         self.start_jump_effect();
@@ -350,6 +350,9 @@ impl<
             }
             return ScreenAction::None;
         }
+        if self.wait_after_site(input) {
+            return ScreenAction::None;
+        }
         if let Input::PointerButton {
             button: MouseButton::Left,
             pressed: true,
@@ -359,10 +362,18 @@ impl<
         {
             self.press_button_latched(at);
         }
-        if let Some(action) = self.act_on_press(self.press_taken(press, jumping), input) {
+        let taken = self.press_taken(press, jumping);
+        if let Some(command) = taken {
+            self.note_read_on_press(command, input);
+        }
+        if let Some(action) = self.act_on_press(taken, input) {
             return action;
         }
-        self.track_held(input);
+        // A press that ran a site with no dialog (Y's offer accepted at
+        // once) is down as the site latches every key.
+        if !self.wait_after_site(input) {
+            self.track_held(input);
+        }
         ScreenAction::None
     }
 

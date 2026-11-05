@@ -27,15 +27,16 @@ use crate::{Input, Key};
 
 /// The keys typed while a close waits for `waited`'s release, for the
 /// screen under it: the original's queue of key-downs, auto-keys and
-/// key-ups, less what can't reach a screen.
+/// key-ups, less what can't reach a screen. Typed text goes with the key
+/// that typed it, as the original's key-down carries its character.
 #[derive(Clone, Debug)]
 pub(crate) struct WaitKeys {
     /// The key waited on, if any is bound.
     waited: Option<Key>,
     keys: Vec<Input>,
-    /// Whether the last key taken was a press or a repeat that queued, so
-    /// a character typed now goes in behind it.
-    typing: bool,
+    /// Whether an [`Input::Text`] now would follow, directly or behind
+    /// other text, a press or repeat that was queued.
+    text_follows: bool,
     /// The bindings the live keys are read through.
     bindings: SharedBindings,
 }
@@ -46,7 +47,7 @@ impl WaitKeys {
         Self {
             waited: waited.into(),
             keys: Vec::new(),
-            typing: false,
+            text_follows: false,
             bindings: SharedBindings::default(),
         }
     }
@@ -70,35 +71,38 @@ impl WaitKeys {
     /// whether a key it saw is still down.
     ///
     /// A typed character goes in behind the queued press or repeat that
-    /// typed it, as a queued `keyDown` or `autoKey` carries its character
-    /// with its key code. Any other is dropped: one typed by a key the
-    /// queue dropped (the waited key's repeat, say) goes with that key,
-    /// never behind a key queued before it that typed nothing, such as
-    /// Shift.
+    /// typed it, directly or behind other text, as a queued `keyDown` or
+    /// `autoKey` carries its character with its key code. Any other is
+    /// dropped: one typed by a key the queue dropped (the waited key's
+    /// repeat, say) goes with that key, never behind a key queued before
+    /// it that typed nothing, such as Shift, nor behind anything else
+    /// taken between them.
     pub(crate) fn take(&mut self, input: &Input) {
-        if let Input::Text(_) = input {
-            if std::mem::take(&mut self.typing) {
-                self.keys.push(*input);
+        let follows = std::mem::replace(&mut self.text_follows, false);
+        let (key, pressed) = match *input {
+            Input::Text(_) => {
+                if follows {
+                    self.keys.push(*input);
+                    self.text_follows = true;
+                }
+                return;
             }
-            return;
-        }
-        let Input::Key { key, pressed, .. } = *input else {
-            return;
+            Input::Key { key, pressed, .. } => (key, pressed),
+            _ => return,
         };
-        self.typing = false;
         if Some(key) == self.waited || self.is_double_time(input) {
             return;
         }
         if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
             self.keys.push(*input);
-            self.typing = pressed;
+            self.text_follows = pressed;
         }
     }
 
     /// Drops all that was taken.
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
-        self.typing = false;
+        self.text_follows = false;
     }
 
     /// What the wait leaves for the screen under it, in order, the queue
@@ -106,7 +110,7 @@ impl WaitKeys {
     /// let go does nothing, and goes with its repeats, release and the
     /// characters they typed; one still down stays.
     pub(crate) fn finish(&mut self) -> Vec<Input> {
-        self.typing = false;
+        self.text_follows = false;
         let keys = std::mem::take(&mut self.keys);
         let mut kept = vec![true; keys.len()];
         for live in self.live_keys(&keys) {
@@ -368,7 +372,6 @@ mod tests {
             Input::PointerLeft,
             Input::PointerMovedOutside(at),
             click(),
-            Input::Text('a'),
         ];
         assert_eq!(left_by(&inputs), []);
         assert_eq!(
@@ -448,6 +451,77 @@ mod tests {
             [press(Key::ShiftLeft)],
             "a release it dropped"
         );
+    }
+
+    #[test]
+    fn it_keeps_text_behind_its_key_in_order() {
+        let five = Key::Digit5;
+        let inputs = [
+            press(A),
+            Input::Text('a'),
+            release(A),
+            press(five),
+            Input::Text('5'),
+        ];
+        assert_eq!(left_by(&inputs), inputs);
+        let repeated = [repeat(A), Input::Text('a'), Input::Text('b')];
+        assert_eq!(left_by(&repeated), repeated);
+    }
+
+    #[test]
+    fn it_drops_text_behind_a_key_it_doesnt_take() {
+        let text = Input::Text('x');
+        for before in [
+            press(MAP_KEY),
+            repeat(MAP_KEY),
+            press(Key::CapsLock),
+            click(),
+        ] {
+            assert_eq!(left_by(&[before, text]), [], "{before:?}");
+        }
+        assert_eq!(
+            left_by(&[press(A), release(A), text]),
+            [press(A), release(A)]
+        );
+        assert_eq!(left_by(&[text]), []);
+    }
+
+    #[test]
+    fn it_drops_a_let_go_live_keys_text_with_it() {
+        let inputs = [
+            press(PLAYER_INFO_KEY),
+            Input::Text('p'),
+            press(A),
+            Input::Text('a'),
+            release(PLAYER_INFO_KEY),
+        ];
+        assert_eq!(left_by(&inputs), [press(A), Input::Text('a')]);
+        let repeated = [
+            press(PLAYER_INFO_KEY),
+            repeat(PLAYER_INFO_KEY),
+            Input::Text('p'),
+            Input::Text('p'),
+            release(PLAYER_INFO_KEY),
+        ];
+        assert_eq!(left_by(&repeated), []);
+    }
+
+    #[test]
+    fn clear_drops_text_following() {
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.take(&press(A));
+        queue.clear();
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), []);
+    }
+
+    #[test]
+    fn finish_drops_text_following() {
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.take(&press(A));
+        queue.finish();
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), []);
     }
 
     #[test]

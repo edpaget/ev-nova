@@ -16,11 +16,13 @@
 //! zoom's hold (`_quickKeyCheckResult` *0x3b504c, set by every read down,
 //! @0xa145-0xa14c), the floating map's shows (\`/H @0x69b8e-0x69ba3, `\`
 //! @0x69cdd-0x69ce7) and the latches keys share (H's for \`, a slot key's
-//! for the rest of its block, Tab's for the click).
+//! for the rest of its block, Tab's for the click) and the escort menu's
+//! close beep (E read live, @0x6e01e-0x6e04d).
 //!
 //! The press handlers read [`FlightView::held`] alone: a latched key
 //! reaches its press only after its release. So do the step's controls
-//! (the cloak's edge among them) and the escort menu.
+//! (the cloak's edge among them) and the escort menu's group and press
+//! handling.
 
 use crate::flight::sim_port::FlightSim;
 use crate::keymap::{Command, Context, EscortMenuCommand, FlightCommand, Kind, PlayCommand};
@@ -69,11 +71,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_missionInfoFlag` (0xdee00, I's) and `_weapTargetSelectFlag`
     /// (0xdede8, [`FlightView::target_latch`]). The other pointers it
     /// sets latch keys ours acts on at their press (M, R, W, Return, E,
-    /// F12, P, Y, the escort commands, the zooms), which a latched key
-    /// reaches only after its release, or U, whose edge the step reads.
-    /// B's and L's latches (`_boardTryFlag` 0xdee18, `_dockTryFlag`
-    /// 0xdee34) are not among them (the `map_wait` module's
-    /// `OWN_LATCH`). A latch whose keys are up clears at the next
+    /// F12, P, Y, the zooms), which a latched key reaches only after its
+    /// release, or U, whose edge the step reads. B's, L's and the escort
+    /// commands' latches (`_boardTryFlag` 0xdee18, `_dockTryFlag`
+    /// 0xdee34, 0x316954..0x316957) are not among them (the `map_wait`
+    /// module's `OWN_LATCH`). A latch whose keys are up clears at the next
     /// poll, and a fresh press clears its own, so setting them all is
     /// safe.
     pub(super) fn set_every_latch(&mut self) {

@@ -48,8 +48,10 @@
 //! **After the settle.** Once no jump is under way, a key still kept acts
 //! as a plain press if it is down and is dropped if not; L and I act on
 //! their latches ([`FlightView::faded_keys_frame`]). Double time's held
-//! arrival leaves the jump under way for a tick, and the keys wait through
-//! it. A key that opens something from there ends the tick: flight stops
+//! arrival leaves the jump under way for a tick that runs no step. The
+//! warp's end settles that tick too: M pressed in it is latched and lost
+//! as on the arrival's pass (@0x6a89f), P and Y stay kept, and L and I
+//! wait on their latches. A key that opens something from there ends the tick: flight stops
 //! under what it opened, as the original's modal call stops the pass.
 //!
 //! **The latches.** With its key down, a failed gate (a jump, or the
@@ -290,16 +292,22 @@ impl<
 
     /// Right after a tick's steps, which began with a jump under way as
     /// `jumping` says, once one has run: settles the keys kept by what the
-    /// steps left (see the module docs).
+    /// steps left (see the module docs). The warp's end settles even a tick
+    /// that ran no step: double time's held arrival stops before its step.
     pub(super) fn settle_faded_keys(&mut self, jumping: bool) {
-        if !jumping || self.step_report.steps.is_empty() {
+        if !jumping {
             return;
         }
         if self.frame.warp_end_due {
             self.faded_keys.kept.retain(|&command| {
                 command == Command::Play(PlayCommand::PlayerInfo) || is_hail(command)
             });
-        } else if self.jump_under_way() {
+            return;
+        }
+        if self.step_report.steps.is_empty() {
+            return;
+        }
+        if self.jump_under_way() {
             let kept = std::mem::take(&mut self.faded_keys.kept);
             if kept.contains(&Command::Play(PlayCommand::PlayerInfo)) {
                 self.refuse_player_info();
@@ -381,7 +389,7 @@ impl<
         if faded {
             self.ui_sounds.push(UiSound::MapOpened);
             self.ui_sounds.push(UiSound::MapClosed);
-            self.keep_unlatched_keys();
+            self.latch_at_site();
         } else {
             let down = self.held(PlayCommand::GalaxyMap);
             self.open_map_by_key();

@@ -561,13 +561,33 @@ fn the_rescue_shows_from_its_start_until_its_closing_fade_ends() {
 }
 
 #[test]
-fn a_press_under_the_closing_fade_reaches_flight_once_it_ends() {
+fn flights_keys_tapped_under_the_closing_fade_are_not_replayed_to_it() {
+    // The rescue leaves for the pass loop (`jmp 0x71113` @0x692ce), whose
+    // flight drops every queued key-down without Command
+    // (`_IterateInGameEventLoop` @0x56a6b, @0x56cec) and polls the rest
+    // live. The router's keys, and the modifiers its chords read, stay.
     let mut view = under_the_texts(Vec::new());
     view.tick(TICK);
-    view.input(&key(LAND_KEY, true));
+    for input in [
+        key(JUMP_KEY, true),
+        key(JUMP_KEY, false),
+        key(Key::AltLeft, true),
+        key(Key::Escape, true),
+        key(Key::Escape, false),
+    ] {
+        view.input(&input);
+    }
     assert_eq!(view.take_rescue_replay(), []);
     ticks(&mut view, RESCUE_FADE_FOR);
-    assert_eq!(view.take_rescue_replay(), [key(LAND_KEY, true)]);
+    assert!(!view.rescuing(), "over");
+    assert_eq!(
+        view.take_rescue_replay(),
+        [
+            key(Key::AltLeft, true),
+            key(Key::Escape, true),
+            key(Key::Escape, false)
+        ]
+    );
 }
 
 #[test]

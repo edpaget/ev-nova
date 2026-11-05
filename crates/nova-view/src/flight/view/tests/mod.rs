@@ -109,10 +109,12 @@ mod key_fades;
 mod keys;
 mod landing;
 mod layers;
+mod leaving_cursor;
 mod live_keys;
 mod map_borders;
 mod map_find;
 mod map_key_wait;
+mod map_opening;
 mod maps;
 mod missions;
 mod murk_sprites;
@@ -479,9 +481,17 @@ fn stellar_names(stellars: &[(i16, &str)]) -> Names {
     names
 }
 
-/// The commands `view` sent its flight, in order.
-fn sent(view: &Faked) -> &[FlightCommand] {
-    view.sim.applied()
+/// The commands `view` sent its flight, in order, but the map's opening
+/// ([`FlightCommand::OpenSystemMap`]), which every opening sends first:
+/// the `map_opening` tests pin it, and the rest are about what the
+/// player's input sends.
+fn sent(view: &Faked) -> Vec<FlightCommand> {
+    view.sim
+        .applied()
+        .iter()
+        .filter(|&command| *command != FlightCommand::OpenSystemMap)
+        .cloned()
+        .collect()
 }
 
 /// Gives `view`'s course map `input` as flight's map input does, and
@@ -600,13 +610,14 @@ fn blank_panel() -> nova_sim::map_panel::MapPanel {
         strip: Strip::Info {
             ports: Ports::None,
             hazards: String::new(),
-            date: String::new(),
+            date: nova_sim::map_panel::PanelDate::Text(String::new()),
         },
         column: Column {
             title: String::new(),
             body: ColumnBody::Unknown,
         },
         words: PanelWords::default(),
+        numbers: nova_sim::map_panel::CheatNumbers::default(),
     }
 }
 

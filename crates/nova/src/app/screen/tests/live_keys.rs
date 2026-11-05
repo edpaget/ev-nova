@@ -579,6 +579,39 @@ fn a_slot_key_pressed_under_the_preferences_and_still_down_selects_after_its_clo
 }
 
 #[test]
+fn a_slot_key_pressed_in_the_frame_before_command_comma_and_still_down_selects_after_the_preferences_close()
+ {
+    // No poll read 1 between its press and the Preferences
+    // (`_AppEventHandler` @0xcccf1): its latch is clear.
+    let mut screen = texted();
+    close_text(&mut screen);
+    screen.tick(TICK);
+    screen.input(&key(SLOT_1, true));
+    command_comma(&mut screen);
+    assert_eq!(screen.showing(), Showing::Preferences);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK);
+    assert_ne!(nav(&screen), None, "selected on the first step");
+}
+
+#[test]
+fn a_hail_key_refused_in_the_frame_before_command_comma_waits_for_its_release() {
+    // Ours read Y on its press, as the original's poll would have.
+    let mut screen = texted();
+    close_text(&mut screen);
+    screen.tick(TICK);
+    screen.input(&key(HAIL_KEY, true));
+    assert!(refused(&screen.take_sounds()), "nothing to hail");
+    command_comma(&mut screen);
+    assert_eq!(screen.showing(), Showing::Preferences);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 4);
+    assert!(!refused(&screen.take_sounds()), "no second hail");
+}
+
+#[test]
 fn a_slot_key_pressed_under_the_about_text_and_still_down_selects_after_its_close() {
     let mut screen = texted();
     close_text(&mut screen);

@@ -23,7 +23,7 @@
 //!   reading down meanwhile for every read that skips their latch (the
 //!   `latched_reads` module): `_HandlePlayer` sets its 22 latches and the
 //!   escort menu's 5 after M's map (`_SetAllKeyCmdFlags` @0x61e6d, called
-//!   @0x6a898), but not B's and L's. The same
+//!   @0x6a898), but not B's, L's and the escort commands'. The same
 //!   poll reads them after every other dialog over flight, which takes
 //!   flight's input from the router instead: the router keeps what is
 //!   physically down under it and hands it back as the last one closes
@@ -37,11 +37,22 @@
 //!   wait takes (the `ui::key_wait` module's `WaitKeys`, waiting for M)
 //!   and hands it to the router at the close
 //!   ([`FlightView::take_map_replay`]), which gives it to the screen.
+//!   Typed text goes with the key that typed it, as the original's
+//!   key-down carries its character: `_DoQuantityDialog` (@0x56d5b) never
+//!   flushes, nor does anything between the map's close and it
+//!   (`_DoTradeDialog`, `_DoOutfitDialog`'s loop after its open flush
+//!   @0x5bd51), so a queued digit lands in its count. The opener's own
+//!   character is dropped by `EditDialog::flush_typed_key` as live. A text
+//!   screen that opens through a flush (`_EVTextInputDialog` @0x55429)
+//!   drops it as a `FlushMark` stop does.
 //!
 //! Left out:
 //!
 //! - `MenuKey` for a queued Command key in flight (@0x56a81), whose result
-//!   is ignored, as ours' Command-Q acts on its press in the router.
+//!   is ignored. The menu chords never reach the map's queue: the router
+//!   holds Command-Q and Command-comma typed during the wait and runs them
+//!   after the close, as the app menu's handler reads them from the queue
+//!   then (`nova::app::screen`'s `held_chords` module).
 //! - An auto-key's live read of M, P or I (the `what == 5` tests @0x4e0c6,
 //!   @0x608cd, @0x9f7da and their kin): those keys stay press-only by the
 //!   user's decision.
@@ -54,10 +65,6 @@
 //!   `_KeyCheck` reads them live (@0xa19b-0xa1dc), so
 //!   [`Screen::release_keys`](crate::Screen::release_keys) closes the map
 //!   and drops what was queued.
-//! - [`Input::Text`] on its own: only the character a queued key typed
-//!   is kept, behind that key, for the offer's filter, which reads the
-//!   character (`_SingleMissionFilter` @0x98e4a); each text dialog opens
-//!   through a `0xff7f` flush (`_EVTextInputDialog` @0x55429).
 
 use super::FlightView;
 use super::dialog_map::MapOpening;
@@ -103,8 +110,9 @@ const fn flight(command: FlightCommand) -> Command {
 /// Jump (0xdee44), `_ackCommFlag` Acknowledge (0xdedf4), `_playerInfoFlag`
 /// Player Info (0xdedd4), `_commTryFlag` Communicate (0xdee0c),
 /// `_missionInfoFlag` Mission Info (0xdee00) and `_cloakFlag` Engage
-/// Cloak (0xdedfc), each Option or Shift variant with its base. Board and
-/// Land have latches of their own that it doesn't set ([`OWN_LATCH`]).
+/// Cloak (0xdedfc), each Option or Shift variant with its base. Board,
+/// Land and the escort commands have latches of their own that it
+/// doesn't set ([`OWN_LATCH`]).
 /// A latched command held past the close still reads down for every read
 /// that skips its latch (the `latched_reads` module).
 pub(super) const UNLATCHED: [Command; 14] = [
@@ -127,18 +135,30 @@ pub(super) const UNLATCHED: [Command; 14] = [
 /// The commands whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets:
 /// Land's `_dockTryFlag` (0xdee34), set only as L makes a dock request
 /// (@0x6a953) and cleared on a pass L is up or its gate closed
-/// (@0x6a95d), and Board's `_boardTryFlag` (0xdee18), set by a board
+/// (@0x6a95d); Board's `_boardTryFlag` (0xdee18), set by a board
 /// attempt past its no-target and cloak returns (@0x6504c) and cleared on
-/// a pass B is up (@0x6a9a3). So across a close, a map or a gate's movie
-/// they are read as the unlatched commands are: held whenever their keys
-/// are physically down and read on every pass, their own latches
-/// deciding ([`FlightView::board_latch`], the `faded_keys` module's L
-/// latch). One first pressed under the dialog acts at the next pass, its
-/// latch clear; one that acted before it waits for its release, even let
-/// go and pressed again under it, which no pass saw.
-pub(super) const OWN_LATCH: [Command; 2] = [
+/// a pass B is up (@0x6a9a3); and the escort commands Attack Target,
+/// Defend Me, Hold Position and Recall (Return to Hangar with Option),
+/// one byte each at 0x316954 (set @0x6e1cf, cleared on release
+/// @0x6e2d7), which the site's group block writes at 0x316958
+/// (@0x61efd-0x61f44) never reach
+/// ([`CommandLatches`](crate::flight::escorts::CommandLatches)). So
+/// across a close, a map or a gate's movie they are read as the unlatched
+/// commands are: held whenever their keys are physically down and read
+/// on every pass, their own latches deciding
+/// ([`FlightView::board_latch`], the `faded_keys` module's L latch,
+/// [`FlightView::escort_commands_frame`]). One first pressed under the
+/// dialog acts at the next pass, its latch clear; one that acted before
+/// it waits for its release, even let go and pressed again under it,
+/// which no pass saw.
+pub(super) const OWN_LATCH: [Command; 7] = [
     flight(FlightCommand::LandDock),
     flight(FlightCommand::Board),
+    flight(FlightCommand::AttackTarget),
+    flight(FlightCommand::DefendMe),
+    flight(FlightCommand::HoldPosition),
+    flight(FlightCommand::Recall),
+    flight(FlightCommand::RecallToHangar),
 ];
 
 /// Whether flight reads `command` across a close with no latch of
