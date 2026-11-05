@@ -27,6 +27,10 @@
 //! - [`contexts`] lists each key-reading screen's contexts, in order.
 //! - [`reader`] is what a screen holds: a [`CommandReader`] over the
 //!   app's [`SharedBindings`].
+//! - [`saved`] is the key map's saved form: a combo's text, the bindings
+//!   that differ from the defaults ([`KeyMap::overrides`]), the map they
+//!   build again ([`KeyMap::with_overrides`]) and the text table the
+//!   settings file holds ([`KeyMap::to_table`], [`KeyMap::from_table`]).
 //!
 //! # Decisions
 //!
@@ -77,6 +81,22 @@
 //!   [`SharedBindings`] and hands it to every screen it builds; a screen
 //!   built without one reads `KeyMap::default()`, so tests build screens
 //!   as before.
+//! - **Saved form.** A command saves by its stable name, `Context.Variant`
+//!   ([`Command::name`]), and a combo as its W3C modifier names then
+//!   `Code`'s W3C key name, joined by `+` (`Meta+Digit5`), so the file
+//!   survives a winit upgrade; an unbound command saves as `""`. Only the
+//!   bindings that differ from the defaults are saved, so a later default
+//!   still reaches a player who never touched that key. A pinned table
+//!   holds every default's name and text, so a rename or a
+//!   `keyboard-types` upgrade can't change the file unnoticed. An unknown
+//!   name or key loads as nothing saved: its command keeps its default.
+//! - **Conflict rules on load.** A saved table can clash: two saved
+//!   commands on one key, or a saved key a later build gives another
+//!   command by default. [`KeyMap::with_overrides`] unbinds one command a
+//!   clash, until none is left: of two saved commands the later in
+//!   `Command`'s declaration order, as phase 4's keys screen does, and
+//!   against a defaulted one the defaulted one, as the player's choice
+//!   wins. A variant a saved base carries counts as saved.
 //!
 //! [`Kind`]: command::Kind
 
