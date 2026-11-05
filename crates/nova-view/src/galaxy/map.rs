@@ -2605,6 +2605,7 @@ mod tests {
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",
+            DrawCommand::Triangle { .. } => "triangle",
             DrawCommand::OrFill { .. } => "or-fill",
             DrawCommand::Clipped { .. } => "clipped",
             DrawCommand::MovieFrame { .. } => "movie",

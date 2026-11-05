@@ -272,6 +272,15 @@ pub enum DrawCommand {
         /// Its colour.
         color: Color,
     },
+    /// A filled triangle in one colour, as an outline is drawn where a
+    /// ship or stellar has no sprite. Like a line or a dot, a clipped one
+    /// is drawn uncut.
+    Triangle {
+        /// Its corners.
+        corners: [Point; 3],
+        /// Its colour.
+        color: Color,
+    },
     /// A movie's frame stretched (or shrunk) to fill `area`, untinted and
     /// with [`Blend::Normal`]: what a movie player draws
     /// ([`MoviePlayer::draw_frame`](crate::movie::MoviePlayer::draw_frame)).
@@ -302,7 +311,7 @@ pub enum DrawCommand {
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's, picture's or movie frame's quad cropped to it with its
     /// texture coordinates, a tiled picture's or OR fill's area cut to it. A
-    /// line or a dot is drawn as it is, uncut. The floating map clips its
+    /// line, a dot or a triangle is drawn as it is, uncut. The floating map clips its
     /// names and arrows to its frame so.
     Clipped {
         /// Where it may draw.
@@ -341,6 +350,7 @@ impl DrawCommand {
                 *from = moved(*from);
                 *to = moved(*to);
             }
+            Self::Triangle { corners, .. } => *corners = corners.map(moved),
             Self::Clipped { clip, command } => {
                 *clip = moved_bounds(*clip);
                 **command = command.translated(by);
@@ -673,6 +683,11 @@ impl DrawList {
             size,
             color,
         })
+    }
+
+    /// Appends a [`DrawCommand::Triangle`].
+    pub fn triangle(&mut self, corners: [Point; 3], color: Color) -> &mut Self {
+        self.push(DrawCommand::Triangle { corners, color })
     }
 
     /// Appends a [`DrawCommand::MovieFrame`]: `frame` stretched into `area`.
@@ -1418,6 +1433,10 @@ mod tests {
                 size: 3.0,
                 color: Color::WHITE,
             },
+            DrawCommand::Triangle {
+                corners: [p(25.0, 26.0), p(27.0, 28.0), p(29.0, 30.0)],
+                color: Color::BLACK,
+            },
             DrawCommand::OrFill {
                 area: area(24.0),
                 color: Color::rgba(0, 8, 16, 255),
@@ -1578,6 +1597,31 @@ mod tests {
         assert_eq!(layered, list.iter().collect::<Vec<_>>());
         assert_eq!(list.len(), 4);
         assert_eq!(DrawLayer::default(), DrawLayer::Overlay);
+    }
+
+    #[test]
+    fn a_triangle_is_appended_in_the_list_s_layer() {
+        let red = Color::rgba(255, 0, 0, 255);
+        let corners = [at(0.0, 0.0), at(4.0, 0.0), at(0.0, 3.0)];
+        let mut list = DrawList::new();
+        list.triangle(corners, red);
+        list.world(|list| {
+            list.triangle(corners, Color::WHITE);
+        });
+        assert_eq!(layers(&list), [DrawLayer::Overlay, DrawLayer::World]);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                DrawCommand::Triangle {
+                    corners,
+                    color: red
+                },
+                DrawCommand::Triangle {
+                    corners,
+                    color: Color::WHITE
+                },
+            ]
+        );
     }
 
     #[test]

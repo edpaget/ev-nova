@@ -327,6 +327,12 @@ impl<S: ImageSource> Renderer<S> {
                 size,
                 color,
             } => push_solid(batches, square(center, size), color),
+            // A quad whose last two corners meet: its second triangle has
+            // no area, so the solid pipeline draws the one.
+            DrawCommand::Triangle {
+                corners: [a, b, c],
+                color,
+            } => push_solid(batches, [a, b, c, c], color),
             DrawCommand::MovieFrame { ref frame, area } => {
                 // An area with no drawable size draws nothing, so its frame
                 // is not even uploaded.
@@ -2710,6 +2716,65 @@ mod tests {
                 corners: [at(8.5, 18.5), at(11.5, 18.5), at(11.5, 21.5), at(8.5, 21.5)],
                 color: [1.0, 1.0, 0.0, 0.0],
             }]
+        );
+    }
+
+    #[test]
+    fn a_triangle_is_a_solid_quad_whose_fourth_corner_repeats_its_third() {
+        let mut list = DrawList::new();
+        list.triangle(
+            [at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0)],
+            Color::rgba(255, 0, 0, 255),
+        );
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport())),
+            vec![SolidQuad {
+                corners: [at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0), at(5.0, 7.0)],
+                color: [1.0, 0.0, 0.0, 1.0],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_world_triangle_is_drawn_in_the_world() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.triangle([at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0)], Color::WHITE);
+        });
+        list.triangle([at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0)], Color::WHITE);
+        let frame = render_through(&list, &mut RecordingGpu::new());
+        assert_eq!(
+            layered_shape(&frame),
+            [("solid", 1, WORLD), ("solid", 1, OVERLAY)]
+        );
+    }
+
+    #[test]
+    fn a_line_a_triangle_and_a_dot_in_a_row_share_one_solid_batch() {
+        let mut list = DrawList::new();
+        list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .triangle([at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0)], Color::WHITE)
+            .dot(at(10.0, 20.0), 3.0, Color::WHITE);
+        let frame = render_one(&list, &viewport());
+        let [Batch::Solid(quads)] = frame.batches.as_slice() else {
+            panic!("one solid batch: {frame:?}");
+        };
+        assert_eq!(quads.len(), 3);
+    }
+
+    #[test]
+    fn a_clipped_triangle_is_drawn_uncut() {
+        let mut list = DrawList::new();
+        list.clipped(
+            bounds(0.0, 0.0, 2.0, 2.0),
+            DrawCommand::Triangle {
+                corners: [at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0)],
+                color: Color::WHITE,
+            },
+        );
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport()))[0].corners,
+            [at(1.0, 2.0), at(9.0, 2.0), at(5.0, 7.0), at(5.0, 7.0)]
         );
     }
 

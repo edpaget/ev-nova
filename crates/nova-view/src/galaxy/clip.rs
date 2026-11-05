@@ -23,6 +23,8 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   and dropped when it misses;
 /// - each dot kept whole when inside, cut to the rect of its overlap when
 ///   partly inside, and dropped when outside;
+/// - each triangle kept when wholly inside, and dropped otherwise (the map
+///   draws none);
 /// - each text, sprite, picture (blended or not), movie frame and OR fill
 ///   wrapped in [`DrawCommand::Clipped`] with `area`, which the renderer
 ///   crops;
@@ -73,6 +75,11 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
                     } else {
                         fill_rect(out, kept, color);
                     }
+                }
+            }
+            DrawCommand::Triangle { corners, .. } => {
+                if corners.iter().all(|&corner| area.contains(corner)) {
+                    out.push(command.clone());
                 }
             }
             DrawCommand::Clipped { clip, command } => {
@@ -327,5 +334,37 @@ mod tests {
         let mut out = DrawList::new();
         clip_opaque(&map, area(), &mut out);
         assert_eq!(out, map);
+    }
+
+    #[test]
+    fn a_triangle_wholly_inside_is_kept_and_any_other_dropped() {
+        let inside = [at(300.0, 300.0), at(320.0, 300.0), at(300.0, 320.0)];
+        let on_the_edges = [at(221.0, 136.0), at(679.0, 136.0), at(221.0, 556.0)];
+        let drawn = clipped(|map| {
+            map.triangle(inside, Color::WHITE)
+                .triangle(on_the_edges, Color::BLACK)
+                .triangle(
+                    [at(300.0, 300.0), at(700.0, 300.0), at(300.0, 320.0)],
+                    Color::WHITE,
+                )
+                .triangle([at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)], Color::WHITE)
+                .triangle(
+                    [at(300.0, 130.0), at(320.0, 300.0), at(300.0, 320.0)],
+                    Color::WHITE,
+                );
+        });
+        assert_eq!(
+            drawn,
+            [
+                DrawCommand::Triangle {
+                    corners: inside,
+                    color: Color::WHITE,
+                },
+                DrawCommand::Triangle {
+                    corners: on_the_edges,
+                    color: Color::BLACK,
+                },
+            ]
+        );
     }
 }
