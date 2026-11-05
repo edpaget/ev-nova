@@ -1966,37 +1966,46 @@ impl GalaxyMap {
         }
     }
 
-    /// The in-flight maps' six buttons' input (`_TrackMapButtons`): Done
-    /// asks to close the map, as Return does; "-" and "+" step the zoom,
-    /// each only while its flag allows, a step taken redrawing item 3;
-    /// Find opens Find; Clear Route, while enabled, asks to clear the
-    /// route, as C does. Borders flips the borders, as B does
-    /// ([`MapBorders::toggle`]). A zoom step taken runs the borders'
-    /// coarse pass.
+    /// The in-flight maps' six buttons' input (`_TrackMapButtons`): the
+    /// button a release over it activates is pressed ([`Self::press_button`]).
     fn button_input(&mut self, input: &Input) {
         let Look::Dialog(dialog) = &mut self.look else {
             return;
         };
         let state = dialog.state();
-        match dialog.buttons_mut().input(input, &state) {
-            Some(MapButton::Done) => self.request = Some(Request::Close),
+        if let Some(button) = dialog.buttons_mut().input(input, &state) {
+            self.press_button(button);
+        }
+    }
+
+    /// What `button` does, a click's or the pad's: Done asks to close the
+    /// map, as Return does; "-" and "+" step the zoom, each only while its
+    /// flag allows, a step taken redrawing item 3; Find opens Find; Clear
+    /// Route, while enabled, asks to clear the route, as C does. Borders
+    /// flips the borders, as B does ([`MapBorders::toggle`]). A zoom step
+    /// taken runs the borders' coarse pass. Silent.
+    pub(super) fn press_button(&mut self, button: MapButton) {
+        let Look::Dialog(dialog) = &mut self.look else {
+            return;
+        };
+        match button {
+            MapButton::Done => self.request = Some(Request::Close),
             // A step taken redraws item 3 (@0x128d9, @0x12b0c).
-            Some(MapButton::ZoomOut) => {
+            MapButton::ZoomOut => {
                 if dialog.place_mut().zoom_out() {
                     dialog.redraw();
                     self.borders.recompute(dialog);
                 }
             }
-            Some(MapButton::ZoomIn) => {
+            MapButton::ZoomIn => {
                 if dialog.place_mut().zoom_in() {
                     dialog.redraw();
                     self.borders.recompute(dialog);
                 }
             }
-            Some(MapButton::Find) => self.open_find(),
-            Some(MapButton::ClearRoute) => self.request = Some(Request::ClearRoute),
-            Some(MapButton::Borders) => self.borders.toggle(dialog),
-            None => {}
+            MapButton::Find => self.open_find(),
+            MapButton::ClearRoute => self.request = Some(Request::ClearRoute),
+            MapButton::Borders => self.borders.toggle(dialog),
         }
     }
 }
