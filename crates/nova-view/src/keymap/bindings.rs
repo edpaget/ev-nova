@@ -196,8 +196,9 @@ pub fn is_modifier_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::command::{
-        EscortMenuCommand, FlightCommand, HaggleCommand, PauseCommand, PlanetCommCommand,
-        PlayCommand, PlayerInfoCommand, UiCommand,
+        BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, MissionComputerCommand,
+        OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand,
+        PortCommand, RaceCommand, TradeCommand, UiCommand,
     };
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
@@ -432,8 +433,13 @@ mod tests {
 
     #[test]
     fn two_commands_on_one_combo_in_contexts_active_together_clash() {
-        let bindings =
-            Bindings::default().rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyL));
+        // The mission computer's Leave, on L beside the play keys too, moved
+        // off it, so flight's L is the one left.
+        let base =
+            Bindings::default().rebound(MissionComputerCommand::Leave, KeyCombo::key(Key::KeyQ));
+        let bindings = base
+            .clone()
+            .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyL));
         assert_eq!(
             bindings.clashes(),
             vec![Clash {
@@ -442,7 +448,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            Bindings::default().clashes_with(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyL)),
+            base.clashes_with(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyL)),
             vec![Command::Flight(FlightCommand::LandDock)]
         );
     }
@@ -462,7 +468,12 @@ mod tests {
 
     #[test]
     fn a_dialog_s_letter_clashes_with_a_shared_ui_command_on_its_key() {
-        let bindings = Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyL));
+        // Q, which no other screen beside the shared UI context binds (L
+        // is the mission computer's Leave too).
+        let q = KeyCombo::key(Key::KeyQ);
+        let bindings = Bindings::default()
+            .rebound(HaggleCommand::Lower, q)
+            .rebound(UiCommand::Confirm, q);
         assert_eq!(
             bindings.clashes(),
             vec![Clash {
@@ -470,6 +481,67 @@ mod tests {
                 second: Command::Haggle(HaggleCommand::Lower),
             }]
         );
+    }
+
+    #[test]
+    fn a_spaceport_command_rebound_to_return_clashes_with_confirm() {
+        let enter = KeyCombo::key(Key::Enter);
+        let bindings = Bindings::default().rebound(PortCommand::Bar, enter);
+        assert_eq!(
+            bindings.clashes(),
+            vec![Clash {
+                first: Command::Ui(UiCommand::Confirm),
+                second: Command::Port(PortCommand::Bar),
+            }]
+        );
+        assert_eq!(
+            Bindings::default().clashes_with(PortCommand::Bar, enter),
+            vec![Command::Ui(UiCommand::Confirm)]
+        );
+    }
+
+    #[test]
+    fn the_spaceport_s_and_the_bar_s_second_letters_are_twins_of_their_buttons() {
+        let bindings = Bindings::default();
+        let port = &[Context::Port, Context::Play, Context::Ui];
+        let bar = &[Context::Bar, Context::Play, Context::Ui];
+        for (key, command) in [
+            (Key::KeyF, Command::Port(PortCommand::Recharge)),
+            (Key::KeyT, Command::Port(PortCommand::TradeCenter)),
+        ] {
+            assert_eq!(means(&bindings, &[], key, port), Some(command), "{key}");
+        }
+        for (key, command) in [
+            (Key::KeyE, Command::Bar(BarCommand::Hire)),
+            (Key::KeyR, Command::Bar(BarCommand::Gamble)),
+            (Key::KeyW, Command::Bar(BarCommand::News)),
+        ] {
+            assert_eq!(means(&bindings, &[], key, bar), Some(command), "{key}");
+        }
+        assert_eq!(
+            means(&bindings, &[], Key::KeyE, port),
+            None,
+            "the bar's twins answer only in the bar"
+        );
+    }
+
+    #[test]
+    fn either_option_holds_the_trade_center_s_and_the_outfitter_s_and_the_left_one_the_race_s() {
+        let bindings = Bindings::default();
+        let held = |key: Key, active: &[Context]| {
+            let mut devices = Devices::default();
+            devices.follow(&press(key));
+            bindings.held(&devices, active)
+        };
+        let trade = &[Context::Trade, Context::Play, Context::Ui];
+        let outfitter = &[Context::Outfitter, Context::Play, Context::Ui];
+        let race = &[Context::Race, Context::Ui];
+        for key in [Key::AltLeft, Key::AltRight] {
+            assert!(held(key, trade).contains(&Command::Trade(TradeCommand::MaxLot)));
+            assert!(held(key, outfitter).contains(&Command::Outfitter(OutfitterCommand::Count)));
+        }
+        assert!(held(Key::AltLeft, race).contains(&Command::Race(RaceCommand::Ask)));
+        assert!(held(Key::AltRight, race).is_empty());
     }
 
     #[test]

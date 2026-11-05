@@ -149,6 +149,22 @@ contexts! {
     Assignment(AssignmentCommand),
     /// The player info screen's own (`_PlayerInfoFilter` @0x53ae9).
     PlayerInfo(PlayerInfoCommand),
+    /// The spaceport's letters (`_PortFilter` @0x4f209-0x4f257).
+    Port(PortCommand),
+    /// The Trade Center's (`_TradeFilter`, `_DoTradeDialog`).
+    Trade(TradeCommand),
+    /// The outfitter's (`_OutfitFilter`, `_DoOutfitDialog`).
+    Outfitter(OutfitterCommand),
+    /// The shipyard's own letter (`_ShipyardFilter`).
+    Shipyard(ShipyardCommand),
+    /// The bar's letters (`_BarFilter` @0x47b1c-0x47b48).
+    Bar(BarCommand),
+    /// The hire screen's own letter (`_ShipyardFilter` in hire mode).
+    Hire(HireCommand),
+    /// The mission computer's letters (`_MissionFilter`).
+    MissionComputer(MissionComputerCommand),
+    /// The bar race's Option (`_DoRaceDialog`).
+    Race(RaceCommand),
 }
 
 context_commands! {
@@ -391,6 +407,108 @@ context_commands! {
         /// `_PlayerInfoFilter` reads the `shiftKey` bit beside Tab
         /// (@0x53b1e), so a rebound Tab keeps it.
         TabBack: Pressed,
+    }
+}
+
+context_commands! {
+    /// The spaceport's letters, one a button; each presses its button as
+    /// a click does. Their second letters are fixed twins.
+    PortCommand in Port {
+        /// Recharge (R, F its twin).
+        Recharge: Pressed,
+        /// The Trade Center (C, T its twin).
+        TradeCenter: Pressed,
+        /// The Outfitter (O).
+        Outfitter: Pressed,
+        /// The Shipyard (S).
+        Shipyard: Pressed,
+        /// The Mission BBS (N).
+        MissionBbs: Pressed,
+        /// The Bar (B).
+        Bar: Pressed,
+    }
+}
+
+context_commands! {
+    /// The Trade Center's own commands.
+    TradeCommand in Trade {
+        /// Buy (B), repeats too.
+        Buy: Pressed,
+        /// Sell (S), repeats too.
+        Sell: Pressed,
+        /// Held, Buy and Sell ask for a count or trade the most: Option,
+        /// as `_DoTradeDialog` reads the `optionKey` bit (@0x5e211,
+        /// @0x5e45c), so the right Option is its twin.
+        MaxLot: Held,
+        /// The selection back a row: the shared Tab with Shift, as
+        /// `_TradeFilter` reads the `shiftKey` bit beside Tab (@0x4e18a),
+        /// so a rebound Tab keeps it.
+        TabBack: Pressed,
+    }
+}
+
+context_commands! {
+    /// The outfitter's own commands.
+    OutfitterCommand in Outfitter {
+        /// Buy one (B), repeats too.
+        Buy: Pressed,
+        /// Sell one (S), repeats too.
+        Sell: Pressed,
+        /// Held, Buy and Sell ask for a count: Option, as
+        /// `_DoOutfitDialog` tests the `optionKey` bit (@0x5c0c0,
+        /// @0x5c5e3), so the right Option is its twin.
+        Count: Held,
+    }
+}
+
+context_commands! {
+    /// The shipyard's own letter; its Info is the shared Activate (Space,
+    /// `_ShipyardFilter` @0x60526).
+    ShipyardCommand in Shipyard {
+        /// Buy Ship (B).
+        Buy: Pressed,
+    }
+}
+
+context_commands! {
+    /// The bar's letters, one a button; their second letters are fixed
+    /// twins.
+    BarCommand in Bar {
+        /// Hire Escort (H, E its twin).
+        Hire: Pressed,
+        /// Gamble (G, R its twin).
+        Gamble: Pressed,
+        /// Holovid, the news (N, W its twin).
+        News: Pressed,
+    }
+}
+
+context_commands! {
+    /// The hire screen's own letter; its Info is the shared Activate.
+    HireCommand in Hire {
+        /// Hire Escort (H, `_ShipyardFilter` @0x60503).
+        Hire: Pressed,
+    }
+}
+
+context_commands! {
+    /// The mission computer's letters.
+    MissionComputerCommand in MissionComputer {
+        /// Leave (L), beside Confirm and Back (`_MissionFilter`
+        /// @0x9f885-0x9f8af).
+        Leave: Pressed,
+        /// Accept the selected offer (A, @0x9f8b4-0x9f8c7).
+        Accept: Pressed,
+    }
+}
+
+context_commands! {
+    /// The bar race's own command.
+    RaceCommand in Race {
+        /// Held as a racer is clicked, asks for the bet: the left Option,
+        /// as `_DoRaceDialog` polls its key code (`_KeyCheck(0x3a)`
+        /// @0x48be9), so it has no right twin.
+        Ask: Held,
     }
 }
 

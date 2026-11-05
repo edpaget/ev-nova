@@ -123,6 +123,84 @@ pub const KEY_WAIT: ScreenContexts = ScreenContexts {
     entries: &[on(Context::Play), on(Context::Ui)],
 };
 
+/// The spaceport: its buttons' letters, the shared play keys
+/// (`_PortFilter` reads the map key first, @0x4f165, then mission info
+/// and player info) and the shared UI keys.
+pub const PORT: ScreenContexts = ScreenContexts {
+    name: "spaceport",
+    entries: &[on(Context::Port), on(Context::Play), on(Context::Ui)],
+};
+
+/// The Trade Center: Buy, Sell, Option and Shift-Tab, the shared play
+/// keys (`_TradeFilter` @0x4e0e7, @0x4e109) and the shared UI keys.
+pub const TRADE: ScreenContexts = ScreenContexts {
+    name: "trade center",
+    entries: &[on(Context::Trade), on(Context::Play), on(Context::Ui)],
+};
+
+/// The outfitter: Buy, Sell and Option, the shared play keys
+/// (`_OutfitFilter` reads the map and mission info keys, @0x580f3) and
+/// the shared UI keys.
+pub const OUTFITTER: ScreenContexts = ScreenContexts {
+    name: "outfitter",
+    entries: &[on(Context::Outfitter), on(Context::Play), on(Context::Ui)],
+};
+
+/// The shipyard and its Info panel: Buy Ship, the shared play keys
+/// (`_ShipyardFilter` @0x608ed, `_ShipDescFilter` @0x51108) and the
+/// shared UI keys.
+pub const SHIPYARD: ScreenContexts = ScreenContexts {
+    name: "shipyard",
+    entries: &[on(Context::Shipyard), on(Context::Play), on(Context::Ui)],
+};
+
+/// The bar and the hire screen it hosts: its letters, the shared play
+/// keys (`_BarFilter` @0x47a83, and the hire screen's filters') and the
+/// shared UI keys.
+pub const BAR: ScreenContexts = ScreenContexts {
+    name: "bar",
+    entries: &[on(Context::Bar), on(Context::Play), on(Context::Ui)],
+};
+
+/// The hire screen: Hire Escort and the shared UI keys; the bar reads its
+/// play keys for it.
+pub const HIRE: ScreenContexts = ScreenContexts {
+    name: "hire",
+    entries: &[on(Context::Hire), on(Context::Ui)],
+};
+
+/// The mission computer: Leave and Accept, the shared play keys
+/// (`_MissionFilter` @0x9f7fa) and the shared UI keys.
+pub const MISSION_COMPUTER: ScreenContexts = ScreenContexts {
+    name: "mission computer",
+    entries: &[
+        on(Context::MissionComputer),
+        on(Context::Play),
+        on(Context::Ui),
+    ],
+};
+
+/// The mission info screen: the shared play keys (`_MissionInfoFilter`
+/// reads the map key and its own, @0x9d715) and the shared UI keys.
+pub const MISSION_INFO: ScreenContexts = ScreenContexts {
+    name: "mission info",
+    entries: &[on(Context::Play), on(Context::Ui)],
+};
+
+/// A mission offer: the shared play keys (`_SingleMissionFilter`
+/// @0x98db0) and the shared UI keys. Its labels' letters are typed
+/// characters, no commands.
+pub const OFFER: ScreenContexts = ScreenContexts {
+    name: "offer",
+    entries: &[on(Context::Play), on(Context::Ui)],
+};
+
+/// The bar race: its Option and the shared UI keys.
+pub const RACE: ScreenContexts = ScreenContexts {
+    name: "race",
+    entries: &[on(Context::Race), on(Context::Ui)],
+};
+
 /// Every key-reading screen's list.
 pub const SCREENS: &[ScreenContexts] = &[
     FLIGHT,
@@ -135,6 +213,16 @@ pub const SCREENS: &[ScreenContexts] = &[
     PLAYER_INFO,
     DESC,
     KEY_WAIT,
+    PORT,
+    TRADE,
+    OUTFITTER,
+    SHIPYARD,
+    BAR,
+    HIRE,
+    MISSION_COMPUTER,
+    MISSION_INFO,
+    OFFER,
+    RACE,
 ];
 
 /// Whether `shadowing`, listed first, wins the keys it binds over

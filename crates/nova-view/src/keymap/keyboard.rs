@@ -6,9 +6,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{
-    AssignmentCommand, CommCommand, Command, Context, EscortDialogCommand, EscortMenuCommand,
-    FlightCommand, HaggleCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand,
-    UiCommand,
+    AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
+    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, MissionComputerCommand,
+    OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand,
+    RaceCommand, ShipyardCommand, TradeCommand, UiCommand,
 };
 use super::contexts::shadows;
 use crate::input::{Input, Key};
@@ -167,7 +168,7 @@ impl KeyMap {
     /// The fixed twins, read beside the bindable commands whatever they
     /// are bound to. A command bound to the same key in an active context
     /// beats a twin.
-    pub const TWINS: [Twin; 9] = [
+    pub const TWINS: [Twin; 16] = [
         // `_loadKeys` hard-codes F1-F4 at `_keyPrefs`+0x34..+0x3a
         // (@0xce6c8-0xce6da), read beside 1-4 by `_HandlePlayer`
         // @0x69d92.
@@ -221,6 +222,37 @@ impl KeyMap {
             Context::PlanetComm,
             Key::KeyT,
             Command::PlanetComm(PlanetCommCommand::DemandTribute),
+        ),
+        // `_PortFilter` reads F beside R for Recharge (0x03, 0x0f) and T
+        // beside C for the Trade Center (0x11, 0x08), @0x4f209-0x4f257.
+        twin(
+            Context::Port,
+            Key::KeyF,
+            Command::Port(PortCommand::Recharge),
+        ),
+        twin(
+            Context::Port,
+            Key::KeyT,
+            Command::Port(PortCommand::TradeCenter),
+        ),
+        // `_BarFilter` reads E beside H for Hire Escort (14, 4), R beside
+        // G for Gamble (0x0f, 0x05, @0x47b1c-0x47b31) and W beside N for
+        // Holovid (0x0d, 0x2d, @0x47b33-0x47b48).
+        twin(Context::Bar, Key::KeyE, Command::Bar(BarCommand::Hire)),
+        twin(Context::Bar, Key::KeyR, Command::Bar(BarCommand::Gamble)),
+        twin(Context::Bar, Key::KeyW, Command::Bar(BarCommand::News)),
+        // The right Option, where a screen reads the `optionKey` bit
+        // (`_DoTradeDialog` @0x5e211, `_DoOutfitDialog` @0x5c0c0), which
+        // either Option sets.
+        twin(
+            Context::Trade,
+            Key::AltRight,
+            Command::Trade(TradeCommand::MaxLot),
+        ),
+        twin(
+            Context::Outfitter,
+            Key::AltRight,
+            Command::Outfitter(OutfitterCommand::Count),
         ),
     ];
 
@@ -331,6 +363,67 @@ const fn default_binding(command: Command) -> Binding {
             base: Command::Ui(UiCommand::Tab),
             plus: Modifiers::SHIFT,
         },
+        Command::Port(command) => default_port(command),
+        Command::Trade(command) => default_trade(command),
+        Command::Outfitter(command) => default_outfitter(command),
+        Command::Shipyard(ShipyardCommand::Buy) => bare(Key::KeyB),
+        Command::Bar(command) => default_bar(command),
+        Command::Hire(HireCommand::Hire) => bare(Key::KeyH),
+        Command::MissionComputer(command) => default_mission_computer(command),
+        Command::Race(RaceCommand::Ask) => bare(Key::AltLeft),
+    }
+}
+
+/// The spaceport's defaults, each its button's initial (`_PortFilter`
+/// @0x4f209-0x4f257).
+const fn default_port(command: PortCommand) -> Binding {
+    match command {
+        PortCommand::Recharge => bare(Key::KeyR),
+        PortCommand::TradeCenter => bare(Key::KeyC),
+        PortCommand::Outfitter => bare(Key::KeyO),
+        PortCommand::Shipyard => bare(Key::KeyS),
+        PortCommand::MissionBbs => bare(Key::KeyN),
+        PortCommand::Bar => bare(Key::KeyB),
+    }
+}
+
+/// The Trade Center's defaults: B, S and the left Option (the shared Tab
+/// with Shift, its `TabBack`, follows the Tab).
+const fn default_trade(command: TradeCommand) -> Binding {
+    match command {
+        TradeCommand::Buy => bare(Key::KeyB),
+        TradeCommand::Sell => bare(Key::KeyS),
+        TradeCommand::MaxLot => bare(Key::AltLeft),
+        TradeCommand::TabBack => Binding::Follows {
+            base: Command::Ui(UiCommand::Tab),
+            plus: Modifiers::SHIFT,
+        },
+    }
+}
+
+/// The outfitter's defaults: B, S and the left Option.
+const fn default_outfitter(command: OutfitterCommand) -> Binding {
+    match command {
+        OutfitterCommand::Buy => bare(Key::KeyB),
+        OutfitterCommand::Sell => bare(Key::KeyS),
+        OutfitterCommand::Count => bare(Key::AltLeft),
+    }
+}
+
+/// The bar's defaults: H, G and N (`_BarFilter`).
+const fn default_bar(command: BarCommand) -> Binding {
+    match command {
+        BarCommand::Hire => bare(Key::KeyH),
+        BarCommand::Gamble => bare(Key::KeyG),
+        BarCommand::News => bare(Key::KeyN),
+    }
+}
+
+/// The mission computer's defaults: L and A (`_MissionFilter`).
+const fn default_mission_computer(command: MissionComputerCommand) -> Binding {
+    match command {
+        MissionComputerCommand::Leave => bare(Key::KeyL),
+        MissionComputerCommand::Accept => bare(Key::KeyA),
     }
 }
 
@@ -469,14 +562,23 @@ const fn default_ui(command: UiCommand) -> Binding {
 #[must_use]
 pub const fn sides(context: Context) -> Sides {
     match context {
-        Context::Flight | Context::EscortMenu | Context::Play | Context::Pause => Sides::LeftOnly,
+        Context::Flight | Context::EscortMenu | Context::Play | Context::Pause | Context::Race => {
+            Sides::LeftOnly
+        }
         Context::Ui
         | Context::Comm
         | Context::Haggle
         | Context::PlanetComm
         | Context::EscortDialog
         | Context::Assignment
-        | Context::PlayerInfo => Sides::Either,
+        | Context::PlayerInfo
+        | Context::Port
+        | Context::Trade
+        | Context::Outfitter
+        | Context::Shipyard
+        | Context::Bar
+        | Context::Hire
+        | Context::MissionComputer => Sides::Either,
     }
 }
 
@@ -822,6 +924,104 @@ mod tests {
     }
 
     #[test]
+    fn the_spaceport_s_defaults_are_its_buttons_initials() {
+        use PortCommand as P;
+        assert_eq!(
+            defaults(Context::Port),
+            vec![
+                row(P::Recharge, Key::KeyR, NO),
+                row(P::TradeCenter, Key::KeyC, NO),
+                row(P::Outfitter, Key::KeyO, NO),
+                row(P::Shipyard, Key::KeyS, NO),
+                row(P::MissionBbs, Key::KeyN, NO),
+                row(P::Bar, Key::KeyB, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_trade_center_s_defaults_are_b_s_option_and_shift_tab() {
+        use TradeCommand as T;
+        assert_eq!(
+            defaults(Context::Trade),
+            vec![
+                row(T::Buy, Key::KeyB, NO),
+                row(T::Sell, Key::KeyS, NO),
+                row(T::MaxLot, Key::AltLeft, NO),
+                row(T::TabBack, Key::Tab, SHIFT),
+            ]
+        );
+        let mut map = KeyMap::default();
+        map.bind(UiCommand::Tab.into(), KeyCombo::key(Key::KeyQ));
+        assert_eq!(
+            combo(&map, TradeCommand::TabBack),
+            Some(KeyCombo::with(Key::KeyQ, SHIFT)),
+            "Shift-Tab follows the shared Tab"
+        );
+    }
+
+    #[test]
+    fn the_outfitter_s_defaults_are_b_s_and_option() {
+        use OutfitterCommand as O;
+        assert_eq!(
+            defaults(Context::Outfitter),
+            vec![
+                row(O::Buy, Key::KeyB, NO),
+                row(O::Sell, Key::KeyS, NO),
+                row(O::Count, Key::AltLeft, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_shipyard_s_default_is_b() {
+        assert_eq!(
+            defaults(Context::Shipyard),
+            vec![row(ShipyardCommand::Buy, Key::KeyB, NO)]
+        );
+    }
+
+    #[test]
+    fn the_bar_s_defaults_are_h_g_and_n() {
+        use BarCommand as B;
+        assert_eq!(
+            defaults(Context::Bar),
+            vec![
+                row(B::Hire, Key::KeyH, NO),
+                row(B::Gamble, Key::KeyG, NO),
+                row(B::News, Key::KeyN, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_hire_screen_s_default_is_h() {
+        assert_eq!(
+            defaults(Context::Hire),
+            vec![row(HireCommand::Hire, Key::KeyH, NO)]
+        );
+    }
+
+    #[test]
+    fn the_mission_computer_s_defaults_are_l_and_a() {
+        assert_eq!(
+            defaults(Context::MissionComputer),
+            vec![
+                row(MissionComputerCommand::Leave, Key::KeyL, NO),
+                row(MissionComputerCommand::Accept, Key::KeyA, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_race_s_default_is_the_left_option() {
+        assert_eq!(
+            defaults(Context::Race),
+            vec![row(RaceCommand::Ask, Key::AltLeft, NO)]
+        );
+    }
+
+    #[test]
     fn every_command_is_bound_by_default() {
         let map = KeyMap::default();
         for command in Command::all() {
@@ -991,5 +1191,11 @@ mod tests {
         assert_eq!(sides(Context::EscortMenu), Sides::LeftOnly);
         assert_eq!(sides(Context::Ui), Sides::Either);
         assert_eq!(sides(Context::PlayerInfo), Sides::Either);
+        assert_eq!(sides(Context::Trade), Sides::Either);
+        assert_eq!(
+            sides(Context::Race),
+            Sides::LeftOnly,
+            "_DoRaceDialog polls the left Option's code"
+        );
     }
 }
