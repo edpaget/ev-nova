@@ -83,13 +83,50 @@ impl PadEntry {
     }
 }
 
+/// A stick axis an [`Kind::Axis`](super::Kind::Axis) command reads, and
+/// whether it reads it the other way: an inverted axis's amount is
+/// negated, so an inverted throttle thrusts with its stick pulled back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AxisBinding {
+    /// The axis.
+    pub axis: PadAxis,
+    /// Whether it reads the other way.
+    pub inverted: bool,
+}
+
+impl AxisBinding {
+    /// `axis`, read as it is.
+    #[must_use]
+    pub const fn plain(axis: PadAxis) -> Self {
+        Self {
+            axis,
+            inverted: false,
+        }
+    }
+
+    /// `axis`, read the other way.
+    #[must_use]
+    pub const fn inverted(axis: PadAxis) -> Self {
+        Self {
+            axis,
+            inverted: true,
+        }
+    }
+
+    /// `amount`, an amount read along the axis, as the binding reads it.
+    #[must_use]
+    pub fn read(self, amount: f32) -> f32 {
+        if self.inverted { -amount } else { amount }
+    }
+}
+
 /// How the gamepad binds one command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PadBinding {
     /// To a button, under a layer or none.
     Entry(PadEntry),
     /// To a stick axis: an [`Kind::Axis`](super::Kind::Axis) command's.
-    Axis(PadAxis),
+    Axis(AxisBinding),
     /// To nothing.
     Unbound,
 }
@@ -137,8 +174,15 @@ impl PadMap {
     /// The stick axis `command` is bound to, if an axis.
     #[must_use]
     pub fn axis(&self, command: Command) -> Option<PadAxis> {
+        self.axis_binding(command).map(|binding| binding.axis)
+    }
+
+    /// The stick axis `command` is bound to and whether it is inverted,
+    /// if an axis.
+    #[must_use]
+    pub fn axis_binding(&self, command: Command) -> Option<AxisBinding> {
         match self.binding(command) {
-            PadBinding::Axis(axis) => Some(axis),
+            PadBinding::Axis(binding) => Some(binding),
             PadBinding::Entry(_) | PadBinding::Unbound => None,
         }
     }
@@ -177,21 +221,27 @@ impl PadMap {
 
     /// The commands a stick-direction `button` means in flight with no
     /// layer held, when flight reads its stick as an axis: Reverse Course
-    /// for the throttle's back direction, and none for the bound axes'
-    /// other directions. `None` when flight doesn't read `button`'s axis,
-    /// so the button means what its entries say.
+    /// for the throttle's back direction (the one whose amount reads
+    /// negative: pulled back, or pushed up when the throttle is
+    /// inverted), and none for the bound axes' other directions. `None`
+    /// when flight doesn't read `button`'s axis, so the button means what
+    /// its entries say.
     fn flight_direction(&self, button: PadButton) -> Option<Vec<Command>> {
         let (axis, sign) = button.stick_direction()?;
-        let throttle = self.axis(Command::Flight(FlightCommand::ThrottleAxis));
-        if throttle == Some(axis) && sign < 0 {
+        let throttle = self.axis_binding(Command::Flight(FlightCommand::ThrottleAxis));
+        if let Some(throttle) = throttle
+            && throttle.axis == axis
+            && throttle.read(f32::from(sign)) < 0.0
+        {
             return Some(vec![Command::Flight(FlightCommand::ReverseCourse)]);
         }
         self.flight_axes().any(|read| read == axis).then(Vec::new)
     }
 
-    /// Every pair of commands bound to one entry in contexts active
-    /// together on some screen, a shadowing context's pairs with the one
-    /// it shadows left out. `PadMap::default()` has none.
+    /// Every pair of commands bound to one entry, or to one stick axis
+    /// (inverted or not), in contexts active together on some screen, a
+    /// shadowing context's pairs with the one it shadows left out.
+    /// `PadMap::default()` has none.
     #[must_use]
     pub fn clashes(&self) -> Vec<Clash> {
         self.clashes_on(SCREENS)
@@ -199,14 +249,17 @@ impl PadMap {
 
     /// [`PadMap::clashes`] over `screens`.
     fn clashes_on(&self, screens: &[ScreenContexts]) -> Vec<Clash> {
-        let mut by_entry: BTreeMap<PadEntry, Vec<Command>> = BTreeMap::new();
+        let mut by_input: BTreeMap<Held, Vec<Command>> = BTreeMap::new();
         for command in Command::all() {
-            if let Some(entry) = self.entry(command) {
-                by_entry.entry(entry).or_default().push(command);
-            }
+            let held = match self.binding(command) {
+                PadBinding::Entry(entry) => Held::Entry(entry),
+                PadBinding::Axis(binding) => Held::Axis(binding.axis),
+                PadBinding::Unbound => continue,
+            };
+            by_input.entry(held).or_default().push(command);
         }
         let mut clashes = Vec::new();
-        for commands in by_entry.values() {
+        for commands in by_input.values() {
             for (at, &first) in commands.iter().enumerate() {
                 for &second in &commands[at + 1..] {
                     let (a, b) = (first.context(), second.context());
@@ -223,6 +276,16 @@ impl PadMap {
         }
         clashes
     }
+}
+
+/// What a binding holds, for the clash query: an entry, or an axis
+/// whichever way it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Held {
+    /// A button under a layer or none.
+    Entry(PadEntry),
+    /// A stick axis.
+    Axis(PadAxis),
 }
 
 /// Every command's default on the pad: the phase's findings' table.
@@ -306,8 +369,8 @@ const fn default_flight(command: FlightCommand) -> PadBinding {
     use FlightCommand as F;
     use PadButton as P;
     match command {
-        F::ThrottleAxis => PadBinding::Axis(PadAxis::LeftY),
-        F::TurnAxis => PadBinding::Axis(PadAxis::RightX),
+        F::ThrottleAxis => PadBinding::Axis(AxisBinding::plain(PadAxis::LeftY)),
+        F::TurnAxis => PadBinding::Axis(AxisBinding::plain(PadAxis::RightX)),
         F::Accelerate => plain(P::DPadUp),
         F::ReverseCourse => plain(P::DPadDown),
         F::RotateLeft => plain(P::DPadLeft),
@@ -739,11 +802,13 @@ pub(super) fn bound_to(map: &PadMap, input: &Input, active: &[Context]) -> Vec<C
 
 /// The amount the stick axis `map` binds `command` to is pushed, through
 /// the flight dead zone ([`dead_zoned`], with the same stick's other
-/// axis): -1 to 1, none when `command` is bound to no axis.
+/// axis), negated when the binding is inverted: -1 to 1, none when
+/// `command` is bound to no axis.
 #[must_use]
 pub fn axis_amount(map: &PadMap, pad: &Gamepad, command: Command) -> f32 {
-    map.axis(command).map_or(0.0, |axis| {
-        dead_zoned(pad.axis(axis), pad.axis(axis.across())).0
+    map.axis_binding(command).map_or(0.0, |binding| {
+        let axis = binding.axis;
+        binding.read(dead_zoned(pad.axis(axis), pad.axis(axis.across())).0)
     })
 }
 
@@ -886,8 +951,8 @@ mod tests {
         let st = |button| on(P::Start, button);
         let f = |command, binding| (Command::Flight(command), binding);
         vec![
-            f(F::ThrottleAxis, Axis(PadAxis::LeftY)),
-            f(F::TurnAxis, Axis(PadAxis::RightX)),
+            f(F::ThrottleAxis, Axis(AxisBinding::plain(PadAxis::LeftY))),
+            f(F::TurnAxis, Axis(AxisBinding::plain(PadAxis::RightX))),
             f(F::Accelerate, plain(P::DPadUp)),
             f(F::ReverseCourse, plain(P::DPadDown)),
             f(F::RotateLeft, plain(P::DPadLeft)),
@@ -1138,11 +1203,11 @@ mod tests {
         assert_eq!(on_layer(P::Start), 18);
         assert_eq!(
             pad.binding(flight(FlightCommand::ThrottleAxis)),
-            PadBinding::Axis(PadAxis::LeftY)
+            PadBinding::Axis(AxisBinding::plain(PadAxis::LeftY))
         );
         assert_eq!(
             pad.binding(flight(FlightCommand::TurnAxis)),
-            PadBinding::Axis(PadAxis::RightX)
+            PadBinding::Axis(AxisBinding::plain(PadAxis::RightX))
         );
         assert_eq!(pad.layer_buttons(), BTreeSet::from([P::Select, P::Start]));
         assert_eq!(
@@ -1414,17 +1479,99 @@ mod tests {
         let mut pad = Pad::new(FLYING);
         pad.map.bind(
             flight(FlightCommand::ThrottleAxis),
-            PadBinding::Axis(PadAxis::RightY),
+            PadBinding::Axis(AxisBinding::plain(PadAxis::RightY)),
         );
         pad.map.bind(
             flight(FlightCommand::TurnAxis),
-            PadBinding::Axis(PadAxis::LeftX),
+            PadBinding::Axis(AxisBinding::plain(PadAxis::LeftX)),
         );
         assert_eq!(
             pad.press(P::RightStickDown),
             Some(flight(FlightCommand::ReverseCourse))
         );
         assert_eq!(pad.press(P::LeftStickDown), None, "no longer flight's");
+    }
+
+    /// `pad` with `axis` moved to `value`.
+    fn moved(mut pad: Gamepad, map: &PadMap, axis: PadAxis, value: f32) -> Gamepad {
+        pad.follow(&Input::PadAxis { axis, value }, map);
+        pad
+    }
+
+    #[test]
+    fn an_inverted_turn_axis_reads_the_other_way() {
+        let turn = flight(FlightCommand::TurnAxis);
+        let mut map = PadMap::default();
+        assert_eq!(
+            map.axis_binding(turn),
+            Some(AxisBinding::plain(PadAxis::RightX)),
+            "the defaults are not inverted"
+        );
+        map.bind(
+            turn,
+            PadBinding::Axis(AxisBinding::inverted(PadAxis::RightX)),
+        );
+        assert_eq!(map.axis(turn), Some(PadAxis::RightX));
+        let pad = moved(Gamepad::default(), &map, PadAxis::RightX, -1.0);
+        assert_eq!(axis_amount(&map, &pad, turn), 1.0);
+        assert_eq!(axis_amount(&PadMap::default(), &pad, turn), -1.0);
+        assert_eq!(
+            axis_amount(&map, &Gamepad::default(), turn),
+            0.0,
+            "centred reads none"
+        );
+    }
+
+    #[test]
+    fn an_inverted_throttle_holds_reverse_on_its_stick_pushed_up_and_thrusts_pulled_back() {
+        let throttle = flight(FlightCommand::ThrottleAxis);
+        let mut pad = Pad::new(FLYING);
+        pad.map.bind(
+            throttle,
+            PadBinding::Axis(AxisBinding::inverted(PadAxis::LeftY)),
+        );
+        assert_eq!(
+            pad.press(P::LeftStickUp),
+            Some(flight(FlightCommand::ReverseCourse))
+        );
+        pad.release(P::LeftStickUp);
+        assert_eq!(pad.press(P::LeftStickDown), None, "flight reads its axis");
+        let state = moved(Gamepad::default(), &pad.map, PadAxis::LeftY, -1.0);
+        assert_eq!(axis_amount(&pad.map, &state, throttle), 1.0, "thrusts");
+    }
+
+    #[test]
+    fn two_flight_axes_on_one_axis_clash() {
+        let turn = flight(FlightCommand::TurnAxis);
+        let throttle = flight(FlightCommand::ThrottleAxis);
+        for inverted in [false, true] {
+            let mut map = PadMap::default();
+            map.bind(
+                turn,
+                PadBinding::Axis(AxisBinding {
+                    axis: PadAxis::LeftY,
+                    inverted,
+                }),
+            );
+            assert_eq!(
+                map.clashes(),
+                vec![Clash {
+                    first: turn,
+                    second: throttle
+                }],
+                "inverted {inverted}"
+            );
+        }
+    }
+
+    #[test]
+    fn turn_and_throttle_on_one_stick_s_two_axes_do_not_clash() {
+        let mut map = PadMap::default();
+        map.bind(
+            flight(FlightCommand::TurnAxis),
+            PadBinding::Axis(AxisBinding::plain(PadAxis::LeftX)),
+        );
+        assert_eq!(map.clashes(), vec![]);
     }
 
     #[test]

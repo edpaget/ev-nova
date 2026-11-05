@@ -165,7 +165,9 @@ pub use command::{
     ShipyardCommand, SystemViewCommand, TradeCommand, UiCommand,
 };
 pub use contexts::ScreenContexts;
-pub use gamepad::{FLIGHT_DEAD_ZONE, Gamepad, PadBinding, PadEntry, PadMap, dead_zoned};
+pub use gamepad::{
+    AxisBinding, FLIGHT_DEAD_ZONE, Gamepad, PadBinding, PadEntry, PadMap, dead_zoned,
+};
 pub use keyboard::{Binding, KeyCombo, KeyMap, Keyboard, KeysDown, Modifiers, is_modifier_input};
 pub use reader::{CommandInput, CommandReader, SharedBindings};
 pub use saved::ComboTextError;
