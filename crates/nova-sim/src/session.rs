@@ -3852,6 +3852,13 @@ impl Session {
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
     /// for the arrival.
+    ///
+    /// The exit restarts the course at the system entered
+    /// (@0x63e1d-0x63e3c). By [`RuleKey::GateCourse`]'s other reading an
+    /// exit into the system standing for the course's first hop drops
+    /// that hop instead, as a jump's arrival does, and once the nav is off
+    /// cues the next ([`Session::cue_course`]); it applies to a gate taken
+    /// by hand too.
     pub fn enter_hypergate(
         &mut self,
         to: Option<SystemId>,
@@ -3870,6 +3877,13 @@ impl Session {
             system
         });
         self.chart.set_nav(NavMode::Off);
+        if entered.is_ok() && self.setup.rules.source_for(RuleKey::GateCourse) == RuleSource::Bible
+        {
+            // By the other reading an exit along the course kept its next
+            // hop (see the `entry` module's gate row): cue it, as a jump's
+            // arrival does (@0x6c4cd). Any other exit left no course.
+            self.chart.cue_course(&self.pilot, &self.setup);
+        }
         entered
     }
 
@@ -4015,7 +4029,9 @@ impl Session {
             },
         };
         self.enter_system(
-            Entry::Gate,
+            Entry::Gate {
+                hypergate: kind == GateKind::Hypergate,
+            },
             self.pilot.system,
             entered,
             catalog,
