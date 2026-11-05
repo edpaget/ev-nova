@@ -32,6 +32,9 @@ const LIVE_KEYS: [Key; 3] = [MAP_KEY, PLAYER_INFO_KEY, MISSION_INFO_KEY];
 pub(crate) struct WaitKeys {
     waited: Key,
     keys: Vec<Input>,
+    /// Whether the last key taken was a press or a repeat that queued, so
+    /// a character typed now goes in behind it.
+    typing: bool,
 }
 
 impl WaitKeys {
@@ -40,6 +43,7 @@ impl WaitKeys {
         Self {
             waited,
             keys: Vec::new(),
+            typing: false,
         }
     }
 
@@ -52,10 +56,13 @@ impl WaitKeys {
     ///
     /// A typed character goes in behind the queued press or repeat that
     /// typed it, as a queued `keyDown` or `autoKey` carries its character
-    /// with its key code; any other is dropped.
+    /// with its key code. Any other is dropped: one typed by a key the
+    /// queue dropped (the waited key's repeat, say) goes with that key,
+    /// never behind a key queued before it that typed nothing, such as
+    /// Shift.
     pub(crate) fn take(&mut self, input: &Input) {
         if let Input::Text(_) = input {
-            if matches!(self.keys.last(), Some(Input::Key { pressed: true, .. })) {
+            if std::mem::take(&mut self.typing) {
                 self.keys.push(*input);
             }
             return;
@@ -63,17 +70,20 @@ impl WaitKeys {
         let Input::Key { key, pressed, .. } = *input else {
             return;
         };
+        self.typing = false;
         if key == self.waited || key == Key::CapsLock {
             return;
         }
         if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
             self.keys.push(*input);
+            self.typing = pressed;
         }
     }
 
     /// Drops all that was taken.
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
+        self.typing = false;
     }
 
     /// What the wait leaves for the screen under it, in order, the queue
@@ -82,6 +92,7 @@ impl WaitKeys {
     /// goes with its repeats, release and the characters they typed; one
     /// still down stays.
     pub(crate) fn finish(&mut self) -> Vec<Input> {
+        self.typing = false;
         let keys = std::mem::take(&mut self.keys);
         let mut kept = vec![true; keys.len()];
         for live in LIVE_KEYS.into_iter().filter(|&key| key != self.waited) {
@@ -332,6 +343,36 @@ mod tests {
         );
     }
 
+    /// The waited key's repeat types its character after a key that typed
+    /// none: the character goes with the repeat, never behind that key, as
+    /// `_SingleMissionFilter` takes a letter on `keyDown` alone (@0x98e56).
+    #[test]
+    fn a_dropped_key_takes_its_character_from_behind_a_kept_key() {
+        for waited in LIVE_KEYS {
+            let shift = Key::ShiftLeft;
+            let inputs = [press(shift), repeat(waited), Input::Text('m')];
+            assert_eq!(
+                left_waiting_for(waited, &inputs),
+                [press(shift)],
+                "{waited:?}'s repeat"
+            );
+            let inputs = [press(Key::Escape), press(waited), Input::Text('m')];
+            assert_eq!(
+                left_waiting_for(waited, &inputs),
+                [press(Key::Escape)],
+                "{waited:?}'s press"
+            );
+        }
+        let caps = [press(Key::ArrowUp), press(Key::CapsLock), Input::Text('x')];
+        assert_eq!(left_by(&caps), [press(Key::ArrowUp)], "Caps Lock's");
+        let unheld = [press(Key::ShiftLeft), release(A), Input::Text('a')];
+        assert_eq!(
+            left_by(&unheld),
+            [press(Key::ShiftLeft)],
+            "a release it dropped"
+        );
+    }
+
     #[test]
     fn it_drops_the_release_of_a_key_whose_press_it_never_took() {
         assert_eq!(left_by(&[release(A), press(B)]), [press(B)]);
@@ -399,7 +440,8 @@ mod tests {
         let mut queue = WaitKeys::new(MAP_KEY);
         queue.take(&press(A));
         queue.clear();
-        assert_eq!(queue.finish(), []);
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), [], "nor its character after");
     }
 
     #[test]
@@ -407,7 +449,8 @@ mod tests {
         let mut queue = WaitKeys::new(MAP_KEY);
         queue.take(&press(A));
         assert_eq!(queue.finish().len(), 1);
-        assert_eq!(queue.finish(), []);
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), [], "a character finished with its key");
     }
 
     const P: Key = PLAYER_INFO_KEY;

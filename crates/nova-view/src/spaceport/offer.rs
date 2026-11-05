@@ -1639,6 +1639,41 @@ mod tests {
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse), "a press");
     }
 
+    /// A wait on M, P or I closed with its key held, Shift tapped and the
+    /// held key's repeat typing its letter meanwhile, leaves Shift alone:
+    /// the letter never chooses, as the filter takes a letter on `keyDown`
+    /// alone (@0x98e56).
+    #[test]
+    fn a_letter_the_waited_keys_repeat_typed_chooses_nothing_after_the_wait() {
+        use crate::flight::view::MAP_KEY;
+        use crate::ui::key_wait::WaitKeys;
+        use crate::ui::mission_info::MISSION_INFO_KEY;
+        use crate::ui::player_info::PLAYER_INFO_KEY;
+        for (waited, letter, label) in [
+            (MAP_KEY, 'm', "Move it"),
+            (PLAYER_INFO_KEY, 'p', "Proceed"),
+            (MISSION_INFO_KEY, 'i', "I'm in"),
+        ] {
+            let mut queue = WaitKeys::new(waited);
+            for input in [
+                key(Key::ShiftLeft),
+                Input::Key {
+                    key: waited,
+                    pressed: true,
+                    repeat: true,
+                },
+                Input::Text(letter),
+            ] {
+                queue.take(&input);
+            }
+            let mut dialog = dialog_of(prompt(label, Some("No")));
+            for input in queue.finish() {
+                dialog.input(&input);
+            }
+            assert_eq!(dialog.take_choice(), None, "{waited:?}");
+        }
+    }
+
     #[test]
     fn labels_starting_with_the_same_letter_take_no_letter() {
         let mut dialog = dialog_of(prompt("Sure", Some("Scram")));
