@@ -44,7 +44,11 @@ fn the_fixture_folder_holds_one_record_per_faction_system_and_stellar() {
     let data = new_game::open(&fixture()).expect("lists").data;
     assert_eq!(data.ids(Govt::TYPE), [128, 129]);
     assert_eq!(data.ids(System::TYPE), [128, 129]);
-    assert_eq!(data.ids(Stellar::TYPE), [128, 129, 130]);
+    assert_eq!(
+        data.ids(Stellar::TYPE),
+        [128, 129, 130, 131, 132],
+        "the stellars, then the jump points' gates"
+    );
     assert_eq!(data.ids(Desc::TYPE), [128, 130], "the stellars with a body");
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
@@ -72,14 +76,22 @@ fn the_systems_are_placed_governed_and_hold_their_stellars_with_no_links() {
     assert_eq!((hearth.x_pos, hearth.y_pos), (0, 0));
     assert_eq!(hearth.govt, Some(GovtId(128)));
     assert_eq!(
-        hearth.nav_def[..3],
-        [Some(StellarId(128)), Some(StellarId(129)), None]
+        hearth.nav_def[..4],
+        [
+            Some(StellarId(128)),
+            Some(StellarId(129)),
+            Some(StellarId(131)),
+            None
+        ]
     );
     let (name, verge) = named::<System>(&data, 129);
     assert_eq!(name, "Verge");
     assert_eq!((verge.x_pos, verge.y_pos), (300, -120));
     assert_eq!(verge.govt, None);
-    assert_eq!(verge.nav_def[..2], [Some(StellarId(130)), None]);
+    assert_eq!(
+        verge.nav_def[..3],
+        [Some(StellarId(130)), Some(StellarId(132)), None]
+    );
     for system in [hearth, verge] {
         assert_eq!(system.con, [None; 16], "the jump points are not links");
     }

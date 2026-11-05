@@ -16,9 +16,20 @@
 //! | Bible | Record | Fields |
 //! |---|---|---|
 //! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB` |
-//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, in ID order; no `con` links |
+//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
+//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
+//! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
+//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
+//! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
+//!
+//! A jump point is a hypergate with one link, to its partner's gate: the
+//! original comes out at the linked `spöb` itself, so the partner is
+//! reached even when two points of a system lead to one neighbour, and a
+//! one-way point's gate reaches its partner though the partner links
+//! elsewhere ([`gates`]). The new game's ruleset lets the traffic use the
+//! gates as its only way in and out (`nova::ruleset`).
 //!
 //! The body is kept as written: Markdown isn't rendered, and its line
 //! breaks stay line breaks.
@@ -32,8 +43,13 @@
 //! - A `government` or `owner` naming no faction maps to no government.
 //! - A stellar whose `system` names no system is left out.
 //! - A map or system position outside `i16` is moved to the nearest.
-//! - A system with more than 16 stellars keeps the first 16 in `nav_def`;
-//!   the rest have records but no place in it.
+//! - A system with more than 16 stellars and gates keeps every gate in
+//!   `nav_def` and the first stellars that fit beside them; the rest have
+//!   records but no place in it, all named in one problem.
+//! - A jump point whose `to` names no jump point maps to a gate with no
+//!   link, which refuses its entry.
+//! - A start whose ship is no hull, or whose system isn't there, is left
+//!   out.
 //! - A record past its kind's ID range is left out.
 //!
 //! A reference to a file that failed to load, or to a record left out for
@@ -45,12 +61,16 @@
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - `jump_points`: phase 3 maps each to a hypergate `spöb` with one link,
-//!   in the system's `nav_def` (sharing its 16 slots with the stellars),
-//!   and adds the arrival `Rulebook` key. Gate IDs follow the stellars', so
-//!   no stellar is renumbered ([`ids`]).
-//! - `ships/`, `mods/`, `outfits/`, `liveries/`: they need the flat-outline
-//!   look and the NPC fleets of phase 3, and `play-the-sample`'s mod kits.
+//! - A jump point's `stability`: unstable and dead points are travelled as
+//!   stable ones until `play-the-sample` phase 1.
+//! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
+//!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
+//!   `liveries/` and a hull's `model` wait for
+//!   `phase-4-draw-flat-outlines`; until then ships draw as the view's
+//!   crossed box.
+//! - Traffic: the bible authors none, so the civilian `düde` and each
+//!   system's traffic are placeholders ([`fleet`]), as are a hull's
+//!   acceleration, turn rate, fuel and crew and a start's date.
 //! - `storylines/`, `missions/`, `news/`, `characters/`, `dialog/`: they
 //!   belong to `engine-story`.
 //! - `assets/`, `budgets/`: tooling (art budgets and provenance). Only the
@@ -58,11 +78,14 @@
 //!   ([`NewGame::lfs_pointers`]).
 //! - A stellar's `visual` and a faction's `kind`: Nova has nothing like
 //!   them yet (the planet shader and 3D come with `engine-3d`).
-//! - A start `chär`: the bible names no start system or ship yet, so New
-//!   Pilot has nowhere to fly from. Phase 3 needs one.
 //! - Commodity prices: a trade centre's price levels (the upper `Flags`
 //!   bits) stay unset, so it trades nothing until the bible prices goods.
+//!
+//! IDs aren't pinned: adding a data file renumbers what follows it, and a
+//! pilot saved before can load into another place ([`ids`]).
 
+pub mod fleet;
+pub mod gates;
 pub mod ids;
 mod map;
 pub mod records;

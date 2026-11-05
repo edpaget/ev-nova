@@ -142,6 +142,16 @@ pub mod flags {
     pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
 }
 
+/// `Flags2` bits the new game's data sets (`nova_data::new_game`).
+pub mod flags2 {
+    /// A hypergate: landing on it opens the hypergate map, whose pick
+    /// leaves through the first of its `HyperLink1-8` (`spöb` IDs) whose
+    /// system is the one picked. `nova-sim-state`'s `landing::HYPERGATE`
+    /// reads the same bit, and its `gate::GateKind` tells it from a
+    /// wormhole's 0x2000.
+    pub const HYPERGATE: u16 = 0x1000;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

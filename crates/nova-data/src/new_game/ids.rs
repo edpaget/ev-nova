@@ -3,20 +3,27 @@
 //! Within a kind, records are numbered in id order (the order the loader's
 //! maps already give), counting up from 128, the first ID Nova gives
 //! data. Each kind has its range: [`GOVT_IDS`] for factions,
-//! [`SYSTEM_IDS`] and [`STELLAR_IDS`] for systems and stellars. A record
-//! past its range's end gets no ID, and the caller leaves it out.
+//! [`SYSTEM_IDS`] and [`STELLAR_IDS`] for systems and stellars,
+//! [`SHIP_IDS`] for hulls and [`CHARACTER_IDS`] for starts. A record past
+//! its range's end gets no ID, and the caller leaves it out.
+//!
+//! The jump points' gates share [`STELLAR_IDS`] with the stellars. They
+//! are numbered after the last stellar's ID, in (system id, point id)
+//! order, so adding a gate renumbers no stellar. The one traffic `düde`
+//! is [`CIVILIAN_DUDE`].
 //!
 //! Known limit: an ID depends on how many ids sort before it, so adding a
-//! file renumbers every record of its kind after it. Nothing keeps a new
-//! game's IDs yet (it has no `chär`, so no pilot is saved), so nothing
-//! breaks; phase 3 decides whether IDs need pinning. Phase 3 also adds
-//! hypergate `spöb`s for the jump points after the stellars, so they take
-//! the IDs past the last stellar's without renumbering any stellar.
+//! file renumbers every record of its kind after it, and every gate after
+//! a new stellar. A start's `chär` means New Pilot saves new-game pilots,
+//! and a saved pilot holds its system, stellar and ship by ID, so a pilot
+//! saved before a data file was added can load into another system or
+//! ship. That is accepted while the sample is under development; pinning
+//! the IDs is the `new-game-id-pinning` task.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
-use nova_galaxy_format::id::Id;
+use nova_galaxy_format::id::{Id, PointRef};
 
 /// The `gövt` IDs Nova gives data: 128 to 383.
 pub const GOVT_IDS: RangeInclusive<i16> = 128..=383;
@@ -27,6 +34,16 @@ pub const SYSTEM_IDS: RangeInclusive<i16> = 128..=2175;
 /// The `spöb` IDs Nova gives data: 128 to 2175.
 pub const STELLAR_IDS: RangeInclusive<i16> = 128..=2175;
 
+/// The `shïp` IDs Nova gives data: 128 to 895.
+pub const SHIP_IDS: RangeInclusive<i16> = 128..=895;
+
+/// The `chär` IDs the new game's starts take: 128 to 255.
+pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
+
+/// The one traffic `düde`, "Civilian traffic" (see
+/// [`super::fleet`]).
+pub const CIVILIAN_DUDE: i16 = 128;
+
 /// The Nova ID of each record that has one, by its bible id, per kind.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdTable {
@@ -36,6 +53,12 @@ pub struct IdTable {
     pub systems: BTreeMap<Id, i16>,
     /// Each stellar's `spöb`.
     pub stellars: BTreeMap<Id, i16>,
+    /// Each jump point's hypergate `spöb`, by `system/point`.
+    pub gates: BTreeMap<PointRef, i16>,
+    /// Each hull's `shïp` and `shän`.
+    pub ships: BTreeMap<Id, i16>,
+    /// Each start's `chär`.
+    pub starts: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -93,6 +116,7 @@ mod tests {
         assert_eq!(GOVT_IDS, 128..=383);
         assert_eq!(SYSTEM_IDS, 128..=2175);
         assert_eq!(STELLAR_IDS, 128..=2175);
+        assert_eq!(SHIP_IDS, 128..=895);
     }
 
     #[test]
