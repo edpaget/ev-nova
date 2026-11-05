@@ -43,7 +43,7 @@ use crate::combat::shot_layer::ShotLayer;
 use crate::combat::{CombatEvent, ShipRef};
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
-use crate::flight::{Controls, ShipState};
+use crate::flight::{Amounts, Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
 use crate::gate_sprite::StellarPass;
@@ -1568,6 +1568,10 @@ pub enum FlightEvent {
 pub struct StepInput {
     /// The player's steering, thrust and afterburner.
     pub controls: Controls,
+    /// How far a stick holds the player's turn and thrust, which its step
+    /// scales them by (see `Session`'s `analog` module): full, the
+    /// default, with keys only.
+    pub amounts: Amounts,
     /// The play area about the ship, in world units
     /// ([`Session::set_play_area`](crate::Session::set_play_area)).
     pub play_area: Area,

@@ -9,9 +9,10 @@
 //!    it;
 //! 2. the input is held ([`StepInput`]): the play area, the window's
 //!    width, the fire keys, the eject and self-destruct chords, the cloak
-//!    and weapon safety keys, the double-time key, Hyperspace Effects and
-//!    the land key, each a store but the double-time key, which latches
-//!    the switch at once (see the `double_time` module).
+//!    and weapon safety keys, the double-time key, Hyperspace Effects,
+//!    the land key and a stick's amounts (see the `analog` module), each
+//!    a store but the double-time key, which latches the switch at once
+//!    (see the `double_time` module).
 //!
 //! The view settled the field at the top of its tick, before it caught
 //! up with the session's events and ran its held keys; nothing there
@@ -163,6 +164,7 @@ impl Session {
         self.set_land_key(input.land_key);
         self.set_dock_try(input.dock_try);
         self.hold_jettison(input.jettison);
+        self.ship.hold_amounts(input.amounts);
         if input.held {
             self.hold_time();
         }

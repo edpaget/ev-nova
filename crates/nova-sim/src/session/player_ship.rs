@@ -18,7 +18,7 @@ use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
-use crate::flight::ShipState;
+use crate::flight::{Amounts, ShipState};
 use crate::handling::ShipFields;
 use crate::pilot::Pilot;
 use crate::shipyard;
@@ -49,6 +49,10 @@ pub(super) struct PlayerShip {
     /// the last tick left it (see the `afterburner` module). Unsaved, and
     /// none in a new session, as the original's static data is.
     pub(super) player_max_vel: MaxVel,
+    /// How far a stick holds the turn and the thrust, as the frame's
+    /// input gave them, for its steps (see the `analog` module): full
+    /// with keys only. Unsaved.
+    pub(super) amounts: Amounts,
     /// How the player's ship is holding up.
     pub(super) condition: Condition,
     /// The player's repair inhibit, `_playerRepairInhibit`: armed as it is
@@ -262,6 +266,7 @@ impl PlayerShip {
             player_speed: 0.0,
             afterburner_on: false,
             player_max_vel: MaxVel::START,
+            amounts: Amounts::FULL,
             condition: Condition::Intact,
             repair_inhibit: crate::self_repair::RepairInhibit::OFF,
             tractor: None,

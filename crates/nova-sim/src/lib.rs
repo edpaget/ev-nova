@@ -566,7 +566,9 @@ pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };
-pub use flight::{Controls, Face, FlightRules, Flyer, ShipState, Turn, step};
+pub use flight::{
+    Amounts, Controls, Face, FlightRules, Flyer, PlayerControls, ShipState, Turn, step,
+};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use galaxy_map::{MARKS_DESTINATION, MapMarks};
 pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
