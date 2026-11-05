@@ -387,6 +387,31 @@ fn the_help_line_names_each_command_s_key_through_the_layout() {
 }
 
 #[test]
+fn the_drawn_help_line_names_the_keys_the_view_reads() {
+    use crate::key_names::fixture::FakeKeyNames;
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, SharedBindings};
+    let helped = FlightOverlays {
+        title: false,
+        help: true,
+        cheats: false,
+    };
+    let bindings =
+        SharedBindings::new(Bindings::default().rebound(Fc::HyperJump, KeyCombo::key(Key::KeyK)))
+            .with_key_names(Rc::new(FakeKeyNames::azerty()));
+    let view = barred(catalog(), among(Vec::new()))
+        .with_overlays(helped)
+        .with_bindings(bindings);
+    let texts = texts(&flown(&view));
+    let help = texts
+        .iter()
+        .find(|text| text.contains(": fly   "))
+        .expect("a help line");
+    assert!(help.contains("   K: jump   "), "rebound: {help}");
+    assert!(help.contains("   Z: weapon   "), "AZERTY: {help}");
+    assert!(!texts.contains(&default_help()), "{texts:?}");
+}
+
+#[test]
 fn the_help_line_leaves_out_an_unbound_command_and_groups_what_is_left() {
     use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo};
     let names = || -> Rc<dyn crate::key_names::KeyNames> { Rc::new(crate::key_names::NoKeyNames) };
