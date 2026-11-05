@@ -437,6 +437,22 @@ mod tests {
         assert_eq!(dialog.take_outcome(), Some(7));
     }
 
+    /// The quantity dialog reads its keys through the key map it is
+    /// given: Confirm rebound to F6 confirms on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_confirms_on_its_new_key_alone() {
+        let bindings =
+            crate::keymap::SharedBindings::new(crate::keymap::Bindings::default().rebound(
+                crate::keymap::UiCommand::Confirm,
+                crate::keymap::KeyCombo::key(Key::F6),
+            ));
+        let mut dialog = dialog().with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), None, "Return no longer confirms");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_outcome(), Some(12));
+    }
+
     #[test]
     fn return_confirms_the_maximum_untouched() {
         let mut dialog = dialog();

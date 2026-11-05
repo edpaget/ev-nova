@@ -16,7 +16,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::draw::{DrawList, fill_rect};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -24,7 +25,7 @@ use crate::text::TextMetrics;
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Role, outline};
 use super::prefs::{BACKDROP, BORDER};
-use super::text_field::TextField;
+use super::text_field::{TextField, is_text_entry};
 
 /// What OK and Cancel make of the field: each dialog's own rule.
 pub trait Confirm: Clone {
@@ -122,6 +123,13 @@ impl<P: Confirm> EditDialog<P> {
         })
     }
 
+    /// The dialog reading its keys (Return for OK) through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// Drops the next input if it is typed text, as the original consumes
     /// the keyDown that opened the dialog (or flushes the events pending
     /// as it opens): the key that opened it then types nothing into it.
@@ -175,23 +183,16 @@ impl<P: Confirm> EditDialog<P> {
 
 impl<P: Confirm> Screen for EditDialog<P> {
     /// Typed characters, Backspace and Space go to the field (Space types
-    /// only a space); after [`flush_typed_key`](Self::flush_typed_key), the
-    /// next typed character is dropped. Everything else goes to the
-    /// dialog: OK (or Return) asks the policy, and Cancel declines. It
-    /// never quits.
+    /// only a space): text entry, which no key map rebinds
+    /// ([`is_text_entry`]). After [`flush_typed_key`](Self::flush_typed_key),
+    /// the next typed character is dropped. Everything else goes to the
+    /// dialog: OK (or Confirm, Return) asks the policy, and Cancel
+    /// declines. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if std::mem::take(&mut self.flushing) && matches!(input, Input::Text(_)) {
             return ScreenAction::None;
         }
-        let typing = matches!(
-            input,
-            Input::Text(_)
-                | Input::Key {
-                    key: Key::Backspace | Key::Space,
-                    ..
-                }
-        );
-        if typing {
+        if is_text_entry(input) {
             self.field.input(input);
             return ScreenAction::None;
         }
@@ -236,7 +237,8 @@ mod tests {
 
     use super::*;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::Placement;
 
@@ -397,6 +399,23 @@ mod tests {
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_outcome(), Some("second".to_owned()));
         assert_eq!(*policy.asked.borrow(), ["abc", "d"]);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Confirm
+    /// rebound to F6 asks the policy on F6 and no longer on Return, while
+    /// Space still types into the field.
+    #[test]
+    fn a_rebound_confirm_asks_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F6)),
+        );
+        let policy = Scripted::answering(&[Some("ok")]);
+        let mut dialog = dialog_with(policy.clone()).with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), None, "Return no longer asks");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_outcome(), Some("ok".to_owned()));
+        assert_eq!(*policy.asked.borrow(), ["abc"]);
     }
 
     #[test]

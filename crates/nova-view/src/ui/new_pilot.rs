@@ -53,7 +53,8 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -63,7 +64,7 @@ use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
-use super::text_field::TextField;
+use super::text_field::{TextField, is_text_entry};
 use super::toggle::Toggle;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -199,6 +200,9 @@ pub struct NewPilotDialog {
     refusal: Option<String>,
     /// The sounds made since they were last taken: OK's beep.
     sounds: Vec<Sound>,
+    /// Its keys, as the shared UI context's commands
+    /// ([`contexts::DIALOG`]).
+    keys: CommandReader,
 }
 
 impl std::fmt::Debug for NewPilotDialog {
@@ -271,7 +275,16 @@ impl NewPilotDialog {
             outcome: None,
             refusal: None,
             sounds: Vec::new(),
+            keys: CommandReader::new(contexts::DIALOG),
         })
+    }
+
+    /// The dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The dialog following `rules`: by the other reading of
@@ -491,8 +504,10 @@ fn fallback_template() -> DialogTemplate {
 
 impl Screen for NewPilotDialog {
     /// Typed characters and Backspace go to the focused field, and a
-    /// change of the name clears a refusal. Space only types a space. Tab
-    /// (its repeats too) focuses the other field, its text selected whole.
+    /// change of the name clears a refusal. Space only types a space: text
+    /// entry, which no key map rebinds ([`is_text_entry`]). The shared UI
+    /// context's Tab (its repeats too) focuses the other field, its text
+    /// selected whole.
     /// Everything else goes to the dialog: a click in a field focuses it, a
     /// click on Strict Play ticks or clears it, a click on the gender
     /// control switches the gender, OK (or Return) creates the pilot unless
@@ -500,11 +515,11 @@ impl Screen for NewPilotDialog {
     /// Cancel cancels. Escape does nothing unless the rules make it cancel
     /// ([`NewPilotDialog::with_rules`]). It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: Key::Tab,
+        if let Some(CommandInput {
+            command: Command::Ui(UiCommand::Tab),
             pressed: true,
             ..
-        } = input
+        }) = self.keys.follow(input)
         {
             let next = match self.focus {
                 Focus::Name if self.nickname.is_some() => Focus::Nickname,
@@ -513,15 +528,7 @@ impl Screen for NewPilotDialog {
             self.focus_on(next, true);
             return ScreenAction::None;
         }
-        let typing = matches!(
-            input,
-            Input::Text(_)
-                | Input::Key {
-                    key: Key::Backspace | Key::Space,
-                    ..
-                }
-        );
-        if typing {
+        if is_text_entry(input) {
             match (self.focus, &mut self.nickname) {
                 (Focus::Nickname, Some(field)) => {
                     field.input(input);
@@ -611,7 +618,8 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::Point;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -760,6 +768,23 @@ mod tests {
         dialog.input(&key(Key::Backspace));
         assert_eq!(dialog.name(), "Ada");
         assert_eq!(dialog.take_outcome(), None);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Tab
+    /// rebound to F7 focuses the nickname on F7 and no longer on Tab.
+    #[test]
+    fn a_rebound_tab_focuses_the_other_field_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Tab, KeyCombo::key(Key::F7)),
+        );
+        let mut dialog = dialog().with_bindings(bindings);
+        dialog.input(&key(Key::Tab));
+        typed(&mut dialog, "Ada");
+        assert_eq!(dialog.name(), "Ada", "Tab no longer moves the focus");
+        dialog.input(&key(Key::F7));
+        typed(&mut dialog, "Al");
+        assert_eq!(dialog.nickname(), "Al");
+        assert_eq!(dialog.name(), "Ada");
     }
 
     #[test]

@@ -20,6 +20,27 @@ use super::dialog::outline;
 /// (Delete on a Mac keyboard).
 pub const DELETE_KEY: Key = Key::Backspace;
 
+/// The key that types a space into the field, which its host keeps from
+/// the shared UI context's Activate while the field has the focus.
+pub const SPACE_KEY: Key = Key::Space;
+
+/// Whether `input` is text entry for a focused field: a typed character,
+/// or anything of [`DELETE_KEY`] or [`SPACE_KEY`]. Text entry is no
+/// command (rdm:phase/key-bindings/phase-2-command-key-map's fixed keys):
+/// its keys stay put whatever the key map binds, and a field's host sends
+/// them to the field before reading its own commands.
+#[must_use]
+pub fn is_text_entry(input: &Input) -> bool {
+    matches!(
+        *input,
+        Input::Text(_)
+            | Input::Key {
+                key: DELETE_KEY | SPACE_KEY,
+                ..
+            }
+    )
+}
+
 /// The text's size, in Geneva.
 pub const TEXT_SIZE: f32 = 12.0;
 /// The text's colour.
@@ -243,6 +264,19 @@ mod tests {
             pressed,
             repeat,
         }
+    }
+
+    #[test]
+    fn typed_characters_and_backspace_s_and_space_s_keys_are_text_entry() {
+        assert!(is_text_entry(&Input::Text('a')));
+        for (pressed, repeat) in [(true, false), (true, true), (false, false)] {
+            assert!(is_text_entry(&key(Key::Backspace, pressed, repeat)));
+            assert!(is_text_entry(&key(Key::Space, pressed, repeat)));
+        }
+        for other in [Key::Enter, Key::Tab, Key::KeyA, Key::ArrowLeft] {
+            assert!(!is_text_entry(&key(other, true, false)), "{other:?}");
+        }
+        assert!(!is_text_entry(&Input::PointerLeft));
     }
 
     #[test]
