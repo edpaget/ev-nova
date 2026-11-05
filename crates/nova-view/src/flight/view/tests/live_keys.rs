@@ -937,6 +937,48 @@ fn an_escort_command_pressed_under_an_unlatching_dialog_comes_back_held_not_as_a
 }
 
 #[test]
+fn each_escort_command_reads_its_own_latch_at_the_hand_back() {
+    // F's latch set by its press, D's clear: D acts at the poll, so F12
+    // after it waits for it.
+    let mut view = in_flight();
+    view.input(&key(ESCORT_ATTACK_KEY, true));
+    view.input(&key(ESCORT_ATTACK_KEY, false));
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(
+        back(&mut view, [ESCORT_DEFEND_KEY, FRAME_RATE_KEY], [], false),
+        []
+    );
+    assert_eq!(view.after_poll, [FRAME_RATE_KEY]);
+}
+
+#[test]
+fn b_held_from_before_an_unlatching_dialog_lets_r_come_back_at_once() {
+    // B's latch set (@0x6504c): B doesn't act at the poll, so R, after
+    // it (@0x6a9b7), has nothing to wait on.
+    let mut view = in_flight();
+    view.board_latch = true;
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(
+        back(&mut view, [BOARD_KEY, NEAREST_KEY], [BOARD_KEY], false),
+        [press(NEAREST_KEY)]
+    );
+}
+
+#[test]
+fn the_keys_read_live_act_after_a_site_with_no_dialog() {
+    let mut view = in_flight();
+    view.latch_at_site();
+    view.input(&key(Key::Up, true));
+    assert!(view.held.contains(&Key::Up), "Up held");
+    let from = sent(&view).len();
+    view.input(&key(ESCORT_HOLD_KEY, true));
+    assert_eq!(
+        escort_commands_since(&view, from),
+        [nova_sim::EscortCommand::Hold]
+    );
+}
+
+#[test]
 fn own_latch_keys_never_come_back_as_presses() {
     for site in [true, false] {
         let mut view = in_flight();
