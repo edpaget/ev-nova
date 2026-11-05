@@ -16,11 +16,13 @@
 //! zoom's hold (`_quickKeyCheckResult` *0x3b504c, set by every read down,
 //! @0xa145-0xa14c), the floating map's shows (\`/H @0x69b8e-0x69ba3, `\`
 //! @0x69cdd-0x69ce7) and the latches keys share (H's for \`, a slot key's
-//! for the rest of its block, Tab's for the click).
+//! for the rest of its block, Tab's for the click) and the escort menu's
+//! close beep (E read live, @0x6e01e-0x6e04d).
 //!
 //! The press handlers read [`FlightView::held`] alone: a latched key
 //! reaches its press only after its release. So do the step's controls
-//! (the cloak's edge among them) and the escort menu.
+//! (the cloak's edge among them) and the escort menu's group and press
+//! handling.
 
 use crate::Key;
 use crate::flight::sim_port::FlightSim;
