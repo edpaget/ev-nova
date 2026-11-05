@@ -777,6 +777,90 @@ mod tests {
         );
     }
 
+    /// The findings' default table, row by row, as
+    /// rdm:phase/key-bindings/phase-7-gamepad-input records it. Every
+    /// command not listed is unbound.
+    fn findings_table() -> Vec<(Command, PadBinding)> {
+        use EscortMenuCommand as E;
+        use FlightCommand as F;
+        use PadBinding::Axis;
+        use PlayCommand as Y;
+        let s = |button| on(P::Select, button);
+        let st = |button| on(P::Start, button);
+        let f = |command, binding| (Command::Flight(command), binding);
+        vec![
+            f(F::ThrottleAxis, Axis(PadAxis::LeftY)),
+            f(F::TurnAxis, Axis(PadAxis::RightX)),
+            f(F::Accelerate, plain(P::DPadUp)),
+            f(F::ReverseCourse, plain(P::DPadDown)),
+            f(F::RotateLeft, plain(P::DPadLeft)),
+            f(F::RotateRight, plain(P::DPadRight)),
+            f(F::FirePrimary, plain(P::South)),
+            f(F::FireSecondary, plain(P::RightTrigger)),
+            f(F::Afterburner, plain(P::LeftTrigger)),
+            f(F::TargetSelect, plain(P::RightShoulder)),
+            f(F::TargetSelectBack, plain(P::LeftShoulder)),
+            f(F::ClosestTarget, plain(P::West)),
+            f(F::Autopilot, plain(P::North)),
+            f(F::LandDock, plain(P::East)),
+            f(F::SelectSecondary, plain(P::RightStick)),
+            f(F::Acknowledge, plain(P::LeftStick)),
+            f(F::HyperspaceMode, s(P::DPadUp)),
+            f(F::HyperSelect, s(P::DPadRight)),
+            f(F::NavOff, s(P::DPadDown)),
+            f(F::ClearTarget, s(P::DPadLeft)),
+            f(F::HyperJump, s(P::South)),
+            f(F::Board, s(P::East)),
+            f(F::Communicate, s(P::West)),
+            f(F::FaceStellar, s(P::North)),
+            f(F::TargetEscort, s(P::RightShoulder)),
+            f(F::TargetEscortBack, s(P::LeftShoulder)),
+            f(F::SelectSecondaryBack, s(P::RightTrigger)),
+            f(F::ClosestShip, s(P::LeftTrigger)),
+            f(F::HailStellar, s(P::RightStick)),
+            f(F::ShowFramerate, s(P::LeftStick)),
+            f(F::ZoomIn, s(P::RightStickUp)),
+            f(F::ZoomOut, s(P::RightStickDown)),
+            f(F::WeaponSafety, s(P::LeftStickLeft)),
+            f(F::EngageCloak, s(P::LeftStickRight)),
+            f(F::StellarSlot1, st(P::DPadUp)),
+            f(F::StellarSlot2, st(P::DPadRight)),
+            f(F::StellarSlot3, st(P::DPadDown)),
+            f(F::StellarSlot4, st(P::DPadLeft)),
+            f(F::NearestStellar, st(P::LeftStick)),
+            f(F::AttackTarget, st(P::South)),
+            f(F::DefendMe, st(P::West)),
+            f(F::HoldPosition, st(P::East)),
+            f(F::Recall, st(P::North)),
+            f(F::EscortMenu, st(P::RightShoulder)),
+            f(F::RecallToHangar, st(P::LeftShoulder)),
+            f(F::JettisonCargo, st(P::RightTrigger)),
+            f(F::JettisonNonMission, st(P::LeftTrigger)),
+            f(F::Eject, st(P::RightStick)),
+            f(F::SelfDestruct, st(P::LeftStickRight)),
+            (Command::Play(Y::GalaxyMap), st(P::RightStickUp)),
+            (Command::Play(Y::PlayerInfo), st(P::RightStickDown)),
+            (Command::Play(Y::MissionInfo), st(P::LeftStickLeft)),
+            (Command::EscortMenu(E::Group1), st(P::DPadUp)),
+            (Command::EscortMenu(E::Group2), st(P::DPadRight)),
+            (Command::EscortMenu(E::Group3), st(P::DPadDown)),
+            (Command::EscortMenu(E::Group4), st(P::DPadLeft)),
+            (Command::EscortMenu(E::Group5), st(P::LeftStick)),
+            (Command::Pause(PauseCommand::Pause), on(P::Select, P::Start)),
+        ]
+    }
+
+    #[test]
+    fn the_default_pad_table_is_the_findings_table_row_by_row() {
+        let table: BTreeMap<Command, PadBinding> = findings_table().into_iter().collect();
+        assert_eq!(table.len(), findings_table().len(), "no row listed twice");
+        let pad = PadMap::default();
+        for command in Command::all() {
+            let expected = table.get(&command).copied().unwrap_or(PadBinding::Unbound);
+            assert_eq!(pad.binding(command), expected, "{command:?}");
+        }
+    }
+
     #[test]
     fn the_default_pad_table_is_the_findings_table() {
         let pad = PadMap::default();
