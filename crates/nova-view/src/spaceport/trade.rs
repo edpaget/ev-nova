@@ -593,6 +593,7 @@ impl TradeScreen {
             .min(at)
             .max((at + 1).saturating_sub(ROWS));
         self.regrey();
+        self.sync_pad_targets();
     }
 
     /// Selects the row of the next filled list position after the
@@ -824,6 +825,9 @@ impl Screen for TradeScreen {
         // Its keys are followed under the offer and the quantity dialog
         // too, so a release there is not lost.
         let command = self.keys.follow(input);
+        if self.tell_held(input) {
+            return ScreenAction::None;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -876,7 +880,11 @@ impl Screen for TradeScreen {
             // focus ring keeps it otherwise. Press-only, though the
             // original steps on autoKey too (@0x4e0c3).
             Some((Command::Ui(UiCommand::Tab), true, false)) if ring_off => self.step(true),
-            Some((Command::Trade(TradeCommand::TabBack), true, false)) if ring_off => {
+            Some((
+                Command::Trade(TradeCommand::TabBack) | Command::Ui(UiCommand::PrevFocus),
+                true,
+                false,
+            )) if ring_off => {
                 self.step(false);
             }
             Some((Command::Ui(UiCommand::Up), true, _)) => self.step(false),
@@ -969,6 +977,8 @@ impl Screen for TradeScreen {
     }
 }
 
+pub(crate) mod pad;
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -991,7 +1001,7 @@ mod tests {
     /// Stock "Trade": `DLOG` 1001, 426 x 252 and centred, and its
     /// seventeen user items, where 2, 3, 12, 15, 16 and 17 are disabled
     /// and 2, 16 and 17 parked outside it.
-    fn template() -> DialogTemplate {
+    pub(super) fn template() -> DialogTemplate {
         let items = [
             (272.0, 221.0, 99.0, 25.0, true),
             (129.0, 299.0, 68.0, 30.0, false),
@@ -1054,7 +1064,7 @@ mod tests {
     /// Food at 93 (2 held, lowered), metal at 200 (medium), and opals
     /// bought here only at 1500 (1 held, high), for a player with 1000
     /// credits and 7 of 10 tons free, during a food surplus.
-    fn market() -> Market {
+    pub(super) fn market() -> Market {
         Market {
             rows: vec![
                 MarketRow {
@@ -1081,17 +1091,17 @@ mod tests {
         }
     }
 
-    fn layout() -> (DialogTemplate, Rc<dyn TextMetrics>) {
+    pub(super) fn layout() -> (DialogTemplate, Rc<dyn TextMetrics>) {
         (template(), Rc::new(MonoMetrics))
     }
 
-    fn screen_of(market: Market) -> TradeScreen {
+    pub(super) fn screen_of(market: Market) -> TradeScreen {
         TradeScreen::new(Ok(layout()), Ok(quantity()), market, ButtonStyle::STOCK)
     }
 
     /// Stock `DITL` 1003, fixed at (10, 20): OK (1), the prompt (2), the
     /// field (3) and Cancel (4).
-    fn quantity() -> DialogTemplate {
+    pub(super) fn quantity() -> DialogTemplate {
         let item = |x, y, w, h, kind| ItemTemplate {
             bounds: rect(x, y, w, h),
             enabled: true,
@@ -1109,7 +1119,7 @@ mod tests {
         }
     }
 
-    fn screen() -> TradeScreen {
+    pub(super) fn screen() -> TradeScreen {
         screen_of(market())
     }
 
@@ -1129,7 +1139,7 @@ mod tests {
             .collect()
     }
 
-    fn item(screen: &TradeScreen, number: usize) -> Bounds {
+    pub(super) fn item(screen: &TradeScreen, number: usize) -> Bounds {
         screen
             .dialog()
             .expect("laid out")
@@ -1137,7 +1147,7 @@ mod tests {
             .expect("an item")
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -1145,11 +1155,11 @@ mod tests {
         }
     }
 
-    fn press(screen: &mut TradeScreen, k: Key) {
+    pub(super) fn press(screen: &mut TradeScreen, k: Key) {
         screen.input(&key(k, true, false));
     }
 
-    fn click(screen: &mut TradeScreen, at: Point) {
+    pub(super) fn click(screen: &mut TradeScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -1159,12 +1169,12 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut TradeScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut TradeScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }
 
-    fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
+    pub(super) fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
         Order {
             row,
             good,
@@ -2131,7 +2141,7 @@ mod tests {
 
     // The quantity dialog, by the engine's count reading.
 
-    fn quantity_item(screen: &TradeScreen, number: usize) -> Point {
+    pub(super) fn quantity_item(screen: &TradeScreen, number: usize) -> Point {
         screen
             .quantity()
             .expect("asking")
@@ -2161,7 +2171,7 @@ mod tests {
 
     /// Opens the quantity dialog on the selected row with Alt and a click
     /// on `button`, Alt then let go.
-    fn alt_click(screen: &mut TradeScreen, button: usize) {
+    pub(super) fn alt_click(screen: &mut TradeScreen, button: usize) {
         press(screen, Key::AltLeft);
         click_item(screen, button);
         screen.input(&key(Key::AltLeft, false, false));

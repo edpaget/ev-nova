@@ -26,7 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::bindings::{Change, Clash};
 use super::command::{
-    Command, Context, EscortMenuCommand, FlightCommand, PauseCommand, PlayCommand, UiCommand,
+    Command, Context, EscortMenuCommand, FlightCommand, OutfitterCommand, PauseCommand,
+    PlayCommand, RaceCommand, TradeCommand, UiCommand,
 };
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
 use crate::input::{Input, PadAxis, PadButton};
@@ -232,6 +233,12 @@ const fn default_pad(command: Command) -> PadBinding {
         Command::Play(command) => default_play(command),
         Command::Pause(PauseCommand::Pause) => on(PadButton::Select, PadButton::Start),
         Command::Ui(command) => default_ui(command),
+        // West held stands in for Option: a press of Buy or Sell (or a
+        // racer) asks for a count, as an Option-click does
+        // (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+        Command::Trade(TradeCommand::MaxLot)
+        | Command::Outfitter(OutfitterCommand::Count)
+        | Command::Race(RaceCommand::Ask) => plain(PadButton::West),
         _ => PadBinding::Unbound,
     }
 }
@@ -931,6 +938,11 @@ mod tests {
             (ui(U::Right), plain(P::LeftStickRight)),
             (ui(U::PageUp), plain(P::RightStickUp)),
             (ui(U::PageDown), plain(P::RightStickDown)),
+            // rdm:phase/key-bindings/phase-9-gamepad-spaceport: West held
+            // is Option in the trade center, the outfitter and the race.
+            (Command::Trade(TradeCommand::MaxLot), plain(P::West)),
+            (Command::Outfitter(OutfitterCommand::Count), plain(P::West)),
+            (Command::Race(RaceCommand::Ask), plain(P::West)),
         ]
     }
 

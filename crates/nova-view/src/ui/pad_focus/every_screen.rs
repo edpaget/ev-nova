@@ -101,6 +101,7 @@ fn rows() -> Vec<Row> {
         ("news", crate::spaceport::news::pad_probe),
         ("race", crate::spaceport::race::pad_probe),
         ("bar", crate::spaceport::bar::pad::pad_probe),
+        ("trade", crate::spaceport::trade::pad::tests::pad_probe),
     ]
 }
 

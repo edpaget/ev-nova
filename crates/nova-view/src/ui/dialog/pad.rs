@@ -98,6 +98,13 @@ impl Dialog {
         self
     }
 
+    /// Takes `items` (from 1), and only them, out of the pad's targets,
+    /// for a host whose dead areas change as it runs (the trade center's
+    /// empty slots).
+    pub fn set_pad_left_out(&mut self, items: Vec<usize>) {
+        self.left_out = items;
+    }
+
     /// The cell the pad's highlight is on (from 0), if it shows.
     #[must_use]
     pub fn pad_highlight_cell(&self) -> Option<usize> {
