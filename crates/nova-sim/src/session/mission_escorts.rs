@@ -2038,6 +2038,9 @@ pub(super) mod tests {
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Attack); 2]);
             jump_to(&mut session, &catalog, 131);
+            // The arrival's pass, then the next's bookkeeping, which
+            // clears a jump's by the engine (`RuleKey::ArrivalOrders`).
+            ticks(&mut session, &catalog, 2);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");
             assert_eq!(session.pilot.escorts[0].order, kept, "{source:?}");
         }
@@ -2077,6 +2080,7 @@ pub(super) mod tests {
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             jump_to(&mut session, &catalog, 131);
+            ticks(&mut session, &catalog, 2);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");
         }
     }

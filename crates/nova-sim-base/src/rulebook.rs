@@ -23,7 +23,8 @@
 //! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing (`nova_sim::hail::nova`) | they answer Greetings "No response.", and the middle button works |
 //! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." (`nova_sim::hail::reply`) | it is shown as written\* |
 //! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
-//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`) | the orders are kept\* |
+//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`); at a jump's arrival the reset comes from the class-order bookkeeping a pass later (see [`ArrivalOrders`](RuleKey::ArrivalOrders)) | the orders are kept\* |
+//! | [`ArrivalOrders`](RuleKey::ArrivalOrders) | `arrival_orders` | under `escort_orders`' engine reading, a jump's arrival keeps the escort classes' orders through its pass, whose class-order bookkeeping it skips (`_HandlePlayer` returns @0x6c625 before @0x6e2e8): a mission escort set up in the new system thinks once under its class's order (`_EscortAI` @0x83afb), the hired escorts and fighters gliding past their think (`_AIDispatch` @0x8fcf5), and the next pass's bookkeeping clears every class, every ship placed being unmarked (`_RespawnEscort` @0x3d546; see `nova_sim::Session`) | the port's earlier reading: every escort's order is reset as it enters, before any think\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed (`nova_sim::Session`) | every fighter out goes back into its bay on arrival and on landing\* |
 //! | [`FighterNoBay`](RuleKey::FighterNoBay) | `fighter_no_bay` | a fighter whose carrier has no bay for it stays out at its carrier, steering and thrusting at it, and docks the first tick a bay is there (`_AIAddFighterToParent` @0x80384; `nova_sim::Session`) | it docks and is lost, with a save due\* |
@@ -323,7 +324,7 @@
 //! | [`AreaCloakHold`](RuleKey::AreaCloakHold) | `area_cloak_hold` | `_HandleShip`'s frame hold asks `_ShipCanCloak`, which reads only the ship's own items, so an escort riding its leader's area cloak (`ModVal` 0x1000 of a `ModType` 17 mod) with no cloak of its own is uncloaked the frame it reads cloaked and never stays cloaked; no stock outfit has the bit (`_HandleShip` @0x3413d-0x3415f, `_HasAreaCloak` @0x3d49-0x3e24, `_HasCloak` @0x964c-0x96bf; see `nova_sim_combat::area_cloak`) | the hold counts the ride as a cloak it can keep, so the escort stays cloaked while it rides ("ships in formation with a ship carrying this cloaking device will also be cloaked") |
 //! | [`NewPilotVisibility`](RuleKey::NewPilotVisibility) | `new_pilot_visibility` | a new pilot's neighbour pass reads the visible flags the run's last galaxy refresh left: a pilot loaded, made or flown earlier in the run, or at launch with no pilot the refresh of clear bits, as `_DoNewPilot` tests +0x1eb (@0x18fc5) before its own refresh (@0x1925e; launch @0x4740c; see `nova_sim::Session::begin`) | it reads the new pilot's own refresh\* |
 //!
-//! \* The Bible says nothing of `long_advice`, `escort_orders`,
+//! \* The Bible says nothing of `long_advice`, `escort_orders`, `arrival_orders`,
 //! `fighter_launch`, `fighter_recall`, `fighter_no_bay`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
@@ -852,10 +853,30 @@ rule_keys! {
     /// What becomes of the escorts' standing orders when the player
     /// enters a system (a jump's arrival, a take-off, a pilot loaded): by
     /// the engine, every one is reset to formation; otherwise they are
-    /// kept. The Bible is silent here, so the other reading is the
-    /// intended behaviour, not anything the Bible says (see
-    /// `nova_sim::Session::with_rules`).
+    /// kept. At a jump's arrival the engine's reset comes from the
+    /// class-order bookkeeping a pass later, every ship placed being
+    /// unmarked (see [`RuleKey::ArrivalOrders`]). The Bible is silent
+    /// here, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see `nova_sim::Session::with_rules`).
     EscortOrders => "escort_orders",
+    /// When a jump's arrival resets the escort classes' orders, under
+    /// [`RuleKey::EscortOrders`]' engine reading (by its other reading
+    /// the orders stand through every entry). By the engine, as the
+    /// original: the orders stand through the arrival's pass, whose
+    /// class-order bookkeeping is skipped, as `_HandlePlayer` returns on
+    /// the arrival frame (@0x6c625) before the bookkeeping (@0x6e2e8).
+    /// So a mission escort set up in the new system thinks once under its
+    /// class's kept order (`_EscortAI` copies it @0x83afb), taking a
+    /// target or holding; the hired escorts and fighters glide in past
+    /// their think (`_AIDispatch` @0x8fcf5, goal 8) and never act on it.
+    /// The next pass's bookkeeping clears every class, as every ship
+    /// placed is unmarked (`_RespawnEscort` @0x3d546). By the other
+    /// reading, the port's earlier one, every escort's order is reset as
+    /// it enters, before any think. A take-off, a gate's exit and a pilot
+    /// flown reset at entry under both, as their bookkeeping runs before
+    /// any think. The Bible says nothing of it (see `nova_sim::Session`'s
+    /// `escorts` and `class_orders` modules).
+    ArrivalOrders => "arrival_orders",
     /// What a fighter the player launches from a bay does first: by the
     /// engine, it takes the standing order of the first ship of its class
     /// already in the fleet (Return to Hangar excepted) and no target, so
@@ -6986,6 +7007,7 @@ mod tests {
                 RuleKey::LongAdvice,
                 RuleKey::EscortAi,
                 RuleKey::EscortOrders,
+                RuleKey::ArrivalOrders,
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
                 RuleKey::FighterNoBay,
@@ -8919,6 +8941,21 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&rule));
+    }
+
+    #[test]
+    fn the_arrival_orders_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ArrivalOrders;
+        assert_eq!(rule.key(), "arrival_orders");
+        assert_eq!(RuleKey::from_key("arrival_orders"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
     }
 
     #[test]

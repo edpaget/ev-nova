@@ -67,7 +67,18 @@
 //! ([`Session::with_rules`]): by the engine, every escort's order
 //! is reset to formation, as the original's `_RespawnEscort` (@0x3d546)
 //! and `_HandlePlayer` (@0x6e3bb-0x6e44b) do; by the other reading, the
-//! orders are kept. In flight, a class's order stands only while a ship of
+//! orders are kept. A take-off, a gate's exit and a pilot flown reset as
+//! the escorts enter, as their bookkeeping runs before any think. A
+//! jump's arrival, by the engine reading of
+//! [`RuleKey::ArrivalOrders`](crate::RuleKey::ArrivalOrders), resets
+//! nothing as they enter: the orders stand through the arrival's pass,
+//! whose bookkeeping is skipped (`_HandlePlayer` returns @0x6c625), so a
+//! mission escort set up in the new system thinks once under its class's
+//! order while the hired escorts and fighters glide in past their think
+//! (@0x8fcf5); the next pass's bookkeeping clears every class, every ship
+//! placed being unmarked. By its other reading, the port's earlier one, a
+//! jump's arrival resets as the escorts enter too. In flight, a class's
+//! order stands only while a ship of
 //! it that took a command is out (see the
 //! [`class_orders`](super::class_orders) module).
 //!
@@ -217,7 +228,11 @@ pub(super) struct KeptEscort {
 
 impl Session {
     /// The escorts enter the system (see the module docs): by the
-    /// engine their standing orders are reset; by the other reading of
+    /// engine their standing orders are reset, but on a `jump`'s arrival by
+    /// the engine reading of [`RuleKey::ArrivalOrders`], which keeps them
+    /// and has the next bookkeeping skipped
+    /// ([`Escorts::skip_bookkeeping`](super::space::Escorts)) so the one
+    /// after it clears them; by the other reading of
     /// [`RuleKey::EscortOrders`] each ship of the player's placed, or come
     /// with the system as a mission's, is marked when its class keeps an
     /// order ([`Space::mark_kept_orders`]), so the kept orders stand
@@ -244,16 +259,24 @@ impl Session {
         &mut self,
         berths: &[u32],
         kept: &[KeptEscort],
+        jump: bool,
         chance: &mut dyn Chance,
     ) {
         // Every ship marked is gone with the system left (see the
         // `class_orders` module).
         self.space.escorts.commanded.clear();
+        let rules = &self.setup.rules;
+        let engine = rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
+        // A jump's arrival keeps the orders through its pass, whose
+        // bookkeeping is skipped; the next pass's clears them, every ship
+        // placed being unmarked (see the module docs).
+        let skip = engine && jump && rules.source_for(RuleKey::ArrivalOrders) == RuleSource::Engine;
+        self.space.escorts.skip_bookkeeping = skip;
         // The reset leaves the pilot's copy of the class table, which an
         // escort with no NPC takes its word from (see
         // [`KeptEscort::order_word`]): in the original the next pass's
         // loop 2 clears it, before any save (see the `class_table` module).
-        let reset = self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
+        let reset = engine && !skip;
         if reset {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -328,7 +351,7 @@ impl Session {
                 Some(id)
             })
             .collect();
-        if !reset {
+        if !engine {
             self.space.keep_record_orders(&self.pilot, &self.statics);
             self.space.mark_kept_orders();
         }
@@ -1384,10 +1407,11 @@ pub(super) mod tests {
             .collect()
     }
 
+    /// Defend given every escort, which their records and their class's
+    /// kept order take.
     fn defend_all(session: &mut Session) {
-        for escort in &mut session.pilot.escorts {
-            escort.order = Some(EscortOrder::Defend);
-        }
+        session.command_escorts(EscortGroup::All, EscortCommand::Defend, &mut NeverFires);
+        assert_eq!(orders(session), [Some(EscortOrder::Defend); 2]);
     }
 
     fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
@@ -1415,6 +1439,10 @@ pub(super) mod tests {
         defend_all(&mut session);
         assert!(crate::save::encode(session.pilot()).contains("\"defend\""));
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        // The arrival's pass, then the next's bookkeeping, which resets a
+        // jump's by the engine (`RuleKey::ArrivalOrders`).
+        tick(&mut session, &catalog);
+        tick(&mut session, &catalog);
         let jumped = orders(&session);
 
         let mut session = Session::fly(&catalog, defended(&catalog))
@@ -3241,6 +3269,9 @@ pub(super) mod tests {
             session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
             assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
             session.arrive(&catalog, &mut NeverFires).expect("arrives");
+            // By the engine the arrival's pass keeps it and the next
+            // pass's bookkeeping clears it (`RuleKey::ArrivalOrders`).
+            tick(&mut session, &catalog);
             tick(&mut session, &catalog);
             assert_eq!(orders(&session), [kept; 2], "{source:?}");
             assert!(

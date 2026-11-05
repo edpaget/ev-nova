@@ -250,7 +250,8 @@
 //! ([`Session::command_escorts`], the escort menu's rows in
 //! [`FrameHud::escort_rows`](crate::flight_frame::FrameHud::escort_rows)) and which
 //! entering a system resets, or keeps, as the rule set reads
-//! [`RuleKey::EscortOrders`]. A ship captured joins the fleet
+//! [`RuleKey::EscortOrders`] (a jump's arrival resetting a pass later, as
+//! [`RuleKey::ArrivalOrders`] reads). A ship captured joins the fleet
 //! where it is, and so does a person hailed that offers to join
 //! (`person_join`'s other reading), flying as itself in every system; an
 //! escort disabled or destroyed leaves it, and one hailed may be
@@ -2080,7 +2081,8 @@ impl Session {
         self.run.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
+        let jump = matches!(entry, Some(Entry::Jump { .. }));
+        self.enter_escorts(&berths, &kept_escorts, jump, &mut &mut *chance);
         self.place_entering_escorts(entry);
         self.space.hold_derelicts(&self.statics);
         self.space.strikes.clear();

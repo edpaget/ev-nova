@@ -71,12 +71,34 @@
 //! the kept order as the bookkeeping will leave it, so nothing crosses a
 //! drawn frame.
 //!
+//! **A jump's arrival.** `_HandlePlayer` returns on the arrival frame
+//! (@0x6c625), after `_SetupShipsInSystem` and before the fade and the
+//! bookkeeping, and the rest of that pass runs in the new system, every
+//! ship's think included. So by the engine readings of
+//! [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders) and
+//! [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders) the
+//! arrival resets no order as the escorts enter (see the `escorts`
+//! module): it has the next bookkeeping skipped, once
+//! ([`Escorts::skip_bookkeeping`](super::space::Escorts)), the pilot's copy
+//! of the table included. A mission escort set up in the new system thinks
+//! once under its class's kept order (`_EscortAI` @0x83afb), holding or
+//! taking a target; the hired escorts and fighters glide in past their
+//! think (`_AIDispatch` @0x8fcf5) and never act on it. The pass after
+//! clears every class that keeps an order, as every ship placed is
+//! unmarked (`_RespawnEscort` @0x3d546). Every other entry clears the
+//! skip. By `ArrivalOrders`' other reading, the port's earlier one, the
+//! arrival resets the orders as the escorts enter, before any think.
+//!
+//! The engine arrives between passes, so the skipped bookkeeping and the
+//! think under the kept order come on the first pass after the arrival,
+//! one pass later than the original's arrival pass
+//! (rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs,
+//! item 2). The skip is taken by the first bookkeeping after the entry, so
+//! it stays right once that phase runs the arrival inside a pass.
+//!
 //! **Filed.**
 //! - A ship `_GenericRandomShipSpawn` places keeps its berth's last mark
 //!   (rdm:phase/npc-ai/phase-16-berth-keeps-command-mark).
-//! - A jump's arrival frame skips the bookkeeping, and the menu fades on
-//!   both of double time's passes
-//!   (rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders).
 
 use super::outbox::Outbox;
 use super::{Space, Statics};
@@ -158,6 +180,11 @@ impl Space {
     /// shows the escorts' own orders either way.
     pub(super) fn settle_class_orders(&mut self, pilot: &mut Pilot, statics: &Statics) -> bool {
         if self.traffic_due {
+            return false;
+        }
+        // The arrival frame's return (@0x6c625) skips the whole block, the
+        // pilot's copy of the table included.
+        if std::mem::take(&mut self.escorts.skip_bookkeeping) {
             return false;
         }
         let mut cleared = Vec::new();
@@ -900,6 +927,164 @@ mod tests {
             assert_eq!(orders, [kept; 2], "{source:?}");
             let class = session.player_led().next().expect("escorting").class;
             assert_eq!(row(&session, class).order, kept, "{source:?}");
+        }
+    }
+
+    // A jump's arrival, by `RuleKey::ArrivalOrders` (`_HandlePlayer`
+    // returns on the arrival frame @0x6c625, before the bookkeeping
+    // @0x6e2e8).
+
+    /// Mission 140's two escorts (set up in every system, `ShipSyst` -6)
+    /// and a hired escort flying in 130, all given Hold, then a jump to 131 arrived, its pass still to run, the
+    /// rules `rules`.
+    fn arrived_holding(rules: Rulebook) -> (FakePilotCatalog, Session) {
+        use crate::session::mission_escorts::tests::{escorting, flying_with_escorts};
+        use crate::session::mission_ships::tests::{jump_to, ships_catalog};
+        let catalog = ships_catalog(escorting(-6, 0));
+        let (mut session, _) = flying_with_escorts(&catalog);
+        session.setup.rules = rules;
+        command(&mut session, EscortGroup::All, EscortCommand::Hold);
+        jump_to(&mut session, &catalog, 131);
+        // The passes on the way out reported theirs, as each pass's
+        // report takes it.
+        session.out.escort_menu = None;
+        (catalog, session)
+    }
+
+    /// The rules with `RuleKey::ArrivalOrders` by `source`.
+    fn arrival_orders(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::ArrivalOrders, source)
+    }
+
+    /// A pass of the game's work as Nova's AI thinks it, its escort-menu
+    /// block taken as its report takes it: whether it cleared a class.
+    fn pass(session: &mut Session, catalog: &FakePilotCatalog) -> bool {
+        crate::session::mission_ships::tests::tick(session, catalog);
+        session
+            .out
+            .escort_menu
+            .take()
+            .is_some_and(|pass| pass.class_orders_cleared)
+    }
+
+    /// The mission escorts in the system.
+    fn mission_escorts(session: &Session) -> Vec<crate::traffic::npc::Npc> {
+        session
+            .player_led()
+            .filter(|npc| npc.mission_escort())
+            .cloned()
+            .collect()
+    }
+
+    /// The hired escort's NPC.
+    fn hired_npc(session: &Session) -> crate::traffic::npc::Npc {
+        fleet_npcs(session)[0].clone()
+    }
+
+    /// Every escort's order, the hired one's record and duty and each
+    /// mission escort's, and the order kept for their class.
+    fn every_order(session: &Session) -> Vec<Option<EscortOrder>> {
+        let class = hired_npc(session).class;
+        let mut orders = vec![
+            session.pilot().escorts()[0].order,
+            hired_npc(session).escort_order(),
+        ];
+        orders.extend(
+            mission_escorts(session)
+                .iter()
+                .map(crate::traffic::npc::Npc::escort_order),
+        );
+        orders.push(kept(session, class));
+        orders
+    }
+
+    #[test]
+    fn by_the_engine_a_jumps_arrival_keeps_the_orders_through_its_pass_and_the_next_clears_them() {
+        let (catalog, mut session) = arrived_holding(Rulebook::default());
+        let hold = Some(EscortOrder::Hold);
+        assert_eq!(every_order(&session), [hold; 5], "through the arrival");
+        assert_eq!(mission_escorts(&session).len(), 2);
+        assert!(marked(&session).is_empty(), "every ship placed unmarked");
+        assert!(!pass(&mut session, &catalog), "its bookkeeping skipped");
+        assert_eq!(every_order(&session), [hold; 5]);
+        for npc in mission_escorts(&session) {
+            assert_eq!(npc.goal, crate::ai::Goal::Wait, "a think under Hold");
+        }
+        let gliding = |session: &Session| {
+            matches!(
+                hired_npc(session).mode,
+                crate::traffic::npc::Mode::JumpingIn { .. }
+            )
+        };
+        assert!(gliding(&session), "the hired escort glides past its think");
+        assert!(pass(&mut session, &catalog), "the next pass clears it");
+        assert_eq!(every_order(&session), [None; 5]);
+        assert!(gliding(&session), "it never thought under Hold");
+        pass(&mut session, &catalog);
+        for npc in mission_escorts(&session) {
+            assert!(
+                matches!(npc.goal, crate::ai::Goal::Formation { .. }),
+                "{:?}",
+                npc.goal
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_jumps_arrival_resets_the_orders_before_any_think() {
+        let (catalog, mut session) = arrived_holding(arrival_orders(RuleSource::Bible));
+        assert_eq!(every_order(&session), [None; 5], "reset at entry");
+        assert!(!pass(&mut session, &catalog), "nothing left to clear");
+        for npc in mission_escorts(&session) {
+            assert!(
+                matches!(npc.goal, crate::ai::Goal::Formation { .. }),
+                "{:?}",
+                npc.goal
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_escort_orders_reading_the_orders_stand_through_a_jump_under_either_arrival_reading()
+     {
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules =
+                arrival_orders(source).with_override(RuleKey::EscortOrders, RuleSource::Bible);
+            let (catalog, mut session) = arrived_holding(rules);
+            let hold = Some(EscortOrder::Hold);
+            let placed: BTreeSet<NpcId> = session.player_led().map(|npc| npc.id).collect();
+            assert_eq!(marked(&session), placed, "{source:?}: marked");
+            assert!(!pass(&mut session, &catalog));
+            assert!(!pass(&mut session, &catalog));
+            assert_eq!(every_order(&session), [hold; 5], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_skipped_bookkeeping_is_one_entrys_only() {
+        // A jump arrived, then a take-off's entry before any pass: its
+        // bookkeeping runs on its first pass.
+        let (catalog, mut session) = arrived_holding(Rulebook::default());
+        session.populate(&catalog, &mut NeverFires);
+        command(&mut session, WARSHIPS, EscortCommand::Dock);
+        let class = hired_npc(&session).class;
+        command(&mut session, EscortGroup::Class(class), EscortCommand::Dock);
+        assert!(pass(&mut session, &catalog), "not skipped");
+    }
+
+    #[test]
+    fn a_take_off_still_resets_the_orders_at_entry_under_either_arrival_reading() {
+        use crate::session::mission_escorts::tests::{escorting, flying_with_escorts};
+        use crate::session::mission_ships::tests::{ships_catalog, take_off};
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = ships_catalog(escorting(-6, 0));
+            let (mut session, _) = flying_with_escorts(&catalog);
+            session.setup.rules = arrival_orders(source);
+            command(&mut session, EscortGroup::All, EscortCommand::Hold);
+            crate::testkit::land_now(&mut session).expect("lands");
+            take_off(&mut session, &catalog);
+            assert_eq!(every_order(&session), [None; 5], "{source:?}");
+            assert!(!pass(&mut session, &catalog), "{source:?}");
         }
     }
 }
