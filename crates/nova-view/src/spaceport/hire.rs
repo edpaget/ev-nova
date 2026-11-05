@@ -679,13 +679,13 @@ impl Screen for HireScreen {
         }
     }
 
-    /// The refused hire's beep ([`UiSound::BuyRefused`]); the buttons are
-    /// silent.
     /// Lets go of the keys its reader holds.
     fn release_keys(&mut self) {
         self.keys.let_go();
     }
 
+    /// The refused hire's beep ([`UiSound::BuyRefused`]); the buttons are
+    /// silent.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
