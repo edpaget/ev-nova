@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::bindings::{Change, Clash};
 use super::command::{
-    Command, Context, EscortMenuCommand, FlightCommand, OutfitterCommand, PauseCommand,
+    Command, Context, EscortMenuCommand, FlightCommand, MapCommand, OutfitterCommand, PauseCommand,
     PlayCommand, RaceCommand, TradeCommand, UiCommand,
 };
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
@@ -231,6 +231,7 @@ const fn default_pad(command: Command) -> PadBinding {
         Command::Flight(command) => default_flight(command),
         Command::EscortMenu(command) => default_escort_menu(command),
         Command::Play(command) => default_play(command),
+        Command::Map(command) => default_map(command),
         Command::Pause(PauseCommand::Pause) => on(PadButton::Select, PadButton::Start),
         Command::Ui(command) => default_ui(command),
         // West held stands in for Option: a press of Buy or Sell (or a
@@ -369,6 +370,18 @@ const fn default_play(command: PlayCommand) -> PadBinding {
         PlayCommand::GalaxyMap => start(PadButton::RightStickUp),
         PlayCommand::PlayerInfo => start(PadButton::RightStickDown),
         PlayCommand::MissionInfo => start(PadButton::LeftStickLeft),
+    }
+}
+
+/// The maps' defaults (rdm:phase/key-bindings/phase-10-gamepad-map): the
+/// triggers zoom, as `=` and `-` do. Plain, so a held layer (the map
+/// chord's Start) never zooms; no context a map reads binds a plain
+/// trigger, and flight's are [`Context::Flight`]'s, which no map lists.
+const fn default_map(command: MapCommand) -> PadBinding {
+    match command {
+        MapCommand::ZoomIn => plain(PadButton::RightTrigger),
+        MapCommand::ZoomOut => plain(PadButton::LeftTrigger),
+        _ => PadBinding::Unbound,
     }
 }
 
@@ -943,7 +956,38 @@ mod tests {
             (Command::Trade(TradeCommand::MaxLot), plain(P::West)),
             (Command::Outfitter(OutfitterCommand::Count), plain(P::West)),
             (Command::Race(RaceCommand::Ask), plain(P::West)),
+            // rdm:phase/key-bindings/phase-10-gamepad-map: the triggers zoom
+            // a map as `=` and `-` do.
+            (Command::Map(MapCommand::ZoomIn), plain(P::RightTrigger)),
+            (Command::Map(MapCommand::ZoomOut), plain(P::LeftTrigger)),
         ]
+    }
+
+    #[test]
+    fn on_a_map_the_triggers_zoom_and_the_chord_s_layer_leaks_no_zoom() {
+        use crate::keymap::{CommandReader, contexts};
+        let pressed = |buttons: &[PadButton]| -> Option<Command> {
+            let mut reader = CommandReader::new(contexts::COURSE_MAP);
+            let mut meant = None;
+            for &button in buttons {
+                meant = reader.follow(&press(button)).map(|c| c.command);
+            }
+            meant
+        };
+        assert_eq!(
+            pressed(&[P::RightTrigger]),
+            Some(Command::Map(MapCommand::ZoomIn))
+        );
+        assert_eq!(
+            pressed(&[P::LeftTrigger]),
+            Some(Command::Map(MapCommand::ZoomOut))
+        );
+        assert_eq!(pressed(&[P::Start, P::RightTrigger]), None, "no zoom");
+        assert_eq!(pressed(&[P::Start, P::LeftTrigger]), None, "no zoom");
+        assert_eq!(
+            pressed(&[P::Start, P::RightStickUp]),
+            Some(Command::Play(PlayCommand::GalaxyMap))
+        );
     }
 
     fn ui(command: UiCommand) -> Command {
