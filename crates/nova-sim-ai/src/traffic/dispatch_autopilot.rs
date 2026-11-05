@@ -36,8 +36,16 @@
 //!   tick, and a lower one's as the tick began.
 //! - A ship whose flight is `_HandleShip`'s own (a gate's waits, glide and
 //!   burst, a disabled ship's drift, a warp the warp-out flies,
-//!   [`warp_out::flies_jump`]) or whose AI wait runs leaves the head's
-//!   word ([`SlotWord::none`]).
+//!   [`warp_out::flies_jump`]) leaves the head's word ([`SlotWord::none`]).
+//! - Under its AI wait (but the count wait) the high level writes no sub
+//!   (@0x8d4b4-0x8d4d2) but for goals 0xa and 0xe, which fly as unwaited
+//!   (@0x8d4c8, @0x8d4ce). So the dispatch keeps [`Npc::close_form`] and
+//!   [`Npc::mine_order`] as they stand, and the low level flies the sub
+//!   the last flight kept, its direct writes made at the slot and its word
+//!   left for the step, which skips the turn and thrust while the wait
+//!   runs (see the autopilot's `kept_sub`). A fight sub kept reads the
+//!   ship its think's pursuit read, the goal's quarry or else the target
+//!   it holds ([`Npc::slot_target`]).
 //! - A flight that ends at the slot (a landing, state 1 @0x8d8b8 on, or a
 //!   jump begun, state 2 @0x8dd99) is noted for its step, which reports it
 //!   and flies nothing on the advance pass. The landing's mode is written
@@ -48,12 +56,6 @@
 //! Double time's second pass runs no `_AIDispatch` (`je 0x44350`
 //! @0x4402a): it flies the advance pass's word again.
 //!
-//! **Left out:** under its AI wait the original's low level flies the
-//! sub-goal +0xc8ca kept, and its direct writes (sub 1's settle, say)
-//! show, though `_HandleShip` skips the turn and thrust; the engine
-//! doesn't keep +0xc8ca for an autopilot goal, so a waiting ship leaves
-//! the head's word and writes nothing
-//! (rdm:phase/npc-ai/phase-6-left-out-of-phase-19).
 //! Nothing here plays a sound.
 
 use super::autopilot::{self, Beside, Readings, TopSpeeds};
@@ -61,8 +63,10 @@ use super::npc::Npc;
 use super::slot_word::SlotWord;
 use super::warp_out;
 use super::{Traffic, World};
+use crate::ai::handler_head;
 use crate::ai::mine_orders;
 use crate::ai::sight;
+use crate::ai::waiting_pursuit;
 use crate::ai::{Goal, Surroundings, swarm};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -114,17 +118,25 @@ impl Traffic {
         let rules = (world.flight, readings, world.weapons);
         let npc = &mut self.npcs[index];
         let (left, outcome) = npc.fly_as_flown(|npc| {
-            // The sub-goal this low level flies, stored for the next frame's
-            // sight and cloak think (`_HighLevelAIHandler` writes +0xc8ca).
-            npc.close_form =
-                npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
-            // And goal 0x10's order, from where the flight starts (state 16
-            // @0x8f832-0x8f903): order 1 in any other goal.
-            npc.mine_order = if npc.goal == Goal::Mine {
-                mine_orders::order(npc, beside.rock.as_ref())
-            } else {
-                mine_orders::MineOrder::Stop
-            };
+            // Under its AI wait the high level writes no sub
+            // (@0x8d4b4-0x8d4d2) but for goals 0xa and 0xe: the low level
+            // flies the one kept, and the next think reads it.
+            if !(npc.ai_wait_flies() && handler_head::waits_out(npc, npc.goal)) {
+                // The sub-goal this low level flies, stored for the next
+                // frame's sight and cloak think (`_HighLevelAIHandler`
+                // writes +0xc8ca).
+                npc.close_form =
+                    npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
+                // And goal 0x10's order, from where the flight starts (state
+                // 16 @0x8f832-0x8f903), or goal 0x11's 0x15 (@0x8faf3-0x8fafd),
+                // whose low level stores sub 0 with no box (@0x88636): order
+                // 1 in any other goal.
+                npc.mine_order = match npc.goal {
+                    Goal::Mine => mine_orders::order(npc, beside.rock.as_ref()),
+                    Goal::Scoop if beside.scoop_box.is_some() => mine_orders::MineOrder::Scoop,
+                    _ => mine_orders::MineOrder::Stop,
+                };
+            }
             let quarry = (other.as_ref(), other_disabled, beside);
             let sites = world.flown_among(npc.goal);
             autopilot::low_level(npc, sites, world.type_widths, quarry, speeds, rules, chance)
@@ -155,7 +167,10 @@ impl Traffic {
         let seen = self.sees_leader_at_slot(npc, world);
         let mut flown = npc.clone();
         flown.goal = npc.flown_goal();
-        let (other, other_disabled) = self.quarry_at_slot(&flown, world);
+        let (other, other_disabled) = match self.kept_quarry_at_slot(&flown, world) {
+            Some(kept) => kept,
+            None => self.quarry_at_slot(&flown, world),
+        };
         let beside = Beside {
             swarm,
             rock: world.mining_rock,
@@ -267,6 +282,26 @@ impl Traffic {
             other.and_then(|ship| self.state_at_slot(ship, npc, world)),
             disabled,
         )
+    }
+
+    /// The ship a fight sub `npc` kept under its AI wait aims at, where
+    /// its slot reads it in `world`, and whether it is disabled: the one
+    /// its think's pursuit read
+    /// ([`waiting_pursuit::under_wait`](crate::ai::waiting_pursuit::under_wait)),
+    /// the goal's quarry or else the target +0x70 holds
+    /// ([`Npc::slot_target`]). None for a ship that keeps no fight sub
+    /// under a wait, whose flight reads [`Traffic::quarry_at_slot`]'s.
+    fn kept_quarry_at_slot(&self, npc: &Npc, world: &World) -> Option<(Option<ShipState>, bool)> {
+        if !(npc.ai_wait_flies() && handler_head::waits_out(npc, npc.goal))
+            || waiting_pursuit::held_sub(&npc.pursuit).is_none()
+        {
+            return None;
+        }
+        let ship = npc.goal.quarry().or_else(|| npc.slot_target());
+        Some(ship.map_or((None, false), |ship| {
+            let state = self.state_at_slot(ship, npc, world);
+            (state, self.disabled_at_slot(ship, world))
+        }))
     }
 
     /// Whether `npc` sees its leader at its slot in `world`
@@ -447,7 +482,7 @@ mod tests {
         assert_eq!(
             stored(Goal::Scoop, 0.0, Some(rock)),
             MineOrder::Stop,
-            "goal 0x11"
+            "goal 0x11 with no box: sub 0 (@0x88636)"
         );
     }
 

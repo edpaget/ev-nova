@@ -826,19 +826,26 @@ pub struct Npc {
     /// never reaches, keeps it, as the original's sub-goal survives a glide
     /// in (`_AIMakeShipJumpIn` @0x82ebb writes the goal, not the sub-goal).
     /// Sight and the cloak think read it, as they run before the frame's
-    /// flight (see `nova_sim_combat::area_cloak`). Never saved.
+    /// flight (see `nova_sim_combat::area_cloak`). Under an AI wait the
+    /// high level writes no sub (@0x8d4b4-0x8d4d2) but for goals 0xa and
+    /// 0xe, so the flight keeps it. Never saved.
     pub close_form: bool,
     /// The order its last flight's high level gave it under goal 0x10
     /// ([`mine_orders::order`](crate::ai::mine_orders::order)): the stored
     /// sub-goal +0xc8ca that `_AIHandleCloaking` reads (@0x834d6,
-    /// @0x835e9-0x835fb), [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop)
-    /// in any other goal. The autopilot's low level writes it where it
+    /// @0x835e9-0x835fb), [`MineOrder::Scoop`](crate::ai::mine_orders::MineOrder::Scoop)
+    /// in goal 0x11 with a box to steer to, and
+    /// [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop) in any
+    /// other goal. The autopilot's low level writes it where it
     /// writes [`Npc::close_form`], from where the flight starts, so the
     /// think reads last tick's order as the original's does (it runs at
     /// @0x8fcaa, before the high level's write @0x901e5). An NPC held
     /// still, or whose flight a fly half never reaches (a docking's, which
-    /// flies no mining), keeps it; only [`Goal::Mine`](crate::ai::Goal::Mine)
-    /// reads it. Stop at every spawn. Never saved.
+    /// flies no mining), keeps it, and so does one under its AI wait,
+    /// whose low level flies the order kept whatever its goal (the
+    /// autopilot's `kept_sub`). The cloak think reads it under
+    /// [`Goal::Mine`](crate::ai::Goal::Mine). Stop at every spawn. Never
+    /// saved.
     pub mine_order: crate::ai::mine_orders::MineOrder,
     /// Whether its last flight left it in sub 1: the stored +0xc8ca == 1
     /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
@@ -846,12 +853,11 @@ pub struct Npc {
     /// stop's settle doesn't, as it writes sub 0 (@0x85624). Goal 0 flies
     /// sub 0 (@0x8fb09-0x8fb13), so it never sets it. Each flight clears
     /// it, but while a wait runs: the high level writes no sub
-    /// (@0x8d4b9-0x8d4d2), so sub 1 stands, and under an AI wait the low
-    /// level's sub 1 cuts the ship as it moves and settles it below 0.35,
-    /// which ends it ([`leave_flight::stop_under_wait`]). An NPC held
-    /// still keeps it. It starts `false`. Never saved.
-    ///
-    /// [`leave_flight::stop_under_wait`]: crate::traffic::leave_flight
+    /// (@0x8d4b9-0x8d4d2) but for goals 0xa and 0xe, so sub 1 stands, and
+    /// under an AI wait the low level flies the stop it kept, its word
+    /// and its cuts, and settles it below 0.35, which ends it (the
+    /// autopilot's `kept_sub`). An NPC held still keeps it. It starts
+    /// `false`. Never saved.
     pub stopping: bool,
 }
 
@@ -1593,9 +1599,11 @@ impl Npc {
 
     /// Whether its flight is its AI wait's ([`Npc::ai_wait`] running, and
     /// not the count wait, which flies its own sub 1): the high level
-    /// writes no sub while +0x4c runs (@0x8d4b9-0x8d4d2), the low level
-    /// still runs on what it kept (@0x901ea-0x901f4), and `_HandleShip`
-    /// skips its turn and thrust (@0x34a54-0x34a72).
+    /// writes no sub while +0x4c runs (@0x8d4b9-0x8d4d2) but for goals 0xa
+    /// and 0xe, the low level still runs on what it kept
+    /// (@0x901ea-0x901f4), its direct writes made at the slot, and
+    /// `_HandleShip` skips its turn and thrust (@0x34a54-0x34a72), flying
+    /// the word left once the wait is out.
     #[must_use]
     pub fn ai_wait_flies(&self) -> bool {
         ai_wait::running(self.ai_wait) && !self.count_wait()

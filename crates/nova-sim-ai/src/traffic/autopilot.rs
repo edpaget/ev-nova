@@ -194,16 +194,23 @@
 //! - While its AI wait runs ([`Npc::ai_wait`]: a pirate's dock or hold, a
 //!   ship a pirate took into its fleet, or a pirate turned out of its
 //!   count wait onto another goal), whatever its goal but the count wait
-//!   itself, it moves on at its velocity with no turn, thrust or slowing,
-//!   as `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
+//!   itself, it moves on at its velocity with no turn or thrust, as
+//!   `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
 //!   for goal 0x16 (@0x3443f-0x34454); a drift
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
-//!   high level's (see [`plunder`](crate::traffic::plunder)). A ship that
-//!   took the wait with sub 1 stored ([`Npc::stopping`]) keeps it, the
-//!   high level writing no sub (@0x8d4d2), and sub 1's cuts stand
-//!   ([`leave_flight::stop_under_wait`]): × 0.94 on the soft brake within
-//!   its retro heading (and off it for a refuel, goal 9), and below 0.35
-//!   × 0.95, which ends it.
+//!   high level's (see [`plunder`](crate::traffic::plunder)). Its low
+//!   level still runs: the high level writes no sub (@0x8d4b4-0x8d4d2),
+//!   so it flies the sub its last flight kept ([`kept_sub`]): a stop
+//!   ([`Npc::stopping`], [`leave_flight::stop`]), whose cuts stand (× 0.94
+//!   on the soft brake within its retro heading, and off it for a refuel,
+//!   goal 9; below 0.35 × 0.95, which ends it), a mining order
+//!   ([`Npc::mine_order`]), whose ease, nudge and brake stand, a fight
+//!   sub its think's pursuit held, a sniper's damping at rest standing,
+//!   or else sub 0. Each leaves its word, which double time's second
+//!   pass flies once the advance pass's countdown ends the wait. Goals
+//!   0xa ([`Goal::flies_in_form`]) and 0xe ([`Goal::Drift`]) pass the
+//!   high level's wait gate (@0x8d4c8, @0x8d4ce) and fly as unwaited, a
+//!   formation's nudge and glow copy standing.
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
 //!   either axis, truncated (its frame has no body): beyond 1000 and able
 //!   to jump ([`leave::can_jump`](crate::ai::leave::can_jump), by
@@ -325,6 +332,7 @@
 //!   (@0x33846, @0x34424), so it steers on. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
+mod kept_sub;
 mod low_level;
 mod step;
 

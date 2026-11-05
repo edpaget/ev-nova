@@ -381,6 +381,8 @@ pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
 #[cfg(test)]
+mod wait_kept_sub_tests;
+#[cfg(test)]
 mod wait_sub_1_tests;
 pub mod waiting_think;
 #[cfg(test)]

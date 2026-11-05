@@ -67,8 +67,32 @@ pub(crate) fn mine(
     gain: SpeedMult,
 ) -> Option<Flight> {
     let rock = rock?;
-    Some(match mine_orders::order(npc, Some(rock)) {
-        MineOrder::Stop => return None,
+    by_order(
+        npc,
+        mine_orders::order(npc, Some(rock)),
+        rock,
+        handling,
+        weapons,
+        gain,
+    )
+}
+
+/// `npc`'s flight of `order` with `rock` in slot 0, on `handling`, its
+/// lead by the global records `weapons`, at the frame's `gain`: order 0x13
+/// or 0x14 (see the module docs), whatever its goal, as the low level
+/// flies the order stored (+0xc8ca) under an AI wait too
+/// ([`autopilot`](crate::traffic::autopilot)). None for order 1, which the
+/// autopilot flies as its stop, and for order 0x15, which is [`scoop`]'s.
+pub(crate) fn by_order(
+    npc: &mut Npc,
+    order: MineOrder,
+    rock: &Asteroid,
+    handling: &Handling,
+    weapons: &Arsenal,
+    gain: SpeedMult,
+) -> Option<Flight> {
+    Some(match order {
+        MineOrder::Stop | MineOrder::Scoop => return None,
         MineOrder::Chase => {
             let wanted = trig::intercept_angle(npc.state.position, rock.position);
             steer(npc, wanted, handling, true)
