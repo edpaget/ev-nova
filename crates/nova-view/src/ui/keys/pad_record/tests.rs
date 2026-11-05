@@ -269,6 +269,21 @@ fn a_press_with_select_held_binds_on_select_s_layer() {
 }
 
 #[test]
+fn a_button_still_held_that_is_no_layer_records_no_layer() {
+    let mut screen = gamepad_tab();
+    select(&mut screen, Fc::Autopilot);
+    down(&mut screen, P::South);
+    assert_eq!(screen.recording(), Some(Fc::Autopilot.into()));
+    pad(&mut screen, P::LeftStick);
+    up(&mut screen, P::South);
+    assert_eq!(
+        on_pad(&screen, Fc::Autopilot),
+        plain(P::LeftStick),
+        "the South that started it, still down, is no layer"
+    );
+}
+
+#[test]
 fn select_alone_records_nothing_and_keeps_waiting() {
     let mut screen = gamepad_tab();
     recording(&mut screen, Fc::Autopilot);

@@ -100,7 +100,6 @@ impl KeysScreen {
         match (command, input.pressed) {
             (UiCommand::PrevFocus, true) => return self.switch_tab(Column::Keyboard),
             (UiCommand::Tab, true) => return self.switch_tab(Column::Gamepad),
-            (UiCommand::PrevFocus | UiCommand::Tab, false) => return,
             _ => {}
         }
         match self.focus.read_pad(input) {
