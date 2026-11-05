@@ -155,6 +155,19 @@ pub fn last_think(npc: &Npc, around: &Surroundings, decision: Decision) -> Decis
     }
 }
 
+/// The goal trader `npc`'s idle block gives among `around`, rolling on
+/// `chance`, when it runs before the provoked test: on goal 0 alone
+/// (`_WimpyTraderAI` @0x8b06c, `_BraveTraderAI` @0x8b4d6), the goal
+/// [`unprovoked`] gives. Its leave writes +0x70 -1 (@0x8b190, @0x8b5fa;
+/// [`trader_target::idle_leave_clears`](super::trader_target::idle_leave_clears)),
+/// so a provoked trader whose idle block leaves passes the provoked test
+/// by (@0x8b1b6, @0x8b624-0x8b62c) and leaves, with no flight, fight or
+/// call; its landing and stop write no +0x70, so the test then fires.
+/// None on any other goal, where the provoked test comes first.
+pub fn idle_first(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
+    (npc.goal == Goal::Idle).then(|| unprovoked(npc, around, chance))
+}
+
 /// What trader `npc`'s think gives among `around` when its provoked test
 /// writes nothing: a goal it keeps ([`kept`](super::kept), then
 /// [`kept`]), else its idle block's ([`idle`]), rolling on `chance`.

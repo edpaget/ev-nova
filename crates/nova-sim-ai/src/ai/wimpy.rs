@@ -45,17 +45,25 @@ pub struct WimpyTrader {
 }
 
 /// What `_WimpyTraderAI` writes, before the high level: its count wait
-/// kept (@0x8b062), a flight from its attacker provoked (@0x8b1ac), in its
-/// slot or gone with its slot still named ([`provoked_by_gone`]), and
-/// otherwise a goal it keeps or its idle block's
-/// ([`trader_keep::unprovoked`]).
+/// kept (@0x8b062); on goal 0 its idle block's leave, which clears +0x70
+/// before the provoked test (@0x8b179-0x8b19b, [`trader_keep::idle_first`]);
+/// a flight from its attacker provoked (@0x8b1ac), in its slot or gone
+/// with its slot still named ([`provoked_by_gone`]); and otherwise a goal
+/// it keeps or its idle block's ([`trader_keep::unprovoked`]).
 fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if npc.goal == Goal::CountWait {
         return npc.goal;
     }
+    let business = trader_keep::idle_first(npc, around, chance);
+    if let Some(leave) = business.filter(|&goal| trader_target::idle_leave_clears(npc, goal)) {
+        return leave;
+    }
     provoked_by(npc, around)
         .or_else(|| provoked_by_gone(npc, around).map(|gone| ShipRef::Npc(gone.id)))
-        .map_or_else(|| trader_keep::unprovoked(npc, around, chance), Goal::Flee)
+        .map_or_else(
+            || business.unwrap_or_else(|| trader_keep::unprovoked(npc, around, chance)),
+            Goal::Flee,
+        )
 }
 
 impl Behaviour for WimpyTrader {
@@ -187,6 +195,33 @@ mod tests {
         let stopping = WimpyTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
         assert_eq!(stopping.goal, Goal::Wait);
         assert!(!stopping.clears_target, "the stop");
+    }
+
+    #[test]
+    fn a_provoked_wimpy_trader_on_goal_0_whose_idle_block_leaves_leaves_without_fleeing() {
+        // On goal 0 the idle block runs first (@0x8b06c), and its leave
+        // writes +0x70 -1 (@0x8b179-0x8b19b), so the provoked test finds
+        // none (@0x8b1b6). Its stop writes no +0x70, so the test fires.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let decided = |trader: &Npc| {
+            let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[]))
+        };
+        let leaving = decided(&trader);
+        assert_eq!(leaving.goal, Goal::JumpOut);
+        assert!(leaving.clears_target);
+        assert_eq!(leaving.comm_call, None);
+        assert!(!leaving.forgets_provocation);
+        trader.class_fuel = 99;
+        let fleeing = decided(&trader);
+        assert_eq!(fleeing.goal, Goal::Flee(n(2)), "the stop: @0x8b1ac");
+        assert_eq!(fleeing.comm_call, Some(CommCall::Distress));
     }
 
     #[test]

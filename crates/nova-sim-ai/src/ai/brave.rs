@@ -56,7 +56,9 @@ pub struct BraveTrader {
 }
 
 /// What `_BraveTraderAI` writes, before the high level: its count wait
-/// kept (@0x8b4cc); provoked, an attack on its attacker within
+/// kept (@0x8b4cc); on goal 0 its idle block's leave, which clears +0x70
+/// before the provoked test (@0x8b5e3-0x8b605,
+/// [`trader_keep::idle_first`]); provoked, an attack on its attacker within
 /// [`STAND_AND_FIGHT`] on both axes (`setle`, @0x8b616-0x8b68d) while its
 /// warp stage is at or below 0 (@0x8b684-0x8b68b), nothing above it, and
 /// a flight beyond; unprovoked, or writing nothing, a goal it keeps or its
@@ -73,23 +75,24 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         let off = place - npc.state.position;
         off.x.abs() <= STAND_AND_FIGHT && off.y.abs() <= STAND_AND_FIGHT
     };
-    let mut fight = |attacker: ShipRef, at: Option<Vec2>| {
-        if !at.is_some_and(near) {
-            Goal::Flee(attacker)
-        } else if npc.warp.stage > 0.0 {
-            trader_keep::unprovoked(npc, around, chance)
-        } else {
-            Goal::Attack(attacker)
-        }
-    };
-    let at = |attacker| around.state_of(attacker).map(|state| state.position);
-    if let Some(attacker) = provoked_by(npc, around) {
-        return fight(attacker, at(attacker));
+    let business = trader_keep::idle_first(npc, around, chance);
+    if let Some(leave) = business.filter(|&goal| trader_target::idle_leave_clears(npc, goal)) {
+        return leave;
     }
-    if let Some(gone) = provoked_by_gone(npc, around) {
-        return fight(ShipRef::Npc(gone.id), Some(gone.state.position));
+    let attacker = provoked_by(npc, around)
+        .map(|attacker| {
+            let at = around.state_of(attacker).map(|state| state.position);
+            (attacker, at)
+        })
+        .or_else(|| {
+            provoked_by_gone(npc, around)
+                .map(|gone| (ShipRef::Npc(gone.id), Some(gone.state.position)))
+        });
+    match attacker {
+        Some((attacker, at)) if !at.is_some_and(near) => Goal::Flee(attacker),
+        Some((attacker, _)) if npc.warp.stage <= 0.0 => Goal::Attack(attacker),
+        _ => business.unwrap_or_else(|| trader_keep::unprovoked(npc, around, chance)),
     }
-    trader_keep::unprovoked(npc, around, chance)
 }
 
 impl Behaviour for BraveTrader {
@@ -225,6 +228,27 @@ mod tests {
         let stopping = BraveTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
         assert_eq!(stopping.goal, Goal::Wait);
         assert!(!stopping.clears_target, "the stop");
+    }
+
+    #[test]
+    fn a_provoked_brave_trader_on_goal_0_whose_idle_block_leaves_leaves_without_fighting() {
+        // On goal 0 the idle block runs first (@0x8b4d6), and its leave
+        // writes +0x70 -1 (@0x8b5e3-0x8b605), so the provoked test finds
+        // none (@0x8b624-0x8b62c). Its stop writes no +0x70, so the test
+        // fires: an attack within 1250, a flight beyond.
+        for (x, fought) in [(100.0, Goal::Attack(n(2))), (1251.0, Goal::Flee(n(2)))] {
+            let mut npcs = provoked(x, 0.0);
+            npcs[0].visited = Some(StellarId(128));
+            let leaving = flown(&npcs);
+            assert_eq!(leaving.goal, Goal::JumpOut, "{x}");
+            assert!(leaving.clears_target, "{x}");
+            assert_eq!(leaving.comm_call, None, "{x}");
+            assert!(!leaving.calls_reinforcements, "{x}");
+            npcs[0].class_fuel = 99;
+            let decision = decision_among(&npcs);
+            assert_eq!(decision.goal, fought, "{x}: the stop");
+            assert_eq!(decision.comm_call, Some(CommCall::Distress), "{x}");
+        }
     }
 
     #[test]

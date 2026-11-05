@@ -342,11 +342,13 @@ fn a_brave_trader_provoked_by_an_ally_stays_on_it_on_goal_0() {
     // drop writes goal and sub 0 alone (@0x8e2d2): +0x70 and +0x96 stay,
     // so it thinks the same again. The world holds no government records,
     // so its provoker is of its own government, which `_GovtAllies` holds
-    // allied (@0x4e4e).
+    // allied (@0x4e4e). It can't jump, so its idle block on goal 0 stops
+    // it, writing no +0x70, before the provoked test (@0x8b4d6-0x8b616).
     let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
     trader.berth = 1;
     trader.provoked = 10.0;
     trader.target = Some(n(2));
+    trader.class_fuel = 99;
     let mut police = ship(2, TRADERS, AiType::Warship, 300.0, 0.0);
     police.berth = 2;
     police.no_ai = true;
@@ -362,11 +364,13 @@ fn a_brave_trader_provoked_by_an_ally_stays_on_it_on_goal_0() {
 fn a_traders_hopeless_flight_flies_close_beyond_250_launching_and_calling() {
     // The think attacks its provoker 300 off (@0x8b616); the block finds
     // the chase hopeless and writes goal 3, sub 5 (@0x8e625-0x8e62e), then
-    // launches and calls (@0x8e6eb-0x8e70d).
+    // launches and calls (@0x8e6eb-0x8e70d). It can't jump, so its idle
+    // block on goal 0 stops it, writing no +0x70, before the provoked test.
     let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
     trader.berth = 1;
     trader.provoked = 10.0;
     trader.target = Some(n(2));
+    trader.class_fuel = 99;
     trader.hull.mass = 100.0;
     let mut runner = ship(2, PIRATES, AiType::Warship, 0.0, -300.0);
     runner.berth = 2;

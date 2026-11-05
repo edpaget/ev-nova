@@ -678,9 +678,12 @@ mod tests {
             runner.provoked = 10.0;
             runner.target = Some(ShipRef::Player);
             let runner = traffic.add_npc_at(runner, 1);
+            // The trader can't jump, so its idle block on goal 0 stops it,
+            // writing no +0x70, before the provoked test (@0x8b4d6-0x8b616).
             let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, -901.0);
             trader.provoked = 10.0;
             trader.target = Some(ShipRef::Npc(runner));
+            trader.class_fuel = 99;
             let trader = traffic.add_npc_at(trader, 2);
             let world = World {
                 player: Some(player(251.0, -10.0)),
