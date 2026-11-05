@@ -83,7 +83,7 @@ use std::time::Duration;
 
 use nova_sim::Rulebook;
 
-pub use edit::{KeyEdit, Recorded, Recording, left_key};
+pub use edit::{Column, KeyEdit, PadRecorded, Recorded, Recording, left_key};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::dialog::outline;
@@ -368,7 +368,7 @@ impl KeysScreen {
     /// Whether a rebind left `command` unbound and it is still marked.
     #[must_use]
     pub fn is_marked(&self, command: Command) -> bool {
-        self.edit.is_marked(command)
+        self.edit.is_marked(Column::Keyboard, command)
     }
 
     /// The command being recorded, if any.
@@ -425,7 +425,8 @@ impl KeysScreen {
                     self.keyboard_cell(command)
                 };
                 self.list.set_cell(index, &cell);
-                self.list.set_marked(index, self.edit.is_marked(command));
+                self.list
+                    .set_marked(index, self.edit.is_marked(Column::Keyboard, command));
             }
         }
     }
@@ -523,7 +524,7 @@ impl KeysScreen {
                     && let Some(&Row::Command(command)) =
                         self.list.selected().and_then(|row| self.rows.get(row))
                 {
-                    self.edit.clear(command);
+                    self.edit.clear_on(Column::Keyboard, command);
                     self.refresh();
                 }
             }
@@ -544,7 +545,7 @@ impl KeysScreen {
     fn press_button(&mut self, button: KeysButton) {
         match button {
             KeysButton::RestoreDefaults => {
-                self.edit.restore_defaults();
+                self.edit.restore_defaults(Column::Keyboard);
                 self.refresh();
             }
             KeysButton::Cancel => {
