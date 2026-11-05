@@ -50,8 +50,9 @@
 //! (rdm:phase/flight-controls-2/phase-6-what-flight-controls-phase-16-left-out).
 //!
 //! Under either rule B, L and the escort commands F, D, V and C
-//! ([`OWN_LATCH_KEYS`]) are read as the unlatched keys are: held whenever down, their own latches deciding at
-//! the next pass, as no site sets them. A latched key waiting for its
+//! ([`OWN_LATCH_KEYS`]) are read as the unlatched keys are: held whenever
+//! down, their own latches deciding at the next pass, as no site sets
+//! them. A latched key waiting for its
 //! release still reads down past its latch (the `latched_reads` module).
 
 use super::map_wait::{OWN_LATCH_KEYS, UNLATCHED_KEYS, reads_live};
@@ -185,8 +186,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A key `input` presses or repeats after a site that opened no dialog
     /// ([`FlightView::latch_at_site`]), up to the next poll, flight
-    /// keeping its input meanwhile: whether it was taken here. A latched key's latch is set
-    /// (`_SetAllKeyCmdFlags` @0x61e6d), and only a poll that reads it up
+    /// keeping its input meanwhile: whether it was taken here. A latched
+    /// key's latch is set (`_SetAllKeyCmdFlags` @0x61e6d), and only a poll
+    /// that reads it up
     /// clears it, so one pressed now reads down with its latch set at that
     /// poll and waits for its release: it is noted latched
     /// ([`FlightView::latch_held_keys`]) and not acted on. `-` is held
@@ -254,8 +256,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// those of `live.down` ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), none
     /// flight holds of the rest is let go, and a button still down keeps
     /// the cursor whole. The own-latch keys are never handed back as
-    /// presses: held, the next pass reads them by their own latches. The latched
-    /// keys follow the close's rule (see the module docs), the mark taken:
+    /// presses: held, the next pass reads them by their own latches. The
+    /// latched keys follow the close's rule (see the module docs), the mark taken:
     ///
     /// - With a site marked, every latched key of `live.down` waits for
     ///   its release ([`FlightView::latched_down`]), every latch set
@@ -274,8 +276,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   fresh press, but `-`, which it holds for the self-destruct chord
     ///   and reads as the zoom out by `_mapZoomFlag` (@0x70fdb): it comes
     ///   back as a press, its zoom held back by Command or any other key
-    ///   down ([`FlightView::zoom_floating_map`]). Most act on their press in ours, so they come back
-    ///   for the router to give flight as it gives any key. The slot
+    ///   down ([`FlightView::zoom_floating_map`]). Most act on their
+    ///   press in ours, so they come back for the router to give flight
+    ///   as it gives any key. The slot
     ///   block's keys and the cloak act only at the next poll, as do B, L
     ///   and the escort commands (@0x6e1b6, before F12, P, Y, I and the
     ///   zooms) with their latches clear, so a press key after the first
