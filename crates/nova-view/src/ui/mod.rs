@@ -52,6 +52,8 @@
 //!   the game runs fullscreen, its arrows stepping through the modes.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
+//! - [`keys`]: the keys screen ([`KeysScreen`]) Preferences' Key
+//!   Settings opens: every command's key, recorded, cleared or restored.
 //! - [`mission_info`]: the key that asks for the mission info screen,
 //!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
@@ -87,6 +89,7 @@ pub mod escort_dialog;
 pub mod faded_texts;
 mod held_keys;
 pub(crate) mod key_wait;
+pub mod keys;
 pub mod list_bar;
 pub mod mission_dialogs;
 pub mod mission_info;
@@ -122,6 +125,7 @@ pub use dialog::{
     ItemTemplate, Placement, Role, TextBacking,
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
+pub use keys::KeysScreen;
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use note::NoteDialog;
 pub use player_info::{PlayerInfoButton, PlayerInfoScreen, Tab};
