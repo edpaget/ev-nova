@@ -2,6 +2,8 @@
 //! rebound handle ([`AppScreen::with_bindings`]) hands it to every screen
 //! it builds, so flight, a dialog over flight, the course map and the
 //! spaceport each read the rebound keys, and their old keys no longer.
+//! And the bindings a settings file saves reach flight as `main` wires
+//! them: loaded by [`game_settings`] and handed to the router.
 //!
 //! Over the recharge module's synthetic data and interface file (a ship
 //! starting over the one planet it lands on, and the stock "Spaceport"
@@ -13,6 +15,8 @@ use std::time::Duration;
 
 use nova::app::screen::AppScreen;
 use nova::app::{App, Control, Showing, WindowEvent, start_screen};
+use nova::settings::game_settings;
+use nova_audio::recording::MemorySettings;
 use nova_data::GameData;
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
@@ -105,17 +109,36 @@ impl Harness {
     /// Presses L twice, as the player lands: the first requests
     /// clearance, the dock approach clears it, and the second lands.
     fn land(&mut self) {
-        self.press(Key::KeyL);
-        self.settle();
-        self.settle_until("the dock approach's clearance", |game| {
-            game.screen()
-                .flight_view()
-                .and_then(|flight| flight.session().ok())
-                .is_some_and(nova_sim::Session::dock_cleared)
-        });
-        self.press(Key::KeyL);
-        assert_eq!(self.showing(), Showing::Spaceport);
+        self.land_with(Key::KeyL);
     }
+
+    /// Presses `key` twice, as [`Harness::land`] presses L, and gives the
+    /// frames the dock approach took.
+    fn land_with(&mut self, key: Key) -> u64 {
+        self.press(key);
+        self.settle();
+        let start = self.frames;
+        self.settle_until("the dock approach's clearance", Self::dock_cleared);
+        let approach = self.frames - start;
+        self.press(key);
+        assert_eq!(self.showing(), Showing::Spaceport);
+        approach
+    }
+
+    fn dock_cleared(&mut self) -> bool {
+        self.screen()
+            .flight_view()
+            .and_then(|flight| flight.session().ok())
+            .is_some_and(nova_sim::Session::dock_cleared)
+    }
+}
+
+/// The app flying with the bindings `text`, a settings file, gives, wired
+/// as `main` wires them.
+fn flying_with_settings(text: &str) -> Harness {
+    let (_, settings, warning) = game_settings(Some(Box::new(MemorySettings::holding(text))));
+    assert_eq!(warning, None);
+    Harness::flying(SharedBindings::new(settings.bindings))
 }
 
 crate::common::frames!(Harness, frame);
@@ -157,4 +180,20 @@ fn flight_its_dialogs_its_map_and_the_spaceport_read_the_bindings_the_app_is_giv
     assert_eq!(game.showing(), Showing::Spaceport, "Escape doesn't leave");
     game.press(Key::Backquote);
     assert_eq!(game.showing(), Showing::Flight, "the backquote leaves");
+}
+
+#[test]
+fn a_flight_key_the_settings_file_rebinds_acts_on_its_new_key_and_not_its_old() {
+    let text = r#"{"bindings": {"keyboard": {"Flight.LandDock": "KeyK"}}}"#;
+    let approach = flying_with_settings(text).land_with(Key::KeyK);
+
+    let mut game = flying_with_settings(text);
+    game.press(Key::KeyL);
+    game.settle();
+    for _ in 0..approach {
+        game.frame();
+    }
+    assert!(!game.dock_cleared(), "L requests no clearance");
+    game.press(Key::KeyL);
+    assert_eq!(game.showing(), Showing::Flight, "L doesn't land");
 }

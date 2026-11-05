@@ -177,6 +177,7 @@ use nova_data::{GameData, InterfaceData, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
+use nova_view::SharedBindings;
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use winit::event_loop::EventLoop;
@@ -349,6 +350,8 @@ fn main() -> ExitCode {
         // The shipyard's looping ship movie plays on a player of its own.
         .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
+        // The keys the settings file saves, read by every screen built.
+        .with_bindings(SharedBindings::new(settings.bindings.clone()))
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
