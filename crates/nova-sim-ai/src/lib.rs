@@ -125,6 +125,7 @@ pub mod escort;
 pub mod escort_arrival;
 pub mod escort_voice;
 pub mod gate;
+pub mod gate_lanes;
 pub mod hail;
 pub mod hover;
 pub mod hyperspace;

@@ -173,7 +173,10 @@ fn site(sites: &[GateSite], id: StellarId) -> Option<&GateSite> {
 
 /// The sites `links` lead to, in slot order, repeats kept: each used slot
 /// whose stellar some system lists.
-fn exits<'a>(links: &[Option<StellarId>; 8], sites: &'a [GateSite]) -> Vec<&'a GateSite> {
+pub(crate) fn exits<'a>(
+    links: &[Option<StellarId>; 8],
+    sites: &'a [GateSite],
+) -> Vec<&'a GateSite> {
     links
         .iter()
         .flatten()
