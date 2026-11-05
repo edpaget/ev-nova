@@ -228,6 +228,7 @@ fn seeded() -> MemorySettings {
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
+            bindings: nova_view::Bindings::default(),
         })
         .expect("seeds");
     store

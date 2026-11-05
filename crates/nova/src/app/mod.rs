@@ -2955,6 +2955,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: crate::settings::ScalingSetting::default(),
                 nova_files: None,
+                bindings: nova_view::Bindings::default(),
             }
         );
         let saved: serde_json::Value =

@@ -5,7 +5,8 @@
 //!   whether shots trail and smoke, whether ships show their weapon glow,
 //!   whether they animate, glow and show their running lights, whether
 //!   the stars get their own parallax factors, whether the game runs fullscreen, and how ([`FullscreenSetting`]),
-//!   and the Scaling chosen ([`ScalingSetting`]).
+//!   the Scaling chosen ([`ScalingSetting`]) and the key bindings
+//!   ([`Bindings`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
 //!   or they cannot be used), and saves each change. It is the only
@@ -17,13 +18,13 @@
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
 //! `smoke_trails`, `weapon_effects`, `ship_animations`, `engine_glows`,
 //! `running_lights`, `parallax_starfield`, `show_map_borders`,
-//! `fullscreen`, `fullscreen_kind`, `frame_upscaler` and `nova_files`;
-//! files saved before the last thirteen existed load unchanged, with the
-//! hyperspace effects, the movies, the smoke trails, the weapon effects,
-//! the ship animations, the engine glows, the running lights, the
-//! parallax starfield and the map's borders on, the game windowed and,
-//! when fullscreen, borderless, the world drawn natively, and no `Nova
-//! Files` remembered.
+//! `fullscreen`, `fullscreen_kind`, `frame_upscaler`, `nova_files` and
+//! `bindings`; files saved before the last fourteen existed load
+//! unchanged, with the hyperspace effects, the movies, the smoke trails,
+//! the weapon effects, the ship animations, the engine glows, the running
+//! lights, the parallax starfield and the map's borders on, the game
+//! windowed and, when fullscreen, borderless, the world drawn natively,
+//! no `Nova Files` remembered, and every key at its default.
 //!
 //! `ship_animations`, `engine_glows` and `running_lights` are the
 //! original's `ShipAnimations`, `EngineGlows` and `RunningLights`, each
@@ -54,16 +55,30 @@
 //! monitor `null` when the platform names none. It is kept while the game
 //! is windowed, so the fullscreen shortcut goes back to it.
 //!
+//! `bindings` holds one table per device family. The `keyboard` table
+//! maps each command's name to its combo's text, `""` for an unbound
+//! command, and lists only the bindings that differ from the defaults
+//! (`{"Flight.Accelerate": "Shift+KeyW"}`), so a later default still
+//! reaches a player who never touched that key. The rules are
+//! nova-view's: the names, the text, and how a saved table's clashes
+//! settle on load ([`KeyMap::with_overrides`]). The keeper only passes
+//! the strings through: an entry whose value isn't a string is skipped,
+//! as an unknown name or key is, and its command keeps its default. A
+//! family table this build doesn't know (phase 12's `gamepad`, say) is
+//! kept and saved back unchanged. A `bindings` or `keyboard` that isn't a
+//! table makes the file unusable, as any field of the wrong type does.
+//!
 //! `show_map_borders` is the original's `ShowMapBorders`: whether the
 //! galaxy map shades government borders, on when absent (`_LoadPrefs`
 //! @0xced57-0xced93). The Preferences dialog never carries it, as
 //! `_SavePrefs` never writes it: the map's close saves it
 //! (`nova_view::flight::FlightView::take_map_borders_save`).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
-use nova_view::{FullscreenKind, Prefs, Scaling, VideoMode};
+use nova_view::{Bindings, FullscreenKind, KeyMap, Prefs, Scaling, VideoMode};
 use serde::{Deserialize, Serialize};
 
 /// The Scaling chosen, as saved: its name, kept as it was read even when
@@ -191,6 +206,8 @@ pub struct GameSettings {
     /// The `Nova Files` directory the player picked when the game found
     /// none, tried before the usual places on the next launch.
     pub nova_files: Option<PathBuf>,
+    /// The player's key bindings, one table per device family.
+    pub bindings: Bindings,
 }
 
 impl Default for GameSettings {
@@ -214,6 +231,7 @@ impl Default for GameSettings {
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
+            bindings: Bindings::default(),
         }
     }
 }
@@ -289,8 +307,50 @@ struct Saved {
     frame_upscaler: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     nova_files: Option<String>,
+    bindings: SavedBindings,
     #[serde(flatten)]
     others: Others,
+}
+
+/// The `bindings` table as saved: the keyboard's overrides, each a
+/// command's name and its combo's text ([`KeyMap::to_table`]), and the
+/// tables of device families this build doesn't know, kept as they were.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SavedBindings {
+    /// Each entry's value is a string; any other is skipped on load, as an
+    /// unknown name or key is.
+    keyboard: BTreeMap<String, serde_json::Value>,
+    #[serde(flatten)]
+    families: Others,
+}
+
+impl From<Bindings> for SavedBindings {
+    fn from(bindings: Bindings) -> Self {
+        Self {
+            keyboard: bindings
+                .keyboard
+                .to_table()
+                .into_iter()
+                .map(|(name, text)| (name, text.into()))
+                .collect(),
+            families: Others::new(),
+        }
+    }
+}
+
+impl From<SavedBindings> for Bindings {
+    /// The key map nova-view's rules build from the keyboard's string
+    /// entries ([`KeyMap::from_table`]).
+    fn from(saved: SavedBindings) -> Self {
+        let entries = saved
+            .keyboard
+            .iter()
+            .filter_map(|(name, text)| Some((name.as_str(), text.as_str()?)));
+        Self {
+            keyboard: KeyMap::from_table(entries),
+        }
+    }
 }
 
 /// A [`FullscreenSetting`] as saved.
@@ -376,6 +436,7 @@ impl From<GameSettings> for Saved {
             nova_files: settings
                 .nova_files
                 .and_then(|dir| dir.into_os_string().into_string().ok()),
+            bindings: settings.bindings.into(),
             others: Others::new(),
         }
     }
@@ -407,6 +468,7 @@ impl From<Saved> for GameSettings {
             map_borders: saved.show_map_borders,
             frame_upscaler: ScalingSetting(saved.frame_upscaler),
             nova_files: saved.nova_files.map(PathBuf::from),
+            bindings: saved.bindings.into(),
         }
     }
 }
@@ -419,6 +481,8 @@ pub struct SettingsKeeper<S: SettingsStore> {
     store: S,
     settings: GameSettings,
     others: Others,
+    /// The `bindings` tables of device families this build doesn't know.
+    families: Others,
 }
 
 /// The settings keeper the game saves through.
@@ -436,11 +500,13 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// back with each change.
     pub fn open(mut store: S) -> (Self, Option<String>) {
         let mut others = Others::new();
+        let mut families = Others::new();
         let (settings, warning) = match store.read() {
             Ok(None) => (GameSettings::default(), None),
             Ok(Some(text)) => match serde_json::from_str::<Saved>(&text) {
                 Ok(mut saved) => {
                     others = std::mem::take(&mut saved.others);
+                    families = std::mem::take(&mut saved.bindings.families);
                     (GameSettings::from(saved), None)
                 }
                 Err(error) => (
@@ -465,6 +531,7 @@ impl<S: SettingsStore> SettingsKeeper<S> {
                 store,
                 settings,
                 others,
+                families,
             },
             warning,
         )
@@ -494,10 +561,11 @@ impl<S: SettingsStore> SettingsKeeper<S> {
             return Ok(());
         }
         self.settings = settings.clone();
-        let saved = Saved {
+        let mut saved = Saved {
             others: self.others.clone(),
             ..Saved::from(settings)
         };
+        saved.bindings.families.clone_from(&self.families);
         let text = serde_json::to_string_pretty(&saved).expect("plain values always serialise");
         self.store
             .write(&text)
@@ -533,7 +601,10 @@ mod tests {
     use nova_audio::recording::MemorySettings;
     use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
-    use nova_view::{FullscreenKind, Scaling, SoundPrefs, VideoMode};
+    use nova_view::keymap::FlightCommand;
+    use nova_view::{
+        Command, FullscreenKind, Key, KeyCombo, Modifiers, Scaling, SoundPrefs, VideoMode,
+    };
 
     use super::*;
 
@@ -562,6 +633,7 @@ mod tests {
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
+            bindings: Bindings::default(),
         }
     }
 
@@ -588,6 +660,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
+                bindings: Bindings::default(),
             }
         );
     }
@@ -664,6 +737,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
+                bindings: Bindings::default(),
             }
         );
         let (keeper, _) = SettingsKeeper::open(MemorySettings::holding("{}"));
@@ -695,6 +769,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
+                bindings: Bindings::default(),
             }
         );
     }
@@ -1440,6 +1515,7 @@ mod tests {
                 "parallax_starfield": true,
                 "show_map_borders": true,
                 "frame_upscaler": "native",
+                "bindings": {"keyboard": saved_table(&KeyMap::default())},
             })
         );
     }
@@ -1508,6 +1584,7 @@ mod tests {
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
+                bindings: Bindings::default(),
             })
             .expect("saves");
         keeper
@@ -1642,6 +1719,7 @@ mod tests {
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
+            bindings: Bindings::default(),
         };
         assert_eq!((settings, warning), (expected.clone(), None));
         let mut keeper: GameKeeper = keeper.expect("a keeper");
@@ -1657,6 +1735,176 @@ mod tests {
         assert!(keeper.is_some(), "a change can still be saved");
         assert_eq!(settings, GameSettings::default());
         assert!(warning.is_some_and(|warning| warning.starts_with("nova: the saved settings")));
+    }
+
+    fn flight(command: FlightCommand) -> Command {
+        Command::Flight(command)
+    }
+
+    /// A settings file whose `bindings.keyboard` holds `entries`.
+    fn keyboard_file(entries: &[(&str, &str)]) -> String {
+        let keyboard: serde_json::Map<String, serde_json::Value> = entries
+            .iter()
+            .map(|&(name, text)| (name.to_owned(), text.into()))
+            .collect();
+        serde_json::json!({"bindings": {"keyboard": keyboard}}).to_string()
+    }
+
+    /// The key map nova-view builds from `entries`.
+    fn key_map_of<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> KeyMap {
+        KeyMap::from_table(entries)
+    }
+
+    /// `map`'s table, as it is saved.
+    fn saved_table(map: &KeyMap) -> serde_json::Value {
+        serde_json::to_value(map.to_table()).expect("strings serialise")
+    }
+
+    fn opened(text: &str) -> (GameSettings, Option<String>) {
+        let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
+        (keeper.settings(), warning)
+    }
+
+    #[test]
+    fn a_key_map_is_saved_and_read_back_after_a_restart() {
+        let mut map = KeyMap::default();
+        map.bind(
+            flight(FlightCommand::Accelerate),
+            KeyCombo::with(Key::KeyG, Modifiers::SHIFT),
+        );
+        map.unbind(flight(FlightCommand::Board));
+        let settings = GameSettings {
+            bindings: Bindings {
+                keyboard: map.clone(),
+            },
+            ..GameSettings::default()
+        };
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper.change(settings.clone()).expect("saves");
+        assert_eq!(json(&store)["bindings"]["keyboard"], saved_table(&map));
+        let table = map.to_table();
+        let (restarted, warning) = SettingsKeeper::open(store);
+        assert_eq!(warning, None);
+        assert_eq!(
+            restarted.settings(),
+            GameSettings {
+                bindings: Bindings {
+                    keyboard: key_map_of(table.iter().map(|(n, t)| (n.as_str(), t.as_str()))),
+                },
+                ..settings
+            }
+        );
+    }
+
+    #[test]
+    fn saved_bindings_load_as_nova_view_reads_their_table() {
+        let q = KeyCombo::key(Key::KeyQ).to_string();
+        let z = KeyCombo::key(Key::KeyZ).to_string();
+        let autopilot = flight(FlightCommand::Autopilot).name();
+        let board = flight(FlightCommand::Board).name();
+        let accelerate = flight(FlightCommand::Accelerate).name();
+        for entries in [
+            // Two commands of one context on one combo.
+            vec![(autopilot, q.as_str()), (board, q.as_str())],
+            // A command on a combo another may hold by default.
+            vec![(accelerate, z.as_str())],
+        ] {
+            let (settings, warning) = opened(&keyboard_file(&entries));
+            assert_eq!(warning, None, "{entries:?}");
+            assert_eq!(
+                settings.bindings.keyboard,
+                key_map_of(entries.iter().copied()),
+                "{entries:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_without_bindings_loads_the_default_key_map() {
+        let (settings, warning) = opened(r#"{"sound": false, "hyperspace_effects": false}"#);
+        assert_eq!(warning, None);
+        assert_eq!(settings.bindings, Bindings::default());
+        assert!(!settings.audio.sound);
+        assert!(!settings.hyperspace_effects);
+    }
+
+    #[test]
+    fn a_device_family_this_build_does_not_know_is_kept() {
+        let text = r#"{"bindings": {"keyboard": {}, "gamepad": {"south": "anything"}}}"#;
+        let store = MemorySettings::holding(text);
+        let (mut keeper, warning) = SettingsKeeper::open(store.clone());
+        assert_eq!(warning, None);
+        keeper
+            .change(GameSettings {
+                audio: quiet(),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        assert_eq!(
+            json(&store)["bindings"]["gamepad"],
+            serde_json::json!({"south": "anything"})
+        );
+        assert_eq!(json(&store)["sound"], false);
+    }
+
+    #[test]
+    fn an_entry_that_is_no_text_is_skipped_like_an_unknown_one() {
+        let n = KeyCombo::key(Key::KeyN).to_string();
+        let accelerate = flight(FlightCommand::Accelerate).name();
+        let autopilot = flight(FlightCommand::Autopilot).name();
+        let board = flight(FlightCommand::Board).name();
+        let strings = [
+            ("Flight.NoSuchCommand", n.as_str()),
+            (accelerate, "NoSuchKey"),
+            (autopilot, n.as_str()),
+        ];
+        let mut keyboard: serde_json::Map<String, serde_json::Value> = strings
+            .iter()
+            .map(|&(name, text)| (name.to_owned(), text.into()))
+            .collect();
+        keyboard.insert(board.to_owned(), serde_json::json!(5));
+        let text = serde_json::json!({"bindings": {"keyboard": keyboard}}).to_string();
+        let (settings, warning) = opened(&text);
+        assert_eq!(warning, None);
+        assert_eq!(settings.bindings.keyboard, key_map_of(strings));
+    }
+
+    #[test]
+    fn bindings_or_a_keyboard_table_of_the_wrong_type_are_not_usable() {
+        for text in [
+            r#"{"bindings": 3}"#,
+            r#"{"bindings": {"keyboard": []}}"#,
+            r#"{"bindings": {"keyboard": "KeyW"}}"#,
+        ] {
+            let (settings, warning) = opened(text);
+            assert_eq!(settings, GameSettings::default(), "{text}");
+            assert!(warning.is_some(), "{text}");
+        }
+    }
+
+    #[test]
+    fn saving_a_key_map_leaves_the_other_settings_in_the_file_alone() {
+        let text = r#"{"sound": false, "hyperspace_effects": false,
+            "quicktime_movies": false, "rules": "bible"}"#;
+        let store = MemorySettings::holding(text);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let settings = keeper.settings();
+        keeper
+            .change(GameSettings {
+                bindings: Bindings::default().unbound(flight(FlightCommand::Board)),
+                ..settings
+            })
+            .expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved["sound"], false);
+        assert_eq!(saved["hyperspace_effects"], false);
+        assert_eq!(saved["quicktime_movies"], false);
+        assert_eq!(saved["rules"], "bible");
+        assert_ne!(
+            saved["bindings"]["keyboard"],
+            saved_table(&KeyMap::default())
+        );
     }
 
     #[test]

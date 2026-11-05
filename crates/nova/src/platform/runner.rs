@@ -649,6 +649,7 @@ mod tests {
             parallax_starfield: true,
             frame_upscaler: crate::settings::ScalingSetting::default(),
             nova_files: None,
+            bindings: nova_view::Bindings::default(),
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);

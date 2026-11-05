@@ -8,8 +8,9 @@ use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together
 use super::keyboard::{self, KeyCombo, KeyMap, Keyboard, KeysDown};
 use crate::input::Input;
 
-/// One binding table per device family. Phase 7 adds the gamepad's
-/// beside the keyboard's, and phase 3 saves each on its own.
+/// One binding table per device family: the keyboard's today, the
+/// gamepad's beside it later (phase 12 saves it). The settings file
+/// saves each family's table on its own ([`KeyMap::to_table`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bindings {
     /// The keyboard's table.
