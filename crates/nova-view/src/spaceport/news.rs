@@ -34,6 +34,7 @@ use nova_sim::News;
 use nova_sim::news::DEFAULT_NEWS_PICTURE;
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
@@ -243,7 +244,10 @@ impl Screen for NewsScreen {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the news: {reason}. Press Return or Escape to close it."),
+                    format!(
+                        "Cannot show the news: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -595,6 +599,19 @@ mod tests {
         let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
         screen.input(&key(Key::NumpadEnter, false));
         assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000))
+            .with_bindings(SharedBindings::new(
+                Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+            ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the news: no DLOG 1014. Press Q or Escape to close it."]
+        );
     }
 
     /// `_NewsDialogFilter` @0x48160 maps Return and Escape to item 1 with no

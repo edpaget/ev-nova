@@ -73,6 +73,7 @@ use super::shipyard::{
 };
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
@@ -644,8 +645,8 @@ impl Screen for HireScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the ships for hire: {reason}. Press Return or Escape to \
-                         close it."
+                        "Cannot show the ships for hire: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -1421,6 +1422,30 @@ mod tests {
         assert!(!screen.closed());
         screen.input(&key(Key::Enter, false));
         assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let screen = HireScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            list(),
+            art(),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the ships for hire: no DLOG 1004. Press Q or Escape to close it."
+                    .to_owned(),
+                PROBLEM_AT,
+                Color::ERROR
+            )]
+        );
     }
 
     #[test]

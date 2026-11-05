@@ -104,6 +104,7 @@ use super::port_map::PortMap;
 use super::race::{RACE_DIALOG, RaceScreen};
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::PortScreen;
@@ -1029,7 +1030,10 @@ impl Screen for BarScreen {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the bar: {reason}. Press Return or Escape to leave it."),
+                    format!(
+                        "Cannot show the bar: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "leave it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -2039,6 +2043,33 @@ mod tests {
         assert!(!screen.take_hire_request());
         screen.input(&key(Key::Escape, false));
         assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_the_bar_names_the_keys_bound_to_leave_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        let screen = BarScreen::new(
+            Err("no DLOG 1013".to_owned()),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the bar: no DLOG 1013. Press Q or Escape to leave it.".to_owned(),
+                Color::ERROR
+            )]
+        );
     }
 
     /// `_TrackBarButtons` @0x26fd5 plays nothing under the pointer.

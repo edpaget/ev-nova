@@ -149,6 +149,7 @@ mod close;
 use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::press_clause;
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::image::ImageKey;
@@ -785,7 +786,10 @@ impl Screen for OfferDialog {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the mission offer: {reason}. Press Return to accept it."),
+                    format!(
+                        "Cannot show the mission offer: {reason}.{}",
+                        press_clause(&self.keys, &[Command::Ui(UiCommand::Confirm)], "accept it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -1953,6 +1957,23 @@ mod tests {
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
         assert_eq!(dialog.prompt().mission, MissionId(141));
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_key_bound_to_accept_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("Yes", Some("No")),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&dialog),
+            ["Cannot show the mission offer: no DLOG 1016. Press Q to accept it."]
+        );
     }
 
     /// `_TrackSingleMissionButtons` @0x28188 plays nothing under the pointer.

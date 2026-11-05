@@ -57,6 +57,7 @@ use nova_sim::gamble::{Bet, RACERS};
 use super::layout::DONE_LABEL;
 use super::quantity_ask::{Purpose, QuantityAsk};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::image::ImageKey;
@@ -463,7 +464,10 @@ impl Screen for RaceScreen {
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the race: {reason}. Press Return or Escape to leave it."),
+                    format!(
+                        "Cannot show the race: {reason}.{}",
+                        press_clause(self.quantity.keys(), &CONFIRM_OR_BACK, "leave it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -1051,5 +1055,18 @@ mod tests {
             screen.input(&key(leave, true, false));
             assert!(screen.closed(), "{leave:?}");
         }
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_leave_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let screen = RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5)
+            .with_bindings(SharedBindings::new(
+                Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+            ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the race: no DLOG 1023. Press Q or Escape to leave it."]
+        );
     }
 }

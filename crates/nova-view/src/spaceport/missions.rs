@@ -110,6 +110,7 @@ use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
 use super::layout::{DONE_LABEL, LEAVE_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::MapOpener;
@@ -623,7 +624,8 @@ impl Screen for MissionComputerScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the mission computer: {reason}. Press Return or Escape to leave it."
+                        "Cannot show the mission computer: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "leave it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -1027,7 +1029,8 @@ impl Screen for MissionInfoScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the mission info: {reason}. Press Return or Escape to close it."
+                        "Cannot show the mission info: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -1896,6 +1899,27 @@ mod tests {
         assert!(screen.closed());
     }
 
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_leave_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let screen = MissionComputerScreen::new(
+            Err("no DLOG 1006".to_owned()),
+            computer(),
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the mission computer: no DLOG 1006. Press Q or Escape to leave it."
+                    .to_owned(),
+                Color::ERROR
+            )]
+        );
+    }
+
     /// `_TrackMissionButtons` @0x287f5 plays nothing under the pointer.
     #[test]
     fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
@@ -2516,6 +2540,28 @@ mod tests {
         )));
         screen.input(&key(Key::Escape));
         assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_mission_info_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo};
+        let screen =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK)
+                .with_bindings(SharedBindings::new(
+                    Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+                ));
+        assert_eq!(
+            info_drawn(&screen),
+            [DrawCommand::Text {
+                text: "Cannot show the mission info: no DLOG 1012. Press Q or Escape to close it."
+                    .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
     }
 
     /// `_TrackMissionInfoButtons` @0x2850e plays nothing under the pointer.

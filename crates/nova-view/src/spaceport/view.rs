@@ -210,6 +210,7 @@ use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, Shipy
 use super::trade::{ListColors, TradeScreen};
 
 mod shop_texts;
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::view::SharedChance;
@@ -2630,7 +2631,8 @@ impl SpaceportView {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the spaceport: {reason}. Press Return or Escape to take off."
+                        "Cannot show the spaceport: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "take off")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -3212,6 +3214,19 @@ pub(in crate::spaceport) mod tests {
             assert!(view.left(), "{k:?}");
         }
         assert_eq!((PROBLEM_AT, PROBLEM_SIZE), (Point::new(16.0, 32.0), 20.0));
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_keys_bound_to_take_off() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let view = SpaceportView::new(&catalog(), StellarId(140), Err("no DLOG 1000".to_owned()))
+            .with_bindings(SharedBindings::new(
+                Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+            ));
+        assert_eq!(
+            texts(&drawn(&view)),
+            ["Cannot show the spaceport: no DLOG 1000. Press Q or Escape to take off."]
+        );
     }
 
     #[test]

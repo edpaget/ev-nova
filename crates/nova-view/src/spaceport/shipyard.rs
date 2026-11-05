@@ -181,6 +181,7 @@ use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::ship_movie::ShipMovie;
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::PortScreen;
@@ -1817,7 +1818,8 @@ impl Screen for ShipyardScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the shipyard: {reason}. Press Return or Escape to close it."
+                        "Cannot show the shipyard: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -4702,6 +4704,34 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings};
+        let screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            art() as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text: "Cannot show the shipyard: no DLOG 1004. Press Q or Escape to close it."
+                    .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
     }
 
     // The shipyard's mission offers.

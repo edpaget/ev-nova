@@ -95,6 +95,7 @@ use super::catalog::PictureSizes;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
 use super::key_wait::KeyWait;
 use super::text_box::TextBox;
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
@@ -955,7 +956,8 @@ impl Screen for PlayerInfoScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the player info: {reason}. Press Return or Escape to close it."
+                        "Cannot show the player info: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -2490,6 +2492,24 @@ mod tests {
             stock(),
         );
         assert_eq!(screen.problem(), Some("its dialog has no item 7"));
+    }
+
+    #[test]
+    fn without_its_template_it_names_the_keys_bound_to_close_it() {
+        let screen = PlayerInfoScreen::new(
+            Err("no DLOG 1017".to_owned()),
+            Ok(yes_no()),
+            info(),
+            ButtonStyle::STOCK,
+            stock(),
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the player info: no DLOG 1017. Press Q or Escape to close it."]
+        );
     }
 
     /// `_EVYesNoDialog` @0x5558c, the Jettison question, runs the
