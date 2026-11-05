@@ -3,7 +3,7 @@
 //! from the folder `GAME_DATA` names ([`chosen`]).
 //!
 //! A ruleset selects, as data on its [`Profile`], the readings its game
-//! pins in the rulebook (see [`crate::rulebook`]) and
+//! pins in the rulebook (see [`crate::rulebook::ruleset_rulebook`]) and
 //! the folder its pilots are saved in (see [`crate::config::pilots_dir`]).
 //! The simulation never sees the ruleset: it reads the rulebook's keys,
 //! each defaulting to the original's reading.
