@@ -525,6 +525,59 @@ mod tests {
     }
 
     #[test]
+    fn a_role_and_a_mount_are_named_as_in_data() {
+        let roles = [
+            (Role::Shuttle, "shuttle"),
+            (Role::Freighter, "freighter"),
+            (Role::Courier, "courier"),
+            (Role::Racer, "racer"),
+            (Role::Fighter, "fighter"),
+            (Role::Raider, "raider"),
+            (Role::Gunboat, "gunboat"),
+            (Role::Corvette, "corvette"),
+            (Role::Cruiser, "cruiser"),
+            (Role::Carrier, "carrier"),
+        ];
+        for (role, text) in roles {
+            assert_eq!(role.as_str(), text);
+        }
+        let mounts = [
+            (Mount::Fixed, "fixed"),
+            (Mount::Turret, "turret"),
+            (Mount::Launcher, "launcher"),
+            (Mount::Bay, "bay"),
+        ];
+        for (mount, text) in mounts {
+            assert_eq!(mount.as_str(), text);
+        }
+    }
+
+    #[test]
+    fn the_totals_are_named_in_a_fixed_order() {
+        let totals = Totals {
+            hull: 1,
+            shields: 2,
+            speed: 3,
+            handling: 4,
+            cargo: 5,
+            hidden_cargo: 6,
+            attention: 7,
+        };
+        assert_eq!(
+            totals.named(),
+            [
+                ("hull", 1),
+                ("shields", 2),
+                ("speed", 3),
+                ("handling", 4),
+                ("cargo", 5),
+                ("hidden_cargo", 6),
+                ("attention", 7),
+            ]
+        );
+    }
+
+    #[test]
     fn a_mod_kit_reads_its_effects() {
         let kit: ModKit = read(
             "name: Gun mount\nfits: [shuttle, freighter]\nfitted_at: lawless\nprice: 4000\n\
@@ -627,6 +680,35 @@ mod tests {
             assert_eq!(ship.totals.attention, 2);
             let from: Vec<_> = ship.hardpoints.iter().map(|p| p.from.as_str()).collect();
             assert_eq!(from, ["skiff", "gun-mount"]);
+        }
+
+        #[test]
+        fn a_kit_adds_each_of_its_effects_to_the_hull_s() {
+            let galaxy = galaxy_with(&[
+                (
+                    "mods/tune-kit.md",
+                    "---\nname: Tune kit\nfits: [shuttle]\nfitted_at: legal\nprice: 10\n\
+                     effects: {hull: 5, shields: 3, speed: 7, handling: 2, hidden_cargo: 4}\n---\n",
+                ),
+                (
+                    "ships/tuned-skiff.md",
+                    "---\nname: Tuned\nbase: skiff\nstats: {shields: 20, speed: 300, handling: 40}\n\
+                     mods: [tune-kit]\n---\n",
+                ),
+            ]);
+            let totals = resolve(&galaxy, &id("tuned-skiff")).unwrap().totals;
+            assert_eq!(
+                totals,
+                Totals {
+                    hull: 55,
+                    shields: 23,
+                    speed: 307,
+                    handling: 42,
+                    cargo: 10,
+                    hidden_cargo: 4,
+                    attention: 0,
+                }
+            );
         }
 
         #[test]

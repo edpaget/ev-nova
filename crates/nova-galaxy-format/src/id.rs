@@ -332,6 +332,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_ink_name_may_start_with_an_underscore() {
+        assert!(is_ink_name("_hidden"));
+        assert!(is_ink_name("knot_2"));
+        assert!(!is_ink_name("2knot"));
+        assert!(!is_ink_name("-knot"));
+    }
+
+    #[test]
+    fn a_source_path_is_not_export() {
+        let source = MediaPath::try_from("media/source/spire.blend".to_string()).unwrap();
+        assert!(!source.is_export());
+    }
+
+    /// `T`'s schema as the generator writes it: its name and its JSON.
+    fn schema_of<T: JsonSchema>() -> (String, serde_json::Value) {
+        let mut generator = SchemaGenerator::default();
+        let schema = T::json_schema(&mut generator);
+        (T::schema_name().into_owned(), schema.to_value())
+    }
+
+    #[test]
+    fn a_harshness_schema_is_an_integer_from_1_to_5() {
+        let (name, schema) = schema_of::<Harshness>();
+        assert_eq!(name, "Harshness");
+        assert_eq!(schema["type"], "integer");
+        assert_eq!(
+            (schema["minimum"].as_u64(), schema["maximum"].as_u64()),
+            (Some(1), Some(5))
+        );
+    }
+
+    #[test]
+    fn a_fraction_schema_is_a_number_from_0_to_1() {
+        let (name, schema) = schema_of::<Fraction>();
+        assert_eq!(name, "Fraction");
+        assert_eq!(schema["type"], "number");
+        assert_eq!(
+            (schema["minimum"].as_u64(), schema["maximum"].as_u64()),
+            (Some(0), Some(1))
+        );
+    }
+
+    #[test]
     fn an_id_is_kebab_case() {
         assert_eq!(
             Id::try_from("far-gate".to_string()).unwrap().as_str(),
@@ -389,6 +432,7 @@ mod tests {
     #[test]
     fn harshness_runs_from_one_to_five() {
         assert_eq!(Harshness::try_from(1).unwrap().get(), 1);
+        assert_eq!(Harshness::try_from(3).unwrap().get(), 3);
         assert!(Harshness::try_from(5).is_ok());
         assert!(Harshness::try_from(0).is_err());
         assert!(Harshness::try_from(6).is_err());

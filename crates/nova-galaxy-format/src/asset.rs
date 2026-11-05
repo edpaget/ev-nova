@@ -230,12 +230,36 @@ crate::model::kinds! {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::frontmatter::parse;
 
     fn read(yaml: &str) -> Result<Asset, String> {
         parse::<Asset>(&format!("---\n{yaml}---\n")).map(|(t, _)| t)
+    }
+
+    #[test]
+    fn a_kind_and_a_licence_are_named_as_in_data() {
+        assert_eq!(AssetKind::Model.as_str(), "model");
+        assert_eq!(AssetKind::Texture.as_str(), "texture");
+        assert_eq!(Licence::Cc0.as_str(), "CC0-1.0");
+        assert_eq!(Licence::CcBy3.as_str(), "CC-BY-3.0");
+        assert_eq!(Licence::CcBy4.as_str(), "CC-BY-4.0");
+    }
+
+    #[test]
+    fn each_front_points_forward_along_its_axis_with_right_a_quarter_turn_on() {
+        let cases = [
+            (Front::PlusZ, [0.0, 1.0], [-1.0, 0.0]),
+            (Front::MinusZ, [0.0, -1.0], [1.0, 0.0]),
+            (Front::PlusX, [1.0, 0.0], [0.0, 1.0]),
+            (Front::MinusX, [-1.0, 0.0], [0.0, -1.0]),
+        ];
+        for (front, forward, right) in cases {
+            assert_eq!(front.forward(), forward, "{front:?}");
+            assert_eq!(front.right(), right, "{front:?}");
+        }
     }
 
     #[test]

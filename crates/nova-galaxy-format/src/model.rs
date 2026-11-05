@@ -684,6 +684,22 @@ mod tests {
     }
 
     #[test]
+    fn a_planet_type_is_named_as_in_data() {
+        let types = [
+            (PlanetType::Rocky, "rocky"),
+            (PlanetType::Desert, "desert"),
+            (PlanetType::Ocean, "ocean"),
+            (PlanetType::Garden, "garden"),
+            (PlanetType::Ice, "ice"),
+            (PlanetType::Lava, "lava"),
+            (PlanetType::GasGiant, "gas-giant"),
+        ];
+        for (kind, text) in types {
+            assert_eq!(kind.as_str(), text);
+        }
+    }
+
+    #[test]
     fn a_system_reads_its_jump_points() {
         let system: System = read(
             "name: Marrow\nregion: commonwealth-rim\ngovernment: commonwealth\nmap: [10, 20]\n\

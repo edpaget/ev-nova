@@ -193,6 +193,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_fake_lists_its_entries_and_drops_a_file_without_the_rest() {
+        let fake = MemSource::default()
+            .with("b.md", "b")
+            .with_bytes("a.bin", b"\x01")
+            .with("c.md", "c")
+            .without("c.md");
+        let entries: Vec<_> = fake.entries().collect();
+        assert_eq!(entries, [("a.bin", &b"\x01"[..]), ("b.md", &b"b"[..])]);
+    }
+
+    #[test]
+    fn the_directory_adapter_reports_errors_other_than_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("systems"), "a file, not a folder").unwrap();
+        std::fs::create_dir(dir.path().join("media")).unwrap();
+        let source = DirSource::new(dir.path());
+        assert!(source.files("systems", "md").is_err(), "not a folder");
+        assert!(source.bytes("media").is_err(), "a folder, not a file");
+    }
+
+    #[test]
     fn the_fake_meets_the_contract() {
         let mut fake = MemSource::default();
         for (path, text) in TREE {
