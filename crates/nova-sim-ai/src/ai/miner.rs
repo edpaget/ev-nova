@@ -18,7 +18,15 @@
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
 //!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
-//!   [`call_for_help`](crate::ai::call_for_help)). The target is +0x70,
+//!   [`call_for_help`](crate::ai::call_for_help)). The test reads +0x70 not
+//!   -1 whatever its slot holds (@0x8b254-0x8b263), so an attacker gone from
+//!   the system whose freed slot +0x70 still names is fled too
+//!   ([`provoked_by_gone`]), on the one think before a slot test clears it;
+//!   the high level then ends that flight zeroed (@0x8d4e4-0x8d50d →
+//!   @0x8e228-0x8e23d, see
+//!   [`with_flight_end`](crate::traffic::provocation::with_flight_end)). The
+//!   miner has no leader branch (@0x8b1bd's): `_AIDispatch` sends it only
+//!   ships with +0x9a -1. The target is +0x70,
 //!   which names the inspected ship of a goal 7 a successor copied from a
 //!   lost interceptor lead ([`Npc::slot_target`]), so it flees that ship.
 //!   Unprovoked, the tests below write a goal every think, so a copied
@@ -81,7 +89,7 @@
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::travel::{self, TravelWrite};
-use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by};
+use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by, provoked_by_gone};
 use crate::cargo_box::any_scoopable;
 use crate::catalog::StellarId;
 use crate::chance::Chance;
@@ -169,7 +177,9 @@ fn think(npc: &Npc, around: &Surroundings) -> (Goal, TravelWrite) {
     if let Goal::CountWait = npc.goal {
         return (npc.goal, TravelWrite::Keep);
     }
-    if let Some(attacker) = provoked_by(npc, around) {
+    let attacker = provoked_by(npc, around)
+        .or_else(|| provoked_by_gone(npc, around).map(|gone| ShipRef::Npc(gone.id)));
+    if let Some(attacker) = attacker {
         // `_MinerAI` tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483):
         // its decision carries the call (`MinerAi::decision`).
         return (Goal::Flee(attacker), TravelWrite::Keep);
@@ -966,6 +976,78 @@ mod tests {
         let decision = MinerAi.decision(&provoked, &around, &mut Draws::of(&[]));
         assert_eq!(decision.goal, Goal::Mine);
         assert_eq!(decision.comm_call, None);
+    }
+
+    /// The decision by `behaviour` of a miner in slot `berth`, `provoked`
+    /// its provocation, whose target names a pirate in slot 2 gone from
+    /// the system as `freed` says.
+    fn decided_on_gone_by(
+        behaviour: &dyn Behaviour,
+        freed: crate::traffic::gone::Freed,
+        berth: u32,
+        provoked: f32,
+    ) -> crate::ai::Decision {
+        use crate::traffic::gone::GoneShip;
+        let mut npc = miner(MINER_BITS, true);
+        npc.provoked = provoked;
+        npc.target = Some(n(2));
+        npc.berth = berth;
+        let mut attacker = ship(2, PIRATES, AiType::Warship, 50.0, 0.0);
+        attacker.berth = 2;
+        let gone = [GoneShip {
+            ship: attacker,
+            freed,
+        }];
+        let npcs = [npc];
+        let around = Surroundings {
+            gone: &gone,
+            ..Surroundings::new(&[], &npcs)
+        };
+        behaviour.decision(&npcs[0], &around, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn a_provoked_miner_flees_a_gone_attacker_its_target_names_calls_for_help_and_the_flight_ends_zeroed()
+     {
+        // The provoked test finds +0x70 not -1 (@0x8b254-0x8b263), writes
+        // goal 3 (@0x8b265) and calls for help (@0x8b46c-0x8b483); the
+        // slot test makes +0x70 -1 (@0x8d4e4-0x8d50d) and goal 3's block
+        // zeroes (@0x8e228-0x8e23d).
+        use crate::traffic::gone::Freed;
+        for (freed, berth) in [(Freed::InDispatch, 3), (Freed::InShipPass, 1)] {
+            let think = decided_on_gone_by(&MinerAi, freed, berth, 5.0);
+            assert_eq!(think.goal, Goal::Flee(n(2)), "{freed:?}: the think's");
+            assert_eq!(think.travel, TravelWrite::Keep, "{freed:?}");
+            assert_eq!(
+                think.comm_call,
+                Some(crate::ai::CommCall::Distress),
+                "{freed:?}"
+            );
+            let flown = decided_on_gone_by(&crate::ai::NovaAi::default(), freed, berth, 5.0);
+            assert_eq!(flown.goal, Goal::Idle, "{freed:?}");
+            assert!(flown.clears_target, "{freed:?}");
+            assert!(flown.forgets_provocation, "{freed:?}");
+            assert_eq!(
+                flown.comm_call,
+                Some(crate::ai::CommCall::Distress),
+                "{freed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provoked_miner_does_not_read_a_gone_attacker_once_a_slot_test_has_cleared_it_or_unprovoked()
+     {
+        use crate::traffic::gone::Freed;
+        for (freed, berth, provoked) in [
+            (Freed::InDispatch, 1, 5.0),
+            (Freed::InShipPass, 3, 5.0),
+            (Freed::InDispatch, 3, 0.0),
+        ] {
+            let decision = decided_on_gone_by(&MinerAi, freed, berth, provoked);
+            assert_eq!(decision.goal, Goal::Mine, "{freed:?} {berth}");
+            assert_eq!(decision.comm_call, None, "{freed:?} {berth}");
+        }
     }
 
     #[test]

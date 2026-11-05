@@ -1178,4 +1178,92 @@ mod tests {
             }
         }
     }
+
+    /// The hunters' provoked branch on a gone attacker whose freed slot
+    /// their target still names (`_WarshipAI` @0x8bb0c, `_InterceptorAI`
+    /// @0x8cbf6): both read `Npc::target` as the original reads +0x70, so
+    /// they match it with no read of the gone ship's record.
+    mod gone_slot {
+        use crate::ai::fixture::{PIRATES, POLICE, around, govts, n, ship, sites};
+        use crate::ai::{Behaviour, Decision, Goal, NovaAi, Surroundings};
+        use crate::catalog::StellarId;
+        use crate::govt::INTERCEPTORS_RETREAT;
+        use crate::traffic::gone::{Freed, GoneShip};
+        use crate::traffic::npc::{AiType, Npc};
+        use nova_sim_base::fixture::Draws;
+
+        /// A police hunter of `ai_type` (NPC 1) in slot 3 holding `goal`,
+        /// provoked, its target a pirate (NPC 2) whose slot 2 was freed in
+        /// the AI loop, so the hunter's think still finds it.
+        fn provoked(ai_type: AiType, goal: Goal) -> Npc {
+            let mut hunter = ship(1, POLICE, ai_type, 0.0, 0.0);
+            hunter.goal = goal;
+            hunter.target = Some(n(2));
+            hunter.provoked = 5.0;
+            hunter.berth = 3;
+            hunter
+        }
+
+        /// `hunter`'s decision through Nova's AI, the police of
+        /// `police_flags`.
+        fn flown(hunter: &Npc, police_flags: u16) -> Decision {
+            let mut attacker = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+            attacker.berth = 2;
+            let gone = [GoneShip {
+                ship: attacker,
+                freed: Freed::InDispatch,
+            }];
+            let npcs = [hunter.clone()];
+            let govts = govts(0, police_flags);
+            let sites = sites();
+            let around = Surroundings {
+                gone: &gone,
+                ..around(&sites, &npcs, &govts, (0.0, -1000.0), 0)
+            };
+            NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 8]))
+        }
+
+        #[test]
+        fn a_provoked_warship_whose_target_names_a_gone_slot_drops_it_keeping_its_provocation() {
+            // Goal 4 (@0x8bb0c-0x8bb44), then its own drop finds the slot's
+            // +0xb8 clear: goal 0, +0x70 -1, +0x96 kept (@0x8bc4e-0x8bca9).
+            for goal in [Goal::Idle, Goal::Land(StellarId(128)), Goal::JumpOut] {
+                let decision = flown(&provoked(AiType::Warship, goal), 0);
+                assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+                assert!(decision.clears_target, "{goal:?}");
+                assert!(!decision.forgets_provocation, "{goal:?}");
+                assert_eq!(decision.comm_call, None, "{goal:?}");
+            }
+        }
+
+        #[test]
+        fn a_provoked_interceptor_whose_target_names_a_gone_slot_attacks_it_into_the_slot_test_or_flees_it_zeroed()
+         {
+            // Goal 4 (@0x8cbf6-0x8cc31), which the slot test ends on goal 0
+            // keeping +0x96 (@0x8d4e4-0x8d50d → @0x8e263 → @0x8e731); or a
+            // retreat to goal 3 (@0x8d14d-0x8d2e4, @0x8d343-0x8d391), which
+            // goal 3's block ends zeroed (@0x8e228-0x8e23d).
+            let attacking = flown(&provoked(AiType::Interceptor, Goal::Idle), 0);
+            assert_eq!(attacking.goal, Goal::Idle);
+            assert!(attacking.clears_target);
+            assert!(!attacking.forgets_provocation, "@0x8e731");
+            let mut shaken = provoked(AiType::Interceptor, Goal::Idle);
+            shaken.reserves.shield.now = 1.0;
+            shaken.odds = 5.0;
+            let dry = crate::ai::fixture::short_of_ammo(
+                provoked(AiType::Interceptor, Goal::Idle),
+                crate::ai::fire::AmmoLeft::Dry,
+                true,
+            );
+            for (retreating, police_flags, why) in [
+                (shaken, INTERCEPTORS_RETREAT, "outnumbered"),
+                (dry, 0, "dry"),
+            ] {
+                let decision = flown(&retreating, police_flags);
+                assert_eq!(decision.goal, Goal::Idle, "{why}");
+                assert!(decision.clears_target, "{why}");
+                assert!(decision.forgets_provocation, "{why}: @0x8e228");
+            }
+        }
+    }
 }

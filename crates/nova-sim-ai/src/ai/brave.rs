@@ -29,8 +29,8 @@
 use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by, react,
-    trader_keep, trader_target,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by,
+    provoked_by_gone, react, trader_keep, trader_target,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -83,7 +83,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if let Some(attacker) = provoked_by(npc, around) {
         return fight(attacker, at(attacker));
     }
-    if let Some(gone) = around.held_gone(npc).filter(|_| npc.provoked > 0.0) {
+    if let Some(gone) = provoked_by_gone(npc, around) {
         return fight(ShipRef::Npc(gone.id), Some(gone.state.position));
     }
     trader_keep::unprovoked(npc, around, chance)

@@ -559,6 +559,57 @@ mod tests {
             (traffic, trader, attacker)
         }
 
+        /// A wimpy trader at the centre, in slot `trader_berth`, landing,
+        /// provoked by a warship 100 off in slot `attacker_berth` that it
+        /// holds as its target: the traffic, the trader and the warship.
+        fn landing_provoked_by_a_warship(
+            trader_berth: u32,
+            attacker_berth: u32,
+        ) -> (Traffic, NpcId, NpcId) {
+            let mut traffic = Traffic::new();
+            let attacker = traffic.add_npc_at(
+                ship(0, PIRATES, AiType::Warship, 100.0, 0.0),
+                attacker_berth,
+            );
+            let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+            trader.provoked = 10.0;
+            trader.target = Some(ShipRef::Npc(attacker));
+            trader.goal = Goal::Land(STELLAR);
+            let trader = traffic.add_npc_at(trader, trader_berth);
+            (traffic, trader, attacker)
+        }
+
+        /// The calls on `traffic`'s line, by whom.
+        fn calls(traffic: &mut Traffic) -> Vec<(NpcId, CommCall)> {
+            calls_on_line(&traffic.take_on_line())
+                .into_iter()
+                .map(|(id, call, _)| (id, call))
+                .collect()
+        }
+
+        #[test]
+        fn a_provoked_wimpy_trader_reads_a_gone_attacker_once_and_calls_for_help() {
+            // An earlier slot's think still finds the slot freed in the
+            // ship loop in +0x70 (@0x8b1ac): it flees, calls for help
+            // (@0x8b1f5), and the flight ends zeroed (@0x8e228-0x8e23d).
+            let (mut traffic, trader, attacker) = landing_provoked_by_a_warship(1, 2);
+            traffic.remove_destroyed(attacker);
+            tick(&mut traffic);
+            let after = trader_of(&traffic, trader).clone();
+            assert_eq!(after.goal, Goal::Idle, "@0x8e228");
+            assert_eq!(after.target, None);
+            assert_eq!(after.provoked, 0.0, "@0x8e23d");
+            assert_eq!(calls(&mut traffic), [(trader, CommCall::Distress)]);
+            // A later slot let go of it at its step (@0x33865-0x33888).
+            let (mut traffic, trader, attacker) = landing_provoked_by_a_warship(3, 2);
+            traffic.remove_destroyed(attacker);
+            tick(&mut traffic);
+            let after = trader_of(&traffic, trader);
+            assert_eq!(after.provoked, 10.0, "a later slot does not read it");
+            assert_ne!(after.goal, Goal::Idle);
+            assert_eq!(calls(&mut traffic), []);
+        }
+
         fn tick(traffic: &mut Traffic) {
             let world = World {
                 player: Some(player(0.0, -5000.0)),

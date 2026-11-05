@@ -1446,6 +1446,17 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         .filter(|&attacker| npc.provoked > 0.0 && around.active(attacker))
 }
 
+/// The gone ship that provoked `npc`, while it is provoked and its target
+/// still names the ship's freed slot among `around`
+/// ([`Surroundings::held_gone`]): the provoked tests read +0x70 not -1,
+/// whatever the slot holds (`_WimpyTraderAI` @0x8b1ac, `_MinerAI`
+/// @0x8b254, `_BraveTraderAI` @0x8b616), so on the one think before a slot
+/// test clears it (@0x8d4e4-0x8d50d) the ship that left still provokes.
+#[must_use]
+pub fn provoked_by_gone<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<&'a Npc> {
+    around.held_gone(npc).filter(|_| npc.provoked > 0.0)
+}
+
 /// Whether `npc` can still fly its goal among `around`: a stellar the
 /// system still lists, shown or not ([`Surroundings::listed`], as the
 /// high level reads the stellar's record by its +0x6c, state 1 @0x8d8d7,
