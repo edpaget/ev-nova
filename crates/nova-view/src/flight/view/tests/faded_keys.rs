@@ -440,6 +440,32 @@ fn p_pressed_after_y_faded_and_before_the_next_poll_waits() {
 }
 
 #[test]
+fn a_latched_key_pressed_after_p_i_or_m_faded_and_before_the_next_poll_waits() {
+    // P's (@0x70393), I's (@0x70524) and M's (@0x6a898)
+    // `_SetAllKeyCmdFlags` set J's latch: a press no poll has read since
+    // finds it set.
+    let cases = [
+        (PLAYER_INFO_KEY, Some(Answer::PlayerInfoFaded)),
+        (
+            MISSION_INFO_KEY,
+            Some(Answer::MissionInfo(MissionInfoPress::Faded)),
+        ),
+        (MAP_KEY, None),
+    ];
+    for (k, answer) in cases {
+        let mut view = under_the_white();
+        tap(&mut view, k);
+        if let Some(answer) = answer {
+            view.sim.queue_answer(answer);
+        }
+        collapses_lit(&mut view);
+        view.input(&key(JUMP_KEY, true));
+        assert!(view.latched_down.contains(&JUMP_KEY), "{k:?}: J waits");
+        assert!(!view.held.contains(&JUMP_KEY), "{k:?}");
+    }
+}
+
+#[test]
 fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
     let mut view = under_the_white();
     collapses_lit(&mut view);

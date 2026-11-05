@@ -270,6 +270,23 @@ fn the_pickup_refused_for_room_latches_its_texts_close() {
 }
 
 #[test]
+fn the_pickup_refused_for_room_latches_the_keys_held_at_once_and_holds_back_a_press() {
+    // `_SetAllKeyCmdFlags` (@0x6535a) runs in the pass, the refusal's text
+    // only queued: J held is latched now, and Tab pressed before the next
+    // poll finds its latch set.
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoRoomForCargo));
+    view.held.insert(JUMP_KEY);
+    view.board();
+    assert!(view.latched_down.contains(&JUMP_KEY), "held: latched");
+    assert!(!view.held.contains(&JUMP_KEY));
+    view.input(&key(TARGET_KEY, true));
+    assert!(view.latched_down.contains(&TARGET_KEY), "pressed: waits");
+    assert!(!view.held.contains(&TARGET_KEY));
+}
+
+#[test]
 fn the_other_refusals_mark_no_site() {
     let mut view = sol();
     view.sim
