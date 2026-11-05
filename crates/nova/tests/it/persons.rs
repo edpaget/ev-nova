@@ -422,6 +422,11 @@ impl Chance for Script {
 /// listing Friend and placing it 150 above, both facing down.
 pub(crate) const BOTH: [u32; 8] = [99, 750, 650, 180, 99, 750, 600, 180];
 
+/// [`BOTH`] placed 3 farther out, 103 and 153 above, so that once the
+/// frame that sets them up has flown them (`_DoPlayGameWork`'s ship loop
+/// @0x44483) the player's held fire meets each in turn.
+const BOTH_FARTHER: [u32; 8] = [99, 750, 647, 180, 99, 750, 597, 180];
+
 /// Every NPC idles.
 #[derive(Debug)]
 struct Still;
@@ -669,7 +674,7 @@ fn by_the_settings_other_reading_a_person_opens_the_hail_with_its_comm_quote() {
 #[test]
 fn a_unique_persons_kill_is_saved_on_landing_and_a_new_app_over_the_store_keeps_it_gone() {
     let store = MemoryPilots::new();
-    let mut game = Game::opened(&store, &BOTH, Showing::Flight, |screen| {
+    let mut game = Game::opened(&store, &BOTH_FARTHER, Showing::Flight, |screen| {
         idle(screen).with_disable_rule(Rc::new(Never))
     });
     game.key(Key::Space, true);
