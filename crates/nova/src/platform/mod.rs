@@ -149,6 +149,37 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
     (chars.next().is_none() && !c.is_control()).then_some(WindowEvent::Text(c))
 }
 
+/// Calls `$then!` with `$args`, then every key winit and `Key` name
+/// alike: the one list [`map_key`] and `key_code` are both built from,
+/// so the two directions can't drift apart.
+macro_rules! same_names {
+    ($then:ident!($($args:tt)*)) => {
+        $then!($($args)*;
+            Backquote, Backslash, BracketLeft, BracketRight, Comma, Digit0, Digit1, Digit2,
+            Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Equal, IntlBackslash, IntlRo,
+            IntlYen, KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL,
+            KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+            Minus, Period, Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock,
+            ContextMenu, ControlLeft, ControlRight, Enter, ShiftLeft, ShiftRight, Space, Tab,
+            Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5, NonConvert, Delete, End, Help,
+            Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, NumLock,
+            Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8,
+            Numpad9, NumpadAdd, NumpadBackspace, NumpadClear, NumpadClearEntry, NumpadComma,
+            NumpadDecimal, NumpadDivide, NumpadEnter, NumpadEqual, NumpadHash, NumpadMemoryAdd,
+            NumpadMemoryClear, NumpadMemoryRecall, NumpadMemoryStore, NumpadMemorySubtract,
+            NumpadMultiply, NumpadParenLeft, NumpadParenRight, NumpadStar, Escape, Fn, FnLock,
+            PrintScreen, ScrollLock, Pause, BrowserBack, BrowserFavorites, BrowserForward,
+            BrowserHome, BrowserRefresh, BrowserSearch, BrowserStop, Eject, LaunchApp1,
+            LaunchApp2, LaunchMail, MediaPlayPause, MediaSelect, MediaStop, MediaTrackNext,
+            MediaTrackPrevious, Power, Sleep, AudioVolumeDown, AudioVolumeMute, AudioVolumeUp,
+            WakeUp, Abort, Resume, Suspend, Again, Copy, Cut, Find, Open, Paste, Props, Select,
+            Undo, Hiragana, Katakana, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13,
+            F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30,
+            F31, F32, F33, F34, F35
+        )
+    };
+}
+
 /// The game's key for a physical key, by its position: each key winit
 /// names is the `Key` of the same name, so every letter, digit,
 /// punctuation, function, keypad, navigation and editing key reaches the
@@ -200,7 +231,7 @@ pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent
 #[must_use]
 pub fn map_key(key: PhysicalKey) -> Key {
     /// The arms for keys winit and `Key` name alike.
-    macro_rules! same_name {
+    macro_rules! from_winit {
         ($key:expr; $($name:ident),* $(,)?) => {
             match $key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
@@ -215,28 +246,29 @@ pub fn map_key(key: PhysicalKey) -> Key {
             }
         };
     }
-    same_name!(key;
-        Backquote, Backslash, BracketLeft, BracketRight, Comma, Digit0, Digit1, Digit2, Digit3,
-        Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Equal, IntlBackslash, IntlRo, IntlYen,
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN,
-        KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Minus, Period,
-        Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock, ContextMenu, ControlLeft, ControlRight, Enter,
-        ShiftLeft, ShiftRight, Space, Tab, Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5,
-        NonConvert, Delete, End, Help, Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft,
-        ArrowRight, ArrowUp, NumLock, Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5,
-        Numpad6, Numpad7, Numpad8, Numpad9, NumpadAdd, NumpadBackspace, NumpadClear,
-        NumpadClearEntry, NumpadComma, NumpadDecimal, NumpadDivide, NumpadEnter, NumpadEqual, NumpadHash,
-        NumpadMemoryAdd, NumpadMemoryClear, NumpadMemoryRecall, NumpadMemoryStore,
-        NumpadMemorySubtract, NumpadMultiply, NumpadParenLeft, NumpadParenRight, NumpadStar,
-        Escape, Fn, FnLock, PrintScreen, ScrollLock, Pause, BrowserBack, BrowserFavorites,
-        BrowserForward, BrowserHome, BrowserRefresh, BrowserSearch, BrowserStop, Eject,
-        LaunchApp1, LaunchApp2, LaunchMail, MediaPlayPause, MediaSelect, MediaStop,
-        MediaTrackNext, MediaTrackPrevious, Power, Sleep, AudioVolumeDown, AudioVolumeMute,
-        AudioVolumeUp, WakeUp, Abort, Resume, Suspend, Again, Copy, Cut, Find, Open, Paste,
-        Props, Select, Undo, Hiragana, Katakana, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11,
-        F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28,
-        F29, F30, F31, F32, F33, F34, F35
-    )
+    same_names!(from_winit!(key))
+}
+
+/// Winit's key for `key`, which the platform's layout is asked about
+/// through `to_scancode`: [`map_key`] the other way. The keypad's minus,
+/// which `map_key` folds into `-`, is its own key here, so the layout is
+/// asked about the key the player sees. `None` for
+/// [`Key::Unidentified`] and any key winit doesn't name.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn key_code(key: Key) -> Option<KeyCode> {
+    /// The arms for keys winit and `Key` name alike.
+    macro_rules! to_winit {
+        ($key:expr; $($name:ident),* $(,)?) => {
+            match $key {
+                $(Key::$name => Some(KeyCode::$name),)*
+                Key::MetaLeft => Some(KeyCode::SuperLeft),
+                Key::MetaRight => Some(KeyCode::SuperRight),
+                Key::NumpadSubtract => Some(KeyCode::NumpadSubtract),
+                _ => None,
+            }
+        };
+    }
+    same_names!(to_winit!(key))
 }
 
 /// The running platform's menu bar key equivalents, as key combos, which
@@ -636,6 +668,31 @@ mod tests {
             let asked = !names.asked().is_empty();
             assert_eq!(asked, prints(key), "{physical:?}");
         }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn every_printing_key_maps_back_to_the_winit_key_it_came_from() {
+        for key in nova_view::key_names::PRINTING_KEYS {
+            let code = key_code(key).unwrap_or_else(|| panic!("{key:?} has a winit key"));
+            if key == Key::NumpadSubtract {
+                // `map_key` folds it into `-`, but the layout is asked about
+                // the keypad's own key.
+                assert_eq!(code, KeyCode::NumpadSubtract);
+            } else {
+                assert_eq!(map_key(PhysicalKey::Code(code)), key, "{key:?}");
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn every_key_map_key_names_maps_back_but_an_unidentified_one() {
+        assert_eq!(key_code(Key::MetaLeft), Some(KeyCode::SuperLeft));
+        assert_eq!(key_code(Key::MetaRight), Some(KeyCode::SuperRight));
+        assert_eq!(key_code(Key::F35), Some(KeyCode::F35));
+        assert_eq!(key_code(Key::ArrowUp), Some(KeyCode::ArrowUp));
+        assert_eq!(key_code(Key::Unidentified), None);
     }
 
     /// The pairs `map_key` folds: the second key arrives as the first's.

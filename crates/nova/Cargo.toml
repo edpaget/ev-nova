@@ -33,7 +33,8 @@ egui-wgpu = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# The macOS menu bar, built behind nova-appkit's safe API.
+# The macOS menu bar, built behind nova-appkit's safe API, and the
+# keyboard layout's key names.
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
 
@@ -51,8 +52,9 @@ rfd.workspace = true
 rfd = { workspace = true, features = ["xdg-portal"] }
 
 # The console calls behind nova-win32's safe API: attaching to the
-# terminal's console, as `nova.exe` is a Windows-subsystem program; and
-# the icon's resource id, which the window loads its icon by.
+# terminal's console, as `nova.exe` is a Windows-subsystem program; the
+# keyboard layout's key names; and the icon's resource id, which the
+# window loads its icon by.
 [target.'cfg(windows)'.dependencies]
 nova-win32.workspace = true
 nova-winres.workspace = true
