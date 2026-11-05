@@ -363,6 +363,11 @@ mod tests {
             PadEvent::Connected(ONE),
             "an event from a pad not yet reported reports it first"
         );
+        assert_eq!(
+            forwarded(&mut Forward::default(), &[EventType::Connected]),
+            [PadEvent::Connected(ONE)],
+            "gilrs's own connect"
+        );
         let mut lost = Forward::default();
         assert_eq!(forwarded(&mut lost, &[EventType::Disconnected]), []);
         assert_eq!(

@@ -962,6 +962,14 @@ mod tests {
             BTreeSet::from([flight(FlightCommand::FirePrimary)]),
             "not the Select and Start chord's Pause"
         );
+        let mut layered = Pad::new(FLYING);
+        layered.press(P::Start);
+        layered.press(P::South);
+        assert_eq!(
+            layered.held(),
+            BTreeSet::from([flight(FlightCommand::AttackTarget)]),
+            "Start's layer meets the chord only with Select"
+        );
     }
 
     #[test]
