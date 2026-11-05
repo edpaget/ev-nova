@@ -34,7 +34,7 @@ mod tests {
     use nova_sim::{MissionId, MissionText, MissionTextKind};
 
     use super::*;
-    use crate::flight::view::MAP_KEY;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
     use crate::input::Key;
     use crate::screen::Screen;
     use crate::spaceport::view::tests::{

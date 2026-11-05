@@ -12,14 +12,15 @@ use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, Sc
 use nova_sim::planet_comm::{PlanetCommItem, PlanetCommView};
 use nova_sim::{Haggle, HailView, Hailed, VenueOffer};
 
-use crate::Key;
 use crate::flight::sim_port::FlightSim;
 
 use super::{FlightView, MESSAGE_TICKS, hail_refusal_message};
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Hails the target ([`FlightCommand::Hail`]), Option held as Alt is,
-    /// once the flight takes the comm key ([`FlightView::send_gated`]), or
+    /// Hails the target ([`FlightCommand::Hail`]), or the navigation
+    /// stellar as `stellar` says (Communicate with Option,
+    /// [`HailStellar`](crate::keymap::FlightCommand::HailStellar)), once
+    /// the flight takes the comm key ([`FlightView::send_gated`]), or
     /// says why not: a hail answered is held for the router
     /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
     /// in its place ([`FlightView::take_escort_dialog`]), a mission
@@ -33,20 +34,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// dialog marked as a site's ([`FlightView::let_go_into_dialog`]); a
     /// mission accepted at once shows nothing. A refusal reaches no site,
     /// and its beep is the flight's, drained with its sounds.
-    pub(super) fn hail(&mut self) {
-        let option = self.held.contains(&Key::AltLeft);
-        let answer = self.send_gated(FlightCommand::Hail { option });
+    pub(super) fn hail_at(&mut self, stellar: bool) {
+        let answer = self.send_gated(FlightCommand::Hail { option: stellar });
         self.take_hail_answer(answer);
     }
 
     /// The comm key read on the pass a jump collapsed under the white
-    /// ([`FadedPress::Hail`]): whether it latched the keys after it, the
+    /// ([`FadedPress::Hail`]), at the stellar as `stellar` says: whether it latched the keys after it, the
     /// dialog's guard refusing it (`_SetAllKeyCmdFlags` after it, letting
     /// go of the latched keys) or an offer opening. A refusal and an
-    /// offer are answered as [`FlightView::hail`]'s.
-    pub(super) fn hail_faded(&mut self) -> bool {
-        let option = self.held.contains(&Key::AltLeft);
-        let answer = self.send_gated(FlightCommand::PressFaded(FadedPress::Hail { option }));
+    /// offer are answered as [`FlightView::hail_at`]'s.
+    pub(super) fn hail_faded(&mut self, stellar: bool) -> bool {
+        let answer = self.send_gated(FlightCommand::PressFaded(FadedPress::Hail {
+            option: stellar,
+        }));
         let faded = answer == Answer::Hailed(Hailed::Faded);
         if faded {
             self.keep_unlatched_keys();
@@ -82,7 +83,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether a hail left a dialog for the router, whichever kind: the
-    /// keys were let go ([`FlightView::hail`]) and the dialog takes Y's
+    /// keys were let go ([`FlightView::hail_at`]) and the dialog takes Y's
     /// release, so Y mustn't be tracked as held behind it.
     pub(super) fn hail_opened(&self) -> bool {
         self.pending_hail.is_some()

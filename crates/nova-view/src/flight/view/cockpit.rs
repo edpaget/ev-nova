@@ -3,8 +3,6 @@
 //! (its HUD and target parts). The world itself is drawn from the kept
 //! frame (the `drawing` and `world` modules).
 
-use std::collections::HashSet;
-
 use nova_sim::PlayerCommand;
 #[cfg(doc)]
 use nova_sim::Session;
@@ -13,9 +11,7 @@ use nova_sim::{
     ClassRow, Condition, EscortCommand, NavMode, Reserves, StellarPick, SystemId, TargetPick,
 };
 
-use crate::flight::escorts::{
-    EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
-};
+use crate::flight::escorts::{EscortMenu, NO_ESCORTS, Toggled, escort_command_message};
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::NavDisplay;
 use crate::flight::hud::{self, HudState, StatusBar};
@@ -25,22 +21,14 @@ use crate::flight::target::{self, TargetPanel};
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::MapMarks;
 use crate::galaxy::map::MapPicture;
+use crate::keymap::{Command, EscortMenuCommand, FlightCommand as F, PlayCommand};
 use crate::system::camera::VIEW_SIZE;
 use crate::time::sixtieths;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{DrawList, Input, Key, Point, UiSound};
+use crate::{DrawList, Input, Point, UiSound};
 use nova_sim::flight_frame::FlightCommand;
 
-use super::slot_block;
-use super::{
-    BOARD_KEY, DESELECT_KEY, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FRAME_RATE_KEY, FlightView, HAIL_KEY,
-    HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
-    MENU_CLOSE_KEY, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY,
-    SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
-    ZOOM_OUT_KEY, window_width,
-};
+use super::slot_block::{self, Column};
+use super::{ESCORT_TICKS, FlightView, window_width};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Sets the view's size, `view` logical units: the app's widened size
@@ -64,87 +52,132 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.status_bar.as_ref().map_err(String::as_str)
     }
 
-    /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`](crate::Screen::input)
-    /// dispatches it; `None` for a key that is no command.
-    pub(super) fn command_of(&self, key: Key) -> Option<PlayerCommand> {
-        let command = match key {
-            LAND_KEY => PlayerCommand::Land,
-            BOARD_KEY => PlayerCommand::Board,
-            HAIL_KEY => PlayerCommand::Hail,
-            MAP_KEY => PlayerCommand::Map,
-            JUMP_KEY => PlayerCommand::Jump,
-            JETTISON_KEY => PlayerCommand::Jettison,
-            EJECT_KEY => PlayerCommand::Eject,
-            MISSION_INFO_KEY => PlayerCommand::MissionInfo,
-            PLAYER_INFO_KEY => PlayerCommand::PlayerInfo,
-            FRAME_RATE_KEY => PlayerCommand::FrameRate,
-            HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
-            HYPERSPACE_MODE_KEY => PlayerCommand::Nav,
-            TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
-            MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
-            | ESCORT_RECALL_KEY => PlayerCommand::Escort,
-            _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
-            NEAREST_STELLAR_COMMAND_KEY if self.held.contains(&Key::MetaLeft) => PlayerCommand::Nav,
-            SELECT_KEY => PlayerCommand::SelectWeapon,
-            DESELECT_KEY => PlayerCommand::DeselectWeapon,
-            NEAREST_STELLAR_KEY | NAV_OFF_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY => {
-                PlayerCommand::Nav
+    /// The [`PlayerCommand`] a press of `command` sends, as
+    /// [`Screen::input`](crate::Screen::input) dispatches it; `None` for
+    /// one that sends none.
+    pub(super) fn player_command(command: Command) -> Option<PlayerCommand> {
+        let sent = match command {
+            Command::Flight(F::LandDock) => PlayerCommand::Land,
+            Command::Flight(F::Board) => PlayerCommand::Board,
+            Command::Flight(F::Communicate | F::HailStellar) => PlayerCommand::Hail,
+            Command::Play(PlayCommand::GalaxyMap) => PlayerCommand::Map,
+            Command::Flight(F::HyperJump) => PlayerCommand::Jump,
+            Command::Flight(F::JettisonCargo | F::JettisonNonMission) => PlayerCommand::Jettison,
+            Command::Flight(F::Eject) => PlayerCommand::Eject,
+            Command::Play(PlayCommand::MissionInfo) => PlayerCommand::MissionInfo,
+            Command::Play(PlayCommand::PlayerInfo) => PlayerCommand::PlayerInfo,
+            Command::Flight(F::ShowFramerate) => PlayerCommand::FrameRate,
+            Command::Flight(F::HyperSelect) => PlayerCommand::SelectSystem,
+            Command::Flight(
+                F::TargetSelect
+                | F::TargetSelectBack
+                | F::TargetEscort
+                | F::TargetEscortBack
+                | F::ClosestTarget
+                | F::ClosestShip,
+            ) => PlayerCommand::Target,
+            Command::Flight(
+                F::EscortMenu
+                | F::Acknowledge
+                | F::AttackTarget
+                | F::DefendMe
+                | F::HoldPosition
+                | F::Recall
+                | F::RecallToHangar,
+            )
+            | Command::EscortMenu(_) => PlayerCommand::Escort,
+            Command::Flight(F::SelectSecondary | F::SelectSecondaryBack) => {
+                PlayerCommand::SelectWeapon
             }
-            _ if STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key)) => PlayerCommand::Nav,
+            Command::Flight(F::WeaponSafety) => PlayerCommand::DeselectWeapon,
+            Command::Flight(
+                F::HyperspaceMode
+                | F::NavOff
+                | F::ClearTarget
+                | F::StellarSlot1
+                | F::StellarSlot2
+                | F::StellarSlot3
+                | F::StellarSlot4
+                | F::NearestStellar
+                | F::ZoomOut
+                | F::ZoomIn,
+            ) => PlayerCommand::Nav,
             _ => return None,
         };
-        Some(command)
+        Some(sent)
     }
 
-    /// Whether a press of `key` is taken while a jump is under way, the
-    /// pre-jump stage included, with Option held (`option`) and the escort
-    /// menu open (`menu_open`) or not. `_HandlePlayer` runs its key
-    /// handling on every frame of a jump but the arrival (@0x6c625), and
-    /// these keys' blocks read no jump state (+0x50):
+    /// Whether a press of `command` is taken while a jump is under way,
+    /// the pre-jump stage included. `_HandlePlayer` runs its key handling
+    /// on every frame of a jump but the arrival (@0x6c625), and these
+    /// keys' blocks read no jump state (+0x50):
     ///
-    /// - Target Select, Tab, with Shift and Option ([`TARGET_KEY`],
-    ///   @0x69f1c-0x69ffb), and Closest Target, R and Option-R
-    ///   ([`NEAREST_KEY`], @0x6a9b7-0x6aae7);
-    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf).
-    ///   Weapon Safety, S ([`DESELECT_KEY`], @0x6adc2-0x6ae1b), reads no
-    ///   jump state either; it is held, not pressed, so no press filter
-    ///   applies to it;
-    /// - Option-\` ([`NAV_OFF_KEY`] with Option, @0x69a17-0x69a90), which
+    /// - Target Select, with Shift and Option ([`F::TargetSelect`] and its
+    ///   variants, @0x69f1c-0x69ffb), and Closest Target, with Option
+    ///   ([`F::ClosestTarget`], [`F::ClosestShip`], @0x6a9b7-0x6aae7);
+    /// - Select Secondary, with Option ([`F::SelectSecondary`],
+    ///   [`F::SelectSecondaryBack`], @0x6ac12-0x6adbf). Weapon Safety
+    ///   ([`F::WeaponSafety`], @0x6adc2-0x6ae1b) reads no jump state
+    ///   either; it is held, not pressed, so no press filter applies to
+    ///   it;
+    /// - Nav Off with Option ([`F::ClearTarget`], @0x69a17-0x69a90), which
     ///   lets go of the ship target;
-    /// - Board, B ([`BOARD_KEY`], @0x6a98b-0x6a9a8);
-    /// - Jettison, Command-K and Command-Option-K ([`JETTISON_KEY`],
+    /// - Board ([`F::Board`], @0x6a98b-0x6a9a8);
+    /// - Jettison, with Command and with Command and Option
+    ///   ([`F::JettisonCargo`], [`F::JettisonNonMission`],
     ///   @0x6fd54-0x6fdaf);
-    /// - the escort menu's keys: E, Return, F, D, V and C, and 1-5 while the
-    ///   menu shows, fading out too (@0x6dd00-0x6e452);
-    /// - the floating map's zoom keys, `-`, `=` and the keypad's `+`
-    ///   ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`],
+    /// - the escort menu's keys: the menu key, Acknowledge, the four
+    ///   escort commands, and the menu's groups while it shows, fading out
+    ///   too (@0x6dd00-0x6e452);
+    /// - the floating map's zooms ([`F::ZoomOut`], [`F::ZoomIn`],
     ///   @0x70f4e-0x71110);
-    /// - the frame-rate key, F12 ([`FRAME_RATE_KEY`], @0x6e454-0x6e4bd).
+    /// - Show Framerate ([`F::ShowFramerate`], @0x6e454-0x6e4bd).
     ///
-    /// Every other key is ignored, as the original gates it on +0x50 ≤ 0:
-    /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 and
-    /// Command-5 with the menu shut, F1-F4 and F5 (@0x69d2e; held through
-    /// the jump's end, one pressed during it acts after it, see
-    /// [`FlightView::slot_keys_frame`]), and J, which changes nothing
-    /// during a jump (@0x6b0da-0x6b10d). M, L, P, Y and I never get here:
-    /// each press is kept for the pass that reads it, so P's and Y's
+    /// Every other command is ignored, as the original gates it on +0x50
+    /// ≤ 0: Nav Off without Option and Hyperspace Mode (@0x69ad4), Hyper
+    /// Select (@0x69be7), the stellar slots and the nearest stellar
+    /// (@0x69d2e; held through the jump's end, one pressed during it acts
+    /// after it, see [`FlightView::slot_keys_frame`]), and Hyper Jump,
+    /// which changes nothing during a jump (@0x6b0da-0x6b10d). The map
+    /// key, Land, Player Info, Communicate and Mission Info never get
+    /// here: each press is kept for the pass that reads it, so P's and Y's
     /// refusals land on the pass, not on the press, and L and I held wait
     /// past the jump (the `faded_keys` module). The flight keys are
-    /// tracked as held whatever this says, so H, \` and `\` dropped here
-    /// act after the jump as their latches let them, and J, whose latch
-    /// the jump sets, does not ([`FlightView::held_keys_frame`]). A click on the
-    /// escort menu is no key press, so this filter never sees it: the menu
-    /// takes it during a jump too, as its branch reads no +0x50
-    /// (@0x6a000-0x6a12b, [`FlightView::click_escort_menu`]).
-    pub(super) fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
-        match key {
-            TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | JETTISON_KEY | MENU_KEY
-            | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
-            | ESCORT_RECALL_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY
-            | FRAME_RATE_KEY => true,
-            NAV_OFF_KEY => option,
-            _ => menu_open && GROUP_KEYS.contains(&key),
-        }
+    /// tracked as held whatever this says, so Hyperspace Mode, Nav Off and
+    /// Hyper Select dropped here act after the jump as their latches let
+    /// them, and Hyper Jump, whose latch the jump sets, does not
+    /// ([`FlightView::held_keys_frame`]). A click on the escort menu is no
+    /// key press, so this filter never sees it: the menu takes it during a
+    /// jump too, as its branch reads no +0x50 (@0x6a000-0x6a12b,
+    /// [`FlightView::click_escort_menu`]).
+    pub(super) const fn taken_in_jump(command: Command) -> bool {
+        matches!(
+            command,
+            Command::Flight(
+                F::TargetSelect
+                    | F::TargetSelectBack
+                    | F::TargetEscort
+                    | F::TargetEscortBack
+                    | F::ClosestTarget
+                    | F::ClosestShip
+                    | F::SelectSecondary
+                    | F::SelectSecondaryBack
+                    | F::ClearTarget
+                    | F::Board
+                    | F::JettisonCargo
+                    | F::JettisonNonMission
+                    | F::EscortMenu
+                    | F::Acknowledge
+                    | F::AttackTarget
+                    | F::DefendMe
+                    | F::HoldPosition
+                    | F::Recall
+                    | F::RecallToHangar
+                    | F::ZoomOut
+                    | F::ZoomIn
+                    | F::ShowFramerate
+            ) | Command::EscortMenu(_)
+        )
     }
 }
 
@@ -162,26 +195,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// A press of `key`, if it is one of the escort menu's: E, Return,
-    /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
-    /// Hangar). Whether it was one.
-    pub(super) fn escort_key(&mut self, key: Key) -> bool {
-        let group = GROUP_KEYS.iter().position(|&group| group == key);
-        match key {
-            MENU_KEY => self.toggle_escort_menu(),
-            MENU_CLOSE_KEY => self.acknowledge(),
-            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
-            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
-            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
-            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::AltLeft) {
-                EscortCommand::Dock
-            } else {
-                EscortCommand::Recall
-            }),
-            _ => match group {
-                Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
-                _ => return false,
-            },
+    /// A press of `command`, if it is one of the escort menu's: the menu
+    /// key, Acknowledge, the groups while the menu is open, and the four
+    /// escort commands (Recall with Option, Return to Hangar). Whether it
+    /// was one.
+    pub(super) fn escort_command(&mut self, command: Command) -> bool {
+        match command {
+            Command::Flight(F::EscortMenu) => self.toggle_escort_menu(),
+            Command::Flight(F::Acknowledge) => self.acknowledge(),
+            Command::Flight(F::AttackTarget) => self.command_escorts(EscortCommand::Attack),
+            Command::Flight(F::DefendMe) => self.command_escorts(EscortCommand::Defend),
+            Command::Flight(F::HoldPosition) => self.command_escorts(EscortCommand::Hold),
+            Command::Flight(F::Recall) => self.command_escorts(EscortCommand::Recall),
+            Command::Flight(F::RecallToHangar) => self.command_escorts(EscortCommand::Dock),
+            Command::EscortMenu(group) if self.escort_menu.is_open() => {
+                let n = EscortMenuCommand::ALL
+                    .iter()
+                    .position(|&each| each == group)
+                    .unwrap_or_default();
+                self.select_escort_group(n);
+            }
+            _ => return false,
         }
         true
     }
@@ -191,7 +225,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// and only that (`_HandlePlayer` @0x6dedb-0x6df29).
     fn toggle_escort_menu(&mut self) {
         let rows = self.escort_rows();
-        match self.escort_menu.toggle(self.elapsed, &rows) {
+        let toggled = self.escort_menu.toggle(self.elapsed, &rows);
+        self.sync_escort_keys();
+        match toggled {
             Toggled::NoEscorts => {
                 self.say_for(NO_ESCORTS, ESCORT_TICKS);
                 self.ui_sounds.push(UiSound::NoEscorts);
@@ -213,17 +249,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.acknowledge_message();
         if self.escort_menu.is_open() {
             self.escort_menu.close();
+            self.sync_escort_keys();
             self.shut_escort_menu_by_key();
         }
         self.floating.hide();
     }
 
     /// The beep of the escort menu's close by Return or by its fade's end:
-    /// [`UiSound::EscortMenuToggled`] if E ([`MENU_KEY`]) is held, as the
-    /// close block reads the key live (@0x6e01e-0x6e04d), and none
-    /// otherwise.
+    /// [`UiSound::EscortMenuToggled`] if the menu key ([`F::EscortMenu`])
+    /// is held, as the close block reads the key live (@0x6e01e-0x6e04d),
+    /// and none otherwise.
     fn shut_escort_menu_by_key(&mut self) {
-        if self.held.contains(&MENU_KEY) {
+        if self.held(F::EscortMenu) {
             self.ui_sounds.push(UiSound::EscortMenuToggled);
         }
     }
@@ -269,10 +306,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .steps
             .iter()
             .map(|run| run.class_orders_cleared);
-        if self
+        let shut = self
             .escort_menu
-            .run_steps(self.elapsed, steps, cleared, flying)
-        {
+            .run_steps(self.elapsed, steps, cleared, flying);
+        self.sync_escort_keys();
+        if shut {
             self.shut_escort_menu_by_key();
         }
     }
@@ -297,6 +335,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x6705a) or a jump's arrival (`_HandlePlayer` @0x6c50e).
     pub fn shut_escort_menu(&mut self) {
         self.escort_menu.close();
+        self.sync_escort_keys();
     }
 }
 
@@ -456,45 +495,58 @@ pub(super) struct BarParts<'a> {
 /// commands through it, so any
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Tracks a flight key `input` presses or lets go of as held. A repeat
-    /// holds a key too, as a repeat is the first flight sees of a key
-    /// whose press went elsewhere, such as one down as focus comes back:
-    /// the original polls `GetKeys` and reads such a key down. Two
-    /// exceptions:
+    /// Tracks a flight key `input` presses or lets go of as held
+    /// ([`FlightView::is_flight_key`]): flight's reader follows it, so
+    /// the commands it holds are held while it is down. A repeat holds a
+    /// key too, as a repeat is the first flight sees of a key whose press
+    /// went elsewhere, such as one down as focus comes back: the original
+    /// polls `GetKeys` and reads such a key down. Two exceptions:
     ///
-    /// - A repeat of L or I is no fresh down: they act on being held (the
-    ///   `faded_keys` module), so one taken for a press would read again
-    ///   once a refusal let go of the key.
-    /// - A repeat of a key a `_SetAllKeyCmdFlags` site latched while it
-    ///   was down ([`FlightView::latched_down`]) is dropped: its latch
-    ///   waits for the release, the key reading down meanwhile past it
-    ///   ([`FlightView::reads_down`]). That release, or a fresh press,
-    ///   which the OS sends only after a release, ends the wait.
+    /// - A repeat of the land or mission info key is no fresh down: they
+    ///   act on being held (the `faded_keys` module), so one taken for a
+    ///   press would read again once a refusal let go of the key.
+    /// - A repeat of a key whose commands a `_SetAllKeyCmdFlags` site
+    ///   latched while it was down ([`FlightView::latched_down`]) is
+    ///   dropped: its latch waits for the release, the key reading down
+    ///   meanwhile past it ([`FlightView::reads_down`]). That release, or
+    ///   a fresh press, which the OS sends only after a release, ends the
+    ///   wait.
     pub(super) fn track_held(&mut self, input: &Input) {
-        if let Input::Key {
-            key,
-            pressed,
-            repeat,
+        let Input::Key {
+            pressed, repeat, ..
         } = *input
-            && FLIGHT_KEYS.contains(&key)
-            && !(repeat && matches!(key, LAND_KEY | MISSION_INFO_KEY))
-        {
-            if repeat {
-                if self.latched_down.contains(&key) {
-                    return;
-                }
-            } else {
-                self.latched_down.remove(&key);
-            }
-            if !pressed {
-                self.after_poll.retain(|kept| *kept != key);
-            }
-            if pressed {
-                self.held.insert(key);
-            } else {
-                self.held.remove(&key);
-            }
+        else {
+            return;
+        };
+        self.sync_escort_keys();
+        if !self.is_flight_key(input) {
+            return;
         }
+        let waits_held = |command: &Command| {
+            matches!(
+                command,
+                Command::Flight(F::LandDock) | Command::Play(PlayCommand::MissionInfo)
+            )
+        };
+        if repeat && self.keys.bound_to(input).iter().any(waits_held) {
+            return;
+        }
+        let meant = self.keys.meanings(input);
+        if repeat {
+            if meant
+                .iter()
+                .any(|command| self.latched_down.contains(command))
+            {
+                return;
+            }
+        } else if pressed {
+            self.latched_down.retain(|command| !meant.contains(command));
+        }
+        if !pressed {
+            self.after_poll.retain(|kept| !kept.same_key(input));
+        }
+        self.keys.follow(input);
+        self.latched_down.retain(|&command| self.keys.held(command));
     }
 
     /// Lets go of the flight keys and the mouse button: flight is giving
@@ -508,7 +560,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_back_live_input`]); a path that misses it
     /// leaves the keys let go, never stuck down. The paths that keep the
     /// input in flight (a gate's exit, the course map opened over a
-    /// screen) let go of `held` alone, as their releases still come here,
+    /// screen) let go of the held keys alone ([`FlightView::let_go_of_held`]), as their releases still come here,
     /// and the course map opened in flight and a gate's exit keep the
     /// keys read with no latch, B and L among them
     /// ([`FlightView::open_map_as`], `FlightView::came_through`). The
@@ -519,11 +571,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (the `dialog_latch` module); a site's dialog opens through
     /// [`FlightView::let_go_into_dialog`].
     pub(super) fn let_go_of_input(&mut self) {
-        self.held.clear();
+        self.keys.let_go();
         self.latched_down.clear();
         self.after_poll.clear();
         self.faded_keys.forget();
         self.cursor.button(false);
+    }
+
+    /// Lets go of the keys of the held commands alone, as the course map
+    /// opened over a screen does, whose releases still come here: a key
+    /// whose commands a close latched stays down, waiting for its release
+    /// ([`FlightView::latched_down`]).
+    pub(super) fn let_go_of_held(&mut self) {
+        for press in self.keys.down() {
+            let latched = self
+                .keys
+                .meanings(&press)
+                .iter()
+                .any(|command| self.latched_down.contains(command));
+            if !latched {
+                self.keys.follow(&press.released());
+            }
+        }
+        self.latched_down.retain(|&command| self.keys.held(command));
     }
 
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
@@ -537,14 +607,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::held_keys_frame`]'s frame. So a latched key holds
     /// the latch it shares: a latched H keeps a fresh \` from acting
     /// (@0x69ae6), a latched slot key a fresh one from picking (@0x69e15).
+    ///
+    /// Option is read with Nav Off's key: [`F::ClearTarget`] down is Nav
+    /// Off's key down with Option, so Option let go of with it still down
+    /// is a fresh Nav Off, as the original reads Option on every frame.
     pub(super) fn nav_held_frame(&mut self) {
-        let down = |key: Key| self.reads_down(key);
-        let (nav_off, option, h) = (
-            down(NAV_OFF_KEY),
-            down(Key::AltLeft),
-            down(HYPERSPACE_MODE_KEY),
-        );
-        let select = down(HYPER_SELECT_KEY);
+        let option = self.reads_down(F::ClearTarget);
+        let nav_off = option || self.reads_down(F::NavOff);
+        let h = self.reads_down(F::HyperspaceMode);
+        let select = self.reads_down(F::HyperSelect);
         if self.takes(PlayerCommand::Nav) {
             self.nav_keys_frame(nav_off, option, h);
         }
@@ -564,41 +635,65 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.gates.takes(command)
     }
 
-    /// A press of `key`, if it works the stellar navigation target. 1-4,
-    /// like F1-F4, select the stellar in their slot
-    /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
-    /// its groups instead and never reach here ([`FlightView::escort_key`]).
-    /// F5 and Command-5 select the nearest ([`NEAREST_STELLAR_KEY`],
-    /// [`NEAREST_STELLAR_COMMAND_KEY`]); each of these goes to the slot
-    /// block's next frame ([`FlightView::slot_keys_frame`]). Nav Off turns
-    /// the nav system off, or with Option held lets go of the ship target
-    /// ([`NAV_OFF_KEY`]).
-    pub(super) fn nav_key(&mut self, key: Key) {
-        // The 5 alone goes too: the block picks nothing with it.
-        if slot_block::is_block_key(key) {
-            let menu_open = self.escort_menu.is_open();
-            let down: HashSet<Key> = self.keys_down().collect();
+    /// A press of `command`, if it works the stellar navigation target.
+    /// The stellar slots, 1-4 or their F-key twins, select the stellar in
+    /// their slot ([`F::StellarSlot1`] and on); while the escort menu is
+    /// open, 1-5 pick its groups instead and never reach here
+    /// ([`FlightView::escort_command`]). The nearest stellar, F5 or Command-5,
+    /// selects the nearest ([`F::NearestStellar`]); each of these goes to
+    /// the slot block's next frame ([`FlightView::slot_keys_frame`]), by
+    /// its key's `column`, its binding or its fixed twin. Nav Off turns
+    /// the nav system off, and with Option held ([`F::ClearTarget`]) lets
+    /// go of the ship target.
+    pub(super) fn nav_command(&mut self, command: Command, column: Column) {
+        if slot_block::is_block_command(command) {
+            let down = self.slot_columns_down();
             self.slot_block
-                .press(key, |key| down.contains(&key), menu_open);
-        } else if key == NAV_OFF_KEY {
-            self.press_nav_block(key);
+                .press(command, column, |other, at| down.contains(&(other, at)));
+        } else if let Command::Flight(pressed @ (F::NavOff | F::ClearTarget)) = command {
+            self.press_nav_block(pressed);
         }
     }
 
-    /// One frame of the stellar slot keys' block, with the keys held and
-    /// pressed since the last ([`slot_block`]): skipped
+    /// One frame of the stellar slot keys' block, with the commands held
+    /// and pressed since the last ([`slot_block`]): skipped
     /// while a jump is under way (@0x69d2b-0x69d32) or the session refuses
     /// the nav keys, otherwise at most one stellar picked
     /// ([`FlightView::select_stellar`]).
     pub(super) fn slot_keys_frame(&mut self) {
         let polled = self.slot_block_polled();
-        let menu_open = self.escort_menu.is_open();
-        let down: HashSet<Key> = self.keys_down().collect();
+        let down = self.slot_columns_down();
         let picked = self
             .slot_block
-            .frame(|key| down.contains(&key), menu_open, polled);
+            .frame(|command, at| down.contains(&(command, at)), polled);
         if let Some(pick) = picked {
             self.select_stellar(pick);
+        }
+    }
+
+    /// The slot block's commands read down, each with the column of each
+    /// key holding it: its binding's or its fixed twin's.
+    fn slot_columns_down(&self) -> Vec<(Command, Column)> {
+        let presses = self.keys.down();
+        self.commands_down()
+            .filter(|&command| slot_block::is_block_command(command))
+            .flat_map(|command| {
+                presses
+                    .iter()
+                    .filter(move |press| self.keys.meanings(press).contains(&command))
+                    .map(move |press| (command, self.column_of(press, command)))
+            })
+            .collect()
+    }
+
+    /// Which column the key of `input` holds `command` by: its fixed twin
+    /// ([`CommandReader::is_twin`](crate::keymap::CommandReader::is_twin))
+    /// or its binding.
+    pub(super) fn column_of(&self, input: &Input, command: Command) -> Column {
+        if self.keys.is_twin(input, command) {
+            Column::Twin
+        } else {
+            Column::Bound
         }
     }
 
@@ -619,54 +714,65 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// queued input.
     #[cfg(any(test, feature = "fixture"))]
     pub fn input_queued(&self) -> bool {
-        let menu_open = self.escort_menu.is_open();
+        let down = self.slot_columns_down();
         self.slot_block.queued(
-            |down| self.reads_down(down),
-            menu_open,
+            |command, at| down.contains(&(command, at)),
             self.slot_block_polled(),
         )
     }
 
-    /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
-    /// ([`HYPERSPACE_MODE_KEY`]). The press's own frame shows the floating
-    /// map: H's always (presses are taken only outside a jump), and
-    /// `\`'s when it leaves the mode at 3, unless it found no system. A tap released before the next tick
-    /// still shows it, as the frame's key poll would see it down.
+    /// A press of Hyper Select ([`F::HyperSelect`]) or Hyperspace Mode
+    /// ([`F::HyperspaceMode`]). The press's own frame shows the floating
+    /// map: Hyperspace Mode's always (presses are taken only outside a
+    /// jump), and Hyper Select's when it leaves the mode at 3, unless it
+    /// found no system. A tap released before the next tick still shows
+    /// it, as the frame's key poll would see it down.
     ///
     /// Each runs its key's routine with the key counted as down, its latch
-    /// first cleared as the release before the press clears it: `\`'s
-    /// always, H's unless \` without Option is still down, when the
-    /// latch holds and H only shows the map (@0x69b8e-0x69ba3).
+    /// first cleared as the release before the press clears it: Hyper
+    /// Select's always, Hyperspace Mode's unless Nav Off without Option is
+    /// still down, when the latch holds and H only shows the map
+    /// (@0x69b8e-0x69ba3).
     ///
     /// A flight that failed to start shows nothing here: its frame's nav is
     /// off, and its floating map has no drawing.
-    pub(super) fn hyperspace_key(&mut self, key: Key) {
-        if key == HYPER_SELECT_KEY {
+    pub(super) fn hyperspace_command(&mut self, pressed: F) {
+        if pressed == F::HyperSelect {
             self.select_latch = false;
             self.select_frame(true);
             if matches!(self.frame.nav_mode, NavMode::Hyperspace(_)) {
                 self.show_floating_map();
             }
         } else {
-            self.press_nav_block(key);
+            self.press_nav_block(pressed);
             self.show_floating_map();
         }
     }
 
-    /// A fresh press of \` or H ([`NAV_OFF_KEY`], [`HYPERSPACE_MODE_KEY`]):
+    /// A fresh press of Nav Off, with Option or not ([`F::NavOff`],
+    /// [`F::ClearTarget`]), or Hyperspace Mode ([`F::HyperspaceMode`]):
     /// the OS sends one only after a release, which clears the block's
-    /// latch unless the block's other keys still hold it (H for \`; \`
-    /// without Option for H). Then the block runs with the key down
-    /// ([`FlightView::nav_keys_frame`]).
-    fn press_nav_block(&mut self, key: Key) {
-        let down = |read: Key| key == read || self.reads_down(read);
-        let option = self.held.contains(&Key::AltLeft);
-        let others = if key == NAV_OFF_KEY {
-            self.reads_down(HYPERSPACE_MODE_KEY)
+    /// latch unless the block's other keys still hold it (Hyperspace Mode
+    /// for Nav Off; Nav Off without Option for Hyperspace Mode). Then the
+    /// block runs with the key down ([`FlightView::nav_keys_frame`]).
+    fn press_nav_block(&mut self, pressed: F) {
+        let nav_off_pressed = matches!(pressed, F::NavOff | F::ClearTarget);
+        let option = if nav_off_pressed {
+            pressed == F::ClearTarget
         } else {
-            self.reads_down(NAV_OFF_KEY) && !option
+            self.reads_down(F::ClearTarget)
         };
-        let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
+        let nav_off_down = self.reads_down(F::NavOff) || self.reads_down(F::ClearTarget);
+        let h_down = self.reads_down(F::HyperspaceMode);
+        let others = if nav_off_pressed {
+            h_down
+        } else {
+            nav_off_down && !option
+        };
+        let (nav_off, h) = (
+            nav_off_pressed || nav_off_down,
+            pressed == F::HyperspaceMode || h_down,
+        );
         if !others {
             self.nav_latch = false;
         }
@@ -795,9 +901,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
         let mode_3 = matches!(self.frame.nav_mode, NavMode::Hyperspace(_));
-        let h = self.reads_down(HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
+        let h = self.reads_down(F::HyperspaceMode) && !jumping && self.takes(PlayerCommand::Nav);
         let backslash =
-            self.reads_down(HYPER_SELECT_KEY) && mode_3 && self.takes(PlayerCommand::SelectSystem);
+            self.reads_down(F::HyperSelect) && mode_3 && self.takes(PlayerCommand::SelectSystem);
         if h || backslash {
             self.show_floating_map();
         }
@@ -846,24 +952,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight reads is down (`_quickKeyCheckResult` and the modifiers,
     /// @0x70f4e-0x70fb5), a latched one held past a close included, as
     /// `_QuickKeyCheck` sets the result for any key it reads down
-    /// (@0xa145-0xa14c), `-` steps it out and `=` or keypad `+` in. A `-`,
-    /// X or K held alone doesn't count: `_HandlePlayer` checks each only
-    /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
-    /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One
-    /// that changes the scale shows the map again and raises
+    /// (@0xa145-0xa14c), Zoom Out steps it out and Zoom In in. The eject,
+    /// jettison and self-destruct keys held alone don't count:
+    /// `_HandlePlayer` checks each only with Command down (@0x6fdc8,
+    /// @0x6f2a5), so alone they hold no command and never set
+    /// `_quickKeyCheckResult`, and Command itself holds the zoom back, as
+    /// any modifier does ([`CommandReader::modifier_down`](crate::keymap::CommandReader::modifier_down)).
+    /// One that changes the scale shows the map again and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
-    pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        let holds = self.keys_down().any(|down| {
-            self.slot_key_polled(down, true).unwrap_or(!matches!(
-                down,
-                SELF_DESTRUCT_KEY | EJECT_KEY | JETTISON_KEY
-            ))
-        });
+    pub(super) fn zoom_floating(&mut self, pressed: F) {
+        let holds = self.keys.modifier_down()
+            || self.commands_down().any(|down| {
+                self.slot_polled(down, true).unwrap_or(!matches!(
+                    down,
+                    Command::Flight(
+                        F::SelfDestruct | F::Eject | F::JettisonCargo | F::JettisonNonMission
+                    )
+                ))
+            });
         if !self.floating.is_up() || holds {
             return;
         }
-        let moved = if key == ZOOM_OUT_KEY {
+        let moved = if pressed == F::ZoomOut {
             self.floating.zoom_out()
         } else {
             self.floating.zoom_in()
@@ -874,23 +985,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// For a held stellar slot key `key` (1-4, F1-F5 or the 5), whether
-    /// `_HandlePlayer` polls it this frame and so finds it down; `None` for
-    /// any other key. The slot block polls F1-F5 always, 1-4 with the
-    /// escort menu shut and the 5 with the menu shut, Command down and F5
-    /// up (@0x69d38-0x69dda, the menu's mask @0xa106-0xa124), and none of
-    /// them during a jump (@0x69d2b-0x69d32). With `escort_loop`, the
-    /// escort menu's loop counts too: it polls 1-5 while the menu shows,
-    /// during a jump too (@0x6df4a-0x6e186), setting
-    /// `_quickKeyCheckResult` (@0xa18a-0xa191) but not the cursor's fade.
-    pub(super) fn slot_key_polled(&self, key: Key, escort_loop: bool) -> Option<bool> {
-        if !slot_block::is_block_key(key) {
-            return None;
+    /// For a held command of the stellar slot block or the escort menu's
+    /// groups, whether `_HandlePlayer` polls its key this frame and so
+    /// finds it down; `None` for any other. The slot block polls its
+    /// commands always but during a jump (@0x69d2b-0x69d32), the escort
+    /// menu hiding 1-5 from it (@0xa106-0xa124) as flight's reader reads
+    /// them as the groups then. With `escort_loop`, the escort menu's loop
+    /// counts too: it polls 1-5 while the menu shows, during a jump too
+    /// (@0x6df4a-0x6e186), setting `_quickKeyCheckResult`
+    /// (@0xa18a-0xa191) but not the cursor's fade.
+    pub(super) fn slot_polled(&self, command: Command, escort_loop: bool) -> Option<bool> {
+        if let Command::EscortMenu(_) = command {
+            return Some(escort_loop);
         }
-        let menu_open = self.escort_menu.is_open();
-        let block = !self.jump_under_way()
-            && slot_block::block_polls(key, |down| self.reads_down(down), menu_open);
-        Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
+        slot_block::is_block_command(command).then(|| !self.jump_under_way())
     }
 
     /// Draws the floating map while it is up: centred on the current
@@ -927,38 +1035,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::SelectTarget(pick));
     }
 
-    /// A press of Target Select ([`TARGET_KEY`]): the next ship, the
-    /// previous with Shift, each among the player's escorts with Option
-    /// ([`FlightCommand::SelectTarget`]).
-    pub(super) fn press_target_key(&mut self) {
-        let (shift, option) = (
-            self.held.contains(&Key::ShiftLeft),
-            self.held.contains(&Key::AltLeft),
-        );
-        self.select_target(match (shift, option) {
-            (false, false) => TargetPick::Next,
-            (false, true) => TargetPick::NextEscort,
-            (true, false) => TargetPick::Previous,
-            (true, true) => TargetPick::PreviousEscort,
+    /// A press of Target Select (`pressed`, [`F::TargetSelect`] or a
+    /// variant): the next ship, the previous with Shift, each among the
+    /// player's escorts with Option ([`FlightCommand::SelectTarget`]).
+    pub(super) fn pick_target(&mut self, pressed: F) {
+        self.select_target(match pressed {
+            F::TargetEscort => TargetPick::NextEscort,
+            F::TargetSelectBack => TargetPick::Previous,
+            F::TargetEscortBack => TargetPick::PreviousEscort,
+            _ => TargetPick::Next,
         });
     }
 
-    /// A press of Closest Target ([`NEAREST_KEY`]): the nearest threat, or
-    /// the nearest ship with Option ([`FlightCommand::SelectTarget`]).
-    pub(super) fn press_nearest_key(&mut self) {
-        self.select_target(if self.held.contains(&Key::AltLeft) {
+    /// A press of Closest Target (`pressed`): the nearest threat, or the
+    /// nearest ship with Option ([`F::ClosestShip`],
+    /// [`FlightCommand::SelectTarget`]).
+    pub(super) fn pick_nearest(&mut self, pressed: F) {
+        self.select_target(if pressed == F::ClosestShip {
             TargetPick::Nearest
         } else {
             TargetPick::NearestThreat
         });
     }
 
-    /// A press of Weapon Select ([`SELECT_KEY`]), backwards with Option
-    /// held ([`FlightCommand::SelectWeapon`]). Option is read at the press,
-    /// the original reading it at the pass (@0x6acf6): the press is taken
-    /// on the next step, before a frame is drawn.
-    pub(super) fn press_weapon_select(&mut self) {
-        let backwards = self.held.contains(&Key::AltLeft);
+    /// A press of Select Secondary (`pressed`), backwards with Option
+    /// ([`F::SelectSecondaryBack`], [`FlightCommand::SelectWeapon`]).
+    /// Option is read at the press, the original reading it at the pass
+    /// (@0x6acf6): the press is taken on the next step, before a frame is
+    /// drawn.
+    pub(super) fn select_weapon(&mut self, pressed: F) {
+        let backwards = pressed == F::SelectSecondaryBack;
         self.send(FlightCommand::SelectWeapon { backwards });
     }
 }

@@ -31,7 +31,7 @@ use crate::flight::catalog::ShipSprites;
 use crate::flight::catalog::{
     Blink, BoomLook, GovtId, LayerSheet, StarSheet, StatusBarLayout, WeaponLook,
 };
-use crate::flight::escorts::{GROUP_KEYS, MENU_KEY, NO_ESCORTS};
+use crate::flight::escorts::NO_ESCORTS;
 use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
 use crate::flight::jump::JumpPhase;
 use crate::flight::radar::RadarStellar;
@@ -48,7 +48,7 @@ use crate::system::scene::PLACEHOLDER;
 use crate::system::{scene, starfield};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{DrawList, ImageKey, Input, MouseButton, Screen, ScreenAction};
+use crate::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 use nova_sim::ShipIff;
 use nova_sim::flight_frame::{
     Answer, FlightCommand, FlightFrame, MapClick, MapOpen, MapScreen, MarksFrom, Names,
@@ -106,6 +106,7 @@ mod frames;
 mod hyperspace;
 mod kept_frame;
 mod key_fades;
+mod keys;
 mod landing;
 mod layers;
 mod live_keys;
@@ -136,6 +137,7 @@ use crate::flight::fake_catalog::*;
 // The fixture's `look`, not the view's.
 use crate::flight::fake_catalog::look;
 use frames::*;
+use keys::*;
 
 /// Where flight draws the player's ship in Nova's own 1024 x 768 by the
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's

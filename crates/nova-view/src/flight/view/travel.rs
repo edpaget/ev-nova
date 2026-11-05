@@ -15,13 +15,15 @@ use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{MapCycle, MapMode, PendingPress, PressAnswer};
-use crate::keymap::{Command, MapCommand, UiCommand, is_modifier_input};
+use crate::keymap::{
+    Command, FlightCommand as F, MapCommand, PlayCommand, UiCommand, is_modifier_input,
+};
 use crate::system::catalog::SystemCatalog;
 use crate::view_shape::classic_offset;
 use crate::{DrawList, Input, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
-use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
+use super::{FlightView, Redrawn};
 
 impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
     /// The pilot flying, as the developer tools' desk: its reading and
@@ -75,7 +77,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the arrival tick still counts as jumping, and the first tick after
     /// it is the original's first frame to act (@0x6c625).
     pub(super) fn held_keys_frame(&mut self) {
-        let (jump, board) = (self.reads_down(JUMP_KEY), self.held.contains(&BOARD_KEY));
+        let (jump, board) = (self.reads_down(F::HyperJump), self.held(F::Board));
         self.nav_held_frame();
         self.target_poll();
         // The Board key's and the jump's frames ask their own gates
@@ -294,7 +296,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The input while the map waits for [`MAP_KEY`]'s release to close
+    /// The input while the map waits for the map key's release to close
     /// (`_DoSystemMap`'s `BusyIdle` loop, @0x13a2e-0x13a46): M's release
     /// runs the close `close`, and nothing else does anything, as the loop
     /// reads no events.
@@ -304,11 +306,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_map_replay`]; the `map_wait` module). Over
     /// flight nothing reads them, and what is still down is already held.
     fn closing_input(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
-        if let Input::Key {
-            key: MAP_KEY,
-            pressed: false,
-            ..
-        } = *input
+        if let Input::Key { pressed: false, .. } = *input
+            && self.is_map_key(input)
         {
             self.map_key_held = false;
             self.map_replay = self.wait_keys.finish();
@@ -398,7 +397,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if by == MapOpening::Plain {
             self.keep_unlatched_keys();
         } else {
-            self.held.clear();
+            self.let_go_of_held();
         }
         self.map_open = true;
         if let Some(sources) = borders {
@@ -468,7 +467,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
+    /// Opens the course map on a press of the map key in flight, held from
     /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
     /// not the map's: the hypergate's map opens without it.
     pub(super) fn open_map_by_key(&mut self) {
@@ -486,7 +485,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::close_map`]'s in port.
     ///
     /// The bar asks for it only on the map key (`_BarFilter`'s item 8), so
-    /// it opens with [`MAP_KEY`] held, and a close before its release
+    /// it opens with the map key held, and a close before its release
     /// waits for it ([`FlightView::close_map`]).
     pub fn open_bar_map(&mut self) {
         self.open_map_as(MapOpening::Bar);
@@ -496,14 +495,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::map_input`]'s input, translated into the map's frame,
     /// before the panels follow the selection: whether it closes the map,
     /// which the caller then does ([`FlightView::close_map`]), at once.
-    /// A key-down the filter doesn't take with [`MAP_KEY`] held closes it
+    /// A key-down the filter doesn't take with the map key held closes it
     /// before anything else; Return or Done after the rest.
     pub(super) fn map_input_taken(&mut self, input: &Input) -> bool {
-        if let Input::Key {
-            key: MAP_KEY,
-            pressed,
-            ..
-        } = *input
+        if let Input::Key { pressed, .. } = *input
+            && self.is_map_key(input)
         {
             self.map_key_held = pressed;
         }
@@ -592,6 +588,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         self.redraw_map();
         self.retake_nav();
+    }
+
+    /// Whether `input` (a press, a repeat or a release) is of the map
+    /// key, the key flight's reader reads as
+    /// [`PlayCommand::GalaxyMap`]: what the map's own close waits on.
+    pub(super) fn is_map_key(&self, input: &Input) -> bool {
+        self.keys.means(input) == Some(Command::Play(PlayCommand::GalaxyMap))
     }
 
     /// Whether `_MapFilter` takes `input`'s key before its map-key close,

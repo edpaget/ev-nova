@@ -325,7 +325,7 @@ fn reentering_shuts_the_escort_menu_and_starts_the_cursor_hidden() {
     open_held(&mut screen);
     enter_ship(&mut screen);
     screen.tick(TICK);
-    tap(&mut screen, nova_view::flight::escorts::MENU_KEY);
+    tap(&mut screen, Key::KeyE);
     assert!(flight(&screen).escort_menu().is_open());
     screen.input(&Input::PointerMoved(Point::new(300.0, 300.0)));
     assert!(flight(&screen).cursor_at().is_some());
@@ -513,7 +513,7 @@ fn command_tab_away_during_the_entry_leaves_command_up_in_flight() {
     into_play(&mut screen);
     no_arrow_held(&mut screen);
     assert_eq!(pilot(&screen).held(FOOD), 5, "carried into play");
-    tap(&mut screen, nova_view::flight::view::JETTISON_KEY);
+    tap(&mut screen, Key::KeyK);
     screen.tick(TICK);
     assert_eq!(
         pilot(&screen).held(FOOD),

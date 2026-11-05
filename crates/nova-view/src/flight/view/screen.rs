@@ -9,19 +9,12 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
+use crate::keymap::{Command, FlightCommand as F, PlayCommand};
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{
-    Diagnostic, DrawList, Input, Key, MouseButton, Screen, ScreenAction, Sound, ViewShape,
-};
+use crate::{Diagnostic, DrawList, Input, MouseButton, Screen, ScreenAction, Sound, ViewShape};
 
-use super::{
-    BOARD_KEY, FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
-    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
-};
+use super::FlightView;
 
 impl<
     C: CombatLooks
@@ -38,7 +31,7 @@ impl<
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, M, L, P, Y and I are kept for the pass
     /// that reads them (the `faded_keys` module), and any other press
-    /// goes on only when [`FlightView::taken_during_jump`] takes it; a
+    /// goes on only when [`FlightView::taken_in_jump`] takes it; a
     /// click in space selects nothing then, as [`Session::select_stellar`](nova_sim::Session::select_stellar)
     /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
     /// keys taken during a jump, each key's [`PlayerCommand`] is asked of
@@ -140,7 +133,7 @@ impl<
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
-    /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
+    /// and coasts. The map key counts as let go too, so a key-down the
     /// course map doesn't take no longer closes it, and a map waiting for
     /// M's release closes ([`FlightView::close_map`]): ours can't read the
     /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
@@ -239,6 +232,7 @@ impl<
             return;
         }
         self.elapse_frame_rate(dt);
+        self.sync_escort_keys();
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
@@ -290,18 +284,13 @@ impl<
 
     /// `press`, if a jump under way lets it through and the flight takes
     /// its command.
-    pub(super) fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
+    pub(super) fn press_taken(&self, press: Option<Command>, jumping: bool) -> Option<Command> {
         let press = if jumping {
-            let option = self.held.contains(&Key::AltLeft);
-            let menu_open = self.escort_menu.is_open();
-            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
+            press.filter(|&command| Self::taken_in_jump(command))
         } else {
             press
         };
-        press.filter(|&key| {
-            self.command_of(key)
-                .is_none_or(|command| self.takes(command))
-        })
+        press.filter(|&command| Self::player_command(command).is_none_or(|sent| self.takes(sent)))
     }
 
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
@@ -317,13 +306,16 @@ impl<
             self.movie_input(input);
             return ScreenAction::None;
         }
+        self.sync_escort_keys();
         self.cursor_input(input);
+        // What a fresh press means, with the modifiers held as flight
+        // reads them, before flight follows it.
         let press = match *input {
             Input::Key {
-                key,
                 pressed: true,
                 repeat: false,
-            } => Some(key),
+                ..
+            } => self.keys.peek(input),
             _ => None,
         };
         let jumping = self.jump_under_way();
@@ -335,7 +327,7 @@ impl<
                 self.track_unlatched(input);
             }
             // M types into Find while it is open.
-            if press == Some(MAP_KEY) && !self.map.finding() {
+            if press == Some(Command::Play(PlayCommand::GalaxyMap)) && !self.map.finding() {
                 // M's own close reads M held, so it waits for the release.
                 self.map_key_held = true;
                 self.close_map();
@@ -353,67 +345,90 @@ impl<
         {
             self.press_button_latched(at);
         }
-        match self.press_taken(press, jumping) {
-            Some(LAND_KEY) => {
+        if let Some(action) = self.act_on_press(self.press_taken(press, jumping), input) {
+            return action;
+        }
+        self.track_held(input);
+        ScreenAction::None
+    }
+
+    /// What a fresh press of `input`, its command `press` if flight takes
+    /// it, does: `Some` of the screen's action when what it opened takes
+    /// the key's release, so flight doesn't hold it.
+    fn act_on_press(&mut self, press: Option<Command>, input: &Input) -> Option<ScreenAction> {
+        match press {
+            Some(Command::Flight(F::LandDock)) => {
                 self.press_land();
                 // The hypergate's map takes its release, as M's does.
                 if self.map_open {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(BOARD_KEY) => {
+            Some(Command::Flight(F::Board)) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
                 self.board_frame(true);
                 // The plunder screen or a boarding offer's dialog opened:
                 // it takes B's release, so B isn't held.
                 if self.pending_boarding || self.pending_offer.is_some() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(HAIL_KEY) => {
-                self.hail();
+            Some(Command::Flight(pressed @ (F::Communicate | F::HailStellar))) => {
+                self.hail_at(pressed == F::HailStellar);
                 if self.hail_opened() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(MAP_KEY) => {
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
                 self.open_map_by_key();
-                return ScreenAction::None;
+                return Some(ScreenAction::None);
             }
-            Some(JUMP_KEY) => {
+            Some(Command::Flight(F::HyperJump)) => {
                 // A fresh press follows a release, which clears the latch.
                 self.jump_latch = false;
                 self.jump_frame(true);
             }
-            Some(JETTISON_KEY) => self.jettison(),
-            Some(MISSION_INFO_KEY) => {
+            Some(Command::Flight(pressed @ (F::JettisonCargo | F::JettisonNonMission))) => {
+                self.jettison_tap(pressed);
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
                 self.press_mission_info();
                 if self.pending_mission_info.is_some() {
-                    return ScreenAction::None;
+                    return Some(ScreenAction::None);
                 }
             }
-            Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
-            Some(PLAYER_INFO_KEY) => {
+            Some(Command::Flight(F::ShowFramerate)) => self.toggle_frame_rate(),
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
                 let action = self.ask_player_info();
                 if !self.pending_player_info {
                     self.track_held(input);
                 }
-                return action;
+                return Some(action);
             }
-            Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
-            Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
-                self.zoom_floating_map(key);
+            Some(Command::Flight(pressed @ (F::HyperSelect | F::HyperspaceMode))) => {
+                self.hyperspace_command(pressed);
             }
-            Some(TARGET_KEY) => self.press_target_latched(),
-            Some(key) if self.escort_key(key) => {}
-            Some(NEAREST_KEY) => self.press_nearest_key(),
-            Some(SELECT_KEY) => self.press_weapon_select(),
-            Some(key) => self.nav_key(key),
+            Some(Command::Flight(pressed @ (F::ZoomOut | F::ZoomIn))) => {
+                self.zoom_floating(pressed);
+            }
+            Some(Command::Flight(
+                pressed @ (F::TargetSelect
+                | F::TargetSelectBack
+                | F::TargetEscort
+                | F::TargetEscortBack),
+            )) => self.press_target_latched(pressed),
+            Some(command) if self.escort_command(command) => {}
+            Some(Command::Flight(pressed @ (F::ClosestTarget | F::ClosestShip))) => {
+                self.pick_nearest(pressed);
+            }
+            Some(Command::Flight(pressed @ (F::SelectSecondary | F::SelectSecondaryBack))) => {
+                self.select_weapon(pressed);
+            }
+            Some(command) => self.nav_command(command, self.column_of(input, command)),
             None => {}
         }
-        self.track_held(input);
-        ScreenAction::None
+        None
     }
 
     /// Draws the scene and its HUD, the fades left out: whether there was

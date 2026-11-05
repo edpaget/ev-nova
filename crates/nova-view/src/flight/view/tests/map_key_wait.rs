@@ -248,7 +248,7 @@ fn option_command_and_shift_pressed_during_the_wait_stay_down_after_the_close() 
         view.input(&key(MAP, true));
         view.input(&key(k, true));
         view.input(&key(MAP, false));
-        assert!(view.held.contains(&k), "{k:?} reads down");
+        assert!(view.holds_key(k), "{k:?} reads down");
     }
     let mut view = faked_m_open();
     view.input(&key(MAP, true));
@@ -319,7 +319,7 @@ fn a_latched_key_held_past_the_close_waits_for_its_release() {
             [],
             "{k:?} sends nothing"
         );
-        assert!(!view.held.contains(&k), "{k:?} not held");
+        assert!(!view.holds_key(k), "{k:?} not held");
     }
 }
 
@@ -332,7 +332,7 @@ fn b_pressed_under_the_map_boards_after_its_close() {
     view.input(&key(BOARD_KEY, true));
     let from = sent_count(&view);
     view.input(&key(MAP, false));
-    assert!(view.held.contains(&BOARD_KEY), "B held");
+    assert!(view.holds_key(BOARD_KEY), "B held");
     view.tick(TICK);
     assert!(
         sent_since(&view, from).contains(&FlightCommand::Board),
@@ -366,7 +366,7 @@ fn a_jump_key_pressed_on_ms_map_and_held_past_its_close_ignores_its_repeats_unti
     let from = sent_count(&view);
     repeats(&mut view, JUMP_KEY);
     assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(!view.holds_key(JUMP_KEY));
     view.input(&key(JUMP_KEY, false));
     view.input(&key(JUMP_KEY, true));
     assert!(jumped_since(&view, from), "let go and pressed afresh");
@@ -382,7 +382,7 @@ fn a_jump_key_held_from_before_m_ignores_its_repeats_after_the_close() {
     let from = sent_count(&view);
     repeats(&mut view, JUMP_KEY);
     assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(!view.holds_key(JUMP_KEY));
 }
 
 #[test]
@@ -396,7 +396,7 @@ fn a_jump_key_first_seen_on_ms_map_by_a_repeat_ignores_its_repeats_until_let_go(
     let from = sent_count(&view);
     repeats(&mut view, JUMP_KEY);
     assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(!view.holds_key(JUMP_KEY));
     view.input(&key(JUMP_KEY, false));
     view.input(&key(JUMP_KEY, true));
     assert!(jumped_since(&view, from), "let go and pressed afresh");
@@ -411,7 +411,7 @@ fn a_latched_key_let_go_on_the_map_is_tracked_afresh_after_the_close() {
     tap(&mut view, MAP);
     // A repeat is a first sight of a key whose press went elsewhere.
     view.input(&held(JUMP_KEY));
-    assert!(view.held.contains(&JUMP_KEY));
+    assert!(view.holds_key(JUMP_KEY));
 }
 
 #[test]
@@ -419,11 +419,11 @@ fn a_jump_key_held_across_a_faded_refusal_ignores_its_repeats() {
     // `_DoPlayerInfoDialog`'s guard refuses, and `_SetAllKeyCmdFlags`
     // follows (@0x70393).
     let mut view = faked_sol(in_sol());
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     view.sim.queue_answer(Answer::PlayerInfoFaded);
     assert!(view.press_faded_player_info());
     view.input(&held(JUMP_KEY));
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(!view.holds_key(JUMP_KEY));
 }
 
 #[test]
@@ -431,7 +431,7 @@ fn a_latched_key_held_as_the_map_opens_is_let_go() {
     let mut view = faked_sol(in_sol());
     view.input(&key(JUMP_KEY, true));
     view.input(&key(MAP, true));
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(!view.holds_key(JUMP_KEY));
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn every_other_map_clears_the_flight_keys_as_it_opens() {
         let mut view = faked_sol(in_sol());
         view.input(&key(Key::ArrowUp, true));
         view.open_map_as(opening);
-        assert!(view.held.is_empty(), "{opening:?}");
+        assert!(view.holds_no_key(), "{opening:?}");
     }
 }
 
@@ -590,8 +590,8 @@ fn the_wait_is_read_from_its_start_not_from_ms_press() {
 #[test]
 fn a_live_key_handed_over_is_held_only_if_flight_reads_it_with_no_latch() {
     let mut view = faked_sol(in_sol());
-    view.hold_live_key(Key::ArrowUp);
-    view.hold_live_key(JUMP_KEY);
-    assert!(view.held.contains(&Key::ArrowUp));
-    assert!(!view.held.contains(&JUMP_KEY));
+    view.hold_live_key(&key(Key::ArrowUp, true));
+    view.hold_live_key(&key(JUMP_KEY, true));
+    assert!(view.holds_key(Key::ArrowUp));
+    assert!(!view.holds_key(JUMP_KEY));
 }

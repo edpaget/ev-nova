@@ -1,5 +1,5 @@
 //! What [`FlightView`] keeps of the keys pressed while the map waits for
-//! [`MAP_KEY`](super::MAP_KEY)'s release to close (`_DoSystemMap`
+//! the map key's release ([`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)) to close (`_DoSystemMap`
 //! @0x13a2e-0x13a46). All addresses are in `EV Nova.app`'s `EV Nova`
 //! (i386).
 //!
@@ -16,7 +16,7 @@
 //!   `_QuickKeyCheck` @0xa0f5). A key tapped during the wait does nothing
 //!   after the close, and one still down reads as down, whenever it went
 //!   down, before the wait and before the map opened too. So over flight
-//!   the view keeps [`UNLATCHED_KEYS`] and [`OWN_LATCH_KEYS`] held across
+//!   the view keeps the keys of [`UNLATCHED`] and [`OWN_LATCH`] held across
 //!   the map, presses and releases, and everything else is let go as the
 //!   map opens. The latched keys wait for their release, their OS repeats
 //!   included, which the poll never sees ([`FlightView::latched_down`]),
@@ -59,71 +59,98 @@
 //!   character (`_SingleMissionFilter` @0x98e4a); each text dialog opens
 //!   through a `0xff7f` flush (`_EVTextInputDialog` @0x55429).
 
+use super::FlightView;
 use super::dialog_map::MapOpening;
-use super::{
-    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS,
-    FlightView, JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
-};
 use crate::flight::sim_port::FlightSim;
+use crate::keymap::{Command, FlightCommand, Kind, PlayCommand, SharedBindings};
 use crate::{Input, Key};
 
-/// The keys `_HandlePlayer` acts on the moment they read down, with no
-/// latch to wait on, so the map keeps them held: thrust +0x2a (@0x6cb71),
-/// turn +0x26 and +0x28 (@0x6c9cc), reverse +0x2c (@0x6c72f), face-target
-/// +0xe (@0x6aec6), afterburner +0x30 (@0x6cadf), primary +0x4 (@0x6ab06),
-/// secondary +0x6 (@0x6ab87), weapon safety +0x2 (@0x6adc2-0x6addf), the
-/// eject chord +0x22 (@0x6f29e-0x6f2c1), the self-destruct chord +0x24
-/// (@0x6fdb4-0x6fdfc), jettison +0x1e (@0x6fd54-0x6fda1), and raw Option,
-/// Command and Shift (0x3a, 0x37, 0x38).
+/// The key the map key's command, [`PlayCommand::GalaxyMap`], is bound to
+/// in `bindings`, if any: what the map's close waits on. A key wait
+/// compares the key itself (the phase's fixed keys).
+pub(super) fn map_key(bindings: &SharedBindings) -> Option<Key> {
+    bindings.with(|bindings| {
+        bindings
+            .keyboard
+            .combo(PlayCommand::GalaxyMap.into())
+            .map(|combo| combo.key)
+    })
+}
+
+/// A flight command, for the const tables.
+const fn flight(command: FlightCommand) -> Command {
+    Command::Flight(command)
+}
+
+/// The commands `_HandlePlayer` acts on the moment they read down, with
+/// no latch to wait on, so the map keeps their keys held: thrust +0x2a
+/// (@0x6cb71), turn +0x26 and +0x28 (@0x6c9cc), reverse +0x2c (@0x6c72f),
+/// face-target +0xe (@0x6aec6), Option's too, afterburner +0x30
+/// (@0x6cadf), primary +0x4 (@0x6ab06), secondary +0x6 (@0x6ab87), weapon
+/// safety +0x2 (@0x6adc2-0x6addf), the eject chord +0x22
+/// (@0x6f29e-0x6f2c1), the self-destruct chord +0x24 (@0x6fdb4-0x6fdfc)
+/// and jettison +0x1e (@0x6fd54-0x6fda1), Option's too. The raw Option,
+/// Command and Shift (0x3a, 0x37, 0x38) are read live as well: flight's
+/// reader keeps the modifier keys ([`FlightView::key_reads_live`]).
 ///
-/// Every other flight key has a latch `_SetAllKeyCmdFlags` (@0x61e6d)
-/// sets: `_navModeSelectFlag` \` and H (0xdee04), `_navTargetSelectFlag`
-/// `\` (0xdee48), `_navDefaultSelectFlag` the stellar slot keys (0xdede0),
-/// `_weapTargetSelectFlag` Tab (0xdede8), `_mapTryFlag` M (0xdedf8),
-/// `_weapCloseTargFlag` R (0xdee50), `_weapSelectFlag` W (0xdee54),
-/// `_jumpTryFlag` J (0xdee44), `_ackCommFlag` Return (0xdedf4),
-/// `_playerInfoFlag` P (0xdedd4), `_commTryFlag` Y (0xdee0c),
-/// `_missionInfoFlag` I (0xdee00) and `_cloakFlag` U (0xdedfc). B and L
-/// have latches of their own that it doesn't set ([`OWN_LATCH_KEYS`]).
-/// A latched key held past the close still reads down for every read
+/// Every other held flight command has a latch `_SetAllKeyCmdFlags`
+/// (@0x61e6d) sets: `_navModeSelectFlag` Nav Off and Hyperspace Mode
+/// (0xdee04), `_navTargetSelectFlag` Hyper Select (0xdee48),
+/// `_navDefaultSelectFlag` the stellar slots (0xdede0),
+/// `_weapTargetSelectFlag` Target Select (0xdede8), `_mapTryFlag` the
+/// map key (0xdedf8), `_weapCloseTargFlag` Closest Target (0xdee50),
+/// `_weapSelectFlag` Select Secondary (0xdee54), `_jumpTryFlag` Hyper
+/// Jump (0xdee44), `_ackCommFlag` Acknowledge (0xdedf4), `_playerInfoFlag`
+/// Player Info (0xdedd4), `_commTryFlag` Communicate (0xdee0c),
+/// `_missionInfoFlag` Mission Info (0xdee00) and `_cloakFlag` Engage
+/// Cloak (0xdedfc), each Option or Shift variant with its base. Board and
+/// Land have latches of their own that it doesn't set ([`OWN_LATCH`]).
+/// A latched command held past the close still reads down for every read
 /// that skips its latch (the `latched_reads` module).
-pub(super) const UNLATCHED_KEYS: [Key; 15] = [
-    Key::ArrowUp,
-    Key::ArrowLeft,
-    Key::ArrowRight,
-    Key::ArrowDown,
-    FACE_TARGET_KEY,
-    AFTERBURNER_KEY,
-    FIRE_KEY,
-    SECONDARY_KEY,
-    DESELECT_KEY,
-    EJECT_KEY,
-    SELF_DESTRUCT_KEY,
-    JETTISON_KEY,
-    Key::AltLeft,
-    Key::MetaLeft,
-    Key::ShiftLeft,
+pub(super) const UNLATCHED: [Command; 14] = [
+    flight(FlightCommand::Accelerate),
+    flight(FlightCommand::RotateLeft),
+    flight(FlightCommand::RotateRight),
+    flight(FlightCommand::ReverseCourse),
+    flight(FlightCommand::Autopilot),
+    flight(FlightCommand::FaceStellar),
+    flight(FlightCommand::Afterburner),
+    flight(FlightCommand::FirePrimary),
+    flight(FlightCommand::FireSecondary),
+    flight(FlightCommand::WeaponSafety),
+    flight(FlightCommand::Eject),
+    flight(FlightCommand::SelfDestruct),
+    flight(FlightCommand::JettisonCargo),
+    flight(FlightCommand::JettisonNonMission),
 ];
 
-/// The keys whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets: L's
-/// `_dockTryFlag` (0xdee34), set only as L makes a dock request
+/// The commands whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets:
+/// Land's `_dockTryFlag` (0xdee34), set only as L makes a dock request
 /// (@0x6a953) and cleared on a pass L is up or its gate closed
-/// (@0x6a95d), and B's `_boardTryFlag` (0xdee18), set by a board attempt
-/// past its no-target and cloak returns (@0x6504c) and cleared on a pass
-/// B is up (@0x6a9a3). So across a close, a map or a gate's movie they
-/// are read as the unlatched keys are: held whenever physically down and
-/// read on every pass, their own latches deciding
-/// ([`FlightView::board_latch`], the `faded_keys` module's L latch). One
-/// first pressed under the dialog acts at the next pass, its latch clear;
-/// one that acted before it waits for its release, even let go and
-/// pressed again under it, which no pass saw.
-pub(super) const OWN_LATCH_KEYS: [Key; 2] = [LAND_KEY, BOARD_KEY];
+/// (@0x6a95d), and Board's `_boardTryFlag` (0xdee18), set by a board
+/// attempt past its no-target and cloak returns (@0x6504c) and cleared on
+/// a pass B is up (@0x6a9a3). So across a close, a map or a gate's movie
+/// they are read as the unlatched commands are: held whenever their keys
+/// are physically down and read on every pass, their own latches
+/// deciding ([`FlightView::board_latch`], the `faded_keys` module's L
+/// latch). One first pressed under the dialog acts at the next pass, its
+/// latch clear; one that acted before it waits for its release, even let
+/// go and pressed again under it, which no pass saw.
+pub(super) const OWN_LATCH: [Command; 2] = [
+    flight(FlightCommand::LandDock),
+    flight(FlightCommand::Board),
+];
 
-/// Whether flight reads `key` down across a close with no latch of
-/// `_SetAllKeyCmdFlags`' in its way: [`UNLATCHED_KEYS`] and
-/// [`OWN_LATCH_KEYS`].
-pub(super) fn reads_live(key: Key) -> bool {
-    UNLATCHED_KEYS.contains(&key) || OWN_LATCH_KEYS.contains(&key)
+/// Whether flight reads `command` across a close with no latch of
+/// `_SetAllKeyCmdFlags`' in its way: [`UNLATCHED`] and [`OWN_LATCH`].
+pub(super) fn reads_live(command: Command) -> bool {
+    UNLATCHED.contains(&command) || OWN_LATCH.contains(&command)
+}
+
+/// Whether `command` is one a `_SetAllKeyCmdFlags` site latches: a held
+/// flight command not read live.
+pub(super) fn latches(command: Command) -> bool {
+    command.kind() == Kind::Held && !reads_live(command)
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -134,46 +161,80 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .is_some_and(|opened| opened.by == MapOpening::Plain)
     }
 
-    /// Keeps of the keys held only those flight goes on reading live
-    /// across the map ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), as every
-    /// path that calls it runs `_SetAllKeyCmdFlags`, and sets every latch
-    /// it sets ([`FlightView::set_every_latch`]): the latched keys it lets
-    /// go of wait for their release ([`FlightView::latched_down`]),
-    /// repeats and all, still reading down past their latches.
+    /// Whether the key of `input` is one flight holds: a modifier key
+    /// flight reads (the left ones), or a key bound to a held command of flight's contexts, whatever
+    /// modifiers it needs ([`Kind::Held`]; X is the eject key alone too).
+    pub(super) fn is_flight_key(&self, input: &Input) -> bool {
+        self.keys.reads_modifier(input)
+            || self
+                .keys
+                .bound_to(input)
+                .iter()
+                .any(|command| command.kind() == Kind::Held)
+    }
+
+    /// Whether flight reads the key of `input` down across a close with no
+    /// latch in its way: a modifier, or a key bound to one of
+    /// [`UNLATCHED`] or [`OWN_LATCH`].
+    pub(super) fn key_reads_live(&self, input: &Input) -> bool {
+        self.keys.reads_modifier(input) || self.keys.bound_to(input).into_iter().any(reads_live)
+    }
+
+    /// Whether the key of `input` is a latched one: a flight key not read
+    /// live ([`FlightView::key_reads_live`]).
+    pub(super) fn key_latches(&self, input: &Input) -> bool {
+        !self.key_reads_live(input) && self.keys.bound_to(input).into_iter().any(latches)
+    }
+
+    /// Keeps held of the commands held only those flight goes on reading
+    /// live across the map ([`UNLATCHED`], [`OWN_LATCH`]), as every path
+    /// that calls it runs `_SetAllKeyCmdFlags`, and sets every latch it
+    /// sets ([`FlightView::set_every_latch`]): the latched commands it
+    /// lets go of wait for their keys' release
+    /// ([`FlightView::latched_down`]), repeats and all, still reading down
+    /// past their latches.
     pub(super) fn keep_unlatched_keys(&mut self) {
-        let latched: Vec<Key> = self
-            .held
-            .iter()
-            .copied()
-            .filter(|&key| !reads_live(key))
-            .collect();
-        self.held.retain(|&key| reads_live(key));
-        self.latch_held_keys(latched);
+        let latched: Vec<Command> = self.commands_down().filter(|&c| latches(c)).collect();
+        for command in latched {
+            self.latched_down.insert(command);
+            self.latch_command(command);
+        }
         self.set_every_latch();
     }
 
-    /// Notes `keys` down as latched, those flight reads with a latch
-    /// `_SetAllKeyCmdFlags` sets: the flight keys beyond [`UNLATCHED_KEYS`]
-    /// and [`OWN_LATCH_KEYS`], each with its latch set
-    /// ([`FlightView::latch_key`]), as the poll that saw it down or the
-    /// site set it.
-    pub(super) fn latch_held_keys(&mut self, keys: impl IntoIterator<Item = Key>) {
-        let latched = keys
-            .into_iter()
-            .filter(|&key| FLIGHT_KEYS.contains(&key) && !reads_live(key));
-        for key in latched {
-            self.latched_down.insert(key);
-            self.latch_key(key);
+    /// Notes the keys `presses` press as down and latched, those flight
+    /// reads with a latch `_SetAllKeyCmdFlags` sets
+    /// ([`FlightView::key_latches`]): each followed, its latched commands
+    /// waiting for its release, and each latch it could meet set
+    /// ([`FlightView::latch_command`]), as the poll that saw it down or
+    /// the site set it.
+    pub(super) fn latch_keys(&mut self, presses: impl IntoIterator<Item = Input>) {
+        for press in presses {
+            if !self.key_latches(&press) {
+                continue;
+            }
+            for command in self.keys.bound_to(&press) {
+                if latches(command) {
+                    self.latch_command(command);
+                }
+            }
+            self.keys.follow(&press);
+            let latched: Vec<Command> = self
+                .keys
+                .meanings(&press)
+                .into_iter()
+                .filter(|&command| latches(command))
+                .collect();
+            self.latched_down.extend(latched);
         }
     }
 
     /// Tracks `input`'s key as held if it is one flight goes on reading
-    /// live across the map ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]). A
-    /// latched flight key
-    /// isn't held, but its press or repeat is noted as latched and its
-    /// release lets go of it, so the close leaves latched exactly those
-    /// still down ([`FlightView::latched_down`]), however they went down:
-    /// `_SetAllKeyCmdFlags` (@0x6a898) latches every key down at the
+    /// live across the map ([`UNLATCHED`], [`OWN_LATCH`]). A latched
+    /// flight key isn't held, but its press or repeat is noted as latched
+    /// and its release lets go of it, so the close leaves latched exactly
+    /// those still down ([`FlightView::latched_down`]), however they went
+    /// down: `_SetAllKeyCmdFlags` (@0x6a898) latches every key down at the
     /// close, so one first seen here by a repeat, its press gone
     /// elsewhere, is latched as a pressed one is. A gate's movie starts
     /// with the keys flight held, which its come-out sorts
@@ -181,22 +242,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_movie_replay`]), so a latched key pressed under
     /// it acts only once let go and pressed again.
     pub(super) fn track_unlatched(&mut self, input: &Input) {
-        let Input::Key { key, pressed, .. } = *input else {
+        let Input::Key { pressed, .. } = *input else {
             return;
         };
-        if reads_live(key) || !pressed {
-            self.track_held(input);
+        if pressed && self.key_latches(input) {
+            self.latch_keys([*input]);
         } else {
-            self.latch_held_keys([key]);
+            self.track_held(input);
         }
     }
 
-    /// Holds `key` if flight would read it down at once
-    /// ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), for one still down as the
-    /// last dialog over flight closes. Its release comes to flight live.
-    pub fn hold_live_key(&mut self, key: Key) {
-        if reads_live(key) {
-            self.held.insert(key);
+    /// Holds the key `press` presses if flight would read it down at once
+    /// ([`FlightView::key_reads_live`]), for one still down as the last
+    /// dialog over flight closes. Its release comes to flight live.
+    pub fn hold_live_key(&mut self, press: &Input) {
+        if self.key_reads_live(press) {
+            self.keys.follow(press);
         }
     }
 

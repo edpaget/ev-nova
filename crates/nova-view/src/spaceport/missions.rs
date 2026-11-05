@@ -2446,7 +2446,7 @@ mod tests {
         assert!(!info_enabled(&screen, ABORT_LABEL), "@0x283c7-0x283e4");
         click_info(&mut screen, ABORT_ITEM);
         assert_eq!(screen.take_abort(), None, "@0x285a3-0x285b1");
-        screen.input(&key(crate::flight::view::MAP_KEY));
+        screen.input(&key(crate::Key::KeyM));
         assert_eq!(
             screen.take_map_request(),
             Some(MapOpener::MissionInfo(None)),
@@ -2597,9 +2597,9 @@ mod tests {
         assert_eq!(screen.take_accept(), None);
     }
 
-    /// A press, a repeat and a release of [`MAP_KEY`](crate::flight::view::MAP_KEY), in that order.
+    /// A press, a repeat and a release of the map key, M, in that order.
     fn map_keys() -> [Input; 3] {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         [
             Input::Key {
                 key: m,

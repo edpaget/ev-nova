@@ -1027,7 +1027,7 @@ mod tests {
         for pressed in [
             Key::KeyG,
             Key::KeyR,
-            crate::flight::view::MAP_KEY,
+            crate::Key::KeyM,
             crate::ui::mission_info::MISSION_INFO_KEY,
             crate::ui::player_info::PLAYER_INFO_KEY,
         ] {

@@ -72,7 +72,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if matches!(line, MissionBoardLine::Retrieved { .. }) {
             self.latch_at_close();
         }
-        let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
+        let said = mission_board_message(
+            line,
+            Wording::of(&self.names, &self.frame).keyed(self.keys.bindings()),
+        );
         self.say_for(said, BOARD_LINE_TICKS);
     }
 
@@ -105,7 +108,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// with no target, or cloaked, boards on the first frame a target is
     /// taken or the cloak drops, and any other outcome waits for B's
     /// release. No `_SetAllKeyCmdFlags` site sets the latch, so B is held
-    /// across every close (the `map_wait` module's `OWN_LATCH_KEYS`) and
+    /// across every close (the `map_wait` module's `OWN_LATCH`) and
     /// read here at the next frame: first pressed under a dialog, it
     /// boards then.
     ///

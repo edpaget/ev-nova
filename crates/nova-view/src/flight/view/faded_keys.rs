@@ -60,7 +60,7 @@
 //! refused before its pick, leaves it clear, so L held reads again on
 //! every pass ([`FlightView::press_land`]). It is no `_SetAllKeyCmdFlags`
 //! latch, so L is held across every close (the `map_wait` module's
-//! `OWN_LATCH_KEYS`), and the step carries it as the dock approach's
+//! `OWN_LATCH`), and the step carries it as the dock approach's
 //! hold ([`StepInput::dock_try`](nova_sim::flight_frame::StepInput::dock_try)).
 //! I's is, and a site sets it ([`FlightView::set_every_latch`]). A pass in
 //! the pod or dead reaches neither block, so neither latch clears there. Dialog keys stay press-only otherwise, by the user's decision:
@@ -110,29 +110,35 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
+use crate::keymap::{Command, FlightCommand as F, PlayCommand};
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Input, Key, UiSound};
+use crate::{Input, UiSound};
 
-use super::{FlightView, HAIL_KEY, LAND_KEY, MAP_KEY};
+use super::FlightView;
 
-/// The keys kept through a jump, in the pass's order.
-const KEPT_KEYS: [Key; 5] = [
-    MAP_KEY,
-    LAND_KEY,
-    PLAYER_INFO_KEY,
-    HAIL_KEY,
-    MISSION_INFO_KEY,
+/// The map key, the land key's and the rest kept through a jump, in the
+/// pass's order: M, L, P, Y (with Option too) and I.
+const KEPT: [Command; 6] = [
+    Command::Play(PlayCommand::GalaxyMap),
+    Command::Flight(F::LandDock),
+    Command::Play(PlayCommand::PlayerInfo),
+    Command::Flight(F::Communicate),
+    Command::Flight(F::HailStellar),
+    Command::Play(PlayCommand::MissionInfo),
 ];
+
+/// Whether `command` is Communicate, with Option or not.
+const fn is_hail(command: Command) -> bool {
+    matches!(command, Command::Flight(F::Communicate | F::HailStellar))
+}
 
 /// The presses kept through a jump, and L's and I's latches (see the
 /// module docs).
 #[derive(Clone, Debug, Default)]
 pub(super) struct FadedKeys {
-    /// The keys pressed during the jump, not yet read.
-    kept: Vec<Key>,
+    /// The commands pressed during the jump, not yet read.
+    kept: Vec<Command>,
     /// L's latch (0xdee34).
     land_latch: bool,
     /// I's latch (0xdee00).
@@ -140,9 +146,9 @@ pub(super) struct FadedKeys {
 }
 
 impl FadedKeys {
-    /// Keeps `press` if it is one of [`KEPT_KEYS`]: whether it was.
-    pub(super) fn keep(&mut self, press: Option<Key>) -> bool {
-        let kept = press.filter(|key| KEPT_KEYS.contains(key));
+    /// Keeps `press` if it is one of [`KEPT`]: whether it was.
+    pub(super) fn keep(&mut self, press: Option<Command>) -> bool {
+        let kept = press.filter(|command| KEPT.contains(command));
         self.kept.extend(kept);
         kept.is_some()
     }
@@ -163,9 +169,9 @@ impl FadedKeys {
         self.land_latch
     }
 
-    /// `key`'s latch, L's or else I's.
-    fn latch_mut(&mut self, key: Key) -> &mut bool {
-        if key == LAND_KEY {
+    /// `command`'s latch, L's or else I's.
+    fn latch_mut(&mut self, command: Command) -> &mut bool {
+        if command == Command::Flight(F::LandDock) {
             &mut self.land_latch
         } else {
             &mut self.mission_latch
@@ -186,13 +192,13 @@ impl<
 > FlightView<C, S>
 {
     /// A key's `input`, its press `press`, during a jump: whether that's
-    /// all of it. One of [`KEPT_KEYS`] is kept for the pass that reads it,
+    /// all of it. One of [`KEPT`] is kept for the pass that reads it,
     /// the map shut, and tracked as down, whatever comes of it (@0x702d8
     /// has no gate); with the map open P goes nowhere, and the rest are
     /// the map's.
-    pub(super) fn stop_during_jump(&mut self, press: Option<Key>, input: &Input) -> bool {
+    pub(super) fn stop_during_jump(&mut self, press: Option<Command>, input: &Input) -> bool {
         if self.map_open {
-            return press == Some(PLAYER_INFO_KEY);
+            return press == Some(Command::Play(PlayCommand::PlayerInfo));
         }
         let kept = self.faded_keys.keep(press);
         if kept {
@@ -207,21 +213,24 @@ impl<
     /// or dead returns before either block (@0x68ddd, @0x68853), so it
     /// clears neither: L held from before an eject still waits on its
     /// latch after the rescue.
-    fn waiting_keys(&mut self, clearing: bool) -> Vec<Key> {
+    fn waiting_keys(&mut self, clearing: bool) -> Vec<Command> {
         let reached = self.frame.fate.row().input != Takes::Nothing;
-        [LAND_KEY, MISSION_INFO_KEY]
-            .into_iter()
-            .filter(|&key| {
-                let down = self.reads_down(key);
-                let taken = self.press_taken(Some(key), false).is_some();
-                let latch = self.faded_keys.latch_mut(key);
-                let waiting = down && !*latch;
-                if clearing && reached && !(down && taken) {
-                    *latch = false;
-                }
-                waiting
-            })
-            .collect()
+        [
+            Command::Flight(F::LandDock),
+            Command::Play(PlayCommand::MissionInfo),
+        ]
+        .into_iter()
+        .filter(|&command| {
+            let down = self.reads_down(command);
+            let taken = self.press_taken(Some(command), false).is_some();
+            let latch = self.faded_keys.latch_mut(command);
+            let waiting = down && !*latch;
+            if clearing && reached && !(down && taken) {
+                *latch = false;
+            }
+            waiting
+        })
+        .collect()
     }
 
     /// A press of L read: the land key pressed, and its latch set only if
@@ -255,9 +264,9 @@ impl<
             return false;
         }
         let kept = std::mem::take(&mut self.faded_keys.kept);
-        let mut reads: Vec<Key> = kept
+        let mut reads: Vec<Command> = kept
             .into_iter()
-            .filter(|key| self.held.contains(key))
+            .filter(|&command| self.kept_still_held(command))
             .collect();
         reads.extend(self.waiting_keys(true));
         if reads.is_empty() {
@@ -287,16 +296,17 @@ impl<
             return;
         }
         if self.frame.warp_end_due {
-            self.faded_keys
-                .kept
-                .retain(|key| matches!(*key, PLAYER_INFO_KEY | HAIL_KEY));
+            self.faded_keys.kept.retain(|&command| {
+                command == Command::Play(PlayCommand::PlayerInfo) || is_hail(command)
+            });
         } else if self.jump_under_way() {
             let kept = std::mem::take(&mut self.faded_keys.kept);
-            if kept.contains(&PLAYER_INFO_KEY) {
+            if kept.contains(&Command::Play(PlayCommand::PlayerInfo)) {
                 self.refuse_player_info();
             }
-            if kept.contains(&HAIL_KEY) {
-                self.hail();
+            if let Some(&hail) = kept.iter().find(|&&command| is_hail(command)) {
+                let stellar = self.hail_at_stellar(hail);
+                self.hail_at(stellar);
             }
         } else {
             let faded = self.step_report.steps.iter().any(|run| run.lit_collapse);
@@ -306,20 +316,56 @@ impl<
         }
     }
 
-    /// One pass's reads of the keys `reads`, in its order, on a `faded`
-    /// screen or not (see the module docs): M, then L, then P, Y and I
-    /// until one of them latches the rest.
-    fn read_keys(&mut self, reads: &[Key], faded: bool) {
-        let read = |key: Key| reads.contains(&key) && self.press_taken(Some(key), false).is_some();
-        let (map, land, player) = (read(MAP_KEY), read(LAND_KEY), read(PLAYER_INFO_KEY));
-        let (hail, mission) = (read(HAIL_KEY), read(MISSION_INFO_KEY));
+    /// Whether the key of `command`, a press kept, is still held: for
+    /// Communicate, with Option or not, as Option may have changed since
+    /// the press.
+    fn kept_still_held(&self, command: Command) -> bool {
+        if is_hail(command) {
+            self.held(F::Communicate) || self.held(F::HailStellar)
+        } else {
+            self.held(command)
+        }
+    }
+
+    /// Whether Communicate, pressed as `pressed` and read now, hails the
+    /// navigation stellar: as Option is now while its key is still held
+    /// ([`F::HailStellar`]), as the original reads Option at the pass, and
+    /// otherwise as its press was.
+    fn hail_at_stellar(&self, pressed: Command) -> bool {
+        if self.held(F::Communicate) || self.held(F::HailStellar) {
+            self.held(F::HailStellar)
+        } else {
+            pressed == Command::Flight(F::HailStellar)
+        }
+    }
+
+    /// One pass's reads of the commands `reads`, in its order, on a
+    /// `faded` screen or not (see the module docs): M, then L, then P, Y
+    /// and I until one of them latches the rest.
+    fn read_keys(&mut self, reads: &[Command], faded: bool) {
+        let read = |command: Command| {
+            reads.contains(&command) && self.press_taken(Some(command), false).is_some()
+        };
+        let (map, land, player) = (
+            read(Command::Play(PlayCommand::GalaxyMap)),
+            read(Command::Flight(F::LandDock)),
+            read(Command::Play(PlayCommand::PlayerInfo)),
+        );
+        let hail = reads
+            .iter()
+            .copied()
+            .find(|&command| is_hail(command) && read(command));
+        let mission = read(Command::Play(PlayCommand::MissionInfo));
         if map {
             self.read_map(faded);
         }
         if land {
             self.press_land();
         }
-        if map || (player && self.read_player_info(faded)) || (hail && self.read_hail(faded)) {
+        if map
+            || (player && self.read_player_info(faded))
+            || hail.is_some_and(|hail| self.read_hail(hail, faded))
+        {
             return;
         }
         if mission {
@@ -337,7 +383,7 @@ impl<
             self.ui_sounds.push(UiSound::MapClosed);
             self.keep_unlatched_keys();
         } else {
-            let down = self.held.contains(&MAP_KEY);
+            let down = self.held(PlayCommand::GalaxyMap);
             self.open_map_by_key();
             self.map_key_held = down;
         }
@@ -353,13 +399,15 @@ impl<
         self.pending_player_info
     }
 
-    /// Y, read on a `faded` screen or not: whether it latched the keys
-    /// after it, refused by the guard or opening something.
-    fn read_hail(&mut self, faded: bool) -> bool {
+    /// Y, pressed as `pressed`, read on a `faded` screen or not: whether
+    /// it latched the keys after it, refused by the guard or opening
+    /// something.
+    fn read_hail(&mut self, pressed: Command, faded: bool) -> bool {
+        let stellar = self.hail_at_stellar(pressed);
         if faded {
-            return self.hail_faded();
+            return self.hail_faded(stellar);
         }
-        self.hail();
+        self.hail_at(stellar);
         self.hail_opened()
     }
 

@@ -47,10 +47,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         true
     }
 
-    /// Whether any flight key is held down.
+    /// Whether any flight key is held down, a modifier among them, with
+    /// commands no close latched.
     #[must_use]
     pub fn holds_keys(&self) -> bool {
-        !self.held.is_empty()
+        self.keys.down().iter().any(|press| {
+            self.keys
+                .meanings(press)
+                .iter()
+                .all(|command| !self.latched_down.contains(command))
+        })
     }
 
     /// The `dësc` IDs a sabotaged player sees as it dies, as the kept

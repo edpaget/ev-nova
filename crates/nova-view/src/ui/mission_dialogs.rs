@@ -916,7 +916,7 @@ mod tests {
 
     #[test]
     fn the_briefings_map_key_asks_for_its_marked_map_and_another_texts_none() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let marks = MapMarks {
             green: Some(nova_sim::SystemId(131)),
             multi_arrows: true,
@@ -1164,7 +1164,7 @@ mod tests {
 
     #[test]
     fn mission_infos_map_key_asks_for_the_map_of_its_selected_slot_unless_refused() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut dialogs = dialogs();
         dialogs.open_info(info());
         dialogs.input(&key(m));

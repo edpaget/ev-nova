@@ -547,11 +547,11 @@ fn i_the_flight_refuses_itself_does_nothing_and_says_nothing() {
     let mut view = faked(in_sol());
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Refused));
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.ask_mission_info();
     assert_eq!(view.take_mission_info_request(), None);
     assert_eq!(view.message(), None);
-    assert!(view.held.contains(&Key::ArrowUp), "the flight keys kept");
+    assert!(view.holds_key(Key::ArrowUp), "the flight keys kept");
 }
 
 #[test]
@@ -559,12 +559,12 @@ fn i_with_an_active_mission_asks_for_the_info_screen_once_letting_go_of_the_keys
     let mut view = faked(in_sol());
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.ask_mission_info();
     assert_eq!(view.take_mission_info_request(), Some(info()));
     assert_eq!(view.take_mission_info_request(), None, "once");
     assert_eq!(view.message(), None);
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
 }
 
 #[test]

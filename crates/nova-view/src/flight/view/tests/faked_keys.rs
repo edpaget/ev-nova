@@ -143,8 +143,6 @@ fn each_key_asks_the_session_for_its_command() {
         (HAIL_KEY, PlayerCommand::Hail),
         (MAP_KEY, PlayerCommand::Map),
         (JUMP_KEY, PlayerCommand::Jump),
-        (JETTISON_KEY, PlayerCommand::Jettison),
-        (EJECT_KEY, PlayerCommand::Eject),
         (MISSION_INFO_KEY, PlayerCommand::MissionInfo),
         (HYPER_SELECT_KEY, PlayerCommand::SelectSystem),
         (HYPERSPACE_MODE_KEY, PlayerCommand::Nav),
@@ -168,6 +166,15 @@ fn each_key_asks_the_session_for_its_command() {
     for (k, command) in commands {
         assert_eq!(view.command_of(k), Some(command), "{k:?}");
     }
+    // The chords' keys mean their commands only with Command down.
+    view.input(&key(Key::MetaLeft, true));
+    for (k, command) in [
+        (JETTISON_KEY, PlayerCommand::Jettison),
+        (EJECT_KEY, PlayerCommand::Eject),
+    ] {
+        assert_eq!(view.command_of(k), Some(command), "{k:?}");
+    }
+    view.input(&key(Key::MetaLeft, false));
     for k in [
         FIRE_KEY,
         Key::ArrowUp,

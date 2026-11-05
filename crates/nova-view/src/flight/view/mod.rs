@@ -243,7 +243,7 @@
 //! - Up thrusts, Left and Right turn, and Down turns to face against the
 //!   ship's motion, while held: a press (or its key repeats) holds the key
 //!   and its release lets it go. Left and Right together cancel. A
-//!   (`FACE_TARGET_KEY`, the original's `autopilot`) turns to face the
+//!   ([`FlightCommand::Autopilot`](crate::keymap::FlightCommand::Autopilot), the original's `autopilot`) turns to face the
 //!   ship target, or the navigation stellar with no target or with Alt
 //!   (Option) held. While Down or A aims the ship, Left and Right do
 //!   nothing, as the original's turn block holds them off (see
@@ -353,10 +353,10 @@
 //!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
 //!   (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
-//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`]) select the stellar in
+//!   1-4 and F1-F4 ([`FlightCommand::StellarSlot1`](crate::keymap::FlightCommand::StellarSlot1) and on, F1-F4 their twins) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
-//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) and, with the menu shut,
-//!   Command-5 ([`NEAREST_STELLAR_COMMAND_KEY`]) the nearest stellar, as L
+//!   menu is shut; F5 and, with the menu shut,
+//!   Command-5 ([`FlightCommand::NearestStellar`](crate::keymap::FlightCommand::NearestStellar), F5 its twin) the nearest stellar, as L
 //!   does with none. They share one latch and are polled once a frame, as
 //!   the original's block is (the `slot_block` module): one pick a frame, by
 //!   the block's order, and none while another of them is held. A left click in space
@@ -366,9 +366,9 @@
 //!   the stellar under it. Neither the status panel, the right
 //!   [`STATUS_BAR_WIDTH`] of the screen, where the radar takes no clicks,
 //!   nor the open escort menu's frame takes a click in space. Backquote, Nav Off
-//!   ([`NAV_OFF_KEY`]), turns the nav system off, keeping the course; with
+//!   ([`FlightCommand::NavOff`](crate::keymap::FlightCommand::NavOff)), turns the nav system off, keeping the course; with
 //!   Option held it lets go of the ship target instead. H
-//!   ([`HYPERSPACE_MODE_KEY`]), Hyperspace Mode, selects the course's next
+//!   ([`FlightCommand::HyperspaceMode`](crate::keymap::FlightCommand::HyperspaceMode)), Hyperspace Mode, selects the course's next
 //!   hop, or no destination. Closing the course map cues the course's
 //!   next hop too. The original has no stellar cycle key: Tab is its
 //!   Target Select, cycling the ships. During a jump none of these keys
@@ -394,7 +394,7 @@
 //!   nothing, on a link's box mode 3 with that link, each with `snd ` 152
 //!   ([`Session::select_on_floating_map`]), except during a jump, and
 //!   anything else picks nothing. `-` zooms it out a step and `=` or the keypad's
-//!   `+` in ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`]),
+//!   `+` in ([`FlightCommand::ZoomOut`](crate::keymap::FlightCommand::ZoomOut), [`FlightCommand::ZoomIn`](crate::keymap::FlightCommand::ZoomIn)),
 //!   with `snd ` 150, during a jump too, but only while no key the flight
 //!   holds is down. A hit or a zoom shows it again.
 //! - J (a press) begins the pre-jump turn and slow-down towards the
@@ -405,7 +405,7 @@
 //!   and thrust keys, and its fire keys fire nothing until arrival. While
 //!   a jump is under way, the stage braking for it included, only the keys
 //!   the original's `_HandlePlayer` does not gate on its jump state are
-//!   taken ([`FlightView::taken_during_jump`]): Tab, R, W, Option-\`, B,
+//!   taken ([`FlightView::taken_in_jump`]): Tab, R, W, Option-\`, B,
 //!   Y, Command-K, the escort menu's keys and the floating map's zoom
 //!   keys. The rest, J included, are
 //!   ignored, P is refused, and a click in space selects no stellar,
@@ -499,7 +499,7 @@
 //!   taken and the session refuses the hail, silently, as
 //!   `_HandlePlayerCommunication` refuses while the jump state is set
 //!   (@0x61f87; its beep is player-death phase 16's).
-//! - P ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press), outside the map, asks the router
+//! - P ([`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo), a press), outside the map, asks the router
 //!   for the player info screen over the paused flight
 //!   ([`FlightView::take_player_info_request`], with
 //!   [`FlightView::open_player_info`]), letting go of the flight keys, as
@@ -517,7 +517,7 @@
 //!   more: its `_screenFaded` holds only while a jump fades out, and
 //!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
 //!   @0x1d7c3).
-//! - I ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a press), outside the map, asks the router
+//! - I ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo), a press), outside the map, asks the router
 //!   for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
 //!   flight keys, when the session shows an active mission there; with
@@ -533,7 +533,7 @@
 //!   [`TAKEOFF_GRACE_TICKS`](nova_sim::TAKEOFF_GRACE_TICKS) after a
 //!   take-off or a gate's exit (`_frameCounter`, @0x7045e). A disabled
 //!   ship takes it.
-//! - F12 ([`FRAME_RATE_KEY`], a press, not its repeats) toggles the
+//! - F12 ([`FlightCommand::ShowFramerate`](crate::keymap::FlightCommand::ShowFramerate), a press, not its repeats) toggles the
 //!   frame-rate readout ([`frame_rate`](crate::flight::frame_rate)), as
 //!   `_HandlePlayer` does (@0x6e454-0x6e4bd), silently, during a jump
 //!   too and while the ship is disabled or breaks up; once it has
@@ -615,7 +615,7 @@
 //!   before the first frame is drawn, a session started or loaded in
 //!   flight places its field as its rules say
 //!   (`nova_sim::Session::settle_asteroid_field`).
-//! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
+//! - Return ([`FlightCommand::Acknowledge`](crate::keymap::FlightCommand::Acknowledge), the original's `ackComm`) clears the
 //!   message line, closes the escort menu and hides the floating map.
 //! - While the player's ship breaks up, M, L and I do nothing, saying
 //!   nothing, as `_HandlePlayer`'s breakup-timer gates refuse them
@@ -668,7 +668,7 @@
 //! original has it under them.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -703,14 +703,13 @@ use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
 use crate::galaxy::map::MapPicture;
+use crate::keymap::{Command, CommandReader};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
+use crate::{Color, Diagnostic, Input, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
 mod between_passes;
@@ -782,281 +781,6 @@ pub struct FlightOverlays {
     /// ([`PlayerInfo::cheats`](nova_sim::player_info::PlayerInfo::cheats)).
     pub cheats: bool,
 }
-
-/// The keys flight holds: the original's defaults, Alt, which turns the
-/// weapon select key back, Shift, which turns the target select key back,
-/// the weapon select key, whose hold fades the cursor, the weapon safety
-/// key, which lets go of the secondary on every pass it is held,
-/// Command, which the jettison, eject and self-destruct keys need, the
-/// eject key and the self-destruct key, which work only held with Command,
-/// the cloak key, which toggles once a hold, the land key, which picks the
-/// nearest stellar on every pass it is down with none targeted, H and
-/// `\`, which show the floating map while they are down, \` and J, and B,
-/// which `_HandlePlayer` polls every frame, setting the cursor's fade
-/// while it is down (@0x6a98b-0x6a999).
-/// H, `\`, \` and J act again when held across a jump's end, a release
-/// of Option or a repair, and B once a target is taken or the cloak drops,
-/// as the original polls them with a latch each
-/// ([`FlightView::held_keys_frame`]). Held across a dialog or map that
-/// `_SetAllKeyCmdFlags` (@0x61e6d) follows, a latched key stays out of
-/// `held`, its OS repeats too, until its release
-/// ([`FlightView::latched_down`]), but still reads down for every read
-/// that skips its latch (the `latched_reads` module); which keys have no
-/// latch is the `map_wait` module's `UNLATCHED_KEYS`, and which have
-/// latches no site sets, B and L, its `OWN_LATCH_KEYS`. The original's
-/// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
-/// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
-/// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
-/// latch and frame (see the `slot_block` module); they fade the cursor and
-/// hold the zoom back only while `_HandlePlayer` polls them
-/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P and I act
-/// on their press, K with Command on every step it is held, and are here
-/// because they stay down: `_HandlePlayer`
-/// sets the cursor's byte on every frame one is held, and the zoom reads
-/// them held. A key that opens a dialog from its press isn't tracked, as
-/// the dialog takes its release. Being here doesn't make a key fade the
-/// cursor: [`FlightView::key_fades_cursor`] says which do.
-const FLIGHT_KEYS: [Key; 40] = [
-    Key::ArrowUp,
-    Key::ArrowLeft,
-    Key::ArrowRight,
-    Key::ArrowDown,
-    FACE_TARGET_KEY,
-    AFTERBURNER_KEY,
-    FIRE_KEY,
-    SECONDARY_KEY,
-    SELECT_KEY,
-    DESELECT_KEY,
-    Key::AltLeft,
-    Key::ShiftLeft,
-    Key::MetaLeft,
-    LAND_KEY,
-    EJECT_KEY,
-    SELF_DESTRUCT_KEY,
-    CLOAK_KEY,
-    HYPERSPACE_MODE_KEY,
-    HYPER_SELECT_KEY,
-    NAV_OFF_KEY,
-    JUMP_KEY,
-    BOARD_KEY,
-    STELLAR_SLOT_KEYS[0][0],
-    STELLAR_SLOT_KEYS[1][0],
-    STELLAR_SLOT_KEYS[2][0],
-    STELLAR_SLOT_KEYS[3][0],
-    NEAREST_STELLAR_COMMAND_KEY,
-    STELLAR_SLOT_KEYS[0][1],
-    STELLAR_SLOT_KEYS[1][1],
-    STELLAR_SLOT_KEYS[2][1],
-    STELLAR_SLOT_KEYS[3][1],
-    NEAREST_STELLAR_KEY,
-    TARGET_KEY,
-    NEAREST_KEY,
-    HAIL_KEY,
-    MENU_CLOSE_KEY,
-    MAP_KEY,
-    JETTISON_KEY,
-    PLAYER_INFO_KEY,
-    MISSION_INFO_KEY,
-];
-
-/// The keys flight acts on only as they go down, which it doesn't track as
-/// held: the rest of [`every_key`] beyond [`FLIGHT_KEYS`]. The 1-5 the
-/// escort menu takes are [`FLIGHT_KEYS`]'s too.
-const PRESS_KEYS: [Key; 9] = [
-    FRAME_RATE_KEY,
-    super::escorts::MENU_KEY,
-    ESCORT_ATTACK_KEY,
-    ESCORT_DEFEND_KEY,
-    ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY,
-    ZOOM_OUT_KEY,
-    ZOOM_IN_KEY,
-    ZOOM_IN_KEYPAD_KEY,
-];
-
-/// Every key flight reads, held or pressed. The platform's key map is
-/// tested against this, so no key here goes without a physical key.
-///
-/// The guarantee covers held keys and command keys only: a key can't be
-/// held unless it is in [`FLIGHT_KEYS`], and this module's tests fail on a
-/// command key that isn't listed here. Nothing catches a press-only key
-/// outside `command_of`, so such a key must be added to [`PRESS_KEYS`] by
-/// hand.
-pub fn every_key() -> impl Iterator<Item = Key> {
-    FLIGHT_KEYS.into_iter().chain(PRESS_KEYS)
-}
-
-/// The face-target key: the original's default A for its `autopilot`
-/// (keyPrefs +0xe, named by `_loadKeys` @0xcd8c5-0xcd935). Held, it turns
-/// the ship to face its target, or with Alt (Option) or no target the
-/// navigation stellar ([`Face`](nova_sim::Face)); a flight key, so it
-/// fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
-pub const FACE_TARGET_KEY: Key = Key::KeyA;
-/// The afterburner key: the original's default, Mac keycode 6, Z (keyPrefs
-/// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
-/// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
-/// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
-/// the ship carries an afterburner, on a ship not disabled (@0x6caf2,
-/// @0x6cb03).
-pub const AFTERBURNER_KEY: Key = Key::KeyZ;
-/// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
-/// @0xcd5f8).
-pub const FIRE_KEY: Key = Key::Space;
-/// The secondary fire key: the original's default (`fireKey1`).
-pub const SECONDARY_KEY: Key = Key::ControlLeft;
-/// The secondary weapon select key: the original's default
-/// (`weapSelect`); with Alt (Option) it selects the one before, in `wëap`
-/// ID order, on the next pass (see `nova_sim::session`'s
-/// `secondary_select`). Held, it fades the cursor, as `_HandlePlayer` sets
-/// *0x3b5550 on every pass it is down (@0x6ac2a).
-pub const SELECT_KEY: Key = Key::KeyW;
-/// The weapon safety key: the original's default for key-preference slot
-/// 0x2 (`weapSafe`, Keys.nib's "Weapon Safety:"), keycode 0x01, S, which
-/// `_loadKeys` falls back to when the defaults hold none
-/// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
-/// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
-/// `nova_sim::Session::hold_weapon_safety`), and fades the cursor only on
-/// those passes (@0x6ade1).
-pub const DESELECT_KEY: Key = Key::KeyS;
-/// The target select key: the original's default (`targSel`), which
-/// picks the next ship in turn.
-pub const TARGET_KEY: Key = Key::Tab;
-/// The closest target key: the original's default (`closeTarg`), which
-/// picks the nearest threat, and with Alt (Option) the nearest ship.
-pub const NEAREST_KEY: Key = Key::KeyR;
-
-/// The land key: the original's default (`STR#` 129, and `STR#` 2002
-/// #25).
-pub const LAND_KEY: Key = Key::KeyL;
-/// The galaxy map key: the original's documented default (`Keys.nib`'s
-/// `mapKey`; `STR#` 2002 #26-28 name a map key).
-pub const MAP_KEY: Key = Key::KeyM;
-/// The hyperspace jump key: the original's documented default
-/// (`Keys.nib`'s `jumpKey`).
-pub const JUMP_KEY: Key = Key::KeyJ;
-/// The board key: the original's default (`Keys.nib`'s `boardKey`), one
-/// attempt a press.
-pub const BOARD_KEY: Key = Key::KeyB;
-/// The hail key: the original's default (`Keys.nib`'s `hailKey`), one
-/// hail a press.
-pub const HAIL_KEY: Key = Key::KeyY;
-/// The jettison key: the original's default (`dumpCargo`, `_keyPrefs`
-/// +0x1e, keycode 0x28, `_loadKeys` @0xce33d-0xce360), which jettisons
-/// only with Command held (`_HandlePlayer` @0x6fd54-0x6fdaf): everything,
-/// or with Option (Alt) also held, all but the mission cargo. It works
-/// during a jump too: `_JettisonCargo` (0x3dffd-0x3e3c4) reads no jump
-/// state.
-pub const JETTISON_KEY: Key = Key::KeyK;
-/// The eject key: the original's default for key-preference slot 0x22
-/// (`ejectKey`), keycode 0x07, X, which ejects only held together with
-/// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
-pub const EJECT_KEY: Key = Key::KeyX;
-/// The self-destruct key, `-`: key-preference slot 0x24 (`destructKey`),
-/// which `_loadKeys` reads (@0xce458) and then forces to keycode 0x1b
-/// whatever the preference says (@0xce71c). It acts only held together
-/// with Command (`_HandlePlayer` @0x6fdb4-0x6fddb; see the session's
-/// self-destruct), so it never clashes with the floating map's zoom out,
-/// the same key, which refuses any press with Command held
-/// (@0x70fa7-0x70fb5). The keypad's `-` (0x4e) arrives as the same key,
-/// a platform difference accepted as [`ZOOM_OUT_KEY`]'s is.
-pub const SELF_DESTRUCT_KEY: Key = Key::Minus;
-/// The cloak key: the original's default for key-preference slot 0x52
-/// (`cloakKey`), keycode 0x20, U (`_loadKeys` @0xce461-0xce4d4). Held,
-/// it cloaks or uncloaks once a hold, with no Command
-/// (`_HandlePlayer` @0x705b7; see the session's `player_cloak`).
-pub const CLOAK_KEY: Key = Key::KeyU;
-/// The frame-rate key: the original's default for key-preference slot
-/// 0x68 (`framerateKey`), F12, Mac keycode 0x6f, which `_loadKeys` falls
-/// back to when the preferences hold none (@0xce6a1-0xce6c4). A press, no
-/// modifier read, toggles the frame-rate readout (`_HandlePlayer`
-/// @0x6e454-0x6e4bd), during a jump too; see
-/// [`frame_rate`](crate::flight::frame_rate).
-pub const FRAME_RATE_KEY: Key = Key::F12;
-/// The escorts' attack key: the original's default (`Keys.nib`'s
-/// `escortCmdKey0`, "Attack Target").
-pub const ESCORT_ATTACK_KEY: Key = Key::KeyF;
-/// The escorts' defend key (`escortCmdKey1`, "Defend Me").
-pub const ESCORT_DEFEND_KEY: Key = Key::KeyD;
-/// The escorts' hold key (`escortCmdKey2`, "Hold Position").
-pub const ESCORT_HOLD_KEY: Key = Key::KeyV;
-/// The escorts' recall key (`escortCmdKey3`, "Recall: (option = dock)").
-pub const ESCORT_RECALL_KEY: Key = Key::KeyC;
-/// What closes the escort menu besides its own key: Return
-/// (`ackComm`).
-pub const MENU_CLOSE_KEY: Key = Key::Enter;
-
-/// The stellar slot keys: each pair selects the stellar in that slot of
-/// the system's navigation defaults, from the first. The original reads
-/// keys 1-4 (Mac keycodes 0x12-0x15) and F1-F4 (`_loadKeys` @0xce6c8
-/// hard-codes 0x7a, 0x78, 0x63, 0x76 at +0x34..+0x3a) in `_HandlePlayer`
-/// @0x69d2b-0x69f17, with F5 and Command-5, as one block with one latch
-/// (the `slot_block` module). While the escort menu shows,
-/// `_QuickKeyCheck` hides 1-4 from the block (@0xa106-0xa124) and they
-/// pick its groups instead
-/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); F1-F4 always pick a
-/// stellar.
-pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
-    [Key::Digit1, Key::F1],
-    [Key::Digit2, Key::F2],
-    [Key::Digit3, Key::F3],
-    [Key::Digit4, Key::F4],
-];
-/// The nearest stellar key: F5 (Mac keycode 0x60), which the original
-/// reads beside the slot keys (@0x69cf6-0x69f17) and which selects the
-/// stellar its land key would with nothing selected. Command-5
-/// ([`NEAREST_STELLAR_COMMAND_KEY`]) is its twin.
-pub const NEAREST_STELLAR_KEY: Key = Key::F5;
-/// The other nearest stellar key: the top-row 5 (Mac keycode 0x17), held
-/// together with Command (0x37), which `_HandlePlayer` polls only while F5
-/// is up (@0x69dbc-0x69dda) and picks with as F5 does. Both are
-/// hard-coded, not key preferences. While the escort menu shows,
-/// `_QuickKeyCheck` hides the 5 from this block (@0xa106-0xa124), so
-/// Command-5 then picks the menu's Freighters instead
-/// ([`GROUP_KEYS`](super::escorts::GROUP_KEYS)); 5 alone picks nothing.
-pub const NEAREST_STELLAR_COMMAND_KEY: Key = Key::Digit5;
-/// The Nav Off key, which turns the nav system off, the course kept: the
-/// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
-/// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
-/// lets go of the ship target instead ([`Session::clear_target`],
-/// @0x69a17-0x69a90). It shares H's latch: held through a jump's end it
-/// turns the nav off after it, Option let go with it still down turns
-/// the nav off, and Option-\` held lets go of a target picked meanwhile
-/// on the next frame ([`FlightView::nav_keys_frame`]). While the dev
-/// overlay is built in, backquote toggles the overlay instead and never
-/// reaches flight.
-pub const NAV_OFF_KEY: Key = Key::Backquote;
-
-/// The Hyper Select key, which cycles the hyperspace selection through
-/// the systems the current one links to, keeping the course by the
-/// engine's reading: the original's default, `\`
-/// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
-/// `_loadKeys`). H is the original's separate Hyperspace Mode key. Held
-/// in nav mode 3, during a jump too, it shows the floating map
-/// (@0x69cdd-0x69ce7, @0x69be7; see the [`floating`](super::floating)
-/// module). One first pressed during a jump, or let go and pressed again
-/// then, and held past its end selects on the first frame after it; one
-/// held from before the jump does nothing after it
-/// ([`FlightView::select_frame`]).
-pub const HYPER_SELECT_KEY: Key = Key::Backslash;
-
-/// The Hyperspace Mode key, which puts the nav system in hyperspace mode
-/// and selects the course's next hop (`nova_sim::Session::hyperspace_mode`): the
-/// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
-/// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). Held outside a
-/// jump, it shows the floating map (@0x69b8e-0x69ba8; see the
-/// [`floating`](super::floating) module). Held through a jump's end, it
-/// acts as a press on the first frame after it, as its latch is cleared
-/// on every frame of a jump ([`FlightView::nav_keys_frame`]).
-pub const HYPERSPACE_MODE_KEY: Key = Key::KeyH;
-
-/// The floating map's zoom-out key, `-` and the keypad's `-` (keycodes
-/// 0x1b and 0x4e, `_HandlePlayer` @0x70f4e-0x71110), which the platform
-/// both gives as this.
-pub const ZOOM_OUT_KEY: Key = Key::Minus;
-/// The floating map's zoom-in key, `=` (keycode 0x18).
-pub const ZOOM_IN_KEY: Key = Key::Equal;
-/// The floating map's other zoom-in key, the keypad's `+` (keycode 0x45).
-pub const ZOOM_IN_KEYPAD_KEY: Key = Key::NumpadAdd;
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
 fn shown_position(from: ShipPlace, to: ShipPlace, alpha: f32) -> Point {
@@ -1318,7 +1042,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// key's latch moves (`FlightView::jump_frame`,
     /// `FlightView::board_frame`). The keys that ask a gate mid-input
     /// before any command exists ask it by the key (`Screen::input`'s
-    /// filter, `FlightView::command_of`), and so do the polls that hold
+    /// filter, `FlightView::player_command`), and so do the polls that hold
     /// no command of their own yet: the nav block and Hyper Select
     /// (`FlightView::nav_held_frame`) and the step's holds
     /// (`FlightView::step_input`).
@@ -1436,25 +1160,54 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// more the next step holds its gain (`StepInput::held`; see
     /// `nova_sim::speed_mult`).
     since_step: Duration,
-    /// The flight keys held down. A dialog over flight lets go of them,
-    /// and its close gets back those `_HandlePlayer` polls with no latch
-    /// that are still down ([`FlightView::take_back_live_input`]).
-    held: HashSet<Key>,
-    /// The latched flight keys a `_SetAllKeyCmdFlags` (@0x61e6d) site
-    /// latched while they were down, and that haven't been let go since:
-    /// their latches (`_jumpTryFlag`, `_navModeSelectFlag` and the rest,
-    /// see the `map_wait` module) wait for a release `_HandlePlayer` reads
-    /// from `GetKeys`, so their OS repeats are no presses and stay out of
-    /// `held` (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
-    latched_down: HashSet<Key>,
+    /// Flight's reader of its commands ([`FLIGHT`](crate::keymap::contexts::FLIGHT)), over the
+    /// keys flight has seen go down and not up: what it holds is what
+    /// flight reads held ([`FlightView::held`]), less the latched
+    /// commands. A dialog over flight lets go of them, and its close gets
+    /// back those `_HandlePlayer` polls with no latch that are still down
+    /// ([`FlightView::take_back_live_input`]). The escort menu's context
+    /// is on while the menu shows ([`FlightView::sync_escort_keys`]).
+    ///
+    /// The held commands ([`Kind::Held`](crate::keymap::Kind::Held)) are
+    /// those `_HandlePlayer` polls every frame, setting the cursor's fade
+    /// while one is down (@0x6a98b-0x6a999) and counting it for the
+    /// floating map's zoom ([`FlightView::commands_down`]): the original's
+    /// defaults, each Option, Shift or Command variant beside its base,
+    /// the land key, which picks the nearest stellar on every pass it is
+    /// down with none targeted, Hyperspace Mode and Hyper Select, which
+    /// show the floating map while they are down, the latched ones, and
+    /// those that act on their press but stay down, as `_HandlePlayer`
+    /// sets the cursor's byte on every frame one is held. Hyperspace Mode,
+    /// Hyper Select, Nav Off and Hyper Jump act again when held across a
+    /// jump's end, a release of Option or a repair, and Board once a
+    /// target is taken or the cloak drops, as the original polls them with
+    /// a latch each ([`FlightView::held_keys_frame`]). The stellar slots
+    /// and the escort menu's groups fade the cursor and hold the zoom back
+    /// only while `_HandlePlayer` polls them
+    /// ([`FlightView::slot_polled`]). A key that opens a dialog from
+    /// its press isn't followed, as the dialog takes its release. Being
+    /// held doesn't make a command fade the cursor:
+    /// [`FlightView::key_fades_cursor`] says which do.
+    keys: CommandReader,
+    /// The latched commands a `_SetAllKeyCmdFlags` (@0x61e6d) site
+    /// latched while their keys were down, and that haven't been let go
+    /// since: their latches (`_jumpTryFlag`, `_navModeSelectFlag` and the
+    /// rest, see the `map_wait` module) wait for a release `_HandlePlayer`
+    /// reads from `GetKeys`, so their OS repeats are no presses and they
+    /// aren't [`FlightView::held`], though they read down
+    /// ([`FlightView::reads_down`];
+    /// rdm:phase/play-feel-8/phase-4-latched-key-repeats). Each is one
+    /// `keys` holds: a release, or a modifier let go of, that drops one
+    /// from `keys` drops it here.
+    latched_down: BTreeSet<Command>,
     /// Whether a `_SetAllKeyCmdFlags` site ran since the last hand-back or
     /// key poll, so the dialogs it opened latch every key down at their
     /// close (see the `dialog_latch` module).
     latch_at_close: bool,
-    /// The press keys a hand-back left for the next key poll, in
+    /// The presses a hand-back left for the next key poll, in
     /// `_HandlePlayer`'s order, as a slot key before them acts only there
-    /// (see the `dialog_latch` module). A release drops its key.
-    after_poll: Vec<Key>,
+    /// (see the `dialog_latch` module). A release drops its key's.
+    after_poll: Vec<Input>,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,
     /// so a key held acts once; cleared on a frame neither \` without
@@ -1477,7 +1230,7 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
     /// A tap of the jettison chord since the last step, `Some(all)`, for
-    /// the next step to jettison once ([`FlightView::jettison`]).
+    /// the next step to jettison once ([`FlightView::jettison_tap`]).
     jettison_tapped: Option<bool>,
     /// `_weapTargetSelectFlag` (0xdede8), the latch Tab and the click in
     /// space share: set as either acts, cleared on a frame both are up
@@ -1528,10 +1281,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
     /// The planet comm dialog a stellar hailed just opened, for the router.
     pending_planet_comm: Option<nova_sim::planet_comm::PlanetCommView>,
-    /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked the screen be opened
+    /// The mission info [`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen, for
+    /// Whether [`PlayCommand::PlayerInfo`](crate::keymap::PlayCommand::PlayerInfo) asked for the player info screen, for
     /// the router.
     pending_player_info: bool,
     /// The main screen's pilot panel as last answered, until the frame
@@ -1547,12 +1300,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
-    /// Whether [`MAP_KEY`] is held while the map is shown, as
+    /// Whether the map key ([`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)) is held while the map is shown, as
     /// `_KeyCheck(prefs+0x12)` reads it for the map key's close
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
-    /// Whether the map has been closed while [`MAP_KEY`] was held, and
+    /// Whether the map has been closed while the map key was held, and
     /// waits for its release to close: `_DoSystemMap` loops
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of
     /// the dialog (@0x13a2e-0x13a46), and `_BusyIdle` (@0x5981-0x5985) is

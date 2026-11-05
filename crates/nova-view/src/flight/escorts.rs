@@ -2,12 +2,14 @@
 //! how the menu is drawn over the flight (`_ShowEscortMenu` @0x5664a and
 //! `_DrawEscortMenuInFrame` @0x56268 in the `EV Nova` executable).
 //!
-//! - E ([`MENU_KEY`]) opens the menu in full ([`FULL_LEVEL`]), selecting
+//! - E ([`FlightCommand::EscortMenu`](crate::keymap::FlightCommand::EscortMenu))
+//!   opens the menu in full ([`FULL_LEVEL`]), selecting
 //!   All Ships; with no escorts it stays shut and the flight says so
 //!   ([`NO_ESCORTS`]). E again, or Return, closes it at once, fading or
 //!   not. E's close beeps; Return's, and the fade's end, beep only while E
 //!   is held, as the close block reads the key live (@0x6e01e-0x6e04d).
-//! - While it shows, fading too, keys 1-5 ([`GROUP_KEYS`]) select All
+//! - While it shows, fading too, keys 1-5
+//!   ([`EscortMenuCommand`](crate::keymap::EscortMenuCommand)) select All
 //!   Ships, Fighters, Medium Ships, Warships or Freighters and show it in
 //!   full again; a class the player has no escort of is not selected,
 //!   though its press, silent, still restarts the timeout, holding a fade
@@ -80,24 +82,11 @@ use crate::draw::{DrawList, fill_rect};
 use crate::flight::floating;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::Key;
 use crate::text::TextMetrics;
 use crate::time::sixtieths;
 
 pub use nova_sim::escort::NO_ESCORTS;
 
-/// The escort menu key: the original's default (`Keys.nib`'s
-/// `escortMenuKey`).
-pub const MENU_KEY: Key = Key::KeyE;
-/// The keys that select All Ships, Fighters, Medium Ships, Warships and
-/// Freighters while the menu is open (hard-coded, @0xce722).
-pub const GROUP_KEYS: [Key; 5] = [
-    Key::Digit1,
-    Key::Digit2,
-    Key::Digit3,
-    Key::Digit4,
-    Key::Digit5,
-];
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
 pub const MENU_TIMEOUT: Duration = Duration::from_secs(8);
@@ -318,7 +307,8 @@ impl EscortMenu {
         Toggled::Opened
     }
 
-    /// Key `n` of [`GROUP_KEYS`] (from 0), at `now`: while the menu shows,
+    /// Group `n` of the menu's (from 0,
+    /// [`EscortMenuCommand`](crate::keymap::EscortMenuCommand)), at `now`: while the menu shows,
     /// selects its group when the player has an escort of it (All Ships
     /// always), shows the menu in full and says it did. A press of a class
     /// the player has none of selects nothing and keeps the level, but
@@ -576,6 +566,8 @@ pub fn fighters_abandoned_message(count: u32) -> String {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
+    use crate::keymap::{EscortMenuCommand, FlightCommand, KeyCombo, KeyMap};
     use nova_sim::{EscortClass, EscortOrder};
 
     /// The fleet's rows: a warship escort holding, a freighter in
@@ -893,7 +885,10 @@ mod tests {
         assert_eq!(menu.group(), EscortGroup::All);
         assert_eq!(menu.toggle(AT, &rows()), Toggled::Closed);
         assert!(!menu.is_open());
-        assert_eq!(MENU_KEY, Key::KeyE);
+        assert_eq!(
+            KeyMap::default().combo(FlightCommand::EscortMenu.into()),
+            Some(KeyCombo::key(Key::KeyE))
+        );
     }
 
     #[test]
@@ -918,15 +913,21 @@ mod tests {
         assert!(menu.select(0, AT, &rows()), "1: all, always");
         assert_eq!(menu.group(), EscortGroup::All);
         assert!(!menu.select(5, AT, &rows()), "no sixth key");
+        let keys = KeyMap::default();
         assert_eq!(
-            GROUP_KEYS,
+            EscortMenuCommand::ALL
+                .iter()
+                .map(|&group| keys.combo(group.into()))
+                .collect::<Vec<_>>(),
             [
                 Key::Digit1,
                 Key::Digit2,
                 Key::Digit3,
                 Key::Digit4,
                 Key::Digit5
-            ],
+            ]
+            .map(|key| Some(KeyCombo::key(key)))
+            .to_vec(),
             "hard-coded"
         );
     }

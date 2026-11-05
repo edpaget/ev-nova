@@ -1102,7 +1102,7 @@ mod tests {
     use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
 
     use super::*;
-    use crate::flight::view::MAP_KEY;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
     use crate::input::Key;
 
     /// Hire Escort's key and its twin, as the key map has them

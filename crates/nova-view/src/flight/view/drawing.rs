@@ -212,6 +212,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// there. The M that opens it does, read before the dispatch, on the
     /// first step after the close.
     pub(super) fn cursor_input(&mut self, input: &Input) {
+        self.sync_escort_keys();
         match *input {
             Input::PointerMoved(at) => self.cursor.pointer(at),
             Input::PointerButton {
@@ -222,9 +223,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             Input::PointerButton { pressed: false, .. } => self.cursor.button(false),
             Input::PointerLeft => self.cursor.left(),
-            Input::Key {
-                pressed: true, key, ..
-            } if !self.map_open && self.key_fades_cursor(key) => self.cursor.key(),
+            Input::Key { pressed: true, .. }
+                if !self.map_open && self.press_fades_cursor(input) =>
+            {
+                self.cursor.key();
+            }
             _ => {}
         }
     }

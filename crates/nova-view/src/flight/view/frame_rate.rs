@@ -12,7 +12,7 @@ use crate::flight::sim_port::FlightSim;
 use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// A press of [`FRAME_RATE_KEY`](super::FRAME_RATE_KEY): toggles the
+    /// A press of [`FlightCommand::ShowFramerate`](crate::keymap::FlightCommand::ShowFramerate): toggles the
     /// readout, silently. Turned on, the message line is freed at once
     /// (`_commCount` := 0); turned off, it keeps what it shows for 1
     /// tick (`_commCount` := 1), so `_HandleComm` paints it empty on the

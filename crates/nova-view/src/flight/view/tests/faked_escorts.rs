@@ -52,9 +52,9 @@ fn press(view: &mut Faked, k: Key) -> bool {
 
 /// Presses `k` with Option held.
 fn option_press(view: &mut Faked, k: Key) {
-    view.held.insert(Key::AltLeft);
+    view.hold_key(Key::AltLeft);
     press(view, k);
-    view.held.remove(&Key::AltLeft);
+    view.let_go_key(Key::AltLeft);
 }
 
 /// The interface's sounds `view` raised since they were last taken.
@@ -207,7 +207,7 @@ fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
 fn with_e_held_through_the_timeout_the_fades_end_beeps_once() {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     ui_heard(&mut view);
     menu_tick(&mut view, MENU_TIMEOUT + TICK);
     assert_eq!(ui_heard(&mut view), [], "fading: no beep yet");
@@ -232,7 +232,7 @@ fn return_closes_it_at_once_silent_and_beeps_with_e_held() {
     assert!(!view.escort_menu().is_open(), "at once");
     assert_eq!(ui_heard(&mut view), [], "silent");
     press(&mut view, MENU_KEY);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     ui_heard(&mut view);
     press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
@@ -789,12 +789,12 @@ fn the_target_key_walks_back_with_shift_and_through_the_escorts_with_option() {
         (true, false, TargetPick::Previous),
         (true, true, TargetPick::PreviousEscort),
     ] {
-        view.held.clear();
+        view.keys.let_go();
         if shift {
-            view.held.insert(Key::ShiftLeft);
+            view.hold_key(Key::ShiftLeft);
         }
         if option {
-            view.held.insert(Key::AltLeft);
+            view.hold_key(Key::AltLeft);
         }
         let before = sent(&view).len();
         view.press_target_key();
@@ -973,7 +973,7 @@ fn every_clear_of_a_tick_shows_the_menu_in_full_again() {
     // At 2: step 1 drops to 1 and shows it again, steps 2 and 3 drop to
     // 30, and step 3's clear shows it again. Its fade never reaches 0.
     let mut view = faded_to(2);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     steps_clearing(&mut view, &[true, false, true]);
     assert_eq!(view.escort_menu().level(), Some(32));
     assert_eq!(ui_heard(&mut view), [], "it never shut");
@@ -990,7 +990,7 @@ fn a_clear_leaves_a_shut_menu_shut() {
 #[test]
 fn a_fade_that_starts_again_and_ends_in_the_same_tick_beeps_with_e_held() {
     let mut view = faded_to(22);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     let mut cleared = vec![false; 34];
     cleared[1] = true;
     steps_clearing(&mut view, &cleared);

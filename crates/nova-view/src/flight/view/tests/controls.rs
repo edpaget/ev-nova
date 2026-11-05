@@ -40,7 +40,7 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
 fn caps_lock_is_no_flight_key() {
     let mut view = super::faked_flight::at_rest(catalog());
     super::faked_flight::hold(&mut view, Key::CapsLock, true);
-    assert!(view.held.is_empty());
+    assert!(view.holds_no_key());
     super::faked_flight::ticked(&mut view, 1);
     assert_eq!(
         super::faked_flight::last_controls(&view),

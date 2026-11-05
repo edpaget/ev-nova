@@ -18,7 +18,7 @@ use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{
-    FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, MAP_KEY, gate_refusal_message,
+    FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, gate_refusal_message,
     landing_refusal_ticks, refusal_message, stellar_name,
 };
 
@@ -174,7 +174,7 @@ impl<
     /// `_PlayerEnterHypergate` plays no beep around it (@0x6385b). See
     /// [`FlightView::close_map_then`] for the course map's close.
     ///
-    /// While [`MAP_KEY`] is held the close waits for its release, as
+    /// While the map key is held the close waits for its release, as
     /// `_DoSystemMap` does after every end of its loop, whichever close
     /// ended it (@0x1394d-0x13957, then the wait @0x13a2e-0x13a46): the
     /// map stays drawn, inert, and the whole close, the beep, the cue, the
@@ -198,7 +198,7 @@ impl<
     /// close [`FlightView::close_map`]:
     ///
     /// - A key-down (not a repeat) of a key the filter doesn't take
-    ///   (`FlightView::map_filter_takes`) while [`MAP_KEY`] is held
+    ///   (`FlightView::map_filter_takes`) while the map key is held
     ///   closes the map, as the map key's close reads the key held
     ///   (@0x144db-0x14587). M's own press closes it before this, in
     ///   flight and in port.
@@ -217,7 +217,7 @@ impl<
     /// - The map's beeps (Space's and Find's) join the flight's.
     ///
     /// While Find is open every input goes to the map, which gives it to
-    /// Find: a key with [`MAP_KEY`] held types, and closes nothing.
+    /// Find: a key with the map key held types, and closes nothing.
     pub(super) fn map_input(&mut self, input: &Input) {
         self.map_input_then(input, Self::close_map);
     }
@@ -225,18 +225,22 @@ impl<
     /// The input to the map opened over a screen: in port
     /// ([`FlightView::open_bar_map`], `FlightView::open_port_screen_map`),
     /// or by a mission dialog docked or in flight
-    /// (`FlightView::open_dialog_map`): a press of [`MAP_KEY`] closes it
+    /// (`FlightView::open_dialog_map`): a press of the map key
+    /// ([`FlightView::is_map_key`]) closes it
     /// ([`FlightView::close_map`]), unless Find is open, where it
     /// types, and anything else goes to the map
     /// ([`FlightView::map_input`]), so flight's own keys and cursor stay
     /// out of the port.
     pub fn port_map_input(&mut self, input: &Input) {
-        let closing = Input::Key {
-            key: MAP_KEY,
-            pressed: true,
-            repeat: false,
-        };
-        if *input == closing && !self.map.finding() {
+        let closing = matches!(
+            *input,
+            Input::Key {
+                pressed: true,
+                repeat: false,
+                ..
+            }
+        ) && self.is_map_key(input);
+        if closing && !self.map.finding() {
             // M's own close reads M held, so it waits for the release.
             self.map_key_held = true;
             self.close_map();

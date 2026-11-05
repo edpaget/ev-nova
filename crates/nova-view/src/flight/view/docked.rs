@@ -39,7 +39,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the course map has been closed and waits for
-    /// [`MAP_KEY`](super::MAP_KEY)'s release to go ([`FlightView::close_map`]).
+    /// the map key's release to go ([`FlightView::close_map`]).
     /// A map opened on the key isn't waiting until something closes it.
     #[must_use]
     pub fn map_waiting(&self) -> bool {

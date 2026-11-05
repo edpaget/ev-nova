@@ -250,7 +250,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn text_of(&mut self, message: &SimMessage) -> Option<String> {
         message_text(
             message,
-            Wording::of(&self.names, &self.frame),
+            Wording::of(&self.names, &self.frame).keyed(self.keys.bindings()),
             self.scene.as_ref(),
             &mut self.words_chance,
             self.presentation.millions,

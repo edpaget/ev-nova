@@ -1046,8 +1046,8 @@ fn the_frame_rate_readout_toggled_in_flight_reaches_the_next_flight() {
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
     assert!(!flight_frame_rate(&screen), "off at launch");
-    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, true));
-    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, false));
+    screen.input(&key(Key::F12, true));
+    screen.input(&key(Key::F12, false));
     assert!(flight_frame_rate(&screen), "toggled");
     escape_to_menu(&mut screen);
     create(&mut screen, "Bea");

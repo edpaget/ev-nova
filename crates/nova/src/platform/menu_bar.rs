@@ -55,8 +55,8 @@ impl MenuPort for MenuBar {
 #[cfg(test)]
 mod tests {
     use nova_appkit::{KeyEquivalent, Modifiers, key_equivalents};
-    use nova_view::Key;
-    use nova_view::flight::view::{EJECT_KEY, JETTISON_KEY};
+    use nova_view::keymap::FlightCommand;
+    use nova_view::{Key, KeyMap};
 
     use super::*;
     use crate::app::screen::menu_chord;
@@ -123,6 +123,9 @@ mod tests {
     /// carries Command: these are the router's and flight's own chords.
     fn game_command_chords() -> Vec<(char, Modifiers, Option<MenuCommand>)> {
         let chord = |command| key_char(menu_chord(command).expect("a chord"));
+        let defaults = KeyMap::default();
+        let key =
+            |command: FlightCommand| key_char(defaults.combo(command.into()).expect("bound").key);
         vec![
             (
                 chord(MenuCommand::Quit),
@@ -134,9 +137,13 @@ mod tests {
                 Modifiers::COMMAND,
                 Some(MenuCommand::Preferences),
             ),
-            (key_char(JETTISON_KEY), Modifiers::COMMAND, None),
-            (key_char(JETTISON_KEY), Modifiers::COMMAND_OPTION, None),
-            (key_char(EJECT_KEY), Modifiers::COMMAND, None),
+            (key(FlightCommand::JettisonCargo), Modifiers::COMMAND, None),
+            (
+                key(FlightCommand::JettisonNonMission),
+                Modifiers::COMMAND_OPTION,
+                None,
+            ),
+            (key(FlightCommand::Eject), Modifiers::COMMAND, None),
         ]
     }
 

@@ -192,7 +192,7 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
         DESELECT_KEY,
         LAND_KEY,
     ] {
-        view.held.insert(k);
+        view.hold_key(k);
     }
     view.double_time = true;
     view.step_frame(0, anchor());
@@ -233,7 +233,7 @@ fn command_and_minus_hold_the_self_destruct_and_command_and_x_the_eject() {
     assert_eq!(SELF_DESTRUCT_KEY, Key::Minus);
     let held = |keys: &[Key]| {
         let mut view = stepping(catalog());
-        view.held.extend(keys.iter().copied());
+        view.hold_keys(keys.iter().copied());
         view.step_input(anchor())
     };
     let destruct = held(&[Key::MetaLeft, SELF_DESTRUCT_KEY]);
@@ -256,9 +256,9 @@ fn the_step_input_carries_the_held_jettison_chord_while_taken() {
     // `_HandlePlayer`'s Command-K block has no latch (@0x6fd54-0x6fda1):
     // Command and K down jettison on every pass, `!Option` all.
     let mut view = stepping(catalog());
-    view.held.extend([Key::MetaLeft, JETTISON_KEY]);
+    view.hold_keys([Key::MetaLeft, JETTISON_KEY]);
     assert_eq!(view.step_input(anchor()).jettison, Some(true));
-    view.held.insert(Key::AltLeft);
+    view.hold_key(Key::AltLeft);
     assert_eq!(view.step_input(anchor()).jettison, Some(false), "Option");
     view.change_sim(|sim| sim.refuse(PlayerCommand::Jettison));
     assert_eq!(view.step_input(anchor()).jettison, None, "refused");
@@ -267,9 +267,9 @@ fn the_step_input_carries_the_held_jettison_chord_while_taken() {
 #[test]
 fn k_without_command_carries_nothing() {
     let mut view = stepping(catalog());
-    view.held.insert(JETTISON_KEY);
+    view.hold_key(JETTISON_KEY);
     assert_eq!(view.step_input(anchor()).jettison, None);
-    view.held.insert(Key::AltLeft);
+    view.hold_key(Key::AltLeft);
     assert_eq!(view.step_input(anchor()).jettison, None);
 }
 
@@ -300,14 +300,14 @@ fn the_step_input_carries_ls_latch_as_the_dock_try() {
     view.press_land();
     let input = view.step_input(anchor());
     assert!(input.dock_try, "set by the request");
-    view.held.insert(LAND_KEY);
+    view.hold_key(LAND_KEY);
     assert!(view.step_input(anchor()).land_key);
 }
 
 #[test]
 fn a_command_the_flight_refuses_holds_none_of_its_keys() {
     let mut view = stepping(catalog());
-    view.held.extend([
+    view.hold_keys([
         Key::MetaLeft,
         SELF_DESTRUCT_KEY,
         EJECT_KEY,
@@ -326,7 +326,7 @@ fn a_command_the_flight_refuses_holds_none_of_its_keys() {
     assert!(!input.self_destruct && !input.eject && !input.cloak && !input.weapon_safety);
     // U needs no Command.
     view.change_sim(|sim| sim.take(PlayerCommand::Cloak));
-    view.held.remove(&Key::MetaLeft);
+    view.let_go_key(Key::MetaLeft);
     assert!(view.step_input(anchor()).cloak);
 }
 

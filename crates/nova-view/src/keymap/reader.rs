@@ -8,7 +8,7 @@ use std::rc::Rc;
 use super::bindings::{Bindings, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
-use super::keyboard::{self, Modifiers};
+use super::keyboard::{self, KeyMap, KeysDown, Modifiers};
 use crate::input::Input;
 
 /// The app's bindings, shared by every screen: a cheap clone over one
@@ -215,6 +215,80 @@ impl CommandReader {
         self.bindings.with(|bindings| {
             keyboard::meanings(&bindings.keyboard, key, devices.keyboard(), &active)
         })
+    }
+
+    /// Every command of the active contexts bound to the key of `input`
+    /// (a press, a repeat or a release), whatever modifiers its combo
+    /// needs, then the active contexts' fixed twins on it, each in
+    /// command order: what the key can mean at all, for a screen that
+    /// sorts keys by what they are for (flight's held keys, the latched
+    /// ones and those it reads live). Empty for any other input.
+    #[must_use]
+    pub fn bound_to(&self, input: &Input) -> Vec<Command> {
+        let Input::Key { key, .. } = *input else {
+            return Vec::new();
+        };
+        let active = self.active();
+        let bound: BTreeSet<Command> = self.bindings.with(|bindings| {
+            active
+                .iter()
+                .flat_map(|context| context.commands())
+                .filter(|&command| {
+                    bindings
+                        .keyboard
+                        .combo(command)
+                        .is_some_and(|combo| combo.key == key)
+                })
+                .collect()
+        });
+        let mut found: Vec<Command> = bound.into_iter().collect();
+        for twin in &KeyMap::TWINS {
+            if twin.key == key && active.contains(&twin.context) && !found.contains(&twin.command) {
+                found.push(twin.command);
+            }
+        }
+        found
+    }
+
+    /// Whether the key of `input` is a modifier key the active contexts
+    /// read ([`keyboard::sides`]): flight's left Option, Shift, Command and
+    /// Control, but not their right keys or Caps Lock.
+    #[must_use]
+    pub fn reads_modifier(&self, input: &Input) -> bool {
+        let Input::Key { key, .. } = *input else {
+            return false;
+        };
+        let mut down = KeysDown::default();
+        down.follow(&Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        });
+        self.active()
+            .into_iter()
+            .any(|context| down.modifiers(keyboard::sides(context)) != Modifiers::NONE)
+    }
+
+    /// Whether the key of `input` means `command` as one of its fixed
+    /// twins ([`KeyMap::TWINS`]), not through its binding: F1 for the
+    /// first stellar slot, for a screen whose original polls a twin apart
+    /// from its command's key.
+    #[must_use]
+    pub fn is_twin(&self, input: &Input, command: impl Into<Command>) -> bool {
+        let Input::Key { key, .. } = *input else {
+            return false;
+        };
+        let command = command.into();
+        let bound = self.bindings.with(|bindings| {
+            bindings
+                .keyboard
+                .combo(command)
+                .is_some_and(|combo| combo.key == key)
+        });
+        !bound
+            && KeyMap::TWINS
+                .iter()
+                .any(|twin| twin.key == key && twin.command == command)
     }
 
     /// Whether the key of `input` (a press, a repeat or a release) is
@@ -510,6 +584,75 @@ mod tests {
             !reader.held(FlightCommand::TargetSelect),
             "nothing followed"
         );
+    }
+
+    #[test]
+    fn bound_to_lists_every_active_command_and_twin_on_a_key_whatever_the_modifiers() {
+        let mut reader = CommandReader::new(FLIGHT);
+        assert_eq!(
+            reader.bound_to(&press(Key::KeyX)),
+            vec![Command::Flight(FlightCommand::Eject)],
+            "X alone means nothing, but Eject is on it"
+        );
+        assert_eq!(
+            reader.bound_to(&release(Key::Minus)),
+            vec![
+                Command::Flight(FlightCommand::SelfDestruct),
+                Command::Flight(FlightCommand::ZoomOut),
+            ]
+        );
+        assert_eq!(
+            reader.bound_to(&press(Key::F1)),
+            vec![Command::Flight(FlightCommand::StellarSlot1)],
+            "a twin"
+        );
+        assert_eq!(reader.bound_to(&press(Key::KeyQ)), vec![]);
+        assert_eq!(
+            reader.bound_to(&press(Key::Digit1)),
+            vec![Command::Flight(FlightCommand::StellarSlot1)]
+        );
+        reader.set_active(Context::EscortMenu, true);
+        assert_eq!(
+            reader.bound_to(&press(Key::Digit1)),
+            vec![
+                Command::Flight(FlightCommand::StellarSlot1),
+                Command::EscortMenu(EscortMenuCommand::Group1),
+            ],
+            "the active contexts', in command order"
+        );
+        assert_eq!(reader.bound_to(&Input::Text('x')), vec![]);
+    }
+
+    #[test]
+    fn reads_modifier_says_which_modifier_keys_the_contexts_read() {
+        let flight = CommandReader::new(FLIGHT);
+        for key in [
+            Key::AltLeft,
+            Key::ShiftLeft,
+            Key::MetaLeft,
+            Key::ControlLeft,
+        ] {
+            assert!(flight.reads_modifier(&press(key)), "{key:?}");
+        }
+        for key in [Key::AltRight, Key::CapsLock, Key::KeyA] {
+            assert!(!flight.reads_modifier(&press(key)), "{key:?}");
+        }
+        assert!(CommandReader::new(DIALOG).reads_modifier(&release(Key::AltRight)));
+        assert!(!flight.reads_modifier(&Input::Text('a')));
+    }
+
+    #[test]
+    fn is_twin_tells_a_twin_from_its_command_s_key() {
+        let slot = FlightCommand::StellarSlot1;
+        let mut reader = CommandReader::new(FLIGHT);
+        assert!(reader.is_twin(&press(Key::F1), slot));
+        assert!(!reader.is_twin(&press(Key::Digit1), slot));
+        assert!(!reader.is_twin(&press(Key::F2), slot), "another's twin");
+        assert!(!reader.is_twin(&Input::Text('1'), slot));
+        reader.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(slot, KeyCombo::key(Key::F1)),
+        ));
+        assert!(!reader.is_twin(&press(Key::F1), slot), "bound there now");
     }
 
     #[test]

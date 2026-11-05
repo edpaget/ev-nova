@@ -20,7 +20,6 @@ use nova_sim::{
     TradeRefusal,
 };
 
-use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
@@ -198,8 +197,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.send(FlightCommand::CloseHire);
     }
 
-    /// Presses the jettison key: with Command held, notes the tap, all
-    /// unless Option (Alt) is down too. The chord jettisons on every pass
+    /// Presses Jettison Cargo (`pressed`, held with Command, or with
+    /// Option too, [`JettisonNonMission`](crate::keymap::FlightCommand::JettisonNonMission)):
+    /// notes the tap, all unless with Option. The chord jettisons on every pass
     /// it is held, with no latch (`_HandlePlayer` @0x6fd54-0x6fda1), so
     /// the step does it ([`StepInput::jettison`](nova_sim::flight_frame::StepInput::jettison),
     /// `nova_sim::Session::hold_jettison`), and its messages and sound
@@ -209,11 +209,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// moves to the next step: no frame is drawn between them, so the move
     /// crosses no boundary the player sees. Its key's gate is asked by the
     /// key, before the press reaches it (`Screen::input`'s filter).
-    pub(super) fn jettison(&mut self) {
-        if !self.held.contains(&Key::MetaLeft) {
-            return;
-        }
-        self.jettison_tapped = Some(!self.held.contains(&Key::AltLeft));
+    pub(super) fn jettison_tap(&mut self, pressed: crate::keymap::FlightCommand) {
+        self.jettison_tapped = Some(pressed != crate::keymap::FlightCommand::JettisonNonMission);
     }
 
     /// Whether the pilot flying has seen the intro screen, as the kept

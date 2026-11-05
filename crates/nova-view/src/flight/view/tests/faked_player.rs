@@ -55,13 +55,13 @@ fn faked_cheats(cheats: bool) -> Faked {
 fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
     let mut view = faked(in_sol());
     assert!(!view.take_player_info_request());
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.sim.queue_answer(Answer::PlayerInfoPressed(true));
     let _ = view.ask_player_info();
     assert_eq!(sent_but_lines(&view), [FlightCommand::PressPlayerInfo]);
     assert!(view.take_player_info_request());
     assert!(!view.take_player_info_request(), "once");
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
     assert_eq!(view.message(), None, "nothing said");
     assert_eq!(view.drained_sounds(), [], "silent");
 }
@@ -78,14 +78,14 @@ fn the_player_infos_close_latches_every_key() {
 #[test]
 fn a_press_the_flight_refuses_asks_nothing_and_beeps_through_the_drain() {
     let mut view = faked(in_sol());
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.sim
         .queue_event(FlightEvent::Sound(nova_sim::SimSound::Refused));
     view.sim.queue_answer(Answer::PlayerInfoPressed(false));
     let _ = view.ask_player_info();
     assert_eq!(sent_but_lines(&view), [FlightCommand::PressPlayerInfo]);
     assert!(!view.take_player_info_request());
-    assert!(!view.held.is_empty(), "the flight keys held");
+    assert!(!view.holds_no_key(), "the flight keys held");
     assert_eq!(
         view.drained_sounds(),
         [Sound::Sim(nova_sim::SimSound::Refused)],

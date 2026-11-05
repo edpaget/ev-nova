@@ -68,7 +68,7 @@ pub(super) fn prompt(text: &str) -> OfferPrompt {
 
 /// Holds Up, as the flight keys are held, and presses Y.
 fn hail_thrusting(view: &mut Faked) {
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.hail();
 }
 
@@ -88,7 +88,7 @@ fn y_sends_the_hail_and_holds_the_comm_dialog_answered_once_letting_go_of_the_ke
     assert_eq!(view.take_hail(), Some(hail_view("Channel open.")));
     assert_eq!(view.take_hail(), None, "once");
     assert_eq!(view.message(), None);
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
     assert_eq!(HAIL_KEY, Key::KeyY);
 }
 
@@ -105,7 +105,7 @@ fn the_comm_dialogs_contents_are_the_flights_hail_under_way() {
 #[test]
 fn alt_y_hails_with_option_held() {
     let mut view = sol();
-    view.held.insert(Key::AltLeft);
+    view.hold_key(Key::AltLeft);
     view.hail();
     assert_eq!(
         sent_but_lines(&view),
@@ -153,7 +153,7 @@ fn a_refused_hail_opens_nothing_and_says_nothing() {
     assert_eq!(view.take_escort_dialog(), None);
     assert_eq!(view.take_planet_comm(), None);
     assert_eq!(view.message(), None);
-    assert!(view.held.contains(&Key::ArrowUp), "the keys held");
+    assert!(view.holds_key(Key::ArrowUp), "the keys held");
 }
 
 // Y's press through the input.
@@ -221,7 +221,7 @@ fn y_on_a_stellar_that_answers_holds_its_planet_comm_dialog_once_letting_go_of_t
     assert_eq!(view.take_planet_comm(), Some(planet_view(128)));
     assert_eq!(view.take_planet_comm(), None, "once");
     assert_eq!(view.take_hail(), None, "no comm dialog");
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
 }
 
 #[test]
@@ -389,12 +389,12 @@ fn y_on_a_person_offering_its_mission_holds_the_offer_once_till_its_close_gives_
     assert_eq!(view.take_hail(), None, "no comm dialog");
     assert_eq!(view.take_offer(), Some(prompt("Ace needs help.")));
     assert_eq!(view.take_offer(), None, "once");
-    assert!(view.held.is_empty(), "let go for the dialog");
+    assert!(view.holds_no_key(), "let go for the dialog");
     // The offer closes with Up and J down: `_HandlePlayer` polls Up, and
     // `_SetAllKeyCmdFlags` (@0x622ac) latches J.
     let replay = back(&mut view, [Key::ArrowUp, JUMP_KEY], [], false);
     assert_eq!(replay, [], "J latched");
-    assert_eq!(view.held, [Key::ArrowUp].into_iter().collect());
+    assert_eq!(view.held_keys(), [Key::ArrowUp].into_iter().collect());
 }
 
 // Each of `_HandlePlayerCommunication`'s dialogs is followed by
@@ -426,11 +426,11 @@ fn an_offer_accepted_at_once_latches_the_keys_held_at_the_next_pass() {
             mission: MissionId(130),
             accepted: Ok(0),
         })));
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     view.hail();
     view.tick(TICK);
-    assert!(view.latched_down.contains(&JUMP_KEY), "latched");
-    assert!(!view.held.contains(&JUMP_KEY));
+    assert!(view.latched_key(JUMP_KEY), "latched");
+    assert!(!view.holds_key(JUMP_KEY));
 }
 
 #[test]
@@ -457,7 +457,7 @@ fn an_offer_accepted_at_once_shows_nothing() {
     hail_thrusting(&mut view);
     assert_eq!(view.take_offer(), None);
     assert_eq!(view.take_hail(), None);
-    assert!(view.held.contains(&Key::ArrowUp), "nothing to let go for");
+    assert!(view.holds_key(Key::ArrowUp), "nothing to let go for");
 }
 
 // The escort dialog.
@@ -472,7 +472,7 @@ fn y_on_a_fleet_escort_holds_its_dialog_once_and_its_presses_send_their_buttons(
     assert_eq!(view.take_escort_dialog(), Some(escort_view(None)));
     assert_eq!(view.take_escort_dialog(), None, "once");
     assert_eq!(view.take_hail(), None, "no comm dialog");
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
     let sold = escort_view(Some(nova_sim::fleet::EscortMark::Sell));
     view.sim
         .queue_answer(Answer::EscortDialog(Some(sold.clone())));

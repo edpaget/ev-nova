@@ -2974,7 +2974,7 @@ mod tests {
 
     #[test]
     fn the_map_key_asks_for_the_map_on_a_press_not_in_the_quantity_dialog() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut screen = screen();
         assert!(!screen.take_map_request());
         screen.input(&key(m, true, true));

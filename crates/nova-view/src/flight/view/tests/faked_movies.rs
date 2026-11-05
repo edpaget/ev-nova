@@ -485,7 +485,7 @@ fn an_unlatched_key_pressed_under_a_gate_movie_reads_down_after_the_come_out() {
     view.input(&key(Key::ArrowUp, true));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(view.held.contains(&Key::ArrowUp), "down: {:?}", view.held);
+    assert!(view.holds_key(Key::ArrowUp), "down: {:?}", view.keys);
 }
 
 #[test]
@@ -500,7 +500,7 @@ fn one_let_go_under_the_movie_doesnt() {
     view.input(&key(Key::ArrowUp, false));
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(!view.held.contains(&Key::ArrowUp));
+    assert!(!view.holds_key(Key::ArrowUp));
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn an_unlatched_key_held_through_the_hypergates_map_and_movie_reads_down_after_t
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     view.sim.queue_answer(arrived());
     run_out(&mut view);
-    assert!(view.held.contains(&Key::ArrowUp), "down: {:?}", view.held);
+    assert!(view.holds_key(Key::ArrowUp), "down: {:?}", view.keys);
 }
 
 #[test]
@@ -530,7 +530,7 @@ fn a_jump_key_held_across_the_hypergate_map_and_its_movie_ignores_its_repeats_af
     // J's release, which `_HandlePlayer` reads from `GetKeys`, never from
     // a repeat.
     let (mut view, _) = filming(filmed(&[131], &[]), true);
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);
     view.sim.queue_answer(at_gate(GateKind::Hypergate));
@@ -546,13 +546,13 @@ fn a_jump_key_held_across_the_hypergate_map_and_its_movie_ignores_its_repeats_af
     view.sim.queue_answer(arrived());
     run_out(&mut view);
     view.input(&held(JUMP_KEY));
-    assert!(!view.held.contains(&JUMP_KEY), "latched: {:?}", view.held);
+    assert!(!view.holds_key(JUMP_KEY), "latched: {:?}", view.keys);
 }
 
 #[test]
 fn a_jump_key_let_go_under_the_gates_movie_is_tracked_afresh_after_the_come_out() {
     let (mut view, _) = filming(filmed(&[300], &[]), true);
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     into_the_wormhole(
         &mut view,
         Some(ScreenAnswer::GateEntryDesc(Some(300))),
@@ -564,11 +564,7 @@ fn a_jump_key_let_go_under_the_gates_movie_is_tracked_afresh_after_the_come_out(
     run_out(&mut view);
     view.take_movie_replay();
     view.input(&held(JUMP_KEY));
-    assert!(
-        view.held.contains(&JUMP_KEY),
-        "a first sight: {:?}",
-        view.held
-    );
+    assert!(view.holds_key(JUMP_KEY), "a first sight: {:?}", view.keys);
 }
 
 #[test]
@@ -596,7 +592,7 @@ fn a_jump_key_first_seen_under_a_gates_movie_by_a_repeat_ignores_its_repeats_aft
         "{:?}",
         sent_since(&view, from)
     );
-    assert!(!view.held.contains(&JUMP_KEY), "latched: {:?}", view.held);
+    assert!(!view.holds_key(JUMP_KEY), "latched: {:?}", view.keys);
     view.input(&key(JUMP_KEY, false));
     view.input(&key(JUMP_KEY, true));
     assert!(
@@ -618,14 +614,14 @@ fn a_skip_flushes_the_queue_but_not_a_key_still_down() {
     view.input(&key(Key::Enter, true));
     assert!(!view.playing(), "skipped");
     assert_eq!(view.take_movie_replay(), [], "flushed");
-    assert!(view.held.contains(&Key::ArrowUp), "polled: {:?}", view.held);
+    assert!(view.holds_key(Key::ArrowUp), "polled: {:?}", view.keys);
 }
 
 #[test]
 fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
     let (mut view, _) = filming(filmed(&[300], &[]), true);
-    view.held.insert(JUMP_KEY);
-    view.held.insert(BOARD_KEY);
+    view.hold_key(JUMP_KEY);
+    view.hold_key(BOARD_KEY);
     into_the_wormhole(
         &mut view,
         Some(ScreenAnswer::GateEntryDesc(Some(300))),
@@ -633,11 +629,8 @@ fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
     );
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(!view.held.contains(&JUMP_KEY), "latched (@0x6429c)");
-    assert!(
-        view.held.contains(&BOARD_KEY),
-        "B's own latch, never set there"
-    );
+    assert!(!view.holds_key(JUMP_KEY), "latched (@0x6429c)");
+    assert!(view.holds_key(BOARD_KEY), "B's own latch, never set there");
 }
 
 /// J and B pressed and let go, and the zoom tapped, under the movie

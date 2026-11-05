@@ -1892,7 +1892,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{DrawCommand, frame_rect};
-    use crate::flight::view::MAP_KEY;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
     use crate::input::{Key, MouseButton};
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};

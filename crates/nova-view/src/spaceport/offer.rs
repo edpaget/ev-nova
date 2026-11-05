@@ -1705,7 +1705,7 @@ mod tests {
     /// alone (@0x98e56).
     #[test]
     fn a_letter_the_waited_keys_repeat_typed_chooses_nothing_after_the_wait() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         use crate::ui::key_wait::WaitKeys;
         use crate::ui::mission_info::MISSION_INFO_KEY;
         use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -2519,7 +2519,7 @@ mod tests {
 
     #[test]
     fn the_map_key_asks_for_the_map_before_the_labels_letters_on_a_press() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let mut dialog = dialog_of(prompt("Move it", Some("No thanks")));
         for (input, what) in [
             (
@@ -2564,7 +2564,7 @@ mod tests {
         let mut dialog = offer();
         dialog.input(&key(Key::Enter));
         assert!(dialog.answered());
-        dialog.input(&key(crate::flight::view::MAP_KEY));
+        dialog.input(&key(crate::Key::KeyM));
         assert!(!dialog.take_map_request());
     }
 

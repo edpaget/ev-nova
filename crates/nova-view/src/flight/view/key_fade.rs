@@ -1,72 +1,101 @@
-//! Which physical key fades the cursor, against what the kept frame says
+//! Which held command fades the cursor, against what the kept frame says
 //! fades it ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
 //! The gates are the session's (`nova_sim::key_fade`, which records where
 //! each of `_HandlePlayer`'s writes of the byte sits); the keys are the
 //! view's, in [`fade_key`]. Every latched block writes the byte before
 //! its latch test, so a latched key held past a close fades the cursor as
-//! a held one does ([`FlightView::keys_down`]).
+//! a held one does ([`FlightView::commands_down`]).
 
 use nova_sim::flight_frame::FadeKey;
 
-use crate::Key;
+use crate::Input;
 use crate::flight::sim_port::FlightSim;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::keymap::{Command, FlightCommand as F, Kind, PlayCommand};
 
-use super::{
-    AFTERBURNER_KEY, BOARD_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY,
-    FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY,
-    MAP_KEY, MENU_CLOSE_KEY, NAV_OFF_KEY, NEAREST_KEY, SECONDARY_KEY, SELECT_KEY,
-    SELF_DESTRUCT_KEY, TARGET_KEY,
-};
+use super::FlightView;
 
-/// The gate `key` sets the byte behind, with Command down or not, or
-/// `None` for a key that never sets it: K, X and `-` are polled only with
-/// Command down, and Alt, Shift, Command alone, E, F, D, V, C and F12 are
-/// polled with no write. The stellar slot keys are
-/// [`FlightView::slot_key_polled`]'s.
-fn fade_key(key: Key, command: bool) -> Option<FadeKey> {
-    let gate = match key {
-        TARGET_KEY | NEAREST_KEY | HYPER_SELECT_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY
-        | MAP_KEY | PLAYER_INFO_KEY | MENU_CLOSE_KEY | HYPERSPACE_MODE_KEY | NAV_OFF_KEY
-        | FACE_TARGET_KEY => FadeKey::Free,
-        Key::ArrowUp
-        | Key::ArrowDown
-        | Key::ArrowLeft
-        | Key::ArrowRight
-        | AFTERBURNER_KEY
-        | FIRE_KEY
-        | JUMP_KEY
-        | CLOAK_KEY => FadeKey::Helm,
-        SECONDARY_KEY => FadeKey::Secondary,
-        DESELECT_KEY => FadeKey::WeaponSafety,
-        LAND_KEY => FadeKey::Land,
-        MISSION_INFO_KEY => FadeKey::MissionInfo,
-        JETTISON_KEY if command => FadeKey::Free,
-        EJECT_KEY if command => FadeKey::Eject,
-        SELF_DESTRUCT_KEY if command => FadeKey::SelfDestruct,
+/// The gate `command` sets the byte behind, or `None` for one that never
+/// sets it: Command, Option and Shift alone hold no command, and the
+/// escort menu's keys and Show Framerate are polled with no write. The
+/// stellar slots and the menu's groups are
+/// [`FlightView::slot_polled`]'s.
+fn fade_key(command: Command) -> Option<FadeKey> {
+    let gate = match command {
+        Command::Flight(
+            F::TargetSelect
+            | F::TargetSelectBack
+            | F::TargetEscort
+            | F::TargetEscortBack
+            | F::ClosestTarget
+            | F::ClosestShip
+            | F::HyperSelect
+            | F::SelectSecondary
+            | F::SelectSecondaryBack
+            | F::Board
+            | F::Communicate
+            | F::HailStellar
+            | F::Acknowledge
+            | F::HyperspaceMode
+            | F::NavOff
+            | F::ClearTarget
+            | F::Autopilot
+            | F::FaceStellar
+            | F::JettisonCargo
+            | F::JettisonNonMission,
+        )
+        | Command::Play(PlayCommand::GalaxyMap | PlayCommand::PlayerInfo) => FadeKey::Free,
+        Command::Flight(
+            F::Accelerate
+            | F::ReverseCourse
+            | F::RotateLeft
+            | F::RotateRight
+            | F::Afterburner
+            | F::FirePrimary
+            | F::HyperJump
+            | F::EngageCloak,
+        ) => FadeKey::Helm,
+        Command::Flight(F::FireSecondary) => FadeKey::Secondary,
+        Command::Flight(F::WeaponSafety) => FadeKey::WeaponSafety,
+        Command::Flight(F::LandDock) => FadeKey::Land,
+        Command::Play(PlayCommand::MissionInfo) => FadeKey::MissionInfo,
+        Command::Flight(F::Eject) => FadeKey::Eject,
+        Command::Flight(F::SelfDestruct) => FadeKey::SelfDestruct,
         _ => return None,
     };
     Some(gate)
 }
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Whether `key`, pressed or held, fades the cursor on this frame: a
-    /// stellar slot key while its block polls it, as it writes the byte
-    /// behind no gate of its own (@0x69e0d), any other by [`fade_key`].
-    pub(super) fn key_fades_cursor(&self, key: Key) -> bool {
+    /// Whether `command`, pressed or held, fades the cursor on this frame:
+    /// a stellar slot or a group while its block polls it, as it writes the
+    /// byte behind no gate of its own (@0x69e0d), any other by
+    /// [`fade_key`]. The jettison, eject and self-destruct chords hold
+    /// their commands only with Command down, as `_HandlePlayer` reads
+    /// their keys only then.
+    pub(super) fn key_fades_cursor(&self, command: Command) -> bool {
         let fades = self.frame.key_fades;
-        match self.slot_key_polled(key, false) {
+        match self.slot_polled(command, false) {
             Some(polled) => polled && fades.fades(FadeKey::Free),
-            None => fade_key(key, self.held.contains(&Key::MetaLeft))
-                .is_some_and(|gate| fades.fades(gate)),
+            None => fade_key(command).is_some_and(|gate| fades.fades(gate)),
         }
     }
 
+    /// Whether the key `input` presses or repeats fades the cursor: a
+    /// command it would hold does ([`FlightView::key_fades_cursor`]).
+    pub(super) fn press_fades_cursor(&self, input: &Input) -> bool {
+        self.keys
+            .meanings(input)
+            .into_iter()
+            .any(|command| command.kind() == Kind::Held && self.key_fades_cursor(command))
+    }
+
     /// Whether this frame's pass sets the byte with what is read down: a
-    /// jump or an auto-eject with no key at all, or any key down that
+    /// jump or an auto-eject with no key at all, or any held command that
     /// fades, a latched one held past a close included.
     pub(super) fn cursor_keyed(&self) -> bool {
-        self.frame.key_fades.unbidden() || self.keys_down().any(|key| self.key_fades_cursor(key))
+        self.frame.key_fades.unbidden()
+            || self
+                .commands_down()
+                .any(|command| self.key_fades_cursor(command))
     }
 }

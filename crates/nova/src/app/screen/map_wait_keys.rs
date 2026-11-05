@@ -113,7 +113,11 @@ impl AppScreen {
                     && let Some(flight) = &mut self.flight
                 {
                     for key in still_down {
-                        flight.hold_live_key(key);
+                        flight.hold_live_key(&Input::Key {
+                            key,
+                            pressed: true,
+                            repeat: false,
+                        });
                     }
                 }
                 return;

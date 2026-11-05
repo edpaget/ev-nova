@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn with_marks_the_map_key_asks_for_the_map_and_without_none() {
-        let m = crate::flight::view::MAP_KEY;
+        let m = crate::Key::KeyM;
         let marks = MapMarks {
             green: Some(nova_sim::SystemId(131)),
             multi_arrows: true,
@@ -1665,7 +1665,7 @@ mod tests {
     fn the_map_key_waits_for_the_release() {
         let mut desc = long_stock_desc().with_map(Some(marks()));
         press_on(&mut desc, SCROLL_DOWN_ITEM);
-        desc.input(&key(crate::flight::view::MAP_KEY));
+        desc.input(&key(crate::Key::KeyM));
         assert_eq!(desc.take_map_request(), None, "it waits");
         desc.tick(TICK * 3);
         assert_eq!(desc.scroll_offset(), 4.0, "the hold carries on");
@@ -1730,7 +1730,7 @@ mod tests {
     fn what_the_replay_queued_after_the_map_key_is_dropped() {
         let mut desc = long_stock_desc().with_map(Some(marks()));
         press_on(&mut desc, SCROLL_DOWN_ITEM);
-        for input in [key(crate::flight::view::MAP_KEY), key(Key::Enter)] {
+        for input in [key(crate::Key::KeyM), key(Key::Enter)] {
             desc.input(&input);
         }
         release_on(&mut desc, SCROLL_DOWN_ITEM);
@@ -1743,7 +1743,7 @@ mod tests {
     fn a_map_key_that_opens_no_map_lets_the_replay_run_on() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, SCROLL_DOWN_ITEM);
-        for input in [key(crate::flight::view::MAP_KEY), key(Key::Enter)] {
+        for input in [key(crate::Key::KeyM), key(Key::Enter)] {
             desc.input(&input);
         }
         release_on(&mut desc, SCROLL_DOWN_ITEM);

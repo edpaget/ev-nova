@@ -4,12 +4,12 @@
 //! `_HandlePlayer` polls every key from `GetKeys` (`_QuickKeyCheck`
 //! @0xa0f5), so a key held past a close that `_SetAllKeyCmdFlags`
 //! (@0x61e6d) latched still reads down: only the command behind its latch
-//! waits for its release. Ours keeps such a key out of
+//! waits for its release. Ours keeps such a key's commands out of
 //! [`FlightView::held`] ([`FlightView::latched_down`]), so its OS repeats
 //! are no presses, and sets ours' copy of its latch as the original's site
-//! does ([`FlightView::set_every_latch`], [`FlightView::latch_key`]). The
+//! does ([`FlightView::set_every_latch`], [`FlightView::latch_command`]). The
 //! frames that poll a latched key read it here
-//! ([`FlightView::reads_down`], [`FlightView::keys_down`]): it reads down
+//! ([`FlightView::reads_down`], [`FlightView::commands_down`]): it reads down
 //! with its latch set, so its command waits, and every read that skips
 //! the latch sees it down. That is the cursor's fade (each latched block
 //! sets `_keyPressedThisFrame` *0x3b5550 before its latch test), the
@@ -22,26 +22,43 @@
 //! reaches its press only after its release. So do the step's controls
 //! (the cloak's edge among them) and the escort menu.
 
-use crate::Key;
 use crate::flight::sim_port::FlightSim;
-use crate::ui::mission_info::MISSION_INFO_KEY;
+use crate::keymap::{Command, Context, EscortMenuCommand, FlightCommand, Kind, PlayCommand};
 
-use super::{
-    FlightView, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JUMP_KEY, NAV_OFF_KEY, TARGET_KEY,
-    slot_block,
-};
+use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Whether `_QuickKeyCheck` (@0xa0f5) reads `key` down: held, or held
-    /// past a close that latched it ([`FlightView::latched_down`]).
-    pub(super) fn reads_down(&self, key: Key) -> bool {
-        self.held.contains(&key) || self.latched_down.contains(&key)
+    /// Whether flight holds `command`: its key is down, as flight's reader
+    /// follows it, and no close latched it ([`FlightView::latched_down`]).
+    pub(super) fn held(&self, command: impl Into<Command>) -> bool {
+        let command = command.into();
+        self.keys.held(command) && !self.latched_down.contains(&command)
     }
 
-    /// Every key `_QuickKeyCheck` reads down ([`FlightView::reads_down`]):
-    /// the held ones and the latched ones, which never share a key.
-    pub(super) fn keys_down(&self) -> impl Iterator<Item = Key> + '_ {
-        self.held.iter().chain(&self.latched_down).copied()
+    /// Whether `_QuickKeyCheck` (@0xa0f5) reads `command` down: held, or
+    /// held past a close that latched it ([`FlightView::latched_down`]).
+    pub(super) fn reads_down(&self, command: impl Into<Command>) -> bool {
+        self.keys.held(command)
+    }
+
+    /// Every held command `_QuickKeyCheck` reads down
+    /// ([`FlightView::reads_down`]), the latched ones among them: the
+    /// commands of [`Kind::Held`], which the original polls every frame.
+    pub(super) fn commands_down(&self) -> impl Iterator<Item = Command> + '_ {
+        self.keys
+            .held_commands()
+            .filter(|command| command.kind() == Kind::Held)
+    }
+
+    /// Switches the escort menu's group keys on while the menu shows,
+    /// fading too, and off otherwise, so 1-5 mean its groups only then
+    /// (`_QuickKeyCheck` @0xa106-0xa124).
+    pub(super) fn sync_escort_keys(&mut self) {
+        let shown = self.escort_menu.is_open();
+        if self.keys.active().contains(&Context::EscortMenu) != shown {
+            self.keys.set_active(Context::EscortMenu, shown);
+            self.latched_down.retain(|&command| self.keys.held(command));
+        }
     }
 
     /// Sets every latch ours keeps of those `_SetAllKeyCmdFlags`
@@ -56,7 +73,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// reaches only after its release, or U, whose edge the step reads.
     /// B's and L's latches (`_boardTryFlag` 0xdee18, `_dockTryFlag`
     /// 0xdee34) are not among them (the `map_wait` module's
-    /// `OWN_LATCH_KEYS`). A latch whose keys are up clears at the next
+    /// `OWN_LATCH`). A latch whose keys are up clears at the next
     /// poll, and a fresh press clears its own, so setting them all is
     /// safe.
     pub(super) fn set_every_latch(&mut self) {
@@ -68,17 +85,35 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.target_latch = true;
     }
 
-    /// Sets `key`'s latch, as [`FlightView::set_every_latch`] sets it:
-    /// for a key down at the poll before a dialog no site follows, whose
-    /// latch that poll set.
-    pub(super) fn latch_key(&mut self, key: Key) {
-        match key {
-            NAV_OFF_KEY | HYPERSPACE_MODE_KEY => self.nav_latch = true,
-            HYPER_SELECT_KEY => self.select_latch = true,
-            JUMP_KEY => self.jump_latch = true,
-            MISSION_INFO_KEY => self.faded_keys.set_mission_latch(),
-            TARGET_KEY => self.target_latch = true,
-            _ if slot_block::is_block_key(key) => self.slot_block.set_latch(),
+    /// Sets `command`'s latch, as [`FlightView::set_every_latch`] sets
+    /// it: for a key down at the poll before a dialog no site follows,
+    /// whose latch that poll set.
+    pub(super) fn latch_command(&mut self, command: Command) {
+        use FlightCommand as F;
+        match command {
+            Command::Flight(F::NavOff | F::ClearTarget | F::HyperspaceMode) => {
+                self.nav_latch = true;
+            }
+            Command::Flight(F::HyperSelect) => self.select_latch = true,
+            Command::Flight(F::HyperJump) => self.jump_latch = true,
+            Command::Play(PlayCommand::MissionInfo) => self.faded_keys.set_mission_latch(),
+            Command::Flight(
+                F::TargetSelect | F::TargetSelectBack | F::TargetEscort | F::TargetEscortBack,
+            ) => self.target_latch = true,
+            Command::Flight(
+                F::StellarSlot1
+                | F::StellarSlot2
+                | F::StellarSlot3
+                | F::StellarSlot4
+                | F::NearestStellar,
+            )
+            | Command::EscortMenu(
+                EscortMenuCommand::Group1
+                | EscortMenuCommand::Group2
+                | EscortMenuCommand::Group3
+                | EscortMenuCommand::Group4
+                | EscortMenuCommand::Group5,
+            ) => self.slot_block.set_latch(),
             _ => {}
         }
     }

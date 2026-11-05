@@ -271,12 +271,63 @@ impl Input {
             Self::Key { .. } | Self::Text(_) | Self::PointerLeft => self,
         }
     }
+
+    /// Whether `self` and `other` are both a key's press, repeat or
+    /// release, of one key.
+    #[must_use]
+    pub fn same_key(&self, other: &Self) -> bool {
+        matches!(
+            (*self, *other),
+            (Self::Key { key: a, .. }, Self::Key { key: b, .. }) if a == b
+        )
+    }
+
+    /// The release of the key `self` presses, repeats or releases; any
+    /// other input as it is.
+    #[must_use]
+    pub const fn released(self) -> Self {
+        match self {
+            Self::Key { key, .. } => Self::Key {
+                key,
+                pressed: false,
+                repeat: false,
+            },
+            other => other,
+        }
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    fn key_input(key: Key, pressed: bool, repeat: bool) -> Input {
+        Input::Key {
+            key,
+            pressed,
+            repeat,
+        }
+    }
+
+    #[test]
+    fn same_key_matches_any_input_of_one_key() {
+        let press = key_input(Key::KeyJ, true, false);
+        assert!(press.same_key(&key_input(Key::KeyJ, false, false)));
+        assert!(press.same_key(&key_input(Key::KeyJ, true, true)));
+        assert!(!press.same_key(&key_input(Key::KeyK, true, false)));
+        assert!(!press.same_key(&Input::Text('j')));
+        assert!(!Input::PointerLeft.same_key(&Input::PointerLeft));
+    }
+
+    #[test]
+    fn released_is_the_release_of_its_key() {
+        assert_eq!(
+            key_input(Key::KeyJ, true, true).released(),
+            key_input(Key::KeyJ, false, false)
+        );
+        assert_eq!(Input::Text('j').released(), Input::Text('j'));
+    }
 
     #[test]
     fn a_translated_input_moves_its_pointer_point_and_nothing_else() {

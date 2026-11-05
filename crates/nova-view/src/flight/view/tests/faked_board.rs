@@ -91,7 +91,7 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
     let mut view = sol();
     assert_eq!(view.take_boarding(), None);
     opened(&mut view);
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     assert!(view.board(), "a board that opens latches");
     assert_eq!(sent_but_lines(&view), [FlightCommand::Board]);
     let shown = view.take_boarding().expect("held for the router");
@@ -105,7 +105,7 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
     view.sim.queue_screen(ScreenAnswer::Boarding(ON_BOARD));
     assert_eq!(view.boarding(), Some(ON_BOARD), "still under way");
     assert_eq!(view.message(), None);
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
     assert_eq!(BOARD_KEY, Key::KeyB);
 }
 
@@ -284,21 +284,18 @@ fn a_pickup_that_fits_latches_the_keys_held_at_the_next_pass() {
     let mut view = sol();
     view.sim
         .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(picked.clone()))));
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     view.board();
     view.tick(TICK);
-    assert!(view.latched_down.contains(&JUMP_KEY), "latched");
+    assert!(view.latched_key(JUMP_KEY), "latched");
     // A failed mission's ship takes the same pickup, then the plunder.
     let mut view = sol();
     view.sim.queue_event(FlightEvent::BoardLine(picked));
     view.sim.queue_answer(Answer::Boarded(Boarding::Repelled));
-    view.held.insert(JUMP_KEY);
+    view.hold_key(JUMP_KEY);
     view.board();
     view.tick(TICK);
-    assert!(
-        view.latched_down.contains(&JUMP_KEY),
-        "latched by the pickup"
-    );
+    assert!(view.latched_key(JUMP_KEY), "latched by the pickup");
 }
 
 #[test]
@@ -448,11 +445,11 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
         .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
             prompt.clone(),
         ))));
-    view.held.insert(Key::ArrowUp);
+    view.hold_key(Key::ArrowUp);
     view.board();
     assert_eq!(view.take_boarding(), None, "no plunder");
     assert_eq!(view.take_offer(), Some(prompt));
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.holds_no_key(), "the flight keys let go");
     assert_eq!(view.message(), None, "nothing granted");
 }
 
@@ -577,13 +574,13 @@ fn the_board_keys_frame_while_its_gate_is_refused_sends_nothing_and_leaves_the_l
 #[test]
 fn the_held_keys_frame_runs_the_board_keys_with_b_held() {
     let mut view = sol();
-    view.held.insert(BOARD_KEY);
+    view.hold_key(BOARD_KEY);
     view.sim
         .queue_answer(Answer::BoardRefused(BoardRefusal::TooFar));
     view.held_keys_frame();
     assert_eq!(boards(&view), 1);
     assert_eq!(view.message(), Some(NOT_CLOSE_ENOUGH), "in the words given");
-    view.held.remove(&BOARD_KEY);
+    view.let_go_key(BOARD_KEY);
     view.held_keys_frame();
     assert!(!view.board_latch, "let go");
 }

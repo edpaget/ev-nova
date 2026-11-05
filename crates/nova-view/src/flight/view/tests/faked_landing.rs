@@ -407,8 +407,8 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
     let mut view = at_the_hypergate();
     view.map.centre_on_system(SystemId(132));
     view.track_held(&key(Key::ArrowUp, true));
-    view.held.insert(JUMP_KEY);
-    view.held.insert(BOARD_KEY);
+    view.hold_key(JUMP_KEY);
+    view.hold_key(BOARD_KEY);
     came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
     close_on(&mut view, Some(SystemId(131)), arrived());
     assert_eq!(
@@ -428,7 +428,7 @@ fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate_fading_in_from_whit
         Some(JumpPhase::FadeIn(0.0))
     );
     assert_eq!(
-        view.held,
+        view.held_keys(),
         [Key::ArrowUp, BOARD_KEY].into_iter().collect(),
         "the latched keys let go (@0x6387a, @0x639f2), Up and B polled"
     );
@@ -562,7 +562,7 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
             "effects {effects}"
         );
         assert_eq!(
-            view.held,
+            view.held_keys(),
             [Key::ArrowUp, BOARD_KEY].into_iter().collect(),
             "the latched keys let go (@0x6429c), Up and B polled"
         );

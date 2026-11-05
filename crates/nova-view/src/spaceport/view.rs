@@ -3513,7 +3513,7 @@ pub(in crate::spaceport) mod tests {
         let others = [
             PLAYER_INFO_KEY,
             MISSION_INFO_KEY,
-            crate::flight::view::MAP_KEY,
+            crate::Key::KeyM,
             Key::Enter,
             Key::Escape,
         ];
@@ -4931,7 +4931,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn the_bars_map_key_asks_through_the_spaceport() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         let mut view = drinking(true);
         view.input(&key(MAP_KEY));
         assert_eq!(
@@ -4948,7 +4948,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn the_map_key_asks_from_an_offer_over_each_venue() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         for venue in [SPACEPORT, BAR, TRADE_CENTER, OUTFITTER, SHIPYARD] {
             let mut view = venues();
             assert_eq!(view.take_offer_request(), Some(SPACEPORT));
@@ -4980,7 +4980,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn the_map_key_asks_from_the_mission_computer_with_its_selected_offer() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         let mut view = missioned();
         view.open_mission_computer(Ok(offers()));
         view.input(&key(MAP_KEY));
@@ -4993,7 +4993,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn mission_info_asks_for_the_map_unless_opened_over_an_offer_or_the_computer() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         let mut view = missioned();
         view.open_mission_info(actives(2));
         view.input(&key(MAP_KEY));
@@ -5017,7 +5017,7 @@ pub(in crate::spaceport) mod tests {
 
     #[test]
     fn the_briefing_asks_for_its_map_and_another_text_for_none() {
-        use crate::flight::view::MAP_KEY;
+        const MAP_KEY: crate::Key = crate::Key::KeyM;
         let marks = nova_sim::MapMarks {
             green: Some(nova_sim::SystemId(131)),
             multi_arrows: true,

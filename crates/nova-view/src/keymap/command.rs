@@ -177,39 +177,76 @@ context_commands! {
     /// Flight's commands: the `Keys.nib` commands `_HandlePlayer` reads,
     /// in `Keys.nib`'s order, then the ones the original keeps outside
     /// `_keyPrefs`.
+    ///
+    /// The held ones are those flight tracks as held: `_HandlePlayer`
+    /// polls each every frame, setting the cursor's fade
+    /// (`_keyPressedThisFrame` *0x3b5550) on every frame one is down and
+    /// counting it for `_quickKeyCheckResult`, which the floating map's
+    /// zoom reads; the pressed ones act only as they go down. Which held
+    /// ones wait on a latch, and which are read live across a close, is
+    /// the flight view's `map_wait` module's.
     FlightCommand in Flight {
-        /// Thrust (`accelKey`, `_keyPrefs`+0x2a).
+        /// Thrust (`accelKey`, `_keyPrefs`+0x2a), held.
         Accelerate: Held,
-        /// Turn to face against the ship's motion (`reverseKey`, +0x2c).
+        /// Turn to face against the ship's motion (`reverseKey`, +0x2c),
+        /// held.
         ReverseCourse: Held,
-        /// Turn right (`rightTurn`, +0x28).
+        /// Turn right (`rightTurn`, +0x28), held.
         RotateRight: Held,
-        /// Turn left (`leftTurn`, +0x26).
+        /// Turn left (`leftTurn`, +0x26), held.
         RotateLeft: Held,
-        /// Engage the afterburner (`afterburner`, +0x30).
+        /// Engage the afterburner (`afterburner`, +0x30, `_loadKeys`
+        /// @0xcd899-0xcd8bc), held. It fades the cursor, as its press sets
+        /// *0x3b5550 whether or not the ship carries an afterburner, on a
+        /// ship not disabled (@0x6caf2, @0x6cb03).
         Afterburner: Held,
         /// Turn to face the ship target, or the navigation stellar with
-        /// none (`autopilot`, +0x0e).
+        /// none (`autopilot`, +0x0e, `_loadKeys` @0xcd8c5-0xcd935), held.
+        /// It fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
         Autopilot: Held,
-        /// Hyperspace Mode (`hyperMode`, +0x18), polled with a latch.
+        /// Hyperspace Mode (`hyperMode`, +0x18, key code 0x04), polled
+        /// with a latch: puts the nav system in hyperspace mode and selects
+        /// the course's next hop (`_HandlePlayer` @0x69b76-0x69b89). Held
+        /// outside a jump, it shows the floating map (@0x69b8e-0x69ba8).
+        /// Held through a jump's end, it acts as a press on the first frame
+        /// after it, as its latch is cleared on every frame of a jump.
         HyperspaceMode: Held,
-        /// Hyper Select (`hyperSel`, +0x1a), polled with a latch.
+        /// Hyper Select (`hyperSel`, +0x1a, key code 0x2a), polled with a
+        /// latch: cycles the hyperspace selection through the systems the
+        /// current one links to, the course kept by the engine's reading.
+        /// Held in nav mode 3, during a jump too, it shows the floating map
+        /// (@0x69cdd-0x69ce7, @0x69be7). One first pressed during a jump,
+        /// or let go and pressed again then, and held past its end selects
+        /// on the first frame after it; one held from before the jump does
+        /// nothing after it.
         HyperSelect: Held,
         /// Hyper Jump (`jumpKey`, +0x1c), polled with a latch.
         HyperJump: Held,
-        /// Nav System Off (`navOff`, +0x10), polled with a latch.
+        /// Nav System Off (`navOff`, +0x10, key code 0x32), polled with a
+        /// latch: turns the nav system off, the course kept (`_HandlePlayer`
+        /// @0x69a94-0x69b63). It shares Hyperspace Mode's latch: held
+        /// through a jump's end it turns the nav off after it, and Option
+        /// let go with it still down turns the nav off. While the dev
+        /// overlay is built in, its default key toggles the overlay instead
+        /// and never reaches flight.
         NavOff: Held,
-        /// Hail the target (`hailKey`, +0x08).
+        /// Hail the target (`hailKey`, +0x08), one hail a press.
         Communicate: Held,
-        /// Land, or request clearance (`landReq`, +0x0a).
+        /// Land, or request clearance (`landReq`, +0x0a; `STR#` 129 and
+        /// `STR#` 2002 #25 name it).
         LandDock: Held,
-        /// Fire the primary weapons (`fireKey0`, +0x04).
+        /// Fire the primary weapons (`fireKey0`, +0x04), held.
         FirePrimary: Held,
-        /// Fire the secondary weapon (`fireKey1`, +0x06).
+        /// Fire the secondary weapon (`fireKey1`, +0x06), held.
         FireSecondary: Held,
-        /// Select the next secondary weapon (`weapSelect`, +0x00).
+        /// Select the next secondary weapon (`weapSelect`, +0x00), in
+        /// `wëap` ID order. Held, it fades the cursor, as `_HandlePlayer`
+        /// sets *0x3b5550 on every pass it is down (@0x6ac2a).
         SelectSecondary: Held,
-        /// Let go of the secondary weapon (`weapSafe`, +0x02).
+        /// Let go of the secondary weapon (`weapSafe`, +0x02, key code
+        /// 0x01, `_loadKeys` @0xcdde9-0xcde0c), held: on every pass with
+        /// one selected (`_HandlePlayer` @0x6adc2-0x6ae1b), fading the
+        /// cursor only on those passes (@0x6ade1).
         WeaponSafety: Held,
         /// Target the next ship (`targSel`, +0x14).
         TargetSelect: Held,
@@ -223,26 +260,46 @@ context_commands! {
         DefendMe: Pressed,
         /// The escorts hold position (`escortCmdKey2`, +0x64).
         HoldPosition: Pressed,
-        /// The escorts return to formation (`escortCmdKey3`, +0x66).
+        /// The escorts return to formation (`escortCmdKey3`, +0x66,
+        /// "Recall: (option = dock)").
         Recall: Pressed,
         /// Clear the message line, close the escort menu and hide the
         /// floating map (`ackComm`, +0x0c).
         Acknowledge: Held,
-        /// Board the target (`boardKey`, +0x20), polled with a latch.
+        /// Board the target (`boardKey`, +0x20), one attempt a press,
+        /// polled with a latch.
         Board: Held,
-        /// Jettison all the cargo, Command held (`dumpCargo`, +0x1e).
+        /// Jettison all the cargo, Command held (`dumpCargo`, +0x1e, key
+        /// code 0x28, `_loadKeys` @0xce33d-0xce360): `_HandlePlayer` reads
+        /// it only with Command down (@0x6fd54-0x6fdaf), on every pass it
+        /// is held. It works during a jump too: `_JettisonCargo`
+        /// (0x3dffd-0x3e3c4) reads no jump state.
         JettisonCargo: Held,
-        /// Eject in the escape pod, Command held (`ejectKey`, +0x22).
+        /// Eject in the escape pod, Command held (`ejectKey`, +0x22, key
+        /// code 0x07): `_HandlePlayer` reads it only with Command down
+        /// (@0x6f29e-0x6f2c1).
         Eject: Held,
-        /// Self-destruct, Command held (`destructKey`, +0x24).
+        /// Self-destruct, Command held (`destructKey`, +0x24), which
+        /// `_loadKeys` reads (@0xce458) and then forces to key code 0x1b
+        /// (@0xce71c, left out: the phase's findings). `_HandlePlayer`
+        /// reads it only with Command down (@0x6fdb4-0x6fddb), so it never
+        /// clashes with the floating map's zoom out on the same key, which
+        /// refuses any press with Command held (@0x70fa7-0x70fb5): a
+        /// Command-`-` press means this. The keypad's `-` (0x4e) arrives
+        /// as the same key, as for the zoom out.
         SelfDestruct: Held,
-        /// Cloak or uncloak, once a hold (`cloakKey`, +0x52).
+        /// Cloak or uncloak, once a hold (`cloakKey`, +0x52, key code
+        /// 0x20, `_loadKeys` @0xce461-0xce4d4), with no Command
+        /// (`_HandlePlayer` @0x705b7).
         EngageCloak: Held,
-        /// Toggle the frame-rate readout (`framerateKey`, +0x68).
+        /// Toggle the frame-rate readout (`framerateKey`, +0x68, F12, key
+        /// code 0x6f, `_loadKeys` @0xce6a1-0xce6c4): a press, no modifier
+        /// read (`_HandlePlayer` @0x6e454-0x6e4bd), during a jump too.
         ShowFramerate: Pressed,
         /// Autopilot with Option: face the navigation stellar.
         FaceStellar: Held,
-        /// Select Secondary with Option: the weapon before.
+        /// Select Secondary with Option: the weapon before, in `wëap` ID
+        /// order.
         SelectSecondaryBack: Held,
         /// Target Select with Shift: the ship before.
         TargetSelectBack: Held,
@@ -252,7 +309,10 @@ context_commands! {
         TargetEscortBack: Held,
         /// Closest Target with Option: the nearest ship.
         ClosestShip: Held,
-        /// Nav System Off with Option: let go of the ship target.
+        /// Nav System Off with Option: let go of the ship target
+        /// (@0x69a17-0x69a90), during a jump too. It shares Nav System
+        /// Off's latch, so held it lets go of a target picked meanwhile on
+        /// the next frame.
         ClearTarget: Held,
         /// Communicate with Option: hail the navigation stellar.
         HailStellar: Held,
@@ -260,19 +320,34 @@ context_commands! {
         RecallToHangar: Pressed,
         /// Jettison Cargo with Option too: all but the mission cargo.
         JettisonNonMission: Held,
-        /// Select the stellar in the system's first nav slot.
+        /// Select the stellar in the system's first nav slot: key code
+        /// 0x12, with F1 its twin (`_loadKeys` hard-codes F1-F4 at
+        /// +0x34..+0x3a, @0xce6c8-0xce6da). `_HandlePlayer` reads the
+        /// slots, the nearest stellar's keys after them, as one block with
+        /// one latch (@0x69d2b-0x69f17, the flight view's `slot_block`
+        /// module). While the escort menu shows, `_QuickKeyCheck` hides
+        /// 1-4 from the block (@0xa106-0xa124) and they pick its groups
+        /// instead ([`EscortMenuCommand`]); the F keys always pick a
+        /// stellar.
         StellarSlot1: Held,
-        /// Select the stellar in the second nav slot.
+        /// Select the stellar in the second nav slot (0x13, F2 its twin).
         StellarSlot2: Held,
-        /// Select the stellar in the third nav slot.
+        /// Select the stellar in the third nav slot (0x14, F3 its twin).
         StellarSlot3: Held,
-        /// Select the stellar in the fourth nav slot.
+        /// Select the stellar in the fourth nav slot (0x15, F4 its twin).
         StellarSlot4: Held,
-        /// Select the nearest stellar.
+        /// Select the nearest stellar, as the land key would with nothing
+        /// selected: Command and the top-row 5 (0x37, 0x17, @0x69dbc-0x69dda),
+        /// with F5 (0x60, @0x69dac) its twin. While the escort menu shows,
+        /// `_QuickKeyCheck` hides the 5 from the block (@0xa106-0xa124), so
+        /// Command-5 picks the menu's Freighters; 5 alone picks nothing.
         NearestStellar: Held,
-        /// Zoom the floating map out.
+        /// Zoom the floating map out (`-` and the keypad's `-`, key codes
+        /// 0x1b and 0x4e, `_HandlePlayer` @0x70f4e-0x71110, which the
+        /// platform gives as one key).
         ZoomOut: Pressed,
-        /// Zoom the floating map in.
+        /// Zoom the floating map in (`=`, key code 0x18, the keypad's `+`,
+        /// 0x45, its twin).
         ZoomIn: Pressed,
     }
 }

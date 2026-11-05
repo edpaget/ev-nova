@@ -148,7 +148,7 @@ fn a_release_without_a_press_does_nothing() {
     let mut view = at_rest(catalog());
     hold(&mut view, Key::ArrowUp, false);
     ticked(&mut view, 1);
-    assert!(view.held.is_empty());
+    assert!(view.holds_no_key());
     assert_eq!(last_controls(&view), Controls::default());
 }
 

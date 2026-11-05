@@ -1,10 +1,11 @@
 use super::live_keys::texted_and_held;
 use super::map_wait_keys::{offered_docked, offered_over_flight};
 use super::*;
-use nova_view::flight::view::MAP_KEY;
 use nova_view::spaceport::offer::ACCEPT_ITEM;
 use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
+/// The map key's default.
+const MAP_KEY: Key = Key::KeyM;
 // The menu chords typed during a press a dialog holds keys back for act
 // at its release, after its replay (the `held_chords` module): wiring
 // through the real router, views and flight. Which keys a dialog holds

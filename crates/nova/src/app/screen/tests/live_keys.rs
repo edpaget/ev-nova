@@ -1,9 +1,10 @@
 use super::encounters::{boardable, boarding_data, hailable};
 use super::map_wait_keys::{game_data_fork_loaded, job, offered_over_flight};
 use super::*;
-use nova_view::flight::view::HAIL_KEY;
 use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
+/// Communicate's default key.
+const HAIL_KEY: Key = Key::KeyY;
 // The keys and the button down under a dialog over flight, handed back as
 // the last one closes (the `live_input` module): `_HandlePlayer` polls its
 // unlatched keys past `_SetAllKeyCmdFlags` (@0x61e6d), which latches the

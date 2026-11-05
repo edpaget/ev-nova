@@ -449,11 +449,11 @@ fn every_latched_key_held_across_a_close_fades_by_its_gate() {
         .chain([KeyFades::EVERY]);
     let fades: Vec<KeyFades> = gates.collect();
     let mut checked = 0;
-    for k in FLIGHT_KEYS {
+    for k in every_key() {
         let mut view = showing(KeyFades::EVERY);
         super::live_keys::dialog_opens(&mut view);
         let _ = super::live_keys::back(&mut view, [k], [], false);
-        if !view.latched_down.contains(&k) {
+        if !view.latched_key(k) {
             continue;
         }
         checked += 1;

@@ -299,7 +299,7 @@ mod tests {
     /// What `live` holds of `keys` as down before flight's input went
     /// away, in order.
     fn down_before(live: &LiveInput) -> Vec<Key> {
-        let mut keys = live.taken().down_before;
+        let mut keys: Vec<Key> = live.taken().down_before.keys().collect();
         keys.sort_by_key(|key| format!("{key:?}"));
         keys
     }

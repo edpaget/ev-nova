@@ -721,13 +721,25 @@ mod tests {
             Key::F4 => KeyCode::F4,
             Key::F5 => KeyCode::F5,
             Key::F12 => KeyCode::F12,
+            Key::Escape => KeyCode::Escape,
+            Key::Home => KeyCode::Home,
+            Key::End => KeyCode::End,
+            Key::PageUp => KeyCode::PageUp,
+            Key::PageDown => KeyCode::PageDown,
+            Key::NumpadEnter => KeyCode::NumpadEnter,
+            Key::AltRight => KeyCode::AltRight,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
 
     #[test]
-    fn every_key_flight_reads_comes_from_its_physical_key() {
-        for key in nova_view::flight::view::every_key() {
+    fn every_key_the_key_map_binds_comes_from_its_physical_key() {
+        let defaults = nova_view::KeyMap::default();
+        let bound = nova_view::Command::all()
+            .filter_map(|command| defaults.combo(command))
+            .map(|combo| combo.key);
+        let twins = nova_view::KeyMap::TWINS.iter().map(|twin| twin.key);
+        for key in bound.chain(twins) {
             assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
         }
     }

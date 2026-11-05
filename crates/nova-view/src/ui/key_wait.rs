@@ -256,7 +256,7 @@ impl KeyWait {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flight::view::MAP_KEY;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
     use crate::keymap::{Bindings, KeyCombo, PlayCommand};
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use crate::ui::player_info::PLAYER_INFO_KEY;

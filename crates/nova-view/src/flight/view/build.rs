@@ -3,7 +3,7 @@
 //! view's own builders and settings, and a test's view over a session it
 //! built.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use crate::flight::hud::{self};
 use crate::flight::sim_adapter::SessionFlight;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::keymap::{CommandReader, contexts};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
@@ -585,7 +586,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map_open: false,
             map_key_held: false,
             map_closing: false,
-            wait_keys: crate::ui::key_wait::WaitKeys::new(super::MAP_KEY),
+            wait_keys: crate::ui::key_wait::WaitKeys::new(super::map_wait::map_key(
+                &crate::keymap::SharedBindings::default(),
+            )),
             map_replay: Vec::new(),
             map_opened: None,
             map_missions: Vec::new(),
@@ -622,8 +625,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             alpha: 0.0,
             elapsed: Duration::ZERO,
             since_step: Duration::ZERO,
-            held: HashSet::new(),
-            latched_down: HashSet::new(),
+            keys: CommandReader::new(contexts::FLIGHT),
+            latched_down: BTreeSet::new(),
             latch_at_close: false,
             after_poll: Vec::new(),
             nav_latch: false,
