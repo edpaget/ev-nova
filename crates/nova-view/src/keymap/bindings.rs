@@ -196,9 +196,9 @@ pub fn is_modifier_input(input: &Input) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::command::{
-        BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, MissionComputerCommand,
-        OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand,
-        PortCommand, RaceCommand, TradeCommand, UiCommand,
+        BarCommand, EscortMenuCommand, FlightCommand, HaggleCommand, IntroCommand, MapCommand,
+        MissionComputerCommand, OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand,
+        PlayerInfoCommand, PortCommand, RaceCommand, TradeCommand, UiCommand,
     };
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
@@ -577,6 +577,97 @@ mod tests {
             means(&bindings, &[], Key::Tab, player_info),
             Some(Command::Ui(UiCommand::Tab))
         );
+    }
+
+    #[test]
+    fn the_map_s_twins_are_s_the_keypad_s_plus_and_backslash_back_with_shift() {
+        let bindings = Bindings::default();
+        let course = &[Context::Map, Context::Play, Context::Ui];
+        assert_eq!(
+            means(&bindings, &[], Key::KeyS, course),
+            Some(Command::Map(MapCommand::Find))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::NumpadAdd, course),
+            Some(Command::Map(MapCommand::ZoomIn))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Backslash, course),
+            Some(Command::Ui(UiCommand::Tab))
+        );
+        for shift in [Key::ShiftLeft, Key::ShiftRight] {
+            assert_eq!(
+                means(&bindings, &[shift], Key::Backslash, course),
+                Some(Command::Map(MapCommand::TabBack)),
+                "{shift}"
+            );
+            assert_eq!(
+                means(&bindings, &[shift], Key::Tab, course),
+                Some(Command::Map(MapCommand::TabBack)),
+                "{shift}"
+            );
+        }
+        let tab_on_q = bindings.rebound(UiCommand::Tab, KeyCombo::key(Key::KeyQ));
+        assert_eq!(
+            means(&tab_on_q, &[Key::ShiftLeft], Key::Backslash, course),
+            Some(Command::Map(MapCommand::TabBack)),
+            "the twin stays put"
+        );
+        assert_eq!(
+            means(&tab_on_q, &[Key::ShiftLeft], Key::KeyQ, course),
+            Some(Command::Map(MapCommand::TabBack))
+        );
+    }
+
+    #[test]
+    fn the_map_s_left_shift_alone_is_held_to_plot_the_course() {
+        let bindings = Bindings::default();
+        let course = &[Context::Map, Context::Play, Context::Ui];
+        let held = |key: Key| {
+            let mut devices = Devices::default();
+            devices.follow(&press(key));
+            bindings.held(&devices, course)
+        };
+        assert!(held(Key::ShiftLeft).contains(&Command::Map(MapCommand::PlotCourse)));
+        assert!(held(Key::ShiftRight).is_empty());
+    }
+
+    #[test]
+    fn wasd_are_the_system_view_s_twins_of_the_arrows() {
+        let bindings = Bindings::default();
+        let system = &[Context::SystemView, Context::Ui];
+        for (key, command) in [
+            (Key::KeyW, UiCommand::Up),
+            (Key::KeyA, UiCommand::Left),
+            (Key::KeyS, UiCommand::Down),
+            (Key::KeyD, UiCommand::Right),
+        ] {
+            assert_eq!(
+                means(&bindings, &[], key, system),
+                Some(Command::Ui(command)),
+                "{key}"
+            );
+            assert_eq!(means(&bindings, &[], key, &[Context::Ui]), None, "{key}");
+        }
+    }
+
+    #[test]
+    fn the_intro_reads_return_and_space_and_pause_but_not_the_keypad_s_enter() {
+        let bindings = Bindings::default();
+        let intro = &[Context::Intro, Context::Pause];
+        assert_eq!(
+            means(&bindings, &[], Key::Enter, intro),
+            Some(Command::Intro(IntroCommand::Confirm))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Space, intro),
+            Some(Command::Intro(IntroCommand::Activate))
+        );
+        assert_eq!(
+            means(&bindings, &[], Key::Escape, intro),
+            Some(Command::Pause(PauseCommand::Pause))
+        );
+        assert_eq!(means(&bindings, &[], Key::NumpadEnter, intro), None);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Each key-reading screen's contexts, as data.
 //!
 //! A screen reads an ordered list of [`Context`]s: its own first, then
-//! the shared UI context ([`Context::Ui`]) on every screen but flight. Two
+//! the shared UI context ([`Context::Ui`]) on every screen but flight and
+//! the intro (which polls Return's key code alone, [`INTRO`]). Two
 //! contexts are **active together** when some list holds both, and the
 //! clash query ([`Bindings::clashes`](super::Bindings::clashes)) checks
 //! every pair of commands over that. An entry may be **conditional**: on
@@ -201,6 +202,65 @@ pub const RACE: ScreenContexts = ScreenContexts {
     entries: &[on(Context::Race), on(Context::Ui)],
 };
 
+/// The galaxy viewer, the developer's map: its own keys and the shared UI
+/// keys (the arrows pan, Return enters a system). The map key means
+/// nothing there, and its Tab and Escape are the app's router's and the
+/// navigator's.
+pub const GALAXY_VIEWER: ScreenContexts = ScreenContexts {
+    name: "galaxy viewer",
+    entries: &[on(Context::Map), on(Context::Ui)],
+};
+
+/// The course and hypergate maps over flight or the spaceport: their own
+/// keys, the shared play keys (the map key closes them, `_MapFilter`
+/// @0x144ea) and the shared UI keys.
+pub const COURSE_MAP: ScreenContexts = ScreenContexts {
+    name: "course map",
+    entries: &[on(Context::Map), on(Context::Play), on(Context::Ui)],
+};
+
+/// The navigator over the viewer and the system view: Escape, the shared
+/// Back, goes from a system back to the map.
+pub const NAVIGATOR: ScreenContexts = ScreenContexts {
+    name: "navigator",
+    entries: &[on(Context::Ui)],
+};
+
+/// The system view: WASD, its own context's twins of the shared arrows,
+/// and the shared UI keys (the arrows pan, Space recentres).
+pub const SYSTEM_VIEW: ScreenContexts = ScreenContexts {
+    name: "system view",
+    entries: &[on(Context::SystemView), on(Context::Ui)],
+};
+
+/// The ship browser: the shared arrows.
+pub const SHIP_BROWSER: ScreenContexts = ScreenContexts {
+    name: "ship browser",
+    entries: &[on(Context::Ui)],
+};
+
+/// The saved pilots' list: the shared arrows, Confirm and Back.
+pub const PILOT_LIST: ScreenContexts = ScreenContexts {
+    name: "pilot list",
+    entries: &[on(Context::Ui)],
+};
+
+/// The intro screen: its own Return and Space, and the Pause key, its
+/// skip (`_ShowIntroScreen` @0x16d05). No shared UI: it polls Return's
+/// key code alone, so the keypad's Enter, the shared Confirm's twin,
+/// doesn't end a picture.
+pub const INTRO: ScreenContexts = ScreenContexts {
+    name: "intro",
+    entries: &[on(Context::Intro), on(Context::Pause)],
+};
+
+/// A movie playing (`_PlayQTMovie`): the shared Activate (Space) and
+/// Confirm (Return, the keypad's Enter its twin) skip it.
+pub const MOVIE: ScreenContexts = ScreenContexts {
+    name: "movie",
+    entries: &[on(Context::Ui)],
+};
+
 /// Every key-reading screen's list.
 pub const SCREENS: &[ScreenContexts] = &[
     FLIGHT,
@@ -223,6 +283,14 @@ pub const SCREENS: &[ScreenContexts] = &[
     MISSION_INFO,
     OFFER,
     RACE,
+    GALAXY_VIEWER,
+    COURSE_MAP,
+    NAVIGATOR,
+    SYSTEM_VIEW,
+    SHIP_BROWSER,
+    PILOT_LIST,
+    INTRO,
+    MOVIE,
 ];
 
 /// Whether `shadowing`, listed first, wins the keys it binds over
@@ -258,7 +326,12 @@ mod tests {
     fn every_screen_but_flight_reads_the_shared_ui_context() {
         for screen in SCREENS {
             let has_ui = screen.entries.iter().any(|e| e.context == Context::Ui);
-            assert_eq!(has_ui, screen.name != "flight", "{}", screen.name);
+            assert_eq!(
+                has_ui,
+                !["flight", "intro"].contains(&screen.name),
+                "{}",
+                screen.name
+            );
         }
     }
 

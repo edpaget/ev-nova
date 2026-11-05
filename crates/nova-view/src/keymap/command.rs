@@ -165,6 +165,12 @@ contexts! {
     MissionComputer(MissionComputerCommand),
     /// The bar race's Option (`_DoRaceDialog`).
     Race(RaceCommand),
+    /// The galaxy map's own keys (`_MapFilter`, `_DoSystemMap`).
+    Map(MapCommand),
+    /// The intro screen's Return and Space (`_ShowIntroScreen` @0x16cf1).
+    Intro(IntroCommand),
+    /// The system view's WASD, the fixed twins of the shared arrows.
+    SystemView(SystemViewCommand),
 }
 
 context_commands! {
@@ -510,6 +516,56 @@ context_commands! {
         /// @0x48be9), so it has no right twin.
         Ask: Held,
     }
+}
+
+context_commands! {
+    /// The galaxy map's own commands, which `_MapFilter` reads on the
+    /// in-flight maps (@0x13cdd-0x144d6) and the viewer reads likewise.
+    /// Its arrows, Return, Space and Tab are the shared UI context's, and
+    /// the map key that closes it the shared play keys'.
+    MapCommand in Map {
+        /// Flip the government borders, as the Borders button does (B,
+        /// its repeats too, @0x14251).
+        Borders: Pressed,
+        /// Ask to clear the route, as Clear Route does (C, its repeats
+        /// too, @0x14268).
+        ClearRoute: Pressed,
+        /// Open Find, as the Find button does (F, S its twin,
+        /// @0x144b9-0x144d6).
+        Find: Pressed,
+        /// Step the zoom out, item 4 (`-`, @0x14271-0x14293).
+        ZoomOut: Pressed,
+        /// Step the zoom in, item 5 (`=`, the keypad's `+` its twin).
+        ZoomIn: Pressed,
+        /// Cycle the hypergate map's selection back: the shared Tab with
+        /// Shift, as `_MapFilter` reads the `shiftKey` bit beside Tab and
+        /// `\` (@0x13ee4), so a rebound Tab keeps it.
+        TabBack: Pressed,
+        /// Held as a system is clicked, the click edits the course: the
+        /// left Shift, as `_DoSystemMap` polls its key code
+        /// (`_KeyCheck(0x38)` @0x13071), so it has no right twin.
+        PlotCourse: Held,
+    }
+}
+
+context_commands! {
+    /// The intro screen's own keys, which `_ShowIntroScreen` polls by key
+    /// code beside the Pause key (@0x16ef2, @0x16fc3, @0x17034): Return
+    /// alone, with no keypad Enter twin, and Space. The intro reads no
+    /// shared UI key.
+    IntroCommand in Intro {
+        /// End the picture showing (Return, 0x24).
+        Confirm: Held,
+        /// End the picture showing (Space, 0x31).
+        Activate: Held,
+    }
+}
+
+context_commands! {
+    /// The system view's own commands: none. Its context holds W, A, S
+    /// and D, the fixed twins of the shared arrows it pans with.
+    #[allow(clippy::empty_enums, reason = "a context of twins alone")]
+    SystemViewCommand in SystemView {}
 }
 
 impl Command {

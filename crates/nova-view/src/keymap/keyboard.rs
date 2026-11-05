@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{
     AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
-    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, MissionComputerCommand,
-    OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand, PlayerInfoCommand, PortCommand,
-    RaceCommand, ShipyardCommand, TradeCommand, UiCommand,
+    EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, MapCommand,
+    MissionComputerCommand, OutfitterCommand, PauseCommand, PlanetCommCommand, PlayCommand,
+    PlayerInfoCommand, PortCommand, RaceCommand, ShipyardCommand, TradeCommand, UiCommand,
 };
 use super::contexts::shadows;
 use crate::input::{Input, Key};
@@ -139,8 +139,12 @@ pub enum Binding {
 pub struct Twin {
     /// The context it answers in, when active.
     pub context: Context,
-    /// The fixed key, with any modifier held.
+    /// The fixed key.
     pub key: Key,
+    /// The modifiers it needs held, as its context reads them; more held
+    /// still meet it. Only a variant's twin needs any: `\` with Shift
+    /// beside Shift-Tab on the map.
+    pub modifiers: Modifiers,
     /// The command it means.
     pub command: Command,
 }
@@ -168,7 +172,7 @@ impl KeyMap {
     /// The fixed twins, read beside the bindable commands whatever they
     /// are bound to. A command bound to the same key in an active context
     /// beats a twin.
-    pub const TWINS: [Twin; 16] = [
+    pub const TWINS: [Twin; 24] = [
         // `_loadKeys` hard-codes F1-F4 at `_keyPrefs`+0x34..+0x3a
         // (@0xce6c8-0xce6da), read beside 1-4 by `_HandlePlayer`
         // @0x69d92.
@@ -254,6 +258,28 @@ impl KeyMap {
             Key::AltRight,
             Command::Outfitter(OutfitterCommand::Count),
         ),
+        // `_MapFilter` reads the keypad's `+` beside `=` (@0x14271-0x14293),
+        // S beside F for Find (@0x144b9-0x144d6), and `\` beside Tab for
+        // the cycle, back with the `shiftKey` bit as Tab's is (@0x13ee4):
+        // so `\` with Shift is Shift-Tab's twin, listed first to win.
+        twin(Context::Map, Key::NumpadAdd, map(MapCommand::ZoomIn)),
+        twin(Context::Map, Key::KeyS, map(MapCommand::Find)),
+        Twin {
+            context: Context::Map,
+            key: Key::Backslash,
+            modifiers: Modifiers::SHIFT,
+            command: map(MapCommand::TabBack),
+        },
+        twin(Context::Map, Key::Backslash, Command::Ui(UiCommand::Tab)),
+        // The system view pans on WASD beside the arrows.
+        twin(Context::SystemView, Key::KeyA, Command::Ui(UiCommand::Left)),
+        twin(
+            Context::SystemView,
+            Key::KeyD,
+            Command::Ui(UiCommand::Right),
+        ),
+        twin(Context::SystemView, Key::KeyW, Command::Ui(UiCommand::Up)),
+        twin(Context::SystemView, Key::KeyS, Command::Ui(UiCommand::Down)),
     ];
 
     /// A key map built from saved entries: each command an entry names
@@ -313,11 +339,12 @@ impl KeyMap {
     }
 }
 
-/// A [`Twin`], for the const table.
+/// A [`Twin`] that needs no modifier, for the const table.
 const fn twin(context: Context, key: Key, command: Command) -> Twin {
     Twin {
         context,
         key,
+        modifiers: Modifiers::NONE,
         command,
     }
 }
@@ -325,6 +352,11 @@ const fn twin(context: Context, key: Key, command: Command) -> Twin {
 /// A flight command, for the const tables.
 const fn flight(command: FlightCommand) -> Command {
     Command::Flight(command)
+}
+
+/// A map command, for the const tables.
+const fn map(command: MapCommand) -> Command {
+    Command::Map(command)
 }
 
 /// `key` alone.
@@ -371,6 +403,34 @@ const fn default_binding(command: Command) -> Binding {
         Command::Hire(HireCommand::Hire) => bare(Key::KeyH),
         Command::MissionComputer(command) => default_mission_computer(command),
         Command::Race(RaceCommand::Ask) => bare(Key::AltLeft),
+        Command::Map(command) => default_map(command),
+        Command::Intro(command) => default_intro(command),
+        Command::SystemView(command) => match command {},
+    }
+}
+
+/// The galaxy map's defaults (`_MapFilter`): B, C, F, `-` and `=`, the
+/// shared Tab with Shift, and the left Shift (`_DoSystemMap`).
+const fn default_map(command: MapCommand) -> Binding {
+    match command {
+        MapCommand::Borders => bare(Key::KeyB),
+        MapCommand::ClearRoute => bare(Key::KeyC),
+        MapCommand::Find => bare(Key::KeyF),
+        MapCommand::ZoomOut => bare(Key::Minus),
+        MapCommand::ZoomIn => bare(Key::Equal),
+        MapCommand::TabBack => Binding::Follows {
+            base: Command::Ui(UiCommand::Tab),
+            plus: Modifiers::SHIFT,
+        },
+        MapCommand::PlotCourse => bare(Key::ShiftLeft),
+    }
+}
+
+/// The intro's defaults: Return and Space (`_ShowIntroScreen`).
+const fn default_intro(command: IntroCommand) -> Binding {
+    match command {
+        IntroCommand::Confirm => bare(Key::Enter),
+        IntroCommand::Activate => bare(Key::Space),
     }
 }
 
@@ -562,9 +622,12 @@ const fn default_ui(command: UiCommand) -> Binding {
 #[must_use]
 pub const fn sides(context: Context) -> Sides {
     match context {
-        Context::Flight | Context::EscortMenu | Context::Play | Context::Pause | Context::Race => {
-            Sides::LeftOnly
-        }
+        Context::Flight
+        | Context::EscortMenu
+        | Context::Play
+        | Context::Pause
+        | Context::Race
+        | Context::Intro => Sides::LeftOnly,
         Context::Ui
         | Context::Comm
         | Context::Haggle
@@ -578,7 +641,9 @@ pub const fn sides(context: Context) -> Sides {
         | Context::Shipyard
         | Context::Bar
         | Context::Hire
-        | Context::MissionComputer => Sides::Either,
+        | Context::MissionComputer
+        | Context::Map
+        | Context::SystemView => Sides::Either,
     }
 }
 
@@ -590,8 +655,8 @@ pub const fn sides(context: Context) -> Sides {
 /// 2. Otherwise every other active context's commands met on the key,
 ///    leaving out a shadowed context's commands on a key its shadowing
 ///    context binds.
-/// 3. Otherwise the fixed twins of the active contexts on the key: a
-///    bound command beats a twin.
+/// 3. Otherwise the fixed twins of the active contexts on the key whose
+///    modifiers are held: a bound command beats a twin.
 ///
 /// Every command returned is held while the key stays down; a press
 /// means the most specific of them ([`most_specific`]).
@@ -638,7 +703,11 @@ pub(super) fn meanings(
     }
     KeyMap::TWINS
         .iter()
-        .filter(|twin| twin.key == key && active.contains(&twin.context))
+        .filter(|twin| {
+            twin.key == key
+                && active.contains(&twin.context)
+                && keys.modifiers(sides(twin.context)).contains(twin.modifiers)
+        })
         .map(|twin| twin.command)
         .collect()
 }
@@ -1022,6 +1091,46 @@ mod tests {
     }
 
     #[test]
+    fn the_map_s_defaults_are_b_c_f_minus_equal_shift_tab_and_the_left_shift() {
+        use MapCommand as M;
+        assert_eq!(
+            defaults(Context::Map),
+            vec![
+                row(M::Borders, Key::KeyB, NO),
+                row(M::ClearRoute, Key::KeyC, NO),
+                row(M::Find, Key::KeyF, NO),
+                row(M::ZoomOut, Key::Minus, NO),
+                row(M::ZoomIn, Key::Equal, NO),
+                row(M::TabBack, Key::Tab, SHIFT),
+                row(M::PlotCourse, Key::ShiftLeft, NO),
+            ]
+        );
+        let mut map = KeyMap::default();
+        map.bind(UiCommand::Tab.into(), KeyCombo::key(Key::KeyQ));
+        assert_eq!(
+            combo(&map, MapCommand::TabBack),
+            Some(KeyCombo::with(Key::KeyQ, SHIFT)),
+            "Shift-Tab follows the shared Tab"
+        );
+    }
+
+    #[test]
+    fn the_intro_s_defaults_are_return_and_space() {
+        assert_eq!(
+            defaults(Context::Intro),
+            vec![
+                row(IntroCommand::Confirm, Key::Enter, NO),
+                row(IntroCommand::Activate, Key::Space, NO),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_system_view_has_no_command_of_its_own() {
+        assert_eq!(defaults(Context::SystemView), vec![]);
+    }
+
+    #[test]
     fn every_command_is_bound_by_default() {
         let map = KeyMap::default();
         for command in Command::all() {
@@ -1197,5 +1306,16 @@ mod tests {
             Sides::LeftOnly,
             "_DoRaceDialog polls the left Option's code"
         );
+        assert_eq!(
+            sides(Context::Map),
+            Sides::Either,
+            "_MapFilter reads shiftKey"
+        );
+        assert_eq!(
+            sides(Context::Intro),
+            Sides::LeftOnly,
+            "_ShowIntroScreen polls key codes"
+        );
+        assert_eq!(sides(Context::SystemView), Sides::Either);
     }
 }

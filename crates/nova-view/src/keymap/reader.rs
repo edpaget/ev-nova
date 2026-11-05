@@ -173,6 +173,27 @@ impl CommandReader {
         self.bindings.with(|b| b.resolve(input, &devices, &active))
     }
 
+    /// The command the key of `input` (a press, a repeat or a release)
+    /// means, without following it: what its press meant while the
+    /// reader holds that, otherwise what pressing it would mean now. So a
+    /// release whose press came before the reader did means its key's
+    /// command, for a screen that reads a key's going up as its going
+    /// down (`_PlayQTMovie`'s skip keys, polled held). `None` for any
+    /// other input.
+    #[must_use]
+    pub fn means(&self, input: &Input) -> Option<Command> {
+        let Input::Key { key, .. } = *input else {
+            return None;
+        };
+        self.devices.press_of(input).or_else(|| {
+            self.peek(&Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            })
+        })
+    }
+
     /// Whether `command` is held.
     #[must_use]
     pub fn held(&self, command: impl Into<Command>) -> bool {
@@ -393,6 +414,31 @@ mod tests {
         );
         assert!(!reader.anything_down());
         assert_eq!(reader.peek(&Input::Text('a')), None);
+    }
+
+    #[test]
+    fn means_says_what_a_key_means_going_down_or_up_whether_its_press_was_seen_or_not() {
+        let mut reader = CommandReader::new(FLIGHT);
+        assert_eq!(
+            reader.means(&release(Key::ArrowUp)),
+            Some(Command::Flight(FlightCommand::Accelerate)),
+            "a release whose press it never saw"
+        );
+        reader.follow(&press(Key::ShiftLeft));
+        reader.follow(&press(Key::Tab));
+        reader.follow(&release(Key::ShiftLeft));
+        assert_eq!(
+            reader.means(&release(Key::Tab)),
+            Some(Command::Flight(FlightCommand::TargetSelectBack)),
+            "what its press meant"
+        );
+        assert_eq!(
+            reader.means(&press(Key::KeyX)),
+            None,
+            "X alone means nothing"
+        );
+        assert_eq!(reader.means(&Input::Text('a')), None);
+        assert!(reader.held(FlightCommand::TargetSelect), "nothing followed");
     }
 
     #[test]
