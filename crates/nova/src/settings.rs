@@ -59,13 +59,16 @@
 //! maps each command's name to its combo's text, `""` for an unbound
 //! command, and lists only the bindings that differ from the defaults
 //! (`{"Flight.Accelerate": "Shift+KeyW"}`), so a later default still
-//! reaches a player who never touched that key. The rules are
-//! nova-view's: the names, the text, and how a saved table's clashes
-//! settle on load ([`KeyMap::with_overrides`]). The keeper only passes
-//! the strings through: an entry whose value isn't a string is skipped,
-//! as an unknown name or key is, and its command keeps its default. A
-//! family table this build doesn't know (phase 12's `gamepad`, say) is
-//! kept and saved back unchanged. A `bindings` or `keyboard` that isn't a
+//! reaches a player who never touched that key. The `gamepad` table does
+//! the same for the pad, each binding as its position's text
+//! (`{"Flight.Autopilot": "start+-rightx", "Flight.TurnAxis": "leftx"}`).
+//! The rules are nova-view's: the names, the text, and how a saved
+//! table's clashes settle on load ([`KeyMap::with_overrides`],
+//! [`PadMap::with_overrides`]). The keeper only passes the strings
+//! through: an entry whose value isn't a string is skipped, as an unknown
+//! name, key or position is, and its command keeps its default. A family
+//! table this build doesn't know (a later `touch`, say) is kept and saved
+//! back unchanged. A `bindings`, `keyboard` or `gamepad` that isn't a
 //! table makes the file unusable, as any field of the wrong type does.
 //!
 //! `show_map_borders` is the original's `ShowMapBorders`: whether the
@@ -78,6 +81,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use nova_audio::{AudioSettings, SettingsStore, Volume};
+use nova_view::keymap::PadMap;
 use nova_view::{Bindings, FullscreenKind, KeyMap, Prefs, Scaling, VideoMode};
 use serde::{Deserialize, Serialize};
 
@@ -313,44 +317,57 @@ struct Saved {
 }
 
 /// The `bindings` table as saved: the keyboard's overrides, each a
-/// command's name and its combo's text ([`KeyMap::to_table`]), and the
-/// tables of device families this build doesn't know, kept as they were.
+/// command's name and its combo's text ([`KeyMap::to_table`]), the
+/// gamepad's, each a command's name and its binding's text
+/// ([`PadMap::to_table`]), and the tables of device families this build
+/// doesn't know, kept as they were.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SavedBindings {
     /// Each entry's value is a string; any other is skipped on load, as an
     /// unknown name or key is.
     keyboard: BTreeMap<String, serde_json::Value>,
+    /// The same for the gamepad's table.
+    gamepad: BTreeMap<String, serde_json::Value>,
     #[serde(flatten)]
     families: Others,
+}
+
+/// `table`'s entries as JSON strings.
+fn json_table(table: BTreeMap<String, String>) -> BTreeMap<String, serde_json::Value> {
+    table
+        .into_iter()
+        .map(|(name, text)| (name, text.into()))
+        .collect()
+}
+
+/// `saved`'s entries whose value is a string.
+fn string_entries(
+    saved: &BTreeMap<String, serde_json::Value>,
+) -> impl Iterator<Item = (&str, &str)> {
+    saved
+        .iter()
+        .filter_map(|(name, text)| Some((name.as_str(), text.as_str()?)))
 }
 
 impl From<Bindings> for SavedBindings {
     fn from(bindings: Bindings) -> Self {
         Self {
-            keyboard: bindings
-                .keyboard
-                .to_table()
-                .into_iter()
-                .map(|(name, text)| (name, text.into()))
-                .collect(),
+            keyboard: json_table(bindings.keyboard.to_table()),
+            gamepad: json_table(bindings.gamepad.to_table()),
             families: Others::new(),
         }
     }
 }
 
 impl From<SavedBindings> for Bindings {
-    /// The key map nova-view's rules build from the keyboard's string
-    /// entries ([`KeyMap::from_table`]), and the default gamepad table,
-    /// which isn't saved until phase 12.
+    /// The key map and the pad table nova-view's rules build from each
+    /// family's string entries ([`KeyMap::from_table`],
+    /// [`PadMap::from_table`]).
     fn from(saved: SavedBindings) -> Self {
-        let entries = saved
-            .keyboard
-            .iter()
-            .filter_map(|(name, text)| Some((name.as_str(), text.as_str()?)));
         Self {
-            keyboard: KeyMap::from_table(entries),
-            ..Self::default()
+            keyboard: KeyMap::from_table(string_entries(&saved.keyboard)),
+            gamepad: PadMap::from_table(string_entries(&saved.gamepad)),
         }
     }
 }
@@ -603,9 +620,10 @@ mod tests {
     use nova_audio::recording::MemorySettings;
     use nova_audio::settings::effects_level_volume;
     use nova_audio::{FileSettings, Volume};
-    use nova_view::keymap::FlightCommand;
+    use nova_view::keymap::{AxisBinding, FlightCommand, PadBinding, PadEntry, PadMap};
     use nova_view::{
-        Command, FullscreenKind, Key, KeyCombo, Modifiers, Scaling, SoundPrefs, VideoMode,
+        Command, FullscreenKind, Key, KeyCombo, Modifiers, PadAxis, PadButton, Scaling, SoundPrefs,
+        VideoMode,
     };
 
     use super::*;
@@ -1517,7 +1535,11 @@ mod tests {
                 "parallax_starfield": true,
                 "show_map_borders": true,
                 "frame_upscaler": "native",
-                "bindings": {"keyboard": saved_table(&KeyMap::default())},
+                "bindings": {
+                    "keyboard": saved_table(&KeyMap::default()),
+                    "gamepad": serde_json::to_value(PadMap::default().to_table())
+                        .expect("strings serialise"),
+                },
             })
         );
     }
@@ -1833,9 +1855,118 @@ mod tests {
         assert!(!settings.hyperspace_effects);
     }
 
+    /// A pad table that rebinds, unbinds, swaps the sticks and inverts
+    /// one, built through nova-view's public table.
+    fn rebound_pad() -> PadMap {
+        let mut pad = PadMap::default();
+        pad.bind(
+            flight(FlightCommand::Autopilot),
+            PadBinding::Entry(PadEntry::on(PadButton::Start, PadButton::RightStickLeft)),
+        );
+        pad.unbind(flight(FlightCommand::Board));
+        pad.bind(
+            flight(FlightCommand::TurnAxis),
+            PadBinding::Axis(AxisBinding::plain(PadAxis::LeftX)),
+        );
+        pad.bind(
+            flight(FlightCommand::ThrottleAxis),
+            PadBinding::Axis(AxisBinding::inverted(PadAxis::RightY)),
+        );
+        pad
+    }
+
+    /// The pad table nova-view builds from `table`.
+    fn pad_map_of(table: &BTreeMap<String, String>) -> PadMap {
+        PadMap::from_table(table.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+    }
+
+    #[test]
+    fn a_gamepad_table_saves_and_loads_back_equal_and_leaves_the_keyboard_table() {
+        let mut keys = KeyMap::default();
+        keys.bind(flight(FlightCommand::Accelerate), KeyCombo::key(Key::KeyG));
+        let store = MemorySettings::new();
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        let keyed = GameSettings {
+            bindings: Bindings {
+                keyboard: keys.clone(),
+                ..Bindings::default()
+            },
+            ..GameSettings::default()
+        };
+        keeper.change(keyed.clone()).expect("saves");
+        let keyboard_before = json(&store)["bindings"]["keyboard"].clone();
+        let pad = rebound_pad();
+        let padded = GameSettings {
+            bindings: Bindings {
+                keyboard: keys,
+                gamepad: pad.clone(),
+            },
+            ..keyed
+        };
+        keeper.change(padded.clone()).expect("saves");
+        let saved = json(&store);
+        assert_eq!(saved["bindings"]["keyboard"], keyboard_before);
+        assert_eq!(
+            saved["bindings"]["gamepad"],
+            serde_json::to_value(pad.to_table()).expect("strings serialise")
+        );
+        let (restarted, warning) = SettingsKeeper::open(store);
+        assert_eq!(warning, None);
+        assert_eq!(
+            restarted.settings().bindings.gamepad,
+            pad_map_of(&pad.to_table())
+        );
+        assert_eq!(
+            restarted.settings().bindings.keyboard,
+            padded.bindings.keyboard
+        );
+    }
+
+    /// A settings file whose `bindings.gamepad` holds `entries`.
+    fn gamepad_file(entries: &serde_json::Value) -> String {
+        serde_json::json!({"bindings": {"gamepad": entries}}).to_string()
+    }
+
+    #[test]
+    fn a_saved_gamepad_entry_with_an_unknown_position_loads_at_its_default() {
+        let autopilot = flight(FlightCommand::Autopilot).name();
+        let (settings, warning) = opened(&gamepad_file(&serde_json::json!({autopilot: "a"})));
+        assert_eq!(warning, None);
+        assert_eq!(
+            settings.bindings.gamepad,
+            PadMap::from_table([(autopilot, "a")])
+        );
+    }
+
+    #[test]
+    fn a_gamepad_entry_that_is_not_a_string_is_skipped() {
+        let autopilot = flight(FlightCommand::Autopilot).name();
+        let board = flight(FlightCommand::Board).name();
+        let (settings, warning) =
+            opened(&gamepad_file(&serde_json::json!({board: 5, autopilot: ""})));
+        assert_eq!(warning, None);
+        assert_eq!(
+            settings.bindings.gamepad,
+            PadMap::from_table([(autopilot, "")])
+        );
+        assert_ne!(settings.bindings.gamepad, PadMap::default());
+    }
+
+    #[test]
+    fn a_gamepad_table_of_the_wrong_type_is_not_usable() {
+        for text in [
+            r#"{"bindings": {"gamepad": []}}"#,
+            r#"{"bindings": {"gamepad": "south"}}"#,
+        ] {
+            let (settings, warning) = opened(text);
+            assert_eq!(settings, GameSettings::default(), "{text}");
+            assert!(warning.is_some(), "{text}");
+        }
+    }
+
     #[test]
     fn a_device_family_this_build_does_not_know_is_kept() {
-        let text = r#"{"bindings": {"keyboard": {}, "gamepad": {"south": "anything"}}}"#;
+        let text = r#"{"bindings": {"keyboard": {}, "touch": {"south": "anything"}}}"#;
         let store = MemorySettings::holding(text);
         let (mut keeper, warning) = SettingsKeeper::open(store.clone());
         assert_eq!(warning, None);
@@ -1846,7 +1977,7 @@ mod tests {
             })
             .expect("saves");
         assert_eq!(
-            json(&store)["bindings"]["gamepad"],
+            json(&store)["bindings"]["touch"],
             serde_json::json!({"south": "anything"})
         );
         assert_eq!(json(&store)["sound"], false);
