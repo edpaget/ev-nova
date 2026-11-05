@@ -561,6 +561,8 @@ mod land_on_stellar;
 #[allow(clippy::float_cmp)]
 mod landed_work;
 mod landing_fee;
+#[cfg(test)]
+mod lane_readers;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
