@@ -1260,6 +1260,32 @@ pub(super) mod tests {
         assert_eq!(hired_slot(&session), (2, 2), "the hired escort re-forms");
     }
 
+    #[test]
+    fn aborted_while_it_glides_in_a_mission_escort_ends_the_glide_owing_as_the_rulebook_reads() {
+        // `_AIDispatch`'s mark-clear leave (@0x8fc3a-0x8fc96) floors the
+        // glide's -999.0, so the glide ends (@0x8fcf5).
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = inherent_catalog(escorting(-1, 0));
+            let (mut session, ids) = flying_with_escorts(&catalog);
+            session.setup.rules =
+                Rulebook::default().with_override(RuleKey::HeldGateBurst, reading);
+            let gliding = session.space.npc_mut(ids[0]).expect("in the system");
+            gliding.mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
+            let mut expected = gliding.clone();
+            expected.takes_leave_write(reading);
+            assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+            let left = session.space.npc(ids[0]).expect("still here as it leaves");
+            assert_eq!(left.goal, Goal::JumpOut, "{reading:?}");
+            assert_eq!(left.mode, crate::traffic::npc::Mode::Flying, "{reading:?}");
+            assert_eq!(left.owed_burst, expected.owed_burst, "{reading:?}");
+            assert_eq!(
+                left.owed_burst.is_some(),
+                reading == RuleSource::Engine,
+                "{reading:?}"
+            );
+        }
+    }
+
     /// Two pirates escorting the player: [`ships_catalog`] with düde 150's
     /// government 131 plundering and its ship 200 of `InherentAI` 3.
     fn pirate_escorts() -> FakePilotCatalog {

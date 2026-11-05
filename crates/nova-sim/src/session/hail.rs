@@ -2116,6 +2116,38 @@ pub(super) mod tests {
         assert_eq!((spared.warp.stage, spared.warp.since), (0.0, 0));
     }
 
+    #[test]
+    fn a_ship_bribed_while_it_glides_in_ends_the_glide_owing_as_the_rulebook_reads() {
+        // `_AIMakeShipLeave`'s floor ends the glide (@0x8fcf5).
+        let catalog = hailable();
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = pirate(&catalog, PIRATES);
+            session.setup.rules =
+                Rulebook::default().with_override(RuleKey::HeldGateBurst, reading);
+            hail(&mut session, &catalog);
+            session
+                .answer(1, &catalog, &HailOptions::default(), &mut Draws::of(&[99]))
+                .expect("open");
+            npc(&mut session).mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
+            let mut expected = npc(&mut session).clone();
+            expected.takes_leave_write(reading);
+            haggle(&mut session, &catalog, Haggle::Accept);
+            let spared = &session.npcs()[0];
+            assert_eq!(spared.goal, Goal::JumpOut, "{reading:?}");
+            assert_eq!(
+                spared.mode,
+                crate::traffic::npc::Mode::Flying,
+                "{reading:?}"
+            );
+            assert_eq!(spared.owed_burst, expected.owed_burst, "{reading:?}");
+            assert_eq!(
+                spared.owed_burst.is_some(),
+                reading == RuleSource::Engine,
+                "{reading:?}"
+            );
+        }
+    }
+
     /// The pirate (NPC 0) provoked by `provoked`, with a second ship of
     /// its own class beside it, then bribed: the session, and the second
     /// ship.
