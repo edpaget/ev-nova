@@ -33,7 +33,7 @@ use nova_sim::{RuleKey, RuleSource, Rulebook};
 use super::grid::CellGrid;
 use super::grid_arrows::ArrowMoves;
 use super::grid_clicks::CellClicks;
-use crate::input::Key;
+use crate::keymap::Command;
 
 /// What a press on the grid did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,11 +99,11 @@ impl ShipyardGrid {
         self.cells.select(index, count);
     }
 
-    /// Moves the selection for an arrow `key` among `count` cells, by the
+    /// Moves the selection for an arrow `command` among `count` cells, by the
     /// reading of [`RuleKey::GridArrows`] read on opening, and says
     /// whether it was an arrow ([`CellGrid::arrow`]).
-    pub fn arrow(&mut self, key: Key, count: usize) -> bool {
-        self.cells.arrow(key, count, self.arrows)
+    pub fn arrow(&mut self, command: impl Into<Command>, count: usize) -> bool {
+        self.cells.arrow(command, count, self.arrows)
     }
 
     /// Lets `dt` pass since the last press.
@@ -146,6 +146,7 @@ mod tests {
     use nova_sim::mission::screens::mac_ticks;
 
     use super::*;
+    use crate::keymap::UiCommand;
 
     /// Thirty ships: eight rows, three more than the grid shows.
     const LISTED: usize = 30;
@@ -284,9 +285,9 @@ mod tests {
         let mut grid = ShipyardGrid::open(&engine(), LISTED);
         grid.select(6, LISTED);
         assert_eq!(grid.cells().selected(LISTED), Some(6));
-        assert!(grid.arrow(Key::ArrowRight, LISTED));
+        assert!(grid.arrow(UiCommand::Right, LISTED));
         assert_eq!(grid.cells().selected(LISTED), Some(7));
-        assert!(!grid.arrow(Key::KeyX, LISTED));
+        assert!(!grid.arrow(UiCommand::Tab, LISTED));
     }
 
     /// The grid by `rules` on `count` cells, with cell `index` selected.
@@ -304,26 +305,26 @@ mod tests {
     fn by_the_engine_down_onto_an_empty_cell_and_up_on_the_first_row_stay() {
         // Six escorts or ships: Down from 3 finds index 7 empty.
         let mut grid = selecting(&engine(), 3, 6);
-        assert!(grid.arrow(Key::ArrowDown, 6));
+        assert!(grid.arrow(UiCommand::Down, 6));
         assert_eq!(grid.cells().selected(6), Some(3));
         let mut grid = selecting(&engine(), 2, 6);
-        assert!(grid.arrow(Key::ArrowUp, 6));
+        assert!(grid.arrow(UiCommand::Up, 6));
         assert_eq!(grid.cells().selected(6), Some(2));
-        assert!(grid.arrow(Key::PageDown, 6));
+        assert!(grid.arrow(UiCommand::PageDown, 6));
         assert_eq!(grid.cells().selected(6), Some(2), "Page Down as Down");
         let mut grid = selecting(&engine(), 1, 6);
-        assert!(grid.arrow(Key::PageDown, 6));
+        assert!(grid.arrow(UiCommand::PageDown, 6));
         assert_eq!(grid.cells().selected(6), Some(5));
     }
 
     #[test]
     fn by_the_other_arrows_reading_down_and_up_go_to_the_ends() {
         let mut grid = selecting(&arrows_other(), 3, 6);
-        assert!(grid.arrow(Key::ArrowDown, 6));
+        assert!(grid.arrow(UiCommand::Down, 6));
         assert_eq!(grid.cells().selected(6), Some(5));
-        assert!(grid.arrow(Key::ArrowUp, 6));
+        assert!(grid.arrow(UiCommand::Up, 6));
         assert_eq!(grid.cells().selected(6), Some(1));
-        assert!(grid.arrow(Key::PageUp, 6));
+        assert!(grid.arrow(UiCommand::PageUp, 6));
         assert_eq!(grid.cells().selected(6), Some(0), "Page Up as Up");
     }
 
@@ -334,10 +335,10 @@ mod tests {
         let mut grid = ShipyardGrid::open(&other(), 6);
         assert_eq!(grid.cells().selected(6), Some(0));
         grid.select(2, 6);
-        assert!(grid.arrow(Key::ArrowUp, 6));
+        assert!(grid.arrow(UiCommand::Up, 6));
         assert_eq!(grid.cells().selected(6), Some(2));
         grid.select(3, 6);
-        assert!(grid.arrow(Key::ArrowDown, 6));
+        assert!(grid.arrow(UiCommand::Down, 6));
         assert_eq!(grid.cells().selected(6), Some(3));
     }
 }

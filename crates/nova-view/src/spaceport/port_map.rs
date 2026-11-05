@@ -35,6 +35,7 @@ mod tests {
 
     use super::*;
     use crate::flight::view::MAP_KEY;
+    use crate::input::Key;
     use crate::screen::Screen;
     use crate::spaceport::view::tests::{
         actives, click_item, drinking_with_info, hiring, in_the_shipyards_panel, informed, key,
@@ -141,7 +142,7 @@ mod tests {
             asked(&mut view),
             Some(PortMap::Screen(PortScreen::Shipyard))
         );
-        view.input(&key(crate::spaceport::shipyard::INFO_KEY));
+        view.input(&key(Key::Space));
         assert_eq!(
             asked(&mut view),
             Some(PortMap::Screen(PortScreen::ShipDescription))

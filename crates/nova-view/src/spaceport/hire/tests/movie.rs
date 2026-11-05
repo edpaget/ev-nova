@@ -149,7 +149,7 @@ fn a_new_selection_an_empty_cell_or_done_stops_it() {
 fn the_info_panel_does_not_stop_it_and_it_holds_its_frame() {
     let reel = MockMoviePlayer::playing((32, 32), 100);
     let mut screen = first_on(&reel);
-    screen.input(&key(INFO_KEY, false));
+    screen.input(&key(Key::Space, false));
     assert!(screen.info_panel().is_some());
     screen.tick(Duration::from_millis(100));
     screen.tick_covered(Duration::from_millis(100));

@@ -1103,7 +1103,7 @@ fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
         bought,
         "the shipyard: the nav as the map opened"
     );
-    screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+    screen.input(&key(Key::Space, true));
     assert_eq!(
         plot_on_a_port_screens_map(&mut screen, SystemId(129), "its Info panel"),
         bought,
@@ -2454,7 +2454,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
         |screen| {
             click_port_item(screen, 9);
             select_first_ship(screen);
-            screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+            screen.input(&key(Key::Space, true));
         },
         |port| {
             port.open_shipyard()
@@ -2476,7 +2476,7 @@ const INFO_OPENERS: [InfoOpener; 7] = [
             click_port_item(screen, 11);
             screen.input(&key(Key::KeyH, true));
             select_first_ship(screen);
-            screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
+            screen.input(&key(Key::Space, true));
         },
         |port| {
             port.open_bar()

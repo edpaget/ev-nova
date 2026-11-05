@@ -1786,7 +1786,7 @@ mod tests {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
         screen.take_sounds();
-        screen.input(&key(super::super::hire::HIRE_KEY, false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_hire(), None, "nothing selected");
         let sounds = screen.take_sounds();
         assert_eq!(
@@ -1804,7 +1804,7 @@ mod tests {
         let mut screen = laid_hire_bar();
         screen.open_hire(list(2));
         screen.input(&key(Key::ArrowRight, false));
-        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         assert!(
             screen
                 .hire_screen()
@@ -1835,7 +1835,7 @@ mod tests {
         );
         assert_eq!(screen.take_map_request(), None, "once");
         assert!(screen.hire_screen().is_some(), "still open");
-        screen.input(&key(crate::spaceport::shipyard::INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         screen.input(&key(MAP_KEY, false));
         assert_eq!(
             screen.take_map_request(),

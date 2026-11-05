@@ -284,7 +284,7 @@ fn holds_while_covered(
 fn the_info_panel_does_not_stop_it_and_it_holds_its_frame() {
     let reel = MockMoviePlayer::playing((32, 32), 100);
     let (mut screen, _) = shuttle_on(&reel);
-    press(&mut screen, INFO_KEY);
+    press(&mut screen, Key::Space);
     assert!(screen.info_panel().is_some());
     holds_while_covered(&reel, &mut screen, |screen| {
         press(screen, Key::Escape);

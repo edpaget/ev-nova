@@ -68,7 +68,7 @@ use super::layout::DONE_LABEL;
 use super::ship_movie::ShipMovie;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
-    INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
+    INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
     ShipyardCatalog, open_panel, ship_picture,
 };
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
@@ -76,7 +76,8 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandReader, HireCommand, SharedBindings, UiCommand, contexts};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
@@ -86,9 +87,6 @@ use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
-/// Hires the selected ship, as Hire Escort does (`_ShipyardFilter`
-/// @0x60503).
-pub const HIRE_KEY: Key = Key::KeyH;
 /// The first pilot description's `dësc`: ship n's is n - 128 after it.
 pub const FIRST_PILOT_DESC: i16 = 14_000;
 /// The first `shïp` ID.
@@ -173,6 +171,9 @@ pub struct HireScreen {
     description_request: Option<i16>,
     /// The selected ship's movie, looping in item 8.
     movie: ShipMovie,
+    /// Its keys, as commands ([`contexts::HIRE`]): Hire Escort and the
+    /// shared UI keys, its Info panel's among them.
+    keys: CommandReader,
     sounds: Vec<Sound>,
 }
 
@@ -249,6 +250,7 @@ impl HireScreen {
             closed: false,
             description_request: None,
             movie: ShipMovie::new(movies),
+            keys: CommandReader::new(contexts::HIRE),
             sounds: Vec::new(),
         };
         screen.selected_changed();
@@ -264,6 +266,17 @@ impl HireScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_focus_ring(ring);
         }
+        self
+    }
+
+    /// The hire screen reading its keys through `bindings`: its own, its
+    /// dialog's and its Info panel's.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
         self
     }
 
@@ -453,7 +466,11 @@ impl HireScreen {
             &laid.metrics.0,
             self.style,
         )
-        .map(|panel| panel.with_focus_ring(self.focus_ring));
+        .map(|panel| {
+            panel
+                .with_focus_ring(self.focus_ring)
+                .with_bindings(self.keys.bindings().clone())
+        });
     }
 
     /// Activates dialog item `item`: Done closes, Hire Escort asks, Info
@@ -562,31 +579,28 @@ impl Screen for HireScreen {
     /// Every input goes to the screen, or to its info panel while that is
     /// open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let command = self.keys.follow(input);
+        let pressed = command.filter(|command| command.pressed);
+        let fresh = pressed
+            .filter(|command| !command.repeat)
+            .map(|command| command.command);
         if self.laid.is_err() {
-            if let Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
+            if matches!(
+                fresh,
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            ) {
                 self.closed = true;
             }
             return ScreenAction::None;
         }
         if let Some(panel) = &mut self.panel {
-            if panel.input(input) {
+            if panel.input(input, command) {
                 self.panel = None;
             }
             return ScreenAction::None;
         }
         let count = self.list.rows.len();
-        let arrow = match *input {
-            Input::Key {
-                key, pressed: true, ..
-            } => self.grid.arrow(key, count),
-            _ => false,
-        };
-        let pressed_once = |wanted: Key| matches!(*input, Input::Key { key, pressed: true, repeat: false } if key == wanted);
+        let arrow = pressed.is_some_and(|command| self.grid.arrow(command.command, count));
         let on_grid = match *input {
             Input::PointerButton {
                 pressed: true, at, ..
@@ -597,9 +611,9 @@ impl Screen for HireScreen {
         };
         if arrow {
             self.selected_changed();
-        } else if pressed_once(HIRE_KEY) {
+        } else if fresh == Some(Command::Hire(HireCommand::Hire)) {
             self.ask();
-        } else if pressed_once(INFO_KEY) {
+        } else if fresh == Some(Command::Ui(UiCommand::Activate)) {
             self.open_info();
         } else if on_grid {
             // The grid took the press.
@@ -667,6 +681,11 @@ impl Screen for HireScreen {
 
     /// The refused hire's beep ([`UiSound::BuyRefused`]); the buttons are
     /// silent.
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
+    }
+
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -685,7 +704,7 @@ mod tests {
     use crate::draw::{DrawCommand, frame_rect};
     use crate::font::Font;
     use crate::image::ImageKey;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
     use crate::spaceport::grid::TEXT_COLOR;
     use crate::spaceport::shipyard::{
@@ -1025,7 +1044,15 @@ mod tests {
 
     #[test]
     fn the_named_values() {
-        assert_eq!((HIRE_ITEM, HIRE_KEY), (1, Key::KeyH));
+        assert_eq!(
+            (
+                HIRE_ITEM,
+                crate::keymap::KeyMap::default()
+                    .combo(HireCommand::Hire.into())
+                    .map(|combo| combo.key)
+            ),
+            (1, Some(Key::KeyH))
+        );
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
@@ -1128,19 +1155,34 @@ mod tests {
         click(&mut screen, second);
         assert_eq!(screen.selected(), Some(1));
         assert!(!enabled(&screen, HIRE_ESCORT));
-        screen.input(&key(HIRE_KEY, false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_order(), None, "refused");
         let hire = item(&screen, HIRE_ITEM).center();
         click(&mut screen, hire);
         assert_eq!(screen.take_order(), None);
     }
 
+    /// The hire screen reads its keys through the key map it is given:
+    /// Hire rebound to Q asks on Q and no longer on H.
+    #[test]
+    fn a_rebound_hire_asks_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, HireCommand, KeyCombo, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(HireCommand::Hire, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = screen().with_bindings(bindings);
+        screen.input(&key(Key::KeyH, false));
+        assert_eq!(screen.take_order(), None, "H no longer hires");
+        screen.input(&key(Key::KeyQ, false));
+        assert_eq!(screen.take_order(), Some(ShipId(128)));
+    }
+
     #[test]
     fn h_or_hire_escort_asks_for_the_selected_ship_on_a_press_only() {
         let mut screen = screen();
-        screen.input(&key(HIRE_KEY, true));
+        screen.input(&key(Key::KeyH, true));
         assert_eq!(screen.take_order(), None, "a repeat");
-        screen.input(&key(HIRE_KEY, false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_order(), Some(ShipId(128)));
         assert_eq!(screen.take_order(), None, "once");
         let hire = item(&screen, HIRE_ITEM).center();
@@ -1234,13 +1276,13 @@ mod tests {
     #[test]
     fn info_opens_the_panel_on_the_selected_ship_and_its_done_closes_it_alone() {
         let mut screen = screen();
-        screen.input(&key(INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         assert!(screen.info_panel().is_some());
         let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
         assert!(words.contains(&"Ship 128".to_owned()), "{words:?}");
         assert!(words.contains(&"Speed:".to_owned()), "{words:?}");
         assert!(words.contains(&"300".to_owned()), "{words:?}");
-        screen.input(&key(HIRE_KEY, false));
+        screen.input(&key(Key::KeyH, false));
         assert_eq!(screen.take_order(), None, "the panel takes the keys");
         screen.input(&key(Key::Escape, false));
         assert!(screen.info_panel().is_none());
@@ -1261,7 +1303,7 @@ mod tests {
             bare.input(&key(Key::ArrowRight, false));
             assert!(!enabled(&bare, INFO_LABEL));
             assert_eq!(bare.selected(), Some(0));
-            bare.input(&key(INFO_KEY, false));
+            bare.input(&key(Key::Space, false));
             let info = item(&bare, INFO_ITEM).center();
             click(&mut bare, info);
             assert!(bare.info_panel().is_none());
@@ -1274,7 +1316,7 @@ mod tests {
     fn space_closes_the_hire_panel_but_not_its_repeats() {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             let mut screen = screen().with_focus_ring(ring);
-            screen.input(&key(INFO_KEY, false));
+            screen.input(&key(Key::Space, false));
             assert!(screen.info_panel().is_some(), "the press that opened it");
             screen.input(&key(Key::Space, true));
             assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
@@ -1301,7 +1343,7 @@ mod tests {
                     ..list()
                 },
             );
-            screen.input(&key(INFO_KEY, false));
+            screen.input(&key(Key::Space, false));
             let area = screen
                 .info_panel()
                 .expect("open")
@@ -1355,7 +1397,7 @@ mod tests {
                 .iter()
                 .any(|(text, _, _)| text.contains("no DLOG 1004"))
         );
-        screen.input(&key(HIRE_KEY, false));
+        screen.input(&key(Key::KeyH, false));
         assert!(!screen.closed());
         screen.input(&key(Key::Enter, false));
         assert!(screen.closed());
@@ -1577,7 +1619,7 @@ mod tests {
         let art = art_with(vec![(13_000, 6000), (14_000, 5000)]);
         let mut screen = screen_of(&art, long_named());
         art.asked.borrow_mut().clear();
-        screen.input(&key(INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(205.0, 115.0, 614.0, 537.0));
         assert_eq!(*art.asked.borrow(), ["graphic 14000"]);
@@ -1602,7 +1644,7 @@ mod tests {
     fn info_on_a_pilot_description_without_a_graphic_opens_1005() {
         let art = art_with(vec![(13_000, 5000)]);
         let mut screen = screen_of(&art, long_named());
-        screen.input(&key(INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
         assert!(drawn(&screen).contains(&DrawCommand::Picture {
@@ -1624,7 +1666,7 @@ mod tests {
             ammo: None,
         }];
         let mut screen = screen_of(&art, list);
-        screen.input(&key(INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         let panel = screen.info_panel().expect("open");
         let weapons = panel.item_bounds(8).expect("item 8");
         let text_area = panel.item_bounds(5).expect("item 5");
@@ -1654,7 +1696,7 @@ mod tests {
     fn the_hire_panel_title_is_times_18() {
         let art = art_with(vec![(14_000, 5000)]);
         let mut screen = screen_of(&art, long_named());
-        screen.input(&key(INFO_KEY, false));
+        screen.input(&key(Key::Space, false));
         let area = screen
             .info_panel()
             .expect("open")
@@ -1728,8 +1770,8 @@ mod tests {
             Key::ArrowDown,
             Key::ArrowLeft,
             Key::ArrowUp,
-            HIRE_KEY,
-            INFO_KEY,
+            Key::KeyH,
+            Key::Space,
             Key::Enter,
             Key::Escape,
         ] {
@@ -1895,16 +1937,16 @@ mod tests {
     #[test]
     fn h_refused_beeps_and_space_with_nothing_selected_is_silent() {
         let mut screen = opened_of(&art(), list());
-        press_key(&mut screen, HIRE_KEY);
+        press_key(&mut screen, Key::KeyH);
         assert_eq!(screen.take_order(), None, "nothing selected");
         assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::BuyRefused)]);
-        press_key(&mut screen, INFO_KEY);
+        press_key(&mut screen, Key::Space);
         assert!(screen.info_panel().is_none());
         assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
         for rules in [nova_sim::Rulebook::default(), bible()] {
             let mut screen = opened_of(&art(), HireList { rules, ..list() });
             click_cell(&mut screen, 1);
-            press_key(&mut screen, HIRE_KEY);
+            press_key(&mut screen, Key::KeyH);
             assert_eq!(screen.take_order(), None, "too dear");
             assert_eq!(
                 screen.take_sounds(),
@@ -1972,7 +2014,7 @@ mod tests {
     }
 
     /// The hire screen's buttons take Tab's focus only with the focus
-    /// ring. Space is its Info key ([`INFO_KEY`]) under both readings, so
+    /// ring. Space is its Info key ([`Key::Space`]) under both readings, so
     /// what the ring changes here is Tab's focus.
     #[test]
     fn tab_focuses_hire_escort_only_with_the_focus_ring() {
@@ -1998,7 +2040,7 @@ mod tests {
             (FocusRing::Off, None),
         ] {
             let mut screen = screen().with_focus_ring(ring);
-            screen.input(&key(INFO_KEY, false));
+            screen.input(&key(Key::Space, false));
             screen.input(&key(Key::Tab, false));
             let panel = screen.info_panel().expect("open");
             assert_eq!(panel.focus_ring(), ring);

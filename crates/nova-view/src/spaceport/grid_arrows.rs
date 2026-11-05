@@ -8,12 +8,14 @@
 //! scroll, a multiple of 4. Page Up (Mac key 0x74) moves as Up and Page
 //! Down (0x79) as Down, one row and not a page (@0x581b0-0x581dd,
 //! @0x604ea-0x60554), by both readings. Home and End are not arrows. No
-//! arrow plays a sound.
+//! arrow plays a sound. The arrows are the shared UI context's
+//! [`UiCommand`]s, read through the key map: Left, Right, Up and Down,
+//! and Page Up and Page Down answering Up and Down.
 
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 use super::grid::{COLUMNS, CellGrid, GRID_ROWS};
-use crate::input::Key;
+use crate::keymap::{Command, UiCommand};
 
 /// How many cells the grid shows: the filters' 20 visible positions.
 const SHOWN: usize = COLUMNS * GRID_ROWS;
@@ -61,22 +63,22 @@ enum Arrow {
 }
 
 impl Arrow {
-    /// The direction of `key`, if it is an arrow: the filters take Page Up
-    /// as Up and Page Down as Down (@0x582c4-0x58307).
-    fn of(key: Key) -> Option<Self> {
-        match key {
-            Key::ArrowLeft => Some(Self::Left),
-            Key::ArrowRight => Some(Self::Right),
-            Key::ArrowUp | Key::PageUp => Some(Self::Up),
-            Key::ArrowDown | Key::PageDown => Some(Self::Down),
+    /// The direction of `command`, if it is an arrow: the filters take
+    /// Page Up as Up and Page Down as Down (@0x582c4-0x58307).
+    fn of(command: Command) -> Option<Self> {
+        match command {
+            Command::Ui(UiCommand::Left) => Some(Self::Left),
+            Command::Ui(UiCommand::Right) => Some(Self::Right),
+            Command::Ui(UiCommand::Up | UiCommand::PageUp) => Some(Self::Up),
+            Command::Ui(UiCommand::Down | UiCommand::PageDown) => Some(Self::Down),
             _ => None,
         }
     }
 }
 
-/// Where an arrow `key` going down moves the selection of a grid of
+/// Where an arrow `command` pressed moves the selection of a grid of
 /// `count` cells, with cell `selected` (highlighted or not) and first row
-/// `top_row` shown, by `moves`; `None` when `key` is no arrow.
+/// `top_row` shown, by `moves`; `None` when `command` is no arrow.
 ///
 /// With no cell highlighted, by both readings, Right, Down and Page Down
 /// pick the first cell shown, and Left, Up and Page Up the last, position
@@ -88,14 +90,14 @@ impl Arrow {
 /// list, and the grid scrolled the least that shows it.
 #[must_use]
 pub fn arrow_move(
-    key: Key,
+    command: impl Into<Command>,
     highlighted: bool,
     selected: usize,
     top_row: usize,
     count: usize,
     moves: ArrowMoves,
 ) -> Option<Placed> {
-    let arrow = Arrow::of(key)?;
+    let arrow = Arrow::of(command.into())?;
     if !highlighted {
         let first = top_row * COLUMNS;
         let index = match arrow {
@@ -196,13 +198,13 @@ mod tests {
 
     /// The filters' move of highlighted index `selected` of `count`, with
     /// first row `top_row` shown: the new index and first row.
-    fn by_filter(key: Key, selected: usize, top_row: usize, count: usize) -> (usize, usize) {
+    fn by_filter(key: UiCommand, selected: usize, top_row: usize, count: usize) -> (usize, usize) {
         moved(ArrowMoves::Filter, key, selected, top_row, count)
     }
 
     fn moved(
         moves: ArrowMoves,
-        key: Key,
+        key: UiCommand,
         selected: usize,
         top_row: usize,
         count: usize,
@@ -230,25 +232,29 @@ mod tests {
     #[test]
     fn by_the_filter_up_on_the_lists_first_row_stays() {
         for index in 0..4 {
-            assert_eq!(by_filter(Key::ArrowUp, index, 0, 10), (index, 0), "{index}");
+            assert_eq!(
+                by_filter(UiCommand::Up, index, 0, 10),
+                (index, 0),
+                "{index}"
+            );
         }
-        assert_eq!(by_filter(Key::ArrowUp, 5, 0, 10), (1, 0));
+        assert_eq!(by_filter(UiCommand::Up, 5, 0, 10), (1, 0));
     }
 
     #[test]
     fn by_the_filter_up_on_the_top_row_shown_scrolls_a_row_and_keeps_the_cell() {
         // 30 listed, scrolled 2 rows: index 9 is visible position 1.
-        assert_eq!(by_filter(Key::ArrowUp, 9, 2, 30), (5, 1));
+        assert_eq!(by_filter(UiCommand::Up, 9, 2, 30), (5, 1));
     }
 
     #[test]
     fn by_the_filter_down_onto_an_empty_cell_stays() {
         // Worked examples 1, 3 and 4.
-        assert_eq!(by_filter(Key::ArrowDown, 6, 0, 10), (6, 0));
-        assert_eq!(by_filter(Key::ArrowDown, 26, 3, 30), (26, 3));
-        assert_eq!(by_filter(Key::ArrowDown, 3, 0, 6), (3, 0));
+        assert_eq!(by_filter(UiCommand::Down, 6, 0, 10), (6, 0));
+        assert_eq!(by_filter(UiCommand::Down, 26, 3, 30), (26, 3));
+        assert_eq!(by_filter(UiCommand::Down, 3, 0, 6), (3, 0));
         assert_eq!(
-            by_filter(Key::ArrowDown, 1, 0, 6),
+            by_filter(UiCommand::Down, 1, 0, 6),
             (5, 0),
             "onto a listed one"
         );
@@ -257,47 +263,47 @@ mod tests {
     #[test]
     fn by_the_filter_down_from_the_bottom_row_scrolls_and_steps_back_to_the_last_listed() {
         // Worked example 2: 22 listed, index 19 at cell 19.
-        assert_eq!(by_filter(Key::ArrowDown, 19, 0, 22), (21, 1));
+        assert_eq!(by_filter(UiCommand::Down, 19, 0, 22), (21, 1));
         assert_eq!(
-            by_filter(Key::ArrowDown, 16, 0, 22),
+            by_filter(UiCommand::Down, 16, 0, 22),
             (20, 1),
             "onto a listed one"
         );
         // At scroll 4 the same index is cell 15, and index 23 is empty.
-        assert_eq!(by_filter(Key::ArrowDown, 19, 1, 22), (19, 1));
+        assert_eq!(by_filter(UiCommand::Down, 19, 1, 22), (19, 1));
     }
 
     #[test]
     fn by_the_filter_down_from_the_last_row_with_no_scroll_left_stays() {
-        assert_eq!(by_filter(Key::ArrowDown, 29, 3, 30), (29, 3));
-        assert_eq!(by_filter(Key::ArrowDown, 17, 0, 20), (17, 0));
+        assert_eq!(by_filter(UiCommand::Down, 29, 3, 30), (29, 3));
+        assert_eq!(by_filter(UiCommand::Down, 17, 0, 20), (17, 0));
     }
 
     #[test]
     fn by_the_filter_right_and_left_cross_a_row_by_scrolling() {
         assert_eq!(
-            by_filter(Key::ArrowRight, 19, 0, 21),
+            by_filter(UiCommand::Right, 19, 0, 21),
             (20, 1),
             "the next index"
         );
         assert_eq!(
-            by_filter(Key::ArrowRight, 19, 0, 20),
+            by_filter(UiCommand::Right, 19, 0, 20),
             (19, 0),
             "no row to scroll"
         );
         assert_eq!(
-            by_filter(Key::ArrowRight, 9, 0, 10),
+            by_filter(UiCommand::Right, 9, 0, 10),
             (9, 0),
             "onto an empty cell"
         );
-        assert_eq!(by_filter(Key::ArrowRight, 3, 0, 10), (4, 0));
+        assert_eq!(by_filter(UiCommand::Right, 3, 0, 10), (4, 0));
         assert_eq!(
-            by_filter(Key::ArrowLeft, 4, 1, 30),
+            by_filter(UiCommand::Left, 4, 1, 30),
             (3, 0),
             "the previous index"
         );
-        assert_eq!(by_filter(Key::ArrowLeft, 5, 1, 30), (4, 1));
-        assert_eq!(by_filter(Key::ArrowLeft, 0, 0, 30), (0, 0));
+        assert_eq!(by_filter(UiCommand::Left, 5, 1, 30), (4, 1));
+        assert_eq!(by_filter(UiCommand::Left, 0, 0, 30), (0, 0));
     }
 
     #[test]
@@ -305,9 +311,10 @@ mod tests {
         for moves in [ArrowMoves::Filter, ArrowMoves::Clamped] {
             for count in COUNTS {
                 for (index, top) in on_screen(count) {
-                    for (page, arrow) in
-                        [(Key::PageUp, Key::ArrowUp), (Key::PageDown, Key::ArrowDown)]
-                    {
+                    for (page, arrow) in [
+                        (UiCommand::PageUp, UiCommand::Up),
+                        (UiCommand::PageDown, UiCommand::Down),
+                    ] {
                         assert_eq!(
                             moved(moves, page, index, top, count),
                             moved(moves, arrow, index, top, count),
@@ -317,15 +324,15 @@ mod tests {
                 }
             }
         }
-        assert_eq!(by_filter(Key::PageDown, 1, 0, 10), (5, 0));
-        assert_eq!(by_filter(Key::PageUp, 5, 0, 10), (1, 0));
+        assert_eq!(by_filter(UiCommand::PageDown, 1, 0, 10), (5, 0));
+        assert_eq!(by_filter(UiCommand::PageUp, 5, 0, 10), (1, 0));
     }
 
     #[test]
     fn left_and_right_move_alike_by_both_readings() {
         for count in COUNTS {
             for (index, top) in on_screen(count) {
-                for key in [Key::ArrowLeft, Key::ArrowRight] {
+                for key in [UiCommand::Left, UiCommand::Right] {
                     assert_eq!(
                         moved(ArrowMoves::Filter, key, index, top, count),
                         moved(ArrowMoves::Clamped, key, index, top, count),
@@ -339,28 +346,28 @@ mod tests {
     #[test]
     fn by_the_clamped_reading_up_and_down_go_to_the_ends() {
         let clamped = |key, index, top, count| moved(ArrowMoves::Clamped, key, index, top, count);
-        assert_eq!(clamped(Key::ArrowUp, 2, 0, 10), (0, 0));
-        assert_eq!(clamped(Key::ArrowDown, 6, 0, 10), (9, 0));
-        assert_eq!(clamped(Key::PageUp, 2, 0, 10), (0, 0));
-        assert_eq!(clamped(Key::PageDown, 6, 0, 10), (9, 0));
-        assert_eq!(clamped(Key::ArrowDown, 19, 1, 22), (21, 1));
-        assert_eq!(clamped(Key::ArrowDown, 9, 0, 30), (13, 0));
+        assert_eq!(clamped(UiCommand::Up, 2, 0, 10), (0, 0));
+        assert_eq!(clamped(UiCommand::Down, 6, 0, 10), (9, 0));
+        assert_eq!(clamped(UiCommand::PageUp, 2, 0, 10), (0, 0));
+        assert_eq!(clamped(UiCommand::PageDown, 6, 0, 10), (9, 0));
+        assert_eq!(clamped(UiCommand::Down, 19, 1, 22), (21, 1));
+        assert_eq!(clamped(UiCommand::Down, 9, 0, 30), (13, 0));
     }
 
     #[test]
     fn with_no_cell_highlighted_an_arrow_picks_the_first_or_the_last_shown_by_both_readings() {
         for moves in [ArrowMoves::Filter, ArrowMoves::Clamped] {
             for (key, top, count, expected) in [
-                (Key::ArrowRight, 0, 30, 0),
-                (Key::ArrowDown, 0, 30, 0),
-                (Key::PageDown, 0, 30, 0),
-                (Key::ArrowLeft, 0, 30, 19),
-                (Key::ArrowUp, 0, 30, 19),
-                (Key::PageUp, 0, 30, 19),
-                (Key::PageDown, 1, 30, 4),
-                (Key::PageUp, 1, 30, 23),
-                (Key::PageUp, 0, 7, 6),
-                (Key::ArrowUp, 1, 22, 21),
+                (UiCommand::Right, 0, 30, 0),
+                (UiCommand::Down, 0, 30, 0),
+                (UiCommand::PageDown, 0, 30, 0),
+                (UiCommand::Left, 0, 30, 19),
+                (UiCommand::Up, 0, 30, 19),
+                (UiCommand::PageUp, 0, 30, 19),
+                (UiCommand::PageDown, 1, 30, 4),
+                (UiCommand::PageUp, 1, 30, 23),
+                (UiCommand::PageUp, 0, 7, 6),
+                (UiCommand::Up, 1, 22, 21),
             ] {
                 let placed = arrow_move(key, false, 12, top, count, moves);
                 assert_eq!(
@@ -379,19 +386,19 @@ mod tests {
     fn by_the_filter_an_off_screen_selection_is_brought_into_view_then_moved() {
         // Index 2 with the grid scrolled 3 rows of 30: shown at the top,
         // then Up on the first row stays and Down moves a row.
-        assert_eq!(by_filter(Key::ArrowUp, 2, 3, 30), (2, 0));
-        assert_eq!(by_filter(Key::ArrowDown, 2, 3, 30), (6, 0));
+        assert_eq!(by_filter(UiCommand::Up, 2, 3, 30), (2, 0));
+        assert_eq!(by_filter(UiCommand::Down, 2, 3, 30), (6, 0));
         // Index 29 with the grid at its top: shown on the last row.
-        assert_eq!(by_filter(Key::ArrowUp, 29, 0, 30), (25, 3));
+        assert_eq!(by_filter(UiCommand::Up, 29, 0, 30), (25, 3));
     }
 
     #[test]
     fn with_nothing_listed_an_arrow_selects_no_listed_cell() {
         for key in [
-            Key::ArrowLeft,
-            Key::ArrowRight,
-            Key::ArrowUp,
-            Key::ArrowDown,
+            UiCommand::Left,
+            UiCommand::Right,
+            UiCommand::Up,
+            UiCommand::Down,
         ] {
             assert_eq!(by_filter(key, 0, 0, 0), (0, 0), "{key:?}");
         }
@@ -399,7 +406,7 @@ mod tests {
 
     #[test]
     fn other_keys_are_not_arrows() {
-        for key in [Key::Enter, Key::KeyJ, Key::Unidentified] {
+        for key in [UiCommand::Confirm, UiCommand::Tab, UiCommand::Home] {
             for highlighted in [true, false] {
                 assert_eq!(
                     arrow_move(key, highlighted, 0, 0, 10, ArrowMoves::Filter),

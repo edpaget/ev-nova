@@ -7603,7 +7603,6 @@ pub(in crate::spaceport) mod tests {
     // The closings that redraw the status bar.
 
     use crate::spaceport::news::NewsScreen;
-    use crate::spaceport::shipyard::INFO_KEY;
 
     /// "Shipyard Info", plain and with a picture both of `DLOG` 1005's
     /// shape: 250 x 285, centred, with Done (1), the title (3) and the
@@ -7882,7 +7881,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = shipbuying_with_info();
         click_item(&mut view, 9);
         view.input(&key(Key::ArrowRight));
-        view.input(&key(INFO_KEY));
+        view.input(&key(Key::Space));
         let shipyard = view.open_shipyard().expect("shipbuying");
         assert!(shipyard.info_panel().is_some());
         view
@@ -7891,7 +7890,7 @@ pub(in crate::spaceport) mod tests {
     /// The hire screen open, its info panel open over it.
     fn in_the_hire_panel() -> SpaceportView {
         let mut view = hiring(drinking_with_info());
-        view.input(&key(INFO_KEY));
+        view.input(&key(Key::Space));
         let hire = view.open_bar().and_then(BarScreen::hire_screen);
         assert!(hire.and_then(HireScreen::info_panel).is_some());
         view
@@ -8034,7 +8033,7 @@ pub(in crate::spaceport) mod tests {
                 let mut view = with_info(shipbuying_with_info(), info);
                 click_item(&mut view, 9);
                 view.input(&key(Key::ArrowRight));
-                view.input(&key(INFO_KEY));
+                view.input(&key(Key::Space));
                 view
             },
             |view| {
@@ -8046,7 +8045,7 @@ pub(in crate::spaceport) mod tests {
             "the hire screen's description",
             |info| {
                 let mut view = hiring(with_info(drinking_with_info(), info));
-                view.input(&key(INFO_KEY));
+                view.input(&key(Key::Space));
                 view
             },
             |view| {

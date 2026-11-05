@@ -623,7 +623,7 @@ mod tests {
     /// and a screen's other keys may be missing. A screen test that sends
     /// one of these directly never crosses `map_key`, so this is what keeps
     /// each one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 30] = [
+    const GAME_CHARACTER_KEYS: [Key; 27] = [
         Key::KeyF,
         Key::KeyI,
         Key::KeyP,
@@ -637,12 +637,10 @@ mod tests {
         Key::NumpadAdd,
         Key::Minus,
         nova_view::devtools::TOGGLE_KEY,
-        // The trade center's Buy and Sell defaults.
+        // The trade center's, the outfitter's and the shipyard's Buy and
+        // Sell defaults.
         Key::KeyB,
         Key::KeyS,
-        nova_view::spaceport::outfitter::BUY_KEY,
-        nova_view::spaceport::outfitter::SELL_KEY,
-        nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
         nova_view::spaceport::bar::NEWS_KEYS[0],
         nova_view::spaceport::bar::GAMBLE_KEYS[0],
@@ -837,7 +835,8 @@ mod tests {
     /// sends it.
     const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
-        (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
+        // The shipyard's Info, the shared Activate.
+        (Key::Space, KeyCode::Space),
         // The trade center's Option and its right twin.
         (Key::AltLeft, KeyCode::AltLeft),
         (Key::AltRight, KeyCode::AltRight),
