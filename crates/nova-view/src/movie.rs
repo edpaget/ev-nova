@@ -47,7 +47,10 @@
 //!   so one still down from before the movie (the Return that closed a
 //!   text) skips it at once. The engine sees a key or button only as it
 //!   goes down or up, so one held from before skips the movie as it is let
-//!   go: later than the original by however long it is still held.
+//!   go: later than the original by however long it is still held. Space
+//!   and Return are the shared UI context's Activate and Confirm (the
+//!   keypad's Enter Confirm's fixed twin), read through the stage's
+//!   bindings ([`MovieStage::with_bindings`]; [`contexts::MOVIE`]).
 //!
 //! On a screen already faded (`_screenFaded` *0x3b5198 set, as under the
 //! jump's white or the intro's black), a cinematic movie's first fade does
@@ -79,7 +82,8 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::system::camera::VIEW_SIZE;
 use crate::time::sixtieths;
 
@@ -310,6 +314,9 @@ pub struct MovieStage {
     replay: Vec<Input>,
     /// Whether the player started it.
     started: bool,
+    /// Its skip keys, as commands ([`contexts::MOVIE`]), boxed to keep
+    /// the stage small beside its holders' other stages.
+    keys: Box<CommandReader>,
 }
 
 impl std::fmt::Debug for MovieStage {
@@ -373,20 +380,32 @@ fn cover(view: (f32, f32)) -> (i32, i32, i32, i32) {
 #[allow(clippy::cast_possible_truncation)]
 const CLASSIC: (i32, i32, i32, i32) = (0, 0, VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
-/// Whether `input` skips a movie playing: the mouse button, Space or
-/// Return going down or up, as the original reads them held
-/// (`KeyCheck` 0x31, 0x24 and 0x4c, up to @0x55e8a).
-#[must_use]
-pub fn skips_a_movie(input: &Input) -> bool {
+/// Whether `input` skips a movie playing: the mouse button, or the key
+/// of the shared Activate (Space) or Confirm (Return, the keypad's Enter
+/// its twin) going down or up, as the original reads them held
+/// (`KeyCheck` 0x31, 0x24 and 0x4c, up to @0x55e8a). `keys` reads what a
+/// key means ([`CommandReader::means`]), going down or up.
+fn skips(input: &Input, keys: &CommandReader) -> bool {
     matches!(
         input,
-        Input::Key {
-            key: Key::Space | Key::Enter | Key::NumpadEnter,
-            ..
-        } | Input::PointerButton {
+        Input::PointerButton {
             button: MouseButton::Left,
             ..
         }
+    ) || matches!(
+        keys.means(input),
+        Some(Command::Ui(UiCommand::Activate | UiCommand::Confirm))
+    )
+}
+
+/// Whether `input` skips a movie playing, its keys read through
+/// `bindings` with no modifier held: [`MovieStage::input`]'s skip, for a
+/// holder that queues input for a movie in front.
+#[must_use]
+pub fn skips_a_movie(input: &Input, bindings: &SharedBindings) -> bool {
+    skips(
+        input,
+        &CommandReader::new(contexts::MOVIE).with_bindings(bindings.clone()),
     )
 }
 
@@ -402,7 +421,20 @@ impl MovieStage {
             view: Rc::new(Cell::new(VIEW_SIZE)),
             replay: Vec::new(),
             started: false,
+            keys: Box::new(CommandReader::new(contexts::MOVIE)),
         }
+    }
+
+    /// The stage reading its skip keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its skip keys through `bindings` from the next input on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.keys.set_bindings(bindings);
     }
 
     /// The movie played.
@@ -544,15 +576,17 @@ impl MovieStage {
         }
     }
 
-    /// Takes `input`. While the movie runs, the mouse button or Space or
-    /// Return going down or up skips it, the queued input flushed; other
-    /// keys and clicks stay queued for what comes next, as they do during
-    /// the fades. A pointer's moves go nowhere.
+    /// Takes `input`. While the movie runs, the mouse button or Activate's
+    /// or Confirm's key going down or up skips it, the queued input
+    /// flushed; other keys and clicks stay queued for what comes next, as
+    /// they do during the fades. A pointer's moves go nowhere.
     pub fn input(&mut self, input: &Input) {
         if self.phase == Phase::Ended {
             return;
         }
-        if matches!(self.phase, Phase::Playing(_)) && skips_a_movie(input) {
+        let skip = skips(input, &self.keys);
+        self.keys.follow(input);
+        if matches!(self.phase, Phase::Playing(_)) && skip {
             self.replay.clear();
             self.close();
             return;
@@ -1201,6 +1235,7 @@ mod tests {
     use super::fixture::{Call, MockMoviePlayer};
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
 
     const TICK: Duration = Duration::from_millis(100);
 
@@ -1893,6 +1928,28 @@ mod tests {
             stage.begin();
             stage.input(&held);
             assert!(stage.ended(), "{held:?}");
+        }
+    }
+
+    #[test]
+    fn a_rebound_activate_and_confirm_skip_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyJ)),
+        );
+        for skip in [press(Key::KeyQ), press(Key::KeyJ), release(Key::KeyQ)] {
+            let player = MockMoviePlayer::playing((160, 120), 30);
+            let mut stage = staged(&player, 0).with_bindings(bindings.clone());
+            stage.begin();
+            stage.tick(TICK);
+            for old in [press(Key::Space), press(Key::Enter), release(Key::Space)] {
+                stage.input(&old);
+                assert!(!stage.ended(), "{old:?} no longer skips");
+            }
+            stage.input(&skip);
+            assert!(stage.ended(), "{skip:?}");
         }
     }
 

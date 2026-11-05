@@ -33,7 +33,7 @@ use std::collections::HashSet;
 use nova_view::flight::FlightView;
 use nova_view::movie::skips_a_movie;
 use nova_view::spaceport::SpaceportView;
-use nova_view::{Input, Key, Showing};
+use nova_view::{Input, Key, SharedBindings, Showing};
 
 use super::AppScreen;
 
@@ -126,7 +126,9 @@ impl AppScreen {
     fn movie_skipped_by(&self, input: &Input) -> bool {
         let playing = self.showing() == Showing::Movie
             || self.spaceport_view().is_some_and(SpaceportView::playing);
-        playing && skips_a_movie(input)
+        // The default bindings until the router holds the app's
+        // (rdm:phase/key-bindings/phase-2-command-key-map).
+        playing && skips_a_movie(input, &SharedBindings::default())
     }
 
     /// Past a stop, the queued release of each key in `down`, the presses

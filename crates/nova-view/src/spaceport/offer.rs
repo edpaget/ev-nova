@@ -401,6 +401,9 @@ impl OfferDialog {
             dialog.set_bindings(bindings.clone());
         }
         self.close.set_bindings(&bindings);
+        if let Some(stage) = &mut self.before {
+            stage.set_bindings(bindings.clone());
+        }
         self.keys.set_bindings(bindings);
         self
     }
@@ -449,7 +452,10 @@ impl OfferDialog {
             return self;
         };
         let mut dialog = self;
-        dialog.before = movies.stage(&movie);
+        let bindings = dialog.keys.bindings().clone();
+        dialog.before = movies
+            .stage(&movie)
+            .map(|stage| stage.with_bindings(bindings));
         dialog
     }
 

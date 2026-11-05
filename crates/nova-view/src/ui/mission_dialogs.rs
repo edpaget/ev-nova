@@ -190,13 +190,15 @@ impl MissionDialogs {
         }
     }
 
-    /// These dialogs reading their keys through `bindings`: each text
-    /// queued, and each queued after it.
+    /// These dialogs reading their keys through `bindings`: each text and
+    /// movie queued, and each queued after it.
     #[must_use]
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
         for stage in &mut self.texts {
-            if let Stage::Text(dialog) = stage {
-                dialog.set_bindings(bindings.clone());
+            match stage {
+                Stage::Text(dialog) => dialog.set_bindings(bindings.clone()),
+                Stage::Movie(movie) => movie.set_bindings(bindings.clone()),
+                _ => {}
             }
         }
         if let Some(screen) = &mut self.info {
@@ -348,7 +350,8 @@ impl MissionDialogs {
     /// Queues `movie` after whatever is queued, while movies are on.
     fn queue_movie(&mut self, movie: &DescMovie) {
         if let Some(stage) = self.movies.stage(movie) {
-            self.texts.push_back(Stage::Movie(stage));
+            self.texts
+                .push_back(Stage::Movie(stage.with_bindings(self.bindings.clone())));
         }
     }
 
@@ -1662,6 +1665,33 @@ mod tests {
                 Call::Stop
             ]
         );
+    }
+
+    /// A movie queued before the dialogs are given their bindings, or
+    /// after, reads its skip keys through them: Activate rebound to Q
+    /// skips it on Q and no longer on Space.
+    #[test]
+    fn a_movie_skips_on_the_rebound_activate_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Activate, KeyCombo::key(Key::KeyQ)),
+        );
+        let player = MockMoviePlayer::playing((160, 120), 30);
+        let mut dialogs = playing(&player);
+        dialogs.show_texts(vec![filmed("Before.", 0)]);
+        let mut dialogs = dialogs.with_bindings(bindings);
+        dialogs.input(&key(Key::Space));
+        assert!(dialogs.playing(), "Space no longer skips it");
+        dialogs.input(&key(Key::KeyQ));
+        assert_eq!(shown(&dialogs).as_deref(), Some("Before."), "Q does");
+        dialogs.show_texts(vec![filmed("After.", 0x0001)]);
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Enter));
+        assert!(dialogs.playing(), "the movie after it");
+        dialogs.input(&key(Key::Space));
+        assert!(dialogs.playing(), "Space no longer skips it");
+        dialogs.input(&key(Key::KeyQ));
+        assert!(!dialogs.playing(), "Q does");
     }
 
     #[test]
