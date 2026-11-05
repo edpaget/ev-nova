@@ -89,11 +89,46 @@ fn shoulder_to_cell(screen: &mut HireScreen, cell: usize) {
     panic!("the shoulder never reaches cell {cell}");
 }
 
+/// The hire screen with its info panel open on the selected escort.
 fn with_info() -> HireScreen {
     let mut screen = screen();
     click_item(&mut screen, INFO_ITEM);
     assert!(screen.info_panel().is_some(), "Info opens the panel");
     screen
+}
+
+struct InfoProbe(HireScreen);
+
+impl PadProbe for InfoProbe {
+    fn screen(&mut self) -> &mut dyn Screen {
+        &mut self.0
+    }
+
+    fn controls(&self) -> Vec<(&'static str, Bounds)> {
+        let panel = self.0.info_panel().expect("open");
+        vec![(
+            "Done",
+            panel.item_bounds(PANEL_DONE_ITEM).expect("its Done"),
+        )]
+    }
+
+    fn outcome(&mut self) -> String {
+        format!(
+            "info {} order {:?} closed {}",
+            self.0.info_panel().is_some(),
+            self.0.take_order(),
+            self.0.closed()
+        )
+    }
+
+    fn default_control(&self) -> Option<&'static str> {
+        Some("Done")
+    }
+}
+
+/// The info panel's row.
+pub(crate) fn info_pad_probe() -> Box<dyn PadProbe> {
+    Box::new(InfoProbe(with_info()))
 }
 
 #[test]

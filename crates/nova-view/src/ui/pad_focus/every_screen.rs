@@ -123,6 +123,10 @@ fn rows() -> Vec<Row> {
             crate::spaceport::shipyard::pad::tests::info_pad_probe,
         ),
         ("hire", crate::spaceport::hire::pad::tests::pad_probe),
+        (
+            "hire's info",
+            crate::spaceport::hire::pad::tests::info_pad_probe,
+        ),
         ("spaceport", crate::spaceport::view::pad_probe),
     ]
 }
