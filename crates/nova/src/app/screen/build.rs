@@ -132,6 +132,7 @@ impl AppScreen {
             keys: CommandReader::new(contexts::ROUTER).with_bindings(bindings.clone()),
             flight_keys: CommandReader::new(contexts::FLIGHT).with_bindings(bindings.clone()),
             surroundings: nova_view::Surroundings::default(),
+            told_overlays: Vec::new(),
             bindings,
             menu_hold: None,
             held: Vec::new(),

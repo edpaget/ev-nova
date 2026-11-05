@@ -107,11 +107,12 @@ impl Screen for AppScreen {
     /// to flight as its input comes back from a dialog or the spaceport
     /// (see `live_input`).
     ///
-    /// The app's surroundings go to the router's readers and the flight,
-    /// if built, and nowhere else, whatever shows: flight is the one
-    /// screen that reads them yet (the screens off flight take the pad
-    /// in phases 8-11), and a flight built later is told them as it
-    /// starts.
+    /// The app's surroundings go to the router's readers, the flight, if
+    /// built, and every overlay open, whatever shows; a flight built
+    /// later is told them as it starts, and an overlay opened later as it
+    /// opens (`routing`'s `tell_new_overlays`, after each input, tick and
+    /// menu command). The spaceport's side isn't told yet
+    /// (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Surroundings(surroundings) = *input {
             self.surroundings = surroundings;
@@ -119,6 +120,7 @@ impl Screen for AppScreen {
             if let Some(flight) = &mut self.flight {
                 flight.input(input);
             }
+            self.tell_overlays(input);
             return ScreenAction::None;
         }
         if self.away_takes_input(input) {
@@ -127,6 +129,7 @@ impl Screen for AppScreen {
         self.live.note(input);
         self.tell_close_keys();
         let action = self.settled_input(input);
+        self.tell_new_overlays();
         if action == ScreenAction::Quit {
             return action;
         }
@@ -196,6 +199,7 @@ impl Screen for AppScreen {
         self.save_if_due();
         self.settle_live_input();
         self.quit_on_held_chords();
+        self.tell_new_overlays();
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -577,6 +581,7 @@ impl Screen for AppScreen {
     /// `menu_commands`).
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
         let action = self.run_menu_command(command);
+        self.tell_new_overlays();
         self.settle_live_input();
         if action == ScreenAction::Quit {
             return action;

@@ -374,11 +374,9 @@ impl MissionDialogs {
     fn ready_front(&mut self) {
         loop {
             self.pop_closed();
-            match self.texts.front_mut() {
-                Some(Stage::Text(text)) => {
-                    if text.dialog().device() != self.surroundings.device {
-                        text.input(&Input::Surroundings(self.surroundings));
-                    }
+            match self.texts.front() {
+                Some(Stage::Text(_)) => {
+                    self.tell_front();
                     self.screen.show_text();
                     return;
                 }
@@ -390,6 +388,16 @@ impl MissionDialogs {
                 }
                 _ => return,
             }
+        }
+    }
+
+    /// Tells the text in front, if one is, the device the player used
+    /// last, unless it knows it.
+    fn tell_front(&mut self) {
+        if let Some(Stage::Text(text)) = self.texts.front_mut()
+            && text.dialog().device() != self.surroundings.device
+        {
+            text.input(&Input::Surroundings(self.surroundings));
         }
     }
 
@@ -665,7 +673,7 @@ impl Screen for MissionDialogs {
             if let Some(info) = &mut self.info {
                 info.input(input);
             }
-            self.ready_front();
+            self.tell_front();
             return ScreenAction::None;
         }
         self.front_input(input);

@@ -189,6 +189,12 @@ impl<P: Confirm> Screen for EditDialog<P> {
     /// dialog: OK (or Confirm, Return) asks the policy, and Cancel
     /// declines. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The surroundings are no player input: they leave the flush of
+        // the opening key's character for the input that follows.
+        if let Input::Surroundings(_) = input {
+            self.dialog.input(input);
+            return ScreenAction::None;
+        }
         if std::mem::take(&mut self.flushing) && matches!(input, Input::Text(_)) {
             return ScreenAction::None;
         }
@@ -489,6 +495,18 @@ mod tests {
         dialog.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
         dialog.input(&Input::Text('K'));
         assert_eq!(dialog.field().text(), "K", "the flush ended");
+    }
+
+    #[test]
+    fn the_surroundings_leave_the_flush_for_the_next_typed_character() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut dialog = dialog();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings { device: pad }));
+        dialog.input(&Input::Text('b'));
+        assert_eq!(dialog.field().text(), "abc", "still flushed");
+        assert_eq!(dialog.dialog.device(), pad, "the dialog is told");
     }
 
     #[test]

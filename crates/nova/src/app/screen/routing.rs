@@ -535,6 +535,43 @@ impl AppScreen {
         ]
     }
 
+    /// Every overlay open, in the router's order.
+    fn overlays_opened(&self) -> Vec<Overlay> {
+        self.overlays_open()
+            .into_iter()
+            .filter_map(|row| row.open.then_some(row.overlay))
+            .collect()
+    }
+
+    /// Tells every open overlay `input`, the app's surroundings.
+    pub(super) fn tell_overlays(&mut self, input: &Input) {
+        for overlay in self.overlays_opened() {
+            if let Some(screen) = self.overlay_screen_mut(overlay) {
+                screen.input(input);
+            }
+        }
+        self.told_overlays = self.overlays_opened();
+    }
+
+    /// Tells each overlay opened since the router last looked the app's
+    /// surroundings, so a dialog opened by a pad press shows the pad's
+    /// highlight on its first frame. Run after each input, tick and menu
+    /// command. An overlay closed and opened again in between is not
+    /// seen as new; the screens that reopen within one call are told
+    /// by whoever opens them.
+    pub(super) fn tell_new_overlays(&mut self) {
+        let open = self.overlays_opened();
+        let told = Input::Surroundings(self.surroundings);
+        for &overlay in &open {
+            if !self.told_overlays.contains(&overlay)
+                && let Some(screen) = self.overlay_screen_mut(overlay)
+            {
+                screen.input(&told);
+            }
+        }
+        self.told_overlays = open;
+    }
+
     /// The overlay open in front, if any: the one [`AppScreen::route`]
     /// gives every input to.
     pub(super) fn overlay_in_front(&self) -> Option<Overlay> {

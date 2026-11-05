@@ -721,6 +721,14 @@ impl Screen for OfferDialog {
     /// shows next ([`OfferDialog::take_unclaimed`]). See the `held_keys`
     /// module.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        // The surroundings are no player input: they reach the dialog
+        // and begin no movie, which waits for its first tick or input.
+        if let Input::Surroundings(_) = input {
+            if let Ok(dialog) = &mut self.laid {
+                dialog.input(input);
+            }
+            return ScreenAction::None;
+        }
         if self.close_input(input) {
             return ScreenAction::None;
         }
@@ -2632,6 +2640,19 @@ mod tests {
             Some(OfferChoice::Refuse),
             "the N pressed under the movie reaches the dialog as it opens"
         );
+    }
+
+    #[test]
+    fn the_surroundings_begin_no_movie_and_reach_the_dialog() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let player = MockMoviePlayer::playing((160, 120), 2);
+        let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
+        dialog.input(&Input::Surroundings(Surroundings { device: pad }));
+        assert!(player.calls().is_empty(), "{:?}", player.calls());
+        let mut plain = offer();
+        plain.input(&Input::Surroundings(Surroundings { device: pad }));
+        assert_eq!(plain.laid.as_ref().expect("laid out").device(), pad);
     }
 
     #[test]

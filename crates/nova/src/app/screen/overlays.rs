@@ -5,6 +5,8 @@
 
 use std::rc::Rc;
 
+use super::routing::Overlay;
+
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightStart, FlightView, MapOpener};
 use nova_view::keymap::{AppCommand, Command, PauseCommand, PlayCommand};
@@ -383,6 +385,38 @@ impl AppScreen {
         self.question
             .as_mut()
             .map(|(_, question)| question as &mut dyn Screen)
+    }
+
+    /// Overlay `overlay`'s screen, if it is open and is one: a mission
+    /// dialog's map over flight is flight's, so none. It goes over the
+    /// same rows as the router's list of overlays open.
+    pub(super) fn overlay_screen_mut(&mut self, overlay: Overlay) -> Option<&mut dyn Screen> {
+        match overlay {
+            Overlay::About => self.about.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Preferences => self.preferences.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::PlayerInfo => self.player_info.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Haggle => self.haggle.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Comm => self.comm.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::EscortDialog => self.escort_dialog.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::PlanetComm => self.planet_comm.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::DialogMap => None,
+            Overlay::Missions => self.missions.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Offer => self.offer.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::CaptureNaming => self.capture_naming.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Assignment => self.assignment.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Plunder => self.plunder.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::NewPilot => self.new_pilot.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Christening => self
+                .christening
+                .as_mut()
+                .map(|open| &mut open.dialog as &mut dyn Screen),
+            Overlay::OpenPilot => self.open_pilot.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::LoadNote => self.load_note.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Question => self
+                .question
+                .as_mut()
+                .map(|(_, question)| question as &mut dyn Screen),
+        }
     }
 
     /// The About dialog's input; it closes once Done is activated and its

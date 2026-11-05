@@ -791,6 +791,11 @@ pub struct AppScreen {
     /// device used last), which the router's readers follow and every
     /// flight it builds is told as it starts.
     surroundings: nova_view::Surroundings,
+    /// The overlays open when the router last told them the surroundings
+    /// (`routing`'s `tell_new_overlays`). It is the router's own: it
+    /// tracks which of the router's overlays have heard the surroundings,
+    /// which no sub-screen can know.
+    told_overlays: Vec<routing::Overlay>,
     /// What the main menu waits on, if anything.
     menu_hold: Option<MenuHold>,
     /// What arrived while the main menu waited, in order.
