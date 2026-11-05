@@ -105,11 +105,15 @@
 //! `GAME_DATA`, set and not empty, starts the new game instead of EV Nova
 //! ([`nova::ruleset`]): `NOVA_DATA` is ignored, an argument is a usage
 //! error, and no `Nova Files` are looked for, asked for or remembered.
-//! Nothing reads the folder yet, so the game starts over empty data with
-//! a warning saying so (and the missing interface file and music warn as
-//! they do anywhere). Its pilots are saved in `New Game Pilots`, beside
-//! `Pilots`, so a stock pilot never opens over the new game's data. An
-//! empty `GAME_DATA` is unset.
+//! The folder is read in the bible's format (`nova_data::new_game`): its
+//! factions, systems and stellars become the game's records. Each file
+//! that doesn't load or map is a warning, as are media that are Git LFS
+//! pointers (with the `git lfs` commands that fetch them) and a folder
+//! with no systems; the game starts with what loaded (and the missing
+//! interface file and music warn as they do anywhere). A folder that
+//! can't be listed ends the launch with exit status 2. Its pilots are
+//! saved in `New Game Pilots`, beside `Pilots`, so a stock pilot never
+//! opens over the new game's data. An empty `GAME_DATA` is unset.
 //!
 //! Every startup error and warning goes to standard error and to the
 //! startup log, which starts with the version and the build ID `nova` was

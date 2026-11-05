@@ -12,18 +12,22 @@ use std::rc::Rc;
 use nova::platform::console::{ConsoleTerminal, StderrGoes};
 use nova::ruleset::Ruleset;
 use nova::startup::{
-    Answer, DataSource, FatalAlert, Launch, NovaFilesDialog, Opened, Started, StartupLog, Terminal,
-    resolve_pick, run,
+    Answer, DataSource, FatalAlert, Launch, NewGameLoaded, NewGameOpened, NovaFilesDialog, Opened,
+    Started, StartupLog, Terminal, resolve_pick, run,
 };
 use nova_audio::SettingsStore;
 use nova_audio::recording::MemorySettings;
 
 /// Directories holding the game's data; every other one is empty, and
-/// holds nothing else. Records each directory asked for.
+/// holds nothing else. Records each directory asked for. The new game's
+/// folder opens as `new_game` says, and each one asked for is recorded
+/// apart.
 #[derive(Default)]
 struct Disk {
     holding: Vec<PathBuf>,
     asked: RefCell<Vec<PathBuf>>,
+    new_game: Option<NewGameOpened<PathBuf>>,
+    new_game_asked: RefCell<Vec<PathBuf>>,
 }
 
 impl DataSource for Disk {
@@ -41,6 +45,25 @@ impl DataSource for Disk {
     fn has_entry(&self, dir: &Path, name: &str) -> bool {
         let entry = dir.join(name);
         self.holding.contains(&entry)
+    }
+
+    /// The canned outcome, else the folder itself as its data, with one
+    /// system and nothing wrong.
+    fn open_new_game(&self, dir: &Path) -> NewGameOpened<PathBuf> {
+        self.new_game_asked.borrow_mut().push(dir.to_path_buf());
+        self.new_game
+            .clone()
+            .unwrap_or_else(|| NewGameOpened::Loaded(loaded(dir.to_path_buf())))
+    }
+}
+
+/// A new game's folder that loaded `data`, one system, with nothing wrong.
+fn loaded(data: PathBuf) -> NewGameLoaded<PathBuf> {
+    NewGameLoaded {
+        data,
+        problems: Vec::new(),
+        lfs_pointers: Vec::new(),
+        systems: 1,
     }
 }
 
@@ -134,7 +157,7 @@ impl Machine {
             game_data: None,
             disk: Disk {
                 holding: holding.iter().map(|dir| dir.to_path_buf()).collect(),
-                asked: RefCell::default(),
+                ..Disk::default()
             },
             panel: Panel {
                 answers: picks
@@ -515,14 +538,6 @@ fn new_game_dir() -> PathBuf {
     Path::new("/Games").join("New Game")
 }
 
-/// The warning a new-game start gives for `dir`, its data unread.
-fn not_loaded(dir: &Path) -> String {
-    format!(
-        "nova: the new game's data in {} is not loaded yet; starting with no galaxy",
-        dir.display()
-    )
-}
-
 #[test]
 fn without_game_data_or_with_it_empty_the_stock_game_starts_as_before() {
     for game_data in [None, Some(OsString::new())] {
@@ -537,28 +552,110 @@ fn without_game_data_or_with_it_empty_the_stock_game_starts_as_before() {
     }
 }
 
-#[test]
-fn game_data_starts_the_new_game_over_empty_data_without_looking_for_nova_files() {
-    let store = MemorySettings::new();
-    let mut machine = Machine::new(&store, &[], &[]);
+/// A launch with `GAME_DATA` naming [`new_game_dir`], whose folder opens
+/// as `opened`.
+fn new_game(store: &MemorySettings, opened: NewGameOpened<PathBuf>) -> Machine {
+    let mut machine = Machine::new(store, &[], &[]);
     machine.game_data = Some(new_game_dir().into_os_string());
+    machine.disk.new_game = Some(opened);
+    machine
+}
+
+#[test]
+fn game_data_opens_its_folder_through_the_port_and_starts_over_its_data() {
+    let store = MemorySettings::new();
+    let data = Path::new("/loaded").to_path_buf();
+    let mut machine = new_game(&store, NewGameOpened::Loaded(loaded(data.clone())));
     machine.nova_data = Some(OsString::from("/env/Nova Files"));
     let mut started = machine.launch().expect("starts");
     assert_eq!(started.ruleset, Ruleset::NewGame);
     assert_eq!(started.dir, new_game_dir());
-    assert_eq!(started.data, PathBuf::default(), "the data's default");
-    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(started.data, data, "what the port returned");
+    assert_eq!(*machine.disk.new_game_asked.borrow(), [new_game_dir()]);
+    assert_eq!(
+        *machine.disk.asked.borrow(),
+        Vec::<PathBuf>::new(),
+        "no Nova Files looked for"
+    );
     assert_eq!(machine.panel.prompts, Vec::<String>::new(), "never asked");
     assert_eq!(machine.alerts.0, Vec::<String>::new());
     assert_eq!(store.writes(), 0, "nothing saved");
-    let warning = not_loaded(&new_game_dir());
-    assert_eq!(
-        machine.log.0.borrow()[1..],
-        *std::slice::from_ref(&warning),
-        "after the header"
+    assert_eq!(machine.log.0.borrow().len(), 1, "the header alone");
+    assert_eq!(machine.stderr.text(), "");
+    assert_eq!(started.report.take_alert(), None);
+}
+
+#[test]
+fn each_load_problem_is_one_warning_in_the_log_stderr_and_the_alert() {
+    let opened = NewGameOpened::Loaded(NewGameLoaded {
+        problems: vec![
+            "systems/Gamma.md: the file name is not an id".to_owned(),
+            "stellars/yard.md: its system `gamma` is not in systems/".to_owned(),
+        ],
+        ..loaded(PathBuf::from("/loaded"))
+    });
+    let mut machine = new_game(&MemorySettings::new(), opened);
+    let mut started = machine.launch().expect("starts");
+    let warnings = [
+        "nova: the new game's data: systems/Gamma.md: the file name is not an id".to_owned(),
+        "nova: the new game's data: stellars/yard.md: its system `gamma` is not in systems/"
+            .to_owned(),
+    ];
+    assert_eq!(machine.log.0.borrow()[1..], warnings);
+    assert_eq!(machine.stderr.text(), format!("{}\n", warnings.join("\n")));
+    assert_eq!(started.report.take_alert(), Some(warnings.join("\n")));
+}
+
+#[test]
+fn lfs_pointers_are_one_warning_naming_the_count_the_first_and_the_fix() {
+    let opened = NewGameOpened::Loaded(NewGameLoaded {
+        lfs_pointers: vec![
+            "media/export/pack/hull.glb".to_owned(),
+            "media/export/pack/surface.png".to_owned(),
+        ],
+        ..loaded(PathBuf::from("/loaded"))
+    });
+    let mut machine = new_game(&MemorySettings::new(), opened);
+    let started = machine.launch().expect("starts");
+    let warning = format!(
+        "nova: 2 media files in {} are Git LFS pointers, not the files, starting with \
+         media/export/pack/hull.glb; run `git lfs install --local` and `git lfs pull` in the \
+         game-bible checkout",
+        new_game_dir().display()
     );
-    assert_eq!(machine.stderr.text(), format!("{warning}\n"));
-    assert_eq!(started.report.take_alert(), Some(warning));
+    assert_eq!(machine.log.0.borrow()[1..], [warning]);
+    assert_eq!(started.dir, new_game_dir(), "the game starts");
+}
+
+#[test]
+fn a_folder_that_cannot_be_listed_is_fatal_naming_game_data_and_the_folder() {
+    let opened = NewGameOpened::Unreadable("No such file or directory".to_owned());
+    let mut machine = new_game(&MemorySettings::new(), opened);
+    assert_eq!(machine.launch().err(), Some(2));
+    let message = format!(
+        "nova: listing the new game's data directory {} (GAME_DATA): No such file or directory",
+        new_game_dir().display()
+    );
+    assert_eq!(machine.log.0.borrow()[1..], *std::slice::from_ref(&message));
+    assert_eq!(machine.alerts.0, [message]);
+    assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(machine.panel.prompts, Vec::<String>::new());
+}
+
+#[test]
+fn a_folder_with_no_systems_warns_and_starts() {
+    let opened = NewGameOpened::Loaded(NewGameLoaded {
+        systems: 0,
+        ..loaded(PathBuf::from("/loaded"))
+    });
+    let mut machine = new_game(&MemorySettings::new(), opened);
+    let started = machine.launch().expect("starts");
+    let warning = format!(
+        "nova: the new game's data in {} has no systems; starting with an empty galaxy",
+        new_game_dir().display()
+    );
+    assert_eq!(machine.log.0.borrow()[1..], [warning]);
+    assert_eq!(started.ruleset, Ruleset::NewGame);
 }
 
 #[test]
@@ -582,11 +679,7 @@ fn the_new_game_still_reads_the_settings() {
     machine.launch().expect("starts");
     assert_eq!(
         machine.log.0.borrow()[1..],
-        [
-            "nova: the saved \"rules\" in memory is not \"engine\" or \"bible\"; ignoring it"
-                .to_owned(),
-            not_loaded(&new_game_dir()),
-        ]
+        ["nova: the saved \"rules\" in memory is not \"engine\" or \"bible\"; ignoring it"]
     );
 }
 
@@ -604,5 +697,10 @@ fn a_nova_files_argument_with_game_data_says_game_data_rejected_it() {
     );
     assert_eq!(machine.log.0.borrow()[1..], [rejected]);
     assert_eq!(*machine.disk.asked.borrow(), Vec::<PathBuf>::new());
+    assert_eq!(
+        *machine.disk.new_game_asked.borrow(),
+        Vec::<PathBuf>::new(),
+        "the folder isn't opened"
+    );
     assert_eq!(machine.panel.prompts, Vec::<String>::new());
 }

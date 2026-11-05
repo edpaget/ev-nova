@@ -19,6 +19,8 @@ use crate::cli::Usage;
 use crate::config::Os;
 use crate::settings::{GameSettings, SettingsKeeper};
 
+use super::new_game::NewGameOpened;
+
 mod linux;
 
 /// What the open panel asks first.
@@ -46,6 +48,9 @@ pub trait DataSource {
 
     /// Whether `dir` holds an entry, a file or a folder, called `name`.
     fn has_entry(&self, dir: &Path, name: &str) -> bool;
+
+    /// Opens `dir` as the new game's data (`GAME_DATA`'s folder).
+    fn open_new_game(&self, dir: &Path) -> NewGameOpened<Self::Data>;
 }
 
 /// The game's data on disk: a directory is opened with
@@ -65,6 +70,10 @@ impl DataSource for DiskData {
 
     fn has_entry(&self, dir: &Path, name: &str) -> bool {
         std::fs::symlink_metadata(dir.join(name)).is_ok()
+    }
+
+    fn open_new_game(&self, dir: &Path) -> NewGameOpened<GameData> {
+        nova_data::new_game::open(dir).into()
     }
 }
 
@@ -487,6 +496,8 @@ mod tests {
     use std::fs;
 
     use nova_audio::recording::MemorySettings;
+    use nova_data::Record;
+    use nova_data::records::system::System;
     use nova_rsrc::ResType;
     use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
 
@@ -543,6 +554,12 @@ mod tests {
         fn has_entry(&self, dir: &Path, name: &str) -> bool {
             let entry = dir.join(name);
             self.holding.contains_key(&entry) || self.files.contains(&entry)
+        }
+
+        /// The lookup is the stock game's: it never opens the new game's
+        /// folder.
+        fn open_new_game(&self, dir: &Path) -> NewGameOpened<PathBuf> {
+            panic!("the lookup opened the new game's folder {}", dir.display())
         }
     }
 
@@ -1213,6 +1230,42 @@ mod tests {
             }
             other => panic!("unreadable: {:?}", kind(&other)),
         }
+    }
+
+    #[test]
+    fn the_new_game_s_folder_on_disk_loads_its_systems() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let write = |kind: &str, name: &str, text: &str| {
+            fs::create_dir_all(dir.path().join(kind)).expect("creates");
+            fs::write(dir.path().join(kind).join(name), text).expect("writes");
+        };
+        write(
+            "regions",
+            "rim.md",
+            "---\nname: Rim\nharshness: 1\ncolor: \"#335577\"\n---\n",
+        );
+        write(
+            "systems",
+            "alpha.md",
+            "---\nname: Alpha\nregion: rim\nmap: [0, 0]\n---\n",
+        );
+        let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(dir.path()) else {
+            panic!("loads");
+        };
+        assert_eq!(loaded.data.ids(System::TYPE), [128]);
+        assert_eq!(loaded.systems, 1);
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.data.files()[0].path, dir.path());
+    }
+
+    #[test]
+    fn a_missing_new_game_folder_is_unreadable() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let missing = dir.path().join("data");
+        assert!(matches!(
+            DiskData.open_new_game(&missing),
+            NewGameOpened::Unreadable(_)
+        ));
     }
 
     /// A Windows `.rez` file the loader reads.

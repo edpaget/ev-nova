@@ -1,6 +1,7 @@
-//! The app over game data with no records, as the new game starts before
-//! its loader reads anything: frames draw, with only missing pictures to
-//! report, and New Pilot doesn't panic.
+//! The app over game data with no records, as a new game whose folder
+//! loads nothing starts (and every new game, for now, has no `chär` to
+//! fly from): frames draw, with only missing pictures to report, and New
+//! Pilot doesn't panic.
 
 use std::rc::Rc;
 

@@ -72,9 +72,10 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use nova_galaxy_format::load::Problem;
 use nova_galaxy_format::media::lfs_pointers;
 use nova_galaxy_format::source::{DirSource, Source};
+
+pub use nova_galaxy_format::load::Problem;
 
 pub use self::ids::IdTable;
 pub use self::map::{Mapped, map};

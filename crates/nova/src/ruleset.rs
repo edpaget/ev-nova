@@ -1,6 +1,7 @@
 //! The game the engine runs, chosen once at startup: [`Ruleset::Stock`],
 //! EV Nova from its `Nova Files`, or [`Ruleset::NewGame`], the new game
-//! from the folder `GAME_DATA` names ([`chosen`]).
+//! from the folder `GAME_DATA` names ([`chosen`]), which
+//! `nova_data::new_game` reads (see [`crate::startup::run`]).
 //!
 //! A ruleset selects, as data on its [`Profile`], the readings its game
 //! pins in the rulebook (see [`crate::rulebook::ruleset_rulebook`]) and

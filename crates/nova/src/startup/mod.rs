@@ -1,11 +1,14 @@
 //! Starting the game: choosing the ruleset ([`crate::ruleset`]), finding
-//! the `Nova Files` for the stock game, and reporting what went wrong on
-//! the way, from a terminal or from a double-clicked app.
+//! the `Nova Files` for the stock game or opening the new game's folder,
+//! and reporting what went wrong on the way, from a terminal or from a
+//! double-clicked app.
 //!
 //! - [`mod@locate`]: the lookup order (the argument or `NOVA_DATA`, the
 //!   remembered directory, the usual places, then the open panel) over the
 //!   [`DataSource`] and [`NovaFilesDialog`] ports, and the change it makes
 //!   to the remembered directory.
+//! - [`new_game`]: what opening the new game's `GAME_DATA` folder gave,
+//!   through the [`DataSource`] port, and the warnings it starts with.
 //! - [`report`]: where each startup line goes ([`Report`]), over the
 //!   [`Terminal`], [`StartupLog`] and [`FatalAlert`] ports, and the exit
 //!   each fatal error ends with ([`Fatal`]).
@@ -13,11 +16,12 @@
 //!   only builds the real adapters and hands them in.
 
 pub mod locate;
+pub mod new_game;
 pub mod report;
 
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use nova_audio::SettingsStore;
 use nova_sim::Rulebook;
@@ -27,6 +31,7 @@ pub use locate::{
     Answer, DataSource, DiskData, Found, Located, NotFound, NotLocated, NovaFilesDialog, Opened,
     Remember, Via, answer, apply_remember, locate, resolve_pick, usual_places,
 };
+pub use new_game::{NewGameLoaded, NewGameOpened};
 pub use report::{Fatal, FatalAlert, FileLog, Report, Shown, StartupLog, StdTerminal, Terminal};
 
 use crate::cli;
@@ -81,8 +86,8 @@ pub struct Started<E, D> {
     /// The `Nova Files` directory found, or the new game's `GAME_DATA`
     /// folder.
     pub dir: PathBuf,
-    /// Its data: for the new game, the empty default until its loader
-    /// reads the folder.
+    /// Its data: for the new game, what loaded from its folder
+    /// ([`DataSource::open_new_game`]).
     pub data: D,
 }
 
@@ -94,9 +99,12 @@ pub struct Started<E, D> {
 /// 3. Chooses the ruleset from `GAME_DATA` ([`chosen`]) and reads the
 ///    settings: the rulebook (with the ruleset's readings), the flight
 ///    overlays and the keeper, so the remembered `Nova Files` are known.
-/// 4. For the new game, takes no argument, and starts over the data's
-///    default with a warning that its folder is not loaded yet: no
-///    lookup, no open panel and no change to the remembered directory.
+/// 4. For the new game, takes no argument, opens its folder
+///    ([`DataSource::open_new_game`]) and starts over what loaded,
+///    reporting each problem, the media that are Git LFS pointers and a
+///    galaxy with no systems as warnings ([`new_game::warnings`]): no
+///    lookup, no open panel and no change to the remembered directory. A
+///    folder that can't be listed is fatal.
 /// 5. For the stock game, reads the command line ([`cli::data_dir`]) and
 ///    finds the data ([`locate()`]), reporting each warning, and saves the
 ///    change to the remembered directory ([`apply_remember`]).
@@ -105,14 +113,14 @@ pub struct Started<E, D> {
 ///
 /// The exit code, once a fatal error has been reported
 /// ([`Report::fail`]): a usage error, an event loop that could not be
-/// made, no data found, or named data that could not be listed.
+/// made, no data found, or named data (or the new game's folder) that
+/// could not be listed.
 pub fn run<E, D, G, A>(
     launch: Launch<'_, D, G, A>,
     open_loop: impl FnOnce() -> Result<E, String>,
 ) -> Result<Started<E, D::Data>, u8>
 where
     D: DataSource,
-    D::Data: Default,
     G: NovaFilesDialog,
     A: FatalAlert,
 {
@@ -149,7 +157,16 @@ where
             let fatal = Fatal::ArgumentsWithGameData { dir, args };
             return Err(report.fail(&fatal, alert));
         }
-        report.warn(&not_loaded(&dir));
+        let loaded = match source.open_new_game(&dir) {
+            NewGameOpened::Loaded(loaded) => loaded,
+            NewGameOpened::Unreadable(error) => {
+                let fatal = Fatal::NewGameUnreadable { dir, error };
+                return Err(report.fail(&fatal, alert));
+            }
+        };
+        for warning in new_game::warnings(&dir, &loaded) {
+            report.warn(&warning);
+        }
         return Ok(Started {
             ruleset,
             report,
@@ -159,7 +176,7 @@ where
             keeper,
             settings: game,
             dir,
-            data: D::Data::default(),
+            data: loaded.data,
         });
     }
     let named = match cli::data_dir(&args, nova_data) {
@@ -193,13 +210,4 @@ where
         }),
         Err(not) => Err(report.fail(&Fatal::from(not), alert)),
     }
-}
-
-/// The warning the new game starts with while nothing reads its data in
-/// `dir` yet.
-fn not_loaded(dir: &Path) -> String {
-    format!(
-        "nova: the new game's data in {} is not loaded yet; starting with no galaxy",
-        dir.display()
-    )
 }
