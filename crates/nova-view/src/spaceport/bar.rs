@@ -1817,6 +1817,30 @@ mod tests {
         );
     }
 
+    /// The hire screen the bar opens reads the bar's bindings, and so do
+    /// the play keys the bar reads for it: the hire screen's Hire rebound
+    /// to Q hires on Q, not H, and Mission Info rebound to F2 asks on F2.
+    #[test]
+    fn its_hire_screen_reads_the_bindings_the_bar_was_given() {
+        use crate::keymap::{Bindings, HireCommand, KeyCombo, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(HireCommand::Hire, KeyCombo::key(Key::KeyQ))
+                .rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::F2)),
+        );
+        let mut screen = laid_hire_bar().with_bindings(bindings);
+        screen.open_hire(list(2));
+        screen.input(&key(Key::ArrowRight, false));
+        screen.input(&key(Key::KeyH, false));
+        assert_eq!(screen.take_hire(), None, "H no longer hires");
+        screen.input(&key(Key::KeyQ, false));
+        assert_eq!(screen.take_hire(), Some(ShipId(128)));
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(!screen.take_info_request(), "I no longer asks");
+        screen.input(&key(Key::F2, false));
+        assert!(screen.take_info_request());
+    }
+
     #[test]
     fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
         let mut screen = laid_hire_bar();
