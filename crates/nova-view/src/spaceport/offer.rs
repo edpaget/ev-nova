@@ -86,10 +86,10 @@
 //! standing decision, though the filter reads auto-key too
 //! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
-//! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
+//! ([the player info key](crate::keymap::PlayCommand::PlayerInfo), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
 //! labels' letters are read; the dialog stays open under it. I
-//! ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a
+//! ([the mission info key](crate::keymap::PlayCommand::MissionInfo), a
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
@@ -100,7 +100,7 @@
 //! covered and leaves its movie the last loaded again: the spaceport asks
 //! for that reload as the screen closes
 //! ([`SpaceportView::take_offer_reload`](super::SpaceportView::take_offer_reload)).
-//! M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press, never a
+//! M ([the map key](crate::keymap::PlayCommand::GalaxyMap), a press, never a
 //! repeat), the filter's first check (@0x98dab-0x98dd3), asks for the
 //! course map before anything else ([`OfferDialog::take_map_request`]),
 //! marked with the offer's destination; the dialog stays open under it,
@@ -263,13 +263,13 @@ pub enum OfferChoice {
 /// What the offer dialog's keys asked for, each until it is taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct OfferAsks {
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY): the
+    /// [the player info key](crate::keymap::PlayCommand::PlayerInfo): the
     /// player info screen.
     player_info: bool,
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY):
+    /// [the mission info key](crate::keymap::PlayCommand::MissionInfo):
     /// the mission info screen.
     mission_info: bool,
-    /// [`MAP_KEY`](crate::flight::view::MAP_KEY): the map.
+    /// [the map key](crate::keymap::PlayCommand::GalaxyMap): the map.
     map: bool,
 }
 
@@ -293,7 +293,7 @@ pub struct OfferDialog {
     /// ([`OfferDialog::take_unclaimed`]).
     unclaimed: Vec<Input>,
     /// Whether the mission info screen lists a mission, so that
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// opens it ([`OfferDialog::set_missions_listed`]).
     missions_listed: bool,
     /// Whether the last key input was a press, not a repeat, that reached
@@ -415,7 +415,7 @@ impl OfferDialog {
 
     /// Tells the dialog whether the mission info screen lists a mission:
     /// an active one that isn't hidden. With none, `_OfferOneMission`'s
-    /// arm for [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// arm for [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// does nothing (the count @0xa32c1-0xa32ee), so the key asks for
     /// nothing, flushes nothing, and the offer takes the next event, a key
     /// held back by a press among them. Its holder says so as the dialog
@@ -539,19 +539,19 @@ impl OfferDialog {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen since
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) asked for the player info screen since
     /// this was last taken, once.
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.asks.player_info)
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen since this was last taken, once.
     pub fn take_info_request(&mut self) -> bool {
         std::mem::take(&mut self.asks.mission_info)
     }
 
-    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for the
+    /// Whether [the map key](crate::keymap::PlayCommand::GalaxyMap) asked for the
     /// map since this was last taken, once: `_SingleMissionFilter`'s first
     /// check gives item 4 (@0x98dab-0x98dd3), and `_OfferOneMission` opens
     /// the course map over the dialog (@0xa2ffe-0xa3119; see

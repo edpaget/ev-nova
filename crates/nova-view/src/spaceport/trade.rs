@@ -250,10 +250,10 @@ impl std::fmt::Debug for MetricsHandle {
 /// What the screen's own keys asked for, until each is taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct KeyAsks {
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo)
     /// asked for the player info screen.
     player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen.
     mission_info: bool,
     /// Whether the map key asked for the course map.
@@ -404,7 +404,7 @@ impl TradeScreen {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) has asked for the player info screen
     /// since this was last asked, in the trade center or its offer
     /// (`_TradeFilter` @0x4e109), not in its quantity dialog.
     pub fn take_player_info_request(&mut self) -> bool {
@@ -429,7 +429,7 @@ impl TradeScreen {
         self.offering.as_mut()?.take_map_request()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {

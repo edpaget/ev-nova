@@ -11,7 +11,7 @@
 //! offer's name in item 5 and its text in item 4; and Accept (item 1,
 //! `STR#` 150 #26) and Leave (item 7, #1). Items 6, 9 and 10 (the map,
 //! player info and mission info) lie outside the dialog, reached only by
-//! keys: M ([`MAP_KEY`](crate::flight::view::MAP_KEY), a press) asks for
+//! keys: M ([the map key](crate::keymap::PlayCommand::GalaxyMap), a press) asks for
 //! the course map marked for the selected offer, or for none with no row
 //! selected ([`MissionComputerScreen::take_map_request`]). The screen
 //! enables its buttons itself.
@@ -21,10 +21,12 @@
 //! ([`MissionComputerScreen::take_accept`]), and is greyed with nothing
 //! listed; whoever holds the session accepts it and hands the computer
 //! back ([`MissionComputerScreen::set_computer`]), as the original closes
-//! the dialog after an accept and opens it again. Leave, Return, Enter,
-//! Escape and L leave (`_MissionFilter` @0x9f885-0x9f8af); A
-//! ([`ACCEPT_KEY`], a press) accepts the selected offer, as Accept does
-//! (@0x9f8b4-0x9f8c7). Up and Down (key repeats too) move the selection a
+//! the dialog after an accept and opens it again. Its keys are read
+//! through the key map ([`contexts::MISSION_COMPUTER`]): Leave, Return,
+//! Enter, Escape and L (the shared Confirm and Back, and its own
+//! [`MissionComputerCommand::Leave`]) leave (`_MissionFilter`
+//! @0x9f885-0x9f8af); A ([`MissionComputerCommand::Accept`], a press)
+//! accepts the selected offer, as Accept does (@0x9f8b4-0x9f8c7). Up and Down (key repeats too) move the selection a
 //! row, wrapping from the last offer to the first and back (@0x9faf2,
 //! @0x9fce3), and show the offer selected. Under the engine reading of
 //! the `dialog_focus_ring` rule ([`FocusRing::Off`]), a Tab press steps
@@ -60,7 +62,7 @@
 //! the selection (@0x9e583).
 //!
 //! Done, Return, Enter, Escape and the mission info key
-//! ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a
+//! ([the mission info key](crate::keymap::PlayCommand::MissionInfo), a
 //! press, so the key that opens the screen closes it) close it
 //! (`_MissionInfoFilter` @0x9d73c-0x9d769). Up and Down (key repeats too)
 //! move the selection a row, wrapping from the last mission to the first
@@ -273,12 +275,12 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) asked for the player info screen.
     player_info_requested: bool,
-    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// The map [the map key](crate::keymap::PlayCommand::GalaxyMap) asked for, with
     /// the selected row's offer, until it is taken.
     map_request: Option<MapOpener>,
     /// The offer shown selected whose text is to be loaded, until it is
@@ -417,21 +419,21 @@ impl MissionComputerScreen {
         self.accepted.take()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo) has asked for the mission info screen
     /// since this was last asked (`_DoMissionDialog` item 10,
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
         std::mem::take(&mut self.info_requested)
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo)
     /// has asked for the player info screen since this was last asked
     /// (`_MissionFilter` @0x9f82c, `_DoMissionDialog` @0xa3ffc).
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.player_info_requested)
     }
 
-    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// The map [the map key](crate::keymap::PlayCommand::GalaxyMap) has asked for
     /// since this was last asked, once, with the selected row's offer, or
     /// none with no row selected: `_MissionFilter` gives item 6
     /// (@0x9f7fa-0x9f818), and `_DoMissionDialog` opens the course map
@@ -700,10 +702,10 @@ pub struct MissionInfoScreen {
     /// The slot shown selected whose text is to be loaded, until it is
     /// taken.
     text_request: Option<u8>,
-    /// Whether [`MAP_KEY`](crate::flight::view::MAP_KEY) may open the
+    /// Whether [the map key](crate::keymap::PlayCommand::GalaxyMap) may open the
     /// map: not when the screen is opened over an offer or the computer.
     map_allowed: bool,
-    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
+    /// The map [the map key](crate::keymap::PlayCommand::GalaxyMap) asked for, with
     /// the selected slot, until it is taken.
     map_request: Option<MapOpener>,
     closed: bool,
@@ -823,7 +825,7 @@ impl MissionInfoScreen {
         self.closed
     }
 
-    /// This screen, letting [`MAP_KEY`](crate::flight::view::MAP_KEY)
+    /// This screen, letting [the map key](crate::keymap::PlayCommand::GalaxyMap)
     /// open the map or not: `_DoMissionInfoDialog` opens none while
     /// `_missionDialog` is set (@0x9e3c6-0x9e3cd), as it is when the
     /// screen is opened over an offer (its item 7) or the computer (its
@@ -836,7 +838,7 @@ impl MissionInfoScreen {
         }
     }
 
-    /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
+    /// The map [the map key](crate::keymap::PlayCommand::GalaxyMap) has asked for
     /// since this was last asked, once, with the selected slot, if any:
     /// `_MissionInfoFilter` gives item 6 (@0x9d70a-0x9d72d), and
     /// `_DoMissionInfoDialog` opens the course map marked for that

@@ -63,8 +63,8 @@
 //! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
 //! ([`BarScreen::with_offer_clock`]), and by the engine the hire screen
 //! restarts it as it opens ([`BarScreen::take_offer_restart`]).
-//! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info screen
-//! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
+//! [the mission info key](crate::keymap::PlayCommand::MissionInfo) asks for the mission info screen
+//! ([`BarScreen::take_info_request`]), and [the player info key](crate::keymap::PlayCommand::PlayerInfo) for the
 //! player info screen, from the bar or its hire screen
 //! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
 //! `_ShipyardFilter` @0x6091a), not from the news.
@@ -235,9 +235,9 @@ struct Laid {
 struct Asks {
     /// The ships for hire: Hire Escort was pressed.
     hire: bool,
-    /// The mission info screen: [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) was pressed.
+    /// The mission info screen: [the mission info key](crate::keymap::PlayCommand::MissionInfo) was pressed.
     info: bool,
-    /// The player info screen: [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) was pressed.
+    /// The player info screen: [the player info key](crate::keymap::PlayCommand::PlayerInfo) was pressed.
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
@@ -765,7 +765,7 @@ impl BarScreen {
         self.offering.as_mut()?.take_map_request()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo) has asked for the mission info screen
     /// since this was last asked, in the bar or its offer.
     pub fn take_info_request(&mut self) -> bool {
         let offer = self
@@ -775,7 +775,7 @@ impl BarScreen {
         std::mem::take(&mut self.asks.info) || offer
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) has asked for the player info screen
     /// since this was last asked, in the bar, its hire screen or its offer.
     pub fn take_player_info_request(&mut self) -> bool {
         let offer = self

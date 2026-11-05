@@ -472,7 +472,7 @@ struct Laid {
 /// What the screen's own keys asked for, until each is taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct KeyAsks {
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen.
     mission_info: bool,
     /// Whether the map key asked for the course map.
@@ -682,7 +682,7 @@ impl OutfitterScreen {
 
     /// Whether its offer has asked for the player info screen since this
     /// was last asked: the outfitter itself ignores
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), as `_OutfitFilter` never reads it.
+    /// [the player info key](crate::keymap::PlayCommand::PlayerInfo), as `_OutfitFilter` never reads it.
     pub fn take_player_info_request(&mut self) -> bool {
         self.offering
             .as_mut()
@@ -733,7 +733,7 @@ impl OutfitterScreen {
         self.offering.as_mut()?.take_map_request()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {

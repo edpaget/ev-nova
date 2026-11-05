@@ -180,23 +180,10 @@ pub const JETTISON_ITEM: usize = 7;
 
 /// The player info key: the original's default `playerInfoKey`
 /// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
-/// The screen reads [`PlayCommand::PlayerInfo`]; the router and the
-/// spaceport's screens compare this until they read the key map
-/// (rdm:phase/key-bindings/phase-2-command-key-map's steps 4 and 8).
+/// The screen and the spaceport's screens read [`PlayCommand::PlayerInfo`];
+/// the router compares this until it reads the key map
+/// (rdm:phase/key-bindings/phase-2-command-key-map's step 8).
 pub const PLAYER_INFO_KEY: Key = Key::KeyP;
-
-/// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
-/// asks for the player info screen where the original's filters read the
-/// key.
-#[must_use]
-pub fn is_player_info_press(input: &Input) -> bool {
-    *input
-        == Input::Key {
-            key: PLAYER_INFO_KEY,
-            pressed: true,
-            repeat: false,
-        }
-}
 
 /// The key the player info key's command, [`PlayCommand::PlayerInfo`],
 /// is bound to in `bindings`, if any: what a close waits on. A key wait

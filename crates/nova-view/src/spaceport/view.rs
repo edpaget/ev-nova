@@ -449,7 +449,7 @@ struct Missioning {
     /// Whether Mission BBS has asked for the mission computer since this
     /// was last taken.
     requested: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo) has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
 }
@@ -1422,7 +1422,7 @@ impl SpaceportView {
 
     /// The spaceport with the mission screens: Mission BBS opens the
     /// mission computer laid out by `computer`, its `DLOG` (or saying why
-    /// there is none); [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asks for the mission info
+    /// there is none); [the mission info key](crate::keymap::PlayCommand::MissionInfo) asks for the mission info
     /// screen, laid out by `info`; the spaceport, and the trade center,
     /// outfitter, shipyard and bar when given, offer missions in the offer
     /// dialog of each offer's variant laid out by `offer`, the spaceport
@@ -1855,7 +1855,7 @@ impl SpaceportView {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`] has asked for the player info screen
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) has asked for the player info screen
     /// since this was last asked, wherever it is read (see the module
     /// docs): whoever flies the ship answers with
     /// [`SpaceportView::open_player_info`].
@@ -1930,7 +1930,7 @@ impl SpaceportView {
         std::mem::take(&mut self.player_info_jettison)
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo) has asked for the mission info screen
     /// since this was last asked, in the spaceport, the bar or the mission
     /// computer: whoever flies the ship answers with
     /// [`SpaceportView::open_mission_info`].

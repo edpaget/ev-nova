@@ -3,7 +3,7 @@
 //! ([`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen))
 //! and by that screen, which it closes.
 
-use crate::input::{Input, Key};
+use crate::input::Key;
 use crate::keymap::{PlayCommand, SharedBindings};
 
 /// The key that asks for the mission info screen from the bar, the
@@ -14,9 +14,9 @@ use crate::keymap::{PlayCommand, SharedBindings};
 /// shipyard's Info is Space, as `_ShipyardFilter` reads it @0x60526) and
 /// in flight. It is the default of the shared play keys' Mission Info
 /// ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo)),
-/// which the key map binds; the spaceport's screens and the router compare
-/// this until they read the key map
-/// (rdm:phase/key-bindings/phase-2-command-key-map's steps 4 and 8).
+/// which the key map binds; the spaceport's screens read that, and the
+/// router compares this until it reads the key map
+/// (rdm:phase/key-bindings/phase-2-command-key-map's step 8).
 pub const MISSION_INFO_KEY: Key = Key::KeyI;
 
 /// The key the mission info key's command,
@@ -30,18 +30,4 @@ pub(crate) fn mission_info_key(bindings: &SharedBindings) -> Option<Key> {
             .combo(PlayCommand::MissionInfo.into())
             .map(|combo| combo.key)
     })
-}
-
-/// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
-/// for the mission info screen where the original's filters read
-/// `_keyPrefs` +0x50, and on that screen itself closes it
-/// (`_MissionInfoFilter` @0x9d756-0x9d769).
-#[must_use]
-pub fn is_mission_info_press(input: &Input) -> bool {
-    *input
-        == Input::Key {
-            key: MISSION_INFO_KEY,
-            pressed: true,
-            repeat: false,
-        }
 }
