@@ -105,7 +105,9 @@ impl Screen for AppScreen {
     ///
     /// What is physically down is noted as it arrives, and handed back
     /// to flight as its input comes back from a dialog or the spaceport
-    /// (see `live_input`).
+    /// (see `live_input`). Flight's pad reader is fed every live input
+    /// too ([`FlightView::note_pad`](nova_view::flight::FlightView::note_pad)), for the pad's map chord over a
+    /// screen.
     ///
     /// The app's surroundings go to the router's readers, the flight, if
     /// built, the spaceport, if landed, and every overlay open, whatever
@@ -131,6 +133,13 @@ impl Screen for AppScreen {
             return ScreenAction::None;
         }
         self.live.note(input);
+        // Flight's pad reader sees every live pad button, whatever shows,
+        // so a map over a screen reads the pad's map chord
+        // (rdm:phase/key-bindings/phase-10-gamepad-map). Replays never
+        // come through here.
+        if let Some(flight) = &mut self.flight {
+            flight.note_pad(input);
+        }
         self.tell_close_keys();
         let action = self.settled_input(input);
         self.tell_new_overlays();
