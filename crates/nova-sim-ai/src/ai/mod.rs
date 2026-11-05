@@ -755,6 +755,15 @@ pub struct Surroundings<'a> {
     /// Who needs a jump's fuel now to jump out ([`leave::can_jump`]), by
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel).
     pub jump_fuel: RuleSource,
+    /// How far from the centre a stellar may be for the destination pick
+    /// ([`destination::within_reach`]), by
+    /// [`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach).
+    pub destination_reach: RuleSource,
+    /// How a ship with nowhere left to go leaves
+    /// ([`idle_block::leave_or_wait`]): by hyperspace, or through a usable
+    /// gate, by
+    /// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates).
+    pub departures_through_gates: RuleSource,
     /// Which odds the odds' readers read ([`odds::cached_odds`]): each
     /// ship's cached odds ([`Npc::odds`]) by the engine, worked out fresh
     /// by the other reading, by
@@ -846,6 +855,8 @@ impl<'a> Surroundings<'a> {
             hit_focus: RuleSource::Engine,
             wanted: None,
             jump_fuel: RuleSource::Engine,
+            destination_reach: RuleSource::Engine,
+            departures_through_gates: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             led_speed: 1.0,
             weapons: &NO_WEAPONS,
@@ -1376,10 +1387,10 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         return kept;
     }
     if idle_block::visited_here(npc, around) {
-        return idle_block::leave_or_wait(npc, around);
+        return idle_block::leave_or_wait(npc, around, chance);
     }
     random_stellar(npc, around, chance, Admit::All)
-        .unwrap_or_else(|| idle_block::leave_or_wait(npc, around))
+        .unwrap_or_else(|| idle_block::leave_or_wait(npc, around, chance))
 }
 
 /// A stellar picked at random for `npc` among those `around` lists, shown
@@ -1395,7 +1406,13 @@ pub(crate) fn random_stellar(
     chance: &mut dyn Chance,
     admit: Admit,
 ) -> Option<Goal> {
-    let candidates = destination::candidates(npc.govt, around.listed, around.govts, admit);
+    let candidates = destination::candidates_within(
+        npc.govt,
+        around.listed,
+        around.govts,
+        admit,
+        around.destination_reach,
+    );
     if candidates.is_empty() {
         return None;
     }

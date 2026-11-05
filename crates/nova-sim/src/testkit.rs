@@ -15,6 +15,9 @@ pub(crate) use nova_sim_catalog::fixture::{
     outfit, person, planet, rank, ship, star, starting, weapon,
 };
 
+mod laned;
+pub(crate) use laned::{DRIFT, HEARTH, VERGE, laned};
+
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings};
 use crate::catalog::{
     PilotCatalog, ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility,

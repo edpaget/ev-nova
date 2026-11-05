@@ -75,12 +75,25 @@
 //! A stellar listed in two nav slots weighs double in the `Rand(16)` loop
 //! (@0x806c1-0x808f4); the listing keeps both copies, so it weighs double
 //! among the [`candidates`] too.
+//!
+//! The 999 bound is the engine's reading of
+//! [`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach): it fits
+//! the original's systems, and the other reading, the new game's, drops it,
+//! so a gate or stellar anywhere the system lists may be picked
+//! ([`within_reach`], [`candidates_within`]). The new game's jump points sit past 999 on one axis.
+//! The gates among the candidates are [`usable_gates`], which the other
+//! readings of
+//! [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)
+//! and
+//! [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
+//! draw among.
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::govt::{AVOIDS_HYPERGATES, Governments, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
 use crate::landing::{StellarFlags, is_landable};
+use crate::rulebook::RuleSource;
 
 /// How far a stellar may be from the centre, on each axis, to be picked
 /// (999, @0x80781-0x8078f): an upper bound only.
@@ -103,9 +116,23 @@ pub enum Admit {
     },
 }
 
+/// Whether `site` is near enough the centre to be picked, as `reach`
+/// reads [`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach):
+/// by the engine its `xPos` and `yPos` each at most [`MAX_COORDINATE`],
+/// with no lower bound (@0x80781-0x80797); by the other reading anywhere.
+#[must_use]
+pub fn within_reach(site: &LandingSite, reach: RuleSource) -> bool {
+    match reach {
+        RuleSource::Engine => {
+            site.position.x <= MAX_COORDINATE && site.position.y <= MAX_COORDINATE
+        }
+        RuleSource::Bible => true,
+    }
+}
+
 /// The stellars among `sites` that `_SelectRandomStellarDest` picks among
 /// for a ship of `govt`, admitting `admit`, in order (see the module
-/// docs).
+/// docs): [`candidates_within`] the engine's reach.
 #[must_use]
 pub fn candidates<'s>(
     govt: Option<GovtId>,
@@ -113,13 +140,24 @@ pub fn candidates<'s>(
     govts: &Governments,
     admit: Admit,
 ) -> Vec<&'s LandingSite> {
+    candidates_within(govt, sites, govts, admit, RuleSource::Engine)
+}
+
+/// The stellars among `sites` that `_SelectRandomStellarDest` picks among
+/// for a ship of `govt`, admitting `admit`, within `reach`
+/// ([`within_reach`]), in order (see the module docs).
+#[must_use]
+pub fn candidates_within<'s>(
+    govt: Option<GovtId>,
+    sites: &'s [LandingSite],
+    govts: &Governments,
+    admit: Admit,
+    reach: RuleSource,
+) -> Vec<&'s LandingSite> {
     let ok: Vec<&LandingSite> = sites
         .iter()
         .filter(|site| {
-            is_landable(site)
-                && site.position.x <= MAX_COORDINATE
-                && site.position.y <= MAX_COORDINATE
-                && !govts.npc_enemies(govt, site.govt)
+            is_landable(site) && within_reach(site, reach) && !govts.npc_enemies(govt, site.govt)
         })
         .collect();
     let inhabited = |site: &LandingSite| site.flags & StellarFlags::UNINHABITED == 0;
@@ -162,6 +200,27 @@ pub fn candidates<'s>(
             Some(GateKind::Wormhole) => wormholes,
             Some(GateKind::Hypergate) => !no_hypergates,
         })
+        .collect()
+}
+
+/// The gates among `sites` a ship of `govt` may use, within `reach`: the
+/// hypergates and wormholes among its [`candidates`] admitting
+/// [`Admit::All`], in order, so its government's `Flags2` choose among them
+/// as they do for a destination. What the other readings of
+/// [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)
+/// and
+/// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
+/// draw among.
+#[must_use]
+pub fn usable_gates<'s>(
+    govt: Option<GovtId>,
+    sites: &'s [LandingSite],
+    govts: &Governments,
+    reach: RuleSource,
+) -> Vec<&'s LandingSite> {
+    candidates_within(govt, sites, govts, Admit::All, reach)
+        .into_iter()
+        .filter(|site| GateKind::of(site.flags2).is_some())
         .collect()
 }
 
@@ -284,6 +343,72 @@ mod tests {
         for admit in [Admit::All, PLAIN] {
             assert_eq!(ids(None, &sites, admit), [130, 131], "{admit:?}");
         }
+    }
+
+    /// The IDs of the candidates among `sites` for an independent ship,
+    /// within `reach`.
+    fn reached(sites: &[LandingSite], reach: RuleSource) -> Vec<i16> {
+        candidates_within(None, sites, &govts(), Admit::All, reach)
+            .into_iter()
+            .map(|site| site.id.0)
+            .collect()
+    }
+
+    #[test]
+    fn by_the_engine_a_gate_at_1500_is_out_and_one_at_minus_1500_is_in() {
+        let far = LandingSite {
+            position: Vec2::new(1500.0, 0.0),
+            ..hypergate(129)
+        };
+        let near = LandingSite {
+            position: Vec2::new(-1500.0, 0.0),
+            ..hypergate(130)
+        };
+        assert_eq!(reached(&[far, near], RuleSource::Engine), [130]);
+    }
+
+    #[test]
+    fn by_the_other_reach_a_gate_or_stellar_anywhere_is_in() {
+        let far_gate = LandingSite {
+            position: Vec2::new(1500.0, 0.0),
+            ..hypergate(129)
+        };
+        let far_planet = planet(128, 0.0, 1500.0);
+        let sites = [far_planet, far_gate];
+        assert_eq!(reached(&sites, RuleSource::Bible), [128, 129]);
+        assert!(reached(&sites, RuleSource::Engine).is_empty());
+        assert!(within_reach(&planet(131, 999.0, 999.0), RuleSource::Engine));
+        assert!(!within_reach(&planet(131, 999.5, 0.0), RuleSource::Engine));
+        assert!(!within_reach(&planet(131, 0.0, 999.5), RuleSource::Engine));
+    }
+
+    #[test]
+    fn the_usable_gates_are_the_gate_candidates_within_reach() {
+        let far = LandingSite {
+            position: Vec2::new(1500.0, 0.0),
+            ..hypergate(131)
+        };
+        let unlandable = LandingSite {
+            flags: 0,
+            ..hypergate(132)
+        };
+        let sites = [
+            planet(128, 0.0, 0.0),
+            hypergate(129),
+            wormhole(130),
+            far,
+            unlandable,
+        ];
+        let usable = |govt, reach| -> Vec<i16> {
+            usable_gates(govt, &sites, &govts(), reach)
+                .into_iter()
+                .map(|site| site.id.0)
+                .collect()
+        };
+        assert_eq!(usable(None, RuleSource::Engine), [129]);
+        assert_eq!(usable(None, RuleSource::Bible), [129, 131]);
+        assert_eq!(usable(Some(GovtId(141)), RuleSource::Engine), [130]);
+        assert!(usable(Some(GovtId(142)), RuleSource::Bible).is_empty());
     }
 
     #[test]

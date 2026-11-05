@@ -248,6 +248,8 @@ pub mod formation_places;
 mod frame_target;
 #[cfg(test)]
 mod gate_approach_tests;
+#[cfg(test)]
+mod gate_departure_tests;
 pub mod gate_entry;
 #[cfg(test)]
 mod goal_0_fire_tests;
@@ -735,6 +737,23 @@ pub struct World<'a> {
     /// that starts with zero fuel by the engine, every NPC by the other
     /// reading ([`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub npc_jump_fuel: RuleSource,
+    /// How far from the centre a stellar may be for an NPC to pick it, as
+    /// its destination or the gate it arrives out of
+    /// ([`destination::within_reach`]): within 999 on each axis by the
+    /// engine, anywhere by the other reading
+    /// ([`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach)).
+    pub destination_reach: RuleSource,
+    /// Whether every arrival with a usable gate comes out of one
+    /// ([`emerge`]): by the engine only when its one draw over the
+    /// candidates lands on a gate, always by the other reading
+    /// ([`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)).
+    pub arrivals_through_gates: RuleSource,
+    /// How an NPC with nowhere left to go leaves
+    /// ([`idle_block::leave_or_wait`](crate::ai::idle_block::leave_or_wait)):
+    /// by hyperspace by the engine, through a usable gate by the other
+    /// reading
+    /// ([`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)).
+    pub departures_through_gates: RuleSource,
     /// Which odds the odds' readers read
     /// ([`cached_odds`](crate::ai::odds::cached_odds)): the cache's by the
     /// engine, fresh by the other reading
@@ -914,6 +933,9 @@ impl<'a> World<'a> {
             snipe_brake_lead: RuleSource::Engine,
             hit_focus: RuleSource::Engine,
             npc_jump_fuel: RuleSource::Engine,
+            destination_reach: RuleSource::Engine,
+            arrivals_through_gates: RuleSource::Engine,
+            departures_through_gates: RuleSource::Engine,
             odds_cache: RuleSource::Engine,
             refuel_cap: RuleSource::Engine,
             cloak_on_reload: RuleSource::Engine,
@@ -947,13 +969,18 @@ impl<'a> World<'a> {
     }
 
     /// The stellars arrivals may come out of, every one the system lists
-    /// ([`World::listed`]), and the governments that judge whether one
-    /// may.
+    /// ([`World::listed`]), the governments that judge whether one may,
+    /// and the readings of the pick: [`World::destination_reach`] and
+    /// [`World::arrivals_through_gates`].
     #[must_use]
     pub fn stellars(self) -> Stellars<'a> {
         Stellars {
             sites: self.listed,
             govts: self.govts,
+            rules: emerge::EmergeRules {
+                reach: self.destination_reach,
+                through_gates: self.arrivals_through_gates,
+            },
         }
     }
 
@@ -998,6 +1025,8 @@ impl<'a> World<'a> {
             hit_focus: self.hit_focus,
             wanted: None,
             jump_fuel: self.npc_jump_fuel,
+            destination_reach: self.destination_reach,
+            departures_through_gates: self.departures_through_gates,
             odds_cache: self.odds_cache,
             led_speed: self.led_speed,
             weapons: self.weapons,
@@ -3304,7 +3333,7 @@ mod tests {
     /// Traffic deciding every `interval` ticks, entered into a system with
     /// `count` NPCs placed in it a pixel apart from the centre rightwards,
     /// brought to rest (setup starts them at their top speed).
-    fn populated(count: u32, interval: u32) -> Traffic {
+    pub(super) fn populated(count: u32, interval: u32) -> Traffic {
         let draws: Vec<u32> = (0..count).flat_map(|i| placed(750 + i, 750)).collect();
         let mut traffic = Traffic::with_interval(interval);
         traffic.enter(table(count), &mut Draws::of(&draws));

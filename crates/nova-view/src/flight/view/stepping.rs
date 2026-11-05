@@ -326,7 +326,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let breakups = if let Some(breakups) = heard {
             breakups
         } else {
-            let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+            let dying = dying(
+                &pass.ships,
+                (&self.sheet, self.outline.as_ref()),
+                &self.npc_sheets,
+                &self.npc_outlines,
+            );
             self.effects.hear_step(&dying, &scene, &self.looks, chance)
         };
         // The pass's gain, `_gSpeedMult`: `_HandleExplods`' for the

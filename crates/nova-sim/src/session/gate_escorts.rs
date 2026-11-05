@@ -451,6 +451,7 @@ pub(in crate::session) mod tests {
                 None,
             ],
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         });
         catalog.gate_listers.push((SystemId(130), StellarId(320)));
         catalog

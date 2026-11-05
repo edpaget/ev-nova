@@ -1,5 +1,6 @@
 //! The flight screen's ports, in the view's own terms: the ship sprite
-//! port, the player ship's sprite sheet, the status bar port, the `ïntf`
+//! port (with the outline a ship with no sheet draws instead), the player
+//! ship's sprite sheet, the status bar port, the `ïntf`
 //! layouts the HUD is drawn from, and the combat looks port, how weapons,
 //! explosions and targets are shown.
 
@@ -13,6 +14,7 @@ pub use nova_sim::{Blink, BoomId, GovtId, ShipId, SoundId, WeaponId};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Bounds;
+use crate::outline::Outline;
 use crate::sheet_image::SheetImage;
 
 /// One of a ship's `shän` layers drawn over its base sprite: the layer's
@@ -112,16 +114,38 @@ impl ShipSheet {
     }
 }
 
-/// The ships' sprite sheets.
+/// The ships' sprite sheets, and what a ship with none draws instead.
 pub trait ShipSprites {
     /// Ship `id`'s sheet, or why it cannot be shown.
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String>;
+
+    /// Ship `id`'s outline, drawn in place of its sheet when the sheet
+    /// can't be read: a new game's hull seen from above, nose up, in
+    /// pixels ([`outline`](crate::outline)). `None` for a ship with none,
+    /// every stock ship among them, which draws as the crossed box.
+    ///
+    /// The view asks only once a ship type's sheet has failed, once a
+    /// type, beside its sheet.
+    ///
+    /// A method, not data on [`ShipSprites::ship_sheet`]'s error: the
+    /// port reads one resource a method, and an outline is a second
+    /// resource, not part of a sheet; a ship drawn from one has no frame
+    /// for it to ride on. On the error it would change every holder of a
+    /// sheet's result (the caches, the glows, the flashes, the breakups
+    /// and the fakes) for what only the two crossed-box arms read. It has
+    /// no default body, so the `&T` and `Rc<T>` forwards can't answer
+    /// `None` by mistake.
+    fn ship_outline(&self, id: ShipId) -> Option<Outline>;
 }
 
 /// A borrowed catalog is a catalog.
 impl<T: ShipSprites + ?Sized> ShipSprites for &T {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         (**self).ship_sheet(id)
+    }
+
+    fn ship_outline(&self, id: ShipId) -> Option<Outline> {
+        (**self).ship_outline(id)
     }
 }
 
@@ -130,6 +154,10 @@ impl<T: ShipSprites + ?Sized> ShipSprites for &T {
 impl<T: ShipSprites + ?Sized> ShipSprites for Rc<T> {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         (**self).ship_sheet(id)
+    }
+
+    fn ship_outline(&self, id: ShipId) -> Option<Outline> {
+        (**self).ship_outline(id)
     }
 }
 
@@ -703,7 +731,8 @@ mod tests {
     use super::*;
     use crate::geometry::Point;
 
-    /// Every ship has a 36-rotation sheet with its own ID.
+    /// Every ship has a 36-rotation sheet with its own ID, and an
+    /// outline of one triangle as wide as its ID.
     struct Sheets;
 
     impl ShipSprites for Sheets {
@@ -723,16 +752,34 @@ mod tests {
                 solid: false,
             })
         }
+
+        fn ship_outline(&self, id: ShipId) -> Option<Outline> {
+            let at = Point::new(f32::from(id.0), 0.0);
+            Some(Outline {
+                triangles: vec![crate::outline::OutlineTriangle {
+                    corners: [at, Point::default(), Point::default()],
+                    color: Color::WHITE,
+                }],
+            })
+        }
     }
 
     fn image(catalog: impl ShipSprites, id: i16) -> Result<i16, String> {
         catalog.ship_sheet(ShipId(id)).map(|sheet| sheet.image_id)
     }
 
+    fn outline_reach(catalog: impl ShipSprites, id: i16) -> Option<f32> {
+        catalog
+            .ship_outline(ShipId(id))
+            .map(|outline| outline.reach())
+    }
+
     #[test]
     fn borrowed_and_shared_catalogs_are_catalogs() {
         assert_eq!(image(&Sheets, 130), Ok(130));
         assert_eq!(image(Rc::new(Sheets), 131), Ok(131));
+        assert_eq!(outline_reach(&Sheets, 130), Some(130.0));
+        assert_eq!(outline_reach(Rc::new(Sheets), 131), Some(131.0));
     }
 
     /// Every govt shows its own ID's bar; every bar is empty but for its

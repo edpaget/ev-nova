@@ -87,6 +87,7 @@ mod faked_docked;
 mod faked_escorts;
 mod faked_flight;
 mod faked_gamble;
+mod faked_gate_pilot;
 mod faked_hail;
 mod faked_hud;
 mod faked_keys;
@@ -124,6 +125,7 @@ mod particle_pixels;
 mod port_screen_map;
 mod rescue;
 mod ship_drawing;
+mod ship_outlines;
 mod shots;
 mod stars;
 mod stellar_looks;
@@ -550,6 +552,7 @@ fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
         current: sol,
         gate_arrows: Vec::new(),
         named: vec![sol],
+        lanes: Vec::new(),
     }
 }
 

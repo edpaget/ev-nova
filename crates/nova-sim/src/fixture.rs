@@ -7,6 +7,7 @@
 //! [`set_player_condition`], for downing or repairing the player directly;
 //! [`set_player_ion`] and [`set_player_tractor`], for ionizing or
 //! holding the player directly; [`put_player_over`], for bringing the player over a ship to board it;
+//! [`put_player_at`], for bringing the player to a place, a gate among them;
 //! [`remember_escort`], for making a ship the player's former escort;
 //! [`cloak`] and [`set_player_cloak`], for setting a ship's or the
 //! player's cloak directly; [`hide`], for
@@ -98,6 +99,13 @@ pub fn set_player_tractor(session: &mut Session, lock: Option<crate::combat::imp
 /// test that boards a ship without flying to it.
 pub fn put_player_over(session: &mut Session, id: NpcId) {
     session.put_player_over(id);
+}
+
+/// Puts the player's ship in `session` at `at`, at rest, its heading
+/// kept: for a test that flies to a stellar, a gate among them, without
+/// steering there.
+pub fn put_player_at(session: &mut Session, at: crate::geometry::Vec2) {
+    session.put_player_at(at);
 }
 
 /// Makes NPC `id` in `session`, if it is in the system, remember being

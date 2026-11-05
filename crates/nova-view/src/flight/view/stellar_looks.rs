@@ -250,6 +250,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         let ship = self.frame.player().class;
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);
+            self.outline = super::outline_for(&self.catalog, ship, &self.sheet);
             self.sheet_ship = Some(ship);
         }
     }

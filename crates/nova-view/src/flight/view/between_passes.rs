@@ -240,7 +240,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(pass) = &held.second else {
             return;
         };
-        let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+        let dying = dying(
+            &pass.ships,
+            (&self.sheet, self.outline.as_ref()),
+            &self.npc_sheets,
+            &self.npc_outlines,
+        );
         let scene = self.presentation.scene(pass.player_position);
         let chance = &mut self.effects_chance;
         let breakups = self.effects.hear_step(&dying, &scene, &self.looks, chance);

@@ -1,19 +1,23 @@
 //! [`FlightView`]'s land key, gates and course map's close, over the
 //! [`FlightSim`] port: the press sends [`FlightCommand::Land`] and says
-//! what the flight answers, the gates open and enter by
+//! what the flight answers, the gate autopilot's press is sent for it when
+//! the frame asks ([`FlightView::gate_pilot_frame`], entering its gate
+//! without the hypergate map), the gates open and enter by
 //! [`FlightCommand::OpenHypergate`], [`FlightCommand::EnterWormhole`] and
 //! [`FlightCommand::EnterHypergate`], and the map's close runs whole here,
 //! its hypergate entry among it. The flight's messages are worded by the
 //! flight's names ([`FlightView::word`]).
 
-use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry};
+use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry, GatePilotShown};
 use nova_sim::landing::LandOutcome;
-use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress};
+use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress, SystemId};
 
 use crate::Input;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
+use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
+use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
@@ -56,6 +60,12 @@ impl<
     /// took, but a refusal it says made none ([`Answer::LandRefused`]'s
     /// `requested`). A press not taken, or a flight that failed, made none.
     pub(super) fn land(&mut self) -> bool {
+        self.land_for(None)
+    }
+
+    /// [`FlightView::land`]'s press, the gate autopilot's flying toward
+    /// `autopilot` when it is some ([`FlightView::gate_pilot_frame`]).
+    fn land_for(&mut self, autopilot: Option<SystemId>) -> bool {
         let pressed = self.send_gated(FlightCommand::Land);
         if pressed.is_refused() {
             // Not taken (`FlightView::send_gated`), or a flight that failed:
@@ -76,6 +86,12 @@ impl<
                 self.glows.clear();
                 self.shot_looks.clear();
                 self.land_with_movie(stellar);
+            }
+            Answer::LandPress(LandPress::AtGate {
+                kind: GateKind::Hypergate,
+                ..
+            }) if autopilot.is_some() => {
+                self.enter_with_movie(GateEntry::Hypergate(autopilot));
             }
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Hypergate,
@@ -243,5 +259,43 @@ impl<
         } else {
             self.map_input(input);
         }
+    }
+}
+
+impl<
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
+    S: FlightSim,
+> FlightView<C, S>
+{
+    /// The gate autopilot's own press of L, once a frame after its steps
+    /// ([`FlightView::settle_faded_keys`] first), when the frame asks for
+    /// it ([`GatePilotShown::press_land`]), no jump is under way and
+    /// nothing is open: the press [`FlightView::land`] makes, worded the
+    /// same, but L's latch is left alone, as the dock approach is held
+    /// back while it is set (@0x6a970-0x6a978), and over a cleared
+    /// hypergate the view enters the gate for the system the autopilot
+    /// flies toward, its movie first with movies on
+    /// ([`FlightView::enter_with_movie`]), and never opens the hypergate
+    /// map. The flight counts the press as the autopilot's because its
+    /// ask stands; the view never says who pressed.
+    pub(super) fn gate_pilot_frame(&mut self) {
+        let Some(GatePilotShown {
+            to,
+            press_land: true,
+        }) = self.frame.gate_pilot
+        else {
+            return;
+        };
+        if self.jump_under_way() || self.opened_something() {
+            return;
+        }
+        self.land_for(Some(to));
     }
 }

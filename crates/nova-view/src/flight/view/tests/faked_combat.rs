@@ -261,7 +261,8 @@ fn a_first_tick_eject_rolls_no_puff_for_the_player() {
     };
     let breaking = super::super::dying(
         &[pod, hulk],
-        &Ok(sheet()),
+        (&Ok(sheet()), None),
+        &std::collections::BTreeMap::new(),
         &std::collections::BTreeMap::new(),
     );
     assert_eq!(breaking.len(), 1, "the hulk alone");

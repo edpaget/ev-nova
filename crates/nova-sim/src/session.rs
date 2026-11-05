@@ -529,6 +529,9 @@ mod game_work;
 mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
+#[cfg(test)]
+mod gate_partner;
+mod gate_pilot;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;
@@ -560,6 +563,8 @@ mod land_on_stellar;
 #[allow(clippy::float_cmp)]
 mod landed_work;
 mod landing_fee;
+#[cfg(test)]
+mod lane_readers;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
@@ -820,7 +825,7 @@ use crate::shipyard::{
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
+use crate::story::{Fate, LinkSource, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 #[cfg(test)]
@@ -1271,10 +1276,12 @@ impl Session {
         // Built first, from the star map and the saved overlay alone: the
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
-        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone())
+            .with_gates(&catalog.gate_sites(), &listed);
         galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        galaxy.set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1532,6 +1539,9 @@ impl Session {
         self.chart.galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        self.chart
+            .galaxy
+            .set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         self.space
             .combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
@@ -2222,6 +2232,9 @@ impl Session {
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            destination_reach: self.setup.rules.source_for(RuleKey::DestinationReach),
+            arrivals_through_gates: self.setup.rules.source_for(RuleKey::ArrivalsThroughGates),
+            departures_through_gates: self.setup.rules.source_for(RuleKey::DeparturesThroughGates),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
@@ -2326,6 +2339,9 @@ impl Session {
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            destination_reach: self.setup.rules.source_for(RuleKey::DestinationReach),
+            arrivals_through_gates: self.setup.rules.source_for(RuleKey::ArrivalsThroughGates),
+            departures_through_gates: self.setup.rules.source_for(RuleKey::DeparturesThroughGates),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
@@ -3055,14 +3071,16 @@ impl Session {
     }
 
     /// Whether the ship can jump to the system selected: under
-    /// way once J has been accepted, until the ship arrives; otherwise
-    /// clear when J would be accepted now, and blocked when it would be
-    /// refused. The nav area draws the destination by this.
+    /// way once J has been accepted, until the ship arrives, or while the
+    /// gate autopilot J engaged flies (see the `gate_pilot` module);
+    /// otherwise clear when J would be accepted now or would engage the
+    /// autopilot, and blocked when it would be refused. The nav area draws
+    /// the destination by this.
     #[must_use]
     pub(crate) fn jump_readiness(&self) -> JumpReadiness {
-        if self.mode.jump().is_some() {
+        if self.mode.jump().is_some() || self.gate_pilot_engaged() {
             JumpReadiness::Underway
-        } else if self.check_next_jump().is_ok() {
+        } else if self.gate_pilot_would_engage() || self.check_next_jump().is_ok() {
             JumpReadiness::Clear
         } else {
             JumpReadiness::Blocked
@@ -3837,6 +3855,13 @@ impl Session {
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
     /// for the arrival.
+    ///
+    /// The exit restarts the course at the system entered
+    /// (@0x63e1d-0x63e3c). By [`RuleKey::GateCourse`]'s other reading an
+    /// exit into the system standing for the course's first hop drops
+    /// that hop instead, as a jump's arrival does, and once the nav is off
+    /// cues the next ([`Session::cue_course`]); it applies to a gate taken
+    /// by hand too.
     pub fn enter_hypergate(
         &mut self,
         to: Option<SystemId>,
@@ -3855,6 +3880,14 @@ impl Session {
             system
         });
         self.chart.set_nav(NavMode::Off);
+        if entered.is_ok() && self.setup.rules.source_for(RuleKey::GateCourse) == RuleSource::Bible
+        {
+            // By the other reading an exit along the course kept its next
+            // hop (see the `entry` module's gate row): cue it, as a jump's
+            // arrival does (@0x6c4cd). Any other exit left no course.
+            self.chart.cue_course(&self.pilot, &self.setup);
+        }
+        self.gate_pilot_after_exit(entered.is_ok());
         entered
     }
 
@@ -3914,6 +3947,7 @@ impl Session {
         let here = self
             .take_gate(GateKind::Wormhole)
             .ok_or(GateRefusal::NotAtGate)?;
+        self.ship.gate_pilot = None;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
         let owner_of = |id| {
@@ -4000,7 +4034,9 @@ impl Session {
             },
         };
         self.enter_system(
-            Entry::Gate,
+            Entry::Gate {
+                hypergate: kind == GateKind::Hypergate,
+            },
             self.pilot.system,
             entered,
             catalog,
@@ -28656,6 +28692,7 @@ pub(super) mod tests {
             flags2,
             links: slots,
             exit_angle,
+            stability: crate::catalog::GateStability::Stable,
         }
     }
 
@@ -28742,7 +28779,11 @@ pub(super) mod tests {
             session.open_hypergate(&catalog),
             Err(GateRefusal::NotAtGate)
         );
-        assert_eq!(*catalog.gate_reads.borrow(), 0, "not read at the start");
+        assert_eq!(
+            *catalog.gate_reads.borrow(),
+            1,
+            "read once at the start, for the galaxy's lanes"
+        );
     }
 
     #[test]

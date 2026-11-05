@@ -43,7 +43,9 @@
 //! members, a level-2 head charts them. A load's rebuild shares by the
 //! rule `Session::load` was given.
 //!
-//! **A new pilot** ([`Chart::explore_start_neighbours`]): `_DoNewPilot`
+//! **A new pilot** ([`Chart::explore_start_neighbours`]; by
+//! [`RuleKey::GateLanes`]' other reading the start system's "Con slots"
+//! are the systems its gate lanes reach): `_DoNewPilot`
 //! clears every level, then, for each of the start system's Con slots
 //! naming a visible system, sets the head of that system's place to level
 //! 1 (@0x18f97-0x19003, @0x18fe6), and last the start system's head
@@ -192,7 +194,9 @@ impl Chart {
     /// system's Con slots naming a system that exists and that the
     /// visibility read ([`RuleKey::NewPilotVisibility`]) shows explores,
     /// by the engine, that system's head, and by the other reading the
-    /// system.
+    /// system. By [`RuleKey::GateLanes`]' other reading the slots are the
+    /// systems the start system's gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)).
     pub(super) fn explore_start_neighbours(
         &mut self,
         pilot: &mut Pilot,
@@ -203,7 +207,7 @@ impl Chart {
         let refresh = self.new_pilot_refresh(statics, setup);
         let galaxy = &self.galaxy;
         let neighbours = start_neighbours(
-            galaxy.con_slots(pilot.system),
+            galaxy.link_slots(pilot.system),
             |system| galaxy.exists(system) && !refresh.hides(system),
             galaxy.map().places(),
             source,

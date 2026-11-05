@@ -57,6 +57,14 @@
 //!    ([`MapDrawing::named`]); +0x1ed and the known flag aren't read. The
 //!    view draws every one at a zoom ≤ 1.1 and only the selection's above.
 //!
+//! By [`RuleKey::GateLanes`]' other reading every "Con slot" above is
+//! one of the systems a system's gate lanes reach
+//! ([`OverlaidGalaxy::link_slots`]): the three link sets draw the lanes.
+//! By [`RuleKey::MapLaneStyle`]'s other reading each drawn link also gets
+//! its look ([`MapDrawing::lanes`], the [`map_lanes`](crate::map_lanes)
+//! module), which the view draws in place of the grey; the engine's
+//! reading leaves the drawing as `_DrawMap` makes it.
+//!
 //! `_MapDialogUpdate` then brackets the selection and draws the names a
 //! second time, on the course and hypergate maps only
 //! (@0xfc9c-0x1001f): the view's.
@@ -91,6 +99,8 @@
 //! mission system (@0x12f82-0x12f8a).
 //!
 //! [`RuleKey::MapLinkPairing`]: crate::RuleKey::MapLinkPairing
+//! [`RuleKey::GateLanes`]: crate::RuleKey::GateLanes
+//! [`RuleKey::MapLaneStyle`]: crate::RuleKey::MapLaneStyle
 //! [`gate::hypergate_offers`]: crate::gate::hypergate_offers
 //! [`Session::mark_known`]: crate::Session::mark_known
 
@@ -100,6 +110,7 @@ use crate::catalog::{GovtId, NebulaId, SystemId};
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::iff::SystemColorCode;
+use crate::map_lanes::{LaneLook, lane_look};
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
 use crate::trig::intercept_angle;
@@ -219,6 +230,12 @@ pub struct MapDrawing {
     /// The systems that may be named, by ascending ID: every visible,
     /// explored one.
     pub named: Vec<SystemId>,
+    /// How each link of [`current_links`](Self::current_links), then of
+    /// [`links`](Self::links), looks, one each in that order, by
+    /// [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)'s other
+    /// reading ([`map_lanes`](crate::map_lanes)); empty by the engine's,
+    /// which draws every link grey.
+    pub lanes: Vec<LaneLook>,
 }
 
 /// What the galaxy map's model shows of the galaxy as overlaid, as plain
@@ -317,6 +334,8 @@ pub struct MapState<'a> {
     pub multi_arrows: bool,
     /// How links are paired ([`RuleKey::MapLinkPairing`](crate::RuleKey::MapLinkPairing)).
     pub pairing: RuleSource,
+    /// How links look ([`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)).
+    pub lane_style: RuleSource,
 }
 
 impl MapState<'_> {
@@ -337,10 +356,13 @@ impl MapState<'_> {
         self.galaxy.map().places().head(system).unwrap_or(system)
     }
 
-    /// `system`'s first 16 Con slots, raw.
+    /// `system`'s first 16 Con slots, raw: by
+    /// [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading,
+    /// the systems its gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`]).
     fn slots(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
         self.galaxy
-            .con_slots(system)
+            .link_slots(system)
             .iter()
             .copied()
             .take(CON_SLOTS)
@@ -367,7 +389,7 @@ pub fn draw_map(
             .filter_map(|pair| Some((pair[0]?, pair[1]?)))
             .collect()
     };
-    let current_links = state
+    let current_links: Vec<(SystemId, SystemId)> = state
         .slots(current)
         .filter_map(|slot| state.resolve(slot))
         .map(|to| (current, to))
@@ -427,6 +449,15 @@ pub fn draw_map(
         .catalog_systems()
         .filter(|&id| galaxy.visible(id) && state.explored.contains(&id))
         .collect();
+    let lanes = match state.lane_style {
+        RuleSource::Engine => Vec::new(),
+        RuleSource::Bible => current_links
+            .iter()
+            .copied()
+            .chain(links.iter().map(|link| (link.from, link.to)))
+            .map(|(from, to)| lane_look(galaxy, from, to))
+            .collect(),
+    };
     MapDrawing {
         hypergate: state.hypergate.is_some(),
         course,
@@ -440,6 +471,7 @@ pub fn draw_map(
             .map(<[SystemId]>::to_vec)
             .unwrap_or_default(),
         named,
+        lanes,
     }
 }
 
@@ -483,6 +515,7 @@ mod tests {
             green: None,
             multi_arrows: true,
             pairing: RuleSource::Engine,
+            lane_style: RuleSource::Engine,
         }
     }
 

@@ -82,10 +82,14 @@
 //! [`RuleKey::GateEscorts`](crate::RuleKey::GateEscorts) says: see the
 //! session's `gate_escorts` module.
 //!
+//! NPCs come out of gates as they arrive
+//! ([`traffic::emerge`](crate::traffic::emerge)) and leave through them
+//! ([`traffic::gate_entry`](crate::traffic::gate_entry)).
+//!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
-//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the ship-spawn
-//! hooks on the shared arrival path (`_SpawnBountyHunter`), the `spöb`
-//! `Fee`, and the failure sound for a wormhole with no exit.
+//! (`_PlayQTMovieFromDesc`), the ship-spawn hooks on the shared arrival
+//! path (`_SpawnBountyHunter`), the `spöb` `Fee`, and the failure sound
+//! for a wormhole with no exit.
 
 use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;
@@ -169,7 +173,10 @@ fn site(sites: &[GateSite], id: StellarId) -> Option<&GateSite> {
 
 /// The sites `links` lead to, in slot order, repeats kept: each used slot
 /// whose stellar some system lists.
-fn exits<'a>(links: &[Option<StellarId>; 8], sites: &'a [GateSite]) -> Vec<&'a GateSite> {
+pub(crate) fn exits<'a>(
+    links: &[Option<StellarId>; 8],
+    sites: &'a [GateSite],
+) -> Vec<&'a GateSite> {
     links
         .iter()
         .flatten()
@@ -522,6 +529,7 @@ mod tests {
             flags2,
             links: links(linked),
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         }
     }
 

@@ -241,6 +241,35 @@ pub struct GateSite {
     /// Its `CustSndID`, raw: the heading a ship comes out of it on, when
     /// it is 0 to 359.
     pub exit_angle: i16,
+    /// How well jumps through it work: a new-game jump point's own
+    /// stability, which the store keeps beside its gate; every stock
+    /// stellar is [`GateStability::Stable`], as the original has no such
+    /// word.
+    pub stability: GateStability,
+}
+
+/// How well jumps through a gate work, ordered from best to worst: the
+/// new game's jump points' `stability`. A jump between two gates works as
+/// well as the [`worse`](GateStability::worse) of its two ends. The
+/// original has no such word, so a stock gate is
+/// [`Stable`](GateStability::Stable).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GateStability {
+    /// Jumps through it always work: every stock gate.
+    #[default]
+    Stable,
+    /// Jumps through it sometimes fail.
+    Unstable,
+    /// Jumps through it never happen.
+    Dead,
+}
+
+impl GateStability {
+    /// The less stable of the two: stable, then unstable, then dead.
+    #[must_use]
+    pub fn worse(self, other: Self) -> Self {
+        self.max(other)
+    }
 }
 
 /// A stellar some system lists, raw from its `spöb`: what a mission's
@@ -2662,6 +2691,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_gates_stability_orders_stable_unstable_dead_and_worse_takes_the_later() {
+        use GateStability::{Dead, Stable, Unstable};
+        assert!(Stable < Unstable && Unstable < Dead);
+        assert_eq!(GateStability::default(), Stable);
+        for (a, b, worse) in [
+            (Stable, Stable, Stable),
+            (Stable, Unstable, Unstable),
+            (Unstable, Stable, Unstable),
+            (Unstable, Dead, Dead),
+            (Dead, Stable, Dead),
+        ] {
+            assert_eq!(a.worse(b), worse, "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
     fn a_tally_adds_up_each_outfits_repeats() {
         let tallied = tally([(OutfitId(130), 2), (OutfitId(128), 1), (OutfitId(130), 3)]);
         assert_eq!(
@@ -2966,6 +3011,7 @@ mod tests {
                 flags2: 0x1200,
                 links,
                 exit_angle: 120,
+                stability: GateStability::Stable,
             }]
         }
 
