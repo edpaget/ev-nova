@@ -842,8 +842,9 @@ impl Session {
             self.destroy_cargo_share(holds, false, Some(id));
         }
         self.dismiss(id);
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         if let Some(npc) = self.space.npc_mut(id) {
-            reset_released(npc);
+            reset_released(npc, burst);
         }
         self.reform();
     }
@@ -1243,13 +1244,14 @@ impl Space {
 /// boarded (+0xb9 1), it is no former escort (+0xc8de -1), `_AISetup`
 /// clears its order word (+0xc90a), its swarm leader and its formation
 /// parent (@0x7f40c-0x7f41e), and it leaves the system
-/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]).
-pub(super) fn reset_released(npc: &mut Npc) {
+/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]), owing any burst by
+/// `burst`'s reading of [`RuleKey::HeldGateBurst`].
+pub(super) fn reset_released(npc: &mut Npc, burst: RuleSource) {
     npc.boarded = true;
     npc.former = None;
     npc.order_word = crate::fleet::OrderWord::NONE;
     npc.clear_swarm_words();
-    super::hail::make_leave(npc);
+    super::hail::make_leave(npc, burst);
 }
 
 /// `npc` falls in with the player, as a hired escort joining

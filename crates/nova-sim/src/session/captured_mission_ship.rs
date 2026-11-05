@@ -58,6 +58,7 @@
 
 use super::Session;
 use crate::escort::FormationSlot;
+use crate::rulebook::RuleKey;
 use crate::traffic::npc::{AiType, MissionMark, NpcId};
 
 impl Session {
@@ -110,6 +111,7 @@ impl Session {
             .statics
             .ship_record(ship)
             .map(|record| AiType::from_raw(record.inherent_ai));
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         let Some(npc) = self.space.npc_mut(id) else {
             return;
         };
@@ -120,7 +122,7 @@ impl Session {
         if let Some(ai_type) = inherent {
             npc.ai_type = ai_type;
         }
-        super::escorts::reset_released(npc);
+        super::escorts::reset_released(npc, burst);
         self.reform();
     }
 }

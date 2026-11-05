@@ -80,12 +80,18 @@
 //! [`mine_flight`](crate::traffic::mine_flight)'s and
 //! [`fire_untargeted`](crate::ai::fire_untargeted)'s.
 //!
-//! State 2's +0x50 clamp (a negative stage raised to 0) and +0xa4 stamp
-//! (@0x8b307-0x8b329, @0x8b428-0x8b44a) need no port: the leave's own
-//! jump, sub 4, starts any stage at 0 or below at 1.0 and stamps the
-//! clock again (@0x858a4-0x858b0, see
-//! [`warp_out`](crate::traffic::warp_out)), and nothing reads the clock or
-//! a stage at or below 0 before then.
+//! State 2's writes are `_AIMakeShipLeave`'s, inlined (@0x8b307-0x8b329,
+//! @0x8b428-0x8b44a): its +0x50 floor (a negative stage raised to 0) and
+//! +0xa4 stamp are built ([`Decision::leaves`], which the traffic takes
+//! with [`Npc::takes_leave_write`]; see
+//! [`leave_write`](crate::traffic::leave_write)), on every think that
+//! reaches either leave, one already held too, but not on [`MINES`]
+//! alone keeping it. The floor shows to no reader here: a miner never has
+//! a parent (`_AIDispatch` @0x8ff80), so no successor's pause reads a
+//! stage below 0, and the leave's own jump, sub 4, starts any stage at 0
+//! or below at 1.0 with its own stamp (@0x858a4-0x858b0). The stamp shows
+//! on a stage under way, which sub 4 then keeps, so the miner goes a
+//! whole jump's time after its last think's write.
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::travel::{self, TravelWrite};
@@ -149,6 +155,7 @@ impl Behaviour for MinerAi {
             comm_call: when_fleeing(goal),
             visits,
             travel,
+            leaves: writes_leave(npc, goal),
             ..Decision::default()
         }
     }
@@ -158,6 +165,15 @@ impl Behaviour for MinerAi {
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         npc.goal.quarry()
     }
+}
+
+/// Whether `npc`'s think of `goal` made `_MinerAI`'s leave, its inlined
+/// `_AIMakeShipLeave` (see the module docs): the scoop-full leave
+/// (@0x8b307-0x8b329) and the shuttle's (@0x8b428-0x8b44a) write it on
+/// every think that reaches them, a leave already held too; [`MINES`]
+/// alone keeps a state 2 it held, writing none.
+fn writes_leave(npc: &Npc, goal: Goal) -> bool {
+    goal == Goal::JumpOut && !(npc.miner & MINES != 0 && npc.miner & SCOOPS == 0)
 }
 
 /// `npc`'s goal among `around`, as `_MinerAI` decides it (see the module
@@ -731,6 +747,50 @@ mod tests {
             deciding(&waiting, &stellars(), None),
             Goal::Idle,
             "a flying ship's AI wait too"
+        );
+    }
+
+    #[test]
+    fn its_scoop_full_and_shuttle_leaves_write_the_leave_and_a_mining_keep_none() {
+        // `_MinerAI`'s copies of `_AIMakeShipLeave` (@0x8b307-0x8b329,
+        // @0x8b428-0x8b44a), on every think that reaches them.
+        let mut full = miner(SCOOPS, true);
+        full.cargo.add(0, 20);
+        let shuttle = miner(SCOOPS, false);
+        let mut kept = miner(MINES, false);
+        kept.goal = Goal::JumpOut;
+        for (npc, sites, why) in [
+            (full.clone(), stellars(), "scoop-full"),
+            (
+                Npc {
+                    goal: Goal::JumpOut,
+                    ..full
+                },
+                stellars(),
+                "scoop-full, leaving already",
+            ),
+            (shuttle.clone(), Vec::new(), "the shuttle"),
+            (
+                Npc {
+                    goal: Goal::JumpOut,
+                    ..shuttle
+                },
+                stellars(),
+                "the shuttle, leaving already",
+            ),
+        ] {
+            let decided = decision(&npc, &sites, None);
+            assert_eq!(
+                (decided.goal, decided.leaves),
+                (Goal::JumpOut, true),
+                "{why}"
+            );
+        }
+        let decided = decision(&kept, &stellars(), Some(rock()));
+        assert_eq!(
+            (decided.goal, decided.leaves),
+            (Goal::JumpOut, false),
+            "MINES alone keeps state 2"
         );
     }
 

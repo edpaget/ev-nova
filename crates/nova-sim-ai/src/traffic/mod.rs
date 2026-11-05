@@ -294,6 +294,9 @@ mod last_wait_frame;
 mod last_wait_frame_tests;
 mod launch_room;
 pub mod leave_flight;
+pub mod leave_write;
+#[cfg(test)]
+mod leave_write_tests;
 #[cfg(test)]
 mod let_go_think_tests;
 #[cfg(test)]
@@ -2724,7 +2727,10 @@ impl Traffic {
     /// writes an order word ([`Decision::order_word`]) sets
     /// [`Npc::order_word`]. Each decision writes whether its flight is the
     /// attack block's or the plunder's hopeless chase
-    /// ([`Npc::fled_hopeless`]). Each
+    /// ([`Npc::fled_hopeless`]). One whose think wrote the leave
+    /// ([`Decision::leaves`]) takes its +0x50 floor and +0xa4 stamp
+    /// ([`Npc::takes_leave_write`]) with the goal, after the clock moved on
+    /// for the tick, so a stage under way runs from t = 0. Each
     /// decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, world: &World) {
@@ -2823,6 +2829,9 @@ impl Traffic {
                 npc.leave_fleet();
             }
             npc.fled_hopeless = decision.hopeless_flee;
+            if decision.leaves {
+                npc.takes_leave_write(world.held_burst);
+            }
             npc.goal = goal;
         }
     }
@@ -5582,6 +5591,7 @@ mod tests {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: false,
+            leaves: false,
             holds_target: None,
             writes_sub: false,
             plunders: None,

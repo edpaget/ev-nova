@@ -55,7 +55,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         return npc.goal;
     }
     let business = trader_keep::idle_first(npc, around, chance);
-    if let Some(leave) = business.filter(|&goal| trader_target::idle_leave_clears(npc, goal)) {
+    if let Some(leave) = business.filter(|&goal| idle_block::leaves(npc, goal)) {
         return leave;
     }
     provoked_by(npc, around)
@@ -71,17 +71,20 @@ impl Behaviour for WimpyTrader {
     /// flees ([`when_fleeing`]), and its idle block's pick written to its
     /// travel stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef), and
     /// its target cleared by the idle block's leave
-    /// ([`trader_target::idle_leave_clears`], @0x8b190); a kept fight whose
+    /// ([`idle_block::leaves`], @0x8b190), with its +0x50 floor and +0xa4
+    /// stamp ([`Decision::leaves`], @0x8b179-0x8b19b); a kept fight whose
     /// +0x70 went is then ended ([`trader_keep::last_think`]). The
     /// high level, which `NovaAi` runs after it, takes a kept attack
     /// ([`attack_drop`](super::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
+        let leaves = idle_block::leaves(npc, thought);
         let decision = Decision {
             goal: thought,
             comm_call: when_fleeing(thought),
             travel: idle_block::pick_write(npc, around, thought),
-            clears_target: trader_target::idle_leave_clears(npc, thought),
+            clears_target: leaves,
+            leaves,
             ..Decision::default()
         };
         trader_keep::last_think(npc, around, decision)
@@ -183,18 +186,21 @@ mod tests {
         let leaving = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
         assert_eq!(leaving.goal, Goal::JumpOut);
         assert!(leaving.clears_target);
+        assert!(leaving.leaves, "its +0x50 floor and +0xa4 stamp");
         let mut kept = npcs.clone();
         kept[0].goal = Goal::JumpOut;
         let around = crate::ai::fixture::around(&sites, &kept, &govts, (0.0, -100.0), 0);
         let still = WimpyTrader::default().decision(&kept[0], &around, &mut Draws::of(&[]));
         assert_eq!(still.goal, Goal::JumpOut);
         assert!(!still.clears_target, "a kept leave");
+        assert!(!still.leaves, "a kept leave");
         let mut stuck = npcs.clone();
         stuck[0].class_fuel = 99;
         let around = crate::ai::fixture::around(&sites, &stuck, &govts, (0.0, -100.0), 0);
         let stopping = WimpyTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
         assert_eq!(stopping.goal, Goal::Wait);
         assert!(!stopping.clears_target, "the stop");
+        assert!(!stopping.leaves, "the stop");
     }
 
     #[test]

@@ -1111,6 +1111,16 @@ pub struct Decision {
     /// so the next think finds no target, whatever its thinker's target
     /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
+    /// Whether the think made `_AIMakeShipLeave`'s inlined write, goal 2
+    /// with the +0x50 floor and the +0xa4 stamp (see
+    /// [`leave_write`](crate::traffic::leave_write)): the idle blocks'
+    /// leave ([`idle_block::leaves`]), the pirate's copy ([`pirate`]), the
+    /// miner's ([`miner`]), the mission hunt's give-up ([`NovaAi`]) and
+    /// the trader's lost-sight leave ([`lost_sight`]). A think that keeps a
+    /// goal 2 it held writes none. The traffic makes the write
+    /// ([`Npc::takes_leave_write`]) as it takes the goal; it stands
+    /// whatever later block of the think moves the goal on.
+    pub leaves: bool,
     /// Whether the think writes the sub-goal (+0xc8ca) itself, ending any
     /// docking ([`Npc::docking`]) even while the AI wait skips the high
     /// level: `_PirateWarshipAI`'s count wait entry (@0x8c6fe), its plunder

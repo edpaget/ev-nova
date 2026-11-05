@@ -76,7 +76,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         off.x.abs() <= STAND_AND_FIGHT && off.y.abs() <= STAND_AND_FIGHT
     };
     let business = trader_keep::idle_first(npc, around, chance);
-    if let Some(leave) = business.filter(|&goal| trader_target::idle_leave_clears(npc, goal)) {
+    if let Some(leave) = business.filter(|&goal| idle_block::leaves(npc, goal)) {
         return leave;
     }
     let attacker = provoked_by(npc, around)
@@ -110,15 +110,18 @@ impl Behaviour for BraveTrader {
     /// The attack block also flees a hopeless chase. Its idle block's pick
     /// is written to its travel stellar ([`idle_block::pick_write`] of the
     /// think's goal; @0x8b53b, @0x8b559), and its leave clears its target
-    /// ([`trader_target::idle_leave_clears`], @0x8b5fa).
+    /// ([`idle_block::leaves`], @0x8b5fa), with its +0x50 floor
+    /// and +0xa4 stamp ([`Decision::leaves`], @0x8b5e3-0x8b605).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
+        let leaves = idle_block::leaves(npc, thought);
         let decision = Decision {
             goal: thought,
             comm_call: brave_call(npc, thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
             travel: idle_block::pick_write(npc, around, thought),
-            clears_target: trader_target::idle_leave_clears(npc, thought),
+            clears_target: leaves,
+            leaves,
             ..Decision::default()
         };
         trader_keep::last_think(npc, around, decision)
@@ -216,18 +219,21 @@ mod tests {
         let leaving = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
         assert_eq!(leaving.goal, Goal::JumpOut);
         assert!(leaving.clears_target);
+        assert!(leaving.leaves, "its +0x50 floor and +0xa4 stamp");
         let mut kept = npcs.clone();
         kept[0].goal = Goal::JumpOut;
         let around = crate::ai::fixture::around(&sites, &kept, &govts, (0.0, -100.0), 0);
         let still = BraveTrader::default().decision(&kept[0], &around, &mut Draws::of(&[]));
         assert_eq!(still.goal, Goal::JumpOut);
         assert!(!still.clears_target, "a kept leave");
+        assert!(!still.leaves, "a kept leave");
         let mut stuck = npcs.clone();
         stuck[0].class_fuel = 99;
         let around = crate::ai::fixture::around(&sites, &stuck, &govts, (0.0, -100.0), 0);
         let stopping = BraveTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
         assert_eq!(stopping.goal, Goal::Wait);
         assert!(!stopping.clears_target, "the stop");
+        assert!(!stopping.leaves, "the stop");
     }
 
     #[test]

@@ -159,7 +159,7 @@ pub fn last_think(npc: &Npc, around: &Surroundings, decision: Decision) -> Decis
 /// `chance`, when it runs before the provoked test: on goal 0 alone
 /// (`_WimpyTraderAI` @0x8b06c, `_BraveTraderAI` @0x8b4d6), the goal
 /// [`unprovoked`] gives. Its leave writes +0x70 -1 (@0x8b190, @0x8b5fa;
-/// [`trader_target::idle_leave_clears`](super::trader_target::idle_leave_clears)),
+/// [`idle_block::leaves`](super::idle_block::leaves)),
 /// so a provoked trader whose idle block leaves passes the provoked test
 /// by (@0x8b1b6, @0x8b624-0x8b62c) and leaves, with no flight, fight or
 /// call; its landing and stop write no +0x70, so the test then fires.

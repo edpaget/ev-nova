@@ -12,7 +12,7 @@
 //! - the idle block (goal 0, @0x8b06c, @0x8b4d6) ends in a landing
 //!   (goal 1, @0x8b0f7-0x8b0fd, @0x8b567) or a stop (goal 6, @0x8b1a3,
 //!   @0x8b60d) with +0x70 untouched, and in a leave (goal 2) with +0x70 -1
-//!   (@0x8b190, @0x8b5fa; [`idle_leave_clears`]);
+//!   (@0x8b190, @0x8b5fa; [`idle_block::leaves`](super::idle_block::leaves));
 //! - unprovoked, every other goal reaches the provoked test (@0x8b1ac,
 //!   @0x8b616), which writes nothing;
 //! - `_HighLevelAIHandler`'s goal-1 block (@0x8d8b8-0x8db5f) has no +0x70
@@ -60,15 +60,6 @@ pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
             .filter(|&ship| around.condition_of(ship).is_some_and(Condition::active)),
         goal => goal.quarry(),
     }
-}
-
-/// Whether a trader's think of `thought` is its idle block's leave, which
-/// clears +0x70 (`_WimpyTraderAI` @0x8b190, `_BraveTraderAI` @0x8b5fa):
-/// a ship on goal 0 that thinks goal 2. A leave it already held is kept,
-/// its target with it, and the idle block's landing and stop write none.
-#[must_use]
-pub fn idle_leave_clears(npc: &Npc, thought: Goal) -> bool {
-    npc.goal == Goal::Idle && thought == Goal::JumpOut
 }
 
 #[cfg(test)]
@@ -142,17 +133,5 @@ mod tests {
             let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
             assert_eq!(trader_target(&trader, &around), Some(n(3)), "{goal:?}");
         }
-    }
-
-    #[test]
-    fn the_idle_blocks_leave_clears_the_target() {
-        // @0x8b190, @0x8b5fa.
-        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
-        trader.goal = Goal::Idle;
-        assert!(idle_leave_clears(&trader, Goal::JumpOut));
-        assert!(!idle_leave_clears(&trader, Goal::Land(StellarId(128))));
-        assert!(!idle_leave_clears(&trader, Goal::Wait));
-        trader.goal = Goal::JumpOut;
-        assert!(!idle_leave_clears(&trader, Goal::JumpOut), "a kept leave");
     }
 }

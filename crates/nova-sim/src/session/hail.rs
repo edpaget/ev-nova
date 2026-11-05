@@ -683,7 +683,7 @@ impl Session {
         match deed {
             Deed::Spare => {
                 npc.take_bribe();
-                make_leave(npc);
+                make_leave(npc, held_burst);
             }
             Deed::Attack => {
                 npc.goal = Goal::Attack(ShipRef::Player);
@@ -812,19 +812,21 @@ impl Space {
     }
 }
 
-/// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7): it
-/// jumps out (state 2), whatever its fuel, as the original tests none,
-/// and its target is gone (+0x70 -1). Those are the routine's writes
-/// but two: the +0x50 floor and the +0xa4 stamp, the warp stage's
-/// (rdm:phase/ship-handling-fidelity/phase-8-warp-out). It keeps its
-/// provocation (+0x96), which `_WimpyTraderAI` reads beside a target a
-/// later hit sets (@0x8b1ac). Its fire command is cleared too: the
-/// engine holds one between thinks, where the original fires each frame
-/// at its target, which the leave makes none. A warship that cannot jump
-/// lands or stops on its next think (`nova_sim::ai::warship`); the other
-/// types keep leaving.
-pub(super) fn make_leave(npc: &mut Npc) {
+/// `npc` leaves the system (`_AIMakeShipLeave` @0x7e2b0-0x7e2e7), all
+/// four of the routine's writes: it jumps out (state 2), whatever its
+/// fuel, as the original tests none; its +0x50 is floored at 0 and its
+/// warp clock stamped (+0xa4), a glide or a gate wait ended and any burst
+/// owed by `burst`'s reading of [`RuleKey::HeldGateBurst`]
+/// ([`Npc::takes_leave_write`]); and its target is gone (+0x70 -1). It
+/// keeps its provocation (+0x96), which `_WimpyTraderAI` reads beside a
+/// target a later hit sets (@0x8b1ac). Its fire command is cleared too:
+/// the engine holds one between thinks, where the original fires each
+/// frame at its target, which the leave makes none. A warship that
+/// cannot jump lands or stops on its next think
+/// (`nova_sim::ai::warship`); the other types keep leaving.
+pub(super) fn make_leave(npc: &mut Npc, burst: RuleSource) {
     npc.goal = Goal::JumpOut;
+    npc.takes_leave_write(burst);
     npc.target = None;
     npc.trigger = Trigger::default();
 }
@@ -2080,7 +2082,8 @@ pub(super) mod tests {
     #[test]
     fn a_bribed_ship_keeps_its_provocation_and_drops_its_target() {
         // `_AIMakeShipLeave` (@0x7e2b0-0x7e2e7) writes goal 2, +0x50,
-        // target -1 and +0xa4, and no +0x96.
+        // target -1 and +0xa4 (`a_bribed_ship_given_up_on_its_jump_takes_the_leaves_floor_and_stamp`),
+        // and no +0x96.
         let catalog = hailable();
         let mut session = pirate(&catalog, PIRATES);
         npc(&mut session).provoked = 5.0;
@@ -2093,6 +2096,24 @@ pub(super) mod tests {
         assert_eq!(spared.goal, Goal::JumpOut);
         assert_eq!(spared.target, None);
         assert_eq!(spared.provoked, 5.0);
+    }
+
+    #[test]
+    fn a_bribed_ship_given_up_on_its_jump_takes_the_leaves_floor_and_stamp() {
+        // `_AIMakeShipLeave` (@0x7e2b0-0x7e2e7): `if 0 > +0x50` +0x50 = 0,
+        // and +0xa4 = `TickCount`.
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        npc(&mut session).warp.give_up();
+        npc(&mut session).warp.since = 9;
+        hail(&mut session, &catalog);
+        session
+            .answer(1, &catalog, &HailOptions::default(), &mut Draws::of(&[99]))
+            .expect("open");
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let spared = &session.npcs()[0];
+        assert_eq!(spared.goal, Goal::JumpOut);
+        assert_eq!((spared.warp.stage, spared.warp.since), (0.0, 0));
     }
 
     /// The pirate (NPC 0) provoked by `provoked`, with a second ship of

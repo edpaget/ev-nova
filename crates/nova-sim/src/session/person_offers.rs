@@ -391,6 +391,7 @@ impl Session {
             .person(offering.person)
             .map_or(0, |person| person.record.flags);
         let gone = flags & GONE_ON_ACCEPT != 0;
+        let held_burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         match offering.by {
             OfferedBy::Hail if accepted => {
                 if gone {
@@ -399,7 +400,7 @@ impl Session {
                 if flags & LEAVES_ON_ACCEPT != 0
                     && let Some(npc) = self.space.npc_mut(offering.npc)
                 {
-                    make_leave(npc);
+                    make_leave(npc, held_burst);
                 }
                 let held = self.pilot.missions.holding(offering.mission);
                 if let Some(&slot) = held.first()

@@ -389,9 +389,11 @@ impl Behaviour for NovaAi {
     /// the target back and leaving the think's other words. One that gives
     /// up on the player leaves by hyperspace (@0x8d6be-0x8d6e9: state 2,
     /// its target -1), with no fuel test: even a warship that cannot jump
-    /// leaves, as its own fallback ran before it. The give-up's +0x50 clamp
-    /// and +0xa4 stamp are the warp stage's
-    /// (rdm:phase/ship-handling-fidelity/phase-8-warp-out). A hunter that
+    /// leaves, as its own fallback ran before it. The give-up is an inlined
+    /// `_AIMakeShipLeave`, its +0x50 floor and +0xa4 stamp built
+    /// ([`Decision::leaves`]; see [`leave_write`](crate::traffic::leave_write)):
+    /// the floor can't act there, as the hold has zeroed +0x50 before it
+    /// (@0x8d513-0x8d52e) on any goal but 2, 3 and 0xb. A hunter that
     /// can't see the player (@0x8d6a8, after the give-up) keeps its think.
     /// Then `_HighLevelAIHandler`'s lost-sight block
     /// follows ([`lost_sight::after_think`], @0x8d6ef-0x8d8ae): a ship
@@ -429,6 +431,7 @@ impl Behaviour for NovaAi {
                 goal: Goal::JumpOut,
                 turns_on_player: false,
                 clears_target: true,
+                leaves: true,
                 looked_over: None,
                 ..decision
             },
@@ -2348,6 +2351,7 @@ mod tests {
         let gave_up = ai.decision(&npcs[0], &disabled, &mut Draws::of(&[]));
         assert_eq!(gave_up.goal, Goal::JumpOut, "state 2 (@0x8d6be)");
         assert!(gave_up.clears_target, "+0x70 = -1 (@0x8d6db)");
+        assert!(gave_up.leaves, "its +0x50 floor and +0xa4 stamp");
         assert!(!gave_up.turns_on_player);
         assert_eq!(ai.target(&npcs[0], &disabled), None);
         assert_eq!(
@@ -2782,6 +2786,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
+                leaves: false,
                 holds_target: None,
                 writes_sub: false,
                 plunders: None,
@@ -2822,6 +2827,7 @@ mod tests {
                 calls_reinforcements: true,
                 board_wait: None,
                 clears_target: false,
+                leaves: false,
                 holds_target: None,
                 // The unarmed warship's think dropped its pick fully dry,
                 // writing sub 0 (@0x8c108), before the hunt.

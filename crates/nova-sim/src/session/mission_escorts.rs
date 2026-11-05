@@ -130,6 +130,7 @@ use crate::ai::{Goal, travel};
 use crate::combat::hull::Condition;
 use crate::escort::{EscortClass, FormationSlot};
 use crate::mission::ships::ShipBehav;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 
 impl Session {
@@ -262,7 +263,12 @@ impl Space {
     /// NPC `id` loses its mission's mark; a mission escort also leaves
     /// the formation, takes its ship type's `InherentAI` and leaves the
     /// system (see the module docs). Whether it was a mission escort.
-    pub(super) fn unmark_mission_ship(&mut self, statics: &Statics, id: NpcId) -> bool {
+    pub(super) fn unmark_mission_ship(
+        &mut self,
+        statics: &Statics,
+        id: NpcId,
+        burst: RuleSource,
+    ) -> bool {
         let Some(npc) = self.npc(id) else {
             return false;
         };
@@ -287,7 +293,7 @@ impl Space {
             npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
             npc.kept_escort_ai = true;
         } else if escort {
-            leave_formation(npc, inherent);
+            leave_formation(npc, inherent, burst);
         }
         escort
     }
@@ -295,12 +301,13 @@ impl Space {
 
 /// Mission escort `npc` leaves the formation and the system: its AI type
 /// its ship type's `inherent` one (kept as it was when its ship type has
-/// no record), and it leaves ([`super::hail::make_leave`]).
-fn leave_formation(npc: &mut Npc, inherent: Option<AiType>) {
+/// no record), and it leaves ([`super::hail::make_leave`]), owing any
+/// burst by `burst`'s reading of `HeldGateBurst`.
+fn leave_formation(npc: &mut Npc, inherent: Option<AiType>, burst: RuleSource) {
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
     }
-    super::hail::make_leave(npc);
+    super::hail::make_leave(npc, burst);
 }
 
 #[cfg(test)]

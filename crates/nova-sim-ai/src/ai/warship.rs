@@ -567,6 +567,7 @@ impl Hunt {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: self.target == HuntTarget::Cleared,
+            leaves: false,
             holds_target: match self.target {
                 HuntTarget::Holds(ship) => Some(ship),
                 HuntTarget::Quarry | HuntTarget::Cleared => None,
@@ -683,8 +684,9 @@ pub(crate) fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bo
 /// none (@0x8c0de). The
 /// original tests the fuel again before it stops (@0x8c058-0x8c0b2), which
 /// cannot pass after the first test failed, so its leave there
-/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands, writing no
-/// travel stellar.
+/// (@0x8c0b4-0x8c0dc), an inlined `_AIMakeShipLeave`
+/// ([`leave_write`](crate::traffic::leave_write)), is never taken. Any
+/// other goal stands, writing no travel stellar.
 ///
 /// Its +0x6c: -1 before the pick (@0x8c00c) and the pick's result
 /// (@0x8c02a), so `Clear` with none; a pick writes none of its own, as
@@ -780,6 +782,8 @@ impl Behaviour for Warship {
         } else {
             decision.travel
         };
+        // The idle block's leave (@0x8b995-0x8b9b7).
+        let leaves = idles && idle_block::leaves(npc, decision.goal);
         let (goal, grounded_write) = grounded(npc, decision.goal, around, chance);
         let dropped = out_of_ammo::drop_when_dry(npc, goal);
         let dry = dropped != goal;
@@ -793,6 +797,7 @@ impl Behaviour for Warship {
             travel,
             // The fully-dry drop's +0x70 -1 (@0x8c111).
             clears_target: decision.clears_target || dry,
+            leaves,
             holds_target: decision.holds_target.filter(|_| !dry),
             // Its sub 0 (@0x8c108).
             writes_sub: decision.writes_sub || dry,
@@ -1871,6 +1876,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
+                leaves: false,
                 holds_target: None,
                 writes_sub: false,
                 plunders: None,
@@ -2439,6 +2445,7 @@ mod tests {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: false,
+            leaves: false,
             holds_target: None,
             writes_sub: false,
             plunders: None,
@@ -2550,6 +2557,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
+                leaves: false,
                 holds_target: None,
                 writes_sub: false,
                 plunders: None,
@@ -2585,6 +2593,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: true,
+                leaves: false,
                 holds_target: None,
                 writes_sub: false,
                 plunders: None,
@@ -2911,6 +2920,31 @@ mod tests {
                 goal
             );
             assert!(chance.asked.is_empty(), "no pick");
+        }
+    }
+
+    #[test]
+    fn a_warships_idle_block_writes_its_leave_and_a_kept_leave_writes_none() {
+        // The idle block's copy of `_AIMakeShipLeave` (@0x8b995-0x8b9b7).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let visited = Npc {
+            visited: Some(StellarId(128)),
+            ..police()
+        };
+        let kept = Npc {
+            goal: Goal::JumpOut,
+            ..visited.clone()
+        };
+        for (npc, leaves) in [(visited, true), (kept, false)] {
+            let npcs = [npc];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&sites, &npcs)
+            };
+            let decision = Warship::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+            assert_eq!(decision.goal, Goal::JumpOut);
+            assert_eq!(decision.leaves, leaves);
         }
     }
 

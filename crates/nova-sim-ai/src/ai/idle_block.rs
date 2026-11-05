@@ -16,7 +16,13 @@
 //!   visited, the inlined `_AIShipHasFuelForJump` (@0x8b10b-0x8b170,
 //!   [`leave::can_jump`]) sends it out by hyperspace (goal 2,
 //!   @0x8b179-0x8b19b) or makes it stop and wait (state 6, [`Goal::Wait`],
-//!   @0x8b1a3): [`leave_or_wait`].
+//!   @0x8b1a3): [`leave_or_wait`]. The leave is an inlined
+//!   `_AIMakeShipLeave`, its +0x50 floor and +0xa4 stamp built
+//!   ([`leaves`], [`Decision::leaves`](super::Decision::leaves); see
+//!   [`leave_write`](crate::traffic::leave_write)), in each copy:
+//!   `_WimpyTraderAI` @0x8b179-0x8b19b, `_BraveTraderAI` @0x8b5e3-0x8b605,
+//!   `_WarshipAI` @0x8b995-0x8b9b7, the interceptor's patrol
+//!   @0x8d0c5-0x8d0f0 and the pirate's copy @0x8c59b-0x8c5bd.
 //! - **State 6 is sticky** for the traders and the interceptor: their idle
 //!   blocks need state 0, and the interceptor's patrol, inspection and
 //!   search need a goal of 1 or below, or 0x14 (`_InterceptorAI`
@@ -74,10 +80,9 @@
 //!   landing's sub-goal itself on every pass (@0x8d9b2-0x8db5a), so the
 //!   engine flies it from the ship's place each tick
 //!   ([`land_flight`](crate::traffic::land_flight)) and keeps no sub-goal.
-//! - The leave's +0x50 clamp and +0xa4 stamp (@0x8b179-0x8b19b and the
-//!   copies): rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
 //! - The warship's second copy (@0x8b9c8-0x8bb03, while its target is still
-//!   -1): the same decision with more draws, so not modelled.
+//!   -1): the same decision with more draws, so not modelled. Its leave
+//!   (@0x8bad9-0x8bafb) would make the same write once it is.
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 
@@ -109,6 +114,22 @@ pub fn leave_or_wait(npc: &Npc, around: &Surroundings) -> Goal {
     } else {
         Goal::Wait
     }
+}
+
+/// Whether a think of `thought` by `npc` is an idle block's leave
+/// ([`leave_or_wait`]'s goal 2), an inlined `_AIMakeShipLeave`: a ship on
+/// goal 0 that thinks goal 2, as the traders', the warship's and the
+/// interceptor's blocks run on state 0 alone (`_WimpyTraderAI` @0x8b06c,
+/// `_BraveTraderAI` @0x8b4d6, `_WarshipAI` @0x8b835, `_InterceptorAI`
+/// @0x8d010). It writes +0x70 -1 (@0x8b190, @0x8b5fa; see
+/// [`trader_target`](super::trader_target)), and the +0x50 floor and
+/// +0xa4 stamp (@0x8b179-0x8b19b, @0x8b5e3-0x8b605, @0x8b995-0x8b9b7,
+/// @0x8d0c5-0x8d0f0; [`Decision::leaves`](super::Decision::leaves)). A
+/// leave the ship already held is kept, writing none, and the block's
+/// landing and stop write none either.
+#[must_use]
+pub fn leaves(npc: &Npc, thought: Goal) -> bool {
+    npc.goal == Goal::Idle && thought == Goal::JumpOut
 }
 
 /// The interceptor's patrol (see the module docs), admitting uninhabited
@@ -248,6 +269,18 @@ mod tests {
             flags: 0,
             ..planet(128, 0.0, 0.0)
         }]
+    }
+
+    #[test]
+    fn only_a_leave_written_over_goal_0_is_the_blocks_leave() {
+        // +0x70 -1 (@0x8b190, @0x8b5fa) and the +0x50 floor and +0xa4
+        // stamp (@0x8b179-0x8b19b and the copies).
+        let mut npc = ship();
+        assert!(leaves(&npc, Goal::JumpOut));
+        assert!(!leaves(&npc, Goal::Land(StellarId(128))));
+        assert!(!leaves(&npc, Goal::Wait));
+        npc.goal = Goal::JumpOut;
+        assert!(!leaves(&npc, Goal::JumpOut), "a kept leave");
     }
 
     #[test]

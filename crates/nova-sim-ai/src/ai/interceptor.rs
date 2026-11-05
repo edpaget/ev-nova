@@ -404,10 +404,14 @@ impl Behaviour for Interceptor {
             };
             stops = out_of_ammo::stops(&let_go, goal);
         }
+        let mut leaves = false;
         let decision = hunt.or(|| {
             let (goal, call, pick) = self.patrol(patroller, around, chance);
             comm_call = call;
             inspection_pick = pick;
+            // The patrol's leave (@0x8d0c5-0x8d0f0), before the out-of-ammo
+            // flight that may move the goal on.
+            leaves = idle_block::leaves(patroller, goal);
             stops = out_of_ammo::stops(patroller, goal);
             out_of_ammo::after_patrol(patroller, goal)
         });
@@ -415,6 +419,7 @@ impl Behaviour for Interceptor {
             npc,
             Decision {
                 comm_call,
+                leaves,
                 inspection_pick,
                 forgets_inspected,
                 ..decision
@@ -1333,6 +1338,28 @@ mod tests {
     }
 
     #[test]
+    fn its_patrols_leave_writes_the_leave_and_a_kept_leave_writes_none() {
+        // The patrol's copy of `_AIMakeShipLeave` (@0x8d0c5-0x8d0f0).
+        let decided = |npc: Npc| {
+            let npcs = [npc];
+            let around = crate::ai::Surroundings::new(&[], &npcs);
+            Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[]))
+        };
+        let patrolled = decided(police());
+        assert_eq!((patrolled.goal, patrolled.leaves), (Goal::JumpOut, true));
+        let kept = decided(Npc {
+            goal: Goal::JumpOut,
+            ..police()
+        });
+        assert_eq!((kept.goal, kept.leaves), (Goal::JumpOut, false));
+        let stranded = decided(Npc {
+            class_fuel: 99,
+            ..police()
+        });
+        assert_eq!((stranded.goal, stranded.leaves), (Goal::Wait, false));
+    }
+
+    #[test]
     fn a_waiting_interceptor_inspects_and_searches_nothing() {
         let mut waiting = police();
         waiting.goal = Goal::Wait;
@@ -2116,6 +2143,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
+                leaves: false,
                 holds_target: None,
                 writes_sub: false,
                 plunders: None,

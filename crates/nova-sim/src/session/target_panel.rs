@@ -361,7 +361,7 @@ mod tests {
             [record(false, Some(30)); 2],
         );
         for npc in released.space.traffic.npcs_mut() {
-            reset_released(npc);
+            reset_released(npc, crate::rulebook::RuleSource::Engine);
             npc.govt = None;
         }
         assert_eq!(tags(&released), [None; 2]);
