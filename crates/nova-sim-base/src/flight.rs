@@ -69,7 +69,7 @@ use crate::handling::{Handling, ORIGINAL_THRUST_DIVISOR};
 use crate::inertialess::{
     BRAKE, InertialDampener, REVERSE, THRUST, adjust_rate, adjust_velocity, step_speed,
 };
-use crate::player_turn::{PlayerTurn, turn};
+use crate::player_turn::{PlayerTurn, turn_by};
 use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
 use crate::speed_mult::SpeedMult;
@@ -301,6 +301,58 @@ pub struct Controls {
     pub afterburner: bool,
 }
 
+/// How far the player holds the turn and the thrust, each 0 to 1: a
+/// stick's analog amounts, which travel beside the on/off [`Controls`]
+/// to the player's step alone. A key always holds its command fully, so
+/// the keys' amounts are [`Amounts::FULL`], the default, and a step with
+/// them is the step the controls alone make.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Amounts {
+    /// How far the turn is held: the fraction of the ship's turn step it
+    /// turns by, in the way [`Controls::turn`] says.
+    pub turn: f32,
+    /// How far the thrust is held: the fraction of the ship's
+    /// acceleration (inertial) or of a tick's thrust (inertialess) it
+    /// adds, while [`Controls::thrust`] is set.
+    pub thrust: f32,
+}
+
+impl Amounts {
+    /// Both held fully, as a key holds them.
+    pub const FULL: Self = Self {
+        turn: 1.0,
+        thrust: 1.0,
+    };
+}
+
+impl Default for Amounts {
+    /// Both held fully ([`Amounts::FULL`]).
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+/// The player's controls for one tick and how far it holds the turn and
+/// the thrust: what [`player_step`] and [`inertialess_player_step`] fly
+/// by. NPCs fly by [`Controls`] alone, on or off.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PlayerControls {
+    /// The controls held.
+    pub controls: Controls,
+    /// How far the turn and the thrust are held.
+    pub amounts: Amounts,
+}
+
+impl From<Controls> for PlayerControls {
+    /// `controls` held fully, as the keys hold them.
+    fn from(controls: Controls) -> Self {
+        Self {
+            controls,
+            amounts: Amounts::FULL,
+        }
+    }
+}
+
 /// A ship in flight.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ShipState {
@@ -335,34 +387,33 @@ pub fn step(
 /// block does, toward `aim` while the auto-turn aims (reverse or the face
 /// key, which the session works out), the turn keys held off, and by
 /// them otherwise ([`player_turn`](crate::player_turn)); then it thrusts,
-/// is capped by `caps` and moves ([`advance`]), each at the frame's
+/// is capped by `caps` and moves ([`advance_by`]), each at the frame's
 /// `gain`.
+///
+/// A stick's [`Amounts`] scale the turn keys' step (not the auto-turn's)
+/// and the thrust's acceleration. [`Controls`] alone are held fully, so
+/// a key's step is the original's.
 pub fn player_step(
     state: &mut ShipState,
     handling: &Handling,
-    controls: Controls,
+    controls: impl Into<PlayerControls>,
     aim: Option<i16>,
     caps: Caps,
     rules: FlightRules,
     gain: SpeedMult,
 ) {
-    (state.heading, _) = turn(
+    let PlayerControls { controls, amounts } = controls.into();
+    (state.heading, _) = turn_by(
         state.heading,
         handling.turn_rate,
         aim,
         controls.turn,
+        amounts.turn,
         rules.player_turn,
         gain,
     );
-    advance(
-        state,
-        handling,
-        controls.thrust,
-        caps,
-        rules,
-        Flyer::Player,
-        gain,
-    );
+    let thrust = if controls.thrust { amounts.thrust } else { 0.0 };
+    advance_by(state, handling, thrust, caps, rules, Flyer::Player, gain);
 }
 
 /// The rest of a tick after the turn (see the module docs, steps 2-4):
@@ -382,10 +433,27 @@ pub fn advance(
     flyer: Flyer,
     gain: SpeedMult,
 ) {
-    let accel = gain.times(handling.accel);
+    let thrust = if thrust { 1.0 } else { 0.0 };
+    advance_by(state, handling, thrust, caps, rules, flyer, gain);
+}
+
+/// [`advance`], thrusting `thrust` of the acceleration, 0 to 1: a
+/// stick's throttle. None thrusts not at all, and 1 is [`advance`]'s
+/// thrust exactly.
+pub fn advance_by(
+    state: &mut ShipState,
+    handling: &Handling,
+    thrust: f32,
+    caps: Caps,
+    rules: FlightRules,
+    flyer: Flyer,
+    gain: SpeedMult,
+) {
+    let accel = gain.times(handling.accel) * thrust;
+    let thrusting = thrust > 0.0;
     match rules.speed_cap {
         SpeedCap::PerAxis => {
-            if thrust {
+            if thrusting {
                 state.velocity =
                     adjusted_accel(state.velocity, state.heading, accel, caps.thrust_top);
             }
@@ -394,7 +462,7 @@ pub fn advance(
             }
         }
         SpeedCap::Circle => {
-            if thrust {
+            if thrusting {
                 state.velocity = state.velocity + facing(state.heading) * accel;
             }
             state.velocity = circle(state.velocity, caps.max_vel);
@@ -485,29 +553,38 @@ pub fn inertialess_step_with(
 /// each floored and capped as [`step_speed`] does, at the top speed
 /// whatever `caps` say (the thrust ignores the afterburner,
 /// @0x6cbb2-0x6cc3e); then [`inertialess_advance`], capped by `caps`.
+///
+/// A stick's [`Amounts`] scale the turn keys' step, as [`player_step`]'s
+/// do, and the thrust's [`THRUST`]; reverse stays whole.
 #[allow(clippy::too_many_arguments)] // the tick's own state, rules and gain
 pub fn inertialess_player_step(
     state: &mut ShipState,
     speed: &mut f32,
     handling: &Handling,
-    controls: Controls,
+    controls: impl Into<PlayerControls>,
     aim: Option<i16>,
     caps: Caps,
     rules: FlightRules,
     gain: SpeedMult,
 ) {
-    (state.heading, _) = turn(
+    let PlayerControls { controls, amounts } = controls.into();
+    (state.heading, _) = turn_by(
         state.heading,
         handling.turn_rate,
         aim,
         controls.turn,
+        amounts.turn,
         rules.player_turn,
         gain,
     );
     if controls.reverse {
         *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed, gain);
     }
-    let thrust = if controls.thrust { THRUST } else { 0.0 };
+    let thrust = if controls.thrust {
+        THRUST * amounts.thrust
+    } else {
+        0.0
+    };
     // `_HandlePlayer` adjusts by the same rate it thrusts by (@0x6d43a).
     let by = Adjusted::by_own(thrust, handling);
     inertialess_advance(state, speed, handling, by, caps, rules, Flyer::Player, gain);
@@ -2238,5 +2315,270 @@ mod tests {
         assert_eq!(state.heading, 88.5, "half a turn");
         let followed = adjust_velocity(Vec2::new(1.0, 0.0), 88.5, 2.0, adjust_rate(0.4, HALF));
         assert_eq!(state.velocity, followed);
+    }
+
+    // The player's analog amounts.
+
+    /// `controls` held at `amounts`.
+    fn held_at(controls: Controls, turn: f32, thrust: f32) -> PlayerControls {
+        PlayerControls {
+            controls,
+            amounts: Amounts { turn, thrust },
+        }
+    }
+
+    const BOTH_CAPS: [FlightRules; 2] = [
+        FlightRules {
+            speed_cap: SpeedCap::PerAxis,
+            ..CIRCLE
+        },
+        CIRCLE,
+    ];
+
+    #[test]
+    fn full_amounts_are_the_default_and_a_controls_own() {
+        assert_eq!(Amounts::default(), Amounts::FULL);
+        assert_eq!(
+            Amounts::FULL,
+            Amounts {
+                turn: 1.0,
+                thrust: 1.0
+            }
+        );
+        assert_eq!(
+            PlayerControls::from(THRUST),
+            PlayerControls {
+                controls: THRUST,
+                amounts: Amounts::FULL
+            }
+        );
+    }
+
+    #[test]
+    fn a_half_turn_turns_half_the_players_turn_step_times_the_gain() {
+        for gain in [SpeedMult::FULL, HALF] {
+            for (way, sign) in [(Turn::Right, 1.0), (Turn::Left, -1.0)] {
+                let mut state = heading(90.0);
+                let controls = held_at(turning(way), 0.5, 1.0);
+                let rules = FlightRules::default();
+                player_step(&mut state, &PEGASUS, controls, None, TOP, rules, gain);
+                // Pegasus turns 2.5, so 2 whole degrees: half of that.
+                let expected = 90.0 + sign * gain.times(2.0) * 0.5;
+                assert!((state.heading - expected).abs() < 1e-4, "{way:?} {gain:?}");
+                let mut speed = 0.0;
+                let mut inertialess = heading(90.0);
+                inertialess_player_step(
+                    &mut inertialess,
+                    &mut speed,
+                    &PEGASUS,
+                    controls,
+                    None,
+                    TOP,
+                    rules,
+                    gain,
+                );
+                assert_eq!(inertialess.heading, state.heading, "{way:?} {gain:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn half_throttle_adds_half_the_acceleration() {
+        for rules in BOTH_CAPS {
+            for gain in [SpeedMult::FULL, HALF] {
+                let mut state = heading(90.0);
+                player_step(
+                    &mut state,
+                    &SHIP,
+                    held_at(THRUST, 1.0, 0.5),
+                    None,
+                    TOP,
+                    rules,
+                    gain,
+                );
+                let expected = gain.times(SHIP.accel) * 0.5;
+                assert!(
+                    (state.velocity.x - expected).abs() < 1e-6 && state.velocity.y.abs() < 1e-6,
+                    "{rules:?} {gain:?}: {state:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn half_throttle_adds_half_a_ticks_thrust_to_an_inertialess_players_speed() {
+        for gain in [SpeedMult::FULL, HALF] {
+            let mut state = heading(90.0);
+            let mut speed = 1.0;
+            inertialess_player_step(
+                &mut state,
+                &mut speed,
+                &SHIP,
+                held_at(THRUST, 1.0, 0.5),
+                None,
+                TOP,
+                FlightRules::default(),
+                gain,
+            );
+            let expected = step_speed(
+                1.0,
+                crate::inertialess::THRUST * 0.5,
+                SHIP.accel,
+                SHIP.max_speed,
+                gain,
+            );
+            assert_eq!(speed, expected, "{gain:?}");
+            assert!(
+                (speed - (1.0 + gain.times(SHIP.accel) * 0.5)).abs() < 1e-6,
+                "{gain:?}: {speed}"
+            );
+        }
+    }
+
+    /// Every `Controls` a player's step can be given, aim on and off.
+    fn control_grid() -> Vec<(Controls, Option<i16>)> {
+        let mut grid = Vec::new();
+        for thrust in [false, true] {
+            for turn in [Turn::None, Turn::Left, Turn::Right] {
+                for reverse in [false, true] {
+                    for aim in [None, Some(200)] {
+                        let controls = Controls {
+                            thrust,
+                            turn,
+                            reverse,
+                            ..Controls::default()
+                        };
+                        grid.push((controls, aim));
+                    }
+                }
+            }
+        }
+        grid
+    }
+
+    #[test]
+    fn full_amounts_step_exactly_as_the_controls_alone() {
+        let start = moving(Vec2::new(1.2, -0.7), 33.3);
+        for (controls, aim) in control_grid() {
+            for rules in BOTH_CAPS {
+                for gain in [SpeedMult::FULL, HALF] {
+                    let mut alone = start;
+                    player_step(&mut alone, &PEGASUS, controls, aim, TOP, rules, gain);
+                    let mut full = start;
+                    let explicit = held_at(controls, 1.0, 1.0);
+                    player_step(&mut full, &PEGASUS, explicit, aim, TOP, rules, gain);
+                    assert_eq!(full, alone, "{controls:?} {aim:?}");
+                    let (mut alone, mut full) = (start, start);
+                    let (mut alone_speed, mut full_speed) = (1.0, 1.0);
+                    inertialess_player_step(
+                        &mut alone,
+                        &mut alone_speed,
+                        &PEGASUS,
+                        controls,
+                        aim,
+                        TOP,
+                        rules,
+                        gain,
+                    );
+                    inertialess_player_step(
+                        &mut full,
+                        &mut full_speed,
+                        &PEGASUS,
+                        explicit,
+                        aim,
+                        TOP,
+                        rules,
+                        gain,
+                    );
+                    assert_eq!((full, full_speed), (alone, alone_speed), "{controls:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_amounts_neither_turn_nor_thrust() {
+        let start = moving(Vec2::new(1.2, -0.7), 33.3);
+        let held = Controls {
+            thrust: true,
+            turn: Turn::Right,
+            ..Controls::default()
+        };
+        for rules in BOTH_CAPS {
+            let mut none = start;
+            player_step(
+                &mut none,
+                &PEGASUS,
+                Controls::default(),
+                None,
+                TOP,
+                rules,
+                HALF,
+            );
+            let mut zero = start;
+            player_step(
+                &mut zero,
+                &PEGASUS,
+                held_at(held, 0.0, 0.0),
+                None,
+                TOP,
+                rules,
+                HALF,
+            );
+            assert_eq!(zero, none, "{rules:?}");
+            let (mut none, mut zero) = (start, start);
+            let (mut none_speed, mut zero_speed) = (1.0, 1.0);
+            inertialess_player_step(
+                &mut none,
+                &mut none_speed,
+                &PEGASUS,
+                Controls::default(),
+                None,
+                TOP,
+                rules,
+                HALF,
+            );
+            inertialess_player_step(
+                &mut zero,
+                &mut zero_speed,
+                &PEGASUS,
+                held_at(held, 0.0, 0.0),
+                None,
+                TOP,
+                rules,
+                HALF,
+            );
+            assert_eq!((zero, zero_speed), (none, none_speed), "{rules:?}");
+        }
+    }
+
+    #[test]
+    fn the_auto_turn_holds_the_stick_off() {
+        let rules = FlightRules::default();
+        for way in [Turn::Left, Turn::Right] {
+            let mut keys = heading(0.0);
+            player_step(
+                &mut keys,
+                &PEGASUS,
+                turning(way),
+                Some(90),
+                TOP,
+                rules,
+                SpeedMult::FULL,
+            );
+            let mut stick = heading(0.0);
+            let half = held_at(turning(way), 0.5, 1.0);
+            player_step(
+                &mut stick,
+                &PEGASUS,
+                half,
+                Some(90),
+                TOP,
+                rules,
+                SpeedMult::FULL,
+            );
+            assert_eq!(stick, keys, "{way:?}");
+            assert_eq!(stick.heading, 2.0, "a full whole-degree step toward 90");
+        }
     }
 }
