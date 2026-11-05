@@ -1066,7 +1066,6 @@ mod tests {
         // bookkeeping runs on its first pass.
         let (catalog, mut session) = arrived_holding(Rulebook::default());
         session.populate(&catalog, &mut NeverFires);
-        command(&mut session, WARSHIPS, EscortCommand::Dock);
         let class = hired_npc(&session).class;
         command(&mut session, EscortGroup::Class(class), EscortCommand::Dock);
         assert!(pass(&mut session, &catalog), "not skipped");
