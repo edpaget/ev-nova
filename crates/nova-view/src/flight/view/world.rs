@@ -242,6 +242,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             &self.drawn().hud.escort_rows,
             self.escort_colors,
             metrics,
+            &self.keys,
         );
     }
 

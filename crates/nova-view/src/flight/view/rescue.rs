@@ -231,7 +231,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hud::draw_message_text(&mut list, message, self.view, metrics);
         }
         self.escort_menu
-            .draw(&mut list, rows, self.escort_colors, metrics);
+            .draw(&mut list, rows, self.escort_colors, metrics, &self.keys);
         list
     }
 

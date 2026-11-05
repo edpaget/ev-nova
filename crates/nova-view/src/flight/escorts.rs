@@ -77,11 +77,13 @@ use nova_sim::bay::{ABANDONED_MANY, ABANDONED_ONE};
 use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
 use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
+use crate::bound_names::{Spelling, name_read};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::floating;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::keymap::{CommandReader, EscortMenuCommand};
 use crate::text::TextMetrics;
 use crate::time::sixtieths;
 
@@ -430,7 +432,8 @@ impl EscortMenu {
     /// Draws the menu while it shows (see the module docs) with the
     /// fleet's classes `rows`, in `colors`, at its level, its text measured
     /// by `metrics` (without them, the title starts at the frame's left and
-    /// an order at the right inset): as the floating map is drawn
+    /// an order at the right inset), each row's key named for the device
+    /// `keys` reads ([`row_key`]): as the floating map is drawn
     /// ([`floating::draw`]), the border faded and the rest clipped to the
     /// frame and faded, so its black inside ORs in nothing.
     pub fn draw(
@@ -439,14 +442,31 @@ impl EscortMenu {
         rows: &[ClassRow; 4],
         colors: EscortMenuColors,
         metrics: Option<&dyn TextMetrics>,
+        keys: &CommandReader,
     ) {
         let Some(shown) = self.open else {
             return;
         };
         floating::draw(list, frame(), shown.level, colors.border, |list| {
-            draw_inside(list, shown.group, rows, colors, metrics);
+            draw_inside(list, shown.group, rows, colors, metrics, keys);
         });
     }
+}
+
+/// The digit each row is numbered with, as `_DrawEscortMenuInFrame`
+/// writes the row's number (`NumToString(row)` @0x5649a, then `") "`
+/// @0x564ad), not the group key bound.
+const ROW_DIGITS: [&str; 5] = ["1", "2", "3", "4", "5"];
+
+/// What row `n` (from 0) names its group key: the row's digit whatever
+/// the key is bound to on the keyboard ([`Spelling::Fixed`]), through
+/// the one naming function, so another device names its own input.
+fn row_key(keys: &CommandReader, n: usize) -> String {
+    EscortMenuCommand::ALL
+        .get(n)
+        .zip(ROW_DIGITS.get(n))
+        .and_then(|(&command, &digit)| name_read(keys, command, Spelling::Fixed(digit)))
+        .unwrap_or_default()
 }
 
 /// The menu's inside with `selected` selected (see the module docs): its
@@ -458,6 +478,7 @@ fn draw_inside(
     rows: &[ClassRow; 4],
     colors: EscortMenuColors,
     metrics: Option<&dyn TextMetrics>,
+    keys: &CommandReader,
 ) {
     let frame = frame();
     let (left, top, right) = (frame.min.x, frame.min.y, frame.max.x);
@@ -491,7 +512,7 @@ fn draw_inside(
         let color = if present { Color::WHITE } else { ABSENT_ROW };
         let text_top = top + ROW_BASELINE + step - MENU_TEXT_SIZE;
         list.text(
-            format!("{}) {}", n + 1, group.menu_label()),
+            format!("{}) {}", row_key(keys, n), group.menu_label()),
             Point::new(left + TEXT_INSET, text_top),
             MENU_TEXT_SIZE,
             None,
@@ -567,8 +588,15 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::Key;
-    use crate::keymap::{EscortMenuCommand, FlightCommand, KeyCombo, KeyMap};
+    use crate::keymap::{
+        Bindings, EscortMenuCommand, FlightCommand, KeyCombo, KeyMap, SharedBindings, contexts,
+    };
     use nova_sim::{EscortClass, EscortOrder};
+
+    /// Flight's keys under the default bindings.
+    fn keys() -> CommandReader {
+        CommandReader::new(contexts::FLIGHT)
+    }
 
     /// The fleet's rows: a warship escort holding, a freighter in
     /// formation, and no fighters or medium ships.
@@ -1083,7 +1111,7 @@ mod tests {
         menu.update(late, u32::from(FULL_LEVEL - level), true);
         assert_eq!(menu.level(), Some(level));
         let mut list = DrawList::new();
-        menu.draw(&mut list, &rows(), COLORS, Some(&Fixed));
+        menu.draw(&mut list, &rows(), COLORS, Some(&Fixed), &keys());
         list.iter().cloned().collect()
     }
 
@@ -1181,7 +1209,7 @@ mod tests {
     fn without_metrics_the_title_starts_at_the_left_and_the_orders_at_the_inset() {
         let menu = opened();
         let mut list = DrawList::new();
-        menu.draw(&mut list, &rows(), COLORS, None);
+        menu.draw(&mut list, &rows(), COLORS, None, &keys());
         let texts: Vec<_> = list
             .iter()
             .filter_map(|command| match command {
@@ -1206,12 +1234,54 @@ mod tests {
     #[test]
     fn the_shut_menu_draws_nothing() {
         let mut list = DrawList::new();
-        EscortMenu::default().draw(&mut list, &rows(), COLORS, Some(&Fixed));
+        EscortMenu::default().draw(&mut list, &rows(), COLORS, Some(&Fixed), &keys());
         assert!(list.is_empty());
         let mut faded = opened();
         assert!(faded.update(after(AT, 600), 32, true), "faded out");
-        faded.draw(&mut list, &rows(), COLORS, Some(&Fixed));
+        faded.draw(&mut list, &rows(), COLORS, Some(&Fixed), &keys());
         assert!(list.is_empty(), "at level 0");
+    }
+
+    /// The row texts the opened menu draws, naming its keys through
+    /// `keys`: for each device `keys` reads, phase 12 reruns it.
+    fn row_texts(keys: &CommandReader) -> Vec<String> {
+        let mut list = DrawList::new();
+        opened().draw(&mut list, &rows(), COLORS, None, keys);
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Clipped { command, .. } => match &**command {
+                    DrawCommand::Text { text, .. } if text.contains(") ") => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_rows_keep_their_digits_whatever_the_group_keys_are_bound_to() {
+        let expected: Vec<String> = EscortGroup::ALL
+            .iter()
+            .zip(1..)
+            .map(|(group, n)| format!("{n}) {}", group.menu_label()))
+            .collect();
+        assert_eq!(row_texts(&CommandReader::new(contexts::FLIGHT)), expected);
+        let rebound = Bindings::default()
+            .rebound(EscortMenuCommand::Group1, KeyCombo::key(Key::KeyQ))
+            .unbound(EscortMenuCommand::Group2);
+        let keys = CommandReader::new(contexts::FLIGHT).with_bindings(SharedBindings::new(rebound));
+        assert_eq!(row_texts(&keys), expected, "the original's row numbers");
+        assert_eq!(
+            EscortMenuCommand::ALL,
+            [
+                EscortMenuCommand::Group1,
+                EscortMenuCommand::Group2,
+                EscortMenuCommand::Group3,
+                EscortMenuCommand::Group4,
+                EscortMenuCommand::Group5
+            ],
+            "row n's command is the nth"
+        );
     }
 
     #[test]
