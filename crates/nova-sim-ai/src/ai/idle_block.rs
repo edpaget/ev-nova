@@ -347,6 +347,28 @@ mod tests {
         assert!(chance.asked.is_empty(), "no pick");
     }
 
+    /// The new game's fly-the-sample plan, step 1, check (c), which pins
+    /// gap (c) of its finding 3 (departures): a ship out of a gate has
+    /// visited it (`Npc::gate_visit`, @0x8955e-0x89574), so in a system
+    /// whose nav slots hold only gates its first idle think leaves by
+    /// hyperspace, picking no gate (`leave_or_wait`, @0x8b0a3-0x8b19b).
+    #[test]
+    fn a_ship_out_of_a_gate_in_a_system_of_gates_alone_jumps_out_by_hyperspace() {
+        let gate = |id| LandingSite {
+            flags2: HYPERGATE,
+            ..planet(id, 0.0, 0.0)
+        };
+        let sites = [gate(300), gate(301)];
+        let around = Surroundings::new(&sites, &[]);
+        let emerged = Npc {
+            visited: Npc::gate_visit(StellarId(300), 300.0),
+            ..ship()
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&emerged, &around, &mut chance), Goal::JumpOut);
+        assert!(chance.asked.is_empty(), "no pick, so no gate");
+    }
+
     #[test]
     fn a_ship_that_has_landed_and_taken_off_stops_when_it_cannot_jump() {
         let sites = sites();

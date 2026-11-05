@@ -528,6 +528,8 @@ mod game_work;
 mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
+#[cfg(test)]
+mod gate_partner;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;

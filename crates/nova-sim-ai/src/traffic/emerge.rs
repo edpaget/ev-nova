@@ -286,6 +286,19 @@ mod tests {
         assert_eq!(picked(SHIP, &sites, &[1]), (Some(129), vec![2]));
     }
 
+    /// The new game's fly-the-sample plan, step 1, check (d), which pins
+    /// gap (b) of its finding 3 (arrivals): with one plain stellar and one
+    /// usable gate, `_PickEmergeStellar`'s one draw over both
+    /// (@0x7f9a-0x7fe9) sends some arrivals in from the edge, by
+    /// hyperspace, and only the rest out of the gate.
+    #[test]
+    fn with_a_planet_and_a_gate_some_arrivals_come_in_from_the_edge() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129)];
+        let outcomes: Vec<Option<i16>> =
+            (0..2).map(|draw| picked(None, &sites, &[draw]).0).collect();
+        assert_eq!(outcomes, [None, Some(129)], "the edge, then the gate");
+    }
+
     #[test]
     fn only_a_government_preferring_wormholes_comes_out_of_one() {
         let sites = [planet(128, 0.0, 0.0), wormhole(129)];
