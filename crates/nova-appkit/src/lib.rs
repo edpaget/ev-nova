@@ -1,12 +1,12 @@
 //! The macOS menu bar, Apple event handlers and updater, built with
 //! `AppKit` and Sparkle behind a safe API: the app menu, View and Window,
 //! as a Mac game's standard menus, the quit and Preferences events the
-//! system sends, the full keyboard access setting, and Sparkle's standard
-//! updater, loaded at run time.
+//! system sends, the full keyboard access setting, the keyboard layout's
+//! key names, and Sparkle's standard updater, loaded at run time.
 //!
 //! The workspace forbids unsafe code; this crate is one of the places it
-//! lives (its three FFI modules, `bar`, `apple_event_handler` and
-//! `updater`, allow it, every block with a `SAFETY` comment), so the game
+//! lives (its four FFI modules, `bar`, `apple_event_handler`, `key_layout`
+//! and `updater`, allow it, every block with a `SAFETY` comment), so the game
 //! itself keeps the ban. On any target but macOS
 //! the crate is empty, and none of its dependencies are built.
 //!
@@ -27,6 +27,10 @@
 //!   startup's open panel, for a quit event that arrives while it is up.
 //! - [`full_keyboard_access`]: whether the player has turned on full
 //!   keyboard access, which the game's Preferences focus ring follows.
+//! - [`key_label`]: what the player's current keyboard layout prints on a
+//!   key, by its virtual key code, asked as the original's Keys window
+//!   asks `UCKeyTranslate`, on the main thread alone; and
+//!   [`keyboard_layout_id`], which layout that is.
 //! - [`SparkleUpdater`]: Sparkle's standard updater, from the
 //!   `Sparkle.framework` the app bundle ships ([`SparkleUpdater::load`]),
 //!   made but not started, and [`feed_configured`], whether the app's
@@ -57,6 +61,7 @@ mod apple_event_handler;
 mod apple_events;
 mod bar;
 mod items;
+mod key_layout;
 mod keyboard;
 mod modal;
 mod updater;
@@ -68,6 +73,7 @@ pub use items::{
     Action, Command, Item, KeyEquivalent, MENUS, Menu, Modifiers, Role, Shortcut, Title,
     key_equivalents,
 };
+pub use key_layout::{key_label, keyboard_layout_id};
 pub use keyboard::full_keyboard_access;
 pub use modal::abort_modal;
 pub use updater::{FEED_KEYS, FRAMEWORK, SparkleUpdater, UpdaterError, feed_configured};
