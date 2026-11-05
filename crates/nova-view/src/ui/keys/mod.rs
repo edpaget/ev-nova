@@ -13,8 +13,10 @@
 //! context ([`Context::label`]): flight first, in `Keys.nib`'s order, then
 //! the other contexts; a context with no command (the system view's) has
 //! no heading. Each command row is its label ([`Command::label`]) and one
-//! cell a device family: the keyboard's today, its combo's name
-//! ([`combo_name`]), or "Click to record shortcut" when it is unbound, as
+//! cell a device family: the keyboard's today, the command's name on the
+//! keyboard through the one naming function ([`name_command`],
+//! [`Spelling::Bound`]: its combo's name), or "Click to record shortcut"
+//! when it is unbound, as
 //! an empty recorder reads (`-[SRRecorderCell drawWithFrame:inView:]`
 //! @0x5d76). A gamepad's cell goes beside it (the key-bindings roadmap's
 //! phase 12).
@@ -86,11 +88,13 @@ use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::dialog::outline;
 use super::prefs::{BACKDROP, BORDER};
 use super::row_list::{BarRoom, ListPress, RowList};
+use crate::bound_names::{Spelling, name_command};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
+use crate::input::Device;
 use crate::input::{Input, Key, MouseButton};
-use crate::key_names::{KeyNames, combo_name};
+use crate::key_names::KeyNames;
 use crate::keymap::keyboard::{Sides, is_modifier};
 use crate::keymap::{Bindings, Command, Context, KeyCombo, KeysDown};
 use crate::screen::{Screen, ScreenAction};
@@ -381,12 +385,18 @@ impl KeysScreen {
         self.change.take()
     }
 
-    /// The keyboard cell of `command`'s row.
+    /// The keyboard cell of `command`'s row: the draft's binding named on
+    /// the keyboard, which this column always shows (phase 12's pad column
+    /// passes the pad).
     fn keyboard_cell(&self, command: Command) -> String {
-        self.edit.draft().keyboard.combo(command).map_or_else(
-            || UNBOUND.to_owned(),
-            |combo| combo_name(&*self.names, combo),
+        name_command(
+            self.edit.draft(),
+            &*self.names,
+            command,
+            Device::Keyboard,
+            Spelling::Bound,
         )
+        .unwrap_or_else(|| UNBOUND.to_owned())
     }
 
     /// Redraws every command row's cell and mark from the draft.
