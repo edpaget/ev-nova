@@ -2,7 +2,7 @@
 //!
 //! - **Who tells whom.** The app tells the spaceport the surroundings
 //!   (the router in `nova`, as it builds the spaceport and on each
-//!   change). The spaceport keeps them ([`Told`]) and tells every screen it
+//!   change). The spaceport keeps them ([`Told`](crate::ui::pad_focus::Told)) and tells every screen it
 //!   holds, not only the one in front: its own dialog, the screen open
 //!   over it, the mission texts and the info beneath, the landing's offer
 //!   and the player info screen. It tells each screen it opens as it opens
