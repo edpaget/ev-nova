@@ -2408,6 +2408,15 @@ fn an_a_held_during_a_computer_press_accepts_at_the_release_and_the_reopen_drops
         Some(0),
         "the reopen flushed the Down (@0xa3a1c)"
     );
+    held_on_computer_row_0(&mut game, &[Key::Char('i'), Key::Escape]);
+    assert!(
+        game.spaceport().mission_info().is_some(),
+        "the run is listed now, so I opened mission info"
+    );
+    assert!(
+        game.spaceport().mission_computer().is_some(),
+        "and its flush dropped the Escape"
+    );
 }
 
 #[test]

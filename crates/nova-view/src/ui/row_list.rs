@@ -641,8 +641,8 @@ impl RowList {
         toward
     }
 
-    /// `LClick` picks the row under `at`, pinned into the view, when it
-    /// isn't the last row picked (`cell`), lighting it. The first pick
+    /// `LClick` picks the row under `at`, pinned into the view, lighting
+    /// it; picking the last row picked (`cell`) again changes nothing. The first pick
     /// unlights every row unless its own is lit (`OneClick`, line 917;
     /// `ClearAll`, line 938), and each pick unlights the last cell picked
     /// and lights the new (`NoMods`, line 1040), so the highlight follows
@@ -657,7 +657,6 @@ impl RowList {
         let offset = (at.y.clamp(self.view.min.y, bottom) - self.view.min.y) / self.line_height;
         let row = self.first.saturating_add(offset.floor() as usize);
         match *cell {
-            Some(last) if last == row => return,
             Some(last) => self.light(last, false),
             None if self.lit.get(row) != Some(&true) => self.lit.fill(false),
             None => {}

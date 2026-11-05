@@ -63,10 +63,11 @@ impl SpaceportView {
     }
 
     /// What the mission computer's replay left after the key or click that
-    /// left it, once it has left, for [`SpaceportView::route_left`].
+    /// left it, for [`SpaceportView::route_left`]: only a leave leaves a
+    /// rest there.
     pub(super) fn take_left_computers_rest(&mut self) -> Vec<Input> {
         match &mut self.open {
-            Some(Open::Computer(screen)) if screen.closed() => screen.take_unclaimed(),
+            Some(Open::Computer(screen)) => screen.take_unclaimed(),
             _ => Vec::new(),
         }
     }
