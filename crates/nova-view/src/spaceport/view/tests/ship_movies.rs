@@ -106,6 +106,7 @@ fn an_offers_movie_over_the_shipyard_plays_on_the_main_player_and_leaves_the_loo
         "neither stopped nor advanced under the offer"
     );
     view.input(&key(Key::KeyN));
+    view.input(&Input::Text('n'));
     assert!(view.offer_dialog().is_none(), "refused");
     view.tick(ms(16));
     assert_eq!(reel.calls(), [start("Ship.mov"), Call::Advance]);

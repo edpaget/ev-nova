@@ -39,6 +39,9 @@ fn bar_left(view: &SpaceportView) -> bool {
 /// does, with nothing to show.
 fn answer(view: &mut SpaceportView, answer: Key) {
     view.input(&key(answer));
+    if let Some(typed) = crate::input::key_letter(answer) {
+        view.input(&Input::Text(typed));
+    }
     assert!(view.take_offer_choice().is_some(), "answered");
     view.show_mission_texts(Vec::<MissionShown>::new());
 }

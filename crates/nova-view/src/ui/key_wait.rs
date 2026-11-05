@@ -49,7 +49,17 @@ impl WaitKeys {
     /// goes in only behind something of its key, a press or a repeat:
     /// otherwise the screen never saw that key. So what is queued says
     /// whether a key it saw is still down.
+    ///
+    /// A typed character goes in behind the queued press or repeat that
+    /// typed it, as a queued `keyDown` or `autoKey` carries its character
+    /// with its key code; any other is dropped.
     pub(crate) fn take(&mut self, input: &Input) {
+        if let Input::Text(_) = input {
+            if matches!(self.keys.last(), Some(Input::Key { pressed: true, .. })) {
+                self.keys.push(*input);
+            }
+            return;
+        }
         let Input::Key { key, pressed, .. } = *input else {
             return;
         };
@@ -69,21 +79,31 @@ impl WaitKeys {
     /// What the wait leaves for the screen under it, in order, the queue
     /// emptied. The filters read [`MAP_KEY`], [`PLAYER_INFO_KEY`] and
     /// [`MISSION_INFO_KEY`] live, so one already let go does nothing, and
-    /// goes with its repeats and release; one still down stays.
+    /// goes with its repeats, release and the characters they typed; one
+    /// still down stays.
     pub(crate) fn finish(&mut self) -> Vec<Input> {
-        let mut keys = std::mem::take(&mut self.keys);
+        let keys = std::mem::take(&mut self.keys);
+        let mut kept = vec![true; keys.len()];
         for live in LIVE_KEYS.into_iter().filter(|&key| key != self.waited) {
-            let let_go = keys.iter().rposition(|input| is_release_of(input, live));
-            if let Some(let_go) = let_go {
-                keys = keys
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(at, input)| *at > let_go || !is_key(input, live))
-                    .map(|(_, input)| input)
-                    .collect();
+            if let Some(let_go) = keys.iter().rposition(|input| is_release_of(input, live)) {
+                for (at, input) in keys.iter().enumerate().take(let_go) {
+                    if is_key(input, live) {
+                        kept[at] = false;
+                    }
+                }
+                kept[let_go] = false;
             }
         }
-        keys
+        // A character goes with the key that typed it, just before it.
+        for at in 1..keys.len() {
+            if matches!(keys[at], Input::Text(_)) {
+                kept[at] = kept[at - 1];
+            }
+        }
+        keys.into_iter()
+            .zip(kept)
+            .filter_map(|(input, kept)| kept.then_some(input))
+            .collect()
     }
 }
 
@@ -253,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn it_takes_no_pointer_input_and_no_text() {
+    fn it_takes_no_pointer_input_and_no_text_typed_by_no_key_it_kept() {
         let at = Point::new(1.0, 2.0);
         let inputs = [
             Input::PointerMoved(at),
@@ -263,6 +283,43 @@ mod tests {
             Input::Text('a'),
         ];
         assert_eq!(left_by(&inputs), []);
+        assert_eq!(
+            left_by(&[press(A), release(A), Input::Text('a')]),
+            [press(A), release(A)],
+            "after a release"
+        );
+    }
+
+    /// A queued `keyDown` carries its character as well as its key code,
+    /// which the offer's filter reads (`_SingleMissionFilter` @0x98e4a).
+    #[test]
+    fn it_keeps_the_character_a_kept_key_typed_with_it() {
+        let typed = [
+            press(A),
+            Input::Text('a'),
+            repeat(A),
+            Input::Text('a'),
+            release(A),
+        ];
+        assert_eq!(left_by(&typed), typed);
+    }
+
+    #[test]
+    fn a_dropped_key_takes_its_character_with_it() {
+        let p = PLAYER_INFO_KEY;
+        let inputs = [
+            press(A),
+            press(p),
+            Input::Text('p'),
+            release(p),
+            Input::Text('x'),
+        ];
+        assert_eq!(left_by(&inputs), [press(A)]);
+        assert_eq!(
+            left_by(&[press(MAP_KEY), Input::Text('m'), press(B)]),
+            [press(B)],
+            "the waited key's"
+        );
     }
 
     #[test]

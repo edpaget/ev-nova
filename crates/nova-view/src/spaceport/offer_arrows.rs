@@ -388,6 +388,7 @@ mod tests {
                 crate::input::letter_key(letter).expect("a letter key"),
                 false,
             ));
+            offer.input(&Input::Text(letter));
             assert_eq!(offer.take_choice(), None, "it waits");
             offer.input(&left(false, at));
             assert_eq!(offer.take_choice(), Some(choice));
@@ -483,12 +484,12 @@ mod tests {
     fn a_press_left_after_an_accept_goes_with_its_flush_and_after_a_refusal_stays() {
         for (letter, kept) in [('y', false), ('n', true)] {
             let (mut offer, at) = held();
-            for k in [
+            offer.input(&key(
                 crate::input::letter_key(letter).expect("a letter key"),
-                Key::KeyB,
-            ] {
-                offer.input(&key(k, false));
-            }
+                false,
+            ));
+            offer.input(&Input::Text(letter));
+            offer.input(&key(Key::KeyB, false));
             offer.input(&left(true, at));
             assert!(offer.answered());
             let mut left_over = vec![key(Key::KeyB, false)];

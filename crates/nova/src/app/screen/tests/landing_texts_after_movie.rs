@@ -170,6 +170,7 @@ fn with_movies_on_the_spaceport_offer_shows_once_the_landings_movie_ends() {
 fn a_key_pressed_under_the_landings_movie_accepts_the_spaceport_offer() {
     let (mut screen, _) = landed_offering_under_the_movie();
     screen.input(&key(Key::KeyY, true));
+    screen.input(&Input::Text('y'));
     screen.input(&key(Key::KeyY, false));
     assert_eq!(screen.showing(), Showing::Movie, "queued, not acted on");
     assert!(

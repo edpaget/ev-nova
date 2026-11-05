@@ -69,10 +69,16 @@
 //! and so flushes nothing, with no mission listed
 //! ([`OfferDialog::set_missions_listed`]). See the `held_keys` module.
 //!
-//! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
-//! accept label's first letter accepts and, when the mission can be
-//! refused, the refuse label's refuses, unless both start with the same
-//! letter. Escape does nothing. Up and Down scroll the text 10 px, repeats
+//! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept (the
+//! characters 0x0D and 0x03, @0x98e62-0x98e6e). The labels' letters are
+//! read from the character typed ([`Input::Text`]), as the filter folds the
+//! event's character with `tolower` (@0x98e4a-0x98eea), not from the key
+//! that typed it, and only from a press's, never a repeat's, as it takes
+//! them on `keyDown` alone (@0x98e56): the accept label's first letter
+//! accepts and, when the mission can be refused, the refuse label's
+//! refuses, unless both start with the same letter. The character follows
+//! its key's press, which the dialog notes; a press the map, player info
+//! or mission info key took types nothing it reads. Escape does nothing. Up and Down scroll the text 10 px, repeats
 //! included, and Home, End, Page Up and Page Down as the text dialog's do
 //! (`ui::desc`'s `page_key`), on the press alone by the user's
 //! standing decision, though the filter reads auto-key too
@@ -288,6 +294,10 @@ pub struct OfferDialog {
     /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
     /// opens it ([`OfferDialog::set_missions_listed`]).
     missions_listed: bool,
+    /// Whether the last key input was a press, not a repeat, that reached
+    /// the labels' letters, so that the character it types
+    /// ([`Input::Text`], which follows it) is read as a `keyDown`'s.
+    letter_pressed: bool,
     /// Its close: hidden, waiting or disposed of (the `close` module).
     close: close::Close,
 }
@@ -372,6 +382,7 @@ impl OfferDialog {
             unclaimed: Vec::new(),
             close: close::Close::default(),
             missions_listed: true,
+            letter_pressed: false,
         }
     }
 
@@ -567,18 +578,18 @@ impl OfferDialog {
         }
     }
 
-    /// What key `key` chooses: Return accepts, and each label's first
-    /// letter, either case, chooses it, unless both start with the same
-    /// letter.
-    fn key_choice(&self, key: Key) -> Option<OfferChoice> {
+    /// What the character `typed` chooses: each label's first letter,
+    /// either case, chooses it, unless both start with the same letter.
+    /// `_SingleMissionFilter` folds the event's character and each label's
+    /// first with `tolower` (@0x98e4a-0x98eea), which folds ASCII alone.
+    fn letter_choice(&self, typed: char) -> Option<OfferChoice> {
         let first = |label: &str| label.chars().next().map(|c| c.to_ascii_lowercase());
         let accept = first(&self.prompt.labels.accept);
         let refuse = self.prompt.labels.refuse.as_deref().and_then(first);
-        let letter = match key {
-            Key::Enter | Key::NumpadEnter => return Some(OfferChoice::Accept),
-            _ if accept != refuse => crate::input::key_letter(key),
-            _ => return None,
-        };
+        if accept == refuse {
+            return None;
+        }
+        let letter = Some(typed.to_ascii_lowercase());
         if letter == accept {
             Some(OfferChoice::Accept)
         } else if letter == refuse {
@@ -605,6 +616,7 @@ impl OfferDialog {
             self.choose_from(event);
             return;
         }
+        let letter_pressed = std::mem::take(&mut self.letter_pressed);
         if is_map_press(input) {
             self.asks.map = true;
             return;
@@ -617,15 +629,27 @@ impl OfferDialog {
             self.asks.mission_info |= self.missions_listed;
             return;
         }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && let Some(choice) = self.key_choice(key)
-        {
-            self.choose(choice);
-            return;
+        match *input {
+            Input::Key {
+                key: Key::Enter | Key::NumpadEnter,
+                pressed: true,
+                repeat: false,
+            } => {
+                self.choose(OfferChoice::Accept);
+                return;
+            }
+            Input::Key {
+                pressed: true,
+                repeat: false,
+                ..
+            } => self.letter_pressed = true,
+            Input::Text(typed) if letter_pressed => {
+                if let Some(choice) = self.letter_choice(typed) {
+                    self.choose(choice);
+                }
+                return;
+            }
+            _ => {}
         }
         let Ok(dialog) = &mut self.laid else {
             return;
@@ -1541,30 +1565,86 @@ mod tests {
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
+    /// Types `typed` as a Mac sends it: `key`'s press, then the character
+    /// it types.
+    fn typed(dialog: &mut OfferDialog, key: Key, typed: char) {
+        dialog.input(&Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        });
+        dialog.input(&Input::Text(typed));
+    }
+
+    /// `_SingleMissionFilter` compares the event's character, case folded,
+    /// with each label's first (@0x98e4a-0x98eea).
     #[test]
-    fn each_labels_first_letter_chooses_it() {
+    fn each_labels_first_letter_typed_either_case_chooses_it() {
+        for c in ['n', 'N'] {
+            let mut dialog = offer();
+            typed(&mut dialog, Key::KeyN, c);
+            assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse), "{c}");
+        }
         let mut dialog = offer();
-        dialog.input(&key(Key::KeyN));
-        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
-        let mut dialog = offer();
-        dialog.input(&key(Key::KeyX));
+        typed(&mut dialog, Key::KeyX, 'x');
         assert_eq!(dialog.take_choice(), None);
         let mut cannot = dialog_of(prompt("Okay", None));
-        cannot.input(&key(Key::KeyN));
+        typed(&mut cannot, Key::KeyN, 'n');
         assert_eq!(cannot.take_choice(), None, "no refuse label");
-        cannot.input(&key(Key::KeyO));
+        typed(&mut cannot, Key::KeyO, 'O');
         assert_eq!(cannot.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn the_character_typed_chooses_wherever_the_layout_puts_it() {
+        let mut dialog = dialog_of(prompt("Accept", Some("Refuse")));
+        typed(&mut dialog, Key::KeyQ, 'a');
+        assert_eq!(
+            dialog.take_choice(),
+            Some(OfferChoice::Accept),
+            "AZERTY's A, where a US keyboard has Q"
+        );
+        let mut dialog = dialog_of(prompt("Accept", Some("Refuse")));
+        typed(&mut dialog, Key::KeyA, 'q');
+        assert_eq!(dialog.take_choice(), None, "the US A typing Q");
+    }
+
+    #[test]
+    fn a_letter_keys_press_alone_chooses_nothing() {
+        let mut dialog = offer();
+        dialog.input(&key(Key::KeyN));
+        assert_eq!(dialog.take_choice(), None, "no character typed");
+        dialog.input(&Input::Key {
+            key: Key::KeyN,
+            pressed: false,
+            repeat: false,
+        });
+        dialog.input(&Input::Text('n'));
+        assert_eq!(dialog.take_choice(), None, "not typed by a press");
+    }
+
+    /// The filter takes a letter on `keyDown` alone, never `autoKey`
+    /// (@0x98e56).
+    #[test]
+    fn a_character_a_repeat_types_chooses_nothing() {
+        let mut dialog = offer();
+        dialog.input(&Input::Key {
+            key: Key::KeyN,
+            pressed: true,
+            repeat: true,
+        });
+        dialog.input(&Input::Text('n'));
+        assert_eq!(dialog.take_choice(), None);
+        typed(&mut dialog, Key::KeyN, 'n');
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse), "a press");
     }
 
     #[test]
     fn labels_starting_with_the_same_letter_take_no_letter() {
         let mut dialog = dialog_of(prompt("Sure", Some("Scram")));
-        dialog.input(&key(Key::KeyS));
+        typed(&mut dialog, Key::KeyS, 's');
         assert_eq!(dialog.take_choice(), None);
         dialog.input(&key(Key::Enter));
-        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
-        let mut dialog = offer();
-        dialog.input(&key(Key::NumpadEnter));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
@@ -2034,8 +2114,10 @@ mod tests {
         );
         opened(&mut offers);
         assert!(offers.input(&key(Key::KeyX), &mut sounds));
+        assert!(offers.input(&Input::Text('x'), &mut sounds));
         assert!(offers.dialog().is_some(), "x chooses nothing");
         assert!(offers.input(&key(Key::KeyN), &mut sounds));
+        assert!(offers.input(&Input::Text('n'), &mut sounds));
         assert!(offers.dialog().is_none(), "answered, it closes");
         assert_eq!(
             offers.take_choice(),
@@ -2306,7 +2388,7 @@ mod tests {
             repeat: true,
         });
         assert!(!dialog.take_info_request(), "not a repeat");
-        dialog.input(&key(i));
+        typed(&mut dialog, i, 'i');
         assert!(dialog.take_info_request());
         assert!(!dialog.take_info_request(), "once");
         assert_eq!(dialog.take_choice(), None, "not I'm in's letter");
@@ -2326,7 +2408,7 @@ mod tests {
     fn with_no_mission_listed_the_mission_info_key_asks_and_chooses_nothing() {
         let i = crate::ui::mission_info::MISSION_INFO_KEY;
         let mut dialog = offer().with_missions_listed(false);
-        dialog.input(&key(i));
+        typed(&mut dialog, i, 'i');
         assert!(!dialog.take_info_request());
         assert_eq!(dialog.take_choice(), None);
         dialog.set_missions_listed(true);
@@ -2365,7 +2447,7 @@ mod tests {
             dialog.input(&input);
             assert!(!dialog.take_map_request(), "{what}");
         }
-        dialog.input(&key(m));
+        typed(&mut dialog, m, 'm');
         assert!(dialog.take_map_request());
         assert!(!dialog.take_map_request(), "once");
         assert_eq!(dialog.take_choice(), None, "not Move it's letter");
@@ -2423,6 +2505,7 @@ mod tests {
         );
         assert_eq!(player.drawn().len(), 1, "the movie is");
         dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         assert!(!dialog.answered(), "the dialog takes no input yet");
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2440,6 +2523,7 @@ mod tests {
         let player = MockMoviePlayer::playing((160, 120), 20);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
         dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         click_at(&mut dialog, Point::new(500.0, 520.0));
         assert!(texts(&dialog).contains(&"Ferry this to Mars.".to_owned()));
         assert!(
@@ -2532,6 +2616,7 @@ mod tests {
         offers.open(filmed(0x0000), Rc::new(MonoMetrics), ButtonStyle::STOCK);
         let mut sounds = Vec::new();
         offers.input(&key(Key::KeyN), &mut sounds);
+        offers.input(&Input::Text('n'), &mut sounds);
         assert_eq!(offers.take_choice(), None, "not while the movie plays");
         offers.tick(TICK, false);
         assert_eq!(
@@ -2554,6 +2639,7 @@ mod tests {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
         dialog.input(&key(Key::KeyN));
+        dialog.input(&Input::Text('n'));
         assert_eq!(player.calls(), [Call::Start("Offer.mov".to_owned())]);
         dialog.tick(TICK);
         dialog.tick(TICK);
@@ -2642,6 +2728,9 @@ mod tests {
     /// Answers `offers`' open dialog with `key`, taking the choice.
     fn answer(offers: &mut VenueOffers, key_pressed: Key) -> Option<(MissionId, OfferChoice)> {
         offers.input(&key(key_pressed), &mut Vec::new());
+        if let Some(typed) = crate::input::key_letter(key_pressed) {
+            offers.input(&Input::Text(typed), &mut Vec::new());
+        }
         offers.take_choice()
     }
 
@@ -2712,6 +2801,11 @@ mod tests {
                 });
             }
             assert_eq!(dialog.take_sounds(), [], "{k:?}");
+        }
+        for c in ['n', 'N', 'i'] {
+            let mut dialog = offer();
+            typed(&mut dialog, Key::KeyN, c);
+            assert_eq!(dialog.take_sounds(), [], "{c}");
         }
     }
 

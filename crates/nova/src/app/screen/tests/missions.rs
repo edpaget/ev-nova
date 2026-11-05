@@ -169,6 +169,7 @@ fn the_spaceports_offer_plays_its_before_movie_and_a_refusal_after_it_plays_none
     assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     screen.tick(Duration::from_millis(16));
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     assert_eq!(active(&screen), []);
     assert_eq!(
         reeled(&reel),
@@ -249,6 +250,7 @@ fn a_refuse_texts_after_movie_plays_twice_and_the_offers_not_at_all() {
         &[(300, filmed_desc_of("No.", "Refuse.mov", 0x0001))],
     );
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     assert!(
         spaceport(&screen).mission_text().is_some(),
         "the RefuseText"
@@ -286,6 +288,7 @@ fn a_refused_spaceport_offer_without_a_refuse_text_stays_drawn_under_its_after_m
     let (mut screen, reel) = landed_offering(&venue_mission(SPACEPORT), &[]);
     assert!(texts_drawn(&screen).contains(&"Job.".to_owned()));
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     assert_eq!(reeled(&reel), [Call::Start("Offer.mov".into())]);
     assert!(
         texts_drawn(&screen).contains(&"Job.".to_owned()),
@@ -305,6 +308,7 @@ fn a_refuse_text_hides_the_spaceport_offer() {
     mission[0x58..0x5A].copy_from_slice(&300_i16.to_be_bytes());
     let (mut screen, _) = landed_offering(&mission, &[(300, desc_of("No."))]);
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     let shown = texts_drawn(&screen);
     assert!(
         !shown.contains(&"Job.".to_owned()),
@@ -376,6 +380,7 @@ fn closing_the_mission_info_over_the_spaceport_offer_reloads_the_offers_after_mo
     assert!(spaceport(&screen).mission_info().is_none(), "info closed");
     assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     assert_eq!(active(&screen), [MissionId(129)], "refused");
     assert!(spaceport(&screen).mission_text().is_none(), "no RefuseText");
     ticked(&mut screen, 3);
@@ -654,11 +659,13 @@ fn offer_a_moment_after_a_long_offer(clock: RuleSource) -> Option<MissionId> {
     };
     assert_eq!(offered(&screen), Some(MissionId(130)));
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     screen.tick(Duration::from_secs(2));
     screen.tick(Duration::from_secs(2));
     assert_eq!(offered(&screen), Some(MissionId(131)), "{clock:?}");
     screen.tick(Duration::from_secs(5));
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     screen.tick(Duration::from_millis(1));
     screen.tick(Duration::from_millis(1));
     offered(&screen)
@@ -703,6 +710,7 @@ fn offered_after_a_refusal(chance: Option<SharedChance>) -> [Option<MissionId>; 
     };
     assert_eq!(offered(&screen), Some(MissionId(130)), "precondition");
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     screen.tick(Duration::from_millis(700));
     let early = offered(&screen);
     screen.tick(Duration::from_millis(400));
@@ -778,6 +786,7 @@ fn the_bar_offers_again_after_its_hire_screen_restarts_its_wait() {
     screen.tick(Duration::from_millis(300));
     assert_eq!(offered(&screen), Some(MissionId(130)));
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     screen.input(&key(Key::KeyH, true));
     assert!(
         spaceport(&screen)
@@ -803,6 +812,7 @@ fn the_spaceport_does_not_offer_again_on_returning_from_a_service() {
         "one offer as it lands"
     );
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     assert!(spaceport(&screen).offer_dialog().is_none(), "refused");
     screen.tick(Duration::from_secs(5));
     assert!(spaceport(&screen).offer_dialog().is_none(), "131 waits");
@@ -1226,6 +1236,7 @@ fn hail_person(screen: &mut AppScreen, id: i16) {
         if targeted == Some(id) {
             screen.take_sounds();
             screen.input(&key(Key::KeyY, true));
+            screen.input(&Input::Text('y'));
             screen.input(&key(Key::KeyY, false));
             return;
         }
@@ -1279,6 +1290,7 @@ fn closing_the_mission_info_over_a_flight_offer_reloads_the_offers_after_movie()
         "unanswered"
     );
     screen.input(&key(Key::KeyN, true));
+    screen.input(&Input::Text('n'));
     ticked(&mut screen, 3);
     assert_eq!(
         reeled(&reel),

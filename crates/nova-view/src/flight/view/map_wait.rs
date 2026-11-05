@@ -54,9 +54,10 @@
 //!   `_KeyCheck` reads them live (@0xa19b-0xa1dc), so
 //!   [`Screen::release_keys`](crate::Screen::release_keys) closes the map
 //!   and drops what was queued.
-//! - [`Input::Text`]: no filter under the map takes text, and each text
-//!   dialog opens through a `0xff7f` flush (`_EVTextInputDialog`
-//!   @0x55429).
+//! - [`Input::Text`] on its own: only the character a queued key typed
+//!   is kept, behind that key, for the offer's filter, which reads the
+//!   character (`_SingleMissionFilter` @0x98e4a); each text dialog opens
+//!   through a `0xff7f` flush (`_EVTextInputDialog` @0x55429).
 
 use super::dialog_map::MapOpening;
 use super::{

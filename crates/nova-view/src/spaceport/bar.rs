@@ -2198,6 +2198,7 @@ mod tests {
         assert!(screen.offer_dialog().is_some());
         assert_eq!(screen.take_offer_choice(), None);
         screen.input(&key(Key::KeyN, false));
+        screen.input(&Input::Text('n'));
         assert!(screen.offer_dialog().is_none(), "answered, it closes");
         assert_eq!(
             screen.take_offer_choice(),

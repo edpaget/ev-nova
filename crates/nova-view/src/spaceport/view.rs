@@ -3317,6 +3317,7 @@ pub(in crate::spaceport) mod tests {
     fn n_asks_for_the_mission_computer_and_b_opens_the_bar() {
         let mut view = missioned();
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert!(view.open_service().is_none(), "no placeholder");
         assert!(view.take_mission_computer_request());
         let mut view = drinking(true);
@@ -3373,6 +3374,7 @@ pub(in crate::spaceport) mod tests {
             plain_texts(),
         );
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert!(!view.take_mission_computer_request(), "no missions");
     }
 
@@ -5908,6 +5910,7 @@ pub(in crate::spaceport) mod tests {
                 "{venue}"
             );
             view.input(&key(Key::KeyN));
+            view.input(&Input::Text('n'));
             assert_eq!(
                 view.take_offer_choice(),
                 Some((MissionId(141), OfferChoice::Refuse)),
@@ -5939,6 +5942,7 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(offer.problem(), None, "laid out by the template given");
         assert!(view.offer_dialog().is_some());
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert_eq!(
             view.take_offer_choice(),
             Some((MissionId(141), OfferChoice::Refuse))
@@ -5968,6 +5972,7 @@ pub(in crate::spaceport) mod tests {
             "the spaceport's, in 1020's shape"
         );
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         let _ = view.take_offer_choice();
         click_item(&mut view, 11);
         view.tick(ms(250));
@@ -5975,6 +5980,7 @@ pub(in crate::spaceport) mod tests {
         view.open_offer(pictured());
         assert_eq!(width(&view), Some(300.0), "the bar's, in 1020's shape");
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         let _ = view.take_offer_choice();
         view.rearm_offers(ms(0));
         view.tick(ms(1));
@@ -6591,6 +6597,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = missioned().with_movies(movies_of(&player));
         view.open_offer(offered());
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert_eq!(
             view.take_offer_choice(),
             Some((MissionId(141), OfferChoice::Refuse))
@@ -6613,6 +6620,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = missioned();
         view.open_offer(offered());
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert!(view.take_offer_choice().is_some());
         view.show_mission_texts(Vec::<MissionShown>::new());
         assert!(!offer_drawn(&view));
@@ -6623,6 +6631,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = missioned();
         view.open_offer(offered());
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert!(view.take_offer_choice().is_some());
         view.hide_answered_offer();
         view.show_mission_texts(vec![MissionText {
@@ -6644,6 +6653,7 @@ pub(in crate::spaceport) mod tests {
         view.open_offer(offered());
         assert!(offer_drawn(&view), "{venue}: offered");
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert_eq!(
             view.take_offer_choice(),
             Some((MissionId(141), OfferChoice::Refuse)),
@@ -7087,6 +7097,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = asked_at(venue, clock);
         view.open_offer(offered());
         view.input(&key(Key::KeyN));
+        view.input(&Input::Text('n'));
         assert!(view.take_offer_choice().is_some());
         view.rearm_offers(ms(500));
         view
@@ -7229,6 +7240,7 @@ pub(in crate::spaceport) mod tests {
                 view.input(&key(Key::Escape));
                 assert!(view.mission_info().is_none(), "{venue}");
                 view.input(&key(Key::KeyN));
+                view.input(&Input::Text('n'));
                 assert!(view.take_offer_choice().is_some(), "{venue}");
                 view.rearm_offers(ms(500));
                 if wait > 0 {

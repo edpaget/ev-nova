@@ -16,6 +16,16 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
+/// Taps the letter key `k` as the platform sends it: its press, the
+/// character it types, its release.
+fn type_tap(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&Input::Text(
+        nova_view::key_letter(k).expect("a letter key"),
+    ));
+    screen.input(&key(k, false));
+}
+
 /// How fast the player's ship goes.
 fn speed(screen: &AppScreen) -> f32 {
     ship(screen).velocity.length()
@@ -51,7 +61,7 @@ fn offer_as_a_hail_would(screen: &mut AppScreen) {
 
 /// Refuses the offer open over flight, which closes back to flight.
 fn refuse(screen: &mut AppScreen) {
-    tap(screen, Key::KeyN);
+    type_tap(screen, Key::KeyN);
     assert_eq!(screen.showing(), Showing::Flight, "closed");
 }
 
@@ -136,7 +146,7 @@ fn a_replayed_press_doesnt_bring_back_a_key_let_go() {
     assert!(flight(&screen).map_waiting(), "waiting");
     screen.input(&key(Key::ArrowUp, false));
     tap(&mut screen, Key::ArrowUp);
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Flight, "refused");
     let closed = speed(&screen);

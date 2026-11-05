@@ -13,6 +13,16 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
+/// Taps the letter key `k` as the platform sends it: its press, the
+/// character it types, its release.
+fn type_tap(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&Input::Text(
+        nova_view::key_letter(k).expect("a letter key"),
+    ));
+    screen.input(&key(k, false));
+}
+
 /// Opens the map from what is shown and lets M go, then starts its wait:
 /// M down again on the open map.
 fn start_the_wait(screen: &mut AppScreen) {
@@ -145,7 +155,7 @@ fn an_offers_refuse_key_tapped_during_its_maps_wait_answers_after_the_close() {
     screen.input(&key(MAP, true));
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).offer_dialog().is_none(), "answered");
 }
@@ -270,7 +280,7 @@ fn offer_map_waiting() -> AppScreen {
 #[test]
 fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
     let mut screen = offer_map_waiting();
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     tap(&mut screen, LAND);
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "refused");
@@ -287,7 +297,7 @@ fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
 fn an_unlatched_key_tapped_behind_the_answer_does_nothing_in_flight() {
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     tap(&mut screen, Key::ArrowUp);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
@@ -299,7 +309,7 @@ fn an_unlatched_key_still_down_as_the_last_dialog_closes_reads_down_in_flight() 
     // `_HandlePlayer` polls it (`_QuickKeyCheck` @0xa0f5).
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     screen.input(&key(Key::ArrowUp, true));
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
@@ -316,7 +326,7 @@ fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() 
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
     screen.input(&key(Key::ArrowUp, true));
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
@@ -638,7 +648,7 @@ fn a_key_known_only_by_its_repeats_and_let_go_isnt_held_past_the_last_dialog() {
     let still = ship(&screen);
     screen.input(&held(Key::ArrowUp));
     screen.input(&key(Key::ArrowUp, false));
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     assert_eq!(screen.showing(), Showing::Flight, "refused");
     screen.tick(TICK * 3);
@@ -650,7 +660,7 @@ fn a_key_known_only_by_its_repeats_and_still_down_reads_down_past_the_last_dialo
     let mut screen = offer_map_waiting();
     let still = ship(&screen);
     screen.input(&held(Key::ArrowUp));
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");

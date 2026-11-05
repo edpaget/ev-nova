@@ -778,17 +778,25 @@ mod tests {
         }
     }
 
-    /// An offer button's key is its label's first letter, so every
-    /// character a label can start with is a key: `offer_labels` keeps a
-    /// mission's own label only when it starts with a letter. P, I and M
-    /// ask for their screens before an offer reads the labels' letters.
+    /// An offer button's key is the character typed that its label starts
+    /// with, as `_SingleMissionFilter` reads the event's character
+    /// (@0x98e4a), so every character a label can start with reaches the
+    /// app as text, whatever key the layout types it with:
+    /// `offer_labels` keeps a mission's own label only when it starts with
+    /// a letter.
     #[test]
-    fn every_letter_an_offer_label_can_start_with_comes_from_its_physical_key() {
+    fn every_letter_an_offer_label_can_start_with_reaches_the_app_as_typed() {
         use nova_sim::mission::offer_labels;
         for c in ' '..='~' {
             let label = offer_labels(&c.to_string(), "", false).accept;
             if label.starts_with(c) {
-                assert_physical(c);
+                for typed in [c, c.to_ascii_uppercase(), c.to_ascii_lowercase()] {
+                    assert_eq!(
+                        text_event(Some(&typed.to_string()), ElementState::Pressed),
+                        Some(WindowEvent::Text(typed)),
+                        "{typed:?}"
+                    );
+                }
             }
         }
     }

@@ -675,6 +675,15 @@ impl Game {
         self.key(key, false);
     }
 
+    /// Taps `key` as the platform sends a letter: its press, the
+    /// character it types, its release.
+    fn type_key(&mut self, key: Key) {
+        self.key(key, true);
+        let typed = nova_view::key_letter(key).expect("a letter key");
+        self.send(WindowEvent::Text(typed));
+        self.key(key, false);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -818,7 +827,7 @@ fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialo
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
     assert_eq!(game.offered(), Some(128));
@@ -837,7 +846,7 @@ fn p_on_merchants_offer_reaches_the_player_info_over_it_and_escape_the_offer() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
     game.tap(Key::KeyP);
@@ -859,10 +868,10 @@ fn n_refuses_merchants_offer_and_flight_resumes() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), Vec::<i16>::new());
@@ -874,10 +883,14 @@ fn answered_over_flight(answer: Key, shown: &str) -> Game {
     let store = MemoryPilots::new();
     let mut game = Game::opened_with(TEXTED, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(answer);
+    if nova_view::key_letter(answer).is_some() {
+        game.type_key(answer);
+    } else {
+        game.tap(answer);
+    }
     game.settle();
     assert_eq!(game.showing(), Showing::MissionText, "over flight");
     assert_eq!(game.flight_text().as_deref(), Some(shown));
@@ -922,7 +935,7 @@ fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
     // offer text, is accepted at once: its BriefText shows over flight,
     // and Up is let go under it.
     game.key(Key::ArrowUp, true);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::MissionText);
     assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
@@ -952,10 +965,10 @@ fn thrust_held_through_merchants_offer_thrusts_once_n_refuses_it() {
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.key(Key::ArrowUp, true);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight, "refused");
     let speed = game.session().player().velocity.length();
@@ -1013,7 +1026,7 @@ fn by_the_settings_other_reading_a_hail_reaches_the_comm_dialog_and_the_joined_p
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, JOINING);
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(
         game.showing(),
@@ -1055,7 +1068,7 @@ fn hailed_with_movies(knobs: Knobs) -> (Game, Rc<MockMoviePlayer>) {
     let player: Rc<dyn MoviePlayer> = Rc::clone(&projector) as Rc<dyn MoviePlayer>;
     let mut game = Game::opened_playing(knobs, &store, &BOTH, Showing::Flight, "{}", Some(player));
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     (game, projector)
 }
@@ -1105,7 +1118,7 @@ fn n_pressed_under_a_persons_offer_movie_reaches_the_offer_once_the_movie_ends()
         offer_movie: Some(0),
         ..TEXTED
     });
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert_eq!(game.showing(), Showing::Movie);
     game.settle_until("the movie's end", |game| game.showing() != Showing::Movie);
     assert_eq!(
@@ -1124,7 +1137,7 @@ fn a_persons_offer_refused_without_a_text_stays_under_its_after_movie_over_fligh
         ..PLAIN
     });
     assert_eq!(game.showing(), Showing::Offer);
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert_eq!(log(&projector), [Call::Start("Offer.mov".into())]);
     assert_eq!(game.showing(), Showing::Movie);
     game.settle();
@@ -1157,7 +1170,7 @@ fn a_persons_unrefusable_offer_accepted_stays_under_its_brief_until_return_close
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "one button, with a text");
     game.tap(Key::Enter);
@@ -1182,7 +1195,7 @@ fn a_persons_unrefusable_offer_accepted_stays_under_its_brief_until_return_close
 #[test]
 fn a_persons_offer_refused_with_a_text_is_hidden_under_it() {
     let (mut game, _) = hailed_with_movies(TEXTED);
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     game.settle();
     assert_eq!(game.flight_text().as_deref(), Some("Your loss."));
     assert!(
@@ -1201,7 +1214,7 @@ fn with_the_engines_player_a_texts_movie_is_skipped_and_its_text_shows() {
     };
     let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
-    game.tap(Key::KeyY);
+    game.type_key(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::Offer, "no movie plays");
     game.tap(Key::Enter);

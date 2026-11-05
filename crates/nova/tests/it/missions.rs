@@ -930,6 +930,15 @@ impl Game {
         self.key(key, false);
     }
 
+    /// Taps `key` as the platform sends a letter: its press, the
+    /// character it types, its release.
+    fn type_key(&mut self, key: Key) {
+        self.key(key, true);
+        let typed = nova_view::key_letter(key).expect("a letter key");
+        self.send(WindowEvent::Text(typed));
+        self.key(key, false);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -1594,13 +1603,13 @@ fn the_bars_offers_reach_the_session_and_ns_refusal_goes_through_it() {
 
     // The bar's ask is answered with the session's offer; N refuses it.
     game.await_offer();
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert!(game.offer().is_none());
 
     // Offered again: N's refusal runs through the session, whose
     // RefuseText shows and whose OnRefuse is saved.
     game.await_offer();
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert!(game.offer().is_none());
     assert!(game.shown_text().is_some(), "the RefuseText");
     let bit = nova_sim::control::Bit::new(7).expect("in range");
@@ -2110,7 +2119,7 @@ fn offered_after_the_comp_text(store: &MemoryPilots, (job, offer): (Vec<u8>, &st
 fn the_ports_offer_shows_after_the_texts_and_a_refusal_leaves() {
     let store = MemoryPilots::new();
     let mut game = offered_after_the_comp_text(&store, bar_job());
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), []);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
@@ -2121,7 +2130,7 @@ fn the_ports_offer_refused_shows_its_refuse_text_then_leaves() {
     let store = MemoryPilots::new();
     let job = bar_mission(202, 203, b"I'm in\0", b"\0");
     let mut game = offered_after_the_comp_text(&store, (job, "<PN>, join us."));
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert_eq!(
         game.showing(),
         Showing::Spaceport,
@@ -2238,7 +2247,7 @@ fn a_landings_offer_holds_a_q_through_the_map_and_its_refusal_leaves() {
     assert_eq!(offer_shown(&game), Some(MissionId(130)));
     assert!(leave_due(&game));
 
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.flight_message().as_deref(), Some("Off you go."));
 }
@@ -2293,7 +2302,7 @@ fn a_key_from_the_maps_wait_answers_the_offer_and_the_leave_goes_as_the_map_clos
 
     // `n` answers the offer at the close; `l` behind it is the spaceport's
     // Leave, and in flight the first of landing's two presses.
-    game.tap(Key::KeyN);
+    game.type_key(Key::KeyN);
     game.tap(land);
     assert_eq!(game.showing(), Showing::FlightMap);
     assert!(game.session().landed().is_some(), "still landed");

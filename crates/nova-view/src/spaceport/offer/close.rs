@@ -279,6 +279,9 @@ mod tests {
     fn answered_by(key: Key) -> VenueOffers {
         let mut offers = venue();
         offers.input(&press(key), &mut Vec::new());
+        if let Some(typed) = crate::input::key_letter(key) {
+            offers.input(&Input::Text(typed), &mut Vec::new());
+        }
         assert!(offers.take_choice().is_some());
         offers
     }
@@ -300,6 +303,7 @@ mod tests {
             assert!(offers.input(&release(I), &mut Vec::new()));
             assert!(offers.answered().is_none(), "{key:?}: gone");
             assert!(!offers.input(&press(Key::KeyY), &mut Vec::new()));
+            assert!(!offers.input(&Input::Text('y'), &mut Vec::new()));
             assert_eq!(offers.take_unclaimed(), [press(Key::KeyZ)]);
         }
     }
@@ -381,6 +385,7 @@ mod timer_tests {
         assert!(offers.take_request());
         offers.open(fixture::prompt(), Rc::new(MonoMetrics), ButtonStyle::STOCK);
         offers.input(&key(Key::KeyN, true), &mut Vec::new());
+        offers.input(&Input::Text('n'), &mut Vec::new());
         assert!(offers.take_choice().is_some());
         offers.release_answered(true);
         offers.rearm(Duration::from_millis(100));

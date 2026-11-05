@@ -16,6 +16,16 @@ fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, false));
 }
 
+/// Taps the letter key `k` as the platform sends it: its press, the
+/// character it types, its release.
+fn type_tap(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&Input::Text(
+        nova_view::key_letter(k).expect("a letter key"),
+    ));
+    screen.input(&key(k, false));
+}
+
 /// The flight's frame gain as it stands.
 fn gain(screen: &AppScreen) -> nova_sim::SpeedMult {
     flight(screen).session().expect("flying").speed_mult()
@@ -246,7 +256,7 @@ fn an_answer_showing_a_movie_with_i_held_as_it_closes_keeps_the_offer_until_is_r
     assert_eq!(screen.showing(), Showing::MissionInfo);
     tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Offer);
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     assert!(screen.missions.is_some(), "the after-movie plays");
     for _ in 0..10 {
         screen.tick(Duration::from_millis(16));
@@ -267,7 +277,7 @@ fn losing_focus_leaves_an_unanswered_offer_over_flight_open() {
 #[test]
 fn losing_focus_keeps_an_answered_offer_drawn_under_its_after_movie() {
     let (mut screen, _reel) = holding_and_offered_in_flight();
-    tap(&mut screen, Key::KeyN);
+    type_tap(&mut screen, Key::KeyN);
     assert!(screen.missions.is_some(), "the after-movie plays");
     screen.release_keys();
     assert!(screen.offer().is_some(), "still under the movie");
