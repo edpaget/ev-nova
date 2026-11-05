@@ -85,6 +85,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
+use crate::ui::pad_focus::{Told, from_pad};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
 pub const HIRE_ITEM: usize = BUY_ITEM;
@@ -165,6 +166,9 @@ pub struct HireScreen {
     grid: ShipyardGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
+    /// The surroundings it was told last, which its info panel is told
+    /// as it opens (the `pad` module).
+    told: Told,
     /// The ship asked for, until it is taken.
     order: Option<ShipId>,
     closed: bool,
@@ -247,6 +251,7 @@ impl HireScreen {
             focus_ring: FocusRing::default(),
             grid,
             panel: None,
+            told: Told::default(),
             order: None,
             closed: false,
             description_request: None,
@@ -255,6 +260,7 @@ impl HireScreen {
             sounds: Vec::new(),
         };
         screen.selected_changed();
+        screen.sync_pad_cells();
         screen
     }
 
@@ -471,6 +477,7 @@ impl HireScreen {
             panel
                 .with_focus_ring(self.focus_ring)
                 .with_bindings(self.keys.bindings().clone())
+                .told(self.told)
         });
     }
 
@@ -585,6 +592,9 @@ impl Screen for HireScreen {
         let fresh = pressed
             .filter(|command| !command.repeat)
             .map(|command| command.command);
+        if self.tell_held(input) {
+            return ScreenAction::None;
+        }
         if self.laid.is_err() {
             if matches!(
                 fresh,
@@ -614,16 +624,18 @@ impl Screen for HireScreen {
             self.selected_changed();
         } else if fresh == Some(Command::Hire(HireCommand::Hire)) {
             self.ask();
-        } else if fresh == Some(Command::Ui(UiCommand::Activate)) {
+        } else if fresh == Some(Command::Ui(UiCommand::Activate)) && !from_pad(input) {
             self.open_info();
         } else if on_grid {
             // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
-            let event = laid.dialog.input(input);
-            if let Some(DialogEvent::Item(item)) = event {
-                self.activate(item);
+            match laid.dialog.input(input) {
+                Some(DialogEvent::Item(item)) => self.activate(item),
+                Some(DialogEvent::Cell(cell)) => self.press_pad_cell(cell),
+                None => {}
             }
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -637,6 +649,7 @@ impl Screen for HireScreen {
             self.grid.advance(dt);
             self.movie.idle(dt);
         }
+        self.sync_pad_cells();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -691,6 +704,8 @@ impl Screen for HireScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+pub(crate) mod pad;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -942,7 +957,7 @@ mod tests {
         screen
     }
 
-    fn screen() -> HireScreen {
+    pub(super) fn screen() -> HireScreen {
         screen_of(&art(), list())
     }
 
@@ -983,7 +998,7 @@ mod tests {
         }
     }
 
-    fn click(screen: &mut HireScreen, at: Point) {
+    pub(super) fn click(screen: &mut HireScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -1491,7 +1506,7 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut HireScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut HireScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }

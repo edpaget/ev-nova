@@ -114,6 +114,15 @@ fn rows() -> Vec<Row> {
             "outfitter",
             crate::spaceport::outfitter::pad::tests::pad_probe,
         ),
+        (
+            "shipyard",
+            crate::spaceport::shipyard::pad::tests::pad_probe,
+        ),
+        (
+            "shipyard's info",
+            crate::spaceport::shipyard::pad::tests::info_pad_probe,
+        ),
+        ("hire", crate::spaceport::hire::pad::tests::pad_probe),
     ]
 }
 

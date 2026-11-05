@@ -200,6 +200,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
+use crate::ui::pad_focus::{Told, from_pad};
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
 use crate::ui::text_box::TextBox;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
@@ -835,6 +836,9 @@ impl Panel {
     /// (@0x511a6-0x511b9), whatever the focus ring, and on a keyDown only
     /// (@0x510f4), so its repeats do nothing.
     pub(super) fn input(&mut self, input: &Input, command: Option<CommandInput>) -> bool {
+        if from_pad(input) {
+            return self.pad_input(input);
+        }
         if let Some(CommandInput {
             command: Command::Ui(UiCommand::Activate),
             pressed: true,
@@ -1018,6 +1022,9 @@ pub struct ShipyardScreen {
     asked_by_key: bool,
     /// The name prompt, while it is open, and the ship it names.
     naming: ModalHost<ShipId, TextInputDialog>,
+    /// The surroundings it was told last, which its info panel is told
+    /// as it opens (the `pad` module).
+    told: Told,
     /// The ship ordered, named, until it is taken.
     order: Option<ShipOrder>,
     /// The ship declined at its name prompt, until it is taken.
@@ -1107,6 +1114,7 @@ impl ShipyardScreen {
             request: None,
             asked_by_key: false,
             naming: ModalHost::default(),
+            told: Told::default(),
             order: None,
             declined: None,
             offering: None,
@@ -1119,6 +1127,7 @@ impl ShipyardScreen {
         };
         screen.read_pictures();
         screen.selected_changed();
+        screen.sync_pad_cells();
         screen
     }
 
@@ -1473,6 +1482,7 @@ impl ShipyardScreen {
         } else {
             self.selected_changed();
         }
+        self.sync_pad_cells();
     }
 
     /// Reads each listed ship's picture, when there is a dialog to show
@@ -1576,6 +1586,7 @@ impl ShipyardScreen {
             panel
                 .with_focus_ring(self.focus_ring)
                 .with_bindings(self.keys.bindings().clone())
+                .told(self.told)
         });
     }
 
@@ -1716,6 +1727,9 @@ impl Screen for ShipyardScreen {
         let fresh = pressed
             .filter(|command| !command.repeat)
             .map(|command| command.command);
+        if self.tell_held(input) {
+            return ScreenAction::None;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -1779,16 +1793,18 @@ impl Screen for ShipyardScreen {
             self.selected_changed();
         } else if fresh == Some(Command::Shipyard(ShipyardCommand::Buy)) {
             self.ask(true);
-        } else if fresh == Some(Command::Ui(UiCommand::Activate)) {
+        } else if fresh == Some(Command::Ui(UiCommand::Activate)) && !from_pad(input) {
             self.open_info();
         } else if on_grid {
             // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
-            let event = laid.dialog.input(input);
-            if let Some(DialogEvent::Item(item)) = event {
-                self.activate(item);
+            match laid.dialog.input(input) {
+                Some(DialogEvent::Item(item)) => self.activate(item),
+                Some(DialogEvent::Cell(cell)) => self.press_pad_cell(cell),
+                None => {}
             }
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -1810,6 +1826,7 @@ impl Screen for ShipyardScreen {
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
+        self.sync_pad_cells();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1884,6 +1901,8 @@ impl Screen for ShipyardScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+pub(crate) mod pad;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -2175,11 +2194,11 @@ mod tests {
         screen
     }
 
-    fn screen_of(shipyard: Shipyard) -> ShipyardScreen {
+    pub(super) fn screen_of(shipyard: Shipyard) -> ShipyardScreen {
         screen_with(shipyard, &art())
     }
 
-    fn screen() -> ShipyardScreen {
+    pub(super) fn screen() -> ShipyardScreen {
         screen_of(shipyard())
     }
 
@@ -2219,7 +2238,7 @@ mod tests {
             .expect("an item")
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -2231,7 +2250,7 @@ mod tests {
         screen.input(&key(k, true, false));
     }
 
-    fn click(screen: &mut ShipyardScreen, at: Point) {
+    pub(super) fn click(screen: &mut ShipyardScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -2241,7 +2260,7 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut ShipyardScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut ShipyardScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }
@@ -2561,7 +2580,7 @@ mod tests {
     }
 
     /// `count` ships, numbered from 200.
-    fn long(count: usize) -> Shipyard {
+    pub(super) fn long(count: usize) -> Shipyard {
         Shipyard {
             rows: (0..count)
                 .map(|n| {
@@ -3450,7 +3469,7 @@ mod tests {
     }
 
     /// The screen with B pressed on ship 129 and its prompt open.
-    fn naming_by_key() -> ShipyardScreen {
+    pub(super) fn naming_by_key() -> ShipyardScreen {
         let mut screen = screen();
         press(&mut screen, Key::ArrowRight);
         press(&mut screen, Key::KeyB);

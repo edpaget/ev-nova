@@ -501,6 +501,13 @@ impl Told {
         }
     }
 
+    /// The surroundings kept, as the input that told them, if any: for a
+    /// holder that tells a dialog that is no [`Screen`].
+    #[must_use]
+    pub fn input(self) -> Option<Input> {
+        self.0.map(Input::Surroundings)
+    }
+
     /// Tells `screen` the surroundings kept, if any.
     pub fn tell(self, screen: &mut (impl Screen + ?Sized)) {
         if let Some(surroundings) = self.0 {
