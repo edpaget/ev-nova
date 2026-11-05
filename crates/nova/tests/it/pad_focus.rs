@@ -3,6 +3,11 @@
 //! app's pad poll and the device switch, and its toggle's change reaches
 //! the settings store.
 //!
+//! From the main menu, the pad alone opens Preferences and closes it,
+//! and creates or opens a pilot and flies it, through the router's
+//! telling the main menu and the screens it opens the device
+//! (rdm:phase/key-bindings/phase-11-gamepad-menus).
+//!
 //! Over `preferences`' synthetic "new prefs dialog". Where the focus
 //! lands, and what each button does, is nova-view's, pinned there
 //! (`ui::pad_focus::every_screen`); this pins that the pieces are joined.
@@ -13,6 +18,8 @@ use nova::app::{Showing, WindowEvent};
 use nova::gamepad::fixture::FakeGamepads;
 use nova::gamepad::{PadEvent, PadId};
 use nova::settings::SettingsKeeper;
+use nova_sim::fixture::MemoryPilots;
+use nova_view::menu::{MainMenu, MenuChoice};
 use nova_view::ui::prefs::Focus;
 use nova_view::{ControllerFamily, Device, MenuCommand, PadButton};
 
@@ -30,6 +37,15 @@ struct Padded {
 
 impl Padded {
     fn new(store: &nova_audio::recording::MemorySettings) -> Self {
+        Self::reading(Harness::new(store))
+    }
+
+    /// The game started on the main menu, reading the fake pads.
+    fn on_main_menu(store: &nova_audio::recording::MemorySettings) -> Self {
+        Self::reading(Harness::on_main_menu(store))
+    }
+
+    fn reading(harness: Harness) -> Self {
         let pads = FakeGamepads::new();
         let Harness {
             app,
@@ -37,7 +53,7 @@ impl Padded {
             gpu,
             log,
             frames,
-        } = Harness::new(store);
+        } = harness;
         let harness = Harness {
             app: app.with_gamepads(Box::new(pads.clone())),
             window,
@@ -208,4 +224,173 @@ fn the_pad_alone_opens_a_service_closes_it_and_takes_off() {
             .all(|event| matches!(event, WindowEvent::Redraw { .. })),
         "no key or pointer event after landing: {events:?}"
     );
+}
+
+/// The d-pad button that heads from the main menu's highlight toward
+/// `goal`'s button: the way the gap between their centres is widest.
+fn toward(menu: &MainMenu, goal: MenuChoice) -> PadButton {
+    let Some(at) = menu.pad_highlight() else {
+        return PadButton::DPadDown;
+    };
+    let (from, to) = (
+        menu.button_bounds(at).center(),
+        menu.button_bounds(goal).center(),
+    );
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    match (dx.abs() > dy.abs(), dx > 0.0, dy > 0.0) {
+        (true, true, _) => PadButton::DPadRight,
+        (true, false, _) => PadButton::DPadLeft,
+        (false, _, true) => PadButton::DPadDown,
+        (false, _, false) => PadButton::DPadUp,
+    }
+}
+
+/// The pad alone from the main menu: the d-pad reaches Preferences,
+/// South opens it and East closes it, through the router's telling the
+/// main menu the device (rdm:phase/key-bindings/phase-11-gamepad-menus).
+#[test]
+fn the_pad_alone_opens_preferences_from_the_main_menu_and_closes_it() {
+    let store = seeded();
+    let mut app = Padded::on_main_menu(&store);
+    assert_eq!(app.harness.showing(), Showing::MainMenu);
+    app.pads.push(vec![PadEvent::Connected(PAD)]);
+    app.frame();
+    let menu = |app: &Padded| {
+        app.harness
+            .app
+            .screen()
+            .main_menu()
+            .expect("a main menu")
+            .clone()
+    };
+    let mut taps = Vec::new();
+    for _ in 0..20 {
+        let now = menu(&app);
+        if now.pad_highlight() == Some(MenuChoice::Preferences) {
+            break;
+        }
+        let button = toward(&now, MenuChoice::Preferences);
+        taps.push(button);
+        app.tap(button);
+    }
+    assert_eq!(
+        menu(&app).pad_highlight(),
+        Some(MenuChoice::Preferences),
+        "the d-pad reaches Preferences: {taps:?}"
+    );
+    app.tap(PadButton::South);
+    assert_eq!(app.harness.showing(), Showing::Preferences);
+    app.tap(PadButton::East);
+    assert_eq!(app.harness.showing(), Showing::MainMenu, "East closes it");
+    assert!(
+        app.sent
+            .iter()
+            .all(|event| matches!(event, WindowEvent::Redraw { .. })),
+        "no key or pointer event: {:?}",
+        app.sent
+    );
+}
+
+/// The pilots harness reading the fake pads.
+struct PadPilots {
+    game: crate::pilots::Harness,
+    pads: FakeGamepads,
+}
+
+impl PadPilots {
+    fn opening(store: &MemoryPilots) -> Self {
+        let pads = FakeGamepads::new();
+        let game = crate::pilots::Harness::opening_with_pads(store, Box::new(pads.clone()));
+        let mut padded = Self { game, pads };
+        padded.pads.push(vec![PadEvent::Connected(PAD)]);
+        padded.game.frame();
+        padded
+    }
+
+    fn tap(&mut self, button: PadButton) {
+        for pressed in [true, false] {
+            self.pads.push(vec![PadEvent::Button {
+                pad: PAD,
+                button,
+                pressed,
+            }]);
+            self.game.frame();
+        }
+    }
+
+    fn menu(&self) -> MainMenu {
+        self.game
+            .app
+            .screen()
+            .main_menu()
+            .expect("a main menu")
+            .clone()
+    }
+
+    /// The d-pad to `goal`, then South.
+    fn choose(&mut self, goal: MenuChoice) {
+        for _ in 0..20 {
+            let menu = self.menu();
+            if menu.pad_highlight() == Some(goal) {
+                self.tap(PadButton::South);
+                return;
+            }
+            self.tap(toward(&menu, goal));
+        }
+        panic!("the d-pad never reaches {goal:?}");
+    }
+
+    /// Frames until flight shows, South tapped on each intro picture.
+    fn fly_in(&mut self) {
+        for _ in 0..2000 {
+            match self.game.showing() {
+                Showing::Flight if !self.game.app.screen().entering() => return,
+                Showing::Intro | Showing::IntroText => self.tap(PadButton::South),
+                _ => {
+                    self.game.frame();
+                }
+            }
+        }
+        panic!("never into flight: {:?}", self.game.showing());
+    }
+}
+
+/// The pad alone creates a pilot, accepting the drawn default name and
+/// ship name with South, and flies it: New Pilot, OK, the christening's
+/// OK, Enter Ship, and the intro's picture ended with South.
+#[test]
+fn the_pad_alone_creates_a_pilot_and_flies_it() {
+    let store = MemoryPilots::new();
+    let mut app = PadPilots::opening(&store);
+    assert_eq!(app.game.showing(), Showing::MainMenu);
+    app.choose(MenuChoice::NewPilot);
+    assert_eq!(app.game.showing(), Showing::NewPilot);
+    app.tap(PadButton::South);
+    assert_eq!(app.game.showing(), Showing::Christening);
+    app.tap(PadButton::South);
+    assert_eq!(app.game.showing(), Showing::MainMenu);
+    app.choose(MenuChoice::EnterShip);
+    app.fly_in();
+    assert_eq!(app.game.showing(), Showing::Flight);
+    assert_eq!(store.keys(), ["Ada Lovelace"], "saved under the default");
+}
+
+/// The pad alone opens a saved pilot from the list and flies it.
+#[test]
+fn the_pad_alone_opens_a_saved_pilot_and_flies_it() {
+    let store = MemoryPilots::new();
+    let mut keyed = crate::pilots::Harness::opening(&store);
+    keyed.create_and_close("Ada");
+    assert_eq!(store.keys(), ["Ada"]);
+
+    let mut app = PadPilots::opening(&store);
+    app.choose(MenuChoice::OpenPilot);
+    assert_eq!(app.game.showing(), Showing::OpenPilot);
+    app.tap(PadButton::South);
+    assert_eq!(app.game.showing(), Showing::MainMenu);
+    app.choose(MenuChoice::EnterShip);
+    app.fly_in();
+    assert_eq!(app.game.showing(), Showing::Flight);
+    let flown = app.game.app.screen().flight_view().expect("flying");
+    assert_eq!(flown.sim().pilot().expect("a pilot").name(), "Ada");
 }

@@ -263,7 +263,7 @@ impl Harness {
 
     /// The game started over `store` on the main menu, where the music
     /// plays.
-    fn on_main_menu(store: &MemorySettings) -> Self {
+    pub(crate) fn on_main_menu(store: &MemorySettings) -> Self {
         Self::build(store, SoundTable::ORIGINAL, true, Os::Windows)
     }
 
