@@ -62,7 +62,9 @@
 
 use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
 use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
+use nova_sim::{
+    Amounts, Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2,
+};
 
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{Breakups, LoopedSounds, Scene};
@@ -153,16 +155,24 @@ impl Presentation {
     }
 }
 
+/// The turn and the thrust flight holds ([`FlightView::steering`]).
+struct Steering {
+    /// Which way it turns.
+    way: Turn,
+    /// How far the turn is held, 0 to 1.
+    turn: f32,
+    /// How far the thrust is held, 0 to 1.
+    thrust: f32,
+}
+
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// The controls for the commands held. Autopilot with Option
-    /// ([`F::FaceStellar`]) faces the navigation stellar, whether its key
-    /// is Autopilot's with Option or one of its own.
+    /// The controls for the commands held and the sticks. Autopilot with
+    /// Option ([`F::FaceStellar`]) faces the navigation stellar, whether
+    /// its key is Autopilot's with Option or one of its own. The turn and
+    /// the thrust are [`FlightView::steering`]'s, held while their amount
+    /// is above none.
     pub(super) fn controls(&self) -> Controls {
-        let turn = match (self.held(F::RotateLeft), self.held(F::RotateRight)) {
-            (true, false) => Turn::Left,
-            (false, true) => Turn::Right,
-            _ => Turn::None,
-        };
+        let steering = self.steering();
         let face = if self.held(F::FaceStellar) {
             Face::Stellar
         } else if self.held(F::Autopilot) {
@@ -171,12 +181,54 @@ impl<C, S: FlightSim> FlightView<C, S> {
             Face::Off
         };
         Controls {
-            thrust: self.held(F::Accelerate),
-            turn,
+            thrust: steering.thrust > 0.0,
+            turn: steering.way,
             reverse: self.held(F::ReverseCourse),
             face,
             afterburner: self.held(F::Afterburner),
         }
+    }
+
+    /// How far the turn and the thrust are held: a key's (or the d-pad's)
+    /// fully, a stick's by its amount.
+    pub(super) fn amounts(&self) -> Amounts {
+        let steering = self.steering();
+        Amounts {
+            turn: steering.turn,
+            thrust: steering.thrust,
+        }
+    }
+
+    /// The turn and the thrust from the commands held and the sticks. The
+    /// turn is the key's way at 1 while exactly one turn command is held,
+    /// otherwise the turn stick's ([`F::TurnAxis`]), its sign the way and
+    /// its size the amount. The thrust is 1 while Accelerate is held,
+    /// otherwise the throttle stick's ([`F::ThrottleAxis`]) forward part:
+    /// pulled back, it thrusts none (and past the press threshold holds
+    /// Reverse Course, a command). So a key or d-pad press beats a smaller
+    /// stick amount, and with keys alone each is 0 or 1.
+    fn steering(&self) -> Steering {
+        let (way, turn) = match (self.held(F::RotateLeft), self.held(F::RotateRight)) {
+            (true, false) => (Turn::Left, 1.0),
+            (false, true) => (Turn::Right, 1.0),
+            _ => {
+                let stick = self.keys.axis(F::TurnAxis);
+                let way = if stick > 0.0 {
+                    Turn::Right
+                } else if stick < 0.0 {
+                    Turn::Left
+                } else {
+                    Turn::None
+                };
+                (way, stick.abs())
+            }
+        };
+        let thrust = if self.held(F::Accelerate) {
+            1.0
+        } else {
+            self.keys.axis(F::ThrottleAxis).max(0.0)
+        };
+        Steering { way, turn, thrust }
     }
 
     /// What the frame's steps are given, the ship drawn at `anchor`: the
@@ -203,7 +255,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),
-            amounts: nova_sim::Amounts::FULL,
+            amounts: self.amounts(),
             play_area: play_area(self.view, anchor),
             window_width: window_width(self.view),
             fire: (self.held(F::FirePrimary), self.held(F::FireSecondary)),

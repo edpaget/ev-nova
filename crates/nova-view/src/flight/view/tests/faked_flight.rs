@@ -56,7 +56,12 @@ pub(super) fn ticked(view: &mut Faked, n: u32) {
 
 /// The controls the last step was given.
 pub(super) fn last_controls(view: &Faked) -> Controls {
-    view.sim.inputs().last().expect("a step").controls
+    last_step_input(view).controls
+}
+
+/// Everything the last step was given.
+pub(super) fn last_step_input(view: &Faked) -> nova_sim::flight_frame::StepInput {
+    *view.sim.inputs().last().expect("a step")
 }
 
 /// The player's ship 128 at `at` facing `heading`.

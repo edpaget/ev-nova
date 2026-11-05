@@ -204,7 +204,10 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
                 thrust: true,
                 ..Controls::default()
             },
-            amounts: nova_sim::Amounts::FULL,
+            amounts: nova_sim::Amounts {
+                turn: 0.0,
+                thrust: 1.0,
+            },
             play_area: super::super::play_area(VIEW_SIZE, anchor()),
             window_width: 1024,
             fire: (true, true),

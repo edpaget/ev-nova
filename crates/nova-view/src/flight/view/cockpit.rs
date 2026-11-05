@@ -511,12 +511,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   meanwhile past it ([`FlightView::reads_down`]). That release, or
     ///   a fresh press, which the OS sends only after a release, ends the
     ///   wait.
+    ///
+    /// A pad button is tracked as a key that never repeats.
     pub(super) fn track_held(&mut self, input: &Input) {
-        let Input::Key {
-            pressed, repeat, ..
-        } = *input
-        else {
-            return;
+        let (pressed, repeat) = match *input {
+            Input::Key {
+                pressed, repeat, ..
+            } => (pressed, repeat),
+            Input::PadButton { pressed, .. } => (pressed, false),
+            _ => return,
         };
         self.sync_escort_keys();
         if !self.is_flight_key(input) {

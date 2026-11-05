@@ -238,7 +238,7 @@ impl<
                 pressed: true,
                 repeat: false,
                 ..
-            }
+            } | Input::PadButton { pressed: true, .. }
         ) && self.is_map_key(input);
         if closing && !self.map.finding() {
             // M's own close reads M held, so it waits for the release.

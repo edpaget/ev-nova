@@ -223,7 +223,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             Input::PointerButton { pressed: false, .. } => self.cursor.button(false),
             Input::PointerLeft => self.cursor.left(),
-            Input::Key { pressed: true, .. }
+            Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. }
                 if !self.map_open && self.press_fades_cursor(input) =>
             {
                 self.cursor.key();

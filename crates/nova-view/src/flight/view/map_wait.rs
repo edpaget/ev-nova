@@ -165,7 +165,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight reads (the left ones), or a key bound to a held command of flight's contexts, whatever
     /// modifiers it needs ([`Kind::Held`]; X is the eject key alone too).
     pub(super) fn is_flight_key(&self, input: &Input) -> bool {
-        self.keys.reads_modifier(input)
+        // Every pad button: a layer button binds nothing alone, but flight
+        // must hold it for the press it layers.
+        matches!(input, Input::PadButton { .. })
+            || self.keys.reads_modifier(input)
             || self
                 .keys
                 .bound_to(input)
@@ -242,7 +245,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_movie_replay`]), so a latched key pressed under
     /// it acts only once let go and pressed again.
     pub(super) fn track_unlatched(&mut self, input: &Input) {
-        let Input::Key { pressed, .. } = *input else {
+        let (Input::Key { pressed, .. } | Input::PadButton { pressed, .. }) = *input else {
             return;
         };
         if pressed && self.key_latches(input) {

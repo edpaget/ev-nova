@@ -118,6 +118,7 @@ mod missions;
 mod murk_sprites;
 mod nav;
 mod outputs;
+mod pad_flight;
 mod painted_ships;
 mod particle_pixels;
 mod port_screen_map;

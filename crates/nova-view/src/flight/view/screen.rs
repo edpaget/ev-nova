@@ -299,6 +299,12 @@ impl<
         if self.hold_under_rescue(input) {
             return ScreenAction::None;
         }
+        // A stick's move and the app's surroundings press nothing: flight's
+        // reader takes them whatever shows, the axes for the next step.
+        if matches!(input, Input::PadAxis { .. } | Input::Surroundings(_)) {
+            self.keys.follow(input);
+            return ScreenAction::None;
+        }
         if self.playing() {
             // `_HandlePlayer` polls the unlatched keys again after the
             // movie, however they went down under it (the `movies` module).
@@ -315,7 +321,8 @@ impl<
                 pressed: true,
                 repeat: false,
                 ..
-            } => self.keys.peek(input),
+            }
+            | Input::PadButton { pressed: true, .. } => self.keys.peek(input),
             _ => None,
         };
         let jumping = self.jump_under_way();

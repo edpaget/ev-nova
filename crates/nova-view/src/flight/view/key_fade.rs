@@ -92,10 +92,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether this frame's pass sets the byte with what is read down: a
     /// jump or an auto-eject with no key at all, or any held command that
     /// fades, a latched one held past a close included.
+    ///
+    /// A stick flight reads as an axis, pushed past the dead zone, fades
+    /// it as the turn and thrust keys do, behind the helm's gate.
     pub(super) fn cursor_keyed(&self) -> bool {
         self.frame.key_fades.unbidden()
             || self
                 .commands_down()
                 .any(|command| self.key_fades_cursor(command))
+            || (self.keys.flight_axis_pushed() && self.frame.key_fades.fades(FadeKey::Helm))
     }
 }
