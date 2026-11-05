@@ -542,6 +542,12 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_text_is_named_in_the_error() {
+        let error = "Hyper+KeyW".parse::<KeyCombo>().expect_err("no combo");
+        assert_eq!(error.to_string(), r#""Hyper+KeyW" is not a key combo"#);
+    }
+
+    #[test]
     fn a_modifier_key_can_be_the_key_itself() {
         assert_eq!(
             "ControlLeft".parse::<KeyCombo>(),
