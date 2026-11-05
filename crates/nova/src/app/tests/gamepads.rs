@@ -169,6 +169,53 @@ fn presses_queued_while_unfocused_are_dropped_on_focus_gained() {
 }
 
 #[test]
+fn a_pad_connected_in_the_background_keeps_its_family() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let ids = crate::gamepad::PadIds {
+        vendor: 0x045E,
+        product: 0x0B12,
+    };
+    let pads = FakeGamepads::new();
+    let mut app = app(&window).with_gamepads(Box::new(pads.clone()));
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    pads.push(vec![PadEvent::connected_with(ONE, ids)]);
+    handle(&mut app, &mut window, WindowEvent::FocusGained);
+    assert_eq!(app.screen().surroundings, [], "a connect is no use");
+    pads.push(vec![south(true)]);
+    redraw_at(&mut app, &mut window, 16);
+    let family = crate::gamepad::family::family_of(Some(ids));
+    assert_eq!(app.screen().surroundings, [told(Device::Gamepad(family))]);
+}
+
+#[test]
+fn a_pad_lost_in_the_background_forgets_its_family_and_stick() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let ids = crate::gamepad::PadIds {
+        vendor: 0x045E,
+        product: 0x0B12,
+    };
+    let stick = PadEvent::Axis {
+        pad: ONE,
+        axis: PadAxis::LeftX,
+        value: 1.0,
+    };
+    let pads = FakeGamepads::with([vec![PadEvent::connected_with(ONE, ids), stick]]);
+    let mut app = app(&window).with_gamepads(Box::new(pads.clone()));
+    redraw_at(&mut app, &mut window, 16);
+    handle(&mut app, &mut window, key(Key::KeyA, true));
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    pads.push(vec![PadEvent::Disconnected(ONE)]);
+    handle(&mut app, &mut window, WindowEvent::FocusGained);
+    pads.push(vec![stick]);
+    redraw_at(&mut app, &mut window, 32);
+    assert_eq!(
+        app.screen().surroundings.last(),
+        Some(&told(PAD)),
+        "a pad found with no connect is generic, its stick centred till it moved"
+    );
+}
+
+#[test]
 fn with_no_gamepads_a_redraw_routes_nothing() {
     let mut window = FakeWindow::new((1024, 768), 1.0);
     let mut app = app(&window);

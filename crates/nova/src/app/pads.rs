@@ -56,13 +56,19 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// into the pad state, routing none of it: a press queued while away
     /// doesn't fire, as a key released in the background reaches no
     /// screen. The state still follows it, so a button let go of away is
-    /// up, and one still down reads down from its next change.
+    /// up, and one still down reads down from its next change; and the
+    /// device used last learns the pads connected and lost away
+    /// ([`LastDevice::track`](super::last_device::LastDevice::track)),
+    /// though their use switches it to none.
     pub(super) fn drain_gamepads(&mut self) {
         let Some(pads) = &mut self.gamepads else {
             return;
         };
         let mut events = Vec::new();
         pads.poll(&mut events);
+        for event in &events {
+            self.last_device.track(event);
+        }
         self.pad_inputs.feed(&events, &mut Vec::new());
     }
 

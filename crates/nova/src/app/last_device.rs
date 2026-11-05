@@ -72,20 +72,14 @@ impl LastDevice {
     /// Follows what a pad did, and says the device it switched to, if it
     /// switched.
     pub fn pad_event(&mut self, event: &PadEvent) -> Option<Device> {
+        self.track(event);
         let used = match *event {
             PadEvent::Button { pressed: true, .. } => true,
             PadEvent::Trigger { value, .. } => value >= PRESS_THRESHOLD,
             PadEvent::Axis { pad, axis, value } => self.leaves_dead_zone(pad, axis, value),
-            PadEvent::Connected { pad, ids } => {
-                self.families.insert(pad, family_of(ids));
+            PadEvent::Connected { .. } | PadEvent::Disconnected(_) | PadEvent::Button { .. } => {
                 false
             }
-            PadEvent::Disconnected(pad) => {
-                self.axes.retain(|&(of, _), _| of != pad);
-                self.families.remove(&pad);
-                false
-            }
-            PadEvent::Button { .. } => false,
         };
         if !used {
             return None;
@@ -93,6 +87,24 @@ impl LastDevice {
         let pad = event.pad();
         self.last_family = self.families.get(&pad).copied().unwrap_or_default();
         self.switch(Device::Gamepad(self.last_family))
+    }
+
+    /// Follows which pads are connected, switching nothing: a connect
+    /// records the pad's family from its ids ([`family_of`]), a loss
+    /// forgets its family and its sticks. [`LastDevice::pad_event`] runs
+    /// it on every event, and the app runs it alone on what the pads did
+    /// while the window was in the background, which is no use.
+    pub fn track(&mut self, event: &PadEvent) {
+        match *event {
+            PadEvent::Connected { pad, ids } => {
+                self.families.insert(pad, family_of(ids));
+            }
+            PadEvent::Disconnected(pad) => {
+                self.axes.retain(|&(of, _), _| of != pad);
+                self.families.remove(&pad);
+            }
+            _ => {}
+        }
     }
 
     /// Whether `pad`'s stick, with `axis` moved to `value`, has just left
@@ -264,6 +276,36 @@ mod tests {
             last.pad_event(&south(TWO)),
             Some(PAD),
             "found again with no ids, generic"
+        );
+    }
+
+    #[test]
+    fn tracking_a_connect_records_its_family_without_switching() {
+        let mut last = LastDevice::new();
+        let ids = crate::gamepad::PadIds {
+            vendor: 0x045E,
+            product: 1,
+        };
+        last.track(&PadEvent::connected_with(ONE, ids));
+        assert_eq!(last.device(), Device::Keyboard, "a connect is no use");
+        assert_eq!(
+            last.pad_event(&south(ONE)),
+            Some(Device::Gamepad(family_of(Some(ids))))
+        );
+    }
+
+    #[test]
+    fn tracking_a_disconnect_forgets_its_family_and_sticks() {
+        let mut last = LastDevice::new();
+        last.pad_event(&connected(ONE, 0x045E));
+        last.pad_event(&stick(PadAxis::RightX, outside()));
+        last.input(&key(true));
+        last.track(&PadEvent::Disconnected(ONE));
+        assert_eq!(last.device(), Device::Keyboard);
+        assert_eq!(
+            last.pad_event(&stick(PadAxis::RightX, outside())),
+            Some(PAD),
+            "found with no connect, generic and centred"
         );
     }
 
