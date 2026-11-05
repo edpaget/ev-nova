@@ -22,7 +22,7 @@
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding (`nova_sim::NovaAi`) | interceptors only |
 //! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing (`nova_sim::hail::nova`) | they answer Greetings "No response.", and the middle button works |
 //! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." (`nova_sim::hail::reply`) | it is shown as written\* |
-//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
+//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player (`nova_sim::EscortAi`) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation: **the default — a deliberate departure from the original**†††††††††††††††††††† |
 //! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`); at a jump's arrival the reset comes from the class-order bookkeeping a pass later (see [`ArrivalOrders`](RuleKey::ArrivalOrders)) | the orders are kept\* |
 //! | [`ArrivalOrders`](RuleKey::ArrivalOrders) | `arrival_orders` | under `escort_orders`' engine reading, a jump's arrival keeps the escort classes' orders through its pass, whose class-order bookkeeping it skips (`_HandlePlayer` returns @0x6c625 before @0x6e2e8): a mission escort set up in the new system thinks once under its class's order (`_EscortAI` @0x83afb), the hired escorts and fighters gliding past their think (`_AIDispatch` @0x8fcf5), and the next pass's bookkeeping clears every class, every ship placed being unmarked (`_RespawnEscort` @0x3d546; see `nova_sim::Session`) | the port's earlier reading: every escort's order is reset as it enters, before any think\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
@@ -714,6 +714,14 @@
 //! intended reading is the default, as CLAUDE.md's rule for the original's
 //! bugs says. The Bible says nothing of it; the engine's reading restores
 //! the original's table.
+//!
+//! †††††††††††††††††††† `escort_ai` follows the other reading by default too, by the user's
+//! choice: under the original's formation an escort hired with no
+//! standing command fires only its best turret at a threat, so a warship
+//! with fixed guns looks idle until the player gives it an order. By the
+//! Bible's `InherentAI`, a warship or interceptor fights the threat to the
+//! player on its own. The engine's reading restores the original's
+//! formation.
 //!
 //! # Numeric values
 //!
@@ -4565,7 +4573,7 @@ impl RuleKey {
     }
 
     /// The source this rule follows when the settings choose none: the
-    /// engine's, but for the two cron holdoff keys, the breakup stall, the
+    /// engine's, but for the escort AI, the two cron holdoff keys, the breakup stall, the
     /// unlisted stellar, the beam cone quirks, the seeker lock angle, the
     /// ship debris, the combat caps, the sound voices, the dialog focus
     /// ring and the new pilot's empty name, which follow the other reading as
@@ -4573,7 +4581,8 @@ impl RuleKey {
     #[must_use]
     pub const fn default_source(self) -> RuleSource {
         match self {
-            Self::CronZeroDurationHoldoff
+            Self::EscortAi
+            | Self::CronZeroDurationHoldoff
             | Self::CronPostHoldoff
             | Self::BreakupStall
             | Self::UnlistedStellar
@@ -4799,6 +4808,7 @@ mod tests {
         assert_eq!(
             bible,
             [
+                RuleKey::EscortAi,
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::BreakupStall,
@@ -5899,6 +5909,18 @@ mod tests {
         assert_eq!(
             RuleKey::ALL.iter().rev().nth(108),
             Some(&RuleKey::SeekerLockAngle)
+        );
+    }
+
+    #[test]
+    fn the_escort_ai_rule_defaults_to_the_bibles_inherent_ai() {
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::EscortAi),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            Rulebook::new(RuleSource::Engine).source_for(RuleKey::EscortAi),
+            RuleSource::Engine
         );
     }
 
