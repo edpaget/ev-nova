@@ -94,6 +94,7 @@ use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
 use super::key_wait::KeyWait;
+use super::pad_focus::{FocusState, from_pad};
 use super::text_box::TextBox;
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
@@ -111,6 +112,8 @@ use crate::spaceport::credits::comma_number;
 use crate::spaceport::layout::DONE_LABEL;
 use crate::spaceport::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::text::{TextMetrics, wrap};
+
+mod pad;
 
 /// The player info screen's `DLOG` (and `DITL`) ID.
 pub const PLAYER_INFO_DIALOG: i16 = 1017;
@@ -591,6 +594,9 @@ pub struct PlayerInfoScreen {
     wait: KeyWait,
     /// Its keys, as commands ([`contexts::PLAYER_INFO`]).
     keys: CommandReader,
+    /// The pad's focus on the buttons, and the device used last (the
+    /// `pad` module): the keyboard has no focus here.
+    focus: FocusState<PlayerInfoButton>,
 }
 
 impl PlayerInfoScreen {
@@ -623,6 +629,7 @@ impl PlayerInfoScreen {
             closed: false,
             wait: KeyWait::new(player_info_key(&SharedBindings::default()), false),
             keys: CommandReader::new(contexts::PLAYER_INFO),
+            focus: FocusState::default(),
         }
     }
 
@@ -769,6 +776,7 @@ impl PlayerInfoScreen {
             .with_focus_ring(self.focus_ring)
             .with_bindings(self.keys.bindings().clone());
         dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
+        dialog.input(&self.told());
         self.confirm = Some(dialog);
     }
 
@@ -895,8 +903,10 @@ fn lay_out(
 
 impl Screen for PlayerInfoScreen {
     /// The Yes/No dialog takes everything while it asks. Otherwise Tab
-    /// and Tab Back change the tab, Confirm, Back and Player Info close,
-    /// and a click goes to the buttons. It never quits.
+    /// and Tab Back (or Previous Field, the pad's left shoulder) change
+    /// the tab, Confirm, Back and Player Info close, the pad's d-pad and
+    /// South move the pad's focus and press the button it is on (the
+    /// `pad` module), and a click goes to the buttons. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.wait.waiting() {
             if self.wait.input(input) {
@@ -906,15 +916,21 @@ impl Screen for PlayerInfoScreen {
         }
         self.wait.note(input);
         let command = self.keys.follow(input);
+        if let Input::Surroundings(surroundings) = *input {
+            self.pad_surroundings(surroundings.device);
+        }
         if self.confirm.is_some() {
             self.confirm_input(input);
+            return ScreenAction::None;
+        }
+        if from_pad(input) && self.pad_command(command) {
             return ScreenAction::None;
         }
         match command {
             Some(CommandInput {
                 command:
-                    tab
-                    @ (Command::Ui(UiCommand::Tab) | Command::PlayerInfo(PlayerInfoCommand::TabBack)),
+                    tab @ (Command::Ui(UiCommand::Tab | UiCommand::PrevFocus)
+                    | Command::PlayerInfo(PlayerInfoCommand::TabBack)),
                 pressed: true,
                 repeat,
             }) if self.laid.is_ok() => {
@@ -925,7 +941,11 @@ impl Screen for PlayerInfoScreen {
                 } else {
                     tab
                 };
-                self.tab = if tab == Command::PlayerInfo(PlayerInfoCommand::TabBack) {
+                self.tab = if matches!(
+                    tab,
+                    Command::PlayerInfo(PlayerInfoCommand::TabBack)
+                        | Command::Ui(UiCommand::PrevFocus)
+                ) {
                     self.tab.previous()
                 } else {
                     self.tab.next()
@@ -983,6 +1003,7 @@ impl Screen for PlayerInfoScreen {
             );
         }
         self.draw_content(laid, list);
+        self.draw_pad_highlight(list);
         if let Some(dialog) = &self.confirm {
             fill_rect(list, dialog.bounds(), Color::BLACK);
             dialog.draw(list);
@@ -1034,6 +1055,9 @@ impl PlayerInfoScreen {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::{confirm_pad_probe, pad_probe};
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1124,7 +1148,7 @@ mod tests {
         }
     }
 
-    fn info() -> PlayerInfo {
+    pub(super) fn info() -> PlayerInfo {
         PlayerInfo {
             pilot_name: "Ada".to_owned(),
             date: "June 23rd, 1177 NC".to_owned(),
@@ -1186,11 +1210,11 @@ mod tests {
         )
     }
 
-    fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
+    pub(super) fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
         screen_with(info, stock())
     }
 
-    fn screen() -> PlayerInfoScreen {
+    pub(super) fn screen() -> PlayerInfoScreen {
         screen_of(info())
     }
 
@@ -1202,7 +1226,7 @@ mod tests {
         }
     }
 
-    fn press(key_pressed: Key) -> Input {
+    pub(super) fn press(key_pressed: Key) -> Input {
         key(key_pressed, true, false)
     }
 
@@ -1220,12 +1244,99 @@ mod tests {
         screen.input(&mouse(false, at));
     }
 
-    fn click_button(screen: &mut PlayerInfoScreen, button: PlayerInfoButton) {
+    pub(super) fn click_button(screen: &mut PlayerInfoScreen, button: PlayerInfoButton) {
         let at = screen.button_bounds(button).expect("laid out").center();
         click(screen, at);
     }
 
-    fn drawn(screen: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    /// The screen on its Cargo tab, with cargo to jettison.
+    pub(super) fn on_cargo() -> PlayerInfoScreen {
+        let mut screen = screen();
+        click_button(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        screen
+    }
+
+    fn outcome_of(screen: &mut PlayerInfoScreen) -> String {
+        format!(
+            "{:?}, closed {}, asking {}, jettison {}",
+            screen.tab(),
+            screen.closed(),
+            screen.confirm_open(),
+            screen.take_jettison()
+        )
+    }
+
+    struct Probe(PlayerInfoScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |button| self.0.button_bounds(button).expect("laid out");
+            vec![
+                ("Done", at(PlayerInfoButton::Done)),
+                ("General", at(PlayerInfoButton::Tab(Tab::General))),
+                ("Cargo", at(PlayerInfoButton::Tab(Tab::Cargo))),
+                ("Extras", at(PlayerInfoButton::Tab(Tab::Extras))),
+                ("Honors", at(PlayerInfoButton::Tab(Tab::Honors))),
+                ("Jettison", at(PlayerInfoButton::Jettison)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            outcome_of(&mut self.0)
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+    }
+
+    /// The player info screen's row in the pad's every-screen table, on
+    /// its Cargo tab with cargo, so Jettison shows.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(on_cargo()))
+    }
+
+    struct ConfirmProbe(PlayerInfoScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for ConfirmProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let confirm = self.0.confirm().expect("asking");
+            let at = |item| confirm.item_bounds(item).expect("item");
+            vec![("OK", at(YES_ITEM)), ("Cancel", at(NO_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            outcome_of(&mut self.0)
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            let mut screen = on_cargo().with_focus_ring(ring);
+            click_button(&mut screen, PlayerInfoButton::Jettison);
+            self.0 = screen;
+            true
+        }
+    }
+
+    /// The Jettison question's row in the pad's every-screen table.
+    pub(crate) fn confirm_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut screen = on_cargo();
+        click_button(&mut screen, PlayerInfoButton::Jettison);
+        Box::new(ConfirmProbe(screen))
+    }
+
+    pub(super) fn drawn(screen: &PlayerInfoScreen) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
         screen.draw(&mut list);
         list.iter().cloned().collect()

@@ -81,6 +81,11 @@ fn rows() -> Vec<Row> {
         ("assignment", crate::ui::plunder::assignment_pad_probe),
         ("planet comm", crate::ui::planet_comm::pad_probe),
         ("escort", crate::ui::escort_dialog::pad_probe),
+        ("player info", crate::ui::player_info::pad_probe),
+        (
+            "player info's question",
+            crate::ui::player_info::confirm_pad_probe,
+        ),
     ]
 }
 
