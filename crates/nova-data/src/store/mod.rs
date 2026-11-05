@@ -344,7 +344,10 @@ struct TypeIndex {
 }
 
 /// The game's data files and plug-ins, layered into one read-only store.
-#[derive(Debug)]
+///
+/// The default is the empty store: no files, nothing failed or ignored,
+/// and no records, the data a game starts over before it has any.
+#[derive(Debug, Default)]
 pub struct GameData {
     files: Vec<SourceFile>,
     failed: Vec<FailedFile>,
