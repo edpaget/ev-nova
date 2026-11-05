@@ -85,6 +85,7 @@ pub mod galaxy;
 pub mod geometry;
 pub mod image;
 pub mod input;
+pub mod key_names;
 pub mod keymap;
 pub mod menu;
 pub mod menu_command;
@@ -119,6 +120,7 @@ pub use input::{
     COMMAND_KEYS, CONTROL_KEYS, Input, Key, ModifierHeld, MouseButton, OPTION_KEYS, SHIFT_KEYS,
     ScrollDelta, key_letter, letter_key,
 };
+pub use key_names::{KeyNames, NoKeyNames, combo_name, key_name};
 pub use keymap::{
     Bindings, Command, CommandInput, CommandReader, Context, KeyCombo, KeyMap, Modifiers,
     SharedBindings,
