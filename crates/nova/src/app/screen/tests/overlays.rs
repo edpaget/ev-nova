@@ -210,6 +210,48 @@ fn the_hint_names_the_keys_through_the_layout_the_bindings_carry() {
 }
 
 #[test]
+fn with_a_pad_last_used_the_hint_names_the_pad_s_inputs_through_nova_view() {
+    use nova_view::bound_names::{Spelling, name_command};
+    use nova_view::keymap::{MainScreenCommand, UiCommand};
+    use nova_view::{Command, ControllerFamily, Device, Surroundings};
+    let pad = Device::Gamepad(ControllerFamily::Xbox);
+    let bindings = nova_view::Bindings::default();
+    let mut screen =
+        with_dialogs(data()).with_bindings(nova_view::SharedBindings::new(bindings.clone()));
+    let keyed = hint_text(&screen);
+    screen.input(&Input::Surroundings(Surroundings { device: pad }));
+    let entries: [(Command, &str); 4] = [
+        (UiCommand::Tab.into(), "ships / galaxy map"),
+        (MainScreenCommand::Fly.into(), "fly"),
+        (MainScreenCommand::About.into(), "about"),
+        (MainScreenCommand::Preferences.into(), "preferences"),
+    ];
+    let expected: Vec<String> = entries
+        .iter()
+        .filter_map(|&(command, does)| {
+            name_command(
+                &bindings,
+                &nova_view::NoKeyNames,
+                command,
+                pad,
+                Spelling::Bound,
+            )
+            .map(|name| format!("{name}: {does}"))
+        })
+        .collect();
+    assert_eq!(hint_text(&screen), expected.join("   "));
+    assert_ne!(hint_text(&screen), keyed, "the pad's names, not the keys");
+    screen.input(&Input::Surroundings(Surroundings {
+        device: Device::Keyboard,
+    }));
+    assert_eq!(
+        hint_text(&screen),
+        keyed,
+        "a key's use names the keys again"
+    );
+}
+
+#[test]
 fn a_missing_dialog_or_text_opens_nothing() {
     let mut screen = AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
     screen.input(&key(Key::KeyI, true));
