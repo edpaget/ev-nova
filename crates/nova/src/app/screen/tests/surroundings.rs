@@ -163,3 +163,112 @@ fn a_south_held_through_the_landing_takes_off_only_when_pressed_again() {
     screen.input(&pad(PadButton::South, false));
     assert_eq!(screen.showing(), Showing::Flight, "its release takes off");
 }
+
+// rdm:phase/key-bindings/phase-11-gamepad-menus: the main menu and the
+// intro's text.
+
+fn tap(screen: &mut AppScreen, button: nova_view::PadButton) {
+    screen.input(&pad(button, true));
+    screen.input(&pad(button, false));
+}
+
+fn main_menu(screen: &AppScreen) -> &MainMenu {
+    screen.main_menu().expect("a main menu")
+}
+
+#[test]
+fn the_main_menu_follows_the_surroundings_shown_or_not() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    screen.input(&told(PAD));
+    assert_eq!(main_menu(&screen).device(), PAD);
+    assert_eq!(
+        main_menu(&screen).pad_highlight(),
+        Some(MenuChoice::NewPilot)
+    );
+    screen.menu_command(MenuCommand::Preferences);
+    screen.input(&told(Device::Mouse));
+    assert_eq!(
+        main_menu(&screen).device(),
+        Device::Mouse,
+        "under Preferences"
+    );
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    screen.input(&told(PAD));
+    assert_eq!(main_menu(&screen).device(), PAD, "after it closes");
+}
+
+#[test]
+fn the_menus_dialogs_opened_after_the_pad_was_used_are_told_so() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    screen.input(&told(PAD));
+    choose(&mut screen, MenuChoice::OpenPilot);
+    assert_eq!(screen.pilot_list().expect("open").device(), PAD);
+    tap(&mut screen, nova_view::PadButton::East);
+    assert_eq!(screen.showing(), Showing::MainMenu, "East cancels the list");
+    choose(&mut screen, MenuChoice::NewPilot);
+    assert_eq!(screen.new_pilot().expect("open").dialog().device(), PAD);
+}
+
+#[test]
+fn the_intro_text_opened_after_the_pad_was_used_is_told_so() {
+    let store = MemoryPilots::new();
+    let mut screen = super::entry::intro_menu(&store);
+    create_held(&mut screen, "Ada");
+    screen.input(&told(PAD));
+    choose(&mut screen, MenuChoice::EnterShip);
+    for _ in 0..20 {
+        if screen.intro_text().is_some() {
+            break;
+        }
+        screen.tick(Duration::from_secs(1));
+    }
+    let text = screen.intro_text().expect("the text");
+    assert_eq!(text.dialog().device(), PAD);
+    screen.input(&told(Device::Keyboard));
+    assert_eq!(
+        screen.intro_text().expect("open").dialog().device(),
+        Device::Keyboard,
+        "and follows them while it shows"
+    );
+}
+
+#[test]
+fn east_on_the_main_menu_neither_quits_nor_leaves_it() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    screen.input(&told(PAD));
+    screen.take_sounds();
+    screen.input(&pad(nova_view::PadButton::East, true));
+    let action = screen.input(&pad(nova_view::PadButton::East, false));
+    assert_eq!(action, ScreenAction::None);
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    screen.tick(QUIT_DELAY);
+    assert!(!screen.take_quit());
+    assert!(screen.take_sounds().is_empty(), "silent, as Escape is");
+}
+
+#[test]
+fn the_right_shoulder_on_the_main_menu_goes_to_the_ship_browser_as_tab_does_and_east_comes_back() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    screen.input(&told(PAD));
+    tap(&mut screen, nova_view::PadButton::RightShoulder);
+    assert_eq!(screen.showing(), Showing::ShipBrowser);
+    tap(&mut screen, nova_view::PadButton::East);
+    assert_eq!(screen.showing(), Showing::MainMenu);
+}
+
+#[test]
+fn a_pad_south_on_the_main_menus_new_pilot_opens_the_dialog_at_once() {
+    let store = MemoryPilots::new();
+    let mut screen = super::menu::menu_with_dialogs(&store);
+    screen.input(&told(PAD));
+    screen.take_sounds();
+    screen.input(&pad(nova_view::PadButton::South, true));
+    screen.input(&pad(nova_view::PadButton::South, false));
+    assert_eq!(screen.showing(), Showing::NewPilot, "no keyed click held");
+}

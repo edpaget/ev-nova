@@ -148,7 +148,7 @@ impl AppScreen {
 
     /// The router reading the keys through `bindings`, and handing it to
     /// every screen it has built or builds from now on: its own keys,
-    /// the ship browser's, the galaxy viewer's, each flight's (its dialogs,
+    /// the main menu's, the ship browser's, the galaxy viewer's, each flight's (its dialogs,
     /// maps and the spaceport's with it) and every dialog it opens. The
     /// app's edge gives it once, at start-up, with the player's layout on
     /// it ([`SharedBindings::with_key_names`]), which every text that
@@ -161,6 +161,9 @@ impl AppScreen {
         self.flight_keys.set_bindings(bindings.clone());
         for flight in self.flights_mut() {
             flight.set_bindings(bindings.clone());
+        }
+        if let Some(menu) = &mut self.menu {
+            menu.screen.set_bindings(bindings.clone());
         }
         let spaceport = self
             .spaceport
@@ -536,6 +539,7 @@ impl AppScreen {
             }
         };
         let mut screen = MainMenu::new(art, self.data.button_style(), Rc::clone(&metrics))
+            .with_bindings(self.bindings.clone())
             .with_chance(self.effects_chance.clone())
             .with_pilot_panel(self.data.pilot_panel_looks());
         screen.appear();

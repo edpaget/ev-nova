@@ -110,11 +110,12 @@ impl Screen for AppScreen {
     /// screen.
     ///
     /// The app's surroundings go to the router's readers, the flight, if
-    /// built, the spaceport, if landed, and every overlay open, whatever
-    /// shows; a flight built later is told them as it starts, a spaceport
+    /// built, the spaceport, if landed, the main menu, if any, the intro's
+    /// text, while it is open, and every overlay open, whatever shows; a flight built later is told them as it starts, a spaceport
     /// as it is built (`show_spaceport`), and an overlay opened later as
     /// it opens (`routing`'s `tell_new_overlays`, after each input, tick
-    /// and menu command). The spaceport passes them on to every screen it
+    /// and menu command), and the intro's text as it opens
+    /// (`advance_entry`). The spaceport passes them on to every screen it
     /// holds or opens (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Surroundings(surroundings) = *input {
@@ -126,6 +127,10 @@ impl Screen for AppScreen {
             if let Some(spaceport) = &mut self.spaceport {
                 spaceport.input(input);
             }
+            if let Some(menu) = &mut self.menu {
+                menu.screen.input(input);
+            }
+            self.tell_intro_text(input);
             self.tell_overlays(input);
             return ScreenAction::None;
         }
