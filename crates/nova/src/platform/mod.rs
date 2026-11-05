@@ -782,14 +782,27 @@ mod tests {
             status: None,
             asking: None,
         });
+        // What a press of `key` means on `screen` with the default keys.
+        let means = |screen, key| {
+            nova_view::CommandReader::new(screen).peek(&nova_view::Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            })
+        };
         for c in ' '..='~' {
             let Some(key) = nova_view::letter_key(c) else {
                 continue;
             };
-            let planet = views
-                .iter()
-                .any(|view| planet_comm::key_press(key, view).is_some());
-            if planet || escort_dialog::key_press(key).is_some() {
+            let planet = views.iter().any(|view| {
+                means(nova_view::keymap::contexts::PLANET_COMM, key)
+                    .and_then(|command| planet_comm::command_press(command, view))
+                    .is_some()
+            });
+            let escort = means(nova_view::keymap::contexts::ESCORT_DIALOG, key)
+                .and_then(escort_dialog::command_press)
+                .is_some();
+            if planet || escort {
                 assert_physical(c);
             }
         }

@@ -20,9 +20,11 @@
 //!   stellar always dominated.
 //!
 //! **Keys** (`_PlanetCommFilter`): a key press, never its repeat, either
-//! case: Return, Enter, Escape and E close the channel; G presses
-//! Greetings, O and B Offer Bribe, D and T Demand Tribute, and R Release,
-//! each only while item 2 or 3 says so.
+//! case, read as commands through the key map: Confirm (Return, Enter),
+//! Back (Escape) and the planet comm context's Close (E) close the
+//! channel; Greetings (G), Offer Bribe (O, B its fixed twin), Demand
+//! Tribute (D, T its twin) and Release (R) press their button, each only
+//! while item 2 or 3 says so ([`command_press`]).
 //!
 //! **Clicks** (`_TrackPlanetCommDialogButtons`): a button pressed and let
 //! go over it presses its item. The original tracks item 3's rect even
@@ -44,7 +46,10 @@ use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{
+    Command, CommandReader, PlanetCommCommand, SharedBindings, UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -103,17 +108,21 @@ pub fn status_color(status: PlanetStatus) -> (Color, bool) {
     }
 }
 
-/// The press a key is, for a dialog showing `view` (see the module docs).
+/// The press a command is, for a dialog showing `view` (see the module
+/// docs).
 #[must_use]
-pub fn key_press(key: Key, view: &PlanetCommView) -> Option<PlanetCommItem> {
+pub fn command_press(command: Command, view: &PlanetCommView) -> Option<PlanetCommItem> {
     let second = |button| (view.second == button).then_some(PlanetCommItem::Second);
     let third = |button| (view.third == Some(button)).then_some(PlanetCommItem::Third);
-    match key {
-        Key::Enter | Key::NumpadEnter | Key::Escape | Key::KeyE => Some(PlanetCommItem::Close),
-        Key::KeyG => second(PlanetCommButton::Greetings),
-        Key::KeyO | Key::KeyB => second(PlanetCommButton::OfferBribe),
-        Key::KeyD | Key::KeyT => third(PlanetCommButton::DemandTribute),
-        Key::KeyR => third(PlanetCommButton::Release),
+    match command {
+        Command::Ui(UiCommand::Confirm | UiCommand::Back)
+        | Command::PlanetComm(PlanetCommCommand::Close) => Some(PlanetCommItem::Close),
+        Command::PlanetComm(PlanetCommCommand::Greetings) => second(PlanetCommButton::Greetings),
+        Command::PlanetComm(PlanetCommCommand::OfferBribe) => second(PlanetCommButton::OfferBribe),
+        Command::PlanetComm(PlanetCommCommand::DemandTribute) => {
+            third(PlanetCommButton::DemandTribute)
+        }
+        Command::PlanetComm(PlanetCommCommand::Release) => third(PlanetCommButton::Release),
         _ => None,
     }
 }
@@ -134,6 +143,8 @@ pub struct PlanetCommDialog {
     press: Option<PlanetCommItem>,
     /// Whether the pointer went down on item 3 while it is hidden.
     hidden_pressed: bool,
+    /// Its keys, as commands ([`contexts::PLANET_COMM`]).
+    reader: CommandReader,
 }
 
 impl std::fmt::Debug for PlanetCommDialog {
@@ -211,7 +222,16 @@ impl PlanetCommDialog {
             focus_ring: FocusRing::default(),
             press: None,
             hidden_pressed: false,
+            reader: CommandReader::new(contexts::PLANET_COMM),
         })
+    }
+
+    /// The planet comm dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// The planet comm dialog with its buttons taking the keyboard focus
@@ -225,7 +245,8 @@ impl PlanetCommDialog {
 
     /// Shows `view`: its reply, its buttons and its status line.
     pub fn set_view(&mut self, view: &PlanetCommView) {
-        self.dialog = layout(&self.template, view, self.style, &self.metrics);
+        self.dialog = layout(&self.template, view, self.style, &self.metrics)
+            .with_bindings(self.reader.bindings().clone());
         self.dialog.set_focus_ring(self.focus_ring);
         self.view = view.clone();
     }
@@ -405,14 +426,11 @@ impl Screen for PlanetCommDialog {
     /// hidden item 3 stands presses it; every other event goes to the
     /// dialog, and a button activated is its press. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat,
-        } = *input
-            && let Some(press) = key_press(key, &self.view)
+        if let Some(command) = self.reader.follow(input)
+            && command.pressed
+            && let Some(press) = command_press(command.command, &self.view)
         {
-            if !repeat {
+            if !command.repeat {
                 self.press = Some(press);
             }
             return ScreenAction::None;
@@ -454,6 +472,8 @@ mod tests {
 
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
 
     /// Earth greeting, its buttons Greetings and Demand Tribute.
@@ -556,6 +576,13 @@ mod tests {
             pressed: true,
             repeat,
         }
+    }
+
+    /// The press a key's press makes in a dialog showing `view`.
+    fn key_press(key: Key, view: &PlanetCommView) -> Option<PlanetCommItem> {
+        let mut shown = dialog(view);
+        shown.input(&self::key(key, false));
+        shown.take_press()
     }
 
     fn click_at(screen: &mut PlanetCommDialog, at: Point) {
@@ -757,6 +784,26 @@ mod tests {
         for (pressed, view, press) in cases {
             assert_eq!(key_press(pressed, view), press, "{pressed:?} on {view:?}");
         }
+    }
+
+    /// The dialog reads its keys through the key map it is given: Offer
+    /// Bribe rebound to Q presses item 2 on Q and no longer on O, B its
+    /// fixed twin still does, and the dialog laid out again for a new
+    /// view reads the same.
+    #[test]
+    fn a_rebound_offer_bribe_presses_on_its_new_key_and_its_twin() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PlanetCommCommand::OfferBribe, KeyCombo::key(Key::KeyQ)),
+        );
+        let hated = refusing(PlanetStatus::Forbidden);
+        let mut shown = dialog(&greeting()).with_bindings(bindings);
+        shown.set_view(&hated);
+        shown.input(&key(Key::KeyO, false));
+        assert_eq!(shown.take_press(), None, "O no longer offers");
+        shown.input(&key(Key::KeyQ, false));
+        assert_eq!(shown.take_press(), Some(PlanetCommItem::Second));
+        shown.input(&key(Key::KeyB, false));
+        assert_eq!(shown.take_press(), Some(PlanetCommItem::Second), "B");
     }
 
     #[test]

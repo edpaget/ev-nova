@@ -48,7 +48,8 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{AssignmentCommand, Command, CommandReader, SharedBindings, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::{OF, TON, TONS, comma_number};
 use crate::spaceport::shipyard::{ENERGY_LABEL, LABEL_COLOR as MED_GREY, NONE};
@@ -348,6 +349,13 @@ impl PlunderDialog {
         Ok(plunder)
     }
 
+    /// The plunder dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// Shows `shown`: item 5's rows, and each button greyed while what
     /// it takes is not on board.
     pub fn set_plunder(&mut self, shown: &PlunderShown) {
@@ -465,6 +473,8 @@ pub struct AssignmentDialog {
     dialog: Dialog,
     picture: Option<ImageKey>,
     choice: Option<Assignment>,
+    /// Its keys, as commands ([`contexts::ASSIGNMENT`]).
+    reader: CommandReader,
 }
 
 impl AssignmentDialog {
@@ -530,7 +540,16 @@ impl AssignmentDialog {
             dialog,
             picture,
             choice: None,
+            reader: CommandReader::new(contexts::ASSIGNMENT),
         })
+    }
+
+    /// The assignment dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings.clone());
+        self.reader.set_bindings(bindings);
+        self
     }
 
     /// What the player chose, once.
@@ -574,24 +593,21 @@ fn assignment_template() -> DialogTemplate {
 }
 
 impl Screen for AssignmentDialog {
-    /// A press (not a repeat) of the M key is Use As My Ship, and of
-    /// E Use As Escort, as `_CapturedAssignmentFilter` has them; every
-    /// other event goes to the dialog, and a button activated is its
-    /// choice. It never quits.
+    /// A press (not a repeat) of the assignment context's My Ship (M) is
+    /// Use As My Ship, and of Escort (E) Use As Escort, as
+    /// `_CapturedAssignmentFilter` has them; every other event goes to the
+    /// dialog, and a button activated is its choice. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat,
-        } = *input
+        if let Some(command) = self.reader.follow(input)
+            && command.pressed
         {
-            let choice = match key {
-                Key::KeyM => Some(Assignment::MyShip),
-                Key::KeyE => Some(Assignment::Escort),
+            let choice = match command.command {
+                Command::Assignment(AssignmentCommand::MyShip) => Some(Assignment::MyShip),
+                Command::Assignment(AssignmentCommand::Escort) => Some(Assignment::Escort),
                 _ => None,
             };
             if let Some(choice) = choice {
-                if !repeat {
+                if !command.repeat {
                     self.choice = Some(choice);
                 }
                 return ScreenAction::None;
@@ -626,6 +642,7 @@ mod tests {
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
     use crate::input::{Key, MouseButton, ScrollDelta};
+    use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
@@ -1457,6 +1474,34 @@ mod tests {
         off.input(&key(Key::Space));
         assert_eq!(off.take_choice(), None);
         assert_eq!(off.dialog().focus(), None);
+    }
+
+    /// The assignment dialog reads its keys through the key map it is
+    /// given: My Ship rebound to Q chooses on Q and no longer on M.
+    #[test]
+    fn a_rebound_my_ship_chooses_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(AssignmentCommand::MyShip, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut dialog = assignment().with_bindings(bindings);
+        dialog.input(&key(Key::KeyM));
+        assert_eq!(dialog.take_choice(), None, "M no longer chooses");
+        dialog.input(&key(Key::KeyQ));
+        assert_eq!(dialog.take_choice(), Some(Assignment::MyShip));
+    }
+
+    /// The plunder dialog hands the bindings it is given to its buttons:
+    /// Confirm rebound to F6 aborts on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_aborts_the_plunder_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F6)),
+        );
+        let mut dialog = dialog(loaded()).with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_take(), None, "Return no longer aborts");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_take(), Some(Take::Abort));
     }
 
     /// `_CapturedAssignmentFilter` @0x51782: M is Use As My Ship
