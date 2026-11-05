@@ -28664,6 +28664,7 @@ pub(super) mod tests {
             flags2,
             links: slots,
             exit_angle,
+            stability: crate::catalog::GateStability::Stable,
         }
     }
 

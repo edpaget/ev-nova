@@ -160,6 +160,20 @@ pub struct FakePilotCatalog {
 }
 
 impl FakePilotCatalog {
+    /// This catalog with gate `gate`'s stability `stability`: none
+    /// changes for a gate it doesn't hold.
+    #[must_use]
+    pub fn with_gate_stability(
+        mut self,
+        gate: i16,
+        stability: crate::catalog::GateStability,
+    ) -> Self {
+        for site in self.gates.iter_mut().filter(|site| site.id.0 == gate) {
+            site.stability = stability;
+        }
+        self
+    }
+
     /// This catalog with `lives` among its stellars' lives.
     #[must_use]
     pub fn living(mut self, lives: impl IntoIterator<Item = StellarLife>) -> Self {
@@ -830,6 +844,7 @@ mod tests {
             flags2: 0,
             links: [None; 8],
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         };
         let commodities = CommodityStrings {
             names: vec!["Food".to_owned()],

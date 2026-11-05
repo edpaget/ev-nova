@@ -3933,6 +3933,7 @@ pub(super) mod tests {
             flags2: HYPERGATE,
             links,
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         };
         let mut to = [None; 8];
         to[0] = Some(StellarId(310));

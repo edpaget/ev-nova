@@ -526,6 +526,7 @@ mod tests {
             flags2,
             links: links(linked),
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         }
     }
 
