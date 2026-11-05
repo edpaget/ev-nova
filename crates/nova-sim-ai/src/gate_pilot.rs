@@ -591,10 +591,11 @@ mod tests {
     }
 
     /// A hull whose thrust is exactly 0.5 a tick, so the wanted speed
-    /// `d` out is exactly `sqrt(d)`, and half a thrust 0.25.
+    /// `d` out is exactly `sqrt(d)`, and half a thrust 0.25, up to its top
+    /// speed of 6.
     fn half_pixel_thrust(craft: Craft) -> Craft {
         Craft {
-            handling: Handling::from_totals(300, 2500, 30.0),
+            handling: Handling::from_totals(600, 2500, 30.0),
             ..craft
         }
     }
@@ -615,6 +616,12 @@ mod tests {
         assert_eq!(at(2.25), Controls::default(), "over by the slack alone");
         assert!(at(1.74).thrust);
         assert!(at(2.26).reverse);
+        // 9 out it wants 3.
+        let nine_out = steer(
+            &half_pixel_thrust(inertialess((0.0, 9.0), 3.0, 0.0)),
+            &gate(&site, None),
+        );
+        assert_eq!(nine_out.controls, Controls::default());
     }
 
     #[test]
