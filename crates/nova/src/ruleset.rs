@@ -8,6 +8,15 @@
 //! the folder its pilots are saved in (see [`crate::config::pilots_dir`]).
 //! The simulation never sees the ruleset: it reads the rulebook's keys,
 //! each defaulting to the original's reading.
+//!
+//! The stock game pins nothing. The new game pins the other reading of
+//! the three keys its traffic needs, where a jump point's gate is the
+//! only way in or out of a system: [`RuleKey::DestinationReach`] (its
+//! jump points sit past the original's 999 bound),
+//! [`RuleKey::ArrivalsThroughGates`] (every arrival with a usable gate
+//! comes out of one) and [`RuleKey::DeparturesThroughGates`] (a ship with
+//! nowhere left to go leaves through a gate). A settings
+//! `"rule_overrides"` entry still moves each.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -43,10 +52,14 @@ const STOCK: Profile = Profile {
     pilots: PILOTS_DIR,
 };
 
-/// The new game's profile: no pinned readings yet (no key it needs exists),
-/// and pilots of its own.
+/// The new game's profile: its traffic's three gate readings (see the
+/// module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
-    readings: &[],
+    readings: &[
+        (RuleKey::DestinationReach, RuleSource::Bible),
+        (RuleKey::ArrivalsThroughGates, RuleSource::Bible),
+        (RuleKey::DeparturesThroughGates, RuleSource::Bible),
+    ],
     pilots: "New Game Pilots",
 };
 
@@ -107,8 +120,19 @@ mod tests {
     }
 
     #[test]
-    fn neither_game_pins_a_reading_yet() {
+    fn the_stock_game_pins_no_reading() {
         assert_eq!(Ruleset::Stock.profile().readings, []);
-        assert_eq!(Ruleset::NewGame.profile().readings, []);
+    }
+
+    #[test]
+    fn the_new_game_pins_the_other_reading_of_its_three_gate_keys() {
+        assert_eq!(
+            Ruleset::NewGame.profile().readings,
+            [
+                (RuleKey::DestinationReach, RuleSource::Bible),
+                (RuleKey::ArrivalsThroughGates, RuleSource::Bible),
+                (RuleKey::DeparturesThroughGates, RuleSource::Bible),
+            ]
+        );
     }
 }
