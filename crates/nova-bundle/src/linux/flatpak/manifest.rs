@@ -254,6 +254,7 @@ mod tests {
                 "--socket=fallback-x11",
                 "--share=ipc",
                 "--device=dri",
+                "--device=input",
                 "--socket=pulseaudio",
                 "--filesystem=~/.wine:ro",
                 "--filesystem=~/Games/ev-nova:ro",

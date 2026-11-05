@@ -86,6 +86,11 @@ pub const MODULE: &str = "nova";
 /// - `--share=ipc`: X11's MIT-SHM, which X11 clients need to draw at a
 ///   usable speed.
 /// - `--device=dri`: the GPU, for wgpu (Vulkan or GL).
+/// - `--device=input`: `/dev/input`, where gilrs finds the gamepads (by
+///   inotify there, as the sandbox has no udev). Flatpak 1.15.6 added it;
+///   an older flatpak skips the device name it doesn't know as it loads
+///   the metadata, so the game runs there without gamepads. Not
+///   `--device=all`, which grants every device.
 /// - `--socket=pulseaudio`: sound. The runtime's ALSA sends the default
 ///   device to the pulse plugin, so kira/cpal's ALSA output reaches the
 ///   Pulse socket, which `PipeWire` serves on current desktops. No
@@ -102,11 +107,12 @@ pub const MODULE: &str = "nova";
 ///
 /// Nothing else: no home or host filesystem, no network (the game makes
 /// no network calls), no session bus (the portals are always reachable).
-pub const FINISH_ARGS: [&str; 9] = [
+pub const FINISH_ARGS: [&str; 10] = [
     "--socket=wayland",
     "--socket=fallback-x11",
     "--share=ipc",
     "--device=dri",
+    "--device=input",
     "--socket=pulseaudio",
     "--filesystem=~/.wine:ro",
     "--filesystem=~/Games/ev-nova:ro",

@@ -121,9 +121,10 @@ Debian 13, Fedora 40 or newer, or SteamOS and Arch. It is built on Ubuntu
 24.04, and the build checks that the game needs no newer glibc. On older
 releases (Ubuntu 22.04, Linux Mint 21, Debian 12), install the Flatpak
 instead. It plays sound through your system's ALSA, which PipeWire or
-PulseAudio serves on current desktops. The Flatpak brings its own
-runtime, so any distribution with Flatpak runs it, and keeps its own
-settings and pilots (see below).
+PulseAudio serves on current desktops, and finds gamepads through your
+system's libudev. The Flatpak brings its own runtime, so any
+distribution with Flatpak runs it, and keeps its own settings and pilots
+(see below); it sees gamepads with Flatpak 1.15.6 or newer.
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
 LICENSE, the two font licences and a share/ folder:

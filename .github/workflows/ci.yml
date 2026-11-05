@@ -68,9 +68,10 @@ jobs:
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
       # libclang-dev is for bindgen, which binds the FFmpeg nova-movie
-      # builds (third_party/ffmpeg-sys-next).
+      # builds (third_party/ffmpeg-sys-next). libudev-dev is for gilrs,
+      # nova's gamepads, which links libudev through pkg-config.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream libclang-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream libclang-dev libudev-dev
       # FFmpeg's configure and make run in MSYS2 (preinstalled at
       # C:\msys64), with MSVC's compiler; bindgen uses the preinstalled
       # LLVM's libclang.

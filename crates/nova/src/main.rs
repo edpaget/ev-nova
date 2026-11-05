@@ -241,6 +241,22 @@ fn run_seed() -> u64 {
         })
 }
 
+/// `runner` with the gamepads, through gilrs. Without them (no udev on a
+/// Linux host, say) the game runs on the keyboard and mouse, with a
+/// warning to `report`.
+fn with_gamepads(
+    runner: Runner<GameImages<Rc<GameData>>>,
+    report: &RefCell<Report>,
+) -> Runner<GameImages<Rc<GameData>>> {
+    match nova::platform::gamepads::GilrsGamepads::new() {
+        Ok(pads) => runner.with_gamepads(Box::new(pads)),
+        Err(warning) => {
+            report.borrow_mut().warn(&warning);
+            runner
+        }
+    }
+}
+
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
 /// back through the loop and Sparkle offered as the updater on macOS, and
 /// WinSparkle on Windows, its quit sent back through the loop; gives the
@@ -394,7 +410,7 @@ fn main() -> ExitCode {
         GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook)),
         GameImages::with_interface,
     );
-    let runner = Runner::new(images, screen, fonts)
+    let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));
     let runner = match audio {

@@ -14,6 +14,8 @@
 
 pub mod console;
 pub mod dialogs;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+pub mod gamepads;
 mod key_names;
 mod keyboard_access;
 #[cfg(target_os = "macos")]

@@ -89,6 +89,11 @@ pollster = "1.0.1"
 # window exists. Without `common-controls-v6` its Windows alerts are plain
 # `MessageBoxW`s.
 rfd = { version = "0.17.2", default-features = false }
+# The gamepads (nova's dependency on macOS, Windows and Linux): IOKit,
+# Windows.Gaming.Input (its default `wgi` feature) and evdev through udev
+# (or inotify in a Flatpak), with SDL's controller mappings. Linux builds
+# need libudev's headers (`libudev-dev`).
+gilrs = "0.11.2"
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu
 # 0.36 is built on wgpu 30 and egui-winit 0.36 on winit 0.30, so the three

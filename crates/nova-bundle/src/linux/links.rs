@@ -22,9 +22,11 @@ pub const GLIBC_FLOOR: [u32; 2] = [2, 39];
 
 /// The libraries the binary may link: glibc's (`libc`, `libm`, the
 /// loader, and `libdl`, `libpthread` and `librt`, which glibc 2.34 folded
-/// into `libc` but a build may still name), GCC's unwinder, and ALSA,
-/// which must be the host's. Any other is a portability regression.
-pub const ALLOWED_LIBRARIES: [&str; 8] = [
+/// into `libc` but a build may still name), GCC's unwinder, ALSA and
+/// libudev (the gamepads' device discovery, through gilrs), each of which
+/// must be the host's: every desktop distribution ships `libudev.so.1`,
+/// systemd's or eudev's. Any other is a portability regression.
+pub const ALLOWED_LIBRARIES: [&str; 9] = [
     "libc.so.6",
     "libm.so.6",
     "ld-linux-x86-64.so.2",
@@ -33,6 +35,7 @@ pub const ALLOWED_LIBRARIES: [&str; 8] = [
     "librt.so.1",
     "libgcc_s.so.1",
     "libasound.so.2",
+    "libudev.so.1",
 ];
 
 /// A glibc symbol version, `GLIBC_<major>.<minor>[.<patch>]`, compared
@@ -227,8 +230,9 @@ mod tests {
     }
 
     /// What the build links today.
-    pub(crate) const NEEDED: [&str; 5] = [
+    pub(crate) const NEEDED: [&str; 6] = [
         "libasound.so.2",
+        "libudev.so.1",
         "libgcc_s.so.1",
         "libm.so.6",
         "libc.so.6",

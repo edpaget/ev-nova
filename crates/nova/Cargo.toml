@@ -44,6 +44,9 @@ nova-appkit.workspace = true
 # without it) and zenity's alerts.
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 rfd.workspace = true
+# The gamepads, behind the `Gamepads` port (`platform::gamepads`): the
+# desktops only, so an iOS build adds its own adapter without gilrs.
+gilrs.workspace = true
 
 # rfd's Linux backend: the FileChooser portal over a `dlopen`ed libdbus,
 # falling back to zenity, with no GTK or Wayland crates. Turned on here, for

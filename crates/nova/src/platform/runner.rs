@@ -84,6 +84,7 @@ use crate::app::{App, AppScreen, Control, Handled, LoopEvent, UpdaterSource, Win
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
+use crate::gamepad::Gamepads;
 use crate::settings::GameKeeper;
 use crate::startup::Report;
 
@@ -127,6 +128,8 @@ pub struct Runner<S> {
     /// The startup report, shared with `main`, which reports the run's
     /// end through it.
     report: Option<Rc<RefCell<Report>>>,
+    /// The gamepads, until the app takes them.
+    gamepads: Option<Box<dyn Gamepads>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -147,6 +150,7 @@ impl<S: ImageSource> Runner<S> {
             menu_proxy: None,
             updates: None,
             report: None,
+            gamepads: None,
         }
     }
 
@@ -199,6 +203,14 @@ impl<S: ImageSource> Runner<S> {
     #[must_use]
     pub fn with_settings(mut self, keeper: GameKeeper) -> Self {
         self.settings = Some(keeper);
+        self
+    }
+
+    /// The runner with the gamepads: the app it opens polls `pads` once a
+    /// frame ([`App::with_gamepads`]).
+    #[must_use]
+    pub fn with_gamepads(mut self, pads: Box<dyn Gamepads>) -> Self {
+        self.gamepads = Some(pads);
         self
     }
 
@@ -324,6 +336,10 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
                 };
                 let app = match self.settings.take() {
                     Some(keeper) => app.with_settings(keeper),
+                    None => app,
+                };
+                let app = match self.gamepads.take() {
+                    Some(pads) => app.with_gamepads(pads),
                     None => app,
                 };
                 // Once NSApplication has finished launching, where Sparkle

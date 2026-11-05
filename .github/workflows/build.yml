@@ -96,13 +96,14 @@ jobs:
       # checkout and mise, ALSA's headers (nova-audio plays through cpal,
       # which builds against ALSA on Linux), objdump (binutils) for the
       # tarball's glibc check, libclang for bindgen over the FFmpeg
-      # nova-movie builds (curl and xz-utils fetch and unpack its source).
+      # nova-movie builds (curl and xz-utils fetch and unpack its source),
+      # and libudev's headers for gilrs, nova's gamepads.
       - if: runner.os == 'Linux'
         run: |
           apt-get update
           # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils libclang-dev
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils libclang-dev libudev-dev
       # As in ci.yml: FFmpeg's configure and make run in MSYS2.
       - if: runner.os == 'Windows'
         run: C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils

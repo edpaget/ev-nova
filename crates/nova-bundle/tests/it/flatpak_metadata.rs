@@ -114,11 +114,12 @@ mod tests {
     use super::*;
 
     /// What flatpak 1.16.6 (Ubuntu's, on CI's `ubuntu-24.04`) listed for
-    /// the installed bundle.
+    /// the installed bundle, with `input` beside `dri` since the game
+    /// reads gamepads (flatpak 1.15.6 and later store it).
     const SHOWN_BY_1_16: &str = "[Context]
 shared=ipc;
 sockets=x11;wayland;pulseaudio;fallback-x11;
-devices=dri;
+devices=dri;input;
 filesystems=~/.wine:ro;~/Games/EV Nova:ro;~/Games/ev-nova:ro;
 persistent=.local/state;
 ";

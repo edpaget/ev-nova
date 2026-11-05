@@ -81,6 +81,10 @@ deny = [
     # `wrappers` form would name crates not in this graph.
     { crate = "wgpu", wrappers = ["glyphon", "nova", "nova-metalfx", "nova-render"], reason = "only the renderer, its MetalFX shim, its text crate and the game reach the GPU" },
     { crate = "winit", wrappers = ["nova"], reason = "only the game opens a window" },
+    # The gamepads, behind nova's `Gamepads` port (its gilrs adapter on
+    # the desktops): no other crate reads a device.
+    { crate = "gilrs", wrappers = ["nova"], reason = "only the game reads gamepads" },
+    { crate = "gilrs-core", wrappers = ["gilrs"], reason = "gilrs-core is reached only through gilrs" },
     { crate = "glyphon", wrappers = ["nova-render"], reason = "only the renderer draws text" },
     { crate = "kira", wrappers = ["nova-audio"], reason = "only the audio crate plays sound" },
     # FFmpeg's unsafe bindings are reached only through ffmpeg-next's safe
