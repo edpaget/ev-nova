@@ -163,16 +163,21 @@ impl Npc {
     /// The bribe (`_DoCommDialog` @0x961f8): +0x88 = [`BRIBED_AI`], kept
     /// over its leader or carrier ([`Npc::spared`]), as
     /// [`AiType::WimpyTrader`]. A fighter is one no longer, and holds its
-    /// class's capacities (see the `fighter_capacity` module).
+    /// class's capacities (see the `fighter_capacity` module). The word is
+    /// above 0, so a ship without AI ([`Npc::no_ai`]) thinks from then on.
     pub fn take_bribe(&mut self) {
+        self.no_ai = false;
         self.spared = true;
         self.ai_type = AiType::WimpyTrader;
         self.hold_capacities(RuleSource::Bible);
     }
 
     /// A write of +0x88 over the bribe's word, which was its only state:
-    /// [`Npc::spared`] cleared (see the module docs).
+    /// [`Npc::spared`] cleared (see the module docs). Every such write the
+    /// engine models (a capture's or hire's 6, a lead's release) is above
+    /// 0, so a ship without AI ([`Npc::no_ai`]) thinks from then on.
     pub fn overwrite_bribe(&mut self) {
+        self.no_ai = false;
         self.spared = false;
     }
 
@@ -254,6 +259,28 @@ mod tests {
             ..ship(AiType::Warship)
         };
         assert_eq!(hulk.original_ai_type(), -1);
+    }
+
+    #[test]
+    fn a_bribe_gives_a_ship_without_ai_the_bribed_word() {
+        let mut ship = Npc {
+            no_ai: true,
+            ..ship(AiType::Warship)
+        };
+        ship.take_bribe();
+        assert!(!ship.no_ai);
+        assert_eq!(ship.original_ai_type(), BRIBED_AI);
+    }
+
+    #[test]
+    fn a_write_over_the_bribe_gives_a_ship_without_ai_its_word() {
+        let mut ship = Npc {
+            no_ai: true,
+            ..ship(AiType::Warship)
+        };
+        ship.overwrite_bribe();
+        assert!(!ship.no_ai);
+        assert_eq!(ship.original_ai_type(), AiType::Warship.raw());
     }
 
     #[test]
