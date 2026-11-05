@@ -282,6 +282,8 @@ mod inspection_hit_tests;
 mod interceptor_goal4_tests;
 pub mod ionization;
 #[cfg(test)]
+mod jump_begun_tests;
+#[cfg(test)]
 mod jump_out_hit_tests;
 pub mod jump_with_leader;
 pub mod kept_berths;
@@ -1055,7 +1057,7 @@ pub struct Traffic {
     /// or left. Never saved.
     words: BTreeMap<NpcId, slot_word::SlotWord>,
     /// How each ship's flight ended at its slot of this tick's AI loop
-    /// ([`dispatch_autopilot`]: a landing, a jump begun), which its step
+    /// ([`dispatch_autopilot`]: a landing, a gate's box reached), which its step
     /// on the advance pass reports, flying nothing: cleared as the loop
     /// opens.
     slot_outcomes: BTreeMap<NpcId, Outcome>,
@@ -4031,13 +4033,10 @@ mod tests {
         traffic.npcs[0].goal = Goal::Land(StellarId(140));
         traffic.npcs[1].goal = Goal::JumpOut;
         let sites = [planet(140, 0.0, 0.0)];
+        // Its warp out begins at its slot, and with warp sounds of no
+        // length the sub 4 it runs there ends it (see `warp_out`).
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
-        assert_eq!(traffic.departed(), [], "the lander stays");
         assert_eq!(traffic.npcs()[0].visited, Some(StellarId(140)));
-        assert!(traffic.npcs()[1].jumping(), "its warp out begins");
-        // With warp sounds of no length, its warp is over on its first
-        // advance pass (see `warp_out`).
-        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         let ids: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
         assert_eq!(ids, [NpcId(0)], "waiting at 140");
         assert_eq!(traffic.departed(), [(NpcId(1), Outcome::JumpedOut)]);
@@ -4120,11 +4119,11 @@ mod tests {
             assert!(ticks < 400, "never gone");
         }
         assert_eq!(traffic.departed(), [(NpcId(0), Outcome::JumpedOut)]);
-        // A tick to begin it, then its clock from the next: 364 / 1.3 =
-        // 280 Mac ticks, 140 ticks, on the 141st after the begin.
-        assert_eq!(ticks, 142);
+        // Its clock from the tick it begins, as sub 4 runs at that slot:
+        // 364 / 1.3 = 280 Mac ticks, 140 ticks, gone on the 141st.
+        assert_eq!(ticks, 141);
         // 0.35 × 364 / 1.69 = 75.4 Mac ticks: it moves off on its 38th.
-        assert_eq!(moved_off, Some(40));
+        assert_eq!(moved_off, Some(39));
     }
 
     #[test]

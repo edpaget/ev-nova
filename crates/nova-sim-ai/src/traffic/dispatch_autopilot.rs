@@ -47,11 +47,16 @@
 //!   ship its think's pursuit read, the goal's quarry or else the target
 //!   it holds ([`Npc::slot_target`]).
 //! - A flight that ends at the slot (a landing, state 1 @0x8d8b8 on, or a
-//!   jump begun, state 2 @0x8dd99) is noted for its step, which reports it
-//!   and flies nothing on the advance pass. The landing's mode is written
-//!   at the slot, so a higher slot's think reads it landed that tick; the
+//!   gate's box reached) is noted for its step, which reports it and
+//!   flies nothing on the advance pass. The landing's mode is written at
+//!   the slot, so a higher slot's think reads it landed that tick; the
 //!   traffic's report of it lags to the ship's step within the tick, which
 //!   crosses no boundary the player sees.
+//! - A jump begun at the slot (state 2 @0x8dd99-0x8de57, state 3's far
+//!   branch @0x8e20f) is not noted: the dispatch runs its sub 4 at once
+//!   (@0x8585b-0x859c5, the traffic's `dispatch_leave`), so a higher
+//!   slot's think reads its stage that tick, and its step's warp-out flies
+//!   it that frame.
 //!
 //! Double time's second pass runs no `_AIDispatch` (`je 0x44350`
 //! @0x4402a): it flies the advance pass's word again.
@@ -62,7 +67,7 @@ use super::autopilot::{self, Beside, Readings, TopSpeeds};
 use super::npc::Npc;
 use super::slot_word::SlotWord;
 use super::warp_out;
-use super::{Traffic, World};
+use super::{Outcome, Traffic, World};
 use crate::ai::handler_head;
 use crate::ai::mine_orders;
 use crate::ai::sight;
@@ -86,19 +91,22 @@ impl Traffic {
     /// The autopilot's low level of the NPC at `index` in `world`, at its
     /// slot, rolling on `chance` (see the module docs): the word it leaves
     /// is kept for both of the tick's fly halves, and a flight that ended
-    /// at the slot is noted for its step.
+    /// at the slot is noted for its step. Whether it began the ship's own
+    /// jump (state 2 @0x8de57, state 3 @0x8e20f), whose sub 4 the caller
+    /// runs at the slot and whose warp-out its step flies, so it is not
+    /// noted.
     pub(super) fn autopilot_in_dispatch(
         &mut self,
         index: usize,
         world: &World,
         chance: &mut (impl Chance + ?Sized),
-    ) {
+    ) -> bool {
         let id = self.npcs[index].id;
         // By the goal it flies, as its step's warp-out reads it: the regroup
         // pause's kept own jump is the warp-out's too.
         if self.npcs[index].fly_as_flown(|npc| warp_out::flies_jump(npc)) {
             self.keep_head_word(index, world);
-            return;
+            return false;
         }
         let (other, other_disabled, beside) = self.reads_at_slot(index, world);
         #[cfg(test)]
@@ -142,9 +150,15 @@ impl Traffic {
             autopilot::low_level(npc, sites, world.type_widths, quarry, speeds, rules, chance)
         });
         self.keep_word(index, left);
+        let began_jump = outcome == Some(Outcome::Flying)
+            && self.npcs[index].fly_as_flown(|npc| warp_out::flies_jump(npc));
+        if began_jump {
+            return true;
+        }
         if let Some(outcome) = outcome {
             self.slot_outcomes.insert(id, outcome);
         }
+        false
     }
 
     /// What the low level of the NPC at `index` reads at its slot in

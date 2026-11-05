@@ -59,12 +59,13 @@
 //!   [`stop`] with `refuelling` false). Sub 1 writes the thrust word
 //!   +0x30 alone, so a ship owing its gate burst bursts out on this brake
 //!   instead ([`held_burst`]). Nothing here plays a sound.
-//! - [`Leg::Jump`] (sub 4): it begins its warp out where it is, with no
-//!   move that tick ([`Npc::begin_own_jump`]). Sub 4 itself, the warp out
+//! - [`Leg::Jump`] (sub 4): it begins its warp out where it is
+//!   ([`Npc::begin_own_jump`]). Sub 4 itself, the warp out
 //!   (`_LowLevelAIHandler` @0x8585e-0x859c5), is
-//!   [`warp_out`](crate::traffic::warp_out)'s, which flies it from the
-//!   next pass and departs it ([`Outcome::JumpedOut`]) once its stage is
-//!   done.
+//!   [`warp_out`](crate::traffic::warp_out)'s: the traffic runs it at the
+//!   same slot, as state 2 (@0x8de57) is followed by the low level's sub 4
+//!   in one `_AIDispatch`, and its step's warp-out flies it that frame,
+//!   and departs it ([`Outcome::JumpedOut`]) once its stage is done.
 
 use crate::ai::leave::{self, Leg};
 use crate::ai::{Goal, fire};
@@ -105,8 +106,8 @@ pub const SETTLE: f64 = 0.95;
 
 /// The low level of `npc` on one tick of `leg` on `handling`, as
 /// `inertia` says (see the module docs): its flight, or, on [`Leg::Jump`],
-/// its warp out begun where it is, with no step that pass
-/// ([`Outcome::Flying`]).
+/// its warp out begun where it is ([`Outcome::Flying`]), whose sub 4 the
+/// traffic runs at the slot and whose warp-out its step flies.
 pub(crate) fn low_level(
     npc: &mut Npc,
     leg: Leg,
@@ -1235,11 +1236,14 @@ mod tests {
 
         let mut traffic = Traffic::new();
         let id = traffic.add_npc(npc);
-        let world = World {
+        let mut world = World {
             player: player.map(|(x, y)| crate::ai::fixture::player(x, y)),
             npc_jump_fuel: jump_fuel,
             ..World::new(&[])
         };
+        // A warp sound to wait out, so a jump begun at the slot, whose sub 4
+        // runs there, is still under way after the tick.
+        world.warp.durations = [600, 600];
         traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
         let after = traffic.npcs().iter().find(|npc| npc.id == id).cloned();
         let departed = traffic.departed().iter();
@@ -1313,16 +1317,16 @@ mod tests {
         let mut last = None;
         for _ in 0..3000 {
             traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
-            let npc = traffic
-                .npcs()
-                .iter()
-                .find(|npc| npc.id == id)
-                .expect("it warps out before it leaves");
-            assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
-            assert_eq!(npc.target, None, "its target dropped");
-            if !warping(npc) {
-                last = Some(npc.state);
-                continue;
+            // With no warp sound to wait out, sub 4 at the slot its jump
+            // begins at sends it out at once (@0x8585b-0x859c5).
+            let flying = traffic.npcs().iter().find(|npc| npc.id == id);
+            if let Some(npc) = flying {
+                assert_ne!(npc.goal, Goal::Attack(ShipRef::Player));
+                assert_eq!(npc.target, None, "its target dropped");
+                if !warping(npc) {
+                    last = Some(npc.state);
+                    continue;
+                }
             }
             let last = last.expect("it flew");
             assert!(last.position.length() > 1000.0, "{last:?}");

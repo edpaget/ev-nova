@@ -54,7 +54,9 @@ use std::collections::BTreeMap;
 /// a landing's wait on `chance`: the word it leaves `_HandleShip`, and how
 /// its flight ended at the slot, if it did (a landing, a jump begun, a
 /// gate's box reached by a ship the high level's gate block didn't
-/// reach), in which case its step flies nothing that pass. Everything it
+/// reach), in which case its step flies nothing that pass but for a jump
+/// begun, whose sub 4 the traffic runs at the slot and whose warp-out the
+/// step flies. Everything it
 /// reads of `npc`'s handling is read now ([`Npc::flying_handling`]): its
 /// charge as it stands at the slot.
 ///
