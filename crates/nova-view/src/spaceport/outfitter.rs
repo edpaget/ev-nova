@@ -1501,6 +1501,8 @@ pub(crate) mod pad;
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    mod unplaced_pad;
+
     use std::cell::RefCell;
 
     use super::*;

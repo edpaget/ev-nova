@@ -1192,4 +1192,18 @@ mod tests {
             ["Cannot show the race: no DLOG 1023. Press Q or Escape to leave it."]
         );
     }
+
+    #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen =
+            RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the race: no DLOG 1023. Press South or East to leave it."]
+        );
+    }
 }

@@ -350,3 +350,13 @@ fn a_south_held_over_from_flight_takes_off_only_on_a_fresh_press() {
     });
     assert!(view.left(), "its release takes off");
 }
+
+#[test]
+fn told_without_the_dialog_it_names_the_buttons_to_take_off() {
+    let mut view = SpaceportView::new(&catalog(), StellarId(140), Err("no DLOG 1000".to_owned()));
+    view.input(&told(PAD));
+    assert_eq!(
+        texts(&drawn(&view)),
+        ["Cannot show the spaceport: no DLOG 1000. Press South or East to take off."]
+    );
+}

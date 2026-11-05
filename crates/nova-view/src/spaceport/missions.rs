@@ -2300,6 +2300,27 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = MissionComputerScreen::new(
+            Err("no DLOG 1006".to_owned()),
+            computer(),
+            ButtonStyle::STOCK,
+        );
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the mission computer: no DLOG 1006. Press South or East to leave it."
+                    .to_owned(),
+                Color::ERROR
+            )]
+        );
+    }
+
     /// `_TrackMissionButtons` @0x287f5 plays nothing under the pointer.
     #[test]
     fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {
@@ -2935,6 +2956,29 @@ pub(super) mod tests {
             [DrawCommand::Text {
                 text: "Cannot show the mission info: no DLOG 1012. Press Q or Escape to close it."
                     .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
+    }
+
+    #[test]
+    fn without_its_dialog_mission_info_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            info_drawn(&screen),
+            [DrawCommand::Text {
+                text:
+                    "Cannot show the mission info: no DLOG 1012. Press South or East to close it."
+                        .to_owned(),
                 font: Font::Geneva,
                 origin: PROBLEM_AT,
                 size: PROBLEM_SIZE,

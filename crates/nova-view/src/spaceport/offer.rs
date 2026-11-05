@@ -726,7 +726,10 @@ impl Screen for OfferDialog {
     fn input(&mut self, input: &Input) -> ScreenAction {
         // The surroundings are no player input: they reach the dialog
         // and begin no movie, which waits for its first tick or input.
+        // The reader takes them too, so the prompt drawn with no layout
+        // names the device's inputs.
         if let Input::Surroundings(_) = input {
+            self.keys.follow(input);
             if let Ok(dialog) = &mut self.laid {
                 dialog.input(input);
             }
@@ -1998,6 +2001,23 @@ mod tests {
         assert_eq!(
             texts(&dialog),
             ["Cannot show the mission offer: no DLOG 1016. Press Q to accept it."]
+        );
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_button_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("Yes", Some("No")),
+            ButtonStyle::STOCK,
+        );
+        dialog.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Xbox),
+        }));
+        assert_eq!(
+            texts(&dialog),
+            ["Cannot show the mission offer: no DLOG 1016. Press A to accept it."]
         );
     }
 

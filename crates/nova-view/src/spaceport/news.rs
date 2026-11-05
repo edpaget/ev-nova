@@ -742,6 +742,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the news: no DLOG 1014. Press South or East to close it."]
+        );
+    }
+
     /// `_NewsDialogFilter` @0x48160 maps Return and Escape to item 1 with no
     /// click; `_DoNewsDialog` plays `_beepSnd[2]` as it closes.
     #[test]

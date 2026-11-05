@@ -2109,6 +2109,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn without_its_dialog_the_bar_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+            graphic: None,
+        });
+        let mut screen = BarScreen::new(
+            Err("no DLOG 1013".to_owned()),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        );
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the bar: no DLOG 1013. Press South or East to leave it.".to_owned(),
+                Color::ERROR
+            )]
+        );
+    }
+
     /// `_TrackBarButtons` @0x26fd5 plays nothing under the pointer.
     #[test]
     fn pointer_click_is_silent_as_the_original_and_a_click_abandoned_does_nothing() {

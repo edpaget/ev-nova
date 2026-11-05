@@ -1924,6 +1924,7 @@ mod tests {
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     mod movie;
+    mod unplaced_pad;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)

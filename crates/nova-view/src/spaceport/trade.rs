@@ -2744,6 +2744,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn without_the_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text:
+                    "Cannot show the trade center: no DLOG 1001. Press South or East to close it."
+                        .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
+    }
+
     // The trade center's mission offers.
 
     use crate::spaceport::offer::OfferChoice;

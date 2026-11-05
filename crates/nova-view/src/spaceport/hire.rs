@@ -1464,6 +1464,30 @@ mod tests {
     }
 
     #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = HireScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            list(),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        assert_eq!(
+            texts(&screen),
+            [(
+                "Cannot show the ships for hire: no DLOG 1004. Press South or East to close it."
+                    .to_owned(),
+                PROBLEM_AT,
+                Color::ERROR
+            )]
+        );
+    }
+
+    #[test]
     fn without_its_dialog_the_keypads_enter_closes_it_as_return_does() {
         let mut screen = HireScreen::new(
             Err("no DLOG 1004".to_owned()),
