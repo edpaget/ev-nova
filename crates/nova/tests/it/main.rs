@@ -41,6 +41,7 @@ mod menu_commands;
 mod missions;
 mod movies;
 mod navigation;
+mod new_game;
 mod news;
 mod outfitter;
 mod person_join;
