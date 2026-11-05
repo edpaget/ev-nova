@@ -575,7 +575,7 @@ impl Screen for MissionComputerScreen {
             &[LIST_ITEM]
         };
         if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, items, input) {
-            if press == (ListPress::Released { changed: true }) {
+            if press == ListPress::Released && laid.rows.read_back() {
                 self.show_selected();
             }
             return ScreenAction::None;
@@ -621,7 +621,7 @@ impl Screen for MissionComputerScreen {
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
-            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
+            if laid.rows.cancel_pointer() == ListPress::Released && laid.rows.read_back() {
                 self.show_selected();
             }
         }
@@ -955,7 +955,7 @@ impl Screen for MissionInfoScreen {
             return ScreenAction::None;
         }
         if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, &[INFO_LIST_ITEM], input) {
-            if press == (ListPress::Released { changed: true }) {
+            if press == ListPress::Released && laid.rows.read_back() {
                 self.show_selected();
             }
             return ScreenAction::None;
@@ -1001,7 +1001,7 @@ impl Screen for MissionInfoScreen {
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
-            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
+            if laid.rows.cancel_pointer() == ListPress::Released && laid.rows.read_back() {
                 self.show_selected();
             }
         }
@@ -2871,6 +2871,14 @@ mod tests {
         screen.rows().map(RowList::first)
     }
 
+    /// The info screen's rows lit.
+    fn info_lit(screen: &MissionInfoScreen) -> Vec<usize> {
+        screen
+            .rows()
+            .map(|rows| rows.highlighted().collect())
+            .unwrap_or_default()
+    }
+
     #[test]
     fn a_long_list_shows_its_scroll_bar_and_a_press_on_it_scrolls() {
         let mut screen = info_screen_of(many_info(10));
@@ -2900,10 +2908,11 @@ mod tests {
         let _ = screen.take_text_request();
         screen.input(&button(true, info_row_at(0.0)));
         screen.input(&Input::PointerMoved(info_row_at(2.0)));
+        assert_eq!(info_lit(&screen), [2], "highlighted");
         assert_eq!(
             screen.rows().and_then(RowList::selected),
-            Some(2),
-            "highlighted"
+            Some(0),
+            "not read back while held"
         );
         assert_eq!(screen.take_text_request(), None, "not loaded while held");
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Brief 0.");
