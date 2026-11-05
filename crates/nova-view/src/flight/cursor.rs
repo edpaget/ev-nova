@@ -9,8 +9,13 @@
 //! - a frame where the mouse moved, or its button is down
 //!   (@0x3801c-0x3803b), sets it to 32 and stamps the time
 //!   (@0x38053-0x38069); here a pointer move does
-//!   ([`HoverCursor::pointer`]), and each step does while a button is
-//!   down ([`HoverCursor::button`]). Ours is told of a button rather than
+//!   ([`HoverCursor::pointer`]), and each step does while the primary
+//!   button is down ([`HoverCursor::button`]). `_Button` is the Toolbox
+//!   `Button()` (@0x3803b, through the stub at 0x3b581b), which reads the
+//!   primary button only, and the app installs no mouse event handler
+//!   (`_AppEventHandler`, @0xcc748): a Right, Middle or Other press
+//!   holds nothing and only reads where the pointer is
+//!   ([`HoverCursor::read`]). Ours is told of a button rather than
 //!   reading `_Button` live, so a release that won't reach flight ends the
 //!   hold where it is lost: at [`HoverCursor::left`] outside the window,
 //!   and at `FlightView::let_go_of_input` when flight gives up its input;
@@ -81,7 +86,7 @@ pub struct HoverCursor {
     clock: u64,
     /// Whether a key that fades was pressed in flight since the last step.
     keyed: bool,
-    /// Whether a mouse button is down.
+    /// Whether the primary mouse button is down (`_Button`, @0x3803b).
     button: bool,
     /// Where the pointer was when the cursor was last hidden
     /// ([`HoverCursor::hide`]), until the next pointer: `_HandleMouse`
@@ -108,19 +113,30 @@ impl HoverCursor {
         self.moved_at = self.clock;
     }
 
+    /// A reading of where the pointer is that isn't a move notice, such
+    /// as a press or release of a button other than the primary, which
+    /// `Button()` doesn't read (@0x3803b): only a pointer somewhere else
+    /// than the last point counts as a move (@0x3801c-0x3803b), through
+    /// [`HoverCursor::pointer`], which keeps its first-after-hide rule.
+    pub fn read(&mut self, at: Point) {
+        if self.at != Some(at) {
+            self.pointer(at);
+        }
+    }
+
     /// A key that fades was pressed in flight: the next step fades the
     /// cursor a level, however short the press.
     pub fn key(&mut self) {
         self.keyed = true;
     }
 
-    /// Whether a mouse button is down, as `_Button` reads it.
+    /// Whether the primary mouse button is down, as `_Button` reads it.
     #[must_use]
     pub fn button_down(&self) -> bool {
         self.button
     }
 
-    /// A mouse button went down or came up: while one is down, each step
+    /// The primary mouse button went down or came up: while it is down, each step
     /// shows the cursor whole and counts as the mouse moving.
     pub fn button(&mut self, down: bool) {
         self.button = down;
@@ -592,5 +608,44 @@ mod tests {
         assert_eq!(cursor.fade(), FADE_LEVELS);
         cursor.pointer(at());
         assert_eq!(cursor.shown_at(), Some(at()));
+    }
+
+    #[test]
+    fn read_at_the_known_point_is_no_move() {
+        let mut cursor = moved();
+        for _ in 0..60 {
+            cursor.step(false, FOUR, false);
+        }
+        let faded = cursor.fade();
+        assert!(faded < FADE_LEVELS, "faded first");
+        cursor.read(at());
+        assert_eq!(cursor.fade(), faded);
+    }
+
+    #[test]
+    fn read_elsewhere_is_a_move() {
+        let mut cursor = moved();
+        for _ in 0..60 {
+            cursor.step(false, FOUR, false);
+        }
+        let there = Point::new(5.0, 6.0);
+        cursor.read(there);
+        assert_eq!(cursor.fade(), FADE_LEVELS);
+        assert_eq!(cursor.shown_at(), Some(there));
+    }
+
+    #[test]
+    fn read_with_no_pointer_yet_shows_it_there() {
+        let mut cursor = HoverCursor::default();
+        cursor.read(at());
+        assert_eq!(cursor.shown_at(), Some(at()));
+    }
+
+    #[test]
+    fn read_after_hide_at_the_hidden_point_stays_hidden() {
+        let mut cursor = moved();
+        cursor.hide();
+        cursor.read(at());
+        assert_eq!(cursor.shown_at(), None);
     }
 }

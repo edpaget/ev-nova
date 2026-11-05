@@ -844,7 +844,9 @@ impl AppScreen {
     /// The input to a mission dialog's map over flight, before anything
     /// open under it sees it: as flight's own map takes it, the Preferences
     /// keys first unless Find is open, then the map's
-    /// ([`AppScreen::port_map_input`]'s).
+    /// ([`AppScreen::port_map_input`]'s). While the map waits for M's
+    /// release, the router has already held the chords for after the
+    /// close (the `held_chords` module).
     pub(super) fn flight_dialog_map_input(&mut self, input: &Input) -> ScreenAction {
         let finding = self.flight.as_ref().is_some_and(FlightView::map_finding);
         if !finding && self.preferences_key(input) {

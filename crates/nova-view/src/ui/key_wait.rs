@@ -27,11 +27,15 @@ const LIVE_KEYS: [Key; 3] = [MAP_KEY, PLAYER_INFO_KEY, MISSION_INFO_KEY];
 
 /// The keys typed while a close waits for `waited`'s release, for the
 /// screen under it: the original's queue of key-downs, auto-keys and
-/// key-ups, less what can't reach a screen.
+/// key-ups, less what can't reach a screen. Typed text goes with the key
+/// that typed it, as the original's key-down carries its character.
 #[derive(Clone, Debug)]
 pub(crate) struct WaitKeys {
     waited: Key,
     keys: Vec<Input>,
+    /// Whether an [`Input::Text`] now would follow, directly or behind
+    /// other text, a press or repeat that was queued.
+    text_follows: bool,
 }
 
 impl WaitKeys {
@@ -40,6 +44,7 @@ impl WaitKeys {
         Self {
             waited,
             keys: Vec::new(),
+            text_follows: false,
         }
     }
 
@@ -48,37 +53,60 @@ impl WaitKeys {
     /// and the router ran Caps Lock's double time on its press. A release
     /// goes in only behind something of its key, a press or a repeat:
     /// otherwise the screen never saw that key. So what is queued says
-    /// whether a key it saw is still down.
+    /// whether a key it saw is still down. Text goes in only behind a
+    /// press or repeat that went in, directly or behind other text: the
+    /// character of a key dropped is dropped with it.
     pub(crate) fn take(&mut self, input: &Input) {
-        let Input::Key { key, pressed, .. } = *input else {
-            return;
+        let follows = std::mem::replace(&mut self.text_follows, false);
+        let (key, pressed) = match *input {
+            Input::Text(_) => {
+                if follows {
+                    self.keys.push(*input);
+                    self.text_follows = true;
+                }
+                return;
+            }
+            Input::Key { key, pressed, .. } => (key, pressed),
+            _ => return,
         };
         if key == self.waited || key == Key::CapsLock {
             return;
         }
         if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
             self.keys.push(*input);
+            self.text_follows = pressed;
         }
     }
 
     /// Drops all that was taken.
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
+        self.text_follows = false;
     }
 
     /// What the wait leaves for the screen under it, in order, the queue
     /// emptied. The filters read [`MAP_KEY`], [`PLAYER_INFO_KEY`] and
     /// [`MISSION_INFO_KEY`] live, so one already let go does nothing, and
-    /// goes with its repeats and release; one still down stays.
+    /// goes with its repeats and release, and the text they typed; one
+    /// still down stays.
     pub(crate) fn finish(&mut self) -> Vec<Input> {
+        self.text_follows = false;
         let mut keys = std::mem::take(&mut self.keys);
         for live in LIVE_KEYS.into_iter().filter(|&key| key != self.waited) {
             let let_go = keys.iter().rposition(|input| is_release_of(input, live));
             if let Some(let_go) = let_go {
+                let mut dropping = false;
                 keys = keys
                     .into_iter()
                     .enumerate()
-                    .filter(|(at, input)| *at > let_go || !is_key(input, live))
+                    .filter(|(at, input)| {
+                        dropping = *at <= let_go
+                            && match input {
+                                Input::Text(_) => dropping,
+                                _ => is_key(input, live),
+                            };
+                        !dropping
+                    })
                     .map(|(_, input)| input)
                     .collect();
             }
@@ -253,16 +281,86 @@ mod tests {
     }
 
     #[test]
-    fn it_takes_no_pointer_input_and_no_text() {
+    fn it_takes_no_pointer_input() {
         let at = Point::new(1.0, 2.0);
         let inputs = [
             Input::PointerMoved(at),
             Input::PointerLeft,
             Input::PointerMovedOutside(at),
             click(),
-            Input::Text('a'),
         ];
         assert_eq!(left_by(&inputs), []);
+    }
+
+    #[test]
+    fn it_keeps_text_behind_its_key_in_order() {
+        let five = Key::Char('5');
+        let inputs = [
+            press(A),
+            Input::Text('a'),
+            release(A),
+            press(five),
+            Input::Text('5'),
+        ];
+        assert_eq!(left_by(&inputs), inputs);
+        let repeated = [repeat(A), Input::Text('a'), Input::Text('b')];
+        assert_eq!(left_by(&repeated), repeated);
+    }
+
+    #[test]
+    fn it_drops_text_behind_a_key_it_doesnt_take() {
+        let text = Input::Text('x');
+        for before in [
+            press(MAP_KEY),
+            repeat(MAP_KEY),
+            press(Key::CapsLock),
+            click(),
+        ] {
+            assert_eq!(left_by(&[before, text]), [], "{before:?}");
+        }
+        assert_eq!(
+            left_by(&[press(A), release(A), text]),
+            [press(A), release(A)]
+        );
+        assert_eq!(left_by(&[text]), []);
+    }
+
+    #[test]
+    fn it_drops_a_let_go_live_keys_text_with_it() {
+        let inputs = [
+            press(PLAYER_INFO_KEY),
+            Input::Text('p'),
+            press(A),
+            Input::Text('a'),
+            release(PLAYER_INFO_KEY),
+        ];
+        assert_eq!(left_by(&inputs), [press(A), Input::Text('a')]);
+        let repeated = [
+            press(PLAYER_INFO_KEY),
+            repeat(PLAYER_INFO_KEY),
+            Input::Text('p'),
+            Input::Text('p'),
+            release(PLAYER_INFO_KEY),
+        ];
+        assert_eq!(left_by(&repeated), []);
+    }
+
+    #[test]
+    fn clear_drops_text_following() {
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.take(&press(A));
+        queue.clear();
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), []);
+    }
+
+    #[test]
+    fn finish_drops_text_following() {
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.take(&press(A));
+        queue.finish();
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), []);
     }
 
     #[test]

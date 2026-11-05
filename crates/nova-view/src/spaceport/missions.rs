@@ -75,28 +75,39 @@
 //! why, and Return or Escape alone closes it.
 //!
 //! Both lists are the List Manager's, as [`RowList`] runs them. A press in
-//! item 2 is held until its release: the one selection follows the
-//! pointer across the rows, and past the list's top or bottom edge the
-//! list scrolls a row at a time, the row scrolled in selected. The text,
-//! Accept's or Abort's grey and M's mark follow the selection at the
-//! release, when `LClick` returns and the filter reads the selection back
-//! (`_MissionFilter` @0xa0003-0xa007c, `_MissionInfoFilter`
-//! @0x9dc5d-0x9dcd8), not at the press; a cancelled press ends as a
-//! release. A press below the last row selects nothing: item 4 is an
-//! empty black box, Accept and A or Abort ask for nothing, and M asks for
-//! the map marked for nothing. The rows don't scroll on their own: when
-//! they don't fit, a scroll bar does. On the mission info screen it is
-//! carved from item 2's right, the rows narrowed by 15
-//! (`_SetupMissionInfoList` @0x9df6f-0x9df90). On the computer it lies in
-//! item 3's column, right of item 2 (`_SetupMissionList` @0xa07a6), and a
-//! press in item 3 goes to it (the second `LClick`, @0xa01c5-0xa01e7);
-//! when the rows fit, the list is widened over item 3 (@0xa07a8-0xa07e3).
-//! A press in item 3 over a list that fits is left out: there the
-//! original's `LClick` moves the highlight and nothing reads it back. The
-//! bar's last column and its top and bottom rows lie outside item 2 (and
-//! item 3), whose `PtInRect` doesn't hand them to `LClick`; the engine's
-//! item test counts the item's right and bottom edges in (the half-open
-//! tests are filed apart). Neither list plays a sound.
+//! item 2 is held until its release: the highlight follows the pointer
+//! across the rows, and past the list's top or bottom edge the list
+//! scrolls a row at a time, the row scrolled in lit. The selection, and
+//! with it the text, Accept's or Abort's grey and M's mark, follow the
+//! highlight at the release, when `LClick` returns and the filter reads
+//! the first row lit back (`_MissionFilter` @0xa0003-0xa007c,
+//! `_MissionInfoFilter` @0x9dc5d-0x9dcd8), not at the press; a cancelled
+//! press ends as a release. A press below the last row lights nothing, so
+//! nothing is selected: item 4 is an empty black box, Accept and A or
+//! Abort ask for nothing, and M asks for the map marked for nothing. The
+//! rows don't scroll on their own: when they don't fit, a scroll bar does.
+//! On the mission info screen it is carved from item 2's right, the rows
+//! narrowed by 15 (`_SetupMissionInfoList` @0x9df6f-0x9df90). On the
+//! computer it lies in item 3's column, right of item 2
+//! (`_SetupMissionList` @0xa07a6); when the rows fit, the list is widened
+//! over item 3 (@0xa07a8-0xa07e3). A press in item 3 goes to the second
+//! `LClick` (@0xa01c5-0xa01e7): the bar, or, over a list that fits, the
+//! rows, where it moves the highlight as item 2's does, but nothing reads
+//! it back. The name, the text, Accept, A and M stay on the selection
+//! (`_selMissionComputerItem`), and a step then lights the row after the
+//! selection and leaves the row pressed lit, two rows highlighted, until
+//! the next item-2 press (`LClick`'s `OneClick`, `ClearAll` and `NoMods`;
+//! the steps' `LSetSelect` @0x9f906-0x9fee3). The bar's last column and
+//! its top and bottom rows lie outside item 2 (and item 3), whose
+//! `PtInRect` doesn't hand them to `LClick`; the engine's item test counts
+//! the item's right and bottom edges in (the half-open tests are filed
+//! apart). Neither list plays a sound.
+//!
+//! Keys pressed while a press is held on a list, its bar or a button wait
+//! for the release, as `LClick` and the screens' button trackers read no
+//! events, and then run in order: the `mission_keys` module has the rules,
+//! and where the rest goes after a key that closes a screen, opens one,
+//! accepts or aborts.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -115,7 +126,7 @@ use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
@@ -125,6 +136,8 @@ use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, Te
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::{BarRoom, ListPress, RowList};
+
+use super::mission_keys::{self, Rest, Stops};
 
 /// The mission computer's `DLOG` (and `DITL`) ID.
 pub const COMPUTER_DIALOG: i16 = 1006;
@@ -190,39 +203,37 @@ impl std::fmt::Debug for MetricsHandle {
 }
 
 /// Whether `input` goes to the list in `dialog`'s item `list`: a press on
-/// it.
+/// it, half-open as each filter's `PtInRect` on the item's rect is
+/// (`_MissionFilter` @0x9fff6 for item 2 and @0xa01c5 for item 3,
+/// `_MissionInfoFilter` @0x9dc50 for item 2), so the item's right column
+/// and bottom row miss. `LClick` then tests `rView` half-open itself
+/// ([`RowList::input`]).
 fn on_list(dialog: &Dialog, list: usize, input: &Input) -> bool {
     match *input {
         Input::PointerButton {
             pressed: true, at, ..
         } => dialog
             .item_bounds(list)
-            .is_some_and(|bounds| bounds.contains(at)),
+            .is_some_and(|bounds| bounds.contains_half_open(at)),
         _ => false,
     }
 }
 
-/// What `input` did to `rows`, if it went to them: while they hold a
-/// press, every pointer move and the left release, as `LClick` keeps the
-/// pointer until the button comes up; otherwise a press on one of
+/// What `input` did to `rows`, if it went to them: a press on one of
 /// `dialog`'s `items`, as each filter's `PtInRect` hands one to `LClick`.
+/// While the rows hold a press ([`RowList::holds`]), each screen gives
+/// them every input instead, as `LClick` keeps the pointer until the
+/// button comes up and reads no events meanwhile.
 fn list_pointer(
     dialog: &Dialog,
     rows: &mut RowList,
     items: &[usize],
     input: &Input,
 ) -> Option<ListPress> {
-    let held = rows.tracking()
-        && matches!(
-            input,
-            Input::PointerMoved(_)
-                | Input::PointerButton {
-                    button: MouseButton::Left,
-                    pressed: false,
-                    ..
-                }
-        );
-    (held || items.iter().any(|&item| on_list(dialog, item, input))).then(|| rows.input(input))
+    items
+        .iter()
+        .any(|&item| on_list(dialog, item, input))
+        .then(|| rows.input(input))
 }
 
 /// Which way `input` steps a mission list, forward (`true`) or back, if it
@@ -255,6 +266,21 @@ struct Laid {
     dialog: Dialog,
     rows: RowList,
     metrics: MetricsHandle,
+    /// Whether the press the list holds reads the selection back at its
+    /// release: item 2's does (@0xa0025-0xa007a), item 3's doesn't
+    /// (@0xa01e7).
+    reads_back: bool,
+}
+
+/// The screens the mission computer's keys have asked for, until taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct ScreenAsks {
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)'s
+    /// mission info screen.
+    mission_info: bool,
+    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)'s
+    /// player info screen.
+    player_info: bool,
 }
 
 /// The mission computer of the stellar landed on.
@@ -265,11 +291,8 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) has asked for the mission info screen
-    /// since this was last taken.
-    info_requested: bool,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
-    player_info_requested: bool,
+    /// The mission info and player info screens asked for.
+    asks: ScreenAsks,
     /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) asked for, with
     /// the selected row's offer, until it is taken.
     map_request: Option<MapOpener>,
@@ -277,6 +300,17 @@ pub struct MissionComputerScreen {
     /// taken.
     text_request: Option<MissionId>,
     closed: bool,
+    /// What the inputs run did to the replay of the keys held back.
+    stops: Stops,
+    /// What a replay queued after the key that left, until taken
+    /// ([`MissionComputerScreen::take_unclaimed`]).
+    unclaimed: Vec<Input>,
+    /// What a replay queued after an accept, until the host's answer
+    /// takes it ([`MissionComputerScreen::take_after_accept`]).
+    after_accept: Vec<Input>,
+    /// Whether the mission info screen lists a mission
+    /// ([`MissionComputerScreen::set_missions_listed`]).
+    missions_listed: bool,
 }
 
 impl MissionComputerScreen {
@@ -326,11 +360,13 @@ impl MissionComputerScreen {
             let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
-                .with_cancel(Some(LEAVE_ITEM));
+                .with_cancel(Some(LEAVE_ITEM))
+                .with_held_keys();
             Laid {
                 rows: computer_rows(&dialog, Vec::new(), &*metrics),
                 dialog,
                 metrics: MetricsHandle(metrics),
+                reads_back: false,
             }
         });
         let mut screen = Self {
@@ -340,11 +376,14 @@ impl MissionComputerScreen {
                 today: String::new(),
             },
             accepted: None,
-            info_requested: false,
-            player_info_requested: false,
+            asks: ScreenAsks::default(),
             map_request: None,
             text_request: None,
             closed: false,
+            stops: Stops::default(),
+            unclaimed: Vec::new(),
+            after_accept: Vec::new(),
+            missions_listed: true,
         };
         screen.set_computer(computer);
         screen
@@ -399,14 +438,14 @@ impl MissionComputerScreen {
     /// since this was last asked (`_DoMissionDialog` item 10,
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.info_requested)
+        std::mem::take(&mut self.asks.mission_info)
     }
 
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
     /// has asked for the player info screen since this was last asked
     /// (`_MissionFilter` @0x9f82c, `_DoMissionDialog` @0xa3ffc).
     pub fn take_player_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.player_info_requested)
+        std::mem::take(&mut self.asks.player_info)
     }
 
     /// The map [`MAP_KEY`](crate::flight::view::MAP_KEY) has asked for
@@ -506,12 +545,175 @@ impl MissionComputerScreen {
         }
     }
 
+    /// What a replay queued after the key or click that left, once: its
+    /// host gives it to the spaceport, as Leave disposes of the dialog
+    /// with no flush (@0xa40c8). See the `mission_keys` module.
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// What a replay queued after an accept, once: its host runs it on
+    /// once it has answered the accept, or drops it with the flush the
+    /// answer makes. See the `mission_keys` module.
+    pub fn take_after_accept(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.after_accept)
+    }
+
+    /// Tells the computer whether the mission info screen lists a
+    /// mission: an active one that isn't hidden. With none,
+    /// `_DoMissionDialog`'s item 10 opens nothing (@0xa3e94-0xa3ebf), so
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// asks for nothing and the keys held back after it run on. Its holder
+    /// says so as it opens, and after an accept or an abort. Listed until
+    /// told otherwise.
+    pub fn set_missions_listed(&mut self, listed: bool) {
+        self.missions_listed = listed;
+    }
+
+    /// The replay's stops, for [`mission_keys::run_replay`].
+    fn stops(&mut self) -> &mut Stops {
+        &mut self.stops
+    }
+
+    /// Leaves, the rest of a replay going on to the spaceport.
+    fn leave(&mut self) {
+        self.closed = true;
+        self.stops.stop(Rest::Unclaimed);
+    }
+
+    /// Accept's arm (@0xa3b47-0xa3bb4): it flushes the mouse events
+    /// queued, then asks for the selected mission, if any, and the rest of
+    /// a replay waits for the answer.
+    fn accept(&mut self) {
+        self.stops.flush_mouse();
+        self.accepted = self.selected_mission();
+        if self.accepted.is_some() {
+            self.stops.stop(Rest::Answer);
+        }
+    }
+
+    /// One input through the computer's own path, its replay aside: while
+    /// the list or the dialog holds a press, everything goes to it;
+    /// otherwise the leave keys leave, M, I and P ask for their screens, A
+    /// accepts, Up, Down and (under [`FocusRing::Off`]) Tab step the list,
+    /// a press on the list starts its press, and everything else goes to
+    /// the dialog.
+    fn own_input(&mut self, input: &Input) {
+        if let Ok(laid) = &mut self.laid {
+            if laid.rows.holds() {
+                let press = laid.rows.input(input);
+                self.list_pressed(press);
+                return;
+            }
+            if laid.dialog.holds() {
+                if let Some(DialogEvent::Item(item)) = laid.dialog.input(input) {
+                    self.activate(item);
+                }
+                return;
+            }
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && LEAVE_KEYS.contains(&key)
+        {
+            self.leave();
+            return;
+        }
+        if is_map_press(input) {
+            self.map_request = Some(MapOpener::Computer(self.selected_mission()));
+            self.stops.stop(Rest::Dropped);
+            return;
+        }
+        if is_mission_info_press(input) {
+            // Item 10 flushes event codes (mouse events) before it counts
+            // the missions listed.
+            self.stops.flush_mouse();
+            if self.missions_listed {
+                self.asks.mission_info = true;
+                self.stops.stop(Rest::Dropped);
+            }
+            return;
+        }
+        if is_player_info_press(input) {
+            self.asks.player_info = true;
+            self.stops.stop(Rest::Dropped);
+            return;
+        }
+        let Ok(laid) = &mut self.laid else {
+            return;
+        };
+        if let Input::Key {
+            key: ACCEPT_KEY,
+            pressed: true,
+            repeat: false,
+        } = *input
+        {
+            self.accept();
+            return;
+        }
+        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
+            if laid.rows.step_wrapping(forward) {
+                self.show_selected();
+            }
+            return;
+        }
+        // Item 3 goes to the second `LClick` (@0xa01c5-0xa01e7): the bar,
+        // or the rows widened over it, with nothing read back after.
+        laid.reads_back = on_list(&laid.dialog, LIST_ITEM, input);
+        if let Some(press) =
+            list_pointer(&laid.dialog, &mut laid.rows, &[LIST_ITEM, BAR_ITEM], input)
+        {
+            self.list_pressed(press);
+            return;
+        }
+        if let Some(DialogEvent::Item(item)) = laid.dialog.input(input) {
+            self.activate(item);
+        }
+    }
+
+    /// Runs what the list or the dialog held back through
+    /// [`Self::own_input`], in order, until a leave, whose rest goes to
+    /// the spaceport ([`Self::take_unclaimed`]); M, P or I opening its
+    /// screen, whose flush drops the rest; or an accept, whose rest waits
+    /// for the answer ([`Self::take_after_accept`]). See the
+    /// `mission_keys` module.
+    fn run_replay(&mut self) {
+        let replay = match &mut self.laid {
+            Ok(laid) => {
+                let mut replay = laid.rows.take_replay();
+                replay.append(&mut laid.dialog.take_replay());
+                replay
+            }
+            Err(_) => Vec::new(),
+        };
+        match mission_keys::run_replay(self, replay, Self::stops, Self::own_input) {
+            Some((Rest::Unclaimed, mut rest)) => self.unclaimed.append(&mut rest),
+            Some((Rest::Answer, mut rest)) => self.after_accept.append(&mut rest),
+            Some((Rest::Dropped, _)) | None => {}
+        }
+    }
+
+    /// What a press on the list did: at its release, item 2's reads the
+    /// selection back, showing it if that changed it.
+    fn list_pressed(&mut self, press: ListPress) {
+        if press == ListPress::Released
+            && let Ok(laid) = &mut self.laid
+            && laid.reads_back
+            && laid.rows.read_back()
+        {
+            self.show_selected();
+        }
+    }
+
     /// Activates dialog item `item`: Accept asks for the selected mission
     /// and Leave leaves. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            ACCEPT_ITEM => self.accepted = self.selected_mission(),
-            LEAVE_ITEM => self.closed = true,
+            ACCEPT_ITEM => self.accept(),
+            LEAVE_ITEM => self.leave(),
             _ => {}
         }
     }
@@ -522,73 +724,26 @@ impl Screen for MissionComputerScreen {
     /// [`FocusRing::Off`]) Tab step the list, wrapping, and a press on the
     /// list selects a row; everything else goes to the dialog. It never
     /// quits.
+    ///
+    /// While a press is held on the list, its bar or a button, keys wait
+    /// for the release, as `LClick` and `_TrackMissionButtons` read no
+    /// events, and the release runs them in order within the same input.
+    /// See the `mission_keys` module.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && LEAVE_KEYS.contains(&key)
-        {
-            self.closed = true;
-            return ScreenAction::None;
-        }
-        if is_map_press(input) {
-            self.map_request = Some(MapOpener::Computer(self.selected_mission()));
-            return ScreenAction::None;
-        }
-        if is_mission_info_press(input) {
-            self.info_requested = true;
-            return ScreenAction::None;
-        }
-        if is_player_info_press(input) {
-            self.player_info_requested = true;
-            return ScreenAction::None;
-        }
-        let Ok(laid) = &mut self.laid else {
-            return ScreenAction::None;
-        };
-        if let Input::Key {
-            key: ACCEPT_KEY,
-            pressed: true,
-            repeat: false,
-        } = *input
-        {
-            self.accepted = self.selected_mission();
-            return ScreenAction::None;
-        }
-        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
-            if laid.rows.step_wrapping(forward) {
-                self.show_selected();
-            }
-            return ScreenAction::None;
-        }
-        // Item 3 goes to the bar (the second `LClick`, @0xa01c5-0xa01e7);
-        // over a list that fits, it is left out (see the module docs).
-        let items: &[usize] = if laid.rows.bar().is_some() {
-            &[LIST_ITEM, BAR_ITEM]
-        } else {
-            &[LIST_ITEM]
-        };
-        if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, items, input) {
-            if press == (ListPress::Released { changed: true }) {
-                self.show_selected();
-            }
-            return ScreenAction::None;
-        }
-        let event = laid.dialog.input(input);
-        if let Some(DialogEvent::Item(item)) = event {
-            self.activate(item);
-        }
+        self.own_input(input);
+        self.run_replay();
         ScreenAction::None
     }
 
     /// A press held on the list's bar steps on, and a drag past its ends
-    /// scrolls on.
+    /// scrolls on. The keys a cancelled press held back run then, so a
+    /// tick can leave, ask or accept.
     fn tick(&mut self, dt: Duration) {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
+            laid.dialog.tick(dt);
         }
+        self.run_replay();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -613,13 +768,35 @@ impl Screen for MissionComputerScreen {
     }
 
     /// The dialog lets go of its press, and the list ends its own as a
-    /// release would, loading the row it reached.
+    /// release would, loading the row it reached from item 2. The keys
+    /// either held back run on the next tick.
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
-            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
-                self.show_selected();
-            }
+            let press = laid.rows.cancel_pointer();
+            self.list_pressed(press);
+        }
+    }
+
+    /// The list's and the dialog's readouts, and an accept's rest waiting
+    /// for its answer.
+    fn holds_back_keys(&self) -> bool {
+        !self.after_accept.is_empty()
+            || self
+                .laid
+                .as_ref()
+                .is_ok_and(|laid| laid.rows.holds_back_keys() || laid.dialog.holds_back_keys())
+    }
+
+    /// Letting go of the keys while a press holds them abandons the press,
+    /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
+    fn release_keys(&mut self) {
+        if self
+            .laid
+            .as_ref()
+            .is_ok_and(|laid| laid.rows.holds() || laid.dialog.holds())
+        {
+            self.cancel_pointer();
         }
     }
 }
@@ -688,6 +865,16 @@ pub struct MissionInfoScreen {
     map_request: Option<MapOpener>,
     closed: bool,
     sounds: Vec<Sound>,
+    /// What the inputs run did to the replay of the keys held back.
+    stops: Stops,
+    /// What a replay queued after the key or click that closed it, until
+    /// taken ([`MissionInfoScreen::take_unclaimed`]).
+    unclaimed: Vec<Input>,
+    /// What a replay queued after an abort, and the inputs since, until
+    /// the info handed back after it ([`MissionInfoScreen::set_info`])
+    /// or, once the abort was taken with none handed back, the next tick
+    /// runs them.
+    after_abort: Vec<Input>,
 }
 
 impl MissionInfoScreen {
@@ -722,7 +909,8 @@ impl MissionInfoScreen {
             let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(INFO_DONE_ITEM))
-                .with_cancel(Some(INFO_DONE_ITEM));
+                .with_cancel(Some(INFO_DONE_ITEM))
+                .with_held_keys();
             InfoLaid {
                 rows: info_rows(&dialog, Vec::new(), &*metrics),
                 dialog,
@@ -738,6 +926,9 @@ impl MissionInfoScreen {
             map_request: None,
             closed: false,
             sounds: vec![Sound::Ui(UiSound::MissionInfoOpened)],
+            stops: Stops::default(),
+            unclaimed: Vec::new(),
+            after_abort: Vec::new(),
         };
         screen.set_info(info);
         screen
@@ -823,7 +1014,8 @@ impl MissionInfoScreen {
     /// past the rows ([`RowList::with_extent`]). The selection, its text,
     /// Abort's grey, Abort, M's mark and the text asked for all read the
     /// pick at the selected place. It closes once nothing is picked
-    /// (@0x9e5eb-0x9e610).
+    /// (@0x9e5eb-0x9e610). The keys a replay held back after an abort run
+    /// then, on the info rebuilt (see the `mission_keys` module).
     pub fn set_info(&mut self, info: MissionInfo) {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
@@ -850,6 +1042,7 @@ impl MissionInfoScreen {
         }
         laid.dialog.set_text(INFO_DATE_ITEM, &self.info.today);
         self.show_selected();
+        self.run_after_abort();
     }
 
     /// The pick at the selected place, if any.
@@ -894,12 +1087,138 @@ impl MissionInfoScreen {
         }
     }
 
+    /// What a replay queued after the key or click that closed it, once:
+    /// its host gives it to what is beneath, as Done and the closing keys
+    /// flush nothing (@0x9e744). See the `mission_keys` module.
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// The replay's stops, for [`mission_keys::run_replay`].
+    fn stops(&mut self) -> &mut Stops {
+        &mut self.stops
+    }
+
+    /// What a press on the list did: at its release, the filter reads the
+    /// selection back (@0x9dc82-0x9dcd6), showing it if that changed it.
+    fn list_pressed(&mut self, press: ListPress) {
+        if press == ListPress::Released
+            && let Ok(laid) = &mut self.laid
+            && laid.rows.read_back()
+        {
+            self.show_selected();
+        }
+    }
+
+    /// One input through the screen's own path, its replay aside: while
+    /// the list or the dialog holds a press, everything goes to it;
+    /// otherwise M asks for the map, the mission info key closes the
+    /// screen, Up, Down and (under [`FocusRing::Off`]) Tab step the list, a
+    /// press on the list starts its press, and everything else goes to
+    /// the dialog.
+    fn own_input(&mut self, input: &Input) {
+        if let Ok(laid) = &mut self.laid {
+            if laid.rows.holds() {
+                let press = laid.rows.input(input);
+                self.list_pressed(press);
+                return;
+            }
+            if laid.dialog.holds() {
+                if let Some(DialogEvent::Item(item)) = laid.dialog.input(input) {
+                    self.activate(item);
+                }
+                return;
+            }
+        }
+        if is_map_press(input) {
+            if self.map_allowed {
+                self.map_request = Some(MapOpener::MissionInfo(
+                    self.selected_row().map(|row| row.slot),
+                ));
+                self.stops.stop(Rest::Dropped);
+            }
+            return;
+        }
+        let Ok(laid) = &mut self.laid else {
+            if let Input::Key {
+                key: Key::Enter | Key::Escape,
+                pressed: true,
+                repeat: false,
+            } = *input
+            {
+                self.close();
+            }
+            return;
+        };
+        if is_mission_info_press(input) {
+            self.close();
+            return;
+        }
+        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
+            if laid.rows.step_wrapping(forward) {
+                self.show_selected();
+            }
+            return;
+        }
+        if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, &[INFO_LIST_ITEM], input) {
+            self.list_pressed(press);
+            return;
+        }
+        if let Some(DialogEvent::Item(item)) = laid.dialog.input(input) {
+            self.activate(item);
+        }
+    }
+
+    /// Runs what the list or the dialog held back through
+    /// [`Self::own_input`], in order. See [`Self::run_inputs`].
+    fn run_replay(&mut self) {
+        let replay = match &mut self.laid {
+            Ok(laid) => {
+                let mut replay = laid.rows.take_replay();
+                replay.append(&mut laid.dialog.take_replay());
+                replay
+            }
+            Err(_) => Vec::new(),
+        };
+        self.run_inputs(replay);
+    }
+
+    /// Runs what an abort's replay left, if anything: after the info
+    /// handed back, or on a tick once the abort was taken with none
+    /// handed back (a refused abort, @0x9e583).
+    fn run_after_abort(&mut self) {
+        let rest = std::mem::take(&mut self.after_abort);
+        self.run_inputs(rest);
+    }
+
+    /// Runs `inputs` through [`Self::own_input`], in order, until a close,
+    /// whose rest goes to what is beneath ([`Self::take_unclaimed`]); M
+    /// opening the map, whose flush drops the rest; or an abort, whose rest
+    /// waits for the info handed back after it. While an abort's rest
+    /// waits, `inputs` wait behind it. See the `mission_keys` module.
+    fn run_inputs(&mut self, mut inputs: Vec<Input>) {
+        if !self.after_abort.is_empty() {
+            self.after_abort.append(&mut inputs);
+            return;
+        }
+        match mission_keys::run_replay(self, inputs, Self::stops, Self::own_input) {
+            Some((Rest::Unclaimed, mut rest)) => self.unclaimed.append(&mut rest),
+            Some((Rest::Answer, mut rest)) => self.after_abort.append(&mut rest),
+            Some((Rest::Dropped, _)) | None => {}
+        }
+    }
+
     /// Activates dialog item `item`: Done closes, and Abort asks for the
     /// selected slot. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
             INFO_DONE_ITEM => self.close(),
-            ABORT_ITEM => self.abort = self.selected_row().map(|row| row.slot),
+            ABORT_ITEM => {
+                self.abort = self.selected_row().map(|row| row.slot);
+                if self.abort.is_some() {
+                    self.stops.stop(Rest::Answer);
+                }
+            }
             _ => {}
         }
     }
@@ -908,6 +1227,7 @@ impl MissionInfoScreen {
     /// was laid out; without its dialog the original returns before it
     /// (@0x9e20b).
     fn close(&mut self) {
+        self.stops.stop(Rest::Unclaimed);
         if !std::mem::replace(&mut self.closed, true) && self.laid.is_ok() {
             self.sounds.push(Sound::Ui(UiSound::MissionInfoClosed));
         }
@@ -920,55 +1240,37 @@ impl Screen for MissionInfoScreen {
     /// [`FocusRing::Off`]) Tab step the list, wrapping, and a press on the
     /// list selects a row; everything else goes to the dialog. It never
     /// quits.
+    ///
+    /// While a press is held on the list, its bar or a button, keys wait
+    /// for the release, as `LClick` and `_TrackMissionInfoButtons` read no
+    /// events, and the release runs them in order within the same input.
+    /// See the `mission_keys` module. While an abort's rest waits for its
+    /// answer, the input waits behind it.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if is_map_press(input) {
-            if self.map_allowed {
-                self.map_request = Some(MapOpener::MissionInfo(
-                    self.selected_row().map(|row| row.slot),
-                ));
-            }
-            return ScreenAction::None;
+        if self.after_abort.is_empty() {
+            self.own_input(input);
+        } else {
+            self.after_abort.push(*input);
         }
-        let Ok(laid) = &mut self.laid else {
-            if let Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
-                self.close();
-            }
-            return ScreenAction::None;
-        };
-        if is_mission_info_press(input) {
-            self.close();
-            return ScreenAction::None;
-        }
-        if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
-            if laid.rows.step_wrapping(forward) {
-                self.show_selected();
-            }
-            return ScreenAction::None;
-        }
-        if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, &[INFO_LIST_ITEM], input) {
-            if press == (ListPress::Released { changed: true }) {
-                self.show_selected();
-            }
-            return ScreenAction::None;
-        }
-        let event = laid.dialog.input(input);
-        if let Some(DialogEvent::Item(item)) = event {
-            self.activate(item);
-        }
+        self.run_replay();
         ScreenAction::None
     }
 
     /// A press held on the list's bar steps on, and a drag past its ends
-    /// scrolls on.
+    /// scrolls on. An abort's rest runs once the abort was taken with no
+    /// info handed back (refused), then the keys a cancelled press held
+    /// back, so a tick can close the screen. An abort they raise keeps
+    /// its rest until the host takes it and answers: the host answers
+    /// after an input, not a tick.
     fn tick(&mut self, dt: Duration) {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
+            laid.dialog.tick(dt);
         }
+        if self.abort.is_none() {
+            self.run_after_abort();
+        }
+        self.run_replay();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -993,13 +1295,35 @@ impl Screen for MissionInfoScreen {
     }
 
     /// The dialog lets go of its press, and the list ends its own as a
-    /// release would, loading the row it reached.
+    /// release would, loading the row it reached. The keys either held
+    /// back run on the next tick.
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
-            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
-                self.show_selected();
-            }
+            let press = laid.rows.cancel_pointer();
+            self.list_pressed(press);
+        }
+    }
+
+    /// The list's and the dialog's readouts, and an abort's rest waiting
+    /// for the info handed back after it.
+    fn holds_back_keys(&self) -> bool {
+        !self.after_abort.is_empty()
+            || self
+                .laid
+                .as_ref()
+                .is_ok_and(|laid| laid.rows.holds_back_keys() || laid.dialog.holds_back_keys())
+    }
+
+    /// Letting go of the keys while a press holds them abandons the press,
+    /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
+    fn release_keys(&mut self) {
+        if self
+            .laid
+            .as_ref()
+            .is_ok_and(|laid| laid.rows.holds() || laid.dialog.holds())
+        {
+            self.cancel_pointer();
         }
     }
 
@@ -1011,7 +1335,7 @@ impl Screen for MissionInfoScreen {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::ComputerRow;
 
@@ -1100,7 +1424,7 @@ mod tests {
         }
     }
 
-    fn screen_of(computer: MissionComputer) -> MissionComputerScreen {
+    pub(in crate::spaceport) fn screen_of(computer: MissionComputer) -> MissionComputerScreen {
         MissionComputerScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
             computer,
@@ -1128,7 +1452,7 @@ mod tests {
             .collect()
     }
 
-    fn key(key: Key) -> Input {
+    pub(in crate::spaceport) fn key(key: Key) -> Input {
         Input::Key {
             key,
             pressed: true,
@@ -2073,7 +2397,7 @@ mod tests {
         three
     }
 
-    fn info_screen_of(info: MissionInfo) -> MissionInfoScreen {
+    pub(in crate::spaceport) fn info_screen_of(info: MissionInfo) -> MissionInfoScreen {
         MissionInfoScreen::new(
             Ok((info_template(), Rc::new(MonoMetrics))),
             info,
@@ -2820,7 +3144,7 @@ mod tests {
 
     // The lists' scroll bars and pressed tracking.
 
-    fn button(pressed: bool, at: Point) -> Input {
+    pub(in crate::spaceport) fn button(pressed: bool, at: Point) -> Input {
         Input::PointerButton {
             button: MouseButton::Left,
             pressed,
@@ -2829,12 +3153,12 @@ mod tests {
     }
 
     /// `n` Mac ticks.
-    fn mac_ticks(n: u32) -> Duration {
+    pub(in crate::spaceport) fn mac_ticks(n: u32) -> Duration {
         Duration::from_secs(1) / 60 * n
     }
 
     /// `count` missions in slots 0 on, the even ones abortable.
-    fn many_info(count: u8) -> MissionInfo {
+    pub(in crate::spaceport) fn many_info(count: u8) -> MissionInfo {
         MissionInfo::shown(
             (0..count)
                 .map(|slot| {
@@ -2856,7 +3180,7 @@ mod tests {
     const INFO_LIST_AT: Point = Point::new(285.0, 330.0);
 
     /// A point on the info screen's row `row`, as shown from the top.
-    fn info_row_at(row: f32) -> Point {
+    pub(in crate::spaceport) fn info_row_at(row: f32) -> Point {
         Point::new(INFO_LIST_AT.x + 50.0, INFO_LIST_AT.y + 12.0 * row + 6.0)
     }
 
@@ -2865,6 +3189,14 @@ mod tests {
 
     fn first_shown(screen: &MissionInfoScreen) -> Option<usize> {
         screen.rows().map(RowList::first)
+    }
+
+    /// The info screen's rows lit.
+    fn info_lit(screen: &MissionInfoScreen) -> Vec<usize> {
+        screen
+            .rows()
+            .map(|rows| rows.highlighted().collect())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -2896,10 +3228,11 @@ mod tests {
         let _ = screen.take_text_request();
         screen.input(&button(true, info_row_at(0.0)));
         screen.input(&Input::PointerMoved(info_row_at(2.0)));
+        assert_eq!(info_lit(&screen), [2], "highlighted");
         assert_eq!(
             screen.rows().and_then(RowList::selected),
-            Some(2),
-            "highlighted"
+            Some(0),
+            "not read back while held"
         );
         assert_eq!(screen.take_text_request(), None, "not loaded while held");
         assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Brief 0.");
@@ -2987,7 +3320,7 @@ mod tests {
     }
 
     /// `count` offers, 130 on.
-    fn many_offers(count: i16) -> MissionComputer {
+    pub(in crate::spaceport) fn many_offers(count: i16) -> MissionComputer {
         MissionComputer {
             rows: (0..count)
                 .map(|n| row(130 + n, &format!("Offer {n}"), &format!("Text {n}.")))
@@ -2998,7 +3331,7 @@ mod tests {
 
     /// The computer's item 2 on screen: (267, 313) to (462, 457), twelve
     /// rows of 12; item 3 is (462, 313) to (477, 457).
-    fn computer_row_at(row: f32) -> Point {
+    pub(in crate::spaceport) fn computer_row_at(row: f32) -> Point {
         Point::new(300.0, 313.0 + 12.0 * row + 6.0)
     }
 
@@ -3059,23 +3392,123 @@ mod tests {
         assert_eq!(item_text(&dragged, TEXT_ITEM), "Text 1.");
     }
 
+    /// A point in item 3 on the computer's row `row`, as shown from the
+    /// top.
+    fn item_3_at(row: f32) -> Point {
+        Point::new(470.0, computer_row_at(row).y)
+    }
+
+    /// The computer's rows lit.
+    fn computer_lit(screen: &MissionComputerScreen) -> Vec<usize> {
+        screen
+            .rows()
+            .map(|rows| rows.highlighted().collect())
+            .unwrap_or_default()
+    }
+
+    pub(in crate::spaceport) fn computer_selected(screen: &MissionComputerScreen) -> Option<usize> {
+        screen.rows().and_then(RowList::selected)
+    }
+
     #[test]
-    fn a_press_in_item_3_over_a_list_that_fits_is_left_out() {
+    fn a_press_in_item_3_over_a_list_that_fits_moves_the_highlight_dragging_to_its_release() {
         let mut screen = screen_of(many_offers(3));
         let _ = screen.take_text_request();
-        let in_item_3 = Point::new(470.0, computer_row_at(1.0).y);
         assert!(
             screen
                 .rows()
                 .and_then(|rows| rows.row_bounds(1))
-                .is_some_and(|row| row.contains(in_item_3)),
+                .is_some_and(|row| row.contains(item_3_at(1.0))),
             "the widened row 1 covers it"
         );
-        screen.input(&button(true, in_item_3));
-        screen.input(&button(false, in_item_3));
-        assert_eq!(screen.rows().and_then(RowList::selected), Some(0));
+        screen.input(&button(true, item_3_at(1.0)));
+        assert_eq!(computer_lit(&screen), [1], "the second LClick (@0xa01e7)");
+        screen.input(&Input::PointerMoved(computer_row_at(2.0)));
+        assert_eq!(computer_lit(&screen), [2], "dragged over item 2");
+        screen.input(&button(false, computer_row_at(2.0)));
+        assert_eq!(computer_lit(&screen), [2]);
+        assert_eq!(computer_selected(&screen), Some(0), "nothing read back");
         assert_eq!(screen.take_text_request(), None);
+    }
+
+    #[test]
+    fn an_item_3_press_leaves_the_name_and_text_on_the_selection() {
+        let mut screen = screen_of(many_offers(3));
+        let offers = many_offers(3).rows;
+        let mut names = FakeNames::default();
+        screen.show_row(&offers[0], &mut names);
+        assert_eq!(item_text(&screen, NAME_ITEM), "Offer 0");
+        click_at(&mut screen, item_3_at(2.0));
+        assert_eq!(item_text(&screen, NAME_ITEM), "Offer 0");
         assert_eq!(item_text(&screen, TEXT_ITEM), "Text 0.");
+        screen.show_row(&offers[2], &mut names);
+        assert_eq!(
+            item_text(&screen, NAME_ITEM),
+            "Offer 0",
+            "_MissionDialogUpdate reads _selMissionComputerItem (@0x9f2f1)"
+        );
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Text 0.");
+    }
+
+    #[test]
+    fn an_item_3_press_leaves_accept_and_a_on_the_selection() {
+        let mut screen = screen_of(many_offers(3));
+        click_at(&mut screen, item_3_at(2.0));
+        click_item(&mut screen, ACCEPT_ITEM);
+        assert_eq!(screen.take_accept(), Some(MissionId(130)), "@0xa3b97");
+        screen.input(&key(ACCEPT_KEY));
+        assert_eq!(screen.take_accept(), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn an_item_3_press_leaves_m_on_the_selection() {
+        let mut screen = screen_of(many_offers(3));
+        click_at(&mut screen, item_3_at(2.0));
+        screen.input(&key(Key::Char('m')));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::Computer(Some(MissionId(130))))
+        );
+    }
+
+    #[test]
+    fn a_step_after_an_item_3_press_lights_the_next_row_and_keeps_the_pressed_one_lit() {
+        let mut screen = screen_of(many_offers(3));
+        let _ = screen.take_text_request();
+        click_at(&mut screen, item_3_at(2.0));
+        screen.input(&key(Key::Down));
+        assert_eq!(computer_lit(&screen), [1, 2], "@0x9fb3a, @0x9fade");
+        assert_eq!(computer_selected(&screen), Some(1));
+        assert_eq!(screen.take_text_request(), Some(MissionId(131)));
+    }
+
+    #[test]
+    fn an_item_2_press_after_it_reads_back_the_first_lit_row() {
+        let mut screen = screen_of(many_offers(3));
+        click_at(&mut screen, item_3_at(2.0));
+        screen.input(&key(Key::Down));
+        let _ = screen.take_text_request();
+        click_at(&mut screen, computer_row_at(2.0));
+        assert_eq!(computer_lit(&screen), [1, 2], "OneClick on a lit row");
+        assert_eq!(computer_selected(&screen), Some(1), "the first lit");
+        assert_eq!(screen.take_text_request(), None, "no change");
+        click_at(&mut screen, computer_row_at(0.0));
+        assert_eq!(computer_lit(&screen), [0], "ClearAll");
+        assert_eq!(computer_selected(&screen), Some(0));
+        assert_eq!(screen.take_text_request(), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn an_item_3_press_below_the_last_row_unlights_everything_but_keeps_the_selection() {
+        let mut screen = screen_of(many_offers(3));
+        let _ = screen.take_text_request();
+        click_at(&mut screen, item_3_at(5.0));
+        assert_eq!(computer_lit(&screen), [0_usize; 0]);
+        assert_eq!(computer_selected(&screen), Some(0));
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Text 0.");
+        assert_eq!(screen.take_text_request(), None);
+        screen.input(&key(ACCEPT_KEY));
+        assert_eq!(screen.take_accept(), Some(MissionId(130)));
     }
 
     #[test]
@@ -3108,5 +3541,110 @@ mod tests {
         assert_eq!(screen.take_accept(), None, "A accepts nothing");
         screen.input(&key(Key::Char('m')));
         assert_eq!(screen.take_map_request(), Some(MapOpener::Computer(None)));
+    }
+
+    // The item gates' `PtInRect`s: half-open on each list item.
+
+    #[test]
+    fn on_list_takes_an_items_left_and_top_edges_but_not_its_right_or_bottom() {
+        let screen = screen_of(many_offers(13));
+        let dialog = screen.dialog().expect("laid out");
+        for item in [LIST_ITEM, BAR_ITEM] {
+            let at = dialog.item_bounds(item).expect("an item");
+            let mid = at.center();
+            for (point, hit) in [
+                (at.min, true),
+                (Point::new(at.max.x - 1.0, at.max.y - 1.0), true),
+                (Point::new(at.max.x, mid.y), false),
+                (Point::new(mid.x, at.max.y), false),
+            ] {
+                assert_eq!(
+                    on_list(dialog, item, &button(true, point)),
+                    hit,
+                    "item {item} at {point:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_press_on_item_3s_right_or_bottom_edge_misses_the_computers_bar() {
+        let mut screen = screen_of(many_offers(13));
+        let _ = screen.take_text_request();
+        let item_3 = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(BAR_ITEM))
+            .expect("an item");
+        for edge in [
+            Point::new(item_3.max.x, 400.0),
+            Point::new(470.0, item_3.max.y),
+        ] {
+            screen.input(&button(true, edge));
+            screen.input(&button(false, edge));
+            assert_eq!(screen.rows().map(RowList::first), Some(0), "{edge:?}");
+            assert_eq!(screen.take_text_request(), None, "{edge:?}");
+        }
+        let inside = Point::new(item_3.max.x - 1.0, item_3.max.y - 7.0);
+        screen.input(&button(true, inside));
+        assert_eq!(
+            screen.rows().map(RowList::first),
+            Some(1),
+            "a pixel inside, the down arrow"
+        );
+        screen.input(&button(false, inside));
+    }
+
+    #[test]
+    fn a_press_on_item_2s_right_or_bottom_edge_misses_the_info_bar() {
+        let mut screen = info_screen_of(many_info(10));
+        let item_2 = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_LIST_ITEM))
+            .expect("an item");
+        for edge in [
+            Point::new(item_2.max.x, item_2.center().y),
+            Point::new(item_2.max.x - 8.0, item_2.max.y),
+        ] {
+            screen.input(&button(true, edge));
+            screen.input(&button(false, edge));
+            assert_eq!(first_shown(&screen), Some(0), "{edge:?}");
+        }
+        let inside = Point::new(item_2.max.x - 1.0, item_2.max.y - 1.0);
+        screen.input(&button(true, inside));
+        assert_eq!(
+            first_shown(&screen),
+            Some(1),
+            "a pixel inside, the down arrow"
+        );
+        screen.input(&button(false, inside));
+    }
+
+    #[test]
+    fn a_press_on_the_list_items_top_left_corner_selects_the_first_row() {
+        let mut computer = screen_of(many_offers(3));
+        click_at(&mut computer, computer_row_at(1.0));
+        let _ = computer.take_text_request();
+        let corner = computer
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(LIST_ITEM))
+            .expect("an item")
+            .min;
+        click_at(&mut computer, corner);
+        assert_eq!(computer.rows().and_then(RowList::selected), Some(0));
+        assert_eq!(computer.take_text_request(), Some(MissionId(130)));
+
+        let mut info = info_screen_of(many_info(3));
+        info.input(&button(true, info_row_at(1.0)));
+        info.input(&button(false, info_row_at(1.0)));
+        let _ = info.take_text_request();
+        let corner = info
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_LIST_ITEM))
+            .expect("an item")
+            .min;
+        info.input(&button(true, corner));
+        info.input(&button(false, corner));
+        assert_eq!(info.rows().and_then(RowList::selected), Some(0));
+        assert_eq!(info.take_text_request(), Some(0));
     }
 }

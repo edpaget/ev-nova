@@ -424,6 +424,48 @@ fn p_faded_latches_y_and_i_and_y_faded_latches_i() {
 }
 
 #[test]
+fn p_pressed_after_y_faded_and_before_the_next_poll_waits() {
+    // Y's `_SetAllKeyCmdFlags` (@0x622ac) set P's latch: a press no poll
+    // has read since finds it set.
+    let mut view = under_the_white();
+    tap(&mut view, HAIL_KEY);
+    view.sim.queue_answer(Answer::Hailed(Hailed::Faded));
+    collapses_lit(&mut view);
+    let from = sent_count(&view);
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.input(&key(PLAYER_INFO_KEY, true));
+    assert!(!view.take_player_info_request(), "P waits");
+    assert_eq!(sent(&view, from), []);
+    assert!(view.latched_down.contains(&PLAYER_INFO_KEY));
+}
+
+#[test]
+fn a_latched_key_pressed_after_p_i_or_m_faded_and_before_the_next_poll_waits() {
+    // P's (@0x70393), I's (@0x70524) and M's (@0x6a898)
+    // `_SetAllKeyCmdFlags` set J's latch: a press no poll has read since
+    // finds it set.
+    let cases = [
+        (PLAYER_INFO_KEY, Some(Answer::PlayerInfoFaded)),
+        (
+            MISSION_INFO_KEY,
+            Some(Answer::MissionInfo(MissionInfoPress::Faded)),
+        ),
+        (MAP_KEY, None),
+    ];
+    for (k, answer) in cases {
+        let mut view = under_the_white();
+        tap(&mut view, k);
+        if let Some(answer) = answer {
+            view.sim.queue_answer(answer);
+        }
+        collapses_lit(&mut view);
+        view.input(&key(JUMP_KEY, true));
+        assert!(view.latched_down.contains(&JUMP_KEY), "{k:?}: J waits");
+        assert!(!view.held.contains(&JUMP_KEY), "{k:?}");
+    }
+}
+
+#[test]
 fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
     let mut view = under_the_white();
     collapses_lit(&mut view);
@@ -431,16 +473,20 @@ fn a_press_on_the_frame_after_a_lit_collapse_acts_as_a_plain_press() {
     view.sim.queue_answer(Answer::PlayerInfoPressed(true));
     tap(&mut view, PLAYER_INFO_KEY);
     assert!(view.take_player_info_request());
+    // Each dialog closes, its site's mark taken, before the next press.
+    let _ = view.take_back_live_input(LiveKeys::default());
     view.sim
         .queue_answer(Answer::Hailed(Hailed::Comm(faked_hail_view())));
     tap(&mut view, HAIL_KEY);
     assert!(view.take_hail().is_some());
+    let _ = view.take_back_live_input(LiveKeys::default());
     view.sim
         .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(
             MissionInfo::default(),
         )));
     tap(&mut view, MISSION_INFO_KEY);
     assert!(view.take_mission_info_request().is_some());
+    let _ = view.take_back_live_input(LiveKeys::default());
     tap(&mut view, MAP_KEY);
     assert!(view.map_open());
     assert_eq!(
@@ -722,6 +768,45 @@ fn y_let_go_during_double_times_held_arrival_does_nothing() {
     });
     view.tick(TICK);
     assert_eq!(sent(&view, from), []);
+}
+
+#[test]
+fn m_pressed_in_double_times_held_arrival_does_not_open_the_map() {
+    let mut view = under_the_white();
+    arrives_held(&mut view, |view| {
+        view.input(&key(MAP_KEY, true));
+    });
+    view.tick(TICK);
+    assert!(!view.map_open(), "@0x6a89f latched it");
+}
+
+#[test]
+fn p_pressed_in_double_times_held_arrival_acts_after_it() {
+    let mut view = under_the_white();
+    let from = sent_count(&view);
+    arrives_held(&mut view, |view| {
+        view.input(&key(PLAYER_INFO_KEY, true));
+    });
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), [FlightCommand::PressPlayerInfo]);
+}
+
+#[test]
+fn a_kept_i_that_opens_its_screen_runs_no_step_that_tick() {
+    let mut view = under_the_white();
+    view.input(&key(MISSION_INFO_KEY, true));
+    arrives(&mut view);
+    let stepped = view.sim.steps();
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(
+            MissionInfo::default(),
+        )));
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped, "the screen comes first");
+    assert!(view.take_mission_info_request().is_some());
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped + 1, "and then on");
 }
 
 #[test]

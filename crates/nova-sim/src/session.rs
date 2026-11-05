@@ -250,7 +250,8 @@
 //! ([`Session::command_escorts`], the escort menu's rows in
 //! [`FrameHud::escort_rows`](crate::flight_frame::FrameHud::escort_rows)) and which
 //! entering a system resets, or keeps, as the rule set reads
-//! [`RuleKey::EscortOrders`]. A ship captured joins the fleet
+//! [`RuleKey::EscortOrders`] (a jump's arrival resetting a pass later, as
+//! [`RuleKey::ArrivalOrders`] reads). A ship captured joins the fleet
 //! where it is, and so does a person hailed that offers to join
 //! (`person_join`'s other reading), flying as itself in every system; an
 //! escort disabled or destroyed leaves it, and one hailed may be
@@ -596,6 +597,7 @@ mod npc_destinations;
 mod npc_escape;
 mod npc_gain;
 mod npc_kinds;
+mod opening_rest;
 mod operator_moves;
 mod outbox;
 mod outfits;
@@ -1101,6 +1103,14 @@ pub struct Session {
     /// of `time` waiting for the close. Never saved: no step runs under
     /// the dialog, so none is open at a save.
     info_zero_owed: bool,
+    /// Whether the next step runs the rest of the frame a comm, escort or
+    /// info dialog opened on, at gain 0, in place of a whole frame (see
+    /// the `opening_rest` module). On `Session` itself beside `time`, for
+    /// its reason: it is a whole pass of every stateful sub-state at the
+    /// frame's gain, waiting for the next step. Never saved: the pilot
+    /// file doesn't keep it, and the next step takes it before a frame is
+    /// drawn.
+    opening_rest_owed: bool,
 }
 
 impl Session {
@@ -1406,6 +1416,7 @@ impl Session {
             load_repaired,
             time: crate::TimeAdjustment::default(),
             info_zero_owed: false,
+            opening_rest_owed: false,
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),
@@ -1717,11 +1728,12 @@ impl Session {
     /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
     /// modules), then the player's wrap (see the `player_wrap` module),
     /// then its lost-target check (see the `lost_target`
-    /// module), then the tribbles and perishables on a due frame, the Red
-    /// Alert's check, and its blink on the advance pass alone, as
-    /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
-    /// target brackets. The cargo boxes are scooped and aged after the
-    /// move and the player's display step
+    /// module), then the Red Alert's check (@0x68c79), then the work that
+    /// runs after the key block ([`Session::work_from_key_block`]): the
+    /// tribbles and perishables on a due frame, the Red Alert's blink on
+    /// the advance pass alone, as `_HandleAlertSprite` runs on it alone,
+    /// the tutorial's hints, the target brackets. The cargo boxes are
+    /// scooped and aged after the move and the player's display step
     /// ([`Session::scoop_after_display`]).
     fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
@@ -1730,23 +1742,8 @@ impl Session {
         self.ship.gamma_tick(self.mode.jump());
         self.wrap_player_position();
         self.let_go_of_lost_target();
-        if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
-            let capacity = self.capacity();
-            market::step_junk(
-                &self.statics.goods,
-                &mut self.pilot.cargo,
-                capacity,
-                self.pilot.missions.tons_aboard(),
-                self.setup.rules.source_for(RuleKey::JunkFlags),
-                self.ship.latches.junk_latches,
-            );
-        }
         self.red_alert_check(frame);
-        if pass != GamePass::Again {
-            self.red_alert.step(frame);
-        }
-        self.tutorial_tick(frame);
-        self.chart.brackets_tick(self.speed_mult());
+        self.work_from_key_block(frame, pass);
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
@@ -2090,7 +2087,8 @@ impl Session {
         self.run.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths, &kept_escorts, &mut &mut *chance);
+        let jump = matches!(entry, Some(Entry::Jump { .. }));
+        self.enter_escorts(&berths, &kept_escorts, jump, &mut &mut *chance);
         self.place_entering_escorts(entry);
         self.space.hold_derelicts(&self.statics);
         self.space.strikes.clear();
@@ -2991,8 +2989,10 @@ impl Session {
         &self.pilot.course
     }
 
-    /// Presses the jump key: accepts a jump to the system selected in nav
-    /// mode 3 ([`Session::nav_mode`]), if the ship has not landed and the
+    /// Presses the jump key: accepts a jump to the system the mode-3
+    /// selection's Con slot names ([`Chart::jump_selection`], a
+    /// self-listed slot and one with no visible system at its place
+    /// included), if the ship has not landed and the
     /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
     /// system; otherwise the refusal says why. In any other mode, or with
     /// nothing selected, it is [`JumpRefusal::NoDestination`]
@@ -6830,10 +6830,12 @@ impl Space {
 impl Chart {
     /// The map bearing of `to` from the current system, in whole degrees,
     /// `_CalcInterceptAngle` of their map positions (@0x6b0cf), which the
-    /// warp stage turns to; none when either is off the map. Two systems
-    /// at one place give 0, as the original's table does.
+    /// warp stage turns to; none when either is not in the catalog. A
+    /// hidden system keeps its map position, as the original reads the
+    /// raw slot target's `sÿst` (@0x6b097-0x6b0a2). Two systems at one
+    /// place give 0, as the original's table does.
     fn jump_aim(&self, pilot: &Pilot, to: SystemId) -> Option<i16> {
-        let map = |id| self.galaxy.map().position(id);
+        let map = |id| self.galaxy.position(id);
         map(pilot.system)
             .zip(map(to))
             .map(|(from, to)| intercept_angle(from, to))
@@ -11511,14 +11513,14 @@ pub(super) mod tests {
 
     // Tribbles and perishables.
 
-    const FURBALLS: Good = Good::Junk(JunkId(128));
-    const FRUIT: Good = Good::Junk(JunkId(129));
+    pub(super) const FURBALLS: Good = Good::Junk(JunkId(128));
+    pub(super) const FRUIT: Good = Good::Junk(JunkId(129));
     const MORE_FURBALLS: Good = Good::Junk(JunkId(130));
     const ROTTING_FURBALLS: Good = Good::Junk(JunkId(131));
 
     /// [`exchange`], its planet 128 selling `jünk` 128 and 130, tribbles,
     /// 129, perishable, and 131, both, at 8 a ton.
-    fn breeding() -> FakePilotCatalog {
+    pub(super) fn breeding() -> FakePilotCatalog {
         let sold = |id, flags| JunkRecord {
             id: JunkId(id),
             name: format!("Junk {id}"),
@@ -11574,7 +11576,7 @@ pub(super) mod tests {
 
     /// A session of [`breeding`] that has bought `tons` of each good at
     /// planet 128 and taken off.
-    fn taken_off_with(tons: &[(Good, u32)]) -> Session {
+    pub(super) fn taken_off_with(tons: &[(Good, u32)]) -> Session {
         let mut session = Session::start(&breeding()).expect("starts");
         land_now(&mut session).expect("lands");
         take_off_with(&mut session, tons);
@@ -11582,7 +11584,7 @@ pub(super) mod tests {
     }
 
     /// The tons of furballs and of fruit held.
-    fn furballs_and_fruit(session: &Session) -> (u32, u32) {
+    pub(super) fn furballs_and_fruit(session: &Session) -> (u32, u32) {
         (session.pilot().held(FURBALLS), session.pilot().held(FRUIT))
     }
 
@@ -30124,18 +30126,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_course_hop_with_no_system_at_its_place_is_no_destination_until_one_shows() {
+    fn a_course_hop_with_no_system_at_its_place_is_jumped_to_by_its_slot() {
+        // The selection, 131, still stands in 130's Con slot 0, so J goes
+        // ahead (+0x6c ≠ −1, @0x6b11e-0x6b131) into hidden 131, and the
+        // refresh's move takes the player to the chain head at its place,
+        // 131 itself, made visible (@0x99929-0x999a4).
         let catalog = alternates();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         hide(&mut session, &catalog, &[131, 134]);
         assert_eq!(session.course_shown(), [], "cut at the first hop");
         fly_out(&mut session, &catalog);
-        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
-        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        unhide(&mut session, &catalog, &[131]);
-        assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert!(session.galaxy().visible(SystemId(131)));
     }
 
     /// [`alternates`] with two ships of düde 128 flying in 131, and none

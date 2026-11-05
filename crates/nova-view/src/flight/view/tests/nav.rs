@@ -1191,7 +1191,7 @@ fn held_frame_sends(keys: &[Key], refused: PlayerCommand) -> Vec<FlightCommand> 
         view.track_held(&key(k, true));
     }
     view.nav_held_frame();
-    sent(&view).to_vec()
+    sent(&view)
 }
 
 #[test]

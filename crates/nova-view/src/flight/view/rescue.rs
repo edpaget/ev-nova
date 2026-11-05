@@ -65,7 +65,12 @@
 //!   on ([`Screen::hides_pointer`](crate::Screen::hides_pointer)).
 //! - **Input.** Everything pressed under the screen is kept and given
 //!   back for the router to hand to what shows next
-//!   ([`FlightView::take_rescue_replay`]).
+//!   ([`FlightView::take_rescue_replay`]): the `dësc`, the texts, or, at
+//!   the end, flight, which reads no queued key (`_IterateInGameEventLoop`
+//!   @0x56a6b, @0x56cec) after the rescue's `jmp 0x71113` (@0x692ce), so
+//!   flight's keys are dropped from that last replay, but the modifiers
+//!   the router's chords read. One still down comes back through the
+//!   hand-back ([`FlightView::take_back_live_input`]).
 //! - **The closing.** As the closing repaint begins, the whole bar is
 //!   redrawn from the rescued frame, as `_RedrawStatus(1)` (@0x69219)
 //!   redraws it.
@@ -88,11 +93,27 @@ use crate::flight::sim_port::FlightSim;
 use crate::input::Input;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene;
-use crate::{Color, DrawList};
+use crate::{Color, DrawList, Key};
 
 use super::cockpit::BarParts;
 use super::world::message_background;
 use super::{FlightView, radar_ships};
+
+/// Whether flight drops `input` when the rescue hands it back at its end:
+/// a key flight reads ([`every_key`](super::every_key)), pressed, repeated
+/// or let go. The rescue leaves by `jmp 0x71113` (@0x692ce) for the pass
+/// loop, where `_IterateInGameEventLoop` drops every queued key-down
+/// without Command (@0x56a6b, @0x56cec) and `_HandlePlayer` polls the keys
+/// live; one still down comes back through the hand-back
+/// ([`FlightView::take_back_live_input`]). Option, Command and Shift stay,
+/// for the router's chords, which the hand-back sets anyway, and so do the
+/// keys flight doesn't read (Escape, Caps Lock, the menu chords'
+/// characters), which the router acts on.
+fn flight_drops(input: &Input) -> bool {
+    matches!(*input, Input::Key { key, .. }
+        if !matches!(key, Key::Alt | Key::Command | Key::Shift)
+            && super::every_key().any(|flight| flight == key))
+}
 
 /// What the rescue keeps of the frame the pod showed last
 /// ([`FlightView::pod_frame`]).
@@ -348,7 +369,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// What was pressed under the rescue, given back as its `dësc`, its
     /// texts or flight come next, taken once: the router hands it to what
     /// it shows then, as the original's queued events reach the next
-    /// event loop.
+    /// event loop. Flight's own keys are dropped from what its end gives
+    /// back, as flight reads no queued key (see the module docs).
     pub fn take_rescue_replay(&mut self) -> Vec<Input> {
         std::mem::take(&mut self.rescue_replay)
     }
@@ -398,7 +420,13 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             return false;
         };
         let entered = screen.tick(dt);
-        self.rescue_replay.extend(screen.take_replay());
+        let mut replay = screen.take_replay();
+        if entered.contains(&RescueStage::Done) {
+            // Every stage that hands back stops its tick, so all of it
+            // came back at the end, for flight.
+            replay.retain(|input| !flight_drops(input));
+        }
+        self.rescue_replay.extend(replay);
         for stage in entered {
             match stage {
                 RescueStage::Black => {

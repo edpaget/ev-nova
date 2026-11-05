@@ -90,3 +90,28 @@ fn a_click_held_on_the_outfitters_alert_holds_back_keys() {
     view.input(&left(true, done));
     assert!(view.holds_back_keys(), "during the press");
 }
+
+#[test]
+fn the_spaceport_holds_back_keys_for_the_computers_press() {
+    let mut view = informed(missioned());
+    click_item(&mut view, 10);
+    view.open_mission_computer(Ok(MissionComputer {
+        rows: (0..20)
+            .map(|n| ComputerRow {
+                mission: MissionId(130 + n),
+                name: format!("Offer {n}"),
+                raw_name: format!("Offer {n}"),
+                text: format!("Text {n}."),
+            })
+            .collect(),
+        today: String::new(),
+    }));
+    let row_0 = Point::new(50.0, 35.0);
+    assert!(!view.holds_back_keys(), "before the press");
+    view.input(&left(true, row_0));
+    assert!(view.holds_back_keys(), "during the press");
+    view.input(&escape());
+    view.input(&left(false, row_0));
+    assert!(!view.holds_back_keys(), "its replay ran");
+    assert!(view.mission_computer().is_none(), "and left");
+}

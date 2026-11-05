@@ -10,7 +10,7 @@ use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
 use crate::combat::report::Reports;
 use crate::control::ScriptNote;
-use crate::flight_frame::RaisedLine;
+use crate::flight_frame::{EscortMenuPass, RaisedLine};
 use crate::gate_sprite::StellarPass;
 use crate::grant::Granted;
 use crate::hail::CommNote;
@@ -101,10 +101,18 @@ pub(super) struct Outbox {
     /// (@0x90251), until a step takes it (see the `step` module); never
     /// saved.
     pub(super) last_line: Option<RaisedLine>,
-    /// Whether a pass cleared an escort class's kept order since a step
-    /// last took it (see the `class_orders` and `step` modules); never
-    /// saved.
-    pub(super) class_orders_cleared: bool,
+    /// What `_HandlePlayer`'s escort-menu block read on the pass under
+    /// way and whether its bookkeeping cleared a class's kept order,
+    /// until the pass's report takes it (see the `class_orders`,
+    /// `display_step` and `step` modules); `None` before the block, and
+    /// for a pass that returned before it. Never saved.
+    pub(super) escort_menu: Option<EscortMenuPass>,
+    /// The escort command a test gives between double time's two passes,
+    /// as the original's escort keys on the second pass's `_HandlePlayer`
+    /// would (see the `step` module).
+    #[cfg(test)]
+    pub(super) command_between_passes:
+        Option<(crate::escort::EscortGroup, crate::escort::EscortCommand)>,
     /// Whether a jump collapsed under the white since a step last took it
     /// (see the `jump_collapse` and `step` modules); never saved.
     pub(super) lit_collapse: bool,

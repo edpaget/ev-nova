@@ -238,7 +238,9 @@ impl Session {
         if matches!(condition, Condition::Intact | Condition::Destroyed) {
             return;
         }
-        let auto = self.ship.auto_eject_fires(&self.pilot, &self.statics);
+        let auto = self
+            .ship
+            .auto_eject_fires(self.ship.condition, &self.pilot, &self.statics);
         // The pass's move has collapsed any pre-jump of a player disabled
         // or dying, so the collapse's clock is never read here.
         self.try_eject(auto, condition, chance);
@@ -465,15 +467,20 @@ impl Session {
 }
 
 impl PlayerShip {
-    /// Whether auto-eject fires this pass: the ship breaking up, armour
-    /// gone counting though nothing has settled it yet, with the timer at
-    /// [`auto_eject_armed`], on a ship carrying the outfit
-    /// ([`has_auto_eject`]).
-    pub(super) fn auto_eject_fires(&self, pilot: &Pilot, statics: &Statics) -> bool {
-        let condition = self
-            .condition
+    /// Whether auto-eject fires on `condition`: the ship breaking up,
+    /// armour gone counting though nothing has settled it yet, with the
+    /// timer at [`auto_eject_armed`], on a ship carrying the outfit
+    /// ([`has_auto_eject`]). `condition` is the one the pass's eject check
+    /// reads, after the pass's `count_down`.
+    pub(super) fn auto_eject_fires(
+        &self,
+        condition: Condition,
+        pilot: &Pilot,
+        statics: &Statics,
+    ) -> bool {
+        let condition = condition
             .breaking_up(pilot.reserves.armor)
-            .unwrap_or(self.condition);
+            .unwrap_or(condition);
         matches!(condition, Condition::Dying { ticks_left, .. }
             if auto_eject_armed(ticks_left, self.fit.hull.death_delay))
             // `_HasAutoEject` reads the outfit counts (see the

@@ -593,7 +593,7 @@ mod tests {
                 let probe = dying(session);
                 probe
                     .ship
-                    .auto_eject_fires(&probe.pilot, &probe.statics)
+                    .auto_eject_fires(probe.ship.condition, &probe.pilot, &probe.statics)
                     .to_string()
             }),
             ("the sabotage flag", (SABOTAGE_BOMB, 1), &|session| {

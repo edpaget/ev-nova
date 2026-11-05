@@ -66,7 +66,7 @@ pub struct Displayed {
 impl Combat {
     /// The player's display step (`_DoPlayGameWork` @0x43e29), after
     /// `_HandlePlayer`'s death-timer tick (the session's,
-    /// `nova_sim::Session::player_display_step`) and before the collision
+    /// `nova_sim::Session::player_display_head`) and before the collision
     /// passes, by
     /// `arena`'s rules: its condition settled from its armour, its dying
     /// block, its wreck's shockwave at once, which strikes the NPCs not

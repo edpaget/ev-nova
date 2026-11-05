@@ -159,7 +159,7 @@ impl Session {
             self.release_stale(dialog.npc);
         }
         // `_gSpeedMult` 0.0 (@0x95693; see the `time_adjustment` module).
-        self.zero_speed_mult();
+        self.zero_at_key_block();
     }
 
     /// Escort NPC `id` is released as `_DoEscortDialog`'s close releases

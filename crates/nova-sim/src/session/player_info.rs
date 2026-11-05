@@ -120,7 +120,7 @@ impl Session {
             self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. });
         if self.mode.landed().is_none() {
             if refused {
-                self.zero_speed_mult_unheld();
+                self.zero_at_key_block_unheld();
             } else {
                 self.owe_info_zero();
             }

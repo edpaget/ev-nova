@@ -10,7 +10,7 @@ use super::faked_screen::{faked_stage, picks_since, sent_count, sent_since};
 use super::faked_travel::{jump_now, lit};
 use super::faked_world::world;
 use super::*;
-use crate::flight::floating;
+use crate::galaxy::place::{INITIAL_ZOOM, ZOOM_OUT_STEP};
 use crate::time::sixtieths;
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::navigation::NavMode;
@@ -276,7 +276,7 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
 /// `view`'s escort menu past its timeout and 10 steps into its fade.
 fn fading(view: &mut Faked) {
     view.step_stellars(crate::flight::escorts::MENU_TIMEOUT + TICK);
-    view.update_escort_menu(10);
+    super::faked_escorts::single_steps(view, 10);
     assert_eq!(view.escort_menu().level(), Some(22), "fading");
 }
 
@@ -451,6 +451,21 @@ fn the_escort_menu_times_out_during_the_streak() {
     view.tick(wait);
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open as the streak begins");
+    // Each tick's step: one pass through `_HandlePlayer`'s fade, the
+    // escort flying.
+    let step = nova_sim::flight_frame::StepReport {
+        steps: vec![nova_sim::flight_frame::StepRun {
+            passes: vec![nova_sim::flight_frame::PassReport {
+                escort_menu: Some(nova_sim::flight_frame::EscortMenuPass {
+                    escorts_flying: true,
+                    class_orders_cleared: false,
+                }),
+                ..nova_sim::flight_frame::PassReport::default()
+            }],
+            ..nova_sim::flight_frame::StepRun::default()
+        }],
+        stopped: false,
+    };
     let mut faded = false;
     for _ in 0..60 {
         if !view.escort_menu().is_open() {
@@ -458,6 +473,7 @@ fn the_escort_menu_times_out_during_the_streak() {
         }
         faded |= view.escort_menu().level() < Some(32);
         assert!(view.jump_under_way(), "shut before the ship arrives");
+        view.sim.queue_report(step.clone());
         view.tick(TICK);
     }
     assert!(faded, "it fades through the streak");
@@ -697,14 +713,18 @@ fn zooms_are_taken_through_a_jump_and_refused_once_exploded() {
                 .contains(&Sound::Ui(UiSound::FloatingMapZoomed)),
             "warping {warping}"
         );
-        assert_eq!(view.floating.zoom(), 4, "warping {warping}");
+        assert_eq!(
+            view.floating.zoom(),
+            INITIAL_ZOOM * ZOOM_OUT_STEP,
+            "warping {warping}"
+        );
     }
     let mut view = super::maps::floating_in(in_sol());
     view.change_sim(|sim| sim.refuse(PlayerCommand::Nav));
     view.floating.show(sixtieths(view.elapsed));
     view.take_sounds();
     tap(&mut view, ZOOM_OUT_KEY);
-    assert_eq!(view.floating.zoom(), floating::START_ZOOM);
+    assert_eq!(view.floating.zoom(), INITIAL_ZOOM);
     assert!(
         !view
             .take_sounds()
@@ -759,7 +779,7 @@ fn the_flights_metrics_measure_the_course_maps_panel() {
     panel.strip = Strip::Info {
         ports: nova_sim::map_panel::Ports::Unknown,
         hazards: String::new(),
-        date: date.clone(),
+        date: nova_sim::map_panel::PanelDate::Text(date.clone()),
     };
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);

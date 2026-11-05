@@ -1,9 +1,11 @@
-//! A list of one-line rows in a box, one of them selected, with a scroll
-//! bar when they don't fit: the mission computer's and the mission info
-//! screen's lists, as the List Manager runs them ([`RowList`]).
+//! A list of one-line rows in a box, one of them selected and the rows
+//! lit highlighted, with a scroll bar when they don't fit: the mission
+//! computer's and the mission info screen's lists, as the List Manager
+//! runs them ([`RowList`]).
 
 use std::time::Duration;
 
+use super::held_keys::HeldKeys;
 use super::list_bar::{BarPart, ListBar, scroll_delay};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -51,11 +53,9 @@ pub enum ListPress {
     Ignored,
     /// A press is held, on the rows or on the bar.
     Tracking,
-    /// The press held is let go, or cancelled: `LClick` returns.
-    Released {
-        /// Whether the selection differs from the one at the press.
-        changed: bool,
-    },
+    /// The press held is let go, or cancelled: `LClick` returns. Nothing
+    /// is read back ([`RowList::read_back`]).
+    Released,
 }
 
 /// A `ScrollDelay` under way: the tick it ends on, and the point the step
@@ -110,27 +110,40 @@ enum Held {
 ///   1159), each at once and then again after each `ScrollDelay` while
 ///   the pointer stays on that part, and a drag of the thumb scrolls at its
 ///   release (`clickCont`, line 964).
+/// - **Two selections.** The List Manager's, the cells lit
+///   ([`RowList::highlighted`]), and the filter's
+///   ([`RowList::selected`]: `_selMissionComputerItem`,
+///   `_selMissionListItem`). [`RowList::new`], [`RowList::select`] and
+///   [`RowList::clear_selection`] set both to one row or none, as
+///   `_SetupMissionList` does (@0xa0a0c). A press moves only the
+///   highlight; the filter reads it back after ([`RowList::read_back`]).
 /// - **A press on the rows** is held until its release ([`RowList::input`],
 ///   `LClick`, line 592): the row under the pointer, pinned into the view,
-///   is the one selection, following the pointer. Over no row (below the
-///   last), nothing is selected: the first pick deselects every cell
-///   (line 797) and selecting a cell past the rows does nothing
-///   (`ListSetSelect`, line 2563). With the pointer at or past the view's
-///   top or bottom edge, the list scrolls a row towards it, then waits a
-///   `ScrollDelay`, then picks the row under the pointer, so the row
-///   scrolled in is selected.
-/// - **A step** ([`RowList::step_wrapping`]) is the filters': with a row
-///   selected, scroll down a row when its rect (`LRect`, which computes
-///   one for any row, line 2250) reaches the view's bottom, or up a row
-///   when it reaches the view's top; select the next row; then
-///   `LAutoScroll` (line 531): a selected row not shown is scrolled to the
-///   top, as far as the scroll goes.
+///   is lit, following the pointer. The first pick unlights every row
+///   unless its own is lit (`OneClick`, line 917; `ClearAll`, line 938),
+///   and each pick unlights the last cell picked (`NoMods`, line 1040), so
+///   rows lit before a press that began on one stay lit. Over no row
+///   (below the last), nothing is lit: a cell past the rows is never
+///   selected (`ListSetSelect`, line 2563). With the pointer at or past
+///   the view's top or bottom edge, the list scrolls a row towards it,
+///   then waits a `ScrollDelay`, then picks the row under the pointer, so
+///   the row scrolled in is lit.
+/// - **Keys during a press** wait for its release, as `clickScan` reads no
+///   events (line 948): the release makes them the replay
+///   ([`RowList::take_replay`]), which the screen runs (see the
+///   `held_keys` module).
+/// - **A step** ([`RowList::step_wrapping`]) is the filters': unlight the
+///   selection's row; with a row selected, scroll down a row when its rect
+///   (`LRect`, which computes one for any row, line 2250) reaches the
+///   view's bottom, or up a row when it reaches the view's top; select and
+///   light the next row; then `LAutoScroll` (line 531): the first row lit,
+///   not shown, is scrolled to the top, as far as the scroll goes.
 /// - **The extent** ([`RowList::with_extent`]): steps wrap over it, which
-///   may run past the rows; a selection there highlights nothing and
-///   scrolls nothing, as the mission info screen's table after an abort
-///   leaves one. A release reads the selection back as the filters do
-///   (`LGetSelect` over the rows, `_MissionInfoFilter` @0x9dca9-0x9dcd6),
-///   so one past the rows reads as none.
+///   may run past the rows; a selection there lights nothing and scrolls
+///   nothing, as the mission info screen's table after an abort leaves
+///   one. A read-back takes the first row lit (`LGetSelect` over the rows,
+///   `_MissionInfoFilter` @0x9dca9-0x9dcd6), so one past the rows reads
+///   as none.
 ///
 /// Nothing is drawn outside the view and the bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,10 +158,15 @@ pub struct RowList {
     shown: usize,
     extent: usize,
     first: usize,
+    /// The filter's selection (`_selMissionComputerItem`,
+    /// `_selMissionListItem`): past the rows when a step over the extent
+    /// took it there.
     selected: Option<usize>,
+    /// The List Manager's selection bits, one a row: the highlight.
+    lit: Vec<bool>,
     held: Option<Held>,
-    /// The selection when the press held was made.
-    pressed: Option<usize>,
+    /// The keys held back while a press is held.
+    held_keys: HeldKeys,
     /// The time ticked, for the delays.
     clock: Duration,
 }
@@ -175,8 +193,13 @@ impl RowList {
         // A NaN or negative quotient (no room, or no line height) is 0.
         let fit = view.height() / line_height;
         let selected = (!rows.is_empty()).then_some(0);
+        let mut lit = vec![false; rows.len()];
+        if let Some(first) = lit.first_mut() {
+            *first = true;
+        }
         Self {
             extent: rows.len(),
+            lit,
             rows,
             bar: overflows.then(|| ListBar::beside(view)),
             view,
@@ -186,7 +209,7 @@ impl RowList {
             first: 0,
             selected,
             held: None,
-            pressed: None,
+            held_keys: HeldKeys::default(),
             clock: Duration::ZERO,
         }
     }
@@ -210,6 +233,40 @@ impl RowList {
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.selected
+    }
+
+    /// The rows lit, in order: the List Manager's selection, which a
+    /// press in item 3 or a step after it can leave apart from
+    /// [`RowList::selected`].
+    pub fn highlighted(&self) -> impl Iterator<Item = usize> + '_ {
+        self.lit
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &lit)| lit.then_some(index))
+    }
+
+    /// The first row lit, if any.
+    fn first_lit(&self) -> Option<usize> {
+        self.lit.iter().position(|&lit| lit)
+    }
+
+    /// Sets or clears row `index`'s bit, as `LSetSelect` does; nothing
+    /// for an index past the rows (`ListSetSelect` → `MyFind`,
+    /// `ListMgrPACK.a` line 2563).
+    fn light(&mut self, index: usize, on: bool) {
+        if let Some(bit) = self.lit.get_mut(index) {
+            *bit = on;
+        }
+    }
+
+    /// The filter's read-back after `LClick` (`_MissionFilter`
+    /// @0xa0025-0xa007a, `_MissionInfoFilter` @0x9dc82-0x9dcd6): the
+    /// selection becomes the first row lit, or none. Returns whether that
+    /// changed it.
+    pub fn read_back(&mut self) -> bool {
+        let before = self.selected;
+        self.selected = self.first_lit();
+        self.selected != before
     }
 
     /// The first row shown.
@@ -246,6 +303,30 @@ impl RowList {
     #[must_use]
     pub fn tracking(&self) -> bool {
         self.held.is_some()
+    }
+
+    /// Whether the list holds its keys back now: while it holds a press,
+    /// as `LClick`'s loop reads no events (`clickScan`, `ListMgrPACK.a`
+    /// line 948). Its host gives it every input then.
+    #[must_use]
+    pub fn holds(&self) -> bool {
+        self.tracking()
+    }
+
+    /// Whether keys typed now would come after keys the list holds back:
+    /// it [`holds`](Self::holds) them, or keeps some for its replay
+    /// (abandoned until the next tick, or released and not yet taken). See
+    /// the `held_keys` module.
+    #[must_use]
+    pub fn holds_back_keys(&self) -> bool {
+        self.holds() || self.held_keys.waiting()
+    }
+
+    /// What the press held back, once it is over: the keys queued, and a
+    /// left press that ended it, in order, for the host to run through its
+    /// own input path. Once.
+    pub fn take_replay(&mut self) -> Vec<Input> {
+        self.held_keys.take_replay()
     }
 
     /// The last first row the scroll reaches.
@@ -285,11 +366,10 @@ impl RowList {
         self.first = to.min(self.last_first());
     }
 
-    /// `LAutoScroll`: a selected row not shown, partly or whole, is
-    /// scrolled to the top, as far as the scroll goes.
+    /// `LAutoScroll`: the first row lit, if it is not shown, partly or
+    /// whole, is scrolled to the top, as far as the scroll goes.
     fn auto_scroll(&mut self) {
-        if let Some(index) = self.selected
-            && index < self.rows.len()
+        if let Some(index) = self.first_lit()
             && !self.shows(index)
         {
             self.first = index.min(self.last_first());
@@ -304,6 +384,8 @@ impl RowList {
         };
         let index = index.min(last);
         self.selected = Some(index);
+        self.lit.fill(false);
+        self.light(index, true);
         if index >= self.rows.len() {
             return;
         }
@@ -314,9 +396,11 @@ impl RowList {
         }
     }
 
-    /// Selects nothing, leaving the list scrolled as it is.
+    /// Selects nothing and lights nothing, leaving the list scrolled as it
+    /// is.
     pub fn clear_selection(&mut self) {
         self.selected = None;
+        self.lit.fill(false);
     }
 
     /// Steps the selection forward or back over the extent, wrapping from
@@ -356,7 +440,11 @@ impl RowList {
             None if forward => 0,
             None => count - 1,
         };
+        if let Some(index) = before {
+            self.light(index, false);
+        }
         self.selected = Some(next);
+        self.light(next, true);
         self.auto_scroll();
         self.selected != before
     }
@@ -364,9 +452,17 @@ impl RowList {
     /// The pointer's input: a left press on the bar or in the view starts
     /// a press the list holds ([`ListPress::Tracking`]), pointer moves
     /// track it, and the left release ends it ([`ListPress::Released`]),
-    /// as `LClick` runs until the button comes up. Anything else is
+    /// as `LClick` runs until the button comes up. While it holds one,
+    /// keys and characters wait for the release, which makes them the
+    /// replay ([`RowList::take_replay`]), and a left press ends it as the
+    /// release the engine never saw, joining the replay after them. With
+    /// no press held, anything but a left press is
     /// [`ListPress::Ignored`], keys included.
     pub fn input(&mut self, input: &Input) -> ListPress {
+        if self.holds() && HeldKeys::waits(input) {
+            self.held_keys.queue(*input);
+            return ListPress::Tracking;
+        }
         match *input {
             Input::PointerButton {
                 button: MouseButton::Left,
@@ -377,7 +473,11 @@ impl RowList {
                 button: MouseButton::Left,
                 pressed: false,
                 ..
-            } => self.release(),
+            } => {
+                let released = self.release();
+                self.held_keys.release(None);
+                released
+            }
             Input::PointerMoved(to) => {
                 let Some(held) = &mut self.held else {
                     return ListPress::Ignored;
@@ -396,14 +496,19 @@ impl RowList {
 
     /// Ends a press held as its release would ([`ListPress::Released`]),
     /// wherever the pointer is: `LClick` ends on any release. Nothing is
-    /// held after, and [`ListPress::Ignored`] when nothing was.
+    /// held after, and [`ListPress::Ignored`] when nothing was. The keys
+    /// it held back wait for the next [`RowList::tick`] to become the
+    /// replay.
     pub fn cancel_pointer(&mut self) -> ListPress {
+        self.held_keys.abandon();
         self.release()
     }
 
-    /// Time passing: a held arrow or page steps again, and an autoscroll
-    /// goes on, as their delays end.
+    /// Time passing: what a cancelled press held back becomes the replay,
+    /// a held arrow or page steps again, and an autoscroll goes on, as
+    /// their delays end.
     pub fn tick(&mut self, dt: Duration) {
+        self.held_keys.tick();
         self.clock += dt;
         self.run();
     }
@@ -413,10 +518,19 @@ impl RowList {
         u64::try_from(sixtieths(self.clock)).unwrap_or(u64::MAX)
     }
 
-    /// A left press at `at`.
+    /// A left press at `at`. Off the bar, it is the list's only if it
+    /// lies in the view, half-open as `LClick`'s `PtInRect` on `rView` is
+    /// (`ListMgrPACK.a` `ListClick`): the view's right column and bottom row
+    /// miss.
     fn press(&mut self, at: Point) -> ListPress {
         if self.held.is_some() {
-            return ListPress::Tracking;
+            let released = self.release();
+            self.held_keys.release(Some(Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: true,
+                at,
+            }));
+            return released;
         }
         let part = self
             .bar
@@ -437,7 +551,6 @@ impl RowList {
             },
             None => return ListPress::Ignored,
         };
-        self.pressed = self.selected;
         self.held = Some(held);
         self.run();
         ListPress::Tracking
@@ -528,27 +641,33 @@ impl RowList {
         toward
     }
 
-    /// `LClick` picks the row under `at`, pinned into the view, when it
-    /// isn't the last row picked (`cell`): the row is the one selection, or
-    /// nothing is selected when there is no row there. `LClick`'s first
-    /// pick deselects every cell unless its own is the one selected
-    /// (`OneClick`, `ClearAll`), and each later one deselects the last cell
-    /// picked and selects the new (`NoMods`); with one selection, which
-    /// nothing else moves while the press is held, both leave just that.
+    /// `LClick` picks the row under `at`, pinned into the view, lighting
+    /// it; picking the last row picked (`cell`) again changes nothing. The first pick
+    /// unlights every row unless its own is lit (`OneClick`, line 917;
+    /// `ClearAll`, line 938), and each pick unlights the last cell picked
+    /// and lights the new (`NoMods`, line 1040), so the highlight follows
+    /// the pointer and rows lit before the press stay lit when it began on
+    /// one. A cell past the last row is never lit (line 2563). The
+    /// selection isn't touched: the filter reads it back after
+    /// ([`RowList::read_back`]). The row is computed as `ClickArea` does
+    /// it (`ListMgrPACK.a`), the offset into the view `div` the row
+    /// height, so the edge two rows share goes to the lower row.
     fn pick(&mut self, at: Point, cell: &mut Option<usize>) {
         let bottom = (self.view.max.y - 1.0).max(self.view.min.y);
         let offset = (at.y.clamp(self.view.min.y, bottom) - self.view.min.y) / self.line_height;
         let row = self.first.saturating_add(offset.floor() as usize);
-        if *cell == Some(row) {
-            return;
+        match *cell {
+            Some(last) => self.light(last, false),
+            None if self.lit.get(row) != Some(&true) => self.lit.fill(false),
+            None => {}
         }
-        self.selected = (row < self.rows.len()).then_some(row);
+        self.light(row, true);
         *cell = Some(row);
     }
 
     /// The release of the press held: a pick the autoscroll's delay held
-    /// back is made (`ScrollDelay` ends on the release), a dragged thumb
-    /// scrolls to where it was dropped, and the selection is read back.
+    /// back is made (`ScrollDelay` ends on the release), and a dragged
+    /// thumb scrolls to where it was dropped. Nothing is read back.
     fn release(&mut self) -> ListPress {
         let Some(held) = self.held.take() else {
             return ListPress::Ignored;
@@ -567,19 +686,17 @@ impl RowList {
             }
             Held::Rows { .. } | Held::Bar { .. } => {}
         }
-        if self.selected.is_some_and(|index| index >= self.rows.len()) {
-            self.selected = None;
-        }
-        ListPress::Released {
-            changed: self.selected != self.pressed,
-        }
+        ListPress::Released
     }
 
-    /// Draws the selected row's highlight, then each row shown, a partly
+    /// Draws each lit row's highlight, then each row shown, a partly
     /// shown last one clipped to the view, then the bar.
     pub fn draw(&self, list: &mut DrawList) {
         let view = self.view;
-        if let Some(row) = self.selected.and_then(|index| self.row_bounds(index)) {
+        for row in self
+            .highlighted()
+            .filter_map(|index| self.row_bounds(index))
+        {
             let shown = Bounds {
                 min: row.min,
                 max: Point::new(row.max.x, row.max.y.min(view.max.y)),
@@ -834,11 +951,9 @@ mod tests {
         assert_eq!(rows.first(), 3, "then 3");
         rows.tick(ticks(30));
         assert_eq!(rows.first(), 3, "held at the end");
-        assert_eq!(rows.selected(), Some(0), "the selection stays");
-        assert_eq!(
-            rows.input(&release(down)),
-            ListPress::Released { changed: false }
-        );
+        assert_eq!(lit(&rows), [0], "the selection stays");
+        assert_eq!(rows.input(&release(down)), ListPress::Released);
+        assert!(!rows.read_back());
         assert!(!rows.tracking());
         rows.tick(ticks(60));
         assert_eq!(rows.first(), 3, "let go");
@@ -863,14 +978,14 @@ mod tests {
         let mut top = list(3);
         top.select(1);
         top.input(&press(Point::new(50.0, 20.0)));
-        assert_eq!(top.selected(), Some(0), "nothing above to scroll in");
+        assert_eq!(lit(&top), [0], "nothing above to scroll in");
         // The view's last pixel row autoscrolls; the one above doesn't.
         let mut low = list(8);
         low.input(&press(Point::new(50.0, 22.0)));
         low.input(&Input::PointerMoved(Point::new(50.0, 58.0)));
         assert_eq!(
-            (low.first(), low.selected()),
-            (0, Some(3)),
+            (low.first(), lit(&low)),
+            (0, vec![3]),
             "row 3, partly shown"
         );
         low.input(&Input::PointerMoved(Point::new(50.0, 59.0)));
@@ -879,18 +994,18 @@ mod tests {
         let mut end = list(8);
         end.scroll_by(5);
         end.input(&press(Point::new(50.0, 22.0)));
-        assert_eq!(end.selected(), Some(5));
+        assert_eq!(lit(&end), [5]);
         end.input(&Input::PointerMoved(Point::new(50.0, 70.0)));
         assert_eq!(
-            (end.first(), end.selected()),
-            (5, None),
+            (end.first(), lit(&end)),
+            (5, Vec::<usize>::new()),
             "pinned to the empty part row below the last, at once"
         );
         // Pinned to the view's last pixel row, not past it.
         let mut fit = in_box(3, EXACT);
         fit.input(&press(Point::new(50.0, 22.0)));
         fit.input(&Input::PointerMoved(Point::new(50.0, 80.0)));
-        assert_eq!(fit.selected(), Some(2), "the last row, pinned to y 55");
+        assert_eq!(lit(&fit), [2], "the last row, pinned to y 55");
     }
 
     #[test]
@@ -936,7 +1051,7 @@ mod tests {
         let outline = drawn(&rows).len();
         assert_eq!(
             rows.input(&release(Point::new(100.0, 59.0))),
-            ListPress::Released { changed: false }
+            ListPress::Released
         );
         // 19 of 38 over 0 to 13: 247 / 38 = 6 r 19, not more than half.
         assert_eq!(rows.first(), 6);
@@ -956,7 +1071,7 @@ mod tests {
                 if *clip == BOX && matches!(&**command, DrawCommand::Text { text, .. } if text == "Row 3")
         )));
         rows.input(&press(Point::new(50.0, 58.0)));
-        assert_eq!(rows.selected(), Some(3), "a press there hits it");
+        assert_eq!(lit(&rows), [3], "a press there hits it");
         assert_eq!(rows.first(), 0, "and it stays where it is");
         let mut highlight = DrawList::new();
         fill_rect(
@@ -999,17 +1114,18 @@ mod tests {
             rows.input(&press(Point::new(50.0, 50.0))),
             ListPress::Tracking
         );
-        assert_eq!(rows.selected(), Some(2));
+        assert_eq!(lit(&rows), [2]);
         assert_eq!(
             rows.input(&release(Point::new(50.0, 50.0))),
-            ListPress::Released { changed: true }
+            ListPress::Released
         );
+        assert!(rows.read_back());
         rows.input(&press(Point::new(50.0, 50.0)));
         assert_eq!(
             rows.input(&release(Point::new(50.0, 50.0))),
-            ListPress::Released { changed: false },
-            "already"
+            ListPress::Released
         );
+        assert!(!rows.read_back(), "already");
         assert_eq!(
             rows.input(&press(Point::new(5.0, 25.0))),
             ListPress::Ignored,
@@ -1029,6 +1145,38 @@ mod tests {
     }
 
     #[test]
+    fn a_press_on_the_edge_two_rows_share_goes_to_the_lower_row() {
+        let mut rows = list(3);
+        for (y, row) in [(32.0, 1), (31.0, 0), (44.0, 2), (43.0, 1), (20.0, 0)] {
+            let at = Point::new(50.0, y);
+            rows.input(&press(at));
+            assert_eq!(lit(&rows), [row], "y {y}: LClick's div");
+            rows.input(&release(at));
+        }
+    }
+
+    #[test]
+    fn a_press_on_the_views_right_edge_misses_and_its_left_edge_hits() {
+        let mut rows = list(3);
+        let row_2 = Point::new(50.0, 50.0);
+        rows.input(&press(row_2));
+        rows.input(&release(row_2));
+        assert_eq!(
+            rows.input(&press(Point::new(BOX.max.x, 25.0))),
+            ListPress::Ignored,
+            "the right edge"
+        );
+        assert_eq!(lit(&rows), [2]);
+        assert_eq!(rows.input(&press(BOX.min)), ListPress::Tracking, "top-left");
+        assert_eq!(lit(&rows), [0]);
+        rows.input(&release(BOX.min));
+        let last_column = Point::new(BOX.max.x - 1.0, 50.0);
+        assert_eq!(rows.input(&press(last_column)), ListPress::Tracking);
+        assert_eq!(lit(&rows), [2], "a pixel inside");
+        rows.input(&release(last_column));
+    }
+
+    #[test]
     fn a_click_below_the_last_row_selects_nothing() {
         let mut few = list(1);
         assert_eq!(
@@ -1036,33 +1184,35 @@ mod tests {
             ListPress::Tracking
         );
         assert_eq!(
-            few.selected(),
-            None,
+            lit(&few),
+            [0_usize; 0],
             "ListMgrPACK.a line 797, then ClearAll"
         );
         assert_eq!(
             few.input(&release(Point::new(50.0, 35.0))),
-            ListPress::Released { changed: true }
+            ListPress::Released
         );
+        assert!(few.read_back());
+        assert_eq!(few.selected(), None);
         assert_eq!(few.first(), 0, "the scroll stays");
         few.input(&press(Point::new(50.0, 22.0)));
         few.input(&Input::PointerMoved(Point::new(50.0, 40.0)));
-        assert_eq!(few.selected(), None, "dragged off the rows");
+        assert_eq!(lit(&few), [0_usize; 0], "dragged off the rows");
         few.input(&Input::PointerMoved(Point::new(50.0, 25.0)));
-        assert_eq!(few.selected(), Some(0), "and back");
+        assert_eq!(lit(&few), [0], "and back");
     }
 
     #[test]
     fn a_press_highlights_its_row_and_a_drag_moves_it_to_the_release() {
         let mut rows = list(3);
         rows.input(&press(Point::new(50.0, 22.0)));
-        assert_eq!(rows.selected(), Some(0));
+        assert_eq!(lit(&rows), [0]);
         assert!(rows.tracking());
         assert_eq!(
             rows.input(&Input::PointerMoved(Point::new(50.0, 46.0))),
             ListPress::Tracking
         );
-        assert_eq!(rows.selected(), Some(2));
+        assert_eq!(lit(&rows), [2]);
         let mut highlight = DrawList::new();
         fill_rect(
             &mut highlight,
@@ -1074,17 +1224,17 @@ mod tests {
             highlight.iter().next().cloned().expect("one")
         );
         rows.input(&Input::PointerMoved(Point::new(500.0, 34.0)));
-        assert_eq!(rows.selected(), Some(1), "pinned into the view");
+        assert_eq!(lit(&rows), [1], "pinned into the view");
         assert_eq!(
             rows.input(&release(Point::new(50.0, 34.0))),
-            ListPress::Released { changed: true }
+            ListPress::Released
         );
         assert!(!rows.tracking());
         assert_eq!(
             rows.input(&Input::PointerMoved(Point::new(50.0, 22.0))),
             ListPress::Ignored
         );
-        assert_eq!(rows.selected(), Some(1));
+        assert_eq!(lit(&rows), [1]);
     }
 
     #[test]
@@ -1094,61 +1244,46 @@ mod tests {
         rows.input(&press(Point::new(50.0, 22.0)));
         rows.input(&Input::PointerMoved(Point::new(50.0, 70.0)));
         assert_eq!(rows.first(), 1, "a row at once");
-        assert_eq!(rows.selected(), Some(0), "picked after the delay");
+        assert_eq!(lit(&rows), [0], "picked after the delay");
         rows.tick(ticks(11));
-        assert_eq!((rows.first(), rows.selected()), (1, Some(0)));
+        assert_eq!((rows.first(), lit(&rows)), (1, vec![0]));
         rows.tick(ticks(1));
-        assert_eq!(rows.selected(), Some(4), "the partly shown row, pinned");
+        assert_eq!(lit(&rows), [4], "the partly shown row, pinned");
         assert_eq!(rows.first(), 2, "and on");
         rows.tick(ticks(3));
-        assert_eq!((rows.first(), rows.selected()), (3, Some(5)));
+        assert_eq!((rows.first(), lit(&rows)), (3, vec![5]));
         assert_eq!(
             rows.input(&release(Point::new(50.0, 70.0))),
-            ListPress::Released { changed: true }
+            ListPress::Released
         );
-        assert_eq!(
-            rows.selected(),
-            Some(6),
-            "the release ends the delay's pick"
-        );
+        assert_eq!(lit(&rows), [6], "the release ends the delay's pick");
         rows.input(&press(Point::new(50.0, 22.0)));
-        assert_eq!(
-            rows.selected(),
-            Some(3),
-            "no autoscroll inside the top edge"
-        );
+        assert_eq!(lit(&rows), [3], "no autoscroll inside the top edge");
         rows.input(&Input::PointerMoved(Point::new(50.0, 20.0)));
         assert_eq!(rows.first(), 2, "at the top edge, up a row");
         rows.tick(ticks(12));
-        assert_eq!(rows.selected(), Some(2), "the row scrolled in");
+        assert_eq!(lit(&rows), [2], "the row scrolled in");
         assert_eq!(rows.first(), 1, "and up again");
         rows.tick(ticks(2));
         assert_eq!(
-            (rows.first(), rows.selected()),
-            (1, Some(2)),
+            (rows.first(), lit(&rows)),
+            (1, vec![2]),
             "3 ticks this time: 48 over the 12 held plus 4"
         );
         rows.input(&Input::PointerMoved(Point::new(50.0, 40.0)));
         rows.tick(ticks(5));
         assert_eq!(rows.first(), 1, "the delay ran out first");
-        assert_eq!(
-            rows.selected(),
-            Some(2),
-            "rows 1 to 4 shown: (40 - 20) / 12 is 1"
-        );
+        assert_eq!(lit(&rows), [2], "rows 1 to 4 shown: (40 - 20) / 12 is 1");
     }
 
     #[test]
-    fn a_release_reports_whether_the_selection_changed_since_the_press() {
+    fn a_read_back_after_a_drag_back_to_the_selection_changes_nothing() {
         let mut rows = list(3);
         rows.input(&press(Point::new(50.0, 22.0)));
         rows.input(&Input::PointerMoved(Point::new(50.0, 46.0)));
         rows.input(&Input::PointerMoved(Point::new(50.0, 22.0)));
-        assert_eq!(
-            rows.input(&release(Point::new(50.0, 22.0))),
-            ListPress::Released { changed: false },
-            "dragged back to the row it began on"
-        );
+        rows.input(&release(Point::new(50.0, 22.0)));
+        assert!(!rows.read_back(), "dragged back to the row it began on");
     }
 
     #[test]
@@ -1157,8 +1292,8 @@ mod tests {
         assert_eq!(rows.cancel_pointer(), ListPress::Ignored, "nothing held");
         rows.input(&press(Point::new(50.0, 22.0)));
         rows.input(&Input::PointerMoved(Point::new(50.0, 46.0)));
-        assert_eq!(rows.cancel_pointer(), ListPress::Released { changed: true });
-        assert_eq!(rows.selected(), Some(2), "the row it reached");
+        assert_eq!(rows.cancel_pointer(), ListPress::Released);
+        assert_eq!(lit(&rows), [2], "the row it reached");
         assert!(!rows.tracking());
         let mut long = tall(30);
         long.input(&press(Point::new(100.0, 100.0)));
@@ -1424,9 +1559,9 @@ mod tests {
         long.select(11);
         assert_eq!(long.first(), 0, "nothing to scroll to");
         long.input(&press(Point::new(100.0, 100.0)));
-        assert_eq!(
-            long.input(&release(Point::new(100.0, 100.0))),
-            ListPress::Released { changed: true },
+        long.input(&release(Point::new(100.0, 100.0)));
+        assert!(
+            long.read_back(),
             "read back over the rows (@0x9dca9-0x9dcd6)"
         );
         assert_eq!(long.selected(), None);
@@ -1437,6 +1572,224 @@ mod tests {
         let mut rows = list(2);
         rows.clear_selection();
         assert_eq!(drawn(&rows).len(), 2, "the two rows' text alone");
+    }
+
+    /// The rows lit, in order.
+    fn lit(rows: &RowList) -> Vec<usize> {
+        rows.highlighted().collect()
+    }
+
+    /// Three rows, row 2 pressed and let go with nothing read back, then a
+    /// step from row 0: rows 1 and 2 lit, row 1 selected.
+    fn two_lit() -> RowList {
+        let mut rows = list(3);
+        rows.input(&press(Point::new(50.0, 46.0)));
+        rows.input(&release(Point::new(50.0, 46.0)));
+        assert!(rows.step_wrapping(true));
+        rows
+    }
+
+    #[test]
+    fn a_release_reads_nothing_back_until_asked() {
+        let mut rows = list(3);
+        rows.input(&press(Point::new(50.0, 22.0)));
+        rows.input(&Input::PointerMoved(Point::new(50.0, 46.0)));
+        assert_eq!(
+            rows.input(&release(Point::new(50.0, 46.0))),
+            ListPress::Released
+        );
+        assert_eq!(lit(&rows), [2]);
+        assert_eq!(rows.selected(), Some(0), "nothing read back");
+        assert!(rows.read_back());
+        assert_eq!(rows.selected(), Some(2));
+        assert!(!rows.read_back(), "already");
+    }
+
+    #[test]
+    fn read_back_takes_the_first_lit_row_or_none() {
+        let mut rows = two_lit();
+        rows.input(&press(Point::new(50.0, 46.0)));
+        rows.input(&Input::PointerMoved(Point::new(50.0, 22.0)));
+        rows.input(&release(Point::new(50.0, 22.0)));
+        assert_eq!(lit(&rows), [0, 1]);
+        assert!(rows.read_back(), "row 0, the first lit");
+        assert_eq!(rows.selected(), Some(0));
+        let mut few = list(1);
+        few.input(&press(Point::new(50.0, 35.0)));
+        few.input(&release(Point::new(50.0, 35.0)));
+        assert!(few.read_back(), "nothing lit");
+        assert_eq!(few.selected(), None);
+    }
+
+    #[test]
+    fn a_step_unlights_the_selection_and_lights_the_next_leaving_other_lit_rows() {
+        let rows = two_lit();
+        assert_eq!(lit(&rows), [1, 2]);
+        assert_eq!(rows.selected(), Some(1));
+        let mut plain = list(3);
+        plain.step_wrapping(true);
+        assert_eq!(lit(&plain), [1], "the selection's row unlit");
+    }
+
+    fn down() -> Input {
+        Input::Key {
+            key: Key::Down,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn keys_wait_during_a_press_on_the_rows_or_the_bar_and_replay_at_its_release() {
+        let mut rows = list(3);
+        let row_0 = Point::new(50.0, 22.0);
+        rows.input(&press(row_0));
+        assert!(rows.holds());
+        assert_eq!(rows.input(&down()), ListPress::Tracking, "it waits");
+        assert_eq!(rows.input(&Input::Text('d')), ListPress::Tracking);
+        assert_eq!(rows.selected(), Some(0), "no step");
+        assert_eq!(rows.take_replay(), [], "not yet");
+        assert_eq!(rows.input(&release(row_0)), ListPress::Released);
+        assert!(!rows.holds());
+        assert_eq!(rows.take_replay(), [down(), Input::Text('d')]);
+        assert_eq!(rows.take_replay(), [], "once");
+        let mut long = tall(20);
+        for at in [Point::new(100.0, 100.0), Point::new(100.0, 40.0)] {
+            long.input(&press(at));
+            long.input(&down());
+            long.input(&release(at));
+            assert_eq!(long.take_replay(), [down()], "the bar at {at:?}");
+        }
+    }
+
+    #[test]
+    fn a_cancelled_press_replays_its_keys_on_the_next_tick() {
+        let mut rows = list(3);
+        rows.input(&press(Point::new(50.0, 22.0)));
+        rows.input(&down());
+        assert_eq!(rows.cancel_pointer(), ListPress::Released);
+        assert_eq!(rows.take_replay(), []);
+        rows.tick(Duration::ZERO);
+        assert_eq!(rows.take_replay(), [down()]);
+        assert_eq!(rows.take_replay(), [], "once");
+    }
+
+    #[test]
+    fn a_second_left_press_ends_the_press_and_replays_after_the_keys() {
+        let mut rows = list(3);
+        rows.input(&press(Point::new(50.0, 22.0)));
+        rows.input(&Input::PointerMoved(Point::new(50.0, 46.0)));
+        rows.input(&down());
+        let again = press(Point::new(50.0, 34.0));
+        assert_eq!(rows.input(&again), ListPress::Released);
+        assert!(!rows.tracking());
+        assert_eq!(lit(&rows), [2], "ended where it was");
+        assert_eq!(rows.take_replay(), [down(), again]);
+    }
+
+    #[test]
+    fn a_press_holds_back_keys_until_its_replay_is_taken() {
+        let mut rows = list(3);
+        let row_0 = Point::new(50.0, 22.0);
+        assert!(!rows.holds_back_keys(), "before the press");
+        rows.input(&press(row_0));
+        assert!(rows.holds_back_keys(), "during the press");
+        rows.input(&down());
+        rows.input(&release(row_0));
+        assert!(rows.holds_back_keys(), "until the replay is taken");
+        rows.take_replay();
+        assert!(!rows.holds_back_keys(), "after it");
+        rows.input(&press(row_0));
+        rows.input(&release(row_0));
+        assert!(!rows.holds_back_keys(), "a press that held nothing");
+        rows.input(&press(row_0));
+        rows.input(&down());
+        rows.cancel_pointer();
+        assert!(rows.holds_back_keys(), "a cancelled one, until the tick");
+        rows.tick(Duration::ZERO);
+        assert!(rows.holds_back_keys(), "and its replay");
+        rows.take_replay();
+        assert!(!rows.holds_back_keys());
+    }
+
+    #[test]
+    fn keys_with_no_press_held_are_ignored_as_before() {
+        let mut rows = list(3);
+        assert_eq!(rows.input(&down()), ListPress::Ignored);
+        assert!(!rows.holds_back_keys());
+        rows.input(&press(Point::new(50.0, 22.0)));
+        rows.input(&release(Point::new(50.0, 22.0)));
+        assert_eq!(rows.input(&Input::Text('d')), ListPress::Ignored);
+        assert_eq!(rows.take_replay(), []);
+    }
+
+    #[test]
+    fn a_first_pick_on_a_lit_row_clears_no_other() {
+        let mut rows = two_lit();
+        rows.input(&press(Point::new(50.0, 46.0)));
+        assert_eq!(lit(&rows), [1, 2], "OneClick: already selected");
+        rows.input(&Input::PointerMoved(Point::new(50.0, 22.0)));
+        assert_eq!(lit(&rows), [0, 1], "NoMods: the last cell picked goes");
+    }
+
+    #[test]
+    fn a_first_pick_off_the_lit_rows_clears_them_all() {
+        let mut rows = two_lit();
+        rows.input(&press(Point::new(50.0, 22.0)));
+        assert_eq!(lit(&rows), [0], "ClearAll");
+        assert_eq!(rows.selected(), Some(1), "the selection stays");
+    }
+
+    #[test]
+    fn lautoscroll_scrolls_to_the_first_lit_row() {
+        // Eight rows, three whole and a part: the scroll runs 0 to 5.
+        let mut rows = list(8);
+        rows.select(3);
+        rows.scroll_by(-1);
+        rows.input(&press(Point::new(50.0, 22.0)));
+        rows.input(&release(Point::new(50.0, 22.0)));
+        rows.scroll_by(5);
+        assert!(rows.step_wrapping(true));
+        assert_eq!(lit(&rows), [0, 4]);
+        assert_eq!(
+            (rows.selected(), rows.first()),
+            (Some(4), 0),
+            "LAutoScroll's first selected cell is row 0 (ListMgrPACK.a line 531)"
+        );
+    }
+
+    #[test]
+    fn every_lit_row_draws_its_highlight() {
+        let rows = two_lit();
+        let mut highlight = DrawList::new();
+        fill_rect(
+            &mut highlight,
+            Bounds::at(Point::new(10.0, 32.0), 100.0, 12.0),
+            SELECTED,
+        );
+        fill_rect(
+            &mut highlight,
+            Bounds::at(Point::new(10.0, 44.0), 100.0, 12.0),
+            SELECTED,
+        );
+        let highlight: Vec<DrawCommand> = highlight.iter().cloned().collect();
+        assert_eq!(drawn(&rows)[..2], highlight[..]);
+        assert_eq!(drawn(&rows).len(), 5, "two highlights and three rows");
+    }
+
+    #[test]
+    fn select_and_clear_selection_light_one_row_or_none() {
+        let mut rows = two_lit();
+        rows.select(0);
+        assert_eq!(lit(&rows), [0]);
+        rows.clear_selection();
+        assert_eq!(lit(&rows), [0_usize; 0]);
+        rows.select(9);
+        assert_eq!(lit(&rows), [2], "held to the last");
+        let mut past = list(3).with_extent(5);
+        past.select(4);
+        assert_eq!(lit(&past), [0_usize; 0], "past the rows");
+        assert_eq!(lit(&list(3)), [0], "the first, as it opens");
     }
 
     #[test]

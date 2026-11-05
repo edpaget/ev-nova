@@ -18,10 +18,15 @@
 //!
 //! Two writes of the in-flight table aren't copied, as the next pass
 //! overwrites them before any save: the engine reading's reset at an entry
+//! other than a jump's arrival
 //! ([`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders),
 //! which the original clears on the next pass by loop 2), and a lone
 //! launch's -1 (`_LaunchFighter` @0x3db3e-0x3db4d), which loop 2 clears on
-//! the same pass.
+//! the same pass. A jump's arrival makes no write: by the engine reading of
+//! [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders) the
+//! arrival's pass skips the whole bookkeeping, the pilot's copy included,
+//! and the pass after it writes the table cleared (see the
+//! [`class_orders`](super::class_orders) module).
 //!
 //! **A load** seeds the in-flight table from the saved one, -1 and 0 as no
 //! order (`_LoadPilotData` @0x760c2-0x760ea, [`Space::seed_class_orders`]),

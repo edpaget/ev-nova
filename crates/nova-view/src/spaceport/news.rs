@@ -23,8 +23,9 @@
 //! and `_beepSnd[2]` @0x4814e, raised as [`UiSound::NewsOpened`] and
 //! [`UiSound::NewsClosed`]). It closes on Return, Enter or Escape, or on
 //! a press inside its frame (`_NewsDialogFilter` @0x48160, key codes
-//! @0x48183-0x4819c, `PtInRect` @0x481df); a press outside it does
-//! nothing. Without its dialog it says why, and Return or Escape still
+//! @0x48183-0x4819c, `PtInRect` @0x481df on the dialog's port rect,
+//! `_GetDialogPortRect` @0x481d0, half-open, so its right column and
+//! bottom row are outside); a press outside it does nothing. Without its dialog it says why, and Return or Escape still
 //! closes it.
 
 use std::rc::Rc;
@@ -193,7 +194,12 @@ impl Screen for NewsScreen {
             } => self.close(),
             Input::PointerButton {
                 pressed: true, at, ..
-            } if self.bounds().is_some_and(|bounds| bounds.contains(at)) => self.close(),
+            } if self
+                .bounds()
+                .is_some_and(|bounds| bounds.contains_half_open(at)) =>
+            {
+                self.close();
+            }
             _ => {}
         }
         ScreenAction::None
@@ -516,6 +522,22 @@ mod tests {
         let mut screen = open();
         screen.input(&press(Point::new(ORIGIN.x + 5.0, ORIGIN.y + 5.0)));
         assert!(screen.closed());
+    }
+
+    #[test]
+    fn a_press_on_the_frames_right_or_bottom_edge_leaves_it_open_and_its_top_left_closes_it() {
+        let mut screen = open();
+        let frame = screen.bounds().expect("laid out");
+        let mid = frame.center();
+        for edge in [
+            Point::new(frame.max.x, mid.y),
+            Point::new(mid.x, frame.max.y),
+        ] {
+            screen.input(&press(edge));
+            assert!(!screen.closed(), "PtInRect is half-open: {edge:?}");
+        }
+        screen.input(&press(frame.min));
+        assert!(screen.closed(), "the top-left corner");
     }
 
     #[test]

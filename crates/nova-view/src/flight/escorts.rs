@@ -19,17 +19,24 @@
 //!   stellar slot keys and Command-5 its second nearest-stellar key.
 //! - Once more than [`MENU_TIMEOUT`] has passed since it was last shown in
 //!   full or a press stamped it ([`EscortMenu::touch`] for a command that
-//!   changed something), it fades out a level each flight step, the
-//!   original's 32-frame fade (`*0x3b51a0`, @0x6dfd5-0x6dff9), and shuts
-//!   at 0 ([`EscortMenu::update`]). On a frame no escort is flying, and
-//!   one was on the last, or on its first frame shown, the group becomes
-//!   All Ships and the fade starts at once (@0x6dfb3-0x6dfcb).
-//! - When the flight clears an escort class's kept order
-//!   (`nova_sim::flight_frame::StepRun::class_orders_cleared`,
+//!   changed something), it fades out a level on each `_HandlePlayer`
+//!   pass that reaches its block, the original's 32-frame fade
+//!   (`*0x3b51a0`, @0x6dfd5-0x6dff9), and shuts at 0
+//!   ([`EscortMenu::update`]). `_DoPlayGameWork` calls `_HandlePlayer` on
+//!   both of double time's passes (@0x43e19) and nothing gates the fade on
+//!   the pass, so in double time it fades two levels a step and shuts 16
+//!   steps after its timeout ([`EscortMenu::run_passes`], each pass the
+//!   flight reports, `nova_sim::flight_frame::PassReport::escort_menu`). On
+//!   a pass no escort is flying, and one was on the last, or on its first
+//!   pass shown, the group becomes All Ships and the fade starts at once
+//!   (@0x6dfb3-0x6dfcb).
+//! - When a pass's class-order bookkeeping clears an escort class's kept
+//!   order (`nova_sim::flight_frame::EscortMenuPass::class_orders_cleared`,
 //!   `_HandlePlayer` @0x6e388, @0x6e446), the menu, if it shows, comes
-//!   back to full with its old stamp after that step's drop
-//!   ([`EscortMenu::run_steps`]), so a fade under way starts again from 32
-//!   and runs on from the next step, each clearing step of a tick again.
+//!   back to full with its old stamp after that pass's drop and before the
+//!   next pass's ([`EscortMenu::run_passes`]), so a fade under way starts
+//!   again from 32 and runs on from the next pass, each clearing pass of a
+//!   tick again.
 //! - A jump's arrival, a gate's exit and a take-off shut it at once and
 //!   silently (`_HandlePlayer` @0x6c50e, `_HandlePlayerDockRequest`
 //!   @0x6705a), as play entered from the main screen does (@0x1a3a3).
@@ -73,6 +80,7 @@ use std::time::Duration;
 
 use nova_sim::bay::{ABANDONED_MANY, ABANDONED_ONE};
 use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
+use nova_sim::flight_frame::EscortMenuPass;
 use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
 use crate::color::Color;
@@ -101,6 +109,44 @@ pub const GROUP_KEYS: [Key; 5] = [
 /// How long the menu stays open after it opens, or after the last
 /// selection or command: 480 ticks of 60 Hz.
 pub const MENU_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The escort commands' own latches, one byte each at `*0x3b5650` =
+/// 0x316954..0x316957, indexed by `_HandlePlayer`'s loop over the
+/// commands (@0x6e1af-0x6e2e2) in its order: Attack (F, `_keyPrefs`
+/// +0x60), Defend (D, +0x62), Hold (V, +0x64) and Recall (C, +0x66, Return
+/// to Hangar with Option, @0x6e207). A key down with its latch clear
+/// fires its command (test @0x6e1c3) and sets the latch (@0x6e1cf, before
+/// `_IssueNewEscortCommand`, so whatever the command did); a key up
+/// clears it (@0x6e2d7). `_SetAllKeyCmdFlags` (@0x61e6d) never sets them:
+/// its group block writes are the escort menu's 1-5 at 0x316958
+/// (@0x61efd-0x61f44).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandLatches([bool; 4]);
+
+impl CommandLatches {
+    /// One poll of the four keys, `down` whether each reads down, in the
+    /// loop's order: which of them fire.
+    pub fn poll(&mut self, down: [bool; 4]) -> [bool; 4] {
+        let mut fire = [false; 4];
+        for ((latch, down), fire) in self.0.iter_mut().zip(down).zip(&mut fire) {
+            *fire = down && !*latch;
+            *latch = down;
+        }
+        fire
+    }
+
+    /// A fresh press of command `index`, which follows its release, so
+    /// its latch was clear: it fires, and sets the latch.
+    pub fn press(&mut self, index: usize) {
+        self.0[index] = true;
+    }
+
+    /// Whether command `index`'s latch is set.
+    #[must_use]
+    pub fn is_set(&self, index: usize) -> bool {
+        self.0[index]
+    }
+}
 /// The frame's top-left corner, in the window.
 pub const MENU_AT: Point = Point::new(15.0, 150.0);
 /// The frame's width.
@@ -202,8 +248,8 @@ struct Shown {
     since: Option<Duration>,
     /// Its level, 1 to [`FULL_LEVEL`] (the counter).
     level: u8,
-    /// Whether an escort was flying on the last frame it showed (the count
-    /// in `0xdee60`): `None` before its first frame, as the count is -1
+    /// Whether an escort was flying on the last pass it showed (the count
+    /// in `0xdee60`): `None` before its first pass, as the count is -1
     /// while the menu is shut (@0x6e188).
     flying: Option<bool>,
 }
@@ -355,12 +401,12 @@ impl EscortMenu {
     }
 
     /// The flight cleared an escort class's kept order
-    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`): the menu,
+    /// (`nova_sim::flight_frame::EscortMenuPass::class_orders_cleared`): the menu,
     /// if it shows, shows in full again, its stamp and group kept, as
     /// `_ShowEscortMenu` (@0x5664a) writes 32 to the counter and draws,
     /// with no stamp and no sound. A fade under way starts again from 32,
     /// its timeout still running from the old stamp. A shut menu stays
-    /// shut. [`EscortMenu::run_steps`] calls it after the step's drop.
+    /// shut. [`EscortMenu::run_passes`] calls it after the pass's drop.
     fn reshow(&mut self) {
         if let Some(shown) = &mut self.open {
             shown.reshow();
@@ -372,15 +418,15 @@ impl EscortMenu {
         self.open = None;
     }
 
-    /// The menu's frame at `now`, after `steps` flight steps, with an
-    /// escort `flying` or not (`_HandlePlayer` @0x6df4a-0x6e052): whether
-    /// it closed. On a frame whose `flying` differs from the last frame's
-    /// (its first frame shown included) and none is flying, the group
-    /// becomes All Ships and the stamp 0, so the fade starts at once
+    /// The menu's fade at `now` over `passes` `_HandlePlayer` passes, with
+    /// an escort `flying` or not (`_HandlePlayer` @0x6df4a-0x6e052):
+    /// whether it closed. When `flying` differs from the last pass's (its
+    /// first pass shown included) and none is flying, the group becomes
+    /// All Ships and the stamp 0, so the fade starts at once
     /// (@0x6dfb3-0x6dfcb). Then, past its timeout, it drops a level for
-    /// each step, one a `_HandlePlayer` frame (@0x6dfec-0x6dff9), and
-    /// closes once it reaches 0 (@0x6e007).
-    pub fn update(&mut self, now: Duration, steps: u32, flying: bool) -> bool {
+    /// each pass (@0x6dfec-0x6dff9), and closes once it reaches 0
+    /// (@0x6e007).
+    pub fn update(&mut self, now: Duration, passes: u32, flying: bool) -> bool {
         let Some(shown) = &mut self.open else {
             return false;
         };
@@ -391,10 +437,10 @@ impl EscortMenu {
                 shown.group = EscortGroup::All;
             }
         }
-        if steps == 0 || !shown.timed_out(now) {
+        if passes == 0 || !shown.timed_out(now) {
             return false;
         }
-        let drop = u8::try_from(steps).unwrap_or(u8::MAX);
+        let drop = u8::try_from(passes).unwrap_or(u8::MAX);
         shown.level = shown.level.saturating_sub(drop);
         if shown.level > 0 {
             return false;
@@ -403,34 +449,30 @@ impl EscortMenu {
         true
     }
 
-    /// The menu's frame at `now` over a tick's `steps` flight steps, with
-    /// an escort `flying` or not, `cleared` saying, step by step, whether
-    /// that step cleared an escort class's kept order
-    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`; a step it
-    /// says nothing of cleared none): whether the menu closed.
+    /// The menu over a tick's `passes` at `now`, each `_HandlePlayer`
+    /// pass that reached its escort-menu block, in order
+    /// (`nova_sim::flight_frame::PassReport::escort_menu`): whether it
+    /// closed.
     ///
-    /// The frame's `flying` is taken first, as [`EscortMenu::update`] takes
-    /// it, steps or none. Then each step runs as a `_HandlePlayer` frame
-    /// does: the fade drops a level (@0x6dfec), and once that step's
-    /// class-order bookkeeping (@0x6e2e8) cleared an order, the menu shows
-    /// in full again ([`EscortMenu::reshow`]), so every clearing step of
-    /// the tick shows it again, not only the last. A fade that reached 0
-    /// has shut the menu, and a later clear leaves it shut (`jle`
-    /// @0x6e386, @0x6e444).
-    pub fn run_steps(
+    /// Each pass runs as `_HandlePlayer` runs it: it takes the escorts
+    /// flying as that pass counted them, then the fade drops a level
+    /// (@0x6dfec, [`EscortMenu::update`]), and once that pass's class-order
+    /// bookkeeping (@0x6e2e8) cleared an order, the menu shows in full
+    /// again ([`EscortMenu::reshow`]), before the next pass's drop. So in
+    /// double time it drops a level on each of a step's two passes, and
+    /// every clearing pass of the tick shows it again, not only the last.
+    /// A fade that reached 0 has shut the menu, and a later clear leaves it
+    /// shut (`jle` @0x6e386, @0x6e444).
+    pub fn run_passes(
         &mut self,
         now: Duration,
-        steps: u32,
-        cleared: impl IntoIterator<Item = bool>,
-        flying: bool,
+        passes: impl IntoIterator<Item = EscortMenuPass>,
     ) -> bool {
-        self.update(now, 0, flying);
-        let mut cleared = cleared.into_iter();
-        for _ in 0..steps {
-            if self.update(now, 1, flying) {
+        for pass in passes {
+            if self.update(now, 1, pass.escorts_flying) {
                 return true;
             }
-            if cleared.next().unwrap_or(false) {
+            if pass.class_orders_cleared {
                 self.reshow();
             }
         }
@@ -643,29 +685,29 @@ mod tests {
         assert!(!menu.update(after(AT, 480), 1, true));
         assert_eq!(menu.level(), Some(32), "480 ticks: not yet");
         assert!(!menu.update(after(AT, 481), 1, true));
-        assert_eq!(menu.level(), Some(31), "481: the fade's first step");
+        assert_eq!(menu.level(), Some(31), "481: the fade's first pass");
         assert_eq!(MENU_TIMEOUT, Duration::from_secs(8), "480 ticks");
     }
 
     #[test]
-    fn past_its_timeout_it_drops_a_level_a_step_and_closes_at_0() {
+    fn past_its_timeout_it_drops_a_level_a_pass_and_closes_at_0() {
         let mut menu = opened();
         let late = after(AT, 600);
-        assert!(!menu.update(late, 0, true), "no step, no drop");
+        assert!(!menu.update(late, 0, true), "no pass, no drop");
         assert_eq!(menu.level(), Some(32));
         for level in (1..32).rev() {
             assert!(!menu.update(late, 1, true));
             assert_eq!(menu.level(), Some(level));
             assert!(menu.is_open(), "it shows while it fades");
         }
-        assert!(menu.update(late, 1, true), "the 32nd step closes it");
+        assert!(menu.update(late, 1, true), "the 32nd pass closes it");
         assert!(!menu.is_open());
         assert_eq!(menu.group(), EscortGroup::All);
         assert!(!menu.update(late, 1, true), "closed once");
     }
 
     #[test]
-    fn a_frame_of_several_steps_drops_a_level_for_each() {
+    fn several_passes_drop_a_level_for_each() {
         let mut menu = opened();
         let late = after(AT, 600);
         assert!(!menu.update(late, 3, true));
@@ -719,7 +761,7 @@ mod tests {
     #[test]
     fn a_reshow_during_a_fade_shows_it_in_full_keeping_its_stamp() {
         // `_ShowEscortMenu` (@0x5664a) writes 32 and draws, and stamps
-        // nothing: the next step past the old timeout drops a level again.
+        // nothing: the next pass past the old timeout drops a level again.
         let mut menu = opened();
         let late = after(AT, 600);
         menu.update(late, 10, true);
@@ -758,17 +800,41 @@ mod tests {
         (menu, late)
     }
 
-    #[test]
-    fn steps_with_no_clear_drop_a_level_each() {
-        let (mut menu, late) = fading_at(22);
-        assert!(!menu.run_steps(late, 3, [false, false, false], true));
-        assert_eq!(menu.level(), Some(19));
-        assert!(!menu.run_steps(late, 2, [], true), "no report: no clears");
-        assert_eq!(menu.level(), Some(17));
+    /// A pass with an escort `flying` or not, that cleared a class's kept
+    /// order or not.
+    fn pass(flying: bool, cleared: bool) -> EscortMenuPass {
+        EscortMenuPass {
+            escorts_flying: flying,
+            class_orders_cleared: cleared,
+        }
+    }
+
+    /// Passes with an escort flying, each clearing as `cleared` says.
+    fn clearing<const N: usize>(cleared: [bool; N]) -> [EscortMenuPass; N] {
+        cleared.map(|cleared| pass(true, cleared))
     }
 
     #[test]
-    fn a_clear_shows_it_in_full_after_its_own_steps_drop() {
+    fn passes_with_no_clear_drop_a_level_each() {
+        let (mut menu, late) = fading_at(22);
+        assert!(!menu.run_passes(late, clearing([false, false, false])));
+        assert_eq!(menu.level(), Some(19));
+        assert!(!menu.run_passes(late, []), "no pass: no drop");
+        assert_eq!(menu.level(), Some(19));
+    }
+
+    #[test]
+    fn its_passes_drop_a_level_each_and_the_32nd_closes_it() {
+        let mut menu = opened();
+        let late = after(AT, 600);
+        assert!(!menu.run_passes(late, [pass(true, false); 31]));
+        assert_eq!(menu.level(), Some(1));
+        assert!(menu.run_passes(late, [pass(true, false)]), "the 32nd");
+        assert!(!menu.is_open());
+    }
+
+    #[test]
+    fn a_clear_shows_it_in_full_after_its_own_passes_drop() {
         // Each `_HandlePlayer` fades (@0x6dfec) before its class-order
         // bookkeeping (@0x6e2e8) shows the menu again.
         for (cleared, level) in [
@@ -777,20 +843,20 @@ mod tests {
             ([false, false, true], 32),
         ] {
             let (mut menu, late) = fading_at(22);
-            assert!(!menu.run_steps(late, 3, cleared, true));
+            assert!(!menu.run_passes(late, clearing(cleared)));
             assert_eq!(menu.level(), Some(level), "{cleared:?}");
         }
     }
 
     #[test]
     fn two_clears_in_one_frame_each_show_it_in_full() {
-        // At 2: step 1 drops to 1 and shows it again, steps 2 and 3 drop
-        // to 30, step 3's clear shows it again.
+        // At 2: pass 1 drops to 1 and shows it again, passes 2 and 3 drop
+        // to 30, pass 3's clear shows it again.
         let (mut menu, late) = fading_at(2);
-        assert!(!menu.run_steps(late, 3, [true, false, true], true));
+        assert!(!menu.run_passes(late, clearing([true, false, true])));
         assert_eq!(menu.level(), Some(32));
         let (mut menu, late) = fading_at(2);
-        assert!(!menu.run_steps(late, 3, [true, false, false], true));
+        assert!(!menu.run_passes(late, clearing([true, false, false])));
         assert_eq!(menu.level(), Some(30), "the first clear alone");
     }
 
@@ -799,11 +865,11 @@ mod tests {
         // A fade that reached 0 has shut the menu, which the bookkeeping
         // leaves shut (`jle` @0x6e386, @0x6e444).
         let (mut menu, late) = fading_at(1);
-        assert!(menu.run_steps(late, 2, [true, true], true), "it closed");
+        assert!(menu.run_passes(late, clearing([true, true])), "it closed");
         assert!(!menu.is_open());
         let (mut menu, late) = fading_at(2);
-        assert!(menu.run_steps(late, 3, [false, false, true], true));
-        assert!(!menu.is_open(), "shut on step 2, before step 3's clear");
+        assert!(menu.run_passes(late, clearing([false, false, true])));
+        assert!(!menu.is_open(), "shut on pass 2, before pass 3's clear");
     }
 
     #[test]
@@ -812,26 +878,29 @@ mod tests {
         // its level.
         let (mut menu, late) = fading_at(22);
         assert!(!menu.select(1, late, &rows()), "2: no fighters");
-        assert!(!menu.run_steps(late, 2, [false, true], true));
+        assert!(!menu.run_passes(late, clearing([false, true])));
         assert_eq!(menu.level(), Some(32), "no drop, and in full again");
     }
 
     #[test]
-    fn steps_take_the_frames_flying_first() {
-        // On a frame none is flying, and one was, the fade starts at once
-        // and the group becomes All Ships, before the steps' drops.
+    fn each_pass_takes_the_escorts_flying_it_counted() {
+        // On a pass none is flying, and one was on the last, the fade
+        // starts at once and the group becomes All Ships (@0x6dfb3-0x6dfcb),
+        // before that pass's drop: a menu not yet timed out drops on that
+        // pass only.
         let mut menu = opened();
         assert!(menu.select(3, after(AT, 1), &rows()), "4: warships");
-        assert!(!menu.run_steps(after(AT, 2), 0, [], false));
-        assert_eq!(menu.group(), EscortGroup::All, "no step, all the same");
-        assert!(!menu.run_steps(after(AT, 2), 2, [], false));
-        assert_eq!(menu.level(), Some(30));
+        assert!(!menu.run_passes(after(AT, 2), [pass(true, false), pass(false, false)]));
+        assert_eq!(menu.group(), EscortGroup::All);
+        assert_eq!(menu.level(), Some(31), "once, on the second pass");
+        assert!(!menu.run_passes(after(AT, 2), []), "no pass");
+        assert_eq!(menu.level(), Some(31), "no drop");
     }
 
     #[test]
-    fn a_shut_menu_runs_no_steps() {
+    fn a_shut_menu_runs_no_passes() {
         let mut menu = EscortMenu::default();
-        assert!(!menu.run_steps(AT, 2, [true, false], true));
+        assert!(!menu.run_passes(AT, clearing([true, false])));
         assert!(!menu.is_open());
     }
 
@@ -854,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn with_none_flying_on_its_first_frame_it_fades_from_that_step() {
+    fn with_none_flying_on_its_first_pass_it_fades_from_that_pass() {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
         assert!(!menu.update(AT, 1, false));
@@ -1346,5 +1415,42 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_command_key_down_with_its_latch_clear_fires_once_and_waits_for_its_release() {
+        let mut latches = CommandLatches::default();
+        assert_eq!(
+            latches.poll([true, false, true, false]),
+            [true, false, true, false]
+        );
+        assert_eq!(latches.poll([true, false, true, false]), [false; 4]);
+        assert_eq!(
+            latches.poll([true, true, false, false]),
+            [false, true, false, false]
+        );
+        assert!(latches.is_set(0) && latches.is_set(1));
+        assert!(!latches.is_set(2), "cleared on its release");
+        assert_eq!(
+            latches.poll([false, false, true, false]),
+            [false, false, true, false]
+        );
+        assert!(!latches.is_set(0) && !latches.is_set(1));
+    }
+
+    #[test]
+    fn a_fresh_press_fires_and_sets_its_latch_alone() {
+        let mut latches = CommandLatches::default();
+        for i in 0..4 {
+            latches.press(i);
+            assert!(latches.is_set(i));
+            let mut down = [false; 4];
+            down[i] = true;
+            assert_eq!(latches.poll(down), [false; 4], "held after it: {i}");
+            assert!(latches.is_set(i));
+        }
+        // Its release clears it.
+        latches.poll([false; 4]);
+        assert!((0..4).all(|i| !latches.is_set(i)));
     }
 }

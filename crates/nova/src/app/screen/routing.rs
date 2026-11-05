@@ -140,11 +140,14 @@ impl AppScreen {
             }
             // An accept shows its texts, then the computer again, as the
             // original closes it and opens it again; one left with nothing
-            // available closes silently.
+            // available closes silently. Whether it took the mission, and
+            // whether any mission is listed now, place the keys a press
+            // held back after the accept.
             if let Some(mission) = accepted {
-                let _ = flight.accept_mission(mission);
+                let taken = flight.accept_mission(mission).is_ok();
                 spaceport.show_mission_texts(flight.take_mission_texts());
-                spaceport.set_mission_computer(flight.open_mission_computer());
+                spaceport.set_computer_missions_listed(!flight.mission_info().rows.is_empty());
+                spaceport.set_mission_computer(flight.open_mission_computer(), taken);
             }
             // The refill says nothing, as `_DoPortDialog` says nothing;
             // Recharge's button follows below.
@@ -363,7 +366,9 @@ impl AppScreen {
     /// it reads a press (@0x1abaf): one that reaches the menu once the
     /// Preferences have closed clicks and opens them again. The Cocoa
     /// Preferences window takes those that come while it is open
-    /// (`_RunPrefsDialog` @0xcd401).
+    /// (`_RunPrefsDialog` @0xcd401). While a map waits for M's release the
+    /// router holds the chord before it gets here, for after the close
+    /// (the `held_chords` module).
     pub(super) fn preferences_key(&mut self, input: &Input) -> bool {
         let Input::Key {
             key,

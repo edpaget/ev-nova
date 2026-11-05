@@ -95,6 +95,26 @@ fn the_keys_handle_player_writes_no_byte_for_never_fade() {
 }
 
 #[test]
+fn the_escort_and_frame_rate_keys_pressed_and_held_leave_the_cursor_whole() {
+    // Held for `_quickKeyCheckResult` (@0x6dda9, @0x6e1b6, @0x6e460),
+    // they set no cursor byte.
+    for k in [
+        MENU_KEY,
+        ESCORT_ATTACK_KEY,
+        ESCORT_DEFEND_KEY,
+        ESCORT_HOLD_KEY,
+        ESCORT_RECALL_KEY,
+        FRAME_RATE_KEY,
+    ] {
+        let mut view = showing(KeyFades::EVERY);
+        view.input(&key(k, true));
+        assert!(view.held.contains(&k), "{k:?} held");
+        ticked(&mut view, 2);
+        assert_eq!(faked_cursor_alpha(&view), WHOLE, "{k:?}");
+    }
+}
+
+#[test]
 fn the_chords_follow_their_gates_with_command_down() {
     follows(FadeKey::Eject, &[Key::Command, EJECT_KEY]);
     follows(FadeKey::SelfDestruct, &[Key::Command, SELF_DESTRUCT_KEY]);

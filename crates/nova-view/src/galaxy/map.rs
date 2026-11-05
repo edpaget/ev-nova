@@ -1549,7 +1549,7 @@ impl GalaxyMap {
         self.draw_marks_and_selection(&mut map, &dialog.transform());
         clip_opaque(&map, map_area(), list);
         if let Some(panel) = &self.panel {
-            draw_panel(list, panel, DIALOG_ORIGIN, metrics);
+            draw_panel(list, panel, DIALOG_ORIGIN, metrics, dialog.place().zoom());
         }
     }
 
@@ -4427,13 +4427,14 @@ mod tests {
             strip: Strip::Info {
                 ports: Ports::Unknown,
                 hazards: words.unknown.clone(),
-                date: "Jun 23, 1177".to_owned(),
+                date: nova_sim::map_panel::PanelDate::Text("Jun 23, 1177".to_owned()),
             },
             column: Column {
                 title: words.selected.clone(),
                 body: ColumnBody::Unknown,
             },
             words,
+            numbers: nova_sim::map_panel::CheatNumbers::default(),
         }
     }
 

@@ -644,7 +644,7 @@ impl Session {
         }
         // `_gSpeedMult` 0.0 after `DisposeDialogNoFlash` (@0x968fd-0x9690e;
         // see the `time_adjustment` module).
-        self.zero_speed_mult();
+        self.zero_at_key_block();
         if let Some(person) = self
             .space
             .npc_mut(talk.npc)

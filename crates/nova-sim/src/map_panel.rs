@@ -56,11 +56,36 @@
 //! original reads system −1, out of bounds (@0x10339-0x1035d,
 //! @0x10ca3-0x10cc5); here no selection reads as an unexplored system.
 //!
+//! **Cheat mode** (`_cheatsActive`, 0xdeb60) swaps seven readouts for raw
+//! numbers ([`MapPanel::with_cheats`]), each drawn with `NumToString` at
+//! the pen and in the colour of the text it replaces. The panel always
+//! carries the numbers ([`CheatNumbers`]) and leaves cheat mode off; the
+//! caller switches it on.
+//!
+//! - An unexplored system's Ports (@0x1052b-0x10564), its hazards
+//!   (@0x10966-0x10999, not upper-cased) and its name (@0x10ccf-0x10d00,
+//!   nothing following) read its `sÿst` ID.
+//! - An explored system's name reads its ID (@0x10d05-0x10d2d), inhabited
+//!   or not: the `_SystemIsInhabited` test comes after it (@0x10d46).
+//! - The government reads "ID " (the literal @0xd826e) and its `gövt` ID
+//!   (@0x10de6-0x10e17); an independent system still reads "Independent".
+//! - The legal status reads the raw record, `_legalStatus[_selSystem]`
+//!   (@0x10e9a-0x10ecd), as [`CheatNumbers::legal_record`] says.
+//! - The date reads trunc(1000 / zoom) ([`zoom_readout`], @0x109bc-0x109f4)
+//!   on both strips ([`PanelDate::ZoomReadout`]): the prompt's reaches it
+//!   too (@0x102cd). The view knows the zoom, so it resolves it.
+//!
+//! With nothing selected the ID is the original's index arithmetic,
+//! −1 + 128 = [`NO_SELECTION_ID`]; whether the original takes the
+//! unexplored branch there rests on its out-of-bounds read, and ours keeps
+//! reading it as unexplored.
+//!
 //! The function calls no `PlaySound` and makes no random draw. Its
-//! `_cheatsActive` numbers, visible-region tests, partial-update skip and
-//! `_didUpdateMap` are left out (rdm:task/map-dialog-update-left-out-branches).
+//! visible-region tests, partial-update skip and `_didUpdateMap` are left
+//! out, with the reasons rdm:phase/flight-controls/phase-2-map-dialog-update-left-out-branches
+//! records.
 
-use crate::catalog::SystemId;
+use crate::catalog::{GovtId, SystemId};
 use crate::exploration::{GATES, UNINHABITED};
 use crate::landing::landable;
 use crate::market::price_level;
@@ -75,6 +100,12 @@ const TRADES: u32 = 0x0002;
 const SERVICE_FLAGS: [u32; 3] = [0x0002, 0x0004, 0x0008];
 /// How many standard commodities the panel asks about.
 const COMMODITIES: u8 = 6;
+/// The system ID cheat mode shows with nothing selected: `_selSystem`
+/// −1, plus 128.
+pub const NO_SELECTION_ID: i16 = 127;
+/// What cheat mode draws before a government's ID, the Pascal string
+/// `\x03ID ` @0xd826e.
+const GOVT_ID_PREFIX: &str = "ID ";
 
 /// The `STR#` 2002 strings the panels show (#308-#340).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -221,6 +252,9 @@ pub struct PanelInput<'a> {
     pub name: &'a str,
     /// Its government's name, `None` when it is independent.
     pub government: Option<&'a str>,
+    /// Its government, `None` when it is independent: the `gövt` cheat
+    /// mode shows the ID of.
+    pub govt: Option<GovtId>,
     /// Its `Asteroids`, as its asteroid field spawns from it.
     pub asteroids: i16,
     /// Its `Interference`, raw.
@@ -235,6 +269,9 @@ pub struct PanelInput<'a> {
     pub inhabited: bool,
     /// The legal status string in it.
     pub legal: &'a str,
+    /// The raw legal record the legal status string is derived from, which
+    /// cheat mode shows.
+    pub legal_record: i16,
     /// The standard commodities' names, by number.
     pub commodities: &'a [String],
     /// Today's date, as `DateToMedString` writes it.
@@ -250,6 +287,87 @@ pub struct MapPanel {
     pub column: Column,
     /// The `STR#` 2002 words, for the labels and the `<Unknown>`s.
     pub words: PanelWords,
+    /// The raw numbers cheat mode shows ([`MapPanel::with_cheats`]).
+    pub numbers: CheatNumbers,
+}
+
+/// The raw numbers cheat mode shows in place of the panels' text (see the
+/// module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CheatNumbers {
+    /// The selected system's `sÿst` ID, [`NO_SELECTION_ID`] with none.
+    pub system: i16,
+    /// Its government's `gövt` ID, `None` when it is independent.
+    pub govt: Option<i16>,
+    /// The raw legal record in it.
+    pub legal_record: i16,
+}
+
+impl MapPanel {
+    /// The panels as cheat mode draws them (see the module docs): an
+    /// unexplored system's ports, hazards and name its ID; an explored
+    /// one's name its ID, its government "ID " and its ID, its legal
+    /// status the raw record; and on either strip the zoom readout in
+    /// place of the date.
+    #[must_use]
+    pub fn with_cheats(mut self) -> Self {
+        let numbers = self.numbers;
+        let id = numbers.system.to_string();
+        match &mut self.strip {
+            Strip::HypergatePrompt { date, .. } => *date = PanelDate::ZoomReadout,
+            Strip::Info {
+                ports,
+                hazards,
+                date,
+            } => {
+                // An unexplored system's ports and hazards are both
+                // `<Unknown>`.
+                if *ports == Ports::Unknown {
+                    *ports = Ports::Id(numbers.system);
+                    hazards.clone_from(&id);
+                }
+                *date = PanelDate::ZoomReadout;
+            }
+        }
+        self.column.body = match self.column.body {
+            ColumnBody::Unknown | ColumnBody::Id(_) => ColumnBody::Id(numbers.system),
+            ColumnBody::Uninhabited { .. } => ColumnBody::Uninhabited { name: id },
+            ColumnBody::Inhabited {
+                government,
+                goods,
+                services,
+                ..
+            } => ColumnBody::Inhabited {
+                name: id,
+                government: numbers
+                    .govt
+                    .map_or(government, |govt| format!("{GOVT_ID_PREFIX}{govt}")),
+                legal: numbers.legal_record.to_string(),
+                goods,
+                services,
+            },
+        };
+        self
+    }
+}
+
+/// What the strip shows where the date goes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PanelDate {
+    /// Today's date, as `DateToMedString` writes it.
+    Text(String),
+    /// Cheat mode's zoom readout, [`zoom_readout`] of the map's zoom,
+    /// which the view knows.
+    ZoomReadout,
+}
+
+/// Cheat mode's readout of `zoom` in place of the date: trunc(1.0 / zoom
+/// × 1000.0) in double (`divsd _mapZoom`, `mulsd`, `cvttsd2si`
+/// @0x109bc-0x109f4). The original's is a 32-bit word; ours is wider.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // Saturates; a map's zoom is near 1.
+pub fn zoom_readout(zoom: f64) -> i64 {
+    (1.0 / zoom * 1000.0).trunc() as i64
 }
 
 /// The bottom strip.
@@ -259,17 +377,18 @@ pub enum Strip {
     HypergatePrompt {
         /// #308.
         prompt: String,
-        /// Today's date.
-        date: String,
+        /// Today's date, or cheat mode's zoom readout.
+        date: PanelDate,
     },
     /// The ports, the hazards and the date.
     Info {
         /// The ports.
         ports: Ports,
-        /// The hazards' value: `<Unknown>` when unexplored.
+        /// The hazards' value: `<Unknown>` when unexplored, the system's
+        /// ID under cheat mode.
         hazards: String,
-        /// Today's date.
-        date: String,
+        /// Today's date, or cheat mode's zoom readout.
+        date: PanelDate,
     },
 }
 
@@ -282,6 +401,8 @@ pub enum Ports {
     None,
     /// `<Unknown>`: the system is unexplored.
     Unknown,
+    /// Cheat mode's: an unexplored system's `sÿst` ID.
+    Id(i16),
 }
 
 /// The right column.
@@ -298,6 +419,9 @@ pub struct Column {
 pub enum ColumnBody {
     /// Unexplored: the name reads `<Unknown>` and nothing more.
     Unknown,
+    /// Cheat mode's unexplored: the name reads the system's `sÿst` ID and
+    /// nothing more.
+    Id(i16),
     /// Not inhabited: the name, then "Uninhabited System".
     Uninhabited {
         /// The system's name.
@@ -382,6 +506,11 @@ pub fn map_panel(input: &PanelInput) -> MapPanel {
             body: column_body(input),
         },
         words: input.words.clone(),
+        numbers: CheatNumbers {
+            system: input.selected.map_or(NO_SELECTION_ID, |system| system.0),
+            govt: input.govt.map(|govt| govt.0),
+            legal_record: input.legal_record,
+        },
     }
 }
 
@@ -393,7 +522,7 @@ fn explored(input: &PanelInput) -> bool {
 
 /// The bottom strip (@0x10213-0x10a6f).
 fn strip(input: &PanelInput) -> Strip {
-    let date = input.date.to_owned();
+    let date = PanelDate::Text(input.date.to_owned());
     let prompt = input.hypergate.is_some()
         && input
             .selected
@@ -561,7 +690,7 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::catalog::StellarId;
+    use crate::catalog::{GovtId, StellarId};
 
     /// Each word its own number, "#n".
     fn words() -> PanelWords {
@@ -602,12 +731,14 @@ mod tests {
             level: ExploredLevel::Charted,
             name: "Sol",
             government: Some("Federation"),
+            govt: Some(GovtId(140)),
             asteroids: 0,
             interference: 0,
             murk: 0,
             stellars,
             inhabited: true,
             legal: "Clean",
+            legal_record: 75,
             commodities: &GOODS,
             date: "Jan 1, 1177",
         };
@@ -647,7 +778,7 @@ mod tests {
                 panel.strip,
                 Strip::HypergatePrompt {
                     prompt: "#308".to_owned(),
-                    date: "Jan 1, 1177".to_owned()
+                    date: PanelDate::Text("Jan 1, 1177".to_owned())
                 },
                 "{selected:?}"
             );
@@ -797,12 +928,14 @@ mod tests {
             level: ExploredLevel::Explored,
             name: "",
             government: None,
+            govt: None,
             asteroids: 2,
             interference: 20,
             murk: 0,
             stellars: &[],
             inhabited: false,
             legal: "",
+            legal_record: 0,
             commodities: &commodities,
             date: "",
         };
@@ -1093,5 +1226,159 @@ mod tests {
         assert_eq!(words.visibility_levels, ["#321", "#322", "#323"]);
         let short = PanelWords::from_list(&strings(&["one"]));
         assert_eq!(short, PanelWords::default());
+    }
+
+    // Cheat mode (`_cheatsActive`).
+
+    #[test]
+    fn the_panel_carries_the_raw_numbers_with_cheat_mode_off() {
+        let panel = panel_with(&[port("Earth")], |_| {});
+        assert_eq!(
+            panel.numbers,
+            CheatNumbers {
+                system: 131,
+                govt: Some(140),
+                legal_record: 75
+            }
+        );
+        let Strip::Info { ports, date, .. } = &panel.strip else {
+            panic!("the info strip");
+        };
+        assert_eq!(*ports, listed(&["Earth"]));
+        assert_eq!(*date, PanelDate::Text("Jan 1, 1177".to_owned()));
+        let independent = panel_with(&[], |input| input.govt = None);
+        assert_eq!(independent.numbers.govt, None);
+        let none = panel_with(&[], |input| input.selected = None);
+        assert_eq!(none.numbers.system, 127, "−1 + 128");
+    }
+
+    #[test]
+    fn cheats_show_an_unexplored_systems_id_for_its_ports_hazards_and_name() {
+        // Sites @0x1052b-0x10564, @0x10966-0x10999 and @0x10ccf-0x10d00.
+        let panel = panel_with(&[port("Earth")], |input| {
+            input.level = ExploredLevel::Unexplored;
+        })
+        .with_cheats();
+        assert_eq!(
+            panel.strip,
+            Strip::Info {
+                ports: Ports::Id(131),
+                hazards: "131".to_owned(),
+                date: PanelDate::ZoomReadout,
+            }
+        );
+        assert_eq!(panel.column.body, ColumnBody::Id(131), "and nothing more");
+        assert_eq!(panel.column.title, "#338", "the title stays");
+    }
+
+    #[test]
+    fn cheats_show_an_explored_systems_id_government_id_and_raw_record() {
+        // Sites @0x10d05-0x10d2d, @0x10de6-0x10e17 and @0x10e9a-0x10ecd;
+        // the ports and hazards of an explored system stay.
+        let plain = panel_with(&[port("Earth")], |input| input.asteroids = 2);
+        let panel = plain.clone().with_cheats();
+        let Strip::Info { ports, hazards, .. } = &panel.strip else {
+            panic!("the info strip");
+        };
+        assert_eq!(
+            (ports, hazards.as_str()),
+            (&listed(&["Earth"]), "#313 #316")
+        );
+        let ColumnBody::Inhabited {
+            goods, services, ..
+        } = plain.column.body
+        else {
+            panic!("inhabited");
+        };
+        assert_eq!(
+            panel.column.body,
+            ColumnBody::Inhabited {
+                name: "131".to_owned(),
+                government: "ID 140".to_owned(),
+                legal: "75".to_owned(),
+                goods,
+                services,
+            }
+        );
+    }
+
+    #[test]
+    fn cheats_leave_an_independent_system_independent_and_show_a_negative_record() {
+        let panel = panel_with(&[port("Earth")], |input| {
+            input.government = None;
+            input.govt = None;
+            input.legal_record = -30;
+        })
+        .with_cheats();
+        let ColumnBody::Inhabited {
+            government, legal, ..
+        } = panel.column.body
+        else {
+            panic!("inhabited");
+        };
+        assert_eq!((government.as_str(), legal.as_str()), ("#333", "-30"));
+    }
+
+    #[test]
+    fn cheats_show_an_uninhabited_systems_id_then_uninhabited() {
+        // The `_SystemIsInhabited` test comes after the name (@0x10d46).
+        let panel = panel_with(&[port("Earth")], |input| input.inhabited = false).with_cheats();
+        assert_eq!(
+            panel.column.body,
+            ColumnBody::Uninhabited {
+                name: "131".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn cheats_with_nothing_selected_show_127() {
+        let panel = panel_with(&[port("Earth")], |input| input.selected = None).with_cheats();
+        assert_eq!(
+            panel.strip,
+            Strip::Info {
+                ports: Ports::Id(127),
+                hazards: "127".to_owned(),
+                date: PanelDate::ZoomReadout,
+            }
+        );
+        assert_eq!(panel.column.body, ColumnBody::Id(127));
+    }
+
+    #[test]
+    fn cheats_put_the_zoom_readout_in_place_of_the_date_on_both_strips() {
+        // @0x109bc-0x109f4, which the prompt's strip reaches too
+        // (@0x102cd).
+        let offers = [OTHER];
+        let panel = panel_with(&[], |input| {
+            input.hypergate = Some(&offers);
+            input.selected = None;
+        });
+        assert_eq!(
+            panel.clone().with_cheats().strip,
+            Strip::HypergatePrompt {
+                prompt: "#308".to_owned(),
+                date: PanelDate::ZoomReadout,
+            }
+        );
+        let Strip::HypergatePrompt { date, .. } = panel.strip else {
+            panic!("the prompt");
+        };
+        assert_eq!(date, PanelDate::Text("Jan 1, 1177".to_owned()), "off");
+    }
+
+    #[test]
+    fn the_zoom_readout_is_1000_over_the_zoom_truncated() {
+        // The seven zooms a run reaches from 0.5625, by 0.75 in and the
+        // decimal 1.333333 out.
+        let mut zoom = 0.5625 * 0.75;
+        let mut readouts = Vec::new();
+        for _ in 0..7 {
+            readouts.push(zoom_readout(zoom));
+            zoom *= 1.333_333;
+        }
+        assert_eq!(readouts, [2370, 1777, 1333, 1000, 750, 562, 421]);
+        // 1000 / 0.5625 is 1777.8: truncated, not rounded.
+        assert_ne!(zoom_readout(0.5625), (1000.0_f64 / 0.5625).round() as i64);
     }
 }

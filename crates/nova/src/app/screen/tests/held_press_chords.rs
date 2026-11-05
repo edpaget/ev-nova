@@ -10,7 +10,7 @@ use nova_view::ui::player_info::PLAYER_INFO_KEY;
 // through the real router, views and flight. Which keys a dialog holds
 // back, and when its replay runs, is nova-view's (`ui::held_keys`).
 
-fn command(pressed: bool) -> Input {
+pub(super) fn command(pressed: bool) -> Input {
     key(Key::Command, pressed)
 }
 
@@ -23,7 +23,7 @@ fn left(pressed: bool, at: Point) -> Input {
 }
 
 /// Command down, then `chord`'s press and release.
-fn chord(screen: &mut AppScreen, chord: Key) -> [ScreenAction; 3] {
+pub(super) fn chord(screen: &mut AppScreen, chord: Key) -> [ScreenAction; 3] {
     [
         screen.input(&command(true)),
         screen.input(&key(chord, true)),
@@ -143,7 +143,9 @@ fn a_return_held_before_command_comma_answers_the_offer_first() {
 
 /// The Preferences' own state, for comparing two runs without pinning
 /// their rules: open or not, what they drew and what they changed.
-fn preferences_state(screen: &mut AppScreen) -> (bool, Vec<DrawCommand>, Option<nova_view::Prefs>) {
+pub(super) fn preferences_state(
+    screen: &mut AppScreen,
+) -> (bool, Vec<DrawCommand>, Option<nova_view::Prefs>) {
     let drawn = screen.preferences().map_or_else(Vec::new, |prefs| {
         let mut list = DrawList::new();
         prefs.draw(&mut list);

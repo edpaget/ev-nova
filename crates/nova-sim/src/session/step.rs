@@ -32,7 +32,10 @@
 //!    `gate_pilot` module), once a step, so both passes below fly them,
 //!    as they fly a held key;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
-//!    [`Session::game_work`]), then its comm notes are taken;
+//!    [`Session::game_work`]), or, on the first step after a comm, escort
+//!    or info dialog's zero, the rest of the frame it opened on, at gain 0
+//!    ([`Session::rest_of_opening_pass`], see the `opening_rest` module),
+//!    then its comm notes are taken;
 //! 3. the NPCs answer what the session left them
 //!    ([`Session::answer_strikes`]): the pass answers every hit it lands
 //!    as its phase settles, the beams' and shockwaves' included, as
@@ -42,7 +45,12 @@
 //!    the `comm_calls` module), are said
 //!    (`_ShowPersonHailQuote` @0x89ce1) and `_HandleShip`'s quote roll runs
 //!    (@0x33f0f-0x33fba; [`Session::tick_quotes`]), and the pass's quotes,
-//!    fight events and ships are reported ([`PassReport`]);
+//!    fight events and ships are reported ([`PassReport`]), with its
+//!    escort-menu block ([`PassReport::escort_menu`], see the
+//!    `class_orders` module): whether an escort flew as its fade counted
+//!    them and whether its bookkeeping cleared a class's kept order, so
+//!    the view fades the escort menu once a pass and shows it in full
+//!    again between that pass's drop and the next;
 //! 4. in double time, the frame as it stands is reported
 //!    ([`StepRun::between_passes`]), as that is what the original draws
 //!    (`_PlayGame` @0x45d96-0x45e82), then the second pass
@@ -68,11 +76,9 @@
 //!    is the slot as the first pass left it. The frame clears the record before its
 //!    first step: a line raised before it (a press the view says at once,
 //!    a note or quote the inbox held) is older than any the steps raise.
-//!    With it, whether the step's passes cleared an escort class's kept
-//!    order ([`StepRun::class_orders_cleared`], see the `class_orders`
-//!    module), which the frame clears before its first step too: the
-//!    view shows the escort menu in full again after that step's fade.
-//!    And whether a jump collapsed under the white on the step
+//!    The frame drops a pass's escort-menu block left from before its
+//!    first step too, and each step drops one a rescue's unreported pass
+//!    left. And whether a jump collapsed under the white on the step
 //!    ([`StepRun::lit_collapse`], see the `jump_collapse` module), read
 //!    per step, so neither double time's second pass nor a catch-up
 //!    tick's later steps lose it.
@@ -134,7 +140,7 @@ impl Session {
         self.settle_asteroid_field(&mut *collab.chance);
         self.hold_input(input);
         self.out.last_line = None;
-        self.out.class_orders_cleared = false;
+        self.out.escort_menu = None;
         for _ in 0..steps {
             if self.warp_end_due() || self.hold_expired() {
                 into.stopped = true;
@@ -179,15 +185,22 @@ impl Session {
             before: self.ships_before(),
             ..StepRun::default()
         };
-        self.adjust_time();
         let controls = self.pilot_controls(input.controls);
-        let rescued = self.game_work(
-            controls,
-            catalog,
-            collab.behaviour,
-            collab.rules,
-            &mut *collab.chance,
-        );
+        let rescued = if self.take_opening_rest() {
+            // The rest of the frame a dialog opened on, at the gain its
+            // zero left (see the `opening_rest` module).
+            self.rest_of_opening_pass(catalog, collab.behaviour, collab.rules, &mut *collab.chance);
+            false
+        } else {
+            self.adjust_time();
+            self.game_work(
+                controls,
+                catalog,
+                collab.behaviour,
+                collab.rules,
+                &mut *collab.chance,
+            )
+        };
         run.comm = self.take_comm();
         if rescued {
             run.rescued = Some(ShipPlace::from(*self.player()));
@@ -203,6 +216,8 @@ impl Session {
             return run;
         }
         run.between_passes = Some(self.frame_between_passes());
+        #[cfg(test)]
+        self.give_test_command_between_passes(&mut *collab.chance);
         self.out.second_pass = Some(Vec::new());
         self.tick_again(
             controls,
@@ -271,6 +286,15 @@ impl Session {
         }
     }
 
+    /// Gives the escort command a test set for between double time's
+    /// passes (`Outbox::command_between_passes`), drawing on `chance`.
+    #[cfg(test)]
+    fn give_test_command_between_passes(&mut self, chance: &mut dyn crate::chance::Chance) {
+        if let Some((group, command)) = self.out.command_between_passes.take() {
+            self.command_escorts(group, command, chance);
+        }
+    }
+
     /// The flight as it stands, between double time's two passes.
     fn frame_between_passes(&self) -> Box<FlightFrame> {
         let mut frame = Box::<FlightFrame>::default();
@@ -279,14 +303,15 @@ impl Session {
     }
 
     /// What `run`'s step leaves at its end, taken into it: the line it
-    /// raised last, whether it cleared an escort class's kept order, and
-    /// whether a jump collapsed under the white on it (see the module
-    /// docs). A wrap a rescue's unreported pass left is dropped, as the
-    /// view lays itself out afresh.
+    /// raised last, and whether a jump collapsed under the white on it
+    /// (see the module docs). A wrap a rescue's unreported pass left is
+    /// dropped, as the view lays itself out afresh, and so is its
+    /// escort-menu block, as the rescue returns before the fade
+    /// (@0x68ddd, @0x692ce).
     fn take_step_ends(&mut self, run: &mut StepRun) {
         self.out.player_wrap = None;
+        self.out.escort_menu = None;
         run.last_line = self.out.last_line.take();
-        run.class_orders_cleared = std::mem::take(&mut self.out.class_orders_cleared);
         run.lit_collapse = std::mem::take(&mut self.out.lit_collapse);
     }
 
@@ -301,8 +326,8 @@ impl Session {
             .collect()
     }
 
-    /// The pass just run, as it stands, its quotes and fight events
-    /// taken: each ship's record as the frame builds it
+    /// The pass just run, as it stands, its quotes, fight events and
+    /// escort-menu block taken: each ship's record as the frame builds it
     /// (`Session::fill_ships`), and each shot's in the fight's order.
     fn pass_report(&mut self) -> PassReport {
         let mut ships = Vec::new();
@@ -324,6 +349,7 @@ impl Session {
             speed_mult: self.speed_mult(),
             quotes: self.take_quotes(),
             wrap: self.out.player_wrap.take(),
+            escort_menu: self.out.escort_menu.take(),
         }
     }
 }
@@ -335,7 +361,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::CombatEvent;
     use crate::flight::Controls;
-    use crate::flight_frame::{FrameShot, RaisedLine};
+    use crate::flight_frame::{EscortMenuPass, FrameShot, RaisedLine};
     use crate::geometry::Vec2;
     use crate::hail::CommNote;
     use crate::player_wrap::{PlayerWrap, WRAP_EDGE};
@@ -375,18 +401,27 @@ mod tests {
         report
     }
 
-    /// What a pass took by hand: its quotes and fight events.
-    type Took = (Vec<PersonQuote>, Vec<CombatEvent>);
+    /// What a pass took by hand: its quotes and fight events, and its
+    /// escort-menu block.
+    type Took = (Vec<PersonQuote>, Vec<CombatEvent>, Option<EscortMenuPass>);
 
     /// What a step took by hand: its comm, each pass's takes, the line it
-    /// raised last, and whether it cleared a class's kept order.
+    /// raised last, and where a rescue's texts fell.
     type StepTook = (
         Vec<CommNote>,
         Vec<Took>,
         Option<RaisedLine>,
-        bool,
         Option<crate::flight_frame::RescueTexts>,
     );
+
+    /// What the pass just run took by hand.
+    fn pass_took(session: &mut Session) -> Took {
+        (
+            session.take_quotes(),
+            session.take_combat_events(),
+            session.out.escort_menu.take(),
+        )
+    }
 
     /// The frame's calls made by hand, in the order the view made them,
     /// on the same collaborators: each step's comm, then each pass's
@@ -414,7 +449,7 @@ mod tests {
         session.set_dock_try(input.dock_try);
         session.hold_jettison(input.jettison);
         session.out.last_line = None;
-        session.out.class_orders_cleared = false;
+        session.out.escort_menu = None;
         let mut took = Vec::new();
         for _ in 0..count {
             if session.warp_end_due() || session.hold_expired() {
@@ -435,8 +470,11 @@ mod tests {
             }
             session.answer_strikes(&behaviour);
             session.tick_quotes(catalog, chance);
-            passes.push((session.take_quotes(), session.take_combat_events()));
+            passes.push(pass_took(session));
             if session.double_time() {
+                if let Some((group, command)) = session.out.command_between_passes.take() {
+                    session.command_escorts(group, command, chance);
+                }
                 session.tick_again(input.controls, &behaviour, Rules::default(), chance);
                 session.raise_test_second_pass_lines();
                 if session.rescue_if_due(catalog, chance) {
@@ -446,7 +484,7 @@ mod tests {
                 }
                 session.answer_strikes(&behaviour);
                 session.tick_quotes_again(catalog, chance);
-                passes.push((session.take_quotes(), session.take_combat_events()));
+                passes.push(pass_took(session));
                 comm.extend(session.take_comm());
             }
             took.push(step_took(session, comm, passes));
@@ -455,18 +493,18 @@ mod tests {
     }
 
     /// What a step took by hand, its `comm` and its `passes`' takes: then
-    /// the line it raised last, whether it cleared a class and where a
-    /// rescue's texts fell.
+    /// the line it raised last and where a rescue's texts fell. The
+    /// escort-menu block of a pass the rescue ended is dropped.
     fn step_took(session: &mut Session, comm: Vec<CommNote>, passes: Vec<Took>) -> StepTook {
         let line = session.out.last_line.take();
-        let cleared = std::mem::take(&mut session.out.class_orders_cleared);
+        session.out.escort_menu = None;
         let rescue_texts = session.ship.fate.rescue_texts.take();
-        (comm, passes, line, cleared, rescue_texts)
+        (comm, passes, line, rescue_texts)
     }
 
-    /// What `report` took: each step's comm, then each pass's quotes and
-    /// fight events, the line it raised last, whether it cleared a class
-    /// and where a rescue's texts fell.
+    /// What `report` took: each step's comm, then each pass's quotes,
+    /// fight events and escort-menu block, the line it raised last and
+    /// where a rescue's texts fell.
     fn took(report: &StepReport) -> Vec<StepTook> {
         report
             .steps
@@ -475,13 +513,12 @@ mod tests {
                 let passes = run
                     .passes
                     .iter()
-                    .map(|pass| (pass.quotes.clone(), pass.combat.clone()))
+                    .map(|pass| (pass.quotes.clone(), pass.combat.clone(), pass.escort_menu))
                     .collect();
                 (
                     run.comm.clone(),
                     passes,
                     run.last_line.clone(),
-                    run.class_orders_cleared,
                     run.rescue_texts,
                 )
             })
@@ -1060,24 +1097,56 @@ mod tests {
     }
 
     /// A session of [`carrying`](crate::session::fighters::tests::carrying)'s
-    /// with a warship escort flying, given Return to Hangar, which the
-    /// next pass clears (see the `class_orders` module).
-    fn returning_warship() -> (FakePilotCatalog, Session) {
-        use crate::escort::{EscortClass, EscortCommand, EscortGroup};
+    /// with a warship escort flying.
+    fn escorted_warship() -> (FakePilotCatalog, Session) {
         use crate::session::fighters::tests::{carrying, fleet, warship};
         let catalog = carrying();
-        let mut session = fleet(&catalog, 0, vec![warship(None)]);
-        session.command_escorts(
-            EscortGroup::Class(EscortClass::Warship),
-            EscortCommand::Dock,
-            &mut NeverFires,
-        );
+        let session = fleet(&catalog, 0, vec![warship(None)]);
         (catalog, session)
     }
 
+    /// The warships' group, and Return to Hangar, which the next pass's
+    /// bookkeeping clears for them (see the `class_orders` module).
+    const WARSHIPS_RETURN: (crate::escort::EscortGroup, crate::escort::EscortCommand) = (
+        crate::escort::EscortGroup::Class(crate::escort::EscortClass::Warship),
+        crate::escort::EscortCommand::Dock,
+    );
+
+    /// [`escorted_warship`], its warships given Return to Hangar.
+    fn returning_warship() -> (FakePilotCatalog, Session) {
+        let (catalog, mut session) = escorted_warship();
+        let (group, command) = WARSHIPS_RETURN;
+        session.command_escorts(group, command, &mut NeverFires);
+        (catalog, session)
+    }
+
+    /// Whether each pass of each step of `report` cleared a class's kept
+    /// order; `None` for a pass that reported no escort-menu block.
+    fn cleared_by_pass(report: &StepReport) -> Vec<Vec<Option<bool>>> {
+        report
+            .steps
+            .iter()
+            .map(|run| {
+                run.passes
+                    .iter()
+                    .map(|pass| pass.escort_menu.map(|menu| menu.class_orders_cleared))
+                    .collect()
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_class_cleared_is_reported_with_the_step_whose_pass_cleared_it() {
-        for double in [false, true] {
+    fn a_class_cleared_is_reported_with_the_pass_that_cleared_it() {
+        for (double, cleared) in [
+            (false, vec![vec![Some(true)], vec![Some(false)]]),
+            (
+                true,
+                vec![
+                    vec![Some(true), Some(false)],
+                    vec![Some(false), Some(false)],
+                ],
+            ),
+        ] {
             let (catalog, mut session) = returning_warship();
             let mut hand = session.clone();
             let input = StepInput {
@@ -1085,29 +1154,66 @@ mod tests {
                 ..StepInput::default()
             };
             let report = steps(&mut session, &catalog, &input, 2);
-            let cleared: Vec<bool> = report
-                .steps
-                .iter()
-                .map(|run| run.class_orders_cleared)
-                .collect();
-            assert_eq!(cleared, [true, false], "double time {double}");
+            assert_eq!(cleared_by_pass(&report), cleared, "double time {double}");
             assert_eq!(took(&report), by_hand(&mut hand, &catalog, &input, 2));
             assert_eq!(session, hand);
-            assert!(!session.out.class_orders_cleared, "taken");
+            assert_eq!(session.out.escort_menu, None, "taken");
         }
     }
 
     #[test]
-    fn a_clear_before_the_frame_is_not_reported_with_its_steps() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.out.class_orders_cleared = true;
-        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
-        assert!(!report.steps[0].class_orders_cleared);
+    fn a_class_cleared_on_double_times_second_pass_is_reported_with_that_pass() {
+        let (catalog, mut session) = escorted_warship();
+        session.out.command_between_passes = Some(WARSHIPS_RETURN);
+        let mut hand = session.clone();
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(cleared_by_pass(&report), [[Some(false), Some(true)]]);
+        assert_eq!(took(&report), by_hand(&mut hand, &catalog, &input, 1));
+        assert_eq!(session, hand);
     }
 
     #[test]
-    fn a_clear_before_a_rescue_on_the_second_pass_comes_with_its_step() {
+    fn each_pass_reports_the_escorts_flying_as_its_menu_block_counted_them() {
+        let (catalog, mut session) = escorted_warship();
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        let flying = |report: &StepReport| -> Vec<Option<bool>> {
+            report.steps[0]
+                .passes
+                .iter()
+                .map(|pass| pass.escort_menu.map(|menu| menu.escorts_flying))
+                .collect()
+        };
+        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(flying(&report), [Some(true), Some(true)]);
+        session.drop_fleet_escort(0);
+        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(flying(&report), [Some(false), Some(false)]);
+    }
+
+    #[test]
+    fn a_menu_block_before_the_frame_is_not_reported_with_its_steps() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.out.escort_menu = Some(EscortMenuPass {
+            escorts_flying: true,
+            class_orders_cleared: true,
+        });
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert_eq!(
+            report.steps[0].passes[0].escort_menu,
+            Some(EscortMenuPass::default())
+        );
+    }
+
+    #[test]
+    fn a_clear_before_a_rescue_on_the_second_pass_comes_with_its_pass() {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
@@ -1120,8 +1226,8 @@ mod tests {
         let report = steps(&mut session, &catalog, &input, 3);
         assert_eq!(report.steps.len(), 1, "rescued");
         assert!(report.steps[0].rescued.is_some());
-        assert!(report.steps[0].class_orders_cleared);
-        assert!(!session.out.class_orders_cleared, "taken");
+        assert_eq!(cleared_by_pass(&report), [[Some(true)]]);
+        assert_eq!(session.out.escort_menu, None, "none left for the next step");
     }
 
     #[test]
@@ -1203,6 +1309,7 @@ mod tests {
             quotes: session.take_quotes(),
             combat: session.take_combat_events(),
             wrap: session.out.player_wrap.take(),
+            escort_menu: session.out.escort_menu.take(),
         }
     }
 

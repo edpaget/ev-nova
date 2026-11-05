@@ -55,7 +55,7 @@ pub(super) fn filming(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMoviePla
 }
 
 /// Lands on Mars (129), the press's beep raised with it.
-fn land_on_mars(view: &mut Faked) {
+pub(super) fn land_on_mars(view: &mut Faked) {
     view.sim
         .queue_event(FlightEvent::Sound(nova_sim::SimSound::Landed));
     view.sim
@@ -359,7 +359,10 @@ fn with_movies_off_a_landings_texts_come_out_with_it() {
 /// [`filming`] over `catalog` with L pressed over Sol's cleared
 /// hypergate (300), its map open offering Alpha Centauri (131) and
 /// Barnard (132), Alpha Centauri picked.
-fn at_the_filmed_hypergate(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMoviePlayer>) {
+pub(super) fn at_the_filmed_hypergate(
+    catalog: FakeCatalog,
+    on: bool,
+) -> (Faked, Rc<MockMoviePlayer>) {
     let (mut view, player) = filming(catalog, on);
     let opening = map_opening(&view.frame, Some(130));
     view.sim.queue_screen(opening);
@@ -372,7 +375,7 @@ fn at_the_filmed_hypergate(catalog: FakeCatalog, on: bool) -> (Faked, Rc<MockMov
 }
 
 /// The hypergate's entry for Alpha Centauri.
-const ENTER_ALPHA: FlightCommand = FlightCommand::EnterHypergate(Some(SystemId(131)));
+pub(super) const ENTER_ALPHA: FlightCommand = FlightCommand::EnterHypergate(Some(SystemId(131)));
 
 #[test]
 fn a_hypergate_entry_loads_the_desc_the_flight_names_and_plays_its_movie_before_entering() {

@@ -514,7 +514,12 @@ mod tests {
         assert_eq!(session.space.escorts.class_orders[0], DOCK, "the table's");
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.space.escorts.class_orders[0], None, "@0x6e37d");
-        assert!(session.out.class_orders_cleared);
+        assert!(
+            session
+                .out
+                .escort_menu
+                .is_some_and(|pass| pass.class_orders_cleared)
+        );
         assert_eq!(order_of(&session, 0), [None, None]);
     }
 

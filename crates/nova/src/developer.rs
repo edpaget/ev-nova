@@ -16,8 +16,8 @@
 //!   flight.
 //! - [`HELP_LINE`]: the line of keys at the bottom of flight.
 //! - [`CHEATS`]: the original's cheat mode (`_cheatsActive` 0xdeb60),
-//!   which nothing in 1.1 turns on. For now it only shows the player
-//!   info's IDs.
+//!   which nothing in 1.1 turns on. It shows the player info's IDs and
+//!   the galaxy map panels' raw numbers and zoom readout.
 //!
 //! All are off unless set to `true`. They are not [`Rulebook`] rules:
 //! none is a different reading of the original. None of this is part of

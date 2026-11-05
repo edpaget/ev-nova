@@ -535,12 +535,13 @@ mod tests {
 
     // Nebulae.
 
-    fn picture(id: i16, width: u32) -> NebulaPicture {
+    fn picture(id: i16, width: i32) -> NebulaPicture {
         NebulaPicture {
             id,
             slot: 0,
             width,
             height: width,
+            decoded: true,
         }
     }
 
@@ -799,6 +800,7 @@ mod tests {
             slot: 0,
             width: 30,
             height: 30,
+            decoded: true,
         };
         let entry = |id| NebulaEntry {
             id: NebulaId(id),
