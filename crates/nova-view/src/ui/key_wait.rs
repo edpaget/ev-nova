@@ -355,6 +355,15 @@ mod tests {
     }
 
     #[test]
+    fn finish_drops_text_following() {
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.take(&press(A));
+        queue.finish();
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), []);
+    }
+
+    #[test]
     fn it_drops_the_release_of_a_key_whose_press_it_never_took() {
         assert_eq!(left_by(&[release(A), press(B)]), [press(B)]);
         assert_eq!(left_by(&[press(B), release(A)]), [press(B)]);
