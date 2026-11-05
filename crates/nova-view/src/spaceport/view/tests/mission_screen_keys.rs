@@ -86,12 +86,7 @@ fn the_computers_rest_after_a_held_leave_reaches_the_spaceport() {
 fn the_info_screens_rest_after_a_held_close_reaches_the_computer_beneath() {
     let mut view = computer();
     view.open_mission_info(actives(2));
-    let at = view
-        .mission_info()
-        .and_then(MissionInfoScreen::rows)
-        .and_then(|rows| rows.row_bounds(0))
-        .expect("the info's row 0")
-        .center();
+    let at = info_row_0(&view);
     view.input(&button(true, at));
     view.input(&key(Key::Escape));
     view.input(&key(Key::Down));
@@ -190,4 +185,53 @@ fn an_abort_tells_the_computer_beneath_whether_missions_are_still_listed() {
     held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::Down)]);
     assert!(!view.take_mission_info_request());
     assert_eq!(selected(&view), Some(1), "the Down ran on");
+}
+
+/// The centre of the info screen's row 0.
+fn info_row_0(view: &SpaceportView) -> Point {
+    view.mission_info()
+        .and_then(MissionInfoScreen::rows)
+        .and_then(|rows| rows.row_bounds(0))
+        .expect("the info's row 0")
+        .center()
+}
+
+#[test]
+fn the_rest_after_an_abort_reaches_the_computer_beneath_as_the_info_is_set() {
+    let mut view = computer();
+    view.open_mission_info(actives(2));
+    let abort = view
+        .mission_info()
+        .and_then(MissionInfoScreen::dialog)
+        .and_then(|dialog| dialog.item_bounds(ABORT_ITEM))
+        .expect("Abort")
+        .center();
+    view.input(&button(true, abort));
+    view.input(&key(Key::Escape));
+    view.input(&key(Key::Down));
+    view.input(&button(false, abort));
+    assert_eq!(view.take_mission_abort(), Some(0));
+    assert!(view.mission_info().is_some(), "the Escape waits");
+    view.set_mission_info(actives(1));
+    assert!(view.mission_info().is_none(), "the Escape closed it");
+    assert_eq!(
+        selected(&view),
+        Some(1),
+        "the Down reached the computer at once"
+    );
+}
+
+#[test]
+fn an_info_screen_a_cancelled_press_closes_on_its_tick_redraws_the_status_bar_then() {
+    let mut view = computer();
+    view.open_mission_info(actives(2));
+    view.take_status_refresh();
+    let at = info_row_0(&view);
+    view.input(&button(true, at));
+    view.input(&key(Key::Escape));
+    view.cancel_pointer();
+    assert!(view.mission_info().is_some(), "until the tick");
+    view.tick(Duration::ZERO);
+    assert!(view.mission_info().is_none(), "closed");
+    assert!(view.take_status_refresh(), "on the same tick");
 }
