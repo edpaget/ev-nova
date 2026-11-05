@@ -7,7 +7,9 @@
 //! (@0x13a2e-0x13a46, @0x13c44-0x13c53), so they reach whoever reads the
 //! queue next: [`FlightView::take_map_replay`] hands them over, and
 //! `nova_view`'s `map_wait` module says which. Each goes through the
-//! router in turn, as the original's next loop reads the queue:
+//! router in turn, as the original's next loop reads the queue. A
+//! replayed [`Input::Text`] goes to the screen as a key does; past a stop
+//! only releases go, so it is dropped there.
 //!
 //! - A key that closes a dialog back to another passes the rest on.
 //! - A key that opens something that flushes drops the rest, as each

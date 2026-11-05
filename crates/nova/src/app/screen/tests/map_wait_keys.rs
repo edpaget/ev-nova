@@ -114,6 +114,29 @@ fn a_key_tapped_during_a_wait_on_the_exchanges_map_acts_on_it_after_the_close() 
 }
 
 #[test]
+fn a_count_typed_during_a_wait_on_the_exchanges_map_is_ordered_after_the_close() {
+    // `_DoQuantityDialog` (@0x56d5b) never flushes, so its `ModalDialog`
+    // reads the queued digit into the count.
+    let store = MemoryPilots::new();
+    let mut screen = landed_trader(&store);
+    click_port_item(&mut screen, 7);
+    start_the_wait(&mut screen);
+    screen.input(&key(Key::Alt, true));
+    screen.input(&key(Key::Char('b'), true));
+    screen.input(&Input::Text('b'));
+    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::Char('5'), true));
+    screen.input(&Input::Text('5'));
+    screen.input(&key(Key::Char('5'), false));
+    tap(&mut screen, Key::Enter);
+    screen.input(&key(Key::Alt, false));
+    assert_eq!(pilot(&screen).held(FOOD), 0, "nothing bought yet");
+    end_the_wait(&mut screen);
+    assert_eq!(pilot(&screen).held(FOOD), 5, "the count typed, not 10");
+    assert_eq!(pilot(&screen).cash(), 1000 - 5 * 75);
+}
+
+#[test]
 fn return_tapped_during_a_wait_on_the_exchanges_map_closes_it_after_the_close() {
     let store = MemoryPilots::new();
     let mut screen = landed_trader(&store);

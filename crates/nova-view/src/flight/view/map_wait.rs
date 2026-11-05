@@ -37,6 +37,14 @@
 //!   wait takes (the `ui::key_wait` module's `WaitKeys`, waiting for M)
 //!   and hands it to the router at the close
 //!   ([`FlightView::take_map_replay`]), which gives it to the screen.
+//!   Typed text goes with the key that typed it, as the original's
+//!   key-down carries its character: `_DoQuantityDialog` (@0x56d5b) never
+//!   flushes, nor does anything between the map's close and it
+//!   (`_DoTradeDialog`, `_DoOutfitDialog`'s loop after its open flush
+//!   @0x5bd51), so a queued digit lands in its count. The opener's own
+//!   character is dropped by `EditDialog::flush_typed_key` as live. A text
+//!   screen that opens through a flush (`_EVTextInputDialog` @0x55429)
+//!   drops it as a `FlushMark` stop does.
 //!
 //! Left out:
 //!
@@ -57,9 +65,6 @@
 //!   `_KeyCheck` reads them live (@0xa19b-0xa1dc), so
 //!   [`Screen::release_keys`](crate::Screen::release_keys) closes the map
 //!   and drops what was queued.
-//! - [`Input::Text`]: no filter under the map takes text, and each text
-//!   dialog opens through a `0xff7f` flush (`_EVTextInputDialog`
-//!   @0x55429).
 
 use super::dialog_map::MapOpening;
 use super::{
