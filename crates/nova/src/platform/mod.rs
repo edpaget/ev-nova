@@ -855,14 +855,8 @@ mod tests {
         // The menus' Command.
         (Key::MetaRight, KeyCode::SuperRight),
         // The player info's Tab goes back with Shift held.
-        (
-            nova_view::ui::player_info::BACKWARDS_KEYS[0],
-            KeyCode::ShiftLeft,
-        ),
-        (
-            nova_view::ui::player_info::BACKWARDS_KEYS[1],
-            KeyCode::ShiftRight,
-        ),
+        (Key::ShiftLeft, KeyCode::ShiftLeft),
+        (Key::ShiftRight, KeyCode::ShiftRight),
     ];
 
     #[test]

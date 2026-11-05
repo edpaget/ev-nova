@@ -58,10 +58,14 @@
 //! screen; with no Yes/No dialog the answer is no. No button is inert
 //! ([`INERT_BUTTONS`]).
 //!
-//! **Keys** (`_PlayerInfoFilter` 0x53ae9). Tab, a press or a repeat,
-//! shows the next tab, or with Shift held the previous one, wrapping
-//! (@0x53b14-0x53b80). Return, Enter, Escape and P (a press) close it
-//! (@0x53b86-0x53bb6). The original closes on any key pressed while P
+//! **Keys** (`_PlayerInfoFilter` 0x53ae9), read as commands through the
+//! key map ([`contexts::PLAYER_INFO`]). The shared UI context's Tab, a
+//! press or a repeat, shows the next tab, and the player info context's
+//! Tab Back (Shift-Tab, following Tab wherever it is bound, as the filter
+//! reads the `shiftKey` bit beside it, set by either Shift) the previous
+//! one, wrapping (@0x53b14-0x53b80). Confirm (Return, Enter), Back
+//! (Escape) and the shared play keys' Player Info (P), each a press,
+//! close it (@0x53b86-0x53bb6). The original closes on any key pressed while P
 //! is held; that stays press-only by the user's decision (2026-10-23),
 //! so P's own press is the only held-P close here.
 //!
@@ -96,7 +100,11 @@ use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, ModifierHeld, MouseButton};
+use crate::input::{Input, Key, MouseButton};
+use crate::keymap::{
+    Command, CommandInput, CommandReader, PlayCommand, PlayerInfoCommand, SharedBindings,
+    UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
 use crate::spaceport::layout::DONE_LABEL;
@@ -172,10 +180,10 @@ pub const JETTISON_ITEM: usize = 7;
 
 /// The player info key: the original's default `playerInfoKey`
 /// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
+/// The screen reads [`PlayCommand::PlayerInfo`]; the router and the
+/// spaceport's screens compare this until they read the key map
+/// (rdm:phase/key-bindings/phase-2-command-key-map's steps 4 and 8).
 pub const PLAYER_INFO_KEY: Key = Key::KeyP;
-/// The keys that, held, make Tab go back: either Shift, as
-/// `_PlayerInfoFilter` reads the `shiftKey` bit (0x0200, @0x53b1e).
-pub const BACKWARDS_KEYS: [Key; 2] = crate::input::SHIFT_KEYS;
 
 /// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
 /// asks for the player info screen where the original's filters read the
@@ -188,6 +196,18 @@ pub fn is_player_info_press(input: &Input) -> bool {
             pressed: true,
             repeat: false,
         }
+}
+
+/// The key the player info key's command, [`PlayCommand::PlayerInfo`],
+/// is bound to in `bindings`, if any: what a close waits on. A key wait
+/// compares the key itself (the phase's fixed keys).
+fn player_info_key(bindings: &SharedBindings) -> Option<Key> {
+    bindings.with(|bindings| {
+        bindings
+            .keyboard
+            .combo(PlayCommand::PlayerInfo.into())
+            .map(|combo| combo.key)
+    })
 }
 
 /// The tabs' labels, `STR#` 150 #36-#39.
@@ -583,13 +603,13 @@ pub struct PlayerInfoScreen {
     /// The button a click is held on, and its tracking.
     tracked: Option<PlayerInfoButton>,
     tracker: ButtonTracker,
-    /// Whether Shift is held.
-    backwards: ModifierHeld,
     jettison: bool,
     closed: bool,
-    /// The close's wait for [`PLAYER_INFO_KEY`]'s release
-    /// (@0x5a6aa-0x5a6d4).
+    /// The close's wait for the player info key's release
+    /// (@0x5a6aa-0x5a6d4): the key [`PlayCommand::PlayerInfo`] is bound to.
     wait: KeyWait,
+    /// Its keys, as commands ([`contexts::PLAYER_INFO`]).
+    keys: CommandReader,
 }
 
 impl PlayerInfoScreen {
@@ -618,22 +638,34 @@ impl PlayerInfoScreen {
             tab: Tab::General,
             tracked: None,
             tracker: ButtonTracker::default(),
-            backwards: ModifierHeld::either(BACKWARDS_KEYS),
             jettison: false,
             closed: false,
-            wait: KeyWait::new(PLAYER_INFO_KEY, false),
+            wait: KeyWait::new(player_info_key(&SharedBindings::default()), false),
+            keys: CommandReader::new(contexts::PLAYER_INFO),
         }
     }
 
-    /// The screen opened with [`PLAYER_INFO_KEY`] down or up, as `held`
-    /// says: a close made while it is down waits for its release.
+    /// The screen reading its keys through `bindings`: its close waits on
+    /// the key Player Info is bound to there.
     #[must_use]
-    pub fn with_key_held(mut self, held: bool) -> Self {
-        self.wait = KeyWait::new(PLAYER_INFO_KEY, held);
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.wait.set_key(player_info_key(&bindings));
+        self.wait.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
         self
     }
 
-    /// Whether a close waits for [`PLAYER_INFO_KEY`]'s release: the
+    /// The screen opened with the player info key down or up, as `held`
+    /// says: a close made while it is down waits for its release.
+    #[must_use]
+    pub fn with_key_held(mut self, held: bool) -> Self {
+        let bindings = self.keys.bindings().clone();
+        self.wait = KeyWait::new(player_info_key(&bindings), held);
+        self.wait.set_bindings(bindings);
+        self
+    }
+
+    /// Whether a close waits for the player info key's release: the
     /// screen stays drawn and takes no input but the wait's.
     #[must_use]
     pub fn waiting(&self) -> bool {
@@ -646,7 +678,7 @@ impl PlayerInfoScreen {
         self.wait.take_replay()
     }
 
-    /// Closes now, or once [`PLAYER_INFO_KEY`] is let go if it is down.
+    /// Closes now, or once the player info key is let go if it is down.
     fn close(&mut self) {
         if self.wait.close() {
             self.closed = true;
@@ -753,7 +785,8 @@ impl PlayerInfoScreen {
             .with_buttons(ButtonSkin::NOVA, self.style)
             .with_default(Some(YES_ITEM))
             .with_cancel(None)
-            .with_focus_ring(self.focus_ring);
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.keys.bindings().clone());
         dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
         self.confirm = Some(dialog);
     }
@@ -881,8 +914,8 @@ fn lay_out(
 
 impl Screen for PlayerInfoScreen {
     /// The Yes/No dialog takes everything while it asks. Otherwise Tab
-    /// changes the tab, Return, Enter, Escape and P close, and a click
-    /// goes to the buttons. It never quits.
+    /// and Tab Back change the tab, Confirm, Back and Player Info close,
+    /// and a click goes to the buttons. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.wait.waiting() {
             if self.wait.input(input) {
@@ -891,30 +924,44 @@ impl Screen for PlayerInfoScreen {
             return ScreenAction::None;
         }
         self.wait.note(input);
-        self.backwards.follow(input);
+        let command = self.keys.follow(input);
         if self.confirm.is_some() {
             self.confirm_input(input);
             return ScreenAction::None;
         }
-        match *input {
-            Input::Key {
-                key: Key::Tab,
+        match command {
+            Some(CommandInput {
+                command:
+                    tab
+                    @ (Command::Ui(UiCommand::Tab) | Command::PlayerInfo(PlayerInfoCommand::TabBack)),
                 pressed: true,
-                ..
-            } if self.laid.is_ok() => {
-                self.tab = if self.backwards.held() {
+                repeat,
+            }) if self.laid.is_ok() => {
+                // A repeat reads Shift as it is now, as the filter reads
+                // `shiftKey` on each autoKey event.
+                let tab = if repeat {
+                    self.keys.peek(input).unwrap_or(tab)
+                } else {
+                    tab
+                };
+                self.tab = if tab == Command::PlayerInfo(PlayerInfoCommand::TabBack) {
                     self.tab.previous()
                 } else {
                     self.tab.next()
                 };
             }
-            Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape | PLAYER_INFO_KEY,
+            Some(CommandInput {
+                command:
+                    Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                    | Command::Play(PlayCommand::PlayerInfo),
                 pressed: true,
                 repeat: false,
-            } => self.close(),
-            Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
-            _ => {}
+            }) => self.close(),
+            _ => {
+                if let Input::PointerButton { .. } | Input::PointerMoved(_) = input {
+                    self.pointer(input);
+                }
+            }
         }
         ScreenAction::None
     }
@@ -969,7 +1016,7 @@ impl Screen for PlayerInfoScreen {
     }
 
     fn release_keys(&mut self) {
-        self.backwards.let_go();
+        self.keys.let_go();
         if self.wait.release() {
             self.closed = true;
         }
@@ -1012,6 +1059,7 @@ mod tests {
     use super::*;
     use nova_sim::player_info::CheatIds;
 
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -1832,6 +1880,35 @@ mod tests {
         screen.input(&key(Key::ShiftLeft, false, false));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Honors, "forward once both are up");
+    }
+
+    /// The screen reads its keys through the key map it is given: Player
+    /// Info rebound to O closes it on O, waiting for O's release, and no
+    /// longer on P; Tab rebound to F7 steps the tabs on F7, and Shift-F7
+    /// back, and no longer on Tab.
+    #[test]
+    fn a_rebound_player_info_key_and_tab_act_on_their_new_keys_alone() {
+        let o = Key::KeyO;
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(PlayCommand::PlayerInfo, KeyCombo::key(o))
+                .rebound(UiCommand::Tab, KeyCombo::key(Key::F7)),
+        );
+        let mut screen = screen().with_bindings(bindings);
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::General, "Tab no longer steps");
+        screen.input(&press(Key::F7));
+        assert_eq!(screen.tab(), Tab::Cargo);
+        screen.input(&press(Key::ShiftRight));
+        screen.input(&press(Key::F7));
+        assert_eq!(screen.tab(), Tab::General, "Shift-F7 steps back");
+        screen.input(&key(Key::ShiftRight, false, false));
+        screen.input(&press(PLAYER_INFO_KEY));
+        assert!(!screen.closed() && !screen.waiting(), "P no longer closes");
+        screen.input(&press(o));
+        assert!(screen.waiting(), "O's press waits for its release");
+        screen.input(&key(o, false, false));
+        assert!(screen.closed());
     }
 
     #[test]
