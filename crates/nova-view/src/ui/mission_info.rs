@@ -8,10 +8,14 @@ use crate::input::{Input, Key};
 /// The key that asks for the mission info screen from the bar, the
 /// spaceport, the mission computer, the trade center, the outfitter, the
 /// shipyard and its Info panel, an offer, and flight. The original reads
-/// it from the player's key settings (`_keyPrefs` +0x50), whose default
-/// is not in `Nova-DF.rsrc`; I is free on every spaceport screen (the
+/// it from the player's key settings (`_keyPrefs` +0x50, default 0x22 I,
+/// `_loadKeys` @0xce625); I is free on every spaceport screen (the
 /// shipyard's Info is Space, as `_ShipyardFilter` reads it @0x60526) and
-/// in flight.
+/// in flight. It is the default of the shared play keys' Mission Info
+/// ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo)),
+/// which the key map binds; the spaceport's screens and the router compare
+/// this until they read the key map
+/// (rdm:phase/key-bindings/phase-2-command-key-map's steps 4 and 8).
 pub const MISSION_INFO_KEY: Key = Key::KeyI;
 
 /// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks

@@ -16,6 +16,7 @@ use std::time::Duration;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -116,6 +117,13 @@ impl NoteDialog {
     #[must_use]
     pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
         self.dialog.set_focus_ring(ring);
+        self
+    }
+
+    /// The note reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
         self
     }
 
@@ -231,6 +239,21 @@ mod tests {
                 at: ok,
             });
         }
+    }
+
+    /// The note reads its keys through the key map it is given: Back
+    /// rebound to F6 closes it on F6 and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_the_note_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(crate::keymap::Bindings::default().rebound(
+            crate::keymap::UiCommand::Back,
+            crate::keymap::KeyCombo::key(Key::F6),
+        ));
+        let mut note = note(&template()).with_bindings(bindings);
+        note.input(&key(Key::Escape));
+        assert!(!note.closed(), "Escape no longer closes it");
+        note.input(&key(Key::F6));
+        assert!(note.closed());
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 
@@ -107,6 +108,13 @@ impl YesNoDialog {
     #[must_use]
     pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
         self.dialog.set_focus_ring(ring);
+        self
+    }
+
+    /// The question reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
         self
     }
 
@@ -214,6 +222,21 @@ mod tests {
                 at,
             });
         }
+    }
+
+    /// The question reads its keys through the key map it is given:
+    /// Confirm rebound to F6 answers yes on F6 and no longer on Return.
+    #[test]
+    fn a_rebound_confirm_answers_yes_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(crate::keymap::Bindings::default().rebound(
+            crate::keymap::UiCommand::Confirm,
+            crate::keymap::KeyCombo::key(Key::F6),
+        ));
+        let mut dialog = asking().with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_answer(), None, "Return no longer answers");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_answer(), Some(true));
     }
 
     #[test]
