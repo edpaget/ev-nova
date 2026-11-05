@@ -5,10 +5,9 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use super::bindings::{Bindings, Devices};
+use super::bindings::{Bindings, Change, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
-use super::keyboard::{self, KeyMap, KeysDown, Modifiers};
 use crate::input::Input;
 
 /// The app's bindings, shared by every screen: a cheap clone over one
@@ -137,12 +136,7 @@ impl CommandReader {
     /// means what its press meant (or, with that forgotten, what it means
     /// now); a release lets go of what its press meant.
     pub fn follow(&mut self, input: &Input) -> Option<CommandInput> {
-        let Input::Key {
-            pressed, repeat, ..
-        } = *input
-        else {
-            return None;
-        };
+        let Change { pressed, repeat } = Devices::change(input)?;
         let meant = if pressed {
             self.devices.follow(input);
             let meant = if repeat {
@@ -183,16 +177,8 @@ impl CommandReader {
     /// other input.
     #[must_use]
     pub fn means(&self, input: &Input) -> Option<Command> {
-        let Input::Key { key, .. } = *input else {
-            return None;
-        };
-        self.devices.press_of(input).or_else(|| {
-            self.peek(&Input::Key {
-                key,
-                pressed: true,
-                repeat: false,
-            })
-        })
+        let press = Devices::fresh_press(input)?;
+        self.devices.press_of(input).or_else(|| self.peek(&press))
     }
 
     /// Every command the key of `input` (a press, a repeat or a release)
@@ -202,19 +188,9 @@ impl CommandReader {
     /// asks this of a key going down or up. Empty for any other input.
     #[must_use]
     pub fn meanings(&self, input: &Input) -> Vec<Command> {
-        let Input::Key { key, .. } = *input else {
-            return Vec::new();
-        };
-        let mut devices = self.devices.clone();
-        devices.follow(&Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        });
         let active = self.active();
-        self.bindings.with(|bindings| {
-            keyboard::meanings(&bindings.keyboard, key, devices.keyboard(), &active)
-        })
+        self.bindings
+            .with(|bindings| bindings.meanings(input, &self.devices, &active))
     }
 
     /// Every command of the active contexts bound to the key of `input`
@@ -225,70 +201,28 @@ impl CommandReader {
     /// ones and those it reads live). Empty for any other input.
     #[must_use]
     pub fn bound_to(&self, input: &Input) -> Vec<Command> {
-        let Input::Key { key, .. } = *input else {
-            return Vec::new();
-        };
         let active = self.active();
-        let bound: BTreeSet<Command> = self.bindings.with(|bindings| {
-            active
-                .iter()
-                .flat_map(|context| context.commands())
-                .filter(|&command| {
-                    bindings
-                        .keyboard
-                        .combo(command)
-                        .is_some_and(|combo| combo.key == key)
-                })
-                .collect()
-        });
-        let mut found: Vec<Command> = bound.into_iter().collect();
-        for twin in &KeyMap::TWINS {
-            if twin.key == key && active.contains(&twin.context) && !found.contains(&twin.command) {
-                found.push(twin.command);
-            }
-        }
-        found
+        self.bindings
+            .with(|bindings| bindings.bound_to(input, &active))
     }
 
     /// Whether the key of `input` is a modifier key the active contexts
-    /// read ([`keyboard::sides`]): flight's left Option, Shift, Command and
-    /// Control, but not their right keys or Caps Lock.
+    /// read ([`sides`](super::keyboard::sides)): flight's left Option,
+    /// Shift, Command and Control, but not their right keys or Caps Lock.
     #[must_use]
     pub fn reads_modifier(&self, input: &Input) -> bool {
-        let Input::Key { key, .. } = *input else {
-            return false;
-        };
-        let mut down = KeysDown::default();
-        down.follow(&Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        });
-        self.active()
-            .into_iter()
-            .any(|context| down.modifiers(keyboard::sides(context)) != Modifiers::NONE)
+        Devices::reads_modifier(input, &self.active())
     }
 
     /// Whether the key of `input` means `command` as one of its fixed
-    /// twins ([`KeyMap::TWINS`]), not through its binding: F1 for the
-    /// first stellar slot, for a screen whose original polls a twin apart
-    /// from its command's key.
+    /// twins ([`KeyMap::TWINS`](super::keyboard::KeyMap::TWINS)), not
+    /// through its binding: F1 for the first stellar slot, for a screen
+    /// whose original polls a twin apart from its command's key.
     #[must_use]
     pub fn is_twin(&self, input: &Input, command: impl Into<Command>) -> bool {
-        let Input::Key { key, .. } = *input else {
-            return false;
-        };
         let command = command.into();
-        let bound = self.bindings.with(|bindings| {
-            bindings
-                .keyboard
-                .combo(command)
-                .is_some_and(|combo| combo.key == key)
-        });
-        !bound
-            && KeyMap::TWINS
-                .iter()
-                .any(|twin| twin.key == key && twin.command == command)
+        self.bindings
+            .with(|bindings| bindings.is_twin(input, command))
     }
 
     /// Whether the key of `input` (a press, a repeat or a release) is
@@ -306,13 +240,11 @@ impl CommandReader {
     }
 
     /// Whether a modifier key is down, as the active contexts read the
-    /// modifier keys ([`keyboard::sides`]): for a screen whose original
-    /// holds an action back while any modifier is down.
+    /// modifier keys ([`sides`](super::keyboard::sides)): for a screen
+    /// whose original holds an action back while any modifier is down.
     #[must_use]
     pub fn modifier_down(&self) -> bool {
-        self.active().into_iter().any(|context| {
-            self.devices.keyboard().modifiers(keyboard::sides(context)) != Modifiers::NONE
-        })
+        self.devices.modifier_down(&self.active())
     }
 
     /// Whether `command` is held.

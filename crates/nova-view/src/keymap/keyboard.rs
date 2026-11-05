@@ -1,10 +1,12 @@
 //! The keyboard's side of the key map: its binding table, [`KeyMap`],
-//! with the original's defaults and fixed twins, and the keys it holds
-//! down, [`KeysDown`]. This is the only place outside the platform
-//! adapter and `input` that names a [`Key`].
+//! with the original's defaults and fixed twins, the keys it holds down,
+//! [`KeysDown`], what each press meant, [`Keyboard`], and the lookup over
+//! a key's input. This is the only place outside the platform adapter
+//! and `input` that names a [`Key`] or reads an `Input::Key`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::bindings::Change;
 use super::command::{
     AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
     EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, MainMenuCommand,
@@ -687,12 +689,7 @@ pub const fn sides(context: Context) -> Sides {
 ///
 /// Every command returned is held while the key stays down; a press
 /// means the most specific of them ([`most_specific`]).
-pub(super) fn meanings(
-    map: &KeyMap,
-    key: Key,
-    keys: &KeysDown,
-    active: &[Context],
-) -> Vec<Command> {
+fn meanings(map: &KeyMap, key: Key, keys: &KeysDown, active: &[Context]) -> Vec<Command> {
     let met = |context: Context| -> Vec<Command> {
         let held = keys.modifiers(sides(context));
         context
@@ -742,7 +739,7 @@ pub(super) fn meanings(
 /// The command a press means among `meanings`, which [`meanings`] lists
 /// in the active contexts' order: the one whose combo needs the most
 /// modifiers, so Option-A beats A, and the first of those.
-pub(super) fn most_specific(map: &KeyMap, meanings: &[Command]) -> Option<Command> {
+fn most_specific(map: &KeyMap, meanings: &[Command]) -> Option<Command> {
     let needs = |command: Command| {
         map.combo(command)
             .map_or(0, |combo| combo.modifiers.count())
@@ -752,6 +749,127 @@ pub(super) fn most_specific(map: &KeyMap, meanings: &[Command]) -> Option<Comman
         .copied()
         .rev()
         .max_by_key(|&command| needs(command))
+}
+
+/// The command `input` means in the `active` contexts, with `keys` down
+/// before it: for a key press or repeat, the most specific command its
+/// key and the held modifiers meet. A release, or any other input, means
+/// none.
+pub(super) fn resolve(
+    map: &KeyMap,
+    input: &Input,
+    keys: &KeysDown,
+    active: &[Context],
+) -> Option<Command> {
+    let Input::Key {
+        key, pressed: true, ..
+    } = *input
+    else {
+        return None;
+    };
+    most_specific(map, &meanings(map, key, keys, active))
+}
+
+/// Every command the keys down hold in the `active` contexts: each one a
+/// key down means with the modifiers held.
+pub(super) fn held(map: &KeyMap, keys: &KeysDown, active: &[Context]) -> BTreeSet<Command> {
+    keys.keys()
+        .flat_map(|key| meanings(map, key, keys, active))
+        .collect()
+}
+
+/// Every command the key of `input` (a press, a repeat or a release)
+/// holds while down, with `keys` down beside it. Empty for any other
+/// input.
+pub(super) fn meanings_with(
+    map: &KeyMap,
+    input: &Input,
+    keys: &KeysDown,
+    active: &[Context],
+) -> Vec<Command> {
+    let Input::Key { key, .. } = *input else {
+        return Vec::new();
+    };
+    let mut keys = keys.clone();
+    keys.down.insert(key);
+    meanings(map, key, &keys, active)
+}
+
+/// Every command of the `active` contexts bound to the key of `input`
+/// (a press, a repeat or a release), whatever modifiers its combo needs,
+/// then the active contexts' fixed twins on it, each in command order.
+/// Empty for any other input.
+pub(super) fn bound_to(map: &KeyMap, input: &Input, active: &[Context]) -> Vec<Command> {
+    let Input::Key { key, .. } = *input else {
+        return Vec::new();
+    };
+    let bound: BTreeSet<Command> = active
+        .iter()
+        .flat_map(|context| context.commands())
+        .filter(|&command| map.combo(command).is_some_and(|combo| combo.key == key))
+        .collect();
+    let mut found: Vec<Command> = bound.into_iter().collect();
+    for twin in &KeyMap::TWINS {
+        if twin.key == key && active.contains(&twin.context) && !found.contains(&twin.command) {
+            found.push(twin.command);
+        }
+    }
+    found
+}
+
+/// Whether the key of `input` means `command` as one of its fixed twins
+/// ([`KeyMap::TWINS`]), not through its binding. False for any other
+/// input.
+pub(super) fn is_twin(map: &KeyMap, input: &Input, command: Command) -> bool {
+    let Input::Key { key, .. } = *input else {
+        return false;
+    };
+    let bound = map.combo(command).is_some_and(|combo| combo.key == key);
+    !bound
+        && KeyMap::TWINS
+            .iter()
+            .any(|twin| twin.key == key && twin.command == command)
+}
+
+/// Whether the key of `input` is a modifier key the `active` contexts
+/// read ([`sides`]). False for any other input.
+pub(super) fn reads_modifier(input: &Input, active: &[Context]) -> bool {
+    let Input::Key { key, .. } = *input else {
+        return false;
+    };
+    KeysDown::from_iter([key]).modifier_down(active)
+}
+
+/// Whether `input` is a modifier key's (or Caps Lock's) press, repeat or
+/// release: an input the "any key" reads pass over.
+#[must_use]
+pub fn is_modifier_input(input: &Input) -> bool {
+    matches!(*input, Input::Key { key, .. } if is_modifier(key))
+}
+
+/// How `input`, a key going down or up, changes what is down; `None`
+/// for any other input.
+pub(super) fn change(input: &Input) -> Option<Change> {
+    let Input::Key {
+        pressed, repeat, ..
+    } = *input
+    else {
+        return None;
+    };
+    Some(Change { pressed, repeat })
+}
+
+/// A fresh press of the key of `input` (a press, a repeat or a release);
+/// `None` for any other input.
+pub(super) fn fresh_press(input: &Input) -> Option<Input> {
+    let Input::Key { key, .. } = *input else {
+        return None;
+    };
+    Some(Input::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    })
 }
 
 /// The keyboard's device state: the keys down.
@@ -815,6 +933,15 @@ impl KeysDown {
             .fold(Modifiers::NONE, |held, &(flag, ..)| held.union(flag))
     }
 
+    /// Whether a modifier key is down, as any of the `active` contexts
+    /// reads the modifier keys ([`sides`]).
+    #[must_use]
+    pub fn modifier_down(&self, active: &[Context]) -> bool {
+        active
+            .iter()
+            .any(|&context| self.modifiers(sides(context)) != Modifiers::NONE)
+    }
+
     /// Lets go of every key.
     pub fn let_go(&mut self) {
         self.down.clear();
@@ -827,6 +954,68 @@ impl FromIterator<Key> for KeysDown {
         Self {
             down: keys.into_iter().collect(),
         }
+    }
+}
+
+/// The keyboard's whole device state: the keys down, and what each press
+/// meant.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keyboard {
+    /// The keys down.
+    down: KeysDown,
+    /// What each key down meant as it went down, so its release lets go
+    /// of that, whatever is held by then.
+    presses: BTreeMap<Key, Command>,
+}
+
+impl Keyboard {
+    /// Follows a key going down or up, forgetting a released key's press;
+    /// anything else changes nothing. Says whether it was a key.
+    pub fn follow(&mut self, input: &Input) -> bool {
+        if let Input::Key {
+            key,
+            pressed: false,
+            ..
+        } = *input
+        {
+            self.presses.remove(&key);
+        }
+        self.down.follow(input)
+    }
+
+    /// Notes that `input`, a key's press, meant `command`.
+    pub fn note_press(&mut self, input: &Input, command: Option<Command>) {
+        if let Input::Key {
+            key, pressed: true, ..
+        } = *input
+        {
+            match command {
+                Some(command) => self.presses.insert(key, command),
+                None => self.presses.remove(&key),
+            };
+        }
+    }
+
+    /// What the press of the key `input` presses, repeats or releases
+    /// meant, if it was noted and is still down.
+    #[must_use]
+    pub fn press_of(&self, input: &Input) -> Option<Command> {
+        let Input::Key { key, .. } = *input else {
+            return None;
+        };
+        self.presses.get(&key).copied()
+    }
+
+    /// The keys down.
+    #[must_use]
+    pub const fn down(&self) -> &KeysDown {
+        &self.down
+    }
+
+    /// Lets go of every key and forgets every press.
+    pub fn let_go(&mut self) {
+        self.down.let_go();
+        self.presses.clear();
     }
 }
 
@@ -1398,6 +1587,14 @@ mod tests {
         for key in [Key::KeyA, Key::Enter, Key::Space, Key::Tab] {
             assert!(!is_modifier(key), "{key}");
         }
+    }
+
+    #[test]
+    fn a_modifier_input_is_a_modifier_key_s() {
+        assert!(is_modifier_input(&press(Key::ShiftRight)));
+        assert!(is_modifier_input(&press(Key::CapsLock)));
+        assert!(!is_modifier_input(&press(Key::KeyA)));
+        assert!(!is_modifier_input(&Input::Text('a')));
     }
 
     #[test]

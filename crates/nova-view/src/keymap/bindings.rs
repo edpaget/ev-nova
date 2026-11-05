@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::command::{Command, Context};
 use super::contexts::{SCREENS, ScreenContexts, shadows, together_on};
-use super::keyboard::{self, KeyCombo, KeyMap, KeysDown};
-use crate::input::{Input, Key};
+use super::keyboard::{self, KeyCombo, KeyMap, Keyboard, KeysDown};
+use crate::input::Input;
 
 /// One binding table per device family. Phase 7 adds the gamepad's
 /// beside the keyboard's, and phase 3 saves each on its own.
@@ -48,25 +48,37 @@ impl Bindings {
     /// command its press meant.
     #[must_use]
     pub fn resolve(&self, input: &Input, devices: &Devices, active: &[Context]) -> Option<Command> {
-        let Input::Key {
-            key, pressed: true, ..
-        } = *input
-        else {
-            return None;
-        };
-        let meanings = keyboard::meanings(&self.keyboard, key, &devices.keyboard, active);
-        keyboard::most_specific(&self.keyboard, &meanings)
+        keyboard::resolve(&self.keyboard, input, devices.keyboard.down(), active)
     }
 
     /// Every command `devices` hold down in the `active` contexts: each
     /// one a key down means with the modifiers held.
     #[must_use]
     pub fn held(&self, devices: &Devices, active: &[Context]) -> BTreeSet<Command> {
-        devices
-            .keyboard
-            .keys()
-            .flat_map(|key| keyboard::meanings(&self.keyboard, key, &devices.keyboard, active))
-            .collect()
+        keyboard::held(&self.keyboard, devices.keyboard.down(), active)
+    }
+
+    /// Every command the device input of `input` (a press, a repeat or a
+    /// release) holds while it is down, with what `devices` hold beside
+    /// it, in the `active` contexts. Empty for any other input.
+    #[must_use]
+    pub fn meanings(&self, input: &Input, devices: &Devices, active: &[Context]) -> Vec<Command> {
+        keyboard::meanings_with(&self.keyboard, input, devices.keyboard.down(), active)
+    }
+
+    /// Every command of the `active` contexts bound to the device input
+    /// of `input`, whatever else its binding needs held, then the active
+    /// contexts' fixed twins on it. Empty for any other input.
+    #[must_use]
+    pub fn bound_to(&self, input: &Input, active: &[Context]) -> Vec<Command> {
+        keyboard::bound_to(&self.keyboard, input, active)
+    }
+
+    /// Whether the device input of `input` means `command` as one of its
+    /// fixed twins, not through its binding.
+    #[must_use]
+    pub fn is_twin(&self, input: &Input, command: Command) -> bool {
+        keyboard::is_twin(&self.keyboard, input, command)
     }
 
     /// Every pair of commands bound to one combo in contexts active
@@ -122,75 +134,83 @@ fn clash_between(screens: &[ScreenContexts], a: Command, b: Command) -> bool {
 /// keyboard's alone; phase 7 adds the gamepad's beside it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Devices {
-    /// The keys down.
-    keyboard: KeysDown,
-    /// What each key down meant as it went down, so its release lets go
-    /// of that, whatever is held by then.
-    presses: BTreeMap<Key, Command>,
+    /// The keyboard's state.
+    keyboard: Keyboard,
+}
+
+/// A device's input going down or up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Change {
+    /// Down (`true`) or up.
+    pub pressed: bool,
+    /// Whether the press is the OS repeating a held input; never set on a
+    /// release.
+    pub repeat: bool,
 }
 
 impl Devices {
+    /// How `input` changes what is down, if it is a device's input (a
+    /// key, today).
+    #[must_use]
+    pub fn change(input: &Input) -> Option<Change> {
+        keyboard::change(input)
+    }
+
+    /// A fresh press of the device input `input` presses, repeats or
+    /// releases; `None` for any other input.
+    #[must_use]
+    pub fn fresh_press(input: &Input) -> Option<Input> {
+        keyboard::fresh_press(input)
+    }
+
+    /// Whether `input` is a modifier the `active` contexts read: a
+    /// modifier key whose side they poll.
+    #[must_use]
+    pub fn reads_modifier(input: &Input, active: &[Context]) -> bool {
+        keyboard::reads_modifier(input, active)
+    }
+
     /// Follows `input`'s change to what is down. Says whether it was a
     /// device's input (a key, today).
     pub fn follow(&mut self, input: &Input) -> bool {
-        if let Input::Key {
-            key,
-            pressed: false,
-            ..
-        } = *input
-        {
-            self.presses.remove(&key);
-        }
         self.keyboard.follow(input)
     }
 
     /// Notes that `input`, a press, meant `command`.
     pub fn note_press(&mut self, input: &Input, command: Option<Command>) {
-        if let Input::Key {
-            key, pressed: true, ..
-        } = *input
-        {
-            match command {
-                Some(command) => self.presses.insert(key, command),
-                None => self.presses.remove(&key),
-            };
-        }
+        self.keyboard.note_press(input, command);
     }
 
-    /// What the press of the key `input` presses, repeats or releases
-    /// meant, if it was noted and is still down.
+    /// What the press of the device input `input` presses, repeats or
+    /// releases meant, if it was noted and is still down.
     #[must_use]
     pub fn press_of(&self, input: &Input) -> Option<Command> {
-        let Input::Key { key, .. } = *input else {
-            return None;
-        };
-        self.presses.get(&key).copied()
+        self.keyboard.press_of(input)
     }
 
     /// Whether anything is down.
     #[must_use]
     pub fn any_down(&self) -> bool {
-        self.keyboard.keys().next().is_some()
+        self.keyboard.down().keys().next().is_some()
+    }
+
+    /// Whether a modifier is down, as any of the `active` contexts reads
+    /// the modifiers.
+    #[must_use]
+    pub fn modifier_down(&self, active: &[Context]) -> bool {
+        self.keyboard.down().modifier_down(active)
     }
 
     /// The keyboard's keys down.
     #[must_use]
     pub const fn keyboard(&self) -> &KeysDown {
-        &self.keyboard
+        self.keyboard.down()
     }
 
     /// Lets go of everything.
     pub fn let_go(&mut self) {
         self.keyboard.let_go();
-        self.presses.clear();
     }
-}
-
-/// Whether `input` is a modifier key's (or Caps Lock's) press, repeat or
-/// release: an input the "any key" reads pass over.
-#[must_use]
-pub fn is_modifier_input(input: &Input) -> bool {
-    matches!(*input, Input::Key { key, .. } if keyboard::is_modifier(key))
 }
 
 #[cfg(test)]
@@ -204,6 +224,7 @@ mod tests {
     use super::super::contexts::{DIALOG, Entry, FLIGHT};
     use super::super::keyboard::Modifiers;
     use super::*;
+    use crate::input::Key;
 
     fn press(key: Key) -> Input {
         Input::Key {
@@ -801,13 +822,5 @@ mod tests {
         assert!(!devices.any_down());
         assert!(!devices.keyboard().is_down(Key::KeyX));
         assert_eq!(devices.press_of(&Input::Text('x')), None);
-    }
-
-    #[test]
-    fn a_modifier_input_is_a_modifier_key_s() {
-        assert!(is_modifier_input(&press(Key::ShiftRight)));
-        assert!(is_modifier_input(&press(Key::CapsLock)));
-        assert!(!is_modifier_input(&press(Key::KeyA)));
-        assert!(!is_modifier_input(&Input::Text('a')));
     }
 }

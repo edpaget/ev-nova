@@ -18,10 +18,12 @@
 //! - [`keyboard`] is the keyboard's side, the only one that holds a
 //!   `Key`: [`KeyCombo`] (a key and the [`Modifiers`] it needs), the
 //!   [`KeyMap`] with its defaults and its fixed twins
-//!   ([`KeyMap::TWINS`]), and [`KeysDown`], the keys held.
+//!   ([`KeyMap::TWINS`]), [`KeysDown`], the keys held, [`Keyboard`],
+//!   those and what each press meant, and the lookup over a key's input.
 //! - [`bindings`] holds every device's table ([`Bindings`]), the lookup
 //!   ([`Bindings::resolve`], [`Bindings::held`]) and the clash query
-//!   ([`Bindings::clashes`]).
+//!   ([`Bindings::clashes`]), with [`Devices`], what each device holds,
+//!   handing each input to its device's side. Neither names a `Key`.
 //! - [`contexts`] lists each key-reading screen's contexts, in order.
 //! - [`reader`] is what a screen holds: a [`CommandReader`] over the
 //!   app's [`SharedBindings`].
@@ -86,7 +88,7 @@ pub mod reader;
 #[cfg(test)]
 pub(crate) mod test_keys;
 
-pub use bindings::{Bindings, Clash, Devices, is_modifier_input};
+pub use bindings::{Bindings, Change, Clash, Devices};
 pub use command::{
     AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
     EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, Kind,
@@ -95,5 +97,5 @@ pub use command::{
     ShipyardCommand, SystemViewCommand, TradeCommand, UiCommand,
 };
 pub use contexts::ScreenContexts;
-pub use keyboard::{Binding, KeyCombo, KeyMap, KeysDown, Modifiers};
+pub use keyboard::{Binding, KeyCombo, KeyMap, Keyboard, KeysDown, Modifiers, is_modifier_input};
 pub use reader::{CommandInput, CommandReader, SharedBindings};
