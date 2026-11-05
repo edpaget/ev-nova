@@ -444,6 +444,7 @@ pub use nova_sim_combat::fleet;
 pub mod galaxy_map;
 pub use nova_sim_ai::gate;
 pub use nova_sim_ai::gate_lanes;
+pub use nova_sim_ai::gate_pilot;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
