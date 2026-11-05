@@ -245,6 +245,25 @@ impl VolumeControl {
         changed
     }
 
+    /// A pad button presses `arrow` as a click does: drawn pressed until
+    /// its release ([`ButtonTracker::press_keyed`]).
+    pub fn press_keyed(&mut self, arrow: Arrow) {
+        self.cancel_pointer();
+        self.tracked = Some(arrow);
+        self.tracker.press_keyed(true);
+    }
+
+    /// The pad button's release: steps as a click on the arrow pressed
+    /// does; `true` when it changes.
+    pub fn release_keyed(&mut self) -> bool {
+        let arrow = self.tracked;
+        if !self.tracker.release_keyed() {
+            return false;
+        }
+        self.tracked = None;
+        arrow.is_some_and(|arrow| self.step(arrow))
+    }
+
     /// Abandons a click in progress without stepping.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
@@ -339,6 +358,22 @@ mod tests {
     fn click(control: &mut VolumeControl, at: Point) -> bool {
         assert!(!control.input(&button(true, at)), "a press never steps");
         control.input(&button(false, at))
+    }
+
+    #[test]
+    fn a_keyed_press_on_an_arrow_steps_it_as_a_click_does() {
+        let mut clicked = control(3);
+        assert!(click(&mut clicked, stock().up.center()));
+        let mut keyed = control(3);
+        keyed.press_keyed(Arrow::Up);
+        assert!(keyed.pressed(Arrow::Up), "drawn pressed while held");
+        assert_eq!(keyed.level(), 3, "the press never steps");
+        assert!(keyed.release_keyed());
+        assert_eq!(keyed.level(), clicked.level());
+        assert!(!keyed.release_keyed(), "no press held");
+        keyed.press_keyed(Arrow::Down);
+        assert!(keyed.release_keyed());
+        assert_eq!(keyed.level(), 3);
     }
 
     fn key(key: Key, repeat: bool) -> Input {

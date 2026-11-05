@@ -260,6 +260,25 @@ impl<T: PickerEntry> Picker<T> {
         changed
     }
 
+    /// A pad button presses `arrow` as a click does: drawn pressed until
+    /// its release ([`ButtonTracker::press_keyed`]).
+    pub fn press_keyed(&mut self, arrow: Arrow) {
+        self.cancel_pointer();
+        self.tracked = Some(arrow);
+        self.tracker.press_keyed(true);
+    }
+
+    /// The pad button's release: steps as a click on the arrow pressed
+    /// does; `true` when it changes.
+    pub fn release_keyed(&mut self) -> bool {
+        let arrow = self.tracked;
+        if !self.tracker.release_keyed() {
+            return false;
+        }
+        self.tracked = None;
+        arrow.is_some_and(|arrow| self.step(arrow))
+    }
+
     /// Abandons a click in progress without stepping.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
@@ -304,6 +323,24 @@ mod tests {
 
     const NATIVE: Scaling = Scaling::Native;
     const SHARP: Scaling = Scaling::SharpBilinear;
+
+    #[test]
+    fn a_keyed_press_on_an_arrow_steps_it_as_a_click_does() {
+        let mut picker = Picker::new(row(), vec![NATIVE, SHARP], NATIVE);
+        picker.press_keyed(Arrow::Down);
+        assert!(picker.pressed(Arrow::Down), "drawn pressed while held");
+        assert_eq!(picker.selected(), NATIVE, "the press never steps");
+        assert!(picker.release_keyed());
+        assert_eq!(picker.selected(), SHARP);
+        assert!(!picker.pressed(Arrow::Down));
+        assert!(!picker.release_keyed(), "no press held");
+        picker.press_keyed(Arrow::Up);
+        assert!(picker.release_keyed());
+        assert_eq!(picker.selected(), NATIVE);
+        picker.press_keyed(Arrow::Up);
+        picker.cancel_pointer();
+        assert!(!picker.release_keyed(), "cancelled");
+    }
 
     fn key(key: Key) -> Input {
         Input::Key {

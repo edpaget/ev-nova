@@ -207,6 +207,9 @@ impl Button {
 pub struct ButtonTracker {
     armed: bool,
     inside: bool,
+    /// Whether the press held is a key's or a pad button's
+    /// ([`ButtonTracker::press_keyed`]), not the pointer's.
+    keyed: bool,
     /// The sound the last input made, until it is taken.
     sound: Option<UiSound>,
 }
@@ -225,6 +228,7 @@ impl ButtonTracker {
                 pressed: true,
                 at,
             } => {
+                self.keyed = false;
                 self.armed = enabled && area.contains_half_open(at);
                 self.inside = self.armed;
                 if self.armed {
@@ -233,7 +237,7 @@ impl ButtonTracker {
                 false
             }
             // Only matters while armed: a press sets it afresh.
-            Input::PointerMoved(at) => {
+            Input::PointerMoved(at) if !self.keyed => {
                 self.inside = area.contains_half_open(at);
                 false
             }
@@ -241,7 +245,7 @@ impl ButtonTracker {
                 button: MouseButton::Left,
                 pressed: false,
                 at,
-            } if self.armed => {
+            } if self.armed && !self.keyed => {
                 self.cancel_pointer();
                 self.sound = Some(UiSound::ButtonUp);
                 area.contains_half_open(at)
@@ -262,11 +266,37 @@ impl ButtonTracker {
         self.armed && self.inside
     }
 
-    /// Abandons the press without activating the button, silently: a
-    /// sound already made is kept until it is taken.
+    /// A key or a pad button presses the button as a click does: on an
+    /// enabled button it arms it, drawn pressed, with a click's
+    /// [`UiSound::ButtonDown`]. While it is held, the pointer's moves and
+    /// releases leave it alone; a pointer press takes over.
+    pub fn press_keyed(&mut self, enabled: bool) {
+        self.armed = enabled;
+        self.inside = enabled;
+        self.keyed = enabled;
+        if enabled {
+            self.sound = Some(UiSound::ButtonDown);
+        }
+    }
+
+    /// The key's or pad button's release: `true`, with a click's
+    /// [`UiSound::ButtonUp`], when its press armed the button.
+    pub fn release_keyed(&mut self) -> bool {
+        if !(self.armed && self.keyed) {
+            return false;
+        }
+        self.cancel_pointer();
+        self.sound = Some(UiSound::ButtonUp);
+        true
+    }
+
+    /// Abandons the press, the pointer's or a key's, without activating
+    /// the button, silently: a sound already made is kept until it is
+    /// taken.
     pub fn cancel_pointer(&mut self) {
         self.armed = false;
         self.inside = false;
+        self.keyed = false;
     }
 
     /// The sound the last input made, once: [`UiSound::ButtonDown`] for a
@@ -641,6 +671,80 @@ mod tests {
 
     const INSIDE: Point = Point::new(200.0, 290.0);
     const OUTSIDE: Point = Point::new(100.0, 100.0);
+
+    #[test]
+    fn a_keyed_press_then_release_activates_with_a_clicks_sounds() {
+        let button = done();
+        let mut clicked = ButtonTracker::default();
+        clicked.input(&button, &press(INSIDE));
+        let click_down = clicked.take_sound();
+        assert!(clicked.input(&button, &release(INSIDE)));
+        let click_up = clicked.take_sound();
+        let mut keyed = ButtonTracker::default();
+        keyed.press_keyed(true);
+        assert_eq!(keyed.take_sound(), click_down);
+        assert!(keyed.release_keyed());
+        assert_eq!(keyed.take_sound(), click_up);
+        assert_eq!(click_up, Some(UiSound::ButtonUp));
+        assert!(!keyed.armed());
+        assert!(!keyed.release_keyed(), "a release with no press");
+        assert_eq!(keyed.take_sound(), None);
+    }
+
+    #[test]
+    fn a_keyed_press_draws_the_button_pressed_until_released() {
+        let mut tracker = ButtonTracker::default();
+        tracker.press_keyed(true);
+        assert!(tracker.armed() && tracker.pressed());
+        tracker.release_keyed();
+        assert!(!tracker.armed() && !tracker.pressed());
+    }
+
+    #[test]
+    fn a_keyed_press_on_a_disabled_button_does_nothing_silently() {
+        let mut tracker = ButtonTracker::default();
+        tracker.press_keyed(false);
+        assert!(!tracker.armed() && !tracker.pressed());
+        assert_eq!(tracker.take_sound(), None);
+        assert!(!tracker.release_keyed());
+        assert_eq!(tracker.take_sound(), None);
+    }
+
+    #[test]
+    fn the_pointer_moving_or_releasing_leaves_a_keyed_press_alone() {
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        tracker.press_keyed(true);
+        tracker.take_sound();
+        assert!(!tracker.input(&button, &Input::PointerMoved(OUTSIDE)));
+        assert!(tracker.pressed(), "still drawn pressed");
+        assert!(!tracker.input(&button, &release(INSIDE)));
+        assert!(tracker.pressed(), "a pointer release is not the key's");
+        assert_eq!(tracker.take_sound(), None);
+        assert!(tracker.release_keyed());
+    }
+
+    #[test]
+    fn a_pointer_press_takes_over_a_keyed_press() {
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        tracker.press_keyed(true);
+        tracker.input(&button, &press(INSIDE));
+        assert!(!tracker.release_keyed(), "the key's press is gone");
+        assert!(
+            tracker.input(&button, &release(INSIDE)),
+            "the click's is not"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_keyed_press_is_silent() {
+        let mut tracker = ButtonTracker::default();
+        tracker.press_keyed(true);
+        tracker.take_sound();
+        tracker.cancel_pointer();
+        assert!(!tracker.armed());
+        assert!(!tracker.release_keyed());
+        assert_eq!(tracker.take_sound(), None);
+    }
 
     #[test]
     fn press_and_release_inside_activates() {

@@ -187,6 +187,23 @@ impl Toggle {
         flips
     }
 
+    /// A pad button presses it as a click does: drawn pressed until its
+    /// release ([`ButtonTracker::press_keyed`]). A greyed toggle ignores
+    /// it.
+    pub fn press_keyed(&mut self) {
+        self.tracker.press_keyed(self.enabled);
+    }
+
+    /// The pad button's release: flips it, as a click's release does,
+    /// when its press was held on it; `true` when it flips.
+    pub fn release_keyed(&mut self) -> bool {
+        let flips = self.tracker.release_keyed();
+        if flips {
+            self.on = !self.on;
+        }
+        flips
+    }
+
     /// Abandons a click in progress without flipping.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
@@ -275,6 +292,23 @@ mod tests {
     fn click(toggle: &mut Toggle, at: Point) -> bool {
         assert!(!toggle.input(&button(true, at)), "a press never flips");
         toggle.input(&button(false, at))
+    }
+
+    #[test]
+    fn a_keyed_press_then_release_flips_it_as_a_click_does() {
+        let mut clicked = music(false);
+        assert!(click(&mut clicked, rect().center()));
+        let mut keyed = music(false);
+        keyed.press_keyed();
+        assert!(keyed.pressed(), "drawn pressed while held");
+        assert!(!keyed.on(), "the press never flips");
+        assert!(keyed.release_keyed());
+        assert_eq!(keyed.on(), clicked.on());
+        assert!(!keyed.release_keyed(), "no press held");
+        let mut greyed = Toggle::greyed(rect(), "Updates");
+        greyed.press_keyed();
+        assert!(!greyed.release_keyed());
+        assert!(!greyed.on());
     }
 
     fn drawn(toggle: &Toggle, focused: bool) -> Vec<DrawCommand> {
