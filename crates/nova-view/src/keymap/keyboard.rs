@@ -480,11 +480,13 @@ const fn default_map(command: MapCommand) -> Binding {
     }
 }
 
-/// The intro's defaults: Return and Space (`_ShowIntroScreen`).
+/// The intro's defaults: Return and Space (`_ShowIntroScreen`). Its
+/// skip is the Pause key's, so its own Skip, the pad's, is unbound.
 const fn default_intro(command: IntroCommand) -> Binding {
     match command {
         IntroCommand::Confirm => bare(Key::Enter),
         IntroCommand::Activate => bare(Key::Space),
+        IntroCommand::Skip => Binding::Unbound,
     }
 }
 
@@ -1452,12 +1454,13 @@ mod tests {
     }
 
     #[test]
-    fn the_intro_s_defaults_are_return_and_space() {
+    fn the_intro_s_defaults_are_return_and_space_and_its_pad_skip_takes_no_key() {
         assert_eq!(
             defaults(Context::Intro),
             vec![
                 row(IntroCommand::Confirm, Key::Enter, NO),
                 row(IntroCommand::Activate, Key::Space, NO),
+                (IntroCommand::Skip.into(), None),
             ]
         );
     }
@@ -1502,7 +1505,7 @@ mod tests {
     }
 
     #[test]
-    fn every_command_but_an_axis_or_a_pad_focus_move_is_bound_by_default() {
+    fn every_command_but_an_axis_or_a_pad_only_command_is_bound_by_default() {
         use UiCommand as U;
         let pad_only = [
             U::FocusUp,
@@ -1511,7 +1514,10 @@ mod tests {
             U::FocusRight,
             U::PrevFocus,
         ]
-        .map(Command::Ui);
+        .map(Command::Ui)
+        .into_iter()
+        .chain([Command::Intro(IntroCommand::Skip)])
+        .collect::<Vec<_>>();
         let map = KeyMap::default();
         for command in Command::all().filter(|c| c.kind() != Kind::Axis && !pad_only.contains(c)) {
             assert!(map.combo(command).is_some(), "{command:?}");

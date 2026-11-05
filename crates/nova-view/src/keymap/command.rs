@@ -719,6 +719,10 @@ context_commands! {
         Confirm: Held "End Picture",
         /// End the picture showing (Space, 0x31).
         Activate: Held "End Picture (Second Key)",
+        /// Skip the rest of the intro, as the Pause key does: the pad's
+        /// Back (East), which the original has no key for. The keyboard
+        /// leaves it unbound (rdm:phase/key-bindings/phase-11-gamepad-menus).
+        Skip: Held "Skip Intro",
     }
 }
 

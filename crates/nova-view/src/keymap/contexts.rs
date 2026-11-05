@@ -306,10 +306,11 @@ pub const MAIN_MENU: ScreenContexts = ScreenContexts {
     entries: &[on(Context::Ui), on(Context::App)],
 };
 
-/// The intro screen: its own Return and Space, and the Pause key, its
-/// skip (`_ShowIntroScreen` @0x16d05). No shared UI: it polls Return's
-/// key code alone, so the keypad's Enter, the shared Confirm's twin,
-/// doesn't end a picture.
+/// The intro screen: its own Return and Space, its pad skip (East, the
+/// pad's Back, scoped here so that East still lands in flight), and the
+/// Pause key, its skip (`_ShowIntroScreen` @0x16d05). No shared UI: it
+/// polls Return's key code alone, so the keypad's Enter, the shared
+/// Confirm's twin, doesn't end a picture.
 pub const INTRO: ScreenContexts = ScreenContexts {
     name: "intro",
     entries: &[on(Context::Intro), on(Context::Pause), on(Context::App)],

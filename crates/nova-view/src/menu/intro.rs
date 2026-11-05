@@ -44,7 +44,9 @@
 //! nor is waited for, and it reads none of the shared UI context's keys.
 //!
 //! **The pad** reads through the same bindings: South is the picture's
-//! Activate, as Space is, and Select + Start the Pause key's skip; a pad
+//! Activate, as Space is, Select + Start the Pause key's skip, and East,
+//! the pad's Back, the intro's own skip ([`IntroCommand::Skip`]), which
+//! does what the Pause key does and is unbound on the keyboard; a pad
 //! button held is waited for as a key is
 //! (rdm:phase/key-bindings/phase-11-gamepad-menus). The intro has no
 //! controls, so it has no pad focus.
@@ -140,7 +142,8 @@ pub struct IntroKeys {
     pub enter: bool,
     /// Space ([`IntroCommand::Activate`]).
     pub space: bool,
-    /// The skip key ([`PauseCommand::Pause`]).
+    /// The skip key ([`PauseCommand::Pause`]), or the intro's own skip,
+    /// the pad's East ([`IntroCommand::Skip`]).
     pub skip: bool,
     /// The keys, as the intro's commands ([`contexts::INTRO`]).
     reader: CommandReader,
@@ -187,7 +190,8 @@ impl IntroKeys {
                 let meant = self.reader.follow(input);
                 self.enter = self.reader.held(IntroCommand::Confirm);
                 self.space = self.reader.held(IntroCommand::Activate);
-                self.skip = self.reader.held(PauseCommand::Pause);
+                self.skip =
+                    self.reader.held(PauseCommand::Pause) || self.reader.held(IntroCommand::Skip);
                 return meant;
             }
             Input::PointerButton {
@@ -378,7 +382,10 @@ impl Intro {
                 let ends = match *input {
                     Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. } => {
                         match meant.map(|meant| meant.command) {
-                            Some(Command::Pause(PauseCommand::Pause)) => {
+                            Some(
+                                Command::Pause(PauseCommand::Pause)
+                                | Command::Intro(IntroCommand::Skip),
+                            ) => {
                                 self.skip = true;
                                 true
                             }
@@ -897,6 +904,64 @@ mod tests {
         assert_eq!(drawn(&screen).1, Some(128), "fading out");
         screen.tick(ms(500));
         assert_eq!(screen.end(), Some(IntroEnd::Skipped), "no 8201, no text");
+    }
+
+    /// The picture drawn and where, the fade, and the end, at one tick.
+    type Outcome = (Option<(i16, Point)>, Option<u8>, Option<IntroEnd>);
+
+    /// What the intro shows and how it ends, a tick at a time, as `down`
+    /// and `up` press and release one key or button: held as it begins,
+    /// held into the release wait, and pressed during a timed wait.
+    fn outcomes(down: &Input, up: &Input) -> Vec<Outcome> {
+        let data = sized();
+        let mut seen = Vec::new();
+        let mut record = |screen: &Intro| {
+            let (picture, fade) = drawn(screen);
+            seen.push((picture, fade, screen.end()));
+        };
+        let mut held = IntroKeys::default();
+        held.note(down);
+        let mut screen = begun(&two_pictures(), &data, held);
+        record(&screen);
+        faded_in(&mut screen);
+        screen.tick(secs(10));
+        record(&screen);
+        screen.input(up);
+        for _ in 0..3 {
+            screen.tick(ms(500));
+            record(&screen);
+        }
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        screen.input(down);
+        faded_in(&mut screen);
+        screen.input(up);
+        screen.tick(PICTURE_FADE_FOR);
+        record(&screen);
+        let mut screen = begun(&two_pictures(), &data, IntroKeys::default());
+        faded_in(&mut screen);
+        screen.tick(ms(100));
+        screen.input(down);
+        for _ in 0..3 {
+            screen.tick(ms(500));
+            record(&screen);
+        }
+        seen
+    }
+
+    #[test]
+    fn east_does_on_the_intro_what_escape_does() {
+        use crate::input::PadButton;
+        let escape = outcomes(&key(Key::Escape, true), &key(Key::Escape, false));
+        assert!(
+            escape
+                .iter()
+                .any(|&(_, _, end)| end == Some(IntroEnd::Skipped)),
+            "Escape skips"
+        );
+        assert_eq!(
+            outcomes(&pad(PadButton::East, true), &pad(PadButton::East, false)),
+            escape
+        );
     }
 
     #[test]

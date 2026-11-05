@@ -236,6 +236,10 @@ const fn default_pad(command: Command) -> PadBinding {
         // South ends an intro picture as Space does
         // (rdm:phase/key-bindings/phase-11-gamepad-menus).
         Command::Intro(IntroCommand::Activate) => plain(PadButton::South),
+        // East, the pad's Back, skips the intro as the Pause key does,
+        // scoped to the intro: in flight East lands
+        // (rdm:phase/key-bindings/phase-11-gamepad-menus).
+        Command::Intro(IntroCommand::Skip) => plain(PadButton::East),
         Command::Ui(command) => default_ui(command),
         // West held stands in for Option: a press of Buy or Sell (or a
         // racer) asks for a count, as an Option-click does
@@ -966,6 +970,8 @@ mod tests {
             // rdm:phase/key-bindings/phase-11-gamepad-menus: South ends an
             // intro picture as Space does.
             (Command::Intro(IntroCommand::Activate), plain(P::South)),
+            // East skips the intro as Escape does.
+            (Command::Intro(IntroCommand::Skip), plain(P::East)),
         ]
     }
 
@@ -977,6 +983,26 @@ mod tests {
             reader.follow(&press(P::South)).map(|meant| meant.command),
             Some(Command::Intro(IntroCommand::Activate))
         );
+    }
+
+    #[test]
+    fn east_skips_the_intro_and_still_lands_in_flight_and_goes_back_elsewhere() {
+        use crate::keymap::{CommandReader, ScreenContexts, contexts};
+        let east = |screen: ScreenContexts| {
+            CommandReader::new(screen)
+                .follow(&press(P::East))
+                .map(|meant| meant.command)
+        };
+        assert_eq!(
+            east(contexts::INTRO),
+            Some(Command::Intro(IntroCommand::Skip))
+        );
+        assert_eq!(
+            east(contexts::FLIGHT),
+            Some(flight(FlightCommand::LandDock))
+        );
+        assert_eq!(east(contexts::PILOT_LIST), Some(ui(U::Back)));
+        assert_eq!(east(contexts::MAIN_MENU), Some(ui(U::Back)));
     }
 
     #[test]
