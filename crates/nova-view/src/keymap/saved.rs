@@ -8,11 +8,31 @@
 //! the file survives a winit upgrade and no name table is ours. No `Code`
 //! name holds a `+`, so splitting on it never breaks a key's name.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
-use super::keyboard::{KeyCombo, Modifiers};
+use super::command::Command;
+use super::keyboard::{Binding, KeyCombo, KeyMap, Modifiers, default_binding};
 use crate::input::Key;
+
+impl KeyMap {
+    /// The bindings that differ from the defaults, as the settings file
+    /// saves them: each rebound command's combo, and `None` for each
+    /// unbound one. A variant still following its base is no override,
+    /// even when its base is rebound.
+    #[must_use]
+    pub fn overrides(&self) -> BTreeMap<Command, Option<KeyCombo>> {
+        Command::all()
+            .filter_map(|command| match self.binding(command) {
+                binding if binding == default_binding(command) => None,
+                Binding::Combo(combo) => Some((command, Some(combo))),
+                Binding::Unbound => Some((command, None)),
+                Binding::Follows { .. } => None,
+            })
+            .collect()
+    }
+}
 
 #[cfg(test)]
 mod pinned;
@@ -82,7 +102,57 @@ impl FromStr for KeyCombo {
 #[cfg(test)]
 mod tests {
     use crate::input::Key;
-    use crate::keymap::keyboard::{KeyCombo, Modifiers};
+    use crate::keymap::keyboard::{KeyCombo, KeyMap, Modifiers};
+    use crate::keymap::{Command, FlightCommand};
+
+    fn flight(command: FlightCommand) -> Command {
+        Command::Flight(command)
+    }
+
+    #[test]
+    fn the_default_map_overrides_nothing() {
+        assert!(KeyMap::default().overrides().is_empty());
+    }
+
+    #[test]
+    fn the_overrides_are_the_rebound_and_unbound_commands() {
+        let shift_w = KeyCombo::with(Key::KeyW, Modifiers::SHIFT);
+        let mut map = KeyMap::default();
+        map.bind(flight(FlightCommand::Accelerate), shift_w);
+        map.unbind(flight(FlightCommand::Afterburner));
+        assert_eq!(
+            map.overrides().into_iter().collect::<Vec<_>>(),
+            vec![
+                (flight(FlightCommand::Accelerate), Some(shift_w)),
+                (flight(FlightCommand::Afterburner), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rebound_base_does_not_list_the_variant_that_follows_it() {
+        let mut map = KeyMap::default();
+        map.bind(
+            flight(FlightCommand::TargetSelect),
+            KeyCombo::key(Key::KeyT),
+        );
+        assert_eq!(
+            map.overrides().into_iter().collect::<Vec<_>>(),
+            vec![(
+                flight(FlightCommand::TargetSelect),
+                Some(KeyCombo::key(Key::KeyT))
+            )]
+        );
+    }
+
+    #[test]
+    fn a_command_bound_back_to_its_default_is_no_override() {
+        let accelerate = flight(FlightCommand::Accelerate);
+        let mut map = KeyMap::default();
+        map.bind(accelerate, KeyCombo::key(Key::KeyW));
+        map.bind(accelerate, KeyCombo::key(Key::ArrowUp));
+        assert!(map.overrides().is_empty());
+    }
 
     #[test]
     fn a_combo_shows_as_its_modifiers_then_its_key() {

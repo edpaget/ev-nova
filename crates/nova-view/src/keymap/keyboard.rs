@@ -382,7 +382,7 @@ const fn follows(base: FlightCommand, plus: Modifiers) -> Binding {
 
 /// Every command's default: the original's, as the phase's findings
 /// record (`_loadKeys` @0xcd5f8-0xce6c4 for the 34 `Keys.nib` commands).
-const fn default_binding(command: Command) -> Binding {
+pub(super) const fn default_binding(command: Command) -> Binding {
     match command {
         Command::Flight(command) => default_flight(command),
         Command::EscortMenu(command) => default_escort_menu(command),
