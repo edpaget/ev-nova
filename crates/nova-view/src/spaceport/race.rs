@@ -790,6 +790,57 @@ mod tests {
         assert_eq!(bet.dialog().pad_highlight(), Some(OK_ITEM), "on OK");
     }
 
+    /// The pad alone asks a bet as the left Option and a click do: told
+    /// the pad, the d-pad onto a racer, then South tapped with West held
+    /// opens the bet's dialog at the asked most, and South on its OK bets
+    /// it.
+    #[test]
+    fn a_pad_alone_asks_the_bet_with_west_held_and_bets_its_count() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let pad = |button, pressed| Input::PadButton { button, pressed };
+        let tap = |screen: &mut RaceScreen, button| {
+            screen.input(&pad(button, true));
+            screen.input(&pad(button, false));
+        };
+        let mut padded = open();
+        padded.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        tap(&mut padded, PadButton::DPadUp);
+        let racer = padded
+            .dialog()
+            .and_then(Dialog::pad_highlight)
+            .and_then(|item| item.checked_sub(FIRST_RACER_ITEM))
+            .and_then(|racer| u8::try_from(racer).ok())
+            .filter(|&racer| racer < RACERS)
+            .expect("the d-pad on a racer");
+        padded.input(&pad(PadButton::West, true));
+        tap(&mut padded, PadButton::South);
+        padded.input(&pad(PadButton::West, false));
+        let mut keyed = open();
+        keyed.input(&key(Key::AltLeft, true, false));
+        click(&mut keyed, racer_item(racer));
+        let field = |screen: &RaceScreen| {
+            screen
+                .quantity()
+                .and_then(QuantityAsk::dialog)
+                .map(|dialog| dialog.field().text().to_owned())
+        };
+        assert_eq!(
+            field(&padded),
+            Some("5000".to_owned()),
+            "asked, at the most"
+        );
+        assert_eq!(field(&padded), field(&keyed), "as Option and a click ask");
+        for bet in [Purpose::Bet.title(), Purpose::Bet.prompt()] {
+            assert!(texts(&padded).contains(&bet.to_owned()), "a bet: {bet}");
+        }
+        assert_eq!(padded.take_bet(), None, "asked first");
+        tap(&mut padded, PadButton::South);
+        assert!(padded.quantity().is_none(), "OK closes it");
+        assert_eq!(padded.take_bet(), Some((racer, Bet::Asked(5_000))));
+    }
+
     #[test]
     fn a_relabel_keeps_the_device_it_was_told() {
         use crate::input::{ControllerFamily, Device, Surroundings};
