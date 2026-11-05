@@ -1,6 +1,7 @@
 //! The app's side of the gamepads: the port it polls once a frame
 //! ([`App::with_gamepads`]), what the pads' events mean for the screen
-//! ([`PadInputs`]), and the device used last ([`LastDevice`]), told to the
+//! ([`PadInputs`](crate::gamepad::inputs::PadInputs)), and the device used
+//! last ([`LastDevice`](super::last_device::LastDevice)), told to the
 //! screen as [`Input::Surroundings`] whenever it changes.
 
 use nova_render::ImageSource;

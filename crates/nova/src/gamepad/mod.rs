@@ -9,8 +9,9 @@
 //!   this module. The real adapter is `platform::gamepads` (gilrs, on the
 //!   desktops); an iPad build adds a `GCController` one behind the same
 //!   port (rdm:roadmap/ipad-port).
-//! - [`fixture`] publishes the fake ([`fixture::FakeGamepads`]) and the
-//!   contract check ([`fixture::check_contract`]) every adapter runs.
+//! - `fixture` (the `fixture` feature, and this crate's tests) publishes
+//!   the fake (`FakeGamepads`) and the contract check (`check_contract`)
+//!   every adapter runs.
 //! - [`inputs`] ([`inputs::PadInputs`]) decides what the events mean for
 //!   the screens: buttons pass through, a stick or trigger past the press
 //!   threshold presses a button (with hysteresis), two pads merge, and a

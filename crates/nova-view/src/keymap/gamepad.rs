@@ -5,7 +5,7 @@
 //! - [`PadEntry`] is a pad button and the layer button it needs held, as
 //!   a `KeyCombo` is a key and its modifiers.
 //! - [`PadMap`] binds each command to an entry, to a stick axis (an
-//!   [`Kind::Axis`] command) or to nothing, with the default table that
+//!   [`Kind::Axis`](super::Kind::Axis) command) or to nothing, with the default table that
 //!   rdm:phase/key-bindings/phase-7-gamepad-input's findings record.
 //! - [`Gamepad`] is the pad's device state: the buttons down, each with
 //!   the layer its press went down under, what each press meant, and the
@@ -83,7 +83,7 @@ impl PadEntry {
 pub enum PadBinding {
     /// To a button, under a layer or none.
     Entry(PadEntry),
-    /// To a stick axis: an [`Kind::Axis`] command's.
+    /// To a stick axis: an [`Kind::Axis`](super::Kind::Axis) command's.
     Axis(PadAxis),
     /// To nothing.
     Unbound,
