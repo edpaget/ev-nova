@@ -23,8 +23,8 @@
 //!   (@0x8dd20); the goal-2 block (@0x8dd9c-0x8de5e) writes none, nor do
 //!   the mine's and the scoop's (@0x8f832-0x8f903, @0x8faf3-0x8fafd).
 //!   The low level's order 0x14, the mine's fire at slot 0, writes it -1
-//!   (@0x8843a) for any type, which the traffic's frame makes
-//!   ([`frame_target`](crate::traffic)), whatever this answers.
+//!   (@0x8843a) for any type, which the traffic makes as it sets the
+//!   frame (`traffic::frame_target`), whatever this answers.
 //!
 //! So the target stands until the handler's slot test clears a gone slot
 //! ([`kept_target`](super::kept_target), @0x8d4e4-0x8d50d: one breaking
