@@ -25,6 +25,9 @@
 //!   versions saved them on Linux to where they are saved now.
 //! - [`rulebook`]: which rules follow the original engine and which the
 //!   Nova Bible, as the settings file chooses.
+//! - [`ruleset`]: the game the engine runs, stock EV Nova or the new
+//!   game `GAME_DATA` chooses, and what each selects as data: the
+//!   readings it pins and where its pilots are saved.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
 //! - [`settings`]: the player's settings, sound and Hyperspace Effects,
 //!   and the one keeper that reads and saves them all.
@@ -56,6 +59,7 @@ pub mod movie;
 pub mod pilot_move;
 pub mod platform;
 pub mod rulebook;
+pub mod ruleset;
 pub mod saves;
 pub mod settings;
 pub mod startup;
