@@ -719,25 +719,27 @@ fn a_repeat_of_a_fixed_key_but_the_arrows_does_nothing() {
 
 #[test]
 fn a_press_released_off_the_selected_row_or_from_the_bar_records_nothing() {
-    let mut dragged = screen();
-    let row = dragged.row_list().row_bounds(2).expect("shown");
     let press = |pressed, at| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
         at,
     };
+    let mut dragged = screen();
+    let row = dragged.row_list().row_bounds(2).expect("shown");
+    let beside = Point::new(bounds().max.x + 20.0, row.center().y);
     dragged.input(&press(true, center(row)));
-    dragged.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
-    dragged.input(&press(false, Point::new(1.0, 1.0)));
+    dragged.input(&Input::PointerMoved(beside));
+    dragged.input(&press(false, beside));
+    assert_eq!(dragged.row_list().selected(), Some(2), "still selected");
     assert_eq!(dragged.recording(), None, "released off the row");
     let mut screen = screen();
     let bar = screen.row_list().bar().expect("a bar");
+    screen.input(&press(true, Point::new(bar.center().x, bar.max.y - 3.0)));
     let selected = screen
         .row_list()
         .selected()
         .and_then(|row| screen.row_list().row_bounds(row))
         .expect("shown");
-    screen.input(&press(true, Point::new(bar.center().x, bar.max.y - 3.0)));
     screen.input(&Input::PointerMoved(center(selected)));
     screen.input(&press(false, center(selected)));
     assert_eq!(screen.recording(), None, "a press on the bar");
