@@ -207,6 +207,7 @@ mod decoded;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
+mod gate_stability;
 mod interface;
 pub mod order;
 mod ship_desc;
@@ -219,6 +220,7 @@ mod stellar_sprite;
 mod tests;
 mod walk;
 
+pub use self::gate_stability::GateStability;
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
@@ -371,6 +373,9 @@ pub struct GameData {
     /// What each ship or stellar with no sprite draws instead: the new
     /// game's ([`GameData::with_stand_ins`]); none in a stock store.
     stand_ins: BTreeMap<StandInOf, StandIn>,
+    /// Each jump point's own stability, by its gate's `spöb`: the new
+    /// game's ([`GameData::with_gate_stabilities`]); none in a stock store.
+    gate_stabilities: BTreeMap<crate::wire::id::StellarId, GateStability>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -422,6 +427,7 @@ impl GameData {
             tests: Mutex::default(),
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
+            gate_stabilities: BTreeMap::new(),
         })
     }
 

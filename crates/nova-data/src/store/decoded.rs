@@ -62,6 +62,7 @@ impl GameData {
             tests: Mutex::default(),
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
+            gate_stabilities: BTreeMap::new(),
         }
     }
 }

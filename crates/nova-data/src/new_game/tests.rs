@@ -1029,3 +1029,42 @@ fn a_start_in_a_ship_or_system_that_failed_to_load_is_left_out_unreported() {
         );
     }
 }
+
+#[test]
+fn each_gate_keeps_its_own_point_s_stability() {
+    let game = loaded(&with_a_drop());
+    let gate_of = |p: &str| StellarId(game.ids.gates[&point(p)]);
+    assert_eq!(
+        game.data.gate_stability(gate_of("gamma/drop")),
+        Some(crate::GateStability::Unstable)
+    );
+    assert_eq!(
+        game.data.gate_stability(gate_of("alpha/to-beta")),
+        Some(crate::GateStability::Stable)
+    );
+    assert_eq!(game.data.gate_stability(StellarId(128)), None, "a stellar");
+}
+
+#[test]
+fn the_fixture_s_gates_keep_their_points_stabilities() {
+    use crate::GateStability::{Dead, Stable, Unstable};
+    let game = open(&super::fixture::folder()).expect("the fixture lists");
+    let gate_of = |p: &str| StellarId(game.ids.gates[&point(p)]);
+    for (gate, stability) in [
+        ("drift/hearth-road", Stable),
+        ("drift/verge-road", Dead),
+        ("drift/back-door", Unstable),
+        ("hearth/verge-road", Stable),
+        ("hearth/side-road", Stable),
+        ("hearth/drift-road", Stable),
+        ("verge/hearth-road", Unstable),
+        ("verge/side-road", Stable),
+        ("verge/drift-road", Dead),
+    ] {
+        assert_eq!(
+            game.data.gate_stability(gate_of(gate)),
+            Some(stability),
+            "{gate}"
+        );
+    }
+}

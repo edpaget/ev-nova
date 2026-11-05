@@ -26,6 +26,7 @@
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
 //! | a system's `jump_points` | a gate stand-in ([`looks`]) | a grey ring |
+//! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
 //!
 //! A jump point is a hypergate with one link, to its partner's gate: the
 //! original comes out at the linked `spöb` itself, so the partner is
@@ -73,8 +74,10 @@
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - A jump point's `stability`: unstable and dead points are travelled as
-//!   stable ones until `play-the-sample` phase 1.
+//! - A jump point's `stability` in travel: the store keeps it
+//!   ([`GameData::gate_stability`]) and the map draws it, but unstable and
+//!   dead points are travelled as stable ones until `play-the-sample`
+//!   phase 1.
 //! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
 //!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
 //!   A livery's `decals` aren't drawn.
@@ -175,8 +178,11 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     } = map(&galaxy);
     problems.extend(mapping);
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
+    let stabilities = gates::stabilities(&galaxy, &ids.gates);
     NewGame {
-        data: GameData::from_decoded(dir.to_path_buf(), records).with_stand_ins(stand_ins),
+        data: GameData::from_decoded(dir.to_path_buf(), records)
+            .with_stand_ins(stand_ins)
+            .with_gate_stabilities(stabilities),
         ids,
         problems,
         lfs_pointers,
