@@ -31,6 +31,8 @@ encoding_rs.workspace = true
 # The format's small test galaxy (`fixture::galaxy`), broken one file at a
 # time by the adapter's tests.
 nova-galaxy-format = { workspace = true, features = ["fixture"] }
+# The test models (`fixture::glb`), built in code: no art is checked in.
+nova-galaxy-media = { workspace = true, features = ["fixture"] }
 # Synthetic forks for the decode-file and wiring tests.
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # Integration tests build synthetic pictures, sprites and sounds with the

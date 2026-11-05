@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use nova_data::new_game::fleet::PX_PER_METRE;
 use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
@@ -17,7 +18,11 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::{Stellar, flags2};
 use nova_data::records::system::System;
 use nova_data::store::GameData;
-use nova_data::{GovtId, Record, Registered, ShipId, StellarId, SystemId, new_game};
+use nova_data::{
+    GovtId, Record, Registered, ShipId, StandIn, StandInOf, StellarId, SystemId, new_game,
+};
+use nova_galaxy_format::fleet::Size;
+use nova_galaxy_media::BARE;
 
 /// The checked-in fixture (`new_game::fixture::folder`): one region; the
 /// factions `guild` and `warden`; the systems `drift` (jump points alone),
@@ -214,6 +219,67 @@ fn each_hull_is_a_ship_with_its_size_and_the_civilian_one_is_traffic() {
     assert_eq!(name, "Civilian traffic");
     assert_eq!(dude.ship_type[..2], [Some(ShipId(129)), None]);
     assert_eq!(dude.ai_type, 1);
+}
+
+/// The size box `beam` by `length` metres, at `PX_PER_METRE`, in `color`.
+fn size_box(length: f64, beam: f64, color: [u8; 3]) -> StandIn {
+    let size = Size {
+        length,
+        beam,
+        collision_radius: 0.0,
+    };
+    StandIn::Outline(nova_galaxy_media::size_box(size, color).scaled(PX_PER_METRE))
+}
+
+#[test]
+fn each_hull_draws_as_its_size_box_on_its_placeholder_model() {
+    // Both hulls show `hauler-model`, a placeholder with no files.
+    let game = new_game::open(&fixture()).expect("lists");
+    let ship = |nova| game.data.stand_in(StandInOf::Ship(ShipId(nova))).cloned();
+    assert_eq!(
+        ship(129),
+        Some(size_box(30.0, 12.0, [0xc0, 0x80, 0x40])),
+        "the hauler in guild paint"
+    );
+    assert_eq!(
+        ship(128),
+        Some(size_box(24.0, 10.0, BARE)),
+        "the cutter, bare"
+    );
+}
+
+#[test]
+fn each_stellar_draws_as_a_disc_and_each_gate_as_a_ring() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let stellar = |id: &str| {
+        let nova =
+            game.ids.stellars[&nova_galaxy_format::id::Id::try_from(id.to_owned()).expect("an id")];
+        game.data
+            .stand_in(StandInOf::Stellar(StellarId(nova)))
+            .cloned()
+    };
+    assert_eq!(
+        stellar("hearth-dock"),
+        Some(StandIn::Disc {
+            color: [0xc0, 0x80, 0x40]
+        }),
+        "in the guild's colour"
+    );
+    assert_eq!(stellar("hearth-moon"), Some(StandIn::Disc { color: BARE }));
+    assert_eq!(
+        stellar("verge-camp"),
+        Some(StandIn::Disc {
+            color: [0x33, 0x66, 0xcc]
+        }),
+        "in the wardens' colour"
+    );
+    assert!(!game.ids.gates.is_empty());
+    for &nova in game.ids.gates.values() {
+        assert_eq!(
+            game.data.stand_in(StandInOf::Stellar(StellarId(nova))),
+            Some(&StandIn::Ring { color: BARE })
+        );
+    }
 }
 
 #[test]

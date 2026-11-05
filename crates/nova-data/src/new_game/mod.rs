@@ -23,6 +23,9 @@
 //! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
+//! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
+//! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
+//! | a system's `jump_points` | a gate stand-in ([`looks`]) | a grey ring |
 //!
 //! A jump point is a hypergate with one link, to its partner's gate: the
 //! original comes out at the linked `spöb` itself, so the partner is
@@ -33,6 +36,11 @@
 //!
 //! The body is kept as written: Markdown isn't rendered, and its line
 //! breaks stay line breaks.
+//!
+//! The bible has models, not sprites, so nothing names a sprite: each hull,
+//! stellar and gate draws as its stand-in, kept on the store
+//! ([`GameData::stand_in`]) and read from the media through the same
+//! [`Source`].
 //!
 //! # Problems
 //!
@@ -51,6 +59,10 @@
 //! - A start whose ship is no hull, or whose system isn't there, is left
 //!   out.
 //! - A record past its kind's ID range is left out.
+//! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
+//!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
+//!   box or its disc; an asset whose model file doesn't decode is reported
+//!   once, against the asset ([`looks`]).
 //!
 //! A reference to a file that failed to load, or to a record left out for
 //! its ID, isn't reported again; a stellar in such a system is left out
@@ -65,19 +77,18 @@
 //!   stable ones until `play-the-sample` phase 1.
 //! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
 //!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
-//!   `liveries/` and a hull's `model` wait for
-//!   `phase-4-draw-flat-outlines`; until then ships draw as the view's
-//!   crossed box.
+//!   A livery's `decals` aren't drawn.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date.
 //! - `storylines/`, `missions/`, `news/`, `characters/`, `dialog/`: they
 //!   belong to `engine-story`.
-//! - `assets/`, `budgets/`: tooling (art budgets and provenance). Only the
-//!   export media paths are read, for the LFS report
-//!   ([`NewGame::lfs_pointers`]).
-//! - A stellar's `visual` and a faction's `kind`: Nova has nothing like
-//!   them yet (the planet shader and 3D come with `engine-3d`).
+//! - `budgets/` and an asset's provenance: tooling. An asset's models are
+//!   read for the stand-ins ([`looks`]), and the export media paths for the
+//!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.
+//! - A stellar's generated look beyond its first colour, and a faction's
+//!   `kind`: Nova has nothing like them yet (the planet shader and 3D come
+//!   with `engine-3d`).
 //! - Commodity prices: a trade centre's price levels (the upper `Flags`
 //!   bits) stay unset, so it trades nothing until the bible prices goods.
 //!
@@ -89,6 +100,7 @@ pub mod fixture;
 pub mod fleet;
 pub mod gates;
 pub mod ids;
+pub mod looks;
 mod map;
 pub mod records;
 #[cfg(test)]
@@ -117,8 +129,10 @@ pub struct NewGame {
     /// each against its file. The data holds what loaded.
     pub problems: Vec<Problem>,
     /// The export media the asset manifest names that are Git LFS
-    /// pointers, not the files: the checkout hasn't fetched them. Nothing
-    /// reads media yet, so they don't stop anything.
+    /// pointers, not the files: the checkout hasn't fetched them. A model
+    /// that is a pointer draws as its hull's size box or its stellar's
+    /// disc, so they don't stop anything, and they aren't reported again
+    /// among the problems.
     pub lfs_pointers: Vec<String>,
 }
 
@@ -146,7 +160,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 }
 
 /// Loads the new game's data from `source`, read from the folder `dir`:
-/// the format's loader, the LFS check over its media, then the mapping.
+/// the format's loader, the LFS check over its media, the mapping, then
+/// the stand-ins ([`looks`]), whose models are read from `source` too.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let lfs_pointers = lfs_pointers(&galaxy, source)
@@ -159,8 +174,9 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         problems: mapping,
     } = map(&galaxy);
     problems.extend(mapping);
+    let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
     NewGame {
-        data: GameData::from_decoded(dir.to_path_buf(), records),
+        data: GameData::from_decoded(dir.to_path_buf(), records).with_stand_ins(stand_ins),
         ids,
         problems,
         lfs_pointers,

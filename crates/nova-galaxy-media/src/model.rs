@@ -174,8 +174,9 @@ pub enum NoModel {
     /// Its model file is a Git LFS pointer: the checkout hasn't fetched
     /// it.
     Pointer,
-    /// Its model file is missing or doesn't read as a model; why, naming
-    /// the file.
+    /// Its model file, at this path, isn't there.
+    Missing(String),
+    /// Its model file doesn't read as a model; why, naming the file.
     Unreadable(String),
 }
 
@@ -196,7 +197,7 @@ pub fn read_model(source: &impl Source, asset: &Asset) -> Result<(Model, Front),
             Ok(Some(bytes)) if is_lfs_pointer(&bytes) => Err(NoModel::Pointer),
             Ok(Some(bytes)) => model(path, &bytes, |p| source.bytes(p).ok().flatten())
                 .map_err(|e| NoModel::Unreadable(format!("`{path}`: {e}"))),
-            Ok(None) => Err(NoModel::Unreadable(format!("`{path}` does not exist"))),
+            Ok(None) => Err(NoModel::Missing(path.to_owned())),
             Err(e) => Err(NoModel::Unreadable(format!("`{path}`: {e}"))),
         };
         match read {
@@ -438,13 +439,11 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_model_is_unreadable_naming_its_file() {
+    fn a_missing_model_is_missing_naming_its_file() {
         let asset = asset(&["media/export/p/a.glb"], "+z");
         assert_eq!(
             read_model(&MemSource::default(), &asset),
-            Err(NoModel::Unreadable(
-                "`media/export/p/a.glb` does not exist".into()
-            ))
+            Err(NoModel::Missing("media/export/p/a.glb".into()))
         );
     }
 

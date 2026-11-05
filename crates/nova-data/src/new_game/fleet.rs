@@ -15,8 +15,8 @@
 //! - **Size** ([`ship_anim`]). A hull's `shän` sets only `BaseXSize`
 //!   (the beam) and `BaseYSize` (the length), in pixels at
 //!   [`PX_PER_METRE`]: the simulation collides and hovers at that size.
-//!   It names no sprite, so the view draws the hull as its crossed box
-//!   until `phase-4-draw-flat-outlines` draws outlines.
+//!   It names no sprite: the view draws the hull's stand-in, its model
+//!   from above or its size box at the same scale ([`super::looks`]).
 //! - **Traffic** ([`civilian_traffic`]). One `düde`,
 //!   [`CIVILIAN_DUDE`], "Civilian traffic":
 //!   every hull of `style: civilian`, at even odds, flown as wimpy traders
