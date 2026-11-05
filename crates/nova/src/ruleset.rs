@@ -10,13 +10,24 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! the three keys its traffic needs, where a jump point's gate is the
-//! only way in or out of a system: [`RuleKey::DestinationReach`] (its
-//! jump points sit past the original's 999 bound),
-//! [`RuleKey::ArrivalsThroughGates`] (every arrival with a usable gate
-//! comes out of one) and [`RuleKey::DeparturesThroughGates`] (a ship with
-//! nowhere left to go leaves through a gate). A settings
-//! `"rule_overrides"` entry still moves each.
+//! seven keys, as a jump point's gate is the only way in or out of a
+//! system:
+//!
+//! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
+//!   jump points sit past the original's 999 bound),
+//!   [`RuleKey::ArrivalsThroughGates`] (every arrival with a usable gate
+//!   comes out of one) and [`RuleKey::DeparturesThroughGates`] (a ship
+//!   with nowhere left to go leaves through a gate);
+//! - the four its map and courses need: [`RuleKey::GateLanes`] (every
+//!   link reader reads the jump points' gate lanes, and J never makes a
+//!   hyperspace jump), [`RuleKey::MapLinkPairing`] (a one-way lane only
+//!   the higher-ID system lists is still drawn),
+//!   [`RuleKey::MapLaneStyle`] (each lane drawn in its stability's look,
+//!   one-way lanes arrowed) and [`RuleKey::GateCourse`] (a gate taken
+//!   along the course keeps the rest of it).
+//!
+//! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
+//! hop at a time. A settings `"rule_overrides"` entry still moves each.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -52,13 +63,17 @@ const STOCK: Profile = Profile {
     pilots: PILOTS_DIR,
 };
 
-/// The new game's profile: its traffic's three gate readings (see the
-/// module docs), and pilots of its own.
+/// The new game's profile: its traffic's three gate readings and its map
+/// and courses' four (see the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
         (RuleKey::ArrivalsThroughGates, RuleSource::Bible),
         (RuleKey::DeparturesThroughGates, RuleSource::Bible),
+        (RuleKey::GateLanes, RuleSource::Bible),
+        (RuleKey::MapLinkPairing, RuleSource::Bible),
+        (RuleKey::MapLaneStyle, RuleSource::Bible),
+        (RuleKey::GateCourse, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -125,13 +140,17 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_three_gate_keys() {
+    fn the_new_game_pins_the_other_reading_of_its_seven_gate_lane_and_map_keys() {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
             [
                 (RuleKey::DestinationReach, RuleSource::Bible),
                 (RuleKey::ArrivalsThroughGates, RuleSource::Bible),
                 (RuleKey::DeparturesThroughGates, RuleSource::Bible),
+                (RuleKey::GateLanes, RuleSource::Bible),
+                (RuleKey::MapLinkPairing, RuleSource::Bible),
+                (RuleKey::MapLaneStyle, RuleSource::Bible),
+                (RuleKey::GateCourse, RuleSource::Bible),
             ]
         );
     }
