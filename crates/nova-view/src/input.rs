@@ -203,7 +203,12 @@ pub enum Input {
     },
     /// A printable character was typed, as the keyboard's layout and
     /// modifiers make it. It follows the [`Input::Key`] press that typed
-    /// it; only text entry acts on it, and every other screen ignores it.
+    /// it. Text entry acts on it, and so does the mission offer
+    /// ([`crate::spaceport::offer`]), which picks a button from the
+    /// character as `_SingleMissionFilter` does, but only from the
+    /// character a fresh press typed, never a repeat's. Every other screen
+    /// ignores it, so an adapter delivers it straight after its press,
+    /// outside text fields too, never dropping or delaying it.
     Text(char),
     /// The pointer moved to a point in the logical space.
     PointerMoved(Point),
