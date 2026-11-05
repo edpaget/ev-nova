@@ -870,9 +870,10 @@ pub struct MissionInfoScreen {
     /// What a replay queued after the key or click that closed it, until
     /// taken ([`MissionInfoScreen::take_unclaimed`]).
     unclaimed: Vec<Input>,
-    /// What a replay queued after an abort, until the info handed back
-    /// after it ([`MissionInfoScreen::set_info`]) or the next tick runs
-    /// it.
+    /// What a replay queued after an abort, and the inputs since, until
+    /// the info handed back after it ([`MissionInfoScreen::set_info`])
+    /// or, once the abort was taken with none handed back, the next tick
+    /// runs them.
     after_abort: Vec<Input>,
 }
 
@@ -1183,8 +1184,8 @@ impl MissionInfoScreen {
     }
 
     /// Runs what an abort's replay left, if anything: after the info
-    /// handed back, or on the next tick when none came (a refused abort,
-    /// @0x9e583).
+    /// handed back, or on a tick once the abort was taken with none
+    /// handed back (a refused abort, @0x9e583).
     fn run_after_abort(&mut self) {
         let rest = std::mem::take(&mut self.after_abort);
         self.run_inputs(rest);
@@ -1193,9 +1194,13 @@ impl MissionInfoScreen {
     /// Runs `inputs` through [`Self::own_input`], in order, until a close,
     /// whose rest goes to what is beneath ([`Self::take_unclaimed`]); M
     /// opening the map, whose flush drops the rest; or an abort, whose rest
-    /// waits for the info handed back after it. See the `mission_keys`
-    /// module.
-    fn run_inputs(&mut self, inputs: Vec<Input>) {
+    /// waits for the info handed back after it. While an abort's rest
+    /// waits, `inputs` wait behind it. See the `mission_keys` module.
+    fn run_inputs(&mut self, mut inputs: Vec<Input>) {
+        if !self.after_abort.is_empty() {
+            self.after_abort.append(&mut inputs);
+            return;
+        }
         match mission_keys::run_replay(self, inputs, Self::stops, Self::own_input) {
             Some((Rest::Unclaimed, mut rest)) => self.unclaimed.append(&mut rest),
             Some((Rest::Answer, mut rest)) => self.after_abort.append(&mut rest),
@@ -1239,24 +1244,33 @@ impl Screen for MissionInfoScreen {
     /// While a press is held on the list, its bar or a button, keys wait
     /// for the release, as `LClick` and `_TrackMissionInfoButtons` read no
     /// events, and the release runs them in order within the same input.
-    /// See the `mission_keys` module.
+    /// See the `mission_keys` module. While an abort's rest waits for its
+    /// answer, the input waits behind it.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        self.own_input(input);
+        if self.after_abort.is_empty() {
+            self.own_input(input);
+        } else {
+            self.after_abort.push(*input);
+        }
         self.run_replay();
         ScreenAction::None
     }
 
     /// A press held on the list's bar steps on, and a drag past its ends
-    /// scrolls on. The keys a cancelled press held back run then, and an
-    /// abort's rest that no info handed back has run, so a tick can close
-    /// the screen.
+    /// scrolls on. An abort's rest runs once the abort was taken with no
+    /// info handed back (refused), then the keys a cancelled press held
+    /// back, so a tick can close the screen. An abort they raise keeps
+    /// its rest until the host takes it and answers: the host answers
+    /// after an input, not a tick.
     fn tick(&mut self, dt: Duration) {
         if let Ok(laid) = &mut self.laid {
             laid.rows.tick(dt);
             laid.dialog.tick(dt);
         }
+        if self.abort.is_none() {
+            self.run_after_abort();
+        }
         self.run_replay();
-        self.run_after_abort();
     }
 
     fn draw(&self, list: &mut DrawList) {

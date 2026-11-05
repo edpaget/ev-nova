@@ -50,7 +50,10 @@
 //!     (@0x99a92-0x99bdc), and rebuilds the list (@0x9e5e6-0x9e6d8): the
 //!     rest waits for the host's abort and runs on the rebuilt list
 //!     ([`MissionInfoScreen::set_info`]). A refused abort skips everything
-//!     (@0x9e583), and the next tick runs the rest.
+//!     (@0x9e583), and the next tick after the host took it runs the
+//!     rest. Inputs that come while the rest waits wait behind it, so an
+//!     abort a tick's replay raised, which the host answers only after
+//!     the next input, keeps its rest and that input for the answer.
 //!
 //! A press the router cancels keeps its keys for the next tick, which
 //! runs them. Neither the trackers, `clickScan` nor the paths above play a
@@ -466,6 +469,74 @@ mod tests {
     fn keys_held_after_a_refused_abort_run_on_the_next_tick() {
         let mut screen = info();
         abort_holding_down(&mut screen);
+        assert_eq!(screen.take_abort(), Some(0));
+        screen.tick(mac_ticks(1));
+        assert_eq!(info_selected(&screen), Some(1), "@0x9e583");
+    }
+
+    /// A press on the first row holding Tab, Tab and Space (Abort, by the
+    /// focus ring, slot 0 selected), then `rest`, which the router cancels:
+    /// the next tick replays them.
+    fn abort_held_and_cancelled(screen: &mut MissionInfoScreen, rest: &[Input]) {
+        screen.input(&button(true, info_row_at(0.0)));
+        for input in [key(Key::Tab), key(Key::Tab), key(Key::Space)]
+            .iter()
+            .chain(rest)
+        {
+            screen.input(input);
+        }
+        screen.cancel_pointer();
+    }
+
+    #[test]
+    fn an_abort_a_tick_replays_keeps_its_rest_until_the_answer() {
+        let mut screen = info();
+        abort_held_and_cancelled(&mut screen, &[key(Key::Escape)]);
+        screen.tick(mac_ticks(1));
+        screen.tick(mac_ticks(1));
+        assert!(!screen.closed(), "the Escape waits for the answer");
+        assert!(screen.holds_back_keys());
+        assert_eq!(screen.take_abort(), Some(0), "still unread");
+    }
+
+    #[test]
+    fn keys_after_an_abort_a_tick_replays_run_on_the_info_set_after_it() {
+        let mut screen = info();
+        abort_held_and_cancelled(&mut screen, &[key(Key::Down)]);
+        screen.tick(mac_ticks(1));
+        assert_eq!(info_selected(&screen), Some(0), "the Down waits");
+        let _ = screen.take_text_request();
+        assert_eq!(screen.take_abort(), Some(0));
+        screen.set_info(after_abort());
+        assert_eq!(
+            info_selected(&screen),
+            Some(0),
+            "nothing selected after the abort, then Down takes the first"
+        );
+        assert_eq!(screen.take_text_request(), Some(1), "slot 1's");
+    }
+
+    #[test]
+    fn input_after_an_abort_a_tick_replays_waits_behind_its_rest() {
+        let mut screen = info();
+        abort_held_and_cancelled(&mut screen, &[key(Key::Down)]);
+        screen.tick(mac_ticks(1));
+        screen.input(&key(Key::Down));
+        assert_eq!(info_selected(&screen), Some(0), "both Downs wait");
+        assert_eq!(screen.take_abort(), Some(0));
+        screen.set_info(after_abort());
+        assert_eq!(
+            info_selected(&screen),
+            Some(1),
+            "the rest's Down takes the first, then the input's the second"
+        );
+    }
+
+    #[test]
+    fn a_refused_abort_a_tick_replays_runs_its_rest_on_the_tick_after_the_refusal() {
+        let mut screen = info();
+        abort_held_and_cancelled(&mut screen, &[key(Key::Down)]);
+        screen.tick(mac_ticks(1));
         assert_eq!(screen.take_abort(), Some(0));
         screen.tick(mac_ticks(1));
         assert_eq!(info_selected(&screen), Some(1), "@0x9e583");

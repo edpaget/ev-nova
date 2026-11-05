@@ -1266,6 +1266,40 @@ mod tests {
     }
 
     #[test]
+    fn an_abort_a_tick_replays_keeps_a_close_after_it_until_the_answer() {
+        let mut two = info();
+        two.rows.push(InfoRow {
+            slot: 5,
+            name: "Walk".to_owned(),
+            failed: false,
+            text: "Stroll.".to_owned(),
+            abortable: false,
+        });
+        let mut dialogs = dialogs();
+        dialogs.open_info(two.clone());
+        held_on_info(
+            &mut dialogs,
+            &[
+                key(Key::Tab),
+                key(Key::Tab),
+                key(Key::Space),
+                key(Key::Escape),
+            ],
+        );
+        dialogs.cancel_pointer();
+        dialogs.tick(Duration::ZERO);
+        assert!(dialogs.info().is_some(), "the Escape waits for the answer");
+        assert_eq!(dialogs.take_abort(), Some(2));
+        two.rows.remove(0);
+        dialogs.set_info(two);
+        assert!(
+            dialogs.info().is_none(),
+            "the Escape ran on the rebuilt list"
+        );
+        assert!(dialogs.take_info_closed());
+    }
+
+    #[test]
     fn texts_show_one_after_another_and_close_on_done() {
         let mut dialogs = dialogs();
         assert!(!dialogs.is_open());
