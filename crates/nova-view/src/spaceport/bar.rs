@@ -387,6 +387,9 @@ impl BarScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_bindings(bindings.clone());
         }
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
         self.keys.set_bindings(bindings);
         self
     }
@@ -557,7 +560,9 @@ impl BarScreen {
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
             offering: Some(
-                VenueOffers::waiting(templates, FIRST_OFFER_DELAY).with_focus_ring(self.focus_ring),
+                VenueOffers::waiting(templates, FIRST_OFFER_DELAY)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.keys.bindings().clone()),
             ),
             ..self
         }

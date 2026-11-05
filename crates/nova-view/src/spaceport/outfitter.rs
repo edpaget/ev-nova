@@ -646,6 +646,9 @@ impl OutfitterScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_bindings(bindings.clone());
         }
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
         self.quantity.set_bindings(bindings);
         self
     }
@@ -657,7 +660,11 @@ impl OutfitterScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
+            offering: Some(
+                VenueOffers::asking(templates)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.quantity.bindings().clone()),
+            ),
             ..self
         }
     }

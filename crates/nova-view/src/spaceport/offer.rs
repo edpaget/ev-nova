@@ -69,8 +69,10 @@
 //! and so flushes nothing, with no mission listed
 //! ([`OfferDialog::set_missions_listed`]). See the `held_keys` module.
 //!
-//! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept (the
-//! characters 0x0D and 0x03, @0x98e62-0x98e6e). The labels' letters are
+//! Keys (`_SingleMissionFilter` @0x98d9a), read through the key map
+//! ([`contexts::OFFER`]): Return and Enter accept (the shared Confirm,
+//! Enter its twin; the characters 0x0D and 0x03, @0x98e62-0x98e6e). The
+//! labels' letters are
 //! read from the character typed ([`Input::Text`]), as the filter folds the
 //! event's character with `tolower` (@0x98e4a-0x98eea), not from the key
 //! that typed it, and only from a press's, never a repeat's, as it takes
@@ -80,7 +82,7 @@
 //! its key's press, which the dialog notes; a press the map, player info
 //! or mission info key took types nothing it reads. Escape does nothing. Up and Down scroll the text 10 px, repeats
 //! included, and Home, End, Page Up and Page Down as the text dialog's do
-//! (`ui::desc`'s `page_key`), on the press alone by the user's
+//! (`ui::desc`'s `page_command`), on the press alone by the user's
 //! standing decision, though the filter reads auto-key too
 //! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
@@ -149,19 +151,19 @@ use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::is_map_press;
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts, is_modifier_input,
+};
 use crate::movie::{MovieStage, Movies};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_key, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_command, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
-use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
-use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_shrink::{shrink_after_placing, wrapped_height};
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
@@ -300,6 +302,10 @@ pub struct OfferDialog {
     letter_pressed: bool,
     /// Its close: hidden, waiting or disposed of (the `close` module).
     close: close::Close,
+    /// Its keys, as commands ([`contexts::OFFER`]), followed as its own
+    /// input takes them: after the movie and the dialog's held keys
+    /// replay them.
+    keys: CommandReader,
 }
 
 impl OfferDialog {
@@ -383,7 +389,18 @@ impl OfferDialog {
             close: close::Close::default(),
             missions_listed: true,
             letter_pressed: false,
+            keys: CommandReader::new(contexts::OFFER),
         }
+    }
+
+    /// This dialog reading its keys through `bindings`, its dialog's too.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(dialog) = &mut self.laid {
+            dialog.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// This dialog told whether the mission info screen lists a mission
@@ -617,27 +634,32 @@ impl OfferDialog {
             return;
         }
         let letter_pressed = std::mem::take(&mut self.letter_pressed);
-        if is_map_press(input) {
-            self.asks.map = true;
-            return;
-        }
-        if is_player_info_press(input) {
-            self.asks.player_info = true;
-            return;
-        }
-        if is_mission_info_press(input) {
-            self.asks.mission_info |= self.missions_listed;
-            return;
-        }
-        match *input {
-            Input::Key {
-                key: Key::Enter | Key::NumpadEnter,
-                pressed: true,
-                repeat: false,
-            } => {
+        let command = self.keys.follow(input);
+        let fresh = command
+            .filter(|command| command.pressed && !command.repeat)
+            .map(|command| command.command);
+        match fresh {
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
+                self.asks.map = true;
+                return;
+            }
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
+                self.asks.player_info = true;
+                return;
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
+                self.asks.mission_info |= self.missions_listed;
+                return;
+            }
+            Some(Command::Ui(UiCommand::Confirm)) => {
                 self.choose(OfferChoice::Accept);
                 return;
             }
+            _ => {}
+        }
+        match *input {
+            // Any other key's press: the character it types, which
+            // follows, is a `keyDown`'s.
             Input::Key {
                 pressed: true,
                 repeat: false,
@@ -654,9 +676,10 @@ impl OfferDialog {
         let Ok(dialog) = &mut self.laid else {
             return;
         };
-        if dialog
-            .scroll_text_mut()
-            .is_some_and(|text| page_key(text, input))
+        if let Some(command) = command
+            && dialog
+                .scroll_text_mut()
+                .is_some_and(|text| page_command(text, command))
         {
             return;
         }
@@ -822,6 +845,8 @@ pub(crate) struct VenueOffers {
     /// What the answered dialog's replay queued after its answering key
     /// ([`OfferDialog::take_unclaimed`]), until taken.
     unclaimed: Vec<Input>,
+    /// The bindings each offer dialog opened reads its keys through.
+    bindings: SharedBindings,
 }
 
 impl VenueOffers {
@@ -842,7 +867,25 @@ impl VenueOffers {
             since_ask: Duration::ZERO,
             restarted: false,
             unclaimed: Vec::new(),
+            bindings: SharedBindings::default(),
         }
+    }
+
+    /// These offers' dialogs reading their keys through `bindings`
+    /// ([`VenueOffers::set_bindings`]).
+    #[must_use]
+    pub(crate) fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Hands `bindings` to the offer dialog open, and to each opened
+    /// after it.
+    pub(crate) fn set_bindings(&mut self, bindings: SharedBindings) {
+        if let Some(dialog) = self.dialog.take() {
+            self.dialog = Some(dialog.with_bindings(bindings.clone()));
+        }
+        self.bindings = bindings;
     }
 
     /// These offers with their timer running as `clock` reads
@@ -906,6 +949,7 @@ impl VenueOffers {
         self.dialog = Some(
             OfferDialog::new(layout, prompt, style)
                 .with_focus_ring(self.focus_ring)
+                .with_bindings(self.bindings.clone())
                 .with_movies(&self.movies),
         );
     }
@@ -1127,21 +1171,7 @@ impl VenueOffers {
 /// event for.
 fn queues_an_event(input: &Input) -> bool {
     match *input {
-        Input::Key { key, pressed, .. } => {
-            pressed
-                && !matches!(
-                    key,
-                    Key::AltLeft
-                        | Key::AltRight
-                        | Key::ControlLeft
-                        | Key::ControlRight
-                        | Key::ShiftLeft
-                        | Key::ShiftRight
-                        | Key::MetaLeft
-                        | Key::MetaRight
-                        | Key::CapsLock
-                )
-        }
+        Input::Key { pressed, .. } => pressed && !is_modifier_input(input),
         _ => true,
     }
 }
@@ -1287,7 +1317,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::spaceport::offer_buttons::{LABEL_FONT, LABEL_PADDING, LABEL_SIZE};
@@ -1543,6 +1573,28 @@ mod tests {
         assert_eq!(dialog.take_choice(), None, "answered already");
         let mut dialog = offer();
         click_item(&mut dialog, ACCEPT_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    /// The offer reads its keys through the key map it is given: Confirm
+    /// rebound to F1 accepts on F1 and no longer on Return, and Mission
+    /// Info rebound to F2 asks on F2 and no longer on I.
+    #[test]
+    fn a_rebound_confirm_and_mission_info_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Confirm, KeyCombo::key(Key::F1))
+                .rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::F2)),
+        );
+        let mut dialog = offer().with_bindings(bindings);
+        dialog.input(&key(Key::KeyI));
+        assert!(!dialog.take_info_request(), "I no longer asks");
+        dialog.input(&key(Key::F2));
+        assert!(dialog.take_info_request());
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), None, "Return no longer accepts");
+        dialog.input(&key(Key::F1));
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 

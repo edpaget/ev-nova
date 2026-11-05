@@ -129,30 +129,6 @@ pub(crate) fn page_command(text: &mut ScrollText, input: CommandInput) -> bool {
     true
 }
 
-/// [`page_command`] for a key's `input`, as the default key map reads it:
-/// for the mission offer, until it reads its keys through the key map
-/// itself (rdm:phase/key-bindings/phase-2-command-key-map's step 4).
-pub(crate) fn page_key(text: &mut ScrollText, input: &Input) -> bool {
-    let Input::Key {
-        pressed, repeat, ..
-    } = *input
-    else {
-        return false;
-    };
-    CommandReader::new(contexts::DESC)
-        .peek(input)
-        .is_some_and(|command| {
-            page_command(
-                text,
-                CommandInput {
-                    command,
-                    pressed,
-                    repeat,
-                },
-            )
-        })
-}
-
 /// The description's font, which both lays it out and measures it for
 /// the shrink.
 pub const BODY_FONT: Font = Font::Geneva;

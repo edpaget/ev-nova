@@ -1141,6 +1141,9 @@ impl ShipyardScreen {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_bindings(bindings.clone());
         }
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
         self.keys.set_bindings(bindings);
         self
     }
@@ -1152,7 +1155,11 @@ impl ShipyardScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
+            offering: Some(
+                VenueOffers::asking(templates)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.keys.bindings().clone()),
+            ),
             ..self
         }
     }

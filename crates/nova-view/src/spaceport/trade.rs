@@ -357,6 +357,9 @@ impl TradeScreen {
             laid.dialog.set_bindings(bindings.clone());
         }
         self.quantity.set_bindings(bindings.clone());
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
         self.keys.set_bindings(bindings);
         self
     }
@@ -381,7 +384,11 @@ impl TradeScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
+            offering: Some(
+                VenueOffers::asking(templates)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.keys.bindings().clone()),
+            ),
             ..self
         }
     }
@@ -2711,6 +2718,28 @@ mod tests {
     /// The trade center, its offers given.
     fn offering() -> TradeScreen {
         screen().with_offers(offer_templates())
+    }
+
+    /// The exchange hands its bindings to the offer it opens, given before
+    /// or after its offers: Confirm rebound to F1 accepts on F1 alone.
+    #[test]
+    fn its_offer_reads_the_bindings_the_exchange_was_given() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F1)),
+        );
+        for mut screen in [
+            offering().with_bindings(bindings.clone()),
+            screen()
+                .with_bindings(bindings.clone())
+                .with_offers(offer_templates()),
+        ] {
+            screen.open_offer(prompt());
+            screen.input(&key(Key::Enter, true, false));
+            assert!(screen.take_offer_choice().is_none(), "Return no longer");
+            screen.input(&key(Key::F1, true, false));
+            assert!(screen.take_offer_choice().is_some(), "F1 accepts");
+        }
     }
 
     /// Wiring: the exchange reads its offers' readout
