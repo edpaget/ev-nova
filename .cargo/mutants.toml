@@ -763,4 +763,7 @@ exclude_re = [
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
+    # The heaviest-class fold's `mass > heaviest`: `>=` also takes a mass
+    # equal to the heaviest so far, which leaves the same value.
+    "nova-sim-ai/src/ai/candidates\\.rs:[0-9]+:[0-9]+: replace > with >= in nearest$",
 ]
