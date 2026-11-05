@@ -100,6 +100,7 @@ use crate::catalog::{GovtId, NebulaId, SystemId};
 use crate::flight::facing;
 use crate::geometry::Vec2;
 use crate::iff::SystemColorCode;
+use crate::map_lanes::{LaneLook, lane_look};
 use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
 use crate::trig::intercept_angle;
@@ -219,6 +220,12 @@ pub struct MapDrawing {
     /// The systems that may be named, by ascending ID: every visible,
     /// explored one.
     pub named: Vec<SystemId>,
+    /// How each link of [`current_links`](Self::current_links), then of
+    /// [`links`](Self::links), looks, one each in that order, by
+    /// [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)'s other
+    /// reading ([`map_lanes`](crate::map_lanes)); empty by the engine's,
+    /// which draws every link grey.
+    pub lanes: Vec<LaneLook>,
 }
 
 /// What the galaxy map's model shows of the galaxy as overlaid, as plain
@@ -317,6 +324,8 @@ pub struct MapState<'a> {
     pub multi_arrows: bool,
     /// How links are paired ([`RuleKey::MapLinkPairing`](crate::RuleKey::MapLinkPairing)).
     pub pairing: RuleSource,
+    /// How links look ([`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle)).
+    pub lane_style: RuleSource,
 }
 
 impl MapState<'_> {
@@ -370,7 +379,7 @@ pub fn draw_map(
             .filter_map(|pair| Some((pair[0]?, pair[1]?)))
             .collect()
     };
-    let current_links = state
+    let current_links: Vec<(SystemId, SystemId)> = state
         .slots(current)
         .filter_map(|slot| state.resolve(slot))
         .map(|to| (current, to))
@@ -430,6 +439,15 @@ pub fn draw_map(
         .catalog_systems()
         .filter(|&id| galaxy.visible(id) && state.explored.contains(&id))
         .collect();
+    let lanes = match state.lane_style {
+        RuleSource::Engine => Vec::new(),
+        RuleSource::Bible => current_links
+            .iter()
+            .copied()
+            .chain(links.iter().map(|link| (link.from, link.to)))
+            .map(|(from, to)| lane_look(galaxy, from, to))
+            .collect(),
+    };
     MapDrawing {
         hypergate: state.hypergate.is_some(),
         course,
@@ -443,6 +461,7 @@ pub fn draw_map(
             .map(<[SystemId]>::to_vec)
             .unwrap_or_default(),
         named,
+        lanes,
     }
 }
 
@@ -486,6 +505,7 @@ mod tests {
             green: None,
             multi_arrows: true,
             pairing: RuleSource::Engine,
+            lane_style: RuleSource::Engine,
         }
     }
 

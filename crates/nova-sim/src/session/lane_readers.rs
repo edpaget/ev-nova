@@ -275,3 +275,26 @@ fn by_the_lanes_j_toward_a_lane_neighbour_refuses_silently_with_no_pre_jump() {
     assert_eq!(session.mode.jump(), None, "no pre-jump");
     assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(VERGE)), "kept");
 }
+
+#[test]
+fn the_map_drawing_reads_the_lane_style_key() {
+    use crate::catalog::GateStability::{Dead, Unstable};
+    use crate::map_lanes::Back;
+    for style in RuleSource::ALL {
+        let rules = Rulebook::default()
+            .with_override(RuleKey::GateLanes, RuleSource::Bible)
+            .with_override(RuleKey::MapLaneStyle, style);
+        let session = Session::start_ruled(&laned(), &rules).expect("starts");
+        let drawing = session.map_drawing(None, &[], MapMarks::NONE);
+        let to_verge = drawing
+            .lanes
+            .iter()
+            .find(|look| (look.from, look.to) == (DRIFT, VERGE))
+            .map(|look| (look.out, look.back));
+        let expected = match style {
+            RuleSource::Engine => None,
+            RuleSource::Bible => Some((Some(Unstable), Back::Way(Some(Dead)))),
+        };
+        assert_eq!(to_verge, expected, "{style:?}");
+    }
+}

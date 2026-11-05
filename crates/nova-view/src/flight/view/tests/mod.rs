@@ -541,6 +541,7 @@ fn sol_drawing() -> nova_sim::galaxy_map::MapDrawing {
         current: sol,
         gate_arrows: Vec::new(),
         named: vec![sol],
+        lanes: Vec::new(),
     }
 }
 

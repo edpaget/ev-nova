@@ -136,6 +136,7 @@ impl Session {
             green: marks.green,
             multi_arrows: marks.multi_arrows,
             pairing: self.setup.rules.source_for(RuleKey::MapLinkPairing),
+            lane_style: self.setup.rules.source_for(RuleKey::MapLaneStyle),
         };
         galaxy_map::draw_map(&state, |system| {
             self.chart
