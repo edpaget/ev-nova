@@ -766,3 +766,114 @@ fn a_dialog_laid_out_again_keeps_a_pad_focused_cell() {
         "still left out"
     );
 }
+
+/// OK (1, the default) and Cancel (2) along the bottom; above them a
+/// check box (3), an edit-text field (4) and a control (5), a static text
+/// (6), and a field parked outside the dialog (7).
+fn controlled() -> DialogTemplate {
+    DialogTemplate {
+        bounds: rect(0.0, 0.0, 300.0, 140.0),
+        placement: Placement::Fixed,
+        items: vec![
+            button(220.0, 110.0, "OK"),
+            button(140.0, 110.0, "Cancel"),
+            item(
+                rect(10.0, 70.0, 90.0, 16.0),
+                true,
+                ItemSpec::CheckBox("Tick".into()),
+            ),
+            item(
+                rect(10.0, 10.0, 150.0, 16.0),
+                true,
+                ItemSpec::EditText("Edit".into()),
+            ),
+            item(rect(10.0, 40.0, 150.0, 20.0), true, ItemSpec::Control(500)),
+            item(
+                rect(200.0, 10.0, 80.0, 16.0),
+                false,
+                ItemSpec::StaticText("Hi".into()),
+            ),
+            item(
+                rect(10.0, 400.0, 150.0, 16.0),
+                true,
+                ItemSpec::EditText("Off".into()),
+            ),
+        ],
+    }
+}
+
+#[test]
+fn an_included_check_box_field_or_control_is_a_pad_target_in_item_order() {
+    let mut dialog = dialog(&controlled());
+    assert_eq!(ids(&dialog), [1, 2], "none until included");
+    dialog.set_pad_included(vec![5, 3, 4, 6]);
+    assert_eq!(
+        ids(&dialog),
+        [1, 2, 3, 4, 5],
+        "a disabled static text is no target"
+    );
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::RightShoulder);
+    tap(&mut dialog, PadButton::RightShoulder);
+    assert_eq!(dialog.pad_highlight(), Some(3), "Tab order is item order");
+}
+
+#[test]
+fn south_on_an_included_item_reports_it_on_release_as_a_click_does() {
+    let mut dialog = dialog(&controlled());
+    dialog.set_pad_included(vec![3, 4, 5]);
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::RightShoulder);
+    tap(&mut dialog, PadButton::RightShoulder);
+    assert_eq!(dialog.pad_highlight(), Some(3));
+    assert_eq!(dialog.input(&pad(PadButton::South, true)), None);
+    assert_eq!(
+        dialog.input(&pad(PadButton::South, false)),
+        Some(DialogEvent::Item(3))
+    );
+    let mut clicked = self::dialog(&controlled());
+    let at = clicked.item_bounds(3).expect("check box").center();
+    assert_eq!(click(&mut clicked, at), Some(DialogEvent::Item(3)));
+}
+
+#[test]
+fn including_again_replaces_the_last_set() {
+    let mut dialog = dialog(&controlled());
+    dialog.set_pad_included(vec![3, 4]);
+    dialog.set_pad_included(vec![5]);
+    assert_eq!(ids(&dialog), [1, 2, 5]);
+    dialog.set_pad_included(Vec::new());
+    assert_eq!(ids(&dialog), [1, 2]);
+}
+
+#[test]
+fn an_included_item_hidden_or_disabled_is_no_target() {
+    let mut dialog = dialog(&controlled());
+    dialog.set_pad_included(vec![3, 4, 5, 7]);
+    dialog.set_greyed(3, true);
+    dialog.set_drawn(4, false);
+    assert_eq!(
+        ids(&dialog),
+        [1, 2, 5],
+        "greyed, undrawn and parked items are none"
+    );
+}
+
+#[test]
+fn the_included_set_outlives_lay_out_again() {
+    let mut dialog = dialog(&controlled());
+    dialog.set_pad_included(vec![3]);
+    dialog.lay_out_again(self::dialog(&controlled()));
+    assert_eq!(ids(&dialog), [1, 2, 3]);
+}
+
+fn click(dialog: &mut Dialog, at: Point) -> Option<DialogEvent> {
+    let press = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    let down = dialog.input(&press(true));
+    let up = dialog.input(&press(false));
+    down.or(up)
+}

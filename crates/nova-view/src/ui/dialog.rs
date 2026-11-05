@@ -455,6 +455,9 @@ pub struct Dialog {
     /// The items the host takes out of the pad's targets, the whole set
     /// it gave last ([`Dialog::set_pad_left_out`]).
     left_out: Vec<usize>,
+    /// The items the host takes into the pad's targets though they are
+    /// no buttons, the whole set it gave last ([`Dialog::set_pad_included`]).
+    included: Vec<usize>,
     /// Whether Tab and Space move and press a focus.
     focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
@@ -560,6 +563,7 @@ impl Dialog {
             focus: FocusState::default(),
             pad_cells: None,
             left_out: Vec::new(),
+            included: Vec::new(),
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),

@@ -104,6 +104,17 @@ impl Dialog {
         self.left_out = items;
     }
 
+    /// Takes `items` (from 1), and only them, into the pad's targets
+    /// though they are no buttons: check boxes, edit-text fields and
+    /// controls whose click the host acts on. Each is a target only while
+    /// it is shown, enabled and drawn, in its item-order place, and South
+    /// on it reports [`DialogEvent::Item`] on its release, as a click
+    /// does. Each call replaces the items the last one took in, and the
+    /// set outlives [`Dialog::lay_out_again`].
+    pub fn set_pad_included(&mut self, items: Vec<usize>) {
+        self.included = items;
+    }
+
     /// The cell the pad's highlight is on (from 0), if it shows.
     #[must_use]
     pub fn pad_highlight_cell(&self) -> Option<usize> {
@@ -136,6 +147,7 @@ impl Dialog {
             .with_bindings(self.bindings().clone());
         laid.pad_cells = self.pad_cells.take();
         laid.left_out = std::mem::take(&mut self.left_out);
+        laid.included = std::mem::take(&mut self.included);
         laid.carry_pad_from(self);
         *self = laid;
     }
@@ -204,7 +216,7 @@ impl Dialog {
                     Widget::ScrollArrow(arrow) => self
                         .scroll_text()
                         .is_some_and(|text| arrow.button(item.bounds, text).is_some()),
-                    Widget::Blank => item.user,
+                    Widget::Blank => item.user || self.included.contains(&number),
                     Widget::Text { .. } | Widget::Picture(_) => false,
                 };
             if target {
