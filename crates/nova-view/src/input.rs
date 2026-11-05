@@ -66,8 +66,8 @@ const LETTER_KEYS: [(Key, char); 36] = [
 /// This is the key's US position, not what the player's layout types
 /// there: a screen that reads a letter by key code, as the original's
 /// filters read `EventRecord.message`'s key-code byte, reads it this way.
-/// The layout's own names for keys come from the key-bindings roadmap's
-/// `KeyNames` port (its phase 5).
+/// The layout's own names for keys come from the
+/// [`KeyNames`](crate::key_names::KeyNames) port.
 #[must_use]
 pub fn key_letter(key: Key) -> Option<char> {
     LETTER_KEYS
