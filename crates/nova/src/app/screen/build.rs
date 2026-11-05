@@ -858,16 +858,12 @@ impl AppScreen {
     /// closes.
     fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
-        let press = matches!(
-            input,
-            Input::Key {
-                pressed: true,
-                repeat: false,
-                ..
-            }
-        );
         // Find, while open, takes Escape too, doing nothing with it.
-        if press && map_back(flight, input) && !flight.map_finding() && !flight.map_waiting() {
+        if super::routing::is_press(input)
+            && map_back(flight, input)
+            && !flight.map_finding()
+            && !flight.map_waiting()
+        {
             flight.close_map();
         } else {
             flight.port_map_input(input);
@@ -1005,18 +1001,10 @@ impl AppScreen {
     }
 }
 
-/// Whether the key of `input` (a press, a repeat or a release) means Back
-/// on `flight`'s course map, as the map reads it
-/// ([`GalaxyMap::peek`](nova_view::galaxy::GalaxyMap::peek)): the map
+/// Whether `input` (a press, a repeat or a release) means Back on
+/// `flight`'s course map, as the map reads it
+/// ([`GalaxyMap::means`](nova_view::galaxy::GalaxyMap::means)): the map
 /// holds the shared UI context, whose Back closes it.
 pub(super) fn map_back(flight: &FlightView<Rc<GameData>>, input: &Input) -> bool {
-    let Input::Key { key, .. } = *input else {
-        return false;
-    };
-    let press = Input::Key {
-        key,
-        pressed: true,
-        repeat: false,
-    };
-    flight.course_map().peek(&press) == Some(Command::Ui(UiCommand::Back))
+    flight.course_map().means(input) == Some(Command::Ui(UiCommand::Back))
 }

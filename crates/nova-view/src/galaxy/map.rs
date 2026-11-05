@@ -756,11 +756,21 @@ impl GalaxyMap {
 
     /// The command `input` would press, repeat or let go of on the map,
     /// without taking it: for an owner that decides what reaches the map
-    /// by what it means (the course map's close on a key `_MapFilter`
-    /// doesn't take).
+    /// by what it means (`_MapFilter`'s keys, which its map-key close
+    /// never sees).
     #[must_use]
     pub fn peek(&self, input: &Input) -> Option<Command> {
         self.keys.peek(input)
+    }
+
+    /// The command `input` (a press, a repeat or a release) means on the
+    /// map, without taking it, as [`CommandReader::means`] reads it: for
+    /// an owner that decides what reaches the map by what it means (the
+    /// course map's close on its Back, which the app reads before the
+    /// map), whichever device sent it.
+    #[must_use]
+    pub fn means(&self, input: &Input) -> Option<Command> {
+        self.keys.means(input)
     }
 
     /// What the map is for.
@@ -3161,6 +3171,15 @@ mod tests {
         assert_eq!(map.route(), []);
         assert_eq!(map.picture(), None, "nothing drawn until shown");
         assert_eq!(self::map().mode(), MapMode::Viewer);
+    }
+
+    #[test]
+    fn means_says_what_a_key_means_on_the_map_going_down_or_up() {
+        let back = Some(Command::Ui(UiCommand::Back));
+        let map = course_map();
+        assert_eq!(map.means(&press(Key::Escape)), back);
+        assert_eq!(map.means(&release(Key::Escape)), back, "its release too");
+        assert_eq!(map.means(&Input::Text('x')), None);
     }
 
     #[test]
