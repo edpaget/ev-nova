@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The gate autopilot's turn keys: an off of exactly 0° is within half a
+    # turn step (`off.abs() <= step / 2.0`), so `off < 0.0` and `off <= 0.0`
+    # are never asked of it. A step can't be negative.
+    "nova-sim-ai/src/gate_pilot\\.rs:[0-9]+:[0-9]+: replace < with <= in turn_toward$",
     # A face exactly MIN_UP (0.05) up: kept by `<`, dropped by `<=`. A face
     # whose corners are floats (rationals) has a rational normal, and none is
     # exactly 0.05 up (x² + z² = 399 y² has no rational solution but 0), so

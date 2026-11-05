@@ -590,6 +590,77 @@ mod tests {
         assert_eq!(cruising.controls, Controls::default());
     }
 
+    /// A hull whose thrust is exactly 0.5 a tick, so the wanted speed
+    /// `d` out is exactly `sqrt(d)`, and half a thrust 0.25.
+    fn half_pixel_thrust(craft: Craft) -> Craft {
+        Craft {
+            handling: Handling::from_totals(300, 2500, 30.0),
+            ..craft
+        }
+    }
+
+    #[test]
+    fn inertialess_it_wants_the_speed_it_brakes_from_in_the_room_left() {
+        let site = site();
+        let at = |speed| {
+            steer(
+                &half_pixel_thrust(inertialess((0.0, 4.0), speed, 0.0)),
+                &gate(&site, None),
+            )
+            .controls
+        };
+        // 4 out it wants sqrt(2 × 0.5 × 4) = 2, with 0.25 of slack.
+        assert_eq!(at(2.0), Controls::default());
+        assert_eq!(at(1.75), Controls::default(), "short by the slack alone");
+        assert_eq!(at(2.25), Controls::default(), "over by the slack alone");
+        assert!(at(1.74).thrust);
+        assert!(at(2.26).reverse);
+    }
+
+    #[test]
+    fn inertialess_at_the_gates_centre_it_neither_turns_nor_thrusts() {
+        let site = site();
+        let still = steer(&inertialess((0.0, 0.0), 0.0, 90.0), &gate(&site, None));
+        assert_eq!(still.controls, Controls::default());
+    }
+
+    #[test]
+    fn within_half_a_turn_step_of_its_aim_it_holds_its_heading() {
+        let site = site();
+        // A 3° step: 1.2° off is within half of it.
+        let near_aim = steer(&craft((0.0, 1000.0), (0.0, 0.0), 1.2), &gate(&site, None));
+        assert_eq!(near_aim.controls, controls(Turn::None, true));
+        let past = steer(&craft((0.0, 1000.0), (0.0, 0.0), 1.6), &gate(&site, None));
+        assert_eq!(past.controls, controls(Turn::Left, true));
+    }
+
+    #[test]
+    fn a_hull_that_cannot_turn_still_thrusts_when_it_faces_the_gate() {
+        let site = site();
+        // Maneuver 5 turns 0.5° a tick: none by the original's whole
+        // degrees, so it takes no margin for a turn it can't make.
+        let stiff = Craft {
+            handling: Handling::from_totals(300, 300, 5.0),
+            ..craft((0.0, 1000.0), (0.0, -1.0), 0.0)
+        };
+        assert_eq!(
+            steer(&stiff, &gate(&site, None)).controls,
+            controls(Turn::None, true)
+        );
+    }
+
+    #[test]
+    fn it_measures_near_from_the_gate_wherever_the_gate_is() {
+        let site = LandingSite {
+            position: Vec2::new(1000.0, -500.0),
+            ..site()
+        };
+        let near = craft((800.0, -300.0), (0.0, 0.0), 0.0);
+        assert!(steer(&near, &gate(&site, None)).press_land);
+        let far = craft((1000.0, 0.0), (0.0, 0.0), 0.0);
+        assert!(!steer(&far, &gate(&site, None)).press_land);
+    }
+
     // ---- Convergence ----
 
     /// A sluggish hull: 2 a tick, 0.02 a tick's thrust, 1.5° a tick (1° by
