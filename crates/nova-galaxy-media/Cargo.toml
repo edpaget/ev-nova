@@ -1,0 +1,29 @@
+[package]
+name = "nova-galaxy-media"
+description = "The new game's media as data: glTF models read, and drawn from above as painted silhouettes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No workspace dependency but the format, and otherwise only crates.io
+# crates: like nova-galaxy-format, game-bible's `galaxy` tool may build
+# this crate alone through a git dependency, where the workspace's
+# `[patch.crates-io]` doesn't apply.
+[dependencies]
+gltf.workspace = true
+nova-galaxy-format.workspace = true
+# The `fixture` builders write the test models' glTF JSON.
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# The test model builders (`fixture::glb` and friends), for other crates'
+# tests: every test model is built in code, so no art enters the repo.
+fixture = ["dep:serde_json"]
+
+[lints]
+workspace = true

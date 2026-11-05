@@ -33,6 +33,7 @@ nova-sim-port = { path = "crates/nova-sim-port" }
 nova-audio = { path = "crates/nova-audio" }
 nova-movie = { path = "crates/nova-movie" }
 nova-galaxy-format = { path = "crates/nova-galaxy-format" }
+nova-galaxy-media = { path = "crates/nova-galaxy-media" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
@@ -68,6 +69,9 @@ serde_json = "1"
 # resolves.
 schemars = "1.2.3"
 serde-saphyr = { version = "2.0.0", default-features = false, features = ["deserialize"] }
+# Reads the new game's glTF models (nova-galaxy-media), as game-bible's
+# `galaxy` tool pins it: only the data, no image decoding or URI fetching.
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 thiserror = "2"
 # Reads the synthetic test fonts back in nova-data's fixture tests; the
 # version glyphon's font stack already locks.
