@@ -93,6 +93,7 @@ pub mod mission_info;
 pub mod mode_picker;
 pub mod new_pilot;
 pub mod note;
+mod own_keys;
 pub mod picker;
 pub mod picture_variant;
 pub mod planet_comm;

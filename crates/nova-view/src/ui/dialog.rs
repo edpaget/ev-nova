@@ -43,7 +43,8 @@ use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
@@ -434,6 +435,9 @@ pub struct Dialog {
     /// them ([`Dialog::with_held_keys`]); none when keys act at once.
     /// Boxed, as most dialogs leave it out.
     held_keys: Option<Box<HeldKeys>>,
+    /// Its keys, read as the shared UI context's commands
+    /// ([`contexts::DIALOG`]).
+    keys: CommandReader,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -523,7 +527,27 @@ impl Dialog {
             held: None,
             hold: None,
             held_keys: None,
+            keys: CommandReader::new(contexts::DIALOG),
         }
+    }
+
+    /// The dialog reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads its keys through `bindings` from the next input on.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.keys.set_bindings(bindings);
+    }
+
+    /// The bindings it reads its keys through, for a host that builds it
+    /// again to hand on.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
     }
 
     /// The dialog with `frame` drawn under its items.
@@ -805,10 +829,14 @@ impl Dialog {
     ///   other press on one is tracked as a button's is, and its click is
     ///   one step of [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS), while
     ///   its flag is set. An arrow reports no item.
-    /// - Return activates the default item, and Escape the cancel item.
+    /// - Its keys are the shared UI context's commands, read through the
+    ///   bindings it is given ([`Self::with_bindings`]; see
+    ///   [`Self::command`]). Confirm (Return, keypad Enter its twin)
+    ///   activates the default item, and Back (Escape) the cancel item.
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
-    ///   next enabled button, and Space activates the focused one. Under
-    ///   [`FocusRing::Off`], the original's reading, they do nothing.
+    ///   next enabled button, and Activate (Space) presses the focused
+    ///   one. Under [`FocusRing::Off`], the original's reading, they do
+    ///   nothing.
     /// - Up and Down, repeats included, scroll the first scrolling text: a
     ///   line, or [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS) when it
     ///   is pixel-scrolled.
@@ -829,11 +857,10 @@ impl Dialog {
             return None;
         }
         match *input {
-            Input::Key {
-                key,
-                pressed: true,
-                repeat,
-            } => self.key(key, repeat),
+            Input::Key { .. } => self
+                .keys
+                .follow(input)
+                .and_then(|command| self.command(command)),
             Input::Scroll { at, .. } => {
                 if self.bounds.contains(at) {
                     self.items.iter_mut().any(|item| match &mut item.widget {
@@ -847,36 +874,41 @@ impl Dialog {
                 }
                 None
             }
-            Input::Key { .. }
-            | Input::Text(_)
-            | Input::PointerLeft
-            | Input::PointerMovedOutside(_) => None,
+            Input::Text(_) | Input::PointerLeft | Input::PointerMovedOutside(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }
 
-    fn key(&mut self, key: Key, repeat: bool) -> Option<DialogEvent> {
-        match key {
-            Key::ArrowUp | Key::ArrowDown => {
+    /// Acts on a shared UI command its host read, as [`Self::input`] acts
+    /// on its key: Up and Down, repeats included, scroll the first
+    /// scrolling text; Confirm activates the default item and Back the
+    /// cancel item; under [`FocusRing::Tab`], Tab moves the focus and
+    /// Activate presses the focused button. A repeat activates nothing,
+    /// and a release does nothing.
+    pub fn command(&mut self, input: CommandInput) -> Option<DialogEvent> {
+        let Command::Ui(command) = input.command else {
+            return None;
+        };
+        if !input.pressed {
+            return None;
+        }
+        match command {
+            UiCommand::Up | UiCommand::Down => {
                 if let Some(text) = self.scroll_text_mut() {
-                    text.input(&Input::Key {
-                        key,
-                        pressed: true,
-                        repeat,
-                    });
+                    text.command(input);
                 }
                 None
             }
-            _ if repeat => None,
-            Key::Enter | Key::NumpadEnter => self.activate(self.default_item),
-            Key::Escape => self.activate(self.cancel_item),
-            Key::Tab if self.focus_ring == FocusRing::Tab => {
+            _ if input.repeat => None,
+            UiCommand::Confirm => self.activate(self.default_item),
+            UiCommand::Back => self.activate(self.cancel_item),
+            UiCommand::Tab if self.focus_ring == FocusRing::Tab => {
                 self.focus_next();
                 None
             }
-            // Under `FocusRing::Off` nothing is ever focused, so Space
-            // activates nothing.
-            Key::Space => self.activate(self.focus.map(|index| index + 1)),
+            // Under `FocusRing::Off` nothing is ever focused, so Activate
+            // presses nothing.
+            UiCommand::Activate => self.activate(self.focus.map(|index| index + 1)),
             _ => None,
         }
     }
@@ -1221,7 +1253,8 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 mod tests {
     use super::*;
     use crate::draw::fill_command;
-    use crate::input::{MouseButton, ScrollDelta};
+    use crate::input::{Key, MouseButton, ScrollDelta};
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::scroll_text::{ARROW_UNITS, TextRun};
 
@@ -1934,6 +1967,23 @@ mod tests {
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(5)));
         let mut dialog = dialog.with_default(None);
         assert_eq!(dialog.input(&key(Key::Enter)), None);
+    }
+
+    /// The dialog reads its keys through the key map it is given: Confirm
+    /// rebound to T activates the default item on T and no longer on
+    /// Return, and keypad Enter, a fixed twin, still confirms.
+    #[test]
+    fn a_rebound_confirm_activates_the_default_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyT)),
+        );
+        let mut dialog = dialog(&yes_no(), &[]).with_bindings(bindings);
+        assert_eq!(dialog.input(&key(Key::KeyT)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Enter)), None);
+        assert_eq!(
+            dialog.input(&key(Key::NumpadEnter)),
+            Some(DialogEvent::Item(1))
+        );
     }
 
     #[test]

@@ -7,9 +7,11 @@ use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key, ScrollDelta};
+use crate::input::{Input, ScrollDelta};
+use crate::keymap::{Command, CommandInput, SharedBindings, UiCommand, contexts};
 use crate::text::{TextMetrics, wrap};
 
+use super::own_keys::OwnKeys;
 use super::scroll_arrows::ScrollArrow;
 
 /// How far an arrow's step scrolls a pixel-scrolled text, in the original's
@@ -50,6 +52,9 @@ pub struct ScrollText {
     pixels: Option<PixelScroll>,
     /// The placed rows that are its lines; none for wrapped text.
     rows: Vec<TextRow>,
+    /// Its keys, when sent straight to it ([`ScrollText::input`]): the
+    /// shared UI context's Up and Down.
+    keys: OwnKeys,
 }
 
 /// A line placed by hand, as a dialog's update routine places its text with
@@ -139,7 +144,15 @@ impl ScrollText {
             pending: 0.0,
             pixels: None,
             rows: Vec::new(),
+            keys: OwnKeys::new(contexts::DIALOG),
         }
+    }
+
+    /// The text reading the keys sent straight to it through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// This text scrolled by pixels, as `_ScrollDialogText` scrolls a text
@@ -164,7 +177,8 @@ impl ScrollText {
     /// is.
     #[must_use]
     pub fn rewrapped(&self, text: &str, metrics: &impl TextMetrics) -> Self {
-        let new = Self::new(text, self.font, self.size, self.color, self.rect, metrics);
+        let new = Self::new(text, self.font, self.size, self.color, self.rect, metrics)
+            .with_bindings(self.keys.bindings().clone());
         if self.pixels.is_some() {
             new.pixel_scrolled()
         } else {
@@ -188,7 +202,9 @@ impl ScrollText {
             pending: 0.0,
             pixels: None,
             rows,
+            keys: OwnKeys::new(contexts::DIALOG),
         }
+        .with_bindings(self.keys.bindings().clone())
     }
 
     /// Every wrapped line, or for placed rows each row's runs joined by a
@@ -273,22 +289,35 @@ impl ScrollText {
     /// or trackpad scroll over the box, a whole line for each line height
     /// it builds up to, or its pixels when pixel-scrolled. Returns whether
     /// it used `input`: a scroll over the box is used even where it can't
-    /// move.
+    /// move. Its keys are read through its own bindings
+    /// ([`Self::with_bindings`]); a host that reads its keys itself sends
+    /// the command instead ([`Self::command`]).
     pub fn input(&mut self, input: &Input) -> bool {
-        let key = match *input {
-            Input::Key {
-                key, pressed: true, ..
-            } => key,
-            Input::Scroll { delta, at } => return self.wheel(delta, at),
+        if let Input::Scroll { delta, at } = *input {
+            return self.wheel(delta, at);
+        }
+        self.keys
+            .follow(input)
+            .is_some_and(|command| self.command(command))
+    }
+
+    /// Scrolls for the shared UI context's Up or Down, pressed or
+    /// repeated, as [`Self::input`] does for their keys. Returns whether
+    /// it used the command.
+    pub fn command(&mut self, input: CommandInput) -> bool {
+        if !input.pressed {
+            return false;
+        }
+        let up = match input.command {
+            Command::Ui(UiCommand::Up) => true,
+            Command::Ui(UiCommand::Down) => false,
             _ => return false,
         };
-        let pixels = self.pixels.is_some();
-        match key {
-            Key::ArrowUp if pixels => self.scroll_arrow(ScrollArrow::Up),
-            Key::ArrowDown if pixels => self.scroll_arrow(ScrollArrow::Down),
-            Key::ArrowUp => self.scroll_by(-1),
-            Key::ArrowDown => self.scroll_by(1),
-            _ => return false,
+        match (up, self.pixels.is_some()) {
+            (true, true) => self.scroll_arrow(ScrollArrow::Up),
+            (false, true) => self.scroll_arrow(ScrollArrow::Down),
+            (true, false) => self.scroll_by(-1),
+            (false, false) => self.scroll_by(1),
         }
         true
     }
@@ -481,6 +510,8 @@ impl ScrollText {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::scroll_arrows::ScrollArrow;
 
@@ -813,6 +844,29 @@ mod tests {
             text.input(&up(true));
         }
         assert_eq!(text.first(), 0);
+    }
+
+    /// The text reads its keys through the key map it is given: Down
+    /// rebound to J scrolls on J and no longer on the down arrow, and the
+    /// text rewrapped keeps the bindings.
+    #[test]
+    fn a_rebound_down_scrolls_on_its_new_key_alone() {
+        let j = Input::Key {
+            key: Key::KeyJ,
+            pressed: true,
+            repeat: false,
+        };
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Down, KeyCombo::key(Key::KeyJ)),
+        );
+        let mut text = ten_lines().with_bindings(bindings);
+        assert!(text.input(&j));
+        assert_eq!(text.first(), 1);
+        assert!(!text.input(&down(false)));
+        assert_eq!(text.first(), 1);
+        let mut text = text.rewrapped("l0\rl1\rl2\rl3\rl4", &MonoMetrics);
+        assert!(text.input(&j));
+        assert_eq!(text.first(), 1, "rewrapped, it reads the same bindings");
     }
 
     #[test]
