@@ -197,17 +197,23 @@ fn recording_on_the_gamepad_tab_binds_the_pressed_button() {
     );
 }
 
+/// A raw axis records nothing, at any value: stick directions arrive as
+/// their own buttons past `nova`'s press threshold
+/// (`nova::gamepad::inputs`), whose wiring test in `nova` pins a stick
+/// inside it binding nothing.
 #[test]
-fn a_stick_inside_the_threshold_binds_nothing() {
+fn a_raw_axis_records_nothing() {
     let mut screen = gamepad_tab();
     recording(&mut screen, Fc::Autopilot);
     let before = screen.draft().clone();
-    screen.input(&Input::PadAxis {
-        axis: PadAxis::LeftX,
-        value: 0.3,
-    });
-    assert_eq!(screen.recording(), Some(Fc::Autopilot.into()));
-    assert_eq!(screen.draft(), &before);
+    for value in [0.3, 0.9, -1.0] {
+        screen.input(&Input::PadAxis {
+            axis: PadAxis::LeftX,
+            value,
+        });
+        assert_eq!(screen.recording(), Some(Fc::Autopilot.into()), "{value}");
+        assert_eq!(screen.draft(), &before, "{value}");
+    }
 }
 
 #[test]

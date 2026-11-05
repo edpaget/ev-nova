@@ -177,3 +177,85 @@ fn the_keys_screen_names_keys_through_the_key_names_the_bindings_carry() {
         .expect("a row");
     assert_eq!(keys.row_list().cell(row), Some("Z"));
 }
+
+/// What `events` from the fake pads mean for the screen, through the
+/// app's pad state ([`PadInputs`](crate::gamepad::inputs::PadInputs)),
+/// given to `screen` in order.
+fn from_pads(
+    screen: &mut AppScreen,
+    pads: &mut crate::gamepad::inputs::PadInputs,
+    events: Vec<crate::gamepad::PadEvent>,
+) {
+    use crate::gamepad::Gamepads;
+    let mut port = crate::gamepad::fixture::FakeGamepads::with([events]);
+    let mut polled = Vec::new();
+    port.poll(&mut polled);
+    let mut inputs = Vec::new();
+    pads.feed(&polled, &mut inputs);
+    for input in inputs {
+        screen.input(&input);
+    }
+}
+
+/// The keys screen recording Jettison Cargo on its gamepad tab, told a
+/// pad was used last.
+fn recording_jettison_on_the_pad(screen: &mut AppScreen) {
+    use nova_view::{ControllerFamily, Device, Surroundings};
+    open_keys(screen);
+    screen.input(&Input::Surroundings(Surroundings {
+        device: Device::Gamepad(ControllerFamily::Generic),
+    }));
+    tap(screen, Key::ArrowRight);
+    select_jettison(screen);
+    tap(screen, Key::Enter);
+    assert_eq!(
+        keys(screen).and_then(KeysScreen::recording),
+        Some(FlightCommand::JettisonCargo.into())
+    );
+}
+
+/// The keys screen reads a stick only as the stick directions the app's
+/// pad state presses past its threshold
+/// ([`PRESS_THRESHOLD`](crate::gamepad::inputs::PRESS_THRESHOLD)): a
+/// stick inside it records nothing, and one past it its direction.
+#[test]
+fn recording_on_the_gamepad_tab_a_stick_binds_its_direction_only_past_the_threshold() {
+    use crate::gamepad::inputs::{PRESS_THRESHOLD, PadInputs};
+    use crate::gamepad::{PadEvent, PadId};
+    use nova_view::keymap::{PadBinding, PadEntry};
+    use nova_view::{PadAxis, PadButton};
+    const ONE: PadId = PadId(0);
+    let stick = |value| PadEvent::Axis {
+        pad: ONE,
+        axis: PadAxis::LeftX,
+        value,
+    };
+    let mut screen = with_dialogs(data());
+    let mut pads = PadInputs::new();
+    recording_jettison_on_the_pad(&mut screen);
+    let before = keys(&screen).map(KeysScreen::draft).cloned();
+    from_pads(
+        &mut screen,
+        &mut pads,
+        vec![PadEvent::connected(ONE), stick(PRESS_THRESHOLD * 0.9)],
+    );
+    assert_eq!(
+        keys(&screen).and_then(KeysScreen::recording),
+        Some(FlightCommand::JettisonCargo.into()),
+        "inside the threshold, still recording"
+    );
+    assert_eq!(keys(&screen).map(KeysScreen::draft).cloned(), before);
+    from_pads(
+        &mut screen,
+        &mut pads,
+        vec![stick(f32::midpoint(PRESS_THRESHOLD, 1.0))],
+    );
+    let keys = keys(&screen).expect("open");
+    assert_eq!(keys.recording(), None);
+    assert_eq!(
+        keys.draft()
+            .gamepad
+            .binding(FlightCommand::JettisonCargo.into()),
+        PadBinding::Entry(PadEntry::plain(PadButton::LeftStickRight))
+    );
+}
