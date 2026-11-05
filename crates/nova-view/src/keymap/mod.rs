@@ -102,7 +102,10 @@
 //!   button means nothing until pressed again. This differs from the
 //!   keyboard on purpose: the keyboard recomputes what a key down means
 //!   as modifiers change, but a pad must not turn a layered hold into the
-//!   plain command as Select goes up.
+//!   plain command as Select goes up. The button's release still means
+//!   the command its press meant ([`CommandReader::means`]), so a chord's
+//!   release is its command's whichever button goes up first, though the
+//!   reader reports no release of a hold it already dropped.
 //! - **Stick axes.** Flight's turn and throttle are [`Kind::Axis`]
 //!   commands, bound to a stick axis on the pad and never to a key. Each
 //!   reads through the radial flight dead zone ([`dead_zoned`]). With no

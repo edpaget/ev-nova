@@ -593,47 +593,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Whether `input` (a press, a repeat or a release) is of the map
     /// key, the key flight's reader reads as
-    /// [`PlayCommand::GalaxyMap`]: what the map's own close waits on. A
-    /// pad button's release is the map key's when its press was
-    /// (`FlightView::map_pad_key`), whichever of a chord's buttons went
-    /// up first.
+    /// [`PlayCommand::GalaxyMap`]: what the map's own close waits on.
     pub(super) fn is_map_key(&self, input: &Input) -> bool {
-        if let Input::PadButton {
-            button,
-            pressed: false,
-        } = *input
-            && self.map_pad_key == Some(button)
-        {
-            return true;
-        }
         self.keys.means(input) == Some(Command::Play(PlayCommand::GalaxyMap))
-    }
-
-    /// Notes the pad button of `input` as the map key's while it is down,
-    /// if `input` is a fresh press flight reads as the map key (`press`).
-    pub(super) fn note_map_pad_key(&mut self, input: &Input, press: Option<Command>) {
-        if let Input::PadButton {
-            button,
-            pressed: true,
-        } = *input
-            && press == Some(Command::Play(PlayCommand::GalaxyMap))
-        {
-            self.map_pad_key = Some(button);
-        }
-    }
-
-    /// Forgets the map key's pad button once `input`, its release, has
-    /// been read ([`FlightView::note_map_pad_key`]); focus lost forgets
-    /// it too (`Screen::release_keys`), as its release won't come.
-    pub(super) fn forget_map_pad_key(&mut self, input: &Input) {
-        if let Input::PadButton {
-            button,
-            pressed: false,
-        } = *input
-            && self.map_pad_key == Some(button)
-        {
-            self.map_pad_key = None;
-        }
     }
 
     /// Whether `_MapFilter` takes `input`'s key before its map-key close,

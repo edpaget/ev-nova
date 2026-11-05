@@ -1305,12 +1305,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
-    /// The pad button whose last fresh press meant the map key, while it
-    /// is down: its release is the map key's whatever layer is held then
-    /// ([`FlightView::is_map_key`]). A chord's layer let go of first
-    /// leaves the reader reading the button as nothing, so the release
-    /// alone can't say it was the map key's.
-    map_pad_key: Option<crate::input::PadButton>,
     /// Whether the map has been closed while the map key was held, and
     /// waits for its release to close: `_DoSystemMap` loops
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of

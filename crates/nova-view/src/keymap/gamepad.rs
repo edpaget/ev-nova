@@ -8,8 +8,9 @@
 //!   [`Kind::Axis`](super::Kind::Axis) command) or to nothing, with the default table that
 //!   rdm:phase/key-bindings/phase-7-gamepad-input's findings record.
 //! - [`Gamepad`] is the pad's device state: the buttons down, each with
-//!   the layer its press went down under, what each press meant, and the
-//!   last value of each stick axis.
+//!   the layer its press went down under, what each press meant (as a
+//!   hold, and as what its release ends), and the last value of each
+//!   stick axis.
 //! - The lookup over a pad button's input ([`resolve`], [`held`],
 //!   [`meanings_with`], [`bound_to`]) and the flight dead zone
 //!   ([`FLIGHT_DEAD_ZONE`], [`dead_zoned`], [`axis_amount`]).
@@ -344,15 +345,27 @@ struct Down {
 }
 
 /// The gamepad's device state: the buttons down in the order pressed,
-/// what each press meant, and the last value of each stick axis. Pads
+/// what each press meant, and the last value of each stick axis.
+///
+/// A press's meaning is kept twice: as a hold, dropped when its layer
+/// goes up first ([`Gamepad::press_of`]), and as what its release ends,
+/// kept past its layer and its own release until the button is pressed
+/// again ([`Gamepad::release_of`]). So a screen asking after the reader
+/// followed a chord's release, its layer let go of first, still reads the
+/// chord's command, while nothing holds it. Pads
 /// are merged before they get here (`nova`'s pad module), so this is one
 /// pad's worth.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gamepad {
     /// The buttons down, in the order pressed.
     down: Vec<Down>,
-    /// What each press meant, while its button is down.
+    /// What each press meant, while its button is down and its layer
+    /// still held.
     presses: BTreeMap<PadButton, Command>,
+    /// What the last press of each button meant, kept through its layer's
+    /// release and its own until it is pressed again or the pad is let go
+    /// of: what its release ends ([`Gamepad::release_of`]).
+    meant: BTreeMap<PadButton, Command>,
     /// The last value of each axis.
     axes: BTreeMap<PadAxis, f32>,
 }
@@ -364,7 +377,9 @@ impl Gamepad {
     /// A button going down takes the layer already held: of the layer
     /// buttons of `map` down, the one pressed first. A layer going up
     /// leaves every button pressed under it meaning nothing, its press
-    /// forgotten, until it is pressed again.
+    /// forgotten as a hold ([`Gamepad::press_of`]), until it is pressed
+    /// again; its release still ends that press
+    /// ([`Gamepad::release_of`]).
     pub fn follow(&mut self, input: &Input, map: &PadMap) -> bool {
         let layers = map.layer_buttons();
         match *input {
@@ -442,10 +457,12 @@ impl Gamepad {
             pressed: true,
         } = *input
         {
-            match command {
-                Some(command) => self.presses.insert(button, command),
-                None => self.presses.remove(&button),
-            };
+            for record in [&mut self.presses, &mut self.meant] {
+                match command {
+                    Some(command) => record.insert(button, command),
+                    None => record.remove(&button),
+                };
+            }
         }
     }
 
@@ -459,11 +476,29 @@ impl Gamepad {
         self.presses.get(&button).copied()
     }
 
+    /// What the press the pad button release `input` ends meant, if it
+    /// was noted: its layer let go of first leaves it holding nothing
+    /// ([`Gamepad::press_of`]), but its release is still the end of that
+    /// press, and stays it once followed, until the button is pressed
+    /// again. `None` for any other input.
+    #[must_use]
+    pub fn release_of(&self, input: &Input) -> Option<Command> {
+        let Input::PadButton {
+            button,
+            pressed: false,
+        } = *input
+        else {
+            return None;
+        };
+        self.meant.get(&button).copied()
+    }
+
     /// Lets go of every button, forgets every press and centres every
     /// axis.
     pub fn let_go(&mut self) {
         self.down.clear();
         self.presses.clear();
+        self.meant.clear();
         self.axes.clear();
     }
 
@@ -1010,6 +1045,46 @@ mod tests {
         assert_eq!(
             pad.held(),
             BTreeSet::from([flight(FlightCommand::SelectSecondary)])
+        );
+    }
+
+    #[test]
+    fn a_release_ends_what_its_press_meant_though_its_layer_went_up_first() {
+        let mut pad = Pad::new(FLYING);
+        let hail = flight(FlightCommand::HailStellar);
+        let up = release(P::RightStick);
+        pad.press(P::Select);
+        pad.press(P::RightStick);
+        assert_eq!(pad.state.release_of(&up), Some(hail));
+        pad.release(P::Select);
+        assert!(pad.held().is_empty(), "the layer let go of drops the hold");
+        assert_eq!(pad.state.press_of(&up), None, "it holds nothing");
+        assert_eq!(
+            pad.state.release_of(&up),
+            Some(hail),
+            "its release is hail's"
+        );
+        pad.release(P::RightStick);
+        assert_eq!(
+            pad.state.release_of(&up),
+            Some(hail),
+            "still, once the release is followed"
+        );
+        assert_eq!(pad.state.release_of(&press(P::RightStick)), None, "a press");
+        assert_eq!(pad.state.release_of(&release(P::South)), None, "unpressed");
+        pad.press(P::RightStick);
+        assert_eq!(
+            pad.state.release_of(&up),
+            Some(flight(FlightCommand::SelectSecondary)),
+            "pressed again"
+        );
+        pad.state.let_go();
+        assert_eq!(pad.state.release_of(&up), None, "let go of");
+        pad.press(P::Start);
+        assert_eq!(
+            pad.state.release_of(&release(P::Start)),
+            None,
+            "meant nothing"
         );
     }
 

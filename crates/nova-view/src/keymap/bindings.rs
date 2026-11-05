@@ -292,6 +292,16 @@ impl Devices {
             .or_else(|| self.gamepad.press_of(input))
     }
 
+    /// What the press a pad button release `input` ends meant, its layer
+    /// let go of first or not, and once followed too
+    /// ([`Gamepad::release_of`]).
+    /// `None` for a key, whose release [`Devices::press_of`] answers
+    /// while it is down, or any other input.
+    #[must_use]
+    pub fn release_of(&self, input: &Input) -> Option<Command> {
+        self.gamepad.release_of(input)
+    }
+
     /// Whether anything is down: a key or a pad button.
     #[must_use]
     pub fn any_down(&self) -> bool {

@@ -239,12 +239,21 @@ impl CommandReader {
     /// reader holds that, otherwise what pressing it would mean now. So a
     /// release whose press came before the reader did means its key's
     /// command, for a screen that reads a key's going up as its going
-    /// down (`_PlayQTMovie`'s skip keys, polled held). `None` for any
+    /// down (`_PlayQTMovie`'s skip keys, polled held).
+    ///
+    /// A pad button's release means what its press meant even with that
+    /// press's layer let go of first, which leaves it holding nothing,
+    /// and even once the reader has followed it, until the button is
+    /// pressed again: so the map chord's release is the map key's
+    /// whichever of Start and the stick goes up first. `None` for any
     /// other input.
     #[must_use]
     pub fn means(&self, input: &Input) -> Option<Command> {
         let press = Devices::fresh_press(input)?;
-        self.devices.press_of(input).or_else(|| self.peek(&press))
+        self.devices
+            .press_of(input)
+            .or_else(|| self.devices.release_of(input))
+            .or_else(|| self.peek(&press))
     }
 
     /// Every command the key of `input` (a press, a repeat or a release)
@@ -390,7 +399,7 @@ impl CommandReader {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::super::command::{EscortMenuCommand, FlightCommand, UiCommand};
+    use super::super::command::{EscortMenuCommand, FlightCommand, PlayCommand, UiCommand};
     use super::super::contexts::{DIALOG, FLIGHT};
     use super::super::keyboard::KeyCombo;
     use super::*;
@@ -807,6 +816,32 @@ mod tests {
         reader.follow(&pad(PadButton::Select, false));
         assert!(!reader.held(jump), "the layer let go of first drops it");
         assert_eq!(reader.follow(&pad(PadButton::South, false)), None);
+    }
+
+    #[test]
+    fn a_pad_release_means_its_press_s_command_though_its_layer_went_up_first() {
+        let mut reader = CommandReader::new(FLIGHT);
+        let map = Command::Play(PlayCommand::GalaxyMap);
+        let stick_up = pad(PadButton::RightStickUp, false);
+        reader.follow(&pad(PadButton::Start, true));
+        assert_eq!(
+            reader
+                .follow(&pad(PadButton::RightStickUp, true))
+                .map(|c| c.command),
+            Some(map)
+        );
+        reader.follow(&pad(PadButton::Start, false));
+        assert!(!reader.held(map), "the layer let go of first drops it");
+        assert_eq!(reader.means(&stick_up), Some(map));
+        assert_eq!(reader.follow(&stick_up), None, "no release of a hold");
+        assert_eq!(reader.means(&stick_up), Some(map), "once followed too");
+        assert_eq!(
+            reader.means(&pad(PadButton::RightStickUp, true)),
+            None,
+            "a fresh press with no layer"
+        );
+        reader.let_go();
+        assert_eq!(reader.means(&stick_up), None, "let go of");
     }
 
     #[test]
