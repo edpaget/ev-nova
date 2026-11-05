@@ -11477,14 +11477,14 @@ pub(super) mod tests {
 
     // Tribbles and perishables.
 
-    const FURBALLS: Good = Good::Junk(JunkId(128));
-    const FRUIT: Good = Good::Junk(JunkId(129));
+    pub(super) const FURBALLS: Good = Good::Junk(JunkId(128));
+    pub(super) const FRUIT: Good = Good::Junk(JunkId(129));
     const MORE_FURBALLS: Good = Good::Junk(JunkId(130));
     const ROTTING_FURBALLS: Good = Good::Junk(JunkId(131));
 
     /// [`exchange`], its planet 128 selling `jünk` 128 and 130, tribbles,
     /// 129, perishable, and 131, both, at 8 a ton.
-    fn breeding() -> FakePilotCatalog {
+    pub(super) fn breeding() -> FakePilotCatalog {
         let sold = |id, flags| JunkRecord {
             id: JunkId(id),
             name: format!("Junk {id}"),
@@ -11540,7 +11540,7 @@ pub(super) mod tests {
 
     /// A session of [`breeding`] that has bought `tons` of each good at
     /// planet 128 and taken off.
-    fn taken_off_with(tons: &[(Good, u32)]) -> Session {
+    pub(super) fn taken_off_with(tons: &[(Good, u32)]) -> Session {
         let mut session = Session::start(&breeding()).expect("starts");
         land_now(&mut session).expect("lands");
         take_off_with(&mut session, tons);
@@ -11548,7 +11548,7 @@ pub(super) mod tests {
     }
 
     /// The tons of furballs and of fruit held.
-    fn furballs_and_fruit(session: &Session) -> (u32, u32) {
+    pub(super) fn furballs_and_fruit(session: &Session) -> (u32, u32) {
         (session.pilot().held(FURBALLS), session.pilot().held(FRUIT))
     }
 

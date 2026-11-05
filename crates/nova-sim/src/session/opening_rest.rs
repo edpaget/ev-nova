@@ -200,7 +200,9 @@ mod tests {
     use crate::session::hail::tests::{hail, hailable, targeting};
     use crate::session::mission_screens::tests::{docked, screens, to_mars};
     use crate::session::planet_comm::tests::{at_earth, planet_catalog};
-    use crate::session::tests::{armed, facing_an_npc};
+    use crate::session::tests::{
+        FRUIT, FURBALLS, armed, breeding, facing_an_npc, furballs_and_fruit, taken_off_with,
+    };
     use crate::session::time_adjustment::tests::pass_gains;
     use crate::session::time_adjustment::tests::steps;
     use crate::session::{MissionInfoPress, Session};
@@ -442,6 +444,30 @@ mod tests {
             frames.push(session.space.frame);
         }
         assert_eq!(frames, expected, "@0x45f36, once a step");
+    }
+
+    #[test]
+    fn the_rest_runs_the_work_from_the_key_block_on_its_frame() {
+        let catalog = breeding();
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 10)]);
+        session.port.takeoff_grace = 0;
+        session.at_gain(SpeedMult::FULL);
+        assert!(session.red_alert.check(true, false, true), "it blinks");
+        closed_player_info(&mut session, &catalog);
+        assert!(session.opening_rest_owed());
+        // A frame both steps are due on.
+        let frame = 250;
+        assert!(market::junk_step_due(frame) && crate::red_alert::alert_step_due(frame));
+        session.space.frame = frame;
+        let mut blink = session.red_alert;
+        blink.step(frame);
+        steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert_eq!(
+            furballs_and_fruit(&session),
+            (3, 9),
+            "the tribbles and perishables (@0x70827)"
+        );
+        assert_eq!(session.red_alert, blink, "the alert's blink (@0x4451e)");
     }
 
     #[test]
