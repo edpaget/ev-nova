@@ -30,10 +30,11 @@
 //!   click, which its gate then ignores and which only redraws; here a
 //!   greyed button takes no click, which shows the same.
 //!
-//! **Keys** (`_EscortFilter`): a key press, never its repeat, whatever
-//! modifiers are held: Return, Enter, Escape and C close the channel, R
-//! releases, U upgrades and S sells, either case. A key is passed on even
-//! for a greyed button, as the original's is, and the session ignores it.
+//! **Keys** (`_EscortFilter`, by key code): a key press, never its
+//! repeat, whatever modifiers are held: Return, Enter, Escape and C close
+//! the channel, R releases, U upgrades and S sells. A key is passed on
+//! even for a greyed button, as the original's is, and the session
+//! ignores it.
 //!
 //! Without the interface file, [`EscortDialog::fallback`] lays out the
 //! same items itself, over a dark backdrop.
@@ -697,19 +698,15 @@ mod tests {
     }
 
     #[test]
-    fn its_keys_press_once_whatever_the_case_and_never_on_a_repeat() {
+    fn its_keys_press_once_and_never_on_a_repeat() {
         let mut open = dialog(&captured());
         for (pressed, press) in [
             (Key::Enter, EscortButton::Close),
             (Key::NumpadEnter, EscortButton::Close),
             (Key::Escape, EscortButton::Close),
             (Key::KeyC, EscortButton::Close),
-            (Key::KeyC, EscortButton::Close),
-            (Key::KeyR, EscortButton::Release),
             (Key::KeyR, EscortButton::Release),
             (Key::KeyU, EscortButton::Upgrade),
-            (Key::KeyU, EscortButton::Upgrade),
-            (Key::KeyS, EscortButton::Sell),
             (Key::KeyS, EscortButton::Sell),
         ] {
             open.input(&key(pressed, false));

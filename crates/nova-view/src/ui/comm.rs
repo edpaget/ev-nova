@@ -34,9 +34,10 @@
 //! pushes Close Channel down. A click gives [`CommPress::Option`] (the
 //! option's place in the list) or [`CommPress::Close`]; so do the keys
 //! (`_CommFilter` @0x908ed): Return, Enter, Escape and E close the
-//! channel, and a letter that is an option's hotkey, either case, presses
-//! the first such option. The router passes each press to the flight and
-//! shows what came of it ([`CommDialog::set_hail`]).
+//! channel, and a letter key whose letter is an option's hotkey, whatever
+//! the hotkey's case, presses the first such option. The router passes
+//! each press to the flight and shows what came of it
+//! ([`CommDialog::set_hail`]).
 //!
 //! **The haggle dialog** asks its price ([`price_text`]) in item 3, with
 //! "Accept Price" (item 1, `STR#` 150 #30) and "Lower Price" (item 2,
@@ -1241,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn an_options_hotkey_either_case_presses_the_first_with_it() {
+    fn an_options_hotkey_whatever_its_case_presses_the_first_with_it() {
         let both = HailView {
             options: vec![
                 button("Greetings", Some('G')),
@@ -1250,7 +1251,7 @@ mod tests {
             ],
             ..view()
         };
-        for (pressed, place) in [('g', 0), ('G', 0), ('r', 1), ('R', 1)] {
+        for (pressed, place) in [('g', 0), ('r', 1)] {
             let mut dialog = dialog(&both);
             dialog.input(&key(
                 crate::input::letter_key(pressed).expect("a letter key")
@@ -1854,8 +1855,6 @@ mod tests {
         for (input, choice) in [
             (key(Key::Enter), Some(Haggle::Accept)),
             (key(Key::KeyA), Some(Haggle::Accept)),
-            (key(Key::KeyA), Some(Haggle::Accept)),
-            (key(Key::KeyL), Some(Haggle::LowerPrice)),
             (key(Key::KeyL), Some(Haggle::LowerPrice)),
             (key(Key::Escape), None),
             (key(Key::KeyX), None),

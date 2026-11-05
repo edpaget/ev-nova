@@ -574,7 +574,7 @@ fn assignment_template() -> DialogTemplate {
 }
 
 impl Screen for AssignmentDialog {
-    /// A press (not a repeat) of M, either case, is Use As My Ship, and of
+    /// A press (not a repeat) of the M key is Use As My Ship, and of
     /// E Use As Escort, as `_CapturedAssignmentFilter` has them; every
     /// other event goes to the dialog, and a button activated is its
     /// choice. It never quits.
@@ -1466,8 +1466,6 @@ mod tests {
     fn m_and_e_choose_and_return_and_escape_do_not() {
         for (pressed, choice) in [
             (Key::KeyM, Assignment::MyShip),
-            (Key::KeyM, Assignment::MyShip),
-            (Key::KeyE, Assignment::Escort),
             (Key::KeyE, Assignment::Escort),
         ] {
             let mut dialog = assignment();
