@@ -152,3 +152,22 @@ fn a_jump_whose_warp_is_done_at_once_leaves_at_its_slot() {
         "freed in the AI loop"
     );
 }
+
+#[test]
+fn a_gates_box_reached_at_the_slot_is_noted_for_its_step_not_taken_for_a_jump() {
+    // Only a jump begun runs sub 4 there: a gate's box reached by a ship
+    // the high level's gate block didn't reach ends its flight at the slot.
+    let sites = [crate::catalog::LandingSite {
+        flags2: crate::gate::HYPERGATE,
+        ..nova_sim_catalog::fixture::planet(300, 0.0, 0.0)
+    }];
+    let mut traffic = Traffic::with_interval(1);
+    let mut entrant = ship(0, TRADERS, AiType::Interceptor, 0.0, 0.0);
+    entrant.goal = Goal::EnterGate(crate::catalog::StellarId(300));
+    let entrant = traffic.add_npc_at(entrant, 3);
+    traffic.low_levels(&World::new(&sites), &mut NeverFires);
+    assert_eq!(
+        traffic.slot_outcomes.get(&entrant),
+        Some(&super::Outcome::Flying)
+    );
+}

@@ -598,3 +598,39 @@ fn an_exempt_goal_under_its_ai_wait_drops_a_stored_sub_1() {
         assert_eq!(word.wanted(), Some(178), "{goal:?}");
     }
 }
+
+#[test]
+fn a_formation_ship_under_its_ai_wait_has_its_store_written_and_reads_its_leader() {
+    // Goal 0xa's high level runs under the wait (@0x8d4c8): the dispatch
+    // writes its store, and its slot reads its leader, not a fight sub's
+    // quarry.
+    let mut traffic = Traffic::with_interval(1);
+    let leader = player_at(0.0, 0.0);
+    let mut escort = waiting_escort(&leader);
+    escort.mine_order = MineOrder::Kill;
+    escort.pursuit = pursuing(AT_PLAYER, Manoeuvre::Dogfight, 90);
+    let id = traffic.add_npc(escort);
+    let world = World {
+        player: Some(crate::ai::fixture::player(0.0, 0.0)),
+        ..World::new(&[])
+    };
+    let (read, ..) = traffic.reads_at_slot(0, &world);
+    assert_eq!(read.map(|state| state.position), Some(leader.position));
+    traffic.low_levels(&world, &mut NeverFires);
+    assert_eq!(of(&traffic, id).mine_order, MineOrder::Stop);
+}
+
+#[test]
+fn a_returning_fighter_under_its_ai_wait_with_no_fight_sub_reads_its_carrier() {
+    let mut traffic = Traffic::with_interval(1);
+    traffic.add_npc(waiting(FAST, Goal::Dock(ShipRef::Player), Vec2::ZERO, 0.0));
+    let world = World {
+        player: Some(crate::ai::fixture::player(300.0, 20.0)),
+        ..World::new(&[])
+    };
+    let (read, ..) = traffic.reads_at_slot(0, &world);
+    assert_eq!(
+        read.map(|state| state.position),
+        Some(Vec2::new(300.0, 20.0))
+    );
+}
