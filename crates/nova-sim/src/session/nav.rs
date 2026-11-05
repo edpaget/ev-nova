@@ -940,9 +940,14 @@ impl Chart {
     /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
     /// the system standing for it: its box is at the slot's own position
     /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
+    ///
+    /// By [`RuleKey::GateLanes`]' other reading the slots are the systems
+    /// the current system's gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)),
+    /// as for every reader of the slots below.
     fn floating_links<'a>(&'a self, pilot: &Pilot) -> impl Iterator<Item = SystemId> + 'a {
         self.galaxy
-            .con_slots(pilot.system)
+            .link_slots(pilot.system)
             .iter()
             .copied()
             .filter(|&slot| self.flags(slot))
@@ -977,7 +982,7 @@ impl Chart {
     /// system `test` passes, empty slots (−1) passed over.
     fn slot_at(&self, pilot: &Pilot, test: impl Fn(SystemId) -> bool) -> Option<usize> {
         self.galaxy
-            .con_slots(pilot.system)
+            .link_slots(pilot.system)
             .iter()
             .take(CON_SLOTS)
             .position(|&slot| self.galaxy.exists(slot) && test(slot))
@@ -1054,7 +1059,7 @@ impl Chart {
     /// started from is the last one tried (`_MapFilter` @0x13f77-0x13f9b).
     fn next_link_slot(&self, pilot: &Pilot, from: i32) -> Option<(usize, SystemId)> {
         let start = usize::try_from(from + 1).unwrap_or(CON_SLOTS - 1);
-        let slots = self.galaxy.con_slots(pilot.system);
+        let slots = self.galaxy.link_slots(pilot.system);
         let slots = &slots[..slots.len().min(CON_SLOTS)];
         (start..slots.len()).chain(0..start).find_map(|at| {
             slots

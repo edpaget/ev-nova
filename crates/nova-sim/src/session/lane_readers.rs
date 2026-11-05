@@ -21,6 +21,7 @@
 use super::Session;
 use super::map_click::MapPress;
 use crate::catalog::SystemId;
+use crate::chance::NeverFires;
 use crate::galaxy_map::MapMarks;
 use crate::hyperspace::{JumpReadiness, JumpRefusal, RouteError};
 use crate::navigation::NavMode;
@@ -153,10 +154,44 @@ fn hyper_select_and_the_tab_cycle_find_no_slot() {
 }
 
 #[test]
+fn by_the_lanes_hyper_select_and_the_tab_cycle_step_through_the_lanes() {
+    let mut session = laned_session();
+    let selected: Vec<_> = (0..3).map(|_| session.select_next_system()).collect();
+    assert_eq!(selected, [Some(HEARTH), Some(VERGE), Some(HEARTH)]);
+    let mut session = laned_session();
+    let cycled: Vec<_> = (0..3)
+        .map(|_| {
+            assert!(session.cycle_map_selection());
+            session.nav_mode()
+        })
+        .collect();
+    assert_eq!(
+        cycled,
+        [HEARTH, VERGE, HEARTH].map(|to| NavMode::Hyperspace(Some(to)))
+    );
+}
+
+#[test]
 fn the_floating_map_has_no_link() {
     let session = started();
     assert_eq!(session.floating_map_links(), []);
     assert_eq!(session.floating_map_places().links, []);
+}
+
+#[test]
+fn by_the_lanes_the_floating_map_links_the_lanes() {
+    let mut session = laned_session();
+    assert_eq!(session.floating_map_links(), [HEARTH, VERGE]);
+    let links: Vec<_> = session
+        .floating_map_places()
+        .links
+        .iter()
+        .map(|&(link, _)| link)
+        .collect();
+    assert_eq!(links, [HEARTH, VERGE]);
+    session.select_next_system();
+    session.select_next_system();
+    assert_eq!(session.floating_preselection(), Some(VERGE), "lane slot 1");
 }
 
 #[test]
@@ -166,11 +201,50 @@ fn the_known_pass_marks_only_the_explored_systems() {
 }
 
 #[test]
+fn by_the_lanes_the_known_pass_marks_the_lane_neighbours() {
+    let session = laned_session();
+    assert_eq!(
+        session.known().iter().copied().collect::<Vec<_>>(),
+        [DRIFT, HEARTH, VERGE]
+    );
+}
+
+/// `session` begun as a new pilot over [`laned`], `_DoNewPilot`'s pass
+/// over the start system's neighbours run.
+fn begun(mut session: Session) -> Session {
+    session.begin(&laned(), &mut NeverFires);
+    session
+}
+
+#[test]
 fn a_new_pilot_explores_no_neighbour() {
-    let session = started();
+    let session = begun(started());
     assert!(session.pilot().has_explored(DRIFT));
     assert!(!session.pilot().has_explored(HEARTH));
     assert!(!session.pilot().has_explored(VERGE));
+}
+
+#[test]
+fn by_the_lanes_a_new_pilot_explores_the_lane_neighbours() {
+    let session = begun(laned_session());
+    assert!(session.pilot().has_explored(HEARTH));
+    assert!(session.pilot().has_explored(VERGE));
+}
+
+#[test]
+fn by_the_lanes_the_map_draws_the_selected_lane_again() {
+    let mut session = laned_session();
+    session.select_next_system();
+    session.select_next_system();
+    let drawing = session.map_drawing(None, &[], MapMarks::NONE);
+    assert_eq!(drawing.mode3_link, Some((DRIFT, VERGE)));
+    let selected: Vec<_> = drawing
+        .links
+        .iter()
+        .filter(|link| link.selected)
+        .map(|link| link.to)
+        .collect();
+    assert_eq!(selected, [VERGE]);
 }
 
 #[test]

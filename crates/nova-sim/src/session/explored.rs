@@ -192,7 +192,9 @@ impl Chart {
     /// system's Con slots naming a system that exists and that the
     /// visibility read ([`RuleKey::NewPilotVisibility`]) shows explores,
     /// by the engine, that system's head, and by the other reading the
-    /// system.
+    /// system. By [`RuleKey::GateLanes`]' other reading the slots are the
+    /// systems the start system's gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)).
     pub(super) fn explore_start_neighbours(
         &mut self,
         pilot: &mut Pilot,
@@ -203,7 +205,7 @@ impl Chart {
         let refresh = self.new_pilot_refresh(statics, setup);
         let galaxy = &self.galaxy;
         let neighbours = start_neighbours(
-            galaxy.con_slots(pilot.system),
+            galaxy.link_slots(pilot.system),
             |system| galaxy.exists(system) && !refresh.hides(system),
             galaxy.map().places(),
             source,
