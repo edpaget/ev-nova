@@ -363,7 +363,9 @@ impl AppScreen {
     /// it reads a press (@0x1abaf): one that reaches the menu once the
     /// Preferences have closed clicks and opens them again. The Cocoa
     /// Preferences window takes those that come while it is open
-    /// (`_RunPrefsDialog` @0xcd401).
+    /// (`_RunPrefsDialog` @0xcd401). While a map waits for M's release the
+    /// router holds the chord before it gets here, for after the close
+    /// (the `held_chords` module).
     pub(super) fn preferences_key(&mut self, input: &Input) -> bool {
         let Input::Key {
             key,

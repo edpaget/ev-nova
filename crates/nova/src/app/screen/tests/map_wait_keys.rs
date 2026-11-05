@@ -8,14 +8,14 @@ use nova_view::ui::player_info::PLAYER_INFO_KEY;
 // real router.
 
 /// Presses and lets go of `k`.
-fn tap(screen: &mut AppScreen, k: Key) {
+pub(super) fn tap(screen: &mut AppScreen, k: Key) {
     screen.input(&key(k, true));
     screen.input(&key(k, false));
 }
 
 /// Opens the map from what is shown and lets M go, then starts its wait:
 /// M down again on the open map.
-fn start_the_wait(screen: &mut AppScreen) {
+pub(super) fn start_the_wait(screen: &mut AppScreen) {
     tap(screen, MAP);
     assert!(flight(screen).map_open(), "opened");
     screen.input(&key(MAP, true));
@@ -23,7 +23,7 @@ fn start_the_wait(screen: &mut AppScreen) {
 }
 
 /// Lets M go, ending the wait.
-fn end_the_wait(screen: &mut AppScreen) {
+pub(super) fn end_the_wait(screen: &mut AppScreen) {
     screen.input(&key(MAP, false));
     assert!(!flight(screen).map_open(), "closed");
 }
@@ -258,7 +258,7 @@ fn a_key_that_closes_the_exchange_passes_the_next_on_to_the_spaceport() {
 }
 
 /// [`offered_over_flight`] with its map open and waiting.
-fn offer_map_waiting() -> AppScreen {
+pub(super) fn offer_map_waiting() -> AppScreen {
     let mut screen = offered_over_flight();
     screen.input(&key(MAP, true));
     screen.input(&key(Key::Escape, true));

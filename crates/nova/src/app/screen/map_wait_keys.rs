@@ -75,14 +75,16 @@ impl AppScreen {
     }
 
     /// Replays what the map that just closed left for the screen under
-    /// it ([`FlightView::take_map_replay`]), as the module docs say.
+    /// it ([`FlightView::take_map_replay`]), as the module docs say. They
+    /// came before any chord held through the wait, so they replay ahead
+    /// of it ([`AppScreen::ahead_of_held_chords`]).
     pub(super) fn replay_map_wait_keys(&mut self) {
         let replay = self
             .flight
             .as_mut()
             .map(FlightView::take_map_replay)
             .unwrap_or_default();
-        self.replay_wait_keys(replay);
+        self.ahead_of_held_chords(|screen| screen.replay_wait_keys(replay));
     }
 
     /// Replays what a wait left, `replay`, as the module docs say. With

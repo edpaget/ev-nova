@@ -41,7 +41,10 @@
 //! Left out:
 //!
 //! - `MenuKey` for a queued Command key in flight (@0x56a81), whose result
-//!   is ignored, as ours' Command-Q acts on its press in the router.
+//!   is ignored. The menu chords never reach the map's queue: the router
+//!   holds Command-Q and Command-comma typed during the wait and runs them
+//!   after the close, as the app menu's handler reads them from the queue
+//!   then (`nova::app::screen`'s `held_chords` module).
 //! - An auto-key's live read of M, P or I (the `what == 5` tests @0x4e0c6,
 //!   @0x608cd, @0x9f7da and their kin): those keys stay press-only by the
 //!   user's decision.
