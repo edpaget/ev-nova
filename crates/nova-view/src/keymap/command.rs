@@ -3,8 +3,11 @@
 //! Nothing here names a device: a [`Command`] is what the player means,
 //! and each device's table (the keyboard's is
 //! [`KeyMap`](super::KeyMap)) says which of its inputs means it. Every
-//! fact about a command is data on its enum: its [`Context`] and whether
-//! it is [`Kind::Held`] or [`Kind::Pressed`]. So no screen, and no crate
+//! fact about a command is data on its enum: its [`Context`], whether
+//! it is [`Kind::Held`] or [`Kind::Pressed`], and the label the keys
+//! screen shows ([`Command::label`]: `Keys.nib`'s for its 34 commands, a
+//! short one in the same style for the rest; each context's heading is
+//! [`Context::label`]). So no screen, and no crate
 //! above this one, matches every command: each screen matches its own
 //! context's enum and passes over the rest.
 //!
@@ -32,7 +35,7 @@ macro_rules! context_commands {
     (
         $(#[$meta:meta])*
         $name:ident in $context:ident {
-            $( $(#[$vmeta:meta])* $variant:ident: $kind:ident, )*
+            $( $(#[$vmeta:meta])* $variant:ident: $kind:ident $label:literal, )*
         }
     ) => {
         $(#[$meta])*
@@ -50,6 +53,14 @@ macro_rules! context_commands {
             pub const fn kind(self) -> Kind {
                 match self {
                     $(Self::$variant => Kind::$kind,)*
+                }
+            }
+
+            /// What the keys screen calls the command.
+            #[must_use]
+            pub const fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)*
                 }
             }
 
@@ -74,7 +85,7 @@ macro_rules! context_commands {
 
 /// Declares [`Context`] and [`Command`] over the contexts' enums.
 macro_rules! contexts {
-    ( $( $(#[$meta:meta])* $context:ident($commands:ident), )* ) => {
+    ( $( $(#[$meta:meta])* $context:ident($commands:ident) $label:literal, )* ) => {
         /// A group of commands read together. A screen reads an ordered
         /// list of contexts (the `contexts` module's lists), and two
         /// contexts are active together when some list holds both.
@@ -86,6 +97,14 @@ macro_rules! contexts {
         impl Context {
             /// Every context, in declaration order.
             pub const ALL: &'static [Self] = &[$(Self::$context),*];
+
+            /// What the keys screen heads the context's commands with.
+            #[must_use]
+            pub const fn label(self) -> &'static str {
+                match self {
+                    $(Self::$context => $label,)*
+                }
+            }
 
             /// The context's commands, in declaration order.
             pub fn commands(self) -> impl Iterator<Item = Command> {
@@ -122,6 +141,15 @@ macro_rules! contexts {
                 }
             }
 
+            /// What the keys screen calls the command: `Keys.nib`'s label
+            /// for the 34 commands it offers.
+            #[must_use]
+            pub const fn label(self) -> &'static str {
+                match self {
+                    $(Self::$context(command) => command.label(),)*
+                }
+            }
+
             /// The command's stable name, `Context.Variant`
             /// (`"Flight.Accelerate"`), as the settings file saves it.
             #[must_use]
@@ -148,63 +176,63 @@ macro_rules! contexts {
 
 contexts! {
     /// Flight's own commands, read by `_HandlePlayer`.
-    Flight(FlightCommand),
+    Flight(FlightCommand) "Flight",
     /// The escort menu's group keys, which shadow flight's stellar slots
     /// while the menu shows.
-    EscortMenu(EscortMenuCommand),
+    EscortMenu(EscortMenuCommand) "Escort Menu",
     /// The map, player info and mission info keys, which flight and the
     /// spaceport's screens and dialogs all read (`mapKey`,
     /// `playerInfoKey`, `missionInfoKey`).
-    Play(PlayCommand),
+    Play(PlayCommand) "Flight and Spaceport",
     /// The Pause key, which flight and the intro read (`pauseKey`).
-    Pause(PauseCommand),
+    Pause(PauseCommand) "Pause",
     /// The shared UI commands every screen but flight reads: Confirm,
     /// Back, the arrows, Tab, Space and the scroll keys.
-    Ui(UiCommand),
+    Ui(UiCommand) "Menus and Dialogs",
     /// The comm dialog's own letter (`_CommFilter` @0x908ed).
-    Comm(CommCommand),
+    Comm(CommCommand) "Comm Dialog",
     /// The haggle dialog's letters (`_HaggleFilter` @0x91d9d).
-    Haggle(HaggleCommand),
+    Haggle(HaggleCommand) "Haggle Dialog",
     /// The planet comm dialog's letters (`_PlanetCommFilter` @0x911a9).
-    PlanetComm(PlanetCommCommand),
+    PlanetComm(PlanetCommCommand) "Planet Comm Dialog",
     /// The escort dialog's letters (`_EscortFilter` @0x950e9).
-    EscortDialog(EscortDialogCommand),
+    EscortDialog(EscortDialogCommand) "Escort Dialog",
     /// The captured ship's assignment's letters
     /// (`_CapturedAssignmentFilter` @0x51782).
-    Assignment(AssignmentCommand),
+    Assignment(AssignmentCommand) "Captured Ship",
     /// The player info screen's own (`_PlayerInfoFilter` @0x53ae9).
-    PlayerInfo(PlayerInfoCommand),
+    PlayerInfo(PlayerInfoCommand) "Player Info",
     /// The spaceport's letters (`_PortFilter` @0x4f209-0x4f257).
-    Port(PortCommand),
+    Port(PortCommand) "Spaceport",
     /// The Trade Center's (`_TradeFilter`, `_DoTradeDialog`).
-    Trade(TradeCommand),
+    Trade(TradeCommand) "Trade Center",
     /// The outfitter's (`_OutfitFilter`, `_DoOutfitDialog`).
-    Outfitter(OutfitterCommand),
+    Outfitter(OutfitterCommand) "Outfitter",
     /// The shipyard's own letter (`_ShipyardFilter`).
-    Shipyard(ShipyardCommand),
+    Shipyard(ShipyardCommand) "Shipyard",
     /// The bar's letters (`_BarFilter` @0x47b1c-0x47b48).
-    Bar(BarCommand),
+    Bar(BarCommand) "Bar",
     /// The hire screen's own letter (`_ShipyardFilter` in hire mode).
-    Hire(HireCommand),
+    Hire(HireCommand) "Hire Escorts",
     /// The mission computer's letters (`_MissionFilter`).
-    MissionComputer(MissionComputerCommand),
+    MissionComputer(MissionComputerCommand) "Mission Computer",
     /// The bar race's Option (`_DoRaceDialog`).
-    Race(RaceCommand),
+    Race(RaceCommand) "Bar Race",
     /// The galaxy map's own keys (`_MapFilter`, `_DoSystemMap`).
-    Map(MapCommand),
+    Map(MapCommand) "Galaxy Map",
     /// The intro screen's Return and Space (`_ShowIntroScreen` @0x16cf1).
-    Intro(IntroCommand),
+    Intro(IntroCommand) "Intro",
     /// The system view's WASD, the fixed twins of the shared arrows.
-    SystemView(SystemViewCommand),
+    SystemView(SystemViewCommand) "System View",
     /// The app's own, which its router reads on every screen, flight
     /// included: Caps Lock's double time.
-    App(AppCommand),
+    App(AppCommand) "Everywhere",
     /// The main screen's keys the app's router reads on the main menu and
     /// the developer's sides: Fly, About and Preferences.
-    MainScreen(MainScreenCommand),
+    MainScreen(MainScreenCommand) "Main Screen",
     /// The main menu's keys the app's router reads beside the menu's
     /// typed letters (`_MainScreenKey` @0x1aba0).
-    MainMenu(MainMenuCommand),
+    MainMenu(MainMenuCommand) "Main Menu",
 }
 
 context_commands! {
@@ -221,30 +249,30 @@ context_commands! {
     /// the flight view's `map_wait` module's.
     FlightCommand in Flight {
         /// Thrust (`accelKey`, `_keyPrefs`+0x2a), held.
-        Accelerate: Held,
+        Accelerate: Held "Accelerate",
         /// Turn to face against the ship's motion (`reverseKey`, +0x2c),
         /// held.
-        ReverseCourse: Held,
+        ReverseCourse: Held "Reverse Course",
         /// Turn right (`rightTurn`, +0x28), held.
-        RotateRight: Held,
+        RotateRight: Held "Rotate Right",
         /// Turn left (`leftTurn`, +0x26), held.
-        RotateLeft: Held,
+        RotateLeft: Held "Rotate Left",
         /// Engage the afterburner (`afterburner`, +0x30, `_loadKeys`
         /// @0xcd899-0xcd8bc), held. It fades the cursor, as its press sets
         /// *0x3b5550 whether or not the ship carries an afterburner, on a
         /// ship not disabled (@0x6caf2, @0x6cb03).
-        Afterburner: Held,
+        Afterburner: Held "Afterburner",
         /// Turn to face the ship target, or the navigation stellar with
         /// none (`autopilot`, +0x0e, `_loadKeys` @0xcd8c5-0xcd935), held.
         /// It fades the cursor, as its press sets *0x3b5550 (@0x6aeeb).
-        Autopilot: Held,
+        Autopilot: Held "Autopilot",
         /// Hyperspace Mode (`hyperMode`, +0x18, key code 0x04), polled
         /// with a latch: puts the nav system in hyperspace mode and selects
         /// the course's next hop (`_HandlePlayer` @0x69b76-0x69b89). Held
         /// outside a jump, it shows the floating map (@0x69b8e-0x69ba8).
         /// Held through a jump's end, it acts as a press on the first frame
         /// after it, as its latch is cleared on every frame of a jump.
-        HyperspaceMode: Held,
+        HyperspaceMode: Held "Hyperspace Mode",
         /// Hyper Select (`hyperSel`, +0x1a, key code 0x2a), polled with a
         /// latch: cycles the hyperspace selection through the systems the
         /// current one links to, the course kept by the engine's reading.
@@ -253,9 +281,9 @@ context_commands! {
         /// or let go and pressed again then, and held past its end selects
         /// on the first frame after it; one held from before the jump does
         /// nothing after it.
-        HyperSelect: Held,
+        HyperSelect: Held "Hyper Select",
         /// Hyper Jump (`jumpKey`, +0x1c), polled with a latch.
-        HyperJump: Held,
+        HyperJump: Held "Hyper Jump",
         /// Nav System Off (`navOff`, +0x10, key code 0x32), polled with a
         /// latch: turns the nav system off, the course kept (`_HandlePlayer`
         /// @0x69a94-0x69b63). It shares Hyperspace Mode's latch: held
@@ -263,56 +291,56 @@ context_commands! {
         /// let go with it still down turns the nav off. While the dev
         /// overlay is built in, its default key toggles the overlay instead
         /// and never reaches flight.
-        NavOff: Held,
+        NavOff: Held "Nav System Off",
         /// Hail the target (`hailKey`, +0x08), one hail a press.
-        Communicate: Held,
+        Communicate: Held "Communicate",
         /// Land, or request clearance (`landReq`, +0x0a; `STR#` 129 and
         /// `STR#` 2002 #25 name it).
-        LandDock: Held,
+        LandDock: Held "Land/Dock",
         /// Fire the primary weapons (`fireKey0`, +0x04), held.
-        FirePrimary: Held,
+        FirePrimary: Held "Fire Primary",
         /// Fire the secondary weapon (`fireKey1`, +0x06), held.
-        FireSecondary: Held,
+        FireSecondary: Held "Fire Secondary",
         /// Select the next secondary weapon (`weapSelect`, +0x00), in
         /// `wëap` ID order. Held, it fades the cursor, as `_HandlePlayer`
         /// sets *0x3b5550 on every pass it is down (@0x6ac2a).
-        SelectSecondary: Held,
+        SelectSecondary: Held "Select Secondary",
         /// Let go of the secondary weapon (`weapSafe`, +0x02, key code
         /// 0x01, `_loadKeys` @0xcdde9-0xcde0c), held: on every pass with
         /// one selected (`_HandlePlayer` @0x6adc2-0x6ae1b), fading the
         /// cursor only on those passes (@0x6ade1).
-        WeaponSafety: Held,
+        WeaponSafety: Held "Weapon Safety",
         /// Target the next ship (`targSel`, +0x14).
-        TargetSelect: Held,
+        TargetSelect: Held "Target Select",
         /// Target the nearest threat (`closeTarg`, +0x16).
-        ClosestTarget: Held,
+        ClosestTarget: Held "Closest Target",
         /// Open or close the escort menu (`escortMenuKey`, +0x54).
-        EscortMenu: Pressed,
+        EscortMenu: Pressed "Escort Menu",
         /// The escorts attack the target (`escortCmdKey0`, +0x60).
-        AttackTarget: Pressed,
+        AttackTarget: Pressed "Attack Target",
         /// The escorts defend the player (`escortCmdKey1`, +0x62).
-        DefendMe: Pressed,
+        DefendMe: Pressed "Defend Me",
         /// The escorts hold position (`escortCmdKey2`, +0x64).
-        HoldPosition: Pressed,
+        HoldPosition: Pressed "Hold Position",
         /// The escorts return to formation (`escortCmdKey3`, +0x66,
         /// "Recall: (option = dock)").
-        Recall: Pressed,
+        Recall: Pressed "Recall",
         /// Clear the message line, close the escort menu and hide the
         /// floating map (`ackComm`, +0x0c).
-        Acknowledge: Held,
+        Acknowledge: Held "Acknowledge",
         /// Board the target (`boardKey`, +0x20), one attempt a press,
         /// polled with a latch.
-        Board: Held,
+        Board: Held "Board",
         /// Jettison all the cargo, Command held (`dumpCargo`, +0x1e, key
         /// code 0x28, `_loadKeys` @0xce33d-0xce360): `_HandlePlayer` reads
         /// it only with Command down (@0x6fd54-0x6fdaf), on every pass it
         /// is held. It works during a jump too: `_JettisonCargo`
         /// (0x3dffd-0x3e3c4) reads no jump state.
-        JettisonCargo: Held,
+        JettisonCargo: Held "Jettison Cargo",
         /// Eject in the escape pod, Command held (`ejectKey`, +0x22, key
         /// code 0x07): `_HandlePlayer` reads it only with Command down
         /// (@0x6f29e-0x6f2c1).
-        Eject: Held,
+        Eject: Held "Eject",
         /// Self-destruct, Command held (`destructKey`, +0x24), which
         /// `_loadKeys` reads (@0xce458) and then forces to key code 0x1b
         /// (@0xce71c, left out: the phase's findings). `_HandlePlayer`
@@ -321,39 +349,39 @@ context_commands! {
         /// refuses any press with Command held (@0x70fa7-0x70fb5): a
         /// Command-`-` press means this. The keypad's `-` (0x4e) arrives
         /// as the same key, as for the zoom out.
-        SelfDestruct: Held,
+        SelfDestruct: Held "Self-Destruct",
         /// Cloak or uncloak, once a hold (`cloakKey`, +0x52, key code
         /// 0x20, `_loadKeys` @0xce461-0xce4d4), with no Command
         /// (`_HandlePlayer` @0x705b7).
-        EngageCloak: Held,
+        EngageCloak: Held "Engage Cloak",
         /// Toggle the frame-rate readout (`framerateKey`, +0x68, F12, key
         /// code 0x6f, `_loadKeys` @0xce6a1-0xce6c4): a press, no modifier
         /// read (`_HandlePlayer` @0x6e454-0x6e4bd), during a jump too.
-        ShowFramerate: Pressed,
+        ShowFramerate: Pressed "Show Framerate",
         /// Autopilot with Option: face the navigation stellar.
-        FaceStellar: Held,
+        FaceStellar: Held "Face Stellar",
         /// Select Secondary with Option: the weapon before, in `wëap` ID
         /// order.
-        SelectSecondaryBack: Held,
+        SelectSecondaryBack: Held "Previous Secondary",
         /// Target Select with Shift: the ship before.
-        TargetSelectBack: Held,
+        TargetSelectBack: Held "Previous Target",
         /// Target Select with Option: the next escort.
-        TargetEscort: Held,
+        TargetEscort: Held "Target Escort",
         /// Target Select with Shift and Option: the escort before.
-        TargetEscortBack: Held,
+        TargetEscortBack: Held "Previous Escort",
         /// Closest Target with Option: the nearest ship.
-        ClosestShip: Held,
+        ClosestShip: Held "Closest Ship",
         /// Nav System Off with Option: let go of the ship target
         /// (@0x69a17-0x69a90), during a jump too. It shares Nav System
         /// Off's latch, so held it lets go of a target picked meanwhile on
         /// the next frame.
-        ClearTarget: Held,
+        ClearTarget: Held "Clear Target",
         /// Communicate with Option: hail the navigation stellar.
-        HailStellar: Held,
+        HailStellar: Held "Hail Stellar",
         /// Recall with Option: Return to Hangar.
-        RecallToHangar: Pressed,
+        RecallToHangar: Pressed "Return to Hangar",
         /// Jettison Cargo with Option too: all but the mission cargo.
-        JettisonNonMission: Held,
+        JettisonNonMission: Held "Jettison Non-Mission Cargo",
         /// Select the stellar in the system's first nav slot: key code
         /// 0x12, with F1 its twin (`_loadKeys` hard-codes F1-F4 at
         /// +0x34..+0x3a, @0xce6c8-0xce6da). `_HandlePlayer` reads the
@@ -363,26 +391,26 @@ context_commands! {
         /// 1-4 from the block (@0xa106-0xa124) and they pick its groups
         /// instead ([`EscortMenuCommand`]); the F keys always pick a
         /// stellar.
-        StellarSlot1: Held,
+        StellarSlot1: Held "Select Stellar 1",
         /// Select the stellar in the second nav slot (0x13, F2 its twin).
-        StellarSlot2: Held,
+        StellarSlot2: Held "Select Stellar 2",
         /// Select the stellar in the third nav slot (0x14, F3 its twin).
-        StellarSlot3: Held,
+        StellarSlot3: Held "Select Stellar 3",
         /// Select the stellar in the fourth nav slot (0x15, F4 its twin).
-        StellarSlot4: Held,
+        StellarSlot4: Held "Select Stellar 4",
         /// Select the nearest stellar, as the land key would with nothing
         /// selected: Command and the top-row 5 (0x37, 0x17, @0x69dbc-0x69dda),
         /// with F5 (0x60, @0x69dac) its twin. While the escort menu shows,
         /// `_QuickKeyCheck` hides the 5 from the block (@0xa106-0xa124), so
         /// Command-5 picks the menu's Freighters; 5 alone picks nothing.
-        NearestStellar: Held,
+        NearestStellar: Held "Nearest Stellar",
         /// Zoom the floating map out (`-` and the keypad's `-`, key codes
         /// 0x1b and 0x4e, `_HandlePlayer` @0x70f4e-0x71110, which the
         /// platform gives as one key).
-        ZoomOut: Pressed,
+        ZoomOut: Pressed "Zoom Map Out",
         /// Zoom the floating map in (`=`, key code 0x18, the keypad's `+`,
         /// 0x45, its twin).
-        ZoomIn: Pressed,
+        ZoomIn: Pressed "Zoom Map In",
     }
 }
 
@@ -391,15 +419,15 @@ context_commands! {
     /// `_loadKeys` writes after the prefs, @0xce722-0xce73a).
     EscortMenuCommand in EscortMenu {
         /// Select the menu's first group.
-        Group1: Held,
+        Group1: Held "Group 1",
         /// Select the second group.
-        Group2: Held,
+        Group2: Held "Group 2",
         /// Select the third group.
-        Group3: Held,
+        Group3: Held "Group 3",
         /// Select the fourth group.
-        Group4: Held,
+        Group4: Held "Group 4",
         /// Select the fifth group, Freighters.
-        Group5: Held,
+        Group5: Held "Freighters",
     }
 }
 
@@ -407,11 +435,11 @@ context_commands! {
     /// The keys flight and the spaceport's screens and dialogs all read.
     PlayCommand in Play {
         /// Open or close the map (`mapKey`, `_keyPrefs`+0x12).
-        GalaxyMap: Held,
+        GalaxyMap: Held "Galaxy Map",
         /// Open the player info (`playerInfoKey`, +0x32).
-        PlayerInfo: Held,
+        PlayerInfo: Held "Player Info",
         /// Open the mission info (`missionInfoKey`, +0x50).
-        MissionInfo: Held,
+        MissionInfo: Held "Mission Info",
     }
 }
 
@@ -420,7 +448,7 @@ context_commands! {
     PauseCommand in Pause {
         /// Pause the game (`pauseKey`, `_keyPrefs`+0x2e), or skip the
         /// intro.
-        Pause: Pressed,
+        Pause: Pressed "Pause",
     }
 }
 
@@ -428,29 +456,29 @@ context_commands! {
     /// The shared UI commands.
     UiCommand in Ui {
         /// Activate the default button.
-        Confirm: Pressed,
+        Confirm: Pressed "Confirm",
         /// Activate the cancel button, or leave.
-        Back: Pressed,
+        Back: Pressed "Back",
         /// Move up.
-        Up: Pressed,
+        Up: Pressed "Up",
         /// Move down.
-        Down: Pressed,
+        Down: Pressed "Down",
         /// Move left.
-        Left: Pressed,
+        Left: Pressed "Left",
         /// Move right.
-        Right: Pressed,
+        Right: Pressed "Right",
         /// Move the focus to the next field.
-        Tab: Pressed,
+        Tab: Pressed "Next Field",
         /// Activate the focused item.
-        Activate: Pressed,
+        Activate: Pressed "Activate",
         /// Scroll to the top.
-        Home: Pressed,
+        Home: Pressed "Scroll to Top",
         /// Scroll to the bottom.
-        End: Pressed,
+        End: Pressed "Scroll to Bottom",
         /// Scroll up a page.
-        PageUp: Pressed,
+        PageUp: Pressed "Page Up",
         /// Scroll down a page.
-        PageDown: Pressed,
+        PageDown: Pressed "Page Down",
     }
 }
 
@@ -460,7 +488,7 @@ context_commands! {
     /// them from the key pressed, as text entry is.
     CommCommand in Comm {
         /// Close the channel (E, beside Return and Escape).
-        Close: Pressed,
+        Close: Pressed "Close Channel",
     }
 }
 
@@ -468,9 +496,9 @@ context_commands! {
     /// The haggle dialog's letters.
     HaggleCommand in Haggle {
         /// Accept the price (A, beside Return).
-        Accept: Pressed,
+        Accept: Pressed "Accept",
         /// Lower the price (L).
-        Lower: Pressed,
+        Lower: Pressed "Lower Price",
     }
 }
 
@@ -479,15 +507,15 @@ context_commands! {
     /// button only while the dialog shows it.
     PlanetCommCommand in PlanetComm {
         /// Close the channel (E, beside Return and Escape).
-        Close: Pressed,
+        Close: Pressed "Close Channel",
         /// Greetings (G).
-        Greetings: Pressed,
+        Greetings: Pressed "Greetings",
         /// Offer Bribe (O, B its twin).
-        OfferBribe: Pressed,
+        OfferBribe: Pressed "Offer Bribe",
         /// Demand Tribute (D, T its twin).
-        DemandTribute: Pressed,
+        DemandTribute: Pressed "Demand Tribute",
         /// Release (R).
-        Release: Pressed,
+        Release: Pressed "Release",
     }
 }
 
@@ -495,13 +523,13 @@ context_commands! {
     /// The escort dialog's letters.
     EscortDialogCommand in EscortDialog {
         /// Close the channel (C, beside Return and Escape).
-        Close: Pressed,
+        Close: Pressed "Close Channel",
         /// Release the escort (R).
-        Release: Pressed,
+        Release: Pressed "Release Escort",
         /// Upgrade the escort, or cancel the upgrade (U).
-        Upgrade: Pressed,
+        Upgrade: Pressed "Upgrade",
         /// Sell the escort, or cancel the sale (S).
-        Sell: Pressed,
+        Sell: Pressed "Sell",
     }
 }
 
@@ -509,9 +537,9 @@ context_commands! {
     /// The captured ship's assignment's letters.
     AssignmentCommand in Assignment {
         /// Use As My Ship (M).
-        MyShip: Pressed,
+        MyShip: Pressed "Use As My Ship",
         /// Use As Escort (E).
-        Escort: Pressed,
+        Escort: Pressed "Use As Escort",
     }
 }
 
@@ -521,7 +549,7 @@ context_commands! {
         /// The previous tab: the shared Tab with Shift, as
         /// `_PlayerInfoFilter` reads the `shiftKey` bit beside Tab
         /// (@0x53b1e), so a rebound Tab keeps it.
-        TabBack: Pressed,
+        TabBack: Pressed "Previous Tab",
     }
 }
 
@@ -530,17 +558,17 @@ context_commands! {
     /// a click does. Their second letters are fixed twins.
     PortCommand in Port {
         /// Recharge (R, F its twin).
-        Recharge: Pressed,
+        Recharge: Pressed "Recharge",
         /// The Trade Center (C, T its twin).
-        TradeCenter: Pressed,
+        TradeCenter: Pressed "Trade Center",
         /// The Outfitter (O).
-        Outfitter: Pressed,
+        Outfitter: Pressed "Outfitter",
         /// The Shipyard (S).
-        Shipyard: Pressed,
+        Shipyard: Pressed "Shipyard",
         /// The Mission BBS (N).
-        MissionBbs: Pressed,
+        MissionBbs: Pressed "Mission BBS",
         /// The Bar (B).
-        Bar: Pressed,
+        Bar: Pressed "Bar",
     }
 }
 
@@ -548,17 +576,17 @@ context_commands! {
     /// The Trade Center's own commands.
     TradeCommand in Trade {
         /// Buy (B), repeats too.
-        Buy: Pressed,
+        Buy: Pressed "Buy",
         /// Sell (S), repeats too.
-        Sell: Pressed,
+        Sell: Pressed "Sell",
         /// Held, Buy and Sell ask for a count or trade the most: Option,
         /// as `_DoTradeDialog` reads the `optionKey` bit (@0x5e211,
         /// @0x5e45c), so the right Option is its twin.
-        MaxLot: Held,
+        MaxLot: Held "Trade Most",
         /// The selection back a row: the shared Tab with Shift, as
         /// `_TradeFilter` reads the `shiftKey` bit beside Tab (@0x4e18a),
         /// so a rebound Tab keeps it.
-        TabBack: Pressed,
+        TabBack: Pressed "Previous Row",
     }
 }
 
@@ -566,13 +594,13 @@ context_commands! {
     /// The outfitter's own commands.
     OutfitterCommand in Outfitter {
         /// Buy one (B), repeats too.
-        Buy: Pressed,
+        Buy: Pressed "Buy",
         /// Sell one (S), repeats too.
-        Sell: Pressed,
+        Sell: Pressed "Sell",
         /// Held, Buy and Sell ask for a count: Option, as
         /// `_DoOutfitDialog` tests the `optionKey` bit (@0x5c0c0,
         /// @0x5c5e3), so the right Option is its twin.
-        Count: Held,
+        Count: Held "Ask Count",
     }
 }
 
@@ -581,7 +609,7 @@ context_commands! {
     /// `_ShipyardFilter` @0x60526).
     ShipyardCommand in Shipyard {
         /// Buy Ship (B).
-        Buy: Pressed,
+        Buy: Pressed "Buy Ship",
     }
 }
 
@@ -590,11 +618,11 @@ context_commands! {
     /// twins.
     BarCommand in Bar {
         /// Hire Escort (H, E its twin).
-        Hire: Pressed,
+        Hire: Pressed "Hire Escort",
         /// Gamble (G, R its twin).
-        Gamble: Pressed,
+        Gamble: Pressed "Gamble",
         /// Holovid, the news (N, W its twin).
-        News: Pressed,
+        News: Pressed "Holovid",
     }
 }
 
@@ -602,7 +630,7 @@ context_commands! {
     /// The hire screen's own letter; its Info is the shared Activate.
     HireCommand in Hire {
         /// Hire Escort (H, `_ShipyardFilter` @0x60503).
-        Hire: Pressed,
+        Hire: Pressed "Hire Escort",
     }
 }
 
@@ -611,9 +639,9 @@ context_commands! {
     MissionComputerCommand in MissionComputer {
         /// Leave (L), beside Confirm and Back (`_MissionFilter`
         /// @0x9f885-0x9f8af).
-        Leave: Pressed,
+        Leave: Pressed "Leave",
         /// Accept the selected offer (A, @0x9f8b4-0x9f8c7).
-        Accept: Pressed,
+        Accept: Pressed "Accept",
     }
 }
 
@@ -623,7 +651,7 @@ context_commands! {
         /// Held as a racer is clicked, asks for the bet: the left Option,
         /// as `_DoRaceDialog` polls its key code (`_KeyCheck(0x3a)`
         /// @0x48be9), so it has no right twin.
-        Ask: Held,
+        Ask: Held "Ask Bet",
     }
 }
 
@@ -635,25 +663,25 @@ context_commands! {
     MapCommand in Map {
         /// Flip the government borders, as the Borders button does (B,
         /// its repeats too, @0x14251).
-        Borders: Pressed,
+        Borders: Pressed "Borders",
         /// Ask to clear the route, as Clear Route does (C, its repeats
         /// too, @0x14268).
-        ClearRoute: Pressed,
+        ClearRoute: Pressed "Clear Route",
         /// Open Find, as the Find button does (F, S its twin,
         /// @0x144b9-0x144d6).
-        Find: Pressed,
+        Find: Pressed "Find",
         /// Step the zoom out, item 4 (`-`, @0x14271-0x14293).
-        ZoomOut: Pressed,
+        ZoomOut: Pressed "Zoom Out",
         /// Step the zoom in, item 5 (`=`, the keypad's `+` its twin).
-        ZoomIn: Pressed,
+        ZoomIn: Pressed "Zoom In",
         /// Cycle the hypergate map's selection back: the shared Tab with
         /// Shift, as `_MapFilter` reads the `shiftKey` bit beside Tab and
         /// `\` (@0x13ee4), so a rebound Tab keeps it.
-        TabBack: Pressed,
+        TabBack: Pressed "Previous Selection",
         /// Held as a system is clicked, the click edits the course: the
         /// left Shift, as `_DoSystemMap` polls its key code
         /// (`_KeyCheck(0x38)` @0x13071), so it has no right twin.
-        PlotCourse: Held,
+        PlotCourse: Held "Plot Course",
     }
 }
 
@@ -664,9 +692,9 @@ context_commands! {
     /// shared UI key.
     IntroCommand in Intro {
         /// End the picture showing (Return, 0x24).
-        Confirm: Held,
+        Confirm: Held "End Picture",
         /// End the picture showing (Space, 0x31).
-        Activate: Held,
+        Activate: Held "End Picture (Second Key)",
     }
 }
 
@@ -683,7 +711,7 @@ context_commands! {
         /// Turn double time on or off, on each press (Caps Lock, whose
         /// lock state the original follows, `_QuickKeyCheck(0x39)`
         /// @0x463c3).
-        DoubleTime: Pressed,
+        DoubleTime: Pressed "Double Time",
     }
 }
 
@@ -694,11 +722,11 @@ context_commands! {
     /// P (@0x1ac59).
     MainScreenCommand in MainScreen {
         /// Enter flight from the ship browser or the galaxy viewer (F).
-        Fly: Pressed,
+        Fly: Pressed "Fly",
         /// Open the About text (I).
-        About: Pressed,
+        About: Pressed "About",
         /// Open the Preferences (P).
-        Preferences: Pressed,
+        Preferences: Pressed "Preferences",
     }
 }
 
@@ -708,19 +736,19 @@ context_commands! {
     /// @0x1aba0).
     MainMenuCommand in MainMenu {
         /// Show the About text, after a click (A, @0x1ac70).
-        About: Pressed,
+        About: Pressed "About",
         /// Show `dësc` 32766, after a click (X, @0x1ac7e).
-        Text: Pressed,
+        Text: Pressed "Show Text",
         /// Held, Open Pilot does nothing: the S key, which
         /// `_MainScreenKey` polls by key code (`_KeyCheck(0x01)`
         /// @0x1abd3). No other code reads it, so its purpose is unknown.
-        OpenGuardS: Held,
+        OpenGuardS: Held "Hold Off Open Pilot",
         /// Held, Open Pilot does nothing: the L key (`_KeyCheck(0x25)`
         /// @0x1abf5), beside S.
-        OpenGuardL: Held,
+        OpenGuardL: Held "Hold Off Open Pilot (Second Key)",
         /// Held as Enter Ship is typed, the choice waits for its release
         /// (the E key, `_QuickKeyCheck(0x0e)` @0x1ac32-0x1ac57).
-        EnterShip: Held,
+        EnterShip: Held "Hold Enter Ship",
     }
 }
 
@@ -868,6 +896,71 @@ mod tests {
         ] {
             assert_eq!(Command::from_name(name), None, "{name:?}");
         }
+    }
+
+    #[test]
+    fn every_command_and_context_has_a_label() {
+        for command in Command::all() {
+            assert!(!command.label().is_empty(), "{command:?}");
+        }
+        for context in Context::ALL {
+            assert!(!context.label().is_empty(), "{context:?}");
+        }
+        assert_eq!(Context::Flight.label(), "Flight");
+        assert_eq!(Command::from(UiCommand::Back).label(), "Back");
+    }
+
+    #[test]
+    fn no_two_commands_of_a_context_share_a_label() {
+        for &context in Context::ALL {
+            let labels: std::collections::BTreeSet<&str> =
+                context.commands().map(Command::label).collect();
+            assert_eq!(labels.len(), context.commands().count(), "{context:?}");
+        }
+    }
+
+    #[test]
+    fn the_keys_window_s_commands_carry_keys_nib_s_labels_in_its_order() {
+        let labels: Vec<&str> = Command::KEYS_WINDOW.iter().map(|c| c.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Accelerate",
+                "Reverse Course",
+                "Rotate Right",
+                "Rotate Left",
+                "Afterburner",
+                "Autopilot",
+                "Hyperspace Mode",
+                "Hyper Select",
+                "Hyper Jump",
+                "Nav System Off",
+                "Communicate",
+                "Land/Dock",
+                "Fire Primary",
+                "Fire Secondary",
+                "Select Secondary",
+                "Weapon Safety",
+                "Target Select",
+                "Closest Target",
+                "Escort Menu",
+                "Attack Target",
+                "Defend Me",
+                "Hold Position",
+                "Recall",
+                "Pause",
+                "Acknowledge",
+                "Board",
+                "Jettison Cargo",
+                "Eject",
+                "Self-Destruct",
+                "Engage Cloak",
+                "Galaxy Map",
+                "Player Info",
+                "Mission Info",
+                "Show Framerate",
+            ]
+        );
     }
 
     #[test]
