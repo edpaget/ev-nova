@@ -49,7 +49,9 @@ impl<
     /// let them ([`FlightView::held_keys_frame`]; see the module docs), L
     /// and I too ([`FlightView::faded_keys_frame`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        self.take_input(input)
+        let action = self.take_input(input);
+        self.forget_map_pad_key(input);
+        action
     }
 
     /// First catches the screen up with what the session has told since
@@ -144,6 +146,7 @@ impl<
         self.let_go_of_input();
         self.map.release_keys();
         self.map_key_held = false;
+        self.map_pad_key = None;
         self.wait_keys.clear();
         if self.map_closing {
             self.close_map();
@@ -326,6 +329,7 @@ impl<
             | Input::PadButton { pressed: true, .. } => self.keys.peek(input),
             _ => None,
         };
+        self.note_map_pad_key(input, press);
         let jumping = self.jump_under_way();
         if jumping && self.stop_during_jump(press, input) {
             return ScreenAction::None;

@@ -614,6 +614,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map: opening.map,
             map_open: false,
             map_key_held: false,
+            map_pad_key: None,
             map_closing: false,
             wait_keys: crate::ui::key_wait::WaitKeys::new(super::map_wait::map_key(
                 &crate::keymap::SharedBindings::default(),

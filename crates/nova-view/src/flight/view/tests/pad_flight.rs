@@ -1,6 +1,7 @@
 //! Flying from a gamepad: the stick axes' analog turn and throttle in the
 //! step input, the d-pad's full-rate turn and thrust, the throttle's back
-//! direction as reverse, the layers, and a lost pad. The table's rules
+//! direction as reverse, the layers, the map key's chord whichever of its
+//! buttons goes up first, and a lost pad. The table's rules
 //! are the keymap's (`keymap::gamepad`'s tests); these pin that flight
 //! reads them into its step.
 
@@ -218,4 +219,104 @@ fn the_surroundings_reach_flight_s_reader() {
         device: used,
     }));
     assert_eq!(view.keys.device(), used);
+}
+
+/// A view in Sol with its course map opened by the pad's chord, Start
+/// then the right stick up ([`PlayCommand::GalaxyMap`]'s default), both
+/// still down.
+///
+/// [`PlayCommand::GalaxyMap`]: crate::keymap::PlayCommand::GalaxyMap
+fn chord_opened() -> Faked {
+    let mut view = faked_sol(in_sol());
+    pad(&mut view, PadButton::Start, true);
+    pad(&mut view, PadButton::RightStickUp, true);
+    assert!(view.map_open(), "the chord opens the map");
+    view
+}
+
+/// The chord's two buttons going up: Start first, or the stick first.
+fn chord_released(view: &mut Faked, start_first: bool) {
+    let order = if start_first {
+        [PadButton::Start, PadButton::RightStickUp]
+    } else {
+        [PadButton::RightStickUp, PadButton::Start]
+    };
+    for button in order {
+        pad(view, button, false);
+    }
+}
+
+#[test]
+fn the_chord_s_map_lets_go_of_the_map_key_whichever_button_goes_up_first() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        assert!(view.map_key_held, "start first: {start_first}");
+        chord_released(&mut view, start_first);
+        assert!(!view.map_key_held, "start first: {start_first}");
+        // With the map key up, a press the map doesn't take closes nothing.
+        pad(&mut view, PadButton::West, true);
+        assert!(view.map_open(), "start first: {start_first}");
+    }
+}
+
+#[test]
+fn the_chord_closes_its_map_on_its_release_whichever_button_goes_up_first() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        chord_released(&mut view, false);
+        assert!(!view.map_key_held);
+        pad(&mut view, PadButton::Start, true);
+        pad(&mut view, PadButton::RightStickUp, true);
+        assert!(view.map_open(), "start first: {start_first}: it waits");
+        chord_released(&mut view, start_first);
+        assert!(!view.map_open(), "start first: {start_first}: closed");
+        ticked(&mut view, 2);
+        assert!(!view.map_open(), "start first: {start_first}: stays closed");
+    }
+}
+
+#[test]
+fn start_pressed_again_over_the_held_stick_closes_the_chord_s_map_once() {
+    let mut view = chord_opened();
+    pad(&mut view, PadButton::Start, false);
+    // The stick is still down, so the map key is: Start's press closes
+    // the map, waiting for the stick.
+    pad(&mut view, PadButton::Start, true);
+    assert!(view.map_open(), "it waits for the stick");
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(!view.map_open(), "closed on the stick's release");
+    pad(&mut view, PadButton::Start, false);
+    ticked(&mut view, 2);
+    assert!(!view.map_open(), "nothing opens it again");
+    // A fresh chord opens it again.
+    pad(&mut view, PadButton::Start, true);
+    pad(&mut view, PadButton::RightStickUp, true);
+    assert!(view.map_open());
+}
+
+#[test]
+fn m_s_map_still_closes_on_m_s_release() {
+    let mut view = faked_sol(in_sol());
+    view.input(&key(MAP, true));
+    assert!(view.map_open());
+    view.input(&key(MAP, false));
+    assert!(!view.map_key_held);
+    view.input(&key(MAP, true));
+    assert!(view.map_open(), "it waits");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
+}
+
+#[test]
+fn focus_lost_forgets_the_chord_s_button_as_the_map_key() {
+    let mut view = chord_opened();
+    view.release_keys();
+    assert!(view.map_open(), "nothing waited, so nothing closes");
+    // M closes the map, waiting for M: the stick's release, its press
+    // gone with the focus, isn't the map key's.
+    view.input(&key(MAP, true));
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(view.map_open(), "still waiting for M");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
 }
