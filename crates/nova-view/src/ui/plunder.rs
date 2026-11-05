@@ -636,6 +636,9 @@ impl Screen for AssignmentDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{assignment_pad_probe, plunder_pad_probe};
+
+#[cfg(test)]
 mod tests {
     use nova_sim::{Good, NpcId, OutfitId, ShipId};
 
@@ -1272,6 +1275,68 @@ mod tests {
             Rc::new(MonoMetrics),
         )
         .expect("builds")
+    }
+
+    struct PlunderProbe(PlunderDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for PlunderProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            TAKE_BUTTONS
+                .iter()
+                .map(|&(item, name, _)| (name, self.0.dialog().item_bounds(item).expect("item")))
+                .collect()
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_take())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Abort")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The plunder dialog's row in the pad's every-screen table: a trader
+    /// with something of everything, so every button is enabled.
+    pub(crate) fn plunder_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(PlunderProbe(dialog(loaded())))
+    }
+
+    struct AssignmentProbe(AssignmentDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for AssignmentProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![("My Ship", at(MY_SHIP_ITEM)), ("Escort", at(ESCORT_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_choice())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The captured ship's assignment's row in the pad's every-screen
+    /// table.
+    pub(crate) fn assignment_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(AssignmentProbe(assignment()))
     }
 
     #[test]

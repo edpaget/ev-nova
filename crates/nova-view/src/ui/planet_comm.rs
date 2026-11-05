@@ -243,11 +243,14 @@ impl PlanetCommDialog {
         self
     }
 
-    /// Shows `view`: its reply, its buttons and its status line.
+    /// Shows `view`: its reply, its buttons and its status line, keeping
+    /// the focus ring and the pad's device and focused item.
     pub fn set_view(&mut self, view: &PlanetCommView) {
-        self.dialog = layout(&self.template, view, self.style, &self.metrics)
+        let mut dialog = layout(&self.template, view, self.style, &self.metrics)
             .with_bindings(self.reader.bindings().clone());
-        self.dialog.set_focus_ring(self.focus_ring);
+        dialog.set_focus_ring(self.focus_ring);
+        dialog.carry_pad_from(&self.dialog);
+        self.dialog = dialog;
         self.view = view.clone();
     }
 
@@ -466,6 +469,9 @@ impl Screen for PlanetCommDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::StellarId;
@@ -507,6 +513,81 @@ mod tests {
             status: Some(PlanetStatus::Owned),
             ..greeting()
         }
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    fn tap(screen: &mut impl Screen, button: crate::input::PadButton) {
+        screen.input(&pad(button, true));
+        screen.input(&pad(button, false));
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings { device })
+    }
+
+    #[test]
+    fn east_closes_the_channel_as_escape_does() {
+        let mut escaped = dialog(&greeting());
+        escaped.input(&Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        });
+        let mut padded = dialog(&greeting());
+        padded.input(&told(PAD));
+        tap(&mut padded, crate::input::PadButton::East);
+        assert_eq!(padded.take_press(), Some(PlanetCommItem::Close));
+        assert_eq!(escaped.take_press(), Some(PlanetCommItem::Close));
+    }
+
+    #[test]
+    fn a_new_view_keeps_the_pads_focus_and_device() {
+        let mut dialog = dialog(&greeting());
+        dialog.input(&told(PAD));
+        tap(&mut dialog, crate::input::PadButton::RightShoulder);
+        let focused = dialog.dialog().focus();
+        assert!(focused.is_some());
+        dialog.set_view(&greeting());
+        assert_eq!(dialog.dialog().device(), PAD);
+        assert_eq!(dialog.dialog().focus(), focused);
+        assert_eq!(dialog.dialog().pad_highlight(), focused);
+    }
+
+    struct Probe(PlanetCommDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![
+                ("Close", at(CLOSE_ITEM)),
+                ("Greetings", at(SECOND_ITEM)),
+                ("Demand Tribute", at(THIRD_ITEM)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_press())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The planet comm dialog's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(dialog(&greeting())))
     }
 
     /// Stock `DLOG` 1009's items, fixed at (0, 0).

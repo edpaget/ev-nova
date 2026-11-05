@@ -322,12 +322,15 @@ impl EscortDialog {
         self
     }
 
-    /// Shows `view`: its lines and its buttons' labels and greying.
+    /// Shows `view`: its lines and its buttons' labels and greying,
+    /// keeping the focus ring and the pad's device and focused item.
     pub fn set_view(&mut self, view: &EscortDialogView) {
         let ring = self.dialog.focus_ring();
-        self.dialog = layout(&self.template, view, self.style, &self.metrics)
+        let mut dialog = layout(&self.template, view, self.style, &self.metrics)
             .with_focus_ring(ring)
             .with_bindings(self.reader.bindings().clone());
+        dialog.carry_pad_from(&self.dialog);
+        self.dialog = dialog;
         self.view = view.clone();
     }
 
@@ -488,6 +491,9 @@ impl Screen for EscortDialog {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::ShipId;
@@ -529,6 +535,82 @@ mod tests {
             can_sell: true,
             mark: None,
         }
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    fn tap(screen: &mut impl Screen, button: crate::input::PadButton) {
+        screen.input(&pad(button, true));
+        screen.input(&pad(button, false));
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings { device })
+    }
+
+    #[test]
+    fn east_closes_the_channel_as_escape_does() {
+        let mut escaped = dialog(&hired());
+        escaped.input(&Input::Key {
+            key: Key::Escape,
+            pressed: true,
+            repeat: false,
+        });
+        let mut padded = dialog(&hired());
+        padded.input(&told(PAD));
+        tap(&mut padded, crate::input::PadButton::East);
+        assert_eq!(padded.take_press(), Some(EscortButton::Close));
+        assert_eq!(escaped.take_press(), Some(EscortButton::Close));
+    }
+
+    #[test]
+    fn a_new_view_keeps_the_pads_focus_and_device() {
+        let mut dialog = dialog(&hired());
+        dialog.input(&told(PAD));
+        tap(&mut dialog, crate::input::PadButton::RightShoulder);
+        let focused = dialog.dialog().focus();
+        assert!(focused.is_some());
+        dialog.set_view(&hired());
+        assert_eq!(dialog.dialog().device(), PAD);
+        assert_eq!(dialog.dialog().focus(), focused);
+        assert_eq!(dialog.dialog().pad_highlight(), focused);
+    }
+
+    struct Probe(EscortDialog);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |item| self.0.dialog().item_bounds(item).expect("item");
+            vec![
+                ("Close", at(CLOSE_ITEM)),
+                ("Release", at(RELEASE_ITEM)),
+                ("Upgrade", at(UPGRADE_ITEM)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("{:?}", self.0.take_press())
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            self.0 = self.0.clone().with_focus_ring(ring);
+            true
+        }
+    }
+
+    /// The escort dialog's row in the pad's every-screen table: a hired
+    /// escort that can be upgraded, not sold.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(dialog(&hired())))
     }
 
     /// Stock `DLOG` 1022's items, fixed at (0, 0).

@@ -77,6 +77,10 @@ fn rows() -> Vec<Row> {
         ("desc, overflowing", crate::ui::desc::pad_probe_overflowing),
         ("comm", crate::ui::comm::comm_pad_probe),
         ("haggle", crate::ui::comm::haggle_pad_probe),
+        ("plunder", crate::ui::plunder::plunder_pad_probe),
+        ("assignment", crate::ui::plunder::assignment_pad_probe),
+        ("planet comm", crate::ui::planet_comm::pad_probe),
+        ("escort", crate::ui::escort_dialog::pad_probe),
     ]
 }
 
