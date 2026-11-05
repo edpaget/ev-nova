@@ -14,33 +14,37 @@
 //!   @0x8b60d) with +0x70 untouched, and in a leave (goal 2) with +0x70 -1
 //!   (@0x8b190, @0x8b5fa; [`idle_block::leaves`](super::idle_block::leaves));
 //! - unprovoked, every other goal reaches the provoked test (@0x8b1ac,
-//!   @0x8b616), which writes nothing;
+//!   @0x8b616), which writes nothing: so a trader that took a lead's
+//!   mine (0x10) or scoop (0x11) by the succession keeps it too;
 //! - `_HighLevelAIHandler`'s goal-1 block (@0x8d8b8-0x8db5f) has no +0x70
 //!   write, neither for a gate stellar's goal 0x14 (@0x8d8f5) nor a
 //!   landing's completion (@0x8dadc-0x8db5a); the goal-0x14 block
 //!   (@0x8db62-0x8dd5e) writes it only on the followers it releases
-//!   (@0x8dd20); the goal-2 block (@0x8dd9c-0x8de5e) writes none.
+//!   (@0x8dd20); the goal-2 block (@0x8dd9c-0x8de5e) writes none, nor do
+//!   the mine's and the scoop's (@0x8f832-0x8f903, @0x8faf3-0x8fafd).
+//!   The low level's order 0x14, the mine's fire at slot 0, writes it -1
+//!   (@0x8843a) for any type, which the traffic's frame makes
+//!   ([`frame_target`](crate::traffic)), whatever this answers.
 //!
 //! So the target stands until the handler's slot test clears a gone slot
-//! (@0x8d4e4-0x8d50d: one breaking up is still active). The original's
-//! +0x70 is a slot number, so one refilled names the newcomer; the engine
-//! keeps ids, which can't replicate that.
+//! ([`kept_target`](super::kept_target), @0x8d4e4-0x8d50d: one breaking
+//! up is still active).
 //!
 //! A held target is read by the threat tests ([`Npc::fought`]) and by the
 //! warp hold (@0x8d535-0x8d56b,
 //! [`warp_out::hold_stage`](crate::traffic::warp_out::hold_stage)), which
 //! turns a leaving trader whose warp is under way to flee it.
 
-use crate::ai::{Goal, Surroundings};
+use crate::ai::{Goal, Surroundings, kept_target};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
 /// The ship a trader targets among `around`: its goal's quarry, but
 /// stopped ([`Goal::Wait`], state 6), idle ([`Goal::Idle`], state 0),
-/// leaving ([`Goal::JumpOut`], state 2), landing ([`Goal::Land`], state 1)
-/// or entering a gate ([`Goal::EnterGate`], state 0x14) the target it
-/// holds, until its slot is gone (see the module docs). A stopped trader
+/// leaving ([`Goal::JumpOut`], state 2), landing ([`Goal::Land`], state 1),
+/// entering a gate ([`Goal::EnterGate`], state 0x14), mining
+/// ([`Goal::Mine`], 0x10) or scooping ([`Goal::Scoop`], 0x11) the target
+/// it holds, until its slot is gone (see the module docs). A stopped trader
 /// fires nothing at it (state 6 flies sub 1, @0x8f101), but the threat
 /// tests read it ([`Npc::threatens_player_or_led`],
 /// [`Npc::threatens_npc_among`], [`Npc::threatens_player_extended`]).
@@ -55,9 +59,13 @@ use crate::traffic::npc::Npc;
 #[must_use]
 pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     match npc.goal {
-        Goal::Wait | Goal::Idle | Goal::JumpOut | Goal::Land(_) | Goal::EnterGate(_) => npc
-            .target
-            .filter(|&ship| around.condition_of(ship).is_some_and(Condition::active)),
+        Goal::Wait
+        | Goal::Idle
+        | Goal::JumpOut
+        | Goal::Land(_)
+        | Goal::EnterGate(_)
+        | Goal::Mine
+        | Goal::Scoop => kept_target::kept(npc, around),
         goal => goal.quarry(),
     }
 }
@@ -67,16 +75,19 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
     use crate::catalog::StellarId;
+    use crate::combat::hull::Condition;
     use crate::traffic::npc::AiType;
 
     /// The goals whose blocks never write a trader's +0x70.
-    fn keeping() -> [Goal; 5] {
+    fn keeping() -> [Goal; 7] {
         [
             Goal::JumpOut,
             Goal::Land(StellarId(128)),
             Goal::EnterGate(StellarId(129)),
             Goal::Wait,
             Goal::Idle,
+            Goal::Mine,
+            Goal::Scoop,
         ]
     }
 
@@ -84,7 +95,8 @@ mod tests {
     fn a_trader_keeps_a_hits_target_while_it_leaves_lands_enters_a_gate_waits_or_idles() {
         // The landing @0x8b0fd and the stop @0x8b1a3 leave it, the
         // provoked test @0x8b1ac writes nothing unprovoked, and the goal-1
-        // (@0x8d8f5, @0x8dadc), 0x14 and 2 blocks of the high level none.
+        // (@0x8d8f5, @0x8dadc), 0x14, 2, 0x10 and 0x11 blocks of the high
+        // level none (@0x8f832-0x8f903, @0x8faf3-0x8fafd).
         let govts = govts(0, 0);
         let sites = sites();
         for goal in keeping() {

@@ -71,6 +71,7 @@ pub mod hopeless_flee;
 pub mod idle_block;
 pub mod inspect_high;
 pub mod interceptor;
+pub mod kept_target;
 pub mod leave;
 pub mod lost_sight;
 pub mod mine_orders;
