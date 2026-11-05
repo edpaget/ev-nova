@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 binrw.workspace = true
 encoding_rs.workspace = true
+# The new game's data format: its loader, read by the `new_game` adapter.
+nova-galaxy-format.workspace = true
 nova-rsrc.workspace = true
 serde.workspace = true
 # `AnyRecord::to_json`: a record's fields as JSON, for nova-dump and the
@@ -23,6 +25,9 @@ ttf-parser.workspace = true
 
 [dev-dependencies]
 encoding_rs.workspace = true
+# The format's small test galaxy (`fixture::galaxy`), broken one file at a
+# time by the adapter's tests.
+nova-galaxy-format = { workspace = true, features = ["fixture"] }
 # Synthetic forks for the decode-file and wiring tests.
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # Integration tests build synthetic pictures, sprites and sounds with the

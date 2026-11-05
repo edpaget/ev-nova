@@ -185,8 +185,8 @@
 //! # Records decoded elsewhere
 //!
 //! [`GameData::from_decoded`] builds a store from records that arrive
-//! decoded, with no resource bytes behind them: the new game's data.
-//! Every record is attributed to one file, the
+//! decoded, with no resource bytes behind them: the new game's data
+//! ([`crate::new_game`]). Every record is attributed to one file, the
 //! folder they were read from, and is read like any decoded record; but
 //! [`GameData::resource`] is `None` for each, as there are no bytes.
 

@@ -151,6 +151,7 @@ pub mod file;
 pub mod fonts;
 pub mod graphics;
 pub mod music;
+pub mod new_game;
 pub mod records;
 pub mod registry;
 pub mod sound;

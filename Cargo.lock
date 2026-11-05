@@ -1817,6 +1817,7 @@ dependencies = [
  "binrw",
  "encoding_rs",
  "nova-data",
+ "nova-galaxy-format",
  "nova-rsrc",
  "serde",
  "serde_json",

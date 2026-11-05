@@ -38,8 +38,9 @@ deny = [
     { crate = "nova-win32", wrappers = ["nova"], reason = "Win32's unsafe calls are reached only through nova-win32's safe API, and only by the game" },
     # The workspace's layering, bottom to top:
     #
-    # - nova-rsrc and nova-sim-base (no workspace dependencies);
-    # - nova-data (on nova-rsrc);
+    # - nova-rsrc, nova-sim-base and nova-galaxy-format (no workspace
+    #   dependencies; game-bible's galaxy tool reaches the format by git);
+    # - nova-data (on nova-rsrc and nova-galaxy-format);
     # - the layered nova-sim crates (roadmap nova-sim-layered-crates):
     #   catalog, state, combat, ai, story, port;
     # - nova-sim (the facade);
@@ -62,6 +63,7 @@ deny = [
     # (`mise run deny` makes an unused wrapper an error). A new crate gets
     # its own entry and is added to the `wrappers` of every crate it uses.
     { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim", "nova-sim-catalog", "nova-view"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
+    { crate = "nova-galaxy-format", wrappers = ["nova-data"], reason = "the new game's data format sits at the bottom, below the game data store; game-bible's galaxy tool reaches it by git" },
     { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim", "nova-sim-catalog", "nova-sim-state", "nova-view"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
     { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
