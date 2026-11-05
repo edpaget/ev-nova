@@ -50,23 +50,9 @@ use nova_sim::flight_frame::ScreenAsk;
 use nova_sim::flight_frame::{FlightCommand, MarksFrom};
 use nova_sim::{MapMarks, MissionId, SavedNav};
 
+use super::FlightView;
 use super::port_screen_map::{self, PortScreen};
-use super::{FlightView, MAP_KEY};
-use crate::Input;
 use crate::flight::sim_port::FlightSim;
-
-/// Whether `input` is a press of [`MAP_KEY`], never a repeat: how each
-/// mission dialog asks for the map, as the bar does (`_QuickKeyCheck` of
-/// `_keyPrefs` +0x12).
-#[must_use]
-pub(crate) fn is_map_press(input: &Input) -> bool {
-    *input
-        == Input::Key {
-            key: MAP_KEY,
-            pressed: true,
-            repeat: false,
-        }
-}
 
 /// The mission dialog that asks for the map, and what it reads for the
 /// map's marks.
@@ -196,8 +182,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::close_map`]'s, then the opener's restore (see the
     /// module docs).
     ///
-    /// Each dialog opens it only on the map key ([`is_map_press`]), so it
-    /// opens with [`MAP_KEY`] held, and a close before its release waits
+    /// Each dialog opens it only on the map key (a fresh press of
+    /// [`PlayCommand::GalaxyMap`](crate::keymap::PlayCommand::GalaxyMap)), so it
+    /// opens with [`MAP_KEY`](super::MAP_KEY) held, and a close before its release waits
     /// for it ([`FlightView::close_map`]).
     pub fn open_dialog_map(&mut self, opener: MapOpener) {
         self.open_map_as(MapOpening::Dialog(opener));

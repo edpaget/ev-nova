@@ -11,8 +11,11 @@
 //! draws them. A service the stellar's flags don't offer is drawn
 //! disabled, and a click on it does nothing.
 //!
-//! Leave, Return and Escape leave: the router takes off. Each of the
-//! [`PORT_KEYS`](super::layout::PORT_KEYS) presses its button, as
+//! Leave, Return and Escape leave: the router takes off. The spaceport
+//! reads its keys through the key map ([`contexts::PORT`]), given the
+//! app's bindings ([`SpaceportView::with_bindings`]), which it hands to
+//! every screen it opens. Each of its letters ([`PortCommand`](crate::keymap::PortCommand), the second
+//! letters fixed twins) presses its button, as
 //! `_PortFilter` @0x4f209-0x4f257 does: R or F Recharge, C or T the Trade
 //! Center, O the Outfitter, S the Shipyard, N the Mission BBS and B the
 //! Bar. A letter does exactly what a click on its button does, so one for
@@ -79,7 +82,7 @@
 //! ([`SpaceportView::with_offer_clock`]); the bar's hire screen restarts
 //! the bar's by the engine, which asks for a new gap
 //! ([`SpaceportView::take_offer_restart`]).
-//! [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), in the spaceport, the bar, the mission
+//! The mission info key ([`PlayCommand::MissionInfo`]), in the spaceport, the bar, the mission
 //! computer, the trade center, the outfitter, the shipyard (and its Info
 //! panel) or an offer over any of them, asks for the mission info screen
 //! ([`SpaceportView::take_mission_info_request`]), which opens over
@@ -91,7 +94,7 @@
 //! the [`MissionDialogs`] flight shows too; the spaceport lets go of the
 //! keys of the screen beneath once the info screen closes.
 //!
-//! [`PLAYER_INFO_KEY`] (a press) asks for the player info screen
+//! The player info key ([`PlayCommand::PlayerInfo`], a press) asks for the player info screen
 //! ([`SpaceportView::take_player_info_request`]) from the spaceport
 //! (`_PortFilter` @0x4f18f), the bar and its hire screen, the trade
 //! center, the shipyard and its Info panel (never its name prompt), the
@@ -196,7 +199,7 @@ use super::catalog::{SpaceportCatalog, StellarId};
 use super::hire::HireScreen;
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, NAME_FONT, NAME_ITEM, NAME_SIZE, RECHARGE_ITEM,
-    TEXT_ITEM, item_service, landscape_id, port_key_item,
+    TEXT_ITEM, item_service, landscape_id, port_command_item,
 };
 use super::missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
@@ -209,12 +212,13 @@ use super::trade::{ListColors, TradeScreen};
 mod shop_texts;
 use crate::color::Color;
 use crate::draw::DrawList;
-use crate::flight::view::{SharedChance, is_map_press};
+use crate::flight::view::SharedChance;
 use crate::flight::{MapOpener, PortScreen};
 use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandReader, PlayCommand, SharedBindings, UiCommand, contexts};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
@@ -224,10 +228,7 @@ use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog, DescTemplates};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_dialogs::{DescShown, MissionDialogs};
-use crate::ui::mission_info::is_mission_info_press;
-#[cfg(doc)]
-use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen, is_player_info_press};
+use crate::ui::player_info::{BackgroundSizes, PlayerInfoScreen};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
@@ -512,7 +513,7 @@ pub struct SpaceportView {
     /// The player info screen's dialog, its Yes/No dialog and its
     /// background pictures' sizes, once given.
     player_info_dialogs: Option<PlayerInfoDialogs>,
-    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen in the
+    /// Whether the player info key asked for the player info screen in the
     /// spaceport itself.
     player_info_requested: bool,
     /// Whether the map key asked for the course map in the spaceport
@@ -577,6 +578,9 @@ pub struct SpaceportView {
     /// The bar race's templates and what Gamble's texts wait on (the
     /// `gamble` module).
     gambling: gamble::Gambling,
+    /// Its keys, as commands ([`contexts::PORT`]), and the bindings every
+    /// screen it opens reads. It follows every input, whatever is open.
+    keys: CommandReader,
 }
 
 impl SpaceportView {
@@ -681,7 +685,31 @@ impl SpaceportView {
             ambient,
             chance: SharedChance::default(),
             gambling: gamble::Gambling::default(),
+            keys: CommandReader::new(contexts::PORT),
         }
+    }
+
+    /// The spaceport reading its keys through `bindings`: its own, its
+    /// mission texts' and offers', and those of each screen opened after
+    /// it (the venues, the mission computer, the player info screen).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(port) = &mut self.port {
+            port.dialog.set_bindings(bindings.clone());
+        }
+        self.dialogs = self
+            .dialogs
+            .map(|dialogs| dialogs.with_bindings(bindings.clone()));
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
+    }
+
+    /// The bindings it reads, and hands to each screen it opens.
+    fn bindings(&self) -> SharedBindings {
+        self.keys.bindings().clone()
     }
 
     /// The spaceport with its ambient sound's waits drawn on `chance`.
@@ -1414,12 +1442,15 @@ impl SpaceportView {
             MissionDialogs::new(text, info, Rc::clone(&port.metrics.0), port.style)
                 .with_movies(self.movies.clone())
                 .with_focus_ring(port.focus_ring)
+                .with_bindings(self.keys.bindings().clone())
         });
         let ring = self
             .port
             .as_ref()
             .map_or(FocusRing::default(), |port| port.focus_ring);
-        let mut landing = VenueOffers::asking(offer.clone()).with_focus_ring(ring);
+        let mut landing = VenueOffers::asking(offer.clone())
+            .with_focus_ring(ring)
+            .with_bindings(self.bindings());
         landing.set_movies(self.movies.clone());
         Self {
             missioning: Some(Missioning {
@@ -1641,7 +1672,8 @@ impl SpaceportView {
             .map(|template| (template, Rc::clone(&port.metrics.0)));
         self.open = Some(Open::Computer(Box::new(
             MissionComputerScreen::new(layout, computer, port.style)
-                .with_focus_ring(port.focus_ring),
+                .with_focus_ring(port.focus_ring)
+                .with_bindings(self.keys.bindings().clone()),
         )));
         self.port_dialog_opened = Some(PortDialog::MissionComputer);
     }
@@ -1881,6 +1913,7 @@ impl SpaceportView {
                 dialogs.background,
             )
             .with_focus_ring(port.focus_ring)
+            .with_bindings(self.keys.bindings().clone())
             .with_key_held(self.close_keys.player_info),
         );
     }
@@ -2187,9 +2220,11 @@ impl SpaceportView {
             style,
             barkeeping.room,
         );
-        bar = self
-            .gambling
-            .give_race(bar.with_news(barkeeping.news.clone()).with_focus_ring(ring));
+        bar = self.gambling.give_race(
+            bar.with_news(barkeeping.news.clone())
+                .with_focus_ring(ring)
+                .with_bindings(self.keys.bindings().clone()),
+        );
         if let Some(missioning) = &self.missioning {
             bar = bar
                 .with_offers(missioning.offer.clone())
@@ -2231,13 +2266,15 @@ impl SpaceportView {
             .as_ref()
             .map(|missioning| missioning.offer.clone());
         let clock = self.offer_clock;
+        let bindings = self.bindings();
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
                 (Some((template, quantity, market, colors)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
                     let screen = TradeScreen::new(layout, quantity.clone(), market.clone(), style)
                         .with_colors(*colors)
-                        .with_focus_ring(ring);
+                        .with_focus_ring(ring)
+                        .with_bindings(bindings);
                     Open::Trade(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2258,7 +2295,8 @@ impl SpaceportView {
                         Rc::clone(&shipbuying.catalog),
                         style,
                     )
-                    .with_focus_ring(ring);
+                    .with_focus_ring(ring)
+                    .with_bindings(bindings);
                     Open::Shipyard(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
@@ -2279,13 +2317,16 @@ impl SpaceportView {
                         Rc::clone(&outfitting.catalog),
                         style,
                     )
-                    .with_focus_ring(ring);
+                    .with_focus_ring(ring)
+                    .with_bindings(bindings);
                     Open::Outfitter(Box::new(match offer {
                         Some(offer) => screen.with_offers(offer).with_offer_clock(clock),
                         None => screen,
                     }))
                 }
-                _ => Open::Service(ServiceScreen::new(service, style, metrics)),
+                _ => Open::Service(
+                    ServiceScreen::new(service, style, metrics).with_bindings(bindings),
+                ),
             },
         );
         self.give_offer_movies();
@@ -2308,8 +2349,9 @@ impl Screen for SpaceportView {
     /// An open service takes every input until it closes. Otherwise the
     /// map key asks for the course map, as `_PortFilter`'s first key check
     /// does, the mission info and player info keys ask for their screens, a press of
-    /// one of the [`PORT_KEYS`](super::layout::PORT_KEYS) presses its
-    /// button, and every other input goes to the dialog. It never quits.
+    /// one of its letters
+    /// ([`PortCommand`](crate::keymap::PortCommand)) presses its button, and every
+    /// other input goes to the dialog. It never quits.
     /// What waits on the texts over it is settled after it
     /// ([`SpaceportView::settle_gamble`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -2373,6 +2415,7 @@ impl Screen for SpaceportView {
     /// Lets go of the keys the player info screen holds, or else the
     /// screen open.
     fn release_keys(&mut self) {
+        self.keys.let_go();
         self.each_offers(VenueOffers::release_answer_wait);
         if let Some(screen) = &mut self.player_info {
             screen.release_keys();
@@ -2418,6 +2461,11 @@ impl SpaceportView {
     /// [`Screen::input`]'s routing, before what waits on the texts is
     /// settled.
     fn route_input(&mut self, input: &Input) -> ScreenAction {
+        let fresh = self
+            .keys
+            .follow(input)
+            .filter(|command| command.pressed && !command.repeat)
+            .map(|command| command.command);
         if let Some(screen) = &mut self.player_info {
             screen.input(input);
             self.player_info_jettison |= screen.take_jettison();
@@ -2457,17 +2505,17 @@ impl SpaceportView {
             return ScreenAction::None;
         }
         // `_PortFilter`'s first key check (@0x4f165-0x4f185).
-        if is_map_press(input) && self.port.is_ok() {
+        if fresh == Some(Command::Play(PlayCommand::GalaxyMap)) && self.port.is_ok() {
             self.port_map_requested = true;
             return ScreenAction::None;
         }
-        if is_mission_info_press(input)
+        if fresh == Some(Command::Play(PlayCommand::MissionInfo))
             && let Some(missioning) = &mut self.missioning
         {
             missioning.info_requested = true;
             return ScreenAction::None;
         }
-        if is_player_info_press(input) && self.port.is_ok() {
+        if fresh == Some(Command::Play(PlayCommand::PlayerInfo)) && self.port.is_ok() {
             self.player_info_requested = true;
             return ScreenAction::None;
         }
@@ -2485,27 +2533,19 @@ impl SpaceportView {
         {
             self.sounds.extend(ambient.pressed().map(Sound::Ui));
         }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
+        if let Some(Command::Port(command)) = fresh
             && self.port.is_ok()
-            && let Some(item) = port_key_item(key)
         {
-            self.activate(item);
+            self.activate(port_command_item(command));
             return ScreenAction::None;
         }
         let event = match &mut self.port {
             Ok(port) => port.dialog.input(input),
-            Err(_) => match *input {
-                Input::Key {
-                    key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                    pressed: true,
-                    repeat: false,
-                } => Some(DialogEvent::Item(LEAVE_ITEM)),
-                _ => None,
-            },
+            Err(_) => matches!(
+                fresh,
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            )
+            .then_some(DialogEvent::Item(LEAVE_ITEM)),
         };
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
@@ -2642,7 +2682,7 @@ pub(in crate::spaceport) mod tests {
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
     use crate::geometry::Bounds;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
     use crate::spaceport::layout::{SERVICE_ITEMS, service_item};
@@ -3313,6 +3353,42 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
+    /// The spaceport reads its keys through the key map it is given: the
+    /// Shipyard rebound to Q opens on Q and no longer on S, and the player
+    /// info key rebound to F1 asks on F1 and no longer on P; the
+    /// placeholder opened reads them too, Back rebound to F2.
+    #[test]
+    fn a_rebound_letter_and_player_info_key_act_on_their_new_keys_alone() {
+        use crate::keymap::{
+            Bindings, KeyCombo, PlayCommand, PortCommand, SharedBindings, UiCommand,
+        };
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(PortCommand::Shipyard, KeyCombo::key(Key::KeyQ))
+                .rebound(PlayCommand::PlayerInfo, KeyCombo::key(Key::F1))
+                .rebound(UiCommand::Back, KeyCombo::key(Key::F2)),
+        );
+        let mut view = view_of(&everything()).with_bindings(bindings);
+        view.input(&key(Key::KeyP));
+        assert!(!view.take_player_info_request(), "P no longer asks");
+        view.input(&key(Key::F1));
+        assert!(view.take_player_info_request());
+        view.input(&key(Key::KeyS));
+        assert!(view.open_service().is_none(), "S no longer opens it");
+        view.input(&key(Key::KeyQ));
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Shipyard)
+        );
+        view.input(&key(Key::Escape));
+        assert!(
+            view.open_service().is_some(),
+            "the placeholder reads the bindings: Escape no longer closes it"
+        );
+        view.input(&key(Key::F2));
+        assert!(view.open_service().is_none(), "Back's F2 does");
+    }
+
     #[test]
     fn n_asks_for_the_mission_computer_and_b_opens_the_bar() {
         let mut view = missioned();
@@ -3423,7 +3499,17 @@ pub(in crate::spaceport) mod tests {
     /// (@0x4f165-0x4f1de), and none of them is a letter.
     #[test]
     fn the_other_keys_still_win() {
-        use crate::spaceport::PORT_KEYS;
+        // The spaceport's letters and their twins, as the key map has them.
+        let port_keys = [
+            Key::KeyR,
+            Key::KeyF,
+            Key::KeyC,
+            Key::KeyT,
+            Key::KeyO,
+            Key::KeyS,
+            Key::KeyN,
+            Key::KeyB,
+        ];
         let others = [
             PLAYER_INFO_KEY,
             MISSION_INFO_KEY,
@@ -3431,7 +3517,7 @@ pub(in crate::spaceport) mod tests {
             Key::Enter,
             Key::Escape,
         ];
-        for (letter, _) in PORT_KEYS {
+        for letter in port_keys {
             assert!(!others.contains(&letter), "{letter:?}");
         }
         let mut view = view_of(&everything()).with_missions(

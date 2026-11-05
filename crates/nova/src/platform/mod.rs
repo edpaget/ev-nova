@@ -646,14 +646,15 @@ mod tests {
         Key::KeyN,
         Key::KeyG,
         Key::KeyR,
-        nova_view::spaceport::PORT_KEYS[0].0,
-        nova_view::spaceport::PORT_KEYS[1].0,
-        nova_view::spaceport::PORT_KEYS[2].0,
-        nova_view::spaceport::PORT_KEYS[3].0,
-        nova_view::spaceport::PORT_KEYS[4].0,
-        nova_view::spaceport::PORT_KEYS[5].0,
-        nova_view::spaceport::PORT_KEYS[6].0,
-        nova_view::spaceport::PORT_KEYS[7].0,
+        // The spaceport's letters and their twins.
+        Key::KeyR,
+        Key::KeyF,
+        Key::KeyC,
+        Key::KeyT,
+        Key::KeyO,
+        Key::KeyS,
+        Key::KeyN,
+        Key::KeyB,
     ];
 
     #[test]

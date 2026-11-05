@@ -12,7 +12,8 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
@@ -47,6 +48,9 @@ pub struct ServiceScreen {
     style: ButtonStyle,
     metrics: Rc<dyn TextMetrics>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::DIALOG`]): Confirm and Back,
+    /// boxed to keep the screens open over the spaceport alike in size.
+    keys: Box<CommandReader>,
 }
 
 impl std::fmt::Debug for ServiceScreen {
@@ -70,7 +74,15 @@ impl ServiceScreen {
             style,
             metrics,
             closed: false,
+            keys: Box::new(CommandReader::new(contexts::DIALOG)),
         }
+    }
+
+    /// The placeholder reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The service it stands in for.
@@ -105,13 +117,19 @@ impl Screen for ServiceScreen {
     /// A click on Done, or a Return or Escape press, closes it. It never
     /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        let done = match *input {
-            Input::Key {
-                key: Key::Enter | Key::NumpadEnter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => true,
-            // The tracker ignores every other key.
+        let command = self.keys.follow(input);
+        let done = match command {
+            Some(command)
+                if command.pressed
+                    && !command.repeat
+                    && matches!(
+                        command.command,
+                        Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                    ) =>
+            {
+                true
+            }
+            // The tracker ignores every key.
             _ => self.tracker.input(&self.done, input),
         };
         self.closed |= done;
@@ -150,6 +168,11 @@ impl Screen for ServiceScreen {
     fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
     }
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
+    }
 }
 
 #[cfg(test)]
@@ -157,7 +180,7 @@ impl Screen for ServiceScreen {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
 
     fn bar() -> ServiceScreen {
@@ -252,6 +275,21 @@ mod tests {
             drawn(&screen)[2..],
             pressed.iter().cloned().collect::<Vec<_>>()[..]
         );
+    }
+
+    /// The placeholder reads its keys through the key map it is given:
+    /// Back rebound to Q closes it on Q and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_it_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = bar().with_bindings(bindings);
+        screen.input(&key(Key::Escape, true, false));
+        assert!(!screen.closed(), "Escape no longer closes it");
+        screen.input(&key(Key::KeyQ, true, false));
+        assert!(screen.closed());
     }
 
     #[test]

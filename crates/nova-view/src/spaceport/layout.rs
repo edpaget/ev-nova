@@ -1,7 +1,7 @@
 //! The spaceport's layout decisions: which item of the interface file's
 //! "Spaceport" dialog (`DLOG`/`DITL` 1000) shows what, the button each
-//! service gets and its label, the letter keys that press them, and which
-//! `PICT` is the landscape.
+//! service gets and its label, the button each of its letters
+//! ([`PortCommand`]) presses, and which `PICT` is the landscape.
 //!
 //! The stock dialog is 618 x 517, centred, and drawn over `PICT` 8500,
 //! whose painted frames show the items' places: the landscape (item 5)
@@ -13,7 +13,7 @@ use nova_sim::Service;
 
 use crate::font::Font;
 use crate::image::ImageKey;
-use crate::input::Key;
+use crate::keymap::PortCommand;
 
 /// The spaceport dialog's `DLOG` (and `DITL`) ID.
 pub const SPACEPORT_DIALOG: i16 = 1000;
@@ -49,53 +49,26 @@ pub const SERVICE_ITEMS: [(Service, usize); 5] = [
     (Service::Outfitter, 8),
 ];
 
-/// What a spaceport letter key presses: Recharge, or a service's button.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortKey {
-    /// The Recharge button.
-    Recharge,
-    /// `Service`'s button.
-    Service(Service),
-}
-
-/// The spaceport's letter keys and what each presses, as `_PortFilter`
-/// @0x4f209-0x4f257 maps them. The original reads the Mac virtual key
-/// code (`keyCodeMask`), the key's place on an ANSI keyboard whatever the
-/// layout or case; the platform's `map_key` turns each physical key into
-/// these characters by the same rule. Each names what it presses, never
-/// an item number, which [`port_key_item`] looks up.
-pub const PORT_KEYS: [(Key, PortKey); 8] = [
-    // R (0x0f) → item 4, Recharge.
-    (Key::KeyR, PortKey::Recharge),
-    // F (0x03) → item 4, Recharge.
-    (Key::KeyF, PortKey::Recharge),
-    // C (0x08) → item 7, the Trade Center.
-    (Key::KeyC, PortKey::Service(Service::TradeCenter)),
-    // T (0x11) → item 7, the Trade Center.
-    (Key::KeyT, PortKey::Service(Service::TradeCenter)),
-    // O (0x1f) → item 8, the Outfitter.
-    (Key::KeyO, PortKey::Service(Service::Outfitter)),
-    // S (0x01) → item 9, the Shipyard.
-    (Key::KeyS, PortKey::Service(Service::Shipyard)),
-    // N (0x2d) → item 10, the Mission BBS (`STR#` 150 #16 in
-    // `_DrawPlanetButtons`' table, @0x2982a; `_DoMissionDialog`, @0x5ffa8).
-    (Key::KeyN, PortKey::Service(Service::MissionBbs)),
-    // B (0x0b) → item 11, the Bar (`STR#` 150 #10; `_DoBarDialog`,
-    // @0x600b0).
-    (Key::KeyB, PortKey::Service(Service::Bar)),
-];
-
-/// The item `key` presses, if it is one of the [`PORT_KEYS`]: the
-/// Recharge button's, or its service's.
+/// The item `command`, one of the spaceport's letters, presses: the
+/// Recharge button's, or its service's, as `_PortFilter`
+/// @0x4f209-0x4f257 maps the letters (the key map's defaults and twins;
+/// see [`PortCommand`]): R and F item 4, Recharge; C and T item 7, the
+/// Trade Center; O item 8, the Outfitter; S item 9, the Shipyard; N item
+/// 10, the Mission BBS (`STR#` 150 #16 in `_DrawPlanetButtons`' table,
+/// @0x2982a; `_DoMissionDialog`, @0x5ffa8); and B item 11, the Bar
+/// (`STR#` 150 #10; `_DoBarDialog`, @0x600b0). The original reads the
+/// Mac virtual key code (`keyCodeMask`), the key's place on an ANSI
+/// keyboard whatever the layout or case.
 #[must_use]
-pub fn port_key_item(key: Key) -> Option<usize> {
-    PORT_KEYS
-        .iter()
-        .find(|(each, _)| *each == key)
-        .map(|(_, pressed)| match *pressed {
-            PortKey::Recharge => RECHARGE_ITEM,
-            PortKey::Service(service) => service_item(service),
-        })
+pub fn port_command_item(command: PortCommand) -> usize {
+    match command {
+        PortCommand::Recharge => RECHARGE_ITEM,
+        PortCommand::TradeCenter => service_item(Service::TradeCenter),
+        PortCommand::Outfitter => service_item(Service::Outfitter),
+        PortCommand::Shipyard => service_item(Service::Shipyard),
+        PortCommand::MissionBbs => service_item(Service::MissionBbs),
+        PortCommand::Bar => service_item(Service::Bar),
+    }
 }
 
 /// The name's font.
@@ -243,28 +216,30 @@ mod tests {
         assert_eq!(RECHARGE_LABEL, "Recharge");
     }
 
+    /// What `letter`'s press means on the spaceport, with the default
+    /// keys.
+    fn item_of(letter: char) -> Option<usize> {
+        let key = crate::input::letter_key(letter).expect("a letter key");
+        item_of_key(key)
+    }
+
+    fn item_of_key(key: crate::input::Key) -> Option<usize> {
+        let reader = crate::keymap::CommandReader::new(crate::keymap::contexts::PORT);
+        match reader.peek(&crate::input::Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }) {
+            Some(crate::keymap::Command::Port(command)) => Some(port_command_item(command)),
+            _ => None,
+        }
+    }
+
     #[test]
     fn each_letter_presses_what_port_filter_maps_it_to() {
         use Service::{Bar, MissionBbs, Outfitter, Shipyard, TradeCenter};
-        let service = PortKey::Service;
-        assert_eq!(
-            PORT_KEYS,
-            [
-                (Key::KeyR, PortKey::Recharge),
-                (Key::KeyF, PortKey::Recharge),
-                (Key::KeyC, service(TradeCenter)),
-                (Key::KeyT, service(TradeCenter)),
-                (Key::KeyO, service(Outfitter)),
-                (Key::KeyS, service(Shipyard)),
-                (Key::KeyN, service(MissionBbs)),
-                (Key::KeyB, service(Bar)),
-            ]
-        );
         for (letter, item) in [('r', RECHARGE_ITEM), ('f', RECHARGE_ITEM)] {
-            assert_eq!(
-                port_key_item(crate::input::letter_key(letter).expect("a letter key")),
-                Some(item)
-            );
+            assert_eq!(item_of(letter), Some(item));
         }
         for (letter, each) in [
             ('c', TradeCenter),
@@ -274,14 +249,11 @@ mod tests {
             ('n', MissionBbs),
             ('b', Bar),
         ] {
-            assert_eq!(
-                port_key_item(crate::input::letter_key(letter).expect("a letter key")),
-                Some(service_item(each))
-            );
+            assert_eq!(item_of(letter), Some(service_item(each)));
         }
-        for other in [Key::KeyA, Key::KeyM, Key::KeyP, Key::KeyI] {
-            assert_eq!(port_key_item(other), None, "{other:?}");
+        for other in ['a', 'm', 'p', 'i'] {
+            assert_eq!(item_of(other), None, "{other:?}");
         }
-        assert_eq!(port_key_item(Key::Enter), None);
+        assert_eq!(item_of_key(crate::input::Key::Enter), None);
     }
 }

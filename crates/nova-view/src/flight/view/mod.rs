@@ -756,7 +756,6 @@ mod world;
 
 pub use dialog_latch::LiveKeys;
 pub use dialog_map::MapOpener;
-pub(crate) use dialog_map::is_map_press;
 pub use gamble::RaceShown;
 pub use messages::*;
 pub use port_screen_map::PortScreen;
