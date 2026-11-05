@@ -23,6 +23,7 @@ use crate::error::{DecodeError, DecodeWarning};
 use crate::graphics::{GraphicsError, Image, PICT, decode_pict};
 use crate::records::dialog::Dlog;
 use crate::records::dialog_items::Ditl;
+use crate::records::string_list::StrList;
 use crate::wire::id::{DitlId, PictId};
 
 /// A decoded interface record, or why it failed.
@@ -129,6 +130,12 @@ impl InterfaceData {
         self.decode(id.0)
     }
 
+    /// `STR#` `id`, decoded; `None` if the file has none.
+    #[must_use]
+    pub fn string_list(&self, id: i16) -> Option<DecodeResult<StrList>> {
+        self.decode(id)
+    }
+
     /// `PICT` `id`, decoded; `None` if the file has none.
     #[must_use]
     pub fn picture(&self, id: PictId) -> Option<Result<Image, GraphicsError>> {
@@ -157,6 +164,7 @@ mod tests {
     use crate::records::dialog::Dlog;
     use crate::records::dialog_items::tests::{ditl, item};
     use crate::records::dialog_items::{Ditl, ItemKind};
+    use crate::records::string_list::StrList;
     use crate::store::GameData;
     use crate::store::fixture::FakeTree;
     use crate::store::fs::EntryKind::File;
@@ -273,6 +281,17 @@ mod tests {
         let err = ui.items(DitlId(129)).expect("present").expect_err("bad");
         assert_eq!((err.res_type, err.id), (Ditl::TYPE, 129));
         assert!(ui.items(DitlId(128)).expect("present").is_ok());
+    }
+
+    #[test]
+    fn a_string_list_decodes_by_its_id() {
+        let bytes = b"\x00\x02\x01A\x00".to_vec();
+        let ui = load(fork(&[(StrList::TYPE, 129, bytes)]));
+        let (list, warning) = ui.string_list(129).expect("present").expect("decodes");
+        let strings: Vec<&str> = list.record.strings.iter().map(|s| &**s).collect();
+        assert_eq!(strings, ["A", ""]);
+        assert_eq!(warning, None);
+        assert!(ui.string_list(130).is_none());
     }
 
     #[test]
