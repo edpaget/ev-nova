@@ -29,9 +29,13 @@
 //!   reports [`DialogEvent::Cell`] on its press, silently, as a pointer
 //!   press acts on a grid or a list; the host runs its own press on it.
 //!   Keyboard Tab never visits a cell, and from a cell the pad placed it
-//!   goes on from the cells' item. A cell gone (a scroll, a shorter list)
-//!   is no target: it draws no highlight, and the next move lands on the
-//!   initial target.
+//!   goes on from the cells' item. The focus holds a cell by its place
+//!   in the host's list, as a pad's cursor does: while the list scrolls
+//!   under it, it stays on its slot, and South presses whatever the slot
+//!   now holds. A slot gone (a shorter list) is no target: it draws no
+//!   highlight, and the next move lands on the initial target. A host
+//!   whose cells don't all scroll puts the fixed ones first, so they keep
+//!   their places ([`RowList::pad_cells`](crate::ui::row_list::RowList::pad_cells)).
 //! - **Items left out.** A host takes role-less user items whose click
 //!   does nothing out of the targets ([`Dialog::set_pad_left_out`], the
 //!   whole set each call), so the d-pad never stops on a dead area.

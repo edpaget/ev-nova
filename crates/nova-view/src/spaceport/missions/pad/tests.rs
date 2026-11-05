@@ -203,14 +203,18 @@ fn the_left_stick_scrolls_and_the_cells_follow() {
     }
     let rows = screen.rows().expect("laid out");
     assert!(rows.first() > 0, "scrolled");
-    let first = rows.pad_cells()[0];
-    assert_eq!(first.0, ListCell::Row(rows.first()));
+    let cells = rows.pad_cells();
+    let first = cells
+        .iter()
+        .position(|(cell, _)| *cell == ListCell::Row(rows.first()))
+        .expect("the first row shown is a cell");
     let targets = screen.dialog().expect("laid out").pad_spots();
     let cell = targets
         .iter()
-        .find(|target| target.id.item().is_none())
+        .filter(|target| target.id.item().is_none())
+        .nth(first)
         .expect("a cell");
-    assert_eq!(cell.bounds, first.1, "the cells moved with the list");
+    assert_eq!(cell.bounds, cells[first].1, "the cells moved with the list");
 }
 
 #[test]
@@ -288,4 +292,90 @@ fn under_focus_ring_off_the_right_shoulder_steps_the_list_as_tab_does() {
         keyed.rows().and_then(RowList::selected)
     );
     assert_eq!(padded.rows().and_then(RowList::selected), Some(1));
+}
+
+/// Where the pad's highlight is, as the dialog's cell and that cell's
+/// rect in the list.
+fn highlighted_cell(screen: &MissionComputerScreen) -> Option<(usize, ListCell)> {
+    let cell = cell_at(screen)?;
+    let rows = screen.rows().expect("laid out");
+    Some((cell, rows.pad_cells().get(cell)?.0))
+}
+
+/// Puts the pad's focus on the list's cell `cell` with the shoulders.
+fn shoulder_to(screen: &mut MissionComputerScreen, cell: ListCell) {
+    for _ in 0..40 {
+        if highlighted_cell(screen).map(|(_, at)| at) == Some(cell) {
+            return;
+        }
+        tap(screen, PadButton::LeftShoulder);
+    }
+    panic!("the shoulders never reach {cell:?}");
+}
+
+/// Clicks the bar's down arrow with the pointer: a scroll of one row.
+fn click_down_arrow(screen: &mut MissionComputerScreen) {
+    let down = screen
+        .rows()
+        .expect("laid out")
+        .pad_cells()
+        .into_iter()
+        .find(|(cell, _)| *cell == ListCell::Down)
+        .expect("the bar shows")
+        .1;
+    click(screen, down);
+}
+
+#[test]
+fn after_a_scroll_the_focus_stays_on_its_slot_and_south_selects_the_row_now_in_it() {
+    let mut screen = long_computer();
+    screen.input(&told(PAD));
+    shoulder_to(&mut screen, ListCell::Row(3));
+    let slot = cell_at(&screen).expect("on a cell");
+    click_down_arrow(&mut screen);
+    assert_eq!(screen.rows().map(RowList::first), Some(1), "scrolled a row");
+    assert_eq!(
+        highlighted_cell(&screen),
+        Some((slot, ListCell::Row(4))),
+        "the slot, now holding row 4"
+    );
+    tap(&mut screen, PadButton::South);
+    assert_eq!(screen.rows().and_then(RowList::selected), Some(4));
+}
+
+#[test]
+fn a_focused_bar_arrow_stays_that_arrow_however_far_the_list_scrolls() {
+    for arrow in [ListCell::Up, ListCell::Down] {
+        let mut screen = long_computer();
+        screen.input(&told(PAD));
+        shoulder_to(&mut screen, arrow);
+        for _ in 0..4 {
+            click_down_arrow(&mut screen);
+        }
+        assert_eq!(
+            highlighted_cell(&screen).map(|(_, at)| at),
+            Some(arrow),
+            "{arrow:?}"
+        );
+    }
+}
+
+#[test]
+fn a_shorter_listing_drops_a_focused_slot_it_no_longer_has() {
+    let mut screen = long_computer();
+    screen.input(&told(PAD));
+    shoulder_to(&mut screen, ListCell::Row(5));
+    screen.set_computer(super::super::tests::many_offers(3));
+    assert_eq!(cell_at(&screen), None, "no highlight");
+    let dialog = screen.dialog().expect("laid out");
+    assert_eq!(dialog.pad_highlight(), None);
+    tap(&mut screen, PadButton::South);
+    assert_eq!(screen.take_accept(), None, "South presses nothing");
+    assert!(!screen.closed());
+    tap(&mut screen, PadButton::DPadLeft);
+    assert_eq!(
+        screen.dialog().and_then(Dialog::pad_highlight),
+        Some(LEAVE_ITEM),
+        "the next move lands on the default"
+    );
 }

@@ -478,10 +478,16 @@ impl RowList {
         self.auto_scroll();
     }
 
-    /// What the pad can press in the list, in order: each row shown
-    /// (clipped to the view), then, while the bar shows, its up and down
-    /// arrows. The bar's page areas and thumb are left out, as a press
+    /// What the pad can press in the list, in order: while the bar
+    /// shows, its up and down arrows, then each row shown (clipped to the
+    /// view). The bar's page areas and thumb are left out, as a press
     /// can't drag.
+    ///
+    /// A pad's focus on a cell is held by its place in this list, so it
+    /// stays on its slot while the rows scroll under it. The arrows come
+    /// first because the rows shown drop by one at the bottom of a list
+    /// whose last row shows partly: after them, each arrow would slide a
+    /// place, and a focused up arrow would turn into the down arrow.
     #[must_use]
     pub fn pad_cells(&self) -> Vec<(ListCell, Bounds)> {
         let rows = (self.first..self.first.saturating_add(self.shown)).filter_map(|index| {
@@ -498,7 +504,7 @@ impl RowList {
                 .into_iter()
                 .filter_map(move |(cell, part)| bar.arrow(part).map(|rect| (cell, rect)))
         });
-        rows.chain(arrows).collect()
+        arrows.chain(rows).collect()
     }
 
     /// Presses `cell` by key, as a click (a press and release) on it
@@ -1039,13 +1045,13 @@ mod tests {
     #[test]
     fn the_visible_rows_and_bar_arrows_are_the_lists_cells() {
         let cells: Vec<ListCell> = tall(10).pad_cells().into_iter().map(|(c, _)| c).collect();
-        let mut expected: Vec<ListCell> = (0..7).map(ListCell::Row).collect();
-        expected.extend([ListCell::Up, ListCell::Down]);
+        let mut expected = vec![ListCell::Up, ListCell::Down];
+        expected.extend((0..7).map(ListCell::Row));
         assert_eq!(cells, expected);
         let mut scrolled = tall(10);
         scrolled.press_cell(ListCell::Down);
         assert_eq!(
-            scrolled.pad_cells()[0].0,
+            scrolled.pad_cells()[2].0,
             ListCell::Row(1),
             "follows a scroll"
         );
@@ -1053,13 +1059,30 @@ mod tests {
         assert_eq!(short, [ListCell::Row(0), ListCell::Row(1)], "no bar");
         // A partly shown last row is clipped to the view.
         let partly = list(6).pad_cells();
-        assert_eq!(partly[3].1.max.y, BOX.max.y);
-        assert_eq!(partly[3].0, ListCell::Row(3));
+        assert_eq!(partly[5].1.max.y, BOX.max.y);
+        assert_eq!(partly[5].0, ListCell::Row(3), "after the bar's arrows");
         assert_eq!(
             list(6).press_cell(ListCell::Row(5)),
             ListPress::Ignored,
             "not shown"
         );
+    }
+
+    #[test]
+    fn each_bar_arrow_keeps_its_cell_however_far_the_list_scrolls() {
+        // Six rows in three and a bit: at the bottom the partly shown
+        // slot is empty, so the rows shown drop from four to three.
+        let mut rows = list(6);
+        let at_top = rows.pad_cells();
+        for _ in 0..3 {
+            rows.press_cell(ListCell::Down);
+        }
+        let at_bottom = rows.pad_cells();
+        assert_eq!(at_bottom.len() + 1, at_top.len(), "a row slot fewer");
+        for arrow in [ListCell::Up, ListCell::Down] {
+            let index = |cells: &[(ListCell, Bounds)]| cells.iter().position(|(c, _)| *c == arrow);
+            assert_eq!(index(&at_bottom), index(&at_top), "{arrow:?}");
+        }
     }
 
     #[test]

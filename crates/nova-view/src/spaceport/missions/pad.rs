@@ -13,8 +13,12 @@
 //!   arrow scrolls a row.
 //! - **The cells follow the list**: they are given afresh at the end of
 //!   every input and tick and after each new listing, so a scroll moves
-//!   them. A focused row scrolled away is no target: it draws no
-//!   highlight, and the next move lands on the default.
+//!   them. The focus stays on its slot while the rows scroll under it,
+//!   and South selects the row now in it; the bar's arrows come first
+//!   ([`RowList::pad_cells`]), so a focused arrow stays that arrow. A
+//!   slot gone (a shorter listing, or the partly shown last row's once
+//!   the list reaches its bottom) is no target: it draws no highlight,
+//!   and the next move lands on the default.
 //! - **The shoulders**: under the Off ring the right one steps the list,
 //!   as Tab does (`_MissionFilter` @0x9f8cc, `_MissionInfoFilter`
 //!   @0x9d778); under the Tab ring it moves the focus. Neither filter reads
