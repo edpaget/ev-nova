@@ -4,6 +4,7 @@
 //! and by that screen, which it closes.
 
 use crate::input::{Input, Key};
+use crate::keymap::{PlayCommand, SharedBindings};
 
 /// The key that asks for the mission info screen from the bar, the
 /// spaceport, the mission computer, the trade center, the outfitter, the
@@ -17,6 +18,19 @@ use crate::input::{Input, Key};
 /// this until they read the key map
 /// (rdm:phase/key-bindings/phase-2-command-key-map's steps 4 and 8).
 pub const MISSION_INFO_KEY: Key = Key::KeyI;
+
+/// The key the mission info key's command,
+/// [`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo),
+/// is bound to in `bindings`, if any: what an answered offer's close
+/// waits on. A key wait compares the key itself (the phase's fixed keys).
+pub(crate) fn mission_info_key(bindings: &SharedBindings) -> Option<Key> {
+    bindings.with(|bindings| {
+        bindings
+            .keyboard
+            .combo(PlayCommand::MissionInfo.into())
+            .map(|combo| combo.key)
+    })
+}
 
 /// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
 /// for the mission info screen where the original's filters read

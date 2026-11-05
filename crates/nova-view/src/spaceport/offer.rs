@@ -393,12 +393,14 @@ impl OfferDialog {
         }
     }
 
-    /// This dialog reading its keys through `bindings`, its dialog's too.
+    /// This dialog reading its keys through `bindings`, its dialog's and
+    /// its close wait's too.
     #[must_use]
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
         if let Ok(dialog) = &mut self.laid {
             dialog.set_bindings(bindings.clone());
         }
+        self.close.set_bindings(&bindings);
         self.keys.set_bindings(bindings);
         self
     }

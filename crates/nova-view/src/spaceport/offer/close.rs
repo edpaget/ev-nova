@@ -1,5 +1,7 @@
-//! An answered offer's close: `_OfferOneMission`'s wait for
-//! [`MISSION_INFO_KEY`]'s release (@0xa35fc-0xa3614), and what lands on
+//! An answered offer's close: `_OfferOneMission`'s wait for the mission
+//! info key's release (@0xa35fc-0xa3614), the key
+//! [`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo)
+//! is bound to in the dialog's bindings, and what lands on
 //! the release (@0xa361e-0xa3670). All addresses are in `EV Nova.app`'s
 //! `EV Nova` (i386).
 //!
@@ -14,11 +16,12 @@
 
 use super::{OfferDialog, VenueOffers};
 use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::ui::key_wait::KeyWait;
-use crate::ui::mission_info::MISSION_INFO_KEY;
+use crate::ui::mission_info::mission_info_key;
 
 /// An offer dialog's close: whether the answer hid it, its disposal's
-/// wait for [`MISSION_INFO_KEY`]'s release, and whether it has been
+/// wait for the mission info key's release, and whether it has been
 /// disposed of.
 #[derive(Clone, Debug)]
 pub(super) struct Close {
@@ -31,7 +34,7 @@ impl Default for Close {
     fn default() -> Self {
         Self {
             hidden: false,
-            wait: KeyWait::new(MISSION_INFO_KEY, false),
+            wait: KeyWait::new(mission_info_key(&SharedBindings::default()), false),
             disposed: false,
         }
     }
@@ -41,6 +44,13 @@ impl Close {
     /// Whether the answer hid the dialog: it draws nothing.
     pub(super) fn hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// Waits on the mission info key as `bindings` bind it, reading the
+    /// live keys of what it queues through them.
+    pub(super) fn set_bindings(&mut self, bindings: &SharedBindings) {
+        self.wait.set_key(mission_info_key(bindings));
+        self.wait.set_bindings(bindings.clone());
     }
 }
 
@@ -53,7 +63,7 @@ impl OfferDialog {
     }
 
     /// Disposes of the answered dialog: at once, when `key_held` says
-    /// [`MISSION_INFO_KEY`] is up (true); otherwise it waits for I's
+    /// the mission info key is up (true); otherwise it waits for its
     /// release (false), drawn as it was and inert. Asked again while it
     /// waits, it goes on waiting.
     pub fn dispose(&mut self, key_held: bool) -> bool {
@@ -63,12 +73,14 @@ impl OfferDialog {
         if self.close.wait.waiting() {
             return false;
         }
-        self.close.wait = KeyWait::new(MISSION_INFO_KEY, key_held);
+        let bindings = self.keys.bindings().clone();
+        self.close.wait = KeyWait::new(mission_info_key(&bindings), key_held);
+        self.close.wait.set_bindings(bindings);
         self.close.disposed = self.close.wait.close();
         self.close.disposed
     }
 
-    /// Whether its disposal waits for [`MISSION_INFO_KEY`]'s release.
+    /// Whether its disposal waits for the mission info key's release.
     #[must_use]
     pub fn waiting(&self) -> bool {
         self.close.wait.waiting()
@@ -175,7 +187,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::button::ButtonStyle;
 
-    const I: crate::input::Key = MISSION_INFO_KEY;
+    const I: crate::input::Key = crate::ui::mission_info::MISSION_INFO_KEY;
 
     fn press(key: Key) -> Input {
         Input::Key {
@@ -240,6 +252,25 @@ mod tests {
         assert!(dialog.disposed());
         assert!(!dialog.waiting());
         assert!(dialog.dispose(true), "and stays disposed");
+    }
+
+    /// The wait is on the key the mission info key's command is bound to
+    /// in the bindings the dialog is given: rebound to F2, F2's release
+    /// ends it and I's does not.
+    #[test]
+    fn the_wait_is_on_the_mission_info_key_s_binding() {
+        use crate::keymap::{Bindings, KeyCombo, PlayCommand, SharedBindings};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(Key::F2)),
+        );
+        let mut dialog = offer().with_bindings(bindings);
+        dialog.input(&press(Key::Enter));
+        assert!(dialog.take_choice().is_some(), "answered");
+        assert!(!dialog.dispose(true));
+        dialog.input(&release(I));
+        assert!(!dialog.disposed(), "I's release is no longer waited on");
+        dialog.input(&release(Key::F2));
+        assert!(dialog.disposed());
     }
 
     #[test]
@@ -392,7 +423,10 @@ mod timer_tests {
         offers.tick(Duration::from_millis(200), false);
         assert!(!offers.take_request(), "not while it waits");
         assert!(offers.dialog().is_none());
-        offers.input(&key(MISSION_INFO_KEY, false), &mut Vec::new());
+        offers.input(
+            &key(crate::ui::mission_info::MISSION_INFO_KEY, false),
+            &mut Vec::new(),
+        );
         offers.tick(Duration::from_millis(1), false);
         assert!(
             offers.take_request(),
