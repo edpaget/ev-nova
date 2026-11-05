@@ -121,6 +121,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
+use crate::ui::pad_focus::Told;
 use crate::ui::picture_variant::VariantTemplates;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
@@ -288,6 +289,10 @@ pub struct BarScreen {
     /// keys it reads for itself and its hire screen, and the shared UI
     /// keys. It follows every input, whatever is open over the bar.
     keys: CommandReader,
+    /// The surroundings the bar was told last, which it tells every
+    /// screen it holds and each it opens: the news, the race, the hire
+    /// screen and the offers (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
+    told: Told,
     sounds: Vec<Sound>,
 }
 
@@ -376,6 +381,7 @@ impl BarScreen {
             asks: Asks::default(),
             closed: false,
             keys: CommandReader::new(contexts::BAR),
+            told: Told::default(),
             sounds: Vec::new(),
         }
     }
@@ -427,6 +433,7 @@ impl BarScreen {
         let mut screen =
             NewsScreen::new(layout, news, shown).with_bindings(self.keys.bindings().clone());
         self.sounds.extend(screen.take_sounds());
+        self.told.tell(&mut screen);
         self.news = Some(screen);
     }
 
@@ -470,11 +477,12 @@ impl BarScreen {
             .0
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
-        self.race = Some(
+        let mut race =
             RaceScreen::new(layout, self.race_templates.1.clone(), self.style, asked_max)
                 .with_focus_ring(self.focus_ring)
-                .with_bindings(self.keys.bindings().clone()),
-        );
+                .with_bindings(self.keys.bindings().clone());
+        self.told.tell(&mut race);
+        self.race = Some(race);
     }
 
     /// The race, while it is open.
@@ -820,6 +828,7 @@ impl BarScreen {
         .with_focus_ring(self.focus_ring)
         .with_bindings(self.keys.bindings().clone());
         hire.set_movies(self.movies.clone());
+        self.told.tell(&mut hire);
         self.hire = Some(hire);
     }
 
@@ -869,6 +878,27 @@ impl BarScreen {
         }
     }
 
+    /// Tells every screen the bar holds the surroundings `input`, not only
+    /// the one in front: they are no player input, so nothing else
+    /// happens.
+    fn tell_held(&mut self, input: &Input) {
+        if let Some(race) = &mut self.race {
+            race.input(input);
+        }
+        if let Some(news) = &mut self.news {
+            news.input(input);
+        }
+        if let Some(offering) = &mut self.offering {
+            offering.input(input, &mut self.sounds);
+        }
+        if let Some(hire) = &mut self.hire {
+            hire.input(input);
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.input(input);
+        }
+    }
+
     /// Activates dialog item `item`: Leave leaves, and Hire Escort,
     /// Holovid and Gamble ask, Gamble left drawn pressed, as
     /// `_TrackBarButtons` (@0x26fd5) never redraws on release and the
@@ -900,6 +930,10 @@ impl Screen for BarScreen {
             .follow(input)
             .filter(|command| command.pressed && !command.repeat)
             .map(|command| command.command);
+        if self.told.keep(input) {
+            self.tell_held(input);
+            return ScreenAction::None;
+        }
         if let Some(race) = &mut self.race {
             race.input(input);
             self.sounds.extend(race.take_sounds());
@@ -1097,6 +1131,9 @@ impl Screen for BarScreen {
 }
 
 #[cfg(test)]
+pub(crate) mod pad;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::keymap::test_keys::MISSION_INFO_KEY;
@@ -1260,7 +1297,7 @@ mod tests {
         )
     }
 
-    fn bar() -> BarScreen {
+    pub(super) fn bar() -> BarScreen {
         bar_of(
             &Rc::new(FakeArt {
                 asked: RefCell::default(),
@@ -1295,7 +1332,7 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut BarScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut BarScreen, number: usize) {
         let at = screen
             .dialog()
             .expect("laid out")
@@ -1320,7 +1357,7 @@ mod tests {
     }
 
     /// A list of `rows` ships, all hireable, the fleet with room.
-    fn list(rows: usize) -> HireList {
+    pub(super) fn list(rows: usize) -> HireList {
         HireList {
             rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
@@ -1535,7 +1572,7 @@ mod tests {
         }
     }
 
-    fn racing() -> BarScreen {
+    pub(super) fn racing() -> BarScreen {
         bar().with_race(Ok(race_template()), None)
     }
 
@@ -1777,7 +1814,7 @@ mod tests {
     }
 
     /// Viking's bar with [`laid_hiring`].
-    fn laid_hire_bar() -> BarScreen {
+    pub(super) fn laid_hire_bar() -> BarScreen {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
             pictures: BTreeSet::new(),
@@ -2238,7 +2275,7 @@ mod tests {
         }
     }
 
-    fn prompt() -> OfferPrompt {
+    pub(super) fn prompt() -> OfferPrompt {
         OfferPrompt {
             mission: MissionId(141),
             text: "Ferry this to Mars.".to_owned(),
@@ -2252,7 +2289,7 @@ mod tests {
     }
 
     /// Viking's bar, its offers given.
-    fn offering() -> BarScreen {
+    pub(super) fn offering() -> BarScreen {
         bar().with_offers(offer_templates())
     }
 
@@ -2505,14 +2542,14 @@ mod tests {
         }
     }
 
-    fn news() -> News {
+    pub(super) fn news() -> News {
         News {
             commercial: "Buy Bibble".to_owned(),
             story: "<PN> wins".to_owned(),
         }
     }
 
-    fn newsy() -> BarScreen {
+    pub(super) fn newsy() -> BarScreen {
         bar().with_news(Ok(news_template()))
     }
 

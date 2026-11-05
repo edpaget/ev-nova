@@ -100,6 +100,7 @@ fn rows() -> Vec<Row> {
         ("service", crate::spaceport::service::pad_probe),
         ("news", crate::spaceport::news::pad_probe),
         ("race", crate::spaceport::race::pad_probe),
+        ("bar", crate::spaceport::bar::pad::pad_probe),
     ]
 }
 

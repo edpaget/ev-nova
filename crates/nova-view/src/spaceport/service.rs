@@ -104,6 +104,13 @@ impl ServiceScreen {
         self.service
     }
 
+    /// The device the player used last, as the last surroundings it was
+    /// told said; the keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> crate::input::Device {
+        self.focus.device()
+    }
+
     /// Whether Done has been activated.
     #[must_use]
     pub fn closed(&self) -> bool {

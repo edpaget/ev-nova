@@ -187,6 +187,13 @@ impl NewsScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
+    /// The device the player used last, as the last surroundings it was
+    /// told said; the keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> crate::input::Device {
+        self.focus.device()
+    }
+
     /// Whether the player has closed it.
     #[must_use]
     pub fn closed(&self) -> bool {
