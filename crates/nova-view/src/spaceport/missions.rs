@@ -75,28 +75,39 @@
 //! why, and Return or Escape alone closes it.
 //!
 //! Both lists are the List Manager's, as [`RowList`] runs them. A press in
-//! item 2 is held until its release: the one selection follows the
-//! pointer across the rows, and past the list's top or bottom edge the
-//! list scrolls a row at a time, the row scrolled in selected. The text,
-//! Accept's or Abort's grey and M's mark follow the selection at the
-//! release, when `LClick` returns and the filter reads the selection back
-//! (`_MissionFilter` @0xa0003-0xa007c, `_MissionInfoFilter`
-//! @0x9dc5d-0x9dcd8), not at the press; a cancelled press ends as a
-//! release. A press below the last row selects nothing: item 4 is an
-//! empty black box, Accept and A or Abort ask for nothing, and M asks for
-//! the map marked for nothing. The rows don't scroll on their own: when
-//! they don't fit, a scroll bar does. On the mission info screen it is
-//! carved from item 2's right, the rows narrowed by 15
-//! (`_SetupMissionInfoList` @0x9df6f-0x9df90). On the computer it lies in
-//! item 3's column, right of item 2 (`_SetupMissionList` @0xa07a6), and a
-//! press in item 3 goes to it (the second `LClick`, @0xa01c5-0xa01e7);
-//! when the rows fit, the list is widened over item 3 (@0xa07a8-0xa07e3).
-//! A press in item 3 over a list that fits is left out: there the
-//! original's `LClick` moves the highlight and nothing reads it back. The
-//! bar's last column and its top and bottom rows lie outside item 2 (and
-//! item 3), whose `PtInRect` doesn't hand them to `LClick`; the engine's
-//! item test counts the item's right and bottom edges in (the half-open
-//! tests are filed apart). Neither list plays a sound.
+//! item 2 is held until its release: the highlight follows the pointer
+//! across the rows, and past the list's top or bottom edge the list
+//! scrolls a row at a time, the row scrolled in lit. The selection, and
+//! with it the text, Accept's or Abort's grey and M's mark, follow the
+//! highlight at the release, when `LClick` returns and the filter reads
+//! the first row lit back (`_MissionFilter` @0xa0003-0xa007c,
+//! `_MissionInfoFilter` @0x9dc5d-0x9dcd8), not at the press; a cancelled
+//! press ends as a release. A press below the last row lights nothing, so
+//! nothing is selected: item 4 is an empty black box, Accept and A or
+//! Abort ask for nothing, and M asks for the map marked for nothing. The
+//! rows don't scroll on their own: when they don't fit, a scroll bar does.
+//! On the mission info screen it is carved from item 2's right, the rows
+//! narrowed by 15 (`_SetupMissionInfoList` @0x9df6f-0x9df90). On the
+//! computer it lies in item 3's column, right of item 2
+//! (`_SetupMissionList` @0xa07a6); when the rows fit, the list is widened
+//! over item 3 (@0xa07a8-0xa07e3). A press in item 3 goes to the second
+//! `LClick` (@0xa01c5-0xa01e7): the bar, or, over a list that fits, the
+//! rows, where it moves the highlight as item 2's does, but nothing reads
+//! it back. The name, the text, Accept, A and M stay on the selection
+//! (`_selMissionComputerItem`), and a step then lights the row after the
+//! selection and leaves the row pressed lit, two rows highlighted, until
+//! the next item-2 press (`LClick`'s `OneClick`, `ClearAll` and `NoMods`;
+//! the steps' `LSetSelect` @0x9f906-0x9fee3). The bar's last column and
+//! its top and bottom rows lie outside item 2 (and item 3), whose
+//! `PtInRect` doesn't hand them to `LClick`; the engine's item test counts
+//! the item's right and bottom edges in (the half-open tests are filed
+//! apart). Neither list plays a sound.
+//!
+//! Keys pressed while a press is held on a list, its bar or a button wait
+//! for the release, as `LClick` and the screens' button trackers read no
+//! events, and then run in order: the `mission_keys` module has the rules,
+//! and where the rest goes after a key that closes a screen, opens one,
+//! accepts or aborts.
 
 use std::rc::Rc;
 use std::time::Duration;

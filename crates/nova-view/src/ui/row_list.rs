@@ -1,6 +1,7 @@
-//! A list of one-line rows in a box, one of them selected, with a scroll
-//! bar when they don't fit: the mission computer's and the mission info
-//! screen's lists, as the List Manager runs them ([`RowList`]).
+//! A list of one-line rows in a box, one of them selected and the rows
+//! lit highlighted, with a scroll bar when they don't fit: the mission
+//! computer's and the mission info screen's lists, as the List Manager
+//! runs them ([`RowList`]).
 
 use std::time::Duration;
 
@@ -109,27 +110,40 @@ enum Held {
 ///   1159), each at once and then again after each `ScrollDelay` while
 ///   the pointer stays on that part, and a drag of the thumb scrolls at its
 ///   release (`clickCont`, line 964).
+/// - **Two selections.** The List Manager's, the cells lit
+///   ([`RowList::highlighted`]), and the filter's
+///   ([`RowList::selected`]: `_selMissionComputerItem`,
+///   `_selMissionListItem`). [`RowList::new`], [`RowList::select`] and
+///   [`RowList::clear_selection`] set both to one row or none, as
+///   `_SetupMissionList` does (@0xa0a0c). A press moves only the
+///   highlight; the filter reads it back after ([`RowList::read_back`]).
 /// - **A press on the rows** is held until its release ([`RowList::input`],
 ///   `LClick`, line 592): the row under the pointer, pinned into the view,
-///   is the one selection, following the pointer. Over no row (below the
-///   last), nothing is selected: the first pick deselects every cell
-///   (line 797) and selecting a cell past the rows does nothing
-///   (`ListSetSelect`, line 2563). With the pointer at or past the view's
-///   top or bottom edge, the list scrolls a row towards it, then waits a
-///   `ScrollDelay`, then picks the row under the pointer, so the row
-///   scrolled in is selected.
-/// - **A step** ([`RowList::step_wrapping`]) is the filters': with a row
-///   selected, scroll down a row when its rect (`LRect`, which computes
-///   one for any row, line 2250) reaches the view's bottom, or up a row
-///   when it reaches the view's top; select the next row; then
-///   `LAutoScroll` (line 531): a selected row not shown is scrolled to the
-///   top, as far as the scroll goes.
+///   is lit, following the pointer. The first pick unlights every row
+///   unless its own is lit (`OneClick`, line 917; `ClearAll`, line 938),
+///   and each pick unlights the last cell picked (`NoMods`, line 1040), so
+///   rows lit before a press that began on one stay lit. Over no row
+///   (below the last), nothing is lit: a cell past the rows is never
+///   selected (`ListSetSelect`, line 2563). With the pointer at or past
+///   the view's top or bottom edge, the list scrolls a row towards it,
+///   then waits a `ScrollDelay`, then picks the row under the pointer, so
+///   the row scrolled in is lit.
+/// - **Keys during a press** wait for its release, as `clickScan` reads no
+///   events (line 948): the release makes them the replay
+///   ([`RowList::take_replay`]), which the screen runs (see the
+///   `held_keys` module).
+/// - **A step** ([`RowList::step_wrapping`]) is the filters': unlight the
+///   selection's row; with a row selected, scroll down a row when its rect
+///   (`LRect`, which computes one for any row, line 2250) reaches the
+///   view's bottom, or up a row when it reaches the view's top; select and
+///   light the next row; then `LAutoScroll` (line 531): the first row lit,
+///   not shown, is scrolled to the top, as far as the scroll goes.
 /// - **The extent** ([`RowList::with_extent`]): steps wrap over it, which
-///   may run past the rows; a selection there highlights nothing and
-///   scrolls nothing, as the mission info screen's table after an abort
-///   leaves one. A release reads the selection back as the filters do
-///   (`LGetSelect` over the rows, `_MissionInfoFilter` @0x9dca9-0x9dcd6),
-///   so one past the rows reads as none.
+///   may run past the rows; a selection there lights nothing and scrolls
+///   nothing, as the mission info screen's table after an abort leaves
+///   one. A read-back takes the first row lit (`LGetSelect` over the rows,
+///   `_MissionInfoFilter` @0x9dca9-0x9dcd6), so one past the rows reads
+///   as none.
 ///
 /// Nothing is drawn outside the view and the bar.
 #[derive(Clone, Debug, PartialEq)]
