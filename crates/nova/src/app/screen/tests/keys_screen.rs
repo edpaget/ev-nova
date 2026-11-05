@@ -164,3 +164,15 @@ fn select_jettison(screen: &mut AppScreen) {
         tap(screen, Key::ArrowDown);
     }
 }
+
+#[test]
+fn the_keys_screen_names_keys_through_the_key_names_given() {
+    let names = nova_view::key_names::fixture::FakeKeyNames::azerty();
+    let mut screen = with_dialogs(data()).with_key_names(Rc::new(names));
+    open_keys(&mut screen);
+    let keys = keys(&screen).expect("open");
+    let row = keys
+        .row_of(FlightCommand::SelectSecondary.into())
+        .expect("a row");
+    assert_eq!(keys.row_list().cell(row), Some("Z"));
+}

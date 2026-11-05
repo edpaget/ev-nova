@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::time::Duration;
 
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
@@ -649,4 +650,124 @@ fn a_key_let_go_after_release_keys_is_not_held() {
         combo(&screen, FlightCommand::Board),
         Some(KeyCombo::key(Key::KeyJ))
     );
+}
+
+#[test]
+fn the_title_list_and_buttons_sit_where_the_layout_says() {
+    let screen = screen();
+    let origin = bounds().min;
+    let at = |(l, t, r, b): (f32, f32, f32, f32)| Bounds {
+        min: Point::new(origin.x + l, origin.y + t),
+        max: Point::new(origin.x + r, origin.y + b),
+    };
+    assert_eq!(screen.button_bounds(KeysButton::Ok), at(OK_AREA));
+    assert_eq!(screen.button_bounds(KeysButton::Cancel), at(CANCEL_AREA));
+    assert_eq!(
+        screen.button_bounds(KeysButton::RestoreDefaults),
+        at(RESTORE_AREA)
+    );
+    let list = at(LIST_AREA);
+    assert_eq!(screen.row_list().view().min, list.min);
+    let mut drawn = DrawList::new();
+    screen.draw(&mut drawn);
+    let title = drawn.iter().find_map(|command| match command {
+        DrawCommand::Text { text, origin, .. } if text == TITLE => Some(*origin),
+        _ => None,
+    });
+    assert_eq!(
+        title,
+        Some(Point::new(origin.x + TITLE_AT.x, origin.y + TITLE_AT.y))
+    );
+}
+
+#[test]
+fn the_buttons_are_labelled_restore_defaults_cancel_and_ok() {
+    let labels: Vec<&str> = KeysButton::ALL.iter().map(|b| b.label()).collect();
+    assert_eq!(labels, ["Restore Defaults", "Cancel", "OK"]);
+}
+
+#[test]
+fn it_debugs_as_the_keys_screen() {
+    let text = format!("{:?}", screen());
+    assert!(text.starts_with("KeysScreen"), "{text}");
+    assert!(text.contains("focus: List"), "{text}");
+}
+
+#[test]
+fn an_untouched_command_is_not_marked() {
+    let mut screen = screen();
+    record(&mut screen, FlightCommand::ClosestTarget, Key::KeyW);
+    assert!(!screen.is_marked(FlightCommand::ClosestTarget.into()));
+    assert!(!screen.is_marked(FlightCommand::Accelerate.into()));
+}
+
+#[test]
+fn a_repeat_of_a_fixed_key_but_the_arrows_does_nothing() {
+    let mut screen = screen();
+    for k in [Key::Enter, Key::Space, Key::Delete, Key::Tab, Key::Escape] {
+        screen.input(&Input::Key {
+            key: k,
+            pressed: true,
+            repeat: true,
+        });
+    }
+    assert_eq!(screen.recording(), None);
+    assert_eq!(screen.focus(), KeysFocus::List);
+    assert!(!screen.closed());
+    assert_eq!(screen.draft(), &Bindings::default());
+}
+
+#[test]
+fn a_press_released_off_the_selected_row_or_from_the_bar_records_nothing() {
+    let mut dragged = screen();
+    let row = dragged.row_list().row_bounds(2).expect("shown");
+    let press = |pressed, at| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    };
+    dragged.input(&press(true, center(row)));
+    dragged.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
+    dragged.input(&press(false, Point::new(1.0, 1.0)));
+    assert_eq!(dragged.recording(), None, "released off the row");
+    let mut screen = screen();
+    let bar = screen.row_list().bar().expect("a bar");
+    let selected = screen
+        .row_list()
+        .selected()
+        .and_then(|row| screen.row_list().row_bounds(row))
+        .expect("shown");
+    screen.input(&press(true, Point::new(bar.center().x, bar.max.y - 3.0)));
+    screen.input(&Input::PointerMoved(center(selected)));
+    screen.input(&press(false, center(selected)));
+    assert_eq!(screen.recording(), None, "a press on the bar");
+}
+
+#[test]
+fn a_held_scroll_arrow_steps_on_as_time_passes() {
+    let mut screen = screen();
+    let bar = screen.row_list().bar().expect("a bar");
+    screen.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at: Point::new(bar.center().x, bar.max.y - 3.0),
+    });
+    let pressed = screen.row_list().first();
+    screen.tick(Duration::from_secs(2));
+    assert!(screen.row_list().first() > pressed);
+}
+
+#[test]
+fn the_platform_s_key_names_name_the_rows() {
+    let screen = screen_with(
+        Bindings::default(),
+        Rc::new(
+            FakeKeyNames::new()
+                .with(Key::ArrowUp, "nope")
+                .with(Key::KeyW, "ü"),
+        ),
+        &Rulebook::default(),
+    );
+    assert_eq!(cell(&screen, FlightCommand::SelectSecondary), "Ü");
+    assert_eq!(cell(&screen, FlightCommand::Accelerate), "Up Arrow");
 }

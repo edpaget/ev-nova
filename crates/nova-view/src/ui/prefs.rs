@@ -109,7 +109,7 @@ use crate::keymap::{
 use crate::preferences::{LaunchPrefs, Prefs};
 use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
-use crate::sound::{Sound, SoundPrefs};
+use crate::sound::SoundPrefs;
 use crate::text::TextMetrics;
 use crate::upscaler::Upscaler;
 use crate::video_mode::{FullscreenKind, VideoMode};
@@ -1170,14 +1170,6 @@ impl Screen for PrefsDialog {
         self.keys.let_go();
     }
 
-    /// The keys screen's sounds, while it is open: none, as the
-    /// original's Keys window plays none.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        self.keys_screen
-            .as_mut()
-            .map_or_else(Vec::new, Screen::take_sounds)
-    }
-
     /// The preferences once after each change.
     fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
@@ -1927,6 +1919,46 @@ mod tests {
             dialog.keys_screen().map(KeysScreen::draft),
             Some(&rebound),
             "J is reserved"
+        );
+    }
+
+    #[test]
+    fn the_keys_screen_s_held_scroll_arrow_steps_on_as_the_dialog_ticks() {
+        let mut dialog = prefs();
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        let bar = dialog
+            .keys_screen()
+            .and_then(|screen| screen.row_list().bar())
+            .expect("the commands overflow the list");
+        let arrow = Point::new(bar.center().x, bar.max.y - 3.0);
+        dialog.input(&button(true, arrow));
+        let pressed = dialog.keys_screen().expect("open").row_list().first();
+        dialog.tick(Duration::from_secs(2));
+        let ticked = dialog.keys_screen().expect("open").row_list().first();
+        assert!(ticked > pressed, "{pressed} then {ticked}");
+    }
+
+    #[test]
+    fn the_keys_screen_lets_go_of_its_keys_with_the_dialog() {
+        let bible = Rulebook::default().with_override(
+            nova_sim::RuleKey::RecordedModifiers,
+            nova_sim::RuleSource::Bible,
+        );
+        let mut dialog = prefs().with_rules(&bible);
+        let at = key_settings(&dialog);
+        click(&mut dialog, at);
+        dialog.input(&key(Key::ShiftLeft));
+        dialog.release_keys();
+        tap(&mut dialog, Key::Enter);
+        tap(&mut dialog, Key::KeyJ);
+        assert_eq!(
+            dialog.keys_screen().and_then(|screen| screen
+                .draft()
+                .keyboard
+                .combo(crate::keymap::FlightCommand::Accelerate.into())),
+            Some(KeyCombo::key(Key::KeyJ)),
+            "Shift was let go"
         );
     }
 

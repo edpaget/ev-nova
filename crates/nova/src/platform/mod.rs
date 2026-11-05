@@ -578,6 +578,20 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_bar_s_key_equivalents_are_the_mac_s_and_none_elsewhere() {
+        let equivalents = menu_key_equivalents();
+        let command_h = nova_view::KeyCombo::with(Key::KeyH, nova_view::Modifiers::COMMAND);
+        assert_eq!(
+            equivalents.contains(&command_h),
+            cfg!(target_os = "macos"),
+            "Hide"
+        );
+        if !cfg!(target_os = "macos") {
+            assert_eq!(equivalents, []);
+        }
+    }
+
+    #[test]
     fn every_key_map_key_produces_has_a_name_and_only_a_printing_one_asks_the_layout() {
         use nova_view::key_names::fixture::FakeKeyNames;
         use nova_view::key_names::{key_name, prints};
