@@ -379,3 +379,57 @@ fn only_a_pad_button_is_from_the_pad() {
         repeat: false,
     }));
 }
+
+#[test]
+fn the_gaps_are_the_edge_gaps_along_and_across_and_the_centre_offset() {
+    // `a` spans x 40..50, y 60..80; each `b` lies one way, off to a side.
+    let a = rect(40.0, 60.0, 10.0, 20.0);
+    // Right, above: along 57 - 50, across 60 - 52, centres 70 vs 46.
+    assert_eq!(
+        gaps(a, rect(57.0, 40.0, 6.0, 12.0), Direction::Right),
+        (7.0, 8.0, 24.0)
+    );
+    // Right, below: across 83 - 80.
+    assert_eq!(
+        gaps(a, rect(57.0, 83.0, 6.0, 12.0), Direction::Right),
+        (7.0, 3.0, 19.0)
+    );
+    // Left, above: along 40 - 31.
+    assert_eq!(
+        gaps(a, rect(25.0, 40.0, 6.0, 12.0), Direction::Left),
+        (9.0, 8.0, 24.0)
+    );
+    // Down, left of it: along 85 - 80, across 40 - 33, centres 45 vs 30.
+    assert_eq!(
+        gaps(a, rect(27.0, 85.0, 6.0, 4.0), Direction::Down),
+        (5.0, 7.0, 15.0)
+    );
+    // Up, right of it: along 60 - 52, across 54 - 50, centres 45 vs 57.
+    assert_eq!(
+        gaps(a, rect(54.0, 48.0, 6.0, 4.0), Direction::Up),
+        (8.0, 4.0, 12.0)
+    );
+    // Overlapping both ways: no gap.
+    assert_eq!(
+        gaps(a, rect(45.0, 65.0, 10.0, 10.0), Direction::Right),
+        (0.0, 0.0, 0.0)
+    );
+}
+
+#[test]
+fn beyond_is_strict_each_way() {
+    let a = rect(40.0, 60.0, 10.0, 20.0);
+    let level = rect(42.0, 62.0, 6.0, 16.0);
+    for direction in [
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
+    ] {
+        assert!(!beyond(a, level, direction), "{direction:?}");
+    }
+    assert!(beyond(a, rect(60.0, 60.0, 1.0, 1.0), Direction::Right));
+    assert!(beyond(a, rect(10.0, 60.0, 1.0, 1.0), Direction::Left));
+    assert!(beyond(a, rect(40.0, 90.0, 1.0, 1.0), Direction::Down));
+    assert!(beyond(a, rect(40.0, 10.0, 1.0, 1.0), Direction::Up));
+}

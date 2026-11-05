@@ -482,3 +482,19 @@ fn turning_the_ring_off_keeps_the_pads_focus() {
     assert_eq!(dialog.focus(), Some(1));
     assert_eq!(dialog.pad_highlight(), Some(1));
 }
+
+#[test]
+fn a_focus_greyed_out_shows_no_highlight_and_south_presses_nothing() {
+    let mut dialog = dialog(&row());
+    dialog.input(&told(PAD));
+    tap(&mut dialog, PadButton::DPadLeft);
+    assert_eq!(dialog.pad_highlight(), Some(2));
+    dialog.set_greyed(2, true);
+    assert_eq!(dialog.focus(), Some(2), "kept, for when it comes back");
+    assert_eq!(dialog.pad_highlight(), None);
+    let before = drawn(&dialog);
+    dialog.input(&pad(PadButton::South, true));
+    assert_eq!(dialog.pressed_item(), None);
+    assert_eq!(drawn(&dialog), before);
+    assert_eq!(dialog.input(&pad(PadButton::South, false)), None);
+}

@@ -2629,7 +2629,7 @@ mod tests {
     }
 
     /// The dialog offered [`modes`], on borderless.
-    fn offered() -> PrefsDialog {
+    pub(super) fn offered() -> PrefsDialog {
         let mut dialog = prefs();
         dialog.set_display_modes(
             &modes(),

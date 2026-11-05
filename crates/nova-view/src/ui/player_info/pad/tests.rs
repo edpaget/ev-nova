@@ -147,3 +147,50 @@ fn under_the_question_the_screen_draws_no_highlight_of_its_own() {
             .any(|w| w == ring.as_slice())
     );
 }
+
+#[test]
+fn south_on_a_focus_no_longer_shown_presses_nothing() {
+    let mut screen = on_cargo();
+    screen.input(&told(PAD));
+    let goal = screen
+        .button_bounds(PlayerInfoButton::Jettison)
+        .expect("laid out")
+        .center();
+    for _ in 0..12 {
+        let Some(at) = screen.pad_focus() else { break };
+        if at == PlayerInfoButton::Jettison {
+            break;
+        }
+        let here = screen.button_bounds(at).expect("laid out").center();
+        let (dx, dy) = (goal.x - here.x, goal.y - here.y);
+        let toward = if dx.abs() > dy.abs() {
+            if dx > 0.0 {
+                PadButton::DPadRight
+            } else {
+                PadButton::DPadLeft
+            }
+        } else if dy > 0.0 {
+            PadButton::DPadDown
+        } else {
+            PadButton::DPadUp
+        };
+        tap(&mut screen, toward);
+    }
+    assert_eq!(screen.pad_focus(), Some(PlayerInfoButton::Jettison));
+    tap(&mut screen, PadButton::RightShoulder);
+    assert_eq!(screen.tab(), Tab::Extras, "Jettison hides");
+    screen.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: true,
+    });
+    tap(&mut screen, PadButton::LeftShoulder);
+    assert_eq!(screen.tab(), Tab::Cargo, "Jettison shows again");
+    screen.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: false,
+    });
+    assert!(
+        !screen.confirm_open(),
+        "the press on a hidden button did nothing"
+    );
+}

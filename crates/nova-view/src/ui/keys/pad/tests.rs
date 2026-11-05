@@ -173,3 +173,33 @@ fn keyboard_space_on_the_list_still_records() {
     screen.input(&key(Key::Space, true));
     assert_eq!(screen.recording(), Some(FlightCommand::Accelerate.into()));
 }
+
+#[test]
+fn it_reports_the_device_it_was_told() {
+    let mut screen = screen();
+    assert_eq!(screen.device(), Device::Keyboard);
+    screen.input(&told(PAD));
+    assert_eq!(screen.device(), PAD);
+    screen.input(&told(Device::Mouse));
+    assert_eq!(screen.device(), Device::Mouse);
+}
+
+#[test]
+fn a_dpad_press_while_south_is_held_on_a_button_drops_the_press() {
+    let mut screen = screen();
+    screen.input(&told(PAD));
+    while screen.focus() != KeysFocus::Button(KeysButton::Cancel) {
+        pad(&mut screen, PadButton::RightShoulder);
+    }
+    screen.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: true,
+    });
+    pad(&mut screen, PadButton::DPadRight);
+    assert!(!screen.trackers[KeysButton::Cancel.index()].pressed());
+    screen.input(&Input::PadButton {
+        button: PadButton::South,
+        pressed: false,
+    });
+    assert!(!screen.closed(), "Cancel's press was dropped");
+}

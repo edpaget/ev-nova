@@ -1,4 +1,4 @@
-use super::super::tests::{click, drawn, key, ok, prefs};
+use super::super::tests::{click, drawn, key, offered, ok, prefs};
 use super::*;
 use crate::geometry::Point;
 use crate::input::{ControllerFamily, Input, Key, PadButton, Surroundings};
@@ -165,7 +165,11 @@ fn south_on_key_settings_opens_the_keys_screen() {
         button: PadButton::South,
         pressed: false,
     });
-    assert!(dialog.keys_screen().is_some());
+    assert_eq!(
+        dialog.keys_screen().expect("open").device(),
+        PAD,
+        "told as it opens"
+    );
 }
 
 #[test]
@@ -218,4 +222,75 @@ fn the_pads_click_on_ok_matches_the_pointers() {
     padded.input(&told(PAD));
     tap(&mut padded, PadButton::South);
     assert_eq!(padded.closed(), clicked.closed());
+}
+
+#[test]
+fn the_left_stick_steps_the_focused_stepper_under_focus_ring_off_too() {
+    let mut dialog = prefs().with_focus_ring(FocusRing::Off);
+    dialog.input(&told(PAD));
+    reach(
+        &mut dialog,
+        PrefsTarget::Arrow(Focus::EffectsVolume, Arrow::Up),
+    );
+    tap(&mut dialog, PadButton::LeftStickUp);
+    assert_eq!(dialog.effects_volume().level(), 5);
+    dialog.input(&key(Key::ArrowUp));
+    assert_eq!(
+        dialog.effects_volume().level(),
+        5,
+        "the keyboard has no focus"
+    );
+}
+
+#[test]
+fn south_on_a_toggle_reports_the_change_once() {
+    let mut dialog = prefs();
+    dialog.input(&told(PAD));
+    reach(&mut dialog, PrefsTarget::Part(Focus::Music));
+    tap(&mut dialog, PadButton::South);
+    assert!(dialog.take_change().is_some_and(|prefs| prefs.sound.music));
+    assert_eq!(dialog.take_change(), None);
+}
+
+#[test]
+fn south_on_a_volume_arrow_reports_the_change() {
+    for (part, arrow) in [
+        (Focus::EffectsVolume, Arrow::Up),
+        (Focus::MusicVolume, Arrow::Down),
+    ] {
+        let mut dialog = prefs();
+        dialog.input(&told(PAD));
+        reach(&mut dialog, PrefsTarget::Arrow(part, arrow));
+        tap(&mut dialog, PadButton::South);
+        assert!(dialog.take_change().is_some(), "{part:?}");
+    }
+}
+
+#[test]
+fn south_on_the_display_and_scaling_arrows_picks_as_a_click_does() {
+    use crate::video_mode::FullscreenKind;
+    let mut dialog = offered();
+    dialog.input(&told(PAD));
+    reach(&mut dialog, PrefsTarget::Arrow(Focus::Display, Arrow::Down));
+    tap(&mut dialog, PadButton::South);
+    reach(&mut dialog, PrefsTarget::Part(Focus::Ok));
+    tap(&mut dialog, PadButton::South);
+    assert!(dialog.closed());
+    assert!(matches!(
+        dialog.take_display_choice(),
+        Some(FullscreenKind::Exclusive(_))
+    ));
+    let mut scaled = prefs().with_scaling(&crate::scaling::Scaling::list(&[
+        crate::upscaler::Upscaler::Native,
+        crate::upscaler::Upscaler::SharpBilinear,
+    ]));
+    scaled.input(&told(PAD));
+    reach(&mut scaled, PrefsTarget::Arrow(Focus::Scaling, Arrow::Down));
+    tap(&mut scaled, PadButton::South);
+    tap(&mut scaled, PadButton::East);
+    assert!(scaled.closed());
+    assert!(
+        scaled.take_change().is_some(),
+        "the Scaling picked is reported"
+    );
 }
