@@ -52,6 +52,16 @@ macro_rules! context_commands {
                     $(Self::$variant => Kind::$kind,)*
                 }
             }
+
+            /// The command's stable name, `Context.Variant`, as the
+            /// settings file saves it. Renaming a variant renames its saved
+            /// key, which the saved form's pinned table catches.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => concat!(stringify!($context), ".", stringify!($variant)),)*
+                }
+            }
         }
 
         impl From<$name> for Command {
@@ -110,6 +120,21 @@ macro_rules! contexts {
                 match self {
                     $(Self::$context(command) => command.kind(),)*
                 }
+            }
+
+            /// The command's stable name, `Context.Variant`
+            /// (`"Flight.Accelerate"`), as the settings file saves it.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$context(command) => command.name(),)*
+                }
+            }
+
+            /// The command named `name` ([`Command::name`]), if any.
+            #[must_use]
+            pub fn from_name(name: &str) -> Option<Self> {
+                Self::all().find(|command| command.name() == name)
             }
 
             /// Every command, context by context, each in declaration
@@ -801,6 +826,48 @@ mod tests {
         assert_eq!(Command::from(PauseCommand::Pause).kind(), Kind::Pressed);
         assert_eq!(Command::from(PlayCommand::GalaxyMap).kind(), Kind::Held);
         assert_eq!(Command::from(EscortMenuCommand::Group1).kind(), Kind::Held);
+    }
+
+    #[test]
+    fn every_command_has_a_unique_name_that_finds_it_again() {
+        let names: std::collections::BTreeSet<&str> = Command::all().map(Command::name).collect();
+        assert_eq!(names.len(), Command::all().count());
+        for command in Command::all() {
+            assert_eq!(
+                Command::from_name(command.name()),
+                Some(command),
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_s_name_is_its_context_and_variant() {
+        assert_eq!(
+            Command::from(FlightCommand::Accelerate).name(),
+            "Flight.Accelerate"
+        );
+        assert_eq!(Command::from(PauseCommand::Pause).name(), "Pause.Pause");
+        assert_eq!(Command::from(UiCommand::Back).name(), "Ui.Back");
+        assert_eq!(
+            Command::from(EscortMenuCommand::Group5).name(),
+            "EscortMenu.Group5"
+        );
+        assert_eq!(FlightCommand::Board.name(), "Flight.Board");
+    }
+
+    #[test]
+    fn a_name_no_command_has_finds_none() {
+        for name in [
+            "",
+            "Flight.Nope",
+            "flight.accelerate",
+            "Flight.",
+            "Accelerate",
+            "Flight.Accelerate ",
+        ] {
+            assert_eq!(Command::from_name(name), None, "{name:?}");
+        }
     }
 
     #[test]
