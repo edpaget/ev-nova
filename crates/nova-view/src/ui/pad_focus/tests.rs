@@ -4,7 +4,7 @@ use super::*;
 use crate::draw::DrawCommand;
 use crate::geometry::Point;
 use crate::input::{ControllerFamily, PadButton};
-use crate::keymap::{FlightCommand, UiCommand};
+use crate::keymap::{CommandInput, FlightCommand, UiCommand};
 
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
@@ -273,6 +273,50 @@ fn the_pad_highlight_shows_only_while_the_pad_was_used_last() {
     keyed.surroundings(PAD, Some(2), false);
     assert_eq!(keyed.pad_highlight(), None, "the keyboard placed it");
     assert_eq!(keyed.get(), Some(1));
+}
+
+fn ui_input(command: UiCommand, pressed: bool) -> CommandInput {
+    CommandInput {
+        command: Command::Ui(command),
+        pressed,
+        repeat: false,
+    }
+}
+
+#[test]
+fn the_pads_focus_moves_and_south_are_held_back_until_the_pad_shows() {
+    let focus_or_south = [
+        UiCommand::FocusUp,
+        UiCommand::FocusDown,
+        UiCommand::FocusLeft,
+        UiCommand::FocusRight,
+        UiCommand::Tab,
+        UiCommand::PrevFocus,
+        UiCommand::Activate,
+    ];
+    let mut state = FocusState::<u8>::default();
+    for command in focus_or_south {
+        assert!(state.pad_holds_back(ui_input(command, true)), "{command:?}");
+        assert!(
+            !state.pad_holds_back(ui_input(command, false)),
+            "a release finishes only what a press started: {command:?}"
+        );
+    }
+    for command in [UiCommand::Back, UiCommand::Up, UiCommand::Confirm] {
+        assert!(
+            !state.pad_holds_back(ui_input(command, true)),
+            "{command:?}"
+        );
+    }
+    state.surroundings(PAD, Some(1), false);
+    for command in focus_or_south {
+        assert!(
+            !state.pad_holds_back(ui_input(command, true)),
+            "{command:?}"
+        );
+    }
+    state.surroundings(Device::Mouse, Some(1), false);
+    assert!(state.pad_holds_back(ui_input(UiCommand::Activate, true)));
 }
 
 #[test]

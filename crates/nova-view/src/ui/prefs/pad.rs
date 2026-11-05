@@ -16,6 +16,9 @@
 //!   does, on its release; **the left stick** steps whichever stepper
 //!   holds the focus, as the arrow keys do; **East** closes, as Escape
 //!   does.
+//! - **Until Preferences is told** the pad was the device used last, the
+//!   pad's focus moves and South do nothing, as the highlight can't show
+//!   ([`pad_focus`]'s "Nothing hidden acts"); East and the left stick act.
 //! - The pad acts under either [`FocusRing`] reading. The keyboard keeps
 //!   its rules: under [`FocusRing::Off`] it has no focus, and under
 //!   [`FocusRing::Tab`] Tab goes from any target to the next part.
@@ -163,6 +166,9 @@ impl PrefsDialog {
 
     /// Acts on what a pad button meant: see the module docs.
     pub(super) fn pad_command(&mut self, input: CommandInput) {
+        if self.focus.pad_holds_back(input) {
+            return;
+        }
         if let Some(mv) = FocusMove::of(input.command) {
             if input.pressed {
                 self.drop_pad_press();

@@ -19,6 +19,25 @@
 //!   the pad or the keyboard placed it, so the keyboard's ring and the
 //!   pad's highlight ([`draw_highlight`]) each show only their own.
 //!
+//! # Nothing hidden acts
+//!
+//! The pad's focus moves and South act only while the screen has been
+//! told the pad was the device used last ([`FocusState::pad_shown`]), so
+//! the highlight shows where the focus is. Until then a d-pad press, a
+//! shoulder or South does nothing ([`FocusState::pad_holds_back`]): it
+//! neither moves the focus nor presses a control, not even one the
+//! keyboard's ring shows. East and every other command act as their keys
+//! do. A release passes, as it only finishes a press the pad made while
+//! its focus showed.
+//!
+//! A press that arrives before the surroundings doesn't make the focus
+//! appear either. The app tells each screen the device used last, and a
+//! screen that showed the highlight on its own would never be told when
+//! the player went back to the keyboard, leaving it stuck. So a screen the
+//! app doesn't tell yet (the spaceport's side, until
+//! rdm:phase/key-bindings/phase-9-gamepad-spaceport) ignores the pad's
+//! focus altogether, rather than act on a control the player can't see.
+//!
 //! # Where additions go
 //!
 //! - A new screen lists its targets in its own module (a `pad` child
@@ -35,7 +54,7 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::Bounds;
 use crate::input::{Device, Input};
-use crate::keymap::{Command, UiCommand};
+use crate::keymap::{Command, CommandInput, UiCommand};
 
 use super::dialog::outline;
 
@@ -302,6 +321,19 @@ impl<T: Copy + Eq> FocusState<T> {
     #[must_use]
     pub const fn pad_moved(&self) -> bool {
         self.pad_moved
+    }
+
+    /// Whether a screen drops the pad's command `input`: a focus move's or
+    /// South's press while the pad's focus can't show, because the screen
+    /// hasn't been told the pad was the device used last
+    /// ([`FocusState::pad_shown`]). See the module docs' "Nothing hidden
+    /// acts". Releases, and every other command, pass.
+    #[must_use]
+    pub fn pad_holds_back(&self, input: CommandInput) -> bool {
+        input.pressed
+            && !self.pad_shown()
+            && (FocusMove::of(input.command).is_some()
+                || input.command == Command::Ui(UiCommand::Activate))
     }
 
     /// The keyboard (or the screen itself) sets the focus.

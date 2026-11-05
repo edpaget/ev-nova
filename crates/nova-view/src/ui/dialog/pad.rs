@@ -5,6 +5,9 @@
 //!   enabled and drawn: buttons, role-less user items (click areas), and
 //!   the scroll arrows while their text overflows. Their ids are item
 //!   numbers, and item order is Tab order.
+//! - **Until the dialog is told** the pad was the device used last, the
+//!   pad's focus moves and South do nothing, as its highlight can't show
+//!   ([`pad_focus`]'s "Nothing hidden acts"); East and the rest act.
 //! - **The initial target**, where the pad's focus lands on its first
 //!   `Surroundings(Gamepad)` or first move, is the default item (the one
 //!   Return presses) when it is a target, otherwise the first target. So
@@ -105,6 +108,9 @@ impl Dialog {
 
     /// Acts on what a pad button meant: see the module docs.
     pub(super) fn pad_command(&mut self, input: CommandInput) -> Option<DialogEvent> {
+        if self.focus.pad_holds_back(input) {
+            return None;
+        }
         if let Some(mv) = FocusMove::of(input.command) {
             if input.pressed {
                 self.drop_pad_press();

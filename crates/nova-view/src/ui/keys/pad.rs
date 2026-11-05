@@ -18,6 +18,10 @@
 //!   recording, as a click elsewhere does, since a pad can't record until
 //!   rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs. The pad's
 //!   other buttons record nothing.
+//! - **Until the screen is told** the pad was the device used last, the
+//!   pad's focus moves and South do nothing, though the outline shows the
+//!   focus: one rule for every screen ([`pad_focus`]'s "Nothing hidden
+//!   acts"). East and the left stick act.
 //! - **Drawing**: while the pad was the device used last, its highlight
 //!   replaces the outline the focus always has.
 //!
@@ -80,6 +84,9 @@ impl KeysScreen {
             if command == UiCommand::Back && input.pressed {
                 self.end_capture();
             }
+            return;
+        }
+        if self.focus.pad_holds_back(input) {
             return;
         }
         if let Some(mv) = FocusMove::of(input.command) {

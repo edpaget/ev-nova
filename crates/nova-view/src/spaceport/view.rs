@@ -2674,6 +2674,7 @@ pub(in crate::spaceport) mod tests {
     mod flushing_layers;
     mod held_keys;
     mod overlay_pointer;
+    mod pad_untold;
     mod ship_movies;
 
     use crate::keymap::test_keys::MISSION_INFO_KEY;

@@ -294,3 +294,21 @@ fn south_on_the_display_and_scaling_arrows_picks_as_a_click_does() {
         "the Scaling picked is reported"
     );
 }
+
+#[test]
+fn untold_the_pads_focus_moves_and_south_do_nothing_but_east_cancels() {
+    let mut dialog = prefs();
+    for button in [
+        PadButton::DPadUp,
+        PadButton::DPadLeft,
+        PadButton::RightShoulder,
+        PadButton::LeftShoulder,
+        PadButton::South,
+    ] {
+        tap(&mut dialog, button);
+        assert_eq!(dialog.pad_target(), None, "{button:?}");
+    }
+    assert!(!dialog.closed());
+    tap(&mut dialog, PadButton::East);
+    assert!(dialog.closed(), "East is Escape's");
+}

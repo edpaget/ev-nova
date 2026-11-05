@@ -194,3 +194,28 @@ fn south_on_a_focus_no_longer_shown_presses_nothing() {
         "the press on a hidden button did nothing"
     );
 }
+
+#[test]
+fn untold_the_dpad_and_south_do_nothing_but_the_shoulders_still_change_the_tab() {
+    let mut screen = screen();
+    for button in [
+        PadButton::DPadUp,
+        PadButton::DPadLeft,
+        PadButton::DPadDown,
+        PadButton::DPadRight,
+        PadButton::South,
+    ] {
+        tap(&mut screen, button);
+        assert_eq!(screen.pad_focus(), None, "{button:?}");
+    }
+    assert!(!screen.closed());
+    assert_eq!(screen.tab(), Tab::General);
+    tap(&mut screen, PadButton::LeftShoulder);
+    assert_eq!(
+        screen.tab(),
+        Tab::Honors,
+        "Shift-Tab's, which needs no focus"
+    );
+    tap(&mut screen, PadButton::East);
+    assert!(screen.closed(), "East is Escape's");
+}

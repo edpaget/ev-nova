@@ -42,8 +42,11 @@
 //! highlight, a two-unit ring outside the item, shows only while the pad
 //! was the device used last ([`Input::Surroundings`]), and the keyboard's
 //! outline only a focus the keyboard placed, so a keyboard-only session
-//! draws what it always did. The original has no focus here, so this is a
-//! new feature with no `Rulebook` key.
+//! draws what it always did. Until the dialog is told the pad was the
+//! device used last, the d-pad, the shoulders and South do nothing, so the
+//! pad never presses an item it can't show (the spaceport's dialogs, which
+//! nothing tells yet). The original has no focus here, so this is a new
+//! feature with no `Rulebook` key.
 
 use std::rc::Rc;
 use std::time::Duration;

@@ -128,6 +128,52 @@ fn south_presses_the_focused_button_on_its_release_and_draws_it_pressed_meanwhil
 }
 
 #[test]
+fn before_the_pad_shows_its_focus_moves_and_south_do_nothing() {
+    for ring in [FocusRing::Tab, FocusRing::Off] {
+        let mut dialog = dialog(&row()).with_focus_ring(ring);
+        for button in [
+            PadButton::DPadLeft,
+            PadButton::RightShoulder,
+            PadButton::LeftShoulder,
+        ] {
+            assert_eq!(tap(&mut dialog, button), None, "{ring:?}: {button:?}");
+            assert_eq!(dialog.focus(), None, "{ring:?}: {button:?}");
+        }
+        assert_eq!(tap(&mut dialog, PadButton::South), None, "{ring:?}");
+        assert_eq!(dialog.pressed_item(), None, "{ring:?}");
+        dialog.input(&told(PAD));
+        tap(&mut dialog, PadButton::DPadLeft);
+        assert_eq!(dialog.focus(), Some(2), "{ring:?}: works once told");
+        assert_eq!(
+            tap(&mut dialog, PadButton::South),
+            Some(DialogEvent::Item(2)),
+            "{ring:?}"
+        );
+    }
+}
+
+#[test]
+fn before_the_pad_shows_south_presses_not_even_a_focus_the_keyboard_placed() {
+    let mut dialog = dialog(&row()).with_focus_ring(FocusRing::Tab);
+    dialog.input(&key(Key::Tab));
+    let keyed = dialog.focus();
+    assert!(keyed.is_some());
+    assert_eq!(tap(&mut dialog, PadButton::South), None);
+    assert_eq!(dialog.pressed_item(), None);
+    assert_eq!(tap(&mut dialog, PadButton::DPadLeft), None);
+    assert_eq!(dialog.focus(), keyed);
+}
+
+#[test]
+fn before_the_pad_shows_east_still_does_what_escape_does() {
+    let mut dialog = dialog(&row());
+    assert_eq!(
+        tap(&mut dialog, PadButton::East),
+        Some(DialogEvent::Item(2))
+    );
+}
+
+#[test]
 fn east_activates_the_cancel_item_as_escape_does() {
     let mut keyed = dialog(&row());
     assert_eq!(keyed.input(&key(Key::Escape)), Some(DialogEvent::Item(2)));

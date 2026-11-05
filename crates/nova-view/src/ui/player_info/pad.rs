@@ -9,6 +9,10 @@
 //!   in that order. The pad's focus starts on Done.
 //! - **The d-pad** moves the focus ([`pad_focus::step`]); keys bound to
 //!   the focus moves do nothing here, as the keyboard has no focus.
+//! - **Until the screen is told** the pad was the device used last (the
+//!   spaceport doesn't tell it yet), the d-pad and South do nothing, as
+//!   the highlight can't show ([`pad_focus`]'s "Nothing hidden acts").
+//!   The shoulders and East act, as their keys need no focus.
 //! - **The shoulders** are Tab (Next Field) and Previous Field, which
 //!   change the tab as Tab and Shift-Tab do.
 //! - **South** presses the focused button as a click does, through the
@@ -69,7 +73,17 @@ impl PlayerInfoScreen {
         let Some(command) = command else {
             return false;
         };
-        if let Some(FocusMove::Toward(direction)) = FocusMove::of(command.command) {
+        let direction = match FocusMove::of(command.command) {
+            Some(FocusMove::Toward(direction)) => Some(direction),
+            _ => None,
+        };
+        if direction.is_none() && command.command != Command::Ui(UiCommand::Activate) {
+            return false;
+        }
+        if self.focus.pad_holds_back(command) {
+            return true;
+        }
+        if let Some(direction) = direction {
             if command.pressed {
                 self.drop_pad_press();
                 if let Some(next) = pad_focus::step(
@@ -82,9 +96,6 @@ impl PlayerInfoScreen {
                 }
             }
             return true;
-        }
-        if command.command != Command::Ui(UiCommand::Activate) {
-            return false;
         }
         if command.pressed {
             self.press_focused();

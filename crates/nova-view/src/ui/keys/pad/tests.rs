@@ -203,3 +203,22 @@ fn a_dpad_press_while_south_is_held_on_a_button_drops_the_press() {
     });
     assert!(!screen.closed(), "Cancel's press was dropped");
 }
+
+#[test]
+fn untold_the_pads_focus_moves_and_south_do_nothing_but_east_cancels() {
+    let mut screen = screen();
+    select(&mut screen, FlightCommand::Accelerate);
+    for button in [
+        PadButton::DPadRight,
+        PadButton::RightShoulder,
+        PadButton::LeftShoulder,
+    ] {
+        pad(&mut screen, button);
+        assert_eq!(screen.focus(), KeysFocus::List, "{button:?}");
+    }
+    pad(&mut screen, PadButton::South);
+    assert_eq!(screen.recording(), None, "South records nothing");
+    assert!(!screen.closed());
+    pad(&mut screen, PadButton::East);
+    assert!(screen.closed(), "East is Cancel's, as Escape is");
+}
