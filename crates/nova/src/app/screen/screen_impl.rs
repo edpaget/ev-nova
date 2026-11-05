@@ -10,7 +10,7 @@ use nova_view::{
 
 use super::{
     AppScreen, CLASSIC_VIEW, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS,
-    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
+    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, Side,
 };
 
 impl Screen for AppScreen {
@@ -636,8 +636,7 @@ impl AppScreen {
             }
             return;
         }
-        self.command_held.let_go();
-        self.keys_held = MenuKeys::default();
+        self.let_go_of_noted_keys();
         // A mission dialog's map over flight sits among the overlays, in
         // front of the dialog it opened from, so flight lets go too: its
         // map waiting for M's release closes

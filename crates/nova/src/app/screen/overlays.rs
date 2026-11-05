@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightStart, FlightView, MapOpener};
+use nova_view::keymap::{AppCommand, Command, PauseCommand};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -24,7 +25,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
+use nova_view::{FullscreenKind, Input, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -219,9 +220,10 @@ impl AppScreen {
         }
     }
 
-    /// Turns double time on or off on a Caps Lock press, not on its
-    /// repeats nor its release, and tells flight, if built; a flight
-    /// built later starts with it ([`FlightView::with_double_time`]).
+    /// Turns double time on or off on a press of the app's Double Time
+    /// (Caps Lock by default), not on its repeats nor its release, and
+    /// tells flight, if built; a flight built later starts with it
+    /// ([`FlightView::with_double_time`]).
     ///
     /// The original follows Caps Lock's lock state (`_QuickKeyCheck(0x39)`
     /// @0x463c3); ours toggles on each press the platform reports, an
@@ -230,11 +232,8 @@ impl AppScreen {
     /// launch. On macOS winit 0.30.13 reports no Caps Lock key at all, so
     /// there double time never comes on.
     pub(super) fn double_time_key(&mut self, input: &Input) {
-        if let Input::Key {
-            key: Key::CapsLock,
-            pressed: true,
-            repeat: false,
-        } = *input
+        if super::routing::is_press(input)
+            && self.keys.means(input) == Some(Command::App(AppCommand::DoubleTime))
         {
             self.double_time = !self.double_time;
             let on = self.double_time;
@@ -371,9 +370,11 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// Flight's input: an Escape press closes flight's map when it is
-    /// open (unless its Find is, which takes it), and otherwise goes
-    /// back to the side flight was entered from; from the main menu, by
+    /// Flight's input: a press of the map's Back (Escape by default)
+    /// closes flight's map when it is open (unless its Find is, which
+    /// takes it), and with the map shut a press of the Pause key (Escape
+    /// by default, which the original's pause reads) goes back to the
+    /// side flight was entered from; from the main menu, by
     /// [`RuleKey::EscapeToMainScreen`]: by the engine it saves the pilot
     /// and returns to the menu with it held, and by the other reading it
     /// does nothing, as the original's `_PlayGame` is left only by death
@@ -388,19 +389,19 @@ impl AppScreen {
             self.settle_flight_movie();
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key: Key::Escape,
-            pressed,
-            repeat,
-        } = *input
-        {
+        let leaves = if flight.map_open() {
+            super::build::map_back(flight, input)
+        } else {
+            self.flight_keys.means(input) == Some(Command::Pause(PauseCommand::Pause))
+        };
+        if leaves {
             let flight = self.flight.as_mut().expect(ENTERED);
             // Find, while open, takes Escape too, doing nothing with it.
             if flight.map_finding() {
                 flight.input(input);
                 return ScreenAction::None;
             }
-            if pressed && !repeat {
+            if super::routing::is_press(input) {
                 if flight.map_open() {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {

@@ -20,6 +20,7 @@ use nova_view::flight::{
 };
 use nova_view::galaxy::GalaxyMap;
 use nova_view::galaxy::find::FIND_DIALOG;
+use nova_view::keymap::{Command, UiCommand, contexts};
 use nova_view::menu::appear::Appear;
 use nova_view::menu::{MainMenu, MainScreenSource, PilotList, PilotPanelSource};
 use nova_view::movie::{MoviePlayer, Movies};
@@ -39,24 +40,25 @@ use nova_view::ui::{
     HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
 use nova_view::{
-    COMMAND_KEYS, Input, Key, LaunchPrefs, ModifierHeld, Navigator, Prefs, Screen, ScreenAction,
-    Showing,
+    COMMAND_KEYS, CommandReader, Input, LaunchPrefs, ModifierHeld, Navigator, Prefs, Screen,
+    ScreenAction, SharedBindings, Showing,
 };
 
 use super::port_dialogs::refresh_spaceport;
-use super::{
-    ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU, Menu, MenuKeys, Side,
-};
+use super::{ABOUT_TEXT, AppScreen, CLASSIC_VIEW, Dialogs, ENTERED, LANDED, MENU, Menu, Side};
 
 impl AppScreen {
-    /// Every screen over `data`, showing the ship browser.
+    /// Every screen over `data`, showing the ship browser, reading the
+    /// keys through one handle on the original's default bindings
+    /// ([`AppScreen::with_bindings`] gives it another).
     #[must_use]
     pub fn new(data: Rc<GameData>) -> Self {
+        let bindings = SharedBindings::default();
         Self {
             side: Side::Ships,
             return_to: Side::Ships,
-            galaxy: Navigator::new(Rc::clone(&data)),
-            ships: ShipBrowser::new(Rc::clone(&data)),
+            galaxy: Navigator::new(Rc::clone(&data)).with_bindings(bindings.clone()),
+            ships: ShipBrowser::new(Rc::clone(&data)).with_bindings(bindings.clone()),
             data,
             flight: None,
             game: None,
@@ -125,7 +127,9 @@ impl AppScreen {
             command_held: ModifierHeld::either(COMMAND_KEYS),
             held_chords: super::held_chords::HeldChords::default(),
             live: super::live_input::LiveInput::default(),
-            keys_held: MenuKeys::default(),
+            keys: CommandReader::new(contexts::ROUTER).with_bindings(bindings.clone()),
+            flight_keys: CommandReader::new(contexts::FLIGHT).with_bindings(bindings.clone()),
+            bindings,
             menu_hold: None,
             held: Vec::new(),
             quit_in: None,
@@ -136,6 +140,39 @@ impl AppScreen {
             pointer: None,
             away: None,
         }
+    }
+
+    /// The router reading the keys through `bindings`, and handing it to
+    /// every screen it has built or builds from now on: its own keys,
+    /// the ship browser's, the galaxy viewer's, each flight's (its dialogs,
+    /// maps and the spaceport's with it) and every dialog it opens. The
+    /// app's edge gives it once, at start-up; a later change refills the
+    /// same handle ([`SharedBindings::set`]), which every screen reads on
+    /// its next input.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings.clone());
+        self.flight_keys.set_bindings(bindings.clone());
+        for flight in self.flights_mut() {
+            flight.set_bindings(bindings.clone());
+        }
+        let spaceport = self
+            .spaceport
+            .take()
+            .map(|spaceport| spaceport.with_bindings(bindings.clone()));
+        Self {
+            galaxy: self.galaxy.with_bindings(bindings.clone()),
+            ships: self.ships.with_bindings(bindings.clone()),
+            spaceport,
+            bindings,
+            ..self
+        }
+    }
+
+    /// The bindings the router reads and hands to every screen it builds.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        &self.bindings
     }
 
     /// The router with each flight rolling each day's events and its
@@ -427,6 +464,7 @@ impl AppScreen {
         .with_overlays(self.flight_overlays)
         .with_hyperspace_effects(self.prefs.hyperspace_effects)
         .with_movies(self.movies.clone())
+        .with_bindings(self.bindings.clone())
         .with_smoke_trails(self.prefs.smoke_trails)
         .with_parallax_starfield(self.prefs.parallax_starfield)
         .with_weapon_effects(launch.weapon_effects)
@@ -810,22 +848,26 @@ impl AppScreen {
         true
     }
 
-    /// The input to flight's course map open over something: an Escape
-    /// press closes it ([`FlightView::close_map`]), unless its Find is
-    /// open or it already waits for M's release, and anything else goes to
-    /// it ([`FlightView::port_map_input`]), the wait queueing the keys.
+    /// The input to flight's course map open over something: a press of
+    /// the map's Back (Escape by default, [`map_back`]) closes it
+    /// ([`FlightView::close_map`]), unless its Find is open or it already
+    /// waits for M's release, and anything else goes to it
+    /// ([`FlightView::port_map_input`]), the wait queueing the keys.
     /// Then what an input that closed it left goes to the screen under it
     /// (the `map_wait_keys` module), the one place every map over a screen
     /// closes.
     fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
-        let escape = Input::Key {
-            key: Key::Escape,
-            pressed: true,
-            repeat: false,
-        };
+        let press = matches!(
+            input,
+            Input::Key {
+                pressed: true,
+                repeat: false,
+                ..
+            }
+        );
         // Find, while open, takes Escape too, doing nothing with it.
-        if *input == escape && !flight.map_finding() && !flight.map_waiting() {
+        if press && map_back(flight, input) && !flight.map_finding() && !flight.map_waiting() {
             flight.close_map();
         } else {
             flight.port_map_input(input);
@@ -961,4 +1003,20 @@ impl AppScreen {
             Side::Spaceport => self.spaceport.as_mut().expect(LANDED),
         }
     }
+}
+
+/// Whether the key of `input` (a press, a repeat or a release) means Back
+/// on `flight`'s course map, as the map reads it
+/// ([`GalaxyMap::peek`](nova_view::galaxy::GalaxyMap::peek)): the map
+/// holds the shared UI context, whose Back closes it.
+pub(super) fn map_back(flight: &FlightView<Rc<GameData>>, input: &Input) -> bool {
+    let Input::Key { key, .. } = *input else {
+        return false;
+    };
+    let press = Input::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    };
+    flight.course_map().peek(&press) == Some(Command::Ui(UiCommand::Back))
 }

@@ -231,8 +231,7 @@ impl AppScreen {
         if let Some(text) = &mut entering.text {
             text.release_keys();
         }
-        self.command_held.let_go();
-        self.keys_held = super::MenuKeys::default();
+        self.let_go_of_noted_keys();
         true
     }
 

@@ -7,11 +7,12 @@ use nova_sim::new_pilot::{kept_name, name_defaults};
 use nova_sim::{OpenError, Pilot, RuleKey, RuleSource, SavedOpening, pilot_key};
 #[cfg(doc)]
 use nova_view::flight::FlightView;
+use nova_view::keymap::{Command, MainMenuCommand, UiCommand};
 use nova_view::menu::{Chosen, ChosenBy, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog, VERSION_NOTE};
 use nova_view::ui::{DescriptionSource, DialogResources};
-use nova_view::{Input, Key, Screen, ScreenAction, Sound, UiSound};
+use nova_view::{Input, Screen, ScreenAction, Sound, UiSound};
 
 use super::quit_question::Question;
 use super::{
@@ -36,17 +37,21 @@ impl AppScreen {
     ///
     /// Each key clicks ([`UiSound::ButtonKeyed`]) and its choice waits
     /// for the click to end ([`MenuHold`]): typed N, O and Q (the menu's
-    /// own), and, with dialogs, A (the About text, @0x1ac70) and X
-    /// (`dësc` 32766, @0x1ac7e, munged for the pilot held, or as before
-    /// any pilot). A's and X's repeats act as presses (see below). P is
-    /// the router's ([`preferences_key`](Self::preferences_key)).
+    /// own), and, with dialogs, the main menu's About (A, the About text,
+    /// @0x1ac70) and Text (X, `dësc` 32766, @0x1ac7e, munged for the
+    /// pilot held, or as before any pilot), read through the router's
+    /// bindings. Their repeats act as presses (see below). P is the
+    /// router's ([`preferences_key`](Self::preferences_key)), and so is
+    /// Tab, the shared UI context's.
     ///
-    /// - O does nothing while the physical S or L key is held
-    ///   (@0x1abd3-0x1abf5). No other code reads those two keys, so the
-    ///   guard's purpose is unknown; it is built as read.
-    /// - Typed E with the physical E key held waits for its release
-    ///   (@0x1ac32-0x1ac57) before it clicks; typed with the E key up
-    ///   (another layout) it clicks at once. Then it is Enter Ship
+    /// - O does nothing while the main menu's S or L guard is held (the
+    ///   physical S and L keys by default, @0x1abd3-0x1abf5). No other
+    ///   code reads those two keys, so the guard's purpose is unknown; it
+    ///   is built as read.
+    /// - Typed E with Enter Ship's key held (the physical E key by
+    ///   default) waits for its release (@0x1ac32-0x1ac57) before it
+    ///   clicks; typed with it up (another layout) it clicks at once. Then
+    ///   it is Enter Ship
     ///   (`_MainScreenChoice(3)`, [`AppScreen::enter_ship`]): it enters
     ///   play with the game held, through the entry, or, with none or a
     ///   dying pilot, refuses with [`UiSound::EnterRefused`].
@@ -54,11 +59,9 @@ impl AppScreen {
     /// With Command held, the typed keys and A and X go to the
     /// original's menus and do nothing here.
     pub(super) fn menu_input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: key @ (Key::KeyA | Key::KeyX),
-            pressed,
-            ..
-        } = *input
+        let meant = self.keys.means(input);
+        if let Some(Command::MainMenu(command @ (MainMenuCommand::About | MainMenuCommand::Text))) =
+            meant
             && self.dialogs.is_some()
             && !self.command_held.held()
         {
@@ -67,8 +70,8 @@ impl AppScreen {
             // so an autoKey that reaches it once the text's dialog has
             // closed opens it again; the dialog itself drops those that
             // reach it (`_TextDialogFilter` @0x51f86-0x51fe5).
-            if pressed {
-                self.click_then(if key == Key::KeyA {
+            if matches!(input, Input::Key { pressed: true, .. }) {
+                self.click_then(if command == MainMenuCommand::About {
                     MenuAction::Choice(MenuChoice::About)
                 } else {
                     MenuAction::Text
@@ -76,13 +79,8 @@ impl AppScreen {
             }
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key: Key::Tab,
-            pressed,
-            repeat,
-        } = *input
-        {
-            if pressed && !repeat {
+        if meant == Some(Command::Ui(UiCommand::Tab)) {
+            if super::routing::is_press(input) {
                 self.switch_to(Side::Ships);
             }
             return ScreenAction::None;
@@ -95,14 +93,17 @@ impl AppScreen {
         }
         match *input {
             Input::Text('e' | 'E') => {
-                if self.keys_held.e {
+                if self.keys.held(MainMenuCommand::EnterShip) {
                     self.menu_hold = Some(MenuHold::EHeld);
                 } else {
                     self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
                 }
                 return ScreenAction::None;
             }
-            Input::Text('o' | 'O') if self.keys_held.s || self.keys_held.l => {
+            Input::Text('o' | 'O')
+                if self.keys.held(MainMenuCommand::OpenGuardS)
+                    || self.keys.held(MainMenuCommand::OpenGuardL) =>
+            {
                 return ScreenAction::None;
             }
             _ => {}
@@ -161,39 +162,50 @@ impl AppScreen {
     }
 
     /// An input that arrives while the main menu waits ([`MenuHold`]):
-    /// queued for the replay, but for E's own while it is held. E's
-    /// release clicks and turns the wait into the click's; E's repeats
-    /// and their text are dropped (whether the OS queues autoKeys during
-    /// the original's spin is not read, and replaying them would type E
-    /// again).
+    /// queued for the replay, but for Enter Ship's key's own while it is
+    /// held (E by default). Its release clicks and turns the wait into the
+    /// click's; its repeats and the typed E are dropped (whether the OS
+    /// queues autoKeys during the original's spin is not read, and
+    /// replaying them would type E again).
     pub(super) fn hold_input(&mut self, hold: MenuHold, input: &Input) {
         if hold == MenuHold::EHeld {
+            let enter_ship =
+                self.keys.means(input) == Some(Command::MainMenu(MainMenuCommand::EnterShip));
             match *input {
-                Input::Key {
-                    key: Key::KeyE,
-                    pressed: false,
-                    ..
-                } => {
+                Input::Key { pressed: false, .. } if enter_ship => {
+                    self.keys.follow(input);
                     self.e_released();
                     return;
                 }
-                Input::Key {
-                    key: Key::KeyE,
-                    pressed: true,
-                    ..
-                }
-                | Input::Text('e' | 'E') => return,
+                Input::Key { pressed: true, .. } if enter_ship => return,
+                Input::Text('e' | 'E') => return,
                 _ => {}
             }
         }
         self.held.push(Held::Input(*input));
     }
 
-    /// E is let go of while E's wait holds: it clicks, and Enter Ship
-    /// waits on the click.
+    /// Enter Ship's key is let go of while E's wait holds: it clicks, and
+    /// Enter Ship waits on the click.
     pub(super) fn e_released(&mut self) {
-        self.keys_held.e = false;
+        self.let_go_of_router_command(Command::MainMenu(MainMenuCommand::EnterShip));
         self.click_then(MenuAction::Choice(MenuChoice::EnterShip));
+    }
+
+    /// Lets go of every key the router's keys hold `command` by, as their
+    /// releases would.
+    fn let_go_of_router_command(&mut self, command: Command) {
+        for press in self.keys.down() {
+            if let Input::Key { key, .. } = press
+                && self.keys.meanings(&press).contains(&command)
+            {
+                self.keys.follow(&Input::Key {
+                    key,
+                    pressed: false,
+                    repeat: false,
+                });
+            }
+        }
     }
 
     /// New Pilot, as `_MainScreenChoice(0)` runs it: with a game in

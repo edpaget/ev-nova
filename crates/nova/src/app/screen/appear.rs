@@ -25,7 +25,7 @@ use nova_sim::{RuleKey, RuleSource};
 use nova_view::menu::appear::{Appear, Deferred, Verdict};
 use nova_view::{Input, ScreenAction};
 
-use super::{AppScreen, MenuKeys, Side};
+use super::{AppScreen, Side};
 
 impl AppScreen {
     /// Puts play away and shows the main screen as a return from play
@@ -98,8 +98,7 @@ impl AppScreen {
         if appear.release_keys() != Verdict::Held {
             return false;
         }
-        self.command_held.let_go();
-        self.keys_held = MenuKeys::default();
+        self.let_go_of_noted_keys();
         true
     }
 

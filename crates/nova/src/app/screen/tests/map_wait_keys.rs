@@ -406,7 +406,12 @@ fn a_key_that_opens_a_flushing_screen_takes_its_release_along() {
     tap(&mut screen, Key::KeyS);
     end_the_wait(&mut screen);
     assert!(spaceport(&screen).open_shipyard().is_some(), "opened");
-    assert!(!screen.keys_held.s, "S isn't left down");
+    assert!(
+        !screen
+            .keys
+            .held(nova_view::keymap::MainMenuCommand::OpenGuardS),
+        "S isn't left down"
+    );
 }
 
 #[test]

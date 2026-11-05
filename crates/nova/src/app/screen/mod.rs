@@ -377,7 +377,8 @@ use nova_view::ui::{
     YesNoDialog,
 };
 use nova_view::{
-    Color, Input, Key, LaunchPrefs, MenuCommand, ModifierHeld, Navigator, Point, Prefs, Sound,
+    Color, CommandReader, Input, Key, LaunchPrefs, MenuCommand, ModifierHeld, Navigator, Point,
+    Prefs, SharedBindings, Sound,
 };
 use nova_view::{FullscreenKind, Scaling};
 
@@ -737,9 +738,13 @@ pub struct AppScreen {
     button_down: bool,
     /// The player info screen over flight, while it is open.
     player_info: Option<PlayerInfoScreen>,
-    /// Whether Command is held, for Command+comma and the other chords:
-    /// either Command, as the original's menus read the `cmdKey` bit
+    /// Whether Command is held, for the menu bar's chords (Command-Q and
+    /// Command+comma, [`menu_chord`]) and the keys a Command chord takes
+    /// to the menus rather than the main menu (`MenuKey`): either
+    /// Command, as the original's menus read the `cmdKey` bit
     /// (`_DoMainScreen` @0x1b25d, `_IterateInGameEventLoop` @0x56a6b).
+    /// The menu bar's keys are fixed, no commands (the key map's fixed
+    /// keys, rdm:phase/key-bindings/phase-2-command-key-map).
     command_held: ModifierHeld,
     /// The menu chords held while a dialog holds back its keys for a
     /// held press, until its replay has run (see `held_chords`).
@@ -748,10 +753,25 @@ pub struct AppScreen {
     /// as it gets it back (see `live_input`): the router's, as only it
     /// sees the input while a dialog or the spaceport takes flight's.
     live: live_input::LiveInput,
-    /// Whether the physical S, L and E keys are held: O does nothing
-    /// while S or L is (`_KeyCheck(0x01)`, `_KeyCheck(0x25)`
-    /// @0x1abd3-0x1abf5), and E waits for E's release.
-    keys_held: MenuKeys,
+    /// The app's key bindings, the one handle every screen the router
+    /// builds reads ([`AppScreen::with_bindings`]). It lives on the router,
+    /// not on a screen, as the router builds every screen and outlives
+    /// them all: loading the saved bindings at launch (phase 3) and the
+    /// keys screen's OK (phase 4) refill it, and every screen built,
+    /// running or to be built, reads the change on its next input.
+    bindings: SharedBindings,
+    /// The router's own keys on the main menu and the developer's sides
+    /// (`contexts::ROUTER`), following every input routed: the main
+    /// menu's held S, L and E (O does nothing while S or L is,
+    /// `_KeyCheck(0x01)`, `_KeyCheck(0x25)` @0x1abd3-0x1abf5, and E waits
+    /// for E's release), its A and X, the main screen's F, I and P, the
+    /// shared Tab and Back, and Caps Lock's double time.
+    keys: CommandReader,
+    /// Flight's keys as flight's list reads them (`contexts::FLIGHT`),
+    /// following every input routed: the Pause key, which the router
+    /// reads in flight in front of flight (the `EscapeToMainScreen`
+    /// reading).
+    flight_keys: CommandReader,
     /// What the main menu waits on, if anything.
     menu_hold: Option<MenuHold>,
     /// What arrived while the main menu waited, in order.
@@ -790,14 +810,6 @@ const CLASSIC_VIEW: (f32, f32) = (
     nova_view::view_shape::CLASSIC_SIZE.0 as f32,
     nova_view::view_shape::CLASSIC_SIZE.1 as f32,
 );
-
-/// The physical keys the main menu reads as held.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct MenuKeys {
-    s: bool,
-    l: bool,
-    e: bool,
-}
 
 /// The main menu, the metrics its screens' text is laid out by when there
 /// are no dialogs, and where pilots are kept (if anywhere).

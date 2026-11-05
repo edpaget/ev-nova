@@ -120,6 +120,7 @@ mod overlays;
 mod planet_comm;
 mod port;
 mod quit_question;
+mod rebinding;
 mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
