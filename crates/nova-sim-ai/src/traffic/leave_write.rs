@@ -47,17 +47,24 @@
 //! parent with a successor (it keeps leaving rather than pausing), and on
 //! a glide in or a burst out (it ends there).
 //!
+//! **A ship waiting in its gate.** The emerge writes +0x50 = -1.0
+//! (@0x89555), which the engine keeps in the gate-wait mode
+//! ([`Mode::Emerging`](super::npc::Mode::Emerging),
+//! [`Mode::HeldAtGate`](super::npc::Mode::HeldAtGate)) rather than in
+//! [`Warp::stage`](super::warp_out::Warp::stage), which the high level's
+//! hold zeroes each pass where the original's waiting ship runs no high
+//! level. The floor over it sets
+//! [`Warp::gate_wait_floored`](super::warp_out::Warp::gate_wait_floored),
+//! which [`Npc::stage_below_zero`] honours, so a successor's pause passes
+//! the ship by and it keeps leaving, as the original's +0x50 of 0 does. A
+//! flag, not the -1.0 held in the stage: the pause is the one reader of a
+//! gate wait's -1.0, and every reader of the stage would otherwise have to
+//! learn to read a gate wait's -1.0 apart from a give-up.
+//!
 //! **Left out:**
 //!
-//! - The floor on a ship held in its gate
-//!   ([`Mode::HeldAtGate`](super::npc::Mode::HeldAtGate), the
-//!   emerge's -1.0 @0x89555): the original's +0x50 is 0 after the write,
-//!   but [`Npc::stage_below_zero`] reads the mode as below 0, so a
-//!   successor's pause takes it where the original keeps it leaving. It
-//!   needs the gate wait's -1.0 held in the stage:
-//!   rdm:phase/npc-ai-2/phase-3-leave-write-left-out.
 //! - `_WarshipAI`'s second idle copy's leave (@0x8bad9-0x8bafb), not
-//!   modelled: the same follow-up.
+//!   modelled: rdm:phase/npc-ai-2/phase-3-leave-write-left-out.
 
 use super::npc::Npc;
 use crate::rulebook::RuleSource;
@@ -85,6 +92,10 @@ impl Npc {
     /// reads it: one tick behind the original's real-time clock, which
     /// crosses no boundary the player sees.
     pub fn takes_leave_write(&mut self, burst: RuleSource) {
+        if self.stage_below_zero() {
+            // The gate wait's -1.0, kept in the mode (see the module docs).
+            self.warp.gate_wait_floored = true;
+        }
         self.leaves_gate_goal();
         if self.jumping_in() {
             self.leaves_arrival(burst);
@@ -180,6 +191,24 @@ mod tests {
         waiting.takes_leave_write(RuleSource::Engine);
         assert_eq!(waiting.mode, Mode::HeldAtGate { ticks_left: 12.0 });
         assert_eq!(waiting.emerges_from, None);
+    }
+
+    #[test]
+    fn a_gate_waits_minus_one_is_floored_to_zero() {
+        // The emerge's +0x50 = -1.0 (@0x89555), which the engine keeps in
+        // the mode: the floor raises it to 0 there too.
+        for mode in [
+            Mode::Emerging { ticks_left: 12.0 },
+            Mode::HeldAtGate { ticks_left: 12.0 },
+            Mode::LeavingGate { tick: 0 },
+        ] {
+            let mut held = ship();
+            held.mode = mode;
+            assert!(held.stage_below_zero(), "{mode:?}");
+            held.takes_leave_write(RuleSource::Engine);
+            assert!(!held.stage_below_zero(), "{mode:?}");
+            assert_eq!(held.warp.stage, 0.0, "{mode:?}");
+        }
     }
 
     /// The passes `npc`'s own jump takes until it is gone, at a duration

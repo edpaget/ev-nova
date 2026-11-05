@@ -223,6 +223,11 @@ pub struct Warp {
     /// Whether goal 0xb is written while its high level waits, so its old
     /// substate stands ([`Npc::joins_leaders_jump`]).
     pub joining: bool,
+    /// Whether +0x50 has been written over the emerge's -1.0 (@0x89555),
+    /// which the engine keeps in a gate-wait mode rather than in
+    /// [`Warp::stage`] ([`Npc::stage_below_zero`]): the leave write's
+    /// floor raises it to 0 ([`leave_write`](crate::traffic::leave_write)).
+    pub gate_wait_floored: bool,
 }
 
 impl Warp {

@@ -1792,14 +1792,16 @@ impl Npc {
     /// (@0x8949d-0x894a4): given up ([`Warp::give_up`]), or the emerge's
     /// -1.0 (@0x89555), which a gate wait keeps from the high level's hold
     /// as the engine's stage doesn't
-    /// ([`hold_stage`](crate::traffic::warp_out::hold_stage)).
+    /// ([`hold_stage`](crate::traffic::warp_out::hold_stage)), unless a
+    /// leave write has floored it to 0 ([`Warp::gate_wait_floored`]).
     #[must_use]
     pub fn stage_below_zero(&self) -> bool {
         self.warp.stage < 0.0
-            || matches!(
-                self.mode,
-                Mode::Emerging { .. } | Mode::HeldAtGate { .. } | Mode::LeavingGate { tick: 0 }
-            )
+            || (!self.warp.gate_wait_floored
+                && matches!(
+                    self.mode,
+                    Mode::Emerging { .. } | Mode::HeldAtGate { .. } | Mode::LeavingGate { tick: 0 }
+                ))
     }
 
     /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a

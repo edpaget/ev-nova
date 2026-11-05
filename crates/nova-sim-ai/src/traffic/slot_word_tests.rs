@@ -540,8 +540,7 @@ fn a_flight_ended_at_its_slot_still_settles_its_warp_under_way_at_its_step() {
         aim: 100,
         stage: 3.0,
         since: 200,
-        goal: None,
-        joining: false,
+        ..Warp::default()
     };
     let (traffic, runner, at_slot) = jump_begun_at_slot(under_way);
     let stepped = of(&traffic, runner);

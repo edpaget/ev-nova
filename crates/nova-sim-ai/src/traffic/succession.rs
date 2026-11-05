@@ -1218,6 +1218,26 @@ mod tests {
     }
 
     #[test]
+    fn a_follower_held_at_its_gate_that_was_told_to_leave_keeps_leaving() {
+        // `_AIMakeShipLeave`'s floor (@0x7e2b0-0x7e2e7) raises the emerge's
+        // -1.0 (@0x89555) to 0, so the pause (@0x8949d-0x894a6) passes it by.
+        for mode in [
+            Mode::Emerging { ticks_left: 12.0 },
+            Mode::HeldAtGate { ticks_left: 12.0 },
+        ] {
+            let leaving = beside_a_successor(|ship| {
+                ship.mode = mode;
+                ship.takes_leave_write(RuleSource::Engine);
+                ship.goal = Goal::JumpOut;
+                ship.target = None;
+            });
+            assert_eq!(leaving.leader, Some(NpcId(1)), "{mode:?}");
+            assert_eq!(leaving.goal, Goal::JumpOut, "{mode:?}");
+            assert_eq!(leaving.mode, Mode::HeldAtGate { ticks_left: 12.0 });
+        }
+    }
+
+    #[test]
     fn a_follower_on_the_frame_its_wait_ran_out_pauses_and_bursts_no_more() {
         let paused = beside_a_successor(|ship| ship.mode = Mode::LeavingGate { tick: 0 });
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
