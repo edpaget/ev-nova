@@ -773,4 +773,18 @@ exclude_re = [
     # that to `escort_menu.is_open()` at the start of every input, before
     # the press reaches `escort_command`, so the guard always holds there.
     "nova-view/src/flight/view/cockpit\\.rs:[0-9]+:[0-9]+: replace match guard self\\.escort_menu\\.is_open\\(\\) with true in FlightView<C, S>::escort_command$",
+    # A thrust amount of none thrusting: `adjusted_accel` adds a push of
+    # 0.0 to each axis (or the circle adds facing × 0.0), which leaves the
+    # velocity as it was, so `>=` changes nothing a step can show.
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace > with >= in advance_by$",
+    # A stick direction's sign is 1 or -1 (`PadButton::stick_direction`),
+    # never 0, so `<= 0` is `< 0`.
+    "nova-view/src/keymap/gamepad\\.rs:[0-9]+:[0-9]+: replace < with <= in PadMap::flight_direction$",
+    # gilrs's poll: what it reads is gilrs's event queue and the pads
+    # found at the start, which only a real pad fills, and no hermetic
+    # test attaches one. Its translation is `Forward`'s, tested on every
+    # host, and the adapter's contract test runs the poll with whatever
+    # is attached.
+    "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: replace <impl Gamepads for GilrsGamepads>::poll with \\(\\)$",
+    "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: delete ! in <impl Gamepads for GilrsGamepads>::poll$",
 ]

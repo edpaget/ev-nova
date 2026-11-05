@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use gilrs::ev::filter::{Filter, axis_dpad_to_button};
-use gilrs::{Axis, Button, Event, EventType, GamepadId, Gilrs, GilrsBuilder};
+use gilrs::{Axis, Button, EventType, GamepadId, Gilrs, GilrsBuilder};
 use nova_view::{PadAxis, PadButton};
 
 use crate::gamepad::{Gamepads, PadEvent, PadId};
@@ -29,8 +29,8 @@ pub struct GilrsGamepads {
     gilrs: Gilrs,
     /// Whether the pads found at the start were reported.
     started: bool,
-    /// The pads reported connected and not lost since.
-    connected: BTreeSet<PadId>,
+    /// What gilrs's events are in the port's terms.
+    forward: Forward,
 }
 
 impl GilrsGamepads {
@@ -53,8 +53,49 @@ impl GilrsGamepads {
         Ok(Self {
             gilrs,
             started: false,
-            connected: BTreeSet::new(),
+            forward: Forward::default(),
         })
+    }
+}
+
+impl Gamepads for GilrsGamepads {
+    fn poll(&mut self, out: &mut Vec<PadEvent>) {
+        if !self.started {
+            self.started = true;
+            let found: Vec<PadId> = self.gilrs.gamepads().map(|(id, _)| pad_id(id)).collect();
+            self.forward.found(found, out);
+        }
+        while let Some(event) = self
+            .gilrs
+            .next_event()
+            .filter_ev(&axis_dpad_to_button, &mut self.gilrs)
+        {
+            if event.is_dropped() {
+                continue;
+            }
+            self.gilrs.update(&event);
+            self.forward.event(pad_id(event.id), event.event, out);
+        }
+    }
+}
+
+/// gilrs's events in the port's terms, with the pads reported connected
+/// and not lost since, so each is reported connected once before
+/// anything of its own: gilrs registers the pads found at the start
+/// without an event, and on macOS its backend sends their `Connected`
+/// after.
+#[derive(Debug, Default)]
+struct Forward {
+    /// The pads reported connected and not lost since.
+    connected: BTreeSet<PadId>,
+}
+
+impl Forward {
+    /// Reports each pad of `found` connected, unless it is already.
+    fn found(&mut self, found: impl IntoIterator<Item = PadId>, out: &mut Vec<PadEvent>) {
+        for pad in found {
+            self.connect(pad, out);
+        }
     }
 
     /// Reports `pad` connected, unless it is already.
@@ -64,10 +105,9 @@ impl GilrsGamepads {
         }
     }
 
-    /// What gilrs's `event` is in core terms, appended to `out`.
-    fn forward(&mut self, event: &Event, out: &mut Vec<PadEvent>) {
-        let pad = pad_id(event.id);
-        match event.event {
+    /// What gilrs's `event` on `pad` is in core terms, appended to `out`.
+    fn event(&mut self, pad: PadId, event: EventType, out: &mut Vec<PadEvent>) {
+        match event {
             EventType::Connected => self.connect(pad, out),
             EventType::Disconnected => {
                 if self.connected.remove(&pad) {
@@ -77,7 +117,7 @@ impl GilrsGamepads {
             EventType::ButtonPressed(button, _) | EventType::ButtonReleased(button, _) => {
                 if let Some(button) = pad_button(button) {
                     self.connect(pad, out);
-                    let pressed = matches!(event.event, EventType::ButtonPressed(..));
+                    let pressed = matches!(event, EventType::ButtonPressed(..));
                     out.push(PadEvent::Button {
                         pad,
                         button,
@@ -106,29 +146,6 @@ impl GilrsGamepads {
                 }
             }
             _ => {}
-        }
-    }
-}
-
-impl Gamepads for GilrsGamepads {
-    fn poll(&mut self, out: &mut Vec<PadEvent>) {
-        if !self.started {
-            self.started = true;
-            let found: Vec<PadId> = self.gilrs.gamepads().map(|(id, _)| pad_id(id)).collect();
-            for pad in found {
-                self.connect(pad, out);
-            }
-        }
-        while let Some(event) = self
-            .gilrs
-            .next_event()
-            .filter_ev(&axis_dpad_to_button, &mut self.gilrs)
-        {
-            if event.is_dropped() {
-                continue;
-            }
-            self.gilrs.update(&event);
-            self.forward(&event, out);
         }
     }
 }
@@ -242,6 +259,129 @@ mod tests {
             Axis::Unknown,
         ] {
             assert_eq!(pad_axis(other), None, "{other:?}");
+        }
+    }
+
+    const ONE: PadId = PadId(3);
+
+    /// What `events` on pad [`ONE`] forward as, in order.
+    fn forwarded(forward: &mut Forward, events: &[EventType]) -> Vec<PadEvent> {
+        let mut out = Vec::new();
+        for &event in events {
+            forward.event(ONE, event, &mut out);
+        }
+        out
+    }
+
+    /// Any code: the port reads none.
+    fn code() -> gilrs::ev::Code {
+        Button::South.to_nec().expect("South has a code")
+    }
+
+    #[test]
+    fn each_gilrs_event_forwards_in_core_terms() {
+        let mut forward = Forward::default();
+        let events = [
+            EventType::Connected,
+            EventType::ButtonPressed(Button::South, code()),
+            EventType::ButtonReleased(Button::LeftTrigger, code()),
+            EventType::ButtonChanged(Button::RightTrigger2, 0.7, code()),
+            EventType::ButtonChanged(Button::South, 1.0, code()),
+            EventType::ButtonPressed(Button::RightTrigger2, code()),
+            EventType::AxisChanged(Axis::RightStickY, -0.25, code()),
+            EventType::AxisChanged(Axis::LeftZ, 0.5, code()),
+            EventType::Disconnected,
+        ];
+        assert_eq!(
+            forwarded(&mut forward, &events),
+            [
+                PadEvent::Connected(ONE),
+                PadEvent::Button {
+                    pad: ONE,
+                    button: PadButton::South,
+                    pressed: true
+                },
+                PadEvent::Button {
+                    pad: ONE,
+                    button: PadButton::LeftShoulder,
+                    pressed: false
+                },
+                PadEvent::Trigger {
+                    pad: ONE,
+                    button: PadButton::RightTrigger,
+                    value: 0.7
+                },
+                PadEvent::Axis {
+                    pad: ONE,
+                    axis: PadAxis::RightY,
+                    value: -0.25
+                },
+                PadEvent::Disconnected(ONE),
+            ]
+        );
+    }
+
+    #[test]
+    fn values_are_clamped_to_the_ports_ranges() {
+        let mut forward = Forward::default();
+        let out = forwarded(
+            &mut forward,
+            &[
+                EventType::AxisChanged(Axis::LeftStickX, -1.5, code()),
+                EventType::AxisChanged(Axis::LeftStickX, 1.5, code()),
+                EventType::ButtonChanged(Button::LeftTrigger2, 1.2, code()),
+                EventType::ButtonChanged(Button::LeftTrigger2, -0.2, code()),
+            ],
+        );
+        let values: Vec<f32> = out
+            .iter()
+            .filter_map(|event| match *event {
+                PadEvent::Axis { value, .. } | PadEvent::Trigger { value, .. } => Some(value),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, [-1.0, 1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_pad_is_reported_connected_once_before_anything_of_its_own() {
+        let mut forward = Forward::default();
+        let mut out = Vec::new();
+        forward.found([ONE], &mut out);
+        assert_eq!(out, [PadEvent::Connected(ONE)]);
+        assert_eq!(
+            forwarded(&mut forward, &[EventType::Connected]),
+            [],
+            "found at the start, then connected by the backend"
+        );
+        let mut unseen = Forward::default();
+        assert_eq!(
+            forwarded(
+                &mut unseen,
+                &[EventType::ButtonPressed(Button::North, code())]
+            )[0],
+            PadEvent::Connected(ONE),
+            "an event from a pad not yet reported reports it first"
+        );
+        let mut lost = Forward::default();
+        assert_eq!(forwarded(&mut lost, &[EventType::Disconnected]), []);
+        assert_eq!(
+            check_contract(&mut Replay(vec![forwarded(
+                &mut Forward::default(),
+                &[EventType::Connected, EventType::Connected]
+            ),])),
+            Ok(())
+        );
+    }
+
+    /// The port reporting `batches`, one a poll.
+    struct Replay(Vec<Vec<PadEvent>>);
+
+    impl Gamepads for Replay {
+        fn poll(&mut self, out: &mut Vec<PadEvent>) {
+            if !self.0.is_empty() {
+                out.extend(self.0.remove(0));
+            }
         }
     }
 
