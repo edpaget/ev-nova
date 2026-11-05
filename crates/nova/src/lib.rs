@@ -19,6 +19,8 @@
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
 //!   game's Charcoal.
+//! - [`gamepad`]: the gamepads the app polls each frame, as a port, and
+//!   what their buttons, sticks and triggers mean for the screens.
 //! - [`load`]: what loading the game data found wrong: the files it
 //!   skipped and the control-bit expressions that do not parse.
 //! - [`pilot_move`]: moving the pilots, once, from where earlier
@@ -51,6 +53,7 @@ pub mod developer;
 pub mod devtools;
 pub mod exit;
 pub mod fonts;
+pub mod gamepad;
 pub mod load;
 pub mod movie;
 pub mod pilot_move;
