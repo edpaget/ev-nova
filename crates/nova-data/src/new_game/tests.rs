@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use nova_galaxy_format::fixture;
 use nova_galaxy_format::source::MemSource;
 
-use super::records::{flags, neutral_govt};
+use super::records::neutral_govt;
 use super::*;
 use crate::decode::Record;
 use crate::records::desc::Desc;
 use crate::records::govt::Govt;
-use crate::records::stellar::Stellar;
+use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
 use crate::wire::id::{GovtId, StellarId};
 

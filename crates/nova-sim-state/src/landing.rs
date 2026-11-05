@@ -201,6 +201,8 @@
 //! The player's speed gate is per axis in the original, built by
 //! stellar-fidelity phase 6 (item 2 above).
 
+use nova_data::records::stellar::flags as spob_flags;
+
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
 use crate::flight::ShipState;
@@ -228,27 +230,28 @@ pub const PER_AXIS_LANDING_SPEED: f32 = 0.75;
 /// placeholder box the views draw for it, so it matches what is drawn.
 pub const UNKNOWN_STELLAR_RADIUS: f32 = 32.0;
 
-/// The `spöb` `Flags` bits landing reads (the Bible).
+/// The `spöb` `Flags` bits landing reads (the Bible), as the `spöb`
+/// record defines them ([`nova_data::records::stellar::flags`]).
 #[derive(Clone, Copy, Debug)]
 pub struct StellarFlags;
 
 impl StellarFlags {
     /// Can land or dock here.
-    pub const CAN_LAND: u32 = 0x01;
+    pub const CAN_LAND: u32 = spob_flags::CAN_LAND;
     /// Has a commodity exchange.
-    pub const TRADE_CENTER: u32 = 0x02;
+    pub const TRADE_CENTER: u32 = spob_flags::TRADE_CENTER;
     /// Has an outfitter.
-    pub const OUTFITTER: u32 = 0x04;
+    pub const OUTFITTER: u32 = spob_flags::OUTFITTER;
     /// Has a shipyard.
-    pub const SHIPYARD: u32 = 0x08;
+    pub const SHIPYARD: u32 = spob_flags::SHIPYARD;
     /// Is a station, not a planet.
-    pub const STATION: u32 = 0x10;
+    pub const STATION: u32 = spob_flags::STATION;
     /// Is uninhabited: no services, and `MinStatus` is ignored.
-    pub const UNINHABITED: u32 = 0x20;
+    pub const UNINHABITED: u32 = spob_flags::UNINHABITED;
     /// Has a bar.
-    pub const BAR: u32 = 0x40;
+    pub const BAR: u32 = spob_flags::BAR;
     /// Can be landed on only once it has been destroyed.
-    pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
+    pub const ONLY_WHEN_DESTROYED: u32 = spob_flags::ONLY_WHEN_DESTROYED;
 }
 
 /// The `spöb` `Flags2` bit of a hypergate.

@@ -7,31 +7,11 @@ use nova_galaxy_format::model::{Service, StellarKind};
 
 use crate::records::desc::Desc;
 use crate::records::govt::Govt;
-use crate::records::stellar::Stellar;
+use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
 use crate::wire::flags::{Flags16, Flags32, Flags64};
 use crate::wire::raw::RawArray;
 use crate::wire::string::MacString;
-
-/// The `spöb` `Flags` bits the mapping sets: the Bible's, as
-/// `nova_sim_state::StellarFlags` reads them for landing.
-pub mod flags {
-    /// Can land or dock here.
-    pub const CAN_LAND: u32 = 0x01;
-    /// Has a commodity exchange.
-    pub const TRADE_CENTER: u32 = 0x02;
-    /// Has an outfitter.
-    pub const OUTFITTER: u32 = 0x04;
-    /// Has a shipyard.
-    pub const SHIPYARD: u32 = 0x08;
-    /// Is a station, not a planet.
-    pub const STATION: u32 = 0x10;
-    /// Is uninhabited: no refuelling (and no services, and `MinStatus` is
-    /// ignored).
-    pub const UNINHABITED: u32 = 0x20;
-    /// Has a bar.
-    pub const BAR: u32 = 0x40;
-}
 
 /// A `gövt` that sets nothing: no flags, penalties, classes, names or
 /// colours. Class, ally and enemy slots are -1 (unused) and the voice is
@@ -268,23 +248,6 @@ mod tests {
         for kind in [StellarKind::Planet, StellarKind::Moon] {
             assert_eq!(stellar_flags(kind, &refuel), flags::CAN_LAND, "{kind:?}");
         }
-    }
-
-    #[test]
-    fn the_flag_bits_are_the_bibles() {
-        use flags::*;
-        assert_eq!(
-            [
-                CAN_LAND,
-                TRADE_CENTER,
-                OUTFITTER,
-                SHIPYARD,
-                STATION,
-                UNINHABITED,
-                BAR
-            ],
-            [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40]
-        );
     }
 
     /// The all-zero record with `edit` applied.
