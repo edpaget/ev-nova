@@ -773,6 +773,36 @@ fn an_escort_key_the_flight_does_not_take_sends_nothing() {
     assert_eq!(view.message(), None);
 }
 
+/// The escort commands `view` sent since the first `before` it sent.
+fn escort_commands_since(view: &Faked, before: usize) -> Vec<FlightCommand> {
+    sent_but_lines(view)[before..]
+        .iter()
+        .filter(|sent| matches!(sent, FlightCommand::CommandEscorts { .. }))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn f_held_while_the_flight_refuses_the_escort_keys_attacks_once_it_takes_them() {
+    // The poll leaves the latches alone while refused: had it set F's,
+    // the command it dropped would never be sent once taken again.
+    let mut view = escorted();
+    super::live_keys::dialog_opens(&mut view);
+    let _ = super::live_keys::back(&mut view, [ESCORT_ATTACK_KEY], [], false);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Escort));
+    let before = sent_but_lines(&view).len();
+    view.tick(TICK);
+    assert_eq!(escort_commands_since(&view, before), [], "refused");
+    view.change_sim(|sim| sim.take(PlayerCommand::Escort));
+    let before = sent_but_lines(&view).len();
+    view.tick(TICK);
+    assert_eq!(
+        escort_commands_since(&view, before),
+        [command(EscortGroup::All, EscortCommand::Attack)],
+        "F still down, its latch clear"
+    );
+}
+
 // The escorts' brackets, labels and target keys.
 
 #[test]
