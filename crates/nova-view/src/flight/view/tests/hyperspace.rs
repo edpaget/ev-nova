@@ -1,4 +1,7 @@
 use super::*;
+use crate::key_names::fixture::FakeKeyNames;
+use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
+use nova_sim::flight_frame::FlightEvent;
 
 // Hyperspace.
 
@@ -15,12 +18,98 @@ fn the_land_hint_words_a_station_as_docking() {
     assert_eq!(land_hint(false, "Moon", "L"), MOON_HINT);
 }
 
+/// The text of the tutorial's land hint (for the Moon) and its
+/// hyperspace hint, as a view reading `bindings` (with their layout)
+/// under `rules` words them, for the device its keys read. Phase 12
+/// reruns it with the pad.
+fn hints(bindings: SharedBindings, rules: &Rulebook) -> (String, String) {
+    let mut fake = FakeFlight::new();
+    fake.set_frame(FlightFrame {
+        stellars: vec![record::stellar(StellarId(129))],
+        ..in_sol()
+    });
+    let mut view = scripted_over(catalog(), fake, rules);
+    view.set_bindings(bindings);
+    let mut said = |hint| {
+        view.sim
+            .queue_event(FlightEvent::Message(SimMessage::Tutorial(hint)));
+        view.relay_messages();
+        view.message().unwrap_or_default().to_owned()
+    };
+    let land = said(nova_sim::TutorialHint::Land {
+        stellar: StellarId(129),
+        station: false,
+    });
+    (land, said(nova_sim::TutorialHint::Hyperspace))
+}
+
+/// [`hints`] over `bindings`, naming keys through `names`, by the
+/// engine's reading or, for `bible`, `hint_key_names`' other one.
+fn hints_named(bindings: Bindings, names: FakeKeyNames, bible: bool) -> (String, String) {
+    let mut rules = Rulebook::default();
+    if bible {
+        rules = rules.with_override(RuleKey::HintKeyNames, RuleSource::Bible);
+    }
+    hints(
+        SharedBindings::new(bindings).with_key_names(Rc::new(names)),
+        &rules,
+    )
+}
+
+/// The default hyperspace hint.
+const HYPERSPACE_HINT: &str = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
+
 #[test]
-fn the_hints_name_letter_keys_as_str_129_does() {
-    assert_eq!(key_label(LAND_KEY).as_deref(), Some("L"));
-    assert_eq!(key_label(MAP_KEY).as_deref(), Some("M"));
-    assert_eq!(key_label(JUMP_KEY).as_deref(), Some("J"));
-    assert_eq!(key_label(Key::F5), None, "not yet named");
+fn under_the_defaults_the_hints_read_as_before() {
+    for (names, bible) in [
+        (FakeKeyNames::new(), false),
+        (FakeKeyNames::new(), true),
+        (FakeKeyNames::azerty(), false),
+    ] {
+        let (land, hyperspace) = hints_named(Bindings::default(), names, bible);
+        assert_eq!(land, MOON_HINT);
+        assert_eq!(hyperspace, HYPERSPACE_HINT);
+    }
+    let (_, azerty) = hints_named(Bindings::default(), FakeKeyNames::azerty(), true);
+    assert_eq!(
+        azerty,
+        hyperspace_hint(",", "J"),
+        "AZERTY prints , at the US M"
+    );
+}
+
+#[test]
+fn the_hints_name_the_rebound_keys() {
+    let bindings = Bindings::default()
+        .rebound(Fc::LandDock, KeyCombo::key(Key::KeyK))
+        .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyN))
+        .rebound(Fc::HyperJump, KeyCombo::key(Key::KeyU));
+    let (land, hyperspace) = hints_named(bindings, FakeKeyNames::new(), false);
+    assert_eq!(land, land_hint(false, "Moon", "K"));
+    assert!(land.contains("Hit 'K'"), "{land}");
+    assert_eq!(hyperspace, hyperspace_hint("N", "U"));
+}
+
+#[test]
+fn the_hints_name_the_key_from_str_129_by_default_and_through_the_layout_under_the_bible() {
+    let on_w = Bindings::default().rebound(Fc::LandDock, KeyCombo::key(Key::KeyW));
+    let (engine, _) = hints_named(on_w.clone(), FakeKeyNames::azerty(), false);
+    assert_eq!(engine, land_hint(false, "Moon", "W"));
+    let (bible, _) = hints_named(on_w, FakeKeyNames::azerty(), true);
+    assert_eq!(bible, land_hint(false, "Moon", "Z"));
+    let on_up = Bindings::default().rebound(Fc::LandDock, KeyCombo::key(Key::ArrowUp));
+    let (engine, _) = hints_named(on_up.clone(), FakeKeyNames::new(), false);
+    assert_eq!(engine, land_hint(false, "Moon", "Up"));
+    let (bible, _) = hints_named(on_up, FakeKeyNames::new(), true);
+    assert_eq!(bible, land_hint(false, "Moon", "Up Arrow"));
+}
+
+#[test]
+fn an_unbound_key_reads_empty_in_its_hint() {
+    let unbound = Bindings::default().unbound(Fc::LandDock);
+    let (land, _) = hints_named(unbound, FakeKeyNames::new(), false);
+    assert_eq!(land, land_hint(false, "Moon", ""));
+    assert!(land.contains("Hit ''"), "{land}");
 }
 
 /// Whether [`FlightView::taken_during_jump`] takes `key` with Option

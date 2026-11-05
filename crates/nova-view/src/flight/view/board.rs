@@ -74,7 +74,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         let said = mission_board_message(
             line,
-            Wording::of(&self.names, &self.frame).keyed(self.keys.bindings()),
+            Wording::of(&self.names, &self.frame).keyed(&self.keys, self.presentation.hint_names),
         );
         self.say_for(said, BOARD_LINE_TICKS);
     }

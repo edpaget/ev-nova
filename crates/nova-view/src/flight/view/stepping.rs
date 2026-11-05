@@ -114,10 +114,13 @@ pub(super) struct Presentation {
     /// [`RuleKey::PayMillions`]'s reading: how the messages write a
     /// number from a million.
     pub(super) millions: RuleSource,
+    /// [`RuleKey::HintKeyNames`]'s reading: how the tutorial's hints
+    /// name a key.
+    pub(super) hint_names: RuleSource,
 }
 
 impl Presentation {
-    /// The ten as `rules` read them.
+    /// The eleven as `rules` read them.
     pub(super) fn of(rules: &Rulebook) -> Self {
         Self {
             debris: rules.source_for(RuleKey::ShipDebris),
@@ -130,6 +133,7 @@ impl Presentation {
             ion_tint_murk: rules.source_for(RuleKey::IonTintMurkColour),
             hud_cadence: rules.source_for(RuleKey::HudCadence),
             millions: rules.source_for(RuleKey::PayMillions),
+            hint_names: rules.source_for(RuleKey::HintKeyNames),
         }
     }
 

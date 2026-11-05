@@ -20,9 +20,11 @@ use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
 use nova_sim::flight_frame::{FlightFrame, Names};
 
-use crate::Key;
+use crate::bound_names::{Spelling, name_command, name_read};
 use crate::flight::escorts::NUMBER_WORDS;
-use crate::keymap::{Command, FlightCommand, KeyMap, PlayCommand, SharedBindings};
+use crate::input::Device;
+use crate::key_names::NoKeyNames;
+use crate::keymap::{Bindings, Command, CommandReader, FlightCommand, PlayCommand};
 use crate::spaceport::credits::{OF, TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
@@ -365,9 +367,13 @@ pub(super) struct Wording<'a> {
     pub(super) player_ship: &'a str,
     /// The date ([`FlightFrame::long_date`]).
     pub(super) date: &'a str,
-    /// The bindings the tutorial's hints name the keys of, or the
-    /// defaults for none.
-    pub(super) bindings: Option<&'a SharedBindings>,
+    /// The keys the tutorial's hints name, for the device they read, or
+    /// the default bindings on the keyboard for none.
+    pub(super) keys: Option<&'a CommandReader>,
+    /// [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames)'s
+    /// reading: whether the hints name a key from `STR#` 129 or through
+    /// the layout.
+    pub(super) hint_names: RuleSource,
 }
 
 impl<'a> Wording<'a> {
@@ -377,28 +383,42 @@ impl<'a> Wording<'a> {
             names,
             player_ship: frame.player_ship_name.as_deref().unwrap_or_default(),
             date: &frame.long_date,
-            bindings: None,
+            keys: None,
+            hint_names: RuleSource::Engine,
         }
     }
 
-    /// This wording, naming the keys `bindings` binds.
-    pub(super) const fn keyed(self, bindings: &'a SharedBindings) -> Self {
+    /// This wording, naming the keys `keys` reads, as `hint_names`
+    /// reads [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames).
+    pub(super) const fn keyed(self, keys: &'a CommandReader, hint_names: RuleSource) -> Self {
         Self {
-            bindings: Some(bindings),
+            keys: Some(keys),
+            hint_names,
             ..self
         }
     }
 
-    /// How a tutorial hint names the key `command` is bound to
-    /// ([`key_label`]), empty for one with no name or no key.
+    /// How a tutorial hint names the key `command` is bound to, as
+    /// `_HandlePlayer` names it from `STR#` 129 (@0x70b01-0x70b1b,
+    /// @0x70c3d-0x70cb2; [`Spelling::Str129`]): empty for an unbound
+    /// command, as the original's cleared pref reads entry 0, which
+    /// `GetIndString` answers with nothing.
     fn key_named(self, command: impl Into<Command>) -> String {
         let command = command.into();
-        let combo = self.bindings.map_or_else(
-            || KeyMap::default().combo(command),
-            |bindings| bindings.with(|bindings| bindings.keyboard.combo(command)),
-        );
-        combo
-            .and_then(|combo| key_label(combo.key))
+        let spelling = Spelling::Str129(self.hint_names);
+        self.keys
+            .map_or_else(
+                || {
+                    name_command(
+                        &Bindings::default(),
+                        &NoKeyNames,
+                        command,
+                        Device::Keyboard,
+                        spelling,
+                    )
+                },
+                |keys| name_read(keys, command, spelling),
+            )
             .unwrap_or_default()
     }
 }
@@ -674,17 +694,6 @@ pub const TAKE_OFF_LEADS: [&str; 5] = [
 ];
 /// `STR#` 2002 #60: between the stellar and the date in the greeting.
 pub const TAKE_OFF_ON: &str = "on";
-
-/// How a tutorial hint names `key`, as the original names its keys from
-/// `STR#` 129 (`_HandlePlayer` @0x70b01-0x70b1b, @0x70c3d-0x70cb2): a
-/// letter key uppercased, "L". The hints name the keys Land, the map key
-/// and Hyper Jump are bound to ([`Wording::key_named`]), all letters by
-/// default; other keys are named once the keys screen names them
-/// (rdm:roadmap/key-bindings), so for now they have no name.
-#[must_use]
-pub fn key_label(key: Key) -> Option<String> {
-    crate::input::key_letter(key).map(|letter| letter.to_uppercase().collect())
-}
 
 /// What the message line says as the ship takes off past the tutorial
 /// from the stellar named `stellar` on `date`, led by
