@@ -56,7 +56,7 @@
 //! **The display**: each ship's frame steps at its own display step, as
 //! `_DoPlayGameWork` runs `_HandleShipDisplay` for the player right after
 //! `_HandlePlayer` (@0x43e29, [`PlayerShip::display_frames`] in
-//! `Session::player_display_step`) and for each NPC right after its own
+//! `Session::player_display_rest`) and for each NPC right after its own
 //! `_HandleShip` in the ship loop (@0x444ad, [`Space::display_npc_frames`]
 //! in `Session::ship_loop`), on both passes, each at the frame's gain
 //! (`Session::speed_mult`, which those `Session` methods read and pass on:

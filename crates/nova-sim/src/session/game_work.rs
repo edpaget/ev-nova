@@ -17,7 +17,12 @@
 //!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it, then steps its frame, sets, lights and ion tint (see
-//!    the `ship_display` module; [`Session::player_display_step`]).
+//!    the `ship_display` module): its head up to `_HandlePlayer`'s key
+//!    block ([`Session::player_display_head`]), then its rest
+//!    ([`Session::player_display_rest`]), where the pass from the key
+//!    block on begins ([`Session::pass_from_key_block`]), which the rest
+//!    of the frame a dialog opened on runs alone (see the `opening_rest`
+//!    module).
 //! 3. The scoop, collision pass 1's `_ShipCollisionHandler` scoop branch
 //!    (@0x43e46-0x43e70, @0x3710c), on the player's frame its display
 //!    just stepped, then the boxes' step
@@ -313,15 +318,40 @@ impl Session {
         false
     }
 
-    /// The rest of a pass of the game's work after the player's move, from
-    /// the player's display step ([`Session::player_display_step`]) on,
-    /// then the scoop and the boxes' step from where the player stood as
-    /// the pass `start`ed ([`Session::scoop_after_display`]), on `pass` by
-    /// `rules`, against the session as the pass `start`ed, the
+    /// The rest of a pass of the game's work after the player's move, on
+    /// `pass` by `rules`, against the session as the pass `start`ed, the
     /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
-    /// both passes run it, [`Session::game_work`] and
+    /// the head of the player's display step, up to `_HandlePlayer`'s key
+    /// block ([`Session::player_display_head`]), then the pass from the
+    /// key block on ([`Session::pass_from_key_block`], which reads `ai`
+    /// and `sheets`). Both passes run it, [`Session::game_work`] and
     /// [`Session::tick_again`], as the original runs one routine,
     /// `_DoPlayGameWork(pass)`, for both (see the module docs).
+    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
+    pub(super) fn pass_after_move(
+        &mut self,
+        start: &PassStart,
+        pass: GamePass,
+        ai: Option<&dyn TrafficCatalog>,
+        sheets: Option<&dyn PilotCatalog>,
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
+        self.player_display_head(start.player_head(), chance);
+        self.pass_from_key_block(start, pass, ai, sheets, behaviour, rules, chance);
+    }
+
+    /// A pass of the game's work from `_HandlePlayer`'s key block on: the
+    /// rest of the player's display step, from its cloak key to its
+    /// display ([`Session::player_display_rest`]), then the scoop and the
+    /// boxes' step from where the player stood as the pass `start`ed
+    /// ([`Session::scoop_after_display`]), and the rest of the pass, on
+    /// `pass` by `rules`, against the session as the pass `start`ed, the
+    /// NPCs answering its hits as `behaviour` says, drawing on `chance`.
+    /// [`Session::pass_after_move`] runs it after the display step's head;
+    /// the rest of the frame a dialog opened on runs it alone (see the
+    /// `opening_rest` module).
     ///
     /// `ai` is the advance pass's AI, its traffic drawn from the catalog
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
@@ -343,7 +373,7 @@ impl Session {
     /// (see [`Session::beams_phase`]); the second pass has none and reads
     /// those the first kept.
     #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
-    pub(super) fn pass_after_move(
+    pub(super) fn pass_from_key_block(
         &mut self,
         start: &PassStart,
         pass: GamePass,
@@ -353,8 +383,9 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        // The end of `_HandlePlayer` and its display (@0x43e29).
-        self.player_display_step(behaviour, pass, rules, start.player_head(), chance);
+        // The end of `_HandlePlayer` from its key block, and its display
+        // (@0x43e29).
+        self.player_display_rest(behaviour, pass, rules, start.player_head(), chance);
         // The scoop branch of collision pass 1 (@0x43e46-0x43e70) and the
         // box step after it (see `Session::scoop_after_display`).
         self.scoop_after_display(start.stood);

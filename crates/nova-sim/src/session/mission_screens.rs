@@ -386,7 +386,7 @@ impl Session {
         // port's is `_DoPortDialog`'s, which writes none.
         if self.mode.landed().is_none() {
             if faded {
-                self.zero_speed_mult_unheld();
+                self.zero_at_key_block_unheld();
             } else {
                 self.owe_info_zero();
             }

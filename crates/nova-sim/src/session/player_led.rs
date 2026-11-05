@@ -248,7 +248,7 @@ impl Session {
     /// and its slot keeps its place.
     ///
     /// The session runs it after the player's display step
-    /// ([`Session::player_display_step`], @0x43e29) and after the NPCs'
+    /// ([`Session::player_display_rest`], @0x43e29) and after the NPCs'
     /// (`Session::ship_loop`, @0x444ad), so the collision passes walk
     /// the player in the layer its display just gave it and each NPC in
     /// the one its last display gave it, and the frame is drawn so. Each

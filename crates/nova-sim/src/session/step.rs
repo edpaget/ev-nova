@@ -28,7 +28,10 @@
 //!
 //! 1. each ship's state is recorded, which the view draws from;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
-//!    [`Session::game_work`]), then its comm notes are taken;
+//!    [`Session::game_work`]), or, on the first step after a comm, escort
+//!    or info dialog's zero, the rest of the frame it opened on, at gain 0
+//!    ([`Session::rest_of_opening_pass`], see the `opening_rest` module),
+//!    then its comm notes are taken;
 //! 3. the NPCs answer what the session left them
 //!    ([`Session::answer_strikes`]): the pass answers every hit it lands
 //!    as its phase settles, the beams' and shockwaves' included, as
@@ -178,14 +181,21 @@ impl Session {
             before: self.ships_before(),
             ..StepRun::default()
         };
-        self.adjust_time();
-        let rescued = self.game_work(
-            input.controls,
-            catalog,
-            collab.behaviour,
-            collab.rules,
-            &mut *collab.chance,
-        );
+        let rescued = if self.take_opening_rest() {
+            // The rest of the frame a dialog opened on, at the gain its
+            // zero left (see the `opening_rest` module).
+            self.rest_of_opening_pass(catalog, collab.behaviour, collab.rules, &mut *collab.chance);
+            false
+        } else {
+            self.adjust_time();
+            self.game_work(
+                input.controls,
+                catalog,
+                collab.behaviour,
+                collab.rules,
+                &mut *collab.chance,
+            )
+        };
         run.comm = self.take_comm();
         if rescued {
             run.rescued = Some(ShipPlace::from(*self.player()));

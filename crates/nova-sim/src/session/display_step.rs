@@ -1,7 +1,12 @@
 //! The player's step from its death timer to its display, as
-//! `_HandlePlayer` ends and `_DoPlayGameWork` displays it
-//! ([`Session::player_display_step`]), and what the session does with each
-//! ship's display step (see the fight's `display` module).
+//! `_HandlePlayer` ends and `_DoPlayGameWork` displays it, and what the
+//! session does with each ship's display step (see the fight's `display`
+//! module). It comes in two halves, split at `_HandlePlayer`'s key block
+//! (@0x702b2-0x705b7): its head ([`Session::player_display_head`], steps
+//! 1 to 3 up to the self-destruct) and its rest
+//! ([`Session::player_display_rest`], from the cloak key on). A pass runs
+//! both; the rest of the frame a dialog opened on runs the rest alone
+//! (see the `opening_rest` module).
 //!
 //! **The order** (`_HandlePlayer` after its move, then `_DoPlayGameWork`
 //! @0x43e29), after the player's move and before the collision passes, on
@@ -65,7 +70,12 @@ use crate::sound::SimSound;
 impl Session {
     /// The player's step from its death timer to its display on `pass` by
     /// `rules`, the player as it was at the `head` of the pass, drawing on
-    /// `chance` (see the module docs).
+    /// `chance` (see the module docs): its head, then its rest.
+    ///
+    /// For the tests: a pass runs the two halves apart, as the rest of the
+    /// frame a dialog opened on runs the rest alone (see the
+    /// `opening_rest` module).
+    #[cfg(test)]
     pub(super) fn player_display_step(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -74,6 +84,15 @@ impl Session {
         head: PlayerHead,
         chance: &mut dyn Chance,
     ) {
+        self.player_display_head(head, chance);
+        self.player_display_rest(behaviour, pass, rules, head, chance);
+    }
+
+    /// The player's step from its death timer through the self-destruct's
+    /// countdown (@0x6d7e6-0x6fdb4), the player as it was at the `head` of
+    /// the pass, drawing on `chance`: `_HandlePlayer` up to its key block
+    /// (see the module docs, steps 1 to 3).
+    pub(super) fn player_display_head(&mut self, head: PlayerHead, chance: &mut dyn Chance) {
         self.ship.condition.count_down();
         self.space
             .escort_menu_block(&mut self.pilot, &self.statics, &mut self.out, head.dead);
@@ -89,6 +108,20 @@ impl Session {
         self.eject_check(chance);
         self.held_jettison_tick(chance);
         self.self_destruct_tick(head.dying);
+    }
+
+    /// The player's step from its cloak key to its display on `pass` by
+    /// `rules`, the player as it was at the `head` of the pass, drawing on
+    /// `chance`: `_HandlePlayer` from its key block on (@0x705b7), then its
+    /// display (@0x43e29; see the module docs, steps 3 to 6).
+    pub(super) fn player_display_rest(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        pass: GamePass,
+        rules: Rules,
+        head: PlayerHead,
+        chance: &mut dyn Chance,
+    ) {
         self.player_cloak_tick(head.disabled);
         self.ship
             .step_cloak_fade(&self.pilot, &self.statics, self.speed_mult());

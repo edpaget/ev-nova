@@ -6,10 +6,13 @@
 //!   ([`Session::adjust_time`]), as `_PlayGame`'s loop calls
 //!   `_HandleTimeAdjustment` (@0x45b28) before `_DoPlayGameWork(1)`
 //!   (@0x45bc8), so both of double time's passes run at one gain. A landed
-//!   step doesn't: the spaceport runs no `_PlayGame` loop.
-//! - **The zeroes** ([`Session::zero_speed_mult`]): the take-off, as the
+//!   step doesn't: the spaceport runs no `_PlayGame` loop. Nor does the
+//!   step that runs the rest of the frame a dialog opened on (see the
+//!   `opening_rest` module).
+//! - **The zeroes**: the take-off ([`Session::zero_speed_mult`]), as the
 //!   stay's tail (`_PlayerLandOnStellar` @0x6375e-0x63769, after
-//!   `_DoPortDialog` returns) runs on every way out of the spaceport; the
+//!   `_DoPortDialog` returns) runs on every way out of the spaceport; at
+//!   `_HandlePlayer`'s key block ([`Session::zero_at_key_block`]), the
 //!   hail's, the planet comm's and the escort dialog's closes (@0x9690e,
 //!   @0x97af2, @0x95693); and the player and mission info dialogs
 //!   (`_HandlePlayer` @0x70357, @0x704e8), at the press the dialog's own
@@ -25,8 +28,8 @@
 //!   screen faded, `_DoPlayerInfoDialog` @0x5a013 and
 //!   `_DoMissionInfoDialog`; a jump or
 //!   breaking up, @0x5a02a-0x5a04c) returns at once, so only a frame's
-//!   time passes and the next frame ramps from 0.0 to 0.25
-//!   ([`Session::zero_speed_mult_unheld`]). A press `_HandlePlayer`
+//!   time passes and the frame after the rest ramps from 0.0 to 0.25
+//!   ([`Session::zero_at_key_block_unheld`]). A press `_HandlePlayer`
 //!   refuses before the call (in a jump, in the take-off's grace,
 //!   breaking up, or no active missions) leaves the gain.
 //! - **The switch-in** ([`Session::switch_in`]): `_SwitchedIn`'s 1.0
@@ -40,9 +43,13 @@
 //! By the other reading of [`RuleKey::SpeedMultRamp`] neither a zero nor
 //! a game entry moves the gain from full, the port's earlier feel.
 //!
-//! The frame a hail or an info dialog opens on runs its rest at the gain
-//! it had: the engine's key read that opens a dialog ends the tick, so no
-//! pass of it runs after the open.
+//! The frame a comm, escort or info dialog opens on runs its rest at the
+//! zero: a key-block zero owes it to the next step, which runs it in place
+//! of a whole frame, at gain 0 and with no ramp, then double time's second
+//! pass at 0 (see the `opening_rest` module). The opening frame's head,
+//! up to the key block, isn't run before the dialog: the engine's key read
+//! that opens a dialog comes between steps, so its last step stands in
+//! for it.
 
 use crate::SpeedMult;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -79,28 +86,27 @@ impl Session {
     /// stellars by between steps.
     #[must_use]
     pub(super) fn next_speed_mult(&self) -> SpeedMult {
-        self.time.next()
+        if self.opening_rest_owed() {
+            // The rest of the opening frame runs no ramp (see the
+            // `opening_rest` module).
+            self.time.gain()
+        } else {
+            self.time.next()
+        }
     }
 
     /// Whether the ramp follows the original (see [`RuleKey::SpeedMultRamp`]).
-    fn ramps(&self) -> bool {
+    pub(super) fn ramps(&self) -> bool {
         self.setup.rules.source_for(RuleKey::SpeedMultRamp) == RuleSource::Engine
     }
 
     /// Zeroes the gain and holds the next frame, by the engine's reading:
-    /// a take-off, a dialog's close (see the module docs).
+    /// a take-off (see the module docs). A dialog's close at
+    /// `_HandlePlayer`'s key block zeroes it with
+    /// [`Session::zero_at_key_block`], which owes the rest of its frame.
     pub(super) fn zero_speed_mult(&mut self) {
         if self.ramps() {
             self.time.zero();
-        }
-    }
-
-    /// Zeroes the gain without holding the next frame, by the engine's
-    /// reading: an info dialog's own guard refused the press before
-    /// anything opened (see the module docs).
-    pub(super) fn zero_speed_mult_unheld(&mut self) {
-        if self.ramps() {
-            self.time.zero_unheld();
         }
     }
 
@@ -118,7 +124,7 @@ impl Session {
     /// dialog's mission info) leaves the gain.
     pub(crate) fn close_info_dialog(&mut self) {
         if std::mem::take(&mut self.info_zero_owed) {
-            self.zero_speed_mult();
+            self.zero_at_key_block();
         }
     }
 
@@ -180,7 +186,7 @@ pub(super) mod tests {
 
     /// `count` steps of `session` under `input`, on `catalog`'s
     /// collaborators.
-    fn steps(
+    pub(in crate::session) fn steps(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         input: &StepInput,

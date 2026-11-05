@@ -592,6 +592,7 @@ mod npc_destinations;
 mod npc_escape;
 mod npc_gain;
 mod npc_kinds;
+mod opening_rest;
 mod operator_moves;
 mod outbox;
 mod outfits;
@@ -1097,6 +1098,14 @@ pub struct Session {
     /// of `time` waiting for the close. Never saved: no step runs under
     /// the dialog, so none is open at a save.
     info_zero_owed: bool,
+    /// Whether the next step runs the rest of the frame a comm, escort or
+    /// info dialog opened on, at gain 0, in place of a whole frame (see
+    /// the `opening_rest` module). On `Session` itself beside `time`, for
+    /// its reason: it is a whole pass of every stateful sub-state at the
+    /// frame's gain, waiting for the next step. Never saved: the pilot
+    /// file doesn't keep it, and the next step takes it before a frame is
+    /// drawn.
+    opening_rest_owed: bool,
 }
 
 impl Session {
@@ -1400,6 +1409,7 @@ impl Session {
             load_repaired,
             time: crate::TimeAdjustment::default(),
             info_zero_owed: false,
+            opening_rest_owed: false,
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),
@@ -1708,11 +1718,12 @@ impl Session {
     /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
     /// modules), then the player's wrap (see the `player_wrap` module),
     /// then its lost-target check (see the `lost_target`
-    /// module), then the tribbles and perishables on a due frame, the Red
-    /// Alert's check, and its blink on the advance pass alone, as
-    /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
-    /// target brackets. The cargo boxes are scooped and aged after the
-    /// move and the player's display step
+    /// module), then the Red Alert's check (@0x68c79), then the work that
+    /// runs after the key block ([`Session::work_from_key_block`]): the
+    /// tribbles and perishables on a due frame, the Red Alert's blink on
+    /// the advance pass alone, as `_HandleAlertSprite` runs on it alone,
+    /// the tutorial's hints, the target brackets. The cargo boxes are
+    /// scooped and aged after the move and the player's display step
     /// ([`Session::scoop_after_display`]).
     fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
@@ -1721,23 +1732,8 @@ impl Session {
         self.ship.gamma_tick(self.mode.jump());
         self.wrap_player_position();
         self.let_go_of_lost_target();
-        if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
-            let capacity = self.capacity();
-            market::step_junk(
-                &self.statics.goods,
-                &mut self.pilot.cargo,
-                capacity,
-                self.pilot.missions.tons_aboard(),
-                self.setup.rules.source_for(RuleKey::JunkFlags),
-                self.ship.latches.junk_latches,
-            );
-        }
         self.red_alert_check(frame);
-        if pass != GamePass::Again {
-            self.red_alert.step(frame);
-        }
-        self.tutorial_tick(frame);
-        self.chart.brackets_tick(self.speed_mult());
+        self.work_from_key_block(frame, pass);
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's

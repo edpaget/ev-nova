@@ -231,7 +231,7 @@ impl Session {
         match pressed {
             Pressed::Closed => {
                 self.chart.close_planet_comm(&mut self.out);
-                self.zero_speed_mult();
+                self.zero_at_key_block();
                 return None;
             }
             Pressed::Said | Pressed::Asked(_) => self.out.sounds.push(SimSound::PlanetCommPressed),
@@ -277,7 +277,7 @@ impl Session {
                 .say(&mut self.out, SimMessage::BribeCleared { station });
             self.pilot.cash -= price;
             self.chart.close_planet_comm(&mut self.out);
-            self.zero_speed_mult();
+            self.zero_at_key_block();
             return None;
         }
         self.planet_comm(catalog)
@@ -438,7 +438,7 @@ pub(in crate::session) mod tests {
     /// Hails Earth with the comm key, its variant `variant` and the
     /// bribe roll's draw `roll`: the dialog shown, the draws asked and the
     /// sounds.
-    fn hail(
+    pub(in crate::session) fn hail(
         session: &mut Session,
         catalog: &impl CommCatalog,
         variant: u32,
@@ -473,7 +473,7 @@ pub(in crate::session) mod tests {
         (view, session.take_sounds())
     }
 
-    fn press(
+    pub(in crate::session) fn press(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         item: PlanetCommItem,
