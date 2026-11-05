@@ -21,8 +21,10 @@
 //!   ([`KeyMap::TWINS`]), [`KeysDown`], the keys held, [`Keyboard`],
 //!   those and what each press meant, and the lookup over a key's input.
 //! - [`bindings`] holds every device's table ([`Bindings`]), the lookup
-//!   ([`Bindings::resolve`], [`Bindings::held`]) and the clash query
-//!   ([`Bindings::clashes`]), with [`Devices`], what each device holds,
+//!   ([`Bindings::resolve`], [`Bindings::held`]), the clash query
+//!   ([`Bindings::clashes`], and [`Bindings::clashes_with`] for a rebind
+//!   not yet made) and the keys screen's rebind rule
+//!   ([`Bindings::assign`]), with [`Devices`], what each device holds,
 //!   handing each input to its device's side. Neither names a `Key`.
 //! - [`contexts`] lists each key-reading screen's contexts, in order.
 //! - [`reader`] is what a screen holds: a [`CommandReader`] over the
@@ -94,9 +96,20 @@
 //!   commands on one key, or a saved key a later build gives another
 //!   command by default. [`KeyMap::with_overrides`] unbinds one command a
 //!   clash, until none is left: of two saved commands the later in
-//!   `Command`'s declaration order, as phase 4's keys screen does, and
-//!   against a defaulted one the defaulted one, as the player's choice
-//!   wins. A variant a saved base carries counts as saved.
+//!   `Command`'s declaration order, and against a defaulted one the
+//!   defaulted one, as the player's choice wins. A variant a saved base
+//!   carries counts as saved.
+//! - **The rebind rule.** The keys screen records a key through
+//!   [`Bindings::assign`]: the command recorded keeps the combo, and each
+//!   command that clashes with it, or with a variant following it, loses
+//!   its key, one at a time until none clashes. A clash is worked out on
+//!   the bindings the rebind makes ([`Bindings::clashes_with`]), so a
+//!   variant moved with its base counts: Closest Target on W unbinds
+//!   Select Secondary, and with it its Option variant, which Closest
+//!   Ship's Option-W would meet. Of two variants of one base that land on
+//!   one combo, the later loses. The original refuses the key instead
+//!   (rdm:phase/key-bindings/phase-4-keys-screen's findings); the
+//!   roadmap chose this rule.
 //!
 //! [`Kind`]: command::Kind
 

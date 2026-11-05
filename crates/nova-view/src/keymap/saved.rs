@@ -41,8 +41,9 @@ impl KeyMap {
     /// none is left:
     ///
     /// - A clash between two *chosen* commands settles first, the later
-    ///   one in `Command`'s declaration order unbound, as phase 4's keys
-    ///   screen does. A command is chosen when the overrides name it, or
+    ///   one in `Command`'s declaration order unbound (the keys screen,
+    ///   which knows which command was recorded last, unbinds the other,
+    ///   [`Bindings::assign`]). A command is chosen when the overrides name it, or
     ///   when it follows a base they name: a rebound base carries its
     ///   variant, and that is the player's choice too.
     /// - Then a chosen command's clash with one that kept its default
