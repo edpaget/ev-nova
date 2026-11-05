@@ -269,6 +269,7 @@ use crate::traffic::emerge::{
     EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
 };
 use crate::traffic::npc::{AiType, MissionMark};
+use crate::traffic::spawn_ai::SpawnAi;
 use crate::traffic::table::{
     ShipKind, SpawnDude, SpawnPerson, SpawnTable, appearing_ship_types, dude_ship_type, pick,
 };
@@ -397,8 +398,9 @@ pub struct NewShip {
     pub ship: ShipId,
     /// Its government.
     pub govt: Option<GovtId>,
-    /// How it behaves.
-    pub ai_type: AiType,
+    /// How it behaves: the raw AI type word its spawn writes (+0x88),
+    /// read into its [`Npc`](super::Npc) by `Traffic::add`.
+    pub ai_type: SpawnAi,
     /// The index, among the ships added with it, of the lead it escorts.
     pub lead: Option<usize>,
     /// Where it starts.
@@ -555,7 +557,7 @@ impl<'a> PersonDraw<'a> {
         Some(NewShip {
             ship: record.ship?,
             govt: record.govt,
-            ai_type: AiType::from_raw(record.ai_type),
+            ai_type: SpawnAi(record.ai_type),
             lead: None,
             state,
             entry: Entry::Placed,
@@ -905,15 +907,11 @@ pub(super) fn specific_dude_ship(
         )?,
     };
     let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
-    let ai_type = if dude.ai_type > 0 {
-        dude.ai_type
-    } else {
-        inherent_ai
-    };
+    let ai_type = SpawnAi::of_dude(dude.ai_type, inherent_ai);
     Some(NewShip {
         ship,
         govt: dude.govt,
-        ai_type: AiType::from_raw(ai_type),
+        ai_type,
         lead: None,
         state: ShipState {
             position: Vec2::new(x, y),
@@ -1137,17 +1135,17 @@ fn dude_ship<'a>(
     table: &'a SpawnTable,
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
-) -> Option<(ShipId, &'a SpawnDude, AiType, &'a ShipKind)> {
+) -> Option<(ShipId, &'a SpawnDude, SpawnAi, &'a ShipKind)> {
     let dude = table.dude_records.get(&pick(&table.dudes, chance)?)?;
     let appearing = appearing_ship_types(dude, |ship| table.appear_on(ship), gate);
     let ship = pick(&appearing, chance)?;
     let kind = table.ships.get(&ship)?;
-    let ai_type = if dude.ai_type > 0 {
-        dude.ai_type
-    } else {
-        kind.inherent_ai
-    };
-    Some((ship, dude, AiType::from_raw(ai_type), kind))
+    Some((
+        ship,
+        dude,
+        SpawnAi::of_dude(dude.ai_type, kind.inherent_ai),
+        kind,
+    ))
 }
 
 /// The `LinkSyst` fleet roll: one of 256 slots, and the fleet there, if
@@ -1222,7 +1220,7 @@ pub fn fleet(
         govt: record.govt,
         ai_type: call
             .lead_ai
-            .unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
+            .map_or(SpawnAi(kind.inherent_ai), SpawnAi::from),
         lead: None,
         state,
         entry,
@@ -1267,7 +1265,8 @@ pub fn fleet(
             out.push(NewShip {
                 ship: escort.ship,
                 govt: record.govt,
-                ai_type: AiType::from_raw(kind.inherent_ai),
+                // Led, it reads 6 (@0x421dc) whatever its class's word.
+                ai_type: AiType::from_raw(kind.inherent_ai).into(),
                 lead: Some(lead),
                 state: placed,
                 entry: escort_entry,
@@ -1353,7 +1352,7 @@ pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
 /// drawn, at rest, facing anywhere (@0x3c254-0x3c324); any other ship
 /// [`in_system`], at its top speed ([`at_speed`]).
 pub fn dude_setup_state(
-    ai_type: AiType,
+    ai_type: SpawnAi,
     kind: &ShipKind,
     first_stellar: Option<Vec2>,
     chance: &mut (impl Chance + ?Sized),
@@ -1740,7 +1739,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(200),
                 govt: Some(GovtId(130)),
-                ai_type: AiType::BraveTrader,
+                ai_type: AiType::BraveTrader.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -1838,6 +1837,72 @@ mod tests {
             &mut Draws::of(&ship_201),
         );
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
+    }
+
+    /// `table` with `düde` 128's `AIType` at `dude_ai` and every ship's
+    /// `InherentAI` at `inherent_ai`.
+    fn data_ai(mut table: SpawnTable, dude_ai: i16, inherent_ai: i16) -> SpawnTable {
+        for dude in table.dude_records.values_mut() {
+            dude.ai_type = dude_ai;
+        }
+        for kind in table.ships.values_mut() {
+            kind.inherent_ai = inherent_ai;
+        }
+        table
+    }
+
+    #[test]
+    fn a_dude_ship_carries_its_raw_ai_word_none_at_0_or_below_an_escorts_above_4() {
+        let ship_201 = [6, 6, 0, 99, 0, 0, 0];
+        let word = |table: &SpawnTable| {
+            initial(
+                table,
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut Draws::of(&ship_201),
+            )[0]
+            .ai_type
+        };
+        for (dude_ai, inherent_ai, expected) in [(0, 0, 0), (-1, -1, -1), (7, 3, 7)] {
+            let ai = word(&data_ai(one_pass(), dude_ai, inherent_ai));
+            assert_eq!(ai, SpawnAi(expected), "düde {dude_ai}, shïp {inherent_ai}");
+        }
+        assert!(word(&data_ai(one_pass(), 0, 0)).no_ai());
+        assert!(word(&data_ai(one_pass(), 7, 3)).escort_ai());
+    }
+
+    #[test]
+    fn a_person_of_ai_type_5_carries_an_escorts_word() {
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .record
+            .ai_type = 5;
+        let (ships, _) = set_up(&table, PersonWorld::NONE, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert!(ships[0].ai_type.escort_ai());
+    }
+
+    #[test]
+    fn a_fleet_lead_of_inherent_ai_0_has_no_ai_and_its_escorts_are_led() {
+        let mut out = Vec::new();
+        fleet(
+            &data_ai(table(), 0, 0),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall::default(),
+            &mut Draws::of(&[]),
+            &mut out,
+        );
+        assert!(out[0].ai_type.no_ai(), "the lead");
+        assert!(
+            out[1..].iter().all(|ship| !ship.ai_type.no_ai()),
+            "led, they read 6 (@0x421dc)"
+        );
     }
 
     #[test]
@@ -1988,7 +2053,7 @@ mod tests {
             (
                 ShipId(201),
                 Some(GovtId(130)),
-                AiType::Warship,
+                AiType::Warship.into(),
                 None,
                 Entry::JumpingIn
             )
@@ -2036,13 +2101,18 @@ mod tests {
         assert_eq!(ships.len(), 4);
         assert_eq!(
             (ships[0].ship, ships[0].govt, ships[0].ai_type),
-            (ShipId(201), Some(GovtId(131)), AiType::Warship),
+            (ShipId(201), Some(GovtId(131)), AiType::Warship.into()),
             "the lead's own InherentAI, the fleet's govt"
         );
         for escort in &ships[1..] {
             assert_eq!(
                 (escort.ship, escort.govt, escort.ai_type, escort.lead),
-                (ShipId(202), Some(GovtId(131)), AiType::Interceptor, Some(0))
+                (
+                    ShipId(202),
+                    Some(GovtId(131)),
+                    AiType::Interceptor.into(),
+                    Some(0)
+                )
             );
             assert_eq!(escort.entry, Entry::JumpingIn);
         }
@@ -2848,7 +2918,7 @@ mod tests {
         let ship = ships[0];
         assert_eq!(
             (ship.ship, ship.ai_type, ship.aggression),
-            (ShipId(201), AiType::Warship, 3)
+            (ShipId(201), AiType::Warship.into(), 3)
         );
         assert!(
             near(ship.state.position, FIRST_STELLAR + Vec2::new(100.0, 0.0)),
@@ -3147,7 +3217,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(201),
                 govt: Some(GovtId(128)),
-                ai_type: AiType::Warship,
+                ai_type: AiType::Warship.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -3743,7 +3813,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(203),
                 govt: Some(GovtId(131)),
-                ai_type: AiType::Interceptor,
+                ai_type: AiType::Interceptor.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -3846,9 +3916,23 @@ mod tests {
         let ships = mission_ships(&table, &mission_spawn(1, 0), mission_gate(), &mut chance);
         assert_eq!(
             (ships[0].ship, ships[0].ai_type),
-            (ShipId(202), AiType::Interceptor),
+            (ShipId(202), AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
+    }
+
+    #[test]
+    fn a_mission_ship_of_a_dude_and_ship_at_0_has_no_ai() {
+        let mut table = with_mission_dude();
+        table
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        table.ships.get_mut(&ShipId(202)).expect("202").inherent_ai = 0;
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let ships = mission_ships(&table, &mission_spawn(1, 0), mission_gate(), &mut chance);
+        assert!(ships[0].ai_type.no_ai());
     }
 
     #[test]
@@ -4270,7 +4354,12 @@ mod tests {
             assert_eq!(ship.aux, Some(4));
             assert_eq!(
                 (ship.govt, ship.ai_type, ship.booty, ship.info_types),
-                (Some(GovtId(131)), AiType::Interceptor, Some(0x0002), 0x0001),
+                (
+                    Some(GovtId(131)),
+                    AiType::Interceptor.into(),
+                    Some(0x0002),
+                    0x0001
+                ),
                 "the düde's"
             );
             assert!(!ship.derelict);
@@ -4346,7 +4435,7 @@ mod tests {
         );
         assert_eq!(
             (ships[0].ship, ships[0].ai_type),
-            (ShipId(202), AiType::Interceptor),
+            (ShipId(202), AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
     }
@@ -4375,7 +4464,7 @@ mod tests {
             Some(NewShip {
                 ship: ShipId(203),
                 govt: Some(GovtId(131)),
-                ai_type: AiType::Interceptor,
+                ai_type: AiType::Interceptor.into(),
                 lead: None,
                 state: PERSON_AT,
                 entry: Entry::Placed,
@@ -4448,7 +4537,7 @@ mod tests {
         );
         assert_eq!(
             ship.map(|ship| ship.ai_type),
-            Some(AiType::Interceptor),
+            Some(AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
     }

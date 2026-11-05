@@ -120,7 +120,7 @@ mod tests {
         NewShip {
             ship: ShipId(ship),
             govt: None,
-            ai_type: AiType::WimpyTrader,
+            ai_type: AiType::WimpyTrader.into(),
             lead: None,
             state: ShipState::default(),
             entry: Entry::Placed,

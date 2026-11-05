@@ -1382,7 +1382,7 @@ mod tests {
     fn the_setup_starts_a_duede_ship_at_its_classs_bare_speed_by_the_engine() {
         let at = |items| {
             dude_setup_state(
-                crate::traffic::npc::AiType::WimpyTrader,
+                crate::traffic::npc::AiType::WimpyTrader.into(),
                 &booster_ship(items),
                 None,
                 &mut Draws::of(&[0, 0, 0]),
@@ -1401,7 +1401,7 @@ mod tests {
         let stellar = Some(crate::geometry::Vec2::new(400.0, 0.0));
         let at = |items| {
             dude_setup_state(
-                crate::traffic::npc::AiType::Warship,
+                crate::traffic::npc::AiType::Warship.into(),
                 &kind(
                     &record,
                     &[outfit(300, &[(MORE_SPEED, 100)])],

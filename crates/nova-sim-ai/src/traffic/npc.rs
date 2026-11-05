@@ -47,10 +47,13 @@ pub enum AiType {
 }
 
 impl AiType {
-    /// What a raw AI type other than 1-4 means: a wimpy trader, the most
-    /// harmless, which lands rather than lingers. Stock ships all have an
-    /// `InherentAI` of 1-4; this covers plug-in data that leaves it 0 or
-    /// -1, where the original's behaviour has not been traced.
+    /// What a raw AI type other than 1-4 folds to: a wimpy trader, the most
+    /// harmless, which lands rather than lingers. A spawn no longer folds
+    /// through it: it carries the raw word
+    /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)), 0 or below a ship
+    /// with no AI and above 4 one read as an escort. It stands in for the
+    /// class a ship with no AI never thinks as, and for the other writers
+    /// of a class's `InherentAI` (filed in `npc-ai-2`).
     pub const FALLBACK: Self = Self::WimpyTrader;
 
     /// The AI type `raw` means: 1-4 as the Bible says, anything else
@@ -592,9 +595,11 @@ pub struct Npc {
     /// and its calls for reinforcements read by the engine
     /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
     pub odds: f32,
-    /// Whether it has no AI: the original's AI type 0 or below (+0x88),
-    /// which only the player's eject hulk has, -1 (`_HandlePlayer`
-    /// @0x6f31f). Its [`ai_type`](Npc::ai_type) stays its class's
+    /// Whether it has no AI: the original's AI type 0 or below (+0x88):
+    /// the player's eject hulk, -1 (`_HandlePlayer` @0x6f31f), a spawn whose
+    /// word is 0 or below in plug-in data
+    /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)), and a former
+    /// escort whose class word is ([`Npc::settle_original_ai_type`]). Its [`ai_type`](Npc::ai_type) stays its class's
     /// `InherentAI`, as the engine's [`AiType`] has no "none". A ship
     /// with no AI never thinks (`_AIDispatch`'s gate, `_DoPlayGameWork`
     /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers

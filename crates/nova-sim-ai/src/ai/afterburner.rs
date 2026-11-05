@@ -220,7 +220,7 @@ mod tests {
         NewShip {
             ship: crate::catalog::ShipId(200),
             govt: None,
-            ai_type: crate::traffic::npc::AiType::WimpyTrader,
+            ai_type: crate::traffic::npc::AiType::WimpyTrader.into(),
             lead: None,
             state: crate::flight::ShipState::default(),
             entry: crate::traffic::spawn::Entry::Placed,

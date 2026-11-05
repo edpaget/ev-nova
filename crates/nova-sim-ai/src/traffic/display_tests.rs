@@ -74,7 +74,7 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
     let ship = |entry, booty| NewShip {
         ship: ShipId(200),
         govt: Some(GovtId(130)),
-        ai_type: AiType::WimpyTrader,
+        ai_type: AiType::WimpyTrader.into(),
         lead: None,
         state: ShipState::default(),
         entry,

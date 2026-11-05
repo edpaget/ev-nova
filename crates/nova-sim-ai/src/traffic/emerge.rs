@@ -64,8 +64,10 @@
 //!   and sets +0x30 to -1.165 (@0x88136) before every tick of the burst.
 //!   Only a ship with AI type 0 or below, which `_AIDispatch` never runs
 //!   (@0x4427e-0x44286), would keep the -3.0: the engine's
-//!   [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), which only the
-//!   player's eject hulk has, and the hulk never emerges.
+//!   [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai): the player's eject
+//!   hulk, which never emerges, or a spawn of AI type 0 or below from
+//!   plug-in data, for which the engine keeps no -3.0 (filed in
+//!   `npc-ai-2`).
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
 //! - **Holding fire.** A ship coming out of a gate fires nothing while it

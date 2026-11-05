@@ -246,9 +246,9 @@ impl Hail<'_> {
     /// writers of 5 and 6: a ship that escorts the player, a fleet lead or
     /// a carrier, or a former escort the disabled reset marked; not an
     /// NPC's escort the player has paid off, which the bribe made a wimpy
-    /// trader (@0x961f8). AI types above 4 from data are folded into the
-    /// wimpy trader at the spawn
-    /// ([`AiType::from_raw`](crate::traffic::npc::AiType::from_raw)).
+    /// trader (@0x961f8); and a spawn whose AI type from data is above 4,
+    /// until its first think whole
+    /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)).
     #[must_use]
     pub fn escort_ai(&self) -> bool {
         self.npc.original_ai_type() > 4

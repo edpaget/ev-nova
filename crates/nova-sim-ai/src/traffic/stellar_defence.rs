@@ -362,7 +362,7 @@ pub fn defender(
     // `_SpecificDudeSpawn`'s ship already has no lead, mission or aux mark.
     Some(NewShip {
         govt: site.govt,
-        ai_type: AiType::Warship,
+        ai_type: AiType::Warship.into(),
         state: crate::flight::ShipState {
             position: site.position,
             velocity: crate::geometry::Vec2::ZERO,

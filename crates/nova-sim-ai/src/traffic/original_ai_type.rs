@@ -34,6 +34,13 @@
 //!   [`Npc::leave_fleet`] keeps a bribed ship's word.
 //! - -1, no AI ([`NO_AI`]): the player's eject hulk (`_HandlePlayer`
 //!   @0x6f31f).
+//! - Any word, raw, from data: a spawn's `düde` `AIType` above 0, else its
+//!   `shïp`'s `InherentAI` (`_RandomShipSpawn` @0x3c212-0x3c245, and
+//!   `_MissionDudeSpawn` and `_SpecificDudeSpawn` alike), a fleet lead's
+//!   `InherentAI` (`_HyperSpawnFleet` @0x41d5d-0x41d69), a person's
+//!   `AIType` (`_SpawnPerson`). See [`SpawnAi`]: 0 or below is
+//!   [`Npc::no_ai`], above 4 [`Npc::kept_escort_ai`], as `_AIDispatch`'s
+//!   type chain sends it to `_EscortAI` (@0x8ff9b-0x90016) with no parent.
 //! - Its class's `InherentAI`: `_DamageShip` @0x3b0d7, on a hit that
 //!   leaves `_IsDisabled` a ship the player leads with no mission (+0x9a
 //!   0, +0xc8d2 -1, @0x3ae58-0x3ae62, @0x3af8f-0x3afa5), AI 5 and 6 alike
@@ -86,6 +93,7 @@
 //! Nothing here plays a sound or draws a random number.
 
 use super::npc::{AiType, Npc};
+use super::spawn_ai::SpawnAi;
 use crate::ai::miner;
 use crate::rulebook::RuleSource;
 
@@ -173,7 +181,9 @@ impl Npc {
     /// class's `InherentAI` (@0x83c4a); kept while it is disabled, and for
     /// its stay if it thinks as a miner ([`miner::thinks_for`],
     /// @0x8ff76-0x8ff8d) or as `_DeathStarAI` ([`Npc::attacks_stellars`],
-    /// @0x8ff3a), neither of which reaches that write.
+    /// @0x8ff3a), neither of which reaches that write. The write is raw:
+    /// a class word of 0 or below leaves it with no AI ([`Npc::no_ai`]), and
+    /// one above 4 keeps the mark, as `_EscortAI` thinks it again.
     ///
     /// **Ordering.** The original clears it inside the ship's own
     /// dispatch, in slot order; the traffic's tick settles it after the
@@ -182,8 +192,14 @@ impl Npc {
     /// whole falls in that tick, whose distress call is drawn on the
     /// message line. Filed in `play-feel-5-followups`.
     pub fn settle_original_ai_type(&mut self) {
-        if !self.condition.disabled() && !miner::thinks_for(self) && !self.attacks_stellars() {
-            self.kept_escort_ai = false;
+        if self.kept_escort_ai
+            && !self.condition.disabled()
+            && !miner::thinks_for(self)
+            && !self.attacks_stellars()
+        {
+            let word = SpawnAi(self.hull.inherent_ai);
+            self.no_ai = word.no_ai();
+            self.kept_escort_ai = word.escort_ai();
         }
     }
 }
@@ -412,5 +428,22 @@ mod tests {
         };
         miner.settle_original_ai_type();
         assert!(miner.kept_escort_ai, "a miner keeps it for its stay");
+    }
+
+    #[test]
+    fn the_lost_parents_write_of_its_class_word_0_leaves_no_ai_and_above_4_the_mark() {
+        let marked = |inherent_ai| {
+            let mut ship = Npc {
+                kept_escort_ai: true,
+                ..ship(AiType::WimpyTrader)
+            };
+            ship.hull.inherent_ai = inherent_ai;
+            ship.settle_original_ai_type();
+            (ship.no_ai, ship.kept_escort_ai)
+        };
+        assert_eq!(marked(0), (true, false), "@0x83c4a writes 0");
+        assert_eq!(marked(-1), (true, false));
+        assert_eq!(marked(5), (false, true), "and 5 raw");
+        assert_eq!(marked(1), (false, false));
     }
 }

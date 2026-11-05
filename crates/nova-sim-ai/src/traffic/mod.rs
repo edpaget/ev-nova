@@ -217,6 +217,8 @@ mod cloak_think_tests;
 mod comm_call_tests;
 #[cfg(test)]
 mod count_wait_turn_tests;
+#[cfg(test)]
+mod data_ai_tests;
 pub mod destination;
 #[cfg(test)]
 mod disabled_burst_tests;
@@ -349,6 +351,7 @@ pub mod slot_word;
 mod slot_word_tests;
 pub mod snipe;
 pub mod spawn;
+pub mod spawn_ai;
 pub mod stellar_attack;
 pub mod stellar_defence;
 #[cfg(test)]
@@ -3052,7 +3055,7 @@ impl Traffic {
                 ship: ship.ship,
                 // Independent until it joins its government below.
                 govt: None,
-                ai_type: ship.ai_type,
+                ai_type: ship.ai_type.ai_type(kind.hull.inherent_ai),
                 leader,
                 class: kind.escort_class,
                 escort: None,
@@ -3139,8 +3142,8 @@ impl Traffic {
                 warp: warp_out::Warp::default(),
                 display,
                 odds: odds_cache::STALE,
-                no_ai: false,
-                kept_escort_ai: false,
+                no_ai: ship.ai_type.no_ai(),
+                kept_escort_ai: ship.ai_type.escort_ai(),
                 mission_let_go: false,
                 mission_dropped: false,
                 defends: None,
@@ -6923,7 +6926,7 @@ mod tests {
         NewShip {
             ship: ShipId(200),
             govt: Some(GovtId(131)),
-            ai_type: AiType::Interceptor,
+            ai_type: AiType::Interceptor.into(),
             lead: None,
             state: ShipState {
                 position: Vec2::new(x, 0.0),
