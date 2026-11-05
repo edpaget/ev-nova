@@ -106,7 +106,21 @@ impl Screen for AppScreen {
     /// What is physically down is noted as it arrives, and handed back
     /// to flight as its input comes back from a dialog or the spaceport
     /// (see `live_input`).
+    ///
+    /// The app's surroundings go to the router's readers and the flight,
+    /// if built, and nowhere else, whatever shows: flight is the one
+    /// screen that reads them yet (the screens off flight take the pad
+    /// in phases 8-11), and a flight built later is told them as it
+    /// starts.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Surroundings(surroundings) = *input {
+            self.surroundings = surroundings;
+            self.note_keys(input);
+            if let Some(flight) = &mut self.flight {
+                flight.input(input);
+            }
+            return ScreenAction::None;
+        }
         if self.away_takes_input(input) {
             return ScreenAction::None;
         }

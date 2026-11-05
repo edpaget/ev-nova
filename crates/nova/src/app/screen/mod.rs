@@ -787,6 +787,10 @@ pub struct AppScreen {
     /// reads in flight in front of flight (the `EscapeToMainScreen`
     /// reading).
     flight_keys: CommandReader,
+    /// What the app last told the screens about where they run (the
+    /// device used last), which the router's readers follow and every
+    /// flight it builds is told as it starts.
+    surroundings: nova_view::Surroundings,
     /// What the main menu waits on, if anything.
     menu_hold: Option<MenuHold>,
     /// What arrived while the main menu waited, in order.

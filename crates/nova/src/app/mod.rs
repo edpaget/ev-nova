@@ -172,8 +172,10 @@ use nova_view::{
 
 mod fullscreen;
 pub mod keyboard_access;
+pub mod last_device;
 mod loop_event;
 mod menu;
+mod pads;
 mod scaling;
 pub mod screen;
 mod updates;
@@ -187,8 +189,11 @@ pub use updates::{Chosen, NoUpdater, Updater, UpdaterSource, choose};
 pub use wheel::WheelDelta;
 
 use crate::config::Os;
+use crate::gamepad::Gamepads;
+use crate::gamepad::inputs::PadInputs;
 use crate::settings::{FullscreenSetting, GameKeeper, GameSettings, ScalingSetting};
 use fullscreen::{Fullscreen, Shortcut};
+use last_device::LastDevice;
 use scaling::ScalingChoice;
 
 /// The widened view's size, in logical units, for a window `window_px`
@@ -385,6 +390,13 @@ pub struct App<S, C = AppScreen> {
     /// Whether the screen has been told the app is quitting: it is told
     /// once, however many ways the quit arrives ([`App::exiting`]).
     quit: bool,
+    /// The gamepads, polled once a frame ([`App::with_gamepads`]); none
+    /// until given.
+    gamepads: Option<Box<dyn Gamepads>>,
+    /// What the pads hold, and what their events mean for the screen.
+    pad_inputs: PadInputs,
+    /// The device the player used last, told to the screen as it changes.
+    last_device: LastDevice,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -417,6 +429,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             display_offered: false,
             scaling: ScalingChoice::default(),
             quit: false,
+            gamepads: None,
+            pad_inputs: PadInputs::new(),
+            last_device: LastDevice::new(),
         }
     }
 
@@ -796,7 +811,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// The window came back to the front: an exclusive mode left on
     /// losing focus is entered again, the screen is told, and a redraw is
     /// asked for, which starts the redraws again.
+    ///
+    /// What the gamepads did while away is drained unrouted
+    /// ([`App::drain_gamepads`]).
     fn focus_gained(&mut self, window: &mut impl WindowPort) {
+        self.drain_gamepads();
         self.fullscreen.focus_gained(window);
         self.screen.focus_gained();
         self.background = false;
@@ -815,7 +834,27 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// pointer as `_DoSystemMap`'s `_GetMouse`/`_StillDown` loop does
     /// (@0x137e9-0x138d8). A left release outside the game ends the press
     /// with [`Screen::cancel_pointer`] instead of a release.
+    ///
+    /// A key's press or any pointer event also tells the device used last
+    /// ([`LastDevice`]); a change reaches the screen as
+    /// [`Input::Surroundings`] after the event itself.
     fn dispatch(
+        &mut self,
+        event: WindowEvent,
+        window: &mut impl WindowPort,
+        gpu: &mut impl Gpu,
+    ) -> Handled {
+        let device_changed = device_input(&event).is_some_and(|used| self.note_device(&used));
+        let mut handled = self.dispatch_event(event, window, gpu);
+        // The screen hears of the device after the input that switched it.
+        if device_changed && handled.control != Control::Exit {
+            handled.control = self.tell_device();
+        }
+        handled
+    }
+
+    /// [`App::dispatch`]'s event itself.
+    fn dispatch_event(
         &mut self,
         event: WindowEvent,
         window: &mut impl WindowPort,
@@ -980,6 +1019,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ) -> Control {
         if let Some(overlay) = &mut self.overlay {
             overlay.frame(elapsed);
+        }
+        if self.poll_gamepads() == Control::Exit {
+            return Control::Exit;
         }
         self.screen.tick(elapsed.saturating_sub(self.last_redraw));
         self.forget_sync_unless_drawing();
@@ -1236,6 +1278,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 }
 
+/// The screen input a window event says the player used, for the device
+/// used last: a key's press, or any pointer event, wherever the pointer
+/// is.
+fn device_input(event: &WindowEvent) -> Option<Input> {
+    match *event {
+        WindowEvent::Key {
+            key, pressed: true, ..
+        } => Some(Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }),
+        WindowEvent::PointerMoved { .. }
+        | WindowEvent::PointerButton { .. }
+        | WindowEvent::Scroll { .. } => Some(Input::PointerMoved(Point::new(0.0, 0.0))),
+        _ => None,
+    }
+}
+
 impl<S: ImageSource> App<S, AppScreen> {
     /// Runs one frame of the developer tools: `frame` sees the overlay and
     /// the pilot flying as a desk (none before flight), and says whether it
@@ -1358,6 +1419,8 @@ mod tests {
     #[derive(Default)]
     struct RecordingScreen {
         inputs: Vec<Input>,
+        /// The surroundings it was told, in order.
+        surroundings: Vec<nova_view::Surroundings>,
         ticks: Vec<Duration>,
         quit_on: Option<Key>,
         releases: usize,
@@ -1390,6 +1453,11 @@ mod tests {
 
     impl Screen for RecordingScreen {
         fn input(&mut self, input: &Input) -> ScreenAction {
+            // Kept apart, so the inputs the tests list are the device's.
+            if let Input::Surroundings(told) = *input {
+                self.surroundings.push(told);
+                return ScreenAction::None;
+            }
             self.inputs.push(*input);
             if let Some(shape) = self.shape_on_input.take() {
                 self.shape = shape;
@@ -1470,6 +1538,7 @@ mod tests {
     mod background;
     mod display_shapes;
     mod exiting;
+    mod gamepads;
     mod menu;
     mod pointer_outside;
     mod pointer_release;
@@ -1978,8 +2047,12 @@ mod tests {
     fn a_screen_quit_on_a_pointer_event_exits() {
         struct QuitOnPointer;
         impl Screen for QuitOnPointer {
-            fn input(&mut self, _input: &Input) -> ScreenAction {
-                ScreenAction::Quit
+            fn input(&mut self, input: &Input) -> ScreenAction {
+                if matches!(input, Input::Surroundings(_)) {
+                    ScreenAction::None
+                } else {
+                    ScreenAction::Quit
+                }
             }
             fn tick(&mut self, _dt: Duration) {}
             fn draw(&self, _list: &mut DrawList) {}
@@ -2538,6 +2611,9 @@ mod tests {
 
     impl Screen for SoundingScreen {
         fn input(&mut self, input: &Input) -> ScreenAction {
+            if matches!(input, Input::Surroundings(_)) {
+                return ScreenAction::None;
+            }
             if let Input::Key { key: Key::Tab, .. } = input {
                 self.showing = Showing::ShipBrowser;
             }

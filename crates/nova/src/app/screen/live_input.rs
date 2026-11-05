@@ -89,7 +89,9 @@ pub(super) enum FlightInput {
 impl LiveInput {
     /// Notes what `input` puts down or lets up: a key, repeats as down,
     /// or the primary button; the pointer leaving lets the button go, as
-    /// its release won't come.
+    /// its release won't come. A pad button isn't noted: what a pad holds
+    /// across a dialog stays out of the hand-back until the dialogs take
+    /// the pad (phases 8-11), so flight picks it up from its next press.
     pub(super) fn note(&mut self, input: &Input) {
         match *input {
             Input::Key { .. } => {

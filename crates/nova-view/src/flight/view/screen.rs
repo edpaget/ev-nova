@@ -296,13 +296,14 @@ impl<
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
-        if self.hold_under_rescue(input) {
-            return ScreenAction::None;
-        }
         // A stick's move and the app's surroundings press nothing: flight's
-        // reader takes them whatever shows, the axes for the next step.
+        // reader takes them whatever shows, the rescue included, the axes
+        // for the next step.
         if matches!(input, Input::PadAxis { .. } | Input::Surroundings(_)) {
             self.keys.follow(input);
+            return ScreenAction::None;
+        }
+        if self.hold_under_rescue(input) {
             return ScreenAction::None;
         }
         if self.playing() {

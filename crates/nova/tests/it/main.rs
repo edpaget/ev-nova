@@ -33,6 +33,7 @@ mod entering;
 mod flight;
 mod galaxy_map;
 mod gamble;
+mod gamepad;
 mod hire;
 mod hyperspace;
 mod key_bindings;

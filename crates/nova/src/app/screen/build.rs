@@ -131,6 +131,7 @@ impl AppScreen {
             live: super::live_input::LiveInput::default(),
             keys: CommandReader::new(contexts::ROUTER).with_bindings(bindings.clone()),
             flight_keys: CommandReader::new(contexts::FLIGHT).with_bindings(bindings.clone()),
+            surroundings: nova_view::Surroundings::default(),
             bindings,
             menu_hold: None,
             held: Vec::new(),
@@ -413,6 +414,7 @@ impl AppScreen {
     ) -> FlightView<Rc<GameData>> {
         let mut flight = self.configured_flight(start, last_refresh);
         flight.set_view_size(self.widened);
+        nova_view::Screen::input(&mut flight, &Input::Surroundings(self.surroundings));
         flight
     }
 
