@@ -54,9 +54,7 @@
 //! the next pass, as no site sets them. A latched key waiting for its
 //! release still reads down past its latch (the `latched_reads` module).
 
-#[cfg(doc)]
-use super::map_wait::UNLATCHED_KEYS;
-use super::map_wait::{OWN_LATCH_KEYS, reads_live};
+use super::map_wait::{OWN_LATCH_KEYS, UNLATCHED_KEYS, reads_live};
 use super::{
     BOARD_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY,
     FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JUMP_KEY,
@@ -103,11 +101,12 @@ pub struct LiveKeys {
 /// M (@0x6a778), L (@0x6a8b8), B (@0x6a98b), R (@0x6a9b7), W (@0x6ac1d),
 /// J (@0x6b0e6), Return (@0x6dd00), E (@0x6dda9), the escort commands F,
 /// D, V and C (@0x6e1b6), F12 (@0x6e460), P (@0x702cb), Y (@0x703d8),
-/// I (@0x70411), U (@0x705c3) and the zoom in keys (@0x71046-0x710f8,
-/// latch @0x70fdb). Exactly [`every_key`](super::every_key) less
-/// [`UNLATCHED_KEYS`]: the zoom out key is the self-destruct key, held
-/// for its chord (rdm:phase/play-feel-8-fidelity/phase-11-latched-keys-under-unlatching-dialogs-left-outs).
-pub(super) const POLL_ORDER: [Key; 33] = [
+/// I (@0x70411), U (@0x705c3), then the zoom keys against their shared
+/// latch `_mapZoomFlag` (@0x70fdb): `-` (@0x70fc2) before `=` and keypad
+/// `+` (@0x71046-0x710f8). Exactly [`every_key`](super::every_key) less
+/// [`UNLATCHED_KEYS`], plus `-`, which is both: the self-destruct key,
+/// held for its chord with no latch, and the zoom out.
+pub(super) const POLL_ORDER: [Key; 34] = [
     NAV_OFF_KEY,
     HYPERSPACE_MODE_KEY,
     HYPER_SELECT_KEY,
@@ -139,6 +138,7 @@ pub(super) const POLL_ORDER: [Key; 33] = [
     HAIL_KEY,
     MISSION_INFO_KEY,
     super::CLOAK_KEY,
+    ZOOM_OUT_KEY,
     ZOOM_IN_KEY,
     ZOOM_IN_KEYPAD_KEY,
 ];
@@ -268,7 +268,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   (`live.down_before`) wait, and every other latched key of
     ///   `live.down` is read as a fresh press, in `_HandlePlayer`'s poll
     ///   order (the module's `POLL_ORDER`). One flight still holds is no
-    ///   fresh press. Most act on their press in ours, so they come back
+    ///   fresh press, but `-`, which it holds for the self-destruct chord
+    ///   and reads as the zoom out by `_mapZoomFlag` (@0x70fdb): it comes
+    ///   back as a press, its zoom held back by Command or any other key
+    ///   down ([`FlightView::zoom_floating_map`]). Most act on their press in ours, so they come back
     ///   for the router to give flight as it gives any key. The slot
     ///   block's keys and the cloak act only at the next poll, as do B, L
     ///   and the escort commands (@0x6e1b6, before F12, P, Y, I and the
@@ -308,7 +311,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 polled_before |= !self.own_latch(key);
                 continue;
             }
-            if live.down_before.contains(&key) || self.held.contains(&key) {
+            // `-` is held for its chord whatever its zoom's latch says.
+            let still_held = self.held.contains(&key) && !UNLATCHED_KEYS.contains(&key);
+            if live.down_before.contains(&key) || still_held {
                 continue;
             }
             let at_poll = self.acts_at_the_poll(key);

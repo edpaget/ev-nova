@@ -297,8 +297,10 @@ fn a_latched_key_pressed_under_a_dialog_no_latch_follows_comes_back_as_a_press()
 
 #[test]
 fn every_latched_key_pressed_under_an_unlatching_dialog_comes_back_in_handle_players_poll_order() {
+    // `-` is both an unlatched key, for the self-destruct chord, and the
+    // zoom out, latched by `_mapZoomFlag`.
     let latched: Vec<Key> = every_key()
-        .filter(|k| !UNLATCHED_KEYS.contains(k))
+        .filter(|k| !UNLATCHED_KEYS.contains(k) || *k == ZOOM_OUT_KEY)
         .collect();
     let mut order = POLL_ORDER.to_vec();
     order.sort_by_key(|k| format!("{k:?}"));
@@ -490,6 +492,60 @@ fn i_pressed_in_the_frame_an_offer_is_accepted_at_once_waits() {
         &sent(&view)[from..]
     );
     assert!(view.latched_down.contains(&MISSION_INFO_KEY));
+}
+
+// `-` is both the self-destruct key, read only with Command and with no
+// latch (@0x6fdb4-0x6fdfc), and the floating map's zoom out (keycode
+// 0x1b @0x70fc2), read against `_mapZoomFlag` (@0x70fdb), which no pass
+// under a dialog no site follows touches.
+
+/// A view whose floating map is up, Proxima Near on it.
+fn floating_up() -> Faked {
+    let mut view = super::maps::floating_near(in_sol());
+    super::maps::floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.ui_sounds.clear();
+    view
+}
+
+#[test]
+fn a_minus_pressed_under_an_unlatching_dialog_and_still_down_zooms_the_floating_map_out() {
+    let mut view = floating_up();
+    let shown = super::maps::near_dot(&view);
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [ZOOM_OUT_KEY], [], false);
+    assert_eq!(replay, [press(ZOOM_OUT_KEY)]);
+    for input in &replay {
+        view.input(input);
+    }
+    assert_ne!(super::maps::near_dot(&view), shown, "zoomed out");
+    assert_eq!(view.ui_sounds, [UiSound::FloatingMapZoomed], "once");
+    assert!(view.held.contains(&ZOOM_OUT_KEY), "still held");
+}
+
+#[test]
+fn command_minus_down_at_an_unlatching_dialogs_close_self_destructs_and_doesnt_zoom() {
+    let mut view = floating_up();
+    let shown = super::maps::near_dot(&view);
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [Key::Command, ZOOM_OUT_KEY], [], false);
+    for input in &replay {
+        view.input(input);
+    }
+    ticked(&mut view, 1);
+    assert_eq!(super::maps::near_dot(&view), shown, "no zoom");
+    assert!(!view.ui_sounds.contains(&UiSound::FloatingMapZoomed));
+    let step = view.sim.inputs().last().copied().expect("a step");
+    assert!(step.self_destruct, "Command--");
+}
+
+#[test]
+fn a_minus_down_at_the_poll_before_an_unlatching_dialog_doesnt_zoom() {
+    let mut view = floating_up();
+    let shown = super::maps::near_dot(&view);
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [ZOOM_OUT_KEY], [ZOOM_OUT_KEY], false), []);
+    assert_eq!(super::maps::near_dot(&view), shown);
+    assert!(view.held.contains(&ZOOM_OUT_KEY), "held for its chord");
 }
 
 #[test]
