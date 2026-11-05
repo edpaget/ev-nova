@@ -120,7 +120,9 @@
 //! The new game's data is a folder in the bible's format
 //! (`nova-galaxy-format`), not resource files. [`new_game`] loads it, maps
 //! its factions, systems and stellars to `gövt`, `sÿst`, `spöb` and `dësc`
-//! records, and puts them in a [`store::GameData`] built from decoded
+//! records, its jump points to hypergate `spöb`s, its hulls to `shïp`s and
+//! `shän`s, a placeholder traffic `düde`, and its starts to `chär`s, and
+//! puts them in a [`store::GameData`] built from decoded
 //! records ([`store::GameData::from_decoded`]), so everything that reads
 //! the stock game's data reads the new game's the same way. See
 //! [`new_game`] for what maps to what, the problems it reports and what

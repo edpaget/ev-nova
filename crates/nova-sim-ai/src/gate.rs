@@ -82,10 +82,14 @@
 //! [`RuleKey::GateEscorts`](crate::RuleKey::GateEscorts) says: see the
 //! session's `gate_escorts` module.
 //!
+//! NPCs come out of gates as they arrive
+//! ([`traffic::emerge`](crate::traffic::emerge)) and leave through them
+//! ([`traffic::gate_entry`](crate::traffic::gate_entry)).
+//!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
-//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the ship-spawn
-//! hooks on the shared arrival path (`_SpawnBountyHunter`), the `spöb`
-//! `Fee`, and the failure sound for a wormhole with no exit.
+//! (`_PlayQTMovieFromDesc`), the ship-spawn hooks on the shared arrival
+//! path (`_SpawnBountyHunter`), the `spöb` `Fee`, and the failure sound
+//! for a wormhole with no exit.
 
 use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;
