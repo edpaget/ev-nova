@@ -115,6 +115,17 @@
 //! and its description, and resolves a stellar object to its sprite sheet. See [`store`] for the load order and its
 //! assumptions.
 //!
+//! # New-game data
+//!
+//! The new game's data is a folder in the bible's format
+//! (`nova-galaxy-format`), not resource files. [`new_game`] loads it, maps
+//! its factions, systems and stellars to `gövt`, `sÿst`, `spöb` and `dësc`
+//! records, and puts them in a [`store::GameData`] built from decoded
+//! records ([`store::GameData::from_decoded`]), so everything that reads
+//! the stock game's data reads the new game's the same way. See
+//! [`new_game`] for what maps to what, the problems it reports and what
+//! isn't mapped yet.
+//!
 //! # Interface resources
 //!
 //! The dialogs live in a separate interface file (`Nova-DF.rsrc`, or the

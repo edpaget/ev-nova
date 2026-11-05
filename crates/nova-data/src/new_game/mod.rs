@@ -1,8 +1,8 @@
 //! The new game's data: a `GAME_DATA` folder in the bible's format
 //! (`nova-galaxy-format`), mapped into the [`GameData`] the engine runs on.
 //!
-//! [`load`] reads any [`Source`], and [`map()`] turns a loaded `Galaxy`
-//! into records. The records reach the store through
+//! [`open`] reads a folder on disk, [`load`] reads any [`Source`], and
+//! [`map()`] turns a loaded `Galaxy` into records. The records reach the store through
 //! [`GameData::from_decoded`], with no resource bytes behind them, and
 //! every catalog port, the view and the renderer read them as they read
 //! the stock game's.
@@ -69,11 +69,12 @@ pub mod records;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use nova_galaxy_format::load::Problem;
 use nova_galaxy_format::media::lfs_pointers;
-use nova_galaxy_format::source::Source;
+use nova_galaxy_format::source::{DirSource, Source};
 
 pub use self::ids::IdTable;
 pub use self::map::{Mapped, map};
@@ -93,6 +94,29 @@ pub struct NewGame {
     /// pointers, not the files: the checkout hasn't fetched them. Nothing
     /// reads media yet, so they don't stop anything.
     pub lfs_pointers: Vec<String>,
+}
+
+/// Why a new game's folder couldn't be read at all.
+#[derive(Debug, thiserror::Error)]
+#[error("listing {}: {source}", path.display())]
+pub struct ListError {
+    /// The folder.
+    pub path: PathBuf,
+    /// Why it couldn't be listed: it is missing, or not a folder.
+    pub source: io::Error,
+}
+
+/// Opens the new game's folder `dir` on disk.
+///
+/// The folder itself must list: the format's directory adapter reads a
+/// missing folder as empty, which would start a mistyped `GAME_DATA` over
+/// no galaxy. Inside it, a file that fails is a problem, not an error.
+pub fn open(dir: &Path) -> Result<NewGame, ListError> {
+    std::fs::read_dir(dir).map_err(|source| ListError {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    Ok(load(&DirSource::new(dir), dir))
 }
 
 /// Loads the new game's data from `source`, read from the folder `dir`:
