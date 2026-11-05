@@ -427,19 +427,28 @@ fn a_faction_past_the_last_govt_id_is_a_problem_and_left_out() {
 
 #[test]
 fn a_system_past_the_last_syst_id_is_a_problem_and_left_out_with_its_stellars() {
-    let source = (0..2047).fold(fixture::galaxy(), |source, n| {
-        source.with(
-            &format!("systems/a{n:04}.md"),
-            "---\nname: S\nregion: rim\nmap: [0, 0]\n---\n",
-        )
-    });
+    let source = (0..2047).fold(
+        fixture::galaxy().with(
+            "stellars/beta-rock.md",
+            "---\nname: Beta Rock\nkind: moon\nsystem: beta\nposition: [0, 0]\n---\n",
+        ),
+        |source, n| {
+            source.with(
+                &format!("systems/a{n:04}.md"),
+                "---\nname: S\nregion: rim\nmap: [0, 0]\n---\n",
+            )
+        },
+    );
     let game = loaded(&source);
+    // `beta`'s stellar goes with it, without a second report.
     assert_eq!(
         problems(&game),
         ["systems/beta.md: it is past the last sÿst ID, 2175; it is left out"]
     );
     assert_eq!(game.data.ids(System::TYPE).len(), 2048);
     assert_eq!(game.ids.systems[&id("alpha")], 2175);
+    assert!(!game.ids.stellars.contains_key(&id("beta-rock")));
+    assert_eq!(game.data.ids(Stellar::TYPE).len(), 2);
 }
 
 #[test]
