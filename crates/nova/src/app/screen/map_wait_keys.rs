@@ -175,4 +175,24 @@ mod tests {
         assert!(!mark(0, 0).flushed_since(mark(0, 1)), "the last closed");
         assert!(!mark(0, 2).flushed_since(mark(0, 2)), "unchanged");
     }
+
+    #[test]
+    fn only_the_release_of_a_key_held_lets_go_of_it() {
+        let key = |key, pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        };
+        let a = nova_view::Key::KeyA;
+        let mut down = KeysDown::default();
+        down.follow(&key(a, true));
+        assert!(!let_go_of(&mut down, &key(a, true)), "a press of it");
+        assert!(
+            !let_go_of(&mut down, &key(nova_view::Key::KeyB, false)),
+            "a release of a key not held"
+        );
+        assert!(down.holds(&key(a, false)));
+        assert!(let_go_of(&mut down, &key(a, false)));
+        assert!(!down.holds(&key(a, false)), "let go of");
+    }
 }

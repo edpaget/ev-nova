@@ -732,7 +732,7 @@ exclude_re = [
     # down" clear it is at its end (it fits, End cleared it, or a try
     # failed there), so the scroll the open gate lets through moves
     # nothing, keeps a wheel's leftover and leaves both flags as they were.
-    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_key$",
+    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_command$",
     # The trait's default, already an empty list.
     "nova-view/src/spaceport/modal\\.rs:[0-9]+:[0-9]+: replace Modal::take_unclaimed -> Vec<Input> with vec!\\[\\]$",
     # Whether a follower's berth is below its parent's: a berth holds one
@@ -759,4 +759,15 @@ exclude_re = [
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
+    # The escort menu's groups' guard: a group's command resolves only
+    # while the EscortMenu context is active, and `sync_escort_keys` sets
+    # that to `escort_menu.is_open()` at the start of every input, before
+    # the press reaches `escort_command`, so the guard always holds there.
+    "nova-view/src/flight/view/cockpit\\.rs:[0-9]+:[0-9]+: replace match guard self\\.escort_menu\\.is_open\\(\\) with true in FlightView<C, S>::escort_command$",
+    # Enter Ship's wait letting go of the router's keys bound to it: on
+    # E's release `hold_input` has just followed that release, and on a
+    # focus loss `let_go_of_keys` queued `Held::ReleaseKeys` first, whose
+    # replay at the click's end lets go of every noted key before anything
+    # reads the router's keys (the click's hold takes inputs unread).
+    "nova/src/app/screen/menu\\.rs:[0-9]+:[0-9]+: replace AppScreen::let_go_of_router_command with \\(\\)$",
 ]

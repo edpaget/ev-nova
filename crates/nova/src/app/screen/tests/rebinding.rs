@@ -114,3 +114,54 @@ fn the_player_info_opened_by_its_rebound_key_waits_for_that_key_s_release() {
     screen.input(&key(Key::KeyQ, false));
     assert_eq!(screen.showing(), Showing::Flight, "closed on Q's release");
 }
+
+#[test]
+fn the_router_hands_back_the_bindings_it_was_given() {
+    let rebound = shared(Bindings::default().rebound(UiCommand::Tab, KeyCombo::key(Key::KeyT)));
+    let screen = AppScreen::new(data()).with_bindings(rebound.clone());
+    assert_eq!(screen.bindings().get(), rebound.get());
+}
+
+#[test]
+fn the_ship_browser_built_before_the_bindings_reads_them() {
+    let rebound = Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL));
+    let mut screen = AppScreen::new(data()).with_bindings(shared(rebound));
+    screen.input(&key(Key::ArrowRight, true));
+    assert_eq!(screen.ship_browser().selected(), Some(ShipId(128)), "Right");
+    screen.input(&key(Key::KeyL, true));
+    assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)), "L");
+}
+
+#[test]
+fn the_galaxy_viewer_built_before_the_bindings_reads_them() {
+    let rebound = Bindings::default().rebound(UiCommand::Right, KeyCombo::key(Key::KeyL));
+    let mut screen = AppScreen::new(data()).with_bindings(shared(rebound));
+    screen.input(&key(Key::Tab, true));
+    let fitted = *screen.galaxy_map().view().expect("the viewer");
+    screen.input(&key(Key::ArrowRight, true));
+    assert_eq!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "Right"
+    );
+    screen.input(&key(Key::KeyL, true));
+    assert_ne!(
+        *screen.galaxy_map().view().expect("the viewer"),
+        fitted,
+        "L pans"
+    );
+}
+
+#[test]
+fn a_spaceport_built_before_the_bindings_reads_them() {
+    use nova_view::keymap::PlayCommand;
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    let rebound = Bindings::default().rebound(PlayCommand::PlayerInfo, KeyCombo::key(Key::KeyQ));
+    let mut screen = screen.with_bindings(shared(rebound));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    assert!(spaceport(&screen).player_info().is_none(), "P");
+    screen.input(&key(Key::KeyQ, true));
+    assert!(spaceport(&screen).player_info().is_some(), "Q");
+}

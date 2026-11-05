@@ -380,6 +380,57 @@ fn while_e_is_held_its_repeats_are_dropped_and_the_rest_waits() {
 }
 
 #[test]
+fn while_e_is_held_another_keys_release_waits_and_only_es_clicks() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store);
+    screen.input(&key(Key::KeyN, true));
+    screen.input(&key(Key::KeyE, true));
+    screen.input(&Input::Text('e'));
+    ui_sounds(&mut screen);
+    screen.input(&key(Key::KeyN, false));
+    assert_eq!(ui_sounds(&mut screen), [], "N's release waits");
+    screen.input(&key(Key::KeyE, false));
+    assert_eq!(ui_sounds(&mut screen), [UiSound::ButtonKeyed], "E's clicks");
+}
+
+#[test]
+fn while_e_is_held_another_keys_press_waits_for_the_replay() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store);
+    screen.input(&key(Key::KeyE, true));
+    screen.input(&Input::Text('e'));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&Input::Text('n'));
+    screen.input(&key(Key::KeyE, false));
+    ui_sounds(&mut screen);
+    screen.keyed_click_ended();
+    assert_eq!(
+        ui_sounds(&mut screen),
+        [UiSound::EnterRefused],
+        "Command, replayed, holds the N from clicking"
+    );
+    assert_eq!(screen.showing(), Showing::MainMenu);
+}
+
+#[test]
+fn es_repeats_while_it_is_held_are_not_replayed_to_hold_it_again() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store);
+    screen.input(&key(Key::KeyE, true));
+    screen.input(&Input::Text('e'));
+    screen.input(&held(Key::KeyE));
+    screen.input(&key(Key::KeyE, false));
+    screen.keyed_click_ended();
+    ui_sounds(&mut screen);
+    screen.input(&Input::Text('e'));
+    assert_eq!(
+        ui_sounds(&mut screen),
+        [UiSound::ButtonKeyed],
+        "E is up, so a typed E clicks at once"
+    );
+}
+
+#[test]
 fn command_e_does_nothing() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
