@@ -154,6 +154,9 @@ impl Toggle {
             Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
+            | Input::PadButton { .. }
+            | Input::PadAxis { .. }
+            | Input::Surroundings(_)
             | Input::Scroll { .. } => false,
             // A check box clicks silently: the tracker's sounds are not
             // taken.

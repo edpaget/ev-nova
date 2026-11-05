@@ -173,20 +173,245 @@ pub enum MouseButton {
     Other,
 }
 
-/// The device whose input a text names: what a screen asks its
-/// [`CommandReader`](crate::CommandReader) for
-/// ([`device`](crate::CommandReader::device)), and what every key-naming
-/// text passes to [`name_command`](crate::bound_names::name_command).
+/// The device the player used last, whose input a text names: what a
+/// screen asks its [`CommandReader`](crate::CommandReader) for
+/// ([`device`](crate::CommandReader::device)), which follows the
+/// [`Surroundings`] the app sends, and what every key-naming text passes
+/// to [`name_command`](crate::bound_names::name_command).
 ///
-/// Only the keyboard today. Phase 7
-/// (rdm:phase/key-bindings/phase-7-gamepad-input) adds `Mouse` and
-/// `Gamepad(family)`, the device the player used last, and phase 14 adds
-/// `Touch`. No call site changes then, as each asks its reader.
+/// The app decides which it is (`nova`'s device-last-used module) and
+/// tells the screens through [`Input::Surroundings`]. Phase 12
+/// (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs) adds pad families
+/// and names pad buttons; phase 14 adds `Touch`. No call site changes
+/// then, as each asks its reader.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Device {
     /// The keyboard: a command is named by its key.
     #[default]
     Keyboard,
+    /// The mouse or trackpad: a pointer button, move or scroll.
+    Mouse,
+    /// A gamepad of a family, which names its buttons.
+    Gamepad(ControllerFamily),
+}
+
+/// The family a gamepad belongs to, which phase 12 reads to name its
+/// buttons with that family's labels and glyphs. Every pad is
+/// [`ControllerFamily::Generic`] until then.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ControllerFamily {
+    /// A pad named by position alone.
+    #[default]
+    Generic,
+}
+
+/// What the app tells every screen about where it runs, as data: sent as
+/// [`Input::Surroundings`] whenever it changes, and again to a screen the
+/// app switches to. Later phases add fields (the safe area, points per
+/// logical pixel, whether a soft keyboard exists).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Surroundings {
+    /// The device the player used last.
+    pub device: Device,
+}
+
+/// A gamepad button, by its position on the pad (SDL's names: South is
+/// the bottom face button, whatever its label), never by its printed
+/// label: phase 12 names it by the pad's family. Each stick's four
+/// directions are buttons too, pressed as the stick passes the press
+/// threshold (`nova`'s pad module decides when), so a screen reads a
+/// stick as it reads the d-pad.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PadButton {
+    /// The bottom face button (A on an Xbox pad, Cross on a `PlayStation`
+    /// pad).
+    South,
+    /// The right face button.
+    East,
+    /// The left face button.
+    West,
+    /// The top face button.
+    North,
+    /// The left shoulder button.
+    LeftShoulder,
+    /// The right shoulder button.
+    RightShoulder,
+    /// The left trigger, pressed past the press threshold.
+    LeftTrigger,
+    /// The right trigger, pressed past the press threshold.
+    RightTrigger,
+    /// The d-pad's up.
+    DPadUp,
+    /// The d-pad's down.
+    DPadDown,
+    /// The d-pad's left.
+    DPadLeft,
+    /// The d-pad's right.
+    DPadRight,
+    /// Start (Menu, Options, +).
+    Start,
+    /// Select (Back, View, Share, -).
+    Select,
+    /// The left stick, clicked.
+    LeftStick,
+    /// The right stick, clicked.
+    RightStick,
+    /// The left stick pushed up past the press threshold.
+    LeftStickUp,
+    /// The left stick pulled down past the press threshold.
+    LeftStickDown,
+    /// The left stick pushed left past the press threshold.
+    LeftStickLeft,
+    /// The left stick pushed right past the press threshold.
+    LeftStickRight,
+    /// The right stick pushed up past the press threshold.
+    RightStickUp,
+    /// The right stick pulled down past the press threshold.
+    RightStickDown,
+    /// The right stick pushed left past the press threshold.
+    RightStickLeft,
+    /// The right stick pushed right past the press threshold.
+    RightStickRight,
+}
+
+impl PadButton {
+    /// Every button, in declaration order.
+    pub const ALL: [Self; 24] = [
+        Self::South,
+        Self::East,
+        Self::West,
+        Self::North,
+        Self::LeftShoulder,
+        Self::RightShoulder,
+        Self::LeftTrigger,
+        Self::RightTrigger,
+        Self::DPadUp,
+        Self::DPadDown,
+        Self::DPadLeft,
+        Self::DPadRight,
+        Self::Start,
+        Self::Select,
+        Self::LeftStick,
+        Self::RightStick,
+        Self::LeftStickUp,
+        Self::LeftStickDown,
+        Self::LeftStickLeft,
+        Self::LeftStickRight,
+        Self::RightStickUp,
+        Self::RightStickDown,
+        Self::RightStickLeft,
+        Self::RightStickRight,
+    ];
+
+    /// The button's SDL-style position name (`south`, `leftshoulder`,
+    /// `dpup`, `+lefty`), as phase 12 saves it. A stick direction is its
+    /// axis's name with the direction's sign, as SDL's mappings write a
+    /// half axis.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::South => "south",
+            Self::East => "east",
+            Self::West => "west",
+            Self::North => "north",
+            Self::LeftShoulder => "leftshoulder",
+            Self::RightShoulder => "rightshoulder",
+            Self::LeftTrigger => "lefttrigger",
+            Self::RightTrigger => "righttrigger",
+            Self::DPadUp => "dpup",
+            Self::DPadDown => "dpdown",
+            Self::DPadLeft => "dpleft",
+            Self::DPadRight => "dpright",
+            Self::Start => "start",
+            Self::Select => "back",
+            Self::LeftStick => "leftstick",
+            Self::RightStick => "rightstick",
+            Self::LeftStickUp => "+lefty",
+            Self::LeftStickDown => "-lefty",
+            Self::LeftStickLeft => "-leftx",
+            Self::LeftStickRight => "+leftx",
+            Self::RightStickUp => "+righty",
+            Self::RightStickDown => "-righty",
+            Self::RightStickLeft => "-rightx",
+            Self::RightStickRight => "+rightx",
+        }
+    }
+
+    /// The stick axis and its direction (`1` or `-1`) a stick-direction
+    /// button is, `None` for any other button.
+    #[must_use]
+    pub const fn stick_direction(self) -> Option<(PadAxis, i8)> {
+        Some(match self {
+            Self::LeftStickUp => (PadAxis::LeftY, 1),
+            Self::LeftStickDown => (PadAxis::LeftY, -1),
+            Self::LeftStickLeft => (PadAxis::LeftX, -1),
+            Self::LeftStickRight => (PadAxis::LeftX, 1),
+            Self::RightStickUp => (PadAxis::RightY, 1),
+            Self::RightStickDown => (PadAxis::RightY, -1),
+            Self::RightStickLeft => (PadAxis::RightX, -1),
+            Self::RightStickRight => (PadAxis::RightX, 1),
+            _ => return None,
+        })
+    }
+}
+
+/// A stick axis. X is positive to the right and Y positive up (the stick
+/// pushed forward), each from -1 to 1; `nova`'s gamepad adapter gives
+/// them so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PadAxis {
+    /// The left stick's X.
+    LeftX,
+    /// The left stick's Y.
+    LeftY,
+    /// The right stick's X.
+    RightX,
+    /// The right stick's Y.
+    RightY,
+}
+
+impl PadAxis {
+    /// Every axis, in declaration order.
+    pub const ALL: [Self; 4] = [Self::LeftX, Self::LeftY, Self::RightX, Self::RightY];
+
+    /// The axis's SDL name (`leftx`, `lefty`, `rightx`, `righty`), as
+    /// phase 12 saves a binding to it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::LeftX => "leftx",
+            Self::LeftY => "lefty",
+            Self::RightX => "rightx",
+            Self::RightY => "righty",
+        }
+    }
+
+    /// The other axis of the same stick: Y for X, X for Y.
+    #[must_use]
+    pub const fn across(self) -> Self {
+        match self {
+            Self::LeftX => Self::LeftY,
+            Self::LeftY => Self::LeftX,
+            Self::RightX => Self::RightY,
+            Self::RightY => Self::RightX,
+        }
+    }
+
+    /// The stick-direction button the axis presses pushed the
+    /// `positive` way (right or up) or the other.
+    #[must_use]
+    pub const fn direction(self, positive: bool) -> PadButton {
+        match (self, positive) {
+            (Self::LeftX, true) => PadButton::LeftStickRight,
+            (Self::LeftX, false) => PadButton::LeftStickLeft,
+            (Self::LeftY, true) => PadButton::LeftStickUp,
+            (Self::LeftY, false) => PadButton::LeftStickDown,
+            (Self::RightX, true) => PadButton::RightStickRight,
+            (Self::RightX, false) => PadButton::RightStickLeft,
+            (Self::RightY, true) => PadButton::RightStickUp,
+            (Self::RightY, false) => PadButton::RightStickDown,
+        }
+    }
 }
 
 /// How far a wheel or trackpad scroll moves the text under the pointer,
@@ -260,6 +485,27 @@ pub enum Input {
         /// Where the pointer was.
         at: Point,
     },
+    /// A gamepad button went down or up: a button by position, a trigger
+    /// or a stick direction past the press threshold. Pads merge: a button
+    /// is down while any pad holds it.
+    PadButton {
+        /// The button.
+        button: PadButton,
+        /// Down (`true`) or up.
+        pressed: bool,
+    },
+    /// A stick axis moved to `value`, -1 to 1 (see [`PadAxis`] for the
+    /// signs), as the pad reports it, before any dead zone: flight reads
+    /// its analog amounts from it.
+    PadAxis {
+        /// The axis.
+        axis: PadAxis,
+        /// Where it is.
+        value: f32,
+    },
+    /// What the app tells the screens about where they run changed, or a
+    /// screen was switched to.
+    Surroundings(Surroundings),
 }
 
 impl Input {
@@ -284,22 +530,29 @@ impl Input {
                 delta,
                 at: moved(at),
             },
-            Self::Key { .. } | Self::Text(_) | Self::PointerLeft => self,
+            Self::Key { .. }
+            | Self::Text(_)
+            | Self::PointerLeft
+            | Self::PadButton { .. }
+            | Self::PadAxis { .. }
+            | Self::Surroundings(_) => self,
         }
     }
 
     /// Whether `self` and `other` are both a key's press, repeat or
-    /// release, of one key.
+    /// release, of one key, or both a pad button's press or release, of
+    /// one button.
     #[must_use]
     pub fn same_key(&self, other: &Self) -> bool {
-        matches!(
-            (*self, *other),
-            (Self::Key { key: a, .. }, Self::Key { key: b, .. }) if a == b
-        )
+        match (*self, *other) {
+            (Self::Key { key: a, .. }, Self::Key { key: b, .. }) => a == b,
+            (Self::PadButton { button: a, .. }, Self::PadButton { button: b, .. }) => a == b,
+            _ => false,
+        }
     }
 
-    /// The release of the key `self` presses, repeats or releases; any
-    /// other input as it is.
+    /// The release of the key or pad button `self` presses, repeats or
+    /// releases; any other input as it is.
     #[must_use]
     pub const fn released(self) -> Self {
         match self {
@@ -307,6 +560,10 @@ impl Input {
                 key,
                 pressed: false,
                 repeat: false,
+            },
+            Self::PadButton { button, .. } => Self::PadButton {
+                button,
+                pressed: false,
             },
             other => other,
         }
@@ -334,6 +591,101 @@ mod tests {
         assert!(!press.same_key(&key_input(Key::KeyK, true, false)));
         assert!(!press.same_key(&Input::Text('j')));
         assert!(!Input::PointerLeft.same_key(&Input::PointerLeft));
+    }
+
+    fn pad(button: PadButton, pressed: bool) -> Input {
+        Input::PadButton { button, pressed }
+    }
+
+    #[test]
+    fn same_key_matches_any_input_of_one_pad_button() {
+        let press = pad(PadButton::South, true);
+        assert!(press.same_key(&pad(PadButton::South, false)));
+        assert!(!press.same_key(&pad(PadButton::East, true)));
+        assert!(!press.same_key(&key_input(Key::KeyJ, true, false)));
+        assert!(!key_input(Key::KeyJ, true, false).same_key(&press));
+        let axis = Input::PadAxis {
+            axis: PadAxis::LeftX,
+            value: 0.5,
+        };
+        assert!(!axis.same_key(&axis));
+    }
+
+    #[test]
+    fn released_is_the_release_of_its_pad_button() {
+        assert_eq!(
+            pad(PadButton::DPadUp, true).released(),
+            pad(PadButton::DPadUp, false)
+        );
+        assert_eq!(
+            pad(PadButton::DPadUp, false).released(),
+            pad(PadButton::DPadUp, false)
+        );
+        let axis = Input::PadAxis {
+            axis: PadAxis::RightY,
+            value: -1.0,
+        };
+        assert_eq!(axis.released(), axis);
+        let told = Input::Surroundings(Surroundings::default());
+        assert_eq!(told.released(), told);
+    }
+
+    #[test]
+    fn pad_inputs_and_surroundings_are_not_moved_by_a_translation() {
+        let by = Point::new(-170.0, 2.0);
+        for unmoved in [
+            pad(PadButton::Start, true),
+            Input::PadAxis {
+                axis: PadAxis::LeftY,
+                value: 0.25,
+            },
+            Input::Surroundings(Surroundings {
+                device: Device::Gamepad(ControllerFamily::Generic),
+            }),
+        ] {
+            assert_eq!(unmoved.translated(by), unmoved);
+        }
+    }
+
+    #[test]
+    fn every_pad_button_has_its_own_position_name() {
+        let names: std::collections::BTreeSet<_> =
+            PadButton::ALL.iter().map(|button| button.name()).collect();
+        assert_eq!(names.len(), PadButton::ALL.len());
+        assert_eq!(PadButton::South.name(), "south");
+        assert_eq!(PadButton::Select.name(), "back");
+        assert_eq!(PadButton::LeftStickDown.name(), "-lefty");
+        assert_eq!(PadButton::RightStickRight.name(), "+rightx");
+        let axes: std::collections::BTreeSet<_> =
+            PadAxis::ALL.iter().map(|axis| axis.name()).collect();
+        assert_eq!(axes.len(), 4);
+        assert_eq!(PadAxis::RightX.name(), "rightx");
+    }
+
+    #[test]
+    fn each_stick_direction_is_its_axis_pushed_its_way_and_back() {
+        let mut directions = 0;
+        for button in PadButton::ALL {
+            if let Some((axis, sign)) = button.stick_direction() {
+                assert_eq!(axis.direction(sign > 0), button, "{button:?}");
+                directions += 1;
+            }
+        }
+        assert_eq!(directions, 8);
+        for axis in PadAxis::ALL {
+            for positive in [true, false] {
+                let button = axis.direction(positive);
+                assert_eq!(
+                    button.stick_direction(),
+                    Some((axis, if positive { 1 } else { -1 }))
+                );
+            }
+            assert_eq!(axis.across().across(), axis);
+            assert_ne!(axis.across(), axis);
+        }
+        assert_eq!(PadAxis::LeftY.direction(false), PadButton::LeftStickDown);
+        assert_eq!(PadAxis::RightX.across(), PadAxis::RightY);
+        assert_eq!(PadButton::South.stick_direction(), None);
     }
 
     #[test]

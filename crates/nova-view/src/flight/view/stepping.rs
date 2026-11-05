@@ -203,6 +203,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),
+            amounts: nova_sim::Amounts::FULL,
             play_area: play_area(self.view, anchor),
             window_width: window_width(self.view),
             fire: (self.held(F::FirePrimary), self.held(F::FireSecondary)),

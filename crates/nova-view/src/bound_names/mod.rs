@@ -86,6 +86,11 @@ pub enum Spelling {
 /// What `command` is called on `device`, as a text spells it: through
 /// `bindings` and the player's layout `names`. `None` for a command with
 /// no binding on the device, where the spelling reads one.
+///
+/// Every device names the keyboard's key for now: the mouse has no
+/// binding of its own, and pad buttons get names (by the pad's family)
+/// in phase 12 (rdm:phase/key-bindings/phase-12-gamepad-rebind-glyphs), so
+/// no text changes with the device last used until then.
 #[must_use]
 pub fn name_command(
     bindings: &Bindings,
@@ -96,7 +101,7 @@ pub fn name_command(
 ) -> Option<String> {
     let command = command.into();
     match device {
-        Device::Keyboard => {
+        Device::Keyboard | Device::Mouse | Device::Gamepad(_) => {
             let combo = || bindings.keyboard.combo(command);
             match spelling {
                 Spelling::Bound | Spelling::Str129(RuleSource::Bible) => {

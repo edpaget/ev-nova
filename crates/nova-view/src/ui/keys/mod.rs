@@ -632,6 +632,9 @@ impl Screen for KeysScreen {
             Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
+            | Input::PadButton { .. }
+            | Input::PadAxis { .. }
+            | Input::Surroundings(_)
             | Input::Scroll { .. } => {}
         }
         ScreenAction::None

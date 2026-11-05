@@ -572,7 +572,10 @@ impl Screen for MainMenu {
             Input::Key { .. }
             | Input::PointerButton { .. }
             | Input::Scroll { .. }
-            | Input::PointerMovedOutside(_) => {}
+            | Input::PointerMovedOutside(_)
+            | Input::PadButton { .. }
+            | Input::PadAxis { .. }
+            | Input::Surroundings(_) => {}
             Input::PointerMoved(at) => {
                 self.pointer = Some(at);
                 let hit = self.hit(at);
