@@ -86,6 +86,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 use crate::catalog::{GovtId, LandingSite, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
 use crate::gate::GateKind;
+use crate::gate_lanes::GateLanes;
 use crate::geometry::Vec2;
 use crate::navigation::next_after;
 use crate::rulebook::RuleSource;
@@ -499,9 +500,49 @@ impl StarMap {
         colocated: CoLocated,
     ) -> Self {
         let places = Places::new(&systems, hidden, colocated);
-        // A link's target: the system standing for it, of those in the
-        // catalog.
-        let resolve = |to: SystemId| resolve_link(&places, to);
+        Self::built(systems, places, |system, places| {
+            // A link's target: the system standing for it, of those in
+            // the catalog.
+            system
+                .links
+                .iter()
+                .filter_map(|&to| resolve_link(places, to))
+                .collect()
+        })
+    }
+
+    /// The map of `systems` with those in `hidden` hidden, a place two
+    /// visible systems share resolved as `colocated` says, as
+    /// [`StarMap::with_hidden`] builds it, but with each visible system's
+    /// links the gate `lanes` it leads along ([`GateLanes::listed`]) in
+    /// place of its Con slots: the map
+    /// [`RuleKey::GateLanes`](crate::RuleKey::GateLanes)' other reading
+    /// reads. Its [`StarMap::listed_links`], jumps, neighbours, links and
+    /// routes follow the lanes; its [`StarMap::con_slots`] and
+    /// [`StarMap::usable_con_slots`] stay the systems' own Con slots, so no
+    /// lane is ever a hyperspace link.
+    #[must_use]
+    pub fn with_lanes(
+        systems: Vec<StarSystem>,
+        hidden: &BTreeSet<SystemId>,
+        colocated: CoLocated,
+        lanes: &GateLanes,
+    ) -> Self {
+        let places = Places::new(&systems, hidden, colocated);
+        Self::built(systems, places, |system, _| {
+            lanes.listed(system.id).to_vec()
+        })
+    }
+
+    /// The map of `systems` on `places`, each visible system's links the
+    /// systems `links` gives it, already resolved by place: itself and
+    /// repeats are left out.
+    fn built(
+        systems: Vec<StarSystem>,
+        places: Places,
+        links_of: impl Fn(&StarSystem, &Places) -> Vec<SystemId>,
+    ) -> Self {
+        let colocated = places.colocated;
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
         let mut con = BTreeMap::new();
@@ -514,7 +555,7 @@ impl StarMap {
                 continue;
             }
             let mut listed = Vec::new();
-            for to in system.links.into_iter().filter_map(resolve) {
+            for to in links_of(&system, &places) {
                 if to != from && !listed.contains(&to) {
                     listed.push(to);
                 }

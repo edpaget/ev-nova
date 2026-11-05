@@ -9,7 +9,8 @@
 //! on the hypergate map, as one gate's arrows ([`gate`](crate::gate)). By
 //! `RuleKey::GateLanes`' other reading every
 //! one of those readers reads these lanes instead, through the star map
-//! built from them (`StarMap::with_lanes`); no Con link is made, and no
+//! built from them ([`StarMap::with_lanes`](crate::hyperspace::StarMap::with_lanes));
+//! no Con link is made, and no
 //! hyperspace jump with it.
 //!
 //! **A lane** is directional, (from, to): each hypergate in `from` whose
@@ -400,5 +401,102 @@ mod tests {
             !fixture_shaped().one_way(SystemId(1), SystemId(3)),
             "the dead pair leads back"
         );
+    }
+
+    // The star map of lanes (`StarMap::with_lanes`).
+
+    use crate::hyperspace::{HyperlinkRule, RouteError, StarMap};
+
+    /// [`systems`] with 1 listing 2 and 4 by Con, mapped by
+    /// [`fixture_shaped`]'s lanes.
+    fn laned_map() -> StarMap {
+        let mut systems = systems();
+        systems[0].links = ids(&[2, 4, 4]);
+        StarMap::with_lanes(
+            systems,
+            &BTreeSet::new(),
+            CoLocated::Lowest,
+            &fixture_shaped(),
+        )
+    }
+
+    #[test]
+    fn a_lane_maps_con_slots_stay_the_systems_own() {
+        let map = laned_map();
+        assert_eq!(map.con_slots(SystemId(1)), ids(&[2, 4, 4]));
+        assert_eq!(map.usable_con_slots(SystemId(1)), ids(&[2, 4, 4]));
+        assert_eq!(map.con_slots(SystemId(2)), ids(&[]));
+        assert_eq!(map.usable_con_slots(SystemId(3)), ids(&[]));
+    }
+
+    #[test]
+    fn a_lane_maps_links_are_the_lanes() {
+        let map = laned_map();
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[2, 3]));
+        assert_eq!(map.listed_links(SystemId(3)), ids(&[2, 1]));
+        assert_eq!(map.neighbours(SystemId(1)), ids(&[2, 3]));
+        assert_eq!(
+            map.neighbours(SystemId(4)),
+            ids(&[]),
+            "no lane, its Con aside"
+        );
+        assert_eq!(
+            map.links(),
+            [(1, 2), (1, 3), (2, 3)].map(|(a, b)| (SystemId(a), SystemId(b))),
+            "each pair once"
+        );
+        assert_eq!(map.jumps(SystemId(1), HyperlinkRule::Engine), ids(&[2, 3]));
+        assert_eq!(
+            map.ordered_jumps(SystemId(3), HyperlinkRule::Engine),
+            ids(&[2, 1])
+        );
+    }
+
+    #[test]
+    fn the_engines_hyperlinks_never_go_back_along_a_one_way_lane_and_both_ways_do() {
+        let lanes = lanes(&[
+            gate(101, &[201], Stable),
+            gate(201, &[], Stable),
+            gate(301, &[202], Stable),
+            gate(202, &[], Stable),
+        ]);
+        let map = StarMap::with_lanes(systems(), &BTreeSet::new(), CoLocated::Lowest, &lanes);
+        assert_eq!(map.jumps(SystemId(2), HyperlinkRule::Engine), ids(&[]));
+        assert_eq!(
+            map.jumps(SystemId(2), HyperlinkRule::BothWays),
+            ids(&[1, 3])
+        );
+        assert_eq!(
+            map.route(SystemId(2), SystemId(1), HyperlinkRule::Engine),
+            Err(RouteError::Unreachable)
+        );
+        assert_eq!(
+            map.route(SystemId(2), SystemId(1), HyperlinkRule::BothWays),
+            Ok(ids(&[1]))
+        );
+    }
+
+    #[test]
+    fn a_route_crosses_two_lanes() {
+        let lanes = lanes(&[
+            gate(101, &[201], Stable),
+            gate(201, &[101], Stable),
+            gate(202, &[301], Stable),
+            gate(301, &[202], Stable),
+        ]);
+        let map = StarMap::with_lanes(systems(), &BTreeSet::new(), CoLocated::Lowest, &lanes);
+        assert_eq!(
+            map.route(SystemId(1), SystemId(3), HyperlinkRule::Engine),
+            Ok(ids(&[2, 3]))
+        );
+    }
+
+    #[test]
+    fn a_hidden_system_has_no_lane_on_the_map() {
+        let lanes = fixture_shaped();
+        let hidden = BTreeSet::from([SystemId(3)]);
+        let map = StarMap::with_lanes(systems(), &hidden, CoLocated::Lowest, &lanes);
+        assert_eq!(map.listed_links(SystemId(3)), ids(&[]));
+        assert_eq!(map.position(SystemId(3)), None);
     }
 }
