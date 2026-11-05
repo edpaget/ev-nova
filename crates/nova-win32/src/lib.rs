@@ -7,12 +7,16 @@
 //!   `WinSparkle.dll` from a path at run time and offers each of its calls
 //!   the game makes as a safe method, the shutdown request as a Rust
 //!   closure.
+//! - The keyboard layout: what the thread's current layout prints on a
+//!   key, by its extended scancode ([`key_label`]), and which layout that
+//!   is ([`keyboard_layout_language`]).
 //!
 //! The workspace forbids unsafe code; this crate is one of the places it
-//! lives (its FFI modules, `console` and `winsparkle`, allow it, every
-//! block with a `SAFETY` comment), so the game itself keeps the ban. It
-//! decides nothing: what to do with the answers, and when to call
-//! WinSparkle, is the game's (`nova`'s `platform::console` and
+//! lives (its FFI modules, `console`, `key_label` and `winsparkle`, allow
+//! it, every block with a `SAFETY` comment), so the game itself keeps the
+//! ban. It decides nothing beyond how to put each question to Win32: what
+//! to do with the answers, and when to call WinSparkle, is the game's
+//! (`nova`'s `platform::console`, `platform::key_names` and
 //! `nova::winsparkle`). On any target but Windows the crate is empty, and
 //! none of its dependencies are built.
 
@@ -21,9 +25,11 @@
 #![cfg(windows)]
 
 mod console;
+mod key_label;
 mod winsparkle;
 
 pub use console::{StdHandle, attach_parent_console, stderr_handle};
+pub use key_label::{key_label, keyboard_layout_language};
 pub use winsparkle::{
     FILE as WINSPARKLE_FILE, LoadError as WinSparkleLoadError,
     ShutdownRequest as WinSparkleShutdown, WinSparkleDll,
