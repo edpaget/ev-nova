@@ -492,6 +492,17 @@ context_commands! {
         PageUp: Pressed "Page Up",
         /// Scroll down a page.
         PageDown: Pressed "Page Down",
+        /// Move the focus to the nearest control above (the pad's d-pad).
+        FocusUp: Pressed "Focus Up",
+        /// Move the focus to the nearest control below.
+        FocusDown: Pressed "Focus Down",
+        /// Move the focus to the nearest control to the left.
+        FocusLeft: Pressed "Focus Left",
+        /// Move the focus to the nearest control to the right.
+        FocusRight: Pressed "Focus Right",
+        /// Move the focus to the previous field: the screen's Shift-Tab,
+        /// so on a screen with a Tab Back command it does what that does.
+        PrevFocus: Pressed "Previous Field",
     }
 }
 

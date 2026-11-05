@@ -671,6 +671,11 @@ const fn default_ui(command: UiCommand) -> Binding {
         UiCommand::End => bare(Key::End),
         UiCommand::PageUp => bare(Key::PageUp),
         UiCommand::PageDown => bare(Key::PageDown),
+        UiCommand::FocusUp
+        | UiCommand::FocusDown
+        | UiCommand::FocusLeft
+        | UiCommand::FocusRight
+        | UiCommand::PrevFocus => Binding::Unbound,
     }
 }
 
@@ -1224,8 +1229,31 @@ mod tests {
                 row(U::End, Key::End, NO),
                 row(U::PageUp, Key::PageUp, NO),
                 row(U::PageDown, Key::PageDown, NO),
+                (U::FocusUp.into(), None),
+                (U::FocusDown.into(), None),
+                (U::FocusLeft.into(), None),
+                (U::FocusRight.into(), None),
+                (U::PrevFocus.into(), None),
             ]
         );
+    }
+
+    #[test]
+    fn the_pad_focus_commands_take_no_key_by_default() {
+        use UiCommand as U;
+        for command in [
+            U::FocusUp,
+            U::FocusDown,
+            U::FocusLeft,
+            U::FocusRight,
+            U::PrevFocus,
+        ] {
+            assert_eq!(
+                KeyMap::default().binding(command.into()),
+                Binding::Unbound,
+                "{command:?}"
+            );
+        }
     }
 
     #[test]
@@ -1474,9 +1502,18 @@ mod tests {
     }
 
     #[test]
-    fn every_command_but_an_axis_is_bound_by_default() {
+    fn every_command_but_an_axis_or_a_pad_focus_move_is_bound_by_default() {
+        use UiCommand as U;
+        let pad_only = [
+            U::FocusUp,
+            U::FocusDown,
+            U::FocusLeft,
+            U::FocusRight,
+            U::PrevFocus,
+        ]
+        .map(Command::Ui);
         let map = KeyMap::default();
-        for command in Command::all().filter(|c| c.kind() != Kind::Axis) {
+        for command in Command::all().filter(|c| c.kind() != Kind::Axis && !pad_only.contains(c)) {
             assert!(map.combo(command).is_some(), "{command:?}");
         }
     }
