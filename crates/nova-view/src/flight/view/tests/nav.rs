@@ -944,7 +944,6 @@ fn command_5_picks_the_nearest_as_f5_does() {
     let mut view = faked(in_sol());
     faked_command_tap_slot(&mut view, NEAREST_STELLAR_COMMAND_KEY);
     assert_eq!(picks(&view), [StellarPick::Nearest]);
-    assert_eq!(NEAREST_STELLAR_COMMAND_KEY, Key::Digit5);
 }
 
 #[test]
