@@ -1865,3 +1865,52 @@ fn stock_pictured_texts_scroll_in_3004_and_1020() {
         );
     }
 }
+
+/// The pad's own surroundings and taps, for the stock New Pilot.
+fn told_the_pad() -> Input {
+    Input::Surroundings(nova_view::input::Surroundings {
+        device: nova_view::input::Device::Gamepad(nova_view::input::ControllerFamily::Generic),
+    })
+}
+
+fn pad_tap(screen: &mut impl Screen, button: nova_view::input::PadButton) {
+    for pressed in [true, false] {
+        screen.input(&Input::PadButton { button, pressed });
+    }
+}
+
+/// The stock New Pilot's pad targets are exactly its controls: OK,
+/// Cancel, Strict Play, the two fields and the gender control, so no
+/// dead item of `DITL` 3102 needs leaving out.
+#[test]
+fn the_stock_new_pilot_dialogs_pad_targets_are_its_controls() {
+    use nova_view::input::PadButton;
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        dialog.input(&told_the_pad());
+        let mut reached = Vec::new();
+        for _ in 0..template.items.len() {
+            reached.extend(dialog.dialog().pad_highlight());
+            pad_tap(&mut dialog, PadButton::LeftShoulder);
+        }
+        reached.sort_unstable();
+        reached.dedup();
+        assert_eq!(
+            reached,
+            [
+                NEW_PILOT_OK_ITEM,
+                CANCEL_ITEM,
+                STRICT_PLAY_ITEM,
+                NAME_ITEM,
+                NICKNAME_ITEM,
+                GENDER_ITEM
+            ],
+            "{}",
+            path.display()
+        );
+    }
+}

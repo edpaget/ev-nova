@@ -171,10 +171,6 @@ impl<T: Copy + Eq> Target<T> {
     /// The control with `id` as its neighbour toward `direction`, whatever
     /// the geometry says, while `id` is a target.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no screen's layout misleads the picker yet")
-    )]
     pub const fn with_neighbour(mut self, direction: Direction, id: T) -> Self {
         self.neighbours[direction.slot()] = Some(id);
         self

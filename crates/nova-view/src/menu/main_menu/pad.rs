@@ -11,7 +11,9 @@
 //!   [`MainMenu::button_bounds`], while their row shows: a row still
 //!   sliding in has no target, so the highlight never surrounds a button
 //!   that isn't drawn. The focus starts on New Pilot, the first in
-//!   `_MainScreenChoice`'s order.
+//!   `_MainScreenChoice`'s order. With the art, left and right go to a
+//!   button's row-mate, as explicit neighbours: the stock columns
+//!   stagger enough to mislead the picker.
 //! - **South** does what a primary press does on the focused button: it
 //!   finishes every slide and presses the button with 600, drawn
 //!   pressed; its release plays 601 and chooses it with
@@ -29,7 +31,7 @@
 use crate::geometry::Bounds;
 use crate::input::{Device, Input};
 use crate::keymap::CommandInput;
-use crate::ui::pad_focus::{self, PadRead, Target};
+use crate::ui::pad_focus::{self, Direction, PadRead, Target};
 
 use super::{MainMenu, MenuChoice, row_of};
 
@@ -55,12 +57,28 @@ impl MainMenu {
             .map(|choice| self.button_bounds(choice))
     }
 
-    /// The pad's targets: the buttons whose row shows.
+    /// The pad's targets: the buttons whose row shows. With the art, each
+    /// button's left or right neighbour is its row-mate (0 and 3, 1 and
+    /// 4, 2 and 5): the stock columns stagger, so the geometry alone would
+    /// take Quit's right to New Pilot and Preferences' left to New Pilot.
     fn pad_targets(&self) -> Vec<Target<MenuChoice>> {
+        let art = self.draws_art();
         MenuChoice::ALL
             .into_iter()
             .filter(|choice| self.row_shown(row_of(choice.index())))
-            .map(|choice| Target::at(choice, self.button_bounds(choice)))
+            .map(|choice| {
+                let target = Target::at(choice, self.button_bounds(choice));
+                let index = choice.index();
+                match (art, index < 3) {
+                    (false, _) => target,
+                    (true, true) => {
+                        target.with_neighbour(Direction::Right, MenuChoice::ALL[index + 3])
+                    }
+                    (true, false) => {
+                        target.with_neighbour(Direction::Left, MenuChoice::ALL[index - 3])
+                    }
+                }
+            })
             .collect()
     }
 

@@ -299,3 +299,32 @@ pub(crate) fn pad_probe() -> Box<dyn PadProbe> {
 pub(crate) fn stand_in_pad_probe() -> Box<dyn PadProbe> {
     Box::new(Probe(stand_in()))
 }
+
+/// The stock art's left buttons sit staggered, so a button in the row
+/// above can lie nearer to the right of Quit than About does; each left
+/// and right moves to its row-mate all the same.
+#[test]
+fn left_and_right_move_to_the_row_mate_where_the_columns_stagger() {
+    let mut art = main_screen_art();
+    art.buttons[0].position = Point::new(103.0, 50.0);
+    art.buttons[5].position = Point::new(197.0, 70.0);
+    let menu = || {
+        padded(MainMenu::new(
+            Some(art.clone()),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        ))
+    };
+    for (from, right) in [
+        (MenuChoice::NewPilot, MenuChoice::EnterShip),
+        (MenuChoice::OpenPilot, MenuChoice::Preferences),
+        (MenuChoice::Quit, MenuChoice::About),
+    ] {
+        let mut menu = menu();
+        menu.focus.set_by_pad(from);
+        tap(&mut menu, PadButton::DPadRight);
+        assert_eq!(menu.pad_highlight(), Some(right), "{from:?}");
+        tap(&mut menu, PadButton::DPadLeft);
+        assert_eq!(menu.pad_highlight(), Some(from), "{right:?}");
+    }
+}
