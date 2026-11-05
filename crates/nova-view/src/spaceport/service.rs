@@ -341,6 +341,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_press_over_souths_abandons_it() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = bar();
+        screen.input(&Input::Surroundings(Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+        }));
+        screen.input(&pad(PadButton::South, true));
+        let away = Point::new(10.0, 10.0);
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: away,
+            });
+        }
+        screen.input(&pad(PadButton::South, false));
+        assert!(!screen.closed(), "the pointer took the press over");
+    }
+
+    #[test]
     fn keyboard_space_still_does_nothing() {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let mut screen = bar();
