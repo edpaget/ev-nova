@@ -5,7 +5,10 @@
 //! The new game has no sprites, so its data gives each ship type and
 //! stellar a stand-in ([`StellarStandIn`]; a ship's is an outline). Flight
 //! draws a ship's where it would draw the crossed box
-//! ([`ShipSprites::ship_outline`](crate::flight::catalog::ShipSprites::ship_outline)).
+//! ([`ShipSprites::ship_outline`](crate::flight::catalog::ShipSprites::ship_outline)),
+//! and the system scene a stellar's
+//! ([`StellarContents::stand_in`](crate::system::catalog::StellarContents::stand_in)),
+//! at the landing reach ([`draw_stellar`]).
 //! Everything is drawn as [`DrawCommand::Triangle`]s, in the list's layer.
 //!
 //! An outline's corners are in its own space: x to starboard, y to the
@@ -105,6 +108,22 @@ pub fn ring(list: &mut DrawList, centre: Point, radius: f32, color: Color) {
     for ((out_from, out_to), (in_from, in_to)) in outer.zip(inner) {
         list.triangle([out_from, out_to, in_to], color)
             .triangle([out_from, in_to, in_from], color);
+    }
+}
+
+/// Draws a stellar's `stand_in` round `centre`, reaching `radius`: an
+/// outline nose up, scaled so its farthest corner is at `radius` (an
+/// outline with no reach draws nothing), or a disc or a ring of `radius`.
+pub fn draw_stellar(list: &mut DrawList, stand_in: &StellarStandIn, centre: Point, radius: f32) {
+    match stand_in {
+        StellarStandIn::Outline(outline) => {
+            let reach = outline.reach();
+            if reach > 0.0 {
+                draw(list, outline, centre, 0.0, radius / reach);
+            }
+        }
+        StellarStandIn::Disc(color) => disc(list, centre, radius, *color),
+        StellarStandIn::Ring(color) => ring(list, centre, radius, *color),
     }
 }
 
@@ -336,6 +355,60 @@ mod tests {
             (total - expected).abs() < 0.01,
             "{total} against {expected}"
         );
+    }
+
+    #[test]
+    fn a_stellar_s_outline_is_fitted_to_its_radius_nose_up() {
+        let mut list = DrawList::new();
+        draw_stellar(
+            &mut list,
+            &StellarStandIn::Outline(dart()),
+            at(100.0, 50.0),
+            32.0,
+        );
+        let mut expected = DrawList::new();
+        draw(&mut expected, &dart(), at(100.0, 50.0), 0.0, 8.0);
+        assert_eq!(list, expected, "reach 4 fitted to 32");
+    }
+
+    #[test]
+    fn a_stellar_s_outline_with_no_reach_draws_nothing() {
+        let flat = Outline {
+            triangles: vec![OutlineTriangle {
+                corners: [at(0.0, 0.0); 3],
+                color: RED,
+            }],
+        };
+        let mut list = DrawList::new();
+        draw_stellar(
+            &mut list,
+            &StellarStandIn::Outline(flat),
+            at(1.0, 1.0),
+            32.0,
+        );
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn a_stellar_s_disc_and_ring_are_drawn_at_its_radius() {
+        let centre = at(10.0, 20.0);
+        for (stand_in, drawn) in [
+            (
+                StellarStandIn::Disc(RED),
+                disc as fn(&mut DrawList, Point, f32, Color),
+            ),
+            (StellarStandIn::Ring(BLUE), ring),
+        ] {
+            let mut list = DrawList::new();
+            draw_stellar(&mut list, &stand_in, centre, 32.0);
+            let mut expected = DrawList::new();
+            let color = match stand_in {
+                StellarStandIn::Disc(color) | StellarStandIn::Ring(color) => color,
+                StellarStandIn::Outline(_) => unreachable!(),
+            };
+            drawn(&mut expected, centre, 32.0, color);
+            assert_eq!(list, expected);
+        }
     }
 
     #[test]

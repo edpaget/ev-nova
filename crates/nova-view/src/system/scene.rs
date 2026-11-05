@@ -16,6 +16,7 @@ use std::num::NonZeroU16;
 use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
 use super::kept_frames::KeptFrames;
+use nova_sim::landing::UNKNOWN_STELLAR_RADIUS;
 use nova_sim::{Chance, DrawnSheet, SpeedMult, Vec2};
 
 use super::catalog::{
@@ -25,6 +26,7 @@ use crate::draw::crossed_box;
 use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
+use crate::outline::{self, StellarStandIn};
 use crate::{Blend, Color, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
@@ -36,6 +38,14 @@ const NAME_GAP: f32 = 4.0;
 const NAME_SIZE: f32 = 14.0;
 /// How far below a placeholder's name the reason goes.
 const MESSAGE_GAP: f32 = 18.0;
+/// The side of the square a stellar's stand-in fills: as wide as the
+/// circle a click or a landing reaches on a stellar with no sprite
+/// (`nova_sim::landing::UNKNOWN_STELLAR_RADIUS`), so what is drawn is
+/// where the player can click and land.
+const STAND_IN_SIDE: f32 = 2.0 * UNKNOWN_STELLAR_RADIUS;
+/// [`STAND_IN_SIDE`] as a frame's size.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const STAND_IN_FRAME: (u32, u32) = (STAND_IN_SIDE as u32, STAND_IN_SIDE as u32);
 /// The side `_GetSpriteXSize` and `_GetSpriteYSize` give a slot whose
 /// frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
 const FROZEN_SIDE: u32 = 32;
@@ -81,6 +91,9 @@ pub struct SceneStellar {
     /// stellar was left the last time it was shown
     /// ([`SystemScene::resume`]).
     pub frames: Frames,
+    /// What it draws in place of a sprite that cannot be shown, as its
+    /// data gives it; `None` draws the crossed box and the reason.
+    pub stand_in: Option<StellarStandIn>,
     /// The frame a hypergate draws, as its session steps it
     /// (`Session::gate_frame`), in place of [`frames`](Self::frames)';
     /// `None` for every other stellar, and in a viewer with no session.
@@ -125,6 +138,7 @@ impl SceneStellar {
             type_zero_sprite: type_zero,
             frames: Frames::new(),
             gate_frame: None,
+            stand_in: stellar.stand_in,
         }
     }
 
@@ -491,9 +505,10 @@ impl SystemScene {
 /// Draws every stellar of `scene` where `camera` puts it, at the frame its
 /// animation shows, or a hypergate on the frame its session gave it
 /// ([`SystemScene::set_gate_frames`]), modulo its sheet's frames: each
-/// sprite (or, without a sheet, a placeholder box and the reason, and with
-/// a slot showing no frame, nothing), then every name under its stellar,
-/// so no sprite covers a name.
+/// sprite (or, without a sheet, its stand-in fitted to the landing reach,
+/// [`outline::draw_stellar`], or with none a placeholder box and the
+/// reason; and with a slot showing no frame, nothing), then every name
+/// under its stellar, so no sprite covers a name.
 ///
 /// Both passes go in ascending stellar ID, so of two overlapping stellars
 /// the higher ID is on top. `_HandleStellarSystemVisibility` fills its
@@ -524,6 +539,12 @@ pub fn draw_stellars(
                 let colorize = seen.map(|seen| seen.at(position));
                 list.mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
                 (at, size)
+            }
+            (Some(Err(_)), None) if let Some(stand_in) = &stellar.stand_in => {
+                // Placed as a sprite as wide as the stellar's landing reach.
+                let centre = camera.sprite_centre(stellar.position, STAND_IN_FRAME);
+                outline::draw_stellar(list, stand_in, centre, UNKNOWN_STELLAR_RADIUS);
+                (centre, (STAND_IN_SIDE, STAND_IN_SIDE))
             }
             (Some(Err(message)), None) => {
                 // Placed as a sprite of its side.
@@ -614,6 +635,7 @@ mod tests {
             sprite,
             dead_sprite: None,
             animation: WORMHOLE,
+            stand_in: None,
         }
     }
 
@@ -673,6 +695,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                     gate_frame: None,
+                    stand_in: None,
                 },
                 SceneStellar {
                     id: StellarId(128),
@@ -689,6 +712,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                     gate_frame: None,
+                    stand_in: None,
                 },
                 SceneStellar {
                     id: StellarId(140),
@@ -705,6 +729,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                     gate_frame: None,
+                    stand_in: None,
                 },
             ]
         );
@@ -1827,6 +1852,152 @@ mod tests {
         assert_eq!(
             scene.stellars()[1].drawn(),
             Some(&Err("no spïn 1000".to_owned()))
+        );
+    }
+
+    // Stand-ins (rdm:phase/new-game-engine/phase-4-draw-flat-outlines):
+    // a stellar whose sprite cannot be shown draws its data's stand-in at
+    // the landing reach. Which stellars have which is the data's
+    // (nova-data's `new_game::looks`); how each is drawn is the outline
+    // module's.
+
+    /// A dart 4 from its centre to its nose, red.
+    fn dart() -> crate::outline::Outline {
+        crate::outline::Outline {
+            triangles: vec![crate::outline::OutlineTriangle {
+                corners: [
+                    Point::new(0.0, 4.0),
+                    Point::new(1.0, -2.0),
+                    Point::new(-1.0, -2.0),
+                ],
+                color: Color::rgba(255, 0, 0, 255),
+            }],
+        }
+    }
+
+    /// A scene of one stellar, 140 at (-1700, 900), whose sprite is
+    /// `sprite` and whose stand-in is `stand_in`.
+    fn standing_in(
+        sprite: Result<StellarSheet, String>,
+        stand_in: Option<StellarStandIn>,
+    ) -> SystemScene {
+        let one = StellarContents {
+            stand_in,
+            ..stellar(140, -1700, 900, sprite)
+        };
+        SystemScene::load(
+            &FakeCatalog::new(vec![system(135, vec![one])]),
+            SystemId(135),
+        )
+    }
+
+    /// The stand-in's centre with `camera`: a sprite as wide as the
+    /// landing reach's centre.
+    fn stand_in_centre(camera: &Camera) -> Point {
+        let side = 2.0 * UNKNOWN_STELLAR_RADIUS;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frame = (side as u32, side as u32);
+        camera.sprite_centre(Point::new(-1700.0, 900.0), frame)
+    }
+
+    fn triangles(list: &DrawList) -> Vec<crate::DrawCommand> {
+        list.iter()
+            .filter(|command| matches!(command, crate::DrawCommand::Triangle { .. }))
+            .cloned()
+            .collect()
+    }
+
+    fn no_box_or_reason(list: &DrawList) -> bool {
+        !list.iter().any(|command| {
+            matches!(command, crate::DrawCommand::Line { .. })
+                || matches!(command, crate::DrawCommand::Text { text, .. } if text.starts_with("Sprite"))
+        })
+    }
+
+    #[test]
+    fn a_stellar_with_no_sprite_draws_its_outline_fitted_to_the_landing_reach_nose_up() {
+        let scene = standing_in(
+            Err("no spïn 1002".to_owned()),
+            Some(StellarStandIn::Outline(dart())),
+        );
+        let camera = off_pixel();
+        let list = list_with(&scene, &camera);
+        let mut expected = DrawList::new();
+        crate::outline::draw(
+            &mut expected,
+            &dart(),
+            stand_in_centre(&camera),
+            0.0,
+            UNKNOWN_STELLAR_RADIUS / 4.0,
+        );
+        assert_eq!(triangles(&list), triangles(&expected));
+        assert!(no_box_or_reason(&list));
+    }
+
+    #[test]
+    fn a_stellar_s_disc_and_ring_are_drawn_at_the_landing_reach_in_their_colours() {
+        let camera = off_pixel();
+        let teal = Color::rgba(0, 128, 128, 255);
+        for stand_in in [StellarStandIn::Disc(teal), StellarStandIn::Ring(teal)] {
+            let scene = standing_in(Err("no spïn 1002".to_owned()), Some(stand_in.clone()));
+            let list = list_with(&scene, &camera);
+            let mut expected = DrawList::new();
+            crate::outline::draw_stellar(
+                &mut expected,
+                &stand_in,
+                stand_in_centre(&camera),
+                UNKNOWN_STELLAR_RADIUS,
+            );
+            assert_eq!(triangles(&list), triangles(&expected), "{stand_in:?}");
+            assert!(!triangles(&list).is_empty());
+            assert!(no_box_or_reason(&list), "{stand_in:?}");
+        }
+    }
+
+    #[test]
+    fn a_stellar_s_name_sits_under_its_stand_in_as_under_a_sprite_of_its_size() {
+        let scene = standing_in(
+            Err("no spïn 1002".to_owned()),
+            Some(StellarStandIn::Disc(Color::WHITE)),
+        );
+        let centre = stand_in_centre(&Camera::centred_on(Point::default()));
+        let half = UNKNOWN_STELLAR_RADIUS;
+        assert_eq!(
+            name_at(&scene, "Stellar 140"),
+            Point::new(centre.x - half, centre.y + half + NAME_GAP)
+        );
+    }
+
+    #[test]
+    fn a_stellar_with_no_stand_in_draws_the_crossed_box_and_why() {
+        let scene = standing_in(Err("no spïn 1002".to_owned()), None);
+        let list = list_with(&scene, &off_pixel());
+        assert!(triangles(&list).is_empty());
+        assert!(!no_box_or_reason(&list));
+    }
+
+    #[test]
+    fn a_stellar_with_a_sprite_ignores_its_stand_in() {
+        let scene = standing_in(Ok(sheet(1000, 1)), Some(StellarStandIn::Ring(Color::WHITE)));
+        let list = list_with(&scene, &off_pixel());
+        assert!(triangles(&list).is_empty());
+        assert_eq!(
+            list.iter()
+                .filter(|command| matches!(command, crate::DrawCommand::Sprite { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_stellar_carries_its_stand_in_into_the_scene() {
+        let scene = standing_in(
+            Err("no spïn 1002".to_owned()),
+            Some(StellarStandIn::Ring(Color::WHITE)),
+        );
+        assert_eq!(
+            scene.stellars()[0].stand_in,
+            Some(StellarStandIn::Ring(Color::WHITE))
         );
     }
 }

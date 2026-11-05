@@ -9,13 +9,16 @@ use std::num::NonZeroU16;
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::{GameData, Record, StellarSprite, StoreEntry, stellar_spin_id};
+use nova_data::{GameData, Record, StandIn, StandInOf, StellarSprite, StoreEntry, stellar_spin_id};
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
+use crate::color::Color;
+use crate::flight::data::view_outline;
 use crate::galaxy::data::display_name;
+use crate::outline::StellarStandIn;
 use crate::sheet_image::SheetImage;
 
 /// Reads the system afresh on every call; a view asks once, when it opens.
@@ -101,6 +104,17 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             frame0_bias: record.frame0_bias,
             flags2: record.flags2.bits(),
         },
+        stand_in: data.stand_in(StandInOf::Stellar(id)).map(stand_in),
+    }
+}
+
+/// A stellar's stand-in from the data, in the view's terms.
+fn stand_in(stand_in: &StandIn) -> StellarStandIn {
+    let opaque = |[r, g, b]: [u8; 3]| Color::rgba(r, g, b, 255);
+    match stand_in {
+        StandIn::Outline(outline) => StellarStandIn::Outline(view_outline(outline)),
+        StandIn::Disc { color } => StellarStandIn::Disc(opaque(*color)),
+        StandIn::Ring { color } => StellarStandIn::Ring(opaque(*color)),
     }
 }
 
@@ -258,7 +272,74 @@ mod tests {
             sprite: Ok(sheet_of(1000, 1, 8)),
             dead_sprite: None,
             animation: AnimationData::default(),
+            stand_in: None,
         }
+    }
+
+    #[test]
+    fn a_stellar_s_stand_in_comes_from_the_store_in_the_view_s_terms() {
+        let dart = nova_data::Outline {
+            triangles: vec![nova_data::OutlineTriangle {
+                corners: [[0.0, 2.5], [1.0, -1.0], [-1.0, -1.0]],
+                color: [9, 8, 7],
+            }],
+        };
+        let data = store(&sol()).with_stand_ins(std::collections::BTreeMap::from([
+            (
+                StandInOf::Stellar(StellarId(128)),
+                StandIn::Disc { color: [1, 2, 3] },
+            ),
+            (StandInOf::Stellar(StellarId(129)), StandIn::Outline(dart)),
+        ]));
+        let sol = data.system(SystemId(130));
+        let stand_in = |id: i16| {
+            sol.stellars
+                .iter()
+                .find(|stellar| stellar.id == StellarId(id))
+                .expect("listed")
+                .stand_in
+                .clone()
+        };
+        assert_eq!(
+            stand_in(128),
+            Some(StellarStandIn::Disc(Color::rgba(1, 2, 3, 255)))
+        );
+        assert_eq!(
+            stand_in(129),
+            Some(StellarStandIn::Outline(crate::outline::Outline {
+                triangles: vec![crate::outline::OutlineTriangle {
+                    corners: [
+                        crate::Point::new(0.0, 2.5),
+                        crate::Point::new(1.0, -1.0),
+                        crate::Point::new(-1.0, -1.0),
+                    ],
+                    color: Color::rgba(9, 8, 7, 255),
+                }],
+            }))
+        );
+    }
+
+    #[test]
+    fn a_gate_s_ring_comes_from_the_store() {
+        let data = store(&sol()).with_stand_ins(std::collections::BTreeMap::from([(
+            StandInOf::Stellar(StellarId(128)),
+            StandIn::Ring { color: [4, 5, 6] },
+        )]));
+        let sol = data.system(SystemId(130));
+        assert!(sol.stellars.iter().any(
+            |stellar| stellar.stand_in == Some(StellarStandIn::Ring(Color::rgba(4, 5, 6, 255)))
+        ));
+    }
+
+    #[test]
+    fn a_stock_store_s_stellars_have_no_stand_ins() {
+        let sol = store(&sol()).system(SystemId(130));
+        assert!(!sol.stellars.is_empty());
+        assert!(
+            sol.stellars
+                .iter()
+                .all(|stellar| stellar.stand_in.is_none())
+        );
     }
 
     #[test]
@@ -282,6 +363,7 @@ mod tests {
                             frame0_bias: -1,
                             flags2: 0x2000,
                         },
+                        stand_in: None,
                     },
                     earth(),
                 ],

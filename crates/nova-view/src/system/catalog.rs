@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 pub use nova_data::{StellarId, SystemId};
 
+use crate::outline::StellarStandIn;
 use crate::sheet_image::SheetImage;
 
 /// A stellar's resolved sprite sheet: the image its frames come from, how
@@ -38,7 +39,7 @@ pub struct AnimationData {
 }
 
 /// One stellar object, placed in its system.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StellarContents {
     /// The `spöb`'s ID.
     pub id: StellarId,
@@ -56,10 +57,14 @@ pub struct StellarContents {
     pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation: AnimationData,
+    /// What it draws in place of its sprite when the sprite cannot be
+    /// shown ([`StellarStandIn`]): only the new game's stellars have one.
+    /// `None` draws the crossed box and the reason.
+    pub stand_in: Option<StellarStandIn>,
 }
 
 /// One star system's contents.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SystemContents {
     /// The `sÿst`'s ID.
     pub id: SystemId,

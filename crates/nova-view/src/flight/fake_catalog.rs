@@ -776,6 +776,7 @@ pub(in crate::flight) fn stellar(
             frame0_bias: 0,
             flags2: 0,
         },
+        stand_in: None,
     }
 }
 
