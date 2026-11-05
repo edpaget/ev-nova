@@ -1097,6 +1097,9 @@ impl Session {
                 self.space
                     .traffic
                     .set_reused_slot_voice(self.setup.rules.source_for(RuleKey::ReusedSlotVoice));
+                self.space
+                    .traffic
+                    .set_reused_slot_scoop(self.setup.rules.source_for(RuleKey::ReusedSlotScoop));
                 self.space.traffic.keep_berths(kept);
                 self.space.set_first_class(&self.statics, &self.setup);
                 self.space.traffic_due = true;

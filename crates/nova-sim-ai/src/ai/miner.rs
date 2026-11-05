@@ -45,7 +45,9 @@
 //!   mines (state 16, @0x8b346-0x8b34c), asteroids or none; otherwise it
 //!   shuttles. Without a scoop it shuttles, so an Asteroid Miner (0x0003)
 //!   without one never mines, scoops or stops. A jettisoned box is never
-//!   scoopable, so it is no reason to scoop.
+//!   scoopable, so it is no reason to scoop. A ship whose spawn asks no
+//!   `_ShipCanScoop` holds its berth's flag, not its class's
+//!   ([`berth_scoops`](crate::traffic::berth_scoops)).
 //! - **[`MINES`] alone** keeps the goal the first test gave.
 //! - **The shuttle** (@0x8b35f-0x8b463): while its AI wait (+0x4c) runs
 //!   ([`Npc::wait_running`]), state 0 with no travel stellar

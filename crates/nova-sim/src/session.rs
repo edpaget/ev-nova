@@ -654,6 +654,8 @@ mod shipyard_listing;
 mod shot_gain;
 mod shot_slots;
 #[cfg(test)]
+mod slot_scoop;
+#[cfg(test)]
 mod slot_search;
 mod slot_visibility;
 #[cfg(test)]

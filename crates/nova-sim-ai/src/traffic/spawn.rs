@@ -456,6 +456,16 @@ pub struct NewShip {
     /// (`_RandomShipSpawn` @0x3c709-0x3c719), and every other spawn holds
     /// its berth's word ([`berth_voices`](super::berth_voices)).
     pub rolls_voice: bool,
+    /// Whether its spawn asks `_ShipCanScoop` (@0x75c7-0x766b) for its
+    /// can-scoop flag (+0xc3), writing the answer to its berth: a `düde`
+    /// ship of the traffic does (`_RandomShipSpawn` @0x3c603), as do a
+    /// person (`_SpawnPerson` @0x40d74) and a fleet's lead
+    /// (`_HyperSpawnFleet` @0x41e2c). Every ship `_GenericRandomShipSpawn`
+    /// (@0x3c89f-0x3cd3a) brings in with no later ask holds its berth's
+    /// flag ([`berth_scoops`](super::berth_scoops)): a mission ship
+    /// (`_MissionDudeSpawn` @0x3cd67), an auxiliary or defence ship
+    /// (`_SpecificDudeSpawn` @0x3d10f) and a fleet's escort (@0x421b0).
+    pub asks_scoop: bool,
 }
 
 /// What a caller of [`fleet`] asks of the fleet: `_HyperSpawnFleet`'s
@@ -574,6 +584,7 @@ impl<'a> PersonDraw<'a> {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: true,
         })
     }
 }
@@ -643,6 +654,7 @@ pub fn initial(
                 quote: None,
                 cargo: None,
                 rolls_voice: true,
+                asks_scoop: true,
             });
         }
     }
@@ -791,6 +803,7 @@ fn hyper_ship(
             quote: None,
             cargo: None,
             rolls_voice: true,
+            asks_scoop: true,
         });
     }
 }
@@ -932,6 +945,7 @@ pub(super) fn specific_dude_ship(
         quote: None,
         cargo: None,
         rolls_voice: false,
+        asks_scoop: false,
     })
 }
 
@@ -1237,6 +1251,7 @@ pub fn fleet(
         quote: record.quote.filter(|_| call.announced),
         cargo: random_cargo(record.flags, kind, chance),
         rolls_voice: false,
+        asks_scoop: true,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -1283,6 +1298,7 @@ pub fn fleet(
                 quote: None,
                 cargo: random_cargo(record.flags, kind, chance),
                 rolls_voice: false,
+                asks_scoop: false,
             });
         }
     }
@@ -1760,6 +1776,7 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: true,
+                asks_scoop: true,
             }]
         );
     }
@@ -2063,6 +2080,7 @@ mod tests {
             Vec2::new(jump_in_distance(), 0.0)
         ));
         assert!(ship.rolls_voice, "`_RandomShipSpawn` draws it");
+        assert!(ship.asks_scoop, "`_RandomShipSpawn` asks `_ShipCanScoop`");
     }
 
     #[test]
@@ -2393,6 +2411,26 @@ mod tests {
         );
         assert_eq!(out.len(), 3, "its lead and two escorts");
         assert!(out.iter().all(|ship| !ship.rolls_voice));
+    }
+
+    #[test]
+    fn a_fleets_lead_asks_its_scoop_and_its_escorts_dont() {
+        let mut out = Vec::new();
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall::default(),
+            &mut crate::NeverFires,
+            &mut out,
+        );
+        assert_eq!(out.len(), 3, "its lead and two escorts");
+        assert_eq!(
+            out.iter().map(|ship| ship.asks_scoop).collect::<Vec<_>>(),
+            [true, false, false],
+            "`_HyperSpawnFleet` asks for its lead (@0x41e2c), not its escorts (@0x421b0)"
+        );
     }
 
     #[test]
@@ -3238,6 +3276,7 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: true,
             }]
         );
     }
@@ -3839,6 +3878,7 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: false,
             }]
         );
     }
@@ -4363,6 +4403,7 @@ mod tests {
                 "the düde's"
             );
             assert!(!ship.derelict);
+            assert!(!ship.asks_scoop, "`_SpecificDudeSpawn` asks none");
         }
         assert_eq!((ships[0].aggression, ships[1].aggression), (2, 0));
     }
@@ -4486,6 +4527,7 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: false,
             })
         );
     }

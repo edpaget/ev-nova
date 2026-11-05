@@ -254,6 +254,7 @@ mod tests {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
         };
         let came = traffic.bring_in_within(
             vec![arrival],

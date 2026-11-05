@@ -46,10 +46,46 @@
 //!   change.
 //! - **An NPC's scoop flag** (ship +0xc3): `_ShipCanScoop`
 //!   (@0x75c7-0x766b), the same `ModType` 31 test against its `shïp`'s
-//!   default outfits, which the NPC spawners call and only `_MinerAI`
-//!   reads ([`ShipKind::can_scoop`](crate::traffic::table::ShipKind),
+//!   default outfits ([`ShipKind::can_scoop`](crate::traffic::table::ShipKind),
 //!   [`Npc::can_scoop`], see [`miner`](crate::ai::miner)). The scoop
 //!   branch doesn't read it.
+//!   - *Who writes it.* Each spawner that writes it calls
+//!     `_AIHasAfterburner` (to +0xbd) and then `_ShipCanScoop` to +0xc3:
+//!     `_RandomShipSpawn` @0x3c603/@0x3c608, `_LaunchFighter`
+//!     @0x3d749/@0x3d74e, `_SpawnEscort` @0x3ff64/@0x3ff6b, `_SpawnPerson`
+//!     @0x40d74/@0x40d79, `_DoShipCapture` @0x41250/@0x41255 (the old ship
+//!     kept on "Use As My Ship") and `_HyperSpawnFleet` @0x41e2c/@0x41e31,
+//!     for a fleet's lead only.
+//!   - *The missing write.* `_GenericRandomShipSpawn` (@0x3c89f-0x3cd3a)
+//!     writes the flag bytes +0xb8 to +0xbf, +0xbd = 0 among them
+//!     (@0x3cb83), but never +0xc3, where every other spawner writes it
+//!     beside +0xbd (@0x3cb83-0x3cbc9), and calls only `_RandomSkillLevel`
+//!     and `_Rand`. So the ships it brings in with no later ask hold the
+//!     flag their slot's last writer left: a mission ship
+//!     (`_MissionDudeSpawn` @0x3cd67, the person swap included), an
+//!     auxiliary or defence ship (`_SpecificDudeSpawn` @0x3d10f), a fleet's
+//!     escort (@0x421b0), the eject's hulk (`_HandlePlayer` @0x6f2f8) and
+//!     the shareware nag ship (`_SpawnNagShip` @0x60f5, not built).
+//!     `_RespawnEscort` (@0x3d4b8-0x3d62c) writes none either, which the
+//!     engine doesn't follow yet
+//!     (rdm:phase/npc-ai-2/phase-5-respawned-escort-keeps-slot-scoop-flag).
+//!   - *The zero fill.* The table is zero-filled once (`_InitArrays`
+//!     @0x1b7a1-0x1b7b5) and nothing clears +0xc3, so a never-used slot
+//!     reads 0 and the flag outlives its ship, system, pilot and game
+//!     ([`kept_berths`](crate::traffic::kept_berths)). `_MinerAI` (@0x8b2de,
+//!     behind its `SCOOPS` test @0x8b2da) is the only reader of an NPC's
+//!     flag; `_ShipCollisionHandler`'s read (@0x370c2) is slot 0's, the
+//!     player's.
+//!   - *In stock.* Only a mission Asteroid Miner (`shïp` 379, from `düde`
+//!     175, in `mïsn` 146, 193, 341, 446, 452, 590 and 683) can read a flag
+//!     other than its class's: usually 0, so it never mines, scoops or
+//!     stops, but shuttles to its nearest stellar and lands.
+//!   - *Here.* [`berth_scoops`](crate::traffic::berth_scoops) keeps each
+//!     berth's flag, and a ship whose spawn asks none
+//!     ([`NewShip::asks_scoop`](crate::traffic::spawn::NewShip::asks_scoop))
+//!     holds it by
+//!     [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop): its
+//!     berth's by the engine, its class's by the other reading.
 //!
 //! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
 //! `nova_view::flight::murk` mixes each box toward the background

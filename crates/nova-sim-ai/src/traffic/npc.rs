@@ -542,7 +542,10 @@ pub struct Npc {
     /// Whether its ship type carries an asteroid scoop among its default
     /// items, the original's +0xc3 (`_ShipCanScoop` @0x75c7, see
     /// [`ShipKind::can_scoop`](crate::traffic::table::ShipKind)), which
-    /// only the miner's AI reads.
+    /// only the miner's AI reads. A ship whose spawn asks none holds its
+    /// berth's flag instead, by
+    /// [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop) (see
+    /// [`berth_scoops`](crate::traffic::berth_scoops)).
     pub can_scoop: bool,
     /// Its ship type's `Holds` in tons (`shïp` +0x0,
     /// [`ShipKind::holds`](crate::traffic::table::ShipKind)): a scooping

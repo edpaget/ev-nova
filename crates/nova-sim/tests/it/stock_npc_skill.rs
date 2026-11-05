@@ -112,6 +112,7 @@ fn brought_in(data: &GameData, ship: i16, govt: i16) -> (f32, f32) {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
         }],
         8,
         &govts,

@@ -243,6 +243,7 @@ impl Space {
             .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
         traffic.set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
         traffic.set_reused_slot_voice(rules.source_for(RuleKey::ReusedSlotVoice));
+        traffic.set_reused_slot_scoop(rules.source_for(RuleKey::ReusedSlotScoop));
     }
 
     /// The system's contents as a session starts or loads: an empty

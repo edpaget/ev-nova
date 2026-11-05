@@ -237,6 +237,7 @@ mod tests {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
         }
     }
 

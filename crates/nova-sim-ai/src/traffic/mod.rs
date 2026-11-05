@@ -204,6 +204,7 @@ pub mod berth_blink;
 pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
+pub mod berth_scoops;
 pub mod berth_search;
 pub mod berth_voices;
 pub mod board_wait;
@@ -422,6 +423,7 @@ use autopilot::{Outcome, TopSpeeds};
 use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
+use berth_scoops::BerthScoops;
 use berth_search::BerthSearch;
 use berth_voices::BerthVoices;
 pub use dispatch_leave::NoBay;
@@ -1146,6 +1148,11 @@ pub struct Traffic {
     /// ([`berth_voices`]): kept as it dies or leaves, across systems, and
     /// handed on to the next traffic ([`kept_berths`]).
     berth_voices: BerthVoices,
+    /// The can-scoop flag (+0xc3) the last writer at each berth left,
+    /// which a new ship there holds unless its spawn asks its own
+    /// ([`berth_scoops`]): kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
+    berth_scoops: BerthScoops,
     /// The word (+0x28/+0x2c) each berth holds, as the frame's dispatches
     /// have left it ([`formation_places`]): it outlives its ship, across
     /// systems, and is handed on to the next traffic ([`kept_berths`]).
@@ -1254,6 +1261,7 @@ impl Traffic {
             first_class: ship_display::FirstClass::default(),
             berth_search: BerthSearch::default(),
             berth_voices: BerthVoices::default(),
+            berth_scoops: BerthScoops::default(),
             berth_places: BerthPlaces::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
@@ -2520,8 +2528,16 @@ impl Traffic {
     }
 
     /// Adds `npc` to the system at berth `berth`, numbered as the next NPC,
-    /// and gives its number.
+    /// and gives its number. Its spawn asks `_ShipCanScoop`, as every
+    /// caller's does (`_SpawnEscort` @0x3ff6b, `_LaunchFighter` @0x3d74e,
+    /// `_DoShipCapture` @0x41255): its `can_scoop` is written to the berth.
     pub fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
+        self.add_npc_scooped(npc, berth, true)
+    }
+
+    /// [`Traffic::add_npc_at`], for a spawn that asks `_ShipCanScoop` or
+    /// not ([`berth_scoops`]).
+    fn add_npc_scooped(&mut self, npc: Npc, berth: u32, asks_scoop: bool) -> NpcId {
         self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
@@ -2550,6 +2566,11 @@ impl Traffic {
         // A voice set up is written to the berth (+0xc922); with none, the
         // ship holds the berth's word.
         npc.voice = self.berth_voices.bring_in(berth, npc.voice);
+        // A spawn that asks `_ShipCanScoop` writes +0xc3 to the berth; with
+        // none, the ship holds the berth's by the rule ([`berth_scoops`]).
+        npc.can_scoop =
+            self.berth_scoops
+                .bring_in(berth, asks_scoop.then_some(npc.can_scoop), npc.can_scoop);
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -3047,6 +3068,13 @@ impl Traffic {
                 .rolls_voice
                 .then(|| crate::voice::roll_variant(None, &mut *chance));
             let voice = self.berth_voices.bring_in(berth, drawn);
+            // Only a spawn that asks `_ShipCanScoop` writes +0xc3 (@0x3c603);
+            // `_GenericRandomShipSpawn` leaves the slot's (@0x3cb83-0x3cbc9).
+            let can_scoop = self.berth_scoops.bring_in(
+                berth,
+                ship.asks_scoop.then_some(kind.can_scoop),
+                kind.can_scoop,
+            );
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             if let Some(lead) = leader.filter(|lead| !leads.contains(lead)) {
@@ -3118,7 +3146,7 @@ impl Traffic {
                 skill_mult: 1.0,
                 still: kind.still,
                 miner: kind.miner,
-                can_scoop: kind.can_scoop,
+                can_scoop,
                 holds: kind.holds,
                 class_fuel: kind.class_fuel,
                 former: None,
@@ -6961,6 +6989,7 @@ mod tests {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
         }
     }
 

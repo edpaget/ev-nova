@@ -274,7 +274,11 @@ pub struct ShipKind {
     /// Whether an asteroid scoop is among its default items, the ship's
     /// +0xc3 as an NPC spawner sets it (`_ShipCanScoop` @0x75c7-0x766b,
     /// [`scoop::has_asteroid_scoop`]): one of its default items, with a
-    /// count above 0, has `ModType` 31 in any of its four slots.
+    /// count above 0, has `ModType` 31 in any of its four slots. A ship
+    /// whose spawn asks none (`_GenericRandomShipSpawn` @0x3c89f) holds
+    /// its berth's flag instead, by
+    /// [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop) (see
+    /// [`berth_scoops`](crate::traffic::berth_scoops)).
     pub can_scoop: bool,
     /// Its `Holds` in tons, the size of a negative one (ship-class +0x00,
     /// as `_LoadObjectData` negates it @0x7a6a5-0x7a6d3): the most a
