@@ -180,7 +180,7 @@ use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::quantity_ask::QuantityAsk;
-use super::trade::{BUY_LABEL, MAX_LOT_KEYS, SELL_LABEL};
+use super::trade::{BUY_LABEL, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -241,8 +241,8 @@ pub const SELL_KEY: Key = Key::KeyS;
 /// tests the event's `optionKey` bit alone, `testb $0x8` @0x5c0c0,
 /// @0x5c5e3, which either Option sets), unless the other reading of
 /// [`RuleKey::OutfitCount`](nova_sim::RuleKey::OutfitCount) has it change
-/// nothing. The exchange's keys ([`MAX_LOT_KEYS`]).
-pub const COUNT_KEYS: [Key; 2] = MAX_LOT_KEYS;
+/// nothing. Either Option, as the exchange reads it.
+pub const COUNT_KEYS: [Key; 2] = crate::input::OPTION_KEYS;
 
 /// The first outfit's `PICT`; outfit n's is n - 128 after it.
 pub const FIRST_PICTURE: i16 = 6000;

@@ -637,8 +637,9 @@ mod tests {
         Key::NumpadAdd,
         Key::Minus,
         nova_view::devtools::TOGGLE_KEY,
-        nova_view::spaceport::trade::BUY_KEY,
-        nova_view::spaceport::trade::SELL_KEY,
+        // The trade center's Buy and Sell defaults.
+        Key::KeyB,
+        Key::KeyS,
         nova_view::spaceport::outfitter::BUY_KEY,
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
@@ -837,14 +838,9 @@ mod tests {
     const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
-        (
-            nova_view::spaceport::trade::MAX_LOT_KEYS[0],
-            KeyCode::AltLeft,
-        ),
-        (
-            nova_view::spaceport::trade::MAX_LOT_KEYS[1],
-            KeyCode::AltRight,
-        ),
+        // The trade center's Option and its right twin.
+        (Key::AltLeft, KeyCode::AltLeft),
+        (Key::AltRight, KeyCode::AltRight),
         // The outfitter's grid selection.
         (Key::ArrowLeft, KeyCode::ArrowLeft),
         (Key::ArrowRight, KeyCode::ArrowRight),
