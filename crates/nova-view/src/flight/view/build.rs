@@ -255,6 +255,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if let Some(movie) = &mut self.movie {
             movie.set_bindings(bindings.clone());
         }
+        self.pad_down.set_bindings(bindings.clone());
         self.keys.set_bindings(bindings);
         self.latched_down.retain(|&command| self.keys.held(command));
     }
@@ -614,6 +615,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map: opening.map,
             map_open: false,
             map_key_held: false,
+            pad_down: CommandReader::new(contexts::KEY_WAIT),
             map_closing: false,
             wait_keys: crate::ui::key_wait::WaitKeys::new(super::map_wait::map_key(
                 &crate::keymap::SharedBindings::default(),

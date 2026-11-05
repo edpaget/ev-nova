@@ -594,8 +594,30 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether `input` (a press, a repeat or a release) is of the map
     /// key, the key flight's reader reads as
     /// [`PlayCommand::GalaxyMap`]: what the map's own close waits on.
+    ///
+    /// A pad button on a map opened over a screen (the bar's, a port
+    /// screen's, a mission dialog's) is read by the pad reader the router
+    /// feeds ([`FlightView::note_pad`]), as flight's own reader never sees
+    /// the chord's Start go down there. Its release is the map key's
+    /// whichever of the chord's buttons goes up first.
     pub(super) fn is_map_key(&self, input: &Input) -> bool {
-        self.keys.means(input) == Some(Command::Play(PlayCommand::GalaxyMap))
+        let reader = if matches!(input, Input::PadButton { .. }) && !self.plain_map_open() {
+            &self.pad_down
+        } else {
+            &self.keys
+        };
+        reader.means(input) == Some(Command::Play(PlayCommand::GalaxyMap))
+    }
+
+    /// Notes `input`, if it is a pad button's, for the pad's map key over a
+    /// screen ([`FlightView::is_map_key`]); anything else is ignored. The
+    /// router calls it with every live input, whatever shows, before
+    /// routing it, and nothing else feeds it: a replayed input would bring
+    /// back a button let go of.
+    pub fn note_pad(&mut self, input: &Input) {
+        if let Input::PadButton { .. } = input {
+            self.pad_down.follow(input);
+        }
     }
 
     /// Whether `_MapFilter` takes `input`'s key before its map-key close,
@@ -610,14 +632,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// none of them closes the map. A modifier is taken too
     /// ([`is_modifier_input`]): a Mac sends no key-down for one alone, so
     /// the filter never sees it.
+    ///
+    /// The pad's own map controls, which no key of the original's is, are
+    /// taken as what they stand for (rdm:phase/key-bindings/phase-10-gamepad-map):
+    /// the d-pad's focus moves always, as they act on the map's buttons,
+    /// and the left shoulder's Previous Field under Tab's rule, as it is
+    /// the map's Tab Back. The triggers' zoom is a map command.
     fn map_filter_takes(&self, input: &Input) -> bool {
         if is_modifier_input(input) {
             return true;
         }
         match self.map.peek(input) {
-            Some(Command::Ui(UiCommand::Tab) | Command::Map(MapCommand::TabBack)) => {
-                !self.frame.docked()
-            }
+            Some(
+                Command::Ui(UiCommand::Tab | UiCommand::PrevFocus)
+                | Command::Map(MapCommand::TabBack),
+            ) => !self.frame.docked(),
             Some(
                 Command::Map(_)
                 | Command::Ui(
@@ -627,7 +656,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     | UiCommand::Down
                     | UiCommand::Left
                     | UiCommand::Right
-                    | UiCommand::Activate,
+                    | UiCommand::Activate
+                    | UiCommand::FocusUp
+                    | UiCommand::FocusDown
+                    | UiCommand::FocusLeft
+                    | UiCommand::FocusRight,
                 ),
             ) => true,
             _ => false,

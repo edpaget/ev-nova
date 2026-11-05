@@ -1305,6 +1305,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
+    /// The pad's buttons as they go down and up, whatever shows, through
+    /// flight's bindings over [`contexts::KEY_WAIT`](crate::keymap::contexts::KEY_WAIT):
+    /// how a map opened over a screen reads the pad's map chord, whose
+    /// presses flight's own reader never sees there
+    /// ([`FlightView::note_pad`]). Only the router feeds it.
+    pad_down: CommandReader,
     /// Whether the map has been closed while the map key was held, and
     /// waits for its release to close: `_DoSystemMap` loops
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of

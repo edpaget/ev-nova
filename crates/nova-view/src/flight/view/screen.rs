@@ -143,6 +143,7 @@ impl<
     fn release_keys(&mut self) {
         self.let_go_of_input();
         self.map.release_keys();
+        self.pad_down.let_go();
         self.map_key_held = false;
         self.wait_keys.clear();
         if self.map_closing {
@@ -298,9 +299,14 @@ impl<
     fn take_input(&mut self, input: &Input) -> ScreenAction {
         // A stick's move and the app's surroundings press nothing: flight's
         // reader takes them whatever shows, the rescue included, the axes
-        // for the next step.
+        // for the next step. The course map is told the surroundings too,
+        // open or not, so a map opened later, over flight, over the
+        // spaceport or by a mission dialog, already knows the device.
         if matches!(input, Input::PadAxis { .. } | Input::Surroundings(_)) {
             self.keys.follow(input);
+            if let Input::Surroundings(_) = input {
+                self.map.input(input);
+            }
             return ScreenAction::None;
         }
         if self.hold_under_rescue(input) {
