@@ -83,10 +83,11 @@ impl PilotList {
     /// Where the pad's focus starts: the selected pilot's row, or Cancel
     /// with none.
     fn pad_initial(&self) -> PadTarget {
-        self.selected
-            .and_then(|index| index.checked_sub(self.first))
-            .filter(|&slot| slot < VISIBLE_ROWS)
-            .map_or(PadTarget::Cancel, PadTarget::Row)
+        // The selection is always shown ([`PilotList::select`] scrolls to
+        // it), so its slot is in range.
+        self.selected.map_or(PadTarget::Cancel, |index| {
+            PadTarget::Row(index - self.first)
+        })
     }
 
     /// The device used last changed.

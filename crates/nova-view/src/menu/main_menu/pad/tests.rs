@@ -328,3 +328,27 @@ fn left_and_right_move_to_the_row_mate_where_the_columns_stagger() {
         assert_eq!(menu.pad_highlight(), Some(from), "{right:?}");
     }
 }
+
+#[test]
+fn the_pointer_leaving_leaves_the_pads_press_alone() {
+    let mut menu = padded(with_art());
+    menu.input(&pad(PadButton::South, true));
+    menu.take_sounds();
+    menu.input(&Input::PointerLeft);
+    assert_eq!(menu.take_sounds(), [], "no 601 off the button");
+    menu.input(&pad(PadButton::South, false));
+    assert_eq!(menu.take_choice(), Some(chosen(MenuChoice::NewPilot)));
+}
+
+#[test]
+fn the_pad_is_read_through_the_bindings_given() {
+    use crate::keymap::{Bindings, Command, PadBinding, PadEntry, SharedBindings, UiCommand};
+    let mut bindings = Bindings::default();
+    bindings.gamepad.bind(
+        Command::Ui(UiCommand::FocusRight),
+        PadBinding::Entry(PadEntry::plain(PadButton::North)),
+    );
+    let mut menu = padded(with_art().with_bindings(SharedBindings::new(bindings)));
+    tap(&mut menu, PadButton::North);
+    assert_eq!(menu.pad_highlight(), Some(MenuChoice::EnterShip));
+}
