@@ -175,10 +175,14 @@ fn graphic_type_0_of_a_pict_pair_keys_its_sheet_by_the_spin() {
 
 #[test]
 fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
+    // 256 x 256 tiles, as many as the frames, so the store's count is the
+    // decoded one.
+    let mut tiled = spin(2001, 2001, 1, 256);
+    put_i16s(&mut tiled, 0x0A, &[256]);
     let data = store(&[
         (System::TYPE, 131, system(&[140])),
         (Stellar::TYPE, 140, stellar(1, -1)),
-        (Spin::TYPE, 1001, spin(2001, 2001, 1, 256)),
+        (Spin::TYPE, 1001, tiled),
         (PICT, 2001, rgb888_pict(256, 256, &vec![[0; 3]; 256 * 256])),
     ]);
     let contents = data.system(SystemId(131));

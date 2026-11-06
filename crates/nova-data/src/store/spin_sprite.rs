@@ -1,6 +1,7 @@
 //! Resolving a `spïn` to its sprite sheet: the link stellars, shots and
 //! explosions share.
 
+use super::stellar_sprite::master_frame_count;
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
 use crate::graphics::{
@@ -23,6 +24,9 @@ pub struct SpinSheet<'a> {
     /// The decoded sheet, laid out with the `spïn`'s `xTiles` as its
     /// columns.
     pub sheet: SpriteSheet,
+    /// The `spïn`'s `xTiles` x `yTiles`, multiplied in 32 bits (the
+    /// original's overwrite @0x1ed94): see [`master_frame_count`].
+    pub tiles: i32,
     /// The file the `spïn` came from.
     pub spin: &'a SourceFile,
     /// The file the `rlëD`, or the sprites `PICT`, came from.
@@ -49,6 +53,14 @@ impl SpinSheet<'_> {
     #[must_use]
     pub fn frame_count(&self) -> usize {
         self.sheet.frames().len()
+    }
+
+    /// How many frames a stellar drawn from this sheet animates over
+    /// ([`master_frame_count`]); [`SpinSheet::frame_count`] stays the
+    /// decoded count, which effects, stars and the cursor use.
+    #[must_use]
+    pub fn stellar_frame_count(&self) -> usize {
+        master_frame_count(self.tiles, self.frame_count())
     }
 }
 
@@ -150,6 +162,7 @@ impl GameData {
             image_id,
             kind,
             sheet,
+            tiles: i32::from(record.x_tiles) * i32::from(record.y_tiles),
             spin: spin.source,
             sheet_source: found.source,
         })

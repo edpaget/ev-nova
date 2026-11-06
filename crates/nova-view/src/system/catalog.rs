@@ -16,7 +16,8 @@ pub struct StellarSheet {
     /// The image its frames come from: its `rlëD`, or its `spïn`'s `PICT`
     /// pair.
     pub image: SheetImage,
-    /// How many frames it has; never zero.
+    /// How many frames it animates over (`nova_data::store::master_frame_count`:
+    /// the `spïn`'s tiles when fewer than the decoded frames); never zero.
     pub frames: NonZeroU16,
     /// Each frame's box's width in pixels: the header's, what the stellar
     /// is clicked and placed by.

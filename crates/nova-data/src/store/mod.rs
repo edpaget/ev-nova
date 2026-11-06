@@ -232,7 +232,9 @@ pub use self::sprite::{
     ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
 pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
-pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
+pub use self::stellar_sprite::{
+    StellarSprite, StellarSpriteError, master_frame_count, stellar_spin_id,
+};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]
