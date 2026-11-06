@@ -5,7 +5,8 @@
 //! new game's rulebook.
 //!
 //! The fixture's storyline, `dock-work`: the dock job (offered at Hearth
-//! Dock, ten tons of hull plate to Verge Camp, completed there), the side
+//! Dock, ten tons of hull plate to Verge Camp, completed there, lending a
+//! Dock pass on the way), the side
 //! road closing on day 3 (an event, with its news), the wardens' toll at
 //! Verge Camp (every condition group) and the road's `take_point` offer.
 //! The headless tests drive the session through its commands, putting a
@@ -21,7 +22,8 @@ use nova_data::new_game::NewGame;
 use nova_sim::flight_frame::{Answer, Converse, FlightCommand};
 use nova_sim::storylines::state::MissionState;
 use nova_sim::{
-    ApplyCollaborators, HailOptions, NovaBoarding, NovaLaw, Pilot, Session, StellarId, SystemId,
+    ApplyCollaborators, HailOptions, NovaBoarding, NovaLaw, OutfitId, Pilot, Session, StellarId,
+    SystemId,
 };
 
 use crate::new_game_travel::{fixture, new_game_rules, nova_of, pilot_for};
@@ -143,6 +145,12 @@ impl Play {
         self.session.pilot().flags.is_set(name)
     }
 
+    /// How many Dock passes (`outfits/dock-pass.md`) the pilot owns.
+    fn passes(&self) -> u16 {
+        let pass = OutfitId(nova_of(&self.game.ids.outfits, "dock-pass"));
+        self.session.pilot().owned(pass)
+    }
+
     /// What system `id` has heard, as (news id, age).
     fn heard(&self, id: &str) -> Vec<(String, u32)> {
         self.session
@@ -201,6 +209,7 @@ fn the_dock_job_is_offered_taken_and_delivered() {
         "the plate is aboard"
     );
     assert!(play.flag("hauling_plate"));
+    assert_eq!(play.passes(), 1, "the accept lends a Dock pass");
     play.close();
     assert_eq!(
         play.converse(Converse::Open),
@@ -208,14 +217,17 @@ fn the_dock_job_is_offered_taken_and_delivered() {
         "Hearth Dock names no conversation of its own"
     );
 
-    // A saved pilot in the Verge with the job active.
+    // A saved pilot in the Verge with the job active and the pass.
     let taken = play.session.pilot().clone();
     let mut play = Play::new("verge", |pilot| {
         pilot.story = taken.story.clone();
         pilot.flags = taken.flags.clone();
         pilot.dialogs = taken.dialogs.clone();
+        pilot.outfits = taken.outfits.clone();
     });
+    assert_eq!(play.passes(), 1, "the pass survives a save");
     play.land("verge-camp");
+    assert_eq!(play.passes(), 1, "kept until the completion");
     assert_eq!(play.session.pilot().total_cargo(), 0, "dropped off");
     assert_eq!(
         play.open(),
@@ -224,6 +236,7 @@ fn the_dock_job_is_offered_taken_and_delivered() {
     assert_eq!(play.state("dock-job"), Some(MissionState::Done));
     assert!(play.flag("dock_regular"));
     assert!(!play.flag("hauling_plate"));
+    assert_eq!(play.passes(), 0, "the success takes the pass back");
     play.close();
     assert_eq!(
         play.open(),
