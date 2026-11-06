@@ -39,7 +39,7 @@ use crate::pilot::Pilot;
 use crate::storylines::lifecycle::Scene;
 
 use super::storylines::{scene_place, settle_outcome};
-use super::{Port, Session, Setup, Statics};
+use super::{Outbox, Port, Session, Setup, Statics};
 
 /// The dialog port a session keeps, shared: equal to another when it is
 /// the same one.
@@ -106,14 +106,16 @@ impl Port {
     /// Takes the choice at `index` on the open conversation's page,
     /// keeping the new page's state in `pilot`, then decides its offer by
     /// the outcome reached, against the room left in `holds` (see the
-    /// `storylines` module): the next page, or `None` with none open at
-    /// `landed`, on an ended page, or past its choices, which changes
-    /// nothing.
+    /// `storylines` module), a decision making a save due in `out`: the
+    /// next page, or `None` with none open at `landed`, on an ended page,
+    /// or past its choices, which changes nothing.
+    #[allow(clippy::too_many_arguments)] // what it reads outside Port, then its own three
     pub(super) fn choose_in_conversation(
         &mut self,
         statics: &Statics,
         setup: &Setup,
         pilot: &mut Pilot,
+        out: &mut Outbox,
         landed: Option<StellarId>,
         index: usize,
         holds: u32,
@@ -130,7 +132,7 @@ impl Port {
         open.conversation
             .choose(setup.dialog_loader(), story, &mut pilot.dialogs, index)
             .ok()?;
-        settle_outcome(open, statics, pilot, holds);
+        settle_outcome(open, statics, pilot, out, holds);
         Some(open.conversation.page().clone())
     }
 

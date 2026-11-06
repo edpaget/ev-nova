@@ -23,7 +23,9 @@
 //!   dropped its deliveries off and the offer's `on_offer` has fired its
 //!   events, which may load cargo. A completion's or a stellar's own
 //!   conversation reads no outcome. Closing, or taking off, with none
-//!   reached leaves the offer offered.
+//!   reached leaves the offer offered. An offer's first opening, an
+//!   accept or a decline, and a completion each make a save due; a defer,
+//!   an offer opened again and a stellar's own conversation don't.
 //! - **Landing and days.** The `Storylines` consumer's subscriptions run
 //!   [`Play::landed`] on each landing and [`Play::day_passed`] on each
 //!   day, in the story dispatch. A landing only raises its event, and the
@@ -163,15 +165,11 @@ impl Port {
             flags: &mut pilot.flags,
             story: &mut pilot.story,
         };
-        match &scene {
-            Scene::Offer(id) => {
-                play.make_offer(id);
-            }
-            Scene::Completion(id) => {
-                play.complete(id);
-            }
-            Scene::Stellar(_) => {}
-        }
+        out.save_due |= match &scene {
+            Scene::Offer(id) => play.make_offer(id),
+            Scene::Completion(id) => play.complete(id),
+            Scene::Stellar(_) => false,
+        };
         let conversation = Conversation::open(
             setup.dialog_loader(),
             DialogFile {
@@ -183,7 +181,7 @@ impl Port {
             &pilot.flags,
         );
         let mut open = OpenConversation::new(stellar, scene, conversation);
-        settle_outcome(&mut open, statics, pilot, holds);
+        settle_outcome(&mut open, statics, pilot, out, holds);
         let page = open.conversation.page().clone();
         self.conversation = Some(open);
         Some(page)
@@ -223,11 +221,12 @@ impl Port {
 /// against the room left in `holds`, measured from `pilot`'s cargo as it
 /// decides, after whatever the landing and the offer loaded or dropped
 /// off: nothing for a completion's or a stellar's own conversation, one
-/// already decided, or a page with no outcome.
+/// already decided, or a page with no outcome. A change makes a save due.
 pub(super) fn settle_outcome(
     open: &mut OpenConversation,
     statics: &Statics,
     pilot: &mut Pilot,
+    out: &mut Outbox,
     holds: u32,
 ) {
     let Scene::Offer(id) = &open.scene else {
@@ -241,7 +240,7 @@ pub(super) fn settle_outcome(
     };
     open.decided = true;
     let room = free_cargo_in(holds, pilot);
-    Play {
+    out.save_due |= Play {
         storylines: &statics.storylines,
         flags: &mut pilot.flags,
         story: &mut pilot.story,
@@ -513,6 +512,7 @@ mod tests {
         converse(&mut session, Converse::Close);
         visit_again(&mut session, &catalog);
         assert_eq!(free(&session), room, "dropped off");
+        session.out.save_due = false;
         assert_eq!(
             lines(&converse(&mut session, Converse::Open)),
             ["Paid in full.", "Signed for."],
@@ -520,7 +520,66 @@ mod tests {
         );
         assert_eq!(state(&session, "job"), Some(MissionState::Done));
         assert!(session.pilot().flags.is_set("paid"));
+        assert!(session.out.save_due, "the completion makes a save due");
+    }
+
+    #[test]
+    fn opening_a_first_offer_makes_a_save_due() {
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = landed(&catalog);
+        session.out.save_due = false;
+        converse(&mut session, Converse::Open);
+        assert_eq!(state(&session, "job"), Some(MissionState::Offered));
         assert!(session.out.save_due);
+    }
+
+    #[test]
+    fn choosing_an_accept_or_a_decline_makes_a_save_due() {
+        let catalog = talking(&[("job", job(10))]);
+        for (choice, decided) in [
+            (
+                0,
+                MissionState::Active {
+                    cargo: 10,
+                    met: false,
+                },
+            ),
+            (1, MissionState::Declined),
+        ] {
+            let mut session = landed(&catalog);
+            converse(&mut session, Converse::Open);
+            session.out.save_due = false;
+            converse(&mut session, Converse::Choose(choice));
+            assert_eq!(state(&session, "job"), Some(decided));
+            assert!(session.out.save_due, "choice {choice}");
+        }
+    }
+
+    #[test]
+    fn a_defer_no_outcome_a_reopened_offer_or_the_stellar_s_own_makes_no_save_due() {
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = landed(&catalog);
+        converse(&mut session, Converse::Open);
+        session.out.save_due = false;
+        converse(&mut session, Converse::Choose(2));
+        assert_eq!(state(&session, "job"), Some(MissionState::Offered));
+        assert!(!session.out.save_due, "a defer changes nothing");
+        converse(&mut session, Converse::Close);
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+        assert!(!session.out.save_due, "the stellar's own");
+
+        visit_again(&mut session, &catalog);
+        session.out.save_due = false;
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["A job?"]);
+        assert!(!session.out.save_due, "offered before");
+        converse(&mut session, Converse::Choose(3));
+        assert!(!session.out.save_due, "no outcome");
+
+        let catalog = talking(&[]);
+        let mut session = landed(&catalog);
+        session.out.save_due = false;
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+        assert!(!session.out.save_due, "no mission");
     }
 
     #[test]

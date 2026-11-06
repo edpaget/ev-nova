@@ -43,6 +43,7 @@ impl Session {
                 &self.statics,
                 &self.setup,
                 &mut self.pilot,
+                &mut self.out,
                 landed,
                 index,
                 holds,
