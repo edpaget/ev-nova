@@ -324,3 +324,30 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
     assert!(world_end(&list) > 0);
     assert_world_then_overlay(&list);
 }
+
+#[test]
+fn a_pict_pair_star_sheet_draws_the_stars_from_spin_700() {
+    let mut catalog = catalog();
+    catalog.star_sheet = Ok(StarSheet {
+        image: crate::SheetImage::Spin(700),
+        ..star_sheet()
+    });
+    let mut view =
+        super::faked_world::world(catalog, in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    view.reset_stars();
+    let list = super::faked_world::world_list(&view);
+    let stars = list
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::Sprite {
+                    image,
+                    blend: Blend::Or,
+                    ..
+                } if image.kind == crate::ImageKind::SpinSheet && image.id == 700
+            )
+        })
+        .count();
+    assert!(stars > 0, "no stars drawn from spïn 700");
+}

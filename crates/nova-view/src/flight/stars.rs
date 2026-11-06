@@ -55,7 +55,7 @@ use nova_sim::chance::Chance;
 
 use crate::draw::lights_tint;
 use crate::flight::catalog::StarSheet;
-use crate::{DrawList, ImageKey, Point};
+use crate::{DrawList, Point};
 
 /// How many star slots there are (`_InitArrays` @0x1bb95, 0x190 bytes of
 /// 0x14-byte slots).
@@ -410,7 +410,7 @@ impl Starfield {
             let left = between(drawn.from.0, drawn.to.0);
             let top = between(drawn.from.1, drawn.to.1);
             list.or_sprite(
-                ImageKey::sprite(sheet.image_id, drawn.frame),
+                sheet.image.frame(drawn.frame),
                 Point::new(left + half_w, top + half_h),
                 tint,
             );
@@ -460,7 +460,7 @@ mod tests {
     use nova_sim::player_wrap::WRAP_SHIFT;
 
     use super::*;
-    use crate::{Blend, DrawCommand};
+    use crate::{Blend, DrawCommand, ImageKey};
 
     /// What a draw asked for: a `Rand(sides)` roll or a wide draw below
     /// `n`.
@@ -527,7 +527,7 @@ mod tests {
 
     fn sheet() -> StarSheet {
         StarSheet {
-            image_id: 700,
+            image: crate::SheetImage::Rled(700),
             frames: NonZeroU16::new(16).expect("non-zero"),
             size: (5, 5),
         }
@@ -841,6 +841,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_pict_pair_sheets_star_is_keyed_by_its_spin() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.handle(&surroundings(), &mut Scripted::default());
+        field.snapshot();
+        let sheet = StarSheet {
+            image: crate::SheetImage::Spin(700),
+            ..sheet()
+        };
+        let mut list = DrawList::new();
+        field.draw(&mut list, &sheet, 0.7);
+        let mut expected = DrawList::new();
+        expected.or_sprite(
+            ImageKey::spin_sheet(700, 3),
+            Point::new(420.0 + 2.5, 359.0 + 2.5),
+            lights_tint(32),
+        );
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            expected.iter().cloned().collect::<Vec<_>>()
+        );
     }
 
     #[test]

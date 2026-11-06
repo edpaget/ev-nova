@@ -310,10 +310,12 @@ impl CombatLooks for GameData {
 
     fn star_sheet(&self) -> Result<StarSheet, String> {
         let spin = self.spin_sheet(STAR_SPIN).map_err(|err| err.to_string())?;
-        // The decoder refuses a sheet without frames.
-        let count = u16::try_from(spin.frame_count()).unwrap_or(u16::MAX);
+        // The decoders refuse a sheet without frames; the master counts
+        // its tiles when fewer (`_LoadSprites` @0x210a4-0x210d2,
+        // @0x21218-0x21225).
+        let count = u16::try_from(spin.stellar_frame_count()).unwrap_or(u16::MAX);
         Ok(StarSheet {
-            image_id: spin.image_id,
+            image: SheetImage::of(spin.kind, spin.spin_id, spin.image_id),
             frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
             size: (spin.sheet.frame_width(), spin.sheet.frame_height()),
         })
@@ -1300,12 +1302,62 @@ mod tests {
         assert_eq!(
             data.star_sheet(),
             Ok(StarSheet {
-                image_id: 701,
+                image: crate::SheetImage::Rled(701),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (3, 2),
             })
         );
         assert_eq!(named_store(&[]).star_sheet(), Err("no spïn 700".to_owned()));
+    }
+
+    #[test]
+    fn the_stars_sheet_counts_its_spins_tiles_when_fewer_than_its_rleds_frames() {
+        // 2 x 2 tiles over a 16-frame `rlëD` (`_LoadSprites` @0x210a4-0x210d2).
+        let mut two_by_two = spin(701);
+        put_i16(&mut two_by_two, 0x08, 2);
+        put_i16(&mut two_by_two, 0x0A, 2);
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, two_by_two),
+            (RLED, 701, None, sheet(16)),
+        ]);
+        assert_eq!(data.star_sheet().map(|sheet| sheet.frames.get()), Ok(4));
+    }
+
+    #[test]
+    fn the_stars_sheet_from_a_pict_pair_is_keyed_by_spin_700() {
+        use nova_data::graphics::fixture::rgb888_pict;
+
+        // `spïn` 700 has no `rlëD`: sprites `PICT` 2700 and mask 2800, two
+        // 4 x 4 frames cut from the 8 x 4 picture (@0x21126-0x21225).
+        let mut pict_pair = vec![0; Spin::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x00, 2700),
+            (0x02, 2800),
+            (0x04, 4),
+            (0x06, 4),
+            (0x08, 2),
+            (0x0A, 1),
+        ] {
+            put_i16(&mut pict_pair, at, value);
+        }
+        let data = named_store(&[
+            (Spin::TYPE, 700, None, pict_pair),
+            (
+                PICT,
+                2700,
+                None,
+                rgb888_pict(8, 4, &[[0x80, 0x40, 0x20]; 32]),
+            ),
+            (PICT, 2800, None, rgb888_pict(8, 4, &[[0xFF; 3]; 32])),
+        ]);
+        assert_eq!(
+            data.star_sheet(),
+            Ok(StarSheet {
+                image: crate::SheetImage::Spin(700),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                size: (4, 4),
+            })
+        );
     }
 
     #[test]

@@ -37,6 +37,11 @@ pub const fn stellar_spin_id(graphic_type: i16) -> Option<i16> {
 /// reads past its frame table (@0xa90f7), a memory-layout accident not
 /// copied here: the decoded count stands. A count of no tiles is
 /// `nova_sim::Session::counts_no_frames`' concern, not this one's.
+///
+/// `_LoadSprites` loads the starfield's master, `spïn` 700, the same way:
+/// `xTiles*yTiles` to `_SWCreateSpriteFromRLEResource` (@0x210a4-0x210d2)
+/// on the `rlëD` path, and written to +0x54 (@0x21218-0x21225) on the
+/// `PICT` path.
 #[must_use]
 pub fn master_frame_count(tiles: i32, decoded: usize) -> usize {
     match usize::try_from(tiles) {

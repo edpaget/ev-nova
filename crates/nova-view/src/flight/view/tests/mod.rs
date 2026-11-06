@@ -193,7 +193,7 @@ fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
 /// The stars' sheet, `rlëD` 700 of 16 frames of 5 × 5, as stock's.
 fn star_sheet() -> StarSheet {
     StarSheet {
-        image_id: 700,
+        image: crate::SheetImage::Rled(700),
         frames: NonZeroU16::new(16).expect("non-zero"),
         size: (5, 5),
     }

@@ -49,15 +49,19 @@ pub enum SheetKind {
 }
 
 impl SpinSheet<'_> {
-    /// How many frames the sheet holds.
+    /// How many frames the sheet holds, as decoded: effects and the
+    /// cursor count this; stellars and the starfield count
+    /// [`SpinSheet::stellar_frame_count`].
     #[must_use]
     pub fn frame_count(&self) -> usize {
         self.sheet.frames().len()
     }
 
-    /// How many frames a stellar drawn from this sheet animates over
-    /// ([`master_frame_count`]); [`SpinSheet::frame_count`] stays the
-    /// decoded count, which effects, stars and the cursor use.
+    /// How many frames a stellar or the starfield drawn from this sheet
+    /// animates over ([`master_frame_count`]): `_LoadSprites` counts the
+    /// star master the same way (@0x210a4-0x210d2, @0x21218-0x21225).
+    /// [`SpinSheet::frame_count`] stays the decoded count, which effects
+    /// and the cursor use.
     #[must_use]
     pub fn stellar_frame_count(&self) -> usize {
         master_frame_count(self.tiles, self.frame_count())

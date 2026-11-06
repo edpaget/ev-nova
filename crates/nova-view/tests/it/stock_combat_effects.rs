@@ -238,8 +238,8 @@ fn the_stock_stars_are_spin_700s_16_frames_of_5_by_5() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let sheet = data.star_sheet().expect("spïn 700 reads");
     assert_eq!(
-        (sheet.image_id, sheet.frames.get(), sheet.size),
-        (700, 16, (5, 5)),
+        (sheet.image, sheet.frames.get(), sheet.size),
+        (nova_view::SheetImage::Rled(700), 16, (5, 5)),
         "rlëD 700, 4 × 4 tiles of 5 × 5"
     );
 }

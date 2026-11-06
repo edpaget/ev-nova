@@ -298,15 +298,18 @@ impl EffectSheet {
 }
 
 /// The starfield's sprite sheet ([`CombatLooks::star_sheet`]): its
-/// `rlëD`, how many frames it holds and each frame's width and height,
+/// `rlëD` or `PICT`-pair `spïn`, how many frames it holds and each frame's width and height,
 /// which the stars wrap and are placed by (`_HandleStars` reads them with
 /// `_GetSpriteXSize` and `_GetSpriteYSize`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StarSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
-    /// How many frames the sheet holds: the `spïn`'s x tiles × y tiles
-    /// (`_LoadSprites` stores it at +0x54).
+    /// The image the stars are cut from: `spïn` 700's `rlëD`, or the
+    /// `spïn` itself when it names a `PICT` pair (`_LoadSprites`
+    /// @0x21097-0x21225).
+    pub image: SheetImage,
+    /// How many frames the master holds: the `spïn`'s x tiles × y tiles
+    /// when fewer than the frames decoded, else those (`_LoadSprites`
+    /// @0x210a4-0x210d2, @0x21218-0x21225).
     pub frames: NonZeroU16,
     /// Each frame's width and height in pixels.
     pub size: (u32, u32),
@@ -936,7 +939,7 @@ mod tests {
 
         fn star_sheet(&self) -> Result<StarSheet, String> {
             Ok(StarSheet {
-                image_id: 700,
+                image: crate::SheetImage::Rled(700),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (5, 5),
             })
@@ -963,7 +966,7 @@ mod tests {
             catalog.box_sheet(2).map(|sheet| sheet.image),
             catalog.asteroid_sheet(3).map(|sheet| sheet.image),
             catalog.smoke_sheet(1).map(|sheet| sheet.first_icon),
-            catalog.star_sheet().map(|sheet| sheet.image_id),
+            catalog.star_sheet().map(|sheet| sheet.image),
         )
     }
 
@@ -1076,7 +1079,7 @@ mod tests {
         assert_eq!(
             looks.star_sheet(),
             Some(&StarSheet {
-                image_id: 700,
+                image: crate::SheetImage::Rled(700),
                 frames: NonZeroU16::new(16).expect("non-zero"),
                 size: (5, 5),
             })
@@ -1091,7 +1094,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(700)"#;
+        let direct = r#"Ok("w128") ["s132", "s133"] Some(Ok(Ok(Rled(129)))) "s130" Some("g131") Ok(Rled(502)) Ok(Rled(803)) Some(1008) Ok(Rled(700))"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
