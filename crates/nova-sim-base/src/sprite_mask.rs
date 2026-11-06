@@ -14,11 +14,13 @@
 //!   (@0xbbab2-0xbbae9) shifts each local rect's left and right by its
 //!   frame's +0x5e, depth >> 4 (`_SWCreateFrame` @0xad5f3), so x counts
 //!   the bytes of the RLE lines: 1 for a 16-bit sheet, whose shift cancels
-//!   its 2-byte pixels, and 0 for an 8-bit one, whose byte counts are read
+//!   its 2-byte pixels, 0 for an 8-bit one, whose byte counts are read
 //!   as pixels, twice the width it is drawn at (`EightBitReading::AsDrawn`
-//!   in `nova_data`), cut to its rect. A 16-bit sprite against an 8-bit one
-//!   compares the two in mixed units, bounded by the first's shifted
-//!   width. Then `_BlitPixieRLECollision` (@0xc0c8d-0xc0ebe) walks both.
+//!   in `nova_data`), cut to its rect, and 2 for a 32-bit one, whose shift
+//!   cancels its 4-byte pixels, so it touches by its own pixels at its
+//!   box's size though it is drawn twice as wide. A 16-bit sprite against
+//!   an 8-bit one compares the two in mixed units, bounded by the first's
+//!   shifted width. Then `_BlitPixieRLECollision` (@0xc0c8d-0xc0ebe) walks both.
 //! - **The tokens.** Each is a big-endian word, an op in its top byte and
 //!   a byte count below. They are the very tokens the blitter draws: an
 //!   `rlëD`'s, from `_SWLockSprite`'s walk (@0xaa9b6-0xaaa83), or those
@@ -89,7 +91,7 @@ pub struct RleSheet {
     pub width: u32,
     /// Each frame's height in pixels.
     pub height: u32,
-    /// Its frames' +0x5e, depth >> 4: 1 at 16 bits, 0 at 8.
+    /// Its frames' +0x5e, depth >> 4: 1 at 16 bits, 0 at 8, 2 at 32.
     pub shift: u8,
     /// The tokens after the 16-byte header, each word read big-endian.
     pub words: Vec<u32>,

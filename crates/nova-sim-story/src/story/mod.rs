@@ -2425,12 +2425,16 @@
 //!     `_meetsMinimumRequirements` fails (@0xccac1-0xccaca); the engine
 //!     models the 16-bit world every supported machine runs.
 //!   - An `rlëD` of depth 32, or of any depth other than 8 or 16, loads
-//!     (@0xa9a28-0xa9ac7). At 32 bits `_BlitPixieRLESwap` swaps each pixel
-//!     (@0xbe46e) and `_BlitPixieRLE`'s byte copy draws it at twice its
-//!     width, past its frame box; other depths misparse in the swap
-//!     (@0xbe3f0-0xbe401), and the draw proc asserts on a depth of 7 or
-//!     less (@0xbb612). The engine keeps `UnsupportedDepth`, so such a
-//!     sheet falls back to graphic type 0.
+//!     (@0xa9a28-0xa9ac7). Read since rendering phase 1: at 32 bits
+//!     `_BlitPixieRLESwap` swaps each pixel (@0xbe46e) and
+//!     `_BlitPixieRLE`'s byte copy draws it at twice its width, past its
+//!     frame box, cut to the box when the box touches the world's edge;
+//!     other depths misparse in the swap (@0xbe3f0-0xbe401), and both
+//!     decode byte for byte as drawn (`nova_data::graphics`'s `rled_wide`
+//!     module docs). The draw proc asserts on a depth of 7 or less
+//!     (@0xbb612), which keeps `UnsupportedDepth`, so such a sheet falls
+//!     back to graphic type 0. The rulebook's `thirty_two_bit_sheet` key
+//!     reads a 32-bit sheet as true colour instead.
 //!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
 //!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
 //!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`
