@@ -43,6 +43,7 @@ fn arguments(which: Listing) -> &'static [&'static str] {
         Listing::Pointers => &["-arch", "i386", "-s", "__IMPORT", "__pointers"],
         Listing::Indirect => &["-arch", "i386", "-Iv"],
         Listing::Symbols => &["-arch", "i386", "-n"],
+        Listing::Sections => &["-arch", "i386", "-l"],
     }
 }
 
@@ -119,7 +120,18 @@ impl Cache for FsCache {
         let written = Listing::ALL
             .iter()
             .try_for_each(|&which| fs::write(Self::file(&staging, which), listings.get(which)))
-            .and_then(|()| fs::rename(&staging, &entry));
+            .and_then(|()| {
+                fs::rename(&staging, &entry).or_else(|err| {
+                    // An entry missing a listing (stored by a build that had
+                    // fewer) is never read: put this one in its place.
+                    if entry.is_dir() && self.get(key).is_none() {
+                        fs::remove_dir_all(&entry)?;
+                        fs::rename(&staging, &entry)
+                    } else {
+                        Err(err)
+                    }
+                })
+            });
         if written.is_err() {
             let _ = fs::remove_dir_all(&staging);
             // Another run stored the same key first: that entry is as good.
@@ -227,6 +239,24 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_from_before_a_listing_was_added_is_none_and_replaced() {
+        // An older build cached five listings, without sections.txt: the
+        // load lists them all again and stores them over it.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = FsCache::new(dir.path().to_path_buf());
+        cache.put("k1", &listings()).unwrap();
+        fs::remove_file(dir.path().join("k1").join("sections.txt")).unwrap();
+        assert_eq!(cache.get("k1"), None);
+        cache.put("k1", &listings()).unwrap();
+        assert_eq!(cache.get("k1"), Some(listings()));
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["k1"], "no staging directory is left behind");
+    }
+
+    #[test]
     fn storing_a_key_already_stored_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
         let cache = FsCache::new(dir.path().to_path_buf());
@@ -249,6 +279,7 @@ mod tests {
         }
         assert_eq!(arguments(Listing::Text)[2..], ["-tV"]);
         assert_eq!(arguments(Listing::Symbols)[2..], ["-n"]);
+        assert_eq!(arguments(Listing::Sections)[2..], ["-l"]);
     }
 
     #[test]
@@ -284,6 +315,7 @@ mod tests {
             Listing::CStrings,
             Listing::Pointers,
             Listing::Indirect,
+            Listing::Sections,
         ] {
             assert_eq!(program(which), otool.to_string_lossy(), "{which:?}");
         }

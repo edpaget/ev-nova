@@ -1,4 +1,4 @@
-//! Parsers for the five listings, one module each.
+//! Parsers for the listings, one module each.
 //!
 //! Each parser is tolerant: a line it doesn't recognise (a header, a blank
 //! line, a section it doesn't read) is skipped, never an error, so a
@@ -7,6 +7,7 @@
 pub mod cstrings;
 pub mod indirect;
 pub mod pointers;
+pub mod sections;
 pub mod symbols;
 pub mod text;
 
@@ -28,8 +29,9 @@ pub(crate) mod fixture {
     pub const POINTERS: &str = include_str!("../../fixtures/excerpt/pointers.txt");
     pub const INDIRECT: &str = include_str!("../../fixtures/excerpt/indirect.txt");
     pub const SYMBOLS: &str = include_str!("../../fixtures/excerpt/nm.txt");
+    pub const SECTIONS: &str = include_str!("../../fixtures/excerpt/sections.txt");
 
-    /// All five fixture listings.
+    /// Every fixture listing.
     pub fn listings() -> Listings {
         Listings {
             text: TEXT.to_owned(),
@@ -37,6 +39,7 @@ pub(crate) mod fixture {
             pointers: POINTERS.to_owned(),
             indirect: INDIRECT.to_owned(),
             symbols: SYMBOLS.to_owned(),
+            sections: SECTIONS.to_owned(),
         }
     }
 }

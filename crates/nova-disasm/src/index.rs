@@ -1,12 +1,12 @@
-//! The index over the five listings: functions and their boundaries,
-//! symbol lookup, and the call graph.
+//! The index over the listings: functions and their boundaries, symbol
+//! lookup, and the call graph.
 
 use std::collections::BTreeMap;
 
 use crate::annotate::{self, Target};
 use crate::parse::cstrings::CStrings;
 use crate::parse::text::Insn;
-use crate::parse::{cstrings, indirect, pointers, symbols, text};
+use crate::parse::{cstrings, indirect, pointers, sections, symbols, text};
 use crate::ports::Listings;
 
 /// One function: a label and the instructions up to the next label.
@@ -37,7 +37,8 @@ pub struct DataSymbol {
     pub name: String,
     /// Its address.
     pub start: u32,
-    /// The next symbol's address, if any.
+    /// One past its end: the next symbol's address, or its section's end
+    /// if that comes first. `None` when neither is known.
     pub end: Option<u32>,
 }
 
@@ -119,7 +120,7 @@ pub fn parse_address(s: &str) -> Option<u32> {
 }
 
 impl Index {
-    /// Builds the index from the five listings.
+    /// Builds the index from the listings.
     #[must_use]
     pub fn build(listings: &Listings) -> Index {
         let text = text::parse(&listings.text);
@@ -138,15 +139,19 @@ impl Index {
         insns.sort_by_key(|i| i.addr);
 
         let all = symbols::parse(&listings.symbols);
+        let sections = sections::parse(&listings.sections);
         let data = all
             .iter()
             .enumerate()
             .filter(|(_, s)| s.is_data())
-            .map(|(i, s)| DataSymbol {
-                name: s.name.clone(),
-                start: s.addr,
+            .map(|(i, s)| {
                 // The first later address: past the symbol and its aliases.
-                end: all[i..].iter().map(|n| n.addr).find(|&a| a > s.addr),
+                let next = all[i..].iter().map(|n| n.addr).find(|&a| a > s.addr);
+                DataSymbol {
+                    name: s.name.clone(),
+                    start: s.addr,
+                    end: cap_at_section(next, section_end(&sections, s.addr)),
+                }
             })
             .collect();
 
@@ -335,6 +340,25 @@ impl Index {
                 ))
             })
             .collect()
+    }
+}
+
+/// The end of the section holding `addr`, if a listed one does.
+fn section_end(sections: &[sections::Section], addr: u32) -> Option<u32> {
+    let at = sections.partition_point(|s| s.addr <= addr);
+    sections[..at]
+        .last()
+        .map(sections::Section::end)
+        .filter(|&end| addr < end)
+}
+
+/// A data symbol's end: the next symbol, unless its section ends first.
+/// The last symbol in a section ends with the section, not at a symbol in
+/// a later one.
+fn cap_at_section(next: Option<u32>, section_end: Option<u32>) -> Option<u32> {
+    match (next, section_end) {
+        (Some(next), Some(end)) => Some(next.min(end)),
+        (next, end) => next.or(end),
     }
 }
 
@@ -532,6 +556,45 @@ mod tests {
         assert_eq!(index.data_at(0x23_1798).unwrap().0.name, "_gLast");
         assert!(index.data_at(0x23_1799).is_none());
         assert!(index.data_at(0xdd05f).is_none());
+    }
+
+    #[test]
+    fn the_last_data_symbol_in_a_section_ends_at_the_section_s_end() {
+        // _kScale is the last symbol in __TEXT,__const (0xdd060..0xdd068);
+        // __DATA,__cfstring after it has no symbol before _gTable at 0xdd070.
+        let index = index();
+        let (sym, off) = index.data_at(0xdd067).unwrap();
+        assert_eq!((sym.name.as_str(), off), ("_kScale", 7));
+        assert!(index.data_at(0xdd068).is_none());
+        assert!(index.find("0xdd068").is_empty());
+        assert_eq!(index.find("_kScale")[0].end, Some(0xdd068));
+    }
+
+    #[test]
+    fn within_a_section_a_data_symbol_still_ends_at_the_next_symbol() {
+        let index = index();
+        assert_eq!(index.find("_gTable")[0].end, Some(0x18_6820));
+        // _otherStatic is the last symbol in __DATA,__data.
+        assert_eq!(index.find("_otherStatic")[0].end, Some(0x18_6828));
+        assert!(index.data_at(0x18_6828).is_none());
+    }
+
+    #[test]
+    fn a_data_symbol_in_no_listed_section_ends_at_the_next_symbol() {
+        // The fixture lists no __bss: _quickKeyCheckResult runs to _gLast.
+        let index = index();
+        assert_eq!(index.find("_quickKey")[0].end, Some(0x23_1798));
+    }
+
+    #[test]
+    fn the_last_symbol_of_all_ends_at_its_section_s_end() {
+        let index = Index::build(&Listings {
+            symbols: "00002000 d _only\n".to_owned(),
+            sections: "Section\n  sectname __data\n   segname __DATA\n      addr 0x00002000\n      size 0x00000010\n".to_owned(),
+            ..Listings::default()
+        });
+        assert_eq!(index.find("_only")[0].end, Some(0x2010));
+        assert_eq!(index.data_at(0x200f).unwrap().1, 0xf);
     }
 
     #[test]

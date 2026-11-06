@@ -266,6 +266,27 @@ mod tests {
         assert_eq!(notes(0x303a), ["_kScale+0x4"]);
     }
 
+    fn literal(operands: &str) -> Insn {
+        Insn {
+            addr: 0x3000,
+            mnemonic: "divsd".into(),
+            operands: operands.into(),
+            comment: None,
+            raw: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_literal_past_a_section_s_last_symbol_names_nothing() {
+        // _kScale is the last symbol in __TEXT,__const, which ends at 0xdd068.
+        let index = index();
+        assert_eq!(
+            annotations(&index, &literal("0xdd067, %xmm0")),
+            ["_kScale+0x7"]
+        );
+        assert!(annotations(&index, &literal("0xdd068, %xmm0")).is_empty());
+    }
+
     #[test]
     fn a_local_pointer_to_no_symbol_shows_its_value() {
         let mut listings = fixture::listings();

@@ -59,3 +59,15 @@ fn stock_handle_player_is_indexed_with_named_calls() {
         "{callees:?}"
     );
 }
+
+#[test]
+fn stock_the_last_symbol_in_a_section_ends_with_the_section() {
+    let Some(index) = index() else { return };
+    // _C.308.109470 is the last symbol in __TEXT,__const, which ends at
+    // 0xddfa0; the next symbol (___progname, 0xde920) is in __DATA.
+    let found = index.find("_C.308.109470");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].start, found[0].end), (0xdd740, Some(0xddfa0)));
+    // A CFString in __DATA,__cfstring, before any symbol there.
+    assert!(index.find("0xde1a8").is_empty());
+}

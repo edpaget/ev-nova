@@ -150,7 +150,7 @@ mod tests {
         *binary.bytes.borrow_mut() = Some(b"v2".to_vec());
         tools.runs.borrow_mut().clear();
         run(&binary, &tools, &cache).0.unwrap();
-        assert_eq!(tools.runs.borrow().len(), 5);
+        assert_eq!(tools.runs.borrow().len(), Listing::ALL.len());
         let entries = cache.entries.borrow();
         assert!(entries.contains_key(&key(b"v1")) && entries.contains_key(&key(b"v2")));
     }

@@ -1,7 +1,7 @@
 //! The ports the core reaches the outside world through.
 //!
-//! One "otool run" is five listings of the same binary ([`Listing`]); the
-//! [`Tools`] port produces each one, and the [`Cache`] port keeps the five
+//! One "otool run" is six listings of the same binary ([`Listing`]); the
+//! [`Tools`] port produces each one, and the [`Cache`] port keeps the six
 //! together ([`Listings`]) under the binary's hash.
 
 use std::ffi::OsString;
@@ -21,16 +21,19 @@ pub enum Listing {
     Indirect,
     /// `nm -n`: every symbol, sorted by address.
     Symbols,
+    /// `otool -l`: the load commands, for each section's bounds.
+    Sections,
 }
 
 impl Listing {
     /// Every listing, in a fixed order.
-    pub const ALL: [Listing; 5] = [
+    pub const ALL: [Listing; 6] = [
         Listing::Text,
         Listing::CStrings,
         Listing::Pointers,
         Listing::Indirect,
         Listing::Symbols,
+        Listing::Sections,
     ];
 
     /// A short stable name, used for the cache's file names.
@@ -42,11 +45,12 @@ impl Listing {
             Listing::Pointers => "pointers",
             Listing::Indirect => "indirect",
             Listing::Symbols => "nm",
+            Listing::Sections => "sections",
         }
     }
 }
 
-/// The five listings of one binary.
+/// The six listings of one binary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Listings {
     /// [`Listing::Text`].
@@ -59,6 +63,8 @@ pub struct Listings {
     pub indirect: String,
     /// [`Listing::Symbols`].
     pub symbols: String,
+    /// [`Listing::Sections`].
+    pub sections: String,
 }
 
 impl Listings {
@@ -71,6 +77,7 @@ impl Listings {
             Listing::Pointers => &self.pointers,
             Listing::Indirect => &self.indirect,
             Listing::Symbols => &self.symbols,
+            Listing::Sections => &self.sections,
         }
     }
 
@@ -82,6 +89,7 @@ impl Listings {
             Listing::Pointers => &mut self.pointers,
             Listing::Indirect => &mut self.indirect,
             Listing::Symbols => &mut self.symbols,
+            Listing::Sections => &mut self.sections,
         }
     }
 }
@@ -129,7 +137,8 @@ pub trait Binary {
 
 /// Keeps listings under a key (the binary's hash).
 pub trait Cache {
-    /// The listings stored under `key`, if all five are there.
+    /// The listings stored under `key`, if every one is there: an entry
+    /// stored before a listing was added is missing it, and so is none.
     fn get(&self, key: &str) -> Option<Listings>;
     /// Stores the listings under `key`.
     fn put(&self, key: &str, listings: &Listings) -> io::Result<()>;
