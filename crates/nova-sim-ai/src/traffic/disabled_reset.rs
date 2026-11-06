@@ -22,7 +22,8 @@
 //!   is not disabled, @0x2d6f, so it keeps defending and counts for its
 //!   stellar's wave until it is gone), [`Npc::provoked`]
 //!   none, [`Goal::Idle`], and its substate's state, [`Npc::pursuit`] and
-//!   [`Npc::docking`], none;
+//!   [`Npc::docking`], none, sub 0 stored ([`Npc::stopping`] cleared, so
+//!   a boarded ship holding its course is never cut by a sub 1 it kept);
 //! - by the engine's reading of
 //!   [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) its leader is
 //!   dropped: a fighter (one with a [`carrier`](Npc::carrier)) keeps its
@@ -138,6 +139,8 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.defends = None;
     npc.provoked = 0.0;
     npc.goal = Goal::Idle;
+    // Sub 0 (@0x8ff0a).
+    npc.stopping = false;
     npc.pursuit = Pursuit::default();
     npc.docking = None;
     drop_mission_parent(npc);

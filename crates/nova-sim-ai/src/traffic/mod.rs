@@ -319,6 +319,8 @@ mod lost_sight_tests;
 pub mod mine_flight;
 #[cfg(test)]
 mod miner_hit_target_tests;
+#[cfg(test)]
+mod mode_wait_sub_1_tests;
 pub mod npc;
 #[cfg(test)]
 mod npc_landing_tests;

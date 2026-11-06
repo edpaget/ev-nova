@@ -63,8 +63,10 @@ use std::collections::BTreeMap;
 /// A ship whose flight is `_HandleShip`'s own (a gate's waits, its glide
 /// and burst, a disabled ship's drift, see [`step()`](super::step()))
 /// leaves the head's word: its own whole heading and no thrust
-/// ([`SlotWord::none`]). One whose AI wait runs (but a count wait, and
-/// goals 0xa and 0xe, which fly as unwaited) flies the sub it kept
+/// ([`SlotWord::none`]), but one holding its course or at its gate with
+/// sub 1 stored flies the stop it kept, as the low level runs under +0x4c
+/// whatever set it. One whose AI wait runs (but a count wait, and goals
+/// 0xa and 0xe, which fly as unwaited) flies the sub it kept
 /// ([`kept_sub`](super::kept_sub)).
 pub fn low_level(
     npc: &mut Npc,
@@ -80,10 +82,11 @@ pub fn low_level(
     // The stop's own flight sets it again. While a wait runs the high level
     // writes no sub (@0x8d4b9-0x8d4d2) but for goals 0xa and 0xe (@0x8d4c8,
     // @0x8d4ce), and the low level's settle alone ends a sub 1 (@0x85624):
-    // under an AI wait the kept stop runs that settle itself
-    // (`kept_sub`), so it reads the bit first.
+    // under an AI wait or a mode wait the kept stop runs that settle
+    // itself (`kept_sub`), so it reads the bit first.
     let high_level_runs = !handler_head::waits_out(npc, npc.goal);
-    if high_level_runs || (!inertialess::moving(npc.state.velocity) && !npc.ai_wait_flies()) {
+    let flies_kept_sub = npc.ai_wait_flies() || super::kept_sub::mode_wait(npc);
+    if high_level_runs || (!inertialess::moving(npc.state.velocity) && !flies_kept_sub) {
         npc.stopping = false;
     }
     let quarry = (other, other_disabled, beside);
@@ -115,6 +118,15 @@ fn decide(
 ) -> Result<Flight, Outcome> {
     if pod_flight::is_pod(npc) {
         return Ok(pod_flight::flight(npc));
+    }
+    if super::kept_sub::mode_wait(npc)
+        && let Some(flight) = super::kept_sub::kept_stop(npc, handling, inertia)
+    {
+        // The low level runs under +0x4c whatever set it (@0x901ea-0x901f4),
+        // so a mode wait's stored sub 1 is cut and settled
+        // (@0x8536d-0x85633). The high level has cleared the bit when it
+        // runs, so goals 0xa and 0xe never get here with it.
+        return Ok(flight);
     }
     if !super::step::steered(npc) {
         // The head's word (@0x851f1, @0x8522d).

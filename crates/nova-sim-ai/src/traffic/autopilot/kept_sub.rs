@@ -10,7 +10,8 @@
 //!
 //! - **Sub 1** ([`Npc::stopping`]): the stop's whole flight
 //!   ([`leave_flight::stop`]), its retro heading and brake's thrust as its
-//!   word, its cuts and settle at the slot (@0x8536d-0x85633).
+//!   word, its cuts and settle at the slot (@0x8536d-0x85633)
+//!   ([`kept_stop`]).
 //! - **Orders 0x13, 0x14 and 0x15** ([`Npc::mine_order`]), whatever the
 //!   goal, as a miner's own think under its wait writes goal 0 and leaves
 //!   the sub (`_MinerAI` @0x8b45d): 0x13's chase word and 0x14's ease,
@@ -28,6 +29,13 @@
 //!   frame out again for another goal, nor state 3's far branch, which is
 //!   the high level's.
 //! - **Sub 0** otherwise: the head's word alone.
+//!
+//! The kept stop runs under a mode wait too ([`mode_wait`]): the low level
+//! runs under +0x4c whatever set it (@0x901ea-0x901f4), so a ship holding
+//! its course or held at its gate with sub 1 stored is cut and settled by
+//! it. Stock reaches it through a successor held at its gate, which copies
+//! its lost lead's sub (@0x893c8-0x893e1). The mode's own step moves it by
+//! velocity, so the cuts show at once.
 //!
 //! `_HandleShip` skips the turn and thrust while the wait runs
 //! (@0x34a54-0x34a72), so the direct writes show at once and the word
@@ -55,7 +63,32 @@ use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::mine_flight;
-use crate::traffic::npc::Npc;
+use crate::traffic::npc::{Mode, Npc};
+
+/// Whether `npc` is in a mode wait whose +0x4c the low level runs under
+/// (@0x901ea-0x901f4): holding its course ([`Mode::Coasting`]), held at its
+/// gate ([`Mode::HeldAtGate`]) or waiting in it ([`Mode::Emerging`]). A
+/// ship entering a gate ([`Mode::EnteringGate`]) is left: a sub 1 written
+/// over its sub 0x17 ends the entry, so it never holds one.
+pub(super) fn mode_wait(npc: &Npc) -> bool {
+    matches!(
+        npc.mode,
+        Mode::Coasting { .. } | Mode::HeldAtGate { .. } | Mode::Emerging { .. }
+    )
+}
+
+/// The stop `npc` kept, if it kept one ([`Npc::stopping`]): sub 1's whole
+/// flight on `handling` as `inertia` says ([`leave_flight::stop`]), its
+/// word, its cuts and its settle (@0x8536d-0x85633).
+pub(super) fn kept_stop(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Option<Flight> {
+    if !npc.stopping {
+        return None;
+    }
+    // Goal 9, the refuel, is cut off its retro heading too (+0xc8c8
+    // @0x85595).
+    let refuelling = matches!(npc.goal, Goal::Assist(Help::Refuel));
+    Some(leave_flight::stop(npc, handling, inertia, refuelling))
+}
 
 /// `npc`'s low level under its AI wait (see the module docs), the ship
 /// +0x70 names at `quarry` when it is there, disabled as `quarry_disabled`
@@ -69,11 +102,8 @@ pub(super) fn under_wait(
     inertia: Inertia,
     (readings, weapons): (Readings, &Arsenal),
 ) -> Flight {
-    if npc.stopping {
-        // Goal 9, the refuel, is cut off its retro heading too (+0xc8c8
-        // @0x85595).
-        let refuelling = matches!(npc.goal, Goal::Assist(Help::Refuel));
-        return leave_flight::stop(npc, handling, inertia, refuelling);
+    if let Some(flight) = kept_stop(npc, handling, inertia) {
+        return flight;
     }
     let gain = readings.speed_mult;
     match npc.mine_order {

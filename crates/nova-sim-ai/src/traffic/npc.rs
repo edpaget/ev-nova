@@ -854,10 +854,12 @@ pub struct Npc {
     /// sub 0 (@0x8fb09-0x8fb13), so it never sets it. Each flight clears
     /// it, but while a wait runs: the high level writes no sub
     /// (@0x8d4b9-0x8d4d2) but for goals 0xa and 0xe, so sub 1 stands, and
-    /// under an AI wait the low level flies the stop it kept, its word
+    /// under an AI wait or a mode wait (holding its course, or held or
+    /// waiting at its gate) the low level flies the stop it kept, its word
     /// and its cuts, and settles it below 0.35, which ends it (the
-    /// autopilot's `kept_sub`). An NPC held still keeps it. It starts
-    /// `false`. Never saved.
+    /// autopilot's `kept_sub`). The emerge (@0x8953b) and the disabled
+    /// reset (@0x8ff0a) store sub 0, which clears it. An NPC held still
+    /// keeps it. It starts `false`. Never saved.
     pub stopping: bool,
 }
 
@@ -1672,7 +1674,8 @@ impl Npc {
 
     /// Makes it come out of `gate`, waiting there `ticks_left` ticks
     /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
-    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
+    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b, so no stop kept,
+    /// [`Npc::stopping`]), its travel
     /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
     /// (+0x70 = -1, @0x89544), and its trigger released. A ship with a
     /// fuel tank has visited the gate ([`Npc::visited`], [`Npc::gate_visit`]).
@@ -1693,6 +1696,8 @@ impl Npc {
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+        // Sub 0 (@0x8953b).
+        self.stopping = false;
         // Its own burst is the one `Mode::LeavingGate` flies, from the
         // emerge's word.
         self.owed_burst = None;
