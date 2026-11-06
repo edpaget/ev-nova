@@ -253,12 +253,12 @@ impl FakeDialog {
         lines.push(match &self.at {
             Some(At { knot, choice, next }) => {
                 let choice = choice.map_or("-".to_owned(), |c| c.to_string());
-                format!("at {knot} {choice} {next}")
+                format!("at {} {choice} {next}", hex(&self.knots[*knot].path))
             }
             None => "at -".to_owned(),
         });
         for (knot, choice) in &self.spent {
-            lines.push(format!("spent {knot} {choice}"));
+            lines.push(format!("spent {} {choice}", hex(&self.knots[*knot].path)));
         }
         for (name, value) in &self.variables {
             let value = match value {
@@ -317,8 +317,10 @@ impl FakeDialog {
         Some(state)
     }
 
-    fn knot_index(&self, index: &str) -> Option<usize> {
-        index.parse().ok().filter(|&i| i < self.knots.len())
+    /// The index of the knot whose path [`hex`] wrote as `path`.
+    fn knot_index(&self, path: &str) -> Option<usize> {
+        let path = unhex(path)?;
+        self.knots.iter().position(|knot| knot.path == path)
     }
 }
 
