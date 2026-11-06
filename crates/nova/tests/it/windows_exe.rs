@@ -166,8 +166,7 @@ fn a_usage_error_with_stderr_redirected_prints_there_and_shows_no_box() {
         .read_to_string(&mut stderr)
         .expect("UTF-8");
     assert_eq!(status.code(), Some(2), "{stderr}");
-    assert_eq!(
-        stderr.lines().collect::<Vec<_>>(),
-        ["usage: nova [NOVA_FILES_DIR] (or set NOVA_DATA to the Nova Files directory)"]
-    );
+    // The usage message itself is `cli`'s, pinned there.
+    let usage = nova::cli::Usage.to_string();
+    assert_eq!(stderr.lines().collect::<Vec<_>>(), [usage.as_str()]);
 }
