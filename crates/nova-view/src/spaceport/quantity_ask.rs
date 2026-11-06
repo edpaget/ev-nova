@@ -235,6 +235,13 @@ impl<T> QuantityAsk<T> {
         self.host.cancel_pointer()
     }
 
+    /// Whether whoever holds the screen covers it: the open dialog, and
+    /// each one opened while it lasts, asks for no text entry and draws no
+    /// on-screen keyboard ([`ModalHost::set_covered`]).
+    pub fn set_covered(&mut self, covered: bool) {
+        self.host.set_covered(covered);
+    }
+
     /// Lets go of Alt, and of the keys held in the open dialog.
     pub fn release_keys(&mut self) {
         self.keys.let_go();

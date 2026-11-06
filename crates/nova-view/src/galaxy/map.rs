@@ -1441,6 +1441,7 @@ impl GalaxyMap {
             .with_bindings(self.keys.bindings().clone());
         dialog.flush_typed_key();
         self.pad.told().tell(&mut dialog);
+        dialog.set_covered(crate::ui::touch_aids::host::TouchAid::covered(&self.toggle));
         self.find = Some(dialog);
         self.press = None;
         self.armed = false;
@@ -2184,9 +2185,13 @@ impl Screen for GalaxyMap {
     }
 
     /// Plot Course's toggle hides and disarms while something the map's
-    /// holder shows covers it ([`crate::ui::touch_aids::host::cover`]).
+    /// holder shows covers it ([`crate::ui::touch_aids::host::cover`]), and
+    /// Find asks for no text entry.
     fn set_covered(&mut self, covered: bool) {
         crate::ui::touch_aids::host::cover(self, covered);
+        if let Some(find) = &mut self.find {
+            find.set_covered(covered);
+        }
     }
 
     /// Forgets the left-button press, if any: the map stops dragging and the

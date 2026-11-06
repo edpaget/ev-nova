@@ -177,6 +177,12 @@ impl<C: GalaxyCatalog + SystemCatalog> Screen for Navigator<C> {
         self.shown_mut().cancel_pointer();
     }
 
+    /// The map is told, so its Find asks for no text entry while the
+    /// navigator's holder covers it.
+    fn set_covered(&mut self, covered: bool) {
+        self.map.set_covered(covered);
+    }
+
     fn release_keys(&mut self) {
         self.keys.let_go();
         self.shown_mut().release_keys();
@@ -590,6 +596,16 @@ mod tests {
         assert_eq!(zeros.borrow().0, [3, 3, 3]);
         // The default takes the last frame allowed.
         assert_eq!(flicker(navigator()), [Some(1), Some(3), Some(2)]);
+    }
+
+    #[test]
+    fn a_covered_navigator_s_find_asks_nothing() {
+        let mut navigator = navigator()
+            .with_metrics(std::rc::Rc::new(crate::text::fixture::MonoMetrics))
+            .with_find(None, crate::ui::ButtonStyle::STOCK);
+        navigator.input(&press(Key::KeyS));
+        assert!(navigator.map().finding());
+        crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut navigator, "navigator");
     }
 
     #[test]

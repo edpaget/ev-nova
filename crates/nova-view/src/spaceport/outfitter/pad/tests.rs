@@ -181,6 +181,14 @@ fn the_alert_and_the_quantity_dialog_open_told() {
 }
 
 #[test]
+fn a_covered_outfitter_s_quantity_dialog_asks_nothing() {
+    let mut screen = counting_screen();
+    alt_click(&mut screen, BUY_ITEM);
+    assert!(screen.quantity().is_some(), "asking");
+    crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut screen, "outfitter");
+}
+
+#[test]
 fn a_pad_alone_opens_the_quantity_dialog_with_west_held_and_buys_its_count() {
     let mut padded = counting_screen();
     padded.input(&told(PAD));

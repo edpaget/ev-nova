@@ -1864,6 +1864,12 @@ impl Screen for ShipyardScreen {
         }
     }
 
+    /// Its name prompt asks for no text entry while something the
+    /// spaceport shows covers it.
+    fn set_covered(&mut self, covered: bool) {
+        self.naming.set_covered(covered);
+    }
+
     fn cancel_pointer(&mut self) {
         if self
             .offering

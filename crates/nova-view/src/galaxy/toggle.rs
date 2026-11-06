@@ -121,6 +121,30 @@ mod tests {
         map.touch_toggle().rect().center()
     }
 
+    /// Opens Find with S, as the map's key does.
+    fn open_find(map: &mut GalaxyMap) {
+        map.input(&Input::Key {
+            key: crate::input::Key::KeyS,
+            pressed: true,
+            repeat: false,
+        });
+        map.input(&Input::Text('s'));
+        assert!(map.finding(), "Find opened");
+    }
+
+    #[test]
+    fn a_covered_map_s_find_asks_nothing() {
+        let mut map = map();
+        open_find(&mut map);
+        crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut map, "map");
+        let mut covered = self::map();
+        covered.set_covered(true);
+        open_find(&mut covered);
+        let mut list = crate::draw::DrawList::new();
+        covered.draw(&mut list);
+        assert_eq!(list.text_entry(), None, "opened covered, it asks nothing");
+    }
+
     #[test]
     fn the_toggle_then_a_tap_on_a_system_is_pressed_as_a_shift_click_is() {
         let mut toggled = map();

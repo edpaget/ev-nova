@@ -201,6 +201,13 @@ fn a_pad_south_on_the_shipyard_presses_the_focused_control_not_info() {
 }
 
 #[test]
+fn a_covered_shipyard_s_naming_asks_nothing() {
+    let mut screen = naming_by_key();
+    assert!(screen.naming().is_some(), "naming");
+    crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut screen, "shipyard");
+}
+
+#[test]
 fn the_info_panel_and_the_naming_open_told() {
     let mut screen = screen();
     screen.input(&told(PAD));

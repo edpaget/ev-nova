@@ -69,6 +69,9 @@ pub struct ModalHost<T, D> {
     told: Told,
     /// What the dialog left as it closed, until taken.
     unclaimed: Vec<Input>,
+    /// Whether whoever holds the screen covers it, which each dialog it
+    /// opens is told as it opens ([`Screen::set_covered`]).
+    covered: bool,
 }
 
 impl<T, D> Default for ModalHost<T, D> {
@@ -78,16 +81,30 @@ impl<T, D> Default for ModalHost<T, D> {
             open: None,
             told: Told::default(),
             unclaimed: Vec::new(),
+            covered: false,
         }
     }
 }
 
 impl<T, D: Modal> ModalHost<T, D> {
     /// Opens `dialog` for `payload`, in place of any dialog open, telling
-    /// it the surroundings the host was told last.
+    /// it the surroundings the host was told last and whether it is
+    /// covered.
     pub fn open(&mut self, payload: T, mut dialog: D) {
         self.told.tell(&mut dialog);
+        dialog.set_covered(self.covered);
         self.open = Some((payload, dialog));
+    }
+
+    /// Whether whoever holds the screen covers it: the open dialog is
+    /// told, and so is each one opened while it lasts. A covered text
+    /// dialog asks for no text entry and draws no on-screen keyboard
+    /// (`ui::entry_keyboard`).
+    pub fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
+        if let Some((_, dialog)) = &mut self.open {
+            dialog.set_covered(covered);
+        }
     }
 
     /// Whether a dialog is open.
@@ -478,6 +495,30 @@ mod tests {
             Some(("row", 7))
         );
         assert!(!host.is_open());
+    }
+
+    #[test]
+    fn covering_the_host_covers_its_dialog() {
+        let quantity =
+            || QuantityDialog::fallback(7, "Buy", PROMPT, ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        let asks = |host: &ModalHost<&str, QuantityDialog>| {
+            let mut list = DrawList::new();
+            host.draw(&mut list);
+            list.text_entry().is_some()
+        };
+        let mut host = ModalHost::default();
+        host.open("row", quantity());
+        assert!(asks(&host));
+        host.set_covered(true);
+        assert!(!asks(&host), "the open dialog is told");
+        host.input(&key(Key::Enter), &mut Vec::new());
+        host.open("next", quantity());
+        assert!(!asks(&host), "one opened while covered is told as it opens");
+        host.set_covered(false);
+        assert!(asks(&host));
+        let mut closed: ModalHost<&str, QuantityDialog> = ModalHost::default();
+        closed.set_covered(true);
+        assert!(!closed.is_open(), "covering opens nothing");
     }
 
     /// "Desc Dialog"'s shape, small: Done (1) at (100, 90), a parked

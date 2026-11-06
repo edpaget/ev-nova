@@ -398,6 +398,43 @@ pub(crate) mod pad_entry {
             dialog.input(&input);
         }
     }
+
+    /// Whether `screen` draws the on-screen keyboard now: its panel.
+    fn keyboard_shown(screen: &dyn Screen) -> bool {
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        list.iter().any(|command| {
+            matches!(command, crate::draw::DrawCommand::Line { color, .. }
+                if *color == crate::ui::entry_keyboard::keyboard::PANEL)
+        })
+    }
+
+    /// Asserts that covering `screen`, whose text-entry dialog is open,
+    /// stops its entry: under the keyboard the frame asks for the system's
+    /// entry only uncovered, and under touch the on-screen keyboard is
+    /// drawn only uncovered. `what` names it in the messages.
+    pub(crate) fn covering_stops_its_entry(screen: &mut dyn Screen, what: &str) {
+        let asks = |screen: &dyn Screen| {
+            let mut list = DrawList::new();
+            screen.draw(&mut list);
+            list.text_entry().is_some()
+        };
+        screen.input(&told(Device::Keyboard));
+        assert!(asks(screen), "{what}: asks uncovered");
+        screen.set_covered(true);
+        assert!(!asks(screen), "{what}: asks nothing covered");
+        screen.set_covered(false);
+        assert!(asks(screen), "{what}: asks again uncovered");
+        screen.input(&told(Device::Touch));
+        assert!(keyboard_shown(screen), "{what}: the keyboard under touch");
+        screen.set_covered(true);
+        assert!(!keyboard_shown(screen), "{what}: no keyboard covered");
+        screen.set_covered(false);
+        assert!(
+            keyboard_shown(screen),
+            "{what}: the keyboard again uncovered"
+        );
+    }
 }
 
 #[cfg(test)]

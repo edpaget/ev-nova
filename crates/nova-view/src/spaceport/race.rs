@@ -490,9 +490,11 @@ impl Screen for RaceScreen {
     }
 
     /// Its toggle hides and disarms while something the spaceport shows
-    /// covers it ([`crate::ui::touch_aids::host::cover`]).
+    /// covers it ([`crate::ui::touch_aids::host::cover`]), and its bet's
+    /// dialog asks for no text entry.
     fn set_covered(&mut self, covered: bool) {
         crate::ui::touch_aids::host::cover(self, covered);
+        self.quantity.set_covered(covered);
     }
 
     fn cancel_pointer(&mut self) {
@@ -990,6 +992,18 @@ mod tests {
         click(&mut screen, racer_item(1));
         assert!(screen.quantity().is_none(), "nothing asked");
         assert_eq!(screen.take_bet(), Some((1, Bet::House)));
+    }
+
+    #[test]
+    fn a_covered_race_s_bet_dialog_asks_nothing() {
+        let mut screen = open();
+        screen.input(&key(Key::AltLeft, true, false));
+        click(&mut screen, racer_item(1));
+        assert!(
+            screen.quantity().and_then(QuantityAsk::dialog).is_some(),
+            "asking"
+        );
+        crate::ui::edit_dialog::pad_entry::covering_stops_its_entry(&mut screen, "race");
     }
 
     #[test]
