@@ -7,8 +7,13 @@
 //! points that cover every case a link can take (two from `hearth` to
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
 //! one-way back door to `verge`); the civilian hull `hauler` and the
-//! crown hull `cutter`, with a livery and a placeholder model; and the
-//! start `dock-hand`, in the hauler in `hearth`.
+//! crown hull `cutter`, with a livery and a placeholder model; the
+//! start `dock-hand`, in the hauler in `hearth`; and one conversation,
+//! `dialog/dock-job.ink`, an offer that `hearth-dock` names
+//! (`dialog/dock-job.ink#job_offer`), with its compiled
+//! `dock-job.ink.json` beside it. The other two stellars name none. The
+//! `.ink`'s header, and [`dialogs`](super::dialogs)' docs, give the
+//! `inklecate` command that compiles it again.
 
 use std::path::PathBuf;
 

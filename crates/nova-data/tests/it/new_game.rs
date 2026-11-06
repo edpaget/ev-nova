@@ -31,8 +31,9 @@ use nova_galaxy_media::BARE;
 /// none; and `verge-camp`, a warden outpost with a bar and no fuel; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
-/// civilian hull `hauler` and the crown hull `cutter`; and the start
-/// `dock-hand`, in the hauler in `hearth`.
+/// civilian hull `hauler` and the crown hull `cutter`; the start
+/// `dock-hand`, in the hauler in `hearth`; and the offer conversation
+/// `dialog/dock-job.ink`, compiled, which `hearth-dock` names.
 fn fixture() -> PathBuf {
     new_game::fixture::folder()
 }
@@ -41,6 +42,11 @@ fn fixture() -> PathBuf {
 fn named<T: Registered + Clone>(data: &GameData, id: i16) -> (String, T) {
     let entry = data.get::<T>(id).expect("present").expect("decoded");
     (entry.name.expect("named").to_owned(), entry.record.clone())
+}
+
+/// The bible id `text`.
+fn id(text: &str) -> nova_galaxy_format::id::Id {
+    nova_galaxy_format::id::Id::try_from(text.to_owned()).expect("an id")
 }
 
 /// `table` as `(id, nova)` pairs.
@@ -68,6 +74,28 @@ fn the_fixture_folder_loads_without_problems_or_pointers() {
     let problems: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
     assert_eq!(problems, Vec::<String>::new());
     assert_eq!(game.lfs_pointers, Vec::<String>::new());
+}
+
+#[test]
+fn hearth_dock_names_the_fixture_s_offer_conversation() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
+    let dialogs = game.data.dialogs();
+    let places: Vec<_> = dialogs
+        .stellars
+        .iter()
+        .map(|(&stellar, place)| (stellar, place.as_ref_text()))
+        .collect();
+    assert_eq!(
+        places,
+        [(dock, "dialog/dock-job.ink#job_offer".to_owned())],
+        "the moon and the camp name none"
+    );
+    let (_, compiled) = dialogs.stellar(dock).expect("its compiled story");
+    assert_eq!(
+        &**compiled,
+        nova_data::new_game::dialogs::fixture::DOCK_JOB_JSON
+    );
 }
 
 #[test]
