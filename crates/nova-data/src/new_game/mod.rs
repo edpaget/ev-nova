@@ -74,7 +74,9 @@
 //!   that isn't there is left out, with a problem for each such name. So
 //!   is one whose `offer` or `complete` dialog has no compiled file, or,
 //!   once [`NewGame::check_dialogs`] has run, names a knot its story
-//!   lacks. A news item whose `from` isn't a system is left out.
+//!   lacks. One whose `requires` names a mission left out is left out
+//!   too, with a problem naming it. A news item whose `from` isn't a
+//!   system is left out.
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported

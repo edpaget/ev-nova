@@ -204,7 +204,8 @@ impl NewGame {
     /// Asks `check` about every stellar's conversation and every mission's
     /// offer and completion. Each one it refuses is a problem against the
     /// stellar's or the mission's file: the stellar keeps no
-    /// conversation, and the mission is left out.
+    /// conversation, and the mission is left out, with every mission
+    /// whose `requires` then names one left out.
     pub fn check_dialogs(&mut self, check: &dyn DialogCheck) {
         let mut dialogs = self.data.dialogs().clone();
         let mut storylines = self.data.storylines().clone();
@@ -247,6 +248,7 @@ impl NewGame {
             }
             kept
         });
+        super::missions::drop_dependents(&mut storylines.missions, problems);
         dialogs.stellars = stellars;
         self.data = std::mem::take(&mut self.data)
             .with_dialogs(dialogs)

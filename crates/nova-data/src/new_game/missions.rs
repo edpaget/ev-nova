@@ -16,8 +16,13 @@
 //! compiled file. A news item whose `from` isn't a system is left out the
 //! same way. A name that failed to load, a record left out for its ID, or
 //! a news item left out isn't reported again, but still leaves the
-//! mission out. A mission's `storyline`, `act` and `giver` aren't read
-//! yet.
+//! mission out. A mission whose `requires` names a mission that was left
+//! out (here, or later by [`NewGame::check_dialogs`]) is left out too,
+//! with a problem against its own file naming the one it needs, and so on
+//! down the chain ([`drop_dependents`]). A mission's `storyline`, `act`
+//! and `giver` aren't read yet.
+//!
+//! [`NewGame::check_dialogs`]: super::NewGame::check_dialogs
 
 use std::collections::BTreeMap;
 
@@ -86,10 +91,74 @@ pub fn map(
             missions.insert(id.to_string(), mission);
         }
     }
+    drop_dependents(&mut missions, problems);
     Storylines {
         missions,
         news,
         points,
+    }
+}
+
+/// Leaves out of `missions` each one whose `requires` (nested groups and
+/// all) names a mission that is in the galaxy but not in `missions`,
+/// because it was itself left out, until none does. Each name is one
+/// problem against the dependent's file.
+///
+/// The galaxy's own check ([`Names::mission_named`]) has already left out
+/// a mission naming one that isn't there at all, so every name missing
+/// here was left out with its own problem.
+pub(super) fn drop_dependents(
+    missions: &mut BTreeMap<String, StoryMission>,
+    problems: &mut Vec<Problem>,
+) {
+    loop {
+        let mut dropped = Vec::new();
+        for (id, mission) in missions.iter() {
+            let mut gone = Vec::new();
+            missing_needs("requires", &mission.requires, missions, &mut gone);
+            if !gone.is_empty() {
+                dropped.push(id.clone());
+            }
+            problems.extend(gone.into_iter().map(|(field, name)| {
+                Problem::new(
+                    format!("missions/{id}.md"),
+                    format!(
+                        "{field} names the mission `{name}`, which was left out; it is left out"
+                    ),
+                )
+            }));
+        }
+        if dropped.is_empty() {
+            return;
+        }
+        for id in dropped {
+            missions.remove(&id);
+        }
+    }
+}
+
+/// Each mission `requires`, at `field`, names in `missions_done` (nested
+/// groups and all) that isn't in `missions`, with the field naming it,
+/// pushed onto `gone`.
+fn missing_needs(
+    field: &str,
+    requires: &Requires,
+    missions: &BTreeMap<String, StoryMission>,
+    gone: &mut Vec<(String, String)>,
+) {
+    for name in &requires.missions_done {
+        if !missions.contains_key(name) {
+            gone.push((format!("{field}.missions_done"), name.clone()));
+        }
+    }
+    for (group, list) in [
+        ("all", &requires.all),
+        ("any", &requires.any),
+        ("none", &requires.none),
+    ] {
+        for (i, nested) in list.iter().enumerate() {
+            missing_needs(&format!("{field}.{group}[{i}]"), nested, missions, gone);
+        }
     }
 }
 
@@ -681,6 +750,68 @@ mod tests {
         );
         assert!(game.data.storylines().missions.is_empty());
         assert_eq!(game.data.storylines().news.len(), 1, "the news stays");
+    }
+
+    /// The galaxy with `toll` written as `toll_yaml`, `after` needing
+    /// `toll` done, and `last` needing `after` done in a nested group.
+    fn with_chain(toll_yaml: &str) -> MemSource {
+        with_toll(toll_yaml)
+            .with(
+                "missions/after.md",
+                &format!("{HEAD}requires: {{missions_done: [toll]}}\n---\n"),
+            )
+            .with(
+                "missions/last.md",
+                &format!("{HEAD}requires: {{all: [{{any: [{{missions_done: [after]}}]}}]}}\n---\n"),
+            )
+    }
+
+    /// What a mission named at `field` that was left out reports.
+    fn needs_left_out(file: &str, field: &str, id: &str) -> String {
+        format!(
+            "missions/{file}.md: {field} names the mission `{id}`, which was left out; it is left out"
+        )
+    }
+
+    #[test]
+    fn a_mission_needing_one_left_out_for_a_missing_name_is_left_out_too() {
+        let game = loaded(&with_chain(
+            "offer: {at: nowhere, dialog: dialog/errands.ink#toll}\n",
+        ));
+        assert_eq!(
+            problems(&game),
+            [
+                "missions/toll.md: offer.at names the stellar `nowhere`, which is not in \
+                 stellars/; it is left out"
+                    .to_owned(),
+                needs_left_out("after", "requires.missions_done", "toll"),
+                needs_left_out("last", "requires.all[0].any[0].missions_done", "after"),
+            ]
+        );
+        let kept: Vec<_> = game.data.storylines().missions.keys().cloned().collect();
+        assert_eq!(kept, ["parcel"]);
+    }
+
+    #[test]
+    fn check_dialogs_leaves_out_a_mission_needing_one_it_refused() {
+        use crate::new_game::dialogs::fixture::FakeCheck;
+        let mut game = loaded(&with_chain(
+            "complete: {at: alpha-prime, dialog: dialog/errands.ink#done}\n",
+        ));
+        assert_eq!(problems(&game), Vec::<String>::new());
+        game.check_dialogs(&FakeCheck::default().story("{errands}", &["parcel"]));
+        assert_eq!(
+            problems(&game),
+            [
+                "missions/toll.md: complete dialog dialog/errands.ink#done: no knot or stitch \
+                 `done`"
+                    .to_owned(),
+                needs_left_out("after", "requires.missions_done", "toll"),
+                needs_left_out("last", "requires.all[0].any[0].missions_done", "after"),
+            ]
+        );
+        let kept: Vec<_> = game.data.storylines().missions.keys().cloned().collect();
+        assert_eq!(kept, ["parcel"]);
     }
 
     #[test]
