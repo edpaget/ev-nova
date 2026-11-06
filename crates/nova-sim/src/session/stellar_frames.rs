@@ -810,13 +810,14 @@ mod tests {
     {
         // Animating only while destroyed over a `Type` of 5, with no
         // `DeadType` sheet: a rebuild point while destroyed fills its slot
-        // with graphic type 0, of 3 frames here.
+        // with graphic type 0, of 3 frames here, the count the catalog
+        // reports and the start reads.
         let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 5, 0);
+        catalog.fallback_frames = 3;
         let site = &mut catalog.sites[0].1[1];
         site.dead_graphic = None;
         site.dead_frame_size = None;
         let mut session = Session::start(&catalog).expect("starts");
-        session.statics_mut().fallback_frames = 3;
         let anim = anim(&session);
         run(&mut session, "Y140");
         let mut oracle = StellarFrames::new();
