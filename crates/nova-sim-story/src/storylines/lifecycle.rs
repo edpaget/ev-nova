@@ -734,6 +734,85 @@ mod tests {
         assert!(f.flags.is_set("second"));
     }
 
+    /// An event that happens once `requires` hold, setting `fired`.
+    fn waiting_on(requires: Requires) -> StoryMission {
+        StoryMission {
+            requires,
+            on_offer: setting(&["fired"]),
+            ..StoryMission::default()
+        }
+    }
+
+    /// The job and an event waiting on `requires`, neither seen.
+    fn with_event(requires: Requires) -> Fixture {
+        Fixture::new(&[("job", job()), ("event", waiting_on(requires))])
+    }
+
+    #[test]
+    fn an_offer_s_effects_make_an_event_happen_at_once() {
+        let mut f = with_event(requiring(&["offered"]));
+        assert!(f.play().make_offer("job"));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+        assert!(f.flags.is_set("fired"));
+    }
+
+    #[test]
+    fn an_accept_s_effects_make_an_event_happen_at_once() {
+        let mut f = with_event(requiring(&["accepted"]));
+        f.play().make_offer("job");
+        assert_eq!(f.state("event"), None);
+        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+    }
+
+    #[test]
+    fn a_decline_s_effects_make_an_event_happen_at_once() {
+        let mut f = with_event(requiring(&["declined"]));
+        f.play().make_offer("job");
+        assert!(f.play().decide("job", Outcome::Decline, 10));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+    }
+
+    #[test]
+    fn a_completion_makes_an_event_waiting_on_the_mission_happen_at_once() {
+        let mut f = with_event(Requires {
+            missions_done: vec!["job".to_owned()],
+            ..Requires::default()
+        });
+        f.story.missions.insert(
+            "job".to_owned(),
+            MissionState::Active {
+                cargo: 0,
+                met: true,
+            },
+        );
+        assert!(f.play().complete("job"));
+        assert_eq!(f.state("event"), Some(MissionState::Done));
+        assert!(f.flags.is_set("fired"));
+    }
+
+    #[test]
+    fn an_event_with_an_objective_started_by_an_effect_is_active_at_once() {
+        let mut f = Fixture::new(&[
+            ("job", job()),
+            (
+                "haul",
+                StoryMission {
+                    objective: Some(deliver(5, DOCK)),
+                    ..waiting_on(requiring(&["offered"]))
+                },
+            ),
+        ]);
+        f.play().make_offer("job");
+        assert_eq!(
+            f.state("haul"),
+            Some(MissionState::Active {
+                cargo: 5,
+                met: false
+            })
+        );
+    }
+
     #[test]
     fn an_effect_that_makes_an_offer_hold_makes_it_the_next_scene() {
         let toll = StoryMission {
