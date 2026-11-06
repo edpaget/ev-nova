@@ -3,6 +3,10 @@
 //!
 //! Each decision, in order:
 //!
+//! - **In its count wait** (goal 0x16, [`Goal::CountWait`]) it returns at
+//!   once, writing nothing (@0x8b762 → @0x8c11d), as every type's think
+//!   does; the handler's head clears its target while the wait runs
+//!   ([`board_wait::lapse`](crate::traffic::board_wait::lapse)).
 //! - **The government's word on the player** (`_WarshipAI`
 //!   @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3, identical),
 //!   before anything else, for a ship with a government that is not in
@@ -77,7 +81,13 @@
 //!     and a target it holds idle, landing, entering a gate, leaving,
 //!     holding or drifting, are goal 4 on that ship, taken through its own
 //!     drop, its retreats and its fully-dry drop with no search that think
-//!     ([`warship_hunt`](super::held_attack::warship_hunt));
+//!     ([`warship_hunt`](super::held_attack::warship_hunt)). So goals 1, 2
+//!     and 0x14 hold +0x70 only with its warp under way, which leaves the
+//!     goal standing (@0x8bb75-0x8bb7c, finding f of npc-ai phase 7): in
+//!     goal 2 alone, as the high level's hold zeroes +0x50 for goals 1 and
+//!     0x14 (@0x8d513-0x8d52e), and the warp hold then flees it
+//!     (@0x8d557-0x8d56b). The death star tail-calls this think
+//!     (@0x8c2c5), so it holds them the same way;
 //!   - an interceptor's ([`Retreat::search_gate`]): its provoked branch,
 //!     an attack it holds, a target it kept idle and its closed gate
 //!     ([`interceptor_hunt`](super::held_attack::interceptor_hunt)).
@@ -756,6 +766,14 @@ impl Behaviour for Warship {
     /// the pick of a leave with no way to jump ([`grounded`]), then the
     /// fully-dry drop's -1 (@0x8c117), each over the one before.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        if npc.goal == Goal::CountWait {
+            // It returns for goal 0x16 at once (@0x8b762 → @0x8c11d),
+            // before its word and its provoked branch.
+            return Decision {
+                goal: npc.goal,
+                ..Decision::default()
+            };
+        }
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT

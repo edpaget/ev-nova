@@ -23,7 +23,9 @@
 //!   [`held_attack`](crate::ai::held_attack)): provoked by an active one it
 //!   attacks it; otherwise it keeps its goal holding the target, with no
 //!   inspection and no patrol (@0x8cc93 → @0x8d13f → @0x8d14d), an ally or
-//!   a fleet-mate as much as any. A target its think lets go ([`let_go`],
+//!   a fleet-mate as much as any, or a ship that hit it for no damage. A
+//!   hold of goal 2 behind the closed gate keeps it the same way (see
+//!   "Waiting" below). A target its think lets go ([`let_go`],
 //!   @0x8d2fd-0x8d33a), held, provoker, the word's or a fresh pick, leaves
 //!   it in [`Goal::Idle`] with no target and no patrol. Its out-of-ammo
 //!   flight still runs on either.
@@ -86,7 +88,13 @@
 //!   (goal 2), plundering (0xd), drifting (0xe), mining or scooping: it
 //!   keeps the goal, a lost lead's that the succession copied included,
 //!   with a hostile player in view though it is. Only provocation or its
-//!   government's word lifts it.
+//!   government's word lifts it. Waiting, holding, leaving, mining or
+//!   scooping, it keeps a target it holds (a hit's, or a lead's the
+//!   succession copied) while that ship's slot is active, as nothing from
+//!   @0x8d13f writes +0x70 there
+//!   ([`keeps_behind_gate`](super::held_attack::keeps_behind_gate)), so
+//!   the threat tests and the warp hold read it; the drift's and the count
+//!   wait's high level clears it.
 //! - **Under a wait** the block is shut too: it runs only with +0x4c at
 //!   most 0 (@0x8cc6d-0x8cc8d → @0x8d13f, [`search_shut`]), so an
 //!   interceptor holding its course, entering a gate, held at its gate or
@@ -293,8 +301,11 @@ pub fn search_shut(npc: &Npc, around: &Surroundings) -> bool {
 /// and patrols nothing for the target it kept: idle, landing or entering a
 /// gate (the engine's goal 0 and 1) with +0x70 set goes to @0x8d13f
 /// unprovoked or with the slot inactive (@0x8cc93-0x8ccc9), as an ally
-/// goal 4 spared leaves it ([`held_attack`](super::held_attack)). A
-/// provoked one has taken goal 4 on it already.
+/// goal 4 spared or a hit for no damage leaves it
+/// ([`held_attack`](super::held_attack)). A provoked one has taken goal 4
+/// on it already. Behind the closed gate it reaches @0x8d13f all the same,
+/// and keeps the target there too
+/// ([`keeps_behind_gate`](super::held_attack::keeps_behind_gate)).
 #[must_use]
 pub fn searches_nothing(npc: &Npc) -> bool {
     matches!(npc.goal, Goal::Idle | Goal::Land(_) | Goal::EnterGate(_)) && npc.target.is_some()
@@ -3187,6 +3198,107 @@ mod tests {
             ..after(n(9))
         };
         assert!(forgets(waiting, true), "under a wait");
+    }
+
+    // Behind its closed gate (finding f of npc-ai phase 7).
+
+    /// The interceptor `cop`'s decision among `others` (after it), the
+    /// player 1000 below, the police of `police_flags`.
+    fn kept_by(cop: Npc, others: &[Npc], police_flags: u16) -> Decision {
+        let npcs: Vec<Npc> = std::iter::once(cop).chain(others.iter().cloned()).collect();
+        let (sites, govts) = (sites(), govts(0, police_flags));
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 8]))
+    }
+
+    /// The goals whose think writes no +0x70 behind the closed gate.
+    const BEHIND_GATE: [Goal; 5] = [
+        Goal::JumpOut,
+        Goal::Wait,
+        Goal::Hold,
+        Goal::Mine,
+        Goal::Scoop,
+    ];
+
+    #[test]
+    fn behind_its_closed_gate_it_keeps_a_target_it_holds_unprovoked() {
+        // From @0x8d13f the retreats and the disabled drop need goal 4, the
+        // out-of-ammo flight writes none here, and the lost-sight drop and
+        // the re-pick need goal 7 (@0x8d161-0x8d411): no +0x70 write.
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        for goal in BEHIND_GATE {
+            let cop = Npc {
+                goal,
+                target: Some(n(2)),
+                ..police()
+            };
+            let decision = kept_by(cop.clone(), std::slice::from_ref(&trader), 0);
+            assert_eq!(decision.last_target(), Some(Some(n(2))), "{goal:?}");
+            let waiting = Npc {
+                ai_wait: 5.0,
+                ..cop.clone()
+            };
+            let decision = kept_by(waiting, std::slice::from_ref(&trader), 0);
+            assert_eq!(
+                decision.last_target(),
+                Some(Some(n(2))),
+                "{goal:?} under a wait"
+            );
+            assert_eq!(
+                kept_by(cop, &[], 0).last_target(),
+                Some(None),
+                "{goal:?}: the slot test (@0x8d4e4-0x8d50d)"
+            );
+        }
+    }
+
+    #[test]
+    fn drifting_or_count_waiting_it_holds_nothing_of_its_own() {
+        // The high level clears +0x70 there (@0x8eb85, @0x8d480).
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        for goal in [Goal::Drift, Goal::CountWait] {
+            let cop = Npc {
+                goal,
+                target: Some(n(2)),
+                ..police()
+            };
+            let decision = kept_by(cop, std::slice::from_ref(&trader), 0);
+            assert_eq!(decision.last_target(), None, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_dry_waiting_interceptor_flees_the_target_it_kept() {
+        // Out of ammunition it flees +0x70 (@0x8d391).
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        let cop = Npc {
+            goal: Goal::Wait,
+            target: Some(n(2)),
+            ..short_of_ammo(police(), AmmoLeft::Dry, true)
+        };
+        assert_eq!(kept_by(cop, &[trader], 0).goal, Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_leaving_interceptor_whose_word_finds_its_kept_target_a_threat_drops_it() {
+        // The 0x0040 word's `_IsThreatToPlayer` (@0x8cbb2) reads the kept
+        // +0x70 on a ship the player leads, and writes goal 0 and -1
+        // (@0x8cbc0-0x8cbc6); the think goes on from goal 0, its gate open,
+        // and inspects the player.
+        let mut escort = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let cop = Npc {
+            goal: Goal::JumpOut,
+            target: Some(n(2)),
+            ..police()
+        };
+        let decision = kept_by(cop, &[escort], crate::govt::NEVER_ATTACKS_PLAYER);
+        assert!(decision.dropped_target);
+        assert_eq!(decision.goal, Goal::Inspect(P), "no longer leaving");
+        assert_eq!(decision.last_target(), Some(None));
     }
 
     #[test]

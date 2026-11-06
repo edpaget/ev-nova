@@ -297,6 +297,10 @@ impl Behaviour for EscortAi {
     /// (+0x70 = -1, @0x80e9d), so its next think draws again; idle, which
     /// it decides only under a player breaking up, the target it has, as
     /// the lost parent writes none, unless sub 0's [`unprovoked`] drops it.
+    /// `_EscortAI` never leaves a goal 1, 2 or 0x14 with +0x70 set (its
+    /// order word writes a goal every think, and the inertialess detach's
+    /// goal 2 comes with +0x70 -1, @0x83c11-0x83c4a; finding f of npc-ai
+    /// phase 7), so this holds none there.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Idle => npc

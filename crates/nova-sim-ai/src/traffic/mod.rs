@@ -284,6 +284,8 @@ pub mod inertialess;
 mod inspection_hit_tests;
 #[cfg(test)]
 mod interceptor_goal4_tests;
+#[cfg(test)]
+mod interceptor_hit_target_tests;
 pub mod ionization;
 #[cfg(test)]
 mod jump_begun_tests;
