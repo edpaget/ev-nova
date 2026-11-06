@@ -137,6 +137,7 @@ fn sheet(image: SheetImage, sheet: &SpriteSheet) -> StellarSheet {
         frame_width: sheet.frame_width(),
         frame_height: sheet.frame_height(),
         image_size: (sheet.image_width(), sheet.image_height()),
+        eight_bit: sheet.depth() == 8,
     }
 }
 
@@ -242,6 +243,7 @@ mod tests {
             frame_width: size,
             frame_height: size,
             image_size: (size, size),
+            eight_bit: false,
         }
     }
 
@@ -601,5 +603,26 @@ mod tests {
             (wormhole.frame_width, wormhole.frame_height),
             (decoded.frame_width(), decoded.frame_height())
         );
+    }
+
+    /// An 8-bit `rlëD`'s sheet says so, so the scene can draw it as the
+    /// draw proc's depth-8 branches do; a 16-bit one's does not.
+    #[test]
+    fn an_8_bit_rled_s_sheet_is_eight_bit() {
+        let eight = RledBuilder::new(2, 1)
+            .depth(8)
+            .frame(|f| f.line().pixels8(&[0x00, 0x7C]))
+            .build();
+        let mut resources = sol();
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1001));
+        resources.push((RLED, 1001, None, eight));
+        let data = store(&resources);
+        let sprites: Vec<_> = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .map(|stellar| (stellar.id, stellar.sprite.expect("its sheet").eight_bit))
+            .collect();
+        assert_eq!(sprites, [(StellarId(129), true), (StellarId(128), false)]);
     }
 }

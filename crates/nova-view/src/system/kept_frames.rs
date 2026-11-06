@@ -107,6 +107,7 @@ mod tests {
                 frame_width: 8,
                 frame_height: 8,
                 image_size: (8, 8),
+                eight_bit: false,
             };
             SystemContents {
                 id,

@@ -753,6 +753,7 @@ fn uncounted_gate() -> FakeCatalog {
             frame_width: 100,
             frame_height: 100,
             image_size: (100, 100),
+            eight_bit: false,
         })),
         ..stellar(141, "Gate", (200, 100), 6)
     });

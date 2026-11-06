@@ -82,6 +82,7 @@ mod tests {
             frame_width: crate::flight::fake_catalog::LAYER_SIDE,
             frame_height: crate::flight::fake_catalog::LAYER_SIDE,
             solid,
+            eight_bit: false,
         }
     }
 
@@ -103,6 +104,7 @@ mod tests {
             shield: Some(layer(1500, has(1500))),
             base_transp: 0,
             solid: has(1000),
+            eight_bit: false,
         }
     }
 

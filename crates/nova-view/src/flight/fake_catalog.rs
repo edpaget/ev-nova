@@ -292,6 +292,7 @@ pub(in crate::flight) fn sheet() -> ShipSheet {
         shield: None,
         base_transp: 0,
         solid: false,
+        eight_bit: false,
     }
 }
 
@@ -770,6 +771,7 @@ pub(in crate::flight) fn stellar(
             frame_width: 20,
             frame_height: 20,
             image_size: (20, 20),
+            eight_bit: false,
         }),
         dead_sprite: None,
         animation: AnimationData {
@@ -800,6 +802,7 @@ pub(in crate::flight) fn dying(
             frame_width: 30,
             frame_height: 30,
             image_size: (30, 30),
+            eight_bit: false,
         })),
         ..stellar(id, name, at, frames)
     }
@@ -846,6 +849,7 @@ impl SystemCatalog for FakeCatalog {
                 frame_width: width,
                 frame_height: width,
                 image_size: (width, width),
+                eight_bit: false,
             };
             for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
                 stellar.sprite = Ok(square(1129, moon.width, moon.frames));
@@ -870,6 +874,7 @@ impl SystemCatalog for FakeCatalog {
                 frame_width: zero,
                 frame_height: zero,
                 image_size: (zero, zero),
+                eight_bit: false,
             }),
             problems: Vec::new(),
         }
@@ -1944,6 +1949,7 @@ pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
         frame_width: LAYER_SIDE,
         frame_height: LAYER_SIDE,
         solid: false,
+        eight_bit: false,
     }
 }
 

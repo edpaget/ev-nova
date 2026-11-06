@@ -228,6 +228,7 @@ mod tests {
             frame_width: size,
             frame_height: size,
             image_size: (size, size),
+            eight_bit: false,
         }
     }
 

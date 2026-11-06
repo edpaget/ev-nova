@@ -78,6 +78,7 @@ pub mod color;
 pub mod colorize;
 pub mod devtools;
 pub mod draw;
+mod eight_bit_blit;
 pub mod fade;
 pub mod flight;
 pub mod font;

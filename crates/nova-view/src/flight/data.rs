@@ -72,6 +72,7 @@ impl ShipSprites for GameData {
             shield,
             base_transp: field(|anim| anim.base_transp),
             solid: sheet.info.has_runs,
+            eight_bit: sheet.info.depth == 8,
         })
     }
 
@@ -106,9 +107,8 @@ pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
     }
 }
 
-/// A resolved layer's ID, frame count, frame size and whether it holds
-/// solid runs;
-/// `None` for one that failed.
+/// A resolved layer's ID, frame count, frame size, whether it holds solid
+/// runs and whether it is 8-bit; `None` for one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
@@ -121,6 +121,7 @@ fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,
         solid: layer.sheet.info.has_runs,
+        eight_bit: layer.sheet.info.depth == 8,
     })
 }
 
@@ -516,6 +517,7 @@ mod tests {
             frame_width: 3,
             frame_height: 2,
             solid: false,
+            eight_bit: false,
         }
     }
 
@@ -555,6 +557,7 @@ mod tests {
                 shield: None,
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             })
         );
     }
@@ -617,6 +620,36 @@ mod tests {
             (RLED, 1000, sheet(8)),
         ]);
         assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").solid);
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames at depth 8.
+    fn eight_bit_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).depth(8), |b, _| {
+                b.frame(|f| f.line().pixels8(&[0x7C, 0x00]).line())
+            })
+            .build()
+    }
+
+    #[test]
+    fn a_ships_sheet_marks_the_hull_and_layers_whose_sheets_are_8_bit() {
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 1100, 1200)),
+            (RLED, 1000, eight_bit_sheet(8)),
+            (RLED, 1100, eight_bit_sheet(8)),
+            (RLED, 1200, sheet(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert!(found.eight_bit, "the hull");
+        assert_eq!(found.glow.map(|layer| layer.eight_bit), Some(true));
+        assert_eq!(found.lights.map(|layer| layer.eight_bit), Some(false));
+        let plain = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim(1000, 1, 8)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").eight_bit);
     }
 
     #[test]

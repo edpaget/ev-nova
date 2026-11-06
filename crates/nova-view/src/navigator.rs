@@ -221,6 +221,7 @@ mod tests {
                         frame_width: 8,
                         frame_height: 8,
                         image_size: (8, 8),
+                        eight_bit: false,
                     }),
                     dead_sprite: None,
                     animation: AnimationData::default(),
@@ -238,6 +239,7 @@ mod tests {
                         frame_width: 8,
                         frame_height: 8,
                         image_size: (8, 8),
+                        eight_bit: false,
                     }),
                     dead_sprite: None,
                     animation: AnimationData {
@@ -258,6 +260,7 @@ mod tests {
                     frame_width: 8,
                     frame_height: 8,
                     image_size: (8, 8),
+                    eight_bit: false,
                 }),
                 problems: Vec::new(),
             }

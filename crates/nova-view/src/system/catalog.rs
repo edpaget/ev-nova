@@ -28,6 +28,10 @@ pub struct StellarSheet {
     /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
     /// padded to keep the box at its centre.
     pub image_size: (u32, u32),
+    /// Whether its `rlëD` header says depth 8, so the draw proc takes its
+    /// depth-8 branches (@0xbb5a4, @0xbb792; see `eight_bit_blit`). Never
+    /// for a `PICT` pair, which the original makes a 16-bit RLE.
+    pub eight_bit: bool,
 }
 
 /// A stellar's animation fields, raw from its `spöb`. The view decides

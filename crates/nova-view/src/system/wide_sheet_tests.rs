@@ -49,6 +49,7 @@ fn sheet(image_size: (u32, u32)) -> StellarSheet {
         frame_width: 2,
         frame_height: 2,
         image_size,
+        eight_bit: false,
     }
 }
 
@@ -74,6 +75,7 @@ fn sol(image_size: (u32, u32)) -> SystemScene {
             frame_width: 6,
             frame_height: 6,
             image_size: (6, 6),
+            eight_bit: false,
         }),
         problems: Vec::new(),
     });

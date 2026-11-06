@@ -277,6 +277,7 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
             frame_width: layer.sheet.frame_width(),
             frame_height: layer.sheet.frame_height(),
             solid: layer.sheet.solid_frames().is_some(),
+            eight_bit: false,
         })
     };
     let [glow, lights, weapon, alt, shield] = data.ship_layers(id).map_or([None; 5], |l| {
@@ -297,6 +298,7 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
         shield,
         base_transp: field(|anim| anim.base_transp),
         solid: sprite.sheet.solid_frames().is_some(),
+        eight_bit: false,
     })
 }
 

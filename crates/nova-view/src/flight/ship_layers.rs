@@ -365,6 +365,7 @@ mod tests {
                 frame_width,
                 frame_height,
                 solid: false,
+                eight_bit: false,
             }
         }
 
@@ -384,6 +385,7 @@ mod tests {
                 shield: Some(layer(1500, (9, 8))),
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             }
         }
 

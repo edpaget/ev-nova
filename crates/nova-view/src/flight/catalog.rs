@@ -34,6 +34,9 @@ pub struct LayerSheet {
     /// Whether its `rlëD` holds solid runs, drawn raw over the layer (see
     /// [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+    /// Whether its `rlëD` header says depth 8, so the draw proc takes its
+    /// depth-8 branches (@0xbb5a4, @0xbb792; see `eight_bit_blit`).
+    pub eight_bit: bool,
 }
 
 impl LayerSheet {
@@ -86,6 +89,10 @@ pub struct ShipSheet {
     /// Whether the hull's `rlëD` holds solid runs, drawn raw over the hull
     /// (see [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+    /// Whether the hull's `rlëD` header says depth 8, so the draw proc
+    /// takes its depth-8 branches (@0xbb5a4, @0xbb792; see
+    /// `eight_bit_blit`).
+    pub eight_bit: bool,
 }
 
 impl ShipSheet {
@@ -750,6 +757,7 @@ mod tests {
                 shield: None,
                 base_transp: 0,
                 solid: false,
+                eight_bit: false,
             })
         }
 

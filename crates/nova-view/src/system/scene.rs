@@ -23,6 +23,7 @@ use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
 };
 use crate::draw::crossed_box;
+use crate::eight_bit_blit::{DrawProcState, EightBitBlit};
 use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
@@ -176,6 +177,12 @@ impl SceneStellar {
             self.drawn(),
             Some(Ok(sheet)) if sheet.image_size != (sheet.frame_width, sheet.frame_height)
         )
+    }
+
+    /// Whether the sheet drawn is an 8-bit `rlëD`
+    /// ([`StellarSheet::eight_bit`]).
+    fn eight_bit(&self) -> bool {
+        matches!(self.drawn(), Some(Ok(sheet)) if sheet.eight_bit)
     }
 
     /// The sheet `which` names (see [`drawn`](Self::drawn)).
@@ -529,7 +536,10 @@ impl SystemScene {
 /// With `seen` (how the player sees the murk), each sprite is murked as
 /// `_HandleStellarSprites` murks it at its stellar's position
 /// (@0x2ee57-0x2eea4, [`SeenMurk::at`]); the placeholder and the names are
-/// not, as they are not the original's. The system view passes none.
+/// not, as they are not the original's. The system view passes none. An
+/// 8-bit sheet goes through the draw proc's depth-8 dispatch
+/// ([`EightBitBlit`]): plain when unmurked, and murked as a 16-bit sheet
+/// is where the original's depth-8 routine crashes.
 ///
 /// A sheet that draws past its frame box (a 32-bit `rlëD`, rendering
 /// phase 1) is cut to the box when the box is not wholly inside the
@@ -557,23 +567,37 @@ pub fn draw_stellars(
                 let at = stellar.sprite_centre(camera, size);
                 let position = Vec2::new(stellar.position.x, stellar.position.y);
                 let colorize = seen.map(|seen| seen.at(position));
-                let sprite =
-                    DrawCommand::mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
-                let frame_box = Bounds::at(
-                    Point::new(at.x - size.0 / 2.0, at.y - size.1 / 2.0),
-                    size.0,
-                    size.1,
-                );
-                match list.world_clip() {
-                    Some(world)
-                        if stellar.overhangs()
-                            && !(world.contains(frame_box.min)
-                                && world.contains(frame_box.max)) =>
-                    {
-                        list.clipped(frame_box, sprite);
-                    }
-                    _ => {
-                        list.push(sprite);
+                // A stellar's translucency and factors are zeroed every
+                // tick (@0x2ee57-0x2ee7e), so it never reaches `Nothing`.
+                let state = DrawProcState {
+                    translucency: 0,
+                    full_factors: false,
+                    bias: DrawProcState::bias_of(colorize),
+                };
+                let colorize = match EightBitBlit::of_sheet(stellar.eight_bit(), state) {
+                    EightBitBlit::Plain => Some(None),
+                    EightBitBlit::AsSixteenBit => Some(colorize),
+                    EightBitBlit::Nothing => None,
+                };
+                if let Some(colorize) = colorize {
+                    let sprite =
+                        DrawCommand::mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
+                    let frame_box = Bounds::at(
+                        Point::new(at.x - size.0 / 2.0, at.y - size.1 / 2.0),
+                        size.0,
+                        size.1,
+                    );
+                    match list.world_clip() {
+                        Some(world)
+                            if stellar.overhangs()
+                                && !(world.contains(frame_box.min)
+                                    && world.contains(frame_box.max)) =>
+                        {
+                            list.clipped(frame_box, sprite);
+                        }
+                        _ => {
+                            list.push(sprite);
+                        }
                     }
                 }
                 (at, size)
@@ -679,6 +703,7 @@ mod tests {
             frame_width: 8,
             frame_height: 8,
             image_size: (8, 8),
+            eight_bit: false,
         }
     }
 

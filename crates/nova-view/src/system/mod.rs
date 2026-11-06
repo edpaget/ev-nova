@@ -19,6 +19,8 @@ pub mod animation;
 pub mod camera;
 pub mod catalog;
 pub mod data;
+#[cfg(test)]
+mod eight_bit_sheet_tests;
 pub mod kept_frames;
 #[cfg(test)]
 mod pict_pair_tests;
