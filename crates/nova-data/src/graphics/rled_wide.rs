@@ -101,6 +101,7 @@ use super::color::rgb555;
 use super::image::Image;
 use super::rled::{Header, PIXELS, RUN, SKIP, solid_frames};
 use super::rled8::mem_set_byte;
+use super::rled32::{self, ThirtyTwoBitReading};
 use super::sheet::{SheetLayout, SpriteSheet};
 
 /// Where the tokens start: just past the 16-byte header.
@@ -345,8 +346,44 @@ impl Canvas<'_> {
         }
     }
 
-    /// The frames drawn, as a sheet of images padded about the box.
-    fn finish(&self, drawn: Vec<Drawn>, layout: SheetLayout) -> SpriteSheet {
+    /// The pixels of `frame` from its box's top-left, as `true_colour`
+    /// says: each with its place, its colour, and whether runs alone
+    /// wrote it.
+    ///
+    /// As drawn, each two bytes are a little-endian RGB555 pixel; in true
+    /// colour ([`super::rled32`]), each four within the box are one pixel,
+    /// and what lies past the box is dropped. A pixel with a byte unwritten
+    /// is clear either way.
+    fn pixels(&self, frame: &Drawn, true_colour: bool) -> Vec<((u32, u32), [u8; 4], bool)> {
+        let (unit, columns, rows) = if true_colour {
+            (4, self.header.width as usize, self.header.height as usize)
+        } else {
+            (2, usize::MAX, usize::MAX)
+        };
+        let mut pixels = Vec::new();
+        for (y, row) in (0..).zip(frame.rows.iter().take(rows)) {
+            for (x, cells) in (0..).zip(row.chunks(unit).take(columns)) {
+                let (colour, run) = match *cells {
+                    [Some(b0), Some(b1), Some(b2), Some(b3)] if true_colour => (
+                        rled32::true_colour([b0.value, b1.value, b2.value, b3.value]),
+                        b0.run && b1.run && b2.run && b3.run,
+                    ),
+                    [Some(low), Some(high)] if !true_colour => (
+                        rgb555(u16::from_le_bytes([low.value, high.value])),
+                        low.run && high.run,
+                    ),
+                    // A byte unwritten, or a part pixel at the row's end.
+                    _ => continue,
+                };
+                pixels.push(((x, y), colour, run));
+            }
+        }
+        pixels
+    }
+
+    /// The frames drawn, as a sheet of images padded about the box, read
+    /// in `true_colour` or not as [`Self::pixels`] says.
+    fn finish(&self, drawn: Vec<Drawn>, layout: SheetLayout, true_colour: bool) -> SpriteSheet {
         let (width, height) = (self.header.width, self.header.height);
         let (reach_x, reach_y) = self.reach();
         // Within the budget, so these fit a u32.
@@ -365,17 +402,11 @@ impl Canvas<'_> {
             let mut solid = frame
                 .has_run
                 .then(|| Image::transparent(image_width, image_height));
-            for (y, row) in (0..).zip(&frame.rows) {
-                for (x, pair) in (0..).zip(row.chunks(2)) {
-                    let [Some(low), Some(high)] = pair else {
-                        continue;
-                    };
-                    let colour = rgb555(u16::from_le_bytes([low.value, high.value]));
-                    let at = (origin.0 + x, origin.1 + y);
-                    image.put(at.0, at.1, colour);
-                    if let (Some(solid), true) = (solid.as_mut(), low.run && high.run) {
-                        solid.put(at.0, at.1, colour);
-                    }
+            for ((x, y), colour, run) in self.pixels(&frame, true_colour) {
+                let at = (origin.0 + x, origin.1 + y);
+                image.put(at.0, at.1, colour);
+                if let (Some(solid), true) = (solid.as_mut(), run) {
+                    solid.put(at.0, at.1, colour);
                 }
             }
             frames.push(image);
@@ -405,11 +436,14 @@ pub(super) fn locked(data: &[u8], header: &Header) -> Result<(Vec<u8>, Vec<usize
 
 /// Decodes the `rlëD` `data`, whose checked header is `header` and whose
 /// depth is neither 8 nor 16, as the original draws it (see the module
-/// docs).
+/// docs), or, when it is 32-bit and `reading` says so, its drawn bytes
+/// read back in true colour ([`super::rled32`]): a sheet loads or fails,
+/// and keeps its sizes, the same under either reading.
 pub(super) fn decode_wide(
     data: &[u8],
     header: &Header,
     layout: SheetLayout,
+    reading: ThirtyTwoBitReading,
 ) -> Result<SpriteSheet, GraphicsError> {
     let (mem, starts) = locked(data, header)?;
     let mut canvas = Canvas {
@@ -422,7 +456,8 @@ pub(super) fn decode_wide(
         .into_iter()
         .map(|start| canvas.draw(&mem, start))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(canvas.finish(drawn, layout))
+    let true_colour = header.depth == 32 && reading == ThirtyTwoBitReading::TrueColour;
+    Ok(canvas.finish(drawn, layout, true_colour))
 }
 
 #[cfg(test)]

@@ -574,6 +574,55 @@ mod tests {
         assert_eq!(frame.pixel(1, 0), Some([0; 4]));
     }
 
+    /// The store resolves an `rlëD` by the original's reading, and that
+    /// decides graphic type 0's fallback and the sheet's sizes. A 32-bit
+    /// sheet read in true colour loads or fails alike, at the same sizes.
+    #[test]
+    fn a_32_bit_sheet_resolves_or_fails_alike_under_either_reading() {
+        use crate::graphics::{RledReadings, SpriteSheet, ThirtyTwoBitReading, decode_rled_with};
+        /// The box, the images' size, the box's place in them, and the
+        /// frame count.
+        type Sizes = ((u32, u32), (u32, u32), (u32, u32), usize);
+        fn sizes(sheet: &SpriteSheet) -> Sizes {
+            (
+                (sheet.frame_width(), sheet.frame_height()),
+                (sheet.image_width(), sheet.image_height()),
+                sheet.box_origin(),
+                sheet.frames().len(),
+            )
+        }
+        let true_colour = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::TrueColour,
+            ..RledReadings::default()
+        };
+        let wide = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        let uncounted = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        for (why, bytes, resolves) in [
+            ("a row wider than its box", wide, true),
+            ("line starts without their byte counts", uncounted, false),
+        ] {
+            let data = store(&[("Wide Paint", fork(&[(RLED, 2000, bytes.clone())]))]);
+            let resolved = match data.spin_sheet(3000) {
+                Ok(sheet) => Ok(sizes(&sheet.sheet)),
+                Err(SpinSpriteError::Graphics { source, .. }) => Err(source),
+                Err(other) => panic!("{why}: {other}"),
+            };
+            assert_eq!(resolved.is_ok(), resolves, "{why}");
+            assert_eq!(
+                decode_rled_with(&bytes, None, true_colour).map(|sheet| sizes(&sheet)),
+                resolved,
+                "{why}"
+            );
+        }
+    }
+
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
         let deep = RledBuilder::new(2, 1).depth(1).build();

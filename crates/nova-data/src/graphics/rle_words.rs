@@ -25,6 +25,7 @@ use super::GraphicsError;
 use super::reader::Reader;
 use super::rled::read_header;
 use super::rled_wide::{TOKENS, decode_wide, locked};
+use super::rled32::ThirtyTwoBitReading;
 use super::sheet::{SheetLayout, SpriteSheet};
 
 /// The op of a line start.
@@ -69,7 +70,12 @@ pub fn rled_words(data: &[u8]) -> Result<RleWords, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
     if header.depth == 32 {
-        decode_wide(data, &header, SheetLayout::DEFAULT)?;
+        decode_wide(
+            data,
+            &header,
+            SheetLayout::DEFAULT,
+            ThirtyTwoBitReading::AsDrawn,
+        )?;
         let (mem, starts) = locked(data, &header)?;
         return Ok(RleWords {
             frame_width: header.width,

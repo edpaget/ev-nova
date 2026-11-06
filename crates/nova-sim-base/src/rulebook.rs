@@ -1125,7 +1125,10 @@ rule_keys! {
     /// left edge, and the clipped blit (`_BlitPixieRLEClipped`
     /// @0xbde9c-0xbe0b3) cuts it to the box when the box touches the
     /// world's edge. By the other reading, each pixel is one `xRRGGBB`
-    /// true-colour pixel, opaque, at the box's width. The Bible calls
+    /// true-colour pixel, opaque, at the box's width. Either reading loads
+    /// or fails a sheet, and sizes it, as the original does, since the
+    /// game data decides graphic type 0's fallback and the sizes by it: the
+    /// reading changes only the colours. The Bible calls
     /// `rlëD`s 16-bit and says nothing of 32, so the other reading is the
     /// intended alternative, not anything the Bible says. The reading is
     /// applied where the game's images are decoded

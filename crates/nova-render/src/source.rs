@@ -26,6 +26,9 @@ use crate::images::{ImageError, ImageSource};
 /// by the reading given to
 /// [`with_thirty_two_bit`](Self::with_thirty_two_bit) (the
 /// `thirty_two_bit_sheet` reading), by default as the original draws it.
+/// Either 32-bit reading draws a sheet the game data resolves
+/// ([`GameData::spin_sheet`]) at the size it resolves, and fails one it
+/// fails: the reading changes only the colours.
 ///
 /// It looks resources up in the store (later files winning) and decodes
 /// them on every call; the renderer keeps what it needs in the atlas. A
@@ -484,8 +487,14 @@ mod tests {
         // box at its centre.
         let as_drawn = vec![(6, [clear, clear, red, black, green, black].concat())];
         let as_drawn_solid = vec![(6, [clear, clear, red, black, clear, clear].concat())];
-        let true_colour = vec![(2, [[0, 0x7C, 0, 255], [0, 0x03, 0xE0, 255]].concat())];
-        let true_colour_solid = vec![(2, [[0, 0x7C, 0, 255], clear].concat())];
+        // In true colour, each pixel is one, in the box of an image the
+        // drawn one's size.
+        let (true_red, true_green) = ([0, 0x7C, 0, 255], [0, 0x03, 0xE0, 255]);
+        let true_colour = vec![(
+            6,
+            [clear, clear, true_red, true_green, clear, clear].concat(),
+        )];
+        let true_colour_solid = vec![(6, [clear, clear, true_red, clear, clear, clear].concat())];
         let drawn = GameImages::new(&data, EightBitReading::AsDrawn);
         let true_colour_images = drawn
             .clone()
@@ -509,6 +518,46 @@ mod tests {
             as_drawn,
             "the game data alone draws it as the original does"
         );
+    }
+
+    /// The game data resolves a sheet by the original's reading, which
+    /// decides graphic type 0's fallback and the sizes a view places it
+    /// by. Under either reading, the images draw a 32-bit sheet the store
+    /// resolves at the size it resolves, and fail one it fails.
+    #[test]
+    fn either_reading_draws_a_32_bit_sheet_as_the_store_resolves_it() {
+        let wide = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        let uncounted = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| f.line().pixels32(&[1, 2]))
+            .build();
+        for (why, bytes, resolves) in [
+            ("a row wider than its box", wide, true),
+            ("line starts without their byte counts", uncounted, false),
+        ] {
+            let data = store(&[(RLED, 200, bytes), (Spin::TYPE, 3000, spin(200, -1))]);
+            let resolved = match data.spin_sheet(3000) {
+                Ok(spin) => Ok((spin.sheet.image_width(), spin.sheet.image_height())),
+                Err(SpinSpriteError::Graphics { source, .. }) => Err(ImageError::Decode(source)),
+                Err(other) => panic!("{why}: {other}"),
+            };
+            assert_eq!(resolved.is_ok(), resolves, "{why}");
+            for reading in [
+                ThirtyTwoBitReading::AsDrawn,
+                ThirtyTwoBitReading::TrueColour,
+            ] {
+                let images =
+                    GameImages::new(&data, EightBitReading::AsDrawn).with_thirty_two_bit(reading);
+                let drawn = images
+                    .frames(ImageKind::Rled, 200)
+                    .map(|frames| (frames[0].width(), frames[0].height()));
+                assert_eq!(drawn, resolved, "{why}, {reading:?}");
+            }
+        }
     }
 
     #[test]

@@ -7,9 +7,17 @@
 //! instead: each 4-byte pixel is `xRRGGBB`, opaque, a run is one such
 //! pixel repeated, and a skip is `count / 4` clear pixels. The rulebook's
 //! `thirty_two_bit_sheet` key chooses between them.
-
-use super::image::Image;
-use super::rled::Sink;
+//!
+//! The reading changes only the colours. Whether a sheet loads, and the
+//! size of its box and images, stay the original's under both readings,
+//! because the store decides graphic type 0's fallback, the frame size
+//! and the image size by the original's reading, and touches by its
+//! tokens. So a true-colour sheet is the original's pipeline (the swap,
+//! the lock walk and the byte draw, with every error they raise) read
+//! back four bytes to a pixel: the drawn row's bytes `4k..4k + 4` are
+//! pixel `k` of the box. A pixel with a byte left unwritten is clear,
+//! and what is drawn past the box's right or bottom edge is dropped, so
+//! the overhang the original draws stays clear about the box.
 
 /// How an `rlëD` whose header says 32 bits is turned into pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -20,66 +28,17 @@ pub enum ThirtyTwoBitReading {
     #[default]
     AsDrawn,
     /// Each 32-bit pixel is one `xRRGGBB` true-colour pixel, opaque, at the
-    /// box's width.
+    /// box's width, in images of the drawn sheet's size (see the module
+    /// docs).
     TrueColour,
 }
 
-/// The opaque colour of a 32-bit pixel `x RR GG BB`.
-fn true_colour([_, r, g, b]: [u8; 4]) -> [u8; 4] {
+/// The opaque colour of the 32-bit pixel whose four bytes lie in the
+/// swapped memory as `memory`: the file's `x RR GG BB`, which the swap
+/// reverses to `BB GG RR x` (@0xbe46e-0xbe48e), as a run word's
+/// `_BlitPixieMemSet` lays it down too.
+pub(super) fn true_colour([b, g, r, _]: [u8; 4]) -> [u8; 4] {
     [r, g, b, 255]
-}
-
-/// A sink that paints each frame of a 32-bit sheet in true colour, and
-/// each frame's runs alone.
-pub(super) struct TrueColour {
-    width: u32,
-    height: u32,
-    pub(super) frames: Vec<Image>,
-    frame: Image,
-    /// Each finished frame's runs, if it had any.
-    pub(super) solids: Vec<Option<Image>>,
-    /// The current frame's runs, if it has any.
-    solid: Option<Image>,
-}
-
-impl TrueColour {
-    /// An empty sheet of `count` frames, `width` x `height` each.
-    pub(super) fn new(width: u32, height: u32, count: u16) -> Self {
-        Self {
-            width,
-            height,
-            frames: Vec::with_capacity(usize::from(count)),
-            frame: Image::transparent(width, height),
-            solids: Vec::with_capacity(usize::from(count)),
-            solid: None,
-        }
-    }
-}
-
-impl Sink for TrueColour {
-    fn pixels(&mut self, x: u32, y: u32, pixels: &[u8]) {
-        for (i, &pixel) in (0..).zip(pixels.as_chunks::<4>().0) {
-            self.frame.put(x + i, y, true_colour(pixel));
-        }
-    }
-
-    fn run(&mut self, x: u32, y: u32, len: u32, word: u32) {
-        let colour = true_colour(word.to_be_bytes());
-        let (width, height) = (self.width, self.height);
-        let solid = self
-            .solid
-            .get_or_insert_with(|| Image::transparent(width, height));
-        for i in 0..len {
-            self.frame.put(x + i, y, colour);
-            solid.put(x + i, y, colour);
-        }
-    }
-
-    fn frame_end(&mut self) {
-        let next = Image::transparent(self.width, self.height);
-        self.frames.push(std::mem::replace(&mut self.frame, next));
-        self.solids.push(self.solid.take());
-    }
 }
 
 #[cfg(test)]
@@ -87,19 +46,12 @@ mod tests {
     use super::*;
     use crate::graphics::GraphicsError;
     use crate::graphics::fixture::RledBuilder;
+    use crate::graphics::image::Image;
     use crate::graphics::rled::{RledReadings, decode_rled, decode_rled_with};
     use crate::graphics::rled8::EightBitReading;
     use crate::graphics::sheet::SpriteSheet;
 
     const CLEAR: [u8; 4] = [0; 4];
-
-    fn rgba(image: &Image) -> Vec<[u8; 4]> {
-        image
-            .pixels()
-            .chunks(4)
-            .map(|p| p.try_into().unwrap())
-            .collect()
-    }
 
     fn true_colour_reading() -> RledReadings {
         RledReadings {
@@ -124,73 +76,169 @@ mod tests {
         );
     }
 
+    /// What decides whether a sheet is drawn and where: its box, its
+    /// images' size, the box's place in them, its frame count, and whether
+    /// it has solid frames.
+    type Geometry = ((u32, u32), (u32, u32), (u32, u32), usize, bool);
+
+    fn geometry(sheet: &SpriteSheet) -> Geometry {
+        (
+            (sheet.frame_width(), sheet.frame_height()),
+            (sheet.image_width(), sheet.image_height()),
+            sheet.box_origin(),
+            sheet.frames().len(),
+            sheet.solid_frames().is_some(),
+        )
+    }
+
+    /// The pixels of `image`, one of `sheet`'s, inside the sheet's box,
+    /// row by row. Every pixel outside the box must be clear.
+    fn in_box(sheet: &SpriteSheet, image: &Image) -> Vec<[u8; 4]> {
+        let (left, top) = sheet.box_origin();
+        let (right, bottom) = (left + sheet.frame_width(), top + sheet.frame_height());
+        let mut inside = Vec::new();
+        for y in 0..image.height() {
+            for x in 0..image.width() {
+                let pixel = image.pixel(x, y).unwrap();
+                if (left..right).contains(&x) && (top..bottom).contains(&y) {
+                    inside.push(pixel);
+                } else {
+                    assert_eq!(pixel, CLEAR, "({x}, {y}) is outside the box");
+                }
+            }
+        }
+        inside
+    }
+
     #[test]
-    fn through_true_colour_a_32_bit_sheet_is_its_own_width() {
+    fn through_true_colour_a_32_bit_sheet_colours_its_box() {
         let bytes = RledBuilder::new(2, 1)
             .depth(32)
             .count_lines()
             .frame(|f| f.line().pixels32(&[0x0012_3456, 0x80AB_CDEF]))
             .build();
         let sheet = through_true_colour(&bytes).unwrap();
-        assert_eq!((sheet.frame_width(), sheet.frame_height()), (2, 1));
-        assert_eq!((sheet.image_width(), sheet.image_height()), (2, 1));
-        assert_eq!(sheet.box_origin(), (0, 0));
+        let drawn = decode_rled(&bytes, None).unwrap();
+        // Its images are the drawn sheet's, box and padding alike.
+        assert_eq!(geometry(&sheet), geometry(&drawn));
+        assert_eq!((sheet.image_width(), sheet.box_origin()), (6, (2, 0)));
         assert_eq!(
-            rgba(&sheet.frames()[0]),
+            in_box(&sheet, &sheet.frames()[0]),
             [[0x12, 0x34, 0x56, 255], [0xAB, 0xCD, 0xEF, 255]]
         );
         assert_eq!(sheet.solid_frames(), None);
         // The default reading is the original's.
-        assert_ne!(decode_rled(&bytes, None).unwrap(), sheet);
+        assert_ne!(drawn, sheet);
     }
 
     #[test]
     fn through_true_colour_a_run_repeats_one_pixel_and_a_skip_skips_pixels() {
         let bytes = RledBuilder::new(4, 1)
             .depth(32)
-            .frame(|f| f.line().skip32(1).run32(2, 0x0011_2233))
+            .count_lines()
+            .frame(|f| {
+                f.line()
+                    .skip32(1)
+                    .run32(2, 0x0011_2233)
+                    .pixels32(&[0x0044_5566])
+            })
             .build();
         let sheet = through_true_colour(&bytes).unwrap();
-        let colour = [0x11, 0x22, 0x33, 255];
-        let drawn = vec![CLEAR, colour, colour, CLEAR];
+        let (colour, pixel) = ([0x11, 0x22, 0x33, 255], [0x44, 0x55, 0x66, 255]);
+        let solid = sheet.solid_frames().expect("solid frames");
+        // The solid frame holds the runs alone.
+        assert_eq!(in_box(&sheet, &solid[0]), [CLEAR, colour, colour, CLEAR]);
         assert_eq!(
-            sheet.solid_frames().map(|s| rgba(&s[0])),
-            Some(drawn.clone())
+            in_box(&sheet, &sheet.frames()[0]),
+            [CLEAR, colour, colour, pixel]
         );
-        assert_eq!(rgba(&sheet.frames()[0]), drawn);
+    }
+
+    /// The reading changes only the colours: a sheet loads, or fails, as
+    /// the original's does, with the same images about the same box, so
+    /// the store, which decides the fallback and the sizes by the
+    /// original's reading, agrees with what is drawn.
+    #[test]
+    fn through_true_colour_a_sheet_loads_or_fails_as_the_drawn_one_does() {
+        let sheets = [
+            (
+                "in sync",
+                RledBuilder::new(2, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[1, 2])),
+                true,
+            ),
+            (
+                "a row wider than its box",
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[1, 2])),
+                true,
+            ),
+            (
+                "more line starts than rows",
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[1]).line().pixels32(&[2])),
+                true,
+            ),
+            (
+                "a pixel tail",
+                RledBuilder::new(2, 1).depth(32).count_lines().frame(|f| {
+                    f.line()
+                        .token(2, 6)
+                        .raw(&[0x00, 0x11, 0x22, 0x33, 0x03, 0x44, 0x00, 0x00])
+                }),
+                true,
+            ),
+            (
+                "line starts without their byte counts",
+                RledBuilder::new(2, 1)
+                    .depth(32)
+                    .frame(|f| f.line().pixels32(&[1, 2])),
+                false,
+            ),
+            (
+                "a pixel token of no bytes",
+                RledBuilder::new(2, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().token(2, 0)),
+                false,
+            ),
+        ];
+        for (why, sheet, loads) in sheets {
+            let bytes = sheet.build();
+            let drawn = decode_rled(&bytes, None);
+            assert_eq!(drawn.is_ok(), loads, "{why}");
+            assert_eq!(
+                through_true_colour(&bytes).map(|sheet| geometry(&sheet)),
+                drawn.map(|sheet| geometry(&sheet)),
+                "{why}"
+            );
+        }
     }
 
     #[test]
-    fn through_true_colour_pixel_bytes_must_be_whole_pixels() {
-        let bytes = RledBuilder::new(2, 1)
+    fn through_true_colour_what_is_drawn_outside_the_box_is_dropped() {
+        let one = [0, 0, 1, 255];
+        let wide = RledBuilder::new(1, 1)
             .depth(32)
-            .frame(|f| f.line().token(2, 6).raw(&[0; 8]))
-            .build();
-        assert_eq!(
-            through_true_colour(&bytes),
-            Err(GraphicsError::OddByteCount { offset: 20 })
-        );
-        let bytes = RledBuilder::new(2, 1)
-            .depth(32)
-            .frame(|f| f.line().token(2, 0))
-            .build();
-        assert_eq!(
-            through_true_colour(&bytes),
-            Err(GraphicsError::RunawaySwap { offset: 20 })
-        );
-        // A row holds the box's width of pixels.
-        let bytes = RledBuilder::new(1, 1)
-            .depth(32)
+            .count_lines()
             .frame(|f| f.line().pixels32(&[1, 2]))
             .build();
-        assert_eq!(
-            through_true_colour(&bytes),
-            Err(GraphicsError::LineOverflow {
-                frame: 0,
-                line: 0,
-                offset: 20
-            })
-        );
+        let sheet = through_true_colour(&wide).unwrap();
+        assert_eq!(in_box(&sheet, &sheet.frames()[0]), [one]);
+        let deep = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[1]).line().pixels32(&[2]))
+            .build();
+        let sheet = through_true_colour(&deep).unwrap();
+        assert_eq!(in_box(&sheet, &sheet.frames()[0]), [one]);
     }
 
     #[test]

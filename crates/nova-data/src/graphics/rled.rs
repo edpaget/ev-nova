@@ -17,7 +17,7 @@ use super::image::Image;
 use super::reader::Reader;
 use super::rled_wide::decode_wide;
 use super::rled8::{EightBitReading, Rled8};
-use super::rled32::{ThirtyTwoBitReading, TrueColour};
+use super::rled32::ThirtyTwoBitReading;
 use super::sheet::{SheetLayout, SpriteSheet};
 
 /// The `rlëD` resource type: `rl`, Mac Roman `ë` (`0x91`), `D`.
@@ -29,10 +29,6 @@ const DEPTH: u16 = 16;
 /// The other depth the original draws: one byte per token count, drawn as
 /// [`EightBitReading`] says.
 const DEPTH_8: u16 = 8;
-
-/// A depth the original draws as its bytes fall, with another reading:
-/// four bytes a pixel, drawn as [`ThirtyTwoBitReading`] says.
-const DEPTH_32: u16 = 32;
 
 /// Token opcodes: the top byte of each big-endian `u32` token.
 const FRAME_END: u8 = 0;
@@ -141,18 +137,8 @@ pub fn decode_rled_with(
     let header = read_header(&mut r, data.len())?;
     let (width, height) = (header.width, header.height);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
-    if header.depth == DEPTH_32 && readings.thirty_two_bit == ThirtyTwoBitReading::TrueColour {
-        let units = Units {
-            size: 4,
-            row_len: width,
-        };
-        let mut painter = TrueColour::new(width, height, header.count);
-        walk(data, r.pos(), &header, units, &mut painter)?;
-        let sheet = SpriteSheet::new(width, height, painter.frames, layout);
-        return Ok(sheet.with_solid(solid_frames(painter.solids, width, height)));
-    }
     if header.depth != DEPTH && header.depth != DEPTH_8 {
-        return decode_wide(data, &header, layout);
+        return decode_wide(data, &header, layout, readings.thirty_two_bit);
     }
     let reading = readings.eight_bit;
     let units = Units::of(&header, reading);
@@ -184,7 +170,13 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
     if header.depth != DEPTH && header.depth != DEPTH_8 {
-        let sheet = decode_wide(data, &header, SheetLayout::DEFAULT)?;
+        // Either reading loads, fails and sizes a sheet alike.
+        let sheet = decode_wide(
+            data,
+            &header,
+            SheetLayout::DEFAULT,
+            ThirtyTwoBitReading::AsDrawn,
+        )?;
         return Ok(RledInfo {
             frame_width: header.width,
             frame_height: header.height,
@@ -254,8 +246,7 @@ pub(super) fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header
 /// each), or byte by byte for an 8-bit sheet.
 #[derive(Clone, Copy, Debug)]
 struct Units {
-    /// Bytes per unit: 2 for a 16-bit pixel, 1 for an 8-bit byte, 4 for a
-    /// 32-bit pixel read as true colour.
+    /// Bytes per unit: 2 for a 16-bit pixel, 1 for an 8-bit byte.
     size: u32,
     /// Units a line holds.
     row_len: u32,
@@ -753,7 +744,9 @@ mod tests {
         };
         let three = SheetLayout::new(3).unwrap();
         let sheet = decode_rled_with(&bytes, Some(three), true_colour).unwrap();
-        assert_eq!((sheet.image_width(), sheet.layout()), (1, three));
+        // In images the size of the drawn sheet's.
+        assert_eq!((sheet.image_width(), sheet.layout()), (3, three));
+        assert_ne!(sheet.frames(), drawn.frames());
     }
 
     #[test]
