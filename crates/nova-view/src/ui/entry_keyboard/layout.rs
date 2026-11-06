@@ -353,6 +353,57 @@ mod tests {
         }
     }
 
+    /// A one-column key: a character or Shift.
+    fn one_column(key: KeyId) -> bool {
+        matches!(key, KeyId::Char(_) | KeyId::Shift)
+    }
+
+    #[test]
+    fn no_one_column_key_is_wider_than_the_most_nor_any_key_taller_than_the_minimum() {
+        assert_eq!(KEY_MOST_PT, 60.0);
+        for window in &WINDOWS {
+            let told = window.classic_surroundings();
+            let ppp = told.points_per_pixel;
+            for (key, rect) in Layout::new(&told, canvas(), centred()).keys() {
+                if one_column(*key) {
+                    assert!(
+                        rect.width() * ppp <= KEY_MOST_PT + EPS,
+                        "{}: {key:?} {rect:?}",
+                        window.name
+                    );
+                }
+                assert!(
+                    rect.height() * ppp <= MIN_PT + EPS,
+                    "{}: {key:?} {rect:?}",
+                    window.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_large_window_reaches_the_most_across() {
+        let window = WINDOWS
+            .iter()
+            .find(|window| window.name == "large desktop window")
+            .expect("the large desktop window");
+        let told = window.classic_surroundings();
+        let ppp = told.points_per_pixel;
+        #[allow(clippy::cast_precision_loss)] // Eleven columns.
+        let share =
+            (region(&told).width() * ppp - (COLUMNS as f32 - 1.0) * GAP_PT) / COLUMNS as f32;
+        assert!(share > KEY_MOST_PT, "the region would make them wider");
+        let layout = Layout::new(&told, canvas(), centred());
+        for (key, rect) in layout.keys() {
+            if one_column(*key) {
+                assert!(
+                    (rect.width() * ppp - KEY_MOST_PT).abs() < EPS,
+                    "{key:?} {rect:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_key_lies_inside_the_safe_area_and_the_canvas() {
         for window in &WINDOWS {
