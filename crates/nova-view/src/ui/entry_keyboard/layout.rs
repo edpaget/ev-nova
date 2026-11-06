@@ -239,6 +239,59 @@ impl Layout {
     pub const fn bounds(&self) -> Bounds {
         self.bounds
     }
+
+    /// The pad's inputs that type `keys` in turn, the pad's focus on
+    /// `from`: for each, the shortest run of d-pad taps the keyboard's
+    /// picker takes to it, then South's press and release. For tests that
+    /// drive the keyboard from pad inputs alone.
+    ///
+    /// # Panics
+    ///
+    /// When a key isn't reachable, which no key of the layout is.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn pad_presses(&self, from: KeyId, keys: &[KeyId]) -> Vec<crate::input::Input> {
+        use crate::input::{Input, PadButton};
+        use crate::ui::pad_focus::{Direction, FocusMove, Target, step};
+        let targets: Vec<_> = self
+            .keys
+            .iter()
+            .map(|&(id, rect)| Target::at(id, rect))
+            .collect();
+        let dpad = [
+            (Direction::Up, PadButton::DPadUp),
+            (Direction::Down, PadButton::DPadDown),
+            (Direction::Left, PadButton::DPadLeft),
+            (Direction::Right, PadButton::DPadRight),
+        ];
+        let tap = |button| [true, false].map(|pressed| Input::PadButton { button, pressed });
+        let mut inputs = Vec::new();
+        let mut at = from;
+        for &key in keys {
+            let mut paths = std::collections::VecDeque::from([(at, Vec::new())]);
+            let mut seen = vec![at];
+            let path = loop {
+                let (here, path) = paths.pop_front().expect("every key is reachable");
+                if here == key {
+                    break path;
+                }
+                for (direction, button) in dpad {
+                    let next = step(&targets, Some(here), INITIAL, FocusMove::Toward(direction))
+                        .unwrap_or(here);
+                    if !seen.contains(&next) {
+                        seen.push(next);
+                        let mut longer = path.clone();
+                        longer.push(button);
+                        paths.push_back((next, longer));
+                    }
+                }
+            };
+            inputs.extend(path.into_iter().flat_map(tap));
+            inputs.extend(tap(PadButton::South));
+            at = key;
+        }
+        inputs
+    }
 }
 
 #[cfg(test)]

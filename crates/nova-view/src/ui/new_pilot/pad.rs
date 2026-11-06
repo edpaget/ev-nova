@@ -11,8 +11,9 @@
 //!   focus starts on OK, the default, so South at once accepts the drawn
 //!   default name and nickname.
 //! - **South** does what a click does: on a field it focuses the field
-//!   with the caret at its end (a focus stop only; typing from the pad is
-//!   rdm:phase/key-bindings/phase-17-text-entry-port's), on Strict Play
+//!   with the caret at its end, and raises the on-screen keyboard to type
+//!   into it (the `entry` module,
+//!   rdm:phase/key-bindings/phase-17-text-entry-port), on Strict Play
 //!   it flips the box, on the gender control it switches the gender.
 //! - **The right shoulder** is Tab, which switches between the fields as
 //!   Tab does; **the left** moves the pad's focus back.
@@ -243,6 +244,12 @@ pub(crate) mod tests {
 
         fn default_control(&self) -> Option<&'static str> {
             Some("OK")
+        }
+
+        /// The on-screen keyboard's drawing, which a safe-area change
+        /// moves and touch shows, as it does a touch aid's.
+        fn touch_aids_drawn(&mut self) -> Vec<crate::draw::DrawCommand> {
+            crate::ui::edit_dialog::keyboard_drawn(&self.0)
         }
     }
 

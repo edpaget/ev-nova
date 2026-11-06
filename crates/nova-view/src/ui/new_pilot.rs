@@ -46,6 +46,12 @@
 //! focuses as a click does, and OK is where the pad's focus starts, so a
 //! pad-only player accepts the drawn default names with one South.
 //!
+//! **Text entry** (the `entry` module) follows the focused field: the
+//! dialog asks for the system's entry there (IME, a soft keyboard) under
+//! the keyboard, the mouse and touch with a soft keyboard, and shows the
+//! game's on-screen keyboard under touch without one, and under the pad
+//! once South pressed a field.
+//!
 //! The dialog has no stock frame: like the Preferences dialog, it is drawn
 //! over a dark backdrop with a 1-unit outline.
 
@@ -68,6 +74,7 @@ use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
     Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD, outline,
 };
+use super::entry_keyboard::{self, EntryKeyboard};
 use super::prefs::{BACKDROP, BORDER};
 use super::text_field::{TextField, is_text_entry};
 use super::toggle::Toggle;
@@ -208,6 +215,8 @@ pub struct NewPilotDialog {
     /// Its keys, as the shared UI context's commands
     /// ([`contexts::DIALOG`]).
     keys: CommandReader,
+    /// The on-screen keyboard, and the ask for the system's entry.
+    keyboard: EntryKeyboard,
 }
 
 impl std::fmt::Debug for NewPilotDialog {
@@ -269,6 +278,8 @@ impl NewPilotDialog {
             .then(|| dialog.item_bounds(GENDER_ITEM))
             .flatten()
             .map(GenderControl::new);
+        let mut keyboard = EntryKeyboard::new();
+        keyboard.focus_field();
         Ok(Self {
             dialog,
             field: TextField::new(field_rect, usize::MAX),
@@ -282,6 +293,7 @@ impl NewPilotDialog {
             refusal: None,
             sounds: Vec::new(),
             keys: CommandReader::new(contexts::DIALOG),
+            keyboard,
         })
     }
 
@@ -289,6 +301,7 @@ impl NewPilotDialog {
     #[must_use]
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
         self.dialog.set_bindings(bindings.clone());
+        self.keyboard.set_bindings(bindings.clone());
         self.keys.set_bindings(bindings);
         self
     }
@@ -521,6 +534,9 @@ impl Screen for NewPilotDialog {
     /// Cancel cancels. Escape does nothing unless the rules make it cancel
     /// ([`NewPilotDialog::with_rules`]). It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = entry_keyboard::intercept(self, input) {
+            return action;
+        }
         if let Some(CommandInput {
             command: Command::Ui(UiCommand::Tab),
             pressed: true,
@@ -532,6 +548,7 @@ impl Screen for NewPilotDialog {
                 _ => Focus::Name,
             };
             self.focus_on(next, true);
+            self.keyboard.focus_field();
             return ScreenAction::None;
         }
         if is_text_entry(input) {
@@ -549,8 +566,14 @@ impl Screen for NewPilotDialog {
         }
         match self.dialog.input(input) {
             Some(DialogEvent::Item(OK_ITEM)) => self.ok(),
-            Some(DialogEvent::Item(NAME_ITEM)) => self.focus_on(Focus::Name, false),
-            Some(DialogEvent::Item(NICKNAME_ITEM)) => self.focus_on(Focus::Nickname, false),
+            Some(DialogEvent::Item(NAME_ITEM)) => {
+                self.focus_on(Focus::Name, false);
+                self.keyboard.field_pressed(self.dialog.pad_highlight());
+            }
+            Some(DialogEvent::Item(NICKNAME_ITEM)) => {
+                self.focus_on(Focus::Nickname, false);
+                self.keyboard.field_pressed(self.dialog.pad_highlight());
+            }
             Some(DialogEvent::Item(STRICT_PLAY_ITEM)) => {
                 if let Some(toggle) = &mut self.strict_play {
                     *toggle = Toggle::new(toggle.rect(), toggle.label(), !toggle.on());
@@ -607,10 +630,17 @@ impl Screen for NewPilotDialog {
                 Color::ERROR,
             );
         }
+        entry_keyboard::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
+        entry_keyboard::cancel(self);
         self.dialog.cancel_pointer();
+    }
+
+    /// Covered, it asks nothing and draws no keyboard.
+    fn set_covered(&mut self, covered: bool) {
+        entry_keyboard::cover(self, covered);
     }
 
     /// OK's beeps, in order.
@@ -619,6 +649,7 @@ impl Screen for NewPilotDialog {
     }
 }
 
+mod entry;
 pub(crate) mod pad;
 
 #[cfg(test)]

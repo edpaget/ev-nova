@@ -66,14 +66,28 @@ pub trait EntryHost: Screen {
 
     /// Its dialog's bounds, which the keyboard keeps clear of.
     fn dialog_bounds(&self) -> Bounds;
+
+    /// The control the pad's focus is on (its dialog's item), if the
+    /// highlight shows. The pad's raise lasts while it stays on the field
+    /// South raised it on: a shoulder that moves the pad's focus off it
+    /// lowers the keyboard, so South on another control presses that
+    /// control, as with no keyboard up. Tab, which moves the text focus
+    /// and not the pad's, keeps it up.
+    fn pad_target(&self) -> Option<usize>;
 }
 
-/// The keyboard's layout while it shows over `host`.
-fn shown(host: &impl EntryHost) -> Option<Layout> {
+/// The keyboard's layout while it shows over `host`, if it shows.
+#[must_use]
+pub fn shown(host: &impl EntryHost) -> Option<Layout> {
     let keyboard = host.keyboard();
-    keyboard
-        .shows(host.entry_field().is_some())
+    let pad = matches!(keyboard.told().device, crate::input::Device::Gamepad(_));
+    (keyboard.shows(host.entry_field().is_some()) && (!pad || stays_raised(host)))
         .then(|| keyboard.layout(host.dialog_bounds()))
+}
+
+/// Whether the pad's focus is still where the pad raised the keyboard.
+fn stays_raised(host: &impl EntryHost) -> bool {
+    host.keyboard().raised_on() == host.pad_target()
 }
 
 /// Runs `input` through `host`'s keyboard at the head of the host's
@@ -84,6 +98,9 @@ fn shown(host: &impl EntryHost) -> Option<Layout> {
 pub fn intercept(host: &mut impl EntryHost, input: &Input) -> Option<ScreenAction> {
     if host.keyboard().replaying() {
         return None;
+    }
+    if !stays_raised(host) {
+        host.keyboard_mut().lower();
     }
     let layout = shown(host);
     let chars = host
@@ -145,7 +162,12 @@ mod tests {
         keyboard: EntryKeyboard,
         field: Option<TextField>,
         got: Vec<Input>,
+        /// Whether the pad's focus is on the field.
+        on_field: bool,
     }
+
+    /// The field's item.
+    const FIELD: usize = 3;
 
     const DIALOG: Bounds = Bounds {
         min: Point::new(350.0, 280.0),
@@ -167,6 +189,10 @@ mod tests {
 
         fn dialog_bounds(&self) -> Bounds {
             DIALOG
+        }
+
+        fn pad_target(&self) -> Option<usize> {
+            self.on_field.then_some(FIELD)
         }
     }
 
@@ -213,6 +239,7 @@ mod tests {
                 "abc",
             )),
             got: Vec::new(),
+            on_field: true,
         };
         host.keyboard.focus_field();
         host.input(&told(device));
@@ -285,7 +312,7 @@ mod tests {
             Some(EntryAsk { field, focused: 1 })
         );
         assert!(drawn(&host).is_empty(), "no keyboard drawn");
-        host.keyboard.field_pressed();
+        host.keyboard.field_pressed(Some(FIELD));
         assert_eq!(
             drawn(&host).text_entry(),
             Some(EntryAsk { field, focused: 2 })
@@ -309,7 +336,7 @@ mod tests {
         let mut padded = host(PAD);
         assert_eq!(drawn(&padded).text_entry(), None);
         assert!(drawn(&padded).is_empty(), "nor a keyboard until raised");
-        padded.keyboard.field_pressed();
+        padded.keyboard.field_pressed(Some(FIELD));
         assert!(!drawn(&padded).is_empty(), "raised");
         let mut covered = host(Device::Keyboard);
         covered.set_covered(true);
@@ -339,9 +366,33 @@ mod tests {
     }
 
     #[test]
+    fn the_pads_focus_leaving_the_field_lowers_it() {
+        let mut host = host(PAD);
+        host.keyboard.field_pressed(Some(FIELD));
+        assert!(shown(&host).is_some());
+        host.on_field = false;
+        assert!(shown(&host).is_none(), "hidden at once");
+        host.on_field = true;
+        assert!(shown(&host).is_some(), "until an input lowers it");
+        host.on_field = false;
+        host.input(&pad(PadButton::South, true));
+        host.on_field = true;
+        assert!(shown(&host).is_none(), "lowered: South raises it again");
+        assert_eq!(
+            host.got,
+            [pad(PadButton::South, true)],
+            "South was the host's"
+        );
+        let mut touched = self::host(Device::Touch);
+        touched.on_field = false;
+        touched.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
+        assert!(shown(&touched).is_some(), "touch has no pad focus to leave");
+    }
+
+    #[test]
     fn what_it_does_not_take_reaches_the_host_once() {
         let mut host = host(PAD);
-        host.keyboard.field_pressed();
+        host.keyboard.field_pressed(Some(FIELD));
         host.input(&pad(PadButton::RightShoulder, true));
         host.input(&Input::Text('z'));
         assert_eq!(

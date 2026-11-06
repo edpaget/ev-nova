@@ -300,9 +300,42 @@ pub(crate) mod tests {
         assert_eq!(dialog.take_outcome(), Some(FindOutcome::Cancel));
     }
 
-    /// Its row in the pad's every-screen table: Find and Cancel.
+    /// Its row in the pad's every-screen table: Find, Cancel and the field.
     pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
         Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// AC 2 of rdm:phase/key-bindings/phase-17-text-entry-port for the
+    /// map's Find: it asks for the system's entry as it opens with the
+    /// keyboard, and from pad inputs alone the on-screen keyboard types a
+    /// system's name, which Done finds as Return does.
+    #[test]
+    fn the_pad_alone_types_a_system_and_finds_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        let mut dialog = dialog();
+        assert_eq!(
+            asked_at_open(&dialog),
+            Some(EntryAsk {
+                field: dialog.field().rect(),
+                focused: 1,
+            }),
+            "asks for text entry when it opens"
+        );
+        pad_types(
+            &mut dialog,
+            &[
+                KeyId::Char('s'),
+                KeyId::Char('o'),
+                KeyId::Char('l'),
+                KeyId::Done,
+            ],
+        );
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(FindOutcome::Search("Sol".to_owned()))
+        );
     }
 
     /// No cancel item: East, as Escape, does nothing.

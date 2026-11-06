@@ -320,6 +320,53 @@ mod tests {
         )))
     }
 
+    /// AC 2 of rdm:phase/key-bindings/phase-17-text-entry-port for the
+    /// exchange's and the outfitter's count, which share the dialog
+    /// titled Buy or Sell (`quantity_ask::Purpose`): it asks for the
+    /// system's entry as it opens with the keyboard, and from pad inputs
+    /// alone the on-screen keyboard types a count that OK confirms.
+    #[test]
+    fn the_pad_alone_types_a_count_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        for title in ["Buy", "Sell"] {
+            let mut dialog = dialog_of(12, title);
+            assert_eq!(
+                asked_at_open(&dialog),
+                Some(EntryAsk {
+                    field: dialog.field().rect(),
+                    focused: 1,
+                }),
+                "{title}: asks for text entry when it opens"
+            );
+            pad_types(&mut dialog, &[KeyId::Char('5'), KeyId::Done]);
+            assert_eq!(dialog.take_outcome(), Some(5), "{title}");
+        }
+    }
+
+    /// AC 2 for the race's bet: the dialog titled Bet.
+    #[test]
+    fn the_pad_alone_types_a_bet_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        let mut dialog = dialog_of(40, nova_sim::gamble::BET);
+        assert_eq!(
+            asked_at_open(&dialog),
+            Some(EntryAsk {
+                field: dialog.field().rect(),
+                focused: 1,
+            }),
+            "asks for text entry when it opens"
+        );
+        pad_types(
+            &mut dialog,
+            &[KeyId::Char('2'), KeyId::Char('5'), KeyId::Done],
+        );
+        assert_eq!(dialog.take_outcome(), Some(25));
+    }
+
     /// The surroundings are no player input: the flush of the opening
     /// key's character waits past them.
     #[test]
@@ -637,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_a_backdrop_the_dialog_and_the_field() {
+    fn it_draws_a_backdrop_the_dialog_and_the_field_and_asks_for_entry_at_it() {
         let dialog = dialog();
         let mut list = DrawList::new();
         dialog.draw(&mut list);
@@ -647,6 +694,10 @@ mod tests {
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
         dialog.field().draw(&MonoMetrics, &mut expected);
+        expected.ask_text_entry(crate::text_entry::EntryAsk {
+            field: dialog.field().rect(),
+            focused: 1,
+        });
         assert_eq!(list, expected);
     }
 

@@ -275,6 +275,44 @@ mod tests {
         Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
     }
 
+    /// AC 2 of rdm:phase/key-bindings/phase-17-text-entry-port for the
+    /// shipyard's naming (and the christening and the capture naming,
+    /// the same dialog): it asks for the system's entry as it opens with
+    /// the keyboard, and from pad inputs alone the on-screen keyboard
+    /// names the ship, which OK confirms.
+    #[test]
+    fn the_pad_alone_names_the_ship_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        let mut dialog = dialog();
+        assert_eq!(
+            asked_at_open(&dialog),
+            Some(EntryAsk {
+                field: dialog.field().rect(),
+                focused: 1,
+            }),
+            "asks for text entry when it opens"
+        );
+        pad_types(
+            &mut dialog,
+            &[
+                KeyId::Char('k'),
+                KeyId::Char('e'),
+                KeyId::Char('s'),
+                KeyId::Char('t'),
+                KeyId::Char('r'),
+                KeyId::Char('e'),
+                KeyId::Char('l'),
+                KeyId::Done,
+            ],
+        );
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(TextInputOutcome::Confirm("Kestrel".to_owned()))
+        );
+    }
+
     /// The surroundings are no player input: the flush of the opening
     /// key's character waits past them.
     #[test]
@@ -482,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_a_backdrop_the_dialog_and_the_field() {
+    fn it_draws_a_backdrop_the_dialog_and_the_field_and_asks_for_entry_at_it() {
         let dialog = dialog();
         let mut list = DrawList::new();
         dialog.draw(&mut list);
@@ -492,6 +530,10 @@ mod tests {
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
         dialog.field().draw(&MonoMetrics, &mut expected);
+        expected.ask_text_entry(crate::text_entry::EntryAsk {
+            field: dialog.field().rect(),
+            focused: 1,
+        });
         assert_eq!(list, expected);
     }
 

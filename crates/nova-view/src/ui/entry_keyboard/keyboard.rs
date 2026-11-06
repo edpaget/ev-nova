@@ -49,8 +49,9 @@ pub struct EntryKeyboard {
     told: Surroundings,
     /// Whether whoever holds the host covers it.
     covered: bool,
-    /// Whether the pad's South raised it on a field.
-    pad_raised: bool,
+    /// The pad target (its host's item) the pad's South raised it on, if
+    /// it did: it shows while the pad's focus stays there.
+    pad_raised: Option<usize>,
     /// Whether the next letter is a capital.
     shift: bool,
     /// How many times a field of the host took the focus.
@@ -82,7 +83,7 @@ impl EntryKeyboard {
         Self {
             told: Surroundings::default(),
             covered: false,
-            pad_raised: false,
+            pad_raised: None,
             shift: true,
             focused: 0,
             press: Press::default(),
@@ -117,7 +118,7 @@ impl EntryKeyboard {
         active
             && !self.covered
             && matches!(self.mode(), EntryMode::OnScreen)
-            && (matches!(self.told.device, Device::Touch) || self.pad_raised)
+            && (matches!(self.told.device, Device::Touch) || self.pad_raised.is_some())
     }
 
     /// Whether its host asks for the system's entry, with entry `active`.
@@ -134,23 +135,41 @@ impl EntryKeyboard {
         self.shift = true;
     }
 
-    /// A click, a tap or the pad's South pressed a field of its host: it
-    /// takes the focus ([`EntryKeyboard::focus_field`]), and under the pad
-    /// the keyboard is raised.
-    pub fn field_pressed(&mut self) {
+    /// A click, a tap or the pad's South pressed a field of its host, with
+    /// the pad's focus on `pad_target` (its host's item, the field's under
+    /// the pad): it takes the focus ([`EntryKeyboard::focus_field`]), and
+    /// under the pad the keyboard is raised there.
+    pub fn field_pressed(&mut self, pad_target: Option<usize>) {
         self.focus_field();
-        if let Device::Gamepad(_) = self.told.device {
-            self.pad_raised = true;
+        if let (Device::Gamepad(_), Some(target)) = (self.told.device, pad_target) {
+            self.pad_raised = Some(target);
             if self.focus.get().is_none() {
                 self.focus.set_by_pad(INITIAL);
             }
         }
     }
 
+    /// The pad target the pad raised it on, if it did.
+    #[must_use]
+    pub const fn raised_on(&self) -> Option<usize> {
+        self.pad_raised
+    }
+
+    /// Lowers it if the pad raised it: the pad's focus left the field.
+    pub const fn lower(&mut self) {
+        self.pad_raised = None;
+    }
+
     /// How many times a field of its host took the focus.
     #[must_use]
     pub const fn focused(&self) -> u32 {
         self.focused
+    }
+
+    /// The key the pad's focus is on, if it has one.
+    #[must_use]
+    pub const fn pad_focus(&self) -> Option<KeyId> {
+        self.focus.get()
     }
 
     /// Where its keys go over its host's dialog at `dialog`, in the
@@ -180,7 +199,7 @@ impl EntryKeyboard {
             self.keys.follow(input);
             self.told = told;
             if !matches!(told.device, Device::Gamepad(_)) {
-                self.pad_raised = false;
+                self.pad_raised = None;
             }
             self.focus.surroundings(told.device, Some(INITIAL), false);
             return vec![*input];
@@ -225,7 +244,7 @@ impl EntryKeyboard {
                             self.type_key(key, field_chars)
                         }
                         Some((Command::Ui(UiCommand::Back), PadRead::Other)) => {
-                            self.pad_raised = false;
+                            self.pad_raised = None;
                             Vec::new()
                         }
                         _ => return vec![*input],
@@ -269,7 +288,7 @@ impl EntryKeyboard {
             KeyId::Delete => tap(Key::Backspace).to_vec(),
             KeyId::Clear => (0..field_chars).flat_map(|_| tap(Key::Backspace)).collect(),
             KeyId::Done => {
-                self.pad_raised = false;
+                self.pad_raised = None;
                 tap(Key::Enter).to_vec()
             }
         }
@@ -332,6 +351,9 @@ mod tests {
     use crate::input::{ControllerFamily, MouseButton};
     use crate::ui::pad_focus::every_screen::{PAD, pad, told};
 
+    /// The field's item in its host.
+    const FIELD: usize = 3;
+
     /// A dialog in the middle of the canvas.
     const DIALOG: Bounds = Bounds {
         min: Point::new(350.0, 280.0),
@@ -355,7 +377,7 @@ mod tests {
     /// A keyboard told the pad, raised by South on the field.
     fn raised() -> EntryKeyboard {
         let mut keyboard = keyboard_told(&told(PAD));
-        keyboard.field_pressed();
+        keyboard.field_pressed(Some(FIELD));
         keyboard
     }
 
@@ -420,7 +442,7 @@ mod tests {
     #[test]
     fn touch_with_a_soft_keyboard_never_shows_it() {
         let mut keyboard = keyboard_told(&soft(Device::Touch));
-        keyboard.field_pressed();
+        keyboard.field_pressed(Some(FIELD));
         assert!(!keyboard.shows(true));
         assert!(keyboard.asks(true), "the system's keyboard instead");
     }
@@ -436,7 +458,7 @@ mod tests {
             assert!(!keyboard.asks(true), "nor the system's");
             keyboard.focus_field();
             assert!(!keyboard.shows(true), "a focus alone raises nothing");
-            keyboard.field_pressed();
+            keyboard.field_pressed(Some(FIELD));
             assert!(keyboard.shows(true), "raised by South on the field");
         }
     }
@@ -446,7 +468,7 @@ mod tests {
         for device in [Device::Keyboard, Device::Mouse] {
             for input in [told(device), soft(device)] {
                 let mut keyboard = keyboard_told(&input);
-                keyboard.field_pressed();
+                keyboard.field_pressed(Some(FIELD));
                 assert!(!keyboard.shows(true), "{device:?}");
                 assert!(keyboard.asks(true), "{device:?}");
             }
@@ -742,7 +764,7 @@ mod tests {
         let mut keyboard = EntryKeyboard::new();
         assert_eq!(keyboard.focused(), 0);
         keyboard.focus_field();
-        keyboard.field_pressed();
+        keyboard.field_pressed(Some(FIELD));
         assert_eq!(keyboard.focused(), 2);
     }
 
