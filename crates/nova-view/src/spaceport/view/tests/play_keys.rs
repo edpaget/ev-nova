@@ -2,7 +2,9 @@
 //! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps): told touch, a tap
 //! on Map, Pilot or Missions asks for what the galaxy map, player info or
 //! mission info key asks for there, and nothing where the key asks for
-//! nothing. Each opening the keys make is listed and pinned.
+//! nothing. Each opening the keys make is listed and pinned: over the
+//! spaceport and each venue, the mission screens, an offer over the
+//! spaceport or a venue, and the accept's briefing that opens its map.
 
 use super::*;
 use crate::input::{Device, Surroundings};
@@ -111,6 +113,71 @@ fn player_info() -> SpaceportView {
     view
 }
 
+/// The marks of [`briefing`]'s map.
+fn marks() -> nova_sim::MapMarks {
+    nova_sim::MapMarks {
+        green: Some(nova_sim::SystemId(131)),
+        multi_arrows: true,
+    }
+}
+
+/// A mission accepted from the computer: its briefing in front, which
+/// opens its marked map on the map key.
+fn briefing() -> SpaceportView {
+    let mut view = computer();
+    view.show_mission_texts(vec![MissionText {
+        kind: MissionTextKind::Brief,
+        mission: nova_sim::MissionId(130),
+        text: "Go.".to_owned(),
+        graphic: None,
+        movie: None,
+        map: Some(marks()),
+    }]);
+    assert!(view.mission_text().is_some(), "the briefing in front");
+    view
+}
+
+/// [`venues`] with an offer open over `venue`, as it asks for one.
+fn offer_at(venue: i16) -> SpaceportView {
+    let mut view = venues();
+    assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+    if venue != SPACEPORT {
+        let item = match venue {
+            BAR => 11,
+            TRADE_CENTER => 7,
+            OUTFITTER => 8,
+            _ => 9,
+        };
+        click_item(&mut view, item);
+        serve_openings(&mut view);
+        view.tick(FIRST_OFFER_DELAY);
+        assert_eq!(view.take_offer_request(), Some(venue));
+    }
+    view.open_offer(offered());
+    assert!(view.offer_dialog().is_some(), "{venue}: an offer open");
+    view
+}
+
+fn spaceport_offer() -> SpaceportView {
+    offer_at(SPACEPORT)
+}
+
+fn bar_offer() -> SpaceportView {
+    offer_at(BAR)
+}
+
+fn trade_offer() -> SpaceportView {
+    offer_at(TRADE_CENTER)
+}
+
+fn outfitter_offer() -> SpaceportView {
+    offer_at(OUTFITTER)
+}
+
+fn shipyard_offer() -> SpaceportView {
+    offer_at(SHIPYARD)
+}
+
 /// A screen's name and how to build it.
 type Shown = (&'static str, fn() -> SpaceportView);
 
@@ -128,6 +195,12 @@ fn screens() -> Vec<Shown> {
         ("mission computer", computer),
         ("mission info", mission_info),
         ("player info", player_info),
+        ("briefing", briefing),
+        ("spaceport's offer", spaceport_offer),
+        ("bar's offer", bar_offer),
+        ("trade center's offer", trade_offer),
+        ("outfitter's offer", outfitter_offer),
+        ("shipyard's offer", shipyard_offer),
     ]
 }
 
@@ -138,6 +211,11 @@ const MISSIONS: Command = Command::Play(PlayCommand::MissionInfo);
 /// Asked for the map `map` opens over.
 const fn map_of(map: PortMap) -> Asked {
     (Some(map), false, false)
+}
+
+/// The map [`offered`]'s offer opens, over whatever it is open over.
+const fn offer() -> PortMap {
+    PortMap::Dialog(MapOpener::Offer(nova_sim::MissionId(141)))
 }
 
 const PLAYER_INFO: Asked = (None, true, false);
@@ -208,6 +286,27 @@ fn openings() -> Vec<Opening> {
             MAP,
             map_of(Dialog(MapOpener::MissionInfo(Some(0)))),
         ),
+        (
+            "briefing",
+            briefing,
+            MAP,
+            map_of(Dialog(MapOpener::Briefing(marks()))),
+        ),
+        ("spaceport's offer", spaceport_offer, MAP, map_of(offer())),
+        ("spaceport's offer", spaceport_offer, PILOT, PLAYER_INFO),
+        ("spaceport's offer", spaceport_offer, MISSIONS, MISSION_INFO),
+        ("bar's offer", bar_offer, MAP, map_of(offer())),
+        ("bar's offer", bar_offer, PILOT, PLAYER_INFO),
+        ("bar's offer", bar_offer, MISSIONS, MISSION_INFO),
+        ("trade center's offer", trade_offer, MAP, map_of(offer())),
+        ("trade center's offer", trade_offer, PILOT, PLAYER_INFO),
+        ("trade center's offer", trade_offer, MISSIONS, MISSION_INFO),
+        ("outfitter's offer", outfitter_offer, MAP, map_of(offer())),
+        ("outfitter's offer", outfitter_offer, PILOT, PLAYER_INFO),
+        ("outfitter's offer", outfitter_offer, MISSIONS, MISSION_INFO),
+        ("shipyard's offer", shipyard_offer, MAP, map_of(offer())),
+        ("shipyard's offer", shipyard_offer, PILOT, PLAYER_INFO),
+        ("shipyard's offer", shipyard_offer, MISSIONS, MISSION_INFO),
     ]
 }
 
@@ -261,6 +360,59 @@ fn the_play_keys_hide_while_a_mission_text_is_in_front() {
         strip.iter().all(|command| !drawn.contains(command)),
         "not drawn over the text"
     );
+}
+
+/// The labels of the play keys' strip as `view` draws it now.
+fn strip_labels(view: &SpaceportView) -> Vec<String> {
+    let mut strip = DrawList::new();
+    crate::ui::touch_aids::host::draw(view, &mut strip);
+    strip
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn over_a_briefing_with_a_map_only_the_map_control_shows_at_once() {
+    let mut view = computer();
+    view.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+    assert_eq!(strip_labels(&view), ["Map", "Pilot", "Missions"]);
+    view.show_mission_texts(vec![MissionText {
+        kind: MissionTextKind::Brief,
+        mission: nova_sim::MissionId(130),
+        text: "Go.".to_owned(),
+        graphic: None,
+        movie: None,
+        map: Some(marks()),
+    }]);
+    assert_eq!(strip_labels(&view), ["Map"], "drawn before any input");
+    assert!(view.play_keys().offers(MAP));
+    assert!(!view.play_keys().offers(PILOT));
+    assert!(!view.play_keys().offers(MISSIONS));
+    view.input(&key(Key::Enter));
+    assert!(view.mission_text().is_none(), "the briefing closed");
+    assert_eq!(
+        strip_labels(&view),
+        ["Map", "Pilot", "Missions"],
+        "all back"
+    );
+}
+
+#[test]
+fn over_a_briefing_a_tap_where_pilot_or_missions_would_be_reaches_the_text() {
+    for command in [PILOT, MISSIONS] {
+        let mut view = briefing();
+        view.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+        let at = view.play_keys().rect(command).expect("its place").center();
+        let mut fingers = Fingers::on(&mut view);
+        fingers.down(1, at);
+        fingers.up(1, at);
+        assert_eq!(asked(&mut view), (None, false, false), "{command:?}");
+        assert!(view.mission_text().is_some(), "{command:?}: still in front");
+    }
 }
 
 #[test]

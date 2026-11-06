@@ -22,10 +22,16 @@
 //!   opens what its key opens there, and does nothing where its key does
 //!   nothing (the outfitter ignores player info, as `_OutfitFilter` never
 //!   reads it).
-//! - **Shown** only while touch was used last, the host is live (the
-//!   mission texts, which take every input, hide it) and its holder
+//! - **Shown** only while touch was used last, the host is live (a
+//!   mission text that opens no map, which takes every input, hides it)
+//!   and its holder
 //!   doesn't cover it ([`super::host::cover`]); hidden, it passes every
 //!   input through.
+//! - **Offered** controls alone are drawn and tapped
+//!   ([`PlayKeys::set_offered`]), each in its place in the strip: the
+//!   host offers only the keys that act on what it shows (the spaceport
+//!   offers Map alone over a briefing with a map, which reads no other
+//!   play key). A tap where one not offered would be is the host's.
 
 use super::host::TouchAid;
 use super::look::{self, label};
@@ -78,6 +84,8 @@ pub struct PlayKeys {
     covered: bool,
     /// Whether its host is running the inputs it gave back.
     replaying: bool,
+    /// Whether each of [`PLAY_KEYS`] is offered, in their order.
+    offered: [bool; 3],
 }
 
 impl PlayKeys {
@@ -94,7 +102,40 @@ impl PlayKeys {
             press: Press::default(),
             replaying: false,
             covered: false,
+            offered: [true; 3],
         }
+    }
+
+    /// Offers `commands`' controls alone, each where it is in the strip;
+    /// a press held on one no longer offered acts on nothing.
+    pub fn set_offered(&mut self, commands: &[Command]) {
+        let offered = PLAY_KEYS.map(|command| commands.contains(&command));
+        if offered != self.offered {
+            self.offered = offered;
+            self.press.cancel();
+        }
+    }
+
+    /// Whether `command`'s control is offered ([`Self::set_offered`]).
+    #[must_use]
+    pub fn offers(&self, command: Command) -> bool {
+        PLAY_KEYS
+            .iter()
+            .position(|&each| each == command)
+            .is_some_and(|index| self.offered[index])
+    }
+
+    /// The controls a tap reaches now, by their index in [`PLAY_KEYS`],
+    /// and their rects: those offered while it shows, none while hidden.
+    fn tappable(&self) -> Vec<(usize, Bounds)> {
+        if !self.shown() {
+            return Vec::new();
+        }
+        self.rects()
+            .into_iter()
+            .enumerate()
+            .filter(|&(index, _)| self.offered[index])
+            .collect()
     }
 
     /// Each control's rect, in [`PLAY_KEYS`]' order.
@@ -153,14 +194,11 @@ impl TouchAid for PlayKeys {
             }
             return vec![*input];
         }
-        let rects = if self.shown() {
-            self.rects().to_vec()
-        } else {
-            Vec::new()
-        };
+        let tappable = self.tappable();
+        let rects: Vec<Bounds> = tappable.iter().map(|&(_, rect)| rect).collect();
         match self.press.input(input, &rects) {
-            Step::Acted(index) => {
-                let command = PLAY_KEYS[index];
+            Step::Acted(at) => {
+                let command = PLAY_KEYS[tappable[at].0];
                 vec![Self::button(command, true), Self::button(command, false)]
             }
             Step::Taken => Vec::new(),
@@ -181,16 +219,14 @@ impl TouchAid for PlayKeys {
     }
 
     fn draw(&self, list: &mut DrawList) {
-        if !self.shown() {
-            return;
-        }
         let held = self.press.held();
-        for (index, (rect, command)) in self.rects().into_iter().zip(PLAY_KEYS).enumerate() {
-            let fill = if held == Some(index) {
+        for (at, (index, rect)) in self.tappable().into_iter().enumerate() {
+            let fill = if held == Some(at) {
                 look::HIGHLIGHT
             } else {
                 look::FILL
             };
+            let command = PLAY_KEYS[index];
             look::draw_square(list, rect, label(command), fill, self.told.points_per_pixel);
         }
     }
@@ -336,6 +372,62 @@ mod tests {
         told.input(&button(true, at));
         told.input(&Input::Surroundings(Surroundings::of(Device::Mouse)));
         assert_eq!(told.input(&button(false, at)), [button(false, at)]);
+    }
+
+    const MAP: Command = Command::Play(PlayCommand::GalaxyMap);
+
+    #[test]
+    fn it_offers_every_play_key_until_told_otherwise() {
+        let mut keys = keys();
+        assert!(PLAY_KEYS.iter().all(|&command| keys.offers(command)));
+        keys.set_offered(&[MAP]);
+        assert!(keys.offers(MAP));
+        assert!(!keys.offers(PLAY_KEYS[1]));
+        assert!(!keys.offers(PLAY_KEYS[2]));
+        keys.set_offered(&PLAY_KEYS);
+        assert!(PLAY_KEYS.iter().all(|&command| keys.offers(command)));
+    }
+
+    #[test]
+    fn a_control_not_offered_is_neither_drawn_nor_tapped_and_keeps_the_others_places() {
+        let mut keys = keys();
+        let places = keys.rects();
+        keys.set_offered(&[MAP]);
+        assert_eq!(keys.rects(), places, "the strip's places kept");
+        let mut map_only = DrawList::new();
+        look::draw_square(&mut map_only, places[0], "Map", look::FILL, 1.0);
+        assert_eq!(drawn(&keys), map_only.iter().cloned().collect::<Vec<_>>());
+        for place in &places[1..] {
+            let at = place.center();
+            assert_eq!(tap(&mut keys, at).len(), 4, "passed through");
+        }
+        let at = places[0].center();
+        assert_eq!(
+            tap(&mut keys, at),
+            [
+                Input::PointerMoved(at),
+                PlayKeys::button(MAP, true),
+                PlayKeys::button(MAP, false),
+                Input::PointerLeft,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_press_held_on_a_control_no_longer_offered_acts_on_nothing() {
+        let mut keys = keys();
+        let at = keys.rects()[1].center();
+        keys.input(&button(true, at));
+        keys.set_offered(&[MAP]);
+        assert_eq!(keys.input(&button(false, at)), [button(false, at)]);
+        assert_eq!(drawn(&keys).len(), drawn_one_len(), "no highlight left");
+    }
+
+    /// How many commands one control draws.
+    fn drawn_one_len() -> usize {
+        let mut one = DrawList::new();
+        look::draw_square(&mut one, port(), "Map", look::FILL, 1.0);
+        one.len()
     }
 
     #[test]

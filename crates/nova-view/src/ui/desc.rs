@@ -348,6 +348,13 @@ impl DescDialog {
         Self { map, ..self }
     }
 
+    /// The marks of the map the map key opens over it, if it opens one
+    /// ([`Self::with_map`]).
+    #[must_use]
+    pub fn map(&self) -> Option<MapMarks> {
+        self.map
+    }
+
     /// The marks of the map the map key asked for since this was last
     /// taken, once: `_ShowTextDialog` opens
     /// the course map over the text (@0x5b14c-0x5b17d; see
@@ -630,6 +637,12 @@ mod tests {
             pressed: true,
             repeat: false,
         }
+    }
+
+    #[test]
+    fn it_says_the_map_it_opens() {
+        assert_eq!(desc().map(), None);
+        assert_eq!(desc().with_map(Some(marks())).map(), Some(marks()));
     }
 
     #[test]
