@@ -263,6 +263,41 @@ fn every_stock_ships_target_card_matches_the_pilot_panel() {
     assert_eq!(data.target_cards(&ships), one_by_one, "in one batch");
 }
 
+/// Every stock `shïp`'s target card is the one its pictures give when
+/// each is sized by decoding it, as cards were read before
+/// `picture_size` scanned: the same subtitle and picture.
+#[test]
+fn every_stock_ships_target_card_is_the_one_its_decoded_pictures_give() {
+    use nova_data::graphics::{PICT, decode_pict};
+    use nova_data::records::ship::Ship;
+    use nova_view::flight::TargetCard;
+    use nova_view::target_picture::{game_ship_bases, target_picture};
+    let Some(data) = open() else {
+        return;
+    };
+    let bases = game_ship_bases(&data);
+    let decoded_size = |id: i16| {
+        let image = decode_pict(data.resource(PICT, id)?.resource.data()).ok()?;
+        Some((image.width(), image.height()))
+    };
+    let ships: Vec<ShipId> = data.ids(Ship::TYPE).iter().map(|&id| ShipId(id)).collect();
+    let decoded: Vec<TargetCard> = ships
+        .iter()
+        .map(|&ship| TargetCard {
+            subtitle: data
+                .get::<Ship>(ship.0)
+                .expect("a shïp")
+                .expect("it decodes")
+                .record
+                .subtitle
+                .as_str()
+                .to_owned(),
+            picture: target_picture(ship, &bases, decoded_size).map(|p| p.picture),
+        })
+        .collect();
+    assert_eq!(data.target_cards(&ships), decoded);
+}
+
 /// A ship's sheet as the flight read it before scanning: from the
 /// decoded base and layer sheets.
 fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> {
