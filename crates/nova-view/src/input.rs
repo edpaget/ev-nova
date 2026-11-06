@@ -288,6 +288,9 @@ impl Surroundings {
 /// directions are buttons too, pressed as the stick passes the press
 /// threshold (`nova`'s pad module decides when), so a screen reads a
 /// stick as it reads the d-pad.
+///
+/// A held d-pad or stick direction repeats, as a held arrow key does
+/// ([`PadButton::repeats`]); no other button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PadButton {
     /// The bottom face button (A on an Xbox pad, Cross on a `PlayStation`
@@ -413,6 +416,30 @@ impl PadButton {
             Self::RightStickLeft => "-rightx",
             Self::RightStickRight => "+rightx",
         }
+    }
+
+    /// Whether the button, held, repeats its press as a held key does:
+    /// true for the four d-pad directions and the eight stick directions,
+    /// false for the face buttons, the shoulders, the triggers, Start,
+    /// Select and the stick clicks. `nova`'s pad module repeats only these
+    /// ([`Input::PadButton`]'s `repeat`).
+    #[must_use]
+    pub const fn repeats(self) -> bool {
+        matches!(
+            self,
+            Self::DPadUp
+                | Self::DPadDown
+                | Self::DPadLeft
+                | Self::DPadRight
+                | Self::LeftStickUp
+                | Self::LeftStickDown
+                | Self::LeftStickLeft
+                | Self::LeftStickRight
+                | Self::RightStickUp
+                | Self::RightStickDown
+                | Self::RightStickLeft
+                | Self::RightStickRight
+        )
     }
 
     /// The stick axis and its direction (`1` or `-1`) a stick-direction
@@ -573,7 +600,10 @@ pub enum Input {
     /// or a stick direction past the press threshold. Pads merge: a button
     /// is down while any pad holds it.
     ///
-    /// `repeat` is never set yet: nothing repeats a held pad button.
+    /// A d-pad or stick direction held past the repeat delay sends further
+    /// presses with `repeat` set, as a held key does ([`Input::Key`]), so
+    /// a screen takes them as it takes a key's repeats; no other button
+    /// repeats ([`PadButton::repeats`]). `nova`'s pad module makes them.
     PadButton {
         /// The button.
         button: PadButton,
@@ -926,6 +956,31 @@ mod tests {
         assert_eq!(fire.translated(by), fire);
         let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
         assert_eq!(stick.translated(by), stick);
+    }
+
+    #[test]
+    fn only_the_dpad_and_the_stick_directions_repeat() {
+        let repeating: Vec<PadButton> = PadButton::ALL
+            .into_iter()
+            .filter(|button| button.repeats())
+            .collect();
+        assert_eq!(
+            repeating,
+            [
+                PadButton::DPadUp,
+                PadButton::DPadDown,
+                PadButton::DPadLeft,
+                PadButton::DPadRight,
+                PadButton::LeftStickUp,
+                PadButton::LeftStickDown,
+                PadButton::LeftStickLeft,
+                PadButton::LeftStickRight,
+                PadButton::RightStickUp,
+                PadButton::RightStickDown,
+                PadButton::RightStickLeft,
+                PadButton::RightStickRight,
+            ]
+        );
     }
 
     #[test]

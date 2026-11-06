@@ -820,6 +820,44 @@ mod tests {
         assert!(!reader.anything_down());
     }
 
+    fn pad_repeat(button: PadButton) -> Input {
+        Input::PadButton {
+            button,
+            pressed: true,
+            repeat: true,
+        }
+    }
+
+    #[test]
+    fn a_pad_repeat_is_passed_through_and_marked() {
+        let mut reader = CommandReader::new(DIALOG);
+        reader.follow(&pad(PadButton::LeftStickDown, true));
+        assert_eq!(
+            reader.follow(&pad_repeat(PadButton::LeftStickDown)),
+            input(UiCommand::Down, true, true)
+        );
+        assert!(reader.held(UiCommand::Down));
+        assert_eq!(
+            reader.follow(&pad(PadButton::LeftStickDown, false)),
+            input(UiCommand::Down, false, false)
+        );
+    }
+
+    #[test]
+    fn a_chord_directions_repeat_means_its_chord() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.follow(&pad(PadButton::Select, true));
+        assert_eq!(
+            reader.follow(&pad(PadButton::RightStickUp, true)),
+            input(FlightCommand::ZoomIn, true, false)
+        );
+        assert_eq!(
+            reader.follow(&pad_repeat(PadButton::RightStickUp)),
+            input(FlightCommand::ZoomIn, true, true),
+            "while Select is held"
+        );
+    }
+
     #[test]
     fn a_pad_layer_reaches_its_layered_command_through_the_reader() {
         let mut reader = CommandReader::new(FLIGHT);

@@ -761,16 +761,17 @@ impl Gamepad {
     }
 }
 
-/// How `input`, a pad button going down or up, changes what is down;
-/// `None` for any other input. A pad never repeats.
+/// How `input`, a pad button going down, repeating or going up, changes
+/// what is down; `None` for any other input. A repeat (a held d-pad or
+/// stick direction, `nova`'s pad module repeats it) reads as a key's.
 pub(super) fn change(input: &Input) -> Option<Change> {
-    let Input::PadButton { pressed, .. } = *input else {
+    let Input::PadButton {
+        pressed, repeat, ..
+    } = *input
+    else {
         return None;
     };
-    Some(Change {
-        pressed,
-        repeat: false,
-    })
+    Some(Change { pressed, repeat })
 }
 
 /// A fresh press of the pad button of `input`; `None` for any other
@@ -1007,6 +1008,37 @@ mod tests {
         fn held(&self) -> BTreeSet<Command> {
             held(&self.map, &self.state, self.active)
         }
+    }
+
+    #[test]
+    fn a_fresh_press_is_never_a_repeat_and_a_change_keeps_the_repeat() {
+        let repeat = Input::PadButton {
+            button: P::DPadUp,
+            pressed: true,
+            repeat: true,
+        };
+        assert_eq!(fresh_press(&repeat), Some(press(P::DPadUp)));
+        assert_eq!(
+            change(&repeat),
+            Some(Change {
+                pressed: true,
+                repeat: true
+            })
+        );
+        assert_eq!(
+            change(&press(P::DPadUp)),
+            Some(Change {
+                pressed: true,
+                repeat: false
+            })
+        );
+        assert_eq!(
+            change(&release(P::DPadUp)),
+            Some(Change {
+                pressed: false,
+                repeat: false
+            })
+        );
     }
 
     #[test]
