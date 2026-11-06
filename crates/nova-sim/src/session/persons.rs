@@ -2699,6 +2699,36 @@ mod tests {
     }
 
     #[test]
+    fn an_attack_quote_queued_after_the_roll_is_said_after_the_pass_with_no_roll() {
+        // The beams (`_HandleBeams` @0x4453d) and the after-pass answers
+        // queue theirs after the ship loop's roll; the step says them
+        // after the pass (`_ShowPersonHailQuote` @0x89ce1), with no draw,
+        // the line not counted down and the quote clock unmoved.
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        turn_ace(&mut session);
+        let clock = session.space.escorts.quote_clock.ticks;
+        let mut chance = Draws::of(&[]);
+        session.say_attack_quotes_left(&catalog, &mut chance);
+        let said: Vec<_> = session.take_quotes().into_iter().map(|q| q.text).collect();
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+        assert_eq!(chance.asked, Vec::<u32>::new(), "no roll");
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(QUOTE_SHOWN_TICKS);
+        assert_eq!(session.comm_line(), line, "shown, not counted down");
+        assert_eq!(session.space.escorts.quote_clock.ticks, clock);
+    }
+
+    #[test]
+    fn landed_the_attack_quotes_left_stay_queued() {
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        turn_ace(&mut session);
+        session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
+        session.say_attack_quotes_left(&catalog, &mut NeverFires);
+        assert_eq!(session.take_quotes(), Vec::new());
+        assert_eq!(session.space.traffic.take_attack_quotes().len(), 1);
+    }
+
+    #[test]
     fn an_attack_quote_is_said_at_once_without_a_draw_and_holds_random_quotes_back() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
         turn_ace(&mut session);
