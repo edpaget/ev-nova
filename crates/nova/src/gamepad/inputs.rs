@@ -5,8 +5,9 @@
 //! - A stick axis passes its value through as [`Input::PadAxis`] (flight
 //!   reads its analog amounts from it), and presses its direction's
 //!   button ([`PadAxis::direction`]) once its value reaches
-//!   [`PRESS_THRESHOLD`] that way, letting go once it drops under
-//!   [`RELEASE_THRESHOLD`]. Between the two it stays as it was, so a
+//!   [`PRESS_THRESHOLD`](nova_view::keymap::gamepad::PRESS_THRESHOLD) that
+//!   way, letting go once it drops under
+//!   [`RELEASE_THRESHOLD`](nova_view::keymap::gamepad::RELEASE_THRESHOLD). Between the two it stays as it was, so a
 //!   stick resting at the threshold doesn't chatter.
 //! - A trigger's value presses and lets go of its button the same way.
 //! - Pads merge: a button (a trigger's among them) is down while any pad
@@ -22,22 +23,17 @@
 //!   other pad pushes it, as the router's `release_keys` lets go on a
 //!   focus loss.
 //!
-//! The thresholds and their reasons are recorded in
+//! The thresholds and the rule between them ([`crossing`]) are
+//! `nova_view`'s (`nova_view::keymap::gamepad`), which flight's touch stick
+//! reads too; their reasons are recorded in
 //! rdm:phase/key-bindings/phase-7-gamepad-input's findings.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_view::keymap::gamepad::crossing;
 use nova_view::{Input, PadAxis, PadButton};
 
 use super::{PadEvent, PadId};
-
-/// Where a stick direction or a trigger presses its button: halfway, the
-/// common default.
-pub const PRESS_THRESHOLD: f32 = 0.5;
-
-/// Under which a pressed stick direction or trigger lets go: the 0.1 below
-/// [`PRESS_THRESHOLD`] is the hysteresis.
-pub const RELEASE_THRESHOLD: f32 = 0.4;
 
 /// One pad's buttons down and the last value of each of its stick axes.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -182,19 +178,6 @@ impl PadInputs {
     }
 }
 
-/// Whether a stick direction or trigger at `value` is pressed: `true`
-/// at [`PRESS_THRESHOLD`] or past it, `false` under [`RELEASE_THRESHOLD`],
-/// and `None` between, where it stays as it was.
-fn crossing(value: f32) -> Option<bool> {
-    if value >= PRESS_THRESHOLD {
-        Some(true)
-    } else if value < RELEASE_THRESHOLD {
-        Some(false)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::Gamepads;
@@ -237,12 +220,6 @@ mod tests {
             .copied()
             .filter(|input| matches!(input, Input::PadButton { .. }))
             .collect()
-    }
-
-    #[test]
-    fn the_thresholds_are_the_findings() {
-        assert!((PRESS_THRESHOLD - 0.5).abs() < f32::EPSILON);
-        assert!((RELEASE_THRESHOLD - 0.4).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -27,8 +27,8 @@ use nova_view::keymap::dead_zoned;
 use nova_view::{ControllerFamily, Device, Input, PadAxis, Touch, TouchPhase};
 
 use crate::gamepad::family::family_of;
-use crate::gamepad::inputs::PRESS_THRESHOLD;
 use crate::gamepad::{PadEvent, PadId};
+use nova_view::keymap::gamepad::PRESS_THRESHOLD;
 
 /// The device the player used last, and what it reads to tell.
 #[derive(Clone, Debug, Default, PartialEq)]

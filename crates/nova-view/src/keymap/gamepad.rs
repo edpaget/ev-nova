@@ -26,9 +26,11 @@
 //!   [`PadMap::axis_holder`]), for the keys screen's rule
 //!   ([`Bindings::assign_pad`](super::Bindings::assign_pad)).
 //!
-//! The press threshold, where a stick or trigger presses a button, is
-//! `nova`'s: its pad module turns axis values into [`PadButton`] presses
-//! before they reach a screen.
+//! - The press and release thresholds and the rule between them
+//!   ([`PRESS_THRESHOLD`], [`RELEASE_THRESHOLD`], [`crossing`]): `nova`'s
+//!   pad module reads them to turn axis values into [`PadButton`] presses
+//!   before they reach a screen, and flight's touch stick reads them to
+//!   hold reverse, so a stick pulled back does what the pad's does.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,6 +46,30 @@ use crate::input::{Input, PadAxis, PadButton};
 /// centre reads none (see [`dead_zoned`]). 0.15 covers the drift of a
 /// worn stick on common pads, with some margin (the phase's findings).
 pub const FLIGHT_DEAD_ZONE: f32 = 0.15;
+
+/// Where a stick direction or a trigger presses its button: halfway, the
+/// common default (rdm:phase/key-bindings/phase-7-gamepad-input's
+/// findings).
+pub const PRESS_THRESHOLD: f32 = 0.5;
+
+/// Under which a pressed stick direction or trigger lets go: the 0.1 below
+/// [`PRESS_THRESHOLD`] is the hysteresis.
+pub const RELEASE_THRESHOLD: f32 = 0.4;
+
+/// Whether a stick direction or trigger at `value` is pressed: `true`
+/// at [`PRESS_THRESHOLD`] or past it, `false` under [`RELEASE_THRESHOLD`],
+/// and `None` between, where it stays as it was, so a stick resting at
+/// the threshold doesn't chatter.
+#[must_use]
+pub fn crossing(value: f32) -> Option<bool> {
+    if value >= PRESS_THRESHOLD {
+        Some(true)
+    } else if value < RELEASE_THRESHOLD {
+        Some(false)
+    } else {
+        None
+    }
+}
 
 /// A stick at (`x`, `y`) through the flight's radial dead zone: (0, 0)
 /// within [`FLIGHT_DEAD_ZONE`] of the centre; outside it, the same
@@ -1708,6 +1734,23 @@ mod tests {
             PadBinding::Axis(AxisBinding::plain(PadAxis::LeftX)),
         );
         assert_eq!(map.clashes(), vec![]);
+    }
+
+    #[test]
+    fn the_thresholds_are_the_findings() {
+        assert!((PRESS_THRESHOLD - 0.5).abs() < f32::EPSILON);
+        assert!((RELEASE_THRESHOLD - 0.4).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn crossing_presses_at_the_press_threshold_lets_go_under_the_release_threshold_and_keeps_between()
+     {
+        assert_eq!(crossing(1.0), Some(true));
+        assert_eq!(crossing(PRESS_THRESHOLD), Some(true));
+        assert_eq!(crossing(0.45), None);
+        assert_eq!(crossing(RELEASE_THRESHOLD), None);
+        assert_eq!(crossing(0.39), Some(false));
+        assert_eq!(crossing(-1.0), Some(false));
     }
 
     #[test]

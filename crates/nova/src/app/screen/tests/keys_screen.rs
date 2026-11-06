@@ -216,12 +216,13 @@ fn recording_jettison_on_the_pad(screen: &mut AppScreen) {
 
 /// The keys screen reads a stick only as the stick directions the app's
 /// pad state presses past its threshold
-/// ([`PRESS_THRESHOLD`](crate::gamepad::inputs::PRESS_THRESHOLD)): a
+/// ([`PRESS_THRESHOLD`](nova_view::keymap::gamepad::PRESS_THRESHOLD)): a
 /// stick inside it records nothing, and one past it its direction.
 #[test]
 fn recording_on_the_gamepad_tab_a_stick_binds_its_direction_only_past_the_threshold() {
-    use crate::gamepad::inputs::{PRESS_THRESHOLD, PadInputs};
+    use crate::gamepad::inputs::PadInputs;
     use crate::gamepad::{PadEvent, PadId};
+    use nova_view::keymap::gamepad::PRESS_THRESHOLD;
     use nova_view::keymap::{PadBinding, PadEntry};
     use nova_view::{PadAxis, PadButton};
     const ONE: PadId = PadId(0);
