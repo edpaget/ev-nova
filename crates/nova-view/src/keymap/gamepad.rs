@@ -578,15 +578,17 @@ const fn default_map(command: MapCommand) -> PadBinding {
 
 /// One pad button down: the layer its press went down under, and whether
 /// it still means anything (a layer released first leaves it meaning
-/// nothing until it is pressed again).
+/// nothing until it is pressed again). What a screen that takes a pad
+/// over from another reader adopts ([`Gamepad::adopt`]), so each button
+/// goes on meaning what it went down as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Down {
+pub struct PadDown {
     /// The button.
-    button: PadButton,
+    pub button: PadButton,
     /// The layer held as it went down.
-    layer: Option<PadButton>,
+    pub layer: Option<PadButton>,
     /// Whether its layer is still held, or it had none.
-    live: bool,
+    pub live: bool,
 }
 
 /// The gamepad's device state: the buttons down in the order pressed,
@@ -603,7 +605,7 @@ struct Down {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gamepad {
     /// The buttons down, in the order pressed.
-    down: Vec<Down>,
+    down: Vec<PadDown>,
     /// What each press meant, while its button is down and its layer
     /// still held.
     presses: BTreeMap<PadButton, Command>,
@@ -635,7 +637,7 @@ impl Gamepad {
             } => {
                 if !self.is_down(button) {
                     let layer = self.layer_among(button, &layers);
-                    self.down.push(Down {
+                    self.down.push(PadDown {
                         button,
                         layer,
                         live: true,
@@ -689,6 +691,26 @@ impl Gamepad {
     /// The buttons down, in the order pressed.
     pub fn buttons(&self) -> impl Iterator<Item = PadButton> + '_ {
         self.down.iter().map(|down| down.button)
+    }
+
+    /// Each button down with the layer it went down under and whether it
+    /// still means anything, in the order pressed.
+    pub fn held_buttons(&self) -> impl Iterator<Item = PadDown> + '_ {
+        self.down.iter().copied()
+    }
+
+    /// Puts `down`'s button down as it went down elsewhere, its layer and
+    /// liveness kept; nothing if it is down already. Its press is noted
+    /// by the caller ([`Gamepad::note_press`]).
+    pub fn adopt(&mut self, down: PadDown) {
+        if !self.is_down(down.button) {
+            self.down.push(down);
+        }
+    }
+
+    /// Sets `axis`'s value, as a move of it to `value` would.
+    pub fn set_axis(&mut self, axis: PadAxis, value: f32) {
+        self.axes.insert(axis, value);
     }
 
     /// The last value of `axis`, none before it moved.
@@ -804,7 +826,7 @@ pub(super) fn fresh_press(input: &Input) -> Option<Input> {
 /// An entry matches exactly: a layer held never falls back to the
 /// button's plain entry. Two layer buttons pressed together, in either
 /// order, match the chord's one entry ([`PadEntry::canonical`]).
-fn meanings(
+pub(super) fn meanings(
     map: &PadMap,
     button: PadButton,
     layer: Option<PadButton>,
@@ -1884,5 +1906,70 @@ mod tests {
             resolve(&PadMap::default(), &axis, &Gamepad::default(), FLYING),
             None
         );
+    }
+
+    fn down(button: PadButton, layer: Option<PadButton>, live: bool) -> PadDown {
+        PadDown {
+            button,
+            layer,
+            live,
+        }
+    }
+
+    #[test]
+    fn held_buttons_lists_each_button_with_its_layer_in_press_order() {
+        let mut pad = Pad::new(FLYING);
+        pad.press(P::West);
+        pad.press(P::Select);
+        pad.press(P::South);
+        assert_eq!(
+            pad.state.held_buttons().collect::<Vec<_>>(),
+            [
+                down(P::West, None, true),
+                down(P::Select, None, true),
+                down(P::South, Some(P::Select), true),
+            ]
+        );
+        pad.release(P::Select);
+        assert_eq!(
+            pad.state.held_buttons().collect::<Vec<_>>(),
+            [
+                down(P::West, None, true),
+                down(P::South, Some(P::Select), false)
+            ],
+            "South's layer went up first"
+        );
+    }
+
+    #[test]
+    fn adopting_a_button_keeps_its_layer_and_liveness() {
+        let map = PadMap::default();
+        let mut pad = Gamepad::default();
+        pad.adopt(down(P::Select, None, true));
+        pad.adopt(down(P::South, Some(P::Select), true));
+        let jump = flight(FlightCommand::HyperJump);
+        assert_eq!(resolve(&map, &press(P::South), &pad, FLYING), Some(jump));
+        assert_eq!(held(&map, &pad, FLYING), BTreeSet::from([jump]));
+        pad.adopt(down(P::South, None, true));
+        assert_eq!(
+            pad.held_buttons().collect::<Vec<_>>(),
+            [
+                down(P::Select, None, true),
+                down(P::South, Some(P::Select), true)
+            ],
+            "a button already down stays as it went down"
+        );
+        let mut dead = Gamepad::default();
+        dead.adopt(down(P::South, Some(P::Select), false));
+        assert!(dead.is_down(P::South));
+        assert_eq!(held(&map, &dead, FLYING), BTreeSet::new(), "holds nothing");
+    }
+
+    #[test]
+    fn set_axis_sets_an_axis_value() {
+        let mut pad = Gamepad::default();
+        pad.set_axis(PadAxis::LeftY, 0.7);
+        assert_eq!(pad.axis(PadAxis::LeftY), 0.7);
+        assert_eq!(pad.axis(PadAxis::RightX), 0.0);
     }
 }

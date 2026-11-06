@@ -400,6 +400,12 @@ impl Devices {
         &self.gamepad
     }
 
+    /// The gamepad's state, to adopt buttons and axes into
+    /// ([`CommandReader::adopt_pad`](super::CommandReader::adopt_pad)).
+    pub(super) const fn gamepad_mut(&mut self) -> &mut Gamepad {
+        &mut self.gamepad
+    }
+
     /// Whether a modifier is down, as any of the `active` contexts reads
     /// the modifiers.
     #[must_use]

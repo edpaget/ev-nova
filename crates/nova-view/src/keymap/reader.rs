@@ -8,7 +8,8 @@ use std::rc::Rc;
 use super::bindings::{Bindings, Change, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
-use crate::input::{Device, Input, TouchControl};
+use super::gamepad::{self, Gamepad, PadDown};
+use crate::input::{Device, Input, PadAxis, TouchControl};
 use crate::key_names::{KeyNames, NoKeyNames};
 
 /// The app's bindings, shared by every screen: a cheap clone over one
@@ -387,6 +388,56 @@ impl CommandReader {
     #[must_use]
     pub fn flight_axis_pushed(&self) -> bool {
         self.bindings.with(|b| b.flight_axis_pushed(&self.devices))
+    }
+
+    /// What the pad button `down` describes holds in the active contexts,
+    /// under its recorded layer exactly ([`PadDown::layer`]), whatever
+    /// the reader holds: nothing when its layer went up first, or for a
+    /// layer button alone.
+    #[must_use]
+    pub fn pad_meanings(&self, down: PadDown) -> Vec<Command> {
+        if !down.live {
+            return Vec::new();
+        }
+        let active = self.active();
+        self.bindings
+            .with(|b| gamepad::meanings(&b.gamepad, down.button, down.layer, &active))
+    }
+
+    /// Puts the pad button `down` describes down as it went down
+    /// elsewhere ([`Gamepad::adopt`]), its press noted as meaning its
+    /// first command ([`CommandReader::pad_meanings`]), so a later press of
+    /// it, a replay, means what it went down as, and its release ends
+    /// that; nothing if it is down already.
+    pub fn adopt_pad(&mut self, down: PadDown) {
+        if self.devices.gamepad().is_down(down.button) {
+            return;
+        }
+        let meant = self.pad_meanings(down).first().copied();
+        let press = Input::PadButton {
+            button: down.button,
+            pressed: true,
+            repeat: false,
+        };
+        let pad = self.devices.gamepad_mut();
+        pad.adopt(down);
+        pad.note_press(&press, meant);
+        self.recompute();
+    }
+
+    /// Sets every stick axis to `pad`'s value of it, centred where `pad`
+    /// has none.
+    pub fn adopt_axes(&mut self, pad: &Gamepad) {
+        let mine = self.devices.gamepad_mut();
+        for axis in PadAxis::ALL {
+            mine.set_axis(axis, pad.axis(axis));
+        }
+    }
+
+    /// The gamepad's state, as the reader follows it.
+    #[must_use]
+    pub const fn gamepad(&self) -> &Gamepad {
+        self.devices.gamepad()
     }
 
     /// Follows `input` on the devices, a pad press taking its layer from
@@ -928,6 +979,84 @@ mod tests {
         assert_eq!(reader.axis(FlightCommand::ThrottleAxis), 0.0);
         assert!(!reader.anything_down());
         assert_eq!(reader.held_commands().count(), 0);
+    }
+
+    fn pad_down(button: PadButton, layer: Option<PadButton>, live: bool) -> PadDown {
+        PadDown {
+            button,
+            layer,
+            live,
+        }
+    }
+
+    #[test]
+    fn pad_meanings_reads_the_recorded_layer_only() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.follow(&pad(PadButton::Start, true));
+        let south = PadButton::South;
+        let select = Some(PadButton::Select);
+        assert_eq!(
+            reader.pad_meanings(pad_down(south, select, true)),
+            [Command::Flight(FlightCommand::HyperJump)]
+        );
+        assert_eq!(
+            reader.pad_meanings(pad_down(south, None, true)),
+            [Command::Flight(FlightCommand::FirePrimary)],
+            "not Start's layer, which the reader holds"
+        );
+        assert_eq!(
+            reader.pad_meanings(pad_down(south, select, false)),
+            [] as [Command; 0],
+            "its layer went up first"
+        );
+        assert_eq!(
+            reader.pad_meanings(pad_down(PadButton::Select, None, true)),
+            [] as [Command; 0],
+            "a layer alone"
+        );
+    }
+
+    #[test]
+    fn a_press_of_an_adopted_button_means_its_recorded_layer() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.adopt_pad(pad_down(PadButton::West, None, true));
+        reader.adopt_pad(pad_down(PadButton::Select, None, true));
+        let closest = Command::Flight(FlightCommand::ClosestTarget);
+        assert!(reader.held(closest));
+        assert!(reader.is_down(&pad(PadButton::Select, true)));
+        assert_eq!(
+            reader.means(&pad(PadButton::West, false)),
+            Some(closest),
+            "its press noted"
+        );
+        reader.adopt_pad(pad_down(PadButton::West, Some(PadButton::Select), true));
+        assert_eq!(
+            reader.means(&pad(PadButton::West, false)),
+            Some(closest),
+            "adopted again: as it went down first"
+        );
+        assert_eq!(reader.peek(&pad(PadButton::West, true)), Some(closest));
+        assert_eq!(
+            reader
+                .follow(&pad(PadButton::West, true))
+                .map(|c| c.command),
+            Some(closest),
+            "not Select's Communicate"
+        );
+        reader.adopt_pad(pad_down(PadButton::South, Some(PadButton::Select), false));
+        assert!(reader.is_down(&pad(PadButton::South, true)));
+        assert!(!reader.held(FlightCommand::HyperJump), "dead");
+    }
+
+    #[test]
+    fn adopt_axes_takes_every_axis_of_the_pad() {
+        let mut reader = CommandReader::new(FLIGHT);
+        reader.follow(&axis(PadAxis::RightX, 1.0));
+        let mut pad = Gamepad::default();
+        pad.set_axis(PadAxis::LeftY, 1.0);
+        reader.adopt_axes(&pad);
+        assert_eq!(reader.axis(FlightCommand::ThrottleAxis), 1.0);
+        assert_eq!(reader.axis(FlightCommand::TurnAxis), 0.0, "centred");
     }
 
     #[test]

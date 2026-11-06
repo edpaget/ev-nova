@@ -198,7 +198,7 @@ pub use command::{
 };
 pub use contexts::ScreenContexts;
 pub use gamepad::{
-    AxisBinding, FLIGHT_DEAD_ZONE, Gamepad, PadBinding, PadEntry, PadMap, dead_zoned,
+    AxisBinding, FLIGHT_DEAD_ZONE, Gamepad, PadBinding, PadDown, PadEntry, PadMap, dead_zoned,
 };
 pub use keyboard::{Binding, KeyCombo, KeyMap, Keyboard, KeysDown, Modifiers, is_modifier_input};
 pub use reader::{CommandInput, CommandReader, SharedBindings};
