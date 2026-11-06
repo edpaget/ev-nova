@@ -1,10 +1,13 @@
 //! [`Session::apply`]'s conversation arm: [`FlightCommand::Converse`],
 //! answered with the landed visit's conversation page (see the session's
-//! `conversation` and `storylines` modules).
+//! `conversation` and `storylines` modules). The outfit changes an
+//! opening or a choice's effects queue are made before the page is
+//! answered ([`Session::apply_story_outfits`]).
 //!
 //! [`FlightCommand::Converse`]: crate::flight_frame::FlightCommand::Converse
 
 use super::done_if;
+use crate::chance::Chance;
 use crate::flight_frame::{Answer, Converse};
 use crate::session::Session;
 
@@ -25,7 +28,14 @@ impl Session {
     ///   page or past its choices.
     /// - [`Converse::Close`] closes it: [`Answer::Done`], or
     ///   [`Answer::Refused`] with none open.
-    pub(super) fn apply_conversation(&mut self, converse: Converse) -> Answer {
+    ///
+    /// An opening's or a choice's outfit grants and removals are made
+    /// before it answers, drawing on `chance`.
+    pub(super) fn apply_conversation(
+        &mut self,
+        converse: Converse,
+        chance: &mut dyn Chance,
+    ) -> Answer {
         let landed = self.mode.landed();
         // The holds, not the room: opening settles the landing and the
         // offer, which change the cargo before an outcome is decided.
@@ -50,6 +60,7 @@ impl Session {
             ),
             Converse::Close => return done_if(self.port.close_conversation()),
         };
+        self.apply_story_outfits(chance);
         page.map_or(Answer::Refused, Answer::Conversation)
     }
 }

@@ -289,7 +289,7 @@ impl Session {
             FlightCommand::Hover { .. }
             | FlightCommand::LoadDescription { .. }
             | FlightCommand::LoadPortDescription => self.apply_ask(command, collab),
-            FlightCommand::Converse(converse) => self.apply_conversation(converse),
+            FlightCommand::Converse(converse) => self.apply_conversation(converse, collab.chance),
         }
     }
 }

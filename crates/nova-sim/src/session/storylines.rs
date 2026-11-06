@@ -38,22 +38,41 @@
 //!   save due. A session whose data holds no storylines (the stock
 //!   game's) registers neither hook, and settling its landing finds
 //!   nothing to do.
+//! - **Outfits.** An effect block's outfit grants and removals are handed
+//!   back by the story layer ([`OutfitChange`]) onto the
+//!   [`Outbox`]'s queue, and [`Session::apply_story_outfits`] makes them,
+//!   in order, through the `G` and `D` set operators
+//!   ([`Session::apply_op`]; see the `outfits` module), so the stock fold,
+//!   the refit and the rules for each (`GrantMax`, `RefitReserves`,
+//!   `RemoveRefund`) apply as they do to a `mïsn` script. Each entry that
+//!   plays the storylines drains the queue before it returns: after
+//!   [`Converse::Open`](crate::flight_frame::Converse::Open) and
+//!   [`Converse::Choose`](crate::flight_frame::Converse::Choose), and
+//!   after the `Storylines` consumer's arm of the story dispatch. The
+//!   changes apply at the end of the call that made them, after the
+//!   flags, events and outcomes it settled: nothing there reads outfits,
+//!   and no frame, dialog page or save comes between. The state change
+//!   that applied the block (an offer, a decision, a success, an event)
+//!   has made a save due already.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 
 use crate::catalog::{StellarId, SystemId};
-use crate::control::Script;
+use crate::chance::Chance;
+use crate::control::{Script, SetOp};
 use crate::dialog::conversation::{Conversation, ConversationPage, DialogFile};
 use crate::pilot::Pilot;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
+use crate::storylines::effects::OutfitChange;
 use crate::storylines::lifecycle::{Play, Scene, outcome_of};
 use crate::storylines::news::{self, HeardNews};
 use nova_sim_catalog::dialogs::DialogAt;
 
 use super::conversation::OpenConversation;
 use super::free_cargo::free_cargo_in;
+use super::precalced::ResetCause;
 use super::{MissionRun, Outbox, Port, Session, Setup, Statics};
 
 /// The storylines' landing hook ([`Play::landed`]).
@@ -254,6 +273,37 @@ pub(super) fn settle_outcome(
 }
 
 impl Session {
+    /// Makes the outfit changes the storylines' effects have queued on the
+    /// [`Outbox`], in order, each through `G` or `D`
+    /// ([`Session::apply_op`]) drawing on `chance`, then, when there were
+    /// any, resets the precalculated values as a set expression's end
+    /// does, and marks the galaxy stale when the pilot changed, so a
+    /// `Visibility` test reading outfits is refreshed as after a script's
+    /// `G` (see the module docs and the `precalced` module). It makes no
+    /// save due itself: the change that applied the block has.
+    ///
+    /// The changes are made at the end of the call that queued them,
+    /// rather than where their block applied, as the ship isn't the
+    /// story's: nothing settled in between reads outfits, and no frame,
+    /// dialog page or save comes between.
+    pub(super) fn apply_story_outfits(&mut self, chance: &mut dyn Chance) {
+        if self.out.story_outfits.is_empty() {
+            return;
+        }
+        let before = self.pilot.clone();
+        for change in std::mem::take(&mut self.out.story_outfits) {
+            let op = match change {
+                OutfitChange::Grant(outfit) => SetOp::GrantOutfit(outfit),
+                OutfitChange::Remove(outfit) => SetOp::RemoveOutfit(outfit),
+            };
+            self.apply_op(&op, chance);
+        }
+        self.reset_precalced_for(ResetCause::SetExpr);
+        if self.pilot != before {
+            self.chart.galaxy_stale = true;
+        }
+    }
+
     /// The news `system` has heard by today, over the galaxy's lanes, by
     /// the day each broke and then by id, each with how many days ago it
     /// was heard (see the `storylines` module). None in the stock game.
@@ -269,6 +319,7 @@ impl Session {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // shields compared as the refit leaves them
 mod tests {
     //! What the session forwards to the story layer and what reaches the
     //! pilot and the page; the rules themselves are pinned in
@@ -285,13 +336,16 @@ mod tests {
     };
 
     use super::*;
+    use crate::catalog::{OutfitId, OutfitRecord};
     use crate::chance::NeverFires;
     use crate::dialog::Value;
     use crate::dialog::fake::{FakeChoice, FakeDialog, FakeKnot, FakeLoader};
     use crate::flight_frame::{Answer, Converse, FlightCommand};
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::apply::tests::apply;
+    use crate::stats::MORE_SHIELD;
     use crate::storylines::state::MissionState;
-    use crate::testkit::{FakePilotCatalog, catalog, land_now};
+    use crate::testkit::{FakePilotCatalog, catalog, land_now, outfit};
 
     const STORY: &str = "job story";
     const FILE: &str = "dialog/job.ink";
@@ -954,5 +1008,222 @@ mod tests {
         assert_eq!(state(&session, "job"), Some(MissionState::Done));
         assert!(session.pilot().flags.is_set("paid"));
         assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+    }
+
+    // Outfits granted and removed by the effects (see the module docs).
+
+    /// The shield outfit the job lends: +10 shield, at most 2 owned.
+    const PASS: OutfitId = OutfitId(305);
+
+    /// [`talking`] with [`PASS`] in the catalog.
+    fn lending(missions: &[(&str, StoryMission)]) -> FakePilotCatalog {
+        FakePilotCatalog {
+            outfits: vec![OutfitRecord {
+                max: 2,
+                ..outfit(PASS.0, &[(MORE_SHIELD, 10)])
+            }],
+            ..talking(missions)
+        }
+    }
+
+    /// Effects granting `grant` and removing `remove`, by ID.
+    fn changing(grant: &[OutfitId], remove: &[OutfitId]) -> StoryEffects {
+        StoryEffects {
+            grant_outfits: grant.to_vec(),
+            remove_outfits: remove.to_vec(),
+            ..StoryEffects::default()
+        }
+    }
+
+    /// The job, its accept lending the pass and its success taking it
+    /// back.
+    fn lent() -> StoryMission {
+        let job = job(10);
+        StoryMission {
+            on_accept: StoryEffects {
+                grant_outfits: vec![PASS],
+                ..job.on_accept.clone()
+            },
+            on_success: StoryEffects {
+                remove_outfits: vec![PASS],
+                ..job.on_success.clone()
+            },
+            ..job
+        }
+    }
+
+    fn owned(session: &Session) -> u16 {
+        session.pilot().owned(PASS)
+    }
+
+    #[test]
+    fn an_accept_that_grants_an_outfit_gives_the_pilot_one_and_refits_the_ship() {
+        let catalog = lending(&[("job", lent())]);
+        let mut session = landed(&catalog);
+        let shield = session.stats().shield;
+        converse(&mut session, Converse::Open);
+        assert_eq!(owned(&session), 0, "offered: nothing yet");
+        session.out.save_due = false;
+        converse(&mut session, Converse::Choose(0));
+        assert_eq!(owned(&session), 1);
+        assert_eq!(session.stats().shield, shield + 10.0, "refitted, as G does");
+        assert!(session.out.save_due);
+        assert_eq!(session.out.story_outfits, []);
+    }
+
+    #[test]
+    fn an_offer_s_first_opening_and_a_completion_make_their_changes_as_they_open() {
+        let job = StoryMission {
+            on_offer: changing(&[PASS, PASS], &[]),
+            ..lent()
+        };
+        let catalog = lending(&[("job", job)]);
+        let mut session = landed(&catalog);
+        converse(&mut session, Converse::Open);
+        assert_eq!(owned(&session), 2, "on_offer");
+        assert_eq!(session.out.story_outfits, []);
+        session.pilot.story.missions.insert(
+            "job".to_owned(),
+            MissionState::Active {
+                cargo: 0,
+                met: true,
+            },
+        );
+        visit_again(&mut session, &catalog);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Paid in full.", "Signed for."]
+        );
+        assert_eq!(owned(&session), 1, "on_success, as the completion opens");
+        assert_eq!(session.out.story_outfits, []);
+    }
+
+    #[test]
+    fn a_landing_that_succeeds_makes_its_changes_in_the_dispatch() {
+        let job = StoryMission {
+            complete: None,
+            ..lent()
+        };
+        let catalog = lending(&[("job", job)]);
+        let mut session = flying(&catalog);
+        session.pilot.outfits.insert(PASS, 1);
+        session.pilot.story.missions.insert(
+            "job".to_owned(),
+            MissionState::Active {
+                cargo: 10,
+                met: false,
+            },
+        );
+        land(&mut session, &catalog);
+        assert_eq!(state(&session, "job"), Some(MissionState::Done));
+        assert_eq!(owned(&session), 0, "taken back on success");
+        assert_eq!(session.out.story_outfits, []);
+    }
+
+    #[test]
+    fn an_event_a_day_fires_removes_an_outfit_in_flight() {
+        let [(_, close), _] = closing();
+        let close = StoryMission {
+            on_offer: changing(&[], &[PASS]),
+            ..close
+        };
+        let catalog = lending(&[("close", close)]);
+        let mut session = flying(&catalog);
+        session.pilot.outfits.insert(PASS, 2);
+        session.let_days_pass(3, &mut NeverFires);
+        session.out.save_due = false;
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(state(&session, "close"), Some(MissionState::Done));
+        assert_eq!(owned(&session), 1);
+        assert!(session.out.save_due);
+        assert_eq!(session.out.story_outfits, []);
+    }
+
+    #[test]
+    fn removing_an_outfit_not_owned_changes_nothing() {
+        let job = StoryMission {
+            on_accept: changing(&[], &[PASS]),
+            ..job(10)
+        };
+        let catalog = lending(&[("job", job)]);
+        let mut session = landed(&catalog);
+        let cash = session.pilot().cash();
+        let shield = session.stats().shield;
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        assert!(
+            matches!(state(&session, "job"), Some(MissionState::Active { .. })),
+            "accepted"
+        );
+        assert_eq!(owned(&session), 0);
+        assert!(!session.pilot().outfits.contains_key(&PASS));
+        assert_eq!(session.pilot().cash(), cash);
+        assert_eq!(session.stats().shield, shield);
+    }
+
+    #[test]
+    fn a_grant_and_a_removal_of_one_outfit_in_one_block_leave_the_count() {
+        let job = StoryMission {
+            on_accept: changing(&[PASS], &[PASS]),
+            ..job(10)
+        };
+        let catalog = lending(&[("job", job)]);
+        let mut session = landed(&catalog);
+        session.pilot.outfits.insert(PASS, 1);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        assert_eq!(owned(&session), 1);
+    }
+
+    #[test]
+    fn a_grant_at_the_max_lands_by_the_engine_and_is_refused_by_the_other_reading() {
+        let job = StoryMission {
+            on_accept: changing(&[PASS], &[]),
+            ..job(10)
+        };
+        let catalog = lending(&[("job", job)]);
+        for (source, count) in [(RuleSource::Engine, 3), (RuleSource::Bible, 2)] {
+            let rules = Rulebook::default().with_override(RuleKey::GrantMax, source);
+            let mut session = flying(&catalog).with_rules(rules);
+            land(&mut session, &catalog);
+            session.pilot.outfits.insert(PASS, 2);
+            converse(&mut session, Converse::Open);
+            converse(&mut session, Converse::Choose(0));
+            assert!(
+                matches!(state(&session, "job"), Some(MissionState::Active { .. })),
+                "{source:?}: accepted"
+            );
+            assert_eq!(owned(&session), count, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_changes_reset_as_a_script_s_end_does_and_stale_the_galaxy_when_the_pilot_changed() {
+        let job = StoryMission {
+            on_offer: changing(&[], &[PASS]),
+            ..lent()
+        };
+        let catalog = lending(&[("job", job)]);
+        let mut session = landed(&catalog);
+        let stale = |session: &mut Session| {
+            session.ship.fuel_cap_cached = true;
+            session.chart.galaxy_stale = false;
+        };
+        stale(&mut session);
+        converse(&mut session, Converse::Open);
+        assert!(!session.ship.fuel_cap_cached, "reset");
+        assert!(
+            !session.chart.galaxy_stale,
+            "a removal of none: the pilot is as it was"
+        );
+        stale(&mut session);
+        converse(&mut session, Converse::Choose(0));
+        assert!(!session.ship.fuel_cap_cached, "reset");
+        assert!(session.chart.galaxy_stale, "granted");
+        stale(&mut session);
+        converse(&mut session, Converse::Close);
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+        assert!(session.ship.fuel_cap_cached, "nothing queued: no reset");
+        assert!(!session.chart.galaxy_stale);
     }
 }

@@ -42,7 +42,7 @@ pub(super) struct Outbox {
     pub(super) save_in_flight: bool,
     /// The outfit grants and removals the storylines' effects have handed
     /// back, in the order they applied, until the session makes them
-    /// (`Session::apply_story_outfits`, in the `story_outfits` module).
+    /// (`Session::apply_story_outfits`, in the `storylines` module).
     /// Every entry that plays the storylines drains it before it returns,
     /// so none is left at a frame, a dialog page or a save; never saved.
     pub(super) story_outfits: Vec<OutfitChange>,
