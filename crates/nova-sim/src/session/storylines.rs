@@ -259,12 +259,32 @@ mod tests {
             .line("Signed for.", &["outcome: decline"]);
         let greet = FakeKnot::new("greet").line("Hello.", &[]);
         let toll = FakeKnot::new("toll").line("The road's shut.", &[]);
+        // An offer that reaches a second outcome after its first: `Later`
+        // defers, then offers to take it after all; `Take` accepts, then
+        // offers to take it again.
+        let fickle = FakeKnot::new("fickle")
+            .line("A job?", &[])
+            .choice(
+                FakeChoice::sticky("Later", &[])
+                    .line("Later, then.", &["outcome: defer"])
+                    .then("second"),
+            )
+            .choice(
+                FakeChoice::sticky("Take", &[])
+                    .line("Bay two.", &["outcome: accept"])
+                    .then("second"),
+            );
+        let second = FakeKnot::new("second").line("Sure?", &[]).choice(
+            FakeChoice::sticky("Take it after all", &[]).line("Fine.", &["outcome: accept"]),
+        );
         let dialog = FakeDialog::default()
             .declare("paid", Value::Bool(false))
             .knot(offer)
             .knot(done)
             .knot(greet)
-            .knot(toll);
+            .knot(toll)
+            .knot(fickle)
+            .knot(second);
         FakeLoader::default().story(STORY, dialog)
     }
 
@@ -565,6 +585,66 @@ mod tests {
             session.pilot().story,
             crate::storylines::state::StoryState::default()
         );
+    }
+
+    /// The job, offered by the `fickle` knot, which reaches a second
+    /// outcome after its first.
+    fn fickle() -> StoryMission {
+        StoryMission {
+            offer: offered_at(DOCK, FILE, "fickle").offer,
+            ..job(10)
+        }
+    }
+
+    #[test]
+    fn only_the_first_outcome_an_offer_reaches_decides_it() {
+        let catalog = talking(&[("job", fickle())]);
+        let mut session = landed(&catalog);
+        let room = free(&session);
+        converse(&mut session, Converse::Open);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Later, then.", "Sure?"]
+        );
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Fine."]
+        );
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Offered),
+            "deferred"
+        );
+        assert_eq!(free(&session), room, "nothing loaded");
+        assert!(!session.pilot().flags.is_set("hauling"));
+    }
+
+    #[test]
+    fn an_accept_refused_for_room_decides_the_offer_for_the_visit() {
+        let catalog = talking(&[("job", fickle())]);
+        let mut session = landed(&catalog);
+        let room = free(&session);
+        // The hold full but for 5 tons, short of the job's 10.
+        let filler = u32::try_from(room - 5).expect("a hold's tons");
+        session
+            .pilot
+            .cargo
+            .insert(crate::market::Good::Commodity(0), filler);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(1));
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Offered),
+            "refused"
+        );
+        // Room made before the second accept page: it decides nothing.
+        session.pilot.cargo.clear();
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Choose(0))),
+            ["Fine."]
+        );
+        assert_eq!(state(&session, "job"), Some(MissionState::Offered));
+        assert_eq!(free(&session), room, "nothing loaded");
     }
 
     #[test]
