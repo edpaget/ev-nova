@@ -15,7 +15,7 @@ use nova_data::records::character::Character;
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::spin::Spin;
-use nova_data::store::{SpinSheet, SpinSpriteError};
+use nova_data::store::SpinSheet;
 use nova_sim::catalog::{CommCatalog, ShipId};
 use nova_sim::news::MISC_STRINGS;
 
@@ -175,10 +175,7 @@ fn spin(data: &GameData, id: i16) -> Result<Spin, String> {
 /// `_LoadSprites` loads the buttons and the rollover (@0x20e81-0x20fee,
 /// @0x212c9-0x21409).
 fn sheet(data: &GameData, id: i16) -> Result<SpinSheet<'_>, String> {
-    data.spin_sheet(id).map_err(|err| match err {
-        SpinSpriteError::Decode(err) => format!("spïn {id}: {err}"),
-        err => err.to_string(),
-    })
+    data.spin_sheet(id).map_err(|err| err.to_string())
 }
 
 /// `PICT` `id`, decoded.
@@ -452,6 +449,7 @@ mod tests {
         let broken = replacing(Spin::TYPE, 600, &[0, 4]);
         let error = broken.main_screen_art().expect_err("undecodable");
         assert!(error.starts_with("spïn 600: "), "{error}");
+        assert!(!error.contains("spïn 600: spïn 600"), "{error}");
         let broken = replacing(Colors::TYPE, 128, &[0, 4]);
         let error = broken.main_screen_art().expect_err("undecodable");
         assert!(error.starts_with("cölr 128: "), "{error}");
