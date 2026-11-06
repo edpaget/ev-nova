@@ -17,23 +17,25 @@ use super::dialog::dialog_area;
 use super::map::{GalaxyMap, MapMode};
 use crate::keymap::{Command, MapCommand};
 use crate::ui::touch_aids::ModifierToggle;
-use crate::ui::touch_aids::host::ToggleHost;
+use crate::ui::touch_aids::host::AidHost;
 
 /// An in-flight map's toggle, clear of the map's dialog.
 pub(super) fn toggle() -> ModifierToggle {
     ModifierToggle::classic(Command::Map(MapCommand::PlotCourse), Some(dialog_area()))
 }
 
-impl ToggleHost for GalaxyMap {
-    fn toggle(&self) -> &ModifierToggle {
+impl AidHost for GalaxyMap {
+    type Aid = ModifierToggle;
+
+    fn aid(&self) -> &ModifierToggle {
         &self.toggle
     }
 
-    fn toggle_mut(&mut self) -> &mut ModifierToggle {
+    fn aid_mut(&mut self) -> &mut ModifierToggle {
         &mut self.toggle
     }
 
-    fn toggle_live(&self) -> bool {
+    fn aid_live(&self) -> bool {
         self.mode() != MapMode::Viewer && !self.finding()
     }
 }
@@ -45,6 +47,35 @@ impl GalaxyMap {
     pub fn touch_toggle(&self) -> &ModifierToggle {
         &self.toggle
     }
+}
+
+/// An in-flight map as the toggles' table drives it.
+#[cfg(test)]
+struct Probe(GalaxyMap);
+
+#[cfg(test)]
+impl crate::ui::touch_aids::tests::ToggleProbe for Probe {
+    fn screen(&mut self) -> &mut dyn crate::screen::Screen {
+        &mut self.0
+    }
+
+    fn toggle(&self) -> &ModifierToggle {
+        &self.0.toggle
+    }
+
+    fn target(&self) -> crate::geometry::Point {
+        tests::dot(&self.0, 129)
+    }
+
+    fn holds(&mut self) -> bool {
+        self.0.take_press().is_some_and(|press| press.shift)
+    }
+}
+
+/// The course map's row in the toggles' table.
+#[cfg(test)]
+pub(crate) fn toggle_probe() -> Box<dyn crate::ui::touch_aids::tests::ToggleProbe> {
+    Box::new(Probe(tests::map()))
 }
 
 #[cfg(test)]
@@ -71,7 +102,7 @@ mod tests {
 
     /// The course map in Alpha (128) with a course to Beta (129), looking
     /// at Gamma, with Find.
-    fn map() -> GalaxyMap {
+    pub(super) fn map() -> GalaxyMap {
         let mut map = GalaxyMap::course(&FakeCatalog::new(galaxy()))
             .with_metrics(Rc::new(MonoMetrics))
             .with_find(None, ButtonStyle::STOCK);
@@ -81,7 +112,7 @@ mod tests {
         map
     }
 
-    fn dot(map: &GalaxyMap, id: i16) -> Point {
+    pub(super) fn dot(map: &GalaxyMap, id: i16) -> Point {
         let system = map.model().system(SystemId(id)).expect("a system");
         map.transform().world_to_screen(system.position())
     }

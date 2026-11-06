@@ -589,10 +589,13 @@ pub enum Input {
     /// Two free fingers pinched ([`crate::touch`]). Only the galaxy map
     /// acts on it, zooming in its own steps; every other screen ignores it.
     Pinch(Pinch),
-    /// Flight's on-screen touch controls pressed or let go of a command,
-    /// or moved their stick: a device of its own, which the keymap reads
-    /// beside the keyboard and the pad. Every screen but flight ignores
-    /// it, as it ignores a key it has no use for.
+    /// Flight's on-screen touch controls, or a touch aid off flight
+    /// (`ui::touch_aids`: a modifier click's toggle, the play keys),
+    /// pressed or let go of a command, or moved their stick: a device of
+    /// its own, which the keymap reads beside the keyboard and the pad,
+    /// so a screen's reader takes it as it takes the key bound to the
+    /// same command. A screen reading no such command ignores it, as it
+    /// ignores a key it has no use for.
     TouchControl(TouchControl),
 }
 

@@ -25,6 +25,7 @@
 //!   ([`look::draw_square`]), a menu cell in size ([`CELL_PT`]), placed by
 //!   [`place`] from the bottom-left corner on, highlighted while armed.
 
+use super::host::TouchAid;
 use super::look;
 use super::place::{BOTTOM_FIRST, CELL_PT, place};
 use super::press::{Press, Step};
@@ -71,7 +72,7 @@ pub struct ModifierToggle {
     press: Press,
     /// Whether its host is running the inputs it gave back, which pass it
     /// by ([`super::host`]).
-    pub(super) replaying: bool,
+    replaying: bool,
 }
 
 impl ModifierToggle {
@@ -248,6 +249,32 @@ impl ModifierToggle {
             fill,
             self.told.points_per_pixel,
         );
+    }
+}
+
+impl TouchAid for ModifierToggle {
+    fn input(&mut self, input: &Input) -> Vec<Input> {
+        Self::input(self, input)
+    }
+
+    fn cancel(&mut self) -> Vec<Input> {
+        Self::cancel(self)
+    }
+
+    fn set_live(&mut self, live: bool) {
+        Self::set_live(self, live);
+    }
+
+    fn draw(&self, list: &mut DrawList) {
+        Self::draw(self, list);
+    }
+
+    fn replaying(&self) -> bool {
+        self.replaying
+    }
+
+    fn set_replaying(&mut self, replaying: bool) {
+        self.replaying = replaying;
     }
 }
 

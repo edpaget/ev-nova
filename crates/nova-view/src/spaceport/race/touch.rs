@@ -8,23 +8,25 @@ use super::RaceScreen;
 use crate::geometry::Bounds;
 use crate::keymap::{Command, RaceCommand};
 use crate::ui::touch_aids::ModifierToggle;
-use crate::ui::touch_aids::host::ToggleHost;
+use crate::ui::touch_aids::host::AidHost;
 
 /// The race's toggle, clear of its dialog at `dialog`.
 pub(super) fn toggle(dialog: Option<Bounds>) -> ModifierToggle {
     ModifierToggle::classic(Command::Race(RaceCommand::Ask), dialog)
 }
 
-impl ToggleHost for RaceScreen {
-    fn toggle(&self) -> &ModifierToggle {
+impl AidHost for RaceScreen {
+    type Aid = ModifierToggle;
+
+    fn aid(&self) -> &ModifierToggle {
         &self.toggle
     }
 
-    fn toggle_mut(&mut self) -> &mut ModifierToggle {
+    fn aid_mut(&mut self) -> &mut ModifierToggle {
         &mut self.toggle
     }
 
-    fn toggle_live(&self) -> bool {
+    fn aid_live(&self) -> bool {
         self.laid.is_ok() && !self.quantity.is_open()
     }
 }
@@ -35,6 +37,35 @@ impl RaceScreen {
     pub(crate) const fn touch_toggle(&self) -> &ModifierToggle {
         &self.toggle
     }
+}
+
+/// The race as the toggles' table drives it.
+#[cfg(test)]
+struct Probe(RaceScreen);
+
+#[cfg(test)]
+impl crate::ui::touch_aids::tests::ToggleProbe for Probe {
+    fn screen(&mut self) -> &mut dyn crate::screen::Screen {
+        &mut self.0
+    }
+
+    fn toggle(&self) -> &ModifierToggle {
+        &self.0.toggle
+    }
+
+    fn target(&self) -> crate::geometry::Point {
+        super::tests::centre(&self.0, super::tests::racer_item(1))
+    }
+
+    fn holds(&mut self) -> bool {
+        self.0.quantity.alt_held()
+    }
+}
+
+/// The race's row in the toggles' table.
+#[cfg(test)]
+pub(crate) fn toggle_probe() -> Box<dyn crate::ui::touch_aids::tests::ToggleProbe> {
+    Box::new(Probe(super::tests::open()))
 }
 
 #[cfg(test)]

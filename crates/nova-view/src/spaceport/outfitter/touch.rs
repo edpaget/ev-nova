@@ -9,23 +9,25 @@ use super::OutfitterScreen;
 use crate::geometry::Bounds;
 use crate::keymap::{Command, OutfitterCommand};
 use crate::ui::touch_aids::ModifierToggle;
-use crate::ui::touch_aids::host::ToggleHost;
+use crate::ui::touch_aids::host::AidHost;
 
 /// The outfitter's toggle, clear of its dialog at `dialog`.
 pub(super) fn toggle(dialog: Option<Bounds>) -> ModifierToggle {
     ModifierToggle::classic(Command::Outfitter(OutfitterCommand::Count), dialog)
 }
 
-impl ToggleHost for OutfitterScreen {
-    fn toggle(&self) -> &ModifierToggle {
+impl AidHost for OutfitterScreen {
+    type Aid = ModifierToggle;
+
+    fn aid(&self) -> &ModifierToggle {
         &self.toggle
     }
 
-    fn toggle_mut(&mut self) -> &mut ModifierToggle {
+    fn aid_mut(&mut self) -> &mut ModifierToggle {
         &mut self.toggle
     }
 
-    fn toggle_live(&self) -> bool {
+    fn aid_live(&self) -> bool {
         self.laid.is_ok()
             && !self.quantity.is_open()
             && !self.alert.is_open()
@@ -42,6 +44,40 @@ impl OutfitterScreen {
     pub(crate) const fn touch_toggle(&self) -> &ModifierToggle {
         &self.toggle
     }
+}
+
+/// The outfitter as the toggles' table drives it.
+#[cfg(test)]
+struct Probe(OutfitterScreen);
+
+#[cfg(test)]
+impl crate::ui::touch_aids::tests::ToggleProbe for Probe {
+    fn screen(&mut self) -> &mut dyn crate::screen::Screen {
+        &mut self.0
+    }
+
+    fn toggle(&self) -> &ModifierToggle {
+        &self.0.toggle
+    }
+
+    fn target(&self) -> crate::geometry::Point {
+        self.0
+            .dialog()
+            .expect("laid out")
+            .item_bounds(super::BUY_ITEM)
+            .expect("Buy")
+            .center()
+    }
+
+    fn holds(&mut self) -> bool {
+        self.0.quantity.alt_held()
+    }
+}
+
+/// The outfitter's row in the toggles' table.
+#[cfg(test)]
+pub(crate) fn toggle_probe() -> Box<dyn crate::ui::touch_aids::tests::ToggleProbe> {
+    Box::new(Probe(super::tests::counting_screen()))
 }
 
 #[cfg(test)]

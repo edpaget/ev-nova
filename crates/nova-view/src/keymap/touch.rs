@@ -1,7 +1,11 @@
 //! The touch side: flight's on-screen touch controls as a device of their
 //! own, the keymap's third beside the keyboard and the gamepad
 //! (rdm:phase/key-bindings/phase-15-touch-flight-controls), and the only
-//! keymap file that reads an [`Input::TouchControl`].
+//! keymap file that reads an [`Input::TouchControl`]. The touch aids off
+//! flight (`ui::touch_aids`, rdm:phase/key-bindings/phase-16-touch-pointer-gaps)
+//! raise it too: a modifier click's toggle holds its command across a
+//! tap, and the play keys press theirs, so each screen's reader reads
+//! them as it reads the keys.
 //!
 //! - A control names its command outright, so a button's press means its
 //!   command while that command's context is active, and nothing

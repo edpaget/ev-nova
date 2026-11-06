@@ -1,70 +1,97 @@
-//! How a screen hosts a [`ModifierToggle`]: the toggle sees each input
-//! first and gives back the inputs the host runs through its own input,
-//! in order; the host's pointer cancel ends a wrapped tap; and the toggle
-//! shows only while the host says nothing of its own is open over it.
+//! How a screen hosts a touch aid ([`TouchAid`]: a [`ModifierToggle`],
+//! the [`PlayKeys`](super::PlayKeys)): the aid sees each input first and
+//! gives back the inputs the host runs through its own input, in order;
+//! the host's pointer cancel ends what the aid holds; and the aid shows
+//! only while the host says nothing of its own is open over it.
 //!
-//! A host implements [`ToggleHost`] in a sibling module of its own, and
-//! its [`Screen`] methods call [`intercept`] (at the head of `input`),
+//! A host implements [`AidHost`] in a sibling module of its own, and its
+//! [`Screen`] methods call [`intercept`] (at the head of `input`),
 //! [`cancel`] (in `cancel_pointer`) and [`draw`] (at the end of `draw`):
-//! one line each in the host's file. The inputs the toggle gives back run
-//! through the host's [`Screen::input`] again, past the toggle.
+//! one line each in the host's file. The inputs the aid gives back run
+//! through the host's [`Screen::input`] again, past the aid.
 
-use super::ModifierToggle;
 use crate::draw::DrawList;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
 
-/// A screen with a modifier toggle.
-pub trait ToggleHost: Screen {
-    /// Its toggle.
-    fn toggle(&self) -> &ModifierToggle;
+/// What an aid does for its host: see [`ModifierToggle`] and
+/// [`PlayKeys`](super::PlayKeys).
+pub trait TouchAid {
+    /// Follows `input` ahead of the host: the inputs the host should run
+    /// instead, in order (none for an input the aid took).
+    fn input(&mut self, input: &Input) -> Vec<Input>;
 
-    /// Its toggle, to change.
-    fn toggle_mut(&mut self) -> &mut ModifierToggle;
+    /// The host's pointer was let go of: the inputs the host should run
+    /// to end what the aid holds.
+    fn cancel(&mut self) -> Vec<Input>;
 
-    /// Whether the toggle may show: nothing of the host's own (a quantity
-    /// dialog, an offer, Find) is open over it.
-    fn toggle_live(&self) -> bool;
+    /// Whether the host lets it show.
+    fn set_live(&mut self, live: bool);
+
+    /// Draws it while it shows.
+    fn draw(&self, list: &mut DrawList);
+
+    /// Whether its host is running the inputs it gave back, which pass it
+    /// by.
+    fn replaying(&self) -> bool;
+
+    /// Notes that its host is, or no longer is, running them.
+    fn set_replaying(&mut self, replaying: bool);
 }
 
-/// Runs `input` through `host`'s toggle at the head of the host's
+/// A screen with a touch aid.
+pub trait AidHost: Screen {
+    /// The aid it hosts.
+    type Aid: TouchAid;
+
+    /// Its aid.
+    fn aid(&self) -> &Self::Aid;
+
+    /// Its aid, to change.
+    fn aid_mut(&mut self) -> &mut Self::Aid;
+
+    /// Whether the aid may show: nothing of the host's own (a quantity
+    /// dialog, an offer, Find, the mission texts) is open over it.
+    fn aid_live(&self) -> bool;
+}
+
+/// Runs `input` through `host`'s aid at the head of the host's
 /// [`Screen::input`]: `None` when the host takes `input` as it is, or
-/// else the action of the inputs the toggle gave back, each run through
-/// the host's input past the toggle (the last that isn't
-/// [`ScreenAction::None`]).
-pub fn intercept(host: &mut impl ToggleHost, input: &Input) -> Option<ScreenAction> {
-    if host.toggle().replaying {
+/// else the action of the inputs the aid gave back, each run through the
+/// host's input past the aid (the last that isn't [`ScreenAction::None`]).
+pub fn intercept(host: &mut impl AidHost, input: &Input) -> Option<ScreenAction> {
+    if host.aid().replaying() {
         return None;
     }
     settle_live(host);
-    let given = host.toggle_mut().input(input);
+    let given = host.aid_mut().input(input);
     if given == [*input] {
         return None;
     }
     Some(replay(host, &given))
 }
 
-/// In the host's pointer cancel: a press on the toggle forgotten, and a
-/// wrapped tap's command released through the host's input. A modifier
-/// is read at a press or a release, which the cancel abandons, so it may
-/// run before or after the host's own cancel.
-pub fn cancel(host: &mut impl ToggleHost) {
-    let given = host.toggle_mut().cancel();
+/// In the host's pointer cancel: a press on the aid forgotten, and what
+/// it holds let go of through the host's input. A modifier is read at a
+/// press or a release, which the cancel abandons, so it may run before
+/// or after the host's own cancel.
+pub fn cancel(host: &mut impl AidHost) {
+    let given = host.aid_mut().cancel();
     replay(host, &given);
 }
 
-/// Draws `host`'s toggle over it while the host lets it show now, so one
+/// Draws `host`'s aid over it while the host lets it show now, so one
 /// opened by a call rather than an input (an offer) hides it at once.
-pub fn draw(host: &impl ToggleHost, list: &mut DrawList) {
-    if host.toggle_live() {
-        host.toggle().draw(list);
+pub fn draw(host: &impl AidHost, list: &mut DrawList) {
+    if host.aid_live() {
+        host.aid().draw(list);
     }
 }
 
-/// Runs `inputs` through the host's input past the toggle; the last
-/// action that isn't [`ScreenAction::None`].
-fn replay(host: &mut impl ToggleHost, inputs: &[Input]) -> ScreenAction {
-    host.toggle_mut().replaying = true;
+/// Runs `inputs` through the host's input past the aid; the last action
+/// that isn't [`ScreenAction::None`].
+fn replay(host: &mut impl AidHost, inputs: &[Input]) -> ScreenAction {
+    host.aid_mut().set_replaying(true);
     let mut action = ScreenAction::None;
     for each in inputs {
         let got = host.input(each);
@@ -72,15 +99,15 @@ fn replay(host: &mut impl ToggleHost, inputs: &[Input]) -> ScreenAction {
             action = got;
         }
     }
-    host.toggle_mut().replaying = false;
+    host.aid_mut().set_replaying(false);
     settle_live(host);
     action
 }
 
-/// Tells the toggle whether the host lets it show.
-fn settle_live(host: &mut impl ToggleHost) {
-    let live = host.toggle_live();
-    host.toggle_mut().set_live(live);
+/// Tells the aid whether the host lets it show.
+fn settle_live(host: &mut impl AidHost) {
+    let live = host.aid_live();
+    host.aid_mut().set_live(live);
 }
 
 #[cfg(test)]
@@ -89,6 +116,7 @@ mod tests {
     use crate::geometry::{Bounds, Point};
     use crate::input::{Device, MouseButton, Surroundings, TouchControl};
     use crate::keymap::{Command, TradeCommand};
+    use crate::ui::touch_aids::ModifierToggle;
 
     const COMMAND: Command = Command::Trade(TradeCommand::MaxLot);
 
@@ -102,16 +130,18 @@ mod tests {
 
     const OPENS: Point = Point::new(500.0, 300.0);
 
-    impl ToggleHost for Recorder {
-        fn toggle(&self) -> &ModifierToggle {
+    impl AidHost for Recorder {
+        type Aid = ModifierToggle;
+
+        fn aid(&self) -> &ModifierToggle {
             &self.toggle
         }
 
-        fn toggle_mut(&mut self) -> &mut ModifierToggle {
+        fn aid_mut(&mut self) -> &mut ModifierToggle {
             &mut self.toggle
         }
 
-        fn toggle_live(&self) -> bool {
+        fn aid_live(&self) -> bool {
             !self.open
         }
     }

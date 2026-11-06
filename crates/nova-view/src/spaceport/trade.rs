@@ -988,7 +988,7 @@ impl Screen for TradeScreen {
 }
 
 pub(crate) mod pad;
-mod touch;
+pub(crate) mod touch;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]

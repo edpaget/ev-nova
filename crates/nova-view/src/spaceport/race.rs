@@ -509,7 +509,7 @@ impl Screen for RaceScreen {
     }
 }
 
-mod touch;
+pub(crate) mod touch;
 
 #[cfg(test)]
 pub(crate) use tests::pad_probe;
