@@ -389,8 +389,10 @@ impl<G: Gpu> Driver<G> {
     /// Plots a course to the neighbouring system `id` on flight's map: M,
     /// a Shift-click on it, M.
     fn plot(&mut self, id: i16) {
-        self.redraw();
+        // Let the take-off settle: M opens no map in its first frames.
+        self.frames(60);
         self.press(Key::Char('m'));
+        assert_eq!(self.showing(), Showing::FlightMap, "the map opened");
         self.key(Key::Shift, true);
         let at = self.on_map(id);
         self.click_point(at);
