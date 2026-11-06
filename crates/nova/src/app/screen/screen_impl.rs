@@ -132,10 +132,17 @@ impl Screen for AppScreen {
             }
             self.tell_intro_text(input);
             self.tell_overlays(input);
-            return ScreenAction::None;
+            // Another device hides flight's overlay, letting go of it.
+            return self.feed_touch_controls();
         }
         if self.away_takes_input(input) {
             return ScreenAction::None;
+        }
+        // A finger flight's touch controls claimed is theirs, whatever
+        // shows (the `touch_controls` module).
+        if let Input::Touch(_) = input {
+            self.touch_to_flight(input);
+            return self.feed_touch_controls();
         }
         self.live.note(input);
         // Flight's pad reader sees every live pad button, whatever shows,
@@ -151,7 +158,11 @@ impl Screen for AppScreen {
         if action == ScreenAction::Quit {
             return action;
         }
-        self.replayed_held_chords()
+        let action = self.replayed_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            return ScreenAction::Quit;
+        }
+        action
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -218,6 +229,9 @@ impl Screen for AppScreen {
         self.settle_live_input();
         self.quit_on_held_chords();
         self.tell_new_overlays();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -255,6 +269,7 @@ impl Screen for AppScreen {
         } else {
             self.shown().draw(list);
         }
+        self.draw_touch_controls(list);
         if let Some(hint) = router_hint(&self.keys, self.side, self.dialogs.is_some()) {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
@@ -324,6 +339,9 @@ impl Screen for AppScreen {
     fn cancel_pointer(&mut self) {
         self.cancel_screen_pointer();
         self.quit_on_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// What is physically down is forgotten (see `live_input`), then the
@@ -336,6 +354,9 @@ impl Screen for AppScreen {
         self.settle_released_waits();
         self.hold_let_go();
         self.quit_on_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
@@ -571,6 +592,12 @@ impl Screen for AppScreen {
         self.flights_mut()
             .flat_map(Screen::take_diagnostics)
             .collect()
+    }
+
+    /// A touch on flight's touch controls, while flight shows with nothing
+    /// over it (the `touch_controls` module).
+    fn claims_touch(&self, at: Point) -> bool {
+        self.claims_touch_control(at)
     }
 
     /// Widened while flight shows, with anything over it; classic on the

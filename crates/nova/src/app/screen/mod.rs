@@ -410,6 +410,7 @@ mod rescue_fades;
 mod routing;
 mod screen_impl;
 mod ship_name_dialog;
+mod touch_controls;
 
 /// Where the hint the router draws over the ships, the map and the main
 /// menu goes ([`hint::router_hint`], naming the keys bound), its size and

@@ -17,7 +17,7 @@ use nova_sim::Takes;
 use super::FlightView;
 use crate::draw::DrawList;
 use crate::flight::sim_port::FlightSim;
-use crate::flight::touch_controls::draw;
+use crate::flight::touch_controls::{TouchControls, draw};
 use crate::geometry::Point;
 use crate::input::{Input, Touch};
 
@@ -52,6 +52,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[must_use]
     pub(super) fn claims_touch_control(&self, at: Point) -> bool {
         self.flies_live() && self.touch_controls.claims(at)
+    }
+
+    /// The touch controls, as they stand: what they place and hold.
+    #[must_use]
+    pub const fn touch_controls(&self) -> &TouchControls {
+        &self.touch_controls
     }
 
     /// What the overlay raised since the last call, in order: the router
