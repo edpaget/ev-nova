@@ -1643,7 +1643,7 @@ impl Traffic {
                 .filter_map(|(npc, decision)| Some((npc.id, (*decision)?.voice?))),
         );
         board_wait::resolve(&self.npcs, &mut decisions);
-        let last_words: Vec<Option<Option<ShipRef>>> = decisions
+        let mut last_words: Vec<Option<Option<ShipRef>>> = decisions
             .iter()
             .map(|decision| decision.and_then(|decision| decision.last_target()))
             .collect();
@@ -1667,7 +1667,10 @@ impl Traffic {
         let entering = jump_with_leader::entering(&decisions);
         self.take_goals(decisions, &world);
         jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
-        board_wait::lapse(&mut self.npcs, &due);
+        let ended = board_wait::lapse(&mut self.npcs, &due);
+        for (word, ended) in last_words.iter_mut().zip(ended) {
+            *word = ended.or(*word);
+        }
         self.plunder(plunders, &world, chance);
         self.swarm_checks(&picks, &jump_path);
         let high_levels: Vec<bool> = self

@@ -34,7 +34,8 @@
 //! - **The count wait**: `_HighLevelAIHandler` holds goal 0x16 while +0x4c
 //!   is above 0, firing nothing (sub 1, a stop), and at 0 sets goal 0
 //!   (@0x8d462-0x8d4ac), the per-type think having returned on 0x16 that
-//!   frame (@0x8c2ee); `_HandleShip` takes a frame off +0x4c after the
+//!   frame (@0x8c2ee, and every other type's too); while it holds, it
+//!   clears the target, and at 0 keeps it ([`lapse`]); `_HandleShip` takes a frame off +0x4c after the
 //!   thinks (@0x35037-0x35048), on each of double time's passes. So the
 //!   frame that sets 120 holds and leaves 119, the 120th frame after ends
 //!   the wait, and the pirate searches again on the 121st. The wait is the
@@ -67,7 +68,7 @@ use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
 use crate::rulebook::RuleSource;
 use crate::traffic::ai_wait;
-use crate::traffic::npc::Npc;
+use crate::traffic::npc::{Npc, NpcId};
 
 /// The ticks a pirate waits while another ship boards its victim (+0x4c
 /// = 120.0, 0x42f00000 @0x8c71c).
@@ -170,9 +171,33 @@ pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
 /// "Not written", and sub 1 is the stop the count wait flies
 /// ([`autopilot`](crate::traffic::autopilot)). Once the wait no longer
 /// runs, goal 0 and sub 0 with +0x70 kept (@0x8d497-0x8d4a3),
-/// [`Goal::Idle`].
-pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
-    for (npc, _) in npcs.iter_mut().zip(due).filter(|(_, due)| **due) {
+/// [`Goal::Idle`], and the handler goes on to its slot test, which clears
+/// a gone slot's (@0x8d4e4-0x8d50d).
+///
+/// Each ship's word on the target its frame ends with
+/// ([`Decision::last_target`](crate::ai::Decision::last_target)'s shape):
+/// for one whose wait it ended, the target kept, which the traffic writes
+/// over its type's target step, as the block reads no type; none for any
+/// other.
+// `Decision::last_target`'s own shape: none for no word, then the word.
+#[allow(clippy::option_option)]
+pub fn lapse(npcs: &mut [Npc], due: &[bool]) -> Vec<Option<Option<ShipRef>>> {
+    let active: Vec<NpcId> = npcs
+        .iter()
+        .filter(|npc| npc.condition.active())
+        .map(|npc| npc.id)
+        .collect();
+    let in_slot = |ship: &ShipRef| match ship {
+        ShipRef::Player => true,
+        ShipRef::Npc(id) => active.contains(id),
+    };
+    let mut words = vec![None; npcs.len()];
+    for ((npc, word), _) in npcs
+        .iter_mut()
+        .zip(&mut words)
+        .zip(due)
+        .filter(|(_, due)| **due)
+    {
         if npc.goal != Goal::CountWait {
             continue;
         }
@@ -180,8 +205,11 @@ pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
             npc.target = None;
         } else {
             npc.goal = Goal::Idle;
+            npc.target = npc.target.filter(in_slot);
+            *word = Some(npc.target);
         }
     }
+    words
 }
 
 #[cfg(test)]
@@ -191,7 +219,7 @@ mod tests {
     use crate::ai::pursuit::{Body, Frame, Kept, Pursuit};
     use crate::ai::{Behaviour, Surroundings};
     use crate::chance::Chance;
-    use crate::combat::NpcId;
+
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
@@ -527,17 +555,48 @@ mod tests {
     #[test]
     fn a_count_wait_ending_keeps_the_target_and_one_not_due_keeps_both() {
         // With +0x4c out the block writes goal 0 and sub 0 and keeps +0x70
-        // (@0x8d497-0x8d4a3).
+        // (@0x8d497-0x8d4a3), and its frame ends with it, whatever the
+        // type's target step answers.
         let mut out = waiting(1, 0);
-        out.target = Some(n(5));
+        out.target = Some(n(2));
         let mut not_due = waiting(2, 30);
-        not_due.target = Some(n(6));
+        not_due.target = Some(n(1));
         let mut npcs = vec![out, not_due];
-        lapse(&mut npcs, &[true, false]);
+        let words = lapse(&mut npcs, &[true, false]);
         assert_eq!(npcs[0].goal, Goal::Idle);
-        assert_eq!(npcs[0].target, Some(n(5)), "the wait out keeps +0x70");
+        assert_eq!(npcs[0].target, Some(n(2)), "the wait out keeps +0x70");
         assert_eq!(npcs[1].goal, Goal::CountWait);
-        assert_eq!(npcs[1].target, Some(n(6)), "no high level ran");
+        assert_eq!(npcs[1].target, Some(n(1)), "no high level ran");
+        assert_eq!(words, [Some(Some(n(2))), None]);
+    }
+
+    #[test]
+    fn a_count_wait_ending_on_a_gone_slot_lets_it_go() {
+        // The slot test after the wait exit (@0x8d4e4-0x8d50d): a ship
+        // breaking up is still active, the player always there.
+        let mut gone = waiting(1, 0);
+        gone.target = Some(n(9));
+        let mut on_player = waiting(2, 0);
+        on_player.target = Some(ShipRef::Player);
+        let mut on_wreck = waiting(3, 0);
+        on_wreck.target = Some(n(4));
+        let mut wreck = ship(4, 4, Goal::Idle);
+        wreck.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        let mut npcs = vec![gone, on_player, on_wreck, wreck];
+        let words = lapse(&mut npcs, &[true, true, true, true]);
+        assert_eq!(
+            words,
+            [
+                Some(None),
+                Some(Some(ShipRef::Player)),
+                Some(Some(n(4))),
+                None
+            ]
+        );
+        assert_eq!(npcs[0].target, None);
     }
 
     #[test]
