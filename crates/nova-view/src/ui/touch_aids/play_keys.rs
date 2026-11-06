@@ -27,11 +27,10 @@
 //!   every input through.
 
 use super::host::TouchAid;
-use super::look;
+use super::look::{self, label};
 use super::place::{CELL_PT, Corner, place};
 use super::press::{Press, Step};
 use crate::draw::DrawList;
-use crate::flight::touch_controls::draw::label;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Device, Input, Surroundings, TouchControl};
 use crate::keymap::{Command, PlayCommand};

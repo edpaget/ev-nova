@@ -26,11 +26,10 @@
 //!   [`place`] from the bottom-left corner on, highlighted while armed.
 
 use super::host::TouchAid;
-use super::look;
+use super::look::{self, label};
 use super::place::{BOTTOM_FIRST, CELL_PT, place};
 use super::press::{Press, Step};
 use crate::draw::DrawList;
-use crate::flight::touch_controls::draw::label;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Device, Input, MouseButton, Surroundings, TouchControl};
 #[cfg(doc)]
