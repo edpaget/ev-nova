@@ -111,7 +111,11 @@ impl Session {
     /// their random picks drawn on `chance` (see the `stellar_passes` and
     /// `time_adjustment` modules). No `_HandleTimeAdjustment` runs before
     /// `_PlayGame`'s loop, so all three passes (@0x1a359, @0x1a36c,
-    /// @0x45834) run at it, and the first frame holds it.
+    /// @0x45834) run at it, and the first frame holds it. So do its two
+    /// `_PrepareAllSprites`' ship displays (@0x1a36c, and @0x45834 in a
+    /// system already set up; the first step's setup runs it otherwise),
+    /// which step every ship's set, lights, ion tint and fade once, their
+    /// random draws on `chance` (see the `prepare_frames` module).
     pub fn enter_game(&mut self, gain: crate::SpeedMult, chance: &mut (impl Chance + ?Sized)) {
         self.chart.snapshot_refresh();
         self.enter_time(gain);

@@ -759,7 +759,7 @@ mod tests {
         session.space.traffic.npcs_mut().rotate_right(1);
         // Every slot displayed, as a system entry displays them
         // (`_PrepareAllSprites` @0x3a75a).
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         assert_eq!(session.npcs()[0].id, traffic);
         let led: Vec<NpcId> = session
             .npcs()

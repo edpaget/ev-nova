@@ -15,18 +15,20 @@
 //! - `Session::game_work`'s tail to the NPCs no loop display reached
 //!   (`Space::display_undisplayed`), by the other reading of
 //!   [`RuleKey::UndisplayedShips`](crate::RuleKey::UndisplayedShips);
-//! - `Session::prepare_all_sprites` to the player's fade and the NPCs';
-//! - a gate entry (`Session::come_out`) to the player's fade and
+//! - `Session::prepare_all_sprites` to every ship's frames
+//!   (`Session::display_slots`, through `PlayerShip::display_frames` and
+//!   `Space::display_npc_frames`), then the player's fade and the NPCs';
+//! - a gate entry (`Session::prepare_at_gate_entry`) to the frames of the
+//!   ships passing its system test, the player's fade and
 //!   `Space::step_fades_at_gate_entry`.
 //!
 //! A take-off zeroes the gain before its dock request's tail, so both of
 //! that tail's `_PrepareAllSprites` run at 0 (`_PlayerLandOnStellar`
 //! @0x6375e, returned @0x66f29 before @0x6764e and @0x67658): a moving
 //! fade holds there and a drifting one, unscaled, still falls. Game
-//! entry prepares the player's lights and every sprite at the session's
-//! gain at construction, full, before `Session::enter_game` sets the
-//! carried gain (filed as
-//! rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames).
+//! entry's runs in `Session::enter_game`, once the carried gain is
+//! entered (`_EnterGameFromMainScreen` @0x1a36c; see the `prepare_frames`
+//! module), and the construction steps no display.
 //! The view takes the flash's and glow's gain from
 //! [`PassReport::speed_mult`](crate::flight_frame::PassReport::speed_mult).
 //!
@@ -35,7 +37,7 @@
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use crate::SpeedMult;
     use crate::catalog::{HullRecord, ShipDisplay, ShipExits, ShipId};
     use crate::chance::NeverFires;
@@ -50,16 +52,16 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, hull, land_now, work};
     use crate::traffic::npc::NpcId;
 
-    const HALF: SpeedMult = SpeedMult::new(0.5);
+    pub(in crate::session) const HALF: SpeedMult = SpeedMult::new(0.5);
 
     /// A fading-in cloak at 10.
-    const FADING_IN: Cloak = Cloak {
+    pub(in crate::session) const FADING_IN: Cloak = Cloak {
         fade: 10.0,
         direction: 1,
     };
 
     /// `cloak` after one display step at `gain`, not fast, `dying` or not.
-    fn stepped(cloak: Cloak, dying: bool, gain: SpeedMult) -> Cloak {
+    pub(in crate::session) fn stepped(cloak: Cloak, dying: bool, gain: SpeedMult) -> Cloak {
         let mut stepped = cloak;
         stepped.display_step(false, dying, gain);
         stepped
@@ -67,7 +69,7 @@ mod tests {
 
     /// The moment a shown ship of `session`'s with no key ship aboard
     /// displays in at `gain`.
-    fn moment(session: &Session, gain: SpeedMult) -> Moment {
+    pub(in crate::session) fn moment(session: &Session, gain: SpeedMult) -> Moment {
         Moment {
             disabled: false,
             key_aboard: false,
@@ -78,7 +80,7 @@ mod tests {
 
     /// An animated class of three sets, `AnimDelay` 100, with the Shuttle's
     /// square-wave lights.
-    fn animated_and_lit() -> FrameSpec {
+    pub(in crate::session) fn animated_and_lit() -> FrameSpec {
         FrameSpec {
             flags: ANIMATED,
             base_sets: 3,
@@ -127,7 +129,7 @@ mod tests {
 
     /// `frames` of class `spec` and fold `fold` after one step of their
     /// sets and lights in `moment`, every roll answered 0.
-    fn frames_stepped(
+    pub(in crate::session) fn frames_stepped(
         frames: ShipFrames,
         spec: &FrameSpec,
         mut fold: crate::combat::armament::Fold,
@@ -141,7 +143,10 @@ mod tests {
 
     /// A session of `catalog` set up, with an NPC of [`animated_and_lit`]'s
     /// class added, its condition `condition`: the session and the NPC.
-    fn with_animated_npc(catalog: &FakePilotCatalog, condition: Condition) -> (Session, NpcId) {
+    pub(in crate::session) fn with_animated_npc(
+        catalog: &FakePilotCatalog,
+        condition: Condition,
+    ) -> (Session, NpcId) {
         let mut session = Session::start(catalog).expect("starts");
         // Set up, so a pass keeps the NPC the test adds.
         session.populate(catalog, &mut NeverFires);
@@ -294,7 +299,7 @@ mod tests {
         session.ship.cloak.cloak = FADING_IN;
         session.space.npc_mut(id).expect("there").cloak = FADING_IN;
         session.at_gain(HALF);
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         let half = stepped(FADING_IN, false, HALF);
         assert_eq!(session.player_cloak(), half, "the player's");
         assert_eq!(session.space.npc(id).expect("there").cloak, half, "its");

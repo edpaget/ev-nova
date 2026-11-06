@@ -81,7 +81,7 @@ impl Session {
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The second `_PrepareAllSprites` (@0x67658), `populate`'s being
         // the first (@0x6764e): every NPC's fade steps again.
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The selection let go, the mode kept, then the course cued
         // (@0x674d2-0x674d8).

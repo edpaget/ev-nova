@@ -14,7 +14,7 @@
 //!
 //! | Way in | Passes |
 //! |---|---|
-//! | Entering play ([`Session::enter_game`]) | ticked x 3 (@0x1a359, @0x1a36c, @0x45834), at the gain carried |
+//! | Entering play ([`Session::enter_game`]) | ticked x 3 (@0x1a359, @0x1a36c, @0x45834), at the gain carried, @0x1a36c's after its ships' display and @0x45834's after the setup's |
 //! | A take-off | ticked x 2 (@0x6764e, @0x67658), at 0 |
 //! | A hypergate's or wormhole's exit | entry (@0x63e91, @0x64743), ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
 //! | A wormhole with no exit | ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
@@ -120,14 +120,21 @@ impl Session {
     }
 
     /// Game entry's three passes (see the module docs), at the gain entry
-    /// set: the first two now, and the third now only with the ships in
-    /// place. Otherwise the whole of the third pass at its gain, every
+    /// set, with its two `_PrepareAllSprites`' ships (see the
+    /// `prepare_frames` module): the first pass, then @0x1a36c's ships and
+    /// its pass, now; @0x45834's ships and the third pass now only with
+    /// the ships in place, where the first step's setup
+    /// ([`Session::populate`]) otherwise prepares them. Otherwise the whole of the third pass at its gain, every
     /// stellar's step and the gates', is owed to the first step's setup:
     /// the warm-up frame before it shows neither the ships nor the
     /// stellars' change, under the entry's black, so nothing the player
     /// sees crosses.
     pub(super) fn enter_game_passes(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        // `_HandleStellarSprites` (@0x1a359).
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
+        // `_PrepareAllSprites` (@0x1a36c): its ships, then its stellars
+        // (@0x3a7c9).
+        self.prepare_all_sprites(&mut *chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         if self.space.traffic_due {
             let pass = self.pass_of(PassKind::Ticked);
@@ -135,6 +142,8 @@ impl Session {
             self.out.stellar_passes.push(pass);
             self.space.entry_gate_pass_owed = Some(pass.gain());
         } else {
+            // `_PlayGame`'s (@0x45834), the ships already set up.
+            self.prepare_all_sprites(&mut *chance);
             self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         }
     }

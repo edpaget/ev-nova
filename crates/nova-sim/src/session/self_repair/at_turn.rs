@@ -84,7 +84,7 @@ fn scene(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
     let mut x = crate::testkit::npc(0, ShipStats::default());
     x.state.position = Vec2::new(2000.0, 2000.0);
     let x = session.space.traffic.add_npc_at(x, berth + 4);
-    session.prepare_all_sprites();
+    session.prepare_all_sprites(&mut crate::chance::NeverFires);
     (session, w, x)
 }
 

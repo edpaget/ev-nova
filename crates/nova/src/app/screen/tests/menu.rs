@@ -574,7 +574,14 @@ fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
     assert!(screen.flight_view().is_none(), "put away");
     create(&mut screen, "Bea");
     assert_eq!(pilot(&screen).name(), "Bea");
-    assert_eq!(carried(flight(&screen)).slot_sprites, Some(led_berth_1()));
+    // The entry's `_PrepareAllSprites` (@0x1a36c, its display @0x3a783)
+    // then lays Bea's own slot out on that history, so only the berth Ada
+    // left is compared.
+    let sprites = carried(flight(&screen)).slot_sprites.expect("carried");
+    let left = led_berth_1();
+    assert_eq!(sprites.layers, left.layers);
+    let berth = nova_sim::ship_layer::Slot::Berth(1);
+    assert_eq!(sprites.frames.of(berth), left.frames.of(berth));
 }
 
 #[test]
