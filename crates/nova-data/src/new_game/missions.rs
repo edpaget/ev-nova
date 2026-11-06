@@ -671,6 +671,21 @@ mod tests {
     }
 
     #[test]
+    fn a_point_in_a_system_that_failed_to_load_leaves_the_mission_out_unreported() {
+        let source = with_toll("on_offer: {points: [{point: beta/to-alpha, stability: dead}]}\n")
+            .with("systems/beta.md", "---\nnot: valid\n---\n");
+        let game = loaded(&source);
+        assert_eq!(toll(&game), None);
+        assert!(
+            problems(&game)
+                .iter()
+                .all(|p| !p.starts_with("missions/toll.md")),
+            "{:?}",
+            problems(&game)
+        );
+    }
+
+    #[test]
     fn a_news_item_with_an_unknown_from_is_left_out() {
         let source = galaxy().with(
             "news/rumour.md",
@@ -695,6 +710,44 @@ mod tests {
             &*game.data.dialogs().compiled["dialog/errands.ink"],
             "{errands}"
         );
+    }
+
+    #[test]
+    fn with_the_folder_unlisted_each_named_file_is_read_once() {
+        use std::cell::RefCell;
+
+        use nova_galaxy_format::source::{Source, SourceFile};
+
+        /// The galaxy, counting each read of a compiled story.
+        struct Counting(MemSource, RefCell<Vec<String>>);
+        impl Source for Counting {
+            fn files(&self, dir: &str, ext: &str) -> std::io::Result<Vec<SourceFile>> {
+                self.0.files(dir, ext)
+            }
+            fn bytes(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+                if path.starts_with("dialog/") {
+                    self.1.borrow_mut().push(path.to_owned());
+                }
+                self.0.bytes(path)
+            }
+        }
+        // Two missions name the same readable file, and two the same
+        // unreadable one; a bad file fails the listing.
+        let source = with_toll("complete: {dialog: dialog/errands.ink#done}\n")
+            .with(
+                "missions/other.md",
+                &format!("{HEAD}complete: {{dialog: dialog/bad.ink#a}}\n---\n"),
+            )
+            .with(
+                "missions/third.md",
+                &format!("{HEAD}complete: {{dialog: dialog/bad.ink#b}}\n---\n"),
+            )
+            .with_bytes("dialog/bad.ink.json", &[0xff, 0xfe]);
+        let counting = Counting(source, RefCell::default());
+        let _ = load(&counting, Path::new("sample"));
+        let mut read = counting.1.into_inner();
+        read.sort();
+        assert_eq!(read, ["dialog/bad.ink.json", "dialog/errands.ink.json"]);
     }
 
     #[test]
