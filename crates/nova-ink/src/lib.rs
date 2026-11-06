@@ -6,8 +6,11 @@
 //! promises and `bladeink` doesn't check: a leading byte order mark is
 //! skipped, an unknown knot, a choice past the end and an undeclared
 //! variable are refused as such (an unknown knot before anything changes),
-//! and lines with neither text nor tags (the empty output of a divert) are
-//! stepped over.
+//! lines with neither text nor tags (the empty output of a divert) are
+//! stepped over, and nothing steps before a knot is entered, though
+//! `bladeink` would play the file's top. A [`SavedDialog`] is `bladeink`'s
+//! saved state behind a first line that says whether a knot had been
+//! entered.
 //!
 //! Only this crate may depend on `bladeink` (`deny.toml`). Its story is
 //! built on `Rc`s, so an [`InkDialog`] is not `Send`.
@@ -42,12 +45,22 @@ impl DialogLoader for InkLoader {
         let json = compiled.strip_prefix('\u{feff}').unwrap_or(compiled);
         let story = Story::new_with_seed(json, self.seed)
             .map_err(|e| DialogError::BadStory(e.to_string()))?;
-        Ok(Box::new(InkDialog(story)))
+        Ok(Box::new(InkDialog {
+            story,
+            entered: false,
+        }))
     }
 }
 
 /// A compiled Ink story, played by `bladeink`.
-pub struct InkDialog(Story);
+pub struct InkDialog {
+    story: Story,
+    /// Whether a knot has been entered. `bladeink` opens a story at its
+    /// top, where the file's own content (often a divert into a
+    /// walkthrough) would play, so nothing steps and no choice is offered
+    /// until the first [`Dialog::enter`] succeeds.
+    entered: bool,
+}
 
 impl Dialog for InkDialog {
     fn enter(&mut self, knot: &str) -> Result<(), DialogError> {
@@ -55,16 +68,23 @@ impl Dialog for InkDialog {
         // before it finds the path doesn't resolve, so the path is checked
         // first. `get_visit_count_at_path_string` resolves a knot's path as
         // it does, and only reads.
-        if self.0.get_visit_count_at_path_string(knot).is_err() {
+        if self.story.get_visit_count_at_path_string(knot).is_err() {
             return Err(DialogError::NoSuchKnot(knot.to_owned()));
         }
-        self.0.choose_path_string(knot, true, None).map_err(runtime)
+        self.story
+            .choose_path_string(knot, true, None)
+            .map_err(runtime)?;
+        self.entered = true;
+        Ok(())
     }
 
     fn step(&mut self) -> Result<Option<Line>, DialogError> {
-        while self.0.can_continue() {
-            let text = self.0.cont().map_err(runtime)?;
-            let tags = self.0.get_current_tags().map_err(runtime)?;
+        if !self.entered {
+            return Ok(None);
+        }
+        while self.story.can_continue() {
+            let text = self.story.cont().map_err(runtime)?;
+            let tags = self.story.get_current_tags().map_err(runtime)?;
             let text = text.strip_suffix('\n').unwrap_or(&text).to_owned();
             if !text.is_empty() || !tags.is_empty() {
                 return Ok(Some(Line { text, tags }));
@@ -74,7 +94,10 @@ impl Dialog for InkDialog {
     }
 
     fn choices(&self) -> Vec<Choice> {
-        self.0
+        if !self.entered {
+            return Vec::new();
+        }
+        self.story
             .get_current_choice_infos()
             .into_iter()
             .map(|choice| Choice {
@@ -85,15 +108,15 @@ impl Dialog for InkDialog {
     }
 
     fn choose(&mut self, index: usize) -> Result<(), DialogError> {
-        let count = self.0.get_current_choice_infos().len();
+        let count = self.story.get_current_choice_infos().len();
         if index >= count {
             return Err(DialogError::NoSuchChoice { index, count });
         }
-        self.0.choose_choice_index(index).map_err(runtime)
+        self.story.choose_choice_index(index).map_err(runtime)
     }
 
     fn variable(&self, name: &str) -> Result<Option<Value>, DialogError> {
-        Ok(Some(match self.0.get_variable(name) {
+        Ok(Some(match self.story.get_variable(name) {
             None => return Ok(None),
             Some(ValueType::Bool(b)) => Value::Bool(b),
             Some(ValueType::Int(n)) => Value::Int(n),
@@ -104,7 +127,7 @@ impl Dialog for InkDialog {
     }
 
     fn set_variable(&mut self, name: &str, value: Value) -> Result<(), DialogError> {
-        if self.0.get_variable(name).is_none() {
+        if self.story.get_variable(name).is_none() {
             return Err(DialogError::Undeclared(name.to_owned()));
         }
         let value = match value {
@@ -113,19 +136,36 @@ impl Dialog for InkDialog {
             Value::Float(f) => ValueType::from(f),
             Value::Text(t) => ValueType::from(t.as_str()),
         };
-        self.0.set_variable(name, &value).map_err(runtime)
+        self.story.set_variable(name, &value).map_err(runtime)
     }
 
     fn save(&self) -> Result<SavedDialog, DialogError> {
-        self.0.save_state().map(SavedDialog).map_err(runtime)
+        let mark = if self.entered { ENTERED } else { UNENTERED };
+        let state = self.story.save_state().map_err(runtime)?;
+        Ok(SavedDialog(format!("{mark}\n{state}")))
     }
 
     fn restore(&mut self, saved: &SavedDialog) -> Result<(), DialogError> {
-        self.0
-            .load_state(&saved.0)
-            .map_err(|e| DialogError::BadSave(e.to_string()))
+        let (entered, state) = match saved.0.split_once('\n') {
+            Some((ENTERED, state)) => (true, state),
+            Some((UNENTERED, state)) => (false, state),
+            _ => return Err(DialogError::BadSave("no entered mark".to_owned())),
+        };
+        self.story
+            .load_state(state)
+            .map_err(|e| DialogError::BadSave(e.to_string()))?;
+        self.entered = entered;
+        Ok(())
     }
 }
+
+/// The first line of a [`SavedDialog`] written after a knot was entered;
+/// `bladeink`'s own saved state follows on the next line.
+const ENTERED: &str = "entered";
+
+/// The first line of a [`SavedDialog`] written before any knot was
+/// entered, which restores to a dialog where nothing steps.
+const UNENTERED: &str = "unentered";
 
 /// A `bladeink` error raised as the story runs.
 fn runtime(error: impl std::fmt::Display) -> DialogError {

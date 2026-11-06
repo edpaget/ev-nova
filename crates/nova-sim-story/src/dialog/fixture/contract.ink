@@ -4,7 +4,10 @@ VAR coins = 3
 VAR rate = 0.5
 VAR name = "Tally"
 
--> END
+// Top-level content, which nothing may step before a knot is entered.
+Top of the file.
+~ coins = 99
+-> ledger
 
 === greet ===
 Hello. # speaker: clerk
