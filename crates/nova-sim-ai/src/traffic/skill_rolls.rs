@@ -137,6 +137,7 @@ fn ship(govt: Option<GovtId>) -> NewShip {
         cargo: None,
         rolls_voice: false,
         asks_scoop: false,
+        clears_mark: false,
     }
 }
 

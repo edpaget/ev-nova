@@ -203,6 +203,7 @@ pub mod autopilot;
 pub mod berth_blink;
 pub mod berth_exits;
 pub mod berth_kept;
+pub mod berth_marks;
 pub mod berth_picks;
 pub mod berth_scoops;
 pub mod berth_search;
@@ -438,6 +439,7 @@ use crate::speed_mult::SpeedMult;
 use autopilot::{Outcome, TopSpeeds};
 use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
+use berth_marks::BerthMarks;
 use berth_picks::BerthPicks;
 use berth_scoops::BerthScoops;
 use berth_search::BerthSearch;
@@ -1169,6 +1171,11 @@ pub struct Traffic {
     /// ([`berth_scoops`]): kept as it dies or leaves, across systems, and
     /// handed on to the next traffic ([`kept_berths`]).
     berth_scoops: BerthScoops,
+    /// The escort-command mark (+0xc4) the last ship at each berth left,
+    /// which a new ship there holds unless its placement clears it
+    /// ([`berth_marks`]): kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
+    berth_marks: BerthMarks,
     /// The word (+0x28/+0x2c) each berth holds, as the frame's dispatches
     /// have left it ([`formation_places`]): it outlives its ship, across
     /// systems, and is handed on to the next traffic ([`kept_berths`]).
@@ -1278,6 +1285,7 @@ impl Traffic {
             berth_search: BerthSearch::default(),
             berth_voices: BerthVoices::default(),
             berth_scoops: BerthScoops::default(),
+            berth_marks: BerthMarks::default(),
             berth_places: BerthPlaces::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
@@ -2550,13 +2558,23 @@ impl Traffic {
     /// and gives its number. Its spawn asks `_ShipCanScoop`, as every
     /// caller's does (`_SpawnEscort` @0x3ff6b, `_LaunchFighter` @0x3d74e,
     /// `_DoShipCapture` @0x41255): its `can_scoop` is written to the berth.
+    /// It clears the escort-command mark, as `_RespawnEscort` (@0x3d546)
+    /// and `_LaunchFighter` (@0x3d9c2) do; a placement that keeps it takes
+    /// [`Traffic::add_npc_keeping_mark`] ([`berth_marks`]).
     pub fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
-        self.add_npc_scooped(npc, berth, true)
+        self.add_npc_scooped(npc, berth, true, true)
     }
 
     /// [`Traffic::add_npc_at`], for a spawn that asks `_ShipCanScoop` or
-    /// not ([`berth_scoops`]).
-    fn add_npc_scooped(&mut self, npc: Npc, berth: u32, asks_scoop: bool) -> NpcId {
+    /// not ([`berth_scoops`]), and that clears the escort-command mark or
+    /// keeps its berth's ([`berth_marks`]).
+    fn add_npc_scooped(
+        &mut self,
+        npc: Npc,
+        berth: u32,
+        asks_scoop: bool,
+        clears_mark: bool,
+    ) -> NpcId {
         self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
@@ -2590,6 +2608,9 @@ impl Traffic {
         npc.can_scoop =
             self.berth_scoops
                 .bring_in(berth, asks_scoop.then_some(npc.can_scoop), npc.can_scoop);
+        // A clearing placement writes +0xc4 = 0; with none, the ship holds
+        // the berth's by the rule ([`berth_marks`]).
+        npc.berth_mark = self.berth_marks.bring_in(berth, clears_mark);
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -3094,6 +3115,9 @@ impl Traffic {
                 ship.asks_scoop.then_some(kind.can_scoop),
                 kind.can_scoop,
             );
+            // Only `_RandomShipSpawn` clears +0xc4 (@0x3c6ff);
+            // `_GenericRandomShipSpawn` leaves the slot's ([`berth_marks`]).
+            let berth_mark = self.berth_marks.bring_in(berth, ship.clears_mark);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             if let Some(lead) = leader.filter(|lead| !leads.contains(lead)) {
@@ -3193,6 +3217,7 @@ impl Traffic {
                 slot_place: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 ordered_by_lead: false,
+                berth_mark,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,
                 warp: warp_out::Warp::default(),
@@ -7006,6 +7031,7 @@ mod tests {
             cargo: None,
             rolls_voice: false,
             asks_scoop: false,
+            clears_mark: false,
         }
     }
 

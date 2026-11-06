@@ -92,6 +92,7 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
         boarded: false,
         rolls_voice: false,
         asks_scoop: false,
+        clears_mark: false,
     };
     let came = traffic.bring_in_within(
         vec![ship(Entry::Placed, None), ship(Entry::JumpingIn, Some(0))],

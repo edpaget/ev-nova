@@ -12,8 +12,20 @@
 //! the original's +0xc4, `_IssueNewEscortCommand` @0x66183-0x66190; see
 //! the [`command_word`](super::command_word) module). A ship that isn't a
 //! carried fighter given Return to Hangar is marked, though it keeps
-//! formation. Every placement, respawn and launch starts unmarked
-//! (@0x3c6ff, @0x3d546, @0x3d9c2). So a fighter the out-of-ammunition
+//! formation. The byte is the ship slot's: a respawn, a launch and a
+//! traffic `düde` ship clear it (@0x3d546, @0x3d9c2, @0x3c6ff), but
+//! every other placement goes through `_GenericRandomShipSpawn`
+//! (@0x3c89f-0x3cd3a), which leaves it, so its ship holds the mark its
+//! berth's last ship left, by
+//! [`RuleKey::ReusedSlotMark`](crate::rulebook::RuleKey::ReusedSlotMark)
+//! ([`Npc::berth_mark`](crate::Npc::berth_mark); see
+//! [`berth_marks`](crate::traffic::berth_marks)): a mission escort, the
+//! old ship of "Use As My Ship", and a person, fleet, auxiliary or defence
+//! ship later captured or joined by hail, placed where a commanded or
+//! lead-ordered escort was last, join the fleet marked. A hire and an
+//! escort's upgrade in the port hold their berth's too, but only while
+//! landed: the take-off respawns them, clearing it, before any
+//! bookkeeping. So a fighter the out-of-ammunition
 //! fallback sent home, never commanded, is skipped by a Return and left
 //! unmarked: its class's Return is cleared on the same pass unless a
 //! marked fellow holds it, and that fighter keeps formation either way.
@@ -21,7 +33,8 @@
 //! (@0x89b71, [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead)), and
 //! no clear follows a capture, as `_AISetup` leaves it, so a ship captured
 //! from an NPC fleet joins marked and holds its class's kept order
-//! ([`Space::marked`]).
+//! ([`Space::marked`]). Each of these marks writes the ship's berth's word
+//! too, for the next ship placed there.
 //!
 //! **The bookkeeping** runs on every pass, both of double time's
 //! (`_DoPlayGameWork` calls `_HandlePlayer` on both, @0x43e19), after the
@@ -84,8 +97,9 @@
 //! once under its class's kept order (`_EscortAI` @0x83afb), holding or
 //! taking a target; the hired escorts and fighters glide in past their
 //! think (`_AIDispatch` @0x8fcf5) and never act on it. The pass after
-//! clears every class that keeps an order, as every ship placed is
-//! unmarked (`_RespawnEscort` @0x3d546). Every other entry clears the
+//! clears every class that keeps an order, as every escort respawned is
+//! unmarked (`_RespawnEscort` @0x3d546), unless a mission escort set up
+//! there holds its berth's mark. Every other entry clears the
 //! skip. By `ArrivalOrders`' other reading, the port's earlier one, the
 //! arrival resets the orders as the escorts enter, before any think.
 //!
@@ -96,9 +110,13 @@
 //! item 2). The skip is taken by the first bookkeeping after the entry, so
 //! it stays right once that phase runs the arrival inside a pass.
 //!
-//! **Filed.**
-//! - A ship `_GenericRandomShipSpawn` places keeps its berth's last mark
-//!   (rdm:phase/npc-ai/phase-16-berth-keeps-command-mark).
+//! **The berth's mark** (rdm:phase/npc-ai/phase-16-berth-keeps-command-mark).
+//! The engine keeps each berth's last +0xc4 beside the traffic's other
+//! berth words, handed on as they are
+//! ([`kept_berths`](crate::traffic::kept_berths)): the command's mark
+//! ([`Space::mark_commanded`]) and an NPC lead's order write it, and a
+//! placement that leaves it gives its ship the berth's word. Its tests are
+//! the `berth_marks` module's.
 
 use super::outbox::Outbox;
 use super::{Space, Statics};
@@ -109,8 +127,12 @@ use crate::traffic::npc::{Npc, NpcId};
 impl Space {
     /// Marks NPC `id` as having taken a command since it was placed (see
     /// the module docs).
+    /// The mark is its ship slot's byte, so its berth's word is written
+    /// too, which a ship placed there next may keep
+    /// ([`berth_marks`](crate::traffic::berth_marks)).
     pub(super) fn mark_commanded(&mut self, id: NpcId) {
         self.escorts.commanded.insert(id);
+        self.traffic.mark_berth_of(id);
     }
 
     /// Marks each ship of the player's in the system on entering it, a
@@ -119,7 +141,9 @@ impl Space {
     /// [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders)
     /// keeps the orders through an entry, which the bookkeeping would
     /// otherwise clear on the next pass, as each ship placed is new and
-    /// unmarked (see the module docs).
+    /// unmarked (see the module docs). It stands in for an order kept
+    /// through the entry, where the original writes no +0xc4, so it marks
+    /// no berth ([`berth_marks`](crate::traffic::berth_marks)).
     pub(super) fn mark_kept_orders(&mut self) {
         let orders = self.escorts.class_orders;
         let keeps = |class: EscortClass| {
@@ -208,9 +232,11 @@ impl Space {
     }
 
     /// Whether `npc` is marked as having taken an order, the original's
-    /// +0xc4 (see the module docs).
+    /// +0xc4 (see the module docs): commanded by the player, ordered by an
+    /// NPC lead, or holding the mark its berth's last ship left
+    /// ([`Npc::berth_mark`](crate::Npc::berth_mark)).
     pub(super) fn marked(&self, npc: &Npc) -> bool {
-        self.escorts.commanded.contains(&npc.id) || npc.ordered_by_lead
+        self.escorts.commanded.contains(&npc.id) || npc.ordered_by_lead || npc.berth_mark
     }
 
     /// Whether `class`'s kept `order` falls to the bookkeeping: Return to
@@ -943,6 +969,10 @@ mod tests {
         let catalog = ships_catalog(escorting(-6, 0));
         let (mut session, _) = flying_with_escorts(&catalog);
         session.setup.rules = rules;
+        session
+            .space
+            .traffic
+            .set_reused_slot_mark(rules.source_for(RuleKey::ReusedSlotMark));
         command(&mut session, EscortGroup::All, EscortCommand::Hold);
         jump_to(&mut session, &catalog, 131);
         // The passes on the way out reported theirs, as each pass's
@@ -999,8 +1029,27 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_jumps_arrival_keeps_the_orders_through_its_pass_and_the_next_clears_them() {
+    fn mission_escorts_set_up_again_on_their_commanded_berths_hold_the_orders_past_the_arrival() {
+        // `_MissionDudeSpawn` (@0x3cd67) leaves +0xc4, so each mission
+        // escort set up in the new system on a berth a commanded escort
+        // held last comes in marked, and loop 2 (@0x6e3f1) keeps its
+        // class's order; the hired escort's respawn clears its own
+        // (@0x3d546).
         let (catalog, mut session) = arrived_holding(Rulebook::default());
+        let hold = Some(EscortOrder::Hold);
+        assert!(mission_escorts(&session).iter().all(|npc| npc.berth_mark));
+        assert!(!hired_npc(&session).berth_mark);
+        assert!(!pass(&mut session, &catalog), "its bookkeeping skipped");
+        assert!(!pass(&mut session, &catalog), "the next pass keeps it");
+        assert_eq!(every_order(&session), [hold; 5]);
+    }
+
+    #[test]
+    fn by_the_engine_a_jumps_arrival_keeps_the_orders_through_its_pass_and_the_next_clears_them() {
+        // By the other reading of `ReusedSlotMark`, so the mission escorts
+        // set up again come in unmarked (see the `berth_marks` module).
+        let rules = Rulebook::default().with_override(RuleKey::ReusedSlotMark, RuleSource::Bible);
+        let (catalog, mut session) = arrived_holding(rules);
         let hold = Some(EscortOrder::Hold);
         assert_eq!(every_order(&session), [hold; 5], "through the arrival");
         assert_eq!(mission_escorts(&session).len(), 2);

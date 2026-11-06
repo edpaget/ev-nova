@@ -104,9 +104,11 @@ impl Traffic {
     /// `_ShipCanScoop`: the eject's hulk (`_HandlePlayer` @0x6f2f8, through
     /// `_GenericRandomShipSpawn`). It holds its berth's flag by the
     /// engine, its own `can_scoop` by the other reading, and writes none.
+    /// It keeps its berth's escort-command mark too
+    /// ([`berth_marks`](super::berth_marks)).
     pub fn add_npc_unscooped(&mut self, npc: Npc) -> NpcId {
         let berth = self.next_berth();
-        self.add_npc_scooped(npc, berth, false)
+        self.add_npc_scooped(npc, berth, false, false)
     }
 
     /// Writes `flag` as the can-scoop word of the ship last in `berth`,
@@ -229,6 +231,7 @@ mod tests {
             cargo: None,
             rolls_voice: false,
             asks_scoop: asks,
+            clears_mark: false,
         }
     }
 

@@ -62,6 +62,7 @@ fn spawned(ai: &[i16], inherent_ai: i16) -> Traffic {
         boarded: false,
         rolls_voice: false,
         asks_scoop: false,
+        clears_mark: false,
     };
     let came = traffic.bring_in_within(
         ai.iter().copied().map(ship).collect(),

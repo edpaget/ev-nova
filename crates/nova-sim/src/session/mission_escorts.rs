@@ -2057,6 +2057,17 @@ pub(super) mod tests {
         assert_eq!(orders(&session), [None; 2]);
     }
 
+    /// The rules with [`RuleKey::EscortOrders`] by `source`, and by the
+    /// other reading of [`RuleKey::ReusedSlotMark`], so a mission escort
+    /// set up again on a commanded escort's berth comes in unmarked (by
+    /// the engine it holds the berth's mark, and its class's order: see
+    /// the `class_orders` module's tests).
+    fn unmarked_by(source: RuleSource) -> Rulebook {
+        Rulebook::default()
+            .with_override(RuleKey::EscortOrders, source)
+            .with_override(RuleKey::ReusedSlotMark, RuleSource::Bible)
+    }
+
     #[test]
     fn a_jump_resets_mission_escorts_orders_by_the_engine_and_keeps_the_classs_by_the_bible() {
         for (source, kept) in [
@@ -2065,7 +2076,8 @@ pub(super) mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = unmarked_by(source);
+            session.space.read_reused_slot_rules(&session.setup.rules);
             session.pilot.escorts.push(hired());
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
@@ -2109,7 +2121,8 @@ pub(super) mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = unmarked_by(source);
+            session.space.read_reused_slot_rules(&session.setup.rules);
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             jump_to(&mut session, &catalog, 131);

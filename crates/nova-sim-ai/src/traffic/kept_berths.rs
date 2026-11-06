@@ -1,13 +1,13 @@
 //! What the original's ship table keeps from one traffic to the next: each
 //! slot's cached odds (+0xc914), search timer (+0xc90c), voice variant
-//! (+0xc922), can-scoop flag (+0xc3), person (+0xc8d0) and formation place
-//! (+0x28/+0x2c).
+//! (+0xc922), can-scoop flag (+0xc3), escort-command mark (+0xc4), person
+//! (+0xc8d0) and formation place (+0x28/+0x2c).
 //!
 //! **The original.** The ship table is one `NewPtr(0x325000)` that
 //! `_InitArrays` takes once (@0x1b7a1-0x1b7b5, called from `_InitEVNova`
 //! @0x466fa) and keeps until the app quits. `_InitObjects` (@0x1c2e5,
 //! called once from `_InitEVNova` @0x47252) sets some of each slot's words
-//! at launch, none of these six, and the fresh pages the table is
+//! at launch, none of these seven, and the fresh pages the table is
 //! served from read 0. After that, only the spawns, the odds pass and the
 //! AI write +0xc914 (see [`odds_cache`](super::odds_cache)), only
 //! `_HighLevelAIHandler` writes +0xc90c (see
@@ -19,7 +19,10 @@
 //! @0x3d74e, `_SpawnEscort` @0x3ff6b, `_SpawnPerson` @0x40d79,
 //! `_DoShipCapture` @0x41255 and `_HyperSpawnFleet`'s lead @0x41e31)
 //! write an NPC slot's +0xc3 (see [`berth_scoops`](super::berth_scoops)),
-//! only the spawns and the
+//! only `_IssueNewEscortCommand` (@0x66190) and `_AIIssueEscortOrders`
+//! (@0x89b71) set +0xc4 and only `_RandomShipSpawn` (@0x3c6ff),
+//! `_RespawnEscort` (@0x3d546) and `_LaunchFighter` (@0x3d9c2) clear it
+//! (see [`berth_marks`](super::berth_marks)), only the spawns and the
 //! captures write an NPC slot's +0xc8d0 (`_ResetPlayer` @0x1d4fb writes
 //! the player's slot 0 alone), and only the formation calc and
 //! `_RespawnEscort` write +0x28/+0x2c (see
@@ -42,7 +45,9 @@
 //! voice variants by
 //! [`RuleKey::ReusedSlotVoice`](crate::RuleKey::ReusedSlotVoice), the
 //! can-scoop flags a ship whose spawn asks none by
-//! [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop), and
+//! [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop), the
+//! escort-command marks a ship whose placement keeps them by
+//! [`RuleKey::ReusedSlotMark`](crate::RuleKey::ReusedSlotMark), and
 //! `<OSN>` reads the person of the slot a hail named after a Reset, while
 //! no new ship has come into it (a new pilot or a load names no slot,
 //! `_InitMissions` @0x97bbf). The odds carry changes no read: every
@@ -57,6 +62,7 @@
 use std::collections::BTreeMap;
 
 use super::Traffic;
+use super::berth_marks::BerthMarks;
 use super::berth_scoops::BerthScoops;
 use super::berth_search::BerthSearch;
 use super::berth_voices::BerthVoices;
@@ -73,6 +79,8 @@ pub struct KeptBerths {
     voices: BerthVoices,
     /// Each berth's last can-scoop flag.
     scoops: BerthScoops,
+    /// Each berth's last escort-command mark.
+    marks: BerthMarks,
     /// Each berth's cached odds, and the pass's marker.
     odds: OddsCache,
     /// The person of the ship last brought in at each berth.
@@ -90,6 +98,7 @@ impl Traffic {
             search: self.berth_search.clone(),
             voices: self.berth_voices.clone(),
             scoops: self.berth_scoops.clone(),
+            marks: self.berth_marks.clone(),
             odds: self.odds.clone(),
             persons: self.berth_persons.clone(),
             places: self.berth_places.clone(),
@@ -103,6 +112,7 @@ impl Traffic {
         self.berth_search.take_timers_of(kept.search);
         self.berth_voices.take_variants_of(kept.voices);
         self.berth_scoops.take_scoops_of(kept.scoops);
+        self.berth_marks.take_marks_of(kept.marks);
         self.odds = kept.odds;
         self.berth_persons = kept.persons;
         self.berth_places.take_words_of(kept.places);
@@ -220,6 +230,23 @@ mod tests {
         };
         assert!(scoop(RuleSource::Engine), "the berth's, kept");
         assert!(!scoop(RuleSource::Bible), "its own");
+    }
+
+    #[test]
+    fn a_ship_kept_placed_in_a_new_traffic_takes_its_berths_mark_by_that_traffics_reading() {
+        let mut old = passed();
+        old.write_berth_mark(1, true);
+        let mark = |reading| {
+            let mut new = Traffic::new();
+            new.set_reused_slot_mark(reading);
+            new.keep_berths(old.kept_berths());
+            assert_eq!(new.reused_slot_mark(), reading);
+            let id = new.add_npc_keeping_mark(npc(0, ShipStats::new(FAST, &[])), Some(1));
+            let ship = new.npcs().iter().find(|npc| npc.id == id).expect("added");
+            ship.berth_mark
+        };
+        assert!(mark(RuleSource::Engine), "the berth's, kept");
+        assert!(!mark(RuleSource::Bible), "unmarked");
     }
 
     #[test]

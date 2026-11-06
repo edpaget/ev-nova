@@ -231,6 +231,22 @@ pub(super) struct KeptEscort {
     pub(super) arms: Option<(Armament, LauncherRounds)>,
 }
 
+/// How an escort's placement writes its ship slot's escort-command mark
+/// (+0xc4; see [`berth_marks`](crate::traffic::berth_marks)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Placement {
+    /// `_RespawnEscort` (@0x3d546) clears it: the fleet placed on entering
+    /// a system, each take-off and a load's first entry included.
+    Respawn,
+    /// `_SpawnEscort` (@0x3fe8f) and `_DoShipCapture`'s spawn of the old
+    /// ship (@0x4114d), through `_GenericRandomShipSpawn`, leave it, so
+    /// the escort holds its berth's by
+    /// [`RuleKey::ReusedSlotMark`]: a hire,
+    /// an escort's upgrade in the port and the old ship of "Use As My
+    /// Ship".
+    Spawn,
+}
+
 impl Session {
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, but on a `jump`'s arrival by
@@ -301,6 +317,7 @@ impl Session {
                     index,
                     berths.get(index).copied(),
                     kept.skill,
+                    Placement::Respawn,
                     &mut *chance,
                 )?;
                 let loaded = self
@@ -365,9 +382,10 @@ impl Session {
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
-    /// skill rolled on `chance` (see [`Session::place_escort_at`]).
+    /// skill rolled on `chance`, spawned as `_SpawnEscort` and a capture's
+    /// spawn do (see [`Session::place_escort_at`]).
     pub(super) fn place_escort(&mut self, index: usize, chance: &mut dyn Chance) -> Option<NpcId> {
-        self.place_escort_at(index, None, None, chance)
+        self.place_escort_at(index, None, None, Placement::Spawn, chance)
     }
 
     /// Escort `index` as an NPC in the system, at `berth` or else the
@@ -376,13 +394,14 @@ impl Session {
     /// `afterburner_roll` module); none when its ship type has no record.
     /// It flies at `skill`, or one rolled on `chance` as `_SpawnEscort`
     /// rolls it (through `_GenericRandomShipSpawn` @0x3cad1), of no
-    /// government.
+    /// government. Its escort-command mark is as `placement` writes it.
     #[allow(clippy::too_many_lines)] // one line for each of the NPC's fields
     pub(super) fn place_escort_at(
         &mut self,
         index: usize,
         berth: Option<u32>,
         skill: Option<f32>,
+        placement: Placement,
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
@@ -482,6 +501,7 @@ impl Session {
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
             ordered_by_lead: false,
+            berth_mark: false,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
@@ -520,9 +540,11 @@ impl Session {
                 self.setup.rules.source_for(RuleKey::FighterCapacity),
             );
         }
-        Some(match berth {
-            Some(berth) => self.space.traffic.add_npc_at(npc, berth),
-            None => self.space.traffic.add_npc(npc),
+        let traffic = &mut self.space.traffic;
+        Some(match (placement, berth) {
+            (Placement::Respawn, Some(berth)) => traffic.add_npc_at(npc, berth),
+            (Placement::Respawn, None) => traffic.add_npc(npc),
+            (Placement::Spawn, berth) => traffic.add_npc_keeping_mark(npc, berth),
         })
     }
 

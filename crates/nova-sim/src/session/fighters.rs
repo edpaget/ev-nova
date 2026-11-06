@@ -754,6 +754,7 @@ fn fighter(
         slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
         ordered_by_lead: false,
+        berth_mark: false,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.signed_pod_count,

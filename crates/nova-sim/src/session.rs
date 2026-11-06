@@ -447,6 +447,8 @@ mod asteroid_seekers;
 mod asteroids;
 mod auto_refuel;
 mod aux_ships;
+#[cfg(test)]
+mod berth_marks;
 mod board_attempt;
 mod board_repair;
 mod brackets;

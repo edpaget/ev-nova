@@ -208,14 +208,19 @@ pub(super) struct Escorts {
     pub(super) class_orders: [Option<crate::escort::EscortOrder>; 4],
     /// The ships of the player's that have taken a command since they were
     /// placed: the original's +0xc4 (set by `_IssueNewEscortCommand`
-    /// @0x66190, cleared by every placement, @0x3c6ff, @0x3d546, @0x3d9c2),
-    /// which the class orders' bookkeeping reads (see the `class_orders`
-    /// module). `_AIIssueEscortOrders` sets the same byte (@0x89b71), which
-    /// the traffic keeps as [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead),
-    /// as it can't reach this set. Kept by number: every placement, respawn
-    /// and launch makes a new NPC, so it starts unmarked, and a capture or a
-    /// release keeps the number, as the original keeps the slot's byte.
-    /// Never saved.
+    /// @0x66190, cleared by `_RandomShipSpawn` @0x3c6ff, `_RespawnEscort`
+    /// @0x3d546 and `_LaunchFighter` @0x3d9c2), which the class orders'
+    /// bookkeeping reads (see the `class_orders` module).
+    /// `_AIIssueEscortOrders` sets the same byte (@0x89b71), which the
+    /// traffic keeps as [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead),
+    /// as it can't reach this set. Kept by number: every placement makes a
+    /// new NPC, which this set holds unmarked, and a capture or a release
+    /// keeps the number, as the original keeps the slot's byte. A
+    /// placement that writes no +0xc4 (`_GenericRandomShipSpawn`) gives its
+    /// ship its berth's last mark instead, as
+    /// [`Npc::berth_mark`](crate::Npc::berth_mark), and each mark here is
+    /// written to its berth too (see
+    /// [`berth_marks`](crate::traffic::berth_marks)). Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
     /// Whether the next class-order bookkeeping is skipped, once: set by a
     /// jump's arrival under the engine's readings of
@@ -252,6 +257,7 @@ impl Space {
         traffic.set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
         traffic.set_reused_slot_voice(rules.source_for(RuleKey::ReusedSlotVoice));
         traffic.set_reused_slot_scoop(rules.source_for(RuleKey::ReusedSlotScoop));
+        traffic.set_reused_slot_mark(rules.source_for(RuleKey::ReusedSlotMark));
     }
 
     /// The system's contents as a session starts or loads: an empty

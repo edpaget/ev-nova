@@ -757,10 +757,20 @@ pub struct Npc {
     /// `_AIIssueEscortOrders` sets on each ship it orders (@0x89b71). No
     /// clear follows a capture, as `_AISetup` leaves +0xc4, so a ship
     /// captured from an NPC fleet joins the player's marked (`nova_sim`'s
-    /// `class_orders` module). False on every new NPC, as every spawn
-    /// clears the byte. Here and not beside the commands' marks, as the
-    /// traffic writes it. Never saved.
+    /// `class_orders` module). False on every new NPC; the mark a new
+    /// ship holds from its berth is [`Npc::berth_mark`], and the order
+    /// writes this ship's berth's word too
+    /// ([`berth_marks`](crate::traffic::berth_marks)). Here and not beside
+    /// the commands' marks, as the traffic writes it. Never saved.
     pub ordered_by_lead: bool,
+    /// The escort-command mark (+0xc4) its berth held as it came in, by
+    /// [`RuleKey::ReusedSlotMark`](crate::RuleKey::ReusedSlotMark): set
+    /// by the traffic as it places the ship, false for a placement that
+    /// clears the byte (`_RandomShipSpawn`, `_RespawnEscort`,
+    /// `_LaunchFighter`), the berth's last word for one that keeps it, and
+    /// false for every ship by the other reading
+    /// ([`berth_marks`](crate::traffic::berth_marks)). Never saved.
+    pub berth_mark: bool,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).

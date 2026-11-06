@@ -61,6 +61,7 @@
 //! (`_DamageShip` @0x3afdd), so none marked can be disabled here.
 
 use super::Session;
+use super::escorts::Placement;
 use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::escort_dialog;
@@ -181,7 +182,15 @@ impl Session {
             return;
         };
         self.space.traffic.remove(old.id);
-        let placed = self.place_escort_at(index, Some(old.berth), Some(old.skill), chance);
+        // Through `_SpawnEscort`, which keeps +0xc4 until the take-off's
+        // respawn clears it.
+        let placed = self.place_escort_at(
+            index,
+            Some(old.berth),
+            Some(old.skill),
+            Placement::Spawn,
+            chance,
+        );
         if let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) {
             npc.afterburner = old.afterburner;
             npc.aux = old.aux;

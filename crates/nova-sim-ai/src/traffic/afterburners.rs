@@ -138,6 +138,7 @@ mod tests {
             cargo: None,
             rolls_voice: false,
             asks_scoop: false,
+            clears_mark: false,
         }
     }
 

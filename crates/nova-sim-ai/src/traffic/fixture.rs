@@ -99,6 +99,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
         ordered_by_lead: false,
+        berth_mark: false,
         marines: ClassMarines::default(),
         pods_left: 0,
         warp: crate::traffic::warp_out::Warp::default(),
