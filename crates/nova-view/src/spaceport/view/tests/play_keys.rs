@@ -264,6 +264,27 @@ fn the_play_keys_hide_while_a_mission_text_is_in_front() {
 }
 
 #[test]
+fn the_play_keys_hide_while_a_mission_movie_plays() {
+    use crate::movie::fixture::MockMoviePlayer;
+    use nova_sim::{DescMovie, MissionShown};
+    let player = MockMoviePlayer::playing((160, 120), 1);
+    let mut view = port().with_movies(movies_of(&player));
+    view.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+    let mut strip = DrawList::new();
+    crate::ui::touch_aids::host::draw(&view, &mut strip);
+    assert!(!strip.is_empty(), "shown");
+    let movie = DescMovie::from_desc("Accepted.mov", 0).expect("named");
+    view.show_mission_texts([MissionShown::Movie(movie)]);
+    assert!(view.playing(), "a movie in front");
+    assert!(view.mission_text().is_none(), "and no text");
+    let drawn = drawn(&view);
+    assert!(
+        strip.iter().all(|command| !drawn.contains(command)),
+        "not drawn over the movie"
+    );
+}
+
+#[test]
 fn the_play_keys_are_drawn_only_while_touch_was_used_last() {
     for device in crate::ui::touch_aids::testkit::OTHER_DEVICES {
         let mut view = port();

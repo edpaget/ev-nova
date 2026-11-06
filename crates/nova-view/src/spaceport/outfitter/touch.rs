@@ -175,6 +175,47 @@ mod tests {
         );
     }
 
+    /// Whether `screen` draws its toggle now: what the toggle draws alone,
+    /// all of it among what the screen draws.
+    fn toggle_drawn(screen: &OutfitterScreen) -> bool {
+        let mut alone = DrawList::new();
+        screen.touch_toggle().draw(&mut alone);
+        let drawn = drawn(screen);
+        !alone.is_empty() && alone.iter().all(|command| drawn.contains(command))
+    }
+
+    /// The outfitter, told touch, its toggle shown.
+    fn touched(build: fn() -> OutfitterScreen) -> OutfitterScreen {
+        let mut screen = build();
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+        assert!(screen.touch_toggle().shown(), "shown before");
+        assert!(toggle_drawn(&screen), "drawn before");
+        screen
+    }
+
+    #[test]
+    fn the_toggle_hides_while_the_alert_is_open() {
+        use super::super::tests::rack_alert;
+        use nova_sim::OutfitRefusal;
+        let mut screen = touched(screen);
+        screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        assert!(screen.alert_dialog().is_some(), "alerting");
+        assert!(!toggle_drawn(&screen), "not drawn over the alert");
+        screen.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
+        assert!(!screen.touch_toggle().shown(), "hidden under it");
+    }
+
+    #[test]
+    fn the_toggle_hides_while_an_offer_is_open() {
+        use crate::spaceport::offer::fixture::{prompt, templates};
+        let mut screen = touched(|| screen().with_offers(templates()));
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_some(), "offering");
+        assert!(!toggle_drawn(&screen), "not drawn over the offer");
+        screen.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
+        assert!(!screen.touch_toggle().shown(), "hidden under it");
+    }
+
     #[test]
     fn the_toggle_is_drawn_only_while_touch_was_used_last() {
         let told = |device| Input::Surroundings(Surroundings::of(device));
