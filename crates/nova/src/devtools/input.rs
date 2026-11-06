@@ -148,6 +148,10 @@ impl EguiInput {
             }
             WindowEvent::Resized { scale_factor, .. } => self.scale = scale_factor,
             WindowEvent::Redraw { .. }
+            | WindowEvent::TouchStarted { .. }
+            | WindowEvent::TouchMoved { .. }
+            | WindowEvent::TouchEnded { .. }
+            | WindowEvent::TouchCancelled { .. }
             | WindowEvent::FullscreenChanged { .. }
             | WindowEvent::CloseRequested
             | WindowEvent::Menu(_)

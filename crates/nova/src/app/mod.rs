@@ -166,8 +166,8 @@ use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::view_shape::widened_size;
 use nova_view::{
-    DrawList, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode, MouseButton, Point,
-    Screen, ScreenAction, ViewShape,
+    DrawList, FingerId, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode,
+    MouseButton, Point, Screen, ScreenAction, ViewShape,
 };
 
 mod fullscreen;
@@ -306,6 +306,34 @@ pub enum WindowEvent {
     Scroll {
         /// How far, toward the text's end for positive.
         delta: WheelDelta,
+    },
+    /// A finger touched down at a window position in physical pixels.
+    TouchStarted {
+        /// The finger, valid until its touch ends or is cancelled.
+        finger: FingerId,
+        /// Where, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// A finger down moved.
+    TouchMoved {
+        /// The finger.
+        finger: FingerId,
+        /// Where to, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// A finger lifted.
+    TouchEnded {
+        /// The finger.
+        finger: FingerId,
+        /// Where, in physical pixels from the window's top-left.
+        px: (f64, f64),
+    },
+    /// The system stopped following a finger. winit also sends one after
+    /// every lift, for a finger already ended, which the app ignores (the
+    /// touch router knows no such finger).
+    TouchCancelled {
+        /// The finger.
+        finger: FingerId,
     },
     /// Time to draw. The clock is read at the edge and passed in.
     Redraw {
@@ -959,6 +987,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(self.route(Input::PointerLeft))
             }
             WindowEvent::Scroll { delta } => self.scroll(delta),
+            WindowEvent::TouchStarted { .. }
+            | WindowEvent::TouchMoved { .. }
+            | WindowEvent::TouchEnded { .. }
+            | WindowEvent::TouchCancelled { .. } => game(Control::Continue),
             WindowEvent::PointerButton { button, pressed } => {
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;

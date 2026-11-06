@@ -16,9 +16,20 @@
 //! `MouseButton::Other`). A pointer of unknown kind is the mouse: winit
 //! counts it as primary, and on Windows it is a real pointing device. The
 //! click that activates a window on macOS is a click, as 0.30 delivered
-//! it. Touches and pens are dropped until the touch phase (key-bindings
-//! phase 14) routes them; 0.30 delivered a pen on Windows as a touch, and
-//! dropped it too.
+//! it.
+//!
+//! A finger is its own events, in physical pixels with the finger's id:
+//! winit's touch press is [`WindowEvent::TouchStarted`] (the enter before
+//! it is dropped), a touch move [`WindowEvent::TouchMoved`], a touch
+//! release [`WindowEvent::TouchEnded`], and a touch leave
+//! [`WindowEvent::TouchCancelled`]: a leave without a release is the
+//! system cancelling the touch, and the leave after every release is a
+//! cancel of a finger already ended, which the app ignores. winit's
+//! `primary` flag isn't read: `UIKit` and Wayland keep the first finger
+//! primary until every finger lifts, Android until it lifts, and Windows
+//! and X11 ask the system, so the touch router (`nova_view::touch`) picks
+//! the primary finger itself. Pens are dropped; 0.30 delivered a pen on
+//! Windows as a touch, and dropped it too.
 //!
 //! The system can make the window fullscreen, or a window again, without
 //! the app asking, and winit sends no event for it. So [`window_events`]
@@ -123,6 +134,38 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             button: MouseButton::Other,
             pressed: state.is_pressed(),
         },
+        // A touch starts at its press: the enter before it is dropped.
+        // winit's `primary` isn't read, as each backend means something
+        // else by it; the touch router picks the primary finger.
+        WinitEvent::PointerButton {
+            state,
+            position,
+            button: ButtonSource::Touch { finger_id, .. },
+            ..
+        } => {
+            let finger = core_finger(*finger_id);
+            let px = (position.x, position.y);
+            if state.is_pressed() {
+                WindowEvent::TouchStarted { finger, px }
+            } else {
+                WindowEvent::TouchEnded { finger, px }
+            }
+        }
+        WinitEvent::PointerMoved {
+            position,
+            source: PointerSource::Touch { finger_id, .. },
+            ..
+        } => WindowEvent::TouchMoved {
+            finger: core_finger(*finger_id),
+            px: (position.x, position.y),
+        },
+        // A cancel, or the leave winit sends after every lift.
+        WinitEvent::PointerLeft {
+            kind: PointerKind::Touch(finger_id),
+            ..
+        } => WindowEvent::TouchCancelled {
+            finger: core_finger(*finger_id),
+        },
         WinitEvent::MouseWheel { delta, .. } => WindowEvent::Scroll {
             delta: wheel_delta(*delta)?,
         },
@@ -131,6 +174,11 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
+}
+
+/// The core's finger for winit's.
+fn core_finger(finger: winit::event::FingerId) -> nova_view::FingerId {
+    nova_view::FingerId::new(finger.into_raw())
 }
 
 /// The vertical part of winit's wheel `delta`, toward the text's end for
@@ -1476,29 +1524,183 @@ mod tests {
         );
     }
 
-    #[test]
-    fn touches_are_not_translated() {
-        let finger = FingerId::from_raw(1);
-        let touch = || ButtonSource::Touch {
-            finger_id: finger,
-            force: None,
-        };
-        for raw in [
-            kind_entered(PointerKind::Touch(finger), 3.0, 4.0),
-            source_moved(
-                PointerSource::Touch {
-                    finger_id: finger,
-                    force: None,
-                },
-                5.0,
-                6.0,
-            ),
-            source_button(touch(), ElementState::Pressed),
-            source_button(touch(), ElementState::Released),
-            kind_left(PointerKind::Touch(finger)),
-        ] {
-            assert_eq!(translate(&raw, &WINDOWED), None, "{raw:?}");
+    // A finger's scenarios, as every backend sends them (winit-core's
+    // `PointerSource::Touch` docs): an enter then a press to start, moves,
+    // a release then a leave to lift, and a leave alone to cancel.
+
+    /// winit's finger `f`.
+    fn finger(f: usize) -> FingerId {
+        FingerId::from_raw(f)
+    }
+
+    /// The core's finger `f`.
+    fn core_finger(f: usize) -> nova_view::FingerId {
+        nova_view::FingerId::new(f)
+    }
+
+    fn touch_button(f: usize, state: ElementState, x: f64, y: f64, primary: bool) -> WinitEvent {
+        WinitEvent::PointerButton {
+            device_id: None,
+            state,
+            position: PhysicalPosition::new(x, y),
+            primary,
+            button: ButtonSource::Touch {
+                finger_id: finger(f),
+                force: None,
+            },
+            is_macos_activation_click: false,
         }
+    }
+
+    fn touch_left(f: usize, primary: bool) -> WinitEvent {
+        WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary,
+            kind: PointerKind::Touch(finger(f)),
+        }
+    }
+
+    /// Finger `f` touching down at `(x, y)`.
+    fn touch_down_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![
+            WinitEvent::PointerEntered {
+                device_id: None,
+                position: PhysicalPosition::new(x, y),
+                primary,
+                kind: PointerKind::Touch(finger(f)),
+            },
+            touch_button(f, ElementState::Pressed, x, y, primary),
+        ]
+    }
+
+    fn touch_down(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_down_as(f, x, y, true)
+    }
+
+    /// Finger `f` moving to `(x, y)`.
+    fn touch_moved_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![WinitEvent::PointerMoved {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary,
+            source: PointerSource::Touch {
+                finger_id: finger(f),
+                force: None,
+            },
+        }]
+    }
+
+    fn touch_moved(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_moved_as(f, x, y, true)
+    }
+
+    /// Finger `f` lifting at `(x, y)`.
+    fn touch_up_as(f: usize, x: f64, y: f64, primary: bool) -> Vec<WinitEvent> {
+        vec![
+            touch_button(f, ElementState::Released, x, y, primary),
+            touch_left(f, primary),
+        ]
+    }
+
+    fn touch_up(f: usize, x: f64, y: f64) -> Vec<WinitEvent> {
+        touch_up_as(f, x, y, true)
+    }
+
+    /// The system cancelling finger `f`.
+    fn touch_cancelled(f: usize) -> Vec<WinitEvent> {
+        vec![touch_left(f, true)]
+    }
+
+    #[test]
+    fn a_touch_is_its_fingers_start_moves_and_end_in_physical_pixels() {
+        let f = core_finger(7);
+        assert_eq!(
+            translated(&[
+                touch_down(7, 10.5, 20.0),
+                touch_moved(7, 30.0, 40.25),
+                touch_up(7, 50.0, 60.0),
+            ]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: f,
+                    px: (10.5, 20.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: f,
+                    px: (30.0, 40.25)
+                },
+                WindowEvent::TouchEnded {
+                    finger: f,
+                    px: (50.0, 60.0)
+                },
+                WindowEvent::TouchCancelled { finger: f },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_touch_the_system_cancels_is_a_leave_without_a_release() {
+        let f = core_finger(2);
+        assert_eq!(
+            translated(&[touch_down(2, 1.0, 2.0), touch_cancelled(2)]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: f,
+                    px: (1.0, 2.0)
+                },
+                WindowEvent::TouchCancelled { finger: f },
+            ]
+        );
+    }
+
+    #[test]
+    fn two_fingers_keep_their_own_ids() {
+        assert_eq!(
+            translated(&[
+                touch_down(1, 1.0, 1.0),
+                touch_down_as(2, 2.0, 2.0, false),
+                touch_moved_as(2, 3.0, 3.0, false),
+                touch_moved(1, 4.0, 4.0),
+            ]),
+            [
+                WindowEvent::TouchStarted {
+                    finger: core_finger(1),
+                    px: (1.0, 1.0)
+                },
+                WindowEvent::TouchStarted {
+                    finger: core_finger(2),
+                    px: (2.0, 2.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: core_finger(2),
+                    px: (3.0, 3.0)
+                },
+                WindowEvent::TouchMoved {
+                    finger: core_finger(1),
+                    px: (4.0, 4.0)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn winits_primary_flag_changes_nothing() {
+        let scenario = |primary| {
+            translated(&[
+                touch_down_as(3, 1.0, 2.0, primary),
+                touch_moved_as(3, 3.0, 4.0, primary),
+                touch_up_as(3, 5.0, 6.0, primary),
+            ])
+        };
+        assert_eq!(scenario(true), scenario(false));
+    }
+
+    #[test]
+    fn the_enter_before_a_touchs_press_is_dropped() {
+        let enter = &touch_down(4, 9.0, 9.0)[0];
+        assert!(matches!(enter, WinitEvent::PointerEntered { .. }));
+        assert_eq!(translate(enter, &WINDOWED), None);
     }
 
     #[test]
