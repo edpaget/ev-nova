@@ -1426,6 +1426,9 @@ impl Session {
         // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
         // see the `class_table` module).
         session.space.seed_class_orders(&session.pilot);
+        // `_LoadPilotData` spawns the escorts and fighters into their
+        // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
+        session.space.hold_loaded_berths(&mut session.pilot);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
@@ -2070,6 +2073,7 @@ impl Session {
         };
         let last = self.space.last_npc();
         let berths = self.space.fleet_berths(&self.pilot);
+        self.space.release_loaded_berths();
         self.space.traffic.reserve(berths.iter().copied().collect());
         self.space
             .traffic

@@ -4230,10 +4230,13 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
+        // The load spawned the Viper at 1, the warship at 2 and the Dart
+        // at 3, so with the fighters gone the warship keeps 2, as the
+        // original's table holds it from the load on.
         assert_eq!(
             session.pilot().escorts(),
-            [at_berth(1, warship(None))],
-            "the berth it will take, the fighters gone"
+            [at_berth(2, warship(None))],
+            "the berth the load spawned it in, the fighters gone"
         );
     }
 

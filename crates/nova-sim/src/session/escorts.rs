@@ -1032,9 +1032,14 @@ impl Space {
     /// berth not already chosen, in the order of the berths they were
     /// saved at ([`loaded_berths::packing_order`]), before anything else
     /// is set up, as `_LoadPilotData` spawns a loaded pilot's escorts
-    /// first, walking their old slots up (@0x759a4-0x75b91). The old ship
-    /// kept after a capture and a ship hired are placed at once, so they
-    /// keep theirs.
+    /// first, walking their old slots up (@0x759a4-0x75b91). Until the
+    /// fleet is first placed, a loaded pilot's records keep the berths the
+    /// load packed them into ([`Space::hold_loaded_berths`]), as
+    /// `_LoadPilotData` spawns each into its slot at once
+    /// (@0x759af-0x75b91) and a ship leaving frees only its own; a record
+    /// holding none (a hire not placed) packs into the lowest free. The
+    /// old ship kept after a capture and a ship hired are placed at once,
+    /// so they keep theirs.
     pub(super) fn fleet_berths(&self, pilot: &Pilot) -> Vec<u32> {
         let mut berths: Vec<Option<u32>> = (0..pilot.escorts.len())
             .map(|index| {
@@ -1043,6 +1048,9 @@ impl Space {
             })
             .collect();
         let mut taken: BTreeSet<u32> = berths.iter().flatten().copied().collect();
+        if self.escorts.loaded_berths_held {
+            loaded_berths::keep_held(&pilot.escorts, &mut taken, &mut berths);
+        }
         let unplaced = (0..berths.len()).filter(|&index| berths[index].is_none());
         for index in loaded_berths::packing_order(&pilot.escorts, unplaced.collect()) {
             let free = (1..=u32::MAX)

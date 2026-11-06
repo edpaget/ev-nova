@@ -157,6 +157,7 @@ pub(super) struct Space {
 /// The escorts' and encounters' state: the fleet and its class orders,
 /// the boarding and the hail open, and the persons' quote clock.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each set and read on its own
 pub(super) struct Escorts {
     /// The boarding under way, if any.
     pub(super) aboard: Option<Aboard>,
@@ -225,6 +226,13 @@ pub(super) struct Escorts {
     /// (@0x6e2e8); taken by the first bookkeeping after it, and cleared by
     /// every other entry (see the `class_orders` module). Never saved.
     pub(super) skip_bookkeeping: bool,
+    /// Whether the records not placed yet hold the berths a pilot load
+    /// packed them into (see the `loaded_berths` module), as
+    /// `_LoadPilotData` spawns each into its slot at once, so one leaving
+    /// the fleet frees its slot and the rest keep theirs. Set by
+    /// `Session::load`, spent as the fleet is first placed. Never saved:
+    /// a load sets it afresh.
+    pub(super) loaded_berths_held: bool,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
@@ -296,6 +304,7 @@ impl Space {
                 class_orders: [None; 4],
                 commanded: BTreeSet::new(),
                 skip_bookkeeping: false,
+                loaded_berths_held: false,
                 quote_clock: persons::QuoteClock::default(),
             },
             voice: crate::voice::VoiceChannel::default(),
