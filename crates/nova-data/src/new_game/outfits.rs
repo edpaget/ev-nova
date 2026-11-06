@@ -1,7 +1,7 @@
 //! Outfits as minimal `oütf`s: something a pilot can own, so a mission
 //! can grant and remove one ([`super::missions`]).
 //!
-//! Each outfit is numbered within [`OUTFIT_IDS`] ([`number`]) and maps to
+//! Each outfit is numbered within [`OUTFIT_IDS`] ([`number_outfits`]) and maps to
 //! a neutral `oütf` ([`outfit`], over [`neutral_outfit`]) with the
 //! outfit's `name` and its `price` as `Cost`. It weighs nothing, does
 //! nothing (every `ModType` slot unused), has no limit on how many are
