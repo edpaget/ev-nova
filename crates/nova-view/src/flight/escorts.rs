@@ -1454,16 +1454,23 @@ mod tests {
         texts(menu, rows).contains(&(text.to_owned(), color))
     }
 
-    /// The row the bar `menu` draws by `rows` sits on, from 0.
+    /// The row the bar `menu` draws by `rows` sits on, from 0, at any
+    /// level (faded, it is clipped and its alpha lowered).
     fn bar_row(menu: &EscortMenu, rows: MenuRows<'_>) -> Option<usize> {
+        fn on_row(command: &DrawCommand) -> Option<usize> {
+            match command {
+                DrawCommand::Clipped { command, .. } => on_row(command),
+                DrawCommand::Line { from, color, .. }
+                    if alpha(*color, 0xff) == alpha(COLORS.hilite, 0xff) =>
+                {
+                    (0..5).find(|&n| (row_rect(n).center().y - from.y).abs() < 0.01)
+                }
+                _ => None,
+            }
+        }
         let mut list = DrawList::new();
         menu.draw(&mut list, rows, COLORS, Some(&Fixed));
-        list.iter().find_map(|command| match command {
-            DrawCommand::Line { from, color, .. } if *color == COLORS.hilite => {
-                (0..5).find(|&n| (row_rect(n).center().y - from.y).abs() < 0.01)
-            }
-            _ => None,
-        })
+        list.iter().find_map(on_row)
     }
 
     /// [`rows`] with `class`'s row set to `present` and `order`.
@@ -1587,6 +1594,20 @@ mod tests {
         );
         assert!(!menu.run_passes(AT, [pass_of(attacking, 1, false)]));
         assert!(shows(&menu, MenuRows::Held, "Attack", Color::WHITE));
+    }
+
+    #[test]
+    fn a_count_falling_to_none_redraws_the_bar_on_all_ships() {
+        // @0x6dfbb-0x6dfcb resets the group before @0x6dfd0 redraws, so the
+        // held bar moves with it.
+        let mut menu = opened();
+        assert!(menu.select(3, AT, &rows()), "4: warships");
+        assert!(!menu.run_passes(AT, [pass_of(rows(), 2, false)]));
+        assert_eq!(bar_row(&menu, MenuRows::Held), Some(3));
+        assert!(!menu.run_passes(AT, [pass_of(rows(), 0, false)]));
+        assert_eq!(menu.group(), EscortGroup::All);
+        assert_eq!(bar_row(&menu, MenuRows::Held), Some(0));
+        assert_eq!(menu.open.map(|shown| shown.image.group), Some(menu.group()));
     }
 
     #[test]
