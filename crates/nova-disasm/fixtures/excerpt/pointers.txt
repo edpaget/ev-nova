@@ -1,0 +1,4 @@
+/fixture/EV Nova:
+Contents of (__IMPORT,__pointers) section
+003b5000	00 00 00 00 00 00 00 00 00 00 00 00 20 68 18 00 
+003b5040	00 00 00 00 00 00 00 00 00 00 00 00 90 17 23 00 

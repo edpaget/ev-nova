@@ -1,0 +1,5 @@
+/fixture/EV Nova:
+Contents of (__TEXT,__cstring) section
+000d8200  Hello world
+000d820c  \005Pilot
+000d8220  Line\n

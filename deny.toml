@@ -53,8 +53,9 @@ deny = [
     # The platform shims are each reached only by their owner: nova-metalfx
     # (nova-render, macOS), nova-appkit (nova, macOS), nova-win32 (nova,
     # Windows) and nova-winres (nova's build script and Windows build, and
-    # nova-bundle). The leaf tools nova-dump (on nova-rsrc and nova-data)
-    # and nova-bundle (on nova-winres) have no dependents, so no entry.
+    # nova-bundle). The leaf tools nova-dump (on nova-rsrc and nova-data),
+    # nova-bundle (on nova-winres) and nova-disasm (no workspace
+    # dependencies) have no dependents, so no entry.
     #
     # Each entry's `wrappers` is exactly the crate's direct dependents
     # (normal, dev and build, on every target), including the crate itself
