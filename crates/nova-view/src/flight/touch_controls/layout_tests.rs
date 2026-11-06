@@ -513,3 +513,214 @@ fn hit_finds_the_control_under_a_point() {
     }
     assert_eq!(shut.hit(Point::new(-5.0, -5.0)), None);
 }
+
+#[test]
+fn the_grid_counts_the_cells_a_panel_holds_exactly() {
+    let region = Region {
+        rect: Bounds::at(Point::new(0.0, 0.0), 1000.0, 1000.0),
+        points_per_pixel: 1.0,
+    };
+    // Three cells and two gaps across, four and three down.
+    let panel = Bounds::at(Point::new(0.0, 0.0), 304.0, 200.0);
+    let grid = Grid::fit(&region, panel).expect("a grid");
+    assert_eq!((grid.cols, grid.rows), (3, 4));
+    let short = Bounds::at(Point::new(0.0, 0.0), 303.0, 199.0);
+    let grid_short = Grid::fit(&region, short).expect("a grid");
+    assert_eq!((grid_short.cols, grid_short.rows), (2, 3));
+    assert_eq!(grid.per_page(12), 12, "all fit on one page");
+    assert_eq!(grid.per_page(10), 12);
+    assert_eq!(grid.per_page(13), 9, "a row for the arrows");
+    let wide = Grid::fit(
+        &Region {
+            points_per_pixel: 2.0,
+            ..region
+        },
+        panel,
+    )
+    .expect("a grid");
+    // Cells of 48 × 22 with gaps of 4: (304 + 4) / 52 and (200 + 4) / 26.
+    assert_eq!(
+        (wide.cols, wide.rows),
+        (5, 7),
+        "points per pixel halves a cell"
+    );
+}
+
+#[test]
+fn a_panel_narrower_than_both_page_arrows_holds_no_grid() {
+    let region = Region {
+        rect: Bounds::at(Point::new(0.0, 0.0), 1000.0, 1000.0),
+        points_per_pixel: 1.0,
+    };
+    let arrows = 2.0 * ARROW_PT + GAP_PT;
+    assert!(arrows > CELL_PT.0, "a cell fits where the arrows don't");
+    let narrow = Bounds::at(Point::new(0.0, 0.0), arrows - 1.0, 200.0);
+    assert!(Grid::fit(&region, narrow).is_none());
+    let enough = Bounds::at(Point::new(0.0, 0.0), arrows, 200.0);
+    assert!(Grid::fit(&region, enough).is_some());
+    let one_row = Bounds::at(Point::new(0.0, 0.0), 400.0, CELL_PT.1 + GAP_PT);
+    assert!(
+        Grid::fit(&region, one_row).is_none(),
+        "no row left for the arrows"
+    );
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-3
+}
+
+#[test]
+fn the_stick_zone_is_the_left_two_fifths_and_the_bottom_three_fifths_below_the_edge_row() {
+    for window in &WINDOWS {
+        let region = window.region();
+        let r = region.rect;
+        let u = |pt: f32| pt / region.points_per_pixel;
+        let shut = layout(&region, MenuView::default());
+        let Some(zone) = find(&shut, ControlId::Stick) else {
+            continue;
+        };
+        let ring = 2.0 * u(STICK_RADIUS_PT);
+        let width = (0.4 * r.width()).max(ring);
+        let height = (0.6 * (r.height() - u(EDGE_PT + GAP_PT))).max(ring);
+        assert!(near(zone.rect.width(), width), "{}", window.name);
+        assert!(near(zone.rect.height(), height), "{}", window.name);
+        assert_eq!(zone.rect.min.x, r.min.x, "{}", window.name);
+        assert!(near(zone.rect.max.y, r.max.y), "{}", window.name);
+    }
+    let desktop = WINDOWS[0].region();
+    let zone = find(&layout(&desktop, MenuView::default()), ControlId::Stick)
+        .expect("placed")
+        .rect;
+    assert!(
+        zone.width() > 2.0 * STICK_RADIUS_PT,
+        "two fifths, past the ring"
+    );
+    let slide_over = WINDOWS[5].region();
+    let zone = find(&layout(&slide_over, MenuView::default()), ControlId::Stick)
+        .expect("placed")
+        .rect;
+    let ring = 2.0 * STICK_RADIUS_PT / slide_over.points_per_pixel;
+    assert!(
+        near(zone.width(), ring) && near(zone.height(), ring),
+        "the ring at least"
+    );
+}
+
+#[test]
+fn edge_buttons_step_a_button_and_a_gap_along_a_row_and_a_row_down() {
+    for window in &WINDOWS[..4] {
+        let region = window.region();
+        let u = |pt: f32| pt / region.points_per_pixel;
+        let shut = layout(&region, MenuView::default());
+        assert!(
+            EDGE.iter()
+                .all(|&c| find(&shut, ControlId::Command(c)).is_some()),
+            "{}: every edge command placed, a second row if need be",
+            window.name
+        );
+        let land = find(&shut, ControlId::Command(EDGE[0])).expect("Land").rect;
+        let jump = find(&shut, ControlId::Command(EDGE[1])).expect("Jump").rect;
+        assert_eq!(land.min, region.rect.min, "{}", window.name);
+        assert!(
+            near(jump.min.x - land.min.x, u(EDGE_WIDTH_PT + GAP_PT)),
+            "{}",
+            window.name
+        );
+        for &c in &EDGE {
+            let rect = find(&shut, ControlId::Command(c)).expect("placed").rect;
+            let rows = (rect.min.y - land.min.y) / u(EDGE_PT + GAP_PT);
+            assert!(near(rows, rows.round()), "{}: {c:?} on a row", window.name);
+        }
+    }
+    let small = WINDOWS[3].region();
+    let shut = layout(&small, MenuView::default());
+    let second_row = EDGE
+        .iter()
+        .filter(|&&c| {
+            find(&shut, ControlId::Command(c))
+                .expect("placed")
+                .rect
+                .min
+                .y
+                > small.rect.min.y
+        })
+        .count();
+    assert!(second_row >= 3, "{second_row} on the second row");
+}
+
+#[test]
+fn the_escort_groups_start_a_gap_past_the_escort_menu_and_below_the_edge_row() {
+    let desktop = WINDOWS[0].region();
+    let shown = MenuView {
+        escort_menu: true,
+        ..MenuView::default()
+    };
+    let shut = layout(&desktop, shown);
+    let rect = |layout: &Layout, n: usize| {
+        find(layout, ControlId::Command(GROUPS[n]))
+            .expect("a group")
+            .rect
+    };
+    let edge_bottom = find(&shut, ControlId::Command(EDGE[0]))
+        .expect("Land")
+        .rect
+        .max
+        .y;
+    let first = rect(&shut, 0);
+    assert_eq!(
+        first.min,
+        Point::new(
+            crate::flight::escorts::MENU_AT.x + crate::flight::escorts::MENU_WIDTH + GAP_PT,
+            edge_bottom + GAP_PT
+        )
+    );
+    assert!(near(rect(&shut, 1).min.y - first.min.y, EDGE_PT + GAP_PT));
+    assert_eq!(rect(&shut, 1).min.x, first.min.x, "one column");
+    let split = WINDOWS[4].region();
+    let narrow = layout(&split, shown);
+    let u = |pt: f32| pt / split.points_per_pixel;
+    let (a, b) = (rect(&narrow, 0), rect(&narrow, 1));
+    assert!(
+        near(b.min.x - a.min.x, u(EDGE_WIDTH_PT + GAP_PT)),
+        "the next column"
+    );
+    assert_eq!(b.min.y, a.min.y, "its top");
+}
+
+#[test]
+fn the_open_menu_keeps_more_and_the_first_edge_row_where_they_were() {
+    let desktop = WINDOWS[0].region();
+    let shut = layout(&desktop, MenuView::default());
+    let open = layout(
+        &desktop,
+        MenuView {
+            open: true,
+            ..MenuView::default()
+        },
+    );
+    for id in EDGE
+        .iter()
+        .map(|&c| ControlId::Command(c))
+        .chain([ControlId::More])
+    {
+        assert_eq!(find(&open, id), find(&shut, id), "{id:?}");
+    }
+}
+
+#[test]
+fn the_page_arrows_sit_at_the_panels_two_ends() {
+    let slide_over = WINDOWS[5].region();
+    let open = layout(
+        &slide_over,
+        MenuView {
+            open: true,
+            ..MenuView::default()
+        },
+    );
+    let panel = open.panel.expect("open");
+    let prev = find(&open, ControlId::PagePrev).expect("back").rect;
+    let next = find(&open, ControlId::PageNext).expect("on").rect;
+    assert_eq!(prev.min.x, panel.min.x);
+    assert!(near(next.max.x, panel.max.x));
+    assert!(near(next.width(), ARROW_PT / slide_over.points_per_pixel));
+}

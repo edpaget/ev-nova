@@ -293,6 +293,29 @@ mod tests {
     }
 
     #[test]
+    fn on_a_tie_the_pads_amount_stays() {
+        let mut reader = flight();
+        reader.follow(&Input::PadAxis {
+            axis: PadAxis::RightX,
+            value: -0.5,
+        });
+        reader.follow(&stick(0.5, 0.0));
+        assert_eq!(
+            reader.axis(FlightCommand::TurnAxis),
+            dead_zoned(-0.5, 0.0).0
+        );
+    }
+
+    #[test]
+    fn only_a_touch_button_held_is_down() {
+        let mut reader = flight();
+        assert!(!reader.is_down(&touch(FIRE, true)));
+        reader.follow(&touch(FlightCommand::Afterburner, true));
+        assert!(!reader.is_down(&touch(FIRE, true)), "another is down");
+        assert!(reader.is_down(&touch(FlightCommand::Afterburner, false)));
+    }
+
+    #[test]
     fn a_touch_stick_outside_the_dead_zone_pushes_a_flight_axis() {
         let mut reader = flight();
         reader.follow(&stick(0.0, 0.5));

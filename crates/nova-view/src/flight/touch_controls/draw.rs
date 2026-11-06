@@ -363,6 +363,116 @@ mod tests {
     }
 
     #[test]
+    fn more_draws_in_the_highlight_while_the_menu_is_open() {
+        let mut controls = showing();
+        let more = controls.layout().get(ControlId::More).expect("More").rect;
+        let lit = |controls: &TouchControls| {
+            drawn(controls).iter().any(|command| {
+                matches!(*command, DrawCommand::Line { color, from, .. }
+                    if color == HIGHLIGHT && more.contains(from))
+            })
+        };
+        assert!(!lit(&controls));
+        down(&mut controls, 1, more.center());
+        controls.touch(Touch {
+            finger: FingerId::new(1),
+            phase: TouchPhase::Ended(more.center()),
+        });
+        assert!(lit(&controls));
+    }
+
+    #[test]
+    fn a_square_control_draws_its_outline_and_its_label_sized_in_points() {
+        let mut controls = showing();
+        controls.tell(Surroundings {
+            points_per_pixel: 2.0,
+            ..Surroundings::of(Device::Touch)
+        });
+        let land = F::LandDock.into();
+        let rect = controls
+            .layout()
+            .get(ControlId::Command(land))
+            .expect("Land")
+            .rect;
+        let drawn = drawn(&controls);
+        let size = LABEL_PT / 2.0;
+        let text = drawn
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    size,
+                    wrap_width,
+                    ..
+                } if text == label(land) => Some((*origin, *size, *wrap_width)),
+                _ => None,
+            })
+            .expect("its label");
+        assert_eq!(
+            text,
+            (
+                Point::new(rect.min.x + size / 2.0, rect.center().y - size / 2.0),
+                size,
+                Some(rect.width() - size)
+            )
+        );
+        let top = DrawCommand::Line {
+            from: rect.min,
+            to: Point::new(rect.max.x, rect.min.y),
+            width: 0.5,
+            color: OUTLINE,
+        };
+        assert!(drawn.contains(&top), "a one-point outline");
+    }
+
+    #[test]
+    fn the_rings_are_the_sticks_size_and_the_knob_half_of_it() {
+        let mut controls = showing();
+        let zone = centre(&controls, ControlId::Stick);
+        down(&mut controls, 1, zone);
+        let radius = controls.stick_radius();
+        let extent = |color: Color| {
+            let rows: Vec<(f32, f32)> = drawn(&controls)
+                .iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Line {
+                        from, to, color: c, ..
+                    } if c == color => Some((from.x, to.x)),
+                    _ => None,
+                })
+                .collect();
+            let left = rows.iter().map(|r| r.0).fold(f32::MAX, f32::min);
+            let right = rows.iter().map(|r| r.1).fold(f32::MIN, f32::max);
+            right - left
+        };
+        assert!(
+            (extent(RING) - 2.0 * radius).abs() <= 1.0,
+            "{}",
+            extent(RING)
+        );
+        assert!(
+            (extent(HIGHLIGHT) - radius).abs() <= 1.0,
+            "{}",
+            extent(HIGHLIGHT)
+        );
+    }
+
+    #[test]
+    fn the_labels_are_the_short_names() {
+        assert_eq!(label(F::FirePrimary.into()), "Fire");
+        assert_eq!(label(F::LandDock.into()), "Land");
+        assert_eq!(label(PlayCommand::GalaxyMap.into()), "Map");
+        assert_eq!(label(EscortMenuCommand::Group5.into()), "Freight");
+        let flight: Vec<&str> = Command::all()
+            .filter(|command| matches!(command, Command::Flight(_)))
+            .map(label)
+            .collect();
+        let distinct: std::collections::BTreeSet<&str> = flight.iter().copied().collect();
+        assert_eq!(distinct.len(), flight.len(), "each its own");
+    }
+
+    #[test]
     fn every_control_has_a_label() {
         for command in Command::all() {
             if let Command::Flight(_)

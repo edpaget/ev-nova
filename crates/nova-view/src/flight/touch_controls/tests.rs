@@ -368,3 +368,96 @@ fn events_of_a_finger_it_does_not_know_queue_nothing() {
         "already down"
     );
 }
+
+#[test]
+fn a_stick_held_back_stays_on_reverse_as_it_moves_and_lets_go_once_forward() {
+    let mut controls = showing();
+    let at = centre(&controls, ControlId::Stick);
+    touch(&mut controls, 1, TouchPhase::Started(at));
+    let radius = controls.stick_radius();
+    touch(
+        &mut controls,
+        1,
+        TouchPhase::Moved(Point::new(at.x, at.y + radius)),
+    );
+    let still_back = Point::new(at.x + 5.0, at.y + 0.8 * radius);
+    let (x, y) = stick::offset(at, still_back, radius);
+    assert_eq!(
+        touch(&mut controls, 1, TouchPhase::Moved(still_back)),
+        [stick_input(x, y)],
+        "still back: nothing let go"
+    );
+    assert!(controls.holds(REVERSE));
+    let forward = touch(
+        &mut controls,
+        1,
+        TouchPhase::Moved(Point::new(at.x, at.y - radius)),
+    );
+    assert_eq!(forward, [stick_input(0.0, 1.0), button(REVERSE, false)]);
+    let ahead = Point::new(at.x, at.y - radius / 2.0);
+    let (x, y) = stick::offset(at, ahead, radius);
+    assert_eq!(
+        touch(&mut controls, 1, TouchPhase::Moved(ahead)),
+        [stick_input(x, y)],
+        "forward again: nothing"
+    );
+}
+
+#[test]
+fn the_stick_radius_is_its_points_in_logical_units() {
+    let mut controls = showing();
+    assert_eq!(controls.stick_radius(), layout::STICK_RADIUS_PT);
+    controls.tell(Surroundings {
+        points_per_pixel: 2.0,
+        ..Surroundings::of(Device::Touch)
+    });
+    assert_eq!(controls.stick_radius(), layout::STICK_RADIUS_PT / 2.0);
+}
+
+#[test]
+fn the_escort_groups_are_placed_while_flight_says_its_escort_menu_shows() {
+    let mut controls = showing();
+    let group = ControlId::Command(crate::keymap::EscortMenuCommand::Group1.into());
+    assert!(controls.layout().get(group).is_none());
+    controls.set_escort_menu(true);
+    assert!(controls.layout().get(group).is_some());
+    controls.set_escort_menu(false);
+    assert!(controls.layout().get(group).is_none());
+}
+
+#[test]
+fn a_cancel_on_the_back_arrow_or_the_menus_background_does_nothing() {
+    let mut small = small_window();
+    open_menu(&mut small);
+    let next = centre(&small, ControlId::PageNext);
+    touch(&mut small, 1, TouchPhase::Started(next));
+    touch(&mut small, 1, TouchPhase::Ended(next));
+    let second = page(&small);
+    let prev = centre(&small, ControlId::PagePrev);
+    touch(&mut small, 2, TouchPhase::Started(prev));
+    touch(&mut small, 2, TouchPhase::Cancelled);
+    assert_eq!(page(&small), second, "the same page");
+    let panel = small.layout().panel.expect("open");
+    let empty = Point::new(panel.max.x - 2.0, panel.max.y - 2.0);
+    assert_eq!(small.layout().hit(empty), None);
+    touch(&mut small, 3, TouchPhase::Started(empty));
+    touch(&mut small, 3, TouchPhase::Cancelled);
+    assert!(small.menu_open(), "still open");
+}
+
+#[test]
+fn the_next_arrow_from_the_last_page_wraps_to_the_first() {
+    let mut controls = small_window();
+    open_menu(&mut controls);
+    let first = page(&controls);
+    let pages = controls.layout().pages;
+    let next = centre(&controls, ControlId::PageNext);
+    for _ in 0..pages {
+        touch(&mut controls, 1, TouchPhase::Started(next));
+        touch(&mut controls, 1, TouchPhase::Ended(next));
+    }
+    assert_eq!(page(&controls), first);
+    touch(&mut controls, 1, TouchPhase::Started(next));
+    touch(&mut controls, 1, TouchPhase::Ended(next));
+    assert_ne!(page(&controls), first, "and on from there");
+}

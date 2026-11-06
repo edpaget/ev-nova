@@ -225,9 +225,13 @@ fn a_key_press_hides_the_overlay_and_a_touch_shows_it() {
 fn letting_go_of_the_keys_releases_the_overlay_through_the_router() {
     let mut screen = flying_by_touch();
     let fire = centre(&screen, command(FlightCommand::FirePrimary));
-    finger(&mut screen, 1, TouchPhase::Started(fire));
+    assert_eq!(
+        finger(&mut screen, 1, TouchPhase::Started(fire)),
+        ScreenAction::None,
+        "fed through, quitting nothing"
+    );
     assert!(
-        screen.flight_keys.anything_down(),
+        screen.flight_keys.held(FlightCommand::FirePrimary),
         "the router saw fire down"
     );
     screen.release_keys();

@@ -471,7 +471,7 @@ impl Placer<'_> {
             .iter()
             .filter(|placed| matches!(placed.id, ControlId::Command(c) if EDGE.contains(&c)))
             .map(|placed| placed.rect.max.y)
-            .fold(r.min.y + height, f32::max)
+            .fold(r.min.y, f32::max)
             + gap;
         let row_height = self.row_height();
         let mut slots =
