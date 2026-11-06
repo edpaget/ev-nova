@@ -140,6 +140,14 @@ fn clip_from(left: f32) -> Bounds {
     }
 }
 
+/// A clip whose bottom-right corner is `max`, reaching far left and up.
+fn clip_to(max: Point) -> Bounds {
+    Bounds {
+        min: Point::new(-10_000.0, -10_000.0),
+        max,
+    }
+}
+
 #[test]
 fn a_stellar_whose_sheet_is_32_bit_draws_it_at_the_drawn_size_while_its_box_keeps_the_header_size()
 {
@@ -194,10 +202,31 @@ fn a_32_bit_stellar_touching_the_worlds_edge_is_cut_to_its_box() {
         std::slice::from_ref(&cut)
     );
     // Wholly inside, edges included: the plain blit.
-    assert_eq!(in_world(&scene, clip_from(frame_box.min.x)), [sprite]);
+    assert_eq!(
+        in_world(&scene, clip_from(frame_box.min.x)),
+        std::slice::from_ref(&sprite)
+    );
     // Wholly outside: cut to the box, which the world's clip leaves
     // nothing of.
-    assert_eq!(in_world(&scene, clip_from(frame_box.max.x + 5.0)), [cut]);
+    assert_eq!(
+        in_world(&scene, clip_from(frame_box.max.x + 5.0)),
+        std::slice::from_ref(&cut)
+    );
+    // Straddling the world's top edge.
+    let top = Bounds {
+        min: Point::new(-10_000.0, frame_box.min.y + 1.0),
+        ..clip_from(-10_000.0)
+    };
+    assert_eq!(in_world(&scene, top), std::slice::from_ref(&cut));
+    // Straddling the world's right edge.
+    let right = clip_to(Point::new(frame_box.max.x - 1.0, 10_000.0));
+    assert_eq!(in_world(&scene, right), std::slice::from_ref(&cut));
+    // Straddling the world's bottom edge.
+    let bottom = clip_to(Point::new(10_000.0, frame_box.max.y - 1.0));
+    assert_eq!(in_world(&scene, bottom), std::slice::from_ref(&cut));
+    // Wholly inside, its right and bottom edges on the world's: the plain
+    // blit.
+    assert_eq!(in_world(&scene, clip_to(frame_box.max)), [sprite]);
 }
 
 #[test]
