@@ -393,6 +393,16 @@ impl Canvas<'_> {
     }
 }
 
+/// The `rlëD` `data`, whose checked header is `header`, as the original
+/// holds it once loaded and locked: swapped in memory, and where each
+/// frame starts in it.
+pub(super) fn locked(data: &[u8], header: &Header) -> Result<(Vec<u8>, Vec<usize>), GraphicsError> {
+    let mut mem = data.to_vec();
+    swap(&mut mem, header.depth, header.count)?;
+    let starts = frame_starts(&mem, header.count)?;
+    Ok((mem, starts))
+}
+
 /// Decodes the `rlëD` `data`, whose checked header is `header` and whose
 /// depth is neither 8 nor 16, as the original draws it (see the module
 /// docs).
@@ -401,9 +411,7 @@ pub(super) fn decode_wide(
     header: &Header,
     layout: SheetLayout,
 ) -> Result<SpriteSheet, GraphicsError> {
-    let mut mem = data.to_vec();
-    swap(&mut mem, header.depth, header.count)?;
-    let starts = frame_starts(&mem, header.count)?;
+    let (mem, starts) = locked(data, header)?;
     let mut canvas = Canvas {
         header,
         input_len: data.len(),

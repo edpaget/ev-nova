@@ -6,7 +6,11 @@
 //!   (@0xaa9b6-0xaaa83) walks it from byte 16 to each frame's first
 //!   token: a frame's tokens run to a 0 word, and every other word is
 //!   taken for a line start (asserted only), its count + 4 bytes skipped.
-//!   So the collision reads the very tokens the blitter draws.
+//!   So the collision reads the very tokens the blitter draws. At 32
+//!   bits it reads them as `_BlitPixieRLESwap` left them in memory
+//!   (`rled_wide`): the file's words read big-endian, as far as the
+//!   swap kept in step with the tokens, and byte-reversed after a token
+//!   that stopped it.
 //! - **A cut `PICT` sheet** ([`sheet_rle_words`]). `_SWCreateRLEData`
 //!   (@0xaec89-0xaefa1) has `_BlitPixieRLEParsePixels`
 //!   (@0xc2875-0xc2bef) emit each frame's tokens from its pixels and its
@@ -20,7 +24,8 @@
 use super::GraphicsError;
 use super::reader::Reader;
 use super::rled::read_header;
-use super::sheet::SpriteSheet;
+use super::rled_wide::{TOKENS, decode_wide, locked};
+use super::sheet::{SheetLayout, SpriteSheet};
 
 /// The op of a line start.
 const LINE_START: u32 = 1;
@@ -37,7 +42,7 @@ pub struct RleWords {
     pub frame_width: u32,
     /// Each frame's height in pixels.
     pub frame_height: u32,
-    /// Its depth: 16 or 8.
+    /// Its depth: 16, 8 or 32.
     pub depth: u16,
     /// The tokens after the 16-byte header, each read as a big-endian
     /// word; a part word at the end is dropped.
@@ -51,13 +56,37 @@ pub struct RleWords {
 /// [`decode_rled`](super::decode_rled) checks it, its words, and each
 /// frame's start found by `_SWLockSprite`'s walk.
 ///
-/// A header of another depth is [`GraphicsError::UnsupportedDepth`], of
-/// no size [`GraphicsError::BadDimensions`] and of no frames
-/// [`GraphicsError::NoFrames`]. The tokens themselves are not checked:
-/// the collision reads them as they are.
+/// A header of no size is [`GraphicsError::BadDimensions`] and of no
+/// frames [`GraphicsError::NoFrames`]. At 16 and 8 bits the tokens
+/// themselves are not checked: the collision reads them as they are.
+///
+/// At 32 bits the words are the swapped memory, and each frame starts
+/// where `_SWLockSprite`'s walk finds it; a sheet that does not decode
+/// ([`decode_rled`](super::decode_rled)) fails as that does. Any other
+/// depth is [`GraphicsError::UnsupportedDepth`]: touching by it is not
+/// built.
 pub fn rled_words(data: &[u8]) -> Result<RleWords, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
+    if header.depth == 32 {
+        decode_wide(data, &header, SheetLayout::DEFAULT)?;
+        let (mem, starts) = locked(data, &header)?;
+        return Ok(RleWords {
+            frame_width: header.width,
+            frame_height: header.height,
+            depth: header.depth,
+            words: mem[TOKENS..]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|word| u32::from_le_bytes(*word))
+                .collect(),
+            starts: starts
+                .iter()
+                .map(|start| Some((start - TOKENS) / 4))
+                .collect(),
+        });
+    }
     if header.depth != 16 && header.depth != 8 {
         return Err(GraphicsError::UnsupportedDepth {
             depth: header.depth,
@@ -222,6 +251,82 @@ mod tests {
         );
         let none = RledBuilder::new(2, 1).build();
         assert_eq!(rled_words(&none), Err(GraphicsError::NoFrames));
+    }
+
+    #[test]
+    fn a_32_bit_sheets_words_are_the_swapped_memory() {
+        let data = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0012_3456, 0x80AB_CDEF]))
+            .frame(|f| f.line().skip32(1).run32(1, 0x7FFF_7FFF))
+            .build();
+        let words = rled_words(&data).expect("reads");
+        assert_eq!(
+            (words.frame_width, words.frame_height, words.depth),
+            (2, 1, 32)
+        );
+        // In sync, the swapped memory read natively is the file read
+        // big-endian.
+        let file: Vec<u32> = data[16..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_be_bytes(*word))
+            .collect();
+        assert_eq!(words.words, file);
+        assert_eq!(words.starts, [Some(0), Some(5)]);
+    }
+
+    #[test]
+    fn a_32_bit_sheet_whose_swap_stops_gives_the_words_as_the_swap_left_them() {
+        // The tail word 07 44 00 00 swaps to op 7, which stops the swap;
+        // the word after it, inside the line's count, stays big-endian.
+        let data = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| {
+                f.token(1, 16)
+                    .token(2, 6)
+                    .raw(&[0x00, 0x11, 0x22, 0x33, 0x07, 0x44, 0x00, 0x00])
+                    .raw(&[0x02, 0x00, 0x00, 0x04])
+            })
+            .token(0, 0)
+            .build();
+        let words = rled_words(&data).expect("reads");
+        assert_eq!(
+            words.words,
+            [
+                0x0100_0010,
+                0x0200_0006,
+                0x0011_2233,
+                0x0744_0000,
+                0x0400_0002,
+                0,
+                0
+            ]
+        );
+        assert_eq!(words.starts, [Some(0)]);
+    }
+
+    #[test]
+    fn a_32_bit_sheet_that_does_not_decode_has_no_words() {
+        let data = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().token(2, 2).raw(&[0; 4]))
+            .build();
+        assert_eq!(
+            rled_words(&data),
+            Err(GraphicsError::RunawaySwap { offset: 20 })
+        );
+        let data = RledBuilder::new(2, 1)
+            .depth(32)
+            .frame(|f| f.line().pixels32(&[1]))
+            .build();
+        assert!(matches!(
+            rled_words(&data),
+            Err(GraphicsError::NotALineStart { .. })
+        ));
     }
 
     /// A frame `width` wide of `rows`, `#` opaque and `.` clear.
