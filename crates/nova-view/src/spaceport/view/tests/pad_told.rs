@@ -310,6 +310,12 @@ impl PadProbe for Probe {
         self.0 = earth().with_focus_ring(ring);
         true
     }
+
+    fn touch_aids_drawn(&mut self) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        crate::ui::touch_aids::host::draw(&self.0, &mut list);
+        list.iter().cloned().collect()
+    }
 }
 
 /// The spaceport's row in the pad's every-screen table.

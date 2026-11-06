@@ -212,6 +212,7 @@ use super::trade::{ListColors, TradeScreen};
 
 mod pad;
 mod shop_texts;
+pub(crate) mod touch;
 use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -591,6 +592,8 @@ pub struct SpaceportView {
     /// it holds and each it opens (the `pad` module). On no sub-state of
     /// its own: the spaceport holds them all.
     told: Told,
+    /// Map, Pilot and Missions on touch (the `touch` module).
+    play_keys: crate::ui::touch_aids::PlayKeys,
 }
 
 impl SpaceportView {
@@ -658,6 +661,7 @@ impl SpaceportView {
             .is_ok_and(|port| port.description_problem.is_none());
         Self {
             stellar,
+            play_keys: touch::play_keys(&port),
             port,
             open: None,
             trade: None,
@@ -2364,6 +2368,9 @@ impl Screen for SpaceportView {
     /// What waits on the texts over it is settled after it
     /// ([`SpaceportView::settle_gamble`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
         // The surroundings are no player input: they reach every screen it
         // holds and nothing else runs (the `pad` module).
         if self.follow_surroundings(input) {
@@ -2399,9 +2406,11 @@ impl Screen for SpaceportView {
         if let Some(screen) = &self.player_info {
             screen.draw(list);
         }
+        crate::ui::touch_aids::host::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         if let Some(screen) = &mut self.player_info {
             screen.cancel_pointer();
             return;
@@ -2701,6 +2710,7 @@ pub(in crate::spaceport) mod tests {
     mod overlay_pointer;
     pub(crate) mod pad_told;
     mod pad_untold;
+    mod play_keys;
     mod ship_movies;
 
     use crate::keymap::test_keys::MISSION_INFO_KEY;

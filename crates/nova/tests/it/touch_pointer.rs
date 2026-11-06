@@ -1,9 +1,14 @@
 //! A finger through the whole app
-//! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps): its lift is the
-//! pointer leaving, so after a tap in space and a dialog over flight the
-//! app's resync tells flight the pointer left, not the old finger point,
-//! and the cursor stays hidden. The router's leave is `nova_view`'s and
-//! the app's delivery is pinned in `app::tests::touch`; this is wiring.
+//! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps), as wiring:
+//!
+//! - its lift is the pointer leaving, so after a tap in space and a
+//!   dialog over flight the app's resync tells flight the pointer left,
+//!   not the old finger point, and the cursor stays hidden (the router's
+//!   leave is `nova_view`'s, the app's delivery `app::tests::touch`'s);
+//! - in the spaceport, the play keys' strip opens the player info screen
+//!   and the galaxy map by touch alone (each opening on each port screen,
+//!   mission info's among them, is `nova_view`'s
+//!   `spaceport::view::tests::play_keys`).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -13,8 +18,10 @@ use nova_data::GameData;
 use nova_render::FontFaces;
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
+use nova_view::keymap::{Command, PlayCommand};
 use nova_view::{FingerId, Key};
 
+use crate::common::Frames;
 use crate::recharge::{FakeWindow, game_data, interface};
 
 struct Harness {
@@ -77,7 +84,42 @@ impl Harness {
         });
         assert_eq!(self.app.take_failures(), []);
     }
+
+    /// One finger taps logical point `at` (window pixels here).
+    fn tap(&mut self, at: nova_view::Point) {
+        let finger = FingerId::new(7);
+        let px = (f64::from(at.x), f64::from(at.y));
+        self.send(WindowEvent::TouchStarted { finger, px });
+        self.send(WindowEvent::TouchEnded { finger, px });
+    }
+
+    /// Presses L twice, as the player lands: the first requests
+    /// clearance, the dock approach clears it, and the second lands.
+    fn land(&mut self) {
+        self.press(Key::KeyL);
+        self.settle();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.app
+                .screen()
+                .flight_view()
+                .and_then(|flight| flight.session().ok())
+                .is_some_and(nova_sim::Session::dock_cleared)
+        });
+        self.press(Key::KeyL);
+        assert_eq!(self.showing(), Showing::Spaceport);
+    }
+
+    /// Where the spaceport's play key for `command` is, once a touch has
+    /// told it touch was used last.
+    fn play_key(&mut self, command: Command) -> nova_view::Point {
+        self.tap(nova_view::Point::new(2.0, 2.0));
+        let port = self.app.screen().spaceport_view().expect("landed");
+        assert!(port.play_keys().shown(), "shown under touch");
+        port.play_keys().rect(command).expect("a play key").center()
+    }
 }
+
+crate::common::frames!(Harness, frame);
 
 #[test]
 fn a_dialog_closing_after_a_tap_leaves_the_cursor_hidden() {
@@ -96,4 +138,23 @@ fn a_dialog_closing_after_a_tap_leaves_the_cursor_hidden() {
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert_eq!(game.cursor_at(), None, "after the close");
+}
+
+#[test]
+fn in_the_spaceport_pilot_opens_the_player_info_screen_by_touch_alone() {
+    let mut game = Harness::flying();
+    game.land();
+    let pilot = game.play_key(Command::Play(PlayCommand::PlayerInfo));
+    game.tap(pilot);
+    let port = game.app.screen().spaceport_view().expect("landed");
+    assert!(port.player_info().is_some(), "player info open");
+}
+
+#[test]
+fn in_the_spaceport_map_opens_the_galaxy_map_by_touch_alone() {
+    let mut game = Harness::flying();
+    game.land();
+    let map = game.play_key(Command::Play(PlayCommand::GalaxyMap));
+    game.tap(map);
+    assert_eq!(game.showing(), Showing::FlightMap);
 }

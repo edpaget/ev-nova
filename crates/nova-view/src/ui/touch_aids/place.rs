@@ -65,17 +65,22 @@ pub fn place(
         .unwrap_or_else(|| at(corners.first().copied().unwrap_or(Corner::BottomLeft)))
 }
 
-/// The rect of `size` in `region`'s `corner`.
+/// The rect of `size` in `region`'s `corner`, flush with the region's
+/// edges there (a far edge worked out as near edge plus size can land a
+/// float's width outside).
 fn at_corner(region: Bounds, corner: Corner, (w, h): (f32, f32)) -> Bounds {
-    let x = match corner {
-        Corner::BottomLeft | Corner::TopLeft => region.min.x,
-        Corner::BottomRight | Corner::TopRight => region.max.x - w,
+    let (min_x, max_x) = match corner {
+        Corner::BottomLeft | Corner::TopLeft => (region.min.x, region.min.x + w),
+        Corner::BottomRight | Corner::TopRight => (region.max.x - w, region.max.x),
     };
-    let y = match corner {
-        Corner::TopLeft | Corner::TopRight => region.min.y,
-        Corner::BottomLeft | Corner::BottomRight => region.max.y - h,
+    let (min_y, max_y) = match corner {
+        Corner::TopLeft | Corner::TopRight => (region.min.y, region.min.y + h),
+        Corner::BottomLeft | Corner::BottomRight => (region.max.y - h, region.max.y),
     };
-    Bounds::at(Point::new(x, y), w, h)
+    Bounds {
+        min: Point::new(min_x, min_y),
+        max: Point::new(max_x, max_y),
+    }
 }
 
 /// Whether `rect` lies in `region`, edges included.
@@ -205,6 +210,30 @@ mod tests {
         assert!((rect.height() - CELL_PT.1).abs() < EPS, "{rect:?}");
         assert_eq!(rect.min.x, 508.0, "the region's left, past the margin");
         assert_eq!(rect.max.y, 412.0, "its bottom");
+    }
+
+    #[test]
+    fn a_right_or_bottom_corner_lies_in_the_region_at_any_scale() {
+        // A third of a unit per point leaves the rect's far edge a float's
+        // width past the region's unless it is placed flush.
+        let told = Surroundings {
+            safe_area: canvas().inset(40.0, 12.0),
+            points_per_pixel: 0.75,
+            ..WINDOWS[0].classic_surroundings()
+        };
+        let top = Bounds::at(Point::new(0.0, 100.0), 1024.0, 668.0);
+        let rect = place((304.0, 44.0), &told, canvas(), top, &[Corner::TopRight]);
+        let margin = MARGIN_PT / 0.75;
+        assert_eq!(rect.max.x, 984.0 - margin, "flush right");
+        assert!(intersection(rect, top).is_none());
+        let rect = place(
+            (304.0, 44.0),
+            &told,
+            canvas(),
+            Bounds::at(Point::new(0.0, 0.0), 1024.0, 600.0),
+            &[Corner::TopRight, Corner::BottomRight],
+        );
+        assert_eq!(rect.max, Point::new(984.0 - margin, 756.0 - margin));
     }
 
     #[test]
