@@ -2604,6 +2604,30 @@ mod tests {
     }
 
     #[test]
+    fn an_inspecting_interceptor_answers_no_provoker_it_lets_go_by_the_other_reading() {
+        // A provoker its think lets go (disabled, with no destroying weapon,
+        // @0x8d2fd-0x8d33a) is no provoker it holds: the inspection runs on.
+        let (cop, trader) = trader_cop_inspecting();
+        let provoked = Npc {
+            target: Some(n(3)),
+            provoked: 5.0,
+            ..cop
+        };
+        let downed = Npc {
+            condition: Condition::Disabled,
+            ..ship(3, NEUTRAL, AiType::Warship, 0.0, 300.0)
+        };
+        let (decision, _) = hit_decided(
+            RuleSource::Bible,
+            provoked,
+            &[trader, downed],
+            (0.0, -1000.0),
+            &[],
+        );
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+    }
+
+    #[test]
     fn an_inspecting_interceptor_does_not_hunt_at_its_first_search() {
         // `_SelectWarshipTarget` @0x8cce6 needs state 1 or below, or 0x14
         // (@0x8cc6d-0x8cc7d).
