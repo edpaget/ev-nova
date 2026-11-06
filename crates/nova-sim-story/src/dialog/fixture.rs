@@ -50,7 +50,8 @@ pub const CONTRACT_JSON: &str = include_str!("fixture/contract.ink.json");
 /// 8. A save puts back the variables, the spent choices and the choices
 ///    pending at the save, in the same dialog or a fresh one, whichever
 ///    knot it was in, and before any knot was entered; junk doesn't
-///    restore.
+///    restore. A choice taken in a fresh dialog restored from a save plays
+///    on, as it would have in the dialog that saved.
 /// 9. Entering a knot drops the choices that were pending.
 /// 10. A failed enter changes nothing: the choices pending before it are
 ///     still offered and can still be taken.
@@ -70,6 +71,7 @@ pub fn check_contract(loader: &impl DialogLoader) -> Result<(), String> {
     a_save_restores_variables_spent_choices_and_position(loader)?;
     a_save_keeps_spent_choices_in_another_knot(loader)?;
     a_save_before_entering_restores_to_nothing(loader)?;
+    a_choice_after_a_restore_plays_on(loader)?;
     entering_a_knot_drops_pending_choices(loader)?;
     a_failed_enter_keeps_pending_choices(loader)?;
     Ok(())
@@ -408,6 +410,29 @@ fn a_save_before_entering_restores_to_nothing(loader: &impl DialogLoader) -> Res
     expect_choices(dialog.as_ref(), &[], clause)
 }
 
+fn a_choice_after_a_restore_plays_on(loader: &impl DialogLoader) -> Result<(), String> {
+    let clause = "choice after a restore";
+    let mut dialog = open(loader)?;
+    enter(dialog.as_mut(), "greet", clause)?;
+    expect_lines(dialog.as_mut(), &greet_lines(), clause)?;
+    let saved = dialog
+        .save()
+        .map_err(|e| format!("{clause}: saving failed: {e}"))?;
+
+    let mut fresh = open(loader)?;
+    fresh
+        .restore(&saved)
+        .map_err(|e| format!("{clause}: restoring failed: {e}"))?;
+    choose(fresh.as_mut(), 0, clause)?;
+    expect_lines(
+        fresh.as_mut(),
+        &[line("There's a run to Marrow.", &["outcome: accept"])],
+        clause,
+    )?;
+    expect_choices(fresh.as_ref(), &[], clause)?;
+    expect_variable(fresh.as_ref(), "coins", Some(&Value::Int(5)), clause)
+}
+
 fn set_all(dialog: &mut dyn Dialog, values: &[(&str, Value)], clause: &str) -> Result<(), String> {
     for (name, value) in values {
         dialog
@@ -475,6 +500,7 @@ mod tests {
         IgnoresRestores,
         KeepsChoicesOnEntering,
         ClearsChoicesOnAFailedEnter,
+        StallsAfterARestore,
     }
 
     struct FaultyLoader(Fault);
@@ -491,6 +517,7 @@ mod tests {
                 fault: self.0,
                 entered: false,
                 stale: Vec::new(),
+                restored: false,
             }))
         }
     }
@@ -500,6 +527,7 @@ mod tests {
         fault: Fault,
         entered: bool,
         stale: Vec<Choice>,
+        restored: bool,
     }
 
     impl Dialog for Faulty {
@@ -555,6 +583,12 @@ mod tests {
         }
 
         fn choose(&mut self, index: usize) -> Result<(), DialogError> {
+            if self.fault == Fault::StallsAfterARestore && self.restored {
+                // Accepts the choice, but plays nothing past it.
+                return self.inner.enter("ledger.open").map(|()| {
+                    self.stale.clear();
+                });
+            }
             match (self.fault, self.inner.choose(index)) {
                 (Fault::TakesAnyChoice, Err(_)) => Ok(()),
                 (_, result) => result,
@@ -586,6 +620,7 @@ mod tests {
             if self.fault == Fault::IgnoresRestores {
                 return Ok(());
             }
+            self.restored = true;
             self.inner.restore(saved)
         }
     }
@@ -684,6 +719,15 @@ mod tests {
             Fault::IgnoresRestores,
             a_save_before_entering_restores_to_nothing,
         );
+    }
+
+    #[test]
+    fn rejects_a_choice_that_stalls_after_a_restore() {
+        let error = fails(
+            Fault::StallsAfterARestore,
+            a_choice_after_a_restore_plays_on,
+        );
+        assert!(error.contains("choice after a restore: stepped"), "{error}");
     }
 
     #[test]
