@@ -414,9 +414,9 @@ impl SystemScene {
     }
 }
 
-/// Draws every stellar of `scene` where `camera` puts it, at the frame its
-/// animation shows, or a hypergate on the frame its session gave it
-/// ([`SystemScene::set_gate_frames`]), modulo its sheet's frames: each
+/// Draws every stellar of `scene` where `camera` puts it, on the frame its
+/// session reports ([`SystemScene::set_looks`]), modulo its sheet's
+/// frames, or, with no session, the frame its own animation shows: each
 /// sprite (or, without a sheet, its stand-in fitted to the landing reach,
 /// [`outline::draw_stellar`], or with none a placeholder box and the
 /// reason; and with a slot showing no frame, nothing), then every name
