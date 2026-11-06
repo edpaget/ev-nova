@@ -16,10 +16,11 @@ opentofu = "1.13.2"
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
 RDM_PROJECT = "ev-nova"
-# Build and test four mutants at once: a mutant's build is mostly one crate
-# and its links, which leaves most of the 18 cores idle at two. A flag passed
-# after `--` (`-j`) still wins.
-CARGO_MUTANTS_JOBS = "4"
+# Build and test two mutants at once. Each one is a full copy of the tree with
+# its own target directory; at four, a run wrote 34 GB in nine minutes while
+# other sessions built alongside it (.claude/rules/resource-limits.md). A flag
+# passed after `--` (`-j`) still wins.
+CARGO_MUTANTS_JOBS = "2"
 
 [tasks.fmt]
 description = "Check formatting"
@@ -117,7 +118,11 @@ run = "cargo run -q -p nova-bundle --locked --bin nova-appcast --"
 
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
-run = "cargo mutants --workspace"
+# The `mutants` nextest profile kills a runaway mutant's test after 20 s and
+# runs four tests at a time (.config/nextest.toml). The jobserver caps rustc
+# and test processes across both mutant jobs at 8 (default: one per core).
+env = { NEXTEST_PROFILE = "mutants" }
+run = "cargo mutants --workspace --jobserver-tasks 8"
 
 [tasks.ci]
 description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
