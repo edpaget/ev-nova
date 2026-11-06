@@ -5,7 +5,7 @@
 //! screen as [`Input::Surroundings`] whenever it changes.
 
 use nova_render::ImageSource;
-use nova_view::{Input, Screen, Surroundings};
+use nova_view::{Input, Screen};
 
 use super::{App, Control, DevOverlay};
 use crate::gamepad::Gamepads;
@@ -38,7 +38,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         }
         let mut inputs = Vec::new();
         self.pad_inputs.feed(&events, &mut inputs);
-        if changed.is_some() && self.tell_device() == Control::Exit {
+        if changed.is_some() && self.tell_surroundings() == Control::Exit {
             return Control::Exit;
         }
         if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
@@ -72,17 +72,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.pad_inputs.feed(&events, &mut Vec::new());
     }
 
-    /// Follows a keyboard or pointer `input` for the device used last, and
-    /// says whether it changed: the caller tells the screen
-    /// ([`App::tell_device`]) once the input itself is routed.
-    pub(super) fn note_device(&mut self, input: &Input) -> bool {
-        self.last_device.input(input).is_some()
-    }
-
-    /// Tells the screen the device used last.
-    pub(super) fn tell_device(&mut self) -> Control {
-        self.route(Input::Surroundings(Surroundings::of(
-            self.last_device.device(),
-        )))
+    /// Follows a keyboard or pointer `input` for the device used last: the
+    /// caller tells the screen ([`App::tell_surroundings`]) once the input
+    /// itself is routed.
+    pub(super) fn note_device(&mut self, input: &Input) {
+        self.last_device.input(input);
     }
 }

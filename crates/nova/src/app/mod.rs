@@ -168,7 +168,7 @@ use nova_view::touch::TouchRouter;
 use nova_view::view_shape::widened_size;
 use nova_view::{
     DrawList, FingerId, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode,
-    MouseButton, Point, Screen, ScreenAction, TouchPhase, ViewShape,
+    MouseButton, Point, Screen, ScreenAction, Surroundings, TouchPhase, ViewShape,
 };
 
 mod fullscreen;
@@ -178,6 +178,7 @@ mod loop_event;
 mod menu;
 mod pads;
 mod px_rect;
+mod safe_area;
 mod scaling;
 pub mod screen;
 mod touch;
@@ -448,6 +449,10 @@ pub struct App<S, C = AppScreen> {
     last_device: LastDevice,
     /// Where each finger goes ([`touch`]).
     touch: TouchRouter,
+    /// The window's safe area as last read ([`safe_area`]).
+    safe_px: PxRect,
+    /// The surroundings the screen was told last ([`safe_area`]).
+    told: Surroundings,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -485,6 +490,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             pad_inputs: PadInputs::new(),
             last_device: LastDevice::new(),
             touch: TouchRouter::default(),
+            safe_px: window.safe_area(),
+            told: Surroundings::default(),
         }
     }
 
@@ -895,9 +902,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// with [`Screen::cancel_pointer`] instead of a release.
     ///
     /// A key's press or any pointer event also tells the device used last
-    /// ([`LastDevice`]); a change reaches the screen as
-    /// [`Input::Surroundings`] after the event itself. A finger's start,
-    /// move or end tells it too, wherever the finger is.
+    /// ([`LastDevice`]). A finger's start, move or end tells it too,
+    /// wherever the finger is. After every event the screen is told the
+    /// surroundings ([`App::tell_surroundings`]) when they differ from what
+    /// it was told last: a device switch, a resize or a shape change
+    /// reaches it as [`Input::Surroundings`] after the event itself.
     ///
     /// Touches go through the touch router ([`touch`]), its primary finger
     /// as the mouse under these same rules; while a finger is down, the
@@ -915,11 +924,14 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 routing: Routing::Game,
             };
         }
-        let device_changed = device_input(&event).is_some_and(|used| self.note_device(&used));
+        if let Some(used) = device_input(&event) {
+            self.note_device(&used);
+        }
         let mut handled = self.dispatch_event(event, window, gpu);
-        // The screen hears of the device after the input that switched it.
-        if device_changed && handled.control != Control::Exit {
-            handled.control = self.tell_device();
+        // The screen hears of the device after the input that switched it,
+        // and of a resize or a shape change after the event that made it.
+        if handled.control != Control::Exit {
+            handled.control = self.tell_surroundings();
         }
         handled
     }
@@ -947,6 +959,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.fullscreen.resized(size_px);
                 self.screen.set_widened_size(widened_logical(size_px));
                 self.viewport = Viewport::for_shape(self.shape, size_px, scale_factor);
+                self.read_safe_area(window);
                 self.refit_shape();
                 game(Control::Continue)
             }
@@ -1112,6 +1125,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         if let Some(overlay) = &mut self.overlay {
             overlay.frame(elapsed);
         }
+        self.read_safe_area(window);
         if self.poll_gamepads() == Control::Exit {
             return Control::Exit;
         }
@@ -1127,6 +1141,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         // A tick can change the shape, as death's fade ends flight on the
         // main menu: this frame draws in the new one.
         self.refit_shape();
+        // A safe area read this redraw, or the shape's change, reaches the
+        // screen before the frame that shows it.
+        if self.tell_surroundings() == Control::Exit {
+            return Control::Exit;
+        }
         let resync = self.resync_pointer();
         // A dialog a keyed click opened shows its modes from its first
         // frame.
@@ -1453,6 +1472,8 @@ mod tests {
         size_requests: Vec<(u32, u32)>,
         modes: Vec<MonitorMode>,
         monitor: Option<String>,
+        /// The safe area it reports; the whole window when unset.
+        safe_area: Option<PxRect>,
     }
 
     impl FakeWindow {
@@ -1466,6 +1487,7 @@ mod tests {
                 size_requests: Vec::new(),
                 modes: Vec::new(),
                 monitor: None,
+                safe_area: None,
             }
         }
     }
@@ -1501,6 +1523,15 @@ mod tests {
 
         fn request_inner_size(&mut self, size_px: (u32, u32)) {
             self.size_requests.push(size_px);
+        }
+
+        fn safe_area(&self) -> PxRect {
+            self.safe_area.unwrap_or(PxRect {
+                x: 0,
+                y: 0,
+                width: self.size_px.0,
+                height: self.size_px.1,
+            })
         }
     }
 
@@ -1541,6 +1572,8 @@ mod tests {
         closes: usize,
         /// How many inputs had arrived at each draw.
         drawn_after: std::cell::RefCell<Vec<usize>>,
+        /// The surroundings it was told last at each draw.
+        drawn_told: std::cell::RefCell<Vec<Option<nova_view::Surroundings>>>,
         /// The shape it draws in.
         shape: ViewShape,
         /// Each widened size it was told, in order.
@@ -1579,6 +1612,9 @@ mod tests {
 
         fn draw(&self, list: &mut DrawList) {
             self.drawn_after.borrow_mut().push(self.inputs.len());
+            self.drawn_told
+                .borrow_mut()
+                .push(self.surroundings.last().copied());
             list.sprite(ImageKey::sprite(1, 0), Point::new(0.0, 0.0), Color::WHITE);
         }
 
@@ -1648,6 +1684,7 @@ mod tests {
     mod menu;
     mod pointer_outside;
     mod pointer_release;
+    mod safe_area;
     mod touch;
     mod updates;
     mod wheel;
