@@ -16,7 +16,15 @@
 //! receives, for core tests to assert on: each dialog's own
 //! ([`FakeDialog::log`]), and every dialog a loader opened, in one list
 //! ([`FakeLoader::log`]), for a test that hands the loader to the code
-//! under test and keeps only the loader.
+//! under test and keeps only the loader. The [`restore`](Dialog::restore)
+//! and [`set_variable`](Dialog::set_variable) calls go to a log of their
+//! own ([`FakeDialog::state_log`], [`FakeLoader::state_log`]), so a test
+//! that compares the first log exactly isn't broken by a caller that
+//! restores and sets variables as it plays.
+//!
+//! A knot's line can be conditional ([`FakeKnot::line_when`]): stepped
+//! only while a variable holds a value, as Ink's conditional text reads
+//! variables when it is stepped.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +40,7 @@ use super::{Choice, Dialog, DialogError, DialogLoader, Line, SavedDialog, Value}
 pub struct FakeLoader {
     stories: Vec<(String, FakeDialog)>,
     log: Log,
+    state_log: StateLog,
 }
 
 impl FakeLoader {
@@ -47,6 +56,14 @@ impl FakeLoader {
     #[must_use]
     pub fn log(&self) -> Vec<DialogCall> {
         self.log.borrow().clone()
+    }
+
+    /// The [`restore`](Dialog::restore) and
+    /// [`set_variable`](Dialog::set_variable) calls every dialog this
+    /// loader opened received, in order.
+    #[must_use]
+    pub fn state_log(&self) -> Vec<StateCall> {
+        self.state_log.borrow().clone()
     }
 
     /// The contract story ([`CONTRACT_JSON`]), scripted.
@@ -83,6 +100,7 @@ impl DialogLoader for FakeLoader {
             .map(|(_, dialog)| {
                 let mut dialog = dialog.clone();
                 dialog.log = Rc::clone(&self.log);
+                dialog.state_log = Rc::clone(&self.state_log);
                 Box::new(dialog) as Box<dyn Dialog>
             })
             .ok_or_else(|| DialogError::BadStory("the fake has no such story".to_owned()))
@@ -93,8 +111,25 @@ impl DialogLoader for FakeLoader {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FakeKnot {
     path: String,
-    lines: Vec<Line>,
+    lines: Vec<FakeLine>,
     choices: Vec<FakeChoice>,
+}
+
+/// A line of a [`FakeKnot`] or a [`FakeChoice`], stepped only while the
+/// variable it names, if any, holds the value given.
+#[derive(Clone, Debug, PartialEq)]
+struct FakeLine {
+    line: Line,
+    when: Option<(String, Value)>,
+}
+
+impl FakeLine {
+    fn always(text: &str, tags: &[&str]) -> Self {
+        Self {
+            line: line(text, tags),
+            when: None,
+        }
+    }
 }
 
 impl FakeKnot {
@@ -111,7 +146,18 @@ impl FakeKnot {
     /// Adds a line.
     #[must_use]
     pub fn line(mut self, text: &str, tags: &[&str]) -> Self {
-        self.lines.push(line(text, tags));
+        self.lines.push(FakeLine::always(text, tags));
+        self
+    }
+
+    /// Adds a line stepped only while the variable `name` holds `value`
+    /// as the line is reached, and skipped otherwise.
+    #[must_use]
+    pub fn line_when(mut self, name: &str, value: Value, text: &str, tags: &[&str]) -> Self {
+        self.lines.push(FakeLine {
+            line: line(text, tags),
+            when: Some((name.to_owned(), value)),
+        });
         self
     }
 
@@ -130,7 +176,7 @@ impl FakeKnot {
 pub struct FakeChoice {
     offer: Choice,
     once: bool,
-    lines: Vec<Line>,
+    lines: Vec<FakeLine>,
     sets: Vec<(String, Value)>,
     then: Option<String>,
 }
@@ -164,7 +210,7 @@ impl FakeChoice {
     /// Adds a line it steps once taken.
     #[must_use]
     pub fn line(mut self, text: &str, tags: &[&str]) -> Self {
-        self.lines.push(line(text, tags));
+        self.lines.push(FakeLine::always(text, tags));
         self
     }
 
@@ -196,6 +242,21 @@ pub enum DialogCall {
 /// The calls a dialog received, shared with the loader that opened it.
 type Log = Rc<RefCell<Vec<DialogCall>>>;
 
+/// A call a [`FakeDialog`] received that changes its state without
+/// playing it, logged apart from the [`DialogCall`]s.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StateCall {
+    /// [`Dialog::restore`], whether or not the save restored.
+    Restore,
+    /// [`Dialog::set_variable`], with the name and value, whether or not
+    /// the variable is declared.
+    Set(String, Value),
+}
+
+/// The state calls a dialog received, shared with the loader that opened
+/// it.
+type StateLog = Rc<RefCell<Vec<StateCall>>>;
+
 /// Where a [`FakeDialog`] is: in a knot's lines (then at its choices), or
 /// in a taken choice's lines (then at the end).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +274,7 @@ pub struct FakeDialog {
     spent: BTreeSet<(usize, usize)>,
     at: Option<At>,
     log: Log,
+    state_log: StateLog,
 }
 
 impl FakeDialog {
@@ -235,6 +297,22 @@ impl FakeDialog {
     #[must_use]
     pub fn log(&self) -> Vec<DialogCall> {
         self.log.borrow().clone()
+    }
+
+    /// The [`restore`](Dialog::restore) and
+    /// [`set_variable`](Dialog::set_variable) calls received, in order,
+    /// whether or not they succeeded.
+    #[must_use]
+    pub fn state_log(&self) -> Vec<StateCall> {
+        self.state_log.borrow().clone()
+    }
+
+    /// Whether `line` is stepped now: it names no variable, or the one it
+    /// names holds its value.
+    fn holds(&self, line: &FakeLine) -> bool {
+        line.when
+            .as_ref()
+            .is_none_or(|(name, value)| self.variables.get(name) == Some(value))
     }
 
     /// The choices of the knot the dialog waits at, each with its index
@@ -380,7 +458,10 @@ impl Dialog for FakeDialog {
             };
             if let Some(line) = lines.get(at.next) {
                 at.next += 1;
-                return Ok(Some(line.clone()));
+                if self.holds(line) {
+                    return Ok(Some(line.line.clone()));
+                }
+                continue;
             }
             let Some(then) = then else {
                 return Ok(None);
@@ -433,6 +514,9 @@ impl Dialog for FakeDialog {
     }
 
     fn set_variable(&mut self, name: &str, value: Value) -> Result<(), DialogError> {
+        self.state_log
+            .borrow_mut()
+            .push(StateCall::Set(name.to_owned(), value.clone()));
         let slot = self
             .variables
             .get_mut(name)
@@ -446,6 +530,7 @@ impl Dialog for FakeDialog {
     }
 
     fn restore(&mut self, saved: &SavedDialog) -> Result<(), DialogError> {
+        self.state_log.borrow_mut().push(StateCall::Restore);
         let state = self
             .decode(&saved.0)
             .ok_or_else(|| DialogError::BadSave("not a state the fake saved".to_owned()))?;
@@ -578,5 +663,65 @@ mod tests {
                 DialogCall::Choose(1),
             ]
         );
+    }
+
+    #[test]
+    fn a_conditional_line_steps_only_while_its_variable_holds_its_value() {
+        let mut dialog = FakeDialog::default()
+            .declare("met", Value::Bool(false))
+            .knot(
+                FakeKnot::new("k")
+                    .line_when("met", Value::Bool(true), "Again.", &["t"])
+                    .line_when("met", Value::Bool(false), "Hello.", &[])
+                    .line("Well?", &[]),
+            );
+        dialog.enter("k").unwrap();
+        assert_eq!(dialog.step(), Ok(Some(line("Hello.", &[]))));
+        assert_eq!(dialog.step(), Ok(Some(line("Well?", &[]))));
+        assert_eq!(dialog.step(), Ok(None));
+
+        dialog.set_variable("met", Value::Bool(true)).unwrap();
+        dialog.enter("k").unwrap();
+        assert_eq!(dialog.step(), Ok(Some(line("Again.", &["t"]))));
+        assert_eq!(dialog.step(), Ok(Some(line("Well?", &[]))));
+        assert_eq!(dialog.step(), Ok(None));
+    }
+
+    #[test]
+    fn a_conditional_line_on_an_undeclared_variable_is_skipped() {
+        let mut dialog = FakeDialog::default().knot(
+            FakeKnot::new("k")
+                .line_when("nope", Value::Bool(false), "Never.", &[])
+                .line("Well?", &[]),
+        );
+        dialog.enter("k").unwrap();
+        assert_eq!(dialog.step(), Ok(Some(line("Well?", &[]))));
+    }
+
+    #[test]
+    fn restores_and_sets_go_to_the_state_log_not_the_log() {
+        let loader = FakeLoader::meeting_the_contract();
+        let mut dialog = loader.open(CONTRACT_JSON).unwrap();
+        let saved = dialog.save().unwrap();
+        dialog.enter("greet").unwrap();
+        dialog.restore(&saved).unwrap();
+        dialog.set_variable("met", Value::Bool(true)).unwrap();
+        dialog.set_variable("nope", Value::Int(1)).unwrap_err();
+        dialog.restore(&SavedDialog("junk".to_owned())).unwrap_err();
+        assert_eq!(loader.log(), [DialogCall::Enter("greet".to_owned())]);
+        let expected = [
+            StateCall::Restore,
+            StateCall::Set("met".to_owned(), Value::Bool(true)),
+            StateCall::Set("nope".to_owned(), Value::Int(1)),
+            StateCall::Restore,
+        ];
+        assert_eq!(loader.state_log(), expected);
+        let mut own = FakeDialog::default().declare("met", Value::Bool(false));
+        own.set_variable("met", Value::Bool(true)).unwrap();
+        assert_eq!(
+            own.state_log(),
+            [StateCall::Set("met".to_owned(), Value::Bool(true))]
+        );
+        assert_eq!(own.log(), []);
     }
 }

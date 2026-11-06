@@ -13,16 +13,22 @@
 //! shares a live story. A session with no loader shows the conversation
 //! as one that can't open.
 //!
-//! Leaving and landing again opens the conversation afresh from its knot:
-//! nothing of it is saved (engine-story phase 3 keeps the story's state).
+//! The story's state is the pilot's: each page that steps cleanly keeps
+//! its save under the stellar's Ink file in [`Pilot::dialogs`], and
+//! opening restores it and sets the story's boolean variables from
+//! [`Pilot::flags`] before entering the knot (see
+//! [`conversation`](crate::dialog::conversation)). Leaving and landing
+//! again opens the conversation at its knot once more, but with the file's
+//! read counts and spent choices kept, and they go into the pilot's save.
 //! The stock game names no conversations, so nothing here runs for it.
 
 use std::fmt;
 use std::rc::Rc;
 
 use crate::catalog::StellarId;
-use crate::dialog::conversation::{Conversation, ConversationPage};
+use crate::dialog::conversation::{Conversation, ConversationPage, DialogFile};
 use crate::dialog::{Dialog, DialogError, DialogLoader};
+use crate::pilot::Pilot;
 
 use super::{Port, Session, Setup, Statics};
 
@@ -70,17 +76,29 @@ impl Setup {
 
 impl Port {
     /// Opens the conversation of `landed`, the stellar the ship is landed
-    /// at, from its knot, replacing any open one: its first page, or
-    /// `None` in flight or where the stellar names none.
+    /// at, from its knot, replacing any open one, with `pilot`'s state of
+    /// its file and its flags: its first page, or `None` in flight or
+    /// where the stellar names none.
     pub(super) fn open_conversation(
         &mut self,
         statics: &Statics,
         setup: &Setup,
+        pilot: &mut Pilot,
         landed: Option<StellarId>,
     ) -> Option<ConversationPage> {
         let stellar = landed?;
         let at = statics.stellar_dialogs.place(stellar)?;
-        let conversation = Conversation::open(setup.dialog_loader(), at.compiled, at.knot);
+        let story = DialogFile {
+            file: at.file,
+            compiled: at.compiled,
+        };
+        let conversation = Conversation::open(
+            setup.dialog_loader(),
+            story,
+            at.knot,
+            &mut pilot.dialogs,
+            &pilot.flags,
+        );
         let page = conversation.page().clone();
         self.conversation = Some(OpenConversation {
             stellar,
@@ -89,13 +107,15 @@ impl Port {
         Some(page)
     }
 
-    /// Takes the choice at `index` on the open conversation's page: the
-    /// next page, or `None` with none open at `landed`, on an ended page,
-    /// or past its choices, which changes nothing.
+    /// Takes the choice at `index` on the open conversation's page,
+    /// keeping the new page's state in `pilot`: the next page, or `None`
+    /// with none open at `landed`, on an ended page, or past its choices,
+    /// which changes nothing.
     pub(super) fn choose_in_conversation(
         &mut self,
         statics: &Statics,
         setup: &Setup,
+        pilot: &mut Pilot,
         landed: Option<StellarId>,
         index: usize,
     ) -> Option<ConversationPage> {
@@ -103,9 +123,13 @@ impl Port {
             .conversation
             .as_mut()
             .filter(|open| Some(open.stellar) == landed)?;
-        let compiled = statics.stellar_dialogs.place(open.stellar)?.compiled;
+        let at = statics.stellar_dialogs.place(open.stellar)?;
+        let story = DialogFile {
+            file: at.file,
+            compiled: at.compiled,
+        };
         open.conversation
-            .choose(setup.dialog_loader(), compiled, index)
+            .choose(setup.dialog_loader(), story, &mut pilot.dialogs, index)
             .ok()?;
         Some(open.conversation.page().clone())
     }

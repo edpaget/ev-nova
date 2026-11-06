@@ -12,24 +12,29 @@ impl Session {
     /// Runs `converse` on the landed stellar's conversation, and answers
     /// it:
     ///
-    /// - [`Converse::Open`] opens it afresh: [`Answer::Conversation`] with
-    ///   its first page, or [`Answer::Refused`] in flight or where the
-    ///   stellar names none.
-    /// - [`Converse::Choose`] takes a choice: [`Answer::Conversation`] with
-    ///   the next page, or [`Answer::Refused`] with none open, on an ended
+    /// - [`Converse::Open`] opens it at its knot, with the pilot's state of
+    ///   its Ink file and its flags: [`Answer::Conversation`] with its
+    ///   first page, or [`Answer::Refused`] in flight or where the stellar
+    ///   names none.
+    /// - [`Converse::Choose`] takes a choice, keeping the story's state in
+    ///   the pilot: [`Answer::Conversation`] with the next page, or [`Answer::Refused`] with none open, on an ended
     ///   page or past its choices.
     /// - [`Converse::Close`] closes it: [`Answer::Done`], or
     ///   [`Answer::Refused`] with none open.
     pub(super) fn apply_conversation(&mut self, converse: Converse) -> Answer {
         let landed = self.mode.landed();
         let page = match converse {
-            Converse::Open => self
-                .port
-                .open_conversation(&self.statics, &self.setup, landed),
-            Converse::Choose(index) => {
+            Converse::Open => {
                 self.port
-                    .choose_in_conversation(&self.statics, &self.setup, landed, index)
+                    .open_conversation(&self.statics, &self.setup, &mut self.pilot, landed)
             }
+            Converse::Choose(index) => self.port.choose_in_conversation(
+                &self.statics,
+                &self.setup,
+                &mut self.pilot,
+                landed,
+                index,
+            ),
             Converse::Close => return done_if(self.port.close_conversation()),
         };
         page.map_or(Answer::Refused, Answer::Conversation)
@@ -44,6 +49,7 @@ mod tests {
     use super::*;
     use crate::catalog::StellarId;
     use crate::chance::NeverFires;
+    use crate::dialog::Value;
     use crate::dialog::conversation::ConversationPage;
     use crate::dialog::fake::{DialogCall, FakeChoice, FakeDialog, FakeKnot, FakeLoader};
     use crate::flight_frame::FlightCommand;
@@ -51,11 +57,15 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, catalog, land_now};
 
     const STORY: &str = "dock story";
+    const FILE: &str = "dialog/offer.ink";
 
     /// An offer at planet 128: a line and two choices, `Ask` leading on to
     /// another page and `Leave` ending it.
+    /// Its first line, `You again.`, shows only while its flag `regular`
+    /// is set.
     fn loader() -> FakeLoader {
         let offer = FakeKnot::new("offer")
+            .line_when("regular", Value::Bool(true), "You again.", &[])
             .line("A job?", &[])
             .choice(
                 FakeChoice::sticky("Ask", &[])
@@ -66,7 +76,11 @@ mod tests {
         let route = FakeKnot::new("route")
             .line("Either will do.", &[])
             .choice(FakeChoice::sticky("Take it", &[]).line("Go.", &[]));
-        FakeLoader::default().story(STORY, FakeDialog::default().knot(offer).knot(route))
+        let dialog = FakeDialog::default()
+            .declare("regular", Value::Bool(false))
+            .knot(offer)
+            .knot(route);
+        FakeLoader::default().story(STORY, dialog)
     }
 
     /// [`catalog`] with planet 128, where the ship starts, naming the
@@ -75,7 +89,7 @@ mod tests {
         FakePilotCatalog {
             stellar_dialogs: nova_sim_catalog::dialogs::StellarDialogs::default().with(
                 StellarId(128),
-                "dialog/offer.ink",
+                FILE,
                 Arc::from(STORY),
                 "offer",
             ),
@@ -248,5 +262,63 @@ mod tests {
             .with_dialog_loader(Rc::new(loader()));
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert_eq!(converse(&mut session, Converse::Open), Answer::Refused);
+    }
+
+    // The story's state and the flags, in the pilot.
+
+    #[test]
+    fn a_choice_keeps_the_story_s_state_in_the_pilot_under_its_file() {
+        let mut session = landed(&loader());
+        assert_eq!(session.pilot().dialogs.get(FILE), None);
+        converse(&mut session, Converse::Open);
+        let opened = session.pilot().dialogs.get(FILE).cloned();
+        assert!(opened.is_some(), "the first page is kept");
+        converse(&mut session, Converse::Choose(0));
+        let chosen = session.pilot().dialogs.get(FILE).cloned();
+        assert!(chosen.is_some());
+        assert_ne!(chosen, opened, "the chosen page is kept");
+        assert_eq!(session.pilot().dialogs.iter().count(), 1);
+    }
+
+    #[test]
+    fn a_flag_set_in_the_pilot_shows_in_the_page() {
+        let mut session = landed(&loader());
+        assert_eq!(
+            converse(&mut session, Converse::Open),
+            page(&["A job?"], &["Ask", "Leave"], false)
+        );
+        session.pilot.flags.set("regular");
+        assert_eq!(
+            converse(&mut session, Converse::Open),
+            page(&["You again.", "A job?"], &["Ask", "Leave"], false)
+        );
+    }
+
+    /// An offer whose `Ask` is once-only.
+    fn once_loader() -> FakeLoader {
+        let offer = FakeKnot::new("offer")
+            .line("A job?", &[])
+            .choice(FakeChoice::once("Ask", &[]).line("Two gates.", &[]))
+            .choice(FakeChoice::sticky("Leave", &[]).line("Bye.", &[]));
+        FakeLoader::default().story(STORY, FakeDialog::default().knot(offer))
+    }
+
+    #[test]
+    fn a_spent_choice_is_still_spent_after_a_save_and_load() {
+        let loader = once_loader();
+        let mut session = landed(&loader);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        converse(&mut session, Converse::Close);
+
+        let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        let mut resumed = Session::fly(&talking(), pilot)
+            .expect("flies")
+            .with_dialog_loader(Rc::new(loader.clone()));
+        let landed_again = land_now(&mut resumed).map(|_| converse(&mut resumed, Converse::Open));
+
+        let again = converse(&mut session, Converse::Open);
+        assert_eq!(again, page(&["A job?"], &["Leave"], false));
+        assert_eq!(landed_again, Ok(again));
     }
 }
