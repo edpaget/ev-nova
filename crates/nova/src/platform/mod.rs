@@ -6,6 +6,20 @@
 //! forward to the app. A key press that types a character becomes two
 //! events: the key ([`key_event`]), then its text ([`text_event`]).
 //!
+//! winit 0.31 sends the mouse, touches and pens as one set of pointer
+//! events. [`translate`] keeps the mouse's as they were under 0.30's
+//! `CursorMoved`, `CursorLeft` and `MouseInput`: a move, and the enter
+//! (0.31 sends no move after it), are [`WindowEvent::PointerMoved`], a
+//! leave [`WindowEvent::PointerLeft`], and a button
+//! [`WindowEvent::PointerButton`] ([`map_button`]; X11's and Wayland's
+//! extra buttons arrive as winit's `ButtonSource::Unknown`, and are
+//! `MouseButton::Other`). A pointer of unknown kind is the mouse: winit
+//! counts it as primary, and on Windows it is a real pointing device. The
+//! click that activates a window on macOS is a click, as 0.30 delivered
+//! it. Touches and pens are dropped until the touch phase (key-bindings
+//! phase 14) routes them; 0.30 delivered a pen on Windows as a touch, and
+//! dropped it too.
+//!
 //! The system can make the window fullscreen, or a window again, without
 //! the app asking, and winit sends no event for it. So [`window_events`]
 //! reports the window's state, [`WindowEvent::FullscreenChanged`], ahead
@@ -77,18 +91,18 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         // did: the game learns where it is from the enter.
         WinitEvent::PointerMoved {
             position,
-            source: PointerSource::Mouse,
+            source: PointerSource::Mouse | PointerSource::Unknown,
             ..
         }
         | WinitEvent::PointerEntered {
             position,
-            kind: PointerKind::Mouse,
+            kind: PointerKind::Mouse | PointerKind::Unknown,
             ..
         } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
         WinitEvent::PointerLeft {
-            kind: PointerKind::Mouse,
+            kind: PointerKind::Mouse | PointerKind::Unknown,
             ..
         } => WindowEvent::PointerLeft,
         WinitEvent::PointerButton {
@@ -97,6 +111,15 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             ..
         } => WindowEvent::PointerButton {
             button: map_button(*button),
+            pressed: state.is_pressed(),
+        },
+        // X11 and Wayland send the mouse's extra buttons this way.
+        WinitEvent::PointerButton {
+            state,
+            button: ButtonSource::Unknown(_),
+            ..
+        } => WindowEvent::PointerButton {
+            button: MouseButton::Other,
             pressed: state.is_pressed(),
         },
         WinitEvent::MouseWheel { delta, .. } => WindowEvent::Scroll {
@@ -325,7 +348,10 @@ mod tests {
     use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use winit::event::{MouseButton as WinitButton, ScrollSource, TouchPhase};
+    use winit::event::{
+        FingerId, MouseButton as WinitButton, ScrollSource, TabletToolButton, TabletToolData,
+        TabletToolKind, TouchPhase,
+    };
 
     use super::*;
 
@@ -1137,6 +1163,60 @@ mod tests {
         assert_eq!(map_button(WinitButton::Button8), MouseButton::Other);
     }
 
+    /// winit's key event for `code` going down or up, typing `text`.
+    fn raw_key(code: KeyCode, state: ElementState, repeat: bool, text: Option<&str>) -> WinitEvent {
+        let text = text.map(winit::keyboard::SmolStr::new);
+        WinitEvent::KeyboardInput {
+            device_id: None,
+            event: winit::event::KeyEvent {
+                physical_key: PhysicalKey::Code(code),
+                logical_key: winit::keyboard::Key::Character("q".into()),
+                text: text.clone(),
+                location: winit::keyboard::KeyLocation::Standard,
+                state,
+                repeat,
+                text_with_all_modifiers: text,
+                key_without_modifiers: winit::keyboard::Key::Character("q".into()),
+            },
+            is_synthetic: false,
+        }
+    }
+
+    #[test]
+    fn a_key_from_winit_is_its_physical_key_state_and_repeat() {
+        let cases = [
+            (ElementState::Pressed, false),
+            (ElementState::Pressed, true),
+            (ElementState::Released, false),
+        ];
+        for (state, repeat) in cases {
+            assert_eq!(
+                translate(&raw_key(KeyCode::KeyA, state, repeat, Some("q")), &WINDOWED),
+                Some(WindowEvent::Key {
+                    key: Key::KeyA,
+                    pressed: state.is_pressed(),
+                    repeat
+                }),
+                "{state:?} {repeat}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scale_change_is_a_resize_to_the_window_s_size_at_the_new_scale() {
+        let raw = WinitEvent::ScaleFactorChanged {
+            scale_factor: 1.5,
+            surface_size_writer: winit::event::SurfaceSizeWriter::new(std::sync::Weak::new()),
+        };
+        assert_eq!(
+            translate(&raw, &WINDOWED),
+            Some(WindowEvent::Resized {
+                size_px: (800, 600),
+                scale_factor: 1.5
+            })
+        );
+    }
+
     #[test]
     fn a_resize_carries_the_windows_scale_factor() {
         let event = WinitEvent::SurfaceResized(PhysicalSize::new(1280, 960));
@@ -1318,6 +1398,175 @@ mod tests {
                 },
             ]
         );
+    }
+
+    // Pointers that aren't the mouse: of unknown kind, a finger and a pen.
+
+    /// A pointer of `source` moving to `(x, y)`.
+    fn source_moved(source: PointerSource, x: f64, y: f64) -> WinitEvent {
+        WinitEvent::PointerMoved {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            source,
+        }
+    }
+
+    /// A pointer of `kind` coming in at `(x, y)`.
+    fn kind_entered(kind: PointerKind, x: f64, y: f64) -> WinitEvent {
+        WinitEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            kind,
+        }
+    }
+
+    /// A pointer of `kind` leaving.
+    fn kind_left(kind: PointerKind) -> WinitEvent {
+        WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary: true,
+            kind,
+        }
+    }
+
+    /// `button` going down or up.
+    fn source_button(button: ButtonSource, state: ElementState) -> WinitEvent {
+        WinitEvent::PointerButton {
+            device_id: None,
+            state,
+            position: PhysicalPosition::new(1.0, 2.0),
+            primary: true,
+            button,
+            is_macos_activation_click: false,
+        }
+    }
+
+    #[test]
+    fn a_pointer_of_unknown_kind_is_the_mouse() {
+        let raw = [
+            kind_entered(PointerKind::Unknown, 3.0, 4.0),
+            source_moved(PointerSource::Unknown, 5.0, 6.5),
+            source_button(ButtonSource::Unknown(7), ElementState::Pressed),
+            source_button(ButtonSource::Unknown(7), ElementState::Released),
+            kind_left(PointerKind::Unknown),
+        ];
+        let events: Vec<WindowEvent> = raw
+            .iter()
+            .filter_map(|event| translate(event, &WINDOWED))
+            .collect();
+        assert_eq!(
+            events,
+            [
+                WindowEvent::PointerMoved { px: (3.0, 4.0) },
+                WindowEvent::PointerMoved { px: (5.0, 6.5) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: false
+                },
+                WindowEvent::PointerLeft,
+            ]
+        );
+    }
+
+    #[test]
+    fn touches_are_not_translated() {
+        let finger = FingerId::from_raw(1);
+        let touch = || ButtonSource::Touch {
+            finger_id: finger,
+            force: None,
+        };
+        for raw in [
+            kind_entered(PointerKind::Touch(finger), 3.0, 4.0),
+            source_moved(
+                PointerSource::Touch {
+                    finger_id: finger,
+                    force: None,
+                },
+                5.0,
+                6.0,
+            ),
+            source_button(touch(), ElementState::Pressed),
+            source_button(touch(), ElementState::Released),
+            kind_left(PointerKind::Touch(finger)),
+        ] {
+            assert_eq!(translate(&raw, &WINDOWED), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn pens_are_not_translated() {
+        let pen = TabletToolKind::Pen;
+        for raw in [
+            kind_entered(PointerKind::TabletTool(pen), 3.0, 4.0),
+            source_moved(
+                PointerSource::TabletTool {
+                    kind: pen,
+                    data: TabletToolData::default(),
+                },
+                5.0,
+                6.0,
+            ),
+            source_button(
+                ButtonSource::TabletTool {
+                    kind: pen,
+                    button: TabletToolButton::Contact,
+                    data: TabletToolData::default(),
+                },
+                ElementState::Pressed,
+            ),
+            kind_left(PointerKind::TabletTool(pen)),
+        ] {
+            assert_eq!(translate(&raw, &WINDOWED), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_click_that_activates_the_window_is_a_click() {
+        let activating = WinitEvent::PointerButton {
+            device_id: None,
+            state: ElementState::Pressed,
+            position: PhysicalPosition::new(10.0, 10.0),
+            primary: true,
+            button: ButtonSource::Mouse(WinitButton::Left),
+            is_macos_activation_click: true,
+        };
+        assert_eq!(
+            translate(&activating, &WINDOWED),
+            Some(WindowEvent::PointerButton {
+                button: MouseButton::Left,
+                pressed: true
+            })
+        );
+    }
+
+    #[test]
+    fn a_mouse_wheel_s_source_does_not_matter() {
+        for source in [
+            ScrollSource::Unknown,
+            ScrollSource::Wheel,
+            ScrollSource::Finger,
+        ] {
+            let raw = WinitEvent::MouseWheel {
+                device_id: None,
+                delta: MouseScrollDelta::LineDelta(0.0, 1.0),
+                phase: TouchPhase::Moved,
+                source,
+            };
+            assert_eq!(
+                translate(&raw, &WINDOWED),
+                Some(WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(-1.0)
+                }),
+                "{source:?}"
+            );
+        }
     }
 
     fn wheel(delta: MouseScrollDelta) -> WinitEvent {
