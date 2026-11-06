@@ -489,6 +489,37 @@ mod tests {
         assert_eq!(callees.indirect, 0);
     }
 
+    #[test]
+    fn a_call_to_its_own_start_is_recursion() {
+        let index = build(
+            "/x:\n\
+             _rec:\n\
+             00001000\tpushl\t%ebp\n\
+             00001001\tcalll\t0x1000\n\
+             00001006\tret\n",
+            "",
+        );
+        let callees = index.callees(index.function_named("_rec").unwrap());
+        assert_eq!(
+            callees.named,
+            [Callee {
+                name: "_rec".into(),
+                calls: 1,
+                tail: 0
+            }]
+        );
+        assert_eq!(
+            index.callers("_rec"),
+            [Caller {
+                name: "_rec".into(),
+                sites: vec![Site {
+                    addr: 0x1001,
+                    tail: false
+                }]
+            }]
+        );
+    }
+
     fn range(f: &Function) -> (&str, u32, u32) {
         (f.name.as_str(), f.start, f.end)
     }
