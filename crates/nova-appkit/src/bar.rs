@@ -108,7 +108,8 @@ impl MenuBar {
     /// It turns off automatic window tabbing first, so `AppKit` adds no tab
     /// items to View, and sets the Window and Services menus as `AppKit`'s.
     /// It needs the main thread, after `NSApplication` has finished
-    /// launching (winit's `resumed`); off it, it builds nothing.
+    /// launching (winit's `can_create_surfaces`); off it, it builds
+    /// nothing.
     ///
     /// `on_command` runs inside `AppKit`'s menu handling: it should only
     /// pass the command on (to an event loop proxy, say), never run the

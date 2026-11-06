@@ -742,7 +742,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// the screen keeps it open, to quit later if it asks to, or at once
     /// if the feed after the close asks ([`Screen::take_quit`]). A screen
     /// asking to quit exits. On Windows Alt+F4 arrives as that same close:
-    /// winit 0.30 passes `WM_SYSKEYDOWN` with `VK_F4` to `DefWindowProc`,
+    /// winit (winit-win32 since 0.31) passes `WM_SYSKEYDOWN` with `VK_F4`
+    /// to `DefWindowProc`,
     /// which turns it into `SC_CLOSE` and `WM_CLOSE`, which winit sends as
     /// `CloseRequested`; the keys themselves quit nothing.
     ///

@@ -9,9 +9,9 @@ publish.workspace = true
 
 # Every dependency is macOS-only: on any other target the crate is empty.
 [target.'cfg(target_os = "macos")'.dependencies]
-# objc2 0.6, the version wgpu-hal and nova-metalfx lock, not winit 0.30's
-# 0.5: nothing crosses between the two, as this crate takes
-# NSApplication from `sharedApplication` itself.
+# objc2 0.6, the version wgpu-hal, nova-metalfx and winit 0.31's AppKit
+# backend (winit-appkit) lock. Nothing crosses between this crate and
+# winit, as it takes NSApplication from `sharedApplication` itself.
 objc2 = "0.6"
 # NSBundle and NSError load Sparkle.framework at run time (`updater`).
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSBundle", "NSError", "NSObject", "NSString"] }

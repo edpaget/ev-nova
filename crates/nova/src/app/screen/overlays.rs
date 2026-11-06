@@ -237,7 +237,7 @@ impl AppScreen {
     /// @0x463c3); ours toggles on each press the platform reports, an
     /// accepted difference. It drifts from the lock when Caps Lock is
     /// pressed while the window is not focused, or is already on at
-    /// launch. On macOS winit 0.30.13 reports no Caps Lock key at all, so
+    /// launch. On macOS winit 0.31.0-beta.4 reports no Caps Lock key at all, so
     /// there double time never comes on.
     pub(super) fn double_time_key(&mut self, input: &Input) {
         if super::routing::is_press(input)
