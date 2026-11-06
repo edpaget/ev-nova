@@ -263,7 +263,7 @@ mod tests {
     use std::path::Path;
 
     use nova_galaxy_format::fixture;
-    use nova_galaxy_format::source::MemSource;
+    use nova_galaxy_format::source::{MemSource, SourceFile};
 
     use super::fixture::{DOCK_JOB_JSON, FakeCheck, check_contract};
     use super::*;
@@ -391,6 +391,28 @@ mod tests {
         );
         assert!(!message.contains("inklecate"), "{message}");
         assert_eq!(game.data.dialogs(), &Dialogs::default());
+    }
+
+    #[test]
+    fn a_folder_that_lists_is_trusted_and_no_ref_is_read_behind_it() {
+        /// The galaxy, whose `dialog/` lists nothing but whose `bytes` would
+        /// serve the yard's compiled file.
+        struct Unlisted(MemSource);
+        impl Source for Unlisted {
+            fn files(&self, dir: &str, ext: &str) -> std::io::Result<Vec<SourceFile>> {
+                if dir == "dialog" {
+                    return Ok(Vec::new());
+                }
+                self.0.files(dir, ext)
+            }
+            fn bytes(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+                self.0.bytes(path)
+            }
+        }
+        let game = load(&Unlisted(with_yard_dialog()), Path::new("sample"));
+        assert_eq!(game.data.dialogs(), &Dialogs::default());
+        assert_eq!(game.problems.len(), 1, "{:?}", game.problems);
+        assert!(game.problems[0].message.contains("no dialog/yard.ink.json"));
     }
 
     #[test]
