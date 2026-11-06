@@ -87,9 +87,12 @@ pub const MODULE: &str = "nova";
 ///   usable speed.
 /// - `--device=dri`: the GPU, for wgpu (Vulkan or GL).
 /// - `--device=input`: `/dev/input`, where gilrs finds the gamepads (by
-///   inotify there, as the sandbox has no udev). Flatpak 1.15.6 added it;
-///   an older flatpak skips the device name it doesn't know as it loads
-///   the metadata, so the game runs there without gamepads. Not
+///   inotify there, as the sandbox has no udev). Flatpak 1.15.6 added it,
+///   so building needs flatpak 1.15.6 or newer: an older `flatpak
+///   build-finish` refuses the option ("Unknown device type input").
+///   Installing and running don't: an older flatpak skips a device name
+///   it doesn't know as it loads the metadata (`flatpak_context_load_metadata`
+///   in 1.14), so the game runs there without gamepads. Not
 ///   `--device=all`, which grants every device.
 /// - `--socket=pulseaudio`: sound. The runtime's ALSA sends the default
 ///   device to the pulse plugin, so kira/cpal's ALSA output reaches the

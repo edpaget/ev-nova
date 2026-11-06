@@ -124,7 +124,8 @@ instead. It plays sound through your system's ALSA, which PipeWire or
 PulseAudio serves on current desktops, and finds gamepads through your
 system's libudev. The Flatpak brings its own runtime, so any
 distribution with Flatpak runs it, and keeps its own settings and pilots
-(see below); it sees gamepads with Flatpak 1.15.6 or newer.
+(see below); it sees gamepads with Flatpak 1.15.6 or newer, and runs
+without them on an older Flatpak.
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
 LICENSE, the two font licences and a share/ folder:
