@@ -37,6 +37,17 @@ impl EntryHost for NewPilotDialog {
         }
     }
 
+    /// Empties the focused field; emptying the name clears a refusal,
+    /// as any change of it does.
+    fn clear_entry_field(&mut self) {
+        if let (Focus::Nickname, Some(field)) = (self.focus, &mut self.nickname) {
+            field.clear();
+        } else {
+            self.field.clear();
+            self.refusal = None;
+        }
+    }
+
     fn dialog_bounds(&self) -> Bounds {
         self.dialog.bounds()
     }
@@ -192,6 +203,86 @@ mod tests {
         );
         assert!(!keyboard_drawn(&dialog), "Done lowers it");
         assert_eq!(dialog.take_outcome(), Some(created("Zoe", "Zo")));
+    }
+
+    /// Types a name over the limit and presses Return: OK refuses it,
+    /// its first characters selected.
+    fn refuse_a_long_name(dialog: &mut NewPilotDialog) {
+        for _ in 0..30 {
+            dialog.input(&Input::Text('x'));
+        }
+        for pressed in [true, false] {
+            dialog.input(&Input::Key {
+                key: Key::Enter,
+                pressed,
+                repeat: false,
+            });
+        }
+        assert_eq!(dialog.take_outcome(), None, "refused");
+        assert!(dialog.field.selected(), "its first characters selected");
+    }
+
+    /// Clear empties the field even after OK refused a name and selected
+    /// its first characters, by a tap and by the pad.
+    #[test]
+    fn clear_empties_a_refused_name() {
+        let mut tapped = dialog();
+        tapped.input(&touch(false));
+        refuse_a_long_name(&mut tapped);
+        let at = tapped
+            .keyboard()
+            .layout(tapped.dialog_bounds())
+            .key(KeyId::Clear)
+            .expect("Clear")
+            .center();
+        crate::touch::testkit::tap(&mut tapped, at);
+        assert_eq!(tapped.name(), "", "by a tap");
+        let mut padded = dialog();
+        padded.input(&told(PAD));
+        refuse_a_long_name(&mut padded);
+        for _ in 0..8 {
+            if padded.dialog().pad_highlight() == Some(NAME_ITEM) {
+                break;
+            }
+            tap(&mut padded, PadButton::LeftShoulder);
+        }
+        tap(&mut padded, PadButton::South);
+        pad_types(&mut padded, &[KeyId::Clear]);
+        assert_eq!(padded.name(), "", "by the pad");
+    }
+
+    /// Clear empties only the focused field, and emptying the name
+    /// clears a refusal as typing does.
+    #[test]
+    fn clear_empties_the_focused_field_and_ends_a_refusal_of_the_name() {
+        let mut dialog = dialog();
+        dialog.input(&touch(false));
+        let clear = |dialog: &mut NewPilotDialog| {
+            let at = dialog
+                .keyboard()
+                .layout(dialog.dialog_bounds())
+                .key(KeyId::Clear)
+                .expect("Clear")
+                .center();
+            crate::touch::testkit::tap(dialog, at);
+        };
+        dialog.refuse("taken");
+        dialog.input(&Input::Key {
+            key: Key::Tab,
+            pressed: true,
+            repeat: false,
+        });
+        clear(&mut dialog);
+        assert_eq!((dialog.name(), dialog.nickname()), ("Ada Lovelace", ""));
+        assert_eq!(dialog.refusal(), Some("taken"), "the nickname's emptied");
+        dialog.input(&Input::Key {
+            key: Key::Tab,
+            pressed: true,
+            repeat: false,
+        });
+        clear(&mut dialog);
+        assert_eq!(dialog.name(), "");
+        assert_eq!(dialog.refusal(), None);
     }
 
     #[test]

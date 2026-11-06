@@ -283,6 +283,10 @@ impl<P: Confirm> EntryHost for EditDialog<P> {
         Some(&self.field)
     }
 
+    fn clear_entry_field(&mut self) {
+        self.field.clear();
+    }
+
     fn dialog_bounds(&self) -> Bounds {
         self.dialog.bounds()
     }

@@ -29,7 +29,8 @@
 //! - A new key is an entry of a row in [`layout`], and what it gives back
 //!   is [`keyboard`]'s.
 //! - A new host implements [`EntryHost`] and calls the four hooks from
-//!   its [`Screen`] methods, one line each: [`intercept`] at the head of
+//!   its [`Screen`] methods, one line each, and empties its focused field
+//!   when Clear asks ([`EntryHost::clear_entry_field`]): [`intercept`] at the head of
 //!   `input`, [`cancel`] in `cancel_pointer`, [`cover`] in `set_covered`
 //!   and [`draw`] at the end of `draw`. A field that takes the focus
 //!   (opening, Tab) calls [`EntryKeyboard::focus_field`], and a click, a
@@ -63,6 +64,11 @@ pub trait EntryHost: Screen {
 
     /// The field with the focus, if one has it: entry is active.
     fn entry_field(&self) -> Option<&TextField>;
+
+    /// Empties the field with the focus ([`TextField::clear`]), as the
+    /// keyboard's Clear asks, with what an edit of it brings in the host
+    /// (New Pilot's refusal clears).
+    fn clear_entry_field(&mut self);
 
     /// Its dialog's bounds, which the keyboard keeps clear of.
     fn dialog_bounds(&self) -> Bounds;
@@ -100,10 +106,10 @@ pub fn intercept(host: &mut impl EntryHost, input: &Input) -> Option<ScreenActio
         host.keyboard_mut().lower();
     }
     let layout = shown(host);
-    let chars = host
-        .entry_field()
-        .map_or(0, |field| field.text().chars().count());
-    let given = host.keyboard_mut().input(input, layout.as_ref(), chars);
+    let given = host.keyboard_mut().input(input, layout.as_ref());
+    if host.keyboard_mut().take_clear() {
+        host.clear_entry_field();
+    }
     if given == [*input] {
         return None;
     }
@@ -182,6 +188,12 @@ mod tests {
 
         fn entry_field(&self) -> Option<&TextField> {
             self.field.as_ref()
+        }
+
+        fn clear_entry_field(&mut self) {
+            if let Some(field) = &mut self.field {
+                field.clear();
+            }
         }
 
         fn dialog_bounds(&self) -> Bounds {
@@ -282,15 +294,15 @@ mod tests {
             ScreenAction::Quit,
             "Done is Return"
         );
-        let backspace = |pressed| Input::Key {
-            key: Key::Backspace,
+        let enter = |pressed| Input::Key {
+            key: Key::Enter,
             pressed,
             repeat: false,
         };
         assert_eq!(
-            host.got[..2],
-            [backspace(true), backspace(false)],
-            "the keys the field reads, not the taps"
+            host.got,
+            [Input::Text('X'), enter(true), enter(false)],
+            "what the field reads, not the taps; Clear emptied it directly"
         );
         assert!(
             !host

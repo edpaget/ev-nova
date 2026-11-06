@@ -506,6 +506,37 @@ mod tests {
         assert_eq!(dialog.take_sounds(), Vec::<Sound>::new());
     }
 
+    /// Clear empties the field even after OK refused a long name and
+    /// selected its first characters, by a tap and by the pad
+    /// (rdm:phase/key-bindings/phase-17-text-entry-port).
+    #[test]
+    fn clear_empties_a_refused_name() {
+        use crate::input::{Device, Surroundings};
+        use crate::ui::edit_dialog::pad_entry::pad_types;
+        use crate::ui::entry_keyboard::{EntryHost, KeyId};
+        let refused = |dialog: &mut TextInputDialog| {
+            typed(dialog, &"x".repeat(70));
+            dialog.input(&key(Key::Enter));
+            assert_eq!(dialog.take_outcome(), None, "refused");
+            assert!(dialog.field().selected());
+        };
+        let mut tapped = dialog();
+        tapped.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+        refused(&mut tapped);
+        let at = tapped
+            .keyboard()
+            .layout(tapped.dialog_bounds())
+            .key(KeyId::Clear)
+            .expect("Clear")
+            .center();
+        crate::touch::testkit::tap(&mut tapped, at);
+        assert_eq!(tapped.field().text(), "", "by a tap");
+        let mut padded = dialog();
+        refused(&mut padded);
+        pad_types(&mut padded, &[KeyId::Clear]);
+        assert_eq!(padded.field().text(), "", "by the pad");
+    }
+
     #[test]
     fn a_text_of_exactly_the_most_is_confirmed() {
         let mut dialog = dialog();

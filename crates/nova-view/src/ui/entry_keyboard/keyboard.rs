@@ -18,8 +18,11 @@
 //! - **Gives back** what a key types, for the host to run through its
 //!   own input as real keys ([`super::intercept`]): a character
 //!   ([`Input::Text`]), Space a space, Delete a Backspace press and
-//!   release, Clear one per character in the field, and Done a Return
-//!   press and release, which presses the dialog's default.
+//!   release, and Done a Return press and release, which presses the
+//!   dialog's default. Clear gives back nothing: it asks its host to
+//!   empty the field ([`EntryKeyboard::take_clear`]), as Backspaces
+//!   can't once a refusal selected the field's first characters (the
+//!   first deletes the selection and leaves the caret at the start).
 //! - **Shift** is on as a field takes the focus and turns off after one
 //!   letter, as a phone's keyboard capitalises a name.
 //!
@@ -64,6 +67,8 @@ pub struct EntryKeyboard {
     keys: CommandReader,
     /// The pad buttons whose press it took, whose release it takes too.
     taken: Vec<PadButton>,
+    /// Whether Clear was typed since its host last took it.
+    clear: bool,
 }
 
 impl Default for EntryKeyboard {
@@ -89,6 +94,7 @@ impl EntryKeyboard {
             focus: FocusState::default(),
             keys: CommandReader::new(contexts::DIALOG),
             taken: Vec::new(),
+            clear: false,
         }
     }
 
@@ -179,15 +185,9 @@ impl EntryKeyboard {
     }
 
     /// Follows `input` ahead of its host, with `shown` its layout while it
-    /// shows (none while hidden) and `field_chars` the characters in the
-    /// focused field: the inputs the host runs instead, in order (none
-    /// for an input it took). See the module docs.
-    pub fn input(
-        &mut self,
-        input: &Input,
-        shown: Option<&Layout>,
-        field_chars: usize,
-    ) -> Vec<Input> {
+    /// shows (none while hidden): the inputs the host runs instead, in
+    /// order (none for an input it took). See the module docs.
+    pub fn input(&mut self, input: &Input, shown: Option<&Layout>) -> Vec<Input> {
         if let Input::Surroundings(told) = *input {
             self.keys.follow(input);
             self.told = told;
@@ -234,7 +234,7 @@ impl EntryKeyboard {
                         }
                         Some((_, PadRead::Press)) => {
                             let key = self.focus.get().unwrap_or(INITIAL);
-                            self.type_key(key, field_chars)
+                            self.type_key(key)
                         }
                         Some((Command::Ui(UiCommand::Back), PadRead::Other)) => {
                             self.pad_raised = None;
@@ -252,14 +252,14 @@ impl EntryKeyboard {
                 Step::Taken => Vec::new(),
                 Step::Acted(index) => {
                     let key = layout.keys()[index].0;
-                    self.type_key(key, field_chars)
+                    self.type_key(key)
                 }
             },
         }
     }
 
-    /// What `key` gives back, with `field_chars` in the field.
-    fn type_key(&mut self, key: KeyId, field_chars: usize) -> Vec<Input> {
+    /// What `key` gives back.
+    fn type_key(&mut self, key: KeyId) -> Vec<Input> {
         let tap = |key| {
             [true, false].map(|pressed| Input::Key {
                 key,
@@ -279,12 +279,21 @@ impl EntryKeyboard {
             }
             KeyId::Space => vec![Input::Text(' ')],
             KeyId::Delete => tap(Key::Backspace).to_vec(),
-            KeyId::Clear => (0..field_chars).flat_map(|_| tap(Key::Backspace)).collect(),
+            KeyId::Clear => {
+                self.clear = true;
+                Vec::new()
+            }
             KeyId::Done => {
                 self.pad_raised = None;
                 tap(Key::Enter).to_vec()
             }
         }
+    }
+
+    /// Whether Clear was typed since the last call: its host then empties
+    /// the focused field.
+    pub const fn take_clear(&mut self) -> bool {
+        std::mem::replace(&mut self.clear, false)
     }
 
     /// Its host's pointer was let go of: a press on a key is forgotten.
@@ -351,7 +360,7 @@ mod tests {
 
     fn keyboard_told(input: &Input) -> EntryKeyboard {
         let mut keyboard = EntryKeyboard::new();
-        keyboard.input(input, None, 0);
+        keyboard.input(input, None);
         keyboard.focus_field();
         keyboard
     }
@@ -363,17 +372,16 @@ mod tests {
         keyboard
     }
 
-    /// `keyboard` takes `input` as it shows (or not), with `chars` in
-    /// the field.
-    fn send(keyboard: &mut EntryKeyboard, input: &Input, chars: usize) -> Vec<Input> {
+    /// `keyboard` takes `input` as it shows (or not).
+    fn send(keyboard: &mut EntryKeyboard, input: &Input) -> Vec<Input> {
         let layout = keyboard.layout(DIALOG);
         let shown = keyboard.shows(true).then_some(&layout);
-        keyboard.input(input, shown, chars)
+        keyboard.input(input, shown)
     }
 
     fn tap(keyboard: &mut EntryKeyboard, button: PadButton) -> Vec<Input> {
-        let mut given = send(keyboard, &pad(button, true), 0);
-        given.extend(send(keyboard, &pad(button, false), 0));
+        let mut given = send(keyboard, &pad(button, true));
+        given.extend(send(keyboard, &pad(button, false)));
         given
     }
 
@@ -386,10 +394,10 @@ mod tests {
     }
 
     /// A tap on `key`, as the touch router delivers it.
-    fn tap_key(keyboard: &mut EntryKeyboard, key: KeyId, chars: usize) -> Vec<Input> {
+    fn tap_key(keyboard: &mut EntryKeyboard, key: KeyId) -> Vec<Input> {
         let at = keyboard.layout(DIALOG).key(key).expect("a key").center();
-        let mut given = send(keyboard, &click(true, at), chars);
-        given.extend(send(keyboard, &click(false, at), chars));
+        let mut given = send(keyboard, &click(true, at));
+        given.extend(send(keyboard, &click(false, at)));
         given
     }
 
@@ -460,9 +468,9 @@ mod tests {
     #[test]
     fn leaving_the_pad_lowers_it() {
         let mut keyboard = raised();
-        send(&mut keyboard, &told(Device::Keyboard), 0);
+        send(&mut keyboard, &told(Device::Keyboard));
         assert!(!keyboard.shows(true));
-        send(&mut keyboard, &told(PAD), 0);
+        send(&mut keyboard, &told(PAD));
         assert!(!keyboard.shows(true), "until South raises it again");
     }
 
@@ -486,12 +494,9 @@ mod tests {
             .key(KeyId::Char('7'))
             .expect("7")
             .center();
-        assert_eq!(send(&mut keyboard, &click(true, at), 0), []);
-        assert_eq!(send(&mut keyboard, &Input::PointerMoved(at), 0), []);
-        assert_eq!(
-            send(&mut keyboard, &click(false, at), 0),
-            [Input::Text('7')]
-        );
+        assert_eq!(send(&mut keyboard, &click(true, at)), []);
+        assert_eq!(send(&mut keyboard, &Input::PointerMoved(at)), []);
+        assert_eq!(send(&mut keyboard, &click(false, at)), [Input::Text('7')]);
     }
 
     #[test]
@@ -500,11 +505,11 @@ mod tests {
         let layout = keyboard.layout(DIALOG);
         let at = layout.key(KeyId::Char('7')).expect("7").center();
         let off = Point::new(5.0, 5.0);
-        send(&mut keyboard, &click(true, at), 0);
-        assert_eq!(send(&mut keyboard, &Input::PointerMoved(off), 0), []);
-        assert_eq!(send(&mut keyboard, &click(false, off), 0), []);
+        send(&mut keyboard, &click(true, at));
+        assert_eq!(send(&mut keyboard, &Input::PointerMoved(off)), []);
+        assert_eq!(send(&mut keyboard, &click(false, off)), []);
         assert_eq!(
-            send(&mut keyboard, &click(true, off), 0),
+            send(&mut keyboard, &click(true, off)),
             [click(true, off)],
             "a press off the keys is the host's"
         );
@@ -516,44 +521,32 @@ mod tests {
         assert_eq!(tap(&mut keyboard, PadButton::DPadRight), []);
         assert_eq!(tap(&mut keyboard, PadButton::DPadDown), []);
         assert_eq!(
-            send(&mut keyboard, &pad(PadButton::South, true), 0),
+            send(&mut keyboard, &pad(PadButton::South, true)),
             [Input::Text('W')],
             "from 1, right to 2, down to W, the first letter a capital"
         );
-        assert_eq!(send(&mut keyboard, &pad(PadButton::South, false), 0), []);
+        assert_eq!(send(&mut keyboard, &pad(PadButton::South, false)), []);
         assert_eq!(tap(&mut keyboard, PadButton::South), [Input::Text('w')]);
     }
 
     #[test]
     fn shift_capitalises_one_letter() {
         let mut keyboard = touch();
+        assert_eq!(tap_key(&mut keyboard, KeyId::Char('5')), [Input::Text('5')]);
+        assert_eq!(tap_key(&mut keyboard, KeyId::Char('z')), [Input::Text('Z')]);
+        assert_eq!(tap_key(&mut keyboard, KeyId::Char('o')), [Input::Text('o')]);
+        assert_eq!(tap_key(&mut keyboard, KeyId::Shift), []);
+        assert_eq!(tap_key(&mut keyboard, KeyId::Char('e')), [Input::Text('E')]);
+        tap_key(&mut keyboard, KeyId::Shift);
+        tap_key(&mut keyboard, KeyId::Shift);
         assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('5'), 0),
-            [Input::Text('5')]
-        );
-        assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('z'), 0),
-            [Input::Text('Z')]
-        );
-        assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('o'), 0),
-            [Input::Text('o')]
-        );
-        assert_eq!(tap_key(&mut keyboard, KeyId::Shift, 0), []);
-        assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('e'), 0),
-            [Input::Text('E')]
-        );
-        tap_key(&mut keyboard, KeyId::Shift, 0);
-        tap_key(&mut keyboard, KeyId::Shift, 0);
-        assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('e'), 0),
+            tap_key(&mut keyboard, KeyId::Char('e')),
             [Input::Text('e')],
             "off again"
         );
         keyboard.focus_field();
         assert_eq!(
-            tap_key(&mut keyboard, KeyId::Char('n'), 0),
+            tap_key(&mut keyboard, KeyId::Char('n')),
             [Input::Text('N')],
             "a new field"
         );
@@ -563,27 +556,27 @@ mod tests {
     fn delete_gives_a_backspace_press_and_release() {
         let mut keyboard = touch();
         assert_eq!(
-            tap_key(&mut keyboard, KeyId::Delete, 4),
+            tap_key(&mut keyboard, KeyId::Delete),
             [key(Key::Backspace, true), key(Key::Backspace, false)]
         );
     }
 
     #[test]
-    fn clear_gives_one_backspace_per_character() {
+    fn clear_gives_nothing_back_and_asks_its_host_to_empty_the_field() {
         let mut keyboard = touch();
-        let backspace = [key(Key::Backspace, true), key(Key::Backspace, false)];
-        assert_eq!(
-            tap_key(&mut keyboard, KeyId::Clear, 3),
-            [backspace, backspace, backspace].concat()
-        );
-        assert_eq!(tap_key(&mut keyboard, KeyId::Clear, 0), []);
+        assert!(!keyboard.take_clear());
+        assert_eq!(tap_key(&mut keyboard, KeyId::Clear), []);
+        assert!(keyboard.take_clear());
+        assert!(!keyboard.take_clear(), "taken once");
+        tap_key(&mut keyboard, KeyId::Delete);
+        assert!(!keyboard.take_clear(), "Delete is no Clear");
     }
 
     #[test]
     fn done_gives_return() {
         let mut keyboard = touch();
         assert_eq!(
-            tap_key(&mut keyboard, KeyId::Done, 2),
+            tap_key(&mut keyboard, KeyId::Done),
             [key(Key::Enter, true), key(Key::Enter, false)]
         );
         assert!(keyboard.shows(true), "touch keeps it while entry lasts");
@@ -597,12 +590,12 @@ mod tests {
         }
         assert_eq!(padded.focus.get(), Some(KeyId::Done));
         assert_eq!(
-            send(&mut padded, &pad(PadButton::South, true), 0),
+            send(&mut padded, &pad(PadButton::South, true)),
             [key(Key::Enter, true), key(Key::Enter, false)]
         );
         assert!(!padded.shows(true), "lowered under the pad");
         assert_eq!(
-            send(&mut padded, &pad(PadButton::South, false), 0),
+            send(&mut padded, &pad(PadButton::South, false)),
             [],
             "its release taken"
         );
@@ -611,7 +604,7 @@ mod tests {
     #[test]
     fn space_types_a_space() {
         let mut keyboard = touch();
-        assert_eq!(tap_key(&mut keyboard, KeyId::Space, 0), [Input::Text(' ')]);
+        assert_eq!(tap_key(&mut keyboard, KeyId::Space), [Input::Text(' ')]);
     }
 
     #[test]
@@ -642,7 +635,7 @@ mod tests {
                 key(Key::Enter, true),
                 key(Key::Tab, false),
             ] {
-                assert_eq!(send(&mut keyboard, &input, 3), [input]);
+                assert_eq!(send(&mut keyboard, &input), [input]);
             }
         }
     }
@@ -677,7 +670,7 @@ mod tests {
             pad(PadButton::DPadDown, true),
             click(true, Point::new(500.0, 700.0)),
         ] {
-            assert_eq!(send(&mut keyboard, &input, 2), [input]);
+            assert_eq!(send(&mut keyboard, &input), [input]);
         }
     }
 
@@ -709,7 +702,7 @@ mod tests {
             .key(KeyId::Char('7'))
             .expect("7")
             .center();
-        send(&mut keyboard, &click(true, at), 0);
+        send(&mut keyboard, &click(true, at));
         keyboard.set_covered(true);
         assert!(keyboard.covered());
         assert!(!keyboard.shows(true));
@@ -718,7 +711,7 @@ mod tests {
         assert!(!keyboard.covered());
         assert!(keyboard.shows(true));
         assert_eq!(
-            send(&mut keyboard, &click(false, at), 0),
+            send(&mut keyboard, &click(false, at)),
             [click(false, at)],
             "the press was forgotten"
         );
@@ -735,12 +728,9 @@ mod tests {
             .key(KeyId::Char('7'))
             .expect("7")
             .center();
-        send(&mut keyboard, &click(true, at), 0);
+        send(&mut keyboard, &click(true, at));
         keyboard.cancel();
-        assert_eq!(
-            send(&mut keyboard, &click(false, at), 0),
-            [click(false, at)]
-        );
+        assert_eq!(send(&mut keyboard, &click(false, at)), [click(false, at)]);
     }
 
     #[test]
@@ -775,10 +765,10 @@ mod tests {
             Some(HIGHLIGHT),
             "on at first"
         );
-        send(&mut keyboard, &click(true, seven.center()), 0);
+        send(&mut keyboard, &click(true, seven.center()));
         assert_eq!(fill_of(&drawn(&keyboard), seven), Some(HIGHLIGHT));
-        send(&mut keyboard, &click(false, seven.center()), 0);
-        tap_key(&mut keyboard, KeyId::Shift, 0);
+        send(&mut keyboard, &click(false, seven.center()));
+        tap_key(&mut keyboard, KeyId::Shift);
         assert_eq!(fill_of(&drawn(&keyboard), shift), Some(FILL));
     }
 
@@ -791,7 +781,6 @@ mod tests {
                 ..Surroundings::of(Device::Touch)
             }),
             None,
-            0,
         );
         let layout = keyboard.layout(DIALOG);
         let mut list = DrawList::new();
@@ -812,7 +801,6 @@ mod tests {
         send(
             &mut keyboard,
             &told(Device::Gamepad(ControllerFamily::Xbox)),
-            0,
         );
         assert!(keyboard.shows(true));
     }

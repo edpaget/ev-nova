@@ -106,6 +106,13 @@ impl TextField {
         self.caret = self.selection;
     }
 
+    /// Empties it: no text, nothing selected, the caret at the start.
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.selection = 0;
+        self.caret = 0;
+    }
+
     /// Ends any selection, with the caret after the last character: where
     /// a click inside a field leaves it here, as the field places no caret
     /// by the pointer.
@@ -432,6 +439,20 @@ mod tests {
         assert_eq!(field.text(), "cdef");
         typed(&mut field, "ab");
         assert_eq!(field.text(), "abcdef");
+    }
+
+    #[test]
+    fn clear_empties_it_whatever_is_selected() {
+        let mut field = selected("abcdef");
+        field.select_first(2);
+        field.clear();
+        assert_eq!((field.text(), field.selection()), ("", 0));
+        typed(&mut field, "Zo");
+        assert_eq!(field.text(), "Zo", "the caret at the start");
+        field.clear();
+        assert_eq!(field.text(), "", "with nothing selected too");
+        typed(&mut field, "e");
+        assert_eq!(field.text(), "e");
     }
 
     #[test]
