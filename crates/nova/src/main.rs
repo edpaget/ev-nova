@@ -299,17 +299,14 @@ fn run(
     Result<(), winit::error::EventLoopError>,
 ) {
     let (sender, events) = loop_channel(event_loop.create_proxy());
-    let mut runner = runner.with_loop_events(events);
+    let runner = runner.with_loop_events(events);
     #[cfg(target_os = "macos")]
-    {
-        runner = runner
-            .with_menu_sender(sender)
-            .with_updater_source(Box::new(nova::platform::SparkleSource));
-    }
+    let runner = runner
+        .with_menu_sender(sender)
+        .with_updater_source(Box::new(nova::platform::SparkleSource));
     #[cfg(windows)]
-    {
-        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(sender)));
-    }
+    let runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(sender)));
+    // Nothing sends loop events elsewhere.
     #[cfg(not(any(target_os = "macos", windows)))]
     drop(sender);
     let failure = runner.failure_slot();
