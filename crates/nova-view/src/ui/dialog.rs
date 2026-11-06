@@ -932,7 +932,9 @@ impl Dialog {
             Input::Text(_)
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
-            | Input::PadAxis { .. } => None,
+            | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }

@@ -108,7 +108,9 @@ pub fn name_command(
 ) -> Option<String> {
     let command = command.into();
     match device {
-        Device::Keyboard | Device::Mouse => key_spelled(bindings, names, command, spelling),
+        Device::Keyboard | Device::Mouse | Device::Touch => {
+            key_spelled(bindings, names, command, spelling)
+        }
         Device::Gamepad(_) if matches!(spelling, Spelling::Twin(_)) => None,
         Device::Gamepad(family) => name_on_pad(bindings, command, family)
             .or_else(|| key_spelled(bindings, names, command, spelling)),
@@ -699,6 +701,26 @@ mod tests {
             ] {
                 assert_eq!(
                     name_command(&defaults, &NoKeyNames, command, Device::Mouse, spelling),
+                    named(&defaults, &NoKeyNames, command, spelling),
+                    "{command:?} {spelling:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_touch_last_used_every_spelling_names_the_key() {
+        let defaults = Bindings::default();
+        for spelling in SPELLINGS
+            .into_iter()
+            .chain([Spelling::Fixed("1"), Spelling::Twin(Key::KeyW)])
+        {
+            for command in [
+                Command::Flight(FlightCommand::Board),
+                Command::Ui(UiCommand::Back),
+            ] {
+                assert_eq!(
+                    name_command(&defaults, &NoKeyNames, command, Device::Touch, spelling),
                     named(&defaults, &NoKeyNames, command, spelling),
                     "{command:?} {spelling:?}"
                 );

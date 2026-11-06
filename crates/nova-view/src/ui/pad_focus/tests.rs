@@ -320,6 +320,18 @@ fn the_pads_focus_moves_and_south_are_held_back_until_the_pad_shows() {
 }
 
 #[test]
+fn touch_hides_the_pad_highlight_and_drops_its_focus() {
+    let mut state = FocusState::<u8>::default();
+    state.surroundings(PAD, Some(2), false);
+    assert!(state.pad_shown());
+    state.surroundings(Device::Touch, Some(2), false);
+    assert_eq!(state.pad_highlight(), None);
+    assert!(!state.pad_shown());
+    assert_eq!(state.get(), None, "the pad placed it");
+    assert!(!state.pad_moved());
+}
+
+#[test]
 fn leaving_the_pad_drops_a_focus_it_placed_and_keeps_a_keyboard_one() {
     let mut state = FocusState::<u8>::default();
     state.surroundings(PAD, Some(2), false);

@@ -3,8 +3,10 @@
 use crate::geometry::Point;
 
 mod glyphs;
+mod touch;
 
 pub use glyphs::{pad_axis_name, pad_button_name};
+pub use touch::{FingerId, Pinch, Touch, TouchPhase};
 
 /// A physical key, by its position: `keyboard_types`' `Code`, which names
 /// each key for what it types on a US keyboard. `Key::KeyW` is the key
@@ -185,8 +187,7 @@ pub enum MouseButton {
 ///
 /// The app decides which it is (`nova`'s device-last-used module) and
 /// tells the screens through [`Input::Surroundings`]. A pad is named by
-/// its family ([`pad_button_name`]); phase 14 adds `Touch`. No call site
-/// changes then, as each asks its reader.
+/// its family ([`pad_button_name`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Device {
     /// The keyboard: a command is named by its key.
@@ -194,6 +195,11 @@ pub enum Device {
     Keyboard,
     /// The mouse or trackpad: a pointer button, move or scroll.
     Mouse,
+    /// A finger on a touchscreen: a touch started, moved or lifted. A
+    /// command is named by its key, as for the mouse, since touch has no
+    /// inputs of its own to name; the pad's highlight hides, as for the
+    /// mouse.
+    Touch,
     /// A gamepad of a family, which names its buttons.
     Gamepad(ControllerFamily),
 }
@@ -538,6 +544,14 @@ pub enum Input {
     /// What the app tells the screens about where they run changed, or a
     /// screen was switched to.
     Surroundings(Surroundings),
+    /// A finger a claimant claimed ([`crate::touch::TouchClaimant`])
+    /// touched down, moved, lifted or was cancelled. Only the claimant's
+    /// screen acts on it; the primary finger reaches screens as the
+    /// ordinary pointer inputs instead, never as this.
+    Touch(Touch),
+    /// Two free fingers pinched ([`crate::touch`]). Only the galaxy map
+    /// acts on it, zooming in its own steps; every other screen ignores it.
+    Pinch(Pinch),
 }
 
 impl Input {
@@ -562,6 +576,11 @@ impl Input {
                 delta,
                 at: moved(at),
             },
+            Self::Touch(Touch { finger, phase }) => Self::Touch(Touch {
+                finger,
+                phase: phase.translated(by),
+            }),
+            Self::Pinch(pinch) => Self::Pinch(pinch.translated(by)),
             Self::Key { .. }
             | Self::Text(_)
             | Self::PointerLeft
@@ -793,6 +812,56 @@ mod tests {
         for unmoved in [key, Input::Text('a'), Input::PointerLeft] {
             assert_eq!(unmoved.translated(by), unmoved);
         }
+    }
+
+    fn touch(raw: usize, phase: TouchPhase) -> Input {
+        Input::Touch(Touch {
+            finger: FingerId::new(raw),
+            phase,
+        })
+    }
+
+    #[test]
+    fn a_translated_touch_or_pinch_moves_its_points() {
+        let by = Point::new(-170.0, 2.0);
+        let at = Point::new(300.0, 40.0);
+        let moved = Point::new(130.0, 42.0);
+        for (phase, want) in [
+            (TouchPhase::Started(at), TouchPhase::Started(moved)),
+            (TouchPhase::Moved(at), TouchPhase::Moved(moved)),
+            (TouchPhase::Ended(at), TouchPhase::Ended(moved)),
+            (TouchPhase::Cancelled, TouchPhase::Cancelled),
+        ] {
+            assert_eq!(touch(3, phase).translated(by), touch(3, want), "{phase:?}");
+        }
+        let second = Point::new(400.0, 50.0);
+        for (pinch, want) in [
+            (
+                Pinch::Began {
+                    primary: at,
+                    second,
+                },
+                Pinch::Began {
+                    primary: moved,
+                    second: Point::new(230.0, 52.0),
+                },
+            ),
+            (Pinch::ZoomIn, Pinch::ZoomIn),
+            (Pinch::ZoomOut, Pinch::ZoomOut),
+            (Pinch::Ended, Pinch::Ended),
+        ] {
+            assert_eq!(Input::Pinch(pinch).translated(by), Input::Pinch(want));
+        }
+    }
+
+    #[test]
+    fn touches_and_pinches_are_no_key() {
+        let start = touch(1, TouchPhase::Started(Point::new(1.0, 2.0)));
+        assert!(!start.same_key(&start));
+        assert_eq!(start.released(), start);
+        let pinch = Input::Pinch(Pinch::Ended);
+        assert!(!pinch.same_key(&pinch));
+        assert_eq!(pinch.released(), pinch);
     }
 
     fn press(key: Key) -> Input {

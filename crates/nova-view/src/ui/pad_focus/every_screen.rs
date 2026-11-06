@@ -359,7 +359,7 @@ fn the_highlight_shows_only_while_the_pad_was_used_last() {
     for (screen, build) in rows() {
         let mut padded = Run::new(build).sends(&[told(PAD)]);
         assert!(padded.highlighted().is_some(), "{screen}: shown");
-        for device in [Device::Keyboard, Device::Mouse] {
+        for device in [Device::Keyboard, Device::Mouse, Device::Touch] {
             let mut left = Run::new(build).sends(&[told(PAD), told(device)]);
             assert_eq!(left.highlighted(), None, "{screen}: {device:?}");
         }
@@ -382,12 +382,18 @@ fn after_the_pad_the_keyboard_ring_draws_as_it_always_did() {
                 continue;
             };
             let mut keyboard = keyboard.sends(&tab).sends(&tab);
-            let mut after = ringed().expect("a ring").sends(&[told(PAD)]);
-            for button in DPAD {
-                after.tap(button);
+            for device in [Device::Mouse, Device::Touch] {
+                let mut after = ringed().expect("a ring").sends(&[told(PAD)]);
+                for button in DPAD {
+                    after.tap(button);
+                }
+                let mut after = after.sends(&[told(device)]).sends(&tab).sends(&tab);
+                assert_eq!(
+                    after.drawn(),
+                    keyboard.drawn(),
+                    "{screen}: {ring:?} {device:?}"
+                );
             }
-            let mut after = after.sends(&[told(Device::Mouse)]).sends(&tab).sends(&tab);
-            assert_eq!(after.drawn(), keyboard.drawn(), "{screen}: {ring:?}");
         }
     }
 }

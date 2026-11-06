@@ -118,8 +118,9 @@ pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{
-    COMMAND_KEYS, CONTROL_KEYS, ControllerFamily, Device, Input, Key, ModifierHeld, MouseButton,
-    OPTION_KEYS, PadAxis, PadButton, SHIFT_KEYS, ScrollDelta, Surroundings, key_letter, letter_key,
+    COMMAND_KEYS, CONTROL_KEYS, ControllerFamily, Device, FingerId, Input, Key, ModifierHeld,
+    MouseButton, OPTION_KEYS, PadAxis, PadButton, Pinch, SHIFT_KEYS, ScrollDelta, Surroundings,
+    Touch, TouchPhase, key_letter, letter_key,
 };
 pub use key_names::{KeyNames, NoKeyNames, combo_name, key_name};
 pub use keymap::{

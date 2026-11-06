@@ -750,6 +750,8 @@ impl Screen for KeysScreen {
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_)
             | Input::Scroll { .. } => {}
         }
         ScreenAction::None

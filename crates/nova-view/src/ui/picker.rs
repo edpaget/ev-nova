@@ -213,6 +213,8 @@ impl<T: PickerEntry> Picker<T> {
             | Input::PointerMovedOutside(_)
             | Input::PadButton { .. }
             | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_)
             | Input::Surroundings(_)
             | Input::Scroll { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),

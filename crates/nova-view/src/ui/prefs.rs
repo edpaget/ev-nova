@@ -1195,6 +1195,8 @@ impl Screen for PrefsDialog {
             | Input::PointerLeft
             | Input::PointerMovedOutside(_)
             | Input::PadAxis { .. }
+            | Input::Touch(_)
+            | Input::Pinch(_)
             | Input::Surroundings(_)
             | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
