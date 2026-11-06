@@ -39,7 +39,8 @@ impl AppScreen {
     /// exchange and outfitter when it has them, its ambient sound's waits
     /// drawn on the router's chance. One already open, for another
     /// stellar the pilot desk moved to, is dropped first
-    /// ([`AppScreen::drop_spaceport`]).
+    /// ([`AppScreen::drop_spaceport`]). The stellar's conversation, if it
+    /// names one, opens over it (see the `conversation` module).
     pub(super) fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
         let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
@@ -137,6 +138,8 @@ impl AppScreen {
         self.spaceport = Some(spaceport);
         self.serve_descriptions();
         self.switch_to(Side::Spaceport);
+        // The stellar's conversation, asked once as the spaceport opens.
+        self.open_conversation();
     }
 
     /// Puts the pilot away and shows `side`: saves it (when ending play
@@ -662,6 +665,7 @@ impl AppScreen {
     /// and its sound with it.
     fn drop_spaceport(&mut self) {
         self.leave_held = false;
+        self.conversation = None;
         if let Some(mut spaceport) = self.spaceport.take() {
             self.sounds.extend(spaceport.close_sounds());
         }

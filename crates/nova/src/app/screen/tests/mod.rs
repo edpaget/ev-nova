@@ -95,6 +95,7 @@ mod background;
 mod capture_naming;
 mod christening;
 mod close_waits;
+mod conversation;
 mod death;
 mod desc_load_order;
 mod dialog_maps;

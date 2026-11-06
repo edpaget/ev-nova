@@ -219,6 +219,9 @@ impl Screen for AppScreen {
         } else {
             self.shown().draw(list);
         }
+        if self.side == Side::Spaceport {
+            self.draw_conversation(list);
+        }
         let hint = match (self.side, self.dialogs.is_some()) {
             (Side::Ships | Side::Galaxy, true) => Some(HINT),
             (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
