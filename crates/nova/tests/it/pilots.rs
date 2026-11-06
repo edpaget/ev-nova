@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use crate::bracket_art;
 use crate::common::{EntryHarness, Frames};
-use nova::app::screen::QUIT_DELAY;
+use nova::app::screen::{AppScreen, QUIT_DELAY};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
@@ -42,7 +42,7 @@ use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{Batch, FontFaces, Frame, ImageError};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
@@ -361,6 +361,10 @@ pub(crate) struct Harness {
     log: AudioLog,
     /// The app's audio, to say what is still playing.
     audio: RecordingAudio,
+    /// Whether a frame may fail to draw pictures the data doesn't hold,
+    /// and draw the main menu's stand-in for want of its colours, as the
+    /// new game's data holds neither.
+    missing_ok: bool,
 }
 
 impl Harness {
@@ -427,6 +431,29 @@ impl Harness {
         Self::assembled_from(data, interface(), store, settings, launch, appeared)
     }
 
+    /// The app on the main menu over `data`, past the start-up appear,
+    /// keeping pilots in `store`, its router wired further by `wire` as
+    /// `main` wires it (a rulebook, a dialog loader). Its frames may fail
+    /// to draw pictures the data doesn't hold, and the main menu may draw
+    /// its stand-in.
+    pub(crate) fn wired(
+        data: Rc<GameData>,
+        store: &MemoryPilots,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        let mut harness = Self::assembled_with(
+            data,
+            interface(),
+            store,
+            AudioSettings::default(),
+            false,
+            true,
+            wire,
+        );
+        harness.missing_ok = true;
+        harness
+    }
+
     /// [`Harness::assembled`], its dialogs from `ui`.
     fn assembled_from(
         data: Rc<GameData>,
@@ -436,11 +463,26 @@ impl Harness {
         launch: bool,
         appeared: bool,
     ) -> Self {
+        Self::assembled_with(data, ui, store, settings, launch, appeared, |screen| screen)
+    }
+
+    /// [`Harness::assembled_from`], its router wired further by `wire`
+    /// before the appear.
+    fn assembled_with(
+        data: Rc<GameData>,
+        ui: InterfaceData,
+        store: &MemoryPilots,
+        settings: AudioSettings,
+        launch: bool,
+        appeared: bool,
+        wire: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let mut screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(ui), metrics);
+        screen = wire(screen);
         if launch {
             screen = screen.open_last_pilot();
         }
@@ -457,6 +499,7 @@ impl Harness {
             frames: 0,
             log,
             audio: handle,
+            missing_ok: false,
         }
     }
 
@@ -604,8 +647,22 @@ impl Harness {
         self.send(WindowEvent::Redraw {
             elapsed: Duration::from_millis(16 * self.frames),
         });
-        assert_eq!(self.app.take_failures(), []);
-        assert_eq!(self.app.take_warnings(), Vec::<String>::new());
+        let failures: Vec<_> = self
+            .app
+            .take_failures()
+            .into_iter()
+            .filter(|(_, error)| !(self.missing_ok && matches!(error, ImageError::Missing)))
+            .collect();
+        assert_eq!(failures, []);
+        let warnings: Vec<String> = self
+            .app
+            .take_warnings()
+            .into_iter()
+            .filter(|warning| {
+                !(self.missing_ok && warning.starts_with("nova: drawing the stand-in main menu"))
+            })
+            .collect();
+        assert_eq!(warnings, Vec::<String>::new());
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
@@ -624,7 +681,7 @@ impl Harness {
     }
 }
 
-fn texts(frame: &Frame) -> Vec<String> {
+pub(crate) fn texts(frame: &Frame) -> Vec<String> {
     frame
         .batches
         .iter()

@@ -42,6 +42,7 @@ mod missions;
 mod movies;
 mod navigation;
 mod new_game;
+mod new_game_conversation;
 mod new_game_looks;
 mod new_game_routes;
 mod new_game_travel;
