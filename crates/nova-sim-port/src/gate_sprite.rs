@@ -170,6 +170,7 @@ impl GateAnimation {
             open_frame,
             type_frames,
             dead_frames,
+            ..
         } = site.animation;
         Self {
             delay,
@@ -518,6 +519,7 @@ mod tests {
                 open_frame: 9,
                 type_frames: 42,
                 dead_frames: 8,
+                ..SiteAnimation::default()
             },
             ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
         };

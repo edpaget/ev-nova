@@ -53,6 +53,8 @@ pub mod fixture;
 #[cfg(test)]
 mod pict_sheet_sites;
 pub mod resource_name;
+#[cfg(test)]
+mod sheet_frame_sites;
 pub mod sound;
 mod sound_cue;
 pub mod strings;
