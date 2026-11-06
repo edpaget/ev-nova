@@ -14,9 +14,10 @@
 //! faction that isn't there is left out, with one problem against its file
 //! for each such name; so is one whose offer or completion dialog has no
 //! compiled file. A news item whose `from` isn't a system is left out the
-//! same way. A name that failed to load, or a record left out for its ID,
-//! isn't reported again, but still leaves the mission out. A mission's
-//! `storyline`, `act` and `giver` aren't read yet.
+//! same way. A name that failed to load, a record left out for its ID, or
+//! a news item left out isn't reported again, but still leaves the
+//! mission out. A mission's `storyline`, `act` and `giver` aren't read
+//! yet.
 
 use std::collections::BTreeMap;
 
@@ -70,6 +71,7 @@ pub fn map(
             galaxy,
             ids,
             compiled,
+            news: &news,
             broken: Vec::new(),
             left_out: false,
         };
@@ -116,6 +118,8 @@ struct Names<'a> {
     galaxy: &'a Galaxy,
     ids: &'a IdTable,
     compiled: &'a Compiled,
+    /// The news items mapped, which a mission's releases must name.
+    news: &'a BTreeMap<String, NewsItem>,
     broken: Vec<String>,
     left_out: bool,
 }
@@ -204,9 +208,7 @@ impl Names<'_> {
     /// The effects `effects`, at `field`.
     fn effects(&mut self, field: &str, effects: &Effects) -> StoryEffects {
         for news in &effects.news {
-            if !self.galaxy.news.contains_key(news) {
-                self.missing(&format!("{field}.news"), news.as_str(), "news", "news");
-            }
+            self.news_named(&format!("{field}.news"), news);
         }
         StoryEffects {
             flags: texts(&effects.flags),
@@ -256,6 +258,17 @@ impl Names<'_> {
         if absent(self.galaxy, &self.galaxy.missions, "missions", id) {
             self.missing(field, id.as_str(), "mission", "missions");
         } else if !self.galaxy.missions.contains_key(id) {
+            self.left_out = true;
+        }
+    }
+
+    /// Checks the news item `id`, named at `field`, was mapped: one that
+    /// isn't there is reported, and one that failed to load or was left
+    /// out (its own problem said why) leaves the mission out unreported.
+    fn news_named(&mut self, field: &str, id: &Id) {
+        if absent(self.galaxy, &self.galaxy.news, "news", id) {
+            self.missing(field, id.as_str(), "news", "news");
+        } else if !self.news.contains_key(id.as_str()) {
             self.left_out = true;
         }
     }
@@ -683,6 +696,36 @@ mod tests {
             "{:?}",
             problems(&game)
         );
+    }
+
+    #[test]
+    fn a_news_item_that_failed_to_load_leaves_the_mission_out_unreported() {
+        let source = with_toll("on_accept: {news: [parcel-delivered]}\n")
+            .with("news/parcel-delivered.md", "---\nnot: valid\n---\n");
+        let game = loaded(&source);
+        assert_eq!(toll(&game), None);
+        assert_eq!(game.data.storylines().missions.get("parcel"), None);
+        assert!(
+            problems(&game).iter().all(|p| !p.starts_with("missions/")),
+            "{:?}",
+            problems(&game)
+        );
+    }
+
+    #[test]
+    fn a_news_item_left_out_leaves_the_mission_naming_it_out_unreported_again() {
+        let source = with_toll("on_accept: {news: [rumour]}\n").with(
+            "news/rumour.md",
+            "---\nheadline: Rumour\nfrom: nowhere\n---\nWho knows.\n",
+        );
+        let game = loaded(&source);
+        assert_eq!(
+            problems(&game),
+            ["news/rumour.md: its `from` system `nowhere` is not in systems/; it is left out"],
+            "the news item's problem alone"
+        );
+        assert_eq!(toll(&game), None);
+        assert!(game.data.storylines().missions.contains_key("parcel"));
     }
 
     #[test]
