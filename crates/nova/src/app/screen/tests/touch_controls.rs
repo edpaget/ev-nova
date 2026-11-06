@@ -242,3 +242,66 @@ fn letting_go_of_the_keys_releases_the_overlay_through_the_router() {
         ScreenAction::None
     );
 }
+
+/// A finger taps control `id` of flight's overlay, paging its menu
+/// (More, then the next page) until `id` is placed.
+fn tap_through_the_menu(screen: &mut AppScreen, id: ControlId) {
+    for _ in 0..20 {
+        if flight(screen).touch_controls().layout().get(id).is_some() {
+            let at = centre(screen, id);
+            assert!(screen.claims_touch(at), "{id:?} claimed");
+            finger(screen, 1, TouchPhase::Started(at));
+            finger(screen, 1, TouchPhase::Ended(at));
+            return;
+        }
+        let next = if flight(screen).touch_controls().menu_open() {
+            ControlId::PageNext
+        } else {
+            ControlId::More
+        };
+        let at = centre(screen, next);
+        finger(screen, 9, TouchPhase::Started(at));
+        finger(screen, 9, TouchPhase::Ended(at));
+    }
+    panic!("{id:?} never placed");
+}
+
+/// Flight is the one screen a pointer can't leave
+/// (rdm:phase/key-bindings/phase-16-touch-pointer-gaps): by touch alone,
+/// More, the menu's pages and Pause leave it for the main menu holding
+/// the game, as Escape does.
+#[test]
+fn flight_is_left_for_the_main_menu_by_touch_alone() {
+    for (rules, left) in [
+        (Rulebook::default(), Showing::MainMenu),
+        (
+            Rulebook::default().with_override(RuleKey::EscapeToMainScreen, RuleSource::Bible),
+            Showing::Flight,
+        ),
+    ] {
+        let store = MemoryPilots::new();
+        let mut touched = menu_ruled(&store, rules);
+        create(&mut touched, "Ada");
+        told(&mut touched, Device::Touch);
+        tap_through_the_menu(&mut touched, command(PauseCommand::Pause));
+        let escaped_store = MemoryPilots::new();
+        let mut escaped = menu_ruled(&escaped_store, rules);
+        create(&mut escaped, "Ada");
+        escaped.input(&key(Key::Escape, true));
+        escaped.input(&key(Key::Escape, false));
+        assert_eq!(touched.showing(), escaped.showing());
+        assert_eq!(touched.showing(), left);
+        assert_eq!(
+            touched.game_in_progress().is_some(),
+            escaped.game_in_progress().is_some(),
+            "the game held alike"
+        );
+    }
+    let store = MemoryPilots::new();
+    let mut touched = menu(&store);
+    create(&mut touched, "Ada");
+    told(&mut touched, Device::Touch);
+    tap_through_the_menu(&mut touched, command(PauseCommand::Pause));
+    assert_eq!(touched.showing(), Showing::MainMenu, "by the engine");
+    assert!(touched.game_in_progress().is_some(), "holding the game");
+}
