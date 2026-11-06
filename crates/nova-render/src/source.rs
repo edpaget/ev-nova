@@ -13,8 +13,8 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 
 use nova_data::graphics::{
-    CICN, EightBitReading, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict,
-    decode_ppat, decode_rled_as,
+    CICN, EightBitReading, Image, PICT, PPAT, RLED, RledReadings, ThirtyTwoBitReading, apply_mask,
+    decode_cicn, decode_pict, decode_ppat, decode_rled_with,
 };
 use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
 use nova_view::ImageKind;
@@ -22,7 +22,10 @@ use nova_view::ImageKind;
 use crate::images::{ImageError, ImageSource};
 
 /// The game data as an image source, decoding an 8-bit `rlëD` by
-/// `eight_bit` (the rulebook's `eight_bit_sheet` reading).
+/// `eight_bit` (the rulebook's `eight_bit_sheet` reading) and a 32-bit one
+/// by the reading given to
+/// [`with_thirty_two_bit`](Self::with_thirty_two_bit) (the
+/// `thirty_two_bit_sheet` reading), by default as the original draws it.
 ///
 /// It looks resources up in the store (later files winning) and decodes
 /// them on every call; the renderer keeps what it needs in the atlas. A
@@ -34,18 +37,33 @@ use crate::images::{ImageError, ImageSource};
 #[derive(Clone, Debug)]
 pub struct GameImages<D> {
     data: D,
-    eight_bit: EightBitReading,
+    readings: RledReadings,
     interface: Option<Rc<InterfaceData>>,
 }
 
 impl<D: Borrow<GameData>> GameImages<D> {
-    /// `data`'s images, with 8-bit sheets read as `eight_bit` says, and no
-    /// interface file.
+    /// `data`'s images, with 8-bit sheets read as `eight_bit` says, 32-bit
+    /// sheets as the original draws them, and no interface file.
     pub fn new(data: D, eight_bit: EightBitReading) -> Self {
         Self {
             data,
-            eight_bit,
+            readings: RledReadings {
+                eight_bit,
+                ..RledReadings::default()
+            },
             interface: None,
+        }
+    }
+
+    /// These images, with 32-bit sheets read as `thirty_two_bit` says.
+    #[must_use]
+    pub fn with_thirty_two_bit(self, thirty_two_bit: ThirtyTwoBitReading) -> Self {
+        Self {
+            readings: RledReadings {
+                thirty_two_bit,
+                ..self.readings
+            },
+            ..self
         }
     }
 
@@ -96,7 +114,7 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
                 .ok_or(ImageError::Missing)
         };
         let rled = |id| -> Result<_, ImageError> {
-            Ok(decode_rled_as(bytes(RLED, id)?, None, self.eight_bit)?)
+            Ok(decode_rled_with(bytes(RLED, id)?, None, self.readings)?)
         };
         Ok(match kind {
             ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
@@ -116,8 +134,9 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
 }
 
 /// The game data's images as the original draws them: [`GameImages`] with
-/// 8-bit sheets [`EightBitReading::AsDrawn`] and no interface file, so an
-/// interface picture is [`ImageError::Missing`].
+/// 8-bit sheets [`EightBitReading::AsDrawn`], 32-bit sheets
+/// [`ThirtyTwoBitReading::AsDrawn`] and no interface file, so an interface
+/// picture is [`ImageError::Missing`].
 impl ImageSource for GameData {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         GameImages::new(self, EightBitReading::AsDrawn).frames(kind, id)
@@ -440,6 +459,56 @@ mod tests {
             bad.frames(ImageKind::SpinSheet, 3000),
             Err(ImageError::Decode(_))
         ));
+    }
+
+    #[test]
+    fn a_32_bit_sheet_is_drawn_as_the_reading_says() {
+        // One 2x1 frame: a run of the file pixel 00 00 7C 00, then the
+        // pixel 00 00 03 E0.
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run32(1, 0x0000_7C00).pixels32(&[0x0000_03E0]))
+            .build();
+        let data = store(&[(RLED, 200, thirty_two), (Spin::TYPE, 3000, spin(200, -1))]);
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, green, black, clear) =
+            ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 0, 255], [0; 4]);
+        // As drawn, each pixel is two RGB555 pixels, little-endian, from
+        // the box's left edge; the image is padded on the left to keep the
+        // box at its centre.
+        let as_drawn = vec![(6, [clear, clear, red, black, green, black].concat())];
+        let as_drawn_solid = vec![(6, [clear, clear, red, black, clear, clear].concat())];
+        let true_colour = vec![(2, [[0, 0x7C, 0, 255], [0, 0x03, 0xE0, 255]].concat())];
+        let true_colour_solid = vec![(2, [[0, 0x7C, 0, 255], clear].concat())];
+        let drawn = GameImages::new(&data, EightBitReading::AsDrawn);
+        let true_colour_images = drawn
+            .clone()
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        for (images, frames, solid) in [
+            (&drawn, &as_drawn, &as_drawn_solid),
+            (&true_colour_images, &true_colour, &true_colour_solid),
+        ] {
+            assert_eq!(rgba(images.frames(ImageKind::Rled, 200).unwrap()), *frames);
+            assert_eq!(
+                rgba(images.frames(ImageKind::SpinSheet, 3000).unwrap()),
+                *frames
+            );
+            assert_eq!(
+                rgba(images.frames(ImageKind::RledSolid, 200).unwrap()),
+                *solid
+            );
+        }
+        assert_eq!(
+            rgba(data.frames(ImageKind::Rled, 200).unwrap()),
+            as_drawn,
+            "the game data alone draws it as the original does"
+        );
     }
 
     #[test]
