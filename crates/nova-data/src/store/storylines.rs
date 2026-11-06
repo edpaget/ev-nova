@@ -13,8 +13,9 @@
 //! The format's ids are kept as text: missions, news, flags, factions and
 //! jump points (`system/point`), as they are permanent handles a save can
 //! key by. A Nova ID appears only where the engine must place something: a
-//! stellar to land at, a news item's `from` system and each jump point's
-//! gate. Every reference here names something the store holds: the loader
+//! stellar to land at, a news item's `from` system, each jump point's
+//! gate, and an outfit an effect grants or removes (effects aren't saved,
+//! so a renumbered outfit can't strand one). Every reference here names something the store holds: the loader
 //! leaves out a mission or news item that doesn't.
 //!
 //! The stock game's store holds none.
@@ -24,7 +25,7 @@ use std::collections::BTreeMap;
 pub use nova_galaxy_format::model::Outcome;
 
 use super::{DialogPlace, GameData, GateStability};
-use crate::wire::id::{StellarId, SystemId};
+use crate::wire::id::{OutfitId, StellarId, SystemId};
 
 /// The new game's missions, news and jump points, each by its id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -136,6 +137,12 @@ pub struct StoryEffects {
     pub points: Vec<PointState>,
     /// News released, by id.
     pub news: Vec<String>,
+    /// Outfits granted, one for each entry, by their `oütf`: after the
+    /// flags, points and news.
+    pub grant_outfits: Vec<OutfitId>,
+    /// Outfits removed, one for each entry, by their `oütf`: after the
+    /// grants.
+    pub remove_outfits: Vec<OutfitId>,
 }
 
 /// A jump point's owner, stability or both: a condition to test, or a

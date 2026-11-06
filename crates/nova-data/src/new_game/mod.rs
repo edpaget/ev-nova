@@ -30,7 +30,7 @@
 //! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
 //! | `dialog/<file>.ink.json` | its compiled text on the store ([`dialogs`], [`GameData::dialogs`]) | by the Ink file a ref names (`dialog/<file>.ink`); the `.ink` source isn't read |
 //! | a stellar's `dialog` | its `spöb`'s conversation on the store ([`dialogs`]) | the file and the knot (or `knot.stitch`) a landed pilot's conversation enters |
-//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; its dialogs as places in the compiled texts |
+//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; an outfit an effect grants or removes as its `oütf`; its dialogs as places in the compiled texts |
 //! | `news/` | a news item on the store ([`missions`]) | by its id: its headline, its body trimmed, and its `from` system's `sÿst` |
 //! | a jump point's `owner` and `stability` | its static state on the store ([`missions`]) | by `system/point`: its gate's `spöb`, its owner's id and its stability, which missions' effects overlay in play |
 //!
@@ -71,8 +71,9 @@
 //!   same once [`NewGame::check_dialogs`] has asked the dialog port
 //!   ([`dialogs::DialogCheck`]), which the game runs as it opens the
 //!   folder.
-//! - A mission naming a stellar, mission, news item, jump point or faction
-//!   that isn't there is left out, with a problem for each such name. So
+//! - A mission naming a stellar, mission, news item, jump point, faction
+//!   or outfit that isn't there is left out, with a problem for each such
+//!   name. So
 //!   is one whose `offer` or `complete` dialog has no compiled file, or,
 //!   once [`NewGame::check_dialogs`] has run, names a knot its story
 //!   lacks. One whose `requires` names a mission left out is left out

@@ -3,15 +3,16 @@
 //!
 //! A mission keeps its format ids as text (missions, news, flags,
 //! factions, `system/point` refs), and takes Nova IDs only where the
-//! engine places something: the stellar an offer, a completion or a
-//! delivery is at. Its `offer` and `complete` dialogs become
+//! engine places something or acts on it: the stellar an offer, a
+//! completion or a delivery is at, and the `oütf` of each outfit an
+//! effect grants or removes. Its `offer` and `complete` dialogs become
 //! [`DialogPlace`](crate::store::DialogPlace)s, resolved against the
 //! compiled texts ([`Compiled`]). A news item keeps its headline and body,
 //! and its `from` system's `sÿst`. Every jump point that has a gate is
 //! kept with its gate, owner and stability.
 //!
-//! A mission that names a stellar, mission, news item, jump point or
-//! faction that isn't there is left out, with one problem against its file
+//! A mission that names a stellar, mission, news item, jump point,
+//! faction or outfit that isn't there is left out, with one problem against its file
 //! for each such name; so is one whose offer or completion dialog has no
 //! compiled file. A news item whose `from` isn't a system is left out the
 //! same way. A name that failed to load, a record left out for its ID, or
@@ -37,7 +38,7 @@ use crate::store::{
     MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
     StoryEffects, StoryMission, Storylines,
 };
-use crate::wire::id::{StellarId, SystemId};
+use crate::wire::id::{OutfitId, StellarId, SystemId};
 
 /// Maps `galaxy`'s missions, news and jump points, with `ids`' Nova IDs and
 /// `compiled`'s stories, reporting what is left out to `problems`.
@@ -284,7 +285,28 @@ impl Names<'_> {
             clear_flags: texts(&effects.clear_flags),
             points: self.point_states(&format!("{field}.points"), &effects.points),
             news: texts(&effects.news),
+            grant_outfits: self.outfits(&format!("{field}.grant_outfits"), &effects.grant_outfits),
+            remove_outfits: self
+                .outfits(&format!("{field}.remove_outfits"), &effects.remove_outfits),
         }
+    }
+
+    /// The `oütf`s of the outfits `ids`, named at `field`: one that isn't
+    /// there is reported, and one that failed to load or was left out for
+    /// its ID leaves the mission out unreported.
+    fn outfits(&mut self, field: &str, ids: &[Id]) -> Vec<OutfitId> {
+        ids.iter()
+            .filter_map(|id| {
+                if let Some(&nova) = self.ids.outfits.get(id) {
+                    return Some(OutfitId(nova));
+                }
+                if absent(self.galaxy, &self.galaxy.outfits, "outfits", id) {
+                    self.missing(field, id.as_str(), "outfit", "outfits");
+                }
+                self.left_out = true;
+                None
+            })
+            .collect()
     }
 
     /// The point states `states`, at `field`, each point and owner
@@ -653,6 +675,81 @@ mod tests {
             "requires.any[0].missions_done names the mission `gone`, which is not in \
              missions/; it is left out",
         );
+    }
+
+    /// The test galaxy's `blaster` with the outfit `extra` beside it.
+    fn with_outfit(source: MemSource, extra: &str) -> MemSource {
+        source.with(
+            &format!("outfits/{extra}.md"),
+            "---\nname: Pass\nmount: fixed\ndamage: 0\nrange: 0\nreload: 1\nprice: 0\n---\n",
+        )
+    }
+
+    #[test]
+    fn each_effect_block_maps_its_outfit_grants_and_removals_to_their_ids() {
+        let source = with_outfit(
+            with_toll(
+                "on_offer: {grant_outfits: [pass, blaster, pass]}\n\
+                 on_accept: {remove_outfits: [blaster]}\n\
+                 on_decline: {grant_outfits: [blaster], remove_outfits: [pass]}\n\
+                 on_success: {remove_outfits: [pass, pass]}\n",
+            ),
+            "pass",
+        );
+        let game = loaded(&source);
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let (blaster, pass) = (OutfitId(128), OutfitId(129));
+        let toll = toll(&game).expect("mapped");
+        assert_eq!(toll.on_offer.grant_outfits, [pass, blaster, pass]);
+        assert_eq!(toll.on_offer.remove_outfits, []);
+        assert_eq!(toll.on_accept.grant_outfits, []);
+        assert_eq!(toll.on_accept.remove_outfits, [blaster]);
+        assert_eq!(toll.on_decline.grant_outfits, [blaster]);
+        assert_eq!(toll.on_decline.remove_outfits, [pass]);
+        assert_eq!(toll.on_success.remove_outfits, [pass, pass]);
+    }
+
+    #[test]
+    fn a_missing_outfit_leaves_the_mission_out() {
+        left_out_with(
+            "on_accept: {grant_outfits: [gone]}\n",
+            "on_accept.grant_outfits names the outfit `gone`, which is not in outfits/; \
+             it is left out",
+        );
+        left_out_with(
+            "on_success: {remove_outfits: [gone]}\n",
+            "on_success.remove_outfits names the outfit `gone`, which is not in outfits/; \
+             it is left out",
+        );
+    }
+
+    #[test]
+    fn an_outfit_that_failed_to_load_leaves_the_mission_out_unreported() {
+        let source = with_toll("on_accept: {grant_outfits: [blaster]}\n")
+            .with("outfits/blaster.md", "---\nnot: valid\n---\n");
+        let game = loaded(&source);
+        assert_eq!(toll(&game), None);
+        assert!(
+            problems(&game).iter().all(|p| !p.starts_with("missions/")),
+            "{:?}",
+            problems(&game)
+        );
+    }
+
+    #[test]
+    fn an_outfit_left_out_for_its_id_leaves_the_mission_out_unreported_again() {
+        let source = (0..512).fold(
+            with_toll("on_accept: {remove_outfits: [blaster]}\n"),
+            |source, n| with_outfit(source, &format!("a{n:03}")),
+        );
+        let game = loaded(&source);
+        assert_eq!(
+            problems(&game),
+            ["outfits/blaster.md: it is past the last oütf ID, 639; it is left out"],
+            "the outfit's problem alone"
+        );
+        assert_eq!(toll(&game), None);
+        assert!(game.data.storylines().missions.contains_key("parcel"));
     }
 
     #[test]
