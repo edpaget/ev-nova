@@ -137,6 +137,10 @@ pub(super) struct Statics {
     /// `slot_stellars` module), which the traffic flies a goal naming one
     /// the system doesn't list among.
     pub(super) slot_stellars: Vec<LandingSite>,
+    /// Each stellar's conversation, read when the session starts: the
+    /// compiled story and the knot a landed pilot's conversation enters
+    /// (see the `conversation` module). None in the stock game.
+    pub(super) stellar_dialogs: nova_sim_catalog::dialogs::StellarDialogs,
 }
 
 impl Statics {

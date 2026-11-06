@@ -382,6 +382,7 @@ impl AppScreen {
             control_bits: Rc::clone(&self.control_bits),
             person_rules: Rc::clone(&self.person_rules),
             strings: Some(Rc::clone(&self.data) as Rc<dyn CommCatalog>),
+            dialogs: None,
             carry: CarryOver {
                 slot_sprites: Some(self.slot_sprites.clone()),
                 stellar_sprite_pool: Some(self.stellar_sprites.clone()),

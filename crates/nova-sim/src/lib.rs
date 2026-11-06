@@ -113,6 +113,11 @@
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   a day for each day a jump takes, and [`date::long_date_text`], how
 //!   the messages show it.
+//! - [`dialog`]: the dialog port, which plays the new game's compiled Ink
+//!   conversations, and [`dialog::conversation`], which plays one a page
+//!   at a time ([`ConversationPage`]) for the spaceport's conversation;
+//!   with the `fixture` feature, its fake (`dialog::fake`) too. The game
+//!   wires `nova-ink`'s adapter.
 //! - [`escape`]: the player's escape: the escape pod and auto-eject
 //!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
 //!   and where the escape pod is taken.
@@ -432,6 +437,7 @@ pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
 pub use nova_sim_state::domination;
+pub use nova_sim_story::dialog;
 pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
 pub use nova_sim_story::map_walk;
@@ -566,6 +572,7 @@ pub use control::{
     SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
 pub use date::GameDate;
+pub use dialog::conversation::ConversationPage;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
 };

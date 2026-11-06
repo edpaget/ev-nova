@@ -9,8 +9,9 @@
 //! module, the mission screens' and the mission info key's in the
 //! `missions` module, the player info key's and its dialog's in the
 //! `player_info` module, the view's settings' in the `settings` module,
-//! and the asks' (the hover, the coming traffic and a description's
-//! load) in the `asks` module.
+//! the asks' (the hover, the coming traffic and a description's load) in
+//! the `asks` module, and the landed stellar's conversation's in the
+//! `conversation` module.
 
 use super::Session;
 use crate::board::BoardingRule;
@@ -22,6 +23,7 @@ use crate::session::SimCatalog;
 
 mod asks;
 mod comm;
+mod conversation;
 mod faded;
 mod missions;
 mod player_info;
@@ -287,6 +289,7 @@ impl Session {
             FlightCommand::Hover { .. }
             | FlightCommand::LoadDescription { .. }
             | FlightCommand::LoadPortDescription => self.apply_ask(command, collab),
+            FlightCommand::Converse(converse) => self.apply_conversation(converse),
         }
     }
 }

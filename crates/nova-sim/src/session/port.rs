@@ -3,7 +3,9 @@
 //! touched down, the stay, the bar's news, the outfitter visit, the day's
 //! hire, outfit and ship rolls, what the ranks' port prices are taken
 //! from, the bar's race (its last winner and the winnings due), and the
-//! port's own `dësc` (see the `port_desc` module). Landing and taking off themselves (`land`, `dock`, `take_off`)
+//! port's own `dësc` (see the `port_desc` module), and the landed
+//! stellar's conversation, while it is open (see the `conversation`
+//! module). Landing and taking off themselves (`land`, `dock`, `take_off`)
 //! coordinate the rest and stay on `Session`.
 
 use std::collections::BTreeSet;
@@ -122,6 +124,10 @@ pub(super) struct Port {
     /// module). It is not saved: the load itself lands nothing a save
     /// keeps.
     pub(super) own_desc: OwnDesc,
+    /// The landed stellar's conversation, while it is open (see the
+    /// `conversation` module): opened by the view as the spaceport opens,
+    /// closed by it or by the take-off. Not saved.
+    pub(super) conversation: Option<super::conversation::OpenConversation>,
 }
 
 /// Where the port's own `dësc` stands (see the `port_desc` module).
@@ -145,7 +151,7 @@ pub(super) enum OwnDesc {
 
 impl Port {
     /// The port as a session starts or loads: nothing rolled, no news, no
-    /// outfitter visit, shipyard listing or stay under way, no dock request, the land key
+    /// outfitter visit, shipyard listing, conversation or stay under way, no dock request, the land key
     /// up, no take-off grace, the ship free to move as it takes off, and
     /// `touchdown`, where the ship resumes, as where it touched down.
     pub(super) fn new(touchdown: Vec2) -> Self {
@@ -170,6 +176,7 @@ impl Port {
             last_race_winner: None,
             winnings_due: 0,
             own_desc: OwnDesc::None,
+            conversation: None,
         }
     }
 
