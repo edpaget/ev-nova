@@ -320,23 +320,23 @@ exclude_re = [
     "replace main -> ExitCode",
     # The winit event-loop glue: opening the window and its surface (or
     # recording why it could not), installing the macOS menu bar and the
-    # Apple event handlers, forwarding each window event and loop event to
-    # `App::handle` (including acting on its `Control`) and the screen's
-    # offers to the menu bar, telling the app the run is over (the
-    # runner's `Drop`, which winit-appkit runs in
-    # `applicationWillTerminate:`) and printing what it reports, and
-    # starting the startup warnings' sheet once the loop waits. It needs a
-    # real window, display and, for the menu bar, the handlers and the
-    # sheet, `NSApplication` on the main thread. The decisions it forwards
-    # to (`translate`, `App::handle`, `App::exiting`, `MenuSync`, `choose`,
-    # `gpu_failure`, `exit::exit`, `Report::take_alert`, `overlay_feed`,
-    # `LoopEvents::drain`) are mutated and tested, and `MenuBar::install` /
-    # `set_enabled` and `AppleEvents::install` run on the main thread in
-    # nova-appkit's `tests/it`.
+    # Apple event handlers and the will-terminate observer, forwarding
+    # each window event and loop event to `App::handle` (including acting
+    # on its `Control`) and the screen's offers to the menu bar, telling the app the run is over (`Running`'s
+    # `Ending::end`, which `run_end::Run` calls once, on the runner's drop
+    # or from the will-terminate observer) and printing what it reports,
+    # and starting the startup warnings' sheet once the loop waits. It
+    # needs a real window, display and, for the menu bar, the handlers,
+    # the observer and the sheet, `NSApplication` on the main thread. The
+    # decisions it forwards to (`translate`, `App::handle`, `App::exiting`,
+    # `run_end::Run`, `MenuSync`, `choose`, `gpu_failure`, `exit::exit`,
+    # `Report::take_alert`, `overlay_feed`, `LoopEvents::drain`) are mutated and tested, and `MenuBar::install` /
+    # `set_enabled`, `AppleEvents::install` and `WillTerminate::install`
+    # run on the main thread in nova-appkit's `tests/it`.
     "impl ApplicationHandler for Runner<S>>::(can_create_surfaces|window_event|proxy_wake_up|about_to_wait)",
     "nova/src/platform/runner\\.rs:.* in Runner<S>::take_loop_events( |$)",
     "nova/src/platform/runner\\.rs:.*replace Runner<S>::take_loop_events with \\(\\)$",
-    "nova/src/platform/runner\\.rs:.*replace <impl Drop for Runner<S>>::drop with \\(\\)$",
+    "nova/src/platform/runner\\.rs:.*replace <impl Ending for Running<S>>::end with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
     # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.

@@ -35,6 +35,7 @@ mod keyboard_access;
 mod loop_sender;
 #[cfg(target_os = "macos")]
 mod menu_bar;
+mod run_end;
 mod runner;
 #[cfg(any(target_os = "macos", windows))]
 mod updater;

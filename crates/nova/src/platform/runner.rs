@@ -34,15 +34,19 @@
 //!
 //! The window and its surface open in `can_create_surfaces`, once.
 //!
-//! The runner's drop is the backstop for a quit that never reached the
-//! game: on macOS a `terminate:` sent before the handlers are installed,
-//! or by something else, which ends the process from
-//! `applicationWillTerminate:`, where winit drops the handler. It tells
-//! the app to quit ([`App::exiting`]), so the pilot is saved, and prints
-//! what the app reports. Every run ends in it, after the loop returns, so
-//! it follows the game's own quits too, and then does nothing more. (winit
-//! 0.31 has no `exiting` callback; rdm:task/quit-from-app-menu-may-skip-save
-//! tracks the quits that bypass the game.)
+//! When the run is over, the runner tells the app to quit
+//! ([`App::exiting`]), so the pilot is saved, and prints what the app
+//! reports, once (`run_end::Run`), on the first of two triggers. Every run
+//! whose loop returns ends on the runner's drop, the game's own quits
+//! included, after which the app has nothing more to do. On macOS a
+//! `terminate:` that bypassed the game (sent by code in the process
+//! itself, or a quit Apple event `AppKit` answers because the handlers
+//! couldn't be installed) never returns from the loop: `AppKit` calls
+//! `exit()` after `applicationWillTerminate:`, where winit-appkit 0.31
+//! drops only its borrow of the runner, so the runner is never dropped.
+//! For that the runner installs `nova_appkit::WillTerminate` beside the
+//! menu bar, whose callback ends the run there. (winit 0.31 has no
+//! `exiting` callback, which covered this under 0.30.)
 //!
 //! With [`Runner::with_audio`], the app it opens plays sound, with
 //! [`Runner::with_settings`] it saves the player's settings, and with
@@ -89,6 +93,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 use super::loop_sender::LoopEvents;
 #[cfg(target_os = "macos")]
 use super::loop_sender::LoopSender;
+use super::run_end::{Ending, Run};
 use super::window::WinitWindow;
 use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
@@ -116,13 +121,19 @@ struct Running<S> {
     /// run (their target lives in them); none until they are installed.
     #[cfg(target_os = "macos")]
     apple_events: Option<nova_appkit::AppleEvents>,
+    /// The will-terminate observer, kept for the whole run (its target
+    /// lives in it); none if it could not be installed.
+    #[cfg(target_os = "macos")]
+    will_terminate: Option<nova_appkit::WillTerminate>,
     window: WinitWindow,
 }
 
 /// Runs the app in a winit event loop.
 pub struct Runner<S: ImageSource> {
     pending: Option<(S, AppScreen, FontFaces)>,
-    running: Option<Running<S>>,
+    /// The window, its surface and the app once open, ended once: on the
+    /// runner's drop, or on macOS by the will-terminate observer.
+    running: Run<Running<S>>,
     /// Why the window could not be opened, shared with `main`, which reads
     /// it once the loop, which owns the runner, has ended.
     failure: Rc<RefCell<Option<OpenFailure>>>,
@@ -155,7 +166,7 @@ impl<S: ImageSource> Runner<S> {
     pub fn new(images: S, screen: AppScreen, fonts: FontFaces) -> Self {
         Self {
             pending: Some((images, screen, fonts)),
-            running: None,
+            running: Run::new(),
             failure: Rc::default(),
             loop_events: None,
             start: Instant::now(),
@@ -333,9 +344,11 @@ fn open(
 /// app`: their quit Apple event, which `AppKit` would answer with
 /// `terminate:`, is handled by `nova_appkit::AppleEvents`, installed with
 /// the menu bar, and sends the menu's Quit. A `terminate:` that still
-/// comes (a quit event before the handlers are installed) drops the
-/// runner in `applicationWillTerminate:`, and its drop saves the pilot. A
-/// quit
+/// comes once the window is open (sent by code in the process itself, or
+/// a quit event when the handlers couldn't be installed) is caught by
+/// `nova_appkit::WillTerminate`, installed with them, which ends the run
+/// and saves the pilot before `AppKit` calls `exit()`; before then there
+/// is no pilot flying to save. A quit
 /// event that arrives while an `AppKit` modal runs (the startup warnings
 /// sheet, a file dialog) is taken at once, but its command waits in the
 /// loop until the modal ends, as Command-Q's does. Before the loop runs,
@@ -353,7 +366,9 @@ pub fn event_loop() -> Result<EventLoop, EventLoopError> {
     builder.build()
 }
 
-impl<S: ImageSource> ApplicationHandler for Runner<S> {
+// `'static`, as `run_app` takes the runner, and the will-terminate
+// observer's callback holds the run.
+impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let Some((images, screen, fonts)) = self.pending.take() else {
             return;
@@ -415,16 +430,27 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                     menu: None,
                     #[cfg(target_os = "macos")]
                     apple_events: None,
+                    #[cfg(target_os = "macos")]
+                    will_terminate: None,
                     window,
                 };
                 #[cfg(target_os = "macos")]
-                if let Some(sender) = self.menu_sender.take() {
-                    for warning in running.install_menu(&sender) {
-                        startup_warning(self.report.as_ref(), &warning);
+                {
+                    if let Some(sender) = self.menu_sender.take() {
+                        for warning in running.install_menu(&sender) {
+                            startup_warning(self.report.as_ref(), &warning);
+                        }
+                    }
+                    match nova_appkit::WillTerminate::install(self.running.ender()) {
+                        Ok(observer) => running.will_terminate = Some(observer),
+                        Err(error) => startup_warning(
+                            self.report.as_ref(),
+                            &format!("nova: no will-terminate observer: {error}"),
+                        ),
                     }
                 }
                 running.sync_menu();
-                self.running = Some(running);
+                self.running.start(running);
             }
             Err(failure) => {
                 *self.failure.borrow_mut() = Some(failure);
@@ -434,7 +460,7 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
     }
 
     fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _id: WindowId, event: WinitEvent) {
-        let Some(running) = &mut self.running else {
+        let Some(mut running) = self.running.get() else {
             return;
         };
         let raw = event;
@@ -461,10 +487,15 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         // The overlay sees the events the app gave it, the text with its
         // key.
         #[cfg(feature = "dev-tools")]
-        if let Some(dev_tools) = &mut running.dev_tools {
-            let app = &running.app;
-            for event in overlay_feed(&taken, typed, |handled| app.overlay_wants(Some(&handled))) {
-                dev_tools.on_event(&event);
+        {
+            let running = &mut *running;
+            if let Some(dev_tools) = &mut running.dev_tools {
+                let app = &running.app;
+                for event in
+                    overlay_feed(&taken, typed, |handled| app.overlay_wants(Some(&handled)))
+                {
+                    dev_tools.on_event(&event);
+                }
             }
         }
         #[cfg(not(feature = "dev-tools"))]
@@ -478,7 +509,7 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
     /// a terminal.
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.take_loop_events(event_loop);
-        if let (Some(running), Some(report)) = (&self.running, &self.report)
+        if let (Some(running), Some(report)) = (self.running.get(), &self.report)
             && let Some(body) = report.borrow_mut().take_alert()
         {
             dialogs::show_warnings(&*running.window.0, &body);
@@ -496,7 +527,7 @@ impl<S: ImageSource> Runner<S> {
     /// updater's quit): the app takes it as its window event
     /// ([`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`]).
     fn take_loop_events(&mut self, event_loop: &dyn ActiveEventLoop) {
-        let (Some(running), Some(events)) = (&mut self.running, &self.loop_events) else {
+        let (Some(mut running), Some(events)) = (self.running.get(), &self.loop_events) else {
             return;
         };
         for event in events.drain() {
@@ -509,18 +540,19 @@ impl<S: ImageSource> Runner<S> {
 /// The run is over: tells the app, which quits unless it already has
 /// (saving the pilot flying), and prints what it reports.
 ///
-/// Every run ends here, after the game's own quit too, when the app has
-/// nothing more to do. On macOS a `terminate:` that bypassed the game
-/// also ends here, as winit-appkit drops the handler inside
-/// `applicationWillTerminate:`, and `AppKit` ends the process right after:
-/// `main`'s report never runs, so a failed save goes to stderr only.
-impl<S: ImageSource> Drop for Runner<S> {
-    fn drop(&mut self) {
-        let Some(running) = &mut self.running else {
-            return;
-        };
-        running.app.exiting(&mut running.window);
-        running.print_reports();
+/// `run_end::Run` calls it once, on the first of its two triggers. Every
+/// run whose loop returns ends on the runner's drop (the `Run`'s), after
+/// the game's own quit too, when the app has nothing more to do. On macOS
+/// a `terminate:` that bypassed the game ends in the will-terminate
+/// observer's callback instead: winit-appkit 0.31's
+/// `applicationWillTerminate:` drops only its borrow of the runner, and
+/// `AppKit` calls `exit()` right after, so the runner is never dropped.
+/// There `main`'s report never runs, so a failed save goes to stderr
+/// only.
+impl<S: ImageSource> Ending for Running<S> {
+    fn end(&mut self) {
+        self.app.exiting(&mut self.window);
+        self.print_reports();
     }
 }
 

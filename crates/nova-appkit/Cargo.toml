@@ -1,6 +1,6 @@
 [package]
 name = "nova-appkit"
-description = "The macOS menu bar, Apple event handlers, full keyboard access setting, keyboard layout key names and Sparkle updater, built with AppKit and Carbon behind a safe API, for macOS only"
+description = "The macOS menu bar, Apple event handlers, will-terminate observer, full keyboard access setting, keyboard layout key names and Sparkle updater, built with AppKit and Carbon behind a safe API, for macOS only"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,8 +13,9 @@ publish.workspace = true
 # backend (winit-appkit) lock. Nothing crosses between this crate and
 # winit, as it takes NSApplication from `sharedApplication` itself.
 objc2 = "0.6"
-# NSBundle and NSError load Sparkle.framework at run time (`updater`).
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSBundle", "NSError", "NSObject", "NSString"] }
+# NSBundle and NSError load Sparkle.framework at run time (`updater`);
+# NSNotification observes the application terminating (`will_terminate`).
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSBundle", "NSError", "NSNotification", "NSObject", "NSString"] }
 # The menus alone.
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
 

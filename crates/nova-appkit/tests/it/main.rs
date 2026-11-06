@@ -21,6 +21,8 @@ mod menu_bar;
 mod modal;
 #[cfg(target_os = "macos")]
 mod updater;
+#[cfg(target_os = "macos")]
+mod will_terminate;
 
 /// Every test, by name. Each panics on failure.
 #[cfg(target_os = "macos")]
@@ -64,6 +66,10 @@ const TESTS: &[(&str, fn())] = &[
     (
         "updater::the_real_framework_makes_a_controller_that_isn_t_started",
         updater::the_real_framework_makes_a_controller_that_isn_t_started,
+    ),
+    (
+        "will_terminate::the_observer_calls_back_on_will_terminate_until_dropped",
+        will_terminate::the_observer_calls_back_on_will_terminate_until_dropped,
     ),
 ];
 

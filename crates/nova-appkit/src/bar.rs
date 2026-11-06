@@ -17,7 +17,8 @@ use objc2_foundation::{NSObject, NSString};
 
 use crate::items::{Action, Command, Item, MENUS, Role, Shortcut};
 
-/// Why the menu bar or the Apple event handlers could not be installed.
+/// Why the menu bar, the Apple event handlers or the will-terminate
+/// observer could not be installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallError {
     /// They were asked for off the main thread, where `AppKit` can't be
