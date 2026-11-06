@@ -347,6 +347,13 @@ exclude_re = [
     # nova-appkit's `tests/it` checks that, and can't tell the removal
     # from its absence. It is kept so nothing relies on that.
     "nova-appkit/src/apple_event_handler\\.rs:.*replace <impl Drop for AppleEvents>::drop with \\(\\)$",
+    # `WillTerminate`'s drop removes its observer from the notification
+    # center. Since macOS 10.11 the center holds an observer added with a
+    # selector weakly and stops calling it once it is freed, so a post after
+    # the drop calls no one either way: nova-appkit's `tests/it` checks
+    # that, and can't tell the removal from its absence. It is kept so
+    # nothing relies on that.
+    "nova-appkit/src/will_terminate\\.rs:.*replace <impl Drop for WillTerminate>::drop with \\(\\)$",
     # The current keyboard layout's drop guard releases the input source
     # `key_label` copied. Without it the source leaks, one Core Foundation
     # object per key named, and every answer stays the same, so no test can
