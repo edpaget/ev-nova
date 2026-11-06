@@ -63,8 +63,9 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
+use crate::input::PadButton;
 use crate::keymap::{
-    Command, Devices, EscortMenuCommand, FlightCommand as F, KeysDown, PlayCommand,
+    Command, Devices, EscortMenuCommand, FlightCommand as F, Gamepad, KeysDown, PlayCommand,
     is_modifier_input,
 };
 use crate::system::catalog::SystemCatalog;
@@ -73,10 +74,12 @@ use crate::{Input, Screen as _};
 
 /// What is physically down as the last dialog over flight closes, as the
 /// router saw it: the keys down now, those down at flight's last poll,
-/// and whether the primary button is down. The router passes the physical
-/// state; flight knows which latched keys it read on their press since
-/// that poll ([`FlightView::note_read_on_press`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// whether the primary button is down, and the pad's buttons and sticks
+/// now and at that poll, with the press the closing dialog took. The
+/// router passes the physical state; flight knows which latched keys it
+/// read on their press since that poll
+/// ([`FlightView::note_read_on_press`]).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveKeys {
     /// The keys down now.
     pub down: KeysDown,
@@ -89,6 +92,26 @@ pub struct LiveKeys {
     pub down_before: KeysDown,
     /// Whether the primary button is down now.
     pub button: bool,
+    /// The pad now: each button down with the layer it went down under
+    /// and whether that layer is still held, in the order pressed, and
+    /// each stick axis's value (the `pad_hand_back` module).
+    pub pad: Gamepad,
+    /// The pad at flight's last poll, as
+    /// [`LiveKeys::down_before`] is the keys.
+    pub pad_before: Gamepad,
+    /// The pad button whose press the closing dialog took, still down:
+    /// flight lets it go rather than take it back.
+    pub pad_taken: Option<PadButton>,
+}
+
+/// Where an entry of the hand-back's poll order came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Held {
+    /// A key, still to be sorted into waiting and fresh.
+    Key,
+    /// A pad button, sorted already by its exact layer
+    /// ([`FlightView::take_back_pad`]).
+    Pad,
 }
 
 /// A flight command, for the const table.
@@ -163,6 +186,11 @@ pub(super) const POLL_ORDER: [Command; 41] = [
     flight(F::ZoomOut),
     flight(F::ZoomIn),
 ];
+
+/// `command`'s place in [`POLL_ORDER`], if it is polled there.
+pub(super) fn poll_index(command: Command) -> Option<usize> {
+    POLL_ORDER.iter().position(|&polled| polled == command)
+}
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Marks that a `_SetAllKeyCmdFlags` site ran on this pass, so the
@@ -312,17 +340,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// A key's place in that order is its command's, as a press of it
     /// would mean now, its key read through flight's reader; keys of one
     /// command (a slot's number and its F-key twin) go in key order.
+    ///
+    /// The pad comes back by the same rules, each button read under the
+    /// layer it went down under only ([`FlightView::take_back_pad`]; the
+    /// `pad_hand_back` module): every button adopted with that layer, its
+    /// sticks as they stand, and the press the closing dialog took let go.
+    /// Its own-latch entries and fresh presses join the keys' in one poll
+    /// order, sorted already, so a pad press and a key press come back in
+    /// `_HandlePlayer`'s order between them.
     #[must_use]
     pub fn take_back_live_input(&mut self, live: LiveKeys) -> Vec<Input> {
         let LiveKeys {
             down,
             down_before,
             button,
+            pad,
+            pad_before,
+            pad_taken,
         } = live;
         let latch_all = std::mem::take(&mut self.latch_at_close) || self.map_open;
         self.sync_escort_keys();
         for press in self.keys.down() {
-            if self.key_reads_live(&press) {
+            // The pad's are the pad hand-back's, by their exact layers.
+            if !matches!(press, Input::PadButton { .. }) && self.key_reads_live(&press) {
                 self.keys.follow(&press.released());
             }
         }
@@ -335,6 +375,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.hold_live_key(press);
         }
         self.cursor.button(button);
+        let read_so_far = self.read_on_press.clone();
+        let pad_entries = self.take_back_pad(&pad, &pad_before, pad_taken, latch_all, &read_so_far);
         if latch_all {
             self.latch_keys(keys);
             self.set_every_latch();
@@ -346,31 +388,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
         };
         let waiting: Vec<Input> = keys.iter().copied().filter(waits).collect();
         self.latch_keys(waiting);
-        let mut ordered: Vec<(usize, Command, Input)> = keys
+        let mut ordered: Vec<(usize, Command, Input, Held)> = keys
             .iter()
             .filter_map(|&press| {
                 let command = self
                     .keys
                     .peek(&press)
                     .or_else(|| self.keys.bound_to(&press).first().copied())?;
-                let at = POLL_ORDER.iter().position(|&polled| polled == command)?;
-                Some((at, command, press))
+                let at = poll_index(command)?;
+                Some((at, command, press, Held::Key))
             })
+            .chain(
+                pad_entries
+                    .into_iter()
+                    .map(|(at, command, press)| (at, command, press, Held::Pad)),
+            )
             .collect();
         ordered.sort_by_key(|&(at, ..)| at);
         let mut presses = Vec::new();
         let mut polled_before = false;
         self.after_poll.clear();
-        for (_, command, press) in ordered {
+        for (_, command, press, held) in ordered {
             if OWN_LATCH.contains(&command) {
                 // Held, and read by its own latch at the next poll.
                 polled_before |= !self.own_latch(command);
                 continue;
             }
             // Zoom Out's key is held for its chord whatever its zoom's
-            // latch says.
+            // latch says. A pad entry comes sorted.
             let still_held = self.keys.is_down(&press) && !self.key_reads_live(&press);
-            if waits(&press) || still_held {
+            if held == Held::Key && (waits(&press) || still_held) {
                 continue;
             }
             let at_poll = Self::acts_at_the_poll(command);

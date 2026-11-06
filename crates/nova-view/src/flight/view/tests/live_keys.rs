@@ -50,6 +50,7 @@ pub(super) fn back(
         down: down.into_iter().collect(),
         down_before: before.into_iter().collect(),
         button,
+        ..LiveKeys::default()
     })
 }
 
