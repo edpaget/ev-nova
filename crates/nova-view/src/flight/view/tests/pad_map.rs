@@ -483,3 +483,22 @@ fn over_flight_north_centres_the_open_map() {
         view.ui_sounds
     );
 }
+
+#[test]
+fn a_stick_pushed_over_flight_with_the_map_shut_moves_no_cursor_once_it_opens() {
+    use crate::input::PadAxis;
+    let mut view = faked_sol(in_sol());
+    told(&mut view, PAD);
+    view.input(&Input::PadAxis {
+        axis: PadAxis::RightX,
+        value: 1.0,
+    });
+    view.open_map();
+    let centre = view.course_map().cursor();
+    view.tick(TENTH);
+    assert_eq!(
+        view.course_map().cursor(),
+        centre,
+        "the shut map read no stick"
+    );
+}

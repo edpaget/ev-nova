@@ -655,3 +655,22 @@ fn the_viewer_draws_no_cursor() {
     let crosshair = cursor_alone(&map, MapCursor::default());
     assert!(!holds(&drawn(&map), &crosshair));
 }
+
+#[test]
+fn the_crosshair_is_four_arms_of_5_points_3_from_the_cursor() {
+    let map = GalaxyMap::course(&FakeCatalog::new(Galaxy::default()));
+    let color = crate::ui::button::ButtonStyle::STOCK.up;
+    let mut expected = DrawList::new();
+    for arm in [
+        Bounds::at(Point::new(503.0, 400.0), 5.0, 1.0),
+        Bounds::at(Point::new(493.0, 400.0), 5.0, 1.0),
+        Bounds::at(Point::new(500.0, 403.0), 1.0, 5.0),
+        Bounds::at(Point::new(500.0, 393.0), 1.0, 5.0),
+    ] {
+        fill_rect(&mut expected, arm, color);
+    }
+    assert_eq!(
+        cursor_alone(&map, at(500.7, 400.2)),
+        expected.iter().cloned().collect::<Vec<_>>()
+    );
+}

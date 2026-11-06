@@ -122,21 +122,20 @@ impl MapCursor {
     /// [`SNAP_RADIUS`], the lowest ID on a tie.
     #[must_use]
     pub fn target(&self, model: &GalaxyModel, transform: &Transform) -> Option<(SystemId, Point)> {
-        let mut best: Option<(f32, SystemId, Point)> = None;
-        for system in model.systems() {
-            let (h, v) = transform.pixel(system.position());
-            #[allow(clippy::cast_precision_loss)] // Screen pixels.
-            let point = Point::new(h as f32, v as f32);
-            let distance = (point.x - self.at.x).hypot(point.y - self.at.y);
-            if distance > SNAP_RADIUS {
-                continue;
-            }
-            let id = system.entry.id;
-            if best.is_none_or(|(near, near_id, _)| (distance, id) < (near, near_id)) {
-                best = Some((distance, id, point));
-            }
-        }
-        best.map(|(_, id, point)| (id, point))
+        // By ascending ID, so the first of the nearest is the lowest ID.
+        model
+            .systems()
+            .iter()
+            .map(|system| {
+                let (h, v) = transform.pixel(system.position());
+                #[allow(clippy::cast_precision_loss)] // Screen pixels.
+                let point = Point::new(h as f32, v as f32);
+                let distance = (point.x - self.at.x).hypot(point.y - self.at.y);
+                (distance, system.entry.id, point)
+            })
+            .filter(|&(distance, ..)| distance <= SNAP_RADIUS)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id, point)| (id, point))
     }
 
     /// Where South presses: its target's point, or its own with none.
