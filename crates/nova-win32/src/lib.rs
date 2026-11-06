@@ -8,7 +8,7 @@
 //!   the game makes as a safe method, the shutdown request as a Rust
 //!   closure.
 //! - The keyboard layout: what the thread's current layout prints on a
-//!   key, by its extended scancode ([`key_label`]), and which layout that
+//!   key, by its extended scancode ([`key_label()`]), and which layout that
 //!   is ([`keyboard_layout_language`]).
 //!
 //! The workspace forbids unsafe code; this crate is one of the places it
