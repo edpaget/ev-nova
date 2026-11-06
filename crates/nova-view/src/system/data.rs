@@ -559,4 +559,47 @@ mod tests {
             Err("spïn 1000: no rlëD or PICT 1000 for its sprites".to_owned())
         );
     }
+
+    /// A sheet's image size is the decoded sheet's, apart from its frame
+    /// box: the store decides how far a 32-bit `rlëD` draws past its box
+    /// (rendering phase 1), and the catalog passes that on.
+    #[test]
+    fn a_sheet_s_image_size_is_the_decoded_sheet_s_apart_from_its_box() {
+        let wide = RledBuilder::new(2, 2)
+            .depth(32)
+            .count_lines()
+            .frame(|f| {
+                f.line()
+                    .pixels32(&[0x7C00, 0x7C00])
+                    .line()
+                    .pixels32(&[0x7C00, 0x7C00])
+            })
+            .build();
+        let mut resources = sol();
+        resources
+            .retain(|(ty, id, _, _)| ![(Spin::TYPE, 1001), (RLED, 1001)].contains(&(*ty, *id)));
+        resources.push((Spin::TYPE, 1001, None, spin(1001, 1)));
+        resources.push((RLED, 1001, None, wide));
+        let data = store(&resources);
+        let decoded = data
+            .stellar_sprite(StellarId(129))
+            .expect("the wormhole's sheet decodes")
+            .sheet;
+        let wormhole = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .find(|stellar| stellar.id == StellarId(129))
+            .expect("the wormhole")
+            .sprite
+            .expect("its sheet");
+        assert_eq!(
+            wormhole.image_size,
+            (decoded.image_width(), decoded.image_height())
+        );
+        assert_eq!(
+            (wormhole.frame_width, wormhole.frame_height),
+            (decoded.frame_width(), decoded.frame_height())
+        );
+    }
 }
