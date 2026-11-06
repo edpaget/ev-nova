@@ -13,7 +13,6 @@ deny = [
     # egui must never be in the default build.
     { crate = "egui", reason = "only nova's dev-tools feature may pull in egui" },
     { crate = "egui-wgpu", reason = "only nova's dev-tools feature may pull in egui" },
-    { crate = "egui-winit", reason = "only nova's dev-tools feature may pull in egui" },
     # MetalFX is reached only through nova-metalfx's safe API, and that
     # only from the renderer (a macOS-only dependency of each).
     { crate = "nova-metalfx", wrappers = ["nova-render"], reason = "only the renderer draws the world with MetalFX" },
@@ -78,9 +77,10 @@ deny = [
     # depend on them directly, so a nova-sim or nova-view crate can't open a
     # window, draw or play sound. (This replaces a test that scanned
     # nova-sim's Cargo.toml.) cargo-deny has no globs, so each crate is
-    # named. egui, egui-wgpu and egui-winit keep their outright bans above:
-    # they already reject egui from any crate in the default build, and a
-    # `wrappers` form would name crates not in this graph.
+    # named. egui and egui-wgpu keep their outright bans above: they
+    # already reject egui from any crate in the default build, and a
+    # `wrappers` form would name crates not in this graph. The overlay's
+    # window input is nova's own (`devtools/input.rs`), not an egui crate's.
     { crate = "wgpu", wrappers = ["glyphon", "nova", "nova-metalfx", "nova-render"], reason = "only the renderer, its MetalFX shim, its text crate and the game reach the GPU" },
     { crate = "winit", wrappers = ["nova"], reason = "only the game opens a window" },
     # The gamepads, behind nova's `Gamepads` port (its gilrs adapter on

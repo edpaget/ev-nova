@@ -49,8 +49,9 @@
 //! With the `dev-tools` feature and `Runner::with_dev_tools`, it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
-//! and submits the frame with the panel painted over it, and the raw
-//! window events the app says the overlay wants go to egui.
+//! and submits the frame with the panel painted over it, and the window
+//! events it gave the app that the app says the overlay wants go to egui
+//! (`devtools::overlay_feed`), the typed text with its key.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -82,7 +83,7 @@ use super::{dialogs, text_event, window_events};
 use crate::app::MenuSync;
 use crate::app::{App, AppScreen, Control, Handled, LoopEvent, UpdaterSource, WindowEvent, choose};
 #[cfg(feature = "dev-tools")]
-use crate::devtools::DevTools;
+use crate::devtools::{DevTools, overlay_feed};
 use crate::exit::OpenFailure;
 use crate::gamepad::Gamepads;
 use crate::settings::GameKeeper;
@@ -364,10 +365,10 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
                 }
                 #[cfg(feature = "dev-tools")]
                 let (app, dev_tools) = match self.dev_catalog.take() {
-                    Some(catalog) => (
-                        app.with_dev_overlay(),
-                        Some(DevTools::new(&window.0, catalog)),
-                    ),
+                    Some(catalog) => {
+                        let scale = crate::app::WindowPort::scale_factor(&window);
+                        (app.with_dev_overlay(), Some(DevTools::new(catalog, scale)))
+                    }
                     None => (app, None),
                 };
                 crate::app::WindowPort::request_redraw(&mut window);
@@ -403,18 +404,15 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
             return;
         };
         let raw = event;
-        // The fullscreen report goes first (see `window_events`); what the
-        // event itself did decides whether the overlay sees it raw.
+        // The fullscreen report goes first (see `window_events`).
         let events: Vec<WindowEvent> =
             window_events(&raw, &running.window, self.start.elapsed()).collect();
-        let mut handled = None;
+        let mut taken = Vec::with_capacity(events.len());
         let mut exit = false;
         for event in events {
-            let this = running.handle(event);
-            exit |= this.control == Control::Exit;
-            if !matches!(event, WindowEvent::FullscreenChanged { .. }) {
-                handled = Some(this);
-            }
+            let handled = running.handle(event);
+            exit |= handled.control == Control::Exit;
+            taken.push((event, handled));
         }
         // The text a key press types follows the key.
         let typed = match &raw {
@@ -426,14 +424,17 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
         if let Some(event) = typed {
             exit |= running.handle(event).control == Control::Exit;
         }
+        // The overlay sees the events the app gave it, the text with its
+        // key.
         #[cfg(feature = "dev-tools")]
-        if let Some(dev_tools) = &mut running.dev_tools
-            && running.app.overlay_wants(handled.as_ref())
-        {
-            dev_tools.on_window_event(&running.window.0, &raw);
+        if let Some(dev_tools) = &mut running.dev_tools {
+            let app = &running.app;
+            for event in overlay_feed(&taken, typed, |handled| app.overlay_wants(Some(&handled))) {
+                dev_tools.on_event(&event);
+            }
         }
         #[cfg(not(feature = "dev-tools"))]
-        let _ = handled;
+        let _ = taken;
         running.after_events(event_loop, exit);
     }
 
@@ -536,12 +537,13 @@ impl<S: ImageSource> Running<S> {
     /// the frame.
     fn handle(&mut self, event: WindowEvent) -> Handled {
         #[cfg(feature = "dev-tools")]
-        if let (WindowEvent::Redraw { .. }, Some(dev_tools)) = (event, &mut self.dev_tools)
+        if let (WindowEvent::Redraw { elapsed }, Some(dev_tools)) = (event, &mut self.dev_tools)
             && self.app.dev_overlay().is_some_and(DevOverlay::visible)
         {
-            let window = &self.window.0;
-            self.app
-                .pilot_desk_frame(|overlay, desk| dev_tools.run_frame(window, overlay, desk));
+            let window = &self.window;
+            self.app.pilot_desk_frame(|overlay, desk| {
+                dev_tools.run_frame(window, elapsed, overlay, desk)
+            });
             let mut gpu = WithOverlay {
                 gpu: &mut self.gpu,
                 painter: dev_tools.layer_mut(),

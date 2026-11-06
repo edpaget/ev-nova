@@ -368,11 +368,12 @@ exclude_re = [
     # `names_feed`, which `feed_configured` asks of the app's bundle.
     "nova-appkit/src/updater\\.rs:.*replace feed_configured -> bool with false$",
     "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
-    # The developer tools' window glue (the `dev-tools` feature): egui-winit's
-    # input state over a real winit window, which tests cannot build. Each
-    # forwards to tested parts: the panel (`DevPanel`), the painter
-    # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
-    "DevTools::(new|on_window_event|run_frame|layer_mut)",
+    # The developer tools' window glue (the `dev-tools` feature): each
+    # forwards to tested parts: the input (`EguiInput`, which turns the
+    # game's window events into egui's), the panel (`DevPanel`), the painter
+    # (`EguiLayer`) and the app's routing (`App::overlay_wants`, through
+    # `overlay_feed`).
+    "DevTools::(new|on_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size,
     # scale factor and fullscreen state, a redraw request, showing or hiding
     # the system pointer, the fullscreen and size requests, and its

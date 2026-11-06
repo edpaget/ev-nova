@@ -30,7 +30,6 @@ winit.workspace = true
 # The developer tools overlay, only with the `dev-tools` feature.
 egui = { workspace = true, optional = true }
 egui-wgpu = { workspace = true, optional = true }
-egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
 # The macOS menu bar, built behind nova-appkit's safe API, and the
@@ -100,7 +99,7 @@ object.workspace = true
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by
 # default and in release builds; `mise run dev` turns it on.
-dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
+dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:wgpu"]
 # Exposes the test support this crate's integration tests reach the app
 # through: the current screen to change (`App::screen_mut`) and the
 # flight screen to ask (`AppScreen::flight_view_mut`), as a screen's ask

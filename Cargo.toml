@@ -103,12 +103,12 @@ rfd = { version = "0.17.2", default-features = false }
 gilrs = "0.11.2"
 bytemuck = { version = "1.25", features = ["derive"] }
 # The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu
-# 0.36 is built on wgpu 30 and egui-winit 0.36 on winit 0.30, so the three
-# move with wgpu and winit, as glyphon does. Their default features (WebGL,
-# the clipboard, web links, Wayland and X11 forwarding) are not needed.
+# 0.36 is built on wgpu 30, so the two move with wgpu, as glyphon does. The
+# overlay's window input is nova's own (`devtools/input.rs`), so no egui
+# crate moves with winit. egui-wgpu's default features (wgpu's defaults and
+# WebGL) are not needed.
 egui = "0.36.2"
 egui-wgpu = { version = "0.36.2", default-features = false }
-egui-winit = { version = "0.36.2", default-features = false }
 # Sound effects and music (nova-audio's adapter): the cpal device backend
 # and the MP3 decoder for the soundtrack. The default features' realtime
 # thread priority (and its dbus dependency) and the other formats are not

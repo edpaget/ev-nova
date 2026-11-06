@@ -17,7 +17,7 @@
 //! every key and pointer event, and the screen sees none of them.
 //! [`App::handle_routed`] says where each event went, and
 //! [`App::overlay_wants`] whether the overlay's drawing (egui, in the
-//! `dev-tools` build) should see the raw event too. Without an overlay,
+//! `dev-tools` build) should see the event too. Without an overlay,
 //! every event goes to the game as before. Each frame of the overlay's
 //! drawing runs through [`App::pilot_desk_frame`], which hands it the
 //! pilot flying to edit, and catches the game up after an edit.
@@ -697,8 +697,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.overlay.as_ref()
     }
 
-    /// Whether the overlay's drawing should see the raw window event that
-    /// was `handled` as given, or `None` for one the app does not take: true
+    /// Whether the overlay's drawing should see the window event that was
+    /// `handled` as given, or `None` for one the app does not take: true
     /// while the overlay shows, unless the event was its toggle key's.
     pub fn overlay_wants(&self, handled: Option<&Handled>) -> bool {
         self.overlay.as_ref().is_some_and(DevOverlay::visible)
