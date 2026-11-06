@@ -158,6 +158,13 @@ pub(crate) fn fly(
 
 /// The low level of `npc` leaving (state 2) one tick on `handling`, as
 /// `inertia` says: [`leave::leg`]'s leg, by [`low_level`].
+///
+/// A successor whose sub 4 goal 0xb's block wrote after goal 2's
+/// (@0x8de63, @0x8df54-0x8df6c) never reaches here on that dispatch:
+/// goal 2's block leaves its sub 4 standing
+/// ([`Warp::sub_4_past_leave_block`](crate::traffic::warp_out::Warp::sub_4_past_leave_block)),
+/// so its slot runs sub 4 (@0x8585b) and the warp-out flies it. Its
+/// run-out or brake is picked here from the next dispatch on.
 pub(crate) fn leaving(
     npc: &mut Npc,
     handling: &Handling,

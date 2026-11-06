@@ -228,6 +228,17 @@ pub struct Warp {
     /// [`Warp::stage`] ([`Npc::stage_below_zero`]): the leave write's
     /// floor raises it to 0 ([`leave_write`](crate::traffic::leave_write)).
     pub gate_wait_floored: bool,
+    /// Whether its goal 2, sub 4 was written after goal 2's block in this
+    /// dispatch, so the block hasn't read it yet: a successor's take-over
+    /// of a copied goal 0xb with no parent, which goal 0xb's block
+    /// (@0x8de63, @0x8df54-0x8df6c) turns to goal 2, sub 4 after goal 2's
+    /// (@0x8dd99-0x8de57) has been tested. [`leave_block`] leaves its sub 4
+    /// standing, so sub 4 runs at its slot; the slot's end clears it (the
+    /// traffic's `dispatch_leave`), so it lives one dispatch. It sits on
+    /// the warp beside the sub-goal it qualifies; the copies of a warp
+    /// (the gone record, the open leaders' snapshot) are taken after the
+    /// slot clears it or read only the stage.
+    pub sub_4_past_leave_block: bool,
 }
 
 impl Warp {
@@ -478,7 +489,16 @@ pub fn hold_stage(npc: &mut Npc) {
 ///   once it faces what it wants.
 /// - Goal 3 under way takes sub 4 beyond 1000, whatever its speed
 ///   (@0x8df86-0x8dfdd); inside, +0x50 = 0 and sub 3 (@0x8fb2f-0x8fb42).
+///
+/// It skips a ship whose sub 4 was written after goal 2's block this
+/// dispatch ([`Warp::sub_4_past_leave_block`]): goal 0xb's block
+/// (@0x8de63, @0x8df54-0x8df6c) comes after goal 2's, so the successor
+/// of a lead on a follow keeps sub 4 there and its run-out or brake
+/// starts on the next dispatch.
 fn leave_block(npc: &mut Npc) {
+    if npc.warp.sub_4_past_leave_block {
+        return;
+    }
     let follows = matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
     match npc.goal {
         Goal::Flee(_) if npc.warp.under_way() => {

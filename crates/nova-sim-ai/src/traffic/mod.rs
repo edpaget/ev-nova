@@ -375,6 +375,8 @@ pub mod succession;
 #[cfg(test)]
 mod successor_inspect_tests;
 #[cfg(test)]
+mod successor_jump_tests;
+#[cfg(test)]
 mod successor_plunder_tests;
 mod swarm_low_level;
 #[cfg(test)]

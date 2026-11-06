@@ -117,40 +117,57 @@ impl Traffic {
             let Some(index) = self.npcs.iter().position(|npc| npc.id == id) else {
                 continue;
             };
-            self.hold_and_turn_back(index, world);
-            self.enter_gate_box(index, world);
-            // Goal 0xb's block (@0x8de63) comes after goal 0x14's (@0x8dc5a),
-            // and sub 0xd (@0x859c5) after sub 4 (@0x8585b): a ship that
-            // detaches there runs no sub 4 that frame. A ship a test holds
-            // still runs no low level.
-            let still = self.held_still.contains(&id);
-            let detached = self.follow_in_dispatch(index, world, still);
-            if still {
-                continue;
-            }
-            if detached {
-                // Sub 0xd's detach writes no word: the head's stands
-                // (@0x851f1, @0x8522d), and the warp-out flies it.
-                self.keep_head_word(index, world);
-                continue;
-            }
-            let docked = self.dock_in_dispatch(index, world, chance);
-            let outcome = match self.leaves(index, world, no_bay) {
-                Some(outcome) => Some(outcome),
-                None if docked || !self.autopilot_in_dispatch(index, world, chance) => None,
-                // A jump begun at the slot (state 2 @0x8de57, state 3
-                // @0x8e20f) runs sub 4 in the same `_AIDispatch`
-                // (@0x8585b), whose aim the warp-out flies that frame. The
-                // low level left the head's word for it, as for any jump
-                // the warp-out flies.
-                None => self.leaves(index, world, no_bay),
-            };
+            let outcome = self.slot(index, world, no_bay, chance);
+            // A sub 4 written after goal 2's block is read by it from the
+            // next dispatch on (`Warp::sub_4_past_leave_block`), whatever
+            // path the slot took.
+            self.npcs[index].warp.sub_4_past_leave_block = false;
             if let Some(outcome) = outcome {
                 self.depart(index, outcome, &mut left);
             }
         }
         self.freed.extend(left.iter().copied());
         left
+    }
+
+    /// The high level's and low level's work at the slot of the NPC at
+    /// `index` (see [`Traffic::leave_in_dispatch`]): how it left, if it did.
+    fn slot(
+        &mut self,
+        index: usize,
+        world: &World,
+        no_bay: &NoBay,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<Outcome> {
+        let id = self.npcs[index].id;
+        self.hold_and_turn_back(index, world);
+        self.enter_gate_box(index, world);
+        // Goal 0xb's block (@0x8de63) comes after goal 0x14's (@0x8dc5a),
+        // and sub 0xd (@0x859c5) after sub 4 (@0x8585b): a ship that
+        // detaches there runs no sub 4 that frame. A ship a test holds
+        // still runs no low level.
+        let still = self.held_still.contains(&id);
+        let detached = self.follow_in_dispatch(index, world, still);
+        if still {
+            return None;
+        }
+        if detached {
+            // Sub 0xd's detach writes no word: the head's stands
+            // (@0x851f1, @0x8522d), and the warp-out flies it.
+            self.keep_head_word(index, world);
+            return None;
+        }
+        let docked = self.dock_in_dispatch(index, world, chance);
+        match self.leaves(index, world, no_bay) {
+            Some(outcome) => Some(outcome),
+            None if docked || !self.autopilot_in_dispatch(index, world, chance) => None,
+            // A jump begun at the slot (state 2 @0x8de57, state 3
+            // @0x8e20f) runs sub 4 in the same `_AIDispatch`
+            // (@0x8585b), whose aim the warp-out flies that frame. The
+            // low level left the head's word for it, as for any jump
+            // the warp-out flies.
+            None => self.leaves(index, world, no_bay),
+        }
     }
 
     /// Takes the NPC at `index`, which left at its slot as `outcome` says,
