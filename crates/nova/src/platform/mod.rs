@@ -1127,43 +1127,164 @@ mod tests {
         );
     }
 
+    // The mouse's scenarios: each builder gives the raw events winit sends
+    // for one thing the player does, and a scenario's events are
+    // translated in order. Only how the raw events are built depends on
+    // winit's version; what each scenario translates to is the game's.
+
+    /// The pointer moving to `(x, y)` in physical pixels.
+    fn moved_to(x: f64, y: f64) -> Vec<WinitEvent> {
+        vec![WinitEvent::CursorMoved {
+            device_id: DeviceId::dummy(),
+            position: PhysicalPosition::new(x, y),
+        }]
+    }
+
+    /// The pointer coming into the window at `(x, y)`: winit 0.30 sends
+    /// `CursorEntered`, then a move there.
+    fn entered_at(x: f64, y: f64) -> Vec<WinitEvent> {
+        let entered = WinitEvent::CursorEntered {
+            device_id: DeviceId::dummy(),
+        };
+        [vec![entered], moved_to(x, y)].concat()
+    }
+
+    /// The pointer leaving the window.
+    fn left() -> Vec<WinitEvent> {
+        vec![WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        }]
+    }
+
+    fn mouse_input(button: WinitButton, state: ElementState) -> Vec<WinitEvent> {
+        vec![WinitEvent::MouseInput {
+            device_id: DeviceId::dummy(),
+            state,
+            button,
+        }]
+    }
+
+    /// `button` going down.
+    fn pressed(button: WinitButton) -> Vec<WinitEvent> {
+        mouse_input(button, ElementState::Pressed)
+    }
+
+    /// `button` going up.
+    fn released(button: WinitButton) -> Vec<WinitEvent> {
+        mouse_input(button, ElementState::Released)
+    }
+
+    /// The wheel turning by `delta`.
+    fn scrolled(delta: MouseScrollDelta) -> Vec<WinitEvent> {
+        vec![wheel(delta)]
+    }
+
+    /// The app's events for `scenario`'s raw events, in order.
+    fn translated(scenario: &[Vec<WinitEvent>]) -> Vec<WindowEvent> {
+        scenario
+            .iter()
+            .flatten()
+            .filter_map(|event| translate(event, &WINDOWED))
+            .collect()
+    }
+
     #[test]
     fn pointer_events_are_in_physical_pixels() {
-        let moved = WinitEvent::CursorMoved {
-            device_id: DeviceId::dummy(),
-            position: PhysicalPosition::new(12.5, 40.0),
-        };
         assert_eq!(
-            translate(&moved, &WINDOWED),
-            Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
+            translated(&[
+                moved_to(12.5, 40.0),
+                pressed(WinitButton::Right),
+                released(WinitButton::Left),
+                left(),
+            ]),
+            [
+                WindowEvent::PointerMoved { px: (12.5, 40.0) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Right,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false
+                },
+                WindowEvent::PointerLeft,
+            ]
         );
-        let left = WinitEvent::CursorLeft {
-            device_id: DeviceId::dummy(),
-        };
-        assert_eq!(translate(&left, &WINDOWED), Some(WindowEvent::PointerLeft));
-        let pressed = WinitEvent::MouseInput {
-            device_id: DeviceId::dummy(),
-            state: ElementState::Pressed,
-            button: WinitButton::Right,
-        };
+    }
+
+    #[test]
+    fn a_mouse_entering_the_window_is_a_move_to_where_it_entered() {
         assert_eq!(
-            translate(&pressed, &WINDOWED),
-            Some(WindowEvent::PointerButton {
-                button: MouseButton::Right,
-                pressed: true
-            })
+            translated(&[entered_at(30.0, 420.5)]),
+            [WindowEvent::PointerMoved { px: (30.0, 420.5) }]
         );
-        let released = WinitEvent::MouseInput {
-            device_id: DeviceId::dummy(),
-            state: ElementState::Released,
-            button: WinitButton::Left,
-        };
+    }
+
+    #[test]
+    fn a_click_and_a_turn_of_the_wheel_where_the_pointer_is() {
         assert_eq!(
-            translate(&released, &WINDOWED),
-            Some(WindowEvent::PointerButton {
-                button: MouseButton::Left,
-                pressed: false
-            })
+            translated(&[
+                entered_at(100.0, 200.0),
+                pressed(WinitButton::Left),
+                released(WinitButton::Left),
+                moved_to(101.0, 203.0),
+                scrolled(MouseScrollDelta::LineDelta(0.0, -2.0)),
+                pressed(WinitButton::Middle),
+                released(WinitButton::Middle),
+            ]),
+            [
+                WindowEvent::PointerMoved { px: (100.0, 200.0) },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false
+                },
+                WindowEvent::PointerMoved { px: (101.0, 203.0) },
+                WindowEvent::Scroll {
+                    delta: WheelDelta::Lines(2.0)
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Middle,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Middle,
+                    pressed: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extra_mouse_buttons_are_other() {
+        assert_eq!(
+            translated(&[
+                pressed(WinitButton::Back),
+                released(WinitButton::Back),
+                pressed(WinitButton::Forward),
+                pressed(WinitButton::Other(7)),
+            ]),
+            [
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: false
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+                WindowEvent::PointerButton {
+                    button: MouseButton::Other,
+                    pressed: true
+                },
+            ]
         );
     }
 
@@ -1296,10 +1417,9 @@ mod tests {
 
     #[test]
     fn other_events_report_no_fullscreen_state() {
-        let left = WinitEvent::CursorLeft {
-            device_id: DeviceId::dummy(),
-        };
-        assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        for left in left() {
+            assert_eq!(events(&left, true), [WindowEvent::PointerLeft]);
+        }
         assert_eq!(
             events(&WinitEvent::Focused(false), true),
             [WindowEvent::FocusLost]
