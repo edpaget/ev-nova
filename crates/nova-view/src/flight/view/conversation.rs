@@ -13,9 +13,9 @@ use crate::flight::sim_port::FlightSim;
 use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Opens the landed stellar's conversation from its knot
-    /// ([`Converse::Open`]): its first page, or `None` where the stellar
-    /// names none.
+    /// Opens the next conversation the landed stellar has for this visit,
+    /// from its knot ([`Converse::Open`]): its first page, or `None` when
+    /// it has none left.
     pub fn open_conversation(&mut self) -> Option<ConversationPage> {
         self.converse(Converse::Open)
     }

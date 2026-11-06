@@ -1,6 +1,7 @@
-//! The landed stellar's conversation over the spaceport: opened as the
+//! The landed visit's conversations over the spaceport: opened as the
 //! spaceport opens, each digit's choice sent back, Escape held off while
-//! choices are pending, and the ended page closed back to the spaceport.
+//! choices are pending, and the ended page closed to the next one or back
+//! to the spaceport.
 //! What the conversation plays is the session's (`nova_sim`'s
 //! `session::apply::conversation`), here scripted by the dialog port's
 //! fake.
@@ -245,4 +246,67 @@ fn without_an_interface_file_it_is_drawn_over_the_stand_in_and_plays_to_its_clos
     assert_eq!(texts(&screen), [stand_in], "the stand-in alone");
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight);
+}
+
+/// [`talking_data`] with a mission offered at the planet the ship lands
+/// on, by the same story's `job` knot.
+fn offering_data() -> Rc<GameData> {
+    let data = Rc::into_inner(talking_data()).expect("one owner");
+    let job = nova_data::StoryMission {
+        offer: Some(nova_data::MissionOffer {
+            at: nova_data::StellarId(128),
+            dialog: DialogPlace {
+                file: "dialog/dock.ink".to_owned(),
+                knot: "job".to_owned(),
+            },
+        }),
+        ..nova_data::StoryMission::default()
+    };
+    Rc::new(data.with_storylines(nova_data::Storylines {
+        missions: BTreeMap::from([("job".to_owned(), job)]),
+        ..nova_data::Storylines::default()
+    }))
+}
+
+/// [`loader`]'s story with the mission's offer, `job`, which one choice
+/// ends.
+fn offering_loader() -> FakeLoader {
+    let job = FakeKnot::new("job")
+        .line("Work?", &[])
+        .choice(FakeChoice::sticky("Yes", &[]).line("Done.", &["outcome: accept"]));
+    let offer = FakeKnot::new("offer")
+        .line("A job?", &[])
+        .choice(FakeChoice::sticky("Leave", &[]).line("Bye.", &[]));
+    FakeLoader::default().story(STORY, FakeDialog::default().knot(job).knot(offer))
+}
+
+#[test]
+fn closing_an_offer_shows_the_stellar_s_own_conversation_next() {
+    let loader = offering_loader();
+    let mut screen = talking(offering_data(), &loader);
+    land(&mut screen);
+    assert!(shows(&screen, "Work?"), "the offer first");
+    screen.input(&key(Key::Char('1'), true));
+    assert!(shows(&screen, "Done."));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    assert!(shows(&screen, "A job?"), "then the stellar's own");
+    assert!(shows(&screen, "1. Leave"));
+    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(
+        drawn(&screen),
+        drawn(spaceport(&screen)),
+        "the last closed: the spaceport alone"
+    );
+    assert_eq!(
+        loader.log(),
+        [
+            DialogCall::Enter("job".to_owned()),
+            DialogCall::Choose(0),
+            DialogCall::Enter("offer".to_owned()),
+            DialogCall::Choose(0),
+        ]
+    );
 }

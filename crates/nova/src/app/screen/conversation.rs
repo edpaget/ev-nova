@@ -1,17 +1,19 @@
-//! [`AppScreen`]'s conversation: a landed stellar's conversation, opened
-//! over the spaceport as it opens, a page at a time.
+//! [`AppScreen`]'s conversation: the landed visit's conversations, each
+//! opened over the spaceport in turn, a page at a time.
 //!
 //! As the spaceport opens on landing, the router asks flight for the
-//! stellar's conversation once ([`FlightView::open_conversation`]). If it
-//! has one, the router shows it in a
+//! visit's next conversation ([`FlightView::open_conversation`]): a
+//! mission's completion or offer, or the stellar's own, which the session
+//! picks. If there is one, the router shows it in a
 //! [`ConversationScreen`], laid out with the router's metrics (a router
 //! given none shows no conversation). While it is open it takes every
 //! input the spaceport would, and is drawn over it. Each choice goes back
 //! to flight ([`FlightView::choose_in_conversation`]), and the next page
 //! shows; the ended page's close goes back too
-//! ([`FlightView::close_conversation`]) and drops the screen. The
-//! spaceport dropped (a take-off, the pilot put away) drops it with it.
-//! What the conversation plays is the session's.
+//! ([`FlightView::close_conversation`]), and the router asks for the next
+//! conversation, showing it, or dropping the screen once the session has
+//! none left. The spaceport dropped (a take-off, the pilot put away) drops
+//! it with it. What each conversation plays is the session's.
 
 use nova_view::flight::FlightView;
 use nova_view::spaceport::{ConversationChoice, ConversationScreen};
@@ -20,7 +22,7 @@ use nova_view::{DrawList, Input, Screen};
 use super::{AppScreen, ENTERED};
 
 impl AppScreen {
-    /// Opens the landed stellar's conversation, if it has one and the
+    /// Opens the landed visit's next conversation, if it has one and the
     /// router has metrics to lay it out with, replacing any open one.
     pub(super) fn open_conversation(&mut self) {
         self.conversation = None;
@@ -47,7 +49,7 @@ impl AppScreen {
             }
             Some(ConversationChoice::Close) => {
                 self.flight.as_mut().expect(ENTERED).close_conversation();
-                self.conversation = None;
+                self.open_conversation();
             }
             None => {}
         }
