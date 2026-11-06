@@ -164,10 +164,11 @@ use std::time::Duration;
 use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
+use nova_view::touch::TouchRouter;
 use nova_view::view_shape::widened_size;
 use nova_view::{
     DrawList, FingerId, FullscreenKind, ImageKey, Input, Key, MenuCommand, MonitorMode,
-    MouseButton, Point, Screen, ScreenAction, ViewShape,
+    MouseButton, Point, Screen, ScreenAction, TouchPhase, ViewShape,
 };
 
 mod fullscreen;
@@ -179,6 +180,7 @@ mod pads;
 mod px_rect;
 mod scaling;
 pub mod screen;
+mod touch;
 mod updates;
 mod wheel;
 
@@ -444,6 +446,8 @@ pub struct App<S, C = AppScreen> {
     pad_inputs: PadInputs,
     /// The device the player used last, told to the screen as it changes.
     last_device: LastDevice,
+    /// Where each finger goes ([`touch`]).
+    touch: TouchRouter,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -480,6 +484,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             gamepads: None,
             pad_inputs: PadInputs::new(),
             last_device: LastDevice::new(),
+            touch: TouchRouter::default(),
         }
     }
 
@@ -806,8 +811,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// With a developer overlay, keys go through it first: its toggle key
     /// shows or hides it and goes nowhere else, and opening it makes the
-    /// screen abandon its pointer gesture and let go of its keys. While it
-    /// shows, every other key, pointer and scroll event goes to it alone, wherever
+    /// screen abandon its pointer gesture, its fingers and its keys. While
+    /// it shows, every other key, pointer, touch and scroll event goes to it alone, wherever
     /// the pointer is, though the pointer's position is still recorded. Every
     /// redraw also gives the overlay its time. The text a key press types
     /// goes where its key went, and is handled as that key was: to the
@@ -853,6 +858,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_lost(window);
         self.left_held = false;
+        self.cancel_touches();
         self.screen.cancel_pointer();
         self.screen.release_keys();
         self.screen.focus_lost();
@@ -890,13 +896,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     ///
     /// A key's press or any pointer event also tells the device used last
     /// ([`LastDevice`]); a change reaches the screen as
-    /// [`Input::Surroundings`] after the event itself.
+    /// [`Input::Surroundings`] after the event itself. A finger's start,
+    /// move or end tells it too, wherever the finger is.
+    ///
+    /// Touches go through the touch router ([`touch`]), its primary finger
+    /// as the mouse under these same rules; while a finger is down, the
+    /// mouse's moves, buttons and leaves reach no screen and switch no
+    /// device ([`App::drops_mouse`]).
     fn dispatch(
         &mut self,
         event: WindowEvent,
         window: &mut impl WindowPort,
         gpu: &mut impl Gpu,
     ) -> Handled {
+        if self.drops_mouse(&event) {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Game,
+            };
+        }
         let device_changed = device_input(&event).is_some_and(|used| self.note_device(&used));
         let mut handled = self.dispatch_event(event, window, gpu);
         // The screen hears of the device after the input that switched it.
@@ -990,37 +1008,49 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             WindowEvent::TouchStarted { .. }
             | WindowEvent::TouchMoved { .. }
             | WindowEvent::TouchEnded { .. }
-            | WindowEvent::TouchCancelled { .. } => game(Control::Continue),
-            WindowEvent::PointerButton { button, pressed } => {
-                if self.pointer_routing() == Routing::Overlay {
-                    return overlay;
-                }
-                if button == MouseButton::Left {
-                    // Held only by a press routed to the screen; any
-                    // release ends it.
-                    self.left_held = pressed && self.pointer_at().is_some();
-                }
-                game(match self.pointer_at() {
-                    Some(at) => self.route(Input::PointerButton {
-                        button,
-                        pressed,
-                        at,
-                    }),
-                    // The primary button let go of outside the game, in a
-                    // bar or off the window, ends the screen's press there,
-                    // as `_TrackMainScreenButtons` ends on `Button()` going
-                    // false wherever the pointer is: on no button, so it is
-                    // abandoned.
-                    None if button == MouseButton::Left && !pressed => {
-                        self.screen.cancel_pointer();
-                        Control::Continue
-                    }
-                    None => Control::Continue,
-                })
-            }
+            | WindowEvent::TouchCancelled { .. } => self.touch_event(event),
+            WindowEvent::PointerButton { button, pressed } => self.pointer_button(button, pressed),
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
             WindowEvent::Menu(command) => game(self.route_menu(command, window)),
             WindowEvent::CheckForUpdates => game(self.check_for_updates()),
+        }
+    }
+
+    /// `button` went down or up at the pointer: the overlay's alone while
+    /// it takes the pointer, else the screen's at the pointer's point, a
+    /// left release outside the game abandoning the screen's press.
+    fn pointer_button(&mut self, button: MouseButton, pressed: bool) -> Handled {
+        if self.pointer_routing() == Routing::Overlay {
+            return Handled {
+                control: Control::Continue,
+                routing: Routing::Overlay,
+            };
+        }
+        if button == MouseButton::Left {
+            // Held only by a press routed to the screen; any
+            // release ends it.
+            self.left_held = pressed && self.pointer_at().is_some();
+        }
+        let control = match self.pointer_at() {
+            Some(at) => self.route(Input::PointerButton {
+                button,
+                pressed,
+                at,
+            }),
+            // The primary button let go of outside the game, in a
+            // bar or off the window, ends the screen's press there,
+            // as `_TrackMainScreenButtons` ends on `Button()` going
+            // false wherever the pointer is: on no button, so it is
+            // abandoned.
+            None if button == MouseButton::Left && !pressed => {
+                self.screen.cancel_pointer();
+                Control::Continue
+            }
+            None => Control::Continue,
+        };
+        Handled {
+            control,
+            routing: Routing::Game,
         }
     }
 
@@ -1164,6 +1194,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         let routing = overlay.key(key, pressed, repeat);
         if overlay.visible() && !was_visible {
             self.left_held = false;
+            self.cancel_touches();
             self.screen.cancel_pointer();
             self.screen.release_keys();
         }
@@ -1355,6 +1386,13 @@ fn device_input(event: &WindowEvent) -> Option<Input> {
         WindowEvent::PointerMoved { .. }
         | WindowEvent::PointerButton { .. }
         | WindowEvent::Scroll { .. } => Some(Input::PointerMoved(Point::new(0.0, 0.0))),
+        // A cancel is the system's, not the player's.
+        WindowEvent::TouchStarted { finger, .. }
+        | WindowEvent::TouchMoved { finger, .. }
+        | WindowEvent::TouchEnded { finger, .. } => Some(Input::Touch(nova_view::Touch {
+            finger,
+            phase: TouchPhase::Started(Point::new(0.0, 0.0)),
+        })),
         _ => None,
     }
 }
@@ -1511,6 +1549,8 @@ mod tests {
         shape_on_input: Option<ViewShape>,
         /// The shape to switch to on its next tick, if any.
         shape_on_tick: Option<ViewShape>,
+        /// It claims a touch starting left of this logical x, if set.
+        claims_left_of: Option<f32>,
     }
 
     impl Screen for RecordingScreen {
@@ -1576,6 +1616,10 @@ mod tests {
             self.hides_pointer
         }
 
+        fn claims_touch(&self, at: Point) -> bool {
+            self.claims_left_of.is_some_and(|x| at.x < x)
+        }
+
         fn take_quit(&mut self) -> bool {
             std::mem::take(&mut self.asks_quit)
         }
@@ -1604,6 +1648,7 @@ mod tests {
     mod menu;
     mod pointer_outside;
     mod pointer_release;
+    mod touch;
     mod updates;
     mod wheel;
 
