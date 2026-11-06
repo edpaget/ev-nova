@@ -52,6 +52,9 @@
 //!   graphics, scrolling text) and modal dialogs laid out from the
 //!   interface file's `DLOG`/`DITL`s, such as the "Desc Dialog"
 //!   ([`ui::DescDialog`]).
+//! - [`text_entry`]: what a focused text field asks of the platform's
+//!   text entry ([`EntryAsk`], a field of the frame), and who enters the
+//!   text for the device used last ([`EntryMode`]).
 //!
 //! # Sounds
 //!

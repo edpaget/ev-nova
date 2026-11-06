@@ -48,6 +48,9 @@
 //! app's in its own tests. The
 //! every-screen table (`ui::pad_focus::every_screen`) leaves an aid's own
 //! drawing out of its drawing comparisons (`PadProbe::touch_aids_drawn`).
+//!
+//! The on-screen keyboard ([`crate::ui::entry_keyboard`]) reuses these
+//! parts but is no aid: it shows for the pad as well as for touch.
 
 pub mod host;
 pub mod look;

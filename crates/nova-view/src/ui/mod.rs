@@ -38,6 +38,9 @@
 //! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
 //!   "Text Input" and quantity dialogs share, each with its own
 //!   [`Confirm`] policy.
+//! - [`entry_keyboard`]: the on-screen keyboard a text dialog shows for
+//!   the pad and for touch without a soft keyboard, and its ask for the
+//!   system's text entry otherwise.
 //! - [`text_input`]: the "Text Input" dialog ([`TextInputDialog`]): a
 //!   prompt and a line of text to type, such as the new ship's name.
 //! - [`quantity`]: the quantity dialog ([`QuantityDialog`]): how many

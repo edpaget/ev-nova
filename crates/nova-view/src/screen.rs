@@ -1,4 +1,21 @@
 //! The screen trait: what every game screen does.
+//!
+//! # Where additions go
+//!
+//! The app asks a screen things through the [`Screen`] trait, and grows it
+//! with data, not a method per question:
+//!
+//! - **A readout the app needs only at a frame** is a field of the
+//!   [`DrawList`] the screen fills in [`Screen::draw`]. The text-entry ask
+//!   ([`DrawList::ask_text_entry`],
+//!   rdm:phase/key-bindings/phase-17-text-entry-port) is the first.
+//! - **The readouts the app reads between frames** ([`Screen::hides_pointer`],
+//!   [`Screen::view_shape`], [`Screen::claims_touch`],
+//!   [`Screen::holds_back_keys`]) stay methods for now: the app reads them
+//!   after each input, before the next frame, so a frame's field would
+//!   come too late. Folding them into one readout, and the `take_*`
+//!   one-shot outputs into one batch, is filed as a task
+//!   (`screen-readouts-as-one-report`).
 
 use std::fmt;
 use std::time::Duration;
