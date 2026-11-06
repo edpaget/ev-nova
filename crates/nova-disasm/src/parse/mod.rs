@@ -40,3 +40,15 @@ pub(crate) mod fixture {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::hex;
+
+    #[test]
+    fn hex_reads_bare_hex_digits_only() {
+        assert_eq!(hex("d8200"), Some(0xd8200));
+        assert_eq!(hex("+1f"), None);
+        assert_eq!(hex(""), None);
+    }
+}

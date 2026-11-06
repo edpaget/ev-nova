@@ -193,4 +193,17 @@ mod tests {
             Ok(q(Query::Find("-[Foo".into())))
         );
     }
+
+    #[test]
+    fn after_a_double_dash_option_names_are_arguments() {
+        assert_eq!(p(&["--", "fn", "--"]), Ok(q(Query::Function("--".into()))));
+        assert_eq!(
+            p(&["--", "fn", "--help"]),
+            Ok(q(Query::Function("--help".into())))
+        );
+        assert_eq!(
+            p(&["--", "fn", "--binary"]),
+            Ok(q(Query::Function("--binary".into())))
+        );
+    }
 }

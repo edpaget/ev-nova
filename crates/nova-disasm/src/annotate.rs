@@ -278,6 +278,16 @@ mod tests {
     }
 
     #[test]
+    fn numbers_reads_every_number_after_a_long_operand() {
+        assert_eq!(numbers("%eax,%ebx,%ecx,0x1,$0x2"), [(1, false), (2, true)]);
+    }
+
+    #[test]
+    fn numbers_reads_a_number_right_after_a_long_one() {
+        assert_eq!(numbers("0x12345,0x6"), [(0x12345, false), (6, false)]);
+    }
+
+    #[test]
     fn small_displacements_and_negative_offsets_name_nothing() {
         let insn = Insn {
             addr: 0x3000,

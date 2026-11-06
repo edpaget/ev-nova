@@ -266,6 +266,56 @@ mod tests {
     }
 
     #[test]
+    fn the_symbols_come_from_nm_and_the_rest_from_otool() {
+        let dir = tempfile::tempdir().unwrap();
+        let otool = dir.path().join("no-such-otool");
+        let nm = dir.path().join("no-such-nm");
+        let tools = StdTools {
+            otool: otool.clone().into(),
+            nm: nm.clone().into(),
+        };
+        let program = |which| match tools.listing(&dir.path().join("bin"), which) {
+            Err(ToolError::Missing { program }) => program,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(program(Listing::Symbols), nm.to_string_lossy());
+        for which in [
+            Listing::Text,
+            Listing::CStrings,
+            Listing::Pointers,
+            Listing::Indirect,
+        ] {
+            assert_eq!(program(which), otool.to_string_lossy(), "{which:?}");
+        }
+    }
+
+    #[test]
+    fn a_tool_that_exits_with_an_error_fails() {
+        // git rejects otool's arguments (`-arch`) and exits non-zero.
+        let dir = tempfile::tempdir().unwrap();
+        let tools = StdTools {
+            otool: "git".into(),
+            nm: "git".into(),
+        };
+        let err = tools
+            .listing(&dir.path().join("bin"), Listing::Text)
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Failed { program, .. } if program == "git"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn the_std_env_reads_the_process_environment() {
+        // Cargo sets the package's manifest directory for the tests it runs.
+        assert_eq!(
+            StdEnv.var("CARGO_MANIFEST_DIR"),
+            Some(OsString::from(env!("CARGO_MANIFEST_DIR")))
+        );
+    }
+
+    #[test]
     fn the_std_binary_reports_a_missing_file_as_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let err = StdBinary.read(&dir.path().join("EV Nova")).unwrap_err();

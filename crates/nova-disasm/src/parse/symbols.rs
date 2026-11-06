@@ -70,6 +70,12 @@ mod tests {
     }
 
     #[test]
+    fn an_undefined_or_unnamed_symbol_is_left_out() {
+        assert!(parse("00001000 U _defined_elsewhere\n").is_empty());
+        assert!(parse("00001000 T \n").is_empty());
+    }
+
+    #[test]
     fn a_name_may_hold_spaces() {
         let symbols = parse("000cf268 t -[Foo bar:baz:]\n00001000 t +[A b]\n");
         assert_eq!(symbols[0].name, "+[A b]");

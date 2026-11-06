@@ -145,7 +145,8 @@ impl Index {
             .map(|(i, s)| DataSymbol {
                 name: s.name.clone(),
                 start: s.addr,
-                end: all[i + 1..].iter().map(|n| n.addr).find(|&a| a > s.addr),
+                // The first later address: past the symbol and its aliases.
+                end: all[i..].iter().map(|n| n.addr).find(|&a| a > s.addr),
             })
             .collect();
 
@@ -370,6 +371,98 @@ mod tests {
 
     fn index() -> Index {
         Index::build(&fixture::listings())
+    }
+
+    fn build(text: &str, symbols: &str) -> Index {
+        Index::build(&Listings {
+            text: text.to_owned(),
+            symbols: symbols.to_owned(),
+            ..Listings::default()
+        })
+    }
+
+    #[test]
+    fn functions_lists_every_label_by_address() {
+        let index = index();
+        let names: Vec<_> = index.functions().iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["_Alpha", "_Beta", "_Gamma", "_Delta"]);
+    }
+
+    #[test]
+    fn a_sign_is_not_an_address() {
+        assert_eq!(parse_address("0x+1f"), None);
+        assert_eq!(parse_address("+1f"), None);
+    }
+
+    #[test]
+    fn data_symbols_at_one_address_end_at_the_next_address() {
+        let index = build(
+            "",
+            "00002000 d _first\n00002000 d _alias\n00002008 d _next\n",
+        );
+        let ends: Vec<_> = index
+            .find("0x2000")
+            .iter()
+            .chain(&index.find("_first"))
+            .map(|f| (f.name.clone(), f.end))
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                ("_alias".to_owned(), Some(0x2008)),
+                ("_first".to_owned(), Some(0x2008))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_data_symbol_ends_where_a_code_symbol_starts() {
+        let index = build("", "00002000 d _table\n00002008 T _code\n");
+        let (sym, off) = index.data_at(0x2007).unwrap();
+        assert_eq!((sym.name.as_str(), off), ("_table", 7));
+        assert!(index.data_at(0x2008).is_none());
+    }
+
+    const UNDERSCORES: &str = "/x:\n\
+        _main:\n\
+        00001000\tcalll\tfoo\n\
+        00001005\tcalll\t__x\n\
+        0000100a\tret\n\
+        foo:\n\
+        00001010\tret\n\
+        __x:\n\
+        00001020\tret\n";
+
+    fn caller_names(index: &Index, name: &str) -> Vec<String> {
+        index.callers(name).into_iter().map(|c| c.name).collect()
+    }
+
+    #[test]
+    fn a_name_without_an_underscore_that_has_callers_keeps_them() {
+        let index = build(UNDERSCORES, "");
+        assert_eq!(caller_names(&index, "foo"), ["_main"]);
+    }
+
+    #[test]
+    fn a_name_with_an_underscore_gets_no_second_one() {
+        let index = build(UNDERSCORES, "");
+        assert!(caller_names(&index, "_x").is_empty());
+        assert_eq!(caller_names(&index, "__x"), ["_main"]);
+    }
+
+    #[test]
+    fn a_jmp_to_its_own_start_or_through_a_register_is_not_a_call() {
+        let index = build(
+            "/x:\n\
+             _loop:\n\
+             00001000\tnop\n\
+             00001001\tjmp\t0x1000\n\
+             00001006\tjmp\t*%eax\n",
+            "",
+        );
+        let callees = index.callees(index.function_named("_loop").unwrap());
+        assert!(callees.named.is_empty(), "{:?}", callees.named);
+        assert_eq!(callees.indirect, 0);
     }
 
     fn range(f: &Function) -> (&str, u32, u32) {
