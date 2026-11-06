@@ -19,7 +19,9 @@
 //! - **Outcomes.** After an offer's conversation opens, and after each
 //!   choice, the first `outcome:` tag its page reached decides the offer
 //!   once ([`outcome_of`], [`Play::decide`]), against the room left in the
-//!   hold as the session measures it. A completion's or a stellar's own
+//!   ship's own holds, measured as it decides: after the landing has
+//!   dropped its deliveries off and the offer's `on_offer` has fired its
+//!   events, which may load cargo. A completion's or a stellar's own
 //!   conversation reads no outcome. Closing, or taking off, with none
 //!   reached leaves the offer offered.
 //! - **Landing and days.** The `Storylines` consumer's subscriptions run
@@ -49,6 +51,7 @@ use crate::storylines::news::{self, HeardNews};
 use nova_sim_catalog::dialogs::DialogAt;
 
 use super::conversation::OpenConversation;
+use super::free_cargo::free_cargo_in;
 use super::{MissionRun, Outbox, Port, Session, Setup, Statics};
 
 /// The storylines' landing hook ([`Play::landed`]).
@@ -124,8 +127,9 @@ pub(super) fn scene_place<'a>(statics: &'a Statics, scene: &Scene) -> Option<Dia
 impl Port {
     /// Opens the next scene due at `landed` this visit (see the module
     /// docs), replacing any open conversation, with `pilot`'s state of its
-    /// file and its flags, an offer decided against `room` tons free: its
-    /// first page, or `None` in flight or with none left.
+    /// file and its flags, an offer decided against the room left in
+    /// `holds` once the landing and the offer have settled: its first
+    /// page, or `None` in flight or with none left.
     pub(super) fn open_next_scene(
         &mut self,
         statics: &Statics,
@@ -133,7 +137,7 @@ impl Port {
         pilot: &mut Pilot,
         out: &mut Outbox,
         landed: Option<StellarId>,
-        room: i64,
+        holds: u32,
     ) -> Option<ConversationPage> {
         let stellar = landed?;
         // The landing's story first, so its deliveries' completions are
@@ -179,7 +183,7 @@ impl Port {
             &pilot.flags,
         );
         let mut open = OpenConversation::new(stellar, scene, conversation);
-        settle_outcome(&mut open, statics, pilot, room);
+        settle_outcome(&mut open, statics, pilot, holds);
         let page = open.conversation.page().clone();
         self.conversation = Some(open);
         Some(page)
@@ -216,13 +220,15 @@ impl Port {
 }
 
 /// Decides `open`'s offer by the first outcome its page reached, once,
-/// against `room` tons free: nothing for a completion's or a stellar's
-/// own conversation, one already decided, or a page with no outcome.
+/// against the room left in `holds`, measured from `pilot`'s cargo as it
+/// decides, after whatever the landing and the offer loaded or dropped
+/// off: nothing for a completion's or a stellar's own conversation, one
+/// already decided, or a page with no outcome.
 pub(super) fn settle_outcome(
     open: &mut OpenConversation,
     statics: &Statics,
     pilot: &mut Pilot,
-    room: i64,
+    holds: u32,
 ) {
     let Scene::Offer(id) = &open.scene else {
         return;
@@ -234,6 +240,7 @@ pub(super) fn settle_outcome(
         return;
     };
     open.decided = true;
+    let room = free_cargo_in(holds, pilot);
     Play {
         storylines: &statics.storylines,
         flags: &mut pilot.flags,
@@ -785,6 +792,82 @@ mod tests {
             }),
             "the next landing delivers it"
         );
+    }
+
+    #[test]
+    fn a_first_page_accept_counts_the_room_the_landing_frees() {
+        // `bulk` fills the hold and is bound for the dock with no
+        // completion: the landing Open settles drops it off, and the
+        // eager offer's accept then finds the room.
+        let bulk = StoryMission {
+            objective: Some(deliver(1, DOCK)),
+            ..StoryMission::default()
+        };
+        let catalog = talking(&[("bulk", bulk), ("job", offered_by("eager"))]);
+        let mut session = flying(&catalog);
+        let room = free(&session);
+        session.pilot.story.missions.insert(
+            "bulk".to_owned(),
+            MissionState::Active {
+                cargo: u32::try_from(room).expect("a hold's tons"),
+                met: false,
+            },
+        );
+        assert_eq!(free(&session), 0, "full before the drop-off");
+        land_unsettled(&mut session);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Yours, then."]
+        );
+        assert_eq!(state(&session, "bulk"), Some(MissionState::Done));
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 10,
+                met: false
+            })
+        );
+        assert_eq!(free(&session), room - 10);
+    }
+
+    #[test]
+    fn a_first_page_accept_counts_the_cargo_its_offer_loads() {
+        // The eager offer's `on_offer` sets `loading`, which fires `load`:
+        // an event that fills the hold but for 5 tons, short of the job's
+        // 10.
+        let catalog = talking(&[]);
+        let room = free(&flying(&catalog));
+        let load = StoryMission {
+            requires: Requires {
+                flags: vec!["loading".to_owned()],
+                ..Requires::default()
+            },
+            objective: Some(deliver(
+                u32::try_from(room - 5).expect("a hold's tons"),
+                DOCK + 1,
+            )),
+            ..StoryMission::default()
+        };
+        let job = StoryMission {
+            on_offer: setting(&["loading"]),
+            ..offered_by("eager")
+        };
+        let catalog = talking(&[("job", job), ("load", load)]);
+        let mut session = landed(&catalog);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Yours, then."]
+        );
+        assert!(matches!(
+            state(&session, "load"),
+            Some(MissionState::Active { .. })
+        ));
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Offered),
+            "refused for room"
+        );
+        assert_eq!(free(&session), 5);
     }
 
     #[test]

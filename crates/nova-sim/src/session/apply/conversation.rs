@@ -19,14 +19,17 @@ impl Session {
     ///   (see the `storylines` module).
     /// - [`Converse::Choose`] takes a choice, keeping the story's state in
     ///   the pilot, and decides an offer by the outcome its page reached,
-    ///   against the room left in the hold: [`Answer::Conversation`] with
+    ///   against the room left in the ship's own holds, measured as it
+    ///   decides: [`Answer::Conversation`] with
     ///   the next page, or [`Answer::Refused`] with none open, on an ended
     ///   page or past its choices.
     /// - [`Converse::Close`] closes it: [`Answer::Done`], or
     ///   [`Answer::Refused`] with none open.
     pub(super) fn apply_conversation(&mut self, converse: Converse) -> Answer {
         let landed = self.mode.landed();
-        let room = self.ship.free_cargo(&self.pilot);
+        // The holds, not the room: opening settles the landing and the
+        // offer, which change the cargo before an outcome is decided.
+        let holds = self.ship.holds();
         let page = match converse {
             Converse::Open => self.port.open_next_scene(
                 &self.statics,
@@ -34,7 +37,7 @@ impl Session {
                 &mut self.pilot,
                 &mut self.out,
                 landed,
-                room,
+                holds,
             ),
             Converse::Choose(index) => self.port.choose_in_conversation(
                 &self.statics,
@@ -42,7 +45,7 @@ impl Session {
                 &mut self.pilot,
                 landed,
                 index,
-                room,
+                holds,
             ),
             Converse::Close => return done_if(self.port.close_conversation()),
         };

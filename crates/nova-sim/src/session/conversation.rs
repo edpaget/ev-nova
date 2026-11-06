@@ -105,7 +105,7 @@ impl Setup {
 impl Port {
     /// Takes the choice at `index` on the open conversation's page,
     /// keeping the new page's state in `pilot`, then decides its offer by
-    /// the outcome reached, against `room` tons free (see the
+    /// the outcome reached, against the room left in `holds` (see the
     /// `storylines` module): the next page, or `None` with none open at
     /// `landed`, on an ended page, or past its choices, which changes
     /// nothing.
@@ -116,7 +116,7 @@ impl Port {
         pilot: &mut Pilot,
         landed: Option<StellarId>,
         index: usize,
-        room: i64,
+        holds: u32,
     ) -> Option<ConversationPage> {
         let open = self
             .conversation
@@ -130,7 +130,7 @@ impl Port {
         open.conversation
             .choose(setup.dialog_loader(), story, &mut pilot.dialogs, index)
             .ok()?;
-        settle_outcome(open, statics, pilot, room);
+        settle_outcome(open, statics, pilot, holds);
         Some(open.conversation.page().clone())
     }
 
