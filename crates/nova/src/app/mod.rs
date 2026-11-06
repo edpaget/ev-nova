@@ -1584,6 +1584,23 @@ mod tests {
         shape_on_tick: Option<ViewShape>,
         /// It claims a touch starting left of this logical x, if set.
         claims_left_of: Option<f32>,
+        /// It claims a touch on a control flight's touch controls place
+        /// with the menu so, in the surroundings it was told last, if set.
+        claims_menu: Option<nova_view::flight::touch_controls::layout::MenuView>,
+    }
+
+    impl RecordingScreen {
+        /// The region flight's touch controls take in the surroundings it
+        /// was told last, in its own view: the widened size it was told
+        /// last while widened, else the classic canvas.
+        fn touch_region(&self) -> nova_view::flight::touch_controls::layout::Region {
+            let told = self.surroundings.last().copied().unwrap_or_default();
+            let view = match self.shape {
+                ViewShape::Widened => self.widened.last().copied().unwrap_or((1024.0, 768.0)),
+                ViewShape::Classic => (1024.0, 768.0),
+            };
+            nova_view::flight::touch_controls::layout::Region::for_flight(&told, view)
+        }
     }
 
     impl Screen for RecordingScreen {
@@ -1653,7 +1670,12 @@ mod tests {
         }
 
         fn claims_touch(&self, at: Point) -> bool {
-            self.claims_left_of.is_some_and(|x| at.x < x)
+            let on_control = self.claims_menu.is_some_and(|menu| {
+                let shown =
+                    nova_view::flight::touch_controls::layout::layout(&self.touch_region(), menu);
+                shown.hit(at).is_some()
+            });
+            on_control || self.claims_left_of.is_some_and(|x| at.x < x)
         }
 
         fn take_quit(&mut self) -> bool {
@@ -1686,6 +1708,7 @@ mod tests {
     mod pointer_release;
     mod safe_area;
     mod touch;
+    mod touch_controls;
     mod updates;
     mod wheel;
 
