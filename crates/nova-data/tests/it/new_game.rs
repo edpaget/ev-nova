@@ -13,6 +13,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dude::Dude;
 use nova_data::records::govt::Govt;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::{Stellar, flags2};
@@ -31,8 +32,9 @@ use nova_galaxy_media::BARE;
 /// none; and `verge-camp`, a warden outpost with a bar and no fuel; jump
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
-/// civilian hull `hauler` and the crown hull `cutter`; the start
-/// `dock-hand`, in the hauler in `hearth`; the storyline `dock-work`,
+/// civilian hull `hauler` and the crown hull `cutter`; the outfit
+/// `dock-pass`; the start `dock-hand`, in the hauler in `hearth`; the
+/// storyline `dock-work`,
 /// whose four missions and two news items run over the conversations of
 /// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
 fn fixture() -> PathBuf {
@@ -163,6 +165,7 @@ fn the_fixture_folder_holds_a_record_for_each_thing_it_maps() {
     assert_eq!(data.ids(ShipAnim::TYPE), [128, 129]);
     assert_eq!(data.ids(Dude::TYPE), [128], "the civilian traffic");
     assert_eq!(data.ids(Character::TYPE), [128], "the start");
+    assert_eq!(data.ids(Outfit::TYPE), [128], "the dock pass");
     let [file] = data.files() else {
         panic!("one file: {:?}", data.files());
     };
@@ -379,6 +382,20 @@ fn a_stellar_s_body_is_its_landing_text() {
         dock.text.as_str(),
         "The Guild's great dock.\n\nShips are built and sold here."
     );
+}
+
+#[test]
+fn the_dock_pass_is_an_outfit_the_dock_job_lends_and_takes_back() {
+    let game = new_game::open(&fixture()).expect("lists");
+    assert_eq!(pairs(&game.ids.outfits), [("dock-pass".to_owned(), 128)]);
+    let (name, pass) = named::<Outfit>(&game.data, 128);
+    assert_eq!(name, "Dock pass");
+    assert_eq!(pass.cost, 0);
+    let job = &game.data.storylines().missions["dock-job"];
+    assert_eq!(job.on_accept.grant_outfits, [nova_data::OutfitId(128)]);
+    assert_eq!(job.on_accept.remove_outfits, []);
+    assert_eq!(job.on_success.grant_outfits, []);
+    assert_eq!(job.on_success.remove_outfits, [nova_data::OutfitId(128)]);
 }
 
 #[test]

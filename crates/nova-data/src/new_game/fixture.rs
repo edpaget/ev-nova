@@ -8,12 +8,14 @@
 //! `verge`, a dead pair between `verge` and `drift`, and `drift`'s
 //! one-way back door to `verge`); the civilian hull `hauler` and the
 //! crown hull `cutter`, with a livery and a placeholder model; the
-//! start `dock-hand`, in the hauler in `hearth`; and the storyline
-//! `dock-work`, with its four missions and two news items:
+//! outfit `dock-pass`, a Dock pass; the start `dock-hand`, in the hauler
+//! in `hearth`; and the storyline `dock-work`, with its four missions and
+//! two news items:
 //!
 //! - `dock-job`: offered at `hearth-dock` (`job_offer`), ten tons of hull
 //!   plate to `verge-camp`, completed there (`job_done`), each effect
-//!   block used; its success releases `plate-arrives`, from `verge`;
+//!   block used; its accept lends the `dock-pass` and its success takes
+//!   it back and releases `plate-arrives`, from `verge`;
 //! - `side-road-closes`: an event on day 3 that kills both ends of the
 //!   side road and releases `side-road-closes`, from `hearth`;
 //! - `warden-toll`: offered at `verge-camp` (`toll_offer`) once the side
