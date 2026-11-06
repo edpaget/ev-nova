@@ -12,89 +12,14 @@ use crate::input::{Device, Surroundings};
 use crate::keymap::KeyMap;
 use crate::keymap::command::{FlightCommand, Kind};
 use crate::keymap::contexts::FLIGHT;
-use crate::view_shape::widened_size;
+use crate::ui::touch_aids::testkit::{WINDOWS, Window};
 
-/// A window size in points and its scale factor: the inputs a fixture
-/// derives its view and points per pixel from.
-struct Window {
-    name: &'static str,
-    points: (f32, f32),
-    scale: f32,
+/// Flight's region in a fixture window.
+trait Regions {
+    fn region(&self) -> Region;
 }
 
-const WINDOWS: [Window; 6] = [
-    Window {
-        name: "desktop window",
-        points: (1024.0, 768.0),
-        scale: 1.0,
-    },
-    Window {
-        name: "large desktop window",
-        points: (1920.0, 1440.0),
-        scale: 1.0,
-    },
-    Window {
-        name: "full iPad",
-        points: (1194.0, 834.0),
-        scale: 2.0,
-    },
-    Window {
-        name: "small iPad window",
-        points: (700.0, 525.0),
-        scale: 2.0,
-    },
-    Window {
-        name: "iPad Split View half",
-        points: (590.0, 834.0),
-        scale: 2.0,
-    },
-    Window {
-        name: "Slide Over",
-        points: (320.0, 834.0),
-        scale: 2.0,
-    },
-];
-
-/// The fake safe area's cuts, in points: top, bottom, and each side.
-const CUTS: (f32, f32, f32) = (24.0, 20.0, 32.0);
-
-impl Window {
-    /// Flight's view in this window: its widened shape
-    /// ([`widened_size`] of the window's pixels).
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn view(&self) -> (f32, f32) {
-        let px = (
-            (self.points.0 * self.scale).round() as u32,
-            (self.points.1 * self.scale).round() as u32,
-        );
-        let (w, h) = widened_size(px);
-        #[allow(clippy::cast_precision_loss)]
-        (w as f32, h as f32)
-    }
-
-    /// Points per logical pixel: the window's points over the view, the
-    /// smaller way (the view is letterboxed the other).
-    fn points_per_pixel(&self) -> f32 {
-        let (w, h) = self.view();
-        (self.points.0 / w).min(self.points.1 / h)
-    }
-
-    /// The surroundings, told by touch, with the fake safe area cut from
-    /// the canvas's edges.
-    fn surroundings(&self) -> Surroundings {
-        let ppp = self.points_per_pixel();
-        let (w, h) = self.view();
-        let (top, bottom, side) = CUTS;
-        Surroundings {
-            device: Device::Touch,
-            safe_area: Bounds {
-                min: Point::new(side / ppp, top / ppp),
-                max: Point::new(w - side / ppp, h - bottom / ppp),
-            },
-            points_per_pixel: ppp,
-        }
-    }
-
+impl Regions for Window {
     fn region(&self) -> Region {
         Region::for_flight(&self.surroundings(), self.view())
     }

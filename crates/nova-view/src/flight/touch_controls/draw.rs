@@ -24,13 +24,10 @@ use crate::keymap::command::{
     AppCommand, Command, EscortMenuCommand, FlightCommand as F, PauseCommand, PlayCommand,
 };
 use crate::oval::{fill_pixels, oval_fill_pixels, oval_frame_pixels};
+use crate::ui::touch_aids::look;
 
-/// A control at rest.
-pub const FILL: Color = Color::rgba(200, 210, 230, 72);
-/// A control's outline and label.
-pub const OUTLINE: Color = Color::rgba(230, 235, 245, 160);
-/// A control held down.
-pub const HIGHLIGHT: Color = Color::rgba(120, 200, 255, 160);
+pub use crate::ui::touch_aids::look::{FILL, HIGHLIGHT, LABEL_PT, OUTLINE};
+
 /// Eject and Self-Destruct.
 pub const WARNING: Color = Color::rgba(230, 70, 60, 160);
 /// The open menu's panel.
@@ -39,8 +36,6 @@ pub const PANEL: Color = Color::rgba(10, 12, 20, 160);
 pub const RING: Color = Color::rgba(230, 235, 245, 140);
 /// The stick zone's hint ring.
 pub const HINT: Color = Color::rgba(200, 210, 230, 48);
-/// The labels' size, in points.
-pub const LABEL_PT: f32 = 12.0;
 
 /// Draws the overlay over flight: nothing while it is hidden.
 pub fn draw(controls: &TouchControls, list: &mut DrawList) {
@@ -84,13 +79,6 @@ fn draw_button(
         FILL
     };
     let rect = placed.rect;
-    if placed.round {
-        fill_pixels(list, &oval_fill_pixels(whole(rect)), fill);
-    } else {
-        fill_rect(list, rect, fill);
-        outline(list, rect, 1.0 / points, OUTLINE);
-    }
-    let size = LABEL_PT / points;
     let text = match id {
         ControlId::Command(command) => label(command),
         ControlId::More => "More",
@@ -98,13 +86,12 @@ fn draw_button(
         ControlId::PageNext => "\u{25b6}",
         ControlId::Stick => "",
     };
-    list.text(
-        text,
-        Point::new(rect.min.x + size / 2.0, rect.center().y - size / 2.0),
-        size,
-        Some(rect.width() - size),
-        OUTLINE,
-    );
+    if placed.round {
+        fill_pixels(list, &oval_fill_pixels(whole(rect)), fill);
+        look::draw_label(list, rect, text, points);
+    } else {
+        look::draw_square(list, rect, text, fill, points);
+    }
 }
 
 fn draw_stick(controls: &TouchControls, zone: Bounds, list: &mut DrawList) {
@@ -137,19 +124,6 @@ fn whole(rect: Bounds) -> IRect {
         top: rect.min.y.round() as i32,
         right: rect.max.x.round() as i32,
         bottom: rect.max.y.round() as i32,
-    }
-}
-
-/// A `width`-thick outline just inside `rect`.
-fn outline(list: &mut DrawList, rect: Bounds, width: f32, color: Color) {
-    let Bounds { min, max } = rect;
-    for (from, to) in [
-        (min, Point::new(max.x, min.y)),
-        (Point::new(min.x, max.y), max),
-        (min, Point::new(min.x, max.y)),
-        (Point::new(max.x, min.y), max),
-    ] {
-        list.line(from, to, width, color);
     }
 }
 

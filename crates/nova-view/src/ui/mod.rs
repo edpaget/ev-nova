@@ -117,6 +117,7 @@ pub mod text_field;
 pub mod text_input;
 pub(crate) mod text_shrink;
 pub mod toggle;
+pub mod touch_aids;
 pub mod volume;
 pub mod yes_no;
 
