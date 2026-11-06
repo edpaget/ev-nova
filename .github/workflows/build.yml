@@ -124,6 +124,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # Default features only: never --features dev-tools or --all-features,
       # so egui stays out of published builds. The release build must stay on
       # the same default feature set that `mise run deny` checks in `ci`.
