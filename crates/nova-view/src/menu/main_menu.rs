@@ -77,6 +77,8 @@ use crate::ui::pad_focus::{self, FocusState};
 use crate::ui::{Button, ButtonSkin, ButtonStyle};
 
 pub(crate) mod pad;
+#[cfg(test)]
+mod touch;
 use crate::view_shape::CLASSIC_SIZE;
 
 /// The stand-in's title, over its buttons.

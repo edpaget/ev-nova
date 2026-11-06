@@ -101,6 +101,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     self.screen.cancel_pointer();
                     self.after_input(ScreenAction::None)
                 }
+                Routed::Pointer(PointerStep::Left) => Control::Continue,
             };
             if control == Control::Exit {
                 return Control::Exit;

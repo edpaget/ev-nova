@@ -18,7 +18,10 @@
 //!   ([`HoverCursor::read`]). Ours is told of a button rather than
 //!   reading `_Button` live, so a release that won't reach flight ends the
 //!   hold where it is lost: at [`HoverCursor::left`] outside the window,
-//!   and at `FlightView::let_go_of_input` when flight gives up its input;
+//!   and at `FlightView::let_go_of_input` when flight gives up its input.
+//!   A finger's lift reaches flight as the pointer leaving
+//!   ([`crate::touch::PointerStep::Left`]), so under touch the cursor
+//!   shows only while a finger is down and hides as it lifts;
 //! - at the end of each frame (@0x38427-0x3844d) it drops a level once a
 //!   second (60 `_TickCount`s) has passed since that stamp, or on any frame
 //!   the byte at `0x3b5550` is set, `_keyPressedThisFrame`, which

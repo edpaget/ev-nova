@@ -81,7 +81,7 @@ fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
 
 /// Phase 16's premise: with no claimant, a finger is flight's pointer, so
 /// a tap on a ship targets it as a click does, and the cursor follows the
-/// finger.
+/// finger, hiding as it lifts (the pointer leaving).
 #[test]
 fn a_tap_in_space_does_what_a_click_does() {
     let (mut by_mouse, id) = faked_with_npc();
@@ -89,13 +89,16 @@ fn a_tap_in_space_does_what_a_click_does() {
     by_mouse.input(&Input::PointerMoved(over));
     left_press(&mut by_mouse, over);
     left_release(&mut by_mouse, over);
+    // A lifted finger is the pointer leaving
+    // (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+    by_mouse.input(&Input::PointerLeft);
     let (mut by_touch, _) = faked_with_npc();
     crate::touch::testkit::tap(&mut by_touch, over);
     assert!(clicked(&by_touch), "{:?}", sent(&by_touch));
     assert_eq!(sent(&by_touch), sent(&by_mouse));
     let cursor = |view: &Faked| cursor_sprites(&super::faked_world::world_list(view));
     assert_eq!(cursor(&by_touch), cursor(&by_mouse));
-    assert!(!cursor(&by_touch).is_empty(), "the cursor shows");
+    assert!(cursor(&by_touch).is_empty(), "the cursor hides on the lift");
 }
 
 #[test]

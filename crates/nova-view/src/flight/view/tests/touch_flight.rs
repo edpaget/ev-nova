@@ -302,6 +302,9 @@ fn a_tap_off_the_controls_is_still_a_click_in_space() {
     by_mouse.input(&Input::PointerMoved(over));
     left_press(&mut by_mouse, over);
     left_release(&mut by_mouse, over);
+    // A lifted finger is the pointer leaving
+    // (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+    by_mouse.input(&Input::PointerLeft);
     let (mut by_touch, _) = faked_with_npc();
     told(&mut by_touch, Device::Touch);
     assert!(!by_touch.claims_touch(over), "{over:?} is off the controls");

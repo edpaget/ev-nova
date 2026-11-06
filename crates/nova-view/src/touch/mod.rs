@@ -20,6 +20,13 @@
 //!   under it unchanged. A cancelled primary lets go without firing
 //!   ([`PointerStep::Cancelled`]). Claimed fingers don't count, so a thumb
 //!   on a claimant's control doesn't keep a tap elsewhere from pressing.
+//! - **The lift is a leave.** After the primary's release, and after its
+//!   cancel, the pointer leaves ([`PointerStep::Left`]): a finger has a
+//!   position only while it is down, as winit says with the
+//!   `PointerLeft` it sends after every touch's end. So flight's hover
+//!   cursor hides once the finger lifts, and the main screen's rollover
+//!   fades to none. A claimed finger and a finger that never pressed lift
+//!   with no leave: they were never the pointer.
 //! - **Other fingers** press nothing, and no finger is ever promoted to
 //!   primary: once the primary lifts while another unclaimed finger is
 //!   down, no unclaimed finger presses until every one has lifted.
@@ -91,6 +98,9 @@ pub enum PointerStep {
     /// The press was cancelled: let go without firing
     /// ([`Screen::cancel_pointer`](crate::Screen::cancel_pointer)).
     Cancelled,
+    /// The finger has gone, after its release or its cancel: the pointer
+    /// left ([`Input::PointerLeft`]), as winit reports a touch's end.
+    Left,
 }
 
 impl PointerStep {
@@ -104,6 +114,7 @@ impl PointerStep {
             Self::Pressed(at) => Some(left(true, at)),
             Self::Released(at) => Some(left(false, at)),
             Self::Cancelled => None,
+            Self::Left => Some(Input::PointerLeft),
         }
     }
 }
@@ -131,6 +142,7 @@ mod tests {
         assert_eq!(PointerStep::Pressed(at).input(), Some(left(true, at)));
         assert_eq!(PointerStep::Released(at).input(), Some(left(false, at)));
         assert_eq!(PointerStep::Cancelled.input(), None);
+        assert_eq!(PointerStep::Left.input(), Some(Input::PointerLeft));
     }
 
     #[test]

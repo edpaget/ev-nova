@@ -369,7 +369,7 @@ fn mouse_click(at: Point) -> [Input; 3] {
 }
 
 /// The fingers the touch tests use: none claimed.
-type Free<'a> = Fingers<'a, fn(Point) -> bool>;
+type Free<'a> = Fingers<'a, fn(Point) -> bool, dyn Screen + 'a>;
 
 /// A run whose screen `touch` drives with fingers.
 fn touched(build: fn() -> Box<dyn PadProbe>, touch: impl FnOnce(&mut Free<'_>)) -> Run {

@@ -8,11 +8,12 @@ use crate::geometry::Point;
 use crate::input::{FingerId, Input, Touch, TouchPhase};
 use crate::screen::{Screen, ScreenAction};
 
-/// A router, a claimant and the screen they drive.
-pub(crate) struct Fingers<'a, C: TouchClaimant> {
+/// A router, a claimant and the screen they drive, which a test can read
+/// between steps ([`Self::screen`]).
+pub(crate) struct Fingers<'a, C: TouchClaimant, S: Screen + ?Sized = dyn Screen> {
     router: TouchRouter,
     claimant: C,
-    screen: &'a mut dyn Screen,
+    screen: &'a mut S,
     /// Whether the screen's own [`Screen::claims_touch`] claims, as the
     /// app asks it, instead of `claimant`.
     by_screen: bool,
@@ -20,15 +21,15 @@ pub(crate) struct Fingers<'a, C: TouchClaimant> {
     actions: Vec<ScreenAction>,
 }
 
-impl<'a> Fingers<'a, fn(Point) -> bool> {
+impl<'a, S: Screen + ?Sized> Fingers<'a, fn(Point) -> bool, S> {
     /// Fingers on `screen`, which claims none of them.
-    pub(crate) fn on(screen: &'a mut dyn Screen) -> Self {
+    pub(crate) fn on(screen: &'a mut S) -> Self {
         Self::claimed_by(screen, |_| false)
     }
 
     /// Fingers on `screen`, which claims what its own
     /// [`Screen::claims_touch`] says, as the app asks it.
-    pub(crate) fn claimed_by_screen(screen: &'a mut dyn Screen) -> Self {
+    pub(crate) fn claimed_by_screen(screen: &'a mut S) -> Self {
         Self {
             by_screen: true,
             ..Self::on(screen)
@@ -36,9 +37,9 @@ impl<'a> Fingers<'a, fn(Point) -> bool> {
     }
 }
 
-impl<'a, C: TouchClaimant> Fingers<'a, C> {
+impl<'a, C: TouchClaimant, S: Screen + ?Sized> Fingers<'a, C, S> {
     /// Fingers on `screen`, which `claimant` claims from.
-    pub(crate) fn claimed_by(screen: &'a mut dyn Screen, claimant: C) -> Self {
+    pub(crate) fn claimed_by(screen: &'a mut S, claimant: C) -> Self {
         Self {
             router: TouchRouter::default(),
             claimant,
@@ -46,6 +47,11 @@ impl<'a, C: TouchClaimant> Fingers<'a, C> {
             by_screen: false,
             actions: Vec::new(),
         }
+    }
+
+    /// The screen the fingers drive.
+    pub(crate) fn screen(&mut self) -> &mut S {
+        self.screen
     }
 
     /// Every action the screen answered with since this was last taken.

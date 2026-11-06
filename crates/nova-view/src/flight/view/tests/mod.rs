@@ -135,6 +135,7 @@ mod stellar_passes;
 mod stellars;
 mod stepping;
 mod touch_flight;
+mod touch_hover;
 mod whole_pixels;
 mod widescreen;
 mod world_layers;

@@ -195,8 +195,12 @@ impl TouchRouter {
                     out.push(Routed::Pointer(PointerStep::Moved(at)));
                 }
                 out.push(Routed::Pointer(PointerStep::Released(at)));
+                out.push(Routed::Pointer(PointerStep::Left));
             }
-            (Role::Primary, None) => out.push(Routed::Pointer(PointerStep::Cancelled)),
+            (Role::Primary, None) => {
+                out.push(Routed::Pointer(PointerStep::Cancelled));
+                out.push(Routed::Pointer(PointerStep::Left));
+            }
             (Role::Other, _) => {}
         }
     }
@@ -295,7 +299,7 @@ mod tests {
         }
     }
 
-    use PointerStep::{Cancelled, Moved, Pressed, Released};
+    use PointerStep::{Cancelled, Left, Moved, Pressed, Released};
     use Routed::{Claimed, Pointer};
 
     fn pinch(step: Pinch) -> Routed {
@@ -320,10 +324,95 @@ mod tests {
             fingers.up(1, p(12.0, 22.0)),
             [
                 Pointer(Moved(p(12.0, 22.0))),
-                Pointer(Released(p(12.0, 22.0)))
+                Pointer(Released(p(12.0, 22.0))),
+                Pointer(Left)
             ]
         );
         assert!(!fingers.router.any_down());
+    }
+
+    #[test]
+    fn the_primarys_lift_is_a_release_then_a_leave() {
+        let mut fingers = Drive::new(never);
+        fingers.down(1, p(10.0, 20.0));
+        assert_eq!(
+            fingers.up(1, p(12.0, 22.0)),
+            [
+                Pointer(Moved(p(12.0, 22.0))),
+                Pointer(Released(p(12.0, 22.0))),
+                Pointer(Left)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_primary_leaves_after_its_cancel() {
+        let mut fingers = Drive::new(never);
+        fingers.down(1, p(10.0, 20.0));
+        assert_eq!(fingers.cancel(1), [Pointer(Cancelled), Pointer(Left)]);
+    }
+
+    #[test]
+    fn a_claimed_fingers_lift_leaves_nothing() {
+        let mut fingers = Drive::new(always);
+        fingers.down(1, p(10.0, 20.0));
+        assert_eq!(
+            fingers.up(1, p(10.0, 20.0)),
+            [Claimed(touch(1, TouchPhase::Ended(p(10.0, 20.0))))]
+        );
+        fingers.down(2, p(10.0, 20.0));
+        assert_eq!(
+            fingers.cancel(2),
+            [Claimed(touch(2, TouchPhase::Cancelled))]
+        );
+    }
+
+    #[test]
+    fn a_finger_that_never_pressed_lifts_with_no_leave() {
+        let mut fingers = Drive::new(never);
+        fingers.down(1, p(10.0, 10.0));
+        fingers.down(2, p(300.0, 300.0));
+        fingers.down(3, p(400.0, 300.0));
+        assert_eq!(fingers.up(3, p(400.0, 300.0)), [], "a third finger");
+        assert_eq!(
+            fingers.up(1, p(10.0, 10.0)),
+            [
+                pinch(Pinch::Ended),
+                Pointer(Released(p(10.0, 10.0))),
+                Pointer(Left)
+            ]
+        );
+        assert_eq!(
+            fingers.up(2, p(300.0, 300.0)),
+            [],
+            "the finger left down after the primary lifted"
+        );
+    }
+
+    #[test]
+    fn a_pinchs_primary_lifting_leaves() {
+        let mut fingers = Drive::new(never);
+        fingers.down(1, p(100.0, 100.0));
+        fingers.down(2, p(190.0, 100.0));
+        assert_eq!(
+            fingers.up(1, p(100.0, 100.0)),
+            [
+                pinch(Pinch::Ended),
+                Pointer(Released(p(100.0, 100.0))),
+                Pointer(Left)
+            ]
+        );
+        assert_eq!(fingers.up(2, p(190.0, 100.0)), []);
+    }
+
+    #[test]
+    fn cancel_all_leaves_after_the_primarys_cancel() {
+        let mut fingers = Drive::new(never);
+        fingers.down(1, p(10.0, 10.0));
+        assert_eq!(
+            fingers.router.cancel_all(),
+            [Pointer(Cancelled), Pointer(Left)]
+        );
     }
 
     #[test]
@@ -333,17 +422,20 @@ mod tests {
         fingers.to(1, p(11.0, 21.0));
         assert_eq!(
             fingers.up(1, p(11.0, 21.0)),
-            [Pointer(Released(p(11.0, 21.0)))]
+            [Pointer(Released(p(11.0, 21.0))), Pointer(Left)]
         );
         fingers.down(2, p(5.0, 5.0));
-        assert_eq!(fingers.up(2, p(5.0, 5.0)), [Pointer(Released(p(5.0, 5.0)))]);
+        assert_eq!(
+            fingers.up(2, p(5.0, 5.0)),
+            [Pointer(Released(p(5.0, 5.0))), Pointer(Left)]
+        );
     }
 
     #[test]
     fn a_cancelled_primary_is_cancelled_without_a_release() {
         let mut fingers = Drive::new(never);
         fingers.down(1, p(10.0, 20.0));
-        assert_eq!(fingers.cancel(1), [Pointer(Cancelled)]);
+        assert_eq!(fingers.cancel(1), [Pointer(Cancelled), Pointer(Left)]);
         assert!(!fingers.router.any_down());
         assert_eq!(
             fingers.down(2, p(1.0, 1.0)),
@@ -393,7 +485,10 @@ mod tests {
             [Pointer(Moved(inside))],
             "the pointer stays the pointer on them"
         );
-        assert_eq!(fingers.up(2, inside), [Pointer(Released(inside))],);
+        assert_eq!(
+            fingers.up(2, inside),
+            [Pointer(Released(inside)), Pointer(Left)]
+        );
         fingers.up(1, outside);
         assert_eq!(fingers.claimant.asked.get(), 2, "once per start");
     }
@@ -407,7 +502,7 @@ mod tests {
             fingers.down(2, tap),
             [Pointer(Moved(tap)), Pointer(Pressed(tap))]
         );
-        assert_eq!(fingers.up(2, tap), [Pointer(Released(tap))]);
+        assert_eq!(fingers.up(2, tap), [Pointer(Released(tap)), Pointer(Left)]);
     }
 
     #[test]
@@ -427,7 +522,7 @@ mod tests {
         );
         assert_eq!(
             fingers.up(1, p(10.0, 10.0)),
-            [Pointer(Released(p(10.0, 10.0)))]
+            [Pointer(Released(p(10.0, 10.0))), Pointer(Left)]
         );
     }
 
@@ -470,7 +565,10 @@ mod tests {
         let mut fingers = Drive::new(never);
         fingers.down(1, p(10.0, 10.0));
         fingers.down(2, p(300.0, 300.0));
-        assert_eq!(fingers.cancel(1), [pinch(Pinch::Ended), Pointer(Cancelled)]);
+        assert_eq!(
+            fingers.cancel(1),
+            [pinch(Pinch::Ended), Pointer(Cancelled), Pointer(Left)]
+        );
         assert_eq!(fingers.down(3, p(50.0, 50.0)), []);
         fingers.cancel(2);
         fingers.cancel(3);
@@ -537,6 +635,7 @@ mod tests {
             fingers.down(1, p(20.0, 20.0)),
             [
                 Pointer(Cancelled),
+                Pointer(Left),
                 Pointer(Moved(p(20.0, 20.0))),
                 Pointer(Pressed(p(20.0, 20.0)))
             ]
@@ -600,7 +699,11 @@ mod tests {
         fingers.down(2, p(190.0, 100.0));
         assert_eq!(
             fingers.up(1, p(100.0, 100.0)),
-            [pinch(Pinch::Ended), Pointer(Released(p(100.0, 100.0)))]
+            [
+                pinch(Pinch::Ended),
+                Pointer(Released(p(100.0, 100.0))),
+                Pointer(Left)
+            ]
         );
         assert_eq!(fingers.to(2, p(500.0, 100.0)), [], "no longer pinching");
         fingers.up(2, p(500.0, 100.0));
@@ -615,7 +718,7 @@ mod tests {
         );
         fingers.down(3, p(100.0, 100.0));
         assert_eq!(fingers.cancel(3), [pinch(Pinch::Ended)], "a second pinch");
-        assert_eq!(fingers.cancel(1), [Pointer(Cancelled)]);
+        assert_eq!(fingers.cancel(1), [Pointer(Cancelled), Pointer(Left)]);
     }
 
     #[test]
@@ -659,7 +762,8 @@ mod tests {
             [
                 Claimed(touch(1, TouchPhase::Cancelled)),
                 pinch(Pinch::Ended),
-                Pointer(Cancelled)
+                Pointer(Cancelled),
+                Pointer(Left)
             ]
         );
         assert!(!fingers.router.any_down());
