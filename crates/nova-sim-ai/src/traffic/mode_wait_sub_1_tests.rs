@@ -376,3 +376,41 @@ fn the_disabled_reset_stores_sub_0() {
     super::disabled_reset::reset(&mut ship, RuleSource::Engine);
     assert!(!ship.stopping, "sub 0 (@0x8ff0a)");
 }
+
+/// `npc`'s low level at its slot beside nothing, at full gain under the
+/// original's rules.
+fn low(npc: &mut Npc) {
+    let speeds = TopSpeeds::own_of(npc);
+    let weapons = crate::ai::fixture::records_of([&*npc]);
+    let rules = (FlightRules::default(), Readings::default(), &weapons);
+    let (_, outcome) = autopilot::low_level(
+        npc,
+        &[],
+        &BTreeMap::new(),
+        (None, false, Beside::default()),
+        speeds,
+        rules,
+        &mut Draws::of(&[]),
+    );
+    assert_eq!(outcome, None);
+}
+
+#[test]
+fn a_ship_entering_its_gate_flies_no_kept_stop() {
+    // A sub 1 written over its sub 0x17 would end the entry (F2), so its
+    // wait runs no kept stop: moving, its bit stands uncut, as no sub is
+    // written; at rest the clear drops it, with no settle.
+    let mode = Mode::EnteringGate {
+        gate: crate::catalog::StellarId(129),
+        ticks_left: 9.0,
+    };
+    let mut moving = waiting_in(mode, FAST, Goal::Wait, Vec2::new(0.0, -1.0), 180.0);
+    let start = moving.state;
+    low(&mut moving);
+    assert_eq!((moving.state, moving.speed), (start, 2.0), "uncut");
+    assert!(moving.stopping, "no sub written");
+    let mut at_rest = waiting_in(mode, FAST, Goal::Wait, Vec2::default(), 180.0);
+    low(&mut at_rest);
+    assert_eq!(at_rest.speed, 2.0, "no settle");
+    assert!(!at_rest.stopping, "the clear");
+}
