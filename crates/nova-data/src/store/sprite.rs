@@ -458,17 +458,17 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
         let err = data.ship_sprite(ShipId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             SpriteError::Graphics {
                 image_id: 1000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 1");
     }
 
     /// A plug-in, `Layers`, giving ship 128 a `shän` with glow image `glow`
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_layer_sheet_is_a_graphics_error_for_that_layer_only() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[layered(
             1100,
             1200,
@@ -618,10 +618,10 @@ mod tests {
             LayerError::Graphics {
                 layer: ShipLayer::Glow,
                 image_id: 1100,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 1");
         assert_eq!(
             layers.lights.expect("defined").expect("resolves").image_id,
             1200
@@ -797,13 +797,13 @@ mod tests {
             data.ship_sprite_words(ShipId(129)).expect_err("absent"),
             SpriteError::NoShip(129)
         );
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
         assert_eq!(
             data.ship_sprite_words(ShipId(128)).expect_err("32-bit"),
             SpriteError::Graphics {
                 image_id: 1000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
     }

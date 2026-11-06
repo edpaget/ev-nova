@@ -432,12 +432,12 @@ mod tests {
         let words = data.spin_words(3000).expect("a PICT pair");
         assert_eq!(words, sheet_rle_words(&cut, 16));
         assert_eq!(words.starts.len(), 6);
-        let deep = fork(&[(RLED, 2000, RledBuilder::new(2, 1).depth(32).build())]);
+        let deep = fork(&[(RLED, 2000, RledBuilder::new(2, 1).depth(1).build())]);
         assert_eq!(
             store(&[("Bad", deep)]).spin_words(3000),
             Err(SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             })
         );
         let nothing = fork(&[(Spin::TYPE, 3000, masked_spin(2001, 2101, 2, 1, 6, 6))]);
@@ -576,17 +576,17 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
         let err = data.spin_sheet(3000).expect_err("32-bit");
         assert_eq!(
             err,
             SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 1");
     }
 
     #[test]
@@ -612,7 +612,7 @@ mod tests {
         // With a corrupt `rlëD` 2000 beside it, the `rlëD` is still the
         // sheet (`_ResourceExists` @0x1ebee), and its failure the error.
         let mut resources = pair.to_vec();
-        resources.push((RLED, 2000, RledBuilder::new(2, 1).depth(32).build()));
+        resources.push((RLED, 2000, RledBuilder::new(2, 1).depth(1).build()));
         let err = store(&[("Bad Paint", fork(&resources))])
             .spin_sheet(3000)
             .expect_err("the rlëD fails, not the pair resolves");
@@ -620,7 +620,7 @@ mod tests {
             err,
             SpinSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
     }

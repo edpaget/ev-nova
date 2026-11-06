@@ -607,16 +607,16 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
         let err = data.stellar_sprite(StellarId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             StellarSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 1");
     }
 }

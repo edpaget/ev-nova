@@ -58,6 +58,11 @@ pub struct RleWords {
 pub fn rled_words(data: &[u8]) -> Result<RleWords, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
+    if header.depth != 16 && header.depth != 8 {
+        return Err(GraphicsError::UnsupportedDepth {
+            depth: header.depth,
+        });
+    }
     let words: Vec<u32> = data[r.pos()..]
         .as_chunks::<4>()
         .0
@@ -210,10 +215,10 @@ mod tests {
             .frame(|f| f.token(1, 8).pixels8(&[1, 2]))
             .build();
         assert_eq!(rled_words(&eight).expect("reads").depth, 8);
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(24).frame(|f| f).build();
         assert_eq!(
             rled_words(&deep),
-            Err(GraphicsError::UnsupportedDepth { depth: 32 })
+            Err(GraphicsError::UnsupportedDepth { depth: 24 })
         );
         let none = RledBuilder::new(2, 1).build();
         assert_eq!(rled_words(&none), Err(GraphicsError::NoFrames));

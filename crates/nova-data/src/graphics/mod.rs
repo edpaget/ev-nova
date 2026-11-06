@@ -134,6 +134,7 @@ mod region;
 mod rle_words;
 mod rled;
 mod rled8;
+mod rled_wide;
 mod sheet;
 mod system_clut;
 

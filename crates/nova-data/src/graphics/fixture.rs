@@ -816,6 +816,10 @@ pub struct RledBuilder {
     frame_count: Option<u16>,
     frames: u16,
     tokens: Vec<u8>,
+    /// Each [`RledFrame::line`]'s token offset in `tokens`, and where its
+    /// line's tokens end.
+    lines: Vec<(usize, usize)>,
+    count_lines: bool,
 }
 
 impl RledBuilder {
@@ -829,7 +833,20 @@ impl RledBuilder {
             frame_count: None,
             frames: 0,
             tokens: Vec::new(),
+            lines: Vec::new(),
+            count_lines: false,
         }
+    }
+
+    /// Gives each [`RledFrame::line`] its line's byte count, as stock
+    /// sheets have: the bytes of the tokens up to the next line start or
+    /// the frame's end. (By default the count is left 0, which the
+    /// decoders of depths 8 and 16 ignore, but `_SWLockSprite`'s walk,
+    /// which finds the frames of every other depth, steps by.)
+    #[must_use]
+    pub fn count_lines(mut self) -> Self {
+        self.count_lines = true;
+        self
     }
 
     /// Overrides the header's depth.
@@ -849,7 +866,18 @@ impl RledBuilder {
     /// Adds a frame built by `f`, then its frame-end token.
     #[must_use]
     pub fn frame(mut self, f: impl FnOnce(RledFrame) -> RledFrame) -> Self {
-        self.tokens.extend(f(RledFrame::default()).bytes);
+        let frame = f(RledFrame::default());
+        let base = self.tokens.len();
+        let ends = frame
+            .lines
+            .iter()
+            .skip(1)
+            .copied()
+            .chain([frame.bytes.len()]);
+        for (&start, end) in frame.lines.iter().zip(ends) {
+            self.lines.push((base + start, base + end));
+        }
+        self.tokens.extend(frame.bytes);
         self.tokens.extend([0; 4]);
         self.frames += 1;
         self
@@ -866,11 +894,20 @@ impl RledBuilder {
     #[must_use]
     pub fn build(self) -> Vec<u8> {
         let count = self.frame_count.unwrap_or(self.frames);
+        let mut tokens = self.tokens;
+        if self.count_lines {
+            for (start, end) in self.lines {
+                // A line's bytes fit the 24-bit count in every fixture.
+                #[allow(clippy::cast_possible_truncation)]
+                let bytes = (end - start - 4) as u32;
+                tokens[start..start + 4].copy_from_slice(&token(1, bytes));
+            }
+        }
         let mut out = Vec::new();
         for field in [self.width, self.height, self.depth, 0, count, 0, 0, 0] {
             out.extend(field.to_be_bytes());
         }
-        out.extend(self.tokens);
+        out.extend(tokens);
         out
     }
 }
@@ -879,12 +916,17 @@ impl RledBuilder {
 #[derive(Clone, Debug, Default)]
 pub struct RledFrame {
     bytes: Vec<u8>,
+    /// Where each [`RledFrame::line`] token starts.
+    lines: Vec<usize>,
 }
 
 impl RledFrame {
-    /// Starts the next line. The count is left 0: decoders ignore it.
+    /// Starts the next line. The count is left 0, which the decoders of
+    /// depths 8 and 16 ignore, unless the builder
+    /// [counts lines](RledBuilder::count_lines).
     #[must_use]
-    pub fn line(self) -> Self {
+    pub fn line(mut self) -> Self {
+        self.lines.push(self.bytes.len());
         self.token(1, 0)
     }
 
@@ -940,6 +982,31 @@ impl RledFrame {
     pub fn run8(mut self, n: u32, word: [u8; 4]) -> Self {
         self.bytes.extend(token(4, n));
         self.bytes.extend(word);
+        self
+    }
+
+    /// 32-bit pixels, each written big-endian as `xRRGGBB`: a byte count
+    /// of four a pixel, then the pixels.
+    #[must_use]
+    pub fn pixels32(mut self, pixels: &[u32]) -> Self {
+        self.bytes.extend(token(2, 4 * pixels.len() as u32));
+        for pixel in pixels {
+            self.bytes.extend(pixel.to_be_bytes());
+        }
+        self
+    }
+
+    /// A skip of `n` 32-bit pixels.
+    #[must_use]
+    pub fn skip32(self, n: u32) -> Self {
+        self.token(3, 4 * n)
+    }
+
+    /// A run of `n` 32-bit pixels, with the file word `word`.
+    #[must_use]
+    pub fn run32(mut self, n: u32, word: u32) -> Self {
+        self.bytes.extend(token(4, 4 * n));
+        self.bytes.extend(word.to_be_bytes());
         self
     }
 

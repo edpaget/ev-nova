@@ -141,7 +141,7 @@ impl Rled8 {
 /// 2-byte one: the run's last byte when `i % 4` is 2, which is the low
 /// byte again. (Tails start on a multiple of 4, so every other tail byte
 /// already has `i % 4` equal to `i % 2`.)
-fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
+pub(super) fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
     let le = word.to_le_bytes();
     let one_byte_tail = i % 4 == 2 && i + 1 == n;
     let k = if one_byte_tail { 0 } else { i % 4 };

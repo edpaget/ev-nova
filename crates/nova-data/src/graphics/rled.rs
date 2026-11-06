@@ -1,11 +1,12 @@
-//! `rlëD`: EV Nova's run-length encoded sprite sheets, 16-bit and 8-bit.
+//! `rlëD`: EV Nova's run-length encoded sprite sheets, 16-bit, 8-bit, and
+//! of any other depth the original draws.
 //!
 //! Sources: the EV Nova Bible for meaning (16-bit run-length sprite sheets,
 //! referenced by `spïn` and `shän`), and the open-source ResForge editor's
 //! (MIT) `rlëD` decoder, consulted as a second reading for the byte layout
 //! and token semantics. No code was copied. How the original fills a run,
-//! and how it draws an 8-bit sheet ([`super::rled8`]), come from its own
-//! blitter.
+//! and how it draws an 8-bit sheet ([`super::rled8`]) or a sheet of any
+//! other depth ([`super::rled_wide`]), come from its own blitter.
 
 use nova_rsrc::ResType;
 
@@ -14,6 +15,7 @@ use super::budget::check_budget;
 use super::color::rgb555;
 use super::image::Image;
 use super::reader::Reader;
+use super::rled_wide::decode_wide;
 use super::rled8::{EightBitReading, Rled8};
 use super::sheet::{SheetLayout, SpriteSheet};
 
@@ -56,8 +58,8 @@ pub struct RledInfo {
 /// original's 16-bit world draws it ([`EightBitReading::AsDrawn`]); see
 /// [`decode_rled_as`] for the other reading.
 ///
-/// The 16-byte header is width, height, depth (16 or 8), palette (unused),
-/// frame count and three reserved words. Tokens follow, each a big-endian
+/// The 16-byte header is width, height, depth, palette (unused), frame
+/// count and three reserved words. Tokens follow, each a big-endian
 /// `u32` with an opcode in the top byte and a byte count below. At 16 bits:
 ///
 /// - `0` ends the frame. Lines not drawn stay transparent (every stock
@@ -83,8 +85,16 @@ pub struct RledInfo {
 /// translucency or blend, so a view draws these again over the layer.
 /// A sheet with none keeps nothing more.
 ///
-/// Tokens after the last frame are ignored. Any other depth is
-/// [`GraphicsError::UnsupportedDepth`].
+/// Tokens after the last frame are ignored. A pixel token of no bytes is
+/// [`GraphicsError::RunawaySwap`]: the original's byte swap runs away on
+/// it (@0xbe460-0xbe46a).
+///
+/// A sheet of any other depth whose signed value is above 7, 32 among
+/// them, decodes byte for byte as the original's 16-bit world draws it,
+/// its images padded about its box where they overhang it (see
+/// [`super::rled_wide`]). A depth of 7 or less, or of 0x8000 and up, is
+/// [`GraphicsError::UnsupportedDepth`]: the original's draw procs assert
+/// on it, which quits the game.
 pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteSheet, GraphicsError> {
     decode_rled_as(data, layout, EightBitReading::AsDrawn)
 }
@@ -99,8 +109,11 @@ pub fn decode_rled_as(
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
     let (width, height) = (header.width, header.height);
-    let units = Units::of(&header, reading);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
+    if header.depth != DEPTH && header.depth != DEPTH_8 {
+        return decode_wide(data, &header, layout);
+    }
+    let units = Units::of(&header, reading);
     if header.depth == DEPTH_8 {
         let mut painter = Rled8::new(reading, width, height, header.count);
         walk(data, r.pos(), &header, units, &mut painter)?;
@@ -128,6 +141,15 @@ pub fn decode_rled_as(
 pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
+    if header.depth != DEPTH && header.depth != DEPTH_8 {
+        let sheet = decode_wide(data, &header, SheetLayout::DEFAULT)?;
+        return Ok(RledInfo {
+            frame_width: header.width,
+            frame_height: header.height,
+            frames: header.count,
+            has_runs: sheet.solid_frames().is_some(),
+        });
+    }
     let units = Units::of(&header, EightBitReading::AsDrawn);
     let mut scanner = Scanner { has_runs: false };
     walk(data, r.pos(), &header, units, &mut scanner)?;
@@ -143,7 +165,8 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
 pub(super) struct Header {
     pub(super) width: u32,
     pub(super) height: u32,
-    /// [`DEPTH`] or [`DEPTH_8`].
+    /// Above 7 as a signed word: [`DEPTH`], [`DEPTH_8`], or another the
+    /// original draws as [`super::rled_wide`] says.
     pub(super) depth: u16,
     /// At least one.
     pub(super) count: u16,
@@ -157,7 +180,10 @@ pub(super) fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header
     r.skip(2)?; // palette
     let count = r.u16()?;
     r.skip(6)?; // reserved
-    if depth != DEPTH && depth != DEPTH_8 {
+    // The draw procs compare the depth signed (`cmpw $0x7; jle`,
+    // @0xbb46e-0xbb476).
+    #[allow(clippy::cast_possible_wrap)]
+    if depth as i16 <= 7 {
         return Err(GraphicsError::UnsupportedDepth { depth });
     }
     if width == 0 || height == 0 {
@@ -282,6 +308,9 @@ fn walk(
                 };
                 if units.size == 2 && op == PIXELS && token & 1 == 1 {
                     return Err(GraphicsError::OddByteCount { offset });
+                }
+                if units.size == 2 && op == PIXELS && len == 0 {
+                    return Err(GraphicsError::RunawaySwap { offset });
                 }
                 if x + len > units.row_len {
                     return Err(GraphicsError::LineOverflow {
@@ -633,8 +662,8 @@ mod tests {
             Err(GraphicsError::UnsupportedDepth { depth: 1 })
         );
         assert_eq!(
-            one(RledBuilder::new(2, 2).depth(32)),
-            Err(GraphicsError::UnsupportedDepth { depth: 32 })
+            one(RledBuilder::new(2, 2).depth(0x8000)),
+            Err(GraphicsError::UnsupportedDepth { depth: 0x8000 })
         );
         assert_eq!(
             one(RledBuilder::new(0, 2)),
@@ -678,11 +707,11 @@ mod tests {
             decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
             decode(&bytes)
         );
-        // Any other depth is unsupported.
-        let bytes = RledBuilder::new(2, 1).depth(32).frame(|f| f).build();
+        // A depth of 7 or less is unsupported.
+        let bytes = RledBuilder::new(2, 1).depth(1).frame(|f| f).build();
         assert_eq!(
             decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
-            Err(GraphicsError::UnsupportedDepth { depth: 32 })
+            Err(GraphicsError::UnsupportedDepth { depth: 1 })
         );
     }
 
@@ -850,6 +879,29 @@ mod tests {
         );
     }
 
+    /// `_BlitPixieRLESwap` swaps `count / 2` words from 1 up, so a pixel
+    /// token of no bytes runs it away (@0xbe460-0xbe46a).
+    #[test]
+    fn a_16_bit_pixel_token_of_no_bytes_is_an_error() {
+        let bytes = RledBuilder::new(2, 1)
+            .frame(|f| f.line().token(2, 0).pixels(&[RED]))
+            .build();
+        assert_eq!(
+            decode(&bytes),
+            Err(GraphicsError::RunawaySwap { offset: 20 })
+        );
+        assert_eq!(
+            scan_rled(&bytes),
+            Err(GraphicsError::RunawaySwap { offset: 20 })
+        );
+        // An 8-bit sheet steps over its bytes instead: none is nothing.
+        let bytes = RledBuilder::new(2, 1)
+            .depth(8)
+            .frame(|f| f.line().token(2, 0))
+            .build();
+        assert!(decode(&bytes).is_ok());
+    }
+
     #[test]
     fn a_huge_header_in_a_tiny_sheet_is_too_large() {
         let bytes = RledBuilder::new(65535, 65535).frame_count(65535).build();
@@ -917,7 +969,7 @@ mod tests {
         let cases: Vec<(&str, Vec<u8>)> = vec![
             (
                 "bad depth",
-                RledBuilder::new(2, 2).depth(24).frame(|f| f).build(),
+                RledBuilder::new(2, 2).depth(7).frame(|f| f).build(),
             ),
             ("zero width", RledBuilder::new(0, 2).frame(|f| f).build()),
             ("zero height", RledBuilder::new(2, 0).frame(|f| f).build()),
@@ -938,6 +990,12 @@ mod tests {
                 RledBuilder::new(2, 2)
                     .frame(RledFrame::line)
                     .frame(|f| f.run(1, RED, RED))
+                    .build(),
+            ),
+            (
+                "runaway swap",
+                RledBuilder::new(3, 1)
+                    .frame(|f| f.line().token(2, 0))
                     .build(),
             ),
             (

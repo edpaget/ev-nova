@@ -110,7 +110,10 @@ pub enum GraphicsError {
         /// `patType`.
         pat_type: u16,
     },
-    /// An `rlëD` sheet with a depth other than 16 or 8 bits.
+    /// An `rlëD` sheet whose depth the original's draw procs assert on: 7
+    /// or less, read as a signed word (`_BlitPixieRLETranslucentDrawProc`
+    /// @0xbb46e-0xbb476), so 0x8000 and up as well. The assert quits the
+    /// game, so there is nothing to draw.
     #[error("unsupported rlëD depth {depth}")]
     UnsupportedDepth {
         /// The header's depth.
@@ -173,6 +176,36 @@ pub enum GraphicsError {
         /// Where the token starts.
         offset: usize,
     },
+    /// An `rlëD` pixel token too short for `_BlitPixieRLESwap` to swap: at
+    /// 16 bits under 2 bytes, at 32 under 4. Its swap loop counts from 1
+    /// to the swap count, so a count of 0 runs it on through memory far
+    /// past the sheet (@0xbe460-0xbe46a, @0xbe480-0xbe48c), a crash.
+    #[error("rlëD pixel token at byte {offset:#x} runs the byte swap away")]
+    RunawaySwap {
+        /// Where the token starts.
+        offset: usize,
+    },
+    /// An `rlëD` word where `_SWLockSprite`'s walk wants a line start or a
+    /// frame end: it asserts (@0xaaa19-0xaaa2e), which quits the game.
+    #[error(
+        "rlëD frame {frame} has a word at byte {offset:#x} that is neither a line start nor a frame end"
+    )]
+    NotALineStart {
+        /// The frame, counting from 0.
+        frame: u32,
+        /// Where the word starts.
+        offset: usize,
+    },
+    /// An `rlëD` line start whose count runs past the end of the sheet:
+    /// `_SWLockSprite`'s walk asserts (@0xaaa45-0xaaa5b), which quits the
+    /// game.
+    #[error("rlëD frame {frame}'s line at byte {offset:#x} runs past the end of the sheet")]
+    LinePastEnd {
+        /// The frame, counting from 0.
+        frame: u32,
+        /// Where the line start is.
+        offset: usize,
+    },
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -210,7 +243,10 @@ impl GraphicsError {
             | Self::TokenOutsideLine { offset }
             | Self::LineOverflow { offset, .. }
             | Self::TooManyLines { offset, .. }
-            | Self::OddByteCount { offset } => Some(offset),
+            | Self::OddByteCount { offset }
+            | Self::RunawaySwap { offset }
+            | Self::NotALineStart { offset, .. }
+            | Self::LinePastEnd { offset, .. } => Some(offset),
             Self::BadDimensions { .. }
             | Self::TooLarge { .. }
             | Self::UnsupportedPixMap { .. }
@@ -232,6 +268,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one case per variant
     fn offset_is_the_failing_byte_when_the_variant_has_one() {
         use GraphicsError as E;
         let cases = [
@@ -280,7 +317,7 @@ mod tests {
             (E::BadPackedRow { row: 1, offset: 7 }, Some(7)),
             (E::MaskMismatch, None),
             (E::UnsupportedPatternType { pat_type: 2 }, None),
-            (E::UnsupportedDepth { depth: 32 }, None),
+            (E::UnsupportedDepth { depth: 1 }, None),
             (E::NoFrames, None),
             (
                 E::PartialGrid {
@@ -315,6 +352,21 @@ mod tests {
                 Some(11),
             ),
             (E::OddByteCount { offset: 12 }, Some(12)),
+            (E::RunawaySwap { offset: 13 }, Some(13)),
+            (
+                E::NotALineStart {
+                    frame: 1,
+                    offset: 14,
+                },
+                Some(14),
+            ),
+            (
+                E::LinePastEnd {
+                    frame: 1,
+                    offset: 15,
+                },
+                Some(15),
+            ),
             (E::MissingColour { index: 9 }, None),
             (
                 E::MaskSizeMismatch {
@@ -411,8 +463,8 @@ mod tests {
                 "unsupported ppat pattern type 2",
             ),
             (
-                GraphicsError::UnsupportedDepth { depth: 32 },
-                "unsupported rlëD depth 32",
+                GraphicsError::UnsupportedDepth { depth: 1 },
+                "unsupported rlëD depth 1",
             ),
             (GraphicsError::NoFrames, "the sprite sheet has no frames"),
             (
@@ -453,6 +505,24 @@ mod tests {
             (
                 GraphicsError::OddByteCount { offset: 0x18 },
                 "odd rlëD pixel byte count at byte 0x18",
+            ),
+            (
+                GraphicsError::RunawaySwap { offset: 0x14 },
+                "rlëD pixel token at byte 0x14 runs the byte swap away",
+            ),
+            (
+                GraphicsError::NotALineStart {
+                    frame: 0,
+                    offset: 0x1C,
+                },
+                "rlëD frame 0 has a word at byte 0x1c that is neither a line start nor a frame end",
+            ),
+            (
+                GraphicsError::LinePastEnd {
+                    frame: 2,
+                    offset: 0x30,
+                },
+                "rlëD frame 2's line at byte 0x30 runs past the end of the sheet",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },
