@@ -17,6 +17,7 @@ use super::image::Image;
 use super::reader::Reader;
 use super::rled_wide::decode_wide;
 use super::rled8::{EightBitReading, Rled8};
+use super::rled32::{ThirtyTwoBitReading, TrueColour};
 use super::sheet::{SheetLayout, SpriteSheet};
 
 /// The `rlëD` resource type: `rl`, Mac Roman `ë` (`0x91`), `D`.
@@ -28,6 +29,10 @@ const DEPTH: u16 = 16;
 /// The other depth the original draws: one byte per token count, drawn as
 /// [`EightBitReading`] says.
 const DEPTH_8: u16 = 8;
+
+/// A depth the original draws as its bytes fall, with another reading:
+/// four bytes a pixel, drawn as [`ThirtyTwoBitReading`] says.
+const DEPTH_32: u16 = 32;
 
 /// Token opcodes: the top byte of each big-endian `u32` token.
 const FRAME_END: u8 = 0;
@@ -96,23 +101,60 @@ pub struct RledInfo {
 /// [`GraphicsError::UnsupportedDepth`]: the original's draw procs assert
 /// on it, which quits the game.
 pub fn decode_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<SpriteSheet, GraphicsError> {
-    decode_rled_as(data, layout, EightBitReading::AsDrawn)
+    decode_rled_with(data, layout, RledReadings::default())
 }
 
 /// Decodes an `rlëD` as [`decode_rled`] does, reading an 8-bit sheet as
-/// `reading` says. A 16-bit sheet decodes the same under either reading.
+/// `reading` says, and a 32-bit one as the original draws it. A sheet of
+/// another depth decodes the same under either reading.
 pub fn decode_rled_as(
     data: &[u8],
     layout: Option<SheetLayout>,
     reading: EightBitReading,
 ) -> Result<SpriteSheet, GraphicsError> {
+    let readings = RledReadings {
+        eight_bit: reading,
+        ..RledReadings::default()
+    };
+    decode_rled_with(data, layout, readings)
+}
+
+/// How the depths that have another reading are read: 8 bits and 32. Each
+/// defaults to the original's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RledReadings {
+    /// How an 8-bit sheet is read.
+    pub eight_bit: EightBitReading,
+    /// How a 32-bit sheet is read.
+    pub thirty_two_bit: ThirtyTwoBitReading,
+}
+
+/// Decodes an `rlëD` as [`decode_rled`] does, reading an 8-bit or 32-bit
+/// sheet as `readings` say. A sheet of any other depth decodes the same
+/// under every reading.
+pub fn decode_rled_with(
+    data: &[u8],
+    layout: Option<SheetLayout>,
+    readings: RledReadings,
+) -> Result<SpriteSheet, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
     let (width, height) = (header.width, header.height);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
+    if header.depth == DEPTH_32 && readings.thirty_two_bit == ThirtyTwoBitReading::TrueColour {
+        let units = Units {
+            size: 4,
+            row_len: width,
+        };
+        let mut painter = TrueColour::new(width, height, header.count);
+        walk(data, r.pos(), &header, units, &mut painter)?;
+        let sheet = SpriteSheet::new(width, height, painter.frames, layout);
+        return Ok(sheet.with_solid(solid_frames(painter.solids, width, height)));
+    }
     if header.depth != DEPTH && header.depth != DEPTH_8 {
         return decode_wide(data, &header, layout);
     }
+    let reading = readings.eight_bit;
     let units = Units::of(&header, reading);
     if header.depth == DEPTH_8 {
         let mut painter = Rled8::new(reading, width, height, header.count);
@@ -212,7 +254,8 @@ pub(super) fn read_header(r: &mut Reader<'_>, input_len: usize) -> Result<Header
 /// each), or byte by byte for an 8-bit sheet.
 #[derive(Clone, Copy, Debug)]
 struct Units {
-    /// Bytes per unit: 2 for a 16-bit pixel, 1 for an 8-bit byte.
+    /// Bytes per unit: 2 for a 16-bit pixel, 1 for an 8-bit byte, 4 for a
+    /// 32-bit pixel read as true colour.
     size: u32,
     /// Units a line holds.
     row_len: u32,
@@ -306,10 +349,10 @@ fn walk(
                 let Some(y) = lines.checked_sub(1) else {
                     return Err(GraphicsError::TokenOutsideLine { offset });
                 };
-                if units.size == 2 && op == PIXELS && token & 1 == 1 {
+                if op == PIXELS && !(token & COUNT_MASK).is_multiple_of(units.size) {
                     return Err(GraphicsError::OddByteCount { offset });
                 }
-                if units.size == 2 && op == PIXELS && len == 0 {
+                if units.size > 1 && op == PIXELS && len == 0 {
                     return Err(GraphicsError::RunawaySwap { offset });
                 }
                 if x + len > units.row_len {
@@ -430,6 +473,7 @@ mod tests {
     use crate::graphics::color::rgb555;
     use crate::graphics::fixture::{RledBuilder, RledFrame};
     use crate::graphics::image::Image;
+    use crate::graphics::rled32::ThirtyTwoBitReading;
 
     #[test]
     fn the_resource_type_is_rled_in_mac_roman() {
@@ -683,6 +727,33 @@ mod tests {
             one(RledBuilder::new(2, 2).frame_count(0)),
             Err(GraphicsError::NoFrames)
         );
+    }
+
+    #[test]
+    fn a_32_bit_sheet_decodes_as_drawn_unless_asked_otherwise() {
+        let bytes = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+            .build();
+        let as_drawn = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::AsDrawn,
+            ..RledReadings::default()
+        };
+        let drawn = decode_rled_with(&bytes, None, as_drawn).unwrap();
+        assert_eq!(decode(&bytes), Ok(drawn.clone()));
+        assert_eq!(
+            decode_rled_as(&bytes, None, EightBitReading::SystemPalette),
+            Ok(drawn.clone())
+        );
+        assert_eq!(drawn.image_width(), 3);
+        let true_colour = RledReadings {
+            thirty_two_bit: ThirtyTwoBitReading::TrueColour,
+            ..RledReadings::default()
+        };
+        let three = SheetLayout::new(3).unwrap();
+        let sheet = decode_rled_with(&bytes, Some(three), true_colour).unwrap();
+        assert_eq!((sheet.image_width(), sheet.layout()), (1, three));
     }
 
     #[test]
