@@ -438,6 +438,29 @@ mod tests {
     }
 
     #[test]
+    fn a_session_built_lays_its_slots_out_with_no_display_step() {
+        // The construction keeps the gain-free part of `_PrepareAllSprites`
+        // (each slot put in its layer and shown, its frames cloned), so a
+        // session no entry prepares (the developer's flight) still draws
+        // the player from its first frame; the steps wait for @0x1a36c.
+        let pilot = Session::start(&lit_player()).expect("starts").pilot.clone();
+        let session = Session::fly(&lit_player(), pilot).expect("flies");
+        assert!(
+            session.draw_order().contains(&ShipRef::Player),
+            "laid out and shown"
+        );
+        assert_eq!(
+            session
+                .slot_sprites()
+                .frames
+                .of(crate::ship_layer::Slot::Player),
+            session.pilot.ship,
+            "its frames cloned"
+        );
+        assert_eq!(session.ship.ship_display.frames, ShipFrames::default());
+    }
+
+    #[test]
     fn by_the_other_reading_entering_play_steps_the_players_frames_at_full_gain() {
         let mut session = started(RuleSource::Bible);
         let before = Before::of(&session, ShipRef::Player);
