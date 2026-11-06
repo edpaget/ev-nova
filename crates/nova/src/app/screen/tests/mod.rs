@@ -127,6 +127,7 @@ mod menu_commands;
 mod missions;
 mod new_pilot;
 mod overlays;
+mod pad_live_keys;
 mod pad_map;
 mod planet_comm;
 mod port;

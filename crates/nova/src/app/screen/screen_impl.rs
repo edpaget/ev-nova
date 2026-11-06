@@ -144,7 +144,7 @@ impl Screen for AppScreen {
             self.touch_to_flight(input);
             return self.feed_touch_controls();
         }
-        self.live.note(input);
+        self.live.note(input, &self.bindings);
         // Flight's pad reader sees every live pad button, whatever shows,
         // so a map over a screen reads the pad's map chord
         // (rdm:phase/key-bindings/phase-10-gamepad-map). Replays never
