@@ -134,6 +134,9 @@ fn a_lone_finger_is_the_screens_pointer_as_the_mouse_is() {
             moved(500.0, 120.0),
             moved(520.0, 130.0),
             button(false),
+            // A lifted finger is the pointer leaving
+            // (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+            WindowEvent::PointerLeft,
         ],
     );
     assert_eq!(touched, clicked);
@@ -312,9 +315,10 @@ fn a_cancelled_touch_abandons_the_screens_press() {
                 button: MouseButton::Left,
                 pressed: true,
                 at
-            }
+            },
+            Input::PointerLeft
         ],
-        "no release"
+        "no release, then the leave"
     );
     assert_eq!(app.screen().cancels, 1);
     assert_eq!(
@@ -377,12 +381,15 @@ fn mouse_events_while_a_finger_is_down_are_dropped_and_switch_no_device() {
     let at = logical(&window, IN_GAME);
     assert_eq!(
         lift,
-        [Input::PointerButton {
-            button: MouseButton::Left,
-            pressed: false,
-            at
-        }],
-        "the finger's pointer stayed where the finger is"
+        [
+            Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: false,
+                at
+            },
+            Input::PointerLeft
+        ],
+        "the finger's pointer stayed where the finger is, then left"
     );
     assert_eq!(
         inputs(&mut app, &mut window, &[moved(900.0, 300.0)]),
@@ -426,4 +433,102 @@ fn a_touch_tells_the_screen_touch_was_used_last() {
             "{event:?}"
         );
     }
+}
+
+// The lift is the pointer leaving
+// (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+
+fn released(at: Point) -> Input {
+    Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+        at,
+    }
+}
+
+#[test]
+fn a_finger_lifting_tells_the_screen_the_pointer_left() {
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    let got = inputs(&mut app, &mut window, &[down(1, IN_GAME), up(1, IN_GAME)]);
+    let at = logical(&window, IN_GAME);
+    assert_eq!(got[2..], [released(at), Input::PointerLeft]);
+}
+
+#[test]
+fn a_finger_lifting_in_a_letterbox_bar_tells_one_leave() {
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    let got = inputs(
+        &mut app,
+        &mut window,
+        &[down(1, IN_GAME), to(1, (10.0, 10.0)), up(1, (12.0, 10.0))],
+    );
+    let leaves = got
+        .iter()
+        .filter(|&&input| input == Input::PointerLeft)
+        .count();
+    assert_eq!(leaves, 1, "{got:?}");
+}
+
+#[test]
+fn a_cancelled_finger_tells_a_cancel_then_a_leave() {
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    handle(&mut app, &mut window, down(1, IN_GAME));
+    let got = inputs(&mut app, &mut window, &[cancelled(1)]);
+    assert_eq!(app.screen().cancels, 1);
+    assert_eq!(got, [Input::PointerLeft]);
+}
+
+#[test]
+fn after_a_lift_a_resync_tells_a_leave_not_the_old_point() {
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    app.screen.hides_pointer = true;
+    handle(&mut app, &mut window, down(1, IN_GAME));
+    handle(&mut app, &mut window, up(1, IN_GAME));
+    redraw_plain(&mut app, &mut window);
+    app.screen.hides_pointer = false;
+    redraw_plain(&mut app, &mut window);
+    app.screen.hides_pointer = true;
+    let got = inputs(&mut app, &mut window, &[]);
+    assert_eq!(got, []);
+    redraw_plain(&mut app, &mut window);
+    assert_eq!(app.screen().inputs.last(), Some(&Input::PointerLeft));
+}
+
+#[test]
+fn cancelling_every_finger_forgets_the_primarys_point() {
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    app.screen.hides_pointer = true;
+    handle(&mut app, &mut window, down(1, IN_GAME));
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    handle(&mut app, &mut window, WindowEvent::FocusGained);
+    app.screen.hides_pointer = false;
+    redraw_plain(&mut app, &mut window);
+    app.screen.hides_pointer = true;
+    redraw_plain(&mut app, &mut window);
+    assert_eq!(app.screen().inputs.last(), Some(&Input::PointerLeft));
+}
+
+#[test]
+fn the_mouse_release_still_keeps_its_point() {
+    // A guard: the mouse's pointer stays where it was released.
+    let mut window = pillarboxed();
+    let mut app = app(&window);
+    app.screen.hides_pointer = true;
+    handle(&mut app, &mut window, moved(IN_GAME.0, IN_GAME.1));
+    handle(&mut app, &mut window, button(true));
+    handle(&mut app, &mut window, button(false));
+    redraw_plain(&mut app, &mut window);
+    app.screen.hides_pointer = false;
+    redraw_plain(&mut app, &mut window);
+    app.screen.hides_pointer = true;
+    redraw_plain(&mut app, &mut window);
+    assert_eq!(
+        app.screen().inputs.last(),
+        Some(&Input::PointerMoved(logical(&window, IN_GAME)))
+    );
 }

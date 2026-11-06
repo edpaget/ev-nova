@@ -19,6 +19,12 @@
 //!   ([`Screen::cancel_pointer`]). So it gets the mouse's letterbox rules
 //!   exactly: a leave, then moves outside while held, and a release in a
 //!   bar abandons the press.
+//! - **The lift is a leave.** After the primary's release or cancel the
+//!   router says the pointer left (`PointerStep::Left`): the app forgets
+//!   the finger's point and tells the screen `PointerLeft`, unless the
+//!   finger already left the game for a bar. So flight's cursor hides as
+//!   a finger lifts, and isn't brought back at the old finger point when
+//!   a dialog over flight closes. A mouse release keeps its point.
 //! - **The mouse while a finger is down** reaches no screen and switches
 //!   no device ([`App::drops_mouse`]): X11 moves the mouse with the first
 //!   touch, and Windows probably promotes a touch to mouse clicks, so
@@ -101,7 +107,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     self.screen.cancel_pointer();
                     self.after_input(ScreenAction::None)
                 }
-                Routed::Pointer(PointerStep::Left) => Control::Continue,
+                Routed::Pointer(PointerStep::Left) => self.finger_left(),
             };
             if control == Control::Exit {
                 return Control::Exit;
@@ -110,10 +116,26 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         Control::Continue
     }
 
+    /// The primary finger has gone: the app forgets its point, so a later
+    /// resync ([`App::resync_pointer`]) tells a leave rather than the old
+    /// finger point, and the screen is told the pointer left. A finger
+    /// that lifted in a letterbox bar was told its leave as it moved there
+    /// ([`App::pointer_moved`]), so it gets no second one.
+    fn finger_left(&mut self) -> Control {
+        let over_game = self.pointer_at().is_some();
+        self.pointer = None;
+        if over_game {
+            self.route(Input::PointerLeft)
+        } else {
+            Control::Continue
+        }
+    }
+
     /// Cancels every finger, as the overlay opens or the focus is lost:
     /// the claimed fingers' cancels and a pinch's end reach the screen.
     /// The primary finger's press is the caller's to abandon, with the
-    /// mouse's ([`Screen::cancel_pointer`]), so it isn't cancelled twice.
+    /// mouse's ([`Screen::cancel_pointer`]), so it isn't cancelled twice;
+    /// its leave forgets its point without telling the screen.
     /// A quit the screen asks for here is kept ([`App::after_input`]) and
     /// exits at the next event that can.
     pub(super) fn cancel_touches(&mut self) {
@@ -125,6 +147,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 Routed::Pinch(pinch) => {
                     self.route(Input::Pinch(pinch));
                 }
+                Routed::Pointer(PointerStep::Left) => self.pointer = None,
                 Routed::Pointer(_) => {}
             }
         }

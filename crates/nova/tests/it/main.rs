@@ -61,6 +61,7 @@ mod stock_desc_movies_outside_missions;
 mod stock_stellar_movies;
 mod stock_take_off_cost;
 mod system_view;
+mod touch_pointer;
 mod trade;
 mod traffic;
 mod widescreen;
