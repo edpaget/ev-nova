@@ -176,6 +176,7 @@
 //! [`Kind`]: command::Kind
 
 pub mod bindings;
+pub mod click_modifiers;
 pub mod command;
 pub mod contexts;
 pub mod gamepad;
@@ -187,6 +188,7 @@ pub(crate) mod test_keys;
 pub mod touch;
 
 pub use bindings::{Bindings, Change, Clash, Devices};
+pub use click_modifiers::CLICK_MODIFIERS;
 pub use command::{
     AppCommand, AssignmentCommand, BarCommand, CommCommand, Command, Context, EscortDialogCommand,
     EscortMenuCommand, FlightCommand, HaggleCommand, HireCommand, IntroCommand, Kind,
