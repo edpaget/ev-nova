@@ -487,7 +487,8 @@ mod tests {
         let mut first = loader.open(CONTRACT_JSON).unwrap();
         let mut second = loader.open(CONTRACT_JSON).unwrap();
         first.enter("greet").unwrap();
-        while first.step().unwrap().is_some() {}
+        first.step().unwrap();
+        first.step().unwrap();
         second.enter("ledger.open").unwrap();
         first.choose(1).unwrap();
         assert_eq!(
