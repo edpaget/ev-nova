@@ -30,6 +30,12 @@ use crate::wire::flags::{Flags16, Flags32};
 use crate::wire::id::{GovtId, ShipId, StellarId, SystemId};
 use nova_galaxy_format::id::PointRef;
 
+/// The format's test galaxy with its mission's story compiled
+/// (`dialog/errands.ink.json`), so it maps without problems.
+pub(super) fn galaxy() -> MemSource {
+    fixture::galaxy().with("dialog/errands.ink.json", "{errands}")
+}
+
 fn dir() -> PathBuf {
     Path::new("games").join("sample")
 }
@@ -77,7 +83,7 @@ fn problems(game: &NewGame) -> Vec<String> {
 
 /// The fixture galaxy with `alpha-prime` offering `services`.
 fn alpha_prime_offering(services: &str) -> MemSource {
-    fixture::galaxy().with(
+    galaxy().with(
         "stellars/alpha-prime.md",
         &format!(
             "---\nname: Alpha Prime\nkind: planet\nsystem: alpha\nposition: [50, 0]\n\
@@ -94,14 +100,14 @@ fn alpha_prime_flags(services: &str) -> u32 {
 
 #[test]
 fn the_fixture_maps_without_problems() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(problems(&game), Vec::<String>::new());
     assert_eq!(game.lfs_pointers, Vec::<String>::new());
 }
 
 #[test]
 fn ids_count_up_from_128_in_id_order_per_kind_and_the_table_maps_back() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(game.data.ids(Govt::TYPE), [128]);
     assert_eq!(game.data.ids(System::TYPE), [128, 129]);
     assert_eq!(game.data.ids(Stellar::TYPE), [128, 129, 130, 131]);
@@ -126,7 +132,7 @@ fn ids_count_up_from_128_in_id_order_per_kind_and_the_table_maps_back() {
 
 #[test]
 fn every_record_comes_from_the_folder() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let alpha = game
         .data
         .get::<System>(128)
@@ -137,7 +143,7 @@ fn every_record_comes_from_the_folder() {
 
 #[test]
 fn a_faction_becomes_a_govt_with_its_name_and_colour() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let league = game
         .data
         .get::<Govt>(128)
@@ -154,7 +160,7 @@ fn a_faction_becomes_a_govt_with_its_name_and_colour() {
 
 #[test]
 fn a_system_becomes_a_syst_with_its_name_position_government_and_stellars() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let alpha = game
         .data
         .get::<System>(128)
@@ -181,7 +187,7 @@ fn a_system_becomes_a_syst_with_its_name_position_government_and_stellars() {
 
 #[test]
 fn a_stellar_becomes_a_spob_with_its_name_position_and_owner() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let yard = game
         .data
         .get::<Stellar>(129)
@@ -227,7 +233,7 @@ fn refuel_alone_is_landing_and_inhabited() {
 
 #[test]
 fn a_station_sets_the_station_bit() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let yard = stellar(&game, 129);
     assert_eq!(yard.flags.bits(), flags::STATION | flags::UNINHABITED);
 }
@@ -243,7 +249,7 @@ fn a_planet_without_refuel_is_uninhabited() {
 
 #[test]
 fn a_stellar_s_body_is_its_landing_text_at_its_id() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "stellars/alpha-yard.md",
         "---\nname: Alpha Yard\nkind: station\nsystem: alpha\nposition: [0, 0]\n---\n\n\
          A yard.\n\nIt builds ships.\n\n",
@@ -265,7 +271,7 @@ fn a_stellar_s_body_is_its_landing_text_at_its_id() {
 
 #[test]
 fn a_blank_body_has_no_text() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "stellars/alpha-yard.md",
         "---\nname: Alpha Yard\nkind: station\nsystem: alpha\nposition: [0, 0]\n---\n \n\n",
     );
@@ -274,7 +280,7 @@ fn a_blank_body_has_no_text() {
 
 #[test]
 fn no_system_has_a_hyperspace_link() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     for (_, entry) in game.data.records::<System>() {
         assert_eq!(entry.expect("decoded").record.con, [None; 16]);
     }
@@ -284,7 +290,7 @@ fn no_system_has_a_hyperspace_link() {
 
 #[test]
 fn each_jump_point_is_a_gate_numbered_after_the_last_stellar_in_system_and_point_order() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(
         game.ids
             .gates
@@ -296,7 +302,7 @@ fn each_jump_point_is_a_gate_numbered_after_the_last_stellar_in_system_and_point
             ("beta/to-alpha".to_owned(), 131)
         ]
     );
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "systems/alpha.md",
         "---\nname: Alpha\nregion: rim\nmap: [0, 0]\njump_points:\n\
          \x20 - id: zed\n    position: [0, 0]\n    to: beta/to-alpha\n    stability: stable\n\
@@ -318,7 +324,7 @@ fn each_jump_point_is_a_gate_numbered_after_the_last_stellar_in_system_and_point
 
 #[test]
 fn adding_gates_renumbers_no_stellar() {
-    let pointless = fixture::galaxy()
+    let pointless = galaxy()
         .with(
             "systems/alpha.md",
             "---\nname: Alpha\nregion: rim\nmap: [0, 0]\n---\n",
@@ -329,15 +335,12 @@ fn adding_gates_renumbers_no_stellar() {
         );
     let without = loaded(&pointless);
     assert!(without.ids.gates.is_empty());
-    assert_eq!(
-        loaded(&fixture::galaxy()).ids.stellars,
-        without.ids.stellars
-    );
+    assert_eq!(loaded(&galaxy()).ids.stellars, without.ids.stellars);
 }
 
 #[test]
 fn a_gate_sits_where_its_point_does() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let (_, to_beta): (_, Stellar) = named(&game, 130);
     assert_eq!((to_beta.x_pos, to_beta.y_pos), (100, 0));
     let (_, to_alpha): (_, Stellar) = named(&game, 131);
@@ -346,14 +349,14 @@ fn a_gate_sits_where_its_point_does() {
 
 #[test]
 fn a_gate_is_owned_by_its_point_s_owner() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(stellar(&game, 130).govt, None);
     assert_eq!(stellar(&game, 131).govt, Some(GovtId(128)));
 }
 
 #[test]
 fn a_gate_can_be_landed_on_and_is_a_hypergate() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let to_beta = stellar(&game, 130);
     assert_eq!(to_beta.flags, Flags32(flags::CAN_LAND));
     assert_eq!(to_beta.flags2, Flags16(flags2::HYPERGATE));
@@ -362,7 +365,7 @@ fn a_gate_can_be_landed_on_and_is_a_hypergate() {
 
 #[test]
 fn a_gate_links_to_its_partner_s_gate_alone() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let mut links = [None; 8];
     links[0] = Some(StellarId(131));
     assert_eq!(stellar(&game, 130).hyper_link, links);
@@ -372,14 +375,14 @@ fn a_gate_links_to_its_partner_s_gate_alone() {
 
 #[test]
 fn a_gate_is_named_for_its_partner_s_system() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(named::<Stellar>(&game, 130).0, "Beta");
     assert_eq!(named::<Stellar>(&game, 131).0, "Alpha");
 }
 
 #[test]
 fn a_gate_heads_ships_out_at_random_and_sets_nothing_else() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let mut hyper_link = [None; 8];
     hyper_link[0] = Some(StellarId(131));
     let expected = Stellar {
@@ -397,7 +400,7 @@ fn a_gate_heads_ships_out_at_random_and_sets_nothing_else() {
 /// The fixture galaxy with `gamma`, holding the one-way point `drop` to
 /// `alpha/to-beta`.
 fn with_a_drop() -> MemSource {
-    fixture::galaxy().with(
+    galaxy().with(
         "systems/gamma.md",
         "---\nname: Gamma\nregion: rim\nmap: [0, 300]\njump_points:\n\
          \x20 - id: drop\n    position: [0, -1300]\n    to: alpha/to-beta\n    stability: unstable\n\
@@ -426,7 +429,7 @@ fn a_one_way_point_links_to_its_partner_and_the_partner_links_where_it_says() {
 #[test]
 fn a_point_leading_to_no_point_is_a_problem_and_its_gate_has_no_link() {
     for to in ["alpha/nowhere", "gamma/to-beta"] {
-        let source = fixture::galaxy().with(
+        let source = galaxy().with(
             "systems/beta.md",
             &format!(
                 "---\nname: Beta\nregion: rim\nmap: [200, 50]\njump_points:\n\
@@ -448,7 +451,7 @@ fn a_point_leading_to_no_point_is_a_problem_and_its_gate_has_no_link() {
 
 #[test]
 fn a_gates_partner_in_a_system_that_failed_to_load_is_not_reported_again() {
-    let source = fixture::galaxy().with("systems/alpha.md", "---\nname: Alpha\n---\n");
+    let source = galaxy().with("systems/alpha.md", "---\nname: Alpha\n---\n");
     let game = loaded(&source);
     let lines = problems(&game);
     assert_eq!(lines.len(), 1, "{lines:?}");
@@ -477,7 +480,7 @@ fn a_full_system_leaves_out_its_stellars_past_the_slots_before_a_gate() {
 
 #[test]
 fn a_government_naming_no_faction_is_a_problem_and_no_government() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "systems/beta.md",
         "---\nname: Beta\nregion: rim\ngovernment: nowhere\nmap: [200, 50]\njump_points:\n\
          \x20 - id: to-alpha\n    position: [-100, 0]\n    to: alpha/to-beta\n    stability: stable\n---\n",
@@ -492,7 +495,7 @@ fn a_government_naming_no_faction_is_a_problem_and_no_government() {
 
 #[test]
 fn an_owner_naming_no_faction_is_a_problem_and_no_government() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "stellars/alpha-yard.md",
         "---\nname: Alpha Yard\nkind: station\nsystem: alpha\nposition: [0, 0]\nowner: nobody\n---\n",
     );
@@ -506,7 +509,7 @@ fn an_owner_naming_no_faction_is_a_problem_and_no_government() {
 
 #[test]
 fn a_faction_that_failed_to_load_is_not_reported_again() {
-    let source = fixture::galaxy().with("factions/league.md", "---\nname: League\n---\n");
+    let source = galaxy().with("factions/league.md", "---\nname: League\n---\n");
     let game = loaded(&source);
     let lines = problems(&game);
     assert_eq!(lines.len(), 1, "{lines:?}");
@@ -517,7 +520,7 @@ fn a_faction_that_failed_to_load_is_not_reported_again() {
 
 #[test]
 fn a_stellar_in_no_system_is_a_problem_and_left_out() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "stellars/alpha-yard.md",
         "---\nname: Alpha Yard\nkind: station\nsystem: gamma\nposition: [0, 0]\n---\n",
     );
@@ -540,7 +543,7 @@ fn a_stellar_in_no_system_is_a_problem_and_left_out() {
 
 #[test]
 fn a_stellar_in_a_system_that_failed_to_load_is_left_out_unreported() {
-    let source = fixture::galaxy().with("systems/alpha.md", "---\nname: Alpha\n---\n");
+    let source = galaxy().with("systems/alpha.md", "---\nname: Alpha\n---\n");
     let game = loaded(&source);
     let lines = problems(&game);
     assert_eq!(lines.len(), 1, "{lines:?}");
@@ -551,7 +554,7 @@ fn a_stellar_in_a_system_that_failed_to_load_is_left_out_unreported() {
 
 #[test]
 fn a_map_position_outside_i16_is_a_problem_and_moved_to_the_nearest() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "systems/beta.md",
         "---\nname: Beta\nregion: rim\nmap: [40000, -40000]\njump_points:\n\
          \x20 - id: to-alpha\n    position: [-100, 0]\n    to: alpha/to-beta\n    stability: stable\n---\n",
@@ -571,7 +574,7 @@ fn a_map_position_outside_i16_is_a_problem_and_moved_to_the_nearest() {
 #[test]
 fn one_number_outside_i16_is_enough_for_a_problem() {
     for at in ["[40000, 0]", "[0, 40000]"] {
-        let source = fixture::galaxy().with(
+        let source = galaxy().with(
             "stellars/alpha-prime.md",
             &format!("---\nname: Alpha Prime\nkind: planet\nsystem: alpha\nposition: {at}\n---\n"),
         );
@@ -586,7 +589,7 @@ fn one_number_outside_i16_is_enough_for_a_problem() {
 
 /// The fixture galaxy with `count` more stellars in `beta`, `b00` up.
 fn beta_holding(count: usize) -> MemSource {
-    (0..count).fold(fixture::galaxy(), |source, n| {
+    (0..count).fold(galaxy(), |source, n| {
         source.with(
             &format!("stellars/b{n:02}.md"),
             &format!("---\nname: B{n}\nkind: moon\nsystem: beta\nposition: [{n}, 0]\n---\n"),
@@ -630,7 +633,7 @@ fn more_than_16_stellars_in_a_system_is_a_problem_and_the_rest_have_no_place() {
 
 #[test]
 fn a_faction_past_the_last_govt_id_is_a_problem_and_left_out() {
-    let source = (0..256).fold(fixture::galaxy(), |source, n| {
+    let source = (0..256).fold(galaxy(), |source, n| {
         source.with(
             &format!("factions/f{n:03}.md"),
             "---\nname: F\nkind: minor\ncolor: \"#000000\"\n---\n",
@@ -648,7 +651,7 @@ fn a_faction_past_the_last_govt_id_is_a_problem_and_left_out() {
 #[test]
 fn a_system_past_the_last_syst_id_is_a_problem_and_left_out_with_its_stellars() {
     let source = (0..2047).fold(
-        fixture::galaxy().with(
+        galaxy().with(
             "stellars/beta-rock.md",
             "---\nname: Beta Rock\nkind: moon\nsystem: beta\nposition: [0, 0]\n---\n",
         ),
@@ -682,7 +685,7 @@ fn a_system_past_the_last_syst_id_is_a_problem_and_left_out_with_its_stellars() 
 
 #[test]
 fn a_stellar_past_the_last_spob_id_is_a_problem_and_left_out() {
-    let source = (0..2047).fold(fixture::galaxy(), |source, n| {
+    let source = (0..2047).fold(galaxy(), |source, n| {
         source.with(
             &format!("stellars/a{n:04}.md"),
             "---\nname: S\nkind: moon\nsystem: beta\nposition: [0, 0]\n---\n",
@@ -709,7 +712,7 @@ fn a_stellar_past_the_last_spob_id_is_a_problem_and_left_out() {
 
 #[test]
 fn load_problems_come_through_unchanged_before_the_mapping_s() {
-    let source = fixture::galaxy()
+    let source = galaxy()
         .with("systems/Gamma.md", "---\nname: G\n---\n")
         .with(
             "systems/beta.md",
@@ -726,7 +729,7 @@ fn load_problems_come_through_unchanged_before_the_mapping_s() {
 #[test]
 fn export_media_holding_lfs_pointers_are_listed_and_the_data_still_loads() {
     let pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n";
-    let source = fixture::galaxy()
+    let source = galaxy()
         .with_bytes("media/export/pack/hull.glb", pointer)
         .with_bytes("media/export/pack/surface.png", b"\x89PNG");
     let game = loaded(&source);
@@ -738,7 +741,7 @@ fn export_media_holding_lfs_pointers_are_listed_and_the_data_still_loads() {
 
 /// The fixture galaxy with the skiff holding every stat.
 fn skiff_with_stats() -> MemSource {
-    fixture::galaxy().with(
+    galaxy().with(
         "ships/skiff.md",
         "---\nname: Skiff\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
          size: {length: 8, beam: 4, collision_radius: 4}\n\
@@ -752,7 +755,7 @@ fn skiff(source: &MemSource) -> Ship {
 
 #[test]
 fn each_hull_is_a_ship_numbered_from_128_with_its_name() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(game.data.ids(Ship::TYPE), [128], "the skiff alone");
     assert_eq!(
         game.ids
@@ -767,7 +770,7 @@ fn each_hull_is_a_ship_numbered_from_128_with_its_name() {
 
 #[test]
 fn a_ship_with_mods_but_no_base_is_no_hull() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "ships/kitted.md",
         "---\nname: Kitted\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
          size: {length: 8, beam: 4, collision_radius: 4}\nmods: [gun-mount]\n---\n",
@@ -779,7 +782,7 @@ fn a_ship_with_mods_but_no_base_is_no_hull() {
 
 #[test]
 fn a_variant_is_not_mapped_and_is_no_problem() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert!(!game.ids.ships.contains_key(&id("armed-skiff")));
     assert_eq!(problems(&game), Vec::<String>::new());
 }
@@ -838,7 +841,7 @@ fn a_hull_sets_nothing_else() {
 
 #[test]
 fn a_stat_left_out_is_zero() {
-    let ship = skiff(&fixture::galaxy());
+    let ship = skiff(&galaxy());
     assert_eq!(
         (ship.speed, ship.accel, ship.maneuver, ship.shield),
         (0, 0, 0, 0)
@@ -848,7 +851,7 @@ fn a_stat_left_out_is_zero() {
 
 #[test]
 fn a_hull_s_anim_sets_only_its_size() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     let (_, anim): (_, ShipAnim) = named(&game, 128);
     #[allow(clippy::cast_possible_truncation)]
     let px = |metres: f64| (metres * PX_PER_METRE).round() as i16;
@@ -863,7 +866,7 @@ fn a_hull_s_anim_sets_only_its_size() {
 
 #[test]
 fn a_hull_past_the_last_ship_id_is_a_problem_and_left_out() {
-    let source = (0..768).fold(fixture::galaxy(), |source, n| {
+    let source = (0..768).fold(galaxy(), |source, n| {
         source.with(
             &format!("ships/a{n:03}.md"),
             "---\nname: A\nstyle: civilian\nrole: shuttle\nmodel: hull\n\
@@ -900,7 +903,7 @@ fn three_hulls() -> MemSource {
              size: {{length: 20, beam: 10, collision_radius: 10}}\n---\n"
         )
     };
-    fixture::galaxy()
+    galaxy()
         .with("ships/barge.md", &hull("Barge", "civilian"))
         .with("ships/cutter.md", &hull("Cutter", "crown"))
 }
@@ -928,7 +931,7 @@ fn the_civilian_traffic_dude_flies_every_civilian_hull_at_even_odds() {
 
 #[test]
 fn every_system_names_the_civilian_traffic() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     for nova in [128, 129] {
         let system = system(&game, nova);
         assert_eq!(system.dude_types[0], CIVILIAN_DUDE, "{nova}");
@@ -941,7 +944,7 @@ fn every_system_names_the_civilian_traffic() {
 
 #[test]
 fn without_a_civilian_hull_there_is_no_traffic() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "ships/skiff.md",
         "---\nname: Skiff\nstyle: crown\nrole: shuttle\nmodel: hull\n---\n",
     );
@@ -955,7 +958,7 @@ fn without_a_civilian_hull_there_is_no_traffic() {
 
 #[test]
 fn a_start_is_a_char_with_its_name_ship_system_cash_and_the_placeholder_date() {
-    let game = loaded(&fixture::galaxy());
+    let game = loaded(&galaxy());
     assert_eq!(
         game.ids
             .starts
@@ -984,7 +987,7 @@ fn a_start_is_a_char_with_its_name_ship_system_cash_and_the_placeholder_date() {
 #[test]
 fn a_start_in_a_ship_that_is_no_mapped_hull_is_a_problem_and_left_out() {
     for ship in ["armed-skiff", "barge"] {
-        let source = fixture::galaxy().with(
+        let source = galaxy().with(
             "starts/first-flight.md",
             &format!("---\nname: First flight\nsystem: alpha\nship: {ship}\ncash: 1000\n---\n"),
         );
@@ -1002,7 +1005,7 @@ fn a_start_in_a_ship_that_is_no_mapped_hull_is_a_problem_and_left_out() {
 
 #[test]
 fn a_start_in_a_system_that_is_not_there_is_a_problem_and_left_out() {
-    let source = fixture::galaxy().with(
+    let source = galaxy().with(
         "starts/first-flight.md",
         "---\nname: First flight\nsystem: gamma\nship: skiff\ncash: 1000\n---\n",
     );
@@ -1020,7 +1023,7 @@ fn a_start_in_a_ship_or_system_that_failed_to_load_is_left_out_unreported() {
         ("ships/skiff.md", "---\nname: Skiff\nstyle: nowhere\n---\n"),
         ("systems/alpha.md", "---\nname: Alpha\n---\n"),
     ] {
-        let game = loaded(&fixture::galaxy().with(file, text));
+        let game = loaded(&galaxy().with(file, text));
         assert!(game.ids.starts.is_empty(), "{file}");
         let lines = problems(&game);
         assert!(

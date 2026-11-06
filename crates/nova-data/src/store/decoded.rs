@@ -64,6 +64,7 @@ impl GameData {
             stand_ins: BTreeMap::new(),
             gate_stabilities: BTreeMap::new(),
             dialogs: super::Dialogs::default(),
+            storylines: super::Storylines::default(),
         }
     }
 }

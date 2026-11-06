@@ -6,7 +6,8 @@
 //! [`read`] lists `dialog/*.json` through the [`Source`] and keeps the
 //! names ending in `.ink.json`, each keyed by the Ink file a ref names
 //! (`dialog/<file>.ink`). The format's directory adapter matches one
-//! extension, so it is asked for `json` rather than `ink.json`.
+//! extension, so it is asked for `json` rather than `ink.json`. The texts
+//! ([`Compiled`]) are read once, for the stellars' refs and the missions'.
 //!
 //! A stellar's ref whose compiled file is missing is a problem against the
 //! stellar's file, and that stellar has no conversation. One file that
@@ -22,8 +23,9 @@
 //! the contract every check passes (`check_contract`), over the fixture
 //! folder's own `dialog/dock-job.ink.json`.
 //!
-//! Only stellars' refs are mapped and checked: missions' `offer` and
-//! `complete` refs wait for the mission model (engine-story phase 4).
+//! Missions' `offer` and `complete` refs are read the same way and mapped
+//! with the missions ([`super::missions`]); [`NewGame::check_dialogs`]
+//! checks their knots too, against the mission's file.
 //!
 //! # Regenerating the fixture's compiled story
 //!
@@ -40,6 +42,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use nova_galaxy_format::id::DialogRef;
 use nova_galaxy_format::load::Galaxy;
 use nova_galaxy_format::source::Source;
 
@@ -60,73 +63,129 @@ pub trait DialogCheck {
     fn check(&self, compiled: &str, knot: &str) -> Result<(), String>;
 }
 
-/// Reads the compiled stories in `dialog/` and maps each stellar's ref
-/// onto its `spöb`, reporting what doesn't map to `problems`.
+/// The compiled stories in `dialog/`, by the Ink file a ref names
+/// (`dialog/<file>.ink`), and why each named file that couldn't be read
+/// couldn't.
+#[derive(Clone, Debug, Default)]
+pub struct Compiled {
+    /// Each compiled story's text, by its Ink file.
+    pub texts: BTreeMap<String, Arc<str>>,
+    /// Why each named file that was read on its own failed, by its Ink
+    /// file.
+    unreadable: BTreeMap<String, String>,
+}
+
+impl Compiled {
+    /// The place `dialog` enters, or why it can't, for the author: its
+    /// compiled file is missing or couldn't be read.
+    ///
+    /// # Errors
+    ///
+    /// The reason, to follow `dialog <ref>: `.
+    pub fn place(&self, dialog: &DialogRef) -> Result<DialogPlace, String> {
+        let file = dialog.file();
+        let json = format!("{file}.json");
+        if self.texts.contains_key(file) {
+            Ok(DialogPlace {
+                file: file.to_owned(),
+                knot: dialog.path().to_owned(),
+            })
+        } else if let Some(why) = self.unreadable.get(file) {
+            Err(format!("{json} couldn't be read: {why}"))
+        } else {
+            Err(format!("no {json}; compile {file} with inklecate"))
+        }
+    }
+}
+
+/// Every dialog ref `galaxy` names: each stellar's, then each mission's
+/// offer and completion.
+fn refs(galaxy: &Galaxy) -> impl Iterator<Item = &DialogRef> {
+    let stellars = galaxy
+        .stellars
+        .values()
+        .filter_map(|doc| doc.data.dialog.as_ref());
+    let missions = galaxy.missions.values().flat_map(|doc| {
+        let offer = doc.data.offer.as_ref().map(|offer| &offer.dialog);
+        let complete = doc.data.complete.as_ref().map(|complete| &complete.dialog);
+        offer.into_iter().chain(complete)
+    });
+    stellars.chain(missions)
+}
+
+/// Reads the compiled stories in `dialog/`, reporting a folder that fails
+/// to list to `problems`. Each file a ref names is then read on its own
+/// (see the module docs).
+pub fn compiled(galaxy: &Galaxy, source: &impl Source, problems: &mut Vec<Problem>) -> Compiled {
+    let files = match source.files("dialog", "json") {
+        Ok(files) => files,
+        Err(e) => {
+            problems.push(Problem::new("dialog/", format!("listing failed: {e}")));
+            return read_each(galaxy, source);
+        }
+    };
+    let texts = files
+        .into_iter()
+        .filter_map(|file| {
+            // Refs are lower case, so a name in another case matches
+            // none: it isn't read.
+            let stem = file.path.strip_suffix(".ink.json")?;
+            Some((format!("{stem}.ink"), Arc::from(file.text)))
+        })
+        .collect();
+    Compiled {
+        texts,
+        unreadable: BTreeMap::new(),
+    }
+}
+
+/// Each file a ref of `galaxy` names, read on its own: what a folder that
+/// failed to list (one unreadable file fails it all) still yields.
+fn read_each(galaxy: &Galaxy, source: &impl Source) -> Compiled {
+    let mut compiled = Compiled::default();
+    for dialog in refs(galaxy) {
+        let file = dialog.file();
+        if compiled.texts.contains_key(file) || compiled.unreadable.contains_key(file) {
+            continue;
+        }
+        match read_one(source, &format!("{file}.json")) {
+            Ok(Some(text)) => {
+                compiled.texts.insert(file.to_owned(), Arc::from(text));
+            }
+            Ok(None) => {}
+            Err(why) => {
+                compiled.unreadable.insert(file.to_owned(), why);
+            }
+        }
+    }
+    compiled
+}
+
+/// Maps each stellar's ref onto its `spöb`, with `compiled`'s texts,
+/// reporting a ref whose compiled file is missing or unreadable against
+/// the stellar's file.
 pub fn read(
     galaxy: &Galaxy,
     ids: &IdTable,
-    source: &impl Source,
+    compiled: &Compiled,
     problems: &mut Vec<Problem>,
 ) -> Dialogs {
-    let (mut compiled, listed): (BTreeMap<String, Arc<str>>, bool) =
-        match source.files("dialog", "json") {
-            Ok(files) => (
-                files
-                    .into_iter()
-                    .filter_map(|file| {
-                        // Refs are lower case, so a name in another case
-                        // matches none: it isn't read.
-                        let stem = file.path.strip_suffix(".ink.json")?;
-                        Some((format!("{stem}.ink"), Arc::from(file.text)))
-                    })
-                    .collect(),
-                true,
-            ),
-            Err(e) => {
-                problems.push(Problem::new("dialog/", format!("listing failed: {e}")));
-                (BTreeMap::new(), false)
-            }
-        };
     let mut stellars = BTreeMap::new();
     for (id, doc) in &galaxy.stellars {
         let (Some(dialog), Some(&nova)) = (&doc.data.dialog, ids.stellars.get(id)) else {
             continue;
         };
-        let file = dialog.file();
-        let json = format!("{file}.json");
-        // A folder that failed to list (one unreadable file fails it all)
-        // still yields each ref's own file, read on its own.
-        if !listed && !compiled.contains_key(file) {
-            match read_one(source, &json) {
-                Ok(Some(text)) => {
-                    compiled.insert(file.to_owned(), Arc::from(text));
-                }
-                Ok(None) => {}
-                Err(why) => {
-                    problems.push(Problem::new(
-                        &doc.path,
-                        format!("dialog {dialog}: {json} couldn't be read: {why}"),
-                    ));
-                    continue;
-                }
+        match compiled.place(dialog) {
+            Ok(place) => {
+                stellars.insert(StellarId(nova), place);
             }
-        }
-        if compiled.contains_key(file) {
-            stellars.insert(
-                StellarId(nova),
-                DialogPlace {
-                    file: file.to_owned(),
-                    knot: dialog.path().to_owned(),
-                },
-            );
-        } else {
-            problems.push(Problem::new(
-                &doc.path,
-                format!("dialog {dialog}: no {json}; compile {file} with inklecate"),
-            ));
+            Err(why) => problems.push(Problem::new(&doc.path, format!("dialog {dialog}: {why}"))),
         }
     }
-    Dialogs { compiled, stellars }
+    Dialogs {
+        compiled: compiled.texts.clone(),
+        stellars,
+    }
 }
 
 /// The text of the file at `path`, `None` if there is none, or why it
@@ -142,25 +201,56 @@ fn read_one(source: &impl Source, path: &str) -> Result<Option<String>, String> 
 }
 
 impl NewGame {
-    /// Asks `check` about every stellar's conversation. Each one it
-    /// refuses is a problem against the stellar's file, and the stellar
-    /// keeps no conversation.
+    /// Asks `check` about every stellar's conversation and every mission's
+    /// offer and completion. Each one it refuses is a problem against the
+    /// stellar's or the mission's file: the stellar keeps no
+    /// conversation, and the mission is left out.
     pub fn check_dialogs(&mut self, check: &dyn DialogCheck) {
         let mut dialogs = self.data.dialogs().clone();
+        let mut storylines = self.data.storylines().clone();
         let ids = &self.ids;
         let problems = &mut self.problems;
-        dialogs.stellars.retain(|&stellar, place| {
+        let refused = |place: &DialogPlace| -> Option<String> {
             let compiled = dialogs.compiled.get(&place.file).map_or("", |text| text);
-            let Err(why) = check.check(compiled, &place.knot) else {
-                return true;
-            };
-            problems.push(Problem::new(
-                stellar_file(ids, stellar),
-                format!("dialog {}: {why}", place.as_ref_text()),
-            ));
-            false
+            check.check(compiled, &place.knot).err()
+        };
+        let stellars = dialogs
+            .stellars
+            .iter()
+            .filter(|&(&stellar, place)| {
+                let Some(why) = refused(place) else {
+                    return true;
+                };
+                problems.push(Problem::new(
+                    stellar_file(ids, stellar),
+                    format!("dialog {}: {why}", place.as_ref_text()),
+                ));
+                false
+            })
+            .map(|(&stellar, place)| (stellar, place.clone()))
+            .collect();
+        storylines.missions.retain(|id, mission| {
+            let offer = mission.offer.as_ref().map(|offer| ("offer", &offer.dialog));
+            let complete = mission
+                .complete
+                .as_ref()
+                .map(|complete| ("complete", &complete.dialog));
+            let mut kept = true;
+            for (which, place) in offer.into_iter().chain(complete) {
+                if let Some(why) = refused(place) {
+                    problems.push(Problem::new(
+                        format!("missions/{id}.md"),
+                        format!("{which} dialog {}: {why}", place.as_ref_text()),
+                    ));
+                    kept = false;
+                }
+            }
+            kept
         });
-        self.data = std::mem::take(&mut self.data).with_dialogs(dialogs);
+        dialogs.stellars = stellars;
+        self.data = std::mem::take(&mut self.data)
+            .with_dialogs(dialogs)
+            .with_storylines(storylines);
     }
 }
 
@@ -276,8 +366,12 @@ mod tests {
         load(source, Path::new("sample"))
     }
 
+    /// The format's test galaxy, without its mission (whose story isn't
+    /// compiled: `missions`' tests cover it), and with `alpha-yard` naming
+    /// `dialog/yard.ink#greet`, compiled.
     fn with_yard_dialog() -> MemSource {
         fixture::galaxy()
+            .without("missions/parcel.md")
             .with("stellars/alpha-yard.md", YARD)
             .with("dialog/yard.ink.json", "{yard}")
     }

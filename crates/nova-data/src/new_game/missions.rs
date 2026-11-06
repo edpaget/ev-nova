@@ -1,0 +1,715 @@
+//! The new game's missions, news and jump points, mapped onto the store's
+//! [`Storylines`].
+//!
+//! A mission keeps its format ids as text (missions, news, flags,
+//! factions, `system/point` refs), and takes Nova IDs only where the
+//! engine places something: the stellar an offer, a completion or a
+//! delivery is at. Its `offer` and `complete` dialogs become
+//! [`DialogPlace`](crate::store::DialogPlace)s, resolved against the
+//! compiled texts ([`Compiled`]). A news item keeps its headline and body,
+//! and its `from` system's `sÿst`. Every jump point that has a gate is
+//! kept with its gate, owner and stability.
+//!
+//! A mission that names a stellar, mission, news item, jump point or
+//! faction that isn't there is left out, with one problem against its file
+//! for each such name; so is one whose offer or completion dialog has no
+//! compiled file. A news item whose `from` isn't a system is left out the
+//! same way. A name that failed to load, or a record left out for its ID,
+//! isn't reported again, but still leaves the mission out. A mission's
+//! `storyline`, `act` and `giver` aren't read yet.
+
+use std::collections::BTreeMap;
+
+use nova_galaxy_format::id::{DialogRef, Id, PointRef};
+use nova_galaxy_format::load::{Galaxy, Problem};
+use nova_galaxy_format::model::{Conditions, Effects, Mission, Objective};
+
+use super::dialogs::Compiled;
+use super::ids::IdTable;
+use super::map::absent;
+use crate::store::{
+    MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
+    StoryEffects, StoryMission, Storylines,
+};
+use crate::wire::id::{StellarId, SystemId};
+
+/// Maps `galaxy`'s missions, news and jump points, with `ids`' Nova IDs and
+/// `compiled`'s stories, reporting what is left out to `problems`.
+#[must_use]
+pub fn map(
+    galaxy: &Galaxy,
+    ids: &IdTable,
+    compiled: &Compiled,
+    problems: &mut Vec<Problem>,
+) -> Storylines {
+    let points = points(galaxy, ids);
+    let mut news = BTreeMap::new();
+    for (id, doc) in &galaxy.news {
+        let from = &doc.data.from;
+        let Some(&system) = ids.systems.get(from) else {
+            if absent(galaxy, &galaxy.systems, "systems", from) {
+                problems.push(Problem::new(
+                    &doc.path,
+                    format!("its `from` system `{from}` is not in systems/; it is left out"),
+                ));
+            }
+            continue;
+        };
+        news.insert(
+            id.to_string(),
+            NewsItem {
+                headline: doc.data.headline.clone(),
+                text: doc.body.trim().to_owned(),
+                from: SystemId(system),
+            },
+        );
+    }
+    let mut missions = BTreeMap::new();
+    for (id, doc) in &galaxy.missions {
+        let mut names = Names {
+            galaxy,
+            ids,
+            compiled,
+            broken: Vec::new(),
+            left_out: false,
+        };
+        let mission = names.mission(&doc.data);
+        problems.extend(
+            names
+                .broken
+                .into_iter()
+                .map(|why| Problem::new(&doc.path, why)),
+        );
+        if !names.left_out {
+            missions.insert(id.to_string(), mission);
+        }
+    }
+    Storylines {
+        missions,
+        news,
+        points,
+    }
+}
+
+/// Every jump point with a gate, by `system/point`, with its static owner
+/// and stability.
+fn points(galaxy: &Galaxy, ids: &IdTable) -> BTreeMap<String, PointAt> {
+    ids.gates
+        .iter()
+        .filter_map(|(point, &gate)| {
+            let found = galaxy.jump_point(point)?;
+            Some((
+                point.to_string(),
+                PointAt {
+                    gate: StellarId(gate),
+                    owner: found.owner.as_ref().map(ToString::to_string),
+                    stability: found.stability,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// One mission's names, resolved: each that isn't there is a problem in
+/// `broken`, and any that can't be resolved leaves the mission out.
+struct Names<'a> {
+    galaxy: &'a Galaxy,
+    ids: &'a IdTable,
+    compiled: &'a Compiled,
+    broken: Vec<String>,
+    left_out: bool,
+}
+
+impl Names<'_> {
+    /// `mission` mapped. Its names that don't resolve set
+    /// [`left_out`](Self::left_out), and what it then holds doesn't
+    /// matter.
+    fn mission(&mut self, mission: &Mission) -> StoryMission {
+        let offer = mission.offer.as_ref().and_then(|offer| {
+            let at = self.stellar("offer.at", &offer.at);
+            let dialog = self.dialog("offer", &offer.dialog);
+            Some(MissionOffer {
+                at: at?,
+                dialog: dialog?,
+            })
+        });
+        let complete = mission.complete.as_ref().and_then(|complete| {
+            let at = complete
+                .at
+                .as_ref()
+                .map(|at| self.stellar("complete.at", at));
+            let dialog = self.dialog("complete", &complete.dialog);
+            Some(MissionCompletion {
+                at: at.map_or(Some(None), |at| at.map(Some))?,
+                dialog: dialog?,
+            })
+        });
+        let objective = mission
+            .objective
+            .as_ref()
+            .and_then(|objective| match objective {
+                Objective::Deliver { cargo, tons, to } => Some(MissionObjective::Deliver {
+                    cargo: cargo.clone(),
+                    tons: *tons,
+                    to: self.stellar("objective.deliver.to", to)?,
+                }),
+                Objective::TakePoint { point, held_by } => {
+                    self.point("objective.take_point.point", point);
+                    self.faction("objective.take_point.held_by", held_by);
+                    Some(MissionObjective::TakePoint {
+                        point: point.to_string(),
+                        held_by: held_by.to_string(),
+                    })
+                }
+            });
+        StoryMission {
+            title: mission.title.clone(),
+            requires: self.requires("requires", &mission.requires),
+            offer,
+            objective,
+            complete,
+            on_offer: self.effects("on_offer", &mission.on_offer),
+            on_accept: self.effects("on_accept", &mission.on_accept),
+            on_decline: self.effects("on_decline", &mission.on_decline),
+            on_success: self.effects("on_success", &mission.on_success),
+        }
+    }
+
+    /// The conditions `conditions`, at `field`, nested groups and all.
+    fn requires(&mut self, field: &str, conditions: &Conditions) -> Requires {
+        for mission in &conditions.missions_done {
+            self.mission_named(&format!("{field}.missions_done"), mission);
+        }
+        let mut groups = |name: &str, list: &[Conditions]| -> Vec<Requires> {
+            list.iter()
+                .enumerate()
+                .map(|(i, group)| self.requires(&format!("{field}.{name}[{i}]"), group))
+                .collect()
+        };
+        let all = groups("all", &conditions.all);
+        let any = groups("any", &conditions.any);
+        let none = groups("none", &conditions.none);
+        Requires {
+            missions_done: texts(&conditions.missions_done),
+            flags: texts(&conditions.flags),
+            flags_unset: texts(&conditions.flags_unset),
+            points: self.point_states(&format!("{field}.points"), &conditions.points),
+            not_before_day: conditions.not_before_day,
+            all,
+            any,
+            none,
+        }
+    }
+
+    /// The effects `effects`, at `field`.
+    fn effects(&mut self, field: &str, effects: &Effects) -> StoryEffects {
+        for news in &effects.news {
+            if !self.galaxy.news.contains_key(news) {
+                self.missing(&format!("{field}.news"), news.as_str(), "news", "news");
+            }
+        }
+        StoryEffects {
+            flags: texts(&effects.flags),
+            clear_flags: texts(&effects.clear_flags),
+            points: self.point_states(&format!("{field}.points"), &effects.points),
+            news: texts(&effects.news),
+        }
+    }
+
+    /// The point states `states`, at `field`, each point and owner
+    /// checked.
+    fn point_states(
+        &mut self,
+        field: &str,
+        states: &[nova_galaxy_format::model::PointState],
+    ) -> Vec<PointState> {
+        states
+            .iter()
+            .map(|state| {
+                self.point(&format!("{field}.point"), &state.point);
+                if let Some(owner) = &state.owner {
+                    self.faction(&format!("{field}.owner"), owner);
+                }
+                PointState {
+                    point: state.point.to_string(),
+                    owner: state.owner.as_ref().map(ToString::to_string),
+                    stability: state.stability,
+                }
+            })
+            .collect()
+    }
+
+    /// The `spöb` of the stellar `id`, named at `field`.
+    fn stellar(&mut self, field: &str, id: &Id) -> Option<StellarId> {
+        if let Some(&nova) = self.ids.stellars.get(id) {
+            return Some(StellarId(nova));
+        }
+        if absent(self.galaxy, &self.galaxy.stellars, "stellars", id) {
+            self.missing(field, id.as_str(), "stellar", "stellars");
+        }
+        self.left_out = true;
+        None
+    }
+
+    /// Checks the mission `id`, named at `field`, is there.
+    fn mission_named(&mut self, field: &str, id: &Id) {
+        if absent(self.galaxy, &self.galaxy.missions, "missions", id) {
+            self.missing(field, id.as_str(), "mission", "missions");
+        } else if !self.galaxy.missions.contains_key(id) {
+            self.left_out = true;
+        }
+    }
+
+    /// Checks the faction `id`, named at `field`, is there.
+    fn faction(&mut self, field: &str, id: &Id) {
+        if absent(self.galaxy, &self.galaxy.factions, "factions", id) {
+            self.missing(field, id.as_str(), "faction", "factions");
+        } else if !self.galaxy.factions.contains_key(id) {
+            self.left_out = true;
+        }
+    }
+
+    /// Checks the jump point `point`, named at `field`, has a gate.
+    fn point(&mut self, field: &str, point: &PointRef) {
+        if self.ids.gates.contains_key(point) {
+            return;
+        }
+        let system_file = format!("systems/{}.md", point.system());
+        if self.galaxy.jump_point(point).is_none() && !self.galaxy.unreadable.contains(&system_file)
+        {
+            self.broken.push(format!(
+                "{field} names `{point}`, which is no jump point; it is left out"
+            ));
+        }
+        self.left_out = true;
+    }
+
+    /// The place `dialog` enters, for the mission's `which` (`offer` or
+    /// `complete`).
+    fn dialog(&mut self, which: &str, dialog: &DialogRef) -> Option<crate::store::DialogPlace> {
+        match self.compiled.place(dialog) {
+            Ok(place) => Some(place),
+            Err(why) => {
+                self.broken.push(format!("{which} dialog {dialog}: {why}"));
+                self.left_out = true;
+                None
+            }
+        }
+    }
+
+    /// Reports `id`, a `what` named at `field`, as not in `dir/`.
+    fn missing(&mut self, field: &str, id: &str, what: &str, dir: &str) {
+        self.broken.push(format!(
+            "{field} names the {what} `{id}`, which is not in {dir}/; it is left out"
+        ));
+        self.left_out = true;
+    }
+}
+
+/// Each of `ids` as text.
+fn texts<T: ToString>(ids: &[T]) -> Vec<String> {
+    ids.iter().map(ToString::to_string).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use nova_galaxy_format::source::MemSource;
+
+    use super::*;
+    use crate::new_game::tests::galaxy;
+    use crate::new_game::{NewGame, load};
+    use crate::store::{DialogPlace, GateStability};
+
+    // `galaxy()`: the format's test galaxy, whose mission `parcel` is
+    // offered at `alpha-yard` by `dialog/errands.ink#parcel`, delivers a
+    // ton of parcel to `alpha-yard` and releases `parcel-delivered`, from
+    // `alpha`, on success; with its story compiled.
+
+    fn loaded(source: &MemSource) -> NewGame {
+        load(source, Path::new("sample"))
+    }
+
+    fn problems(game: &NewGame) -> Vec<String> {
+        game.problems.iter().map(ToString::to_string).collect()
+    }
+
+    fn stellar(game: &NewGame, id: &str) -> StellarId {
+        StellarId(game.ids.stellars[&Id::try_from(id.to_owned()).expect("an id")])
+    }
+
+    fn place(file: &str, knot: &str) -> DialogPlace {
+        DialogPlace {
+            file: file.to_owned(),
+            knot: knot.to_owned(),
+        }
+    }
+
+    const HEAD: &str = "---\ntitle: Toll\nstoryline: errands\nact: crossroads\n";
+
+    /// The galaxy with `missions/toll.md`: [`HEAD`], then `yaml`.
+    fn with_toll(yaml: &str) -> MemSource {
+        galaxy().with("missions/toll.md", &format!("{HEAD}{yaml}---\n"))
+    }
+
+    fn toll(game: &NewGame) -> Option<&StoryMission> {
+        game.data.storylines().missions.get("toll")
+    }
+
+    #[test]
+    fn a_mission_maps_its_offer_objective_and_effects() {
+        let game = loaded(&galaxy());
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let yard = stellar(&game, "alpha-yard");
+        let parcel = &game.data.storylines().missions["parcel"];
+        assert_eq!(
+            parcel,
+            &StoryMission {
+                title: "Parcel".to_owned(),
+                offer: Some(MissionOffer {
+                    at: yard,
+                    dialog: place("dialog/errands.ink", "parcel"),
+                }),
+                objective: Some(MissionObjective::Deliver {
+                    cargo: "Parcel".to_owned(),
+                    tons: 1,
+                    to: yard,
+                }),
+                on_success: StoryEffects {
+                    flags: vec!["parcel_done".to_owned()],
+                    news: vec!["parcel-delivered".to_owned()],
+                    ..StoryEffects::default()
+                },
+                ..StoryMission::default()
+            }
+        );
+    }
+
+    #[test]
+    fn a_news_item_keeps_its_headline_body_and_from_system() {
+        let game = loaded(&galaxy());
+        let news = &game.data.storylines().news;
+        assert_eq!(
+            news.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["parcel-delivered"]
+        );
+        assert_eq!(
+            news["parcel-delivered"],
+            NewsItem {
+                headline: "Parcel delivered".to_owned(),
+                text: "The yard has its parcel.".to_owned(),
+                from: SystemId(game.ids.systems[&Id::try_from("alpha".to_owned()).expect("id")]),
+            }
+        );
+    }
+
+    #[test]
+    fn every_jump_point_is_kept_with_its_gate_owner_and_stability() {
+        let game = loaded(&galaxy());
+        let gate_of = |text: &str| {
+            let point = PointRef::try_from(text.to_owned()).expect("a point");
+            StellarId(game.ids.gates[&point])
+        };
+        assert_eq!(
+            game.data.storylines().points,
+            BTreeMap::from([
+                (
+                    "alpha/to-beta".to_owned(),
+                    PointAt {
+                        gate: gate_of("alpha/to-beta"),
+                        owner: None,
+                        stability: GateStability::Stable,
+                    }
+                ),
+                (
+                    "beta/to-alpha".to_owned(),
+                    PointAt {
+                        gate: gate_of("beta/to-alpha"),
+                        owner: Some("league".to_owned()),
+                        stability: GateStability::Unstable,
+                    }
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn requires_keep_every_field_and_nested_groups_their_shape() {
+        let game = loaded(&with_toll(
+            "requires:\n  missions_done: [parcel]\n  flags: [a]\n  flags_unset: [b]\n\
+             \x20 points: [{point: beta/to-alpha, owner: league, stability: dead}]\n\
+             \x20 not_before_day: 9\n\
+             \x20 all:\n    - any: [{flags: [c]}, {none: [{flags: [d]}]}]\n\
+             \x20 none:\n    - points: [{point: alpha/to-beta, stability: unstable}]\n",
+        ));
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let flags = |names: &[&str]| names.iter().map(|&n| n.to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            toll(&game).expect("mapped").requires,
+            Requires {
+                missions_done: flags(&["parcel"]),
+                flags: flags(&["a"]),
+                flags_unset: flags(&["b"]),
+                points: vec![PointState {
+                    point: "beta/to-alpha".to_owned(),
+                    owner: Some("league".to_owned()),
+                    stability: Some(GateStability::Dead),
+                }],
+                not_before_day: Some(9),
+                all: vec![Requires {
+                    any: vec![
+                        Requires {
+                            flags: flags(&["c"]),
+                            ..Requires::default()
+                        },
+                        Requires {
+                            none: vec![Requires {
+                                flags: flags(&["d"]),
+                                ..Requires::default()
+                            }],
+                            ..Requires::default()
+                        },
+                    ],
+                    ..Requires::default()
+                }],
+                any: Vec::new(),
+                none: vec![Requires {
+                    points: vec![PointState {
+                        point: "alpha/to-beta".to_owned(),
+                        owner: None,
+                        stability: Some(GateStability::Unstable),
+                    }],
+                    ..Requires::default()
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn each_effect_block_maps_its_flags_points_and_news() {
+        let game = loaded(&with_toll(
+            "on_offer: {flags: [a]}\non_accept: {clear_flags: [b]}\n\
+             on_decline: {points: [{point: alpha/to-beta, owner: league}]}\n\
+             on_success: {news: [parcel-delivered]}\n",
+        ));
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let toll = toll(&game).expect("mapped");
+        assert_eq!(toll.on_offer.flags, ["a"]);
+        assert_eq!(toll.on_accept.clear_flags, ["b"]);
+        assert_eq!(
+            toll.on_decline.points,
+            [PointState {
+                point: "alpha/to-beta".to_owned(),
+                owner: Some("league".to_owned()),
+                stability: None,
+            }]
+        );
+        assert_eq!(toll.on_success.news, ["parcel-delivered"]);
+        assert_eq!(toll.offer, None, "an event");
+    }
+
+    #[test]
+    fn a_completion_and_a_take_point_objective_map() {
+        let game = loaded(&with_toll(
+            "complete: {at: alpha-prime, dialog: dialog/errands.ink#done}\n\
+             objective: {take_point: {point: beta/to-alpha, held_by: league}}\n",
+        ));
+        assert_eq!(problems(&game), Vec::<String>::new());
+        let mapped = toll(&game).expect("mapped");
+        assert_eq!(
+            mapped.complete,
+            Some(MissionCompletion {
+                at: Some(stellar(&game, "alpha-prime")),
+                dialog: place("dialog/errands.ink", "done"),
+            })
+        );
+        assert_eq!(
+            mapped.objective,
+            Some(MissionObjective::TakePoint {
+                point: "beta/to-alpha".to_owned(),
+                held_by: "league".to_owned(),
+            })
+        );
+        let game = loaded(&with_toll("complete: {dialog: dialog/errands.ink#done}\n"));
+        assert_eq!(
+            toll(&game).expect("mapped").complete.as_ref().map(|c| c.at),
+            Some(None)
+        );
+    }
+
+    /// The mission `toll` written as `yaml` is left out, with the one
+    /// problem `why` against its file.
+    fn left_out_with(yaml: &str, why: &str) {
+        let game = loaded(&with_toll(yaml));
+        assert_eq!(problems(&game), [format!("missions/toll.md: {why}")]);
+        assert_eq!(toll(&game), None);
+        assert!(game.data.storylines().missions.contains_key("parcel"));
+    }
+
+    #[test]
+    fn a_missing_stellar_leaves_the_mission_out() {
+        left_out_with(
+            "offer: {at: nowhere, dialog: dialog/errands.ink#toll}\n",
+            "offer.at names the stellar `nowhere`, which is not in stellars/; it is left out",
+        );
+        left_out_with(
+            "complete: {at: nowhere, dialog: dialog/errands.ink#done}\n",
+            "complete.at names the stellar `nowhere`, which is not in stellars/; it is left out",
+        );
+        left_out_with(
+            "objective: {deliver: {cargo: Plate, tons: 1, to: nowhere}}\n",
+            "objective.deliver.to names the stellar `nowhere`, which is not in stellars/; \
+             it is left out",
+        );
+    }
+
+    #[test]
+    fn a_missing_mission_leaves_the_mission_out_however_deep() {
+        left_out_with(
+            "requires: {any: [{missions_done: [gone]}]}\n",
+            "requires.any[0].missions_done names the mission `gone`, which is not in \
+             missions/; it is left out",
+        );
+    }
+
+    #[test]
+    fn a_missing_news_item_leaves_the_mission_out() {
+        left_out_with(
+            "on_accept: {news: [gone]}\n",
+            "on_accept.news names the news `gone`, which is not in news/; it is left out",
+        );
+    }
+
+    #[test]
+    fn a_missing_point_leaves_the_mission_out() {
+        left_out_with(
+            "on_offer: {points: [{point: alpha/nowhere, stability: dead}]}\n",
+            "on_offer.points.point names `alpha/nowhere`, which is no jump point; it is left out",
+        );
+        left_out_with(
+            "objective: {take_point: {point: beta/nowhere, held_by: league}}\n",
+            "objective.take_point.point names `beta/nowhere`, which is no jump point; \
+             it is left out",
+        );
+    }
+
+    #[test]
+    fn a_missing_faction_leaves_the_mission_out() {
+        left_out_with(
+            "requires: {points: [{point: alpha/to-beta, owner: nobody}]}\n",
+            "requires.points.owner names the faction `nobody`, which is not in factions/; \
+             it is left out",
+        );
+        left_out_with(
+            "objective: {take_point: {point: beta/to-alpha, held_by: nobody}}\n",
+            "objective.take_point.held_by names the faction `nobody`, which is not in \
+             factions/; it is left out",
+        );
+    }
+
+    #[test]
+    fn a_missing_compiled_file_is_a_problem_against_the_mission() {
+        left_out_with(
+            "offer: {at: alpha-yard, dialog: dialog/gone.ink#toll}\n",
+            "offer dialog dialog/gone.ink#toll: no dialog/gone.ink.json; \
+             compile dialog/gone.ink with inklecate",
+        );
+        left_out_with(
+            "complete: {dialog: dialog/gone.ink#done}\n",
+            "complete dialog dialog/gone.ink#done: no dialog/gone.ink.json; \
+             compile dialog/gone.ink with inklecate",
+        );
+    }
+
+    #[test]
+    fn every_missing_name_of_a_mission_is_its_own_problem() {
+        let game = loaded(&with_toll(
+            "offer: {at: nowhere, dialog: dialog/gone.ink#toll}\n",
+        ));
+        assert_eq!(problems(&game).len(), 2, "{:?}", problems(&game));
+        assert_eq!(toll(&game), None);
+    }
+
+    #[test]
+    fn a_name_that_failed_to_load_leaves_the_mission_out_unreported() {
+        let source = with_toll("offer: {at: alpha-prime, dialog: dialog/errands.ink#toll}\n")
+            .with("stellars/alpha-prime.md", "---\nnot: valid\n---\n");
+        let game = loaded(&source);
+        assert_eq!(toll(&game), None);
+        assert!(
+            problems(&game).iter().all(|p| !p.starts_with("missions/")),
+            "{:?}",
+            problems(&game)
+        );
+    }
+
+    #[test]
+    fn check_dialogs_drops_a_mission_whose_offer_or_completion_knot_is_refused() {
+        use crate::new_game::dialogs::fixture::FakeCheck;
+        let mut game = loaded(&with_toll(
+            "complete: {at: alpha-prime, dialog: dialog/errands.ink#done}\n",
+        ));
+        game.check_dialogs(&FakeCheck::default().story("{errands}", &["parcel"]));
+        assert_eq!(
+            problems(&game),
+            ["missions/toll.md: complete dialog dialog/errands.ink#done: no knot or stitch `done`"]
+        );
+        assert_eq!(toll(&game), None);
+        assert!(game.data.storylines().missions.contains_key("parcel"));
+
+        let mut game = loaded(&galaxy());
+        game.check_dialogs(&FakeCheck::default().story("{errands}", &["done"]));
+        assert_eq!(
+            problems(&game),
+            [
+                "missions/parcel.md: offer dialog dialog/errands.ink#parcel: no knot or stitch `parcel`"
+            ]
+        );
+        assert!(game.data.storylines().missions.is_empty());
+        assert_eq!(game.data.storylines().news.len(), 1, "the news stays");
+    }
+
+    #[test]
+    fn a_news_item_with_an_unknown_from_is_left_out() {
+        let source = galaxy().with(
+            "news/rumour.md",
+            "---\nheadline: Rumour\nfrom: nowhere\n---\nWho knows.\n",
+        );
+        let game = loaded(&source);
+        assert_eq!(
+            problems(&game),
+            ["news/rumour.md: its `from` system `nowhere` is not in systems/; it is left out"]
+        );
+        assert!(!game.data.storylines().news.contains_key("rumour"));
+    }
+
+    #[test]
+    fn with_the_folder_unlisted_a_mission_s_ref_is_read_on_its_own() {
+        let source = galaxy().with_bytes("dialog/bad.ink.json", &[0xff, 0xfe]);
+        let game = loaded(&source);
+        assert_eq!(game.problems.len(), 1, "{:?}", game.problems);
+        assert_eq!(game.problems[0].file, "dialog/");
+        assert!(game.data.storylines().missions.contains_key("parcel"));
+        assert_eq!(
+            &*game.data.dialogs().compiled["dialog/errands.ink"],
+            "{errands}"
+        );
+    }
+
+    #[test]
+    fn a_mission_s_unreadable_compiled_file_is_reported_as_unreadable() {
+        let source = galaxy().with_bytes("dialog/errands.ink.json", &[0xff, 0xfe]);
+        let game = loaded(&source);
+        let lines = problems(&game);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[1].starts_with(
+                "missions/parcel.md: offer dialog dialog/errands.ink#parcel: \
+                 dialog/errands.ink.json couldn't be read: "
+            ),
+            "{lines:?}"
+        );
+        assert!(game.data.storylines().missions.is_empty());
+    }
+}

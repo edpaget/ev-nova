@@ -29,6 +29,9 @@
 //! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
 //! | `dialog/<file>.ink.json` | its compiled text on the store ([`dialogs`], [`GameData::dialogs`]) | by the Ink file a ref names (`dialog/<file>.ink`); the `.ink` source isn't read |
 //! | a stellar's `dialog` | its `spöb`'s conversation on the store ([`dialogs`]) | the file and the knot (or `knot.stitch`) a landed pilot's conversation enters |
+//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; its dialogs as places in the compiled texts |
+//! | `news/` | a news item on the store ([`missions`]) | by its id: its headline, its body trimmed, and its `from` system's `sÿst` |
+//! | a jump point's `owner` and `stability` | its static state on the store ([`missions`]) | by `system/point`: its gate's `spöb`, its owner's id and its stability, which missions' effects overlay in play |
 //!
 //! A jump point is a hypergate with one link, to its partner's gate: the
 //! original comes out at the linked `spöb` itself, so the partner is
@@ -67,6 +70,11 @@
 //!   same once [`NewGame::check_dialogs`] has asked the dialog port
 //!   ([`dialogs::DialogCheck`]), which the game runs as it opens the
 //!   folder.
+//! - A mission naming a stellar, mission, news item, jump point or faction
+//!   that isn't there is left out, with a problem for each such name. So
+//!   is one whose `offer` or `complete` dialog has no compiled file, or,
+//!   once [`NewGame::check_dialogs`] has run, names a knot its story
+//!   lacks. A news item whose `from` isn't a system is left out.
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported
@@ -91,10 +99,8 @@
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date.
-//! - `storylines/`, `missions/`, `news/`, `characters/`: they belong to
-//!   `engine-story`. Missions' `offer` and `complete` dialog refs are
-//!   mapped and checked with the mission model (engine-story phase 4);
-//!   only stellars' are now.
+//! - `storylines/`, a mission's `storyline`, `act` and an offer's
+//!   `giver`, and `characters/`: nothing in the engine reads them yet.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
 //!   read for the stand-ins ([`looks`]), and the export media paths for the
 //!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.
@@ -115,6 +121,7 @@ pub mod gates;
 pub mod ids;
 pub mod looks;
 mod map;
+pub mod missions;
 pub mod records;
 #[cfg(test)]
 mod tests;
@@ -189,12 +196,15 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     problems.extend(mapping);
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
     let stabilities = gates::stabilities(&galaxy, &ids.gates);
-    let dialogs = dialogs::read(&galaxy, &ids, source, &mut problems);
+    let compiled = dialogs::compiled(&galaxy, source, &mut problems);
+    let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
+    let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
             .with_gate_stabilities(stabilities)
-            .with_dialogs(dialogs),
+            .with_dialogs(dialogs)
+            .with_storylines(storylines),
         ids,
         problems,
         lfs_pointers,

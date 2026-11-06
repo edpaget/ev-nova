@@ -207,13 +207,14 @@ impl<'a, S: Source> Models<'a, S> {
 mod tests {
     use std::path::Path;
 
-    use nova_galaxy_format::fixture::{self, CC0};
+    use nova_galaxy_format::fixture::CC0;
     use nova_galaxy_format::fleet::Size;
     use nova_galaxy_format::media::LFS_POINTER;
     use nova_galaxy_format::source::MemSource;
     use nova_galaxy_media::{Outline, size_box};
 
     use super::*;
+    use crate::new_game::tests::galaxy;
     use crate::new_game::{NewGame, load};
 
     const HULL_GLB: &str = "media/export/pack/hull.glb";
@@ -225,7 +226,7 @@ mod tests {
     /// The format's galaxy with the skiff's model, a 2 by 1 by 4 box in
     /// one material, `hull`.
     fn with_hull() -> MemSource {
-        fixture::galaxy().with_bytes(
+        galaxy().with_bytes(
             HULL_GLB,
             &nova_galaxy_media::fixture::glb([2.0, 1.0, 4.0], [0.0; 3]),
         )
@@ -297,7 +298,7 @@ mod tests {
 
     #[test]
     fn a_hull_whose_asset_is_a_placeholder_is_its_size_box_in_the_primary() {
-        let game = loaded(&placeholder_hull(fixture::galaxy()));
+        let game = loaded(&placeholder_hull(galaxy()));
         assert_eq!(
             ship(&game, "skiff"),
             Some(StandIn::Outline(
@@ -310,7 +311,7 @@ mod tests {
     #[test]
     fn a_hull_whose_model_is_an_lfs_pointer_is_its_box_with_no_problem() {
         let pointer = [LFS_POINTER, b"\noid sha256:ab\nsize 12\n"].concat();
-        let game = loaded(&fixture::galaxy().with_bytes(HULL_GLB, &pointer));
+        let game = loaded(&galaxy().with_bytes(HULL_GLB, &pointer));
         assert_eq!(
             ship(&game, "skiff"),
             Some(StandIn::Outline(
@@ -323,7 +324,7 @@ mod tests {
 
     #[test]
     fn a_hull_whose_model_does_not_decode_is_its_box_and_the_asset_is_reported() {
-        let game = loaded(&fixture::galaxy().with_bytes(HULL_GLB, b"glTF nonsense"));
+        let game = loaded(&galaxy().with_bytes(HULL_GLB, b"glTF nonsense"));
         assert_eq!(
             ship(&game, "skiff"),
             Some(StandIn::Outline(
@@ -343,7 +344,7 @@ mod tests {
     #[test]
     fn an_undecodable_model_is_reported_once_for_its_asset() {
         // Two hulls on one asset: one problem.
-        let source = fixture::galaxy()
+        let source = galaxy()
             .with_bytes(HULL_GLB, b"glTF nonsense")
             .with(
                 "ships/barge.md",
@@ -357,7 +358,7 @@ mod tests {
     #[test]
     fn a_missing_model_file_is_its_box_and_left_to_the_galaxy_tool() {
         // The format's galaxy holds no media: `hull.glb` isn't there.
-        let game = loaded(&fixture::galaxy());
+        let game = loaded(&galaxy());
         assert_eq!(
             ship(&game, "skiff"),
             Some(StandIn::Outline(
@@ -369,7 +370,7 @@ mod tests {
 
     #[test]
     fn a_hull_with_no_livery_is_bare() {
-        let source = placeholder_hull(fixture::galaxy()).with(
+        let source = placeholder_hull(galaxy()).with(
             "ships/skiff.md",
             "---\nname: Skiff\nmodel: hull\nsize: {length: 8, beam: 4, collision_radius: 4}\n---\n",
         );
@@ -384,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_livery_not_in_liveries_is_reported_and_the_hull_draws_bare() {
-        let source = placeholder_hull(fixture::galaxy()).with(
+        let source = placeholder_hull(galaxy()).with(
             "ships/skiff.md",
             "---\nname: Skiff\nmodel: hull\nlivery: gone\n\
              size: {length: 8, beam: 4, collision_radius: 4}\n---\n",
@@ -404,8 +405,8 @@ mod tests {
 
     #[test]
     fn a_livery_that_failed_to_load_is_not_reported_again() {
-        let source = placeholder_hull(fixture::galaxy())
-            .with("liveries/league-paint.md", "---\nname: [\n---\n");
+        let source =
+            placeholder_hull(galaxy()).with("liveries/league-paint.md", "---\nname: [\n---\n");
         let game = loaded(&source);
         assert_eq!(
             ship(&game, "skiff"),
@@ -424,7 +425,7 @@ mod tests {
 
     #[test]
     fn a_model_not_in_assets_is_reported_and_the_hull_is_its_box() {
-        let source = fixture::galaxy().with(
+        let source = galaxy().with(
             "ships/skiff.md",
             "---\nname: Skiff\nmodel: gone\nlivery: league-paint\n\
              size: {length: 8, beam: 4, collision_radius: 4}\n---\n",
@@ -444,7 +445,7 @@ mod tests {
 
     #[test]
     fn an_asset_that_failed_to_load_is_not_reported_again() {
-        let game = loaded(&fixture::galaxy().with("assets/hull.md", "---\nkind: [\n---\n"));
+        let game = loaded(&galaxy().with("assets/hull.md", "---\nkind: [\n---\n"));
         assert_eq!(
             ship(&game, "skiff"),
             Some(StandIn::Outline(
@@ -485,7 +486,7 @@ mod tests {
     /// The format's galaxy with `alpha-yard` shown by `yard.glb`, a 4 by 1
     /// by 2 box in white.
     fn yard_on_a_model() -> MemSource {
-        fixture::galaxy()
+        galaxy()
             .with(
                 "assets/yard.md",
                 &format!(
