@@ -2823,9 +2823,18 @@
 //!     was not locked" (@0x33304): diagnostics with no effect on play.
 //!   - Shots and deadly stellars against a frozen slot, the nav target
 //!     brackets and the hail dialog's picture sized by the slot, and the
-//!     scene's problems for an uncounted `spïn` (the original reports
-//!     nothing; none is added):
-//!     rdm:phase/rendering/phase-3-uncounted-slot-readers.
+//!     scene's problems for an uncounted `spïn`: built by rendering phase 3
+//!     (rdm:phase/rendering/phase-3-uncounted-slot-readers). A shot's and
+//!     a deadly stellar's disc are centred where the slot's rect is
+//!     (`nova_sim`'s `Space::slot_centre`); the brackets and the hail
+//!     picture read the slot's size (`nova_view`'s `SceneStellar::slot_size`,
+//!     32 square frozen or frameless); and the original reports nothing for
+//!     an uncounted `spïn`, so no scene problem is added. Still left out:
+//!     the faults on a frameless slot (`_SWRLECollision` through a null
+//!     +0x50 from @0x372a8 and @0x39d97, `_BlitPixieRLEDrawProc` @0xbb16d
+//!     from the hail picture @0x90ddf), where the engine hits, kills and
+//!     draws nothing; and the hail picture's read past the slot table when
+//!     the hailed stellar holds no slot (@0x90cff-0x90dc2).
 //!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
 //!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
 //!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates

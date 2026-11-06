@@ -4,8 +4,9 @@
 //! `_GetSpriteXSize` (@0x26d4-0x2702, its Y twin @0x2703-0x2731) reads 32
 //! (`movl $0x20` @0x26fc) for a slot whose frame index is not below its
 //! count (@0x26ec-0x26ef), so a slot whose frames count none, a frame
-//! frozen ([`Session::frame_frozen`]), is placed as a 32-pixel sprite: its
-//! rect's top left at the stellar's centre less 16 on each axis
+//! frozen ([`Session::frame_frozen`](super::Session::frame_frozen)), is
+//! placed as a 32-pixel sprite: its rect's top left at the stellar's
+//! centre less 16 on each axis
 //! (`_HandleStellarSprites` @0x2ee3d-0x2ef1a), the rect keeping the stale
 //! frame's own size (`_SWSetSpriteLocation` @0xab66d-0xab6a0 moves it
 //! without resizing it).
