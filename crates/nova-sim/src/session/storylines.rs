@@ -319,6 +319,9 @@ mod tests {
         let second = FakeKnot::new("second").line("Sure?", &[]).choice(
             FakeChoice::sticky("Take it after all", &[]).line("Fine.", &["outcome: accept"]),
         );
+        // Offers whose first page reaches its outcome.
+        let eager = FakeKnot::new("eager").line("Yours, then.", &["outcome: accept"]);
+        let curt = FakeKnot::new("curt").line("Not for you.", &["outcome: decline"]);
         let dialog = FakeDialog::default()
             .declare("paid", Value::Bool(false))
             .knot(offer)
@@ -326,7 +329,9 @@ mod tests {
             .knot(greet)
             .knot(toll)
             .knot(fickle)
-            .knot(second);
+            .knot(second)
+            .knot(eager)
+            .knot(curt);
         FakeLoader::default().story(STORY, dialog)
     }
 
@@ -636,6 +641,42 @@ mod tests {
             offer: offered_at(DOCK, FILE, "fickle").offer,
             ..job(10)
         }
+    }
+
+    /// The job, offered by the conversation at `knot`.
+    fn offered_by(knot: &str) -> StoryMission {
+        StoryMission {
+            offer: offered_at(DOCK, FILE, knot).offer,
+            on_decline: setting(&["declined"]),
+            ..job(10)
+        }
+    }
+
+    #[test]
+    fn an_outcome_on_the_offer_s_first_page_decides_it_as_it_opens() {
+        let catalog = talking(&[("job", offered_by("eager"))]);
+        let mut session = landed(&catalog);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Yours, then."]
+        );
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 10,
+                met: false
+            })
+        );
+        assert!(session.pilot().flags.is_set("hauling"));
+
+        let catalog = talking(&[("job", offered_by("curt"))]);
+        let mut session = landed(&catalog);
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Not for you."]
+        );
+        assert_eq!(state(&session, "job"), Some(MissionState::Declined));
+        assert!(session.pilot().flags.is_set("declined"));
     }
 
     #[test]
