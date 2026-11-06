@@ -7,6 +7,7 @@
 //! two free fingers as [`Input::Pinch`](super::Input::Pinch).
 
 use crate::geometry::Point;
+use crate::keymap::Command;
 
 /// A finger, opaque. It is valid only until its touch ends or is
 /// cancelled: the system reuses ids, so a later touch with the same id is
@@ -91,4 +92,30 @@ impl Pinch {
             other => other,
         }
     }
+}
+
+/// What flight's on-screen touch controls did, as a device of their own
+/// beside the keyboard and the pad (rdm:phase/key-bindings/phase-15-touch-flight-controls):
+/// the keymap's touch device follows it ([`crate::keymap::touch`]), so a
+/// button runs through the same command path as a key, and the stick
+/// reads as the pad's flight axes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TouchControl {
+    /// A control holding `command` went down or up.
+    Button {
+        /// The command it holds.
+        command: Command,
+        /// Down (`true`) or up.
+        pressed: bool,
+    },
+    /// The stick at (`x`, `y`): its offset as a fraction of its radius,
+    /// clamped to the unit circle, x right and y forward (screen up). Raw,
+    /// as [`Input::PadAxis`](super::Input::PadAxis) is: the reader applies
+    /// the flight dead zone.
+    Stick {
+        /// Across: -1 (left) to 1 (right).
+        x: f32,
+        /// Along: -1 (pulled back) to 1 (pushed forward).
+        y: f32,
+    },
 }

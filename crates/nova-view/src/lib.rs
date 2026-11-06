@@ -121,7 +121,7 @@ pub use image::{ImageKey, ImageKind};
 pub use input::{
     COMMAND_KEYS, CONTROL_KEYS, ControllerFamily, Device, FingerId, Input, Key, ModifierHeld,
     MouseButton, OPTION_KEYS, PadAxis, PadButton, Pinch, SHIFT_KEYS, ScrollDelta, Surroundings,
-    Touch, TouchPhase, key_letter, letter_key,
+    Touch, TouchControl, TouchPhase, key_letter, letter_key,
 };
 pub use key_names::{KeyNames, NoKeyNames, combo_name, key_name};
 pub use keymap::{

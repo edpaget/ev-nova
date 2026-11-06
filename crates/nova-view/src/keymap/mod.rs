@@ -176,6 +176,7 @@ pub mod reader;
 pub mod saved;
 #[cfg(test)]
 pub(crate) mod test_keys;
+pub mod touch;
 
 pub use bindings::{Bindings, Change, Clash, Devices};
 pub use command::{

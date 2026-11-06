@@ -320,6 +320,7 @@ impl Screen for PilotList {
             | Input::PadAxis { .. }
             | Input::Touch(_)
             | Input::Pinch(_)
+            | Input::TouchControl(_)
             | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }

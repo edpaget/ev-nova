@@ -8,7 +8,7 @@ use std::rc::Rc;
 use super::bindings::{Bindings, Change, Devices};
 use super::command::{Command, Context};
 use super::contexts::ScreenContexts;
-use crate::input::{Device, Input};
+use crate::input::{Device, Input, TouchControl};
 use crate::key_names::{KeyNames, NoKeyNames};
 
 /// The app's bindings, shared by every screen: a cheap clone over one
@@ -194,7 +194,7 @@ impl CommandReader {
                 self.device = surroundings.device;
                 return None;
             }
-            Input::PadAxis { .. } => {
+            Input::PadAxis { .. } | Input::TouchControl(TouchControl::Stick { .. }) => {
                 self.follow_devices(input);
                 return None;
             }
@@ -300,18 +300,21 @@ impl CommandReader {
             .with(|bindings| bindings.is_twin(input, command))
     }
 
-    /// Whether the key or pad button of `input` (a press, a repeat or a
-    /// release) is down; false for any other input.
+    /// Whether the key, pad button or touch control button of `input` (a
+    /// press, a repeat or a release) is down; false for any other input.
     #[must_use]
     pub fn is_down(&self, input: &Input) -> bool {
         self.devices.keyboard().holds(input)
             || matches!(*input, Input::PadButton { button, .. }
                 if self.devices.gamepad().is_down(button))
+            || matches!(*input, Input::TouchControl(TouchControl::Button { command, .. })
+                if self.devices.touch().is_down(command))
     }
 
     /// A fresh press of each key down, in order, then of each pad button
-    /// down, in the order pressed: what a screen hands back to the reader
-    /// after letting go of some of them.
+    /// down, then of each touch control button down, each in the order
+    /// pressed: what a screen hands back to the reader after letting go of
+    /// some of them.
     #[must_use]
     pub fn down(&self) -> Vec<Input> {
         let pad = self
@@ -322,7 +325,18 @@ impl CommandReader {
                 button,
                 pressed: true,
             });
-        self.devices.keyboard().presses().chain(pad).collect()
+        let touch = self.devices.touch().buttons().map(|command| {
+            Input::TouchControl(TouchControl::Button {
+                command,
+                pressed: true,
+            })
+        });
+        self.devices
+            .keyboard()
+            .presses()
+            .chain(pad)
+            .chain(touch)
+            .collect()
     }
 
     /// Whether a modifier key is down, as the active contexts read the

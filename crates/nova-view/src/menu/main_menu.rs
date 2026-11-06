@@ -633,6 +633,7 @@ impl Screen for MainMenu {
             | Input::PadAxis { .. }
             | Input::Touch(_)
             | Input::Pinch(_)
+            | Input::TouchControl(_)
             | Input::Surroundings(_) => {}
             // A held South's press is the pad's: the pointer only aims
             // the rollover meanwhile.

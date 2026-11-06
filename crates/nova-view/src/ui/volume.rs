@@ -199,6 +199,7 @@ impl VolumeControl {
             | Input::PadAxis { .. }
             | Input::Touch(_)
             | Input::Pinch(_)
+            | Input::TouchControl(_)
             | Input::Surroundings(_)
             | Input::Scroll { .. } => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),

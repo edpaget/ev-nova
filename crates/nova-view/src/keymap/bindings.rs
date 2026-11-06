@@ -7,6 +7,7 @@ use super::command::{Command, Context};
 use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
 use super::gamepad::{self, Gamepad, PadMap};
 use super::keyboard::{self, KeyCombo, KeyMap, Keyboard, KeysDown};
+use super::touch::{self, TouchDevice};
 use crate::input::Input;
 
 /// One binding table per device family: the keyboard's and the
@@ -48,8 +49,9 @@ impl Bindings {
     /// order, with `devices` holding what was down before it: for a key
     /// press or repeat, the most specific command its key and the held
     /// modifiers meet; for a pad button's press, the command its entry
-    /// under the layer held meets. A release, or any other input, means
-    /// none here: [`CommandReader`](super::CommandReader) reports a
+    /// under the layer held meets; for a touch control's press, its own
+    /// command while its context is active. A release, or any other input,
+    /// means none here: [`CommandReader`](super::CommandReader) reports a
     /// release as the command its press meant.
     #[must_use]
     pub fn resolve(&self, input: &Input, devices: &Devices, active: &[Context]) -> Option<Command> {
@@ -57,17 +59,19 @@ impl Bindings {
             Input::PadButton { .. } => {
                 gamepad::resolve(&self.gamepad, input, &devices.gamepad, active)
             }
+            Input::TouchControl(_) => touch::resolve(input, active),
             _ => keyboard::resolve(&self.keyboard, input, devices.keyboard.down(), active),
         }
     }
 
     /// Every command `devices` hold down in the `active` contexts: each
-    /// one a key down means with the modifiers held, and each one a pad
-    /// button down means under its layer.
+    /// one a key down means with the modifiers held, each one a pad button
+    /// down means under its layer, and each touch control's own.
     #[must_use]
     pub fn held(&self, devices: &Devices, active: &[Context]) -> BTreeSet<Command> {
         let mut held = keyboard::held(&self.keyboard, devices.keyboard.down(), active);
         held.extend(gamepad::held(&self.gamepad, &devices.gamepad, active));
+        held.extend(devices.touch.held(active));
         held
     }
 
@@ -80,6 +84,7 @@ impl Bindings {
             Input::PadButton { .. } => {
                 gamepad::meanings_with(&self.gamepad, input, &devices.gamepad, active)
             }
+            Input::TouchControl(_) => touch::meanings(input, active),
             _ => keyboard::meanings_with(&self.keyboard, input, devices.keyboard.down(), active),
         }
     }
@@ -91,23 +96,29 @@ impl Bindings {
     pub fn bound_to(&self, input: &Input, active: &[Context]) -> Vec<Command> {
         match input {
             Input::PadButton { .. } => gamepad::bound_to(&self.gamepad, input, active),
+            Input::TouchControl(_) => touch::meanings(input, active),
             _ => keyboard::bound_to(&self.keyboard, input, active),
         }
     }
 
     /// How far the stick axis `command` is bound to is pushed, through
     /// the flight dead zone, with `devices` as they are: -1 to 1, none
-    /// for a command bound to no axis.
+    /// for a command bound to no axis. The touch stick pushes flight's
+    /// two axes too; when the pad and the touch stick both push one, the
+    /// amount of larger magnitude wins, as each is a whole reading and
+    /// their sum could pass 1.
     #[must_use]
     pub fn axis(&self, command: Command, devices: &Devices) -> f32 {
-        gamepad::axis_amount(&self.gamepad, &devices.gamepad, command)
+        let pad = gamepad::axis_amount(&self.gamepad, &devices.gamepad, command);
+        let touch = devices.touch.axis_amount(command);
+        if touch.abs() > pad.abs() { touch } else { pad }
     }
 
     /// Whether a stick axis flight reads lies outside the flight dead
-    /// zone, with `devices` as they are.
+    /// zone, with `devices` as they are: the pad's or the touch stick.
     #[must_use]
     pub fn flight_axis_pushed(&self, devices: &Devices) -> bool {
-        devices.gamepad.flight_axis_pushed(&self.gamepad)
+        devices.gamepad.flight_axis_pushed(&self.gamepad) || devices.touch.flight_axis_pushed()
     }
 
     /// Every pair of commands bound to one pad entry in contexts active
@@ -290,13 +301,16 @@ fn clash_between(screens: &[ScreenContexts], a: Command, b: Command) -> bool {
 }
 
 /// What every device holds down, and what each press meant: the
-/// keyboard's and the gamepad's, with the pad's stick axes.
+/// keyboard's, the gamepad's, with the pad's stick axes, and flight's
+/// touch controls' ([`TouchDevice`]), with the touch stick.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Devices {
     /// The keyboard's state.
     keyboard: Keyboard,
     /// The gamepad's state.
     gamepad: Gamepad,
+    /// The touch controls' state.
+    touch: TouchDevice,
 }
 
 /// A device's input going down or up.
@@ -311,17 +325,21 @@ pub struct Change {
 
 impl Devices {
     /// How `input` changes what is down, if it is a device's button (a
-    /// key or a pad button).
+    /// key, a pad button or a touch control's button).
     #[must_use]
     pub fn change(input: &Input) -> Option<Change> {
-        keyboard::change(input).or_else(|| gamepad::change(input))
+        keyboard::change(input)
+            .or_else(|| gamepad::change(input))
+            .or_else(|| touch::change(input))
     }
 
     /// A fresh press of the device input `input` presses, repeats or
     /// releases; `None` for any other input.
     #[must_use]
     pub fn fresh_press(input: &Input) -> Option<Input> {
-        keyboard::fresh_press(input).or_else(|| gamepad::fresh_press(input))
+        keyboard::fresh_press(input)
+            .or_else(|| gamepad::fresh_press(input))
+            .or_else(|| touch::fresh_press(input))
     }
 
     /// Whether `input` is a modifier the `active` contexts read: a
@@ -331,17 +349,20 @@ impl Devices {
         keyboard::reads_modifier(input, active)
     }
 
-    /// Follows `input`'s change to what is down, or a stick axis's move,
-    /// a pad press taking its layer from `bindings`' pad table. Says
-    /// whether it was a device's input.
+    /// Follows `input`'s change to what is down, or a stick axis's move
+    /// (the pad's or the touch stick's), a pad press taking its layer
+    /// from `bindings`' pad table. Says whether it was a device's input.
     pub fn follow(&mut self, input: &Input, bindings: &Bindings) -> bool {
-        self.keyboard.follow(input) || self.gamepad.follow(input, &bindings.gamepad)
+        self.keyboard.follow(input)
+            || self.gamepad.follow(input, &bindings.gamepad)
+            || self.touch.follow(input)
     }
 
     /// Notes that `input`, a press, meant `command`.
     pub fn note_press(&mut self, input: &Input, command: Option<Command>) {
         self.keyboard.note_press(input, command);
         self.gamepad.note_press(input, command);
+        self.touch.note_press(input, command);
     }
 
     /// What the press of the device input `input` presses, repeats or
@@ -351,6 +372,7 @@ impl Devices {
         self.keyboard
             .press_of(input)
             .or_else(|| self.gamepad.press_of(input))
+            .or_else(|| self.touch.press_of(input))
     }
 
     /// What the press a pad button release `input` ends meant, its layer
@@ -363,10 +385,13 @@ impl Devices {
         self.gamepad.release_of(input)
     }
 
-    /// Whether anything is down: a key or a pad button.
+    /// Whether anything is down: a key, a pad button or a touch control's
+    /// button.
     #[must_use]
     pub fn any_down(&self) -> bool {
-        self.keyboard.down().keys().next().is_some() || self.gamepad.buttons().next().is_some()
+        self.keyboard.down().keys().next().is_some()
+            || self.gamepad.buttons().next().is_some()
+            || self.touch.buttons().next().is_some()
     }
 
     /// The gamepad's state.
@@ -388,10 +413,17 @@ impl Devices {
         self.keyboard.down()
     }
 
-    /// Lets go of everything, the pad's axes centred.
+    /// The touch controls' state.
+    #[must_use]
+    pub const fn touch(&self) -> &TouchDevice {
+        &self.touch
+    }
+
+    /// Lets go of everything, the pad's axes and the touch stick centred.
     pub fn let_go(&mut self) {
         self.keyboard.let_go();
         self.gamepad.let_go();
+        self.touch.let_go();
     }
 }
 

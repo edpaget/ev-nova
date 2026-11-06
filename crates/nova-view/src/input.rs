@@ -6,7 +6,7 @@ mod glyphs;
 mod touch;
 
 pub use glyphs::{pad_axis_name, pad_button_name};
-pub use touch::{FingerId, Pinch, Touch, TouchPhase};
+pub use touch::{FingerId, Pinch, Touch, TouchControl, TouchPhase};
 
 /// A physical key, by its position: `keyboard_types`' `Code`, which names
 /// each key for what it types on a US keyboard. `Key::KeyW` is the key
@@ -589,6 +589,11 @@ pub enum Input {
     /// Two free fingers pinched ([`crate::touch`]). Only the galaxy map
     /// acts on it, zooming in its own steps; every other screen ignores it.
     Pinch(Pinch),
+    /// Flight's on-screen touch controls pressed or let go of a command,
+    /// or moved their stick: a device of its own, which the keymap reads
+    /// beside the keyboard and the pad. Every screen but flight ignores
+    /// it, as it ignores a key it has no use for.
+    TouchControl(TouchControl),
 }
 
 impl Input {
@@ -623,27 +628,39 @@ impl Input {
             | Self::PointerLeft
             | Self::PadButton { .. }
             | Self::PadAxis { .. }
-            | Self::Surroundings(_) => self,
+            | Self::Surroundings(_)
+            | Self::TouchControl(_) => self,
         }
     }
 
     /// Whether `self` and `other` are both a key's press, repeat or
-    /// release, of one key, or both a pad button's press or release, of
-    /// one button.
+    /// release, of one key, both a pad button's press or release, of one
+    /// button, or both a touch control's press or release, of one
+    /// command.
     #[must_use]
     pub fn same_key(&self, other: &Self) -> bool {
         match (*self, *other) {
             (Self::Key { key: a, .. }, Self::Key { key: b, .. }) => a == b,
             (Self::PadButton { button: a, .. }, Self::PadButton { button: b, .. }) => a == b,
+            (
+                Self::TouchControl(TouchControl::Button { command: a, .. }),
+                Self::TouchControl(TouchControl::Button { command: b, .. }),
+            ) => a == b,
             _ => false,
         }
     }
 
-    /// The release of the key or pad button `self` presses, repeats or
-    /// releases; any other input as it is.
+    /// The release of the key, pad button or touch control button `self`
+    /// presses, repeats or releases; any other input as it is.
     #[must_use]
     pub const fn released(self) -> Self {
         match self {
+            Self::TouchControl(TouchControl::Button { command, .. }) => {
+                Self::TouchControl(TouchControl::Button {
+                    command,
+                    pressed: false,
+                })
+            }
             Self::Key { key, .. } => Self::Key {
                 key,
                 pressed: false,
@@ -803,6 +820,37 @@ mod tests {
             told
         );
         assert_ne!(Surroundings::of(Device::Mouse), told);
+    }
+
+    fn button(command: crate::keymap::Command, pressed: bool) -> Input {
+        Input::TouchControl(TouchControl::Button { command, pressed })
+    }
+
+    #[test]
+    fn a_touch_control_button_is_its_own_key_and_releases_to_itself_up() {
+        use crate::keymap::command::{FlightCommand, PlayCommand};
+        let fire = FlightCommand::FirePrimary.into();
+        let map = PlayCommand::GalaxyMap.into();
+        assert!(button(fire, true).same_key(&button(fire, false)));
+        assert!(!button(fire, true).same_key(&button(map, true)));
+        assert!(!button(fire, true).same_key(&key_input(Key::Space, true, false)));
+        assert_eq!(button(fire, true).released(), button(fire, false));
+        assert_eq!(button(fire, false).released(), button(fire, false));
+        let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
+        assert!(!stick.same_key(&stick));
+        assert_eq!(stick.released(), stick);
+    }
+
+    #[test]
+    fn a_touch_control_is_not_translated() {
+        let by = Point::new(-170.0, 2.0);
+        let fire = button(
+            crate::keymap::command::FlightCommand::FirePrimary.into(),
+            true,
+        );
+        assert_eq!(fire.translated(by), fire);
+        let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
+        assert_eq!(stick.translated(by), stick);
     }
 
     #[test]

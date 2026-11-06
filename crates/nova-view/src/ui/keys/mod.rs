@@ -752,6 +752,7 @@ impl Screen for KeysScreen {
             | Input::PadAxis { .. }
             | Input::Touch(_)
             | Input::Pinch(_)
+            | Input::TouchControl(_)
             | Input::Scroll { .. } => {}
         }
         ScreenAction::None
