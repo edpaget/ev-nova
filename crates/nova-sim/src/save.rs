@@ -213,8 +213,8 @@
 //! `female`. Strict Play (`strict_play`) is `true` or `false`. The system last jumped from (`jumped_from`) is its `sÿst` ID, or `null` before the first jump. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
-//! (`offers`, `mission_ships`, `missions`, `crons`, `nebulae`, `plugins`
-//! or `fixture`), record and hook (`{"consumer": "missions", "record": 3,
+//! (`offers`, `mission_ships`, `missions`, `storylines`, `crons`,
+//! `nebulae`, `plugins` or `fixture`), record and hook (`{"consumer": "missions", "record": 3,
 //! "hook": 1}`), listed by consumer, record and hook. The galaxy overlay
 //! (`galaxy`) is three lists, each by ascending ID: `systems`, each its
 //! `sÿst` ID, whether it is `visible` and its `govt`; `stellars`, each its
@@ -592,6 +592,7 @@ enum SavedConsumer {
     Offers,
     MissionShips,
     Missions,
+    Storylines,
     Crons,
     Nebulae,
     Plugins,
@@ -604,6 +605,7 @@ impl From<Consumer> for SavedConsumer {
             Consumer::Offers => Self::Offers,
             Consumer::MissionShips => Self::MissionShips,
             Consumer::Missions => Self::Missions,
+            Consumer::Storylines => Self::Storylines,
             Consumer::Crons => Self::Crons,
             Consumer::Nebulae => Self::Nebulae,
             Consumer::Plugins => Self::Plugins,
@@ -618,6 +620,7 @@ impl From<SavedConsumer> for Consumer {
             SavedConsumer::Offers => Self::Offers,
             SavedConsumer::MissionShips => Self::MissionShips,
             SavedConsumer::Missions => Self::Missions,
+            SavedConsumer::Storylines => Self::Storylines,
             SavedConsumer::Crons => Self::Crons,
             SavedConsumer::Nebulae => Self::Nebulae,
             SavedConsumer::Plugins => Self::Plugins,
@@ -2117,6 +2120,7 @@ mod tests {
             fired(Consumer::MissionShips, 15, 2),
             fired(Consumer::Missions, 3, 0),
             fired(Consumer::Crons, -5, 9),
+            fired(Consumer::Storylines, 0, 1),
             fired(Consumer::Nebulae, 200, 0),
             fired(Consumer::Fixture, 1, 255),
         ])
@@ -2301,6 +2305,7 @@ mod tests {
                 {"consumer": "mission_ships", "record": 15, "hook": 2},
                 {"consumer": "missions", "record": 3, "hook": 0},
                 {"consumer": "missions", "record": 3, "hook": 1},
+                {"consumer": "storylines", "record": 0, "hook": 1},
                 {"consumer": "crons", "record": -5, "hook": 9},
                 {"consumer": "nebulae", "record": 200, "hook": 0},
                 {"consumer": "plugins", "record": 128, "hook": 0},

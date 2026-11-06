@@ -1,6 +1,6 @@
 //! [`Session::apply`]'s conversation arm: [`FlightCommand::Converse`],
-//! answered with the landed stellar's conversation page (see the
-//! session's `conversation` module).
+//! answered with the landed visit's conversation page (see the session's
+//! `conversation` and `storylines` modules).
 //!
 //! [`FlightCommand::Converse`]: crate::flight_frame::FlightCommand::Converse
 
@@ -9,24 +9,28 @@ use crate::flight_frame::{Answer, Converse};
 use crate::session::Session;
 
 impl Session {
-    /// Runs `converse` on the landed stellar's conversation, and answers
-    /// it:
+    /// Runs `converse` on the landed visit's conversation, and answers it:
     ///
-    /// - [`Converse::Open`] opens it at its knot, with the pilot's state of
+    /// - [`Converse::Open`] opens the next scene the visit has for the
+    ///   landed stellar (a completion due, an offer, then its own
+    ///   conversation, each once), at its knot, with the pilot's state of
     ///   its Ink file and its flags: [`Answer::Conversation`] with its
-    ///   first page, or [`Answer::Refused`] in flight or where the stellar
-    ///   names none.
+    ///   first page, or [`Answer::Refused`] in flight or with none left
+    ///   (see the `storylines` module).
     /// - [`Converse::Choose`] takes a choice, keeping the story's state in
-    ///   the pilot: [`Answer::Conversation`] with the next page, or [`Answer::Refused`] with none open, on an ended
+    ///   the pilot, and decides an offer by the outcome its page reached,
+    ///   against the room left in the hold: [`Answer::Conversation`] with
+    ///   the next page, or [`Answer::Refused`] with none open, on an ended
     ///   page or past its choices.
     /// - [`Converse::Close`] closes it: [`Answer::Done`], or
     ///   [`Answer::Refused`] with none open.
     pub(super) fn apply_conversation(&mut self, converse: Converse) -> Answer {
         let landed = self.mode.landed();
+        let room = self.ship.free_cargo(&self.pilot);
         let page = match converse {
             Converse::Open => {
                 self.port
-                    .open_conversation(&self.statics, &self.setup, &mut self.pilot, landed)
+                    .open_next_scene(&self.statics, &self.setup, &mut self.pilot, landed, room)
             }
             Converse::Choose(index) => self.port.choose_in_conversation(
                 &self.statics,
@@ -34,6 +38,7 @@ impl Session {
                 &mut self.pilot,
                 landed,
                 index,
+                room,
             ),
             Converse::Close => return done_if(self.port.close_conversation()),
         };
@@ -188,11 +193,25 @@ mod tests {
         assert_eq!(converse(&mut session, Converse::Close), Answer::Refused);
     }
 
+    /// Takes off from planet 128 and lands there again: a new visit.
+    fn visit_again(session: &mut Session) {
+        assert_eq!(
+            session.take_off(&talking(), &mut NeverFires),
+            Some(StellarId(128))
+        );
+        assert_eq!(land_now(session), Ok(StellarId(128)));
+    }
+
+    /// A visit shows each of its scenes once, the stellar's own included
+    /// (see the `storylines` module), so a second `Open` in one visit is
+    /// refused; the next visit opens it again, from its knot.
     #[test]
-    fn opening_again_starts_from_the_knot() {
+    fn a_second_open_in_one_visit_is_refused_and_the_next_starts_from_the_knot() {
         let mut session = landed(&loader());
         converse(&mut session, Converse::Open);
         converse(&mut session, Converse::Choose(0));
+        assert_eq!(converse(&mut session, Converse::Open), Answer::Refused);
+        visit_again(&mut session);
         assert_eq!(
             converse(&mut session, Converse::Open),
             page(&["A job?"], &["Ask", "Leave"], false)
@@ -288,6 +307,8 @@ mod tests {
             page(&["A job?"], &["Ask", "Leave"], false)
         );
         session.pilot.flags.set("regular");
+        // The stellar's own conversation shows once a visit.
+        visit_again(&mut session);
         assert_eq!(
             converse(&mut session, Converse::Open),
             page(&["You again.", "A job?"], &["Ask", "Leave"], false)
@@ -317,6 +338,8 @@ mod tests {
             .with_dialog_loader(Rc::new(loader.clone()));
         let landed_again = land_now(&mut resumed).map(|_| converse(&mut resumed, Converse::Open));
 
+        // The stellar's own conversation shows once a visit.
+        visit_again(&mut session);
         let again = converse(&mut session, Converse::Open);
         assert_eq!(again, page(&["A job?"], &["Leave"], false));
         assert_eq!(landed_again, Ok(again));

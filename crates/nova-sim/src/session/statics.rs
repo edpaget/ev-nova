@@ -141,6 +141,10 @@ pub(super) struct Statics {
     /// compiled story and the knot a landed pilot's conversation enters
     /// (see the `conversation` module). None in the stock game.
     pub(super) stellar_dialogs: nova_sim_catalog::dialogs::StellarDialogs,
+    /// The new game's missions, news and jump points, with their
+    /// conversations' stories, read when the session starts (see the
+    /// `storylines` module). None in the stock game.
+    pub(super) storylines: nova_sim_catalog::storylines::Storylines,
 }
 
 impl Statics {

@@ -1,11 +1,16 @@
-//! The landed stellar's conversation: opened as the spaceport opens, a
-//! choice at a time, until the player closes it or takes off.
+//! The landed visit's conversations: each opened in turn as the spaceport
+//! opens and after each closes, a choice at a time, until the player
+//! closes it or takes off.
 //!
 //! The new game names a conversation on a stellar (the catalog's
-//! `stellar_dialogs`, kept on [`Statics`]). The view opens it with
+//! `stellar_dialogs`, kept on [`Statics`]), and on each mission's offer
+//! and completion (its `storylines`). The view opens the next one with
 //! [`Converse::Open`](crate::flight_frame::Converse::Open) once it has
-//! landed, sends each choice the player takes, and closes it when the
-//! story has ended (see the `apply/conversation` module). The session
+//! landed, and again after each closes: completions due, then offers,
+//! then the stellar's own, each once a visit, and refused once none is
+//! left (see the `storylines` module, which also reads an offer's
+//! outcome). It sends each choice the player takes, and closes it when
+//! the story has ended (see the `apply/conversation` module). The session
 //! keeps the open one on the [`Port`] as a plain value
 //! ([`Conversation`]), its story saved between choices and opened again
 //! for each through the dialog port the game wires
@@ -20,7 +25,9 @@
 //! [`conversation`](crate::dialog::conversation)). Leaving and landing
 //! again opens the conversation at its knot once more, but with the file's
 //! read counts and spent choices kept, and they go into the pilot's save.
-//! The stock game names no conversations, so nothing here runs for it.
+//! A mission's scenes are played the same way, keyed by their own Ink
+//! file, so they share its state with every other scene of that file. The
+//! stock game names no conversations, so nothing here runs for it.
 
 use std::fmt;
 use std::rc::Rc;
@@ -29,7 +36,9 @@ use crate::catalog::StellarId;
 use crate::dialog::conversation::{Conversation, ConversationPage, DialogFile};
 use crate::dialog::{Dialog, DialogError, DialogLoader};
 use crate::pilot::Pilot;
+use crate::storylines::lifecycle::Scene;
 
+use super::storylines::{scene_place, settle_outcome};
 use super::{Port, Session, Setup, Statics};
 
 /// The dialog port a session keeps, shared: equal to another when it is
@@ -60,57 +69,46 @@ impl DialogLoader for NoLoader {
     }
 }
 
-/// The conversation open at a stellar: where, and how far it has played.
+/// The conversation open at a stellar: where, which scene, how far it has
+/// played, and whether its offer has been decided.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct OpenConversation {
     stellar: StellarId,
-    conversation: Conversation,
+    /// The scene it plays: the stellar's own, or a mission's offer or
+    /// completion.
+    pub(super) scene: Scene,
+    pub(super) conversation: Conversation,
+    /// Whether its page has reached an outcome, which decided its offer
+    /// (see the `storylines` module).
+    pub(super) decided: bool,
+}
+
+impl OpenConversation {
+    /// `conversation`, of `scene`, just opened at `stellar`, undecided.
+    pub(super) fn new(stellar: StellarId, scene: Scene, conversation: Conversation) -> Self {
+        Self {
+            stellar,
+            scene,
+            conversation,
+            decided: false,
+        }
+    }
 }
 
 impl Setup {
     /// The loader the game wired, or one that opens nothing.
-    fn dialog_loader(&self) -> &dyn DialogLoader {
+    pub(super) fn dialog_loader(&self) -> &dyn DialogLoader {
         self.dialogs.as_ref().map_or(&NoLoader, |loader| &*loader.0)
     }
 }
 
 impl Port {
-    /// Opens the conversation of `landed`, the stellar the ship is landed
-    /// at, from its knot, replacing any open one, with `pilot`'s state of
-    /// its file and its flags: its first page, or `None` in flight or
-    /// where the stellar names none.
-    pub(super) fn open_conversation(
-        &mut self,
-        statics: &Statics,
-        setup: &Setup,
-        pilot: &mut Pilot,
-        landed: Option<StellarId>,
-    ) -> Option<ConversationPage> {
-        let stellar = landed?;
-        let at = statics.stellar_dialogs.place(stellar)?;
-        let story = DialogFile {
-            file: at.file,
-            compiled: at.compiled,
-        };
-        let conversation = Conversation::open(
-            setup.dialog_loader(),
-            story,
-            at.knot,
-            &mut pilot.dialogs,
-            &pilot.flags,
-        );
-        let page = conversation.page().clone();
-        self.conversation = Some(OpenConversation {
-            stellar,
-            conversation,
-        });
-        Some(page)
-    }
-
     /// Takes the choice at `index` on the open conversation's page,
-    /// keeping the new page's state in `pilot`: the next page, or `None`
-    /// with none open at `landed`, on an ended page, or past its choices,
-    /// which changes nothing.
+    /// keeping the new page's state in `pilot`, then decides its offer by
+    /// the outcome reached, against `room` tons free (see the
+    /// `storylines` module): the next page, or `None` with none open at
+    /// `landed`, on an ended page, or past its choices, which changes
+    /// nothing.
     pub(super) fn choose_in_conversation(
         &mut self,
         statics: &Statics,
@@ -118,12 +116,13 @@ impl Port {
         pilot: &mut Pilot,
         landed: Option<StellarId>,
         index: usize,
+        room: i64,
     ) -> Option<ConversationPage> {
         let open = self
             .conversation
             .as_mut()
             .filter(|open| Some(open.stellar) == landed)?;
-        let at = statics.stellar_dialogs.place(open.stellar)?;
+        let at = scene_place(statics, &open.scene)?;
         let story = DialogFile {
             file: at.file,
             compiled: at.compiled,
@@ -131,6 +130,7 @@ impl Port {
         open.conversation
             .choose(setup.dialog_loader(), story, &mut pilot.dialogs, index)
             .ok()?;
+        settle_outcome(open, statics, pilot, room);
         Some(open.conversation.page().clone())
     }
 

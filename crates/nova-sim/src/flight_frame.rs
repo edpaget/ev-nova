@@ -1150,8 +1150,10 @@ pub enum FlightCommand {
 /// conversation (see the `nova_sim_story::dialog::conversation` module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Converse {
-    /// Opens the conversation the landed stellar names, from its knot:
-    /// refused in flight, or where the stellar names none.
+    /// Opens the next conversation the landed stellar has for this visit,
+    /// from its knot: a mission's completion due there, then an offer
+    /// that holds there, then the stellar's own, each once a visit.
+    /// Refused in flight, or with none left.
     Open,
     /// Takes the choice at this index on the open page: refused with no
     /// conversation open, on an ended page, or past its choices.

@@ -5,6 +5,7 @@
 //! from, the bar's race (its last winner and the winnings due), and the
 //! port's own `dësc` (see the `port_desc` module), and the landed
 //! stellar's conversation, while it is open (see the `conversation`
+//! module), and the scenes the visit has shown (see the `storylines`
 //! module). Landing and taking off themselves (`land`, `dock`, `take_off`)
 //! coordinate the rest and stay on `Session`.
 
@@ -128,6 +129,9 @@ pub(super) struct Port {
     /// `conversation` module): opened by the view as the spaceport opens,
     /// closed by it or by the take-off. Not saved.
     pub(super) conversation: Option<super::conversation::OpenConversation>,
+    /// The conversations this visit has shown, each once (see the
+    /// `storylines` module): forgotten at take-off. Not saved.
+    pub(super) scenes_shown: BTreeSet<crate::storylines::lifecycle::Scene>,
 }
 
 /// Where the port's own `dësc` stands (see the `port_desc` module).
@@ -177,6 +181,7 @@ impl Port {
             winnings_due: 0,
             own_desc: OwnDesc::None,
             conversation: None,
+            scenes_shown: BTreeSet::new(),
         }
     }
 
