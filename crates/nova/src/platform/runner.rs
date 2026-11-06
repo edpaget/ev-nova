@@ -7,7 +7,7 @@
 //! quit and Preferences events the system sends (the Dock's Quit, logout,
 //! restart, shutdown, `osascript`'s `quit app`, and Sparkle's quit to
 //! install an update), comes back through the event loop as a
-//! [`LoopEvent::Menu`], which the app takes as
+//! [`LoopEvent::Menu`](crate::app::LoopEvent::Menu), which the app takes as
 //! [`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`], and after
 //! every event the menu bar is told what the app now offers (`MenuSync`).
 //! The quit event is the menu's Quit, so it quits as Command-Q does,
@@ -22,11 +22,13 @@
 //!
 //! WinSparkle asks the game to quit, before its installer replaces
 //! `nova.exe`, from a thread of its own: the request comes back through
-//! the event loop as [`LoopEvent::UpdaterQuit`], which the app takes on the
-//! main thread as the Quit command.
+//! the event loop as
+//! [`LoopEvent::UpdaterQuit`](crate::app::LoopEvent::UpdaterQuit), which
+//! the app takes on the main thread as the Quit command.
 //!
-//! Every [`LoopEvent`] comes through the loop events' channel
-//! (`platform::loop_sender`), as winit 0.31's proxy only wakes the loop:
+//! Every [`LoopEvent`](crate::app::LoopEvent) comes through the loop
+//! events' channel (`platform::loop_sender`), as winit 0.31's proxy only
+//! wakes the loop:
 //! the runner drains it in `proxy_wake_up`, and again in `about_to_wait`,
 //! since Windows can lose a wake-up (winit#3687).
 //!
