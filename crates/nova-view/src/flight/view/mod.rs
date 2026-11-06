@@ -631,9 +631,13 @@
 //! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
 //! slot, a new message replacing the old and its time, in the rect
 //! `_InitSprites` sets up ([`hud::message_box`](super::hud::message_box)), wrapped, in the system
-//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). It is drawn over the
-//! starfield and under everything else, as the original draws it on the
-//! sprite world's background. Each message stays for as many ticks of
+//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). Its box is erased
+//! over the starfield, under every sprite, as `_DisplayComm` erases it and
+//! draws the text into the sprite world's background frame
+//! (@0x90294-0x902f5). Its text is drawn with the floaters, over the
+//! sprites and under the particles, as `_FloaterDrawCallback` blits the
+//! background frame's `_commRect` over the work frame each frame
+//! (@0x38b52-0x38b90). Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
 //! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim::CommNote::ticks),
 //! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
@@ -664,8 +668,13 @@
 //! among the world's commands. Drawn at the window's resolution the
 //! layers change nothing, as each command is drawn in the list's order.
 //! Under a frame upscaler, which draws the world first and the overlay
-//! over it, the message line would show over the ships, where the
-//! original has it under them.
+//! over it, the message line's box stays in the world under the sprites
+//! and its text draws over the ships, as in the original, but over the
+//! particles too, where the original has it under them
+//! (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled).
+//! A placeholder's reason draws over the world on purpose: it is the
+//! engine's own diagnostic, with no counterpart in the original, and is
+//! there to be read.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};

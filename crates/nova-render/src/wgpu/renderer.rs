@@ -1162,7 +1162,10 @@ impl Scissors {
 /// the world here, where natively the world draws over it; and a second
 /// world run after an overlay run is drawn with the first, under that
 /// overlay. This differs from native on purpose. It remains for text
-/// among flight's world, such as the message line. A dialog's map doesn't
+/// among flight's world: the floaters' text, the message line's included,
+/// draws over the particles under a texture world
+/// (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled),
+/// and a placeholder's reason over the world, on purpose. A dialog's map doesn't
 /// meet it: flight's scene comes first, under the dialogs and the map
 /// (rdm:phase/play-feel-7/phase-2-paused-flight-under-mission-dialogs).
 /// Text is never world (the batcher keeps it in the overlay), so it is

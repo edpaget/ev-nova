@@ -457,7 +457,8 @@ impl DrawList {
     /// [`DrawLayer::World`], except text, which stays in the overlay. Text
     /// is drawn at the window's own resolution, so a world drawn at the
     /// logical resolution never holds it, even text drawn among the world's
-    /// sprites (flight's message line, a placeholder's reason).
+    /// sprites (flight's floaters' text, the message line's included, and a
+    /// placeholder's reason).
     pub fn world(&mut self, draw: impl FnOnce(&mut Self)) -> &mut Self {
         let start = self.commands.len();
         draw(self);
