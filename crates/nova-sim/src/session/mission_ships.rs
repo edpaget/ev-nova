@@ -344,7 +344,11 @@ impl Session {
             &record.ships,
             record.flags,
             &facts,
-            (self.chart.galaxy.map(), &self.statics.govts),
+            (
+                self.chart.galaxy.map(),
+                &self.statics.govts,
+                RuleSource::Engine,
+            ),
             self.strings(),
             &mut draw_type,
             chance,
