@@ -81,13 +81,6 @@ pub(crate) trait PadProbe {
         vec![pointer(true, at), pointer(false, at)]
     }
 
-    /// The control a tap on which does what Escape does, where
-    /// [`escape_s_way_out_is_also_a_tap`]'s search of [`Self::controls`]
-    /// can't see it; `None` to search them.
-    fn exit_control(&self) -> Option<(&'static str, Bounds)> {
-        None
-    }
-
     /// What the screen's touch aids (`ui::touch_aids`) draw now, which a
     /// safe-area change legitimately moves and touch legitimately shows:
     /// the tests that compare drawings across those leave them out.
@@ -523,9 +516,8 @@ fn tapped_at(build: fn() -> Box<dyn PadProbe>, at: Point) -> Run {
 }
 
 /// Every screen Escape leaves (or acts on) can be left by a tap too: when
-/// Escape changes a fresh build's result, a tap on one of its controls (or
-/// the row's [`PadProbe::exit_control`]) gives that same result. A row
-/// with no such control is a screen a pointer can't leave, and needs a
+/// Escape changes a fresh build's result, a tap on one of its controls
+/// gives that same result. A row with no such control is a screen a pointer can't leave, and needs a
 /// touch way out (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
 #[test]
 fn escape_s_way_out_is_also_a_tap() {
@@ -535,11 +527,7 @@ fn escape_s_way_out_is_also_a_tap() {
         if escaped == Run::new(build).result() {
             continue;
         }
-        let probe = build();
-        let candidates = probe
-            .exit_control()
-            .map_or_else(|| probe.controls(), |exit| vec![exit]);
-        let tapped = candidates.iter().find(|&&(name, rect)| {
+        let tapped = build().controls().into_iter().find(|&(name, rect)| {
             tapped_at(build, click_point(build, name, rect)).result() == escaped
         });
         assert!(
