@@ -323,7 +323,7 @@ impl Space {
         })
     }
 
-    /// [`Session::counted_sheet`] for `site`, one of the stellars shown,
+    /// `Session::counted_sheet` for `site`, one of the stellars shown,
     /// by [`RuleKey::StellarFrameCount`]: by the Bible the sheet it draws,
     /// by the engine the one its slot held at the last rebuild point.
     pub(super) fn counted_sheet_by_rules(

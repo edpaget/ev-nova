@@ -63,7 +63,7 @@
 //! distance reads ([`Session::land`], by
 //! [`RuleKey::LandingDistance`]; "Built by phase 10"), and the sheet whose
 //! frame count each stellar shown animates over
-//! ([`Session::counted_sheet`], by [`RuleKey::StellarFrameCount`];
+//! (`Session::counted_sheet`, by [`RuleKey::StellarFrameCount`];
 //! "Built by stellar-fidelity phase 1"), and the sheet each slot holds,
 //! which a stellar showing no sheet that can be read draws
 //! ([`Session::drawn_sheet`], by [`RuleKey::DeadTypeFallback`] and
@@ -71,7 +71,7 @@
 //! and, for a shown graphic whose `spïn` counts no frames, the slot left
 //! with no frame or the frame it kept, frozen, and the stellars that count
 //! none ([`Session::drawn_sheet`], [`Session::frame_frozen`],
-//! [`Session::counts_no_frames`], by [`RuleKey::UncountedSheet`]; "Built
+//! `Session::counts_no_frames`, by [`RuleKey::UncountedSheet`]; "Built
 //! by stellar-fidelity phase 8").
 //! Each point rebuilds after the transition's own writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
@@ -272,6 +272,10 @@ impl Session {
     /// count of none from its slot (@0x331c6-0x331c9), so it never
     /// animates (`_HandleStellarSprites` @0x2e802), even when a later
     /// clone brings counting frames into the slot.
+    ///
+    /// For the tests: the sprite tick reads `Space`'s (see the
+    /// `stellar_frames` module).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn counts_no_frames(&self, stellar: StellarId) -> bool {
         self.space.counts_no_frames(&self.setup, stellar)
@@ -286,6 +290,10 @@ impl Session {
     /// [`RuleKey::TypeSheetFallback`]'s other reading or with a `Type`
     /// sheet); by the Bible, the sheet it draws
     /// ([`Session::drawn_sheet`]). Its `Type` for a stellar not shown.
+    ///
+    /// For the tests: the sprite tick reads `Space`'s (see the
+    /// `stellar_frames` module).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
         self.chart
@@ -641,7 +649,7 @@ impl Space {
             && self.rebuilt.frozen(stellar)
     }
 
-    /// [`Session::counts_no_frames`].
+    /// `Session::counts_no_frames`.
     pub(super) fn counts_no_frames(&self, setup: &Setup, stellar: StellarId) -> bool {
         let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
         engine(RuleKey::UncountedSheet)
@@ -649,7 +657,7 @@ impl Space {
             && self.rebuilt.still(stellar)
     }
 
-    /// [`Session::counted_sheet`] by [`RuleKey::StellarFrameCount`]'s
+    /// `Session::counted_sheet` by [`RuleKey::StellarFrameCount`]'s
     /// engine reading: the sheet `site`'s sprite slot held at the last
     /// rebuild point, graphic type 0's read as its `Type` unless `site`
     /// may draw graphic type 0 under the current rules (by the engine's

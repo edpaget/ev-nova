@@ -97,8 +97,6 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
-                // The session steps every stellar in each pass itself.
-                FlightEvent::StellarPass(_) => {}
             }
         }
     }

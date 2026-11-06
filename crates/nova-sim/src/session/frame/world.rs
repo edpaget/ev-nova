@@ -114,10 +114,7 @@ impl Session {
                     shown,
                     destroyed: self.galaxy().destroyed(id),
                     drawn: self.drawn_sheet(id),
-                    counted: self.counted_sheet(id),
                     frozen: self.frame_frozen(id),
-                    counts_none: self.counts_no_frames(id),
-                    gate_frame: self.gate_frame(id),
                     frame: self.stellar_frame(id),
                 }),
         );

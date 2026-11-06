@@ -50,7 +50,6 @@ use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
-use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
@@ -1589,9 +1588,6 @@ pub enum FlightEvent {
     RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
-    /// A stellar pass run outside a play frame, for the view to replay on
-    /// its scene before the next frame is drawn.
-    StellarPass(StellarPass),
 }
 
 /// What a frame's fixed steps are given
@@ -2179,19 +2175,9 @@ pub struct FrameStellar {
     /// The sheet it draws
     /// (`Session::drawn_sheet`).
     pub drawn: DrawnSheet,
-    /// The sheet whose frame count it animates over
-    /// (`Session::counted_sheet`).
-    pub counted: DrawnSheet,
     /// Whether its frame is frozen
     /// (`Session::frame_frozen`).
     pub frozen: bool,
-    /// Whether it animates over no frames
-    /// (`Session::counts_no_frames`).
-    pub counts_none: bool,
-    /// The frame it draws as a hypergate, or `None` for one that isn't
-    /// one or isn't shown
-    /// (`Session::gate_frame`).
-    pub gate_frame: Option<u16>,
     /// The frame of the sheet it draws that its slot shows, as its
     /// session steps it at each pass's sprite tick
     /// (`Session::stellar_frame`); 0 for one not shown.
@@ -2586,10 +2572,7 @@ mod tests {
             shown,
             destroyed: false,
             drawn: DrawnSheet::Type,
-            counted: DrawnSheet::Type,
             frozen: false,
-            counts_none: false,
-            gate_frame: None,
             frame: 0,
         };
         let frame = FlightFrame {

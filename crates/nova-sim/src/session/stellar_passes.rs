@@ -8,9 +8,9 @@
 //! `_dockPermission` and the ship table as each site leaves them, and it
 //! plays no sound. Only the gain and the callers' state differ.
 //!
-//! [`Session::stellar_pass`] steps every gate shown by the session's gain
-//! and raises the pass ([`StellarPass`]), which the view replays on its
-//! scene before the next frame is drawn. The streams:
+//! [`Session::stellar_pass`] steps every stellar shown, gates included,
+//! by the session's gain (see the `stellar_frames` module): the view
+//! replays nothing, drawing the frame the session reports. The streams:
 //!
 //! | Way in | Passes |
 //! |---|---|
@@ -42,17 +42,18 @@
 //! [`Session::enter_game`], not from the load or the new pilot's begin.
 //! Its third pass is `_PlayGame`'s (@0x45834), after the setup, whose
 //! ships can hold a gate. On a first entry the engine sets them up in the
-//! first step (`Space::traffic_due`), so the pass is raised for the view
-//! at entry and the gates take its step after that setup
-//! (`Session::traffic_think`, [`Session::take_entry_gate_pass`]). The
-//! warm-up frame before it is drawn under the entry's black and shows no
-//! ship either, so nothing the player sees crosses.
+//! first step (`Space::traffic_due`), so the stellars and the gates take
+//! the third pass's step after that setup (`Session::traffic_think`,
+//! [`Session::take_entry_gate_pass`]). The warm-up frame before it is
+//! drawn under the entry's black and shows no ship either, so nothing the
+//! player sees crosses.
 //!
 //! **Left out**, each recorded in
 //! rdm:phase/play-feel-7/phase-3-prepare-all-sprites-steps-stellar-animation:
 //!
-//! - the slot plumbing (@0x2e744-0x2e7e5, @0x2ee35-0x2ef1a), which the view
-//!   draws every frame;
+//! - the slot plumbing (@0x2e744-0x2e7e5, @0x2ee35-0x2ef1a): the clone and
+//!   the placement, which the play frame's sprite tick runs
+//!   (`Session::see_stellars`) and these passes don't;
 //! - the stellar step of the two frozen `_DoPlayGameWork(1)` passes
 //!   (@0x1a38a, @0x4580c),
 //!   rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes.
@@ -86,9 +87,10 @@ pub(super) enum GateHolds {
 }
 
 impl Session {
-    /// Runs a pass of `kind` on every gate shown, at the session's gain as
-    /// it stands (see the `time_adjustment` module), held as `holds` says,
-    /// its random picks drawn on `chance`, and raises it for the view.
+    /// Runs a pass of `kind` on every stellar shown, gates included, at
+    /// the session's gain as it stands (see the `time_adjustment`
+    /// module), gates held as `holds` says, its random picks drawn on
+    /// `chance` (see the `stellar_frames` module).
     pub(super) fn stellar_pass(
         &mut self,
         kind: PassKind,
@@ -97,6 +99,7 @@ impl Session {
     ) {
         let pass = self.pass_of(kind);
         self.step_stellars_by(pass.gain(), holds, chance);
+        #[cfg(test)]
         self.out.stellar_passes.push(pass);
     }
 
@@ -109,23 +112,26 @@ impl Session {
         }
     }
 
-    /// The stellar passes raised since they were last taken, in order;
+    /// The stellar passes run since the tests last took them, in order;
     /// taking them empties the list.
+    #[cfg(test)]
     pub(crate) fn take_stellar_passes(&mut self) -> Vec<StellarPass> {
         std::mem::take(&mut self.out.stellar_passes)
     }
 
     /// Game entry's three passes (see the module docs), at the gain entry
     /// set: the first two now, and the third now only with the ships in
-    /// place. Otherwise it is raised now, for the view, and the gates' step
-    /// at its gain is owed to the first step's setup: the warm-up frame
-    /// before it shows neither the ships nor the gate's change, under the
-    /// entry's black.
+    /// place. Otherwise the whole of the third pass at its gain, every
+    /// stellar's step and the gates', is owed to the first step's setup:
+    /// the warm-up frame before it shows neither the ships nor the
+    /// stellars' change, under the entry's black, so nothing the player
+    /// sees crosses.
     pub(super) fn enter_game_passes(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         if self.space.traffic_due {
             let pass = self.pass_of(PassKind::Ticked);
+            #[cfg(test)]
             self.out.stellar_passes.push(pass);
             self.space.entry_gate_pass_owed = Some(pass.gain());
         } else {
@@ -133,9 +139,9 @@ impl Session {
         }
     }
 
-    /// Takes the gates' step of game entry's third pass at its gain, if it
-    /// is owed ([`Session::enter_game_passes`]), once the system's ships
-    /// are set up: the view has its pass already.
+    /// Takes game entry's third pass at its gain, every stellar shown and
+    /// the gates, if it is owed ([`Session::enter_game_passes`]), once the
+    /// system's ships are set up.
     pub(super) fn take_entry_gate_pass(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if let Some(gain) = self.space.entry_gate_pass_owed.take() {
             self.step_stellars_by(gain, GateHolds::AsTheyStand, chance);
@@ -277,6 +283,41 @@ mod tests {
             stepped(GateSprite::exit_gate(&exit), &exit, 2),
             "opened after the entry's pass"
         );
+    }
+
+    #[test]
+    fn a_hypergate_exit_steps_every_other_stellar_by_each_pass_around_the_reset() {
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        // A planet of 131 of 4 frames stepping every pass.
+        let mut catalog = gate_exits();
+        let planet = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 4,
+                type_sheet_frames: 4,
+                ..SiteAnimation::default()
+            },
+            ..planet(312, -100.0, 200.0)
+        };
+        catalog.sites[1].1.push(planet);
+        let mut session = at_gate(&catalog);
+        let mut oracle = session.space.stellar_frames_afresh;
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        let four = std::num::NonZeroU16::new(4).expect("non-zero");
+        let anim = StellarAnimation::of(&planet);
+        let pass = |frames: &mut StellarFrames| {
+            frames.step_by(SpeedMult::FULL, anim, false, four, four, &mut NeverFires);
+        };
+        // The entry's pass, the reset, then the tail's two.
+        pass(&mut oracle);
+        oracle.take_off_reset();
+        pass(&mut oracle);
+        pass(&mut oracle);
+        assert_eq!(session.space.stellar_frames[&StellarId(312)].frames, oracle);
+        assert_eq!(session.stellar_frame(StellarId(312)), oracle.shown());
     }
 
     #[test]

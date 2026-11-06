@@ -11,6 +11,7 @@ use crate::board::MissionBoardLine;
 use crate::combat::report::Reports;
 use crate::control::ScriptNote;
 use crate::flight_frame::{EscortMenuPass, RaisedLine};
+#[cfg(test)]
 use crate::gate_sprite::StellarPass;
 use crate::grant::Granted;
 use crate::hail::CommNote;
@@ -94,8 +95,11 @@ pub(super) struct Outbox {
     /// ([`Session::take_takeoff_nav`](super::Session::take_takeoff_nav));
     /// never saved.
     pub(super) takeoff_nav: Option<NavMode>,
-    /// The stellar passes run outside a play frame since they were last
-    /// taken, in order (see the `stellar_passes` module); never saved.
+    /// The stellar passes run outside a play frame since the tests last
+    /// took them, in order (see the `stellar_passes` module): what the
+    /// session's tests read the stream by. Nothing outside the session
+    /// takes them: the session steps every stellar in each pass itself.
+    #[cfg(test)]
     pub(super) stellar_passes: Vec<StellarPass>,
     /// The line raised last, what `_DisplayComm`'s one slot holds
     /// (@0x90251), until a step takes it (see the `step` module); never

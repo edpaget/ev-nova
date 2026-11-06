@@ -39,8 +39,12 @@ use crate::gate::HYPERGATE;
 use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
 
 impl Session {
-    /// The frame hypergate `gate` draws, or `None` for a stellar shown
-    /// that is not a hypergate, or one not shown.
+    /// The frame hypergate `gate`'s gate branch shows, or `None` for a
+    /// stellar shown that is not a hypergate, or one not shown. The frame
+    /// its slot draws is [`Session::stellar_frame`]'s.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn gate_frame(&self, gate: StellarId) -> Option<u16> {
         let site = self.chart.gate_site(gate)?;

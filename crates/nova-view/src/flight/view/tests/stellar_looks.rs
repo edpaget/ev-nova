@@ -62,7 +62,6 @@ pub(super) fn looking(id: i16, drawn: DrawnSheet, destroyed: bool) -> FrameStell
     FrameStellar {
         destroyed,
         drawn,
-        counted: drawn,
         ..record::stellar(StellarId(id))
     }
 }
