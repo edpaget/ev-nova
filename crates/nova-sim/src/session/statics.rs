@@ -84,6 +84,10 @@ pub(super) struct Statics {
     /// catalog as the session starts: a slot the rebuild fills with it
     /// shows no frame when it does not (see the `stellars` module).
     pub(super) fallback_counts: bool,
+    /// How many frames graphic type 0's sheet animates over, read from the
+    /// catalog as the session starts: what a slot the rebuild fills with
+    /// it steps over (see the `stellar_frames` module).
+    pub(super) fallback_frames: u16,
     /// Every `mïsn`, read when the session starts.
     pub(super) missions: Vec<MissionRecord>,
     /// The `düde`s of every `mïsn` of `Flags` 0x0800 with a `ShipDude`

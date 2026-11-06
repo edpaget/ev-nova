@@ -14,6 +14,7 @@ use crate::combat::stellar_guns::GunTimer;
 use crate::combat::{Combat, ShipRef, Strike};
 use crate::comm_line::CommLine;
 use crate::gate_sprite::GateSprite;
+use crate::stellar_frames::StellarFrames;
 use crate::story::rebuild::Rebuilt;
 use crate::story::sprite_pool::StellarSpritePool;
 use crate::traffic::Traffic;
@@ -35,6 +36,15 @@ pub(super) struct Space {
     /// the flight has taken off or come out of a gate (see the
     /// `takeoff_frames` module).
     pub(super) gate_sprite_afresh: GateSprite,
+    /// The frames of each stellar the flight has shown, gates included,
+    /// kept while it is not shown, and how its slot looked when they were
+    /// last settled (see the `stellar_frames` module).
+    pub(super) stellar_frames: BTreeMap<StellarId, super::stellar_frames::KeptStellar>,
+    /// The frames a stellar the flight first shows starts with: as the
+    /// launch leaves them, or as the take-off's reset leaves them once the
+    /// flight has taken off or come out of a gate (see the
+    /// `takeoff_frames` module).
+    pub(super) stellar_frames_afresh: StellarFrames,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     pub(super) comm_line: CommLine,
@@ -266,6 +276,8 @@ impl Space {
         Self {
             gate_sprites: BTreeMap::new(),
             gate_sprite_afresh: GateSprite::new(),
+            stellar_frames: BTreeMap::new(),
+            stellar_frames_afresh: StellarFrames::new(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,

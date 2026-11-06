@@ -96,7 +96,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let pass = self.pass_of(kind);
-        self.step_gates_by(pass.gain(), holds, chance);
+        self.step_stellars_by(pass.gain(), holds, chance);
         self.out.stellar_passes.push(pass);
     }
 
@@ -138,7 +138,7 @@ impl Session {
     /// are set up: the view has its pass already.
     pub(super) fn take_entry_gate_pass(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if let Some(gain) = self.space.entry_gate_pass_owed.take() {
-            self.step_gates_by(gain, GateHolds::AsTheyStand, chance);
+            self.step_stellars_by(gain, GateHolds::AsTheyStand, chance);
         }
     }
 }

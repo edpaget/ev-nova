@@ -330,6 +330,7 @@ pub(super) mod tests {
                 frozen: true,
                 counts_none: true,
                 gate_frame: Some(9),
+                frame: 7,
             }],
             radar_stellars: vec![crate::flight_frame::FrameRadarStellar {
                 id: StellarId(999),
@@ -824,6 +825,7 @@ pub(super) mod tests {
             frozen: session.frame_frozen(id),
             counts_none: session.counts_no_frames(id),
             gate_frame: session.gate_frame(id),
+            frame: session.stellar_frame(id),
         }
     }
 

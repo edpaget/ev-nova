@@ -125,9 +125,11 @@
 //! rescue rebuilds too (@0x69135): the engine has none, and whoever builds
 //! it calls the rebuild. Its debug key that explores every system
 //! (@0x6dad1) has no counterpart. The flight frame that drops a stellar
-//! seen whole is the end of the pass's fight in flight
-//! ([`Session::fight_tail`]), after the shots, as the original's sprite
-//! tick (@0x444d2) follows `_CheckShotProximities` (@0x44015).
+//! seen whole is the pass's sprite tick in flight
+//! ([`Session::see_stellars`], at @0x444d2; see the `stellar_frames`
+//! module), after the shots, as it follows `_CheckShotProximities`
+//! (@0x44015), and before the stellar guns, the asteroids, the deadly
+//! touch and the beams.
 
 use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
@@ -217,6 +219,9 @@ impl Session {
             self.setup.rules.source_for(RuleKey::UncountedSheet),
         );
         self.rebuild_sprite_pool();
+        // Each slot set to its stellar's current frame (@0x33096; see the
+        // `stellar_frames` module).
+        self.settle_rebuilt_stellars();
         reshown | rebuilt
     }
 
@@ -283,21 +288,20 @@ impl Session {
     /// ([`Session::drawn_sheet`]). Its `Type` for a stellar not shown.
     #[must_use]
     pub(crate) fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
-        if self.setup.rules.source_for(RuleKey::StellarFrameCount) == RuleSource::Bible {
-            return self.drawn_sheet(stellar);
-        }
         self.chart
             .sites
             .iter()
             .find(|site| site.id == stellar)
             .map_or(DrawnSheet::Type, |site| {
-                self.space.counted_sheet(&self.setup, site)
+                self.space
+                    .counted_sheet_by_rules(&self.statics, &self.setup, site)
             })
     }
 
-    /// A flight frame's sprite tick (see the module docs): every stellar
-    /// it finds whole is no longer dead since the last rebuild point, and
-    /// each owned sprite slot is placed (see the `stale_sprites` module).
+    /// A flight frame's sprite tick's clone and placement (see the module
+    /// docs and the `stellar_frames` module): every stellar it finds whole
+    /// is no longer dead since the last rebuild point, and each owned
+    /// sprite slot is placed (see the `stale_sprites` module).
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.chart.galaxy;
         self.space.rebuilt.frame(
@@ -593,7 +597,12 @@ impl Space {
     /// shows; when it shows none, graphic type 0 when that cannot be read,
     /// the view then drawing the placeholder with that sheet's reason,
     /// and otherwise no frame; and its `Type` by the other reading.
-    fn site_sheet(&self, statics: &Statics, setup: &Setup, site: &LandingSite) -> DrawnSheet {
+    pub(super) fn site_sheet(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+    ) -> DrawnSheet {
         let honours_counts = setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine;
         let showing = self.rebuilt.showing(site.id);
         let readable = if site.destroyed {
@@ -633,7 +642,7 @@ impl Space {
     }
 
     /// [`Session::counts_no_frames`].
-    fn counts_no_frames(&self, setup: &Setup, stellar: StellarId) -> bool {
+    pub(super) fn counts_no_frames(&self, setup: &Setup, stellar: StellarId) -> bool {
         let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
         engine(RuleKey::UncountedSheet)
             && engine(RuleKey::StellarFrameCount)
@@ -646,7 +655,7 @@ impl Space {
     /// may draw graphic type 0 under the current rules (by the engine's
     /// reading of [`RuleKey::DeadTypeFallback`] with no `DeadType` sheet,
     /// or of [`RuleKey::TypeSheetFallback`] with no `Type` sheet).
-    fn counted_sheet(&self, setup: &Setup, site: &LandingSite) -> DrawnSheet {
+    pub(super) fn counted_sheet(&self, setup: &Setup, site: &LandingSite) -> DrawnSheet {
         let engine = |key| setup.rules.source_for(key) == RuleSource::Engine;
         let may_draw_type_zero = (site.dead_frame_size.is_none()
             && engine(RuleKey::DeadTypeFallback))

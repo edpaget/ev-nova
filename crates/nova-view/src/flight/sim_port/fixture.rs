@@ -858,6 +858,7 @@ pub mod record {
             frozen: false,
             counts_none: false,
             gate_frame: None,
+            frame: 0,
         }
     }
 

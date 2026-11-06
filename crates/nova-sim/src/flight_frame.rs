@@ -2192,6 +2192,10 @@ pub struct FrameStellar {
     /// one or isn't shown
     /// (`Session::gate_frame`).
     pub gate_frame: Option<u16>,
+    /// The frame of the sheet it draws that its slot shows, as its
+    /// session steps it at each pass's sprite tick
+    /// (`Session::stellar_frame`); 0 for one not shown.
+    pub frame: u16,
 }
 
 /// A stellar its system lists, shown or not, as the radar draws its blip
@@ -2586,6 +2590,7 @@ mod tests {
             frozen: false,
             counts_none: false,
             gate_frame: None,
+            frame: 0,
         };
         let frame = FlightFrame {
             stellars: vec![stellar(131, true), stellar(128, true), stellar(129, false)],

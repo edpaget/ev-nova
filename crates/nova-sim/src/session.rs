@@ -684,6 +684,7 @@ mod steering;
 #[cfg(test)]
 mod stellar_attackers;
 mod stellar_defence;
+mod stellar_frames;
 mod stellar_guns;
 mod stellar_passes;
 mod stellar_picks;
@@ -1394,6 +1395,7 @@ impl Session {
                 .collect(),
             fallback_frame: catalog.fallback_frame_size(),
             fallback_counts: catalog.fallback_counts_frames(),
+            fallback_frames: catalog.fallback_frame_count(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,
             crons,
@@ -2164,16 +2166,14 @@ impl Session {
 
     /// The end of a traffic tick, drawing on `chance`: the reinforcement
     /// clock's tick, held while work is queued on the line (it runs as the
-    /// work settles, [`Session::settle_line_queue`]), the gates' sprites
-    /// unless landed, and a target lost let go.
+    /// work settles, [`Session::settle_line_queue`]), and a target lost
+    /// let go. The gates' sprites step later in the pass, at the sprite
+    /// tick (see the `stellar_frames` module).
     fn traffic_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.space.traffic.holds_line_work() {
             self.space.reinforcements_held = true;
         } else {
             self.tick_reinforcements(chance);
-        }
-        if self.mode.landed().is_none() {
-            self.step_gate_sprites(chance);
         }
         self.let_go_of_gone_target();
     }

@@ -13,13 +13,12 @@
 //! opens no gate (see the `wormhole_no_exit` module). Then the stellars are rebuilt (@0x67653), each
 //! slot showing its current frame: frame 0.
 //!
-//! The session resets the gates it keeps ([`Space::reset_gate_frames`];
-//! see the `gate_sprites` module) and raises
-//! [`SessionEvent::StellarFramesReset`], from which the view resets every
-//! other stellar's frames, kept or shown. The view settles it in the
-//! catch-up that follows the take-off or the exit, before the first frame
-//! is drawn, so the original's order (the reset before the rebuild) needs
-//! nothing more. A gate entry's stellar pass comes before the reset and
+//! The session resets every stellar's frames it keeps, shown or not, and
+//! every gate's ([`Space::reset_stellar_frames`]; see the
+//! `stellar_frames` and `gate_sprites` modules), and raises
+//! [`SessionEvent::StellarFramesReset`], which the session's tests read
+//! as the mark of each reset. The reset comes before the rebuild, as the
+//! original's does. A gate entry's stellar pass comes before the reset and
 //! the tail's two after it (see the `stellar_passes` module): the reset
 //! keeps each timer, so the passes around it add up, and the exit gate
 //! opened here takes the tail's two. The reset plays no sound.
@@ -27,10 +26,11 @@
 use super::{Session, SessionEvent, Space};
 use crate::catalog::StellarId;
 use crate::gate_sprite::{GateAnimation, GateSprite};
+use crate::stellar_frames::StellarFrames;
 
 impl Session {
-    /// The take-off's reset (see the module docs): every gate's frames to
-    /// 0, the hypergate `exit` (the player's, when it came out of one)
+    /// The take-off's reset (see the module docs): every stellar's and
+    /// every gate's frames to 0, the hypergate `exit` (the player's, when it came out of one)
     /// opened at its last frame, and [`SessionEvent::StellarFramesReset`]
     /// told.
     pub(super) fn reset_stellar_frames(&mut self, exit: Option<StellarId>) {
@@ -38,22 +38,28 @@ impl Session {
             let site = self.chart.gate_site(id)?;
             Some((id, GateAnimation::of(site)))
         });
-        self.space.reset_gate_frames(exit);
+        self.space.reset_stellar_frames(exit);
         self.out.emit(SessionEvent::StellarFramesReset);
     }
 }
 
 impl Space {
-    /// Every gate sprite kept, shown or not, takes the take-off's reset
-    /// ([`GateSprite::take_off_reset`]); one first shown from now on
-    /// starts as the reset leaves it ([`GateSprite::after_reset`]). Then
+    /// Every gate sprite and every stellar's frames kept, shown or not,
+    /// take the take-off's reset ([`GateSprite::take_off_reset`],
+    /// [`StellarFrames::take_off_reset`]); one first shown from now on
+    /// starts as the reset leaves it ([`GateSprite::after_reset`],
+    /// [`StellarFrames::after_reset`]). Then
     /// `exit`, the hypergate the player came out of with its animation,
     /// opens at its last frame ([`GateSprite::exit_gate`]).
-    pub(super) fn reset_gate_frames(&mut self, exit: Option<(StellarId, GateAnimation)>) {
+    pub(super) fn reset_stellar_frames(&mut self, exit: Option<(StellarId, GateAnimation)>) {
         for sprite in self.gate_sprites.values_mut() {
             sprite.take_off_reset();
         }
         self.gate_sprite_afresh = GateSprite::after_reset();
+        for kept in self.stellar_frames.values_mut() {
+            kept.frames.take_off_reset();
+        }
+        self.stellar_frames_afresh = StellarFrames::after_reset();
         if let Some((id, anim)) = exit {
             self.gate_sprites.insert(id, GateSprite::exit_gate(&anim));
         }
@@ -76,6 +82,8 @@ mod tests {
         open_frame: 0,
         type_frames: 6,
         dead_frames: 0,
+        type_sheet_frames: 6,
+        dead_sheet_frames: 0,
     };
 
     /// [`gated`], with hypergate 310, 131's exit, listed in 131 with
@@ -126,11 +134,34 @@ mod tests {
             .count()
     }
 
+    /// Planet 901, not shown, kept on frame 2 of 4 with its timer at 1.
+    const KEPT_PLANET: StellarId = StellarId(901);
+
+    fn planet_stepped() -> StellarFrames {
+        let anim = crate::stellar_frames::StellarAnimation {
+            delay: 2,
+            ..Default::default()
+        };
+        let four = std::num::NonZeroU16::new(4).expect("non-zero");
+        let mut frames = StellarFrames::new();
+        for _ in 0..5 {
+            frames.step(anim, false, four, four, &mut NeverFires);
+        }
+        frames
+    }
+
     #[test]
     fn a_hypergate_exit_opens_the_exit_gate_at_its_last_frame_and_resets_the_others() {
         let catalog = gated_with_exit();
         let mut session = at_gate(&catalog);
         keep_stepped(&mut session);
+        session.space.stellar_frames.insert(
+            KEPT_PLANET,
+            crate::session::stellar_frames::KeptStellar {
+                frames: planet_stepped(),
+                look: None,
+            },
+        );
         session.take_events();
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
@@ -147,6 +178,12 @@ mod tests {
         assert_eq!(session.space.gate_sprites.get(&exit), Some(&opened));
         assert_eq!(session.gate_frame(exit), Some(5), "frames - 1");
         assert_eq!(session.space.gate_sprites[&KEPT], reset(stepped()));
+        let mut planet = planet_stepped();
+        planet.take_off_reset();
+        assert_eq!(
+            session.space.stellar_frames[&KEPT_PLANET].frames, planet,
+            "every other stellar's frames too"
+        );
         assert_eq!(resets_told(&mut session), 1);
     }
 
@@ -239,7 +276,7 @@ mod tests {
         let mut space = Space::new();
         space.keep_gate_sprites([StellarId(300)]);
         assert_eq!(space.gate_sprites[&StellarId(300)], GateSprite::new());
-        space.reset_gate_frames(None);
+        space.reset_stellar_frames(None);
         space.keep_gate_sprites([StellarId(300), StellarId(310)]);
         assert_eq!(
             space.gate_sprites[&StellarId(300)],
@@ -263,7 +300,7 @@ mod tests {
             if kept {
                 space.gate_sprites.insert(StellarId(310), stepped());
             }
-            space.reset_gate_frames(Some((StellarId(310), anim)));
+            space.reset_stellar_frames(Some((StellarId(310), anim)));
             assert_eq!(
                 space.gate_sprites[&StellarId(310)],
                 GateSprite::exit_gate(&anim),

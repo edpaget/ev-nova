@@ -13,11 +13,13 @@
 //! (its `Type`, its `DeadType` while destroyed, or graphic type 0's), at
 //! the frame drawn's size, its top left at the stellar's place less half
 //! the slot's size (`_HandleStellarSprites` @0x2eeab-0x2ef1a), 32 square
-//! for a frame frozen. It shows a hypergate's frame
-//! ([`Session::gate_frame`]), and frame 0 of any other: the animation
-//! frame of a stellar is the view's, not the sim's, which
-//! rdm:phase/play-feel-8-fidelity/phase-1-stellar-animation-frame-in-the-sim
-//! files. An unowned stale slot is graphic type 0's frame 0 at its ghost's
+//! for a frame frozen. It shows the frame its slot shows
+//! ([`Session::stellar_frame`]): its animation's, which this pass's
+//! sprite tick (@0x444d2) stepped before `_HandleDeadlyStellars`
+//! (@0x4450e), a frozen slot's kept frame, or a hypergate's (see the
+//! `stellar_frames` module,
+//! rdm:phase/rendering/phase-11-stellar-animation-frame-in-the-sim).
+//! An unowned stale slot is graphic type 0's frame 0 at its ghost's
 //! top left ([`Space::ghost_mask`]), and an owned one its owner's.
 //!
 //! **A ship's mask** ([`Session::ship_masks`]) is its sprite as the
@@ -75,9 +77,9 @@ impl Space {
 
 impl Session {
     /// The mask of `site`, one of the stellars shown, as it is drawn now
-    /// (see the module docs): a hypergate's frame, else frame 0.
+    /// (see the module docs), on the frame its slot shows.
     pub(super) fn deadly_stellar_mask(&self, site: &LandingSite) -> Option<PlacedMask> {
-        let frame = self.gate_frame(site.id).unwrap_or(0);
+        let frame = self.stellar_frame(site.id);
         self.space.stellar_mask(
             &self.statics,
             &self.setup,
@@ -477,12 +479,14 @@ mod tests {
         use crate::catalog::SiteAnimation;
         use crate::gate::HYPERGATE;
         use crate::gate_sprite::{GateAnimation, GateSprite};
-        // Two frames, its open frame 1, stepping only every 1000 ticks.
+        // Two frames, its open frame 1, stepping only every 1000 ticks;
+        // its sheet two frames too, which the frame shown is taken modulo.
         let gate = LandingSite {
             flags2: DEADLY_STELLAR | HYPERGATE,
             animation: SiteAnimation {
                 delay: 1000,
                 type_frames: 2,
+                type_sheet_frames: 2,
                 ..SiteAnimation::default()
             },
             ..on_the_npc()
@@ -512,6 +516,185 @@ mod tests {
             assert_eq!(lives(&mut session, &catalog), survives, "open: {open}");
             assert_eq!(session.gate_frame(gate.id), Some(u16::from(open)));
         }
+    }
+
+    /// Frame 0 a ring, frame 1 solid: the NPC in the hole lives by frame
+    /// 0 and dies by frame 1.
+    fn ring_then_solid() -> RleSheet {
+        sheet_of(&[square(SIDE, ring, false), square(SIDE, |_, _| true, false)])
+    }
+
+    /// `site` animating over its 2-frame `Type` sheet every `delay`
+    /// passes.
+    fn animating(site: LandingSite, delay: i16) -> LandingSite {
+        LandingSite {
+            animation: crate::catalog::SiteAnimation {
+                delay,
+                type_frames: 2,
+                type_sheet_frames: 2,
+                ..crate::catalog::SiteAnimation::default()
+            },
+            ..site
+        }
+    }
+
+    fn two() -> std::num::NonZeroU16 {
+        std::num::NonZeroU16::new(2).expect("non-zero")
+    }
+
+    #[test]
+    fn an_animated_deadly_stellar_kills_only_while_the_frame_that_touches_is_shown() {
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        let catalog = holding(vec![
+            (MaskSheet::Stellar(3), ring_then_solid()),
+            (NPC_SHIP, solid(10)),
+        ]);
+        let deadly = animating(on_the_npc(), 3);
+        let anim = StellarAnimation::of(&deadly);
+        // The frame each pass shows, its step coming before the touch.
+        let mut oracle = StellarFrames::new();
+        let shown: Vec<u16> = (0..12)
+            .map(|_| {
+                oracle.step(anim, false, two(), two(), &mut NeverFires);
+                oracle.shown()
+            })
+            .collect();
+        let first_solid = shown.iter().position(|&frame| frame == 1).expect("steps");
+        assert!(first_solid > 0, "{shown:?}");
+        let mut session = among(&catalog, &[deadly], 180, Rulebook::default());
+        for pass in 0..first_solid {
+            assert!(lives(&mut session, &catalog), "pass {pass} shows frame 0");
+        }
+        assert!(
+            !lives(&mut session, &catalog),
+            "pass {first_solid}: the pass that steps to frame 1"
+        );
+        // Another ship in the hole once frame 0 is back dies as frame 1
+        // comes round again.
+        let back = first_solid
+            + shown[first_solid..]
+                .iter()
+                .position(|&frame| frame == 0)
+                .expect("back to 0");
+        let again = back
+            + shown[back..]
+                .iter()
+                .position(|&frame| frame == 1)
+                .expect("round again");
+        let mut later = among(&catalog, &[deadly], 180, Rulebook::default());
+        npc_at(&mut later, 600.0, -100.0);
+        for _ in 0..back {
+            assert!(lives(&mut later, &catalog), "out of reach");
+        }
+        npc_at(&mut later, 0.0, -100.0);
+        for pass in back..again {
+            assert!(lives(&mut later, &catalog), "pass {pass} shows frame 0");
+        }
+        assert!(!lives(&mut later, &catalog), "pass {again}");
+    }
+
+    #[test]
+    fn a_double_times_second_pass_touches_by_the_frame_it_stepped() {
+        let catalog = holding(vec![
+            (MaskSheet::Stellar(3), ring_then_solid()),
+            (NPC_SHIP, solid(10)),
+        ]);
+        // `AnimDelay` 2: the advance pass leaves frame 0, the second steps
+        // to frame 1.
+        let deadly = animating(on_the_npc(), 2);
+        let mut session = among(&catalog, &[deadly], 180, Rulebook::default());
+        assert!(lives(&mut session, &catalog));
+        assert_eq!(session.stellar_frame(deadly.id), 0);
+        session.tick_again(
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.stellar_frame(deadly.id), 1);
+        assert_eq!(session.npcs(), [], "killed on the second pass");
+    }
+
+    #[test]
+    fn a_frozen_deadly_stellar_touches_by_the_frame_it_kept() {
+        use crate::session::stellar_frames::KeptStellar;
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        // Its `Type` counts no frames; its `DeadType`, graphic 5, is the
+        // 2-frame sheet, so `Y`, a frame, `U`, a frame keeps a `DeadType`
+        // frame frozen.
+        let catalog = holding(vec![
+            (MaskSheet::Stellar(5), ring_then_solid()),
+            (NPC_SHIP, solid(10)),
+        ]);
+        let deadly = LandingSite {
+            type_counts_frames: false,
+            dead_graphic: Some(5),
+            dead_frame_size: Some((SIDE, SIDE)),
+            animation: crate::catalog::SiteAnimation {
+                delay: 1,
+                dead_frames: 2,
+                dead_sheet_frames: 2,
+                ..crate::catalog::SiteAnimation::default()
+            },
+            ..on_the_npc()
+        };
+        for (kept_on, survives) in [(0, true), (1, false)] {
+            let mut session = among(&catalog, &[deadly], 180, Rulebook::default());
+            let sites = session.chart.sites.clone();
+            let rebuilt = &mut session.space.rebuilt;
+            rebuilt.frame(&sites, |id| id == deadly.id, RuleSource::Engine);
+            rebuilt.frame(&sites, |_| false, RuleSource::Engine);
+            assert!(session.frame_frozen(deadly.id));
+            // Its frames stood on `kept_on` as the slot froze.
+            let mut frames = StellarFrames::new();
+            let anim = StellarAnimation::of(&deadly);
+            for _ in 0..kept_on {
+                frames.step(anim, false, two(), two(), &mut NeverFires);
+            }
+            assert_eq!(frames.shown(), kept_on);
+            session
+                .space
+                .stellar_frames
+                .insert(deadly.id, KeptStellar { frames, look: None });
+            assert_eq!(lives(&mut session, &catalog), survives, "{kept_on}");
+            assert_eq!(session.stellar_frame(deadly.id), kept_on, "kept");
+        }
+    }
+
+    #[test]
+    fn a_stale_slot_owned_by_an_animated_stellar_touches_by_its_owners_frame() {
+        // H, deadly, hidden after the first rebuild point; S, harmless,
+        // of graphic type 4 at the NPC, animating every pass, shown in
+        // H's slot.
+        let hidden = LandingSite {
+            position: Vec2::new(3000.0, 3000.0),
+            ..on_the_npc()
+        };
+        let owner = animating(
+            LandingSite {
+                graphic: 4,
+                frame_size: Some((SIDE, SIDE)),
+                ..planet(141, 0.0, -100.0)
+            },
+            1,
+        );
+        let catalog = holding(vec![
+            (MaskSheet::Stellar(3), solid(SIDE)),
+            (MaskSheet::Stellar(4), ring_then_solid()),
+            (NPC_SHIP, solid(10)),
+        ]);
+        let mut session = among(&catalog, &[hidden, owner], 180, Rulebook::default());
+        session.chart.sites = vec![hidden];
+        session.rebuild_sprite_pool();
+        session.chart.sites = vec![owner];
+        session.rebuild_sprite_pool();
+        assert_eq!(
+            session.stellar_sprite_pool().sprite_of(hidden.id, false),
+            SlotSprite::Owner(owner.id)
+        );
+        // The owner steps to its frame 1 on the first pass.
+        assert!(!lives(&mut session, &catalog), "by S's frame 1");
+        assert_eq!(session.stellar_frame(owner.id), 1);
     }
 
     #[test]

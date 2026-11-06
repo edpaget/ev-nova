@@ -82,10 +82,11 @@
 //!    then the +0x47 pass, each nav
 //!    stellar with a defence ship in the system marked under attack
 //!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
-//!    stellar guns
-//!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
-//!    @0x444d2), each armed stellar firing at its target (see the
-//!    `stellar_guns` module).
+//!    sprite tick (`_HandleStellarSprites` @0x444d2), each stellar's slot
+//!    cloned and placed and its frame stepped, the gates' too, on both
+//!    passes (see the `stellar_frames` module); then the stellar guns
+//!    (`_HandleStellarWeapons` @0x444d7), each armed stellar firing at
+//!    its target (see the `stellar_guns` module).
 //! 7. The asteroids (`_SpawnAsteroid` @0x44243 and `_HandleAsteroids`
 //!    @0x444f5, after the collision passes; see the `asteroids` module),
 //!    and on the second pass the reinforcement clock
@@ -498,8 +499,10 @@ impl Session {
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
         self.mark_defended_stellars();
-        // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
+        // `_HandleStellarSprites` (@0x444d2), on both passes (see the
+        // `stellar_frames` module), then `_HandleStellarWeapons`
         // (@0x444d7).
+        self.stellar_sprite_tick(chance);
         self.stellar_guns(pass, rules, chance);
         // `_HandleAsteroids` (@0x444f5) and the second pass's
         // `_HandleReinforcements` (@0x44504), after the collision passes
@@ -904,7 +907,7 @@ impl Session {
     /// a deadly stellar killed vanished or destroyed
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
-    /// fighters orphaned; a target gone let go; the stellars seen; the
+    /// fighters orphaned; a target gone let go; the
     /// ships laid out; the frames of each NPC not in `displayed`, the ones
     /// the ship loop displayed, stepped by
     /// [`RuleKey::UndisplayedShips`](crate::RuleKey::UndisplayedShips)'
@@ -933,7 +936,6 @@ impl Session {
         self.space
             .lose_leads(self.setup.rules.source_for(crate::RuleKey::NpcEscortAi));
         self.let_go_of_gone_target();
-        self.see_stellars();
         self.space.hold_derelicts(&self.statics);
         self.lay_out_ships();
         self.space.display_undisplayed(

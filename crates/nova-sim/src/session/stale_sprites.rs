@@ -205,6 +205,7 @@ mod tests {
     use crate::flight::Controls;
     use crate::rulebook::Rulebook;
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::story::Countdown;
     use crate::story::rebuild::Fallback;
     use crate::testkit::work;
     use crate::testkit::{FakePilotCatalog, planet};
@@ -385,6 +386,11 @@ mod tests {
         };
         let mut session = among(&catalog, &[dead], Rulebook::default());
         session.chart.sites = vec![dead];
+        // Destroyed in its galaxy too: the sprite tick's clone, which
+        // comes before the deadly touch (@0x444d2, @0x4450e), finds it
+        // destroyed and keeps graphic type 0's frame.
+        let (chart, pilot, out) = (&mut session.chart, &mut session.pilot, &mut session.out);
+        chart.set_stellar_state(pilot, out, dead.id, Some(Countdown { days_left: 5 }));
         session
             .space
             .rebuilt
