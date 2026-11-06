@@ -715,6 +715,60 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_out_of_the_sheet_drawn_reports_frame_0_until_it_settles() {
+        // Frame 3 of a `DeadType` sheet of 3: out of range, as a swap
+        // would show it.
+        let catalog = animated(0, 1, 4, 3);
+        let (session, oracle) = destroyed_on_frame_3(&catalog);
+        assert_eq!(oracle.shown(), 3);
+        assert_eq!(session.stellar_frame(ANIMATED), 0);
+    }
+
+    #[test]
+    fn a_stellar_no_longer_shown_forgets_its_look_and_one_still_shown_keeps_it() {
+        let catalog = animated(0, 1, 4, 0);
+        let mut session = Session::start(&catalog).expect("starts");
+        work(&mut session, &catalog, Controls::default());
+        let look = |session: &Session, id: i16| session.space.stellar_frames[&StellarId(id)].look;
+        assert!(look(&session, 140).is_some() && look(&session, 128).is_some());
+        let sites: Vec<LandingSite> = session
+            .chart
+            .sites
+            .iter()
+            .filter(|site| site.id != ANIMATED)
+            .copied()
+            .collect();
+        session.space.keep_stellar_frames(&sites);
+        assert_eq!(look(&session, 140), None, "not shown");
+        assert!(look(&session, 128).is_some(), "still shown");
+    }
+
+    #[test]
+    fn a_dead_sheet_counts_the_type_sheets_frames_when_the_stellar_has_none() {
+        let site = LandingSite {
+            animation: SiteAnimation {
+                type_sheet_frames: 4,
+                dead_sheet_frames: 0,
+                ..SiteAnimation::default()
+            },
+            ..planet(141, 0.0, 0.0)
+        };
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(
+            sheet_frames(&session.statics, DrawnSheet::Dead, &site),
+            count(4)
+        );
+        let with_dead = LandingSite {
+            dead_graphic: Some(11),
+            ..site
+        };
+        assert_eq!(
+            sheet_frames(&session.statics, DrawnSheet::Dead, &with_dead),
+            NonZeroU16::MIN
+        );
+    }
+
+    #[test]
     fn a_stellar_not_shown_reports_frame_0() {
         let catalog = animated(0, 1, 4, 0);
         let mut session = Session::start(&catalog).expect("starts");

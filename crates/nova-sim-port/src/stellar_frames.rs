@@ -623,6 +623,27 @@ mod tests {
         assert_eq!((frames.current, frames.next), (1, 1));
     }
 
+    #[test]
+    fn a_sites_animation_is_its_delay_bias_and_flags2() {
+        let site = LandingSite {
+            flags2: RANDOM | ALTERNATE,
+            animation: crate::catalog::SiteAnimation {
+                delay: 3,
+                frame0_bias: -2,
+                ..crate::catalog::SiteAnimation::default()
+            },
+            ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
+        };
+        assert_eq!(
+            StellarAnimation::of(&site),
+            StellarAnimation {
+                delay: 3,
+                frame0_bias: -2,
+                flags2: RANDOM | ALTERNATE,
+            }
+        );
+    }
+
     /// Draws `n` for every `below(n)`, one past the last outcome.
     struct OutOfRange;
 

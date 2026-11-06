@@ -421,6 +421,44 @@ mod tests {
     }
 
     #[test]
+    fn a_gate_whose_slot_freezes_holds_the_frame_its_gate_showed_before_the_pass() {
+        use crate::clearance::{CLEARED, DockRequest};
+        // Hypergate 300's `Type` counts no frames; its `DeadType`, of 6
+        // frames, does: `Y`, a frame, `U`, a frame freezes the slot on it.
+        let mut catalog = gated();
+        let gate = &mut catalog.sites[0].1[1];
+        gate.type_counts_frames = false;
+        gate.dead_graphic = Some(9);
+        gate.dead_frame_size = Some((100, 100));
+        gate.animation.dead_frames = 6;
+        gate.animation.dead_sheet_frames = 6;
+        let mut session = flying(&catalog);
+        session.port.dock = Some(DockRequest {
+            stellar: StellarId(300),
+            permission: CLEARED,
+        });
+        for _ in 0..2 {
+            tick(&mut session, &catalog);
+        }
+        let before = session.gate_frame(StellarId(300)).expect("a gate");
+        assert!((1..6).contains(&before), "{before}");
+        let sites = session.chart.sites.clone();
+        let rebuilt = &mut session.space.rebuilt;
+        rebuilt.frame(&sites, |id| id == StellarId(300), RuleSource::Engine);
+        rebuilt.frame(&sites, |_| false, RuleSource::Engine);
+        assert!(session.frame_frozen(StellarId(300)));
+        for _ in 0..3 {
+            tick(&mut session, &catalog);
+            assert_eq!(session.stellar_frame(StellarId(300)), before, "held");
+        }
+        assert_ne!(
+            session.gate_frame(StellarId(300)),
+            Some(before),
+            "its gate stepped on"
+        );
+    }
+
+    #[test]
     fn only_a_hypergate_shown_has_a_gate_frame() {
         let catalog = gated();
         let session = flying(&catalog);

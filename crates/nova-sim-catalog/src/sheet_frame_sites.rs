@@ -112,4 +112,6 @@ fn graphic_type_0s_frame_count_is_its_master_count() {
     }
     // A sheet that does not read counts 1, as a slot shows one frame.
     assert_eq!(store(&[]).fallback_frame_count(), 1);
+    // A catalog that doesn't say counts 1 too.
+    assert_eq!(crate::fixture::catalog().fallback_frame_count(), 1);
 }
