@@ -878,3 +878,52 @@ fn a_self_repair_line_and_a_wrecks_downing_line_end_the_frame_on_the_higher_slot
         assert_eq!(session.comm_line(), shown(last.ticks()));
     }
 }
+
+// The countdown and the quote clock: once a frame, on the advance pass,
+// and only in a frame's steps.
+
+/// The quote clock's ticks.
+fn clock(session: &Session) -> u64 {
+    session.space.escorts.quote_clock.ticks
+}
+
+#[test]
+fn a_frame_counts_the_line_down_and_moves_the_quote_clock_once_and_a_pass_alone_neither() {
+    // `_HandleComm` (@0x4421e) runs on the advance pass, and the quote
+    // clock stands for `TickCount` there; a pass run alone, with no quotes'
+    // catalog, does neither.
+    let catalog = rolling();
+    let mut session = quiet_flight(&catalog);
+    session.space.comm_line = shown(10);
+    let before = clock(&session);
+    work_with(
+        &mut session,
+        &catalog,
+        Controls::default(),
+        &Keeping,
+        Rules::default(),
+        &mut NeverFires,
+    );
+    assert_eq!(session.comm_line(), shown(10), "a pass alone");
+    assert_eq!(clock(&session), before, "a pass alone");
+    frame_on(&mut session, &catalog, &mut NeverFires);
+    let mut line = shown(10);
+    line.tick();
+    assert_eq!(session.comm_line(), line, "a frame");
+    assert_eq!(clock(&session), before + 1, "a frame");
+}
+
+#[test]
+fn a_double_time_frame_counts_down_and_moves_the_clock_on_its_advance_pass_alone() {
+    // `_HandleComm` (@0x4421e) runs on the advance pass only, and the
+    // second pass reads the quote clock unmoved.
+    let catalog = quoting();
+    let mut session = coming(&catalog, 5, 0, false);
+    session.space.comm_line = shown(10);
+    let before = clock(&session);
+    frame_drawing(&mut session, &catalog, &[139, 139]);
+    let mut line = shown(10);
+    line.tick();
+    assert_eq!(session.comm_line(), line);
+    assert_eq!(clock(&session), before + 1);
+}
