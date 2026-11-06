@@ -724,3 +724,21 @@ fn the_page_arrows_sit_at_the_panels_two_ends() {
     assert!(near(next.max.x, panel.max.x));
     assert!(near(next.width(), ARROW_PT / slide_over.points_per_pixel));
 }
+
+#[test]
+fn a_page_past_the_last_shows_the_last() {
+    let slide_over = WINDOWS[5].region();
+    let pages = layout(&slide_over, MenuView::default()).pages;
+    let at = |page: usize| {
+        layout(
+            &slide_over,
+            MenuView {
+                open: true,
+                page,
+                escort_menu: false,
+            },
+        )
+    };
+    assert_eq!(at(pages + 5), at(pages - 1));
+    assert_eq!(at(pages), at(pages - 1));
+}

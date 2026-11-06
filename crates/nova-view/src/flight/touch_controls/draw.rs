@@ -456,6 +456,17 @@ mod tests {
             "{}",
             extent(HIGHLIGHT)
         );
+        let rows: Vec<f32> = drawn(&controls)
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line { from, color, .. } if color == RING => Some(from.y),
+                _ => None,
+            })
+            .collect();
+        let top = rows.iter().copied().fold(f32::MAX, f32::min);
+        let bottom = rows.iter().copied().fold(f32::MIN, f32::max);
+        assert!((top - (zone.y - radius)).abs() <= 1.0, "{top}");
+        assert!((bottom - (zone.y + radius)).abs() <= 2.0, "{bottom}");
     }
 
     #[test]
