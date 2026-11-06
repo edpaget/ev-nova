@@ -57,7 +57,7 @@
 //! # Where each addition is pinned
 //!
 //! - The layout's rules (sizes in points, the safe area, the tiers, every
-//!   command reached): [`layout`]'s tests.
+//!   command reached): [`layout`](mod@layout)'s tests.
 //! - The device: [`crate::keymap::touch`]'s tests.
 //! - The roles and the queue: this module's tests.
 //! - Flight's path (each control does what its key does):
@@ -67,6 +67,7 @@
 //! - A touch on each control through the app's viewport: `nova`'s
 //!   `app/tests/touch_controls.rs`.
 
+pub mod draw;
 pub mod layout;
 pub mod stick;
 

@@ -232,14 +232,9 @@ impl<
     /// ([`FlightView::map_input`]), so flight's own keys and cursor stay
     /// out of the port.
     pub fn port_map_input(&mut self, input: &Input) {
-        let closing = matches!(
-            *input,
-            Input::Key {
-                pressed: true,
-                repeat: false,
-                ..
-            } | Input::PadButton { pressed: true, .. }
-        ) && self.is_map_key(input);
+        let closing = crate::keymap::Devices::change(input)
+            .is_some_and(|change| change.pressed && !change.repeat)
+            && self.is_map_key(input);
         if closing && !self.map.finding() {
             // M's own close reads M held, so it waits for the release.
             self.map_key_held = true;

@@ -13,6 +13,9 @@ pub(crate) struct Fingers<'a, C: TouchClaimant> {
     router: TouchRouter,
     claimant: C,
     screen: &'a mut dyn Screen,
+    /// Whether the screen's own [`Screen::claims_touch`] claims, as the
+    /// app asks it, instead of `claimant`.
+    by_screen: bool,
     /// Every action the screen answered with so far.
     actions: Vec<ScreenAction>,
 }
@@ -21,6 +24,15 @@ impl<'a> Fingers<'a, fn(Point) -> bool> {
     /// Fingers on `screen`, which claims none of them.
     pub(crate) fn on(screen: &'a mut dyn Screen) -> Self {
         Self::claimed_by(screen, |_| false)
+    }
+
+    /// Fingers on `screen`, which claims what its own
+    /// [`Screen::claims_touch`] says, as the app asks it.
+    pub(crate) fn claimed_by_screen(screen: &'a mut dyn Screen) -> Self {
+        Self {
+            by_screen: true,
+            ..Self::on(screen)
+        }
     }
 }
 
@@ -31,6 +43,7 @@ impl<'a, C: TouchClaimant> Fingers<'a, C> {
             router: TouchRouter::default(),
             claimant,
             screen,
+            by_screen: false,
             actions: Vec::new(),
         }
     }
@@ -48,7 +61,12 @@ impl<'a, C: TouchClaimant> Fingers<'a, C> {
             finger: FingerId::new(id),
             phase,
         });
-        let routed = self.router.route(&input, &self.claimant);
+        let routed = if self.by_screen {
+            let screen = &*self.screen;
+            self.router.route(&input, &|at| screen.claims_touch(at))
+        } else {
+            self.router.route(&input, &self.claimant)
+        };
         let mut actions = Vec::new();
         for step in routed {
             match step {

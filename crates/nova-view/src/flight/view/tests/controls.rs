@@ -732,7 +732,7 @@ fn faked_double_time_drawn(view: &Faked) -> bool {
 
 /// A view over a flight showing the player at rest and NPC 0 of ship 129
 /// at (100, -100), and its id.
-fn faked_with_npc() -> (Faked, NpcId) {
+pub(super) fn faked_with_npc() -> (Faked, NpcId) {
     let npc = npc_129(0, Vec2::new(100.0, -100.0), 90.0);
     let view = super::faked_world::world(trafficked(&[130], 1, 129, 3), among(vec![npc]));
     (view, NpcId(0))
@@ -796,7 +796,7 @@ fn block_presses(view: &Faked) -> usize {
 // (@0x69f24); a pass with both up clears it (@0x6a764).
 
 /// A left press at `at`, through flight's input.
-fn left_press(view: &mut Faked, at: Point) {
+pub(super) fn left_press(view: &mut Faked, at: Point) {
     view.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: true,
@@ -805,7 +805,7 @@ fn left_press(view: &mut Faked, at: Point) {
 }
 
 /// A left release at `at`, through flight's input.
-fn left_release(view: &mut Faked, at: Point) {
+pub(super) fn left_release(view: &mut Faked, at: Point) {
     view.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: false,
@@ -814,7 +814,7 @@ fn left_release(view: &mut Faked, at: Point) {
 }
 
 /// Whether `view` sent a click in space.
-fn clicked(view: &Faked) -> bool {
+pub(super) fn clicked(view: &Faked) -> bool {
     sent(view)
         .iter()
         .any(|command| matches!(command, FlightCommand::ClickInSpace { .. }))

@@ -307,7 +307,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_map_replay`]; the `map_wait` module). Over
     /// flight nothing reads them, and what is still down is already held.
     fn closing_input(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
-        if let Input::Key { pressed: false, .. } | Input::PadButton { pressed: false, .. } = *input
+        if crate::keymap::Devices::change(input).is_some_and(|change| !change.pressed)
             && self.is_map_key(input)
         {
             self.map_key_held = false;
@@ -519,17 +519,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// A key-down the filter doesn't take with the map key held closes it
     /// before anything else; Return or Done after the rest.
     pub(super) fn map_input_taken(&mut self, input: &Input) -> bool {
-        if let Input::Key { pressed, .. } | Input::PadButton { pressed, .. } = *input
+        let change = crate::keymap::Devices::change(input);
+        if let Some(crate::keymap::Change { pressed, .. }) = change
             && self.is_map_key(input)
         {
             self.map_key_held = pressed;
         }
-        if let Input::Key {
-            pressed: true,
-            repeat: false,
-            ..
-        }
-        | Input::PadButton { pressed: true, .. } = *input
+        if change.is_some_and(|change| change.pressed && !change.repeat)
             && self.map_key_held
             && !self.map.finding()
             && !self.map_filter_takes(input)

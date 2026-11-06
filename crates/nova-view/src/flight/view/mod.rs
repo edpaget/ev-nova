@@ -699,6 +699,7 @@ use super::sim_adapter::SessionFlight;
 use super::sim_port::FlightSim;
 use super::stars::Starfield;
 use super::target::TargetPanel;
+use super::touch_controls::TouchControls;
 use super::weapon_glow::WeaponGlows;
 use crate::fade::ScreenFade;
 use crate::galaxy::GalaxyMap;
@@ -751,6 +752,7 @@ mod stars;
 mod stellar_looks;
 mod stepping;
 mod target_latch;
+mod touch;
 mod travel;
 mod world;
 
@@ -1330,6 +1332,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// presses flight's own reader never sees there
     /// ([`FlightView::note_pad`]). Only the router feeds it.
     pad_down: CommandReader,
+    /// The on-screen touch controls ([`crate::flight::touch_controls`]),
+    /// which the app's router drains ([`FlightView::take_touch_controls`]).
+    touch_controls: TouchControls,
     /// Whether the map has been closed while the map key was held, and
     /// waits for its release to close: `_DoSystemMap` loops
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of

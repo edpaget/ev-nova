@@ -222,10 +222,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (rdm:phase/flight-controls-2/phase-6-what-flight-controls-phase-16-left-out).
     pub(super) fn wait_after_site(&mut self, input: &Input) -> bool {
         if !self.latched_at_site
-            || !matches!(
-                input,
-                Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. }
-            )
+            || !crate::keymap::Devices::change(input).is_some_and(|change| change.pressed)
         {
             return false;
         }

@@ -578,14 +578,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   a fresh press, which the OS sends only after a release, ends the
     ///   wait.
     ///
-    /// A pad button is tracked as a key that never repeats.
+    /// A pad button, or a touch control's button, is tracked as a key that
+    /// never repeats.
     pub(super) fn track_held(&mut self, input: &Input) {
-        let (pressed, repeat) = match *input {
-            Input::Key {
-                pressed, repeat, ..
-            } => (pressed, repeat),
-            Input::PadButton { pressed, .. } => (pressed, false),
-            _ => return,
+        let Some(crate::keymap::Change { pressed, repeat }) = crate::keymap::Devices::change(input)
+        else {
+            return;
         };
         self.sync_escort_keys();
         if !self.is_flight_key(input) {
@@ -643,6 +641,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn let_go_of_input(&mut self) {
         self.latched_at_site = false;
         self.keys.let_go();
+        self.touch_controls.let_go();
         self.latched_down.clear();
         self.after_poll.clear();
         self.faded_keys.forget();

@@ -265,7 +265,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_movie_replay`]), so a latched key pressed under
     /// it acts only once let go and pressed again.
     pub(super) fn track_unlatched(&mut self, input: &Input) {
-        let (Input::Key { pressed, .. } | Input::PadButton { pressed, .. }) = *input else {
+        let Some(crate::keymap::Change { pressed, .. }) = crate::keymap::Devices::change(input)
+        else {
             return;
         };
         if pressed && self.key_latches(input) {

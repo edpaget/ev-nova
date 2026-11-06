@@ -134,6 +134,7 @@ mod stellar_looks;
 mod stellar_passes;
 mod stellars;
 mod stepping;
+mod touch_flight;
 mod whole_pixels;
 mod widescreen;
 mod world_layers;

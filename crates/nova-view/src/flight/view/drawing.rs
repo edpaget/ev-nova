@@ -233,7 +233,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             } => self.cursor.button(false),
             Input::PointerButton { at, .. } => self.cursor.read(at),
             Input::PointerLeft => self.cursor.left(),
-            Input::Key { pressed: true, .. } | Input::PadButton { pressed: true, .. }
+            Input::Key { pressed: true, .. }
+            | Input::PadButton { pressed: true, .. }
+            | Input::TouchControl(crate::input::TouchControl::Button { pressed: true, .. })
                 if !self.map_open && self.press_fades_cursor(input) =>
             {
                 self.cursor.key();

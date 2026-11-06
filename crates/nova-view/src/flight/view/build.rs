@@ -616,6 +616,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map_open: false,
             map_key_held: false,
             pad_down: CommandReader::new(contexts::KEY_WAIT),
+            touch_controls: {
+                let mut controls = crate::flight::touch_controls::TouchControls::default();
+                controls.set_view(VIEW_SIZE);
+                controls
+            },
             map_closing: false,
             wait_keys: crate::ui::key_wait::WaitKeys::new(super::map_wait::map_key(
                 &crate::keymap::SharedBindings::default(),

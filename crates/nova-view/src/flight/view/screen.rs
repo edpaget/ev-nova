@@ -9,7 +9,8 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
-use crate::keymap::{Command, FlightCommand as F, PlayCommand};
+use crate::input::TouchControl;
+use crate::keymap::{Change, Command, Devices, FlightCommand as F, PlayCommand};
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::{Diagnostic, DrawList, Input, MouseButton, Screen, ScreenAction, Sound, ViewShape};
@@ -49,7 +50,9 @@ impl<
     /// let them ([`FlightView::held_keys_frame`]; see the module docs), L
     /// and I too ([`FlightView::faded_keys_frame`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        self.take_input(input)
+        let action = self.take_input(input);
+        self.sync_touch_controls();
+        action
     }
 
     /// First catches the screen up with what the session has told since
@@ -90,6 +93,7 @@ impl<
     /// runs under it.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
+        self.sync_touch_controls();
     }
 
     /// The scene and its HUD, then the fades. With the course map open,
@@ -202,6 +206,12 @@ impl<
         ViewShape::Widened
     }
 
+    /// A touch starting on one of the touch controls, while they show
+    /// (the `touch` module).
+    fn claims_touch(&self, at: crate::Point) -> bool {
+        self.claims_touch_control(at)
+    }
+
     /// Takes the widened size as the view's ([`FlightView::set_view_size`]).
     fn set_widened_size(&mut self, size: (f32, f32)) {
         self.set_view_size(size);
@@ -297,16 +307,29 @@ impl<
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
-        // A stick's move and the app's surroundings press nothing: flight's
-        // reader takes them whatever shows, the rescue included, the axes
-        // for the next step. The course map is told the surroundings too,
-        // open or not, so a map opened later, over flight, over the
-        // spaceport or by a mission dialog, already knows the device.
-        if matches!(input, Input::PadAxis { .. } | Input::Surroundings(_)) {
+        // A stick's move (the pad's or the touch stick's) and the app's
+        // surroundings press nothing: flight's reader takes them whatever
+        // shows, the rescue included, the axes for the next step. The
+        // course map is told the surroundings too, open or not, so a map
+        // opened later, over flight, over the spaceport or by a mission
+        // dialog, already knows the device, and so are the touch controls.
+        if matches!(
+            input,
+            Input::PadAxis { .. }
+                | Input::Surroundings(_)
+                | Input::TouchControl(TouchControl::Stick { .. })
+        ) {
             self.keys.follow(input);
-            if let Input::Surroundings(_) = input {
+            if let Input::Surroundings(told) = *input {
                 self.map.input(input);
+                self.touch_controls.tell(told);
             }
+            return ScreenAction::None;
+        }
+        // A finger the touch controls claimed is theirs: what it raises
+        // comes back through the router.
+        if let Input::Touch(touch) = *input {
+            self.touch_input(touch);
             return ScreenAction::None;
         }
         if self.hold_under_rescue(input) {
@@ -323,13 +346,11 @@ impl<
         self.cursor_input(input);
         // What a fresh press means, with the modifiers held as flight
         // reads them, before flight follows it.
-        let press = match *input {
-            Input::Key {
+        let press = match Devices::change(input) {
+            Some(Change {
                 pressed: true,
                 repeat: false,
-                ..
-            }
-            | Input::PadButton { pressed: true, .. } => self.keys.peek(input),
+            }) => self.keys.peek(input),
             _ => None,
         };
         let jumping = self.jump_under_way();
