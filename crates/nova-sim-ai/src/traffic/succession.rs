@@ -1921,6 +1921,29 @@ mod tests {
     }
 
     #[test]
+    fn a_stellar_attacker_whose_lead_is_lost_keeps_attacking_and_takes_no_pause() {
+        // Goal 0x12 is no jump goal, so the hold zeroes +0x50 at the head of
+        // every dispatch (@0x8d52e), before goal 0x12's block writes its band
+        // sub (@0x8f906-0x8faeb); the check's strict test (@0x8949d-0x894a4)
+        // then writes no goal 0x13: the attacker keeps goal 0x12 under the
+        // successor.
+        let mut attacker = follower(FEDS, 100);
+        attacker.goal = Goal::AttackStellar(StellarId(131));
+        attacker.warp.stage = -1.0;
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300), attacker]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 2).warp.stage, 0.0);
+        assert_eq!(of(&traffic, 2).goal, Goal::AttackStellar(StellarId(131)));
+
+        of_mut(&mut traffic, 0).condition = DISABLED;
+        think(&mut traffic);
+        let attacker = of(&traffic, 2);
+        assert_eq!(attacker.leader, Some(NpcId(1)));
+        assert_eq!(attacker.goal, Goal::AttackStellar(StellarId(131)));
+        assert_eq!(attacker.flown_goal(), Goal::AttackStellar(StellarId(131)));
+    }
+
+    #[test]
     fn a_fighter_following_the_successor_leaves_its_carrier_for_its_classs_capacities() {
         let mut fighter = follower(FEDS, 100);
         fighter.take_carrier(

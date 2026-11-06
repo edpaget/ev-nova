@@ -31,8 +31,12 @@
 //!   or 0xd: off it the reset drops the parent.
 //! - A ship gliding in (-999.0) takes the write, overwritten in the same
 //!   frame by the glide path (@0x8fcf5-0x8fd18): no pause.
+//! - Goal 0x12's block (@0x8f906-0x8faeb) writes its band subs after the
+//!   hold zeroes +0x50 (@0x8d52e), and `_EscortAI` never runs for a
+//!   stellar attacker (@0x8ff3a-0x8ff43).
 //!
-//! So subs 1, 9, 0xb and 0xc, a fight's and goal 5's never reach it.
+//! So subs 1, 2, 3, 9, 0xb, 0xc and 0x16, a fight's, goal 5's and goal
+//! 0x12's never reach it.
 //!
 //! **What it flies** ([`Kept`]). `_AIDispatch` draws its release first
 //! (@0x8fe73-0x8febb, [`Traffic::release_regroups`](crate::traffic::Traffic::release_regroups));
