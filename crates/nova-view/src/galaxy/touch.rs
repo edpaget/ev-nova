@@ -30,11 +30,14 @@ use crate::input::Pinch;
 use crate::keymap::{Command, MapCommand};
 use crate::screen::Screen;
 
-/// A pinch on the map: the steps it refused at a limit, zoom-ins
-/// positive, not yet taken back by steps the other way.
+/// A pinch on the map: the steps it refused at a limit, each way, not yet
+/// taken back by steps the other way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MapPinch {
-    refused: i32,
+    /// Zoom-ins refused at the zoom-in limit.
+    refused_in: u32,
+    /// Zoom-outs refused at the zoom-out limit.
+    refused_out: u32,
 }
 
 impl GalaxyMap {
@@ -47,29 +50,39 @@ impl GalaxyMap {
                     self.pinch = Some(MapPinch::default());
                 }
             }
-            Pinch::ZoomIn | Pinch::ZoomOut => {
-                let Some(mut held) = self.pinch else {
-                    return;
-                };
-                let (command, way) = if pinch == Pinch::ZoomIn {
-                    (MapCommand::ZoomIn, 1)
-                } else {
-                    (MapCommand::ZoomOut, -1)
-                };
-                if held.refused * way < 0 {
-                    // Takes back a step refused the other way.
-                    held.refused += way;
-                } else {
-                    let before = self.zoom_level();
-                    self.command(Command::Map(command), false);
-                    if self.zoom_level() == before {
-                        held.refused += way;
-                    }
-                }
-                self.pinch = Some(held);
-            }
+            Pinch::ZoomIn => self.pinch_step(MapCommand::ZoomIn, |held| {
+                (&mut held.refused_in, &mut held.refused_out)
+            }),
+            Pinch::ZoomOut => self.pinch_step(MapCommand::ZoomOut, |held| {
+                (&mut held.refused_out, &mut held.refused_in)
+            }),
             Pinch::Ended => self.pinch = None,
         }
+    }
+
+    /// One step of a pinch on the map, the zoom `command`: it first takes
+    /// back a step refused the other way, if any; otherwise it zooms, and
+    /// a step the map refuses is held back. `counts` picks the pinch's
+    /// count of this way's refused steps, then the other way's.
+    fn pinch_step(
+        &mut self,
+        command: MapCommand,
+        counts: impl Fn(&mut MapPinch) -> (&mut u32, &mut u32),
+    ) {
+        let Some(mut held) = self.pinch else {
+            return;
+        };
+        let (this_way, other_way) = counts(&mut held);
+        if *other_way > 0 {
+            *other_way -= 1;
+        } else {
+            let before = self.zoom_level();
+            self.command(Command::Map(command), false);
+            if self.zoom_level() == before {
+                *this_way += 1;
+            }
+        }
+        self.pinch = Some(held);
     }
 }
 

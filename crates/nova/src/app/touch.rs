@@ -129,9 +129,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         }
     }
 
-    /// Whether `event` is the mouse's while a finger is down and the game
-    /// takes the pointer: it then reaches no screen and switches no
-    /// device. The overlay still gets it while it shows.
+    /// Whether `event` is the mouse's while a finger is down: it then
+    /// reaches no screen and switches no device. The overlay still gets
+    /// the mouse while it shows, as no finger is down then: opening it
+    /// cancels them all, and touches go to it alone.
     pub(super) fn drops_mouse(&self, event: &WindowEvent) -> bool {
         matches!(
             event,
@@ -139,6 +140,5 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 | WindowEvent::PointerButton { .. }
                 | WindowEvent::PointerLeft
         ) && self.touch.any_down()
-            && self.pointer_routing() == Routing::Game
     }
 }
