@@ -4,5 +4,6 @@
 //! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
 
 pub mod look;
+pub mod place;
 #[cfg(test)]
 pub(crate) mod testkit;

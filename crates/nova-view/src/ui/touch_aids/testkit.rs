@@ -1,13 +1,14 @@
 //! The window fixtures the touch controls and the touch aids are laid out
 //! in: six window sizes from a desktop window to Slide Over, each with a
 //! fake safe area cut from its edges ([`CUTS`]). Flight's overlay is laid
-//! out in its widened view ([`Window::view`]).
+//! out in its widened view ([`Window::view`]), every other host in the
+//! classic canvas ([`Window::classic_surroundings`]).
 
 #![allow(clippy::float_cmp)]
 
-use crate::geometry::{Bounds, Point};
+use crate::geometry::{Bounds, Point, intersection};
 use crate::input::{Device, Surroundings};
-use crate::view_shape::widened_size;
+use crate::view_shape::{CLASSIC_SIZE, widened_size};
 
 /// A window size in points and its scale factor: the inputs a fixture
 /// derives its view and points per pixel from.
@@ -86,6 +87,36 @@ impl Window {
                 min: Point::new(side / ppp, top / ppp),
                 max: Point::new(w - side / ppp, h - bottom / ppp),
             },
+            points_per_pixel: ppp,
+        }
+    }
+
+    /// The classic canvas, 1024 × 768, as every host but flight draws.
+    pub(crate) fn classic_view() -> (f32, f32) {
+        #[allow(clippy::cast_precision_loss)]
+        (CLASSIC_SIZE.0 as f32, CLASSIC_SIZE.1 as f32)
+    }
+
+    /// The surroundings a host in the classic canvas is told, by touch: the
+    /// canvas letterboxed in the window, and the fake safe area cut from
+    /// the window's edges, mapped into the canvas and clipped to it.
+    pub(crate) fn classic_surroundings(&self) -> Surroundings {
+        let (w, h) = Self::classic_view();
+        let ppp = (self.points.0 / w).min(self.points.1 / h);
+        let offset = Point::new(
+            (self.points.0 - w * ppp) / 2.0,
+            (self.points.1 - h * ppp) / 2.0,
+        );
+        let (top, bottom, side) = CUTS;
+        let logical = |x: f32, y: f32| Point::new((x - offset.x) / ppp, (y - offset.y) / ppp);
+        let safe = Bounds {
+            min: logical(side, top),
+            max: logical(self.points.0 - side, self.points.1 - bottom),
+        };
+        let canvas = Bounds::at(Point::new(0.0, 0.0), w, h);
+        Surroundings {
+            device: Device::Touch,
+            safe_area: intersection(safe, canvas).unwrap_or(canvas),
             points_per_pixel: ppp,
         }
     }

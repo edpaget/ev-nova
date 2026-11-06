@@ -597,8 +597,11 @@ pub enum Input {
 }
 
 impl Input {
-    /// The input with its pointer point moved by `by`, and any other input
-    /// as it is: how a frame drawn moved by `−by` takes the pointer.
+    /// The input with its pointer point moved by `by`, and the safe area
+    /// of [`Input::Surroundings`] moved with it, and any other input as it
+    /// is: how a frame drawn moved by `−by` takes the pointer and reads
+    /// its safe area in its own coordinates (the touch aids place
+    /// themselves by it, `ui::touch_aids`).
     #[must_use]
     pub fn translated(self, by: Point) -> Self {
         let moved = |p: Point| Point::new(p.x + by.x, p.y + by.y);
@@ -623,12 +626,18 @@ impl Input {
                 phase: phase.translated(by),
             }),
             Self::Pinch(pinch) => Self::Pinch(pinch.translated(by)),
+            Self::Surroundings(told) => Self::Surroundings(Surroundings {
+                safe_area: Bounds {
+                    min: moved(told.safe_area.min),
+                    max: moved(told.safe_area.max),
+                },
+                ..told
+            }),
             Self::Key { .. }
             | Self::Text(_)
             | Self::PointerLeft
             | Self::PadButton { .. }
             | Self::PadAxis { .. }
-            | Self::Surroundings(_)
             | Self::TouchControl(_) => self,
         }
     }
@@ -736,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn pad_inputs_and_surroundings_are_not_moved_by_a_translation() {
+    fn pad_inputs_are_not_moved_by_a_translation() {
         let by = Point::new(-170.0, 2.0);
         for unmoved in [
             pad(PadButton::Start, true),
@@ -744,10 +753,27 @@ mod tests {
                 axis: PadAxis::LeftY,
                 value: 0.25,
             },
-            Input::Surroundings(Surroundings::of(Device::Gamepad(ControllerFamily::Generic))),
         ] {
             assert_eq!(unmoved.translated(by), unmoved);
         }
+    }
+
+    #[test]
+    fn translating_surroundings_moves_the_safe_area() {
+        let by = Point::new(-170.0, 2.0);
+        let told = Surroundings {
+            device: Device::Gamepad(ControllerFamily::Generic),
+            safe_area: Bounds::at(Point::new(30.0, 20.0), 900.0, 700.0),
+            points_per_pixel: 0.75,
+        };
+        assert_eq!(
+            Input::Surroundings(told).translated(by),
+            Input::Surroundings(Surroundings {
+                safe_area: Bounds::at(Point::new(-140.0, 22.0), 900.0, 700.0),
+                ..told
+            }),
+            "the device and the points per pixel kept"
+        );
     }
 
     #[test]
