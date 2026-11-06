@@ -186,3 +186,63 @@ fn taking_off_and_landing_again_opens_it_afresh() {
     assert_eq!(screen.showing(), Showing::Spaceport);
     assert!(shows(&screen, "A job?"));
 }
+
+/// A router as the new game builds it: no interface file, so the
+/// spaceport is its stand-in and the conversation is laid out with the
+/// main menu's metrics; its flights play on `loader`. Flight is entered
+/// past the menu.
+fn without_interface(loader: &FakeLoader) -> AppScreen {
+    let mut screen = AppScreen::new(talking_data())
+        .with_pilots(None, Rc::new(MonoMetrics))
+        .with_dialog_loader(Rc::new(loader.clone()))
+        .appeared();
+    screen.enter_flight();
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen
+}
+
+#[test]
+fn without_an_interface_file_it_is_drawn_over_the_stand_in_and_plays_to_its_close() {
+    let mut screen = without_interface(&loader());
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    assert_eq!(spaceport(&screen).problem(), Some(NO_INTERFACE));
+    let stand_in = texts(&screen)[0].clone();
+    assert!(
+        stand_in.starts_with("Cannot show the spaceport"),
+        "{stand_in}"
+    );
+    assert_eq!(
+        texts(&screen),
+        [
+            stand_in.clone(),
+            "A job?".to_owned(),
+            "1. Ask".to_owned(),
+            "2. Leave".to_owned()
+        ],
+        "over the stand-in"
+    );
+    // The stand-in takes off on Return or Escape; choices pending hold
+    // both.
+    for k in [Key::Enter, Key::Escape] {
+        for pressed in [true, false] {
+            assert_eq!(screen.input(&key(k, pressed)), ScreenAction::None);
+        }
+        assert_eq!(screen.showing(), Showing::Spaceport, "{k:?}");
+    }
+    assert!(shows(&screen, "A job?"));
+    screen.input(&key(Key::Char('1'), true));
+    assert!(shows(&screen, "1. Take it"));
+    screen.input(&key(Key::Char('1'), true));
+    assert!(shows(&screen, "Go."));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(
+        screen.showing(),
+        Showing::Spaceport,
+        "the close stays landed"
+    );
+    assert_eq!(texts(&screen), [stand_in], "the stand-in alone");
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight);
+}
