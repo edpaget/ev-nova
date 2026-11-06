@@ -244,7 +244,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             self.release_between_passes(anchor);
         }
-        let mut held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
+        let mut held = report
+            .steps
+            .last_mut()
+            .and_then(|run| BetweenPasses::taken_from(run, self.elapsed));
         let mut rescued = false;
         for run in &report.steps {
             notes.extend(run.comm.iter().cloned());

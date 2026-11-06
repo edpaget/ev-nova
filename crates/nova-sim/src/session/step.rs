@@ -1213,7 +1213,7 @@ mod tests {
             double_time_key: true,
             ..StepInput::default()
         };
-        let flying = |report: &StepReport| -> Vec<Option<bool>> {
+        let flying = |report: &StepReport| -> Vec<Option<u32>> {
             report.steps[0]
                 .passes
                 .iter()
@@ -1221,10 +1221,10 @@ mod tests {
                 .collect()
         };
         let report = steps(&mut session, &catalog, &input, 1);
-        assert_eq!(flying(&report), [Some(true), Some(true)]);
+        assert_eq!(flying(&report), [Some(1), Some(1)]);
         session.drop_fleet_escort(0);
         let report = steps(&mut session, &catalog, &input, 1);
-        assert_eq!(flying(&report), [Some(false), Some(false)]);
+        assert_eq!(flying(&report), [Some(0), Some(0)]);
     }
 
     #[test]
@@ -1232,8 +1232,9 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.out.escort_menu = Some(EscortMenuPass {
-            escorts_flying: true,
+            escorts_flying: 1,
             class_orders_cleared: true,
+            ..EscortMenuPass::default()
         });
         let report = steps(&mut session, &catalog, &StepInput::default(), 1);
         assert_eq!(

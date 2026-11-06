@@ -240,8 +240,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// in `background` (see the module docs): the message while one
     /// shows, its box erased in `background` and its background OR-ed in
     /// as flight draws them ([`FlightView::draw_floaters`]), then the
-    /// escort menu with `rows`. Not world: the repaint's space area is
-    /// no sprite world.
+    /// escort menu: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading the image it last drew, as the rescue path
+    /// (`_HandlePlayer` @0x68e04-0x692ce) redraws it nowhere; by the
+    /// other, `rows` ([`FlightView::menu_rows`]). Not world: the repaint's
+    /// space area is no sprite world.
     fn repaint_floaters(&self, background: Color, rows: &[ClassRow; 4]) -> DrawList {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let mut list = DrawList::new();
@@ -251,7 +254,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hud::draw_message_text(&mut list, message, self.view, metrics);
         }
         self.escort_menu
-            .draw(&mut list, rows, self.escort_colors, metrics);
+            .draw(&mut list, self.menu_rows(rows), self.escort_colors, metrics);
         list
     }
 

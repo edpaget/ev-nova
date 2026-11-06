@@ -457,7 +457,8 @@ fn the_escort_menu_times_out_during_the_streak() {
         steps: vec![nova_sim::flight_frame::StepRun {
             passes: vec![nova_sim::flight_frame::PassReport {
                 escort_menu: Some(nova_sim::flight_frame::EscortMenuPass {
-                    escorts_flying: true,
+                    escorts_flying: 1,
+                    rows: view.frame.hud.escort_rows,
                     class_orders_cleared: false,
                 }),
                 ..nova_sim::flight_frame::PassReport::default()

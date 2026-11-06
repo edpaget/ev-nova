@@ -1785,9 +1785,11 @@ pub struct PassReport {
     /// view carries its own effects by.
     pub wrap: Option<PlayerWrap>,
     /// What `_HandlePlayer`'s escort-menu block read on this pass (the
-    /// fade @0x6df4a-0x6e052) and whether the class-order bookkeeping
-    /// after it cleared an order (@0x6e2e8-0x6e452): the view runs the
-    /// menu's fade once for each pass that reports one. `None` when the
+    /// fade @0x6df4a-0x6e052), whether the class-order bookkeeping after
+    /// it cleared an order (@0x6e2e8-0x6e452), and the rows the pass's
+    /// redraws read: the view runs the menu's fade once for each pass that
+    /// reports one, and redraws its held rows from the pass's where the
+    /// original's `_DrawEscortMenuInFrame` runs. `None` when the
     /// pass returned before both, a destroyed player's dead branch
     /// (@0x68853, @0x6888c).
     pub escort_menu: Option<EscortMenuPass>,
@@ -1795,11 +1797,22 @@ pub struct PassReport {
 
 /// `_HandlePlayer`'s escort-menu block on one pass, as
 /// [`PassReport::escort_menu`] reports it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortMenuPass {
-    /// Whether an escort flew as the fade counted them (@0x6df59-0x6dfd0),
-    /// before the pass's bookkeeping, a disabled ship never counted.
-    pub escorts_flying: bool,
+    /// How many escorts flew as the fade counted them (@0x6df59-0x6dfa7),
+    /// before the pass's bookkeeping: the ships the player leads that are
+    /// intact, a disabled or dying ship never counted. The menu redraws
+    /// whenever the count differs from the last it stored (`*0xdee60`,
+    /// @0x6dfa9-0x6dfd0), zero or not.
+    pub escorts_flying: u32,
+    /// The menu's class rows as the pass's class-order bookkeeping leaves
+    /// them, in [`EscortClass::ALL`]'s order: what each of the pass's
+    /// redraws (`_DrawEscortMenuInFrame`, from @0x6dfd0 and through
+    /// `_ShowEscortMenu` @0x6e388, @0x6e446) reads. A fighter launched on
+    /// the pass is in them, as `_FirePlayerWeapon` launches it (@0x62c61)
+    /// before the block (@0x6df4a); a ship lost later in the pass is not
+    /// gone from them.
+    pub rows: [ClassRow; 4],
     /// Whether the class-order bookkeeping cleared an escort class's kept
     /// order (@0x6e37d, @0x6e43f), a lone launch's clear included (see the
     /// session's `fighters` module): each clear shows the escort menu in
@@ -1807,6 +1820,22 @@ pub struct EscortMenuPass {
     /// called @0x6e388 and @0x6e446), after this pass's drop and before
     /// the next pass's. It plays no sound.
     pub class_orders_cleared: bool,
+}
+
+impl Default for EscortMenuPass {
+    /// No escort flying, no row present (as [`FrameHud::default`] builds
+    /// them) and nothing cleared.
+    fn default() -> Self {
+        Self {
+            escorts_flying: 0,
+            rows: EscortClass::ALL.map(|class| ClassRow {
+                class,
+                present: false,
+                order: None,
+            }),
+            class_orders_cleared: false,
+        }
+    }
 }
 
 /// A ship as a [`FlightFrame`] and a [`PassReport`] carry it: one record

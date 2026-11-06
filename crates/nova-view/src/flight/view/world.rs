@@ -225,8 +225,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`hud::or_message_background`]) and its text over that (its box
     /// stays under the sprites, in
     /// [`FlightView::draw_stars_and_message`]), then the floating map
-    /// (@0x38b95-0x38c0a), then the escort menu with the frame's rows
-    /// (@0x38c0f-0x38c5b).
+    /// (@0x38b95-0x38c0a), then the escort menu's image, or the frame's
+    /// rows by `HudCadence`'s other reading (@0x38c0f-0x38c5b,
+    /// [`FlightView::menu_rows`]).
     ///
     /// The text of all three (the message, the floating map's names, the
     /// escort menu's title, rows and orders) is overlay
@@ -246,7 +247,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.draw_floating_map(list);
         self.escort_menu.draw(
             list,
-            &self.drawn().hud.escort_rows,
+            self.menu_rows(&self.drawn().hud.escort_rows),
             self.escort_colors,
             metrics,
         );

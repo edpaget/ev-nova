@@ -14,7 +14,7 @@ use nova_sim::{
 };
 
 use crate::flight::escorts::{
-    EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
+    EscortMenu, GROUP_KEYS, MENU_KEY, MenuRows, NO_ESCORTS, Toggled, escort_command_message,
 };
 use crate::flight::floating::{self, Hit};
 use crate::flight::hud::NavDisplay;
@@ -272,7 +272,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`UiSound::EscortMenuToggled`] if E ([`MENU_KEY`]) reads down, held
     /// or latched past a close, as the close block reads the key live
     /// (@0x6e01e-0x6e04d), and none otherwise.
-    fn shut_escort_menu_by_key(&mut self) {
+    pub(super) fn shut_escort_menu_by_key(&mut self) {
         if self.reads_down(MENU_KEY) {
             self.ui_sounds.push(UiSound::EscortMenuToggled);
         }
@@ -298,9 +298,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// that reached `_HandlePlayer`'s escort-menu block
     /// ([`EscortMenu::run_passes`],
     /// `nova_sim::flight_frame::PassReport::escort_menu`): for each, it
-    /// takes the escorts flying as that pass counted them, fades a level,
-    /// and shows in full again when that pass cleared an escort class's
-    /// kept order, before the next pass's drop. `_DoPlayGameWork` calls
+    /// takes the count of escorts flying as that pass counted them,
+    /// redrawing the menu's rows from the pass's when it changed, fades a
+    /// level, and shows in full again, redrawn, when that pass cleared an
+    /// escort class's kept order, before the next pass's drop. A
+    /// double-time step's held second pass ran first, as its hold went
+    /// (the `between_passes` module). `_DoPlayGameWork` calls
     /// `_HandlePlayer` on both of double time's passes (@0x43e19) and
     /// nothing gates the fade (@0x6df4a-0x6e052) on the pass, so it fades a
     /// level on each, through a jump's warp too. `Screen::tick` calls it
@@ -328,7 +331,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`EscortMenu::click`]): whether the menu took it, so it goes no
     /// further, to the floating map or to space.
     pub(super) fn click_escort_menu(&mut self, at: Point) -> bool {
-        self.escort_menu.click(at, self.elapsed)
+        let rows = self.escort_rows();
+        self.escort_menu.click(at, self.elapsed, &rows)
+    }
+
+    /// The rows the escort menu draws: by
+    /// [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s engine
+    /// reading the image its last redraw drew ([`MenuRows::Held`]), held
+    /// between `_DrawEscortMenuInFrame`'s redraws; by the other, `live`,
+    /// filled afresh every frame.
+    pub(super) fn menu_rows<'a>(&self, live: &'a [ClassRow; 4]) -> MenuRows<'a> {
+        if self.hud_waits() {
+            MenuRows::Held
+        } else {
+            MenuRows::Live(live)
+        }
     }
 
     /// The escort menu, shut or open.

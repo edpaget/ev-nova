@@ -343,6 +343,52 @@ fn a_real_session_meets_the_contract_in_each_state() {
     meets_the_contract(view.sim(), "after the target is let go");
 }
 
+/// `FlightSim::step`'s escort-menu block, at the adapter: a real step's
+/// pass reports the escort menu's rows and the count of escorts flying,
+/// which the view's held image redraws from, agreeing with the frame.
+#[test]
+fn a_real_steps_pass_reports_the_escort_menus_rows_and_count() {
+    let data = fighting_data(&[]);
+    let escort = nova_sim::fleet::Escort {
+        ship: ShipId(129),
+        reserves: nova_sim::Reserves::full(10.0, 10.0, 100.0),
+        order: None,
+        carried: false,
+        wage: Some(10),
+        person: None,
+        mark: None,
+        voice: None,
+        berth: None,
+    };
+    let sim = SessionFlight::from(
+        SessionBuilder::flying(&data)
+            .with_escorts(vec![escort])
+            .build(),
+    )
+    .with_collaborators(Collaborators {
+        chance: drawing(&TRADER_ABOVE),
+        behaviour: Rc::new(Idle),
+        ..Collaborators::default()
+    });
+    let mut view = FlightView::from_session(Rc::clone(&data), sim, &Rulebook::default());
+    // The first step sets the system up, the escort placed in it.
+    view.tick(TICK);
+    let mut sim = view.sim().clone();
+    let mut report = nova_sim::flight_frame::StepReport::default();
+    sim.step(
+        &nova_sim::flight_frame::StepInput::default(),
+        1,
+        &mut report,
+    );
+    let menu = report.steps[0].passes[0]
+        .escort_menu
+        .expect("the pass reached the block");
+    let frame = frame_of(&sim);
+    assert_eq!(menu.escorts_flying, 1, "the hired escort");
+    assert_eq!(menu.rows, frame.hud.escort_rows);
+    assert!(menu.rows.iter().any(|row| row.present));
+}
+
 /// `FlightSim::apply` then `frame`, at the adapter: a stellar key's
 /// command reaches the session and the next frame shows the selection.
 #[test]

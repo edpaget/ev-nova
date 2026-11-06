@@ -348,6 +348,40 @@ fn the_escort_menu_up_in_the_pod_is_repainted_and_its_floating_map_is_not() {
     );
 }
 
+/// The colour the escort menu's "2) Fighters" row is drawn in, in `list`.
+fn fighters_row(list: &DrawList) -> Option<Color> {
+    list.iter().find_map(|command| match command {
+        DrawCommand::Clipped { command, .. } => match &**command {
+            DrawCommand::Text { text, color, .. } if text == "2) Fighters" => Some(*color),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+#[test]
+fn a_repaint_after_the_move_draws_the_menus_held_image_by_the_engine() {
+    // The rescue path (`_HandlePlayer` @0x68e04-0x692ce) redraws the menu
+    // nowhere: its repaints blit the image the menu last drew.
+    use crate::flight::escorts::ABSENT_ROW;
+    for (cadence, fighters) in [
+        (RuleSource::Engine, Color::WHITE),
+        (RuleSource::Bible, ABSENT_ROW),
+    ] {
+        let mut view = in_the_pod();
+        view.presentation.hud_cadence = cadence;
+        let mut rows = view.frame.hud.escort_rows;
+        rows[0].present = true;
+        view.escort_menu.toggle(view.elapsed, &rows);
+        view.tick(TICK);
+        let marks = RescueTexts { reset: 1, moved: 2 };
+        rescue_noting(&mut view, vec![briefed_third()], Some(marks));
+        let list = under_the_first_text(&mut view);
+        assert!(!rescued_frame().hud.escort_rows[0].present, "none there");
+        assert_eq!(fighters_row(&list), Some(fighters), "{cadence:?}");
+    }
+}
+
 #[test]
 fn a_first_text_the_on_purchase_queued_shows_over_the_pods_system_and_the_reset_bar() {
     let mut view = in_the_pod();

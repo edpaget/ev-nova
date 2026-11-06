@@ -1244,8 +1244,19 @@ impl Space {
     /// escort and a launched fighter all count; a hired escort disabled or
     /// breaking up does not.
     pub(super) fn escorts_flying(&self) -> bool {
-        self.player_led()
-            .any(|npc| npc.condition == Condition::Intact)
+        self.escorts_intact() > 0
+    }
+
+    /// How many escorts the player has flying, as the escort menu counts
+    /// them each pass it shows (`_HandlePlayer` @0x6df59-0x6dfa7): the
+    /// ships the player leads ([`Space::player_led`]) that are neither
+    /// disabled nor breaking up ([`Space::escorts_flying`]'s).
+    pub(super) fn escorts_intact(&self) -> u32 {
+        let intact = self
+            .player_led()
+            .filter(|npc| npc.condition == Condition::Intact)
+            .count();
+        u32::try_from(intact).unwrap_or(u32::MAX)
     }
 
     /// `class`'s row in the escort menu (`_DrawEscortMenuInFrame`
