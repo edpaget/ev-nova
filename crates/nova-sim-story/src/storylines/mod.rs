@@ -29,10 +29,15 @@
 //!
 //! - [`requires::holds`]: whether a mission's conditions hold.
 //! - [`effects::apply`]: one effect block.
+//! - [`lifecycle`]: a mission's life from offer to success, events, and
+//!   the scenes a landed visit shows ([`Play`](lifecycle::Play)), and the
+//!   outcome an offer's conversation reaches
+//!   ([`outcome_of`](lifecycle::outcome_of)).
 //!
 //! The day of the game counts from 0, for a new pilot, by one for each
 //! day passed; `not_before_day: n` holds from day `n`.
 
 pub mod effects;
+pub mod lifecycle;
 pub mod requires;
 pub mod state;
