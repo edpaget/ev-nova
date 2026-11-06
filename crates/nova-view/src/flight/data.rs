@@ -259,19 +259,23 @@ impl CombatLooks for GameData {
     }
 
     /// Reads every `shïp`'s base image once for the batch, rather than
-    /// once per ship.
+    /// once per ship, and sizes each `PICT` once
+    /// ([`target_pictures`](crate::target_picture::target_pictures)).
     fn target_cards(&self, ships: &[ShipId]) -> Vec<TargetCard> {
         let bases = crate::target_picture::game_ship_bases(self);
+        let pictures = crate::target_picture::target_pictures(ships, &bases, |id| {
+            crate::ui::PictureSizes::picture_size(self, id)
+        });
         ships
             .iter()
-            .map(|&ship| {
+            .zip(pictures)
+            .map(|(&ship, picture)| {
                 let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
                     return TargetCard::default();
                 };
                 TargetCard {
                     subtitle: entry.record.subtitle.as_str().to_owned(),
-                    picture: crate::target_picture::game_target_picture_among(self, &bases, ship)
-                        .map(|p| p.picture),
+                    picture: picture.map(|p| p.picture),
                 }
             })
             .collect()

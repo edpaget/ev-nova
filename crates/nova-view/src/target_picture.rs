@@ -10,7 +10,8 @@
 //! `shïp` with no `shän` skips the fill (@0x23ef3). [`target_picture`] is
 //! the pure decision; [`game_target_picture`] feeds it from [`GameData`],
 //! and [`game_ship_bases`] with [`game_target_picture_among`] do so for
-//! many ships, reading the bases once.
+//! many ships, reading the bases once. [`target_pictures`] picks a batch's
+//! pictures, sizing each `PICT` once.
 
 use nova_data::GameData;
 use nova_data::records::ship::Ship;
@@ -84,6 +85,23 @@ pub fn target_picture(
             .min()?;
         picture(base)
     })
+}
+
+/// Each of `ships`' target pictures ([`target_picture`]), in order,
+/// sizing each `PICT` once for the whole batch: ships sharing a base ship
+/// fall back to the same picture, and a batch may name a ship twice.
+#[must_use]
+pub fn target_pictures(
+    ships: &[ShipId],
+    bases: &[(ShipId, i16)],
+    size: impl Fn(i16) -> Option<(u32, u32)>,
+) -> Vec<Option<ShipPicture>> {
+    let sized = std::cell::RefCell::new(std::collections::HashMap::new());
+    let memo = |id: i16| *sized.borrow_mut().entry(id).or_insert_with(|| size(id));
+    ships
+        .iter()
+        .map(|&ship| target_picture(ship, bases, memo))
+        .collect()
 }
 
 /// Ship type `ship`'s target picture in `data` ([`target_picture`]), from
@@ -198,6 +216,40 @@ mod tests {
             None,
             "129 is the base, and it has none; 130's is not looked at"
         );
+    }
+
+    #[test]
+    fn a_batch_sizes_each_picture_once_and_picks_as_one_ship_does() {
+        let bases = [
+            (ShipId(129), 1000),
+            (ShipId(130), 1000),
+            (ShipId(131), 1000),
+            (ShipId(132), 1200),
+        ];
+        let found = existing(&[(3001, 6, 3), (3004, 8, 8)]);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let counted = |id| {
+            asked.borrow_mut().push(id);
+            found(id)
+        };
+        let ships = [
+            ShipId(130),
+            ShipId(131),
+            ShipId(129),
+            ShipId(132),
+            ShipId(131),
+        ];
+        let one_by_one: Vec<_> = ships
+            .iter()
+            .map(|&ship| target_picture(ship, &bases, &found))
+            .collect();
+        assert_eq!(target_pictures(&ships, &bases, counted), one_by_one);
+        let mut asked = asked.into_inner();
+        let all = asked.len();
+        asked.sort_unstable();
+        asked.dedup();
+        assert_eq!(all, asked.len(), "each PICT sized once: {asked:?}");
+        assert_eq!(asked, [3001, 3002, 3003, 3004]);
     }
 
     #[test]
