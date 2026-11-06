@@ -347,7 +347,7 @@ impl Session {
             (
                 self.chart.galaxy.map(),
                 &self.statics.govts,
-                RuleSource::Engine,
+                self.setup.rules.source_for(RuleKey::MissionShipLinks),
             ),
             self.strings(),
             &mut draw_type,

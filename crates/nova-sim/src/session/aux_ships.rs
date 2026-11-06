@@ -112,7 +112,7 @@ impl Session {
                 holders,
                 map,
                 &self.statics.govts,
-                RuleSource::Engine,
+                self.setup.rules.source_for(RuleKey::AuxShipLinks),
             )
         {
             return;
