@@ -285,10 +285,15 @@ and `Mode`) are stateful.
 Write all checks and verifiers as Rust tests (unit tests, integration tests
 under `tests/`, or doctests) so `cargo` runs them.
 
-- Run tests with `mise run test` (nextest plus doctests).
-- In the TDD loop, run `cargo nextest run -p <crate>`, the same form the
-  pre-commit hook uses, so its build stays warm. Don't switch between `-p` and
-  `--workspace` in the loop: each switch rebuilds.
+- Run the least that verifies the change, and the workspace-wide checks once,
+  one at a time, at the end. `.claude/rules/resource-limits.md` gives the
+  ladder and the limits that a hook and the nextest and mise configs enforce:
+  several sessions share this machine, and stacked heavy runs have hung it.
+- In the TDD loop, run `cargo nextest run -p <crate> <filter>`, the same form
+  the pre-commit hook uses, so its build stays warm. Don't switch between `-p`
+  and `--workspace` in the loop: each switch rebuilds.
+- `mise run test` runs every crate's tests and doctests. It is part of the
+  full gate, not the loop.
 - Run the full gate with `mise run ci` (fmt, clippy with `-D warnings`, the
   `cargo-deny` bans, rustdoc with broken links denied, tests, doctests and the
   dev-tools legs). Run it once before moving an item to
@@ -314,10 +319,11 @@ Tests over the original game's data (the `stock_*` modules under each crate's
 `tests/it/`, in `tests/it/stock_*.rs`) skip, passing, unless `NOVA_DATA`
 points at a `Nova Files` folder. CI and `mise run ci` don't set it, so these
 tests can break without anyone noticing. When a change touches anything those
-tests cover, run them with the data:
+tests cover, run them with the data before review, for each crate the change
+touches, one crate at a time:
 
 ```sh
-NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run --workspace
+NOVA_DATA="/Users/edward/Projects/ev-nova/EV Nova.app/Contents/Resources/Nova Files" cargo nextest run -p <crate> -E 'test(/^stock_/)'
 ```
 
 That folder (inside the gitignored app bundle in the primary checkout) holds

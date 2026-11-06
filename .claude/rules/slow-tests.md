@@ -38,3 +38,7 @@ ran without trouble.
   `--workspace`.
 - Cap `CARGO_BUILD_JOBS` (6–8) for these runs, and run `mise run ci` once,
   not alongside a mutants run.
+
+`.config/nextest.toml` now runs at most two wgpu tests at a time in any run
+(the `gpu` test group), and a hook keeps heavy runs from overlapping. See
+`.claude/rules/resource-limits.md`.

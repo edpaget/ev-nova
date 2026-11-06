@@ -20,14 +20,16 @@ Let the tool generate and run the mutants rather than editing source by hand.
   rechecks that the unmutated tests pass.
 - Start the run with `run_in_background` and wait for its completion
   notification. Don't poll it with `sleep` or `until` loops.
-- Run one mutants session at a time across all worktrees. They share the
-  machine's cores, and two at once slow both. `mise.toml` sets
-  `CARGO_MUTANTS_JOBS=4`; pass `-j` to change it for one run.
-- To wait for another session's run, match the process name exactly:
-  `until ! pgrep -x cargo-mutants >/dev/null; do sleep 30; done`. Never use
-  `pgrep -f "cargo-mutants ..."`: `-f` matches whole command lines, and the
-  waiting shell's own command line contains the pattern, so the loop finds
-  itself and never ends.
+- Run one mutants session at a time across all worktrees, and never alongside
+  the full gate. `.claude/hooks/heavy-job-guard.sh` refuses the run while
+  another heavy job is going. `mise run mutants` builds two mutants at once
+  (`CARGO_MUTANTS_JOBS=2`) with the `mutants` nextest profile; don't raise
+  them (`.claude/rules/resource-limits.md`).
+- To wait for another session's run, use the helper in a background command:
+  `until [ -z "$(bash .claude/hooks/heavy-jobs-running.sh)" ]; do sleep 30; done`.
+  Never use `pgrep -f "cargo-mutants ..."` in a wait loop: `-f` matches whole
+  command lines, and the waiting shell's own command line contains the
+  pattern, so the loop finds itself and never ends.
 - For each `MISSED` mutant, write a test that fails against that mutant, then
   rerun to confirm it is `caught`.
 - For a mutant that genuinely can't change observable behaviour, add a pattern
