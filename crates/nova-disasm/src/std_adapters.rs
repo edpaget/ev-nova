@@ -280,18 +280,50 @@ mod tests {
         assert_eq!(workspace.workspace_root(), dir.path());
     }
 
-    #[test]
-    fn a_repository_is_its_own_primary_checkout() {
-        let dir = tempfile::tempdir().unwrap();
-        let init = Command::new("git")
-            .args(["init", "--quiet"])
-            .arg(dir.path())
+    /// Runs git in `dir`, away from any hook's repository and the user's
+    /// config.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", dir.join("no-global-config"))
             .status()
             .unwrap();
-        assert!(init.success());
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn a_worktree_s_primary_checkout_is_the_repository_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let worktree = dir.path().join("wt");
+        fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "--quiet"]);
+        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "x"]);
+        git(
+            &repo,
+            &["worktree", "add", "--quiet", worktree.to_str().unwrap()],
+        );
+        let primary = StdWorkspace::at(worktree.clone())
+            .primary_checkout()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        assert_eq!(primary, repo.canonicalize().unwrap());
+        assert_ne!(primary, worktree.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn a_repository_is_its_own_primary_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "--quiet"]);
         let primary = StdWorkspace::at(dir.path().to_path_buf())
             .primary_checkout()
             .unwrap();
