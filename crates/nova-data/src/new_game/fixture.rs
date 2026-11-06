@@ -11,9 +11,12 @@
 //! start `dock-hand`, in the hauler in `hearth`; and one conversation,
 //! `dialog/dock-job.ink`, an offer that `hearth-dock` names
 //! (`dialog/dock-job.ink#job_offer`), with its compiled
-//! `dock-job.ink.json` beside it. The other two stellars name none. The
-//! `.ink`'s header, and [`dialogs`](super::dialogs)' docs, give the
-//! `inklecate` command that compiles it again.
+//! `dock-job.ink.json` beside it. The offer declares one world flag,
+//! `dock_regular`, which changes its first line, and labels its once-only
+//! `route` choice, whose read count adds a line to a later visit: one flag
+//! and one read count for the engine to carry. The other two stellars
+//! name none. The `.ink`'s header, and [`dialogs`](super::dialogs)'
+//! docs, give the `inklecate` command that compiles it again.
 
 use std::path::PathBuf;
 
