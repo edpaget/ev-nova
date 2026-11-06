@@ -14,7 +14,8 @@ use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{
-    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, rled_words, scan_rled,
+    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, rled_words, scan_pict,
+    scan_rled,
 };
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -90,6 +91,19 @@ fn every_stock_pict_decodes_opaque_at_its_frame_size() {
             if alphas(&image).any(|a| a != 255) {
                 problems.push("not opaque".into());
             }
+        }
+    });
+}
+
+/// A scan gives what the decode does, for every stock picture: its size,
+/// or the same error.
+#[test]
+fn every_stock_pict_scans_as_it_decodes() {
+    check_all("PICT", 671, |data, problems| {
+        let decoded = decode_pict(data).map(|image| (image.width(), image.height()));
+        let scanned = scan_pict(data);
+        if scanned != decoded {
+            problems.push(format!("scanned {scanned:?}, decoded {decoded:?}"));
         }
     });
 }

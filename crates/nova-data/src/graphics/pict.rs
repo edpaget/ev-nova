@@ -77,12 +77,43 @@ const VERSION_2_WORD: u16 = 0x02FF;
 /// # Ok::<(), GraphicsError>(())
 /// ```
 pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
+    walk(data, Image::transparent)
+}
+
+/// Reads a `PICT`'s size without decoding a pixel. It walks the same
+/// opcodes as [`decode_pict`], so it fails exactly where and as that
+/// does, and succeeds with the decoded image's size.
+///
+/// # Example
+///
+/// ```
+/// use nova_data::graphics::{GraphicsError, decode_pict, scan_pict};
+///
+/// // A 3 × 2 picture with nothing drawn in it.
+/// let pict = [0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0x00, 0x11, 0x02, 0xFF, 0x00, 0xFF];
+/// assert_eq!(scan_pict(&pict), Ok((3, 2)));
+///
+/// // Where the decode fails, the scan fails alike.
+/// let unsupported = [0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0x00, 0x11, 0x02, 0xFF, 0x82, 0x00];
+/// assert_eq!(scan_pict(&unsupported), decode_pict(&unsupported).map(|_| (3, 2)));
+/// assert!(scan_pict(&unsupported).is_err());
+/// # Ok::<(), GraphicsError>(())
+/// ```
+pub fn scan_pict(data: &[u8]) -> Result<(u32, u32), GraphicsError> {
+    walk(data, |width, height| Scan { width, height }).map(|scan| (scan.width, scan.height))
+}
+
+/// Walks a picture's opcodes, making every check that can fail, and
+/// hands each copied row to the sink `start` makes from the frame's size:
+/// [`decode_pict`]'s canvas, or [`scan_pict`]'s [`Scan`]. Sharing the walk
+/// keeps the scan failing exactly where and as the decode does.
+fn walk<S: Sink>(data: &[u8], start: impl FnOnce(u32, u32) -> S) -> Result<S, GraphicsError> {
     let mut r = Reader::new(data);
     let frame = read_frame(&mut r)?;
     let version = Version::read(&mut r)?;
     let (width, height) = frame.size()?;
     check_budget(u64::from(width) * u64::from(height), data.len())?;
-    let mut canvas = Image::transparent(width, height);
+    let mut sink = start(width, height);
 
     // Every opcode is at least one byte, so the data runs out first.
     for _ in 0..data.len() {
@@ -100,17 +131,89 @@ pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
             }
             HEADER_OP => r.skip(24)?,
             CLIP => skip_region(&mut r)?,
-            BITS_RECT => indexed_bits(&mut r, ROWS_RAW, frame, &mut canvas)?,
-            BITS_RGN => indexed_bits(&mut r, ROWS_RAW.masked(), frame, &mut canvas)?,
-            PACK_BITS_RECT => indexed_bits(&mut r, ROWS_PACKED, frame, &mut canvas)?,
-            PACK_BITS_RGN => indexed_bits(&mut r, ROWS_PACKED.masked(), frame, &mut canvas)?,
-            DIRECT_BITS_RECT => direct_bits(&mut r, ROWS_PACKED, frame, &mut canvas)?,
-            DIRECT_BITS_RGN => direct_bits(&mut r, ROWS_PACKED.masked(), frame, &mut canvas)?,
-            END_PIC => return Ok(canvas),
+            BITS_RECT => indexed_bits(&mut r, ROWS_RAW, frame, &mut sink)?,
+            BITS_RGN => indexed_bits(&mut r, ROWS_RAW.masked(), frame, &mut sink)?,
+            PACK_BITS_RECT => indexed_bits(&mut r, ROWS_PACKED, frame, &mut sink)?,
+            PACK_BITS_RGN => indexed_bits(&mut r, ROWS_PACKED.masked(), frame, &mut sink)?,
+            DIRECT_BITS_RECT => direct_bits(&mut r, ROWS_PACKED, frame, &mut sink)?,
+            DIRECT_BITS_RGN => direct_bits(&mut r, ROWS_PACKED.masked(), frame, &mut sink)?,
+            END_PIC => return Ok(sink),
             _ => return Err(GraphicsError::UnsupportedOpcode { opcode, offset }),
         }
     }
     Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
+}
+
+/// One unpacked row of a pixel opcode inside its source rectangle's rows,
+/// with what a [`Sink`] needs to place it.
+struct Row<'a> {
+    /// How the row's bytes turn into pixels.
+    format: &'a RowFormat<'a>,
+    /// The unpacked bytes.
+    bytes: &'a [u8],
+    /// The pixel map's width, in pixels.
+    width: u32,
+    /// The pixel map's left edge.
+    left: i16,
+    /// The row's `y` in the pixel map's coordinates.
+    y: i32,
+    /// The copy's source and destination rectangles.
+    src: QdRect,
+    dst: QdRect,
+    /// The mask region of a `Rgn` opcode.
+    mask: Option<&'a Region>,
+    /// The picture's frame.
+    frame: QdRect,
+}
+
+/// Where [`walk`] hands the rows it copies.
+trait Sink {
+    /// Takes one copied row; fails as turning its bytes into pixels does.
+    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError>;
+}
+
+/// [`decode_pict`]'s canvas: each row's pixels inside the mask are drawn.
+impl Sink for Image {
+    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError> {
+        let Row {
+            format,
+            bytes,
+            width,
+            left,
+            y,
+            src,
+            dst,
+            mask,
+            frame,
+        } = *row;
+        let pixels = format.pixels(bytes, width)?;
+        let dst_y = y - i32::from(src.top) + i32::from(dst.top);
+        for x in i32::from(src.left)..i32::from(src.right) {
+            let dst_x = x - i32::from(src.left) + i32::from(dst.left);
+            if mask.is_some_and(|m| !m.contains(dst_x, dst_y)) {
+                continue;
+            }
+            if let Some(&pixel) = pixels.get((x - i32::from(left)) as usize) {
+                let canvas_x = dst_x - i32::from(frame.left);
+                let canvas_y = dst_y - i32::from(frame.top);
+                self.put(canvas_x as u32, canvas_y as u32, pixel);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// [`scan_pict`]'s sink: the frame's size, and each row checked as its
+/// pixels would be built, without building them.
+struct Scan {
+    width: u32,
+    height: u32,
+}
+
+impl Sink for Scan {
+    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError> {
+        row.format.check(row.bytes, row.width)
+    }
 }
 
 /// A `PICT`'s `picFrame`, as QuickDraw's `QDGetPictureBounds` gives it:
@@ -297,7 +400,7 @@ fn direct_bits(
     r: &mut Reader<'_>,
     op: PixelOp,
     frame: QdRect,
-    canvas: &mut Image,
+    sink: &mut impl Sink,
 ) -> Result<(), GraphicsError> {
     r.skip(4)?; // baseAddr
     let pm = PixMap::read(r)?;
@@ -313,7 +416,7 @@ fn direct_bits(
             });
         }
     };
-    copy_rows(r, &pm, &format, op, frame, canvas)
+    copy_rows(r, &pm, &format, op, frame, sink)
 }
 
 /// `0090` BitsRect, `0091` BitsRgn, `0098` PackBitsRect and `0099`
@@ -324,7 +427,7 @@ fn indexed_bits(
     r: &mut Reader<'_>,
     op: PixelOp,
     frame: QdRect,
-    canvas: &mut Image,
+    sink: &mut impl Sink,
 ) -> Result<(), GraphicsError> {
     let (pm, ctab) = match PixelMap::read(r)? {
         PixelMap::BitMap { row_bytes, bounds } => (
@@ -346,7 +449,7 @@ fn indexed_bits(
         bits: pm.pixel_size,
         ctab: &ctab,
     };
-    copy_rows(r, &pm, &format, op, frame, canvas)
+    copy_rows(r, &pm, &format, op, frame, sink)
 }
 
 /// srcCopy and ditherCopy, which both copy pixels unchanged.
@@ -398,6 +501,17 @@ impl RowFormat<'_> {
         }
     }
 
+    /// Fails as [`RowFormat::pixels`] would on the same row, without
+    /// building the pixels: an indexed value missing from the table.
+    fn check(&self, row: &[u8], width: u32) -> Result<(), GraphicsError> {
+        if let Self::Indexed { bits, ctab } = self {
+            for index in indices(row, *bits, width as usize).unwrap_or_default() {
+                ctab.rgba(index)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The pixels of one unpacked row.
     fn pixels(&self, row: &[u8], width: u32) -> Result<Vec<[u8; 4]>, GraphicsError> {
         Ok(match self {
@@ -432,15 +546,16 @@ impl RowFormat<'_> {
 }
 
 /// Reads the copy rectangles, mode, mask region (if `op` has one) and rows
-/// of a pixel opcode whose map is `pm`, and copies its source rectangle
-/// onto `canvas`, leaving the pixels outside the mask as they were.
+/// of a pixel opcode whose map is `pm`, and hands `sink` each row of its
+/// source rectangle; a canvas copies it, leaving the pixels outside the
+/// mask as they were.
 fn copy_rows(
     r: &mut Reader<'_>,
     pm: &PixMap,
     format: &RowFormat<'_>,
     op: PixelOp,
     frame: QdRect,
-    canvas: &mut Image,
+    sink: &mut impl Sink,
 ) -> Result<(), GraphicsError> {
     let src_offset = r.pos();
     let src = QdRect::read(r)?;
@@ -477,19 +592,17 @@ fn copy_rows(
         if y < i32::from(src.top) || y >= i32::from(src.bottom) {
             continue;
         }
-        let pixels = format.pixels(&bytes, width)?;
-        let dst_y = y - i32::from(src.top) + i32::from(dst.top);
-        for x in i32::from(src.left)..i32::from(src.right) {
-            let dst_x = x - i32::from(src.left) + i32::from(dst.left);
-            if mask.as_ref().is_some_and(|m| !m.contains(dst_x, dst_y)) {
-                continue;
-            }
-            if let Some(&pixel) = pixels.get((x - i32::from(pm.bounds.left)) as usize) {
-                let canvas_x = dst_x - i32::from(frame.left);
-                let canvas_y = dst_y - i32::from(frame.top);
-                canvas.put(canvas_x as u32, canvas_y as u32, pixel);
-            }
-        }
+        sink.row(&Row {
+            format,
+            bytes: &bytes,
+            width,
+            left: pm.bounds.left,
+            y,
+            src,
+            dst,
+            mask: mask.as_ref(),
+            frame,
+        })?;
     }
     Ok(())
 }
@@ -528,6 +641,86 @@ mod tests {
     };
 
     const FRAME: [i16; 4] = [0, 0, 3, 5];
+
+    /// Decodes `data`, asserting first that [`scan_pict`] agrees: the
+    /// decoded image's size, or the decode's error. Every test here
+    /// decodes through it, so every fixture pins the agreement.
+    fn decoded(data: &[u8]) -> Result<Image, GraphicsError> {
+        let decode = decode_pict(data);
+        assert_eq!(
+            scan_pict(data),
+            decode
+                .as_ref()
+                .map(|i| (i.width(), i.height()))
+                .map_err(Clone::clone),
+            "the scan agrees with the decode"
+        );
+        decode
+    }
+
+    #[test]
+    fn a_scan_gives_the_frame_size_of_a_16_bit_picture() {
+        let pict = PictBuilder::new([10, 20, 13, 25])
+            .direct_bits(&DirectBits::rgb555([10, 20, 13, 25], &[RED; 15]))
+            .end()
+            .build();
+        assert_eq!(scan_pict(&pict), Ok((5, 3)));
+    }
+
+    #[test]
+    fn a_scan_gives_the_frame_size_of_an_indexed_picture() {
+        let bits = IndexedBits::new([0, 0, 2, 3], 8, &sparse_ctab(), &[0, 1, 3, 255, 3, 1]);
+        assert_eq!(scan_pict(&indexed_pict(&bits)), Ok((3, 2)));
+    }
+
+    #[test]
+    fn an_indexed_pixel_missing_from_the_table_fails_the_scan() {
+        let bits = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[0, 2, 1]);
+        assert_eq!(
+            scan_pict(&indexed_pict(&bits)),
+            Err(GraphicsError::MissingColour { index: 2 })
+        );
+    }
+
+    #[test]
+    fn a_missing_pixel_outside_the_source_rows_is_never_looked_up() {
+        // Row 1 holds value 2, which the table lacks; only row 0 is copied.
+        let mut bits = IndexedBits::new([0, 0, 2, 3], 8, &sparse_ctab(), &[0, 1, 3, 3, 2, 1]);
+        bits.src = [0, 0, 1, 3];
+        bits.dst = [0, 0, 1, 3];
+        let pict = indexed_pict(&bits);
+        assert_eq!(scan_pict(&pict), Ok((3, 2)));
+        assert!(decoded(&pict).is_ok());
+    }
+
+    #[test]
+    fn a_bad_packed_row_a_huge_frame_and_a_truncated_picture_fail_the_scan() {
+        let pict = PictBuilder::new([0, 0, 2, 4])
+            .direct_bits(&DirectBits::rgb555([0, 0, 2, 4], &[RED; 8]))
+            .end()
+            .build();
+        let mut long = pict.clone();
+        long[FIRST_ROW] += 1;
+        assert_eq!(
+            scan_pict(&long),
+            Err(GraphicsError::BadPackedRow {
+                row: 0,
+                offset: FIRST_ROW
+            })
+        );
+        let huge = PictBuilder::new([0, 0, 32767, 32767]).end().build();
+        assert_eq!(
+            scan_pict(&huge),
+            Err(GraphicsError::TooLarge {
+                pixels: 32767 * 32767,
+                input_len: 16
+            })
+        );
+        assert!(matches!(
+            scan_pict(&pict[..pict.len() - 3]),
+            Err(GraphicsError::UnexpectedEnd { .. })
+        ));
+    }
 
     fn transparent(width: u32, height: u32) -> Image {
         Image::from_rgba(width, height, vec![0; (width * height * 4) as usize]).unwrap()
@@ -570,7 +763,7 @@ mod tests {
             Err(GraphicsError::UnexpectedEnd { offset: 8 })
         );
         assert_eq!(
-            decode_pict(&[0; 9]),
+            decoded(&[0; 9]),
             Err(GraphicsError::UnexpectedEnd { offset: 8 })
         );
     }
@@ -584,20 +777,20 @@ mod tests {
             0x00, 0x11, 0x02, 0xFF, // version 2
             0x00, 0xFF, // EndPic
         ];
-        assert_eq!(decode_pict(&bytes), Ok(transparent(3, 2)));
+        assert_eq!(decoded(&bytes), Ok(transparent(3, 2)));
     }
 
     #[test]
     fn the_image_is_the_size_of_the_frame() {
         let pict = PictBuilder::new([10, 20, 13, 25]).end().build();
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
     fn empty_or_inverted_frames_have_bad_dimensions() {
         let pict = PictBuilder::new([0, 0, 0, 5]).end().build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadDimensions {
                 width: 5,
                 height: 0
@@ -605,7 +798,7 @@ mod tests {
         );
         let pict = PictBuilder::new([0, 9, 4, 5]).end().build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadDimensions {
                 width: -4,
                 height: 4
@@ -618,14 +811,14 @@ mod tests {
         let mut garbage = PictBuilder::new(FRAME).end().build();
         garbage[12] = 0x01;
         assert_eq!(
-            decode_pict(&garbage),
+            decoded(&garbage),
             Err(GraphicsError::UnsupportedVersion { offset: 10 })
         );
         for header in [[0x11, 0x02], [0x11, 0x00], [0x12, 0x01], [0x00, 0x00]] {
             let mut pict = PictBuilder::v1(FRAME).end().build();
             pict[10..12].copy_from_slice(&header);
             assert_eq!(
-                decode_pict(&pict),
+                decoded(&pict),
                 Err(GraphicsError::UnsupportedVersion { offset: 10 }),
                 "{header:02x?}"
             );
@@ -636,7 +829,7 @@ mod tests {
     fn version_1_pictures_decode() {
         let pict = PictBuilder::v1(FRAME).end().build();
         assert_eq!(pict.len(), 13);
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -645,14 +838,14 @@ mod tests {
         for len in 0..pict.len() {
             assert!(
                 matches!(
-                    decode_pict(&pict[..len]),
+                    decoded(&pict[..len]),
                     Err(GraphicsError::UnexpectedEnd { .. })
                 ),
                 "{len}"
             );
         }
         assert_eq!(
-            decode_pict(&pict[..12]),
+            decoded(&pict[..12]),
             Err(GraphicsError::UnexpectedEnd { offset: 12 })
         );
     }
@@ -663,14 +856,14 @@ mod tests {
         for len in 0..pict.len() {
             assert!(
                 matches!(
-                    decode_pict(&pict[..len]),
+                    decoded(&pict[..len]),
                     Err(GraphicsError::UnexpectedEnd { .. })
                 ),
                 "{len}"
             );
         }
         assert_eq!(
-            decode_pict(&pict[..13]),
+            decoded(&pict[..13]),
             Err(GraphicsError::UnexpectedEnd { offset: 12 })
         );
     }
@@ -679,7 +872,7 @@ mod tests {
     fn missing_end_pic_is_an_unexpected_end() {
         let pict = PictBuilder::new(FRAME).header_op().build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::UnexpectedEnd { offset: 0x28 })
         );
     }
@@ -697,7 +890,7 @@ mod tests {
             .long_comment(7, &[])
             .end()
             .build();
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -709,10 +902,10 @@ mod tests {
         // The comment ends at 21; the pad byte is 21 and EndPic is at 22.
         assert_eq!(pict.len(), 24);
         assert_eq!(pict[21], 0);
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
         // A missing pad byte is an unexpected end.
         assert_eq!(
-            decode_pict(&pict[..21]),
+            decoded(&pict[..21]),
             Err(GraphicsError::UnexpectedEnd { offset: 21 })
         );
     }
@@ -726,7 +919,7 @@ mod tests {
             .short_comment(0x8200)
             .end()
             .build();
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -734,7 +927,7 @@ mod tests {
         let mut region = vec![0, 12];
         region.extend([0, 0, 0, 3, 0, 5, 0x82, 0x00, 0x82, 0x00]);
         let pict = PictBuilder::new(FRAME).raw(0x0001, &region).end().build();
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -744,7 +937,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadRegion {
                 size: 9,
                 offset: 16
@@ -754,14 +947,14 @@ mod tests {
             .raw(0x0001, &[0, 10, 0, 0, 0, 0, 0, 0, 0, 0])
             .end()
             .build();
-        assert!(decode_pict(&pict).is_ok());
+        assert!(decoded(&pict).is_ok());
     }
 
     #[test]
     fn bytes_after_end_pic_are_ignored() {
         let mut pict = PictBuilder::new(FRAME).end().build();
         pict.extend([0x82, 0x00, 0xFF]);
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -771,7 +964,7 @@ mod tests {
             .raw(0x8200, &[0; 16])
             .end()
             .build();
-        let err = decode_pict(&pict).unwrap_err();
+        let err = decoded(&pict).unwrap_err();
         assert_eq!(
             err,
             GraphicsError::UnsupportedOpcode {
@@ -794,7 +987,7 @@ mod tests {
                 .end()
                 .build();
             assert_eq!(
-                decode_pict(&pict),
+                decoded(&pict),
                 Err(GraphicsError::UnsupportedOpcode { opcode, offset: 16 }),
                 "{opcode:#06x}"
             );
@@ -805,7 +998,7 @@ mod tests {
     fn a_huge_frame_in_a_tiny_picture_is_too_large() {
         let pict = PictBuilder::new([0, 0, 32767, 32767]).end().build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::TooLarge {
                 pixels: 32767 * 32767,
                 input_len: 16
@@ -815,7 +1008,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::TooLarge {
                 pixels: 65535 * 65535,
                 input_len: 16
@@ -869,7 +1062,7 @@ mod tests {
             &[0x00, 0xFF], // EndPic
         ]
         .concat();
-        let image = decode_pict(&bytes).unwrap();
+        let image = decoded(&bytes).unwrap();
         assert_eq!((image.width(), image.height()), (4, 2));
         let red = [255, 0, 0, 255];
         let green = [0, 255, 0, 255];
@@ -894,7 +1087,7 @@ mod tests {
             .direct_bits(&DirectBits::rgb555([0, 0, 2, 3], &SIX))
             .end()
             .build();
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&SIX));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&SIX));
     }
 
     #[test]
@@ -908,7 +1101,7 @@ mod tests {
             .build();
         // Header, opcode, baseAddr, PixMap, rectangles, mode, then 3 raw rows.
         assert_eq!(pict.len(), 14 + 2 + 4 + 46 + 18 + 3 * 4 + 2);
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&pixels));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&pixels));
     }
 
     #[test]
@@ -919,7 +1112,7 @@ mod tests {
             .direct_bits(&bits)
             .end()
             .build();
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&SIX));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&SIX));
     }
 
     /// Where the first row starts when the picture is just the header and
@@ -936,7 +1129,7 @@ mod tests {
             .build();
         // A 1-byte count of 3: a repeat flag (257 - 125) and one word.
         assert_eq!(pict[FIRST_ROW..FIRST_ROW + 2], [3, 132]);
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&[GREEN; 250]));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&[GREEN; 250]));
 
         let wide = DirectBits::rgb555([0, 0, 2, 126], &[GREEN; 252]);
         assert_eq!(wide.row_bytes, 252);
@@ -946,7 +1139,7 @@ mod tests {
             .build();
         // A 2-byte count, then the repeat flag 257 - 126.
         assert_eq!(pict[FIRST_ROW..FIRST_ROW + 3], [0, 3, 131]);
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&[GREEN; 252]));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&[GREEN; 252]));
     }
 
     #[test]
@@ -957,7 +1150,7 @@ mod tests {
             .direct_bits(&bits)
             .end()
             .build();
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&SIX));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&SIX));
     }
 
     #[test]
@@ -969,7 +1162,7 @@ mod tests {
                 .direct_bits(&bits)
                 .end()
                 .build();
-            assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque(&SIX), "{mode}");
+            assert_eq!(rgba(&decoded(&pict).unwrap()), opaque(&SIX), "{mode}");
         }
     }
 
@@ -983,7 +1176,7 @@ mod tests {
                 .end()
                 .build();
             assert_eq!(
-                decode_pict(&pict),
+                decoded(&pict),
                 Err(GraphicsError::UnsupportedTransferMode { mode }),
                 "{mode}"
             );
@@ -1002,7 +1195,7 @@ mod tests {
             .direct_bits(&bits)
             .end()
             .build();
-        let image = decode_pict(&pict).unwrap();
+        let image = decoded(&pict).unwrap();
         let mut expected = vec![[0; 4]; 24];
         for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
             expected[(1 + y) * 6 + 2 + x] = rgb555(pixels[(1 + y) * 4 + 1 + x]);
@@ -1022,7 +1215,7 @@ mod tests {
         let mut expected = opaque(&[RED, GREEN, BLUE]);
         expected.extend([[0; 4]; 3]);
         expected.extend(opaque(&[WHITE, BLACK, RED]));
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), expected);
+        assert_eq!(rgba(&decoded(&pict).unwrap()), expected);
     }
 
     #[test]
@@ -1051,7 +1244,7 @@ mod tests {
             bits.dst = dst;
             let pict = PictBuilder::new(frame).direct_bits(&bits).end().build();
             assert_eq!(
-                decode_pict(&pict),
+                decoded(&pict),
                 Err(GraphicsError::BadCopyRect { offset: src_offset }),
                 "{src:?} -> {dst:?}"
             );
@@ -1066,7 +1259,7 @@ mod tests {
             .direct_bits(&bits)
             .end()
             .build();
-        let image = decode_pict(&pict).unwrap();
+        let image = decoded(&pict).unwrap();
         assert_eq!(image.pixel(1, 2), Some(rgb555(RED)));
         assert_eq!(image.pixel(2, 3), Some(rgb555(WHITE)));
         assert_eq!(image.pixel(0, 2), Some([0; 4]));
@@ -1081,7 +1274,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadRowBytes {
                 row_bytes: 9,
                 needed: 10
@@ -1100,7 +1293,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadDimensions {
                 width: 2,
                 height: 0
@@ -1123,7 +1316,7 @@ mod tests {
         let mut long = pict.clone();
         long[FIRST_ROW] += 1;
         assert_eq!(
-            decode_pict(&long),
+            decoded(&long),
             Err(GraphicsError::BadPackedRow {
                 row: 0,
                 offset: FIRST_ROW
@@ -1136,7 +1329,7 @@ mod tests {
         assert_eq!(pict[flag], 0xFF);
         bad[flag] = 0xFE;
         assert_eq!(
-            decode_pict(&bad),
+            decoded(&bad),
             Err(GraphicsError::BadPackedRow {
                 row: 1,
                 offset: second
@@ -1153,7 +1346,7 @@ mod tests {
         for len in 16..pict.len() - 2 {
             assert!(
                 matches!(
-                    decode_pict(&pict[..len]),
+                    decoded(&pict[..len]),
                     Err(GraphicsError::UnexpectedEnd { .. })
                 ),
                 "{len}"
@@ -1170,7 +1363,7 @@ mod tests {
                 .direct_bits(&bits)
                 .end()
                 .build();
-            decode_pict(&pict)
+            decoded(&pict)
         };
         let error = |pixel_size, pack_type, cmp_count| {
             Err(GraphicsError::UnsupportedPixMap {
@@ -1194,7 +1387,7 @@ mod tests {
             .build();
         pict[20] &= 0x7F;
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::NotAPixMap { offset: 20 })
         );
     }
@@ -1224,7 +1417,7 @@ mod tests {
         // One count byte, then a literal run of six bytes: R R G G B B.
         assert_eq!(pict[FIRST_ROW..FIRST_ROW + 8], [7, 5, 1, 4, 2, 5, 3, 6]);
         assert_eq!(
-            rgba(&decode_pict(&pict).unwrap()),
+            rgba(&decoded(&pict).unwrap()),
             opaque888(&[[1, 2, 3], [4, 5, 6]])
         );
     }
@@ -1235,7 +1428,7 @@ mod tests {
             .direct_bits(&DirectBits::rgb888([0, 0, 2, 3], &SIX_888))
             .end()
             .build();
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&SIX_888));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque888(&SIX_888));
     }
 
     #[test]
@@ -1246,7 +1439,7 @@ mod tests {
             .direct_bits(&bits)
             .end()
             .build();
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&SIX_888));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque888(&SIX_888));
     }
 
     #[test]
@@ -1259,7 +1452,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(pict[FIRST_ROW..FIRST_ROW + 4], [0, 1, 2, 3]);
-        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&pixels));
+        assert_eq!(rgba(&decoded(&pict).unwrap()), opaque888(&pixels));
     }
 
     #[test]
@@ -1280,7 +1473,7 @@ mod tests {
                 "{row_bytes}"
             );
             assert_eq!(
-                rgba(&decode_pict(&pict).unwrap()),
+                rgba(&decoded(&pict).unwrap()),
                 opaque888(&pixels),
                 "{row_bytes}"
             );
@@ -1296,7 +1489,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadRowBytes {
                 row_bytes: 11,
                 needed: 12
@@ -1313,7 +1506,7 @@ mod tests {
                 .direct_bits(&bits)
                 .end()
                 .build();
-            decode_pict(&pict)
+            decoded(&pict)
         };
         let error = |pixel_size, pack_type, cmp_count| {
             Err(GraphicsError::UnsupportedPixMap {
@@ -1374,7 +1567,7 @@ mod tests {
             // 3 pixels wide: never a whole number of bytes below 8 bits.
             for bounds in [[0, 0, 4, 3], [0, 0, 2, 6]] {
                 let bits = IndexedBits::new(bounds, depth, &sparse_ctab(), indices);
-                let image = decode_pict(&indexed_pict(&bits)).unwrap();
+                let image = decoded(&indexed_pict(&bits)).unwrap();
                 let expected: Vec<[u8; 4]> = indices.iter().map(|&i| colour(i)).collect();
                 assert_eq!(rgba(&image), expected, "{depth}-bit {bounds:?}");
             }
@@ -1388,7 +1581,7 @@ mod tests {
             .collect();
         let bits = IndexedBits::new([0, 0, 2, 20], 8, &sparse_ctab(), &indices);
         assert_eq!(bits.row_bytes, 20);
-        let image = decode_pict(&indexed_pict(&bits)).unwrap();
+        let image = decoded(&indexed_pict(&bits)).unwrap();
         let expected: Vec<[u8; 4]> = indices.iter().map(|&i| colour(i)).collect();
         assert_eq!(rgba(&image), expected);
     }
@@ -1419,14 +1612,14 @@ mod tests {
         ]
         .concat();
         let (red, blue) = ([255, 0, 0, 255], [0, 0, 255, 255]);
-        assert_eq!(rgba(&decode_pict(&bytes).unwrap()), [red, blue, blue, red]);
+        assert_eq!(rgba(&decoded(&bytes).unwrap()), [red, blue, blue, red]);
     }
 
     #[test]
     fn a_pixel_missing_from_the_table_is_named() {
         let bits = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[0, 2, 1]);
         assert_eq!(
-            decode_pict(&indexed_pict(&bits)),
+            decoded(&indexed_pict(&bits)),
             Err(GraphicsError::MissingColour { index: 2 })
         );
     }
@@ -1437,7 +1630,7 @@ mod tests {
             let mut bits = IndexedBits::new([0, 0, 1, 3], 8, &sparse_ctab(), &[0, 3, 1]);
             bits.bits = depth;
             assert_eq!(
-                decode_pict(&indexed_pict(&bits)),
+                decoded(&indexed_pict(&bits)),
                 Err(GraphicsError::UnsupportedPixMap {
                     pixel_size: depth,
                     pack_type: 0,
@@ -1454,7 +1647,7 @@ mod tests {
         assert_eq!(bits.row_bytes, 9);
         bits.row_bytes = 8;
         assert_eq!(
-            decode_pict(&indexed_pict(&bits)),
+            decoded(&indexed_pict(&bits)),
             Err(GraphicsError::BadRowBytes {
                 row_bytes: 8,
                 needed: 9
@@ -1467,13 +1660,13 @@ mod tests {
         let mut bits = IndexedBits::new([0, 0, 2, 2], 8, &sparse_ctab(), &[0, 1, 3, 255]);
         bits.mode = 1;
         assert_eq!(
-            decode_pict(&indexed_pict(&bits)),
+            decoded(&indexed_pict(&bits)),
             Err(GraphicsError::UnsupportedTransferMode { mode: 1 })
         );
         bits.mode = 0;
         bits.src = [0, 0, 1, 1];
         bits.dst = [1, 1, 2, 2];
-        let image = decode_pict(&indexed_pict(&bits)).unwrap();
+        let image = decoded(&indexed_pict(&bits)).unwrap();
         assert_eq!(rgba(&image), [[0; 4], [0; 4], [0; 4], colour(0)]);
     }
 
@@ -1516,7 +1709,7 @@ mod tests {
             &[0xFF],                                           // EndPic
         ]
         .concat();
-        let image = decode_pict(&bytes).unwrap();
+        let image = decoded(&bytes).unwrap();
         assert_eq!(art(&image), ["#.#", ".#."]);
         assert_eq!(image.pixel(0, 0), Some(BLACK_PX));
         assert_eq!(image.pixel(1, 0), Some(WHITE_PX));
@@ -1538,7 +1731,7 @@ mod tests {
             ]
             .concat()
         );
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -1554,7 +1747,7 @@ mod tests {
             .short_comment(131)
             .end()
             .build();
-        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+        assert_eq!(decoded(&pict), Ok(transparent(5, 3)));
     }
 
     #[test]
@@ -1567,7 +1760,7 @@ mod tests {
                 .end()
                 .build();
             assert_eq!(
-                decode_pict(&pict),
+                decoded(&pict),
                 Err(GraphicsError::UnsupportedOpcode { opcode, offset: 13 }),
                 "{opcode:#04x}"
             );
@@ -1604,7 +1797,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(pict.len(), 83);
-        assert_eq!(art(&decode_pict(&pict).unwrap()), UP_ARROW);
+        assert_eq!(art(&decoded(&pict).unwrap()), UP_ARROW);
     }
 
     /// A `width` x 3 `BitMap` of a diagonal stripe pattern.
@@ -1632,7 +1825,7 @@ mod tests {
             .end()
             .build();
         assert!(pict.len() < 12 + 3 * 76, "rows are packed");
-        assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+        assert_eq!(art(&decoded(&pict).unwrap()), rows);
     }
 
     #[test]
@@ -1649,7 +1842,7 @@ mod tests {
                 .end()
                 .build(),
         ] {
-            assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+            assert_eq!(art(&decoded(&pict).unwrap()), rows);
         }
     }
 
@@ -1676,7 +1869,7 @@ mod tests {
                 .end()
                 .build(),
         ] {
-            assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+            assert_eq!(art(&decoded(&pict).unwrap()), rows);
         }
     }
 
@@ -1693,7 +1886,7 @@ mod tests {
                 .end()
                 .build(),
         ] {
-            assert_eq!(art(&decode_pict(&pict).unwrap()), ["#.#", "##."]);
+            assert_eq!(art(&decoded(&pict).unwrap()), ["#.#", "##."]);
         }
     }
 
@@ -1716,7 +1909,7 @@ mod tests {
                 .end()
                 .build(),
         ] {
-            assert_eq!(rgba(&decode_pict(&pict).unwrap()), expected);
+            assert_eq!(rgba(&decoded(&pict).unwrap()), expected);
         }
     }
 
@@ -1746,7 +1939,7 @@ mod tests {
             .packbits_rgn(&bits, &rect_region(frame))
             .end()
             .build();
-        assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+        assert_eq!(art(&decoded(&pict).unwrap()), rows);
     }
 
     /// An L-shaped mask over a 4x4 frame: the top two rows, then the left
@@ -1763,7 +1956,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            art(&decode_pict(&alone).unwrap()),
+            art(&decoded(&alone).unwrap()),
             ["####", "####", "##  ", "##  "]
         );
 
@@ -1774,7 +1967,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            art(&decode_pict(&over).unwrap()),
+            art(&decoded(&over).unwrap()),
             ["####", "####", "##..", "##.."]
         );
     }
@@ -1789,7 +1982,7 @@ mod tests {
             .bits_rgn(&black, &rect_region([2, 2, 3, 3]))
             .end()
             .build();
-        assert_eq!(art(&decode_pict(&pict).unwrap()), ["  ", " #"]);
+        assert_eq!(art(&decoded(&pict).unwrap()), ["  ", " #"]);
     }
 
     #[test]
@@ -1799,7 +1992,7 @@ mod tests {
             .direct_bits_rgn(&bits, &l_region())
             .end()
             .build();
-        let image = decode_pict(&pict).unwrap();
+        let image = decoded(&pict).unwrap();
         let red = rgb555(RED);
         let expected: Vec<[u8; 4]> = (0..16)
             .map(|i| if i < 8 || i % 4 < 2 { red } else { CLEAR_PX })
@@ -1820,7 +2013,7 @@ mod tests {
             .build();
         // Opcode at 14, BitMap 10, rectangles and mode 18.
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadRegion {
                 size,
                 offset: 14 + 2 + 10 + 18
@@ -1834,7 +2027,7 @@ mod tests {
         bits.mode = 1;
         let region = rect_region([0, 0, 2, 2]);
         let rgn = |bits: &BitMap| {
-            decode_pict(
+            decoded(
                 &PictBuilder::new([0, 0, 2, 2])
                     .packbits_rgn(bits, &region)
                     .end()
@@ -1860,7 +2053,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadCopyRect {
                 offset: FIRST_ROW - 18
             })
@@ -1877,7 +2070,7 @@ mod tests {
             .end()
             .build();
         assert_eq!(
-            decode_pict(&pict),
+            decoded(&pict),
             Err(GraphicsError::BadRowBytes {
                 row_bytes: 2,
                 needed: 3
@@ -1896,13 +2089,13 @@ mod tests {
             .packbits_rgn(&BitMap::new([0, 0, 4, 4], &[true; 16]), &l_region())
             .end()
             .build();
-        crate::sweep::assert_never_panics(&pict, decode_pict);
+        crate::sweep::assert_never_panics(&pict, decoded);
         let pict = PictBuilder::new([0, 0, 4, 4])
             .bits_rgn(&bits, &l_region())
             .direct_bits_rgn(&DirectBits::rgb555([0, 0, 4, 4], &[RED; 16]), &l_region())
             .end()
             .build();
-        crate::sweep::assert_never_panics(&pict, decode_pict);
+        crate::sweep::assert_never_panics(&pict, decoded);
     }
 
     #[test]
@@ -1924,6 +2117,6 @@ mod tests {
             .end()
             .build();
         assert!(pict.len() < 1024);
-        crate::sweep::assert_never_panics(&pict, decode_pict);
+        crate::sweep::assert_never_panics(&pict, decoded);
     }
 }

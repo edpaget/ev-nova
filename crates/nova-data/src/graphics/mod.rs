@@ -153,7 +153,7 @@ pub use icon::{CICN, decode_cicn};
 pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
-pub use pict::{PICT, PictFrame, decode_pict, pict_frame};
+pub use pict::{PICT, PictFrame, decode_pict, pict_frame, scan_pict};
 pub use pict_sheet::{SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{
