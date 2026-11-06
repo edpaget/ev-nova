@@ -362,6 +362,122 @@ mod tests {
         assert_eq!(whole.original_ai_type(), 3, "its class's InherentAI");
     }
 
+    /// The ship whose first think once whole the brave traders' calls
+    /// read across, in berth 1 ([`Npc::kept_escort_ai`]).
+    mod slot_order {
+        use super::*;
+        use crate::ai::call_for_help::brave_call;
+        use crate::ai::{CommCall, Decision};
+        use crate::traffic::NoBay;
+        use crate::traffic::fixture::calls_on_line;
+
+        const LOW: NpcId = NpcId(0);
+        const FORMER: NpcId = NpcId(1);
+        const HIGH: NpcId = NpcId(2);
+
+        /// A brave trader attacks the former escort, calling as
+        /// `_BraveTraderAI` does ([`brave_call`]); every other ship idles.
+        #[derive(Debug)]
+        struct BraveAtFormer;
+
+        impl Behaviour for BraveAtFormer {
+            fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+                self.decision(npc, around, chance).goal
+            }
+
+            fn decision(&self, npc: &Npc, around: &Surroundings, _: &mut dyn Chance) -> Decision {
+                if npc.ai_type != AiType::BraveTrader {
+                    return Decision::default();
+                }
+                let goal = Goal::Attack(ShipRef::Npc(FORMER));
+                Decision {
+                    goal,
+                    comm_call: brave_call(npc, goal, around),
+                    ..Decision::default()
+                }
+            }
+        }
+
+        fn trader() -> Npc {
+            Npc {
+                ai_type: AiType::BraveTrader,
+                ..npc(0, ShipStats::new(FAST, &[]))
+            }
+        }
+
+        /// Brave traders in berths 0 and 2 and, in berth 1, a former escort
+        /// of a trader's class (`InherentAI` 1) the disabled reset has
+        /// marked, whole again and about to think. The calls of the
+        /// disabled tick, where both traders read 6, are taken.
+        fn traffic() -> Traffic {
+            let mut traffic = Traffic::with_interval(1);
+            assert_eq!(traffic.add_npc(trader()), LOW);
+            let mut led = npc(0, ShipStats::new(FAST, &[]));
+            led.condition = Condition::Disabled;
+            led.leader = Some(LOW);
+            led.hull.inherent_ai = 1;
+            assert_eq!(traffic.add_npc(led), FORMER);
+            assert_eq!(traffic.add_npc(trader()), HIGH);
+            let world = World {
+                npc_escort_ai: RuleSource::Engine,
+                ..World::new(&[])
+            };
+            traffic.tick_in(&BraveAtFormer, world, &[], &mut NeverFires);
+            let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == FORMER);
+            let led = led.expect("there");
+            assert!(led.kept_escort_ai, "the reset marked it");
+            led.condition = Condition::Intact;
+            assert_eq!(
+                distress_callers(&mut traffic),
+                [LOW, HIGH],
+                "both read 6 while it was disabled"
+            );
+            traffic
+        }
+
+        /// The callers of the distress calls queued since the last take.
+        fn distress_callers(traffic: &mut Traffic) -> Vec<NpcId> {
+            calls_on_line(&traffic.take_on_line())
+                .into_iter()
+                .filter(|&(_, call, _)| call == CommCall::Distress)
+                .map(|(id, ..)| id)
+                .collect()
+        }
+
+        #[test]
+        fn a_higher_slot_reads_the_former_escorts_class_word_in_its_first_think_once_whole() {
+            // `_EscortAI`'s lost parent writes +0x88 inside slot 1's
+            // dispatch (@0x83c4a); `_BraveTraderAI` reads it at @0x8b707.
+            let mut traffic = traffic();
+            traffic.tick_in(&BraveAtFormer, World::new(&[]), &[], &mut NeverFires);
+            assert_eq!(
+                distress_callers(&mut traffic),
+                [LOW],
+                "berth 0 thought first and read 6; berth 2 read its class's 1"
+            );
+            assert!(!of(&traffic, FORMER).kept_escort_ai);
+        }
+
+        #[test]
+        fn in_one_batch_every_slot_reads_the_kept_six_for_the_tick() {
+            // `LaunchFrameAi`'s other reading: every NPC decides from the
+            // tick as it began.
+            let mut traffic = traffic();
+            let world = World::new(&[]);
+            traffic.open_think(&BraveAtFormer, world, &[], &mut NeverFires);
+            traffic.think_run(
+                &BraveAtFormer,
+                world,
+                |_| true,
+                &NoBay::new(),
+                &mut NeverFires,
+            );
+            traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+            assert_eq!(distress_callers(&mut traffic), [LOW, HIGH]);
+            assert!(!of(&traffic, FORMER).kept_escort_ai);
+        }
+    }
+
     #[test]
     fn by_the_other_reading_it_keeps_its_leader_and_loses_the_rest() {
         let mut traffic = fleet(Condition::Disabled);

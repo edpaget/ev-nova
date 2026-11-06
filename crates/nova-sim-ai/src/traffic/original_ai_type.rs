@@ -59,8 +59,9 @@
 //! takes it out of its fleet at once ([`Npc::leave_fleet`]) and marks it
 //! ([`Npc::kept_escort_ai`], see
 //! [`disabled_reset`](super::disabled_reset)), and
-//! [`Npc::settle_original_ai_type`] clears the mark at that first think.
-//! A `ShipBehav` 2 mission ship keeps it for its stay too, as
+//! [`Npc::settle_original_ai_type`] clears the mark at that first think,
+//! inside the ship's own run, so a higher slot reads the class's word in
+//! that tick, as the original's (see its **Ordering**). A `ShipBehav` 2 mission ship keeps it for its stay too, as
 //! `_DeathStarAI` thinks in the type think's place and writes no +0x88
 //! (@0x8ff3a).
 //!
@@ -190,12 +191,17 @@ impl Npc {
     /// a class word of 0 or below leaves it with no AI ([`Npc::no_ai`]), and
     /// one above 4 keeps the mark, as `_EscortAI` thinks it again.
     ///
-    /// **Ordering.** The original clears it inside the ship's own
-    /// dispatch, in slot order; the traffic's tick settles it after the
-    /// tick's decisions. So a higher slot's reader in that same tick reads
-    /// 6 a tick late: only a brave trader whose target's first think once
-    /// whole falls in that tick, whose distress call is drawn on the
-    /// message line. Filed in `play-feel-5-followups`.
+    /// **Ordering.** It settles inside the ship's own run
+    /// ([`Traffic::take_goals`](super::Traffic::take_goals)), and under the
+    /// engine reading of [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)
+    /// each berth runs alone (`nova_sim::Session::dispatch_npcs`,
+    /// [`Traffic::think_holding`](super::Traffic::think_holding)). So a
+    /// higher slot reads the class's word in that tick and a lower one read
+    /// 6, as `_EscortAI` writes +0x88 inside the ship's own dispatch
+    /// (@0x83c4a), before any higher slot's dispatch of the frame reads it
+    /// (a brave trader's distress call, `_BraveTraderAI` @0x8b707). Under
+    /// the batch reading every slot decides from the tick as it began, and
+    /// reads 6 for the tick.
     pub fn settle_original_ai_type(&mut self) {
         if self.kept_escort_ai
             && !self.condition.disabled()
