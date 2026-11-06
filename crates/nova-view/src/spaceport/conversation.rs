@@ -417,6 +417,41 @@ mod tests {
     }
 
     #[test]
+    fn each_choice_s_box_spans_its_rows_and_the_text_s_width() {
+        let mut screen = offer();
+        let width = PANEL.width() - 2.0 * INSET;
+        // Above the first choice is the gap after the lines: no choice.
+        let gap = Point::new(LEFT + 1.0, row(1.0) + GAP - 0.5);
+        assert_eq!(click(&mut screen, gap), None);
+        let first = Point::new(LEFT + 1.0, row(1.0) + GAP + 0.5);
+        assert_eq!(
+            click(&mut screen, first),
+            Some(ConversationChoice::Choose(0))
+        );
+        // Either side of the edge between the second and third.
+        let second = Point::new(LEFT + 1.0, row(3.0) + GAP - 0.5);
+        assert_eq!(
+            click(&mut screen, second),
+            Some(ConversationChoice::Choose(1))
+        );
+        let third = Point::new(LEFT + 1.0, row(3.0) + GAP + 0.5);
+        assert_eq!(
+            click(&mut screen, third),
+            Some(ConversationChoice::Choose(2))
+        );
+        // Below the last, and either side of the right edge.
+        let below = Point::new(LEFT + 1.0, row(4.0) + GAP + 0.5);
+        assert_eq!(click(&mut screen, below), None);
+        let inside = Point::new(LEFT + width - 0.5, row(1.0) + GAP + 0.5);
+        assert_eq!(
+            click(&mut screen, inside),
+            Some(ConversationChoice::Choose(0))
+        );
+        let outside = Point::new(LEFT + width + 0.5, row(1.0) + GAP + 0.5);
+        assert_eq!(click(&mut screen, outside), None);
+    }
+
+    #[test]
     fn return_and_escape_do_nothing_while_choices_are_pending() {
         let mut screen = offer();
         assert_eq!(key(&mut screen, Key::Enter, false), None);
