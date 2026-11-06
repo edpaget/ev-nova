@@ -629,6 +629,20 @@ mod tests {
     }
 
     #[test]
+    fn a_data_symbol_at_a_section_s_end_is_in_no_section() {
+        // _after sits at __data's end, in no listed section: it runs to the
+        // next symbol, as it would with no sections listed.
+        let index = Index::build(&Listings {
+            symbols: "00002000 d _in\n00002010 d _after\n00002020 d _next\n".to_owned(),
+            sections: "Section\n  sectname __data\n   segname __DATA\n      addr 0x00002000\n      size 0x00000010\n".to_owned(),
+            ..Listings::default()
+        });
+        let (sym, off) = index.data_at(0x2010).unwrap();
+        assert_eq!((sym.name.as_str(), off), ("_after", 0));
+        assert_eq!(sym.end, Some(0x2020));
+    }
+
+    #[test]
     fn an_absolute_symbol_is_not_data() {
         // `__mh_execute_header` (type A) would otherwise swallow small
         // stack displacements like `0x1004(%esp)`.

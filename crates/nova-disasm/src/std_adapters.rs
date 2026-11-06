@@ -261,7 +261,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = FsCache::new(dir.path().to_path_buf());
         cache.put("k1", &listings()).unwrap();
-        cache.put("k1", &listings()).unwrap();
+        let mut other = listings();
+        other.text = "another run's text".to_owned();
+        cache.put("k1", &other).unwrap();
         assert_eq!(cache.get("k1"), Some(listings()));
     }
 
