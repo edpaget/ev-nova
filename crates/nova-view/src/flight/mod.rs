@@ -101,6 +101,7 @@ pub mod solid_runs;
 pub mod sprite;
 pub mod stars;
 pub mod target;
+pub mod touch_controls;
 pub mod trails;
 pub mod view;
 pub mod weapon_glow;
