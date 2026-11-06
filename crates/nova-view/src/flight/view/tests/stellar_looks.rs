@@ -12,6 +12,7 @@ use nova_sim::SessionEvent;
 use nova_sim::flight_frame::{FlightEvent, FrameStellar};
 
 use super::faked_world::{world, world_list};
+use super::nav::{faked_nav_icons, nav_at};
 use super::stellars::proxima_in_sol;
 use super::*;
 use crate::system::animation::Frames;
@@ -627,6 +628,57 @@ fn a_stellar_drawing_no_frame_draws_nothing_and_a_frozen_one_its_kept_frame_shif
             "the `DeadType` frame kept, where a 32-pixel slot puts it"
         );
     }
+}
+
+#[test]
+fn the_nav_brackets_round_a_slot_whose_frames_count_none_are_32_square() {
+    // `_HandleNavTargetSprites` brackets at half the slot's larger side
+    // (@0x2fe00-0x2fe36), which `_GetSpriteXSize` reads as 32 for a slot
+    // whose frames count none, frozen or frameless (@0x26d4-0x2702).
+    let mut view = faked_from(
+        uncounted_moon(),
+        showing(
+            130,
+            vec![
+                looking(128, DrawnSheet::Type, false),
+                looking(129, DrawnSheet::NoFrame, false),
+            ],
+        ),
+    );
+    caught_up(&mut view);
+    let moon = view.scene().expect("a scene").stellars()[1].position;
+    let (x, y) = (moon.x, moon.y);
+    let on_screen = view.camera().world_to_screen(moon);
+    let brackets = |view: &mut Faked| faked_nav_icons(view, Some(nav_at(129, (x, y), 0.0)));
+    assert_eq!(
+        brackets(&mut view),
+        corners_at(10000, on_screen, 16.0),
+        "showing no frame"
+    );
+    changed(&mut view, |frame| {
+        frame.stellars[1] = FrameStellar {
+            frozen: true,
+            counts_none: true,
+            ..looking(129, DrawnSheet::Dead, false)
+        };
+    });
+    raising(&mut view, &[SessionEvent::GalaxyChanged]);
+    caught_up(&mut view);
+    assert_eq!(
+        brackets(&mut view),
+        corners_at(10000, on_screen, 16.0),
+        "its `DeadType` frame, 70 square, frozen"
+    );
+    changed(&mut view, |frame| {
+        frame.stellars[1] = looking(129, DrawnSheet::Type, false);
+    });
+    raising(&mut view, &[SessionEvent::GalaxyChanged]);
+    caught_up(&mut view);
+    assert_eq!(
+        brackets(&mut view),
+        corners_at(10000, on_screen, 25.0),
+        "its `Type` frame, 50 square"
+    );
 }
 
 #[test]

@@ -51,6 +51,11 @@ const STAND_IN_FRAME: (u32, u32) = (STAND_IN_SIDE as u32, STAND_IN_SIDE as u32);
 /// frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
 const FROZEN_SIDE: u32 = 32;
 
+/// A stellar's frame as [`SystemScene::shown_frame`] gives it: keyed,
+/// with its width and height, and the width and height its sprite slot is
+/// placed as ([`SceneStellar::slot_size`]).
+pub type ShownFrame = (ImageKey, (f32, f32), (f32, f32));
+
 /// One stellar, placed in the scene.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // independent facts the session sets
@@ -168,6 +173,20 @@ impl SceneStellar {
         };
         let size = (sheet.frame_width as f32, sheet.frame_height as f32);
         Some((sheet.image.frame(frame), size))
+    }
+
+    /// The size `_GetSpriteXSize` and `_GetSpriteYSize` give its sprite
+    /// slot (@0x26d4-0x2731): 32 square when the slot's frames count none,
+    /// a frame [`frozen`](Self::frozen) or none shown
+    /// ([`DrawnSheet::NoFrame`], @0x26da-0x26ef); else the frame of the
+    /// sheet drawn; `None` when that sheet can't be read.
+    #[must_use]
+    pub fn slot_size(&self) -> Option<(u32, u32)> {
+        if self.frozen || self.drawn == DrawnSheet::NoFrame {
+            return Some((FROZEN_SIDE, FROZEN_SIDE));
+        }
+        let sheet = self.drawn()?.as_ref().ok()?;
+        Some((sheet.frame_width, sheet.frame_height))
     }
 
     /// Whether the sheet drawn draws past its frame box, as a 32-bit
@@ -496,15 +515,22 @@ impl SystemScene {
     }
 
     /// The frame stellar `id` shows and its size
-    /// ([`SceneStellar::shown_image`]): what the planet comm dialog draws
-    /// of it (`_PlanetCommDialogUpdate` @0x90cc6-0x90e26). None for a
-    /// stellar not in it or showing nothing.
+    /// ([`SceneStellar::shown_image`]), with the size its slot is placed
+    /// as ([`SceneStellar::slot_size`], 32 square for a frozen frame): what
+    /// the planet comm dialog draws of it (`_PlanetCommDialogUpdate`
+    /// @0x90cc6-0x90e26, sizing the rect by `_GetSpriteXSize` and
+    /// `_GetSpriteYSize` @0x90f97-0x90faf). None for a stellar not in it
+    /// or showing nothing.
     #[must_use]
-    pub fn shown_frame(&self, id: StellarId) -> Option<(ImageKey, (f32, f32))> {
-        self.stellars
-            .iter()
-            .find(|stellar| stellar.id == id)?
-            .shown_image()
+    pub fn shown_frame(&self, id: StellarId) -> Option<ShownFrame> {
+        let stellar = self.stellars.iter().find(|stellar| stellar.id == id)?;
+        let (image, size) = stellar.shown_image()?;
+        // A slot's side is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let placed_as = stellar
+            .slot_size()
+            .map_or(size, |(width, height)| (width as f32, height as f32));
+        Some((image, size, placed_as))
     }
 
     /// Where the camera may go: the box round the system's centre and every
@@ -1173,6 +1199,59 @@ mod tests {
             Some(ImageKey::sprite(1001, 2))
         );
         assert_eq!(scene.shown_frame(StellarId(999)), None, "not in it");
+    }
+
+    /// `scene` with stellar 153 frozen, drawing its `Type`, and 151
+    /// showing no frame.
+    fn frozen_153_frameless_151(scene: &mut SystemScene) {
+        scene.set_destroyed(|id| match id.0 {
+            153 => StellarLook {
+                frozen: true,
+                ..WHOLE
+            },
+            151 => StellarLook {
+                drawn: DrawnSheet::NoFrame,
+                counted: DrawnSheet::NoFrame,
+                ..WHOLE
+            },
+            _ => WHOLE,
+        });
+    }
+
+    #[test]
+    fn a_slot_whose_frames_count_none_is_32_square_frozen_or_frameless() {
+        // `_GetSpriteXSize` @0x26d4-0x2702: 32 for a frame index not below
+        // the count (a frozen frame) or a null frame (no frame).
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        let size = |scene: &SystemScene, id: i16| {
+            scene
+                .stellars()
+                .iter()
+                .find(|stellar| stellar.id == StellarId(id))
+                .expect("held")
+                .slot_size()
+        };
+        assert_eq!(size(&scene, 153), Some((8, 8)), "its sheet's frame");
+        frozen_153_frameless_151(&mut scene);
+        assert_eq!(size(&scene, 153), Some((32, 32)), "frozen");
+        assert_eq!(size(&scene, 151), Some((32, 32)), "showing no frame");
+        let unreadable = SystemScene::load(&catalog(), SystemId(130));
+        assert_eq!(size(&unreadable, 140), None, "a sheet that can't be read");
+    }
+
+    #[test]
+    fn a_frozen_stellars_shown_frame_is_placed_as_a_32_pixel_sprite() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        assert_eq!(
+            scene.shown_frame(StellarId(153)),
+            Some((ImageKey::sprite(1003, 0), (8.0, 8.0), (8.0, 8.0)))
+        );
+        frozen_153_frameless_151(&mut scene);
+        assert_eq!(
+            scene.shown_frame(StellarId(153)),
+            Some((ImageKey::sprite(1003, 0), (8.0, 8.0), (32.0, 32.0)))
+        );
+        assert_eq!(scene.shown_frame(StellarId(151)), None, "no frame");
     }
 
     #[test]

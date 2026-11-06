@@ -90,8 +90,9 @@ const REPLY_BACKING: TextBacking = TextBacking {
 };
 
 /// The stellar's frame the flight shows, keyed, with its width and
-/// height: what item 5 draws.
-pub type StellarFrame = (ImageKey, (f32, f32));
+/// height, and the width and height its sprite slot is placed as
+/// (`_GetSpriteXSize`, 32 square for a frozen frame): what item 5 draws.
+pub type StellarFrame = crate::system::ShownFrame;
 
 /// `status`'s colour, and whether it is bold (@0x90fb6-0x910e1).
 #[must_use]
@@ -325,18 +326,22 @@ impl PlanetCommDialog {
         }
     }
 
-    /// Draws the stellar's frame centred in item 5, its top left where the
-    /// original's rect puts it (the item's centre less half the frame,
-    /// each halving truncated, @0x90d04-0x90d66).
+    /// Draws the stellar's frame in item 5, its top left where the
+    /// original's rect puts it: the item's centre less half the size its
+    /// slot is placed as, each halving truncated (@0x90d04-0x90d66), which
+    /// is 32 square for a frozen frame (`_GetSpriteXSize`,
+    /// @0x90f97-0x90faf). The frame is drawn at its own size from there
+    /// (`_BlitPixieRLEDrawProc` @0xbb142-0xbb163), so a frame frozen sits
+    /// from the centre less 16.
     fn draw_sprite(&self, list: &mut DrawList) {
-        let (Some((image, (width, height))), Some(at)) =
+        let (Some((image, (width, height), (placed_w, placed_h))), Some(at)) =
             (self.sprite, self.dialog.item_bounds(SPRITE_ITEM))
         else {
             return;
         };
         let centre = |min: f32, max: f32| f32::midpoint(min, max).trunc();
-        let left = centre(at.min.x, at.max.x) - (width / 2.0).trunc();
-        let top = centre(at.min.y, at.max.y) - (height / 2.0).trunc();
+        let left = centre(at.min.x, at.max.x) - (placed_w / 2.0).trunc();
+        let top = centre(at.min.y, at.max.y) - (placed_h / 2.0).trunc();
         list.sprite(
             image,
             Point::new(left + width / 2.0, top + height / 2.0),
@@ -501,7 +506,7 @@ mod tests {
         }
     }
 
-    const SPRITE: StellarFrame = (ImageKey::sprite(1000, 3), (101.0, 64.0));
+    const SPRITE: StellarFrame = (ImageKey::sprite(1000, 3), (101.0, 64.0), (101.0, 64.0));
 
     fn dialog(view: &PlanetCommView) -> PlanetCommDialog {
         PlanetCommDialog::new(
@@ -698,6 +703,35 @@ mod tests {
             Some(vec!["What is it you want?".to_owned()])
         );
         assert_eq!(shown.view(), &refusing(PlanetStatus::Hostile));
+    }
+
+    #[test]
+    fn a_frozen_stellars_frame_is_placed_as_a_32_pixel_sprite() {
+        // `_PlanetCommDialogUpdate` insets item 5's centre by half the
+        // slot's `_GetSpriteXSize` (@0x90d42-0x90d66, @0x90f97-0x90faf),
+        // 32 for a frozen slot, and draws the frame at its own size from
+        // there (@0xbb142-0xbb163).
+        let frozen = (ImageKey::sprite(2000, 1), (70.0, 70.0), (32.0, 32.0));
+        let shown = PlanetCommDialog::new(
+            &stock(),
+            &greeting(),
+            Some(frozen),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let sprites: Vec<_> = drawn(&shown)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, center, .. } => Some((image, center)),
+                _ => None,
+            })
+            .collect();
+        // Item 5's centre is (377, 146): the top left (361, 130).
+        assert_eq!(
+            sprites,
+            [(frozen.0, Point::new(361.0 + 35.0, 130.0 + 35.0))]
+        );
     }
 
     #[test]

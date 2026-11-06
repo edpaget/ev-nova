@@ -37,5 +37,5 @@ pub use catalog::{
     SystemId,
 };
 pub use kept_frames::KeptFrames;
-pub use scene::{SceneStellar, StellarLook, SystemScene};
+pub use scene::{SceneStellar, ShownFrame, StellarLook, SystemScene};
 pub use view::SystemView;

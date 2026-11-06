@@ -46,9 +46,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.scene.as_ref()
     }
 
-    /// The frame the flight shows of `stellar` and its size, while the
-    /// system laid out shows it: what the planet comm dialog draws of it
-    /// (`_PlanetCommDialogUpdate` @0x90cc6-0x90e26).
+    /// The frame the flight shows of `stellar`, its size and the size its
+    /// slot is placed as, while the system laid out shows it: what the
+    /// planet comm dialog draws of it (`_PlanetCommDialogUpdate`
+    /// @0x90cc6-0x90e26).
     #[must_use]
     pub fn stellar_frame(
         &self,
@@ -786,15 +787,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if let Some(nav) = nav {
             // A selection the scene doesn't hold, such as a stellar
             // another system owns, is bracketed at its spöb position with
-            // no sprite (`_HandleNavTargetSprites` @0x2fd9f-0x2fe41).
+            // no sprite (`_HandleNavTargetSprites` @0x2fd9f-0x2fe41). One
+            // it holds is bracketed by its slot's size as `_GetSpriteXSize`
+            // and `_GetSpriteYSize` read it (@0x2fe00-0x2fe36), 32 square
+            // for a slot whose frames count none, frozen or frameless.
             let (position, sprite) = scene
                 .stellars()
                 .iter()
                 .find(|s| s.id == nav.stellar)
                 .map_or((super::point(nav.position), None), |stellar| {
-                    let sprite = stellar.drawn().and_then(|sheet| sheet.as_ref().ok());
-                    let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
-                    (stellar.position, sprite)
+                    (stellar.position, stellar.slot_size())
                 });
             let at = camera.nav_centre(position);
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);

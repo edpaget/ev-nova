@@ -134,7 +134,7 @@ fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
 
 /// The nav bracket `cïcn`s `view` draws (10000-10007) with `nav`, and
 /// where.
-fn faked_nav_icons(
+pub(super) fn faked_nav_icons(
     view: &mut Faked,
     nav: Option<nova_sim::brackets::NavBrackets>,
 ) -> Vec<(i16, Point)> {
@@ -154,7 +154,7 @@ fn faked_nav_icons(
 }
 
 /// The brackets round stellar `id` at `at`, settled or `expand` out.
-fn nav_at(id: i16, (x, y): (f32, f32), expand: f32) -> nova_sim::brackets::NavBrackets {
+pub(super) fn nav_at(id: i16, (x, y): (f32, f32), expand: f32) -> nova_sim::brackets::NavBrackets {
     nova_sim::brackets::NavBrackets {
         stellar: StellarId(id),
         position: Vec2::new(x, y),
