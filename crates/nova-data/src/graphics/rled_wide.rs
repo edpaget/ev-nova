@@ -784,6 +784,72 @@ mod tests {
         );
     }
 
+    /// At depth 16 the swap's op 2 swaps `count / 2` u16s (@0xbe44d-0xbe46c),
+    /// steps on to the next 4-byte boundary, and swaps the token there.
+    #[test]
+    fn the_swap_at_depth_16_swaps_u16s_then_realigns() {
+        let mut mem = sheet(2, 1, 16)
+            .frame(|f| {
+                f.line()
+                    .token(2, 4)
+                    .raw(&[0x12, 0x34, 0x56, 0x78])
+                    .skip(1)
+                    .token(2, 3)
+                    .raw(&[0x9A, 0xBC, 0xDE, 0xF0])
+                    .skip(1)
+            })
+            .build();
+        assert_eq!(swap(&mut mem, 16, 1), Ok(()));
+        assert_eq!(
+            mem[TOKENS..],
+            [
+                24, 0, 0, 1, // the line start
+                4, 0, 0, 2, 0x34, 0x12, 0x78, 0x56, // two u16s
+                2, 0, 0, 3, // the skip after them
+                3, 0, 0, 2, 0xBC, 0x9A, 0xDE, 0xF0, // one u16; the odd byte as it was
+                2, 0, 0, 3, // the skip after the boundary
+                0, 0, 0, 0, // the frame's end
+            ]
+        );
+    }
+
+    /// At depth 16 a pixel token of no bytes, or of one, swaps no u16s,
+    /// which the original's loop counts down from 0 (@0xbe44d-0xbe46c): a
+    /// runaway.
+    #[test]
+    fn the_swap_at_depth_16_runs_away_on_a_pixel_token_under_2_bytes() {
+        for count in [0, 1] {
+            let mut mem = sheet(2, 1, 16)
+                .frame(|f| f.line().token(2, count).raw(&[0; 4]))
+                .build();
+            assert_eq!(
+                swap(&mut mem, 16, 1),
+                Err(GraphicsError::RunawaySwap { offset: 20 }),
+                "{count} bytes"
+            );
+        }
+    }
+
+    /// At depth 8 the swap's op 2 steps over `count` bytes unswapped
+    /// (@0xbe3f0-0xbe3f7), then on to the next 4-byte boundary, and swaps
+    /// the token there.
+    #[test]
+    fn the_swap_at_depth_8_steps_over_the_bytes_unswapped_then_realigns() {
+        let mut mem = sheet(3, 1, 8)
+            .frame(|f| f.line().token(2, 3).raw(&[0x12, 0x34, 0x56, 0x78]).skip8(2))
+            .build();
+        assert_eq!(swap(&mut mem, 8, 1), Ok(()));
+        assert_eq!(
+            mem[TOKENS..],
+            [
+                12, 0, 0, 1, // the line start
+                3, 0, 0, 2, 0x12, 0x34, 0x56, 0x78, // the bytes as they were
+                2, 0, 0, 3, // the skip after the boundary
+                0, 0, 0, 0, // the frame's end
+            ]
+        );
+    }
+
     #[test]
     fn corrupt_wide_sheets_never_panic() {
         let bytes = sheet(2, 3, 32)
