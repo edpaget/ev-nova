@@ -174,6 +174,14 @@ pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
 /// [`Goal::Idle`], and the handler goes on to its slot test, which clears
 /// a gone slot's (@0x8d4e4-0x8d50d).
 ///
+/// The slot test is [`kept_target::kept`](crate::ai::kept_target::kept)'s,
+/// read from the slots before any write here: an NPC's slot is active by
+/// [`Condition::active`](crate::combat::hull::Condition::active), as
+/// [`Surroundings::active`](crate::ai::Surroundings::active) reads it, and
+/// the player's always is. It is not called, as `npcs` is borrowed to be
+/// written and no [`Surroundings`](crate::ai::Surroundings) is built at
+/// this step, whose player, `None` off its flight, would let the player go.
+///
 /// Each ship's word on the target its frame ends with
 /// ([`Decision::last_target`](crate::ai::Decision::last_target)'s shape):
 /// for one whose wait it ended, the target kept, which the traffic writes
@@ -573,7 +581,8 @@ mod tests {
     #[test]
     fn a_count_wait_ending_on_a_gone_slot_lets_it_go() {
         // The slot test after the wait exit (@0x8d4e4-0x8d50d): a ship
-        // breaking up is still active, the player always there.
+        // breaking up is still active, the player always there, and a ship
+        // still listed but destroyed is not.
         let mut gone = waiting(1, 0);
         gone.target = Some(n(9));
         let mut on_player = waiting(2, 0);
@@ -585,18 +594,25 @@ mod tests {
             ticks_left: 9,
             starting: false,
         };
-        let mut npcs = vec![gone, on_player, on_wreck, wreck];
-        let words = lapse(&mut npcs, &[true, true, true, true]);
+        let mut on_destroyed = waiting(5, 0);
+        on_destroyed.target = Some(n(6));
+        let mut destroyed = ship(6, 6, Goal::Idle);
+        destroyed.condition = Condition::Destroyed;
+        let mut npcs = vec![gone, on_player, on_wreck, wreck, on_destroyed, destroyed];
+        let words = lapse(&mut npcs, &[true; 6]);
         assert_eq!(
             words,
             [
                 Some(None),
                 Some(Some(ShipRef::Player)),
                 Some(Some(n(4))),
+                None,
+                Some(None),
                 None
             ]
         );
         assert_eq!(npcs[0].target, None);
+        assert_eq!(npcs[4].target, None, "listed, but its slot inactive");
     }
 
     #[test]
