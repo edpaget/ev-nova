@@ -9,8 +9,12 @@
 //! - the readers of the overlaid star map ([`OverlaidGalaxy::map`]): the
 //!   planner, the clicks' acceptance, the cue, J's selection, Hyper
 //!   Select's one-jump reading, the map outfits' walk, the view's galaxy
-//!   model and the mission pickers' adjacency. By [`LinkSource::Gates`]
-//!   the map's links are the lanes ([`StarMap::with_lanes`]).
+//!   model and the mission pickers' adjacency: a mission stellar's
+//!   distance ([`StarMap::listed_links`] or [`StarMap::neighbours`] by
+//!   [`RuleKey::MissionStellarDistance`](crate::RuleKey::MissionStellarDistance))
+//!   and `AvailStel` 5000-9998 ([`StarMap::listed_links`]), under both of
+//!   their readings. By [`LinkSource::Gates`] the map's links are the
+//!   lanes ([`StarMap::with_lanes`]).
 //! - the readers of a system's slots ([`OverlaidGalaxy::link_slots`]): the
 //!   galaxy map's three link sets, the click's and Shift-click's link
 //!   tests, Hyper Select, the Tab cycle, the floating map, the floating
@@ -22,8 +26,14 @@
 //! [`StarMap::con_slots`]) stay the catalog's under both: no lane is ever
 //! a Con link, so no lane is a hyperspace link either. The readers that
 //! must read the raw Con keep them: the cue's −1-slot quirk, a hyperspace
-//! arrival's target, a crime's walk and the mission pickers' `-5` and aux
-//! ships.
+//! arrival's target and a crime's walk. Two mission pickers read the raw
+//! Con by the engine's reading of their own keys and the map's links,
+//! so the lanes by [`LinkSource::Gates`], by the other: a mission's
+//! `ShipSyst` -5 ships
+//! ([`RuleKey::MissionShipLinks`](crate::RuleKey::MissionShipLinks),
+//! [`select_ship_system`]) and its `AuxShipSyst` 5000-9998 auxiliary
+//! ships ([`RuleKey::AuxShipLinks`](crate::RuleKey::AuxShipLinks),
+//! [`aux_system_allows`]).
 //!
 //! The lanes are built under both sources, as the map's lane looks read
 //! them by [`RuleKey::MapLaneStyle`](crate::RuleKey::MapLaneStyle) over
@@ -32,6 +42,8 @@
 //! change of [`OverlaidGalaxy::set_link_source`].
 //!
 //! [`known_from`]: crate::exploration::known_from
+//! [`select_ship_system`]: crate::mission::ships::select_ship_system
+//! [`aux_system_allows`]: crate::mission::aux_ships::aux_system_allows
 
 use super::OverlaidGalaxy;
 use crate::catalog::{GateSite, ListedStellar, SystemId};
