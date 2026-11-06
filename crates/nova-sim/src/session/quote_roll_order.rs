@@ -137,6 +137,30 @@ fn a_due_quote_and_a_fleet_arriving_on_one_pass_end_the_frame_on_the_fleets_line
 }
 
 #[test]
+fn on_the_rest_of_the_frame_a_dialog_opened_on_the_quote_comes_before_the_fleets_line() {
+    // The rest of the opening frame runs the pass from the key block on,
+    // its ship loop's end (`_HandleShip` @0x44483) and the reinforcement
+    // clock's tick (`_HandleReinforcements` @0x44504) among it, so the
+    // due quote is said there and the fleet's line replaces it (@0x9024b,
+    // @0x90251), as on a whole pass. The rest runs at the gain as it
+    // stands; a close at the key block would have zeroed it, and the
+    // fleet's clock runs at the gain, so the rest is owed here at full
+    // gain for the fleet to arrive on it.
+    let catalog = quoting();
+    let mut session = coming(&catalog, 1, QUOTE_ON_ATTACK, true);
+    session.opening_rest_owed = true;
+    let report = frame(&mut session, &catalog, 139);
+    assert!(!session.opening_rest_owed(), "the rest run");
+    assert_eq!(said(&report), [vec![QUOTE.to_owned()]], "the quote said");
+    assert_eq!(
+        report.steps[0].last_line,
+        Some(RaisedLine::Message(fleet_quote())),
+        "the fleet's line raised last"
+    );
+    assert_eq!(session.comm_line(), shown(fleet_quote().ticks()));
+}
+
+#[test]
 fn a_random_quote_reads_the_line_free_before_the_fleets_line_is_raised() {
     // The roll's gate reads `_commCount` (@0x33f42-0x33f4b) before
     // `_HandleReinforcements` (@0x44504) raises the fleet's line, so a
