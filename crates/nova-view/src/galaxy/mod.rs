@@ -27,6 +27,8 @@
 //! - [`buttons`]: the in-flight maps' six buttons, as `_DrawMapButtons`
 //!   draws them and `_TrackMapButtons` tracks them.
 //! - [`pad`]: the in-flight maps' pad focus over their six buttons.
+//! - [`cursor`]: the in-flight maps' pad cursor, which the right stick
+//!   moves and South clicks with.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
 //! - [`help`]: the viewer's help line and Enter label, naming the keys
@@ -37,6 +39,7 @@ pub mod buttons;
 pub mod catalog;
 pub mod click;
 pub mod clip;
+pub mod cursor;
 pub mod data;
 pub mod dialog;
 pub mod find;

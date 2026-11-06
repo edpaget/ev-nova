@@ -466,3 +466,92 @@ fn a_cancelled_south_press_leaves_a_later_click_alone() {
     map.input(&pointer(false, find));
     assert!(map.finding(), "the click on Find still opens it");
 }
+
+// South's target: whichever the pad moved last
+// (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
+
+/// Pushes the right stick fully right for a tenth of a second, then lets
+/// it go: the cursor moves 30 points.
+fn nudge_cursor(map: &mut GalaxyMap) {
+    use crate::input::PadAxis;
+    map.input(&Input::PadAxis {
+        axis: PadAxis::RightX,
+        value: 1.0,
+    });
+    map.tick(std::time::Duration::from_millis(100));
+    map.input(&Input::PadAxis {
+        axis: PadAxis::RightX,
+        value: 0.0,
+    });
+}
+
+#[test]
+fn after_the_cursor_moves_south_presses_the_map_not_the_focused_button() {
+    let mut map = map();
+    map.input(&told(PAD));
+    nudge_cursor(&mut map);
+    // Alpha (128) and Alpha Reborn (131) draw at item 3's centre, 30
+    // points left of the cursor: out of reach, so South drags.
+    tap(&mut map, PadButton::South);
+    assert!(!map.take_close(), "Done not pressed");
+    assert_eq!(map.take_press(), None, "nothing hit");
+    // Back over Alpha: South's press is held for the owner.
+    map.input(&Input::PadAxis {
+        axis: crate::input::PadAxis::RightX,
+        value: -1.0,
+    });
+    map.tick(std::time::Duration::from_millis(100));
+    map.input(&pad(PadButton::South, true));
+    let press = map.take_press().expect("a press on the map");
+    assert_eq!(press.hits, vec![SystemId(128), SystemId(131)]);
+    map.input(&pad(PadButton::South, false));
+    assert!(!map.take_close());
+}
+
+#[test]
+fn a_dpad_move_gives_south_back_to_the_buttons() {
+    let mut map = map();
+    map.input(&told(PAD));
+    nudge_cursor(&mut map);
+    assert_eq!(highlighted(&map), None);
+    tap(&mut map, PadButton::DPadLeft);
+    tap(&mut map, PadButton::DPadRight);
+    assert_eq!(highlighted(&map), Some(MapButton::Done));
+    tap(&mut map, PadButton::South);
+    assert!(map.take_close(), "South presses Done again");
+}
+
+#[test]
+fn the_button_highlight_hides_while_the_cursor_holds_south() {
+    let mut map = map();
+    map.input(&told(PAD));
+    assert_eq!(highlighted(&map), Some(MapButton::Done));
+    nudge_cursor(&mut map);
+    assert_eq!(highlighted(&map), None);
+    map.opened();
+    assert_eq!(highlighted(&map), Some(MapButton::Done), "each open");
+}
+
+#[test]
+fn a_south_press_before_the_pad_is_told_presses_nothing() {
+    let mut map = map();
+    nudge_cursor(&mut map);
+    nudge_cursor(&mut map);
+    let place = map.place().copied();
+    tap(&mut map, PadButton::South);
+    assert_eq!(map.take_press(), None);
+    assert!(!map.take_close());
+    map.input(&pointer(false, rect(MapButton::Done).center()));
+    map.input(&Input::PointerMoved(rect(MapButton::Done).center()));
+    assert_eq!(map.place().copied(), place, "no drag started");
+}
+
+#[test]
+fn holding_south_while_the_stick_moves_keeps_the_target_of_the_press() {
+    let mut map = map();
+    map.input(&told(PAD));
+    map.input(&pad(PadButton::South, true));
+    nudge_cursor(&mut map);
+    map.input(&pad(PadButton::South, false));
+    assert!(map.take_close(), "Done, pressed before the stick moved");
+}

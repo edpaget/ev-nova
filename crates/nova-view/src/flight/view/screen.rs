@@ -332,6 +332,9 @@ impl<
             if let Input::Surroundings(told) = *input {
                 self.map.input(&self.map_frame_input(input));
                 self.touch_controls.tell(told);
+            } else if self.map_open && matches!(input, Input::PadAxis { .. }) {
+                // The open map's cursor reads the pad's sticks too.
+                self.map.input(input);
             }
             return ScreenAction::None;
         }

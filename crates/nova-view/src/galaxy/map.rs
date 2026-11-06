@@ -58,8 +58,10 @@
 //! - Space (a press, not its repeats) on the course and hypergate maps
 //!   beeps ([`UiSound::MapCentred`]) and centres the map on the current
 //!   system, selected with no destination, as `_MapFilter` does on every
-//!   map (@0x140e0-0x14169). The viewer has no current system: there it
-//!   does nothing.
+//!   map (@0x140e0-0x14169), and so does the pad's North. The viewer has
+//!   no current system: there it does nothing.
+//! - On an in-flight map the pad's right stick moves a cursor, and South
+//!   presses the map under it as a left button does ([`cursor`](super::cursor)).
 //! - F or S (a press, any case, not its repeats) opens Find, as the Find
 //!   button does (@0x144b9-0x144d6; see "Find" below).
 //! - C (any case, its repeats too) on an in-flight map asks the owner to
@@ -577,7 +579,7 @@ pub enum MapMode {
 #[derive(Clone, Debug)]
 pub struct GalaxyMap {
     mode: MapMode,
-    model: GalaxyModel,
+    pub(super) model: GalaxyModel,
     look: Look,
     selected: Option<SystemId>,
     /// Whether a click made the selection, so that a click again at its
@@ -615,7 +617,7 @@ pub struct GalaxyMap {
     /// reads the `shiftKey` bit (@0x13ee4), and a click's Shift
     /// [`MapCommand::PlotCourse`], held, the left Shift alone as
     /// `_DoSystemMap` polls its key code (`_KeyCheck(0x38)` @0x13071).
-    keys: CommandReader,
+    pub(super) keys: CommandReader,
     /// A Tab, `\`, Return, C or Clear Route on an in-flight map, not yet
     /// taken.
     request: Option<Request>,
@@ -639,7 +641,7 @@ pub struct GalaxyMap {
     /// The government borders ([`borders`](super::borders)).
     borders: MapBorders,
     /// The pad's focus over an in-flight map's buttons ([`pad`](super::pad)).
-    pad: MapPad,
+    pub(super) pad: MapPad,
     /// The pinch on the map, while one is ([`touch`](super::touch)).
     pub(super) pinch: Option<MapPinch>,
     /// Plot Course's touch toggle ([`toggle`](super::toggle)).
@@ -1343,7 +1345,7 @@ impl GalaxyMap {
                 return;
             }
             // Once, on key-down, as `_MapFilter` takes Space (@0x140e0).
-            Command::Ui(UiCommand::Activate) => {
+            Command::Ui(UiCommand::Activate) | Command::Map(MapCommand::Centre) => {
                 if !repeat {
                     self.centre_on_current();
                 }
@@ -1416,6 +1418,7 @@ impl GalaxyMap {
             return;
         }
         self.sounds.push(UiSound::MapCentred);
+        self.pad.centre_cursor();
         if let Some(current) = self.current {
             self.select_and_centre(current);
         }
@@ -1512,7 +1515,7 @@ impl GalaxyMap {
     /// [`CLICK_SLOP`] and is still over the map, otherwise the end of a
     /// drag. On an in-flight map it only ends a drag: its click was the
     /// press's ([`GalaxyMap::take_press`]).
-    fn release(&mut self, at: Point) {
+    pub(super) fn release(&mut self, at: Point) {
         let Some(press) = self.press.take() else {
             return;
         };
@@ -1534,7 +1537,7 @@ impl GalaxyMap {
     /// or dragged on its release; on an in-flight map, the systems its
     /// hit box holds ([`hits`]) held for the owner
     /// ([`GalaxyMap::take_press`]), or with none the drag at once.
-    fn press_map(&mut self, at: Point) {
+    pub(super) fn press_map(&mut self, at: Point) {
         if let Look::Dialog(_) = &self.look {
             let hits = hits(&self.model, at, &self.transform());
             self.awaiting = None;
@@ -1651,6 +1654,7 @@ impl GalaxyMap {
         draw_nebulae(list, nebulae, &frame, dialog.update(), self.nebula_pick);
         let mut map = DrawList::new();
         self.draw_marks_and_selection(&mut map, &dialog.transform());
+        self.draw_cursor(&dialog.transform(), self.style.up, &mut map);
         clip_opaque(&map, map_area(), list);
         if let Some(panel) = &self.panel {
             draw_panel(list, panel, DIALOG_ORIGIN, metrics, dialog.place().zoom());
@@ -2066,6 +2070,10 @@ impl GalaxyMap {
                     self.press_button(button);
                     return;
                 }
+                Some(step @ (PadStep::PressMap | PadStep::ReleaseMap(_))) => {
+                    self.cursor_step(step);
+                    return;
+                }
                 Some(PadStep::Command(command)) => {
                     if command.pressed {
                         self.command(command.command, command.repeat);
@@ -2158,7 +2166,8 @@ impl Screen for GalaxyMap {
     /// Find isn't open, as only `_MapFilter` runs them and Find's dialog
     /// has its own filter (see [`MapBorders::tick`]); then the cells taken
     /// if item 3 was redrawn.
-    fn tick(&mut self, _dt: Duration) {
+    fn tick(&mut self, dt: Duration) {
+        self.cursor_tick(dt);
         if !self.finding() {
             match &mut self.look {
                 Look::Dialog(dialog) => self.borders.tick(dialog),
@@ -2224,6 +2233,7 @@ impl Screen for GalaxyMap {
     /// Forgets the keys held, Shift among them, and a button South
     /// pressed.
     fn release_keys(&mut self) {
+        self.cursor_let_go();
         self.keys.let_go();
         if let Look::Dialog(dialog) = &mut self.look {
             self.pad.let_go(dialog.buttons_mut());

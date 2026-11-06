@@ -3,7 +3,9 @@
 //! taken by the map's filter with the map key held, and the pad's map
 //! chord over a screen, read by the pad reader the router feeds
 //! ([`FlightView::note_pad`]). The map's own focus rules are the
-//! `galaxy::pad` module's.
+//! `galaxy::pad` module's, and its cursor's the `galaxy::cursor` module's:
+//! here the sticks and ticks reach the cursor over flight and over the
+//! port (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
 //!
 //! On flight's plain map, flight still holds the keys it reads with no
 //! latch (`track_unlatched`), the pad's d-pad and right trigger among
@@ -325,4 +327,159 @@ fn a_rebound_map_chord_closes_a_port_map_on_its_new_buttons() {
     assert!(view.map_waiting(), "the layer's release is no map key's");
     over(&mut view, PadButton::North, false);
     assert!(!view.map_open(), "closed on North's release");
+}
+
+// The map's pad cursor and North's centre
+// (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
+
+/// A tenth of a second.
+const TENTH: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Barnard (132): neither Sol's preselection nor linked from Sol, so the
+/// selection cycle, which steps through Sol's links, never reaches it.
+const BARNARD: i16 = 132;
+
+/// Where system `id` draws on `view`'s course map, as a whole pixel in
+/// the map's frame.
+fn pixel_on_map(view: &Faked, id: i16) -> Point {
+    let map = view.course_map();
+    let position = map.model().system(SystemId(id)).expect("drawn").position();
+    let (h, v) = map.transform().pixel(position);
+    #[allow(clippy::cast_precision_loss)] // Screen pixels.
+    Point::new(h as f32, v as f32)
+}
+
+/// Pans `view`'s open map down with the left stick, by `feed`, until
+/// Barnard draws in item 3; the steps taken.
+fn pan_to_barnard(view: &mut Faked, feed: fn(&mut Faked, PadButton, bool)) -> usize {
+    for steps in 0..100 {
+        if crate::galaxy::dialog::in_map_item(pixel_on_map(view, BARNARD)) {
+            return steps;
+        }
+        feed(view, PadButton::LeftStickDown, true);
+        feed(view, PadButton::LeftStickDown, false);
+    }
+    panic!("Barnard never comes into item 3");
+}
+
+/// Steers `view`'s map cursor onto system `id` with the right stick, the
+/// stick fed by `feed` and the map ticked by `tick`.
+fn steer_onto(
+    view: &mut Faked,
+    id: i16,
+    feed: fn(&mut Faked, &Input),
+    tick: fn(&mut Faked, std::time::Duration),
+) {
+    use crate::input::PadAxis;
+    let goal = pixel_on_map(view, id);
+    for (axis, sign) in [(PadAxis::RightX, 1.0), (PadAxis::RightY, -1.0)] {
+        for _ in 0..40 {
+            let at = view.course_map().cursor().expect("in flight");
+            let gap = if axis == PadAxis::RightX {
+                goal.x - at.x
+            } else {
+                goal.y - at.y
+            };
+            if gap.abs() < 1.0 {
+                break;
+            }
+            // A full push moves 30 points a tenth; a push p past the dead
+            // zone reads (p - 0.15) / 0.85.
+            let wanted = (gap.abs() / 30.0).min(1.0);
+            let value = (0.15 + wanted * 0.85) * gap.signum() * sign;
+            feed(view, &Input::PadAxis { axis, value });
+            tick(view, TENTH);
+            feed(view, &Input::PadAxis { axis, value: 0.0 });
+        }
+    }
+    let at = view.course_map().cursor().expect("in flight");
+    assert!(
+        (at.x - goal.x).abs() < 2.0 && (at.y - goal.y).abs() < 2.0,
+        "{at:?} near {goal:?}"
+    );
+}
+
+fn clicked(selected: i16) -> Answer {
+    Answer::Clicked(nova_sim::MapClicked {
+        selected: Some(SystemId(selected)),
+        gate_pick: None,
+        clear_route: None,
+        course_changed: false,
+        nav_redraw: false,
+    })
+}
+
+/// The map clicks `view` sent its flight.
+fn map_clicks(view: &Faked) -> Vec<FlightCommand> {
+    sent(view)
+        .into_iter()
+        .filter(|command| matches!(command, FlightCommand::MapClick(_)))
+        .collect()
+}
+
+#[test]
+fn over_flight_the_cursor_reaches_a_system_off_the_cycle_and_south_clicks_it() {
+    let open = || {
+        let mut view = faked_sol(in_sol());
+        told(&mut view, PAD);
+        view.open_map();
+        view
+    };
+    let mut mouse = open();
+    let steps = pan_to_barnard(&mut mouse, pad);
+    let at = pixel_on_map(&mouse, BARNARD);
+    mouse.sim.queue_answer(clicked(BARNARD));
+    faked_map_click(&mut mouse, at);
+    let mut view = open();
+    assert_eq!(pan_to_barnard(&mut view, pad), steps);
+    assert_ne!(view.course_map().selected(), Some(SystemId(BARNARD)));
+    steer_onto(
+        &mut view,
+        BARNARD,
+        |view, input| {
+            view.input(input);
+        },
+        Faked::tick,
+    );
+    view.sim.queue_answer(clicked(BARNARD));
+    pad(&mut view, PadButton::South, true);
+    pad(&mut view, PadButton::South, false);
+    assert!(view.map_open(), "South pressed the map, not Done");
+    assert_eq!(map_clicks(&view), map_clicks(&mouse));
+    assert_eq!(map_clicks(&view).len(), 1);
+    assert_eq!(view.course_map().selected(), Some(SystemId(BARNARD)));
+}
+
+#[test]
+fn over_the_port_the_cursor_moves_and_clicks() {
+    let mut view = docked();
+    told(&mut view, PAD);
+    view.open_bar_map();
+    view.port_map_input(&key(MAP, false));
+    pan_to_barnard(&mut view, over);
+    steer_onto(&mut view, BARNARD, Faked::port_map_input, Faked::tick);
+    view.sim.queue_answer(clicked(BARNARD));
+    tap_over(&mut view, PadButton::South);
+    assert!(view.map_open());
+    assert_eq!(map_clicks(&view).len(), 1);
+    assert_eq!(view.course_map().selected(), Some(SystemId(BARNARD)));
+}
+
+#[test]
+fn over_flight_north_centres_the_open_map() {
+    let mut view = faked_sol(in_sol());
+    told(&mut view, PAD);
+    view.open_map();
+    view.map.centre_on_system(SystemId(131));
+    let moved = view.course_map().place().copied();
+    pad(&mut view, PadButton::North, true);
+    pad(&mut view, PadButton::North, false);
+    assert!(view.map_open());
+    assert_ne!(view.course_map().place().copied(), moved, "centred");
+    assert_eq!(view.course_map().selected(), Some(SystemId(130)));
+    assert!(
+        view.ui_sounds.contains(&crate::sound::UiSound::MapCentred),
+        "{:?}",
+        view.ui_sounds
+    );
 }
