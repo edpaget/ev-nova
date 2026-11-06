@@ -550,6 +550,46 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
     );
 }
 
+/// A cloaking NPC whose sheet is 8-bit (rendering phase 2): fading, the
+/// cloak writes +0xa8 = 0x20 (@0x2d336) with factors below 0x20, which the
+/// draw proc's depth-8 dispatch draws nothing at (@0xbb8df-0xbb907); fully
+/// faded and seen, 0x1e (@0x2d1c0), whose depth-8 routine crashes the
+/// original, so it is drawn as a 16-bit hull is.
+#[test]
+fn a_cloaking_npc_whose_sheet_is_8_bit_hides_its_hull_mid_fade_and_draws_it_faint_fully_faded() {
+    let eight = ShipSheet {
+        eight_bit: true,
+        ..npc_sheet()
+    };
+    let view = flying_with(shown(display(0, 1, 0), display(0, 1, 0), Some(eight)), 0.0);
+    let sixteen = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0.0,
+    );
+    let mut npc = npc_record(&view, NPC_0);
+    assert_eq!(npc_hull(&view, &npc), Some(Color::WHITE), "uncloaked");
+    npc.cloak = CloakShown::Fading(25.0);
+    assert_eq!(npc_hull(&view, &npc), None, "mid-fade");
+    assert_eq!(npc_hull(&sixteen, &npc), Some(lights_tint(7)));
+    npc.cloak = CloakShown::Translucent(0x1e);
+    let mut list = DrawList::new();
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
+    let hull = list.iter().find_map(|command| match *command {
+        DrawCommand::Sprite {
+            image, tint, blend, ..
+        } if image.id == 2001 => Some((tint, blend)),
+        _ => None,
+    });
+    assert_eq!(
+        hull,
+        Some((
+            crate::draw::translucent_tint(4, 30),
+            crate::draw::Blend::OrTranslucent
+        )),
+        "fully faded and seen"
+    );
+}
+
 #[test]
 fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothing() {
     let view = flying_with(

@@ -67,31 +67,35 @@
 //! (`eight_bit_sheet`) turned the bytes into pixels, so it takes no
 //! reading.
 
-use crate::Colorize;
+use crate::{Blend, Color, Colorize};
+
+/// How a sprite is drawn: its tint, colorize and blend.
+pub type Look = (Color, Option<Colorize>, Blend);
 
 /// The sprite fields the draw proc's depth-8 dispatch reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DrawProcState {
+pub struct DrawProcState {
     /// +0xa8: the translucency, a signed word. 0x20 and up draws nothing
     /// unless it is the add-over case.
-    pub(crate) translucency: i16,
+    pub translucency: i16,
     /// Whether all three channel factors (+0xaa, +0xac, +0xae) are 0x20.
-    pub(crate) full_factors: bool,
+    pub full_factors: bool,
     /// +0xb0: the bias, the colorize level; 0 when not colorized.
-    pub(crate) bias: i16,
+    pub bias: i16,
 }
 
 impl DrawProcState {
     /// The bias a sprite drawn with `colorize` carries: its level, or 0
     /// when it is not colorized.
-    pub(crate) fn bias_of(colorize: Option<Colorize>) -> i16 {
+    #[must_use]
+    pub fn bias_of(colorize: Option<Colorize>) -> i16 {
         colorize.map_or(0, |colorize| i16::from(colorize.level))
     }
 }
 
 /// What the draw proc does with a depth-8 frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EightBitBlit {
+pub enum EightBitBlit {
     /// `_BlitPixieRLE`: the frame as decoded, with no tint, blend or
     /// colorize, whatever the channel factors say.
     Plain,
@@ -106,7 +110,8 @@ impl EightBitBlit {
     /// What the draw proc does with a frame in `state` of a sheet that is
     /// `eight_bit` or not: [`of`](Self::of) for an 8-bit one, and a
     /// 16-bit frame's draw for any other.
-    pub(crate) fn of_sheet(eight_bit: bool, state: DrawProcState) -> Self {
+    #[must_use]
+    pub fn of_sheet(eight_bit: bool, state: DrawProcState) -> Self {
         if eight_bit {
             Self::of(state)
         } else {
@@ -114,9 +119,21 @@ impl EightBitBlit {
         }
     }
 
+    /// How a sprite whose 16-bit frame would draw as `look` is drawn: at
+    /// `look`; plainly, white, uncolorized and normal; or not at all.
+    #[must_use]
+    pub fn applied(self, look: Look) -> Option<Look> {
+        match self {
+            Self::Plain => Some((Color::WHITE, None, Blend::Normal)),
+            Self::AsSixteenBit => Some(look),
+            Self::Nothing => None,
+        }
+    }
+
     /// What the draw proc does with a depth-8 frame in `state` (see the
     /// module docs).
-    pub(crate) fn of(state: DrawProcState) -> Self {
+    #[must_use]
+    pub fn of(state: DrawProcState) -> Self {
         let DrawProcState {
             translucency,
             full_factors,
@@ -155,6 +172,18 @@ mod tests {
             EightBitBlit::of_sheet(false, state),
             EightBitBlit::AsSixteenBit
         );
+    }
+
+    #[test]
+    fn each_dispatch_draws_its_look() {
+        let colorize = Some(Colorize::toward_pixel(24, 0x1081));
+        let look = (Color::rgba(10, 20, 30, 40), colorize, Blend::Or);
+        assert_eq!(
+            EightBitBlit::Plain.applied(look),
+            Some((Color::WHITE, None, Blend::Normal))
+        );
+        assert_eq!(EightBitBlit::AsSixteenBit.applied(look), Some(look));
+        assert_eq!(EightBitBlit::Nothing.applied(look), None);
     }
 
     #[test]

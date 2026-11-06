@@ -115,6 +115,7 @@ mod tests {
         let alt = AltLayer {
             image: ImageKey::sprite(1400, 0),
             at: AT,
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,
@@ -280,6 +281,7 @@ mod tests {
         let held = AltLayer {
             image: ImageKey::sprite(1400, 7),
             at: Point::new(55.0, 12.0),
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,
@@ -292,6 +294,7 @@ mod tests {
         let other = AltLayer {
             image: ImageKey::sprite(1401, 7),
             at: Point::new(55.0, 12.0),
+            shown: true,
             tint: Color::WHITE,
             colorize: None,
             blend: crate::Blend::Normal,

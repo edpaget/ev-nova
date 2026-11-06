@@ -55,6 +55,16 @@
 //!   the lights and the weapon glow move by its jitter, and the layers
 //!   are held to its caps or hidden.
 //!
+//! - **An 8-bit sheet** ([`EightBitBlit`]): a hull, alt or layer whose
+//!   `rlëD` is 8-bit goes through the draw proc's depth-8 dispatch with
+//!   its sprite's fields: the hull's translucency (its cloak's
+//!   [`CloakDraw::hull_translucency`], or `BaseTransp`'s or a gate fade's)
+//!   and colorize level, its factors never all 0x20; the alt copies the
+//!   hull's state, its result kept while held ([`AltLayer::shown`]); the
+//!   glow, lights, weapon glow and shield at 0x20, their factors at their
+//!   level and their bias their colorize's. It draws plainly, as a 16-bit
+//!   sheet would, or not at all, its solid runs included.
+//!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
 //! plainly, or in their paint. Each one whose sheet holds solid runs draws them raw right
@@ -72,6 +82,7 @@ use super::paint::{painted_hull, translucency};
 use super::solid_runs::solid_overlay;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
+use crate::eight_bit_blit::{DrawProcState, EightBitBlit, Look};
 use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
 
 /// Where a ship's sprite of a frame's size (width, height) is centred on
@@ -114,6 +125,27 @@ pub fn lights_murk(murk: u8) -> u8 {
 pub fn npc_glow_rolls(id: NpcId) -> HashedRolls {
     HashedRolls::new(2 + 2 * u64::from(id.0))
 }
+
+/// How a glow, lights, weapon glow or shield `layer` at `level`, whose
+/// 16-bit frame draws as `look`, is drawn: its sprite's +0xa8 is 0x20 and
+/// each channel factor its level (glow @0x2c2b6-0x2c2d6, lights
+/// @0x2c672-0x2c692, weapon glow @0x2c7a6-0x2c7c6, shield
+/// @0x2c87c-0x2c914), its bias `look`'s colorize's level, so an 8-bit
+/// sheet draws only at level 32 uncolorized, the add-over
+/// ([`EightBitBlit`]).
+fn layer_look(layer: LayerSheet, level: u8, look: Look) -> Option<Look> {
+    let state = DrawProcState {
+        translucency: LAYER_TRANSLUCENCY,
+        full_factors: i16::from(level) == LAYER_TRANSLUCENCY,
+        bias: DrawProcState::bias_of(look.1),
+    };
+    EightBitBlit::of_sheet(layer.eight_bit, state).applied(look)
+}
+
+/// The translucency the glow, lights, weapon glow and shield write to their
+/// sprites in the 16-bit world (+0xa8 = 0x20, @0x2c2b6, @0x2c672, @0x2c7a6,
+/// @0x2c87c).
+const LAYER_TRANSLUCENCY: i16 = 0x20;
 
 /// One ship as it is drawn this frame (see the module docs).
 #[derive(Clone, Copy, Debug)]
@@ -177,13 +209,13 @@ impl ShipDraw<'_> {
         turning(self.spec, self.sheet).index(self.drawn.set, self.heading)
     }
 
-    /// The hull's tint, colorize and blend: its unmurked tint drawn
-    /// plainly, or, painted, in its paint at its translucency
-    /// ([`painted_hull`]); or, cloaked, its cloak's tint and blend in place
-    /// of its tint, as the cloak writes the channel factors and leaves the
-    /// colorize (+0xb0 is not touched after @0x2cad1). Its colorize is
-    /// [`ShipDraw::colorize`] in every case.
-    fn hull_tint(&self) -> (Color, Option<Colorize>, Blend) {
+    /// The hull's tint, colorize and blend as a 16-bit sheet draws it: its
+    /// unmurked tint drawn plainly, or, painted, in its paint at its
+    /// translucency ([`painted_hull`]); or, cloaked, its cloak's tint and
+    /// blend in place of its tint, as the cloak writes the channel factors
+    /// and leaves the colorize (+0xb0 is not touched after @0x2cad1). Its
+    /// colorize is [`ShipDraw::colorize`] in every case.
+    fn hull_tint(&self) -> Look {
         if let Some((tint, blend)) = self.cloak.and_then(|cloak| cloak.hull) {
             return (tint, self.colorize, blend);
         }
@@ -192,6 +224,32 @@ impl ShipDraw<'_> {
             None => (self.tint, Blend::Normal),
         };
         (tint, self.colorize, blend)
+    }
+
+    /// The hull's sprite fields that the draw proc's depth-8 dispatch
+    /// reads, which the alt layer copies (@0x2caa6-0x2cb0a): its cloak's
+    /// translucency, or else `BaseTransp`'s or a gate's fade's; and its
+    /// colorize's level. Its channel factors are never all 0x20: they are
+    /// paint − 32 (@0x2be41-0x2beb2), at most −1 for a paint of 31 or
+    /// less and 0 unpainted, and a cloak's are at most 31 fading
+    /// (@0x2d35f-0x2d440) and 2 fully faded.
+    fn hull_state(&self) -> DrawProcState {
+        let translucency = self.cloak.map_or_else(
+            || i16::from(translucency(self.tint.a)),
+            |cloak| cloak.hull_translucency,
+        );
+        DrawProcState {
+            translucency,
+            full_factors: false,
+            bias: DrawProcState::bias_of(self.colorize),
+        }
+    }
+
+    /// How a sheet that is `eight_bit` or not draws in the hull's state
+    /// ([`ShipDraw::hull_state`]): at [`ShipDraw::hull_tint`]'s look,
+    /// plainly, or not at all ([`EightBitBlit`]).
+    fn hull_look(&self, eight_bit: bool) -> Option<Look> {
+        EightBitBlit::of_sheet(eight_bit, self.hull_state()).applied(self.hull_tint())
     }
 
     /// `at` moved by its cloak's jitter, as its hull and the layers that
@@ -206,7 +264,8 @@ impl ShipDraw<'_> {
     /// Its alt layer as drawn this frame, placed by `place` (see
     /// [`ShipDraw::draw`]) by its own frame's size, when its hull is drawn
     /// and the session draws the layer on a set: its own set's frame, with
-    /// the hull's tint and colorize.
+    /// the hull's tint and colorize, through the depth-8 dispatch when its
+    /// own sheet is 8-bit, in the hull's state.
     #[must_use]
     pub fn live_alt(&self, place: Place<'_>) -> Option<AltLayer> {
         let (Some(layer), Alt::Drawn(set), true) = (self.sheet.alt, self.drawn.alt, self.hull)
@@ -214,11 +273,13 @@ impl ShipDraw<'_> {
             return None;
         };
         let frame = turning(self.spec, self.sheet).index(set, self.heading) % layer.frames.get();
-        let (tint, colorize, blend) = self.hull_tint();
+        let look = self.hull_look(layer.eight_bit);
+        let (tint, colorize, blend) = look.unwrap_or_else(|| self.hull_tint());
         let at = self.moved(place(layer.size()));
         Some(AltLayer {
             image: ImageKey::sprite(layer.image_id, frame),
             at,
+            shown: look.is_some(),
             tint,
             colorize,
             blend,
@@ -236,11 +297,13 @@ impl ShipDraw<'_> {
     /// @0x2d5ae, @0x2d69e).
     pub fn draw(&self, list: &mut DrawList, place: Place<'_>, alt: Option<AltLayer>) {
         let frame = self.frame();
-        let (hull_tint, colorize, hull_blend) = self.hull_tint();
-        if self.hull {
+        let colorize = self.colorize;
+        if let (true, Some((tint, hull_colorize, blend))) =
+            (self.hull, self.hull_look(self.sheet.eight_bit))
+        {
             let at = self.moved(place(self.sheet.size()));
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
-            list.mixed_sprite(hull, at, hull_tint, hull_blend, colorize);
+            list.mixed_sprite(hull, at, tint, blend, hull_colorize);
             if self.sheet.solid {
                 solid_overlay(list, self.sheet.image_id, frame, at);
             }
@@ -278,14 +341,21 @@ impl ShipDraw<'_> {
         };
         let add =
             |list: &mut DrawList, layer: Option<LayerSheet>, level: Option<u8>, murk, frame| {
-                if let (Some(layer), Some(level)) = (layer, level) {
-                    let frame = frame % layer.frames.get();
-                    let image = ImageKey::sprite(layer.image_id, frame);
-                    let at = self.moved(place(layer.size()));
-                    list.mixed_sprite(image, at, lights_tint(level), Blend::Or, copied(murk));
-                    if layer.solid && level > 0 {
-                        solid_overlay(list, layer.image_id, frame, at);
-                    }
+                let (Some(layer), Some(level)) = (layer, level) else {
+                    return;
+                };
+                let colorize = copied(murk);
+                let Some((tint, colorize, blend)) =
+                    layer_look(layer, level, (lights_tint(level), colorize, Blend::Or))
+                else {
+                    return;
+                };
+                let frame = frame % layer.frames.get();
+                let image = ImageKey::sprite(layer.image_id, frame);
+                let at = self.moved(place(layer.size()));
+                list.mixed_sprite(image, at, tint, blend, colorize);
+                if layer.solid && level > 0 {
+                    solid_overlay(list, layer.image_id, frame, at);
                 }
             };
         let lights_murk = if self.held { lights_murk(murk) } else { 0 };
@@ -298,7 +368,7 @@ impl ShipDraw<'_> {
         let weapon = self.weapon.map(|level| held(level, murk).min(weapon_cap));
         add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
-        if let Some(alt) = alt {
+        if let Some(alt) = alt.filter(|alt| alt.shown) {
             list.mixed_sprite(alt.image, alt.at, alt.tint, alt.blend, alt.colorize);
             let alt_sheet = self.sheet.alt;
             if alt_sheet.is_some_and(|layer| layer.solid && layer.image_id == alt.image.id) {
@@ -308,11 +378,14 @@ impl ShipDraw<'_> {
         let shield = self
             .shield
             .filter(|_| self.cloak.is_none_or(|cloak| cloak.shield));
-        if let (Some(layer), Some(level)) = (self.sheet.shield, shield) {
+        if let (Some(layer), Some(level)) = (self.sheet.shield, shield)
+            && let Some((tint, colorize, blend)) =
+                layer_look(layer, level, (lights_tint(level), colorize, Blend::Or))
+        {
             let at = place(layer.size());
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
             let image = ImageKey::sprite(layer.image_id, frame);
-            list.mixed_sprite(image, at, lights_tint(level), Blend::Or, colorize);
+            list.mixed_sprite(image, at, tint, blend, colorize);
             if layer.solid && level > 0 {
                 solid_overlay(list, layer.image_id, frame, at);
             }
@@ -449,6 +522,7 @@ mod tests {
         fn a_jitter_moves_the_hull_and_layers_from_their_places_but_not_the_shield() {
             let cloak = CloakDraw {
                 hull: None,
+                hull_translucency: 0,
                 offset: Point::new(2.0, -3.0),
                 layers: Some(32),
                 weapon: 32,
@@ -468,6 +542,297 @@ mod tests {
                     (1500, 9.0),
                 ]
             );
+        }
+    }
+
+    /// A ship whose sheets are 8-bit, through the draw proc's depth-8
+    /// dispatch ([`EightBitBlit`](crate::eight_bit_blit::EightBitBlit)),
+    /// beside the same ship's 16-bit sheets.
+    mod eight_bit {
+        use std::num::NonZeroU16;
+
+        use nova_sim::ShipRef;
+        use nova_sim::cloak::CloakShown;
+        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+
+        use super::super::*;
+        use crate::DrawCommand;
+        use crate::flight::cloak_fade::CloakDraw;
+        use crate::flight::held_alt::HeldAlts;
+
+        const AT: Point = Point::new(100.0, 50.0);
+
+        const PAINT: Option<Rgb15> = Some(Rgb15 { r: 31, g: 16, b: 4 });
+
+        /// A 4 x 4 layer `rlëD` `image_id` of 36 frames.
+        fn layer(image_id: i16, eight_bit: bool, solid: bool) -> LayerSheet {
+            LayerSheet {
+                image_id,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 4,
+                frame_height: 4,
+                solid,
+                eight_bit,
+            }
+        }
+
+        /// A hull 1000 with a glow 1100, alt 1400 and shield 1500, every
+        /// sheet 8-bit or not and holding solid runs or not.
+        fn sheet(eight_bit: bool, solid: bool) -> ShipSheet {
+            ShipSheet {
+                image_id: 1000,
+                rotations: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 10,
+                frame_height: 10,
+                glow: Some(layer(1100, eight_bit, solid)),
+                lights: None,
+                weapon: None,
+                weap_decay: 0,
+                alt: Some(layer(1400, eight_bit, solid)),
+                shield: Some(layer(1500, eight_bit, solid)),
+                base_transp: 0,
+                solid,
+                eight_bit,
+            }
+        }
+
+        /// The player's ship of `sheet`, unpainted, opaque, uncolorized,
+        /// its alt drawn on set 0 and no layer lit.
+        fn ship<'a>(sheet: &'a ShipSheet, spec: &'a FrameSpec) -> ShipDraw<'a> {
+            ShipDraw {
+                sheet,
+                spec,
+                drawn: Drawn {
+                    alt: Alt::Drawn(0),
+                    ..Drawn::default()
+                },
+                heading: 0.0,
+                tint: Color::WHITE,
+                paint: None,
+                cloak: None,
+                hull: true,
+                held: false,
+                glow: None,
+                lights: None,
+                weapon: None,
+                shield: None,
+                colorize: None,
+            }
+        }
+
+        /// `sheet`'s ship cloaked `shown`.
+        fn cloaked<'a>(
+            sheet: &'a ShipSheet,
+            spec: &'a FrameSpec,
+            shown: CloakShown,
+        ) -> ShipDraw<'a> {
+            let cloak = CloakDraw::of(shown, None, 0, &HashedRolls::new(1));
+            ShipDraw {
+                cloak,
+                hull: cloak.is_none_or(|cloak| cloak.hull.is_some()),
+                ..ship(sheet, spec)
+            }
+        }
+
+        /// A hull drawn at `BaseTransp` `base_transp`'s alpha.
+        fn at_base_transp(base_transp: i16) -> Color {
+            Color {
+                a: base_alpha(base_transp),
+                ..Color::WHITE
+            }
+        }
+
+        /// One sprite drawn: its image, tint, blend and colorize.
+        type Sprite = (ImageKey, Color, Blend, Option<Colorize>);
+
+        /// What `ship` draws with its alt `alt`.
+        fn drawn_with(ship: &ShipDraw<'_>, alt: Option<AltLayer>) -> Vec<Sprite> {
+            let mut list = DrawList::new();
+            ship.draw(&mut list, &|_| AT, alt);
+            list.iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Sprite {
+                        image, tint, blend, ..
+                    } => Some((image, tint, blend, None)),
+                    DrawCommand::Colorized {
+                        image,
+                        tint,
+                        blend,
+                        colorize,
+                        ..
+                    } => Some((image, tint, blend, Some(colorize))),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// What `ship` draws, its alt live.
+        fn drawn(ship: &ShipDraw<'_>) -> Vec<Sprite> {
+            drawn_with(ship, ship.live_alt(&|_| AT))
+        }
+
+        /// The sheets of what `ship` draws.
+        fn ids(ship: &ShipDraw<'_>) -> Vec<i16> {
+            drawn(ship).iter().map(|(image, ..)| image.id).collect()
+        }
+
+        const NONE: [i16; 0] = [];
+
+        #[test]
+        fn a_painted_opaque_8_bit_hull_draws_plainly_unpainted() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let painted = |sheet| ShipDraw {
+                paint: PAINT,
+                ..ship(sheet, &spec)
+            };
+            let look = |sprite: Sprite| (sprite.0.id, sprite.1, sprite.2, sprite.3);
+            // +0xa8 0 and no bias: `_BlitPixieRLE`, the factors ignored.
+            let eight = drawn(&painted(&eight));
+            assert_eq!(look(eight[0]), (1000, Color::WHITE, Blend::Normal, None));
+            // Its alt copies the hull's state, and draws plainly too.
+            assert_eq!(look(eight[1]), (1400, Color::WHITE, Blend::Normal, None));
+            assert_eq!(drawn(&painted(&sixteen))[0].2, Blend::OrTranslucent);
+        }
+
+        #[test]
+        fn a_translucent_or_colorized_8_bit_hull_draws_as_a_16_bit_one_does() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let faint = |sheet, paint| ShipDraw {
+                tint: at_base_transp(10),
+                paint,
+                ..ship(sheet, &spec)
+            };
+            for paint in [None, PAINT] {
+                let drawn8 = drawn(&faint(&eight, paint));
+                assert_eq!(drawn8, drawn(&faint(&sixteen, paint)), "{paint:?}");
+                assert_eq!(drawn8.len(), 2, "the hull and its alt");
+            }
+            // Colorized, an opaque 8-bit hull is biased: drawn as 16-bit.
+            let colorize = Some(Colorize::toward_pixel(5, 0x1081));
+            let biased = |sheet| ShipDraw {
+                colorize,
+                ..ship(sheet, &spec)
+            };
+            assert_eq!(drawn(&biased(&eight)), drawn(&biased(&sixteen)));
+            assert_eq!(drawn(&biased(&eight))[0].3, colorize);
+        }
+
+        #[test]
+        fn an_8_bit_hull_at_base_transp_32_or_more_draws_nothing() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            for base_transp in [32, 40] {
+                let gone = ShipDraw {
+                    tint: at_base_transp(base_transp),
+                    ..ship(&eight, &spec)
+                };
+                assert_eq!(ids(&gone), NONE, "{base_transp}");
+            }
+        }
+
+        #[test]
+        fn a_fading_cloak_hides_an_8_bit_hull_and_its_alt() {
+            let spec = FrameSpec::NONE;
+            let fading = CloakShown::Fading(21.5);
+            assert_eq!(ids(&cloaked(&sheet(true, false), &spec, fading)), NONE);
+            let sixteen: Vec<_> = drawn(&cloaked(&sheet(false, false), &spec, fading))
+                .iter()
+                .map(|(image, _, blend, _)| (image.id, *blend))
+                .collect();
+            assert_eq!(sixteen, [(1000, Blend::Or), (1400, Blend::Or)]);
+        }
+
+        #[test]
+        fn a_full_fade_seen_draws_an_8_bit_hull_as_a_16_bit_one() {
+            let spec = FrameSpec::NONE;
+            let seen = CloakShown::Translucent(0x1e);
+            let eight = drawn(&cloaked(&sheet(true, false), &spec, seen));
+            assert_eq!(eight, drawn(&cloaked(&sheet(false, false), &spec, seen)));
+            assert_eq!(eight[0].2, Blend::OrTranslucent);
+        }
+
+        #[test]
+        fn an_8_bit_glow_draws_only_at_level_32_uncolorized() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, false), sheet(false, false));
+            let glowing = |sheet, glow, held, colorize| ShipDraw {
+                hull: false,
+                glow: Some(glow),
+                held,
+                colorize,
+                ..ship(sheet, &spec)
+            };
+            // The add-over: drawn as a 16-bit layer is.
+            let full = drawn(&glowing(&eight, 32, false, None));
+            assert_eq!(full, drawn(&glowing(&sixteen, 32, false, None)));
+            assert_eq!(full[0].1, lights_tint(32));
+            assert_eq!(full[0].2, Blend::Or);
+            // Any other level draws nothing.
+            assert_eq!(ids(&glowing(&eight, 31, false, None)), NONE);
+            assert_eq!(ids(&glowing(&sixteen, 31, false, None)), [1100]);
+            // An NPC's glow copies its murk, and draws nothing.
+            let murk = Some(Colorize::toward_pixel(4, 0x1081));
+            assert_eq!(ids(&glowing(&eight, 32, true, murk)), NONE);
+            // The player's glow takes none of its hull's colorize, so it
+            // draws at 32.
+            assert_eq!(ids(&glowing(&eight, 32, false, murk)), [1100]);
+        }
+
+        #[test]
+        fn an_8_bit_shield_at_32_draws_only_when_its_hull_is_uncolorized() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            let flashed = |colorize| ShipDraw {
+                hull: false,
+                shield: Some(32),
+                colorize,
+                ..ship(&eight, &spec)
+            };
+            assert_eq!(ids(&flashed(None)), [1500]);
+            let ionized = Some(Colorize::toward_pixel(10, 0x7C00));
+            assert_eq!(ids(&flashed(ionized)), NONE);
+        }
+
+        #[test]
+        fn an_8_bit_sprite_that_draws_nothing_draws_no_runs() {
+            let spec = FrameSpec::NONE;
+            let (eight, sixteen) = (sheet(true, true), sheet(false, true));
+            let lit = |sheet| ShipDraw {
+                glow: Some(10),
+                shield: Some(10),
+                ..cloaked(sheet, &spec, CloakShown::Fading(21.5))
+            };
+            assert_eq!(ids(&lit(&eight)), NONE);
+            // The 16-bit ship draws each sprite and its runs.
+            let runs: Vec<_> = drawn(&lit(&sixteen))
+                .iter()
+                .filter(|(image, ..)| image.kind == crate::ImageKind::RledSolid)
+                .map(|(image, ..)| image.id)
+                .collect();
+            assert_eq!(runs, [1000, 1100, 1400, 1500]);
+        }
+
+        #[test]
+        fn a_held_alt_keeps_drawing_nothing() {
+            let spec = FrameSpec::NONE;
+            let eight = sheet(true, false);
+            let fading = cloaked(&eight, &spec, CloakShown::Fading(21.5));
+            let mut held = HeldAlts::default();
+            let live = fading.live_alt(&|_| AT);
+            let recorded = held.shown(ShipRef::Player, Alt::Drawn(0), live, true);
+            assert!(recorded.is_some_and(|alt| !alt.shown), "{recorded:?}");
+            // Held, the alt keeps the state it was last drawn in, though
+            // the hull has since stopped fading.
+            let kept = held.shown(ShipRef::Player, Alt::Held, None, true);
+            assert_eq!(kept, recorded);
+            let opaque = ship(&eight, &spec);
+            let ids: Vec<_> = drawn_with(&opaque, kept)
+                .iter()
+                .map(|(image, ..)| image.id)
+                .collect();
+            assert_eq!(ids, [1000]);
         }
     }
 

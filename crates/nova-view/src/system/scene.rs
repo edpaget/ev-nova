@@ -574,14 +574,13 @@ pub fn draw_stellars(
                     full_factors: false,
                     bias: DrawProcState::bias_of(colorize),
                 };
-                let colorize = match EightBitBlit::of_sheet(stellar.eight_bit(), state) {
-                    EightBitBlit::Plain => Some(None),
-                    EightBitBlit::AsSixteenBit => Some(colorize),
-                    EightBitBlit::Nothing => None,
-                };
-                if let Some(colorize) = colorize {
-                    let sprite =
-                        DrawCommand::mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
+                let look = EightBitBlit::of_sheet(stellar.eight_bit(), state).applied((
+                    Color::WHITE,
+                    colorize,
+                    Blend::Normal,
+                ));
+                if let Some((tint, colorize, blend)) = look {
+                    let sprite = DrawCommand::mixed_sprite(image, at, tint, blend, colorize);
                     let frame_box = Bounds::at(
                         Point::new(at.x - size.0 / 2.0, at.y - size.1 / 2.0),
                         size.0,
