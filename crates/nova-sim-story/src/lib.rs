@@ -9,6 +9,9 @@
 //! each module at its old path (`nova_sim::mission`, `nova_sim::Pilot`,
 //! …), so the rest of the workspace reaches them through it.
 //!
+//! - [`dialog`]: the dialog port, which plays the new game's compiled Ink
+//!   conversations a line at a time ([`Dialog`](dialog::Dialog), opened by
+//!   a [`DialogLoader`](dialog::DialogLoader)); its adapter is `nova-ink`.
 //! - [`exchange_events`]: what the commodity exchange says of the `öops`
 //!   price events at the stellar docked at, the disputed
 //!   [`exchange_events::exchange_events`]: the first local event's line
@@ -90,6 +93,7 @@ use nova_sim_state::{
     cron, date, domination, govt, landing, legal, market, outfit_effects, stats, trade_dialog,
 };
 
+pub mod dialog;
 pub mod exchange_events;
 pub mod exploration;
 pub mod map_walk;

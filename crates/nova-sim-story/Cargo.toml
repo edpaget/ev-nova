@@ -40,7 +40,9 @@ nova-sim-ai = { workspace = true, features = ["fixture"] }
 
 [features]
 # Test support for other crates' tests, its doc saying who keeps it:
-# `mission::fixture::carrying`, an active mission carrying cargo.
+# `mission::fixture::carrying`, an active mission carrying cargo; and the
+# dialog port's fake (`dialog::fake`), its contract story and its
+# `dialog::fixture::check_contract`, which nova-ink's adapter passes.
 fixture = []
 
 [lints]
