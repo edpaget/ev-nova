@@ -125,6 +125,7 @@ fn a_destroyed_stellar_whose_dead_type_is_a_pict_pair_draws_it() {
             frames: NonZeroU16::new(2).expect("non-zero"),
             frame_width: 4,
             frame_height: 4,
+            image_size: (4, 4),
         }))
     );
     let mut scene = SystemScene::load(&data, SystemId(131));
@@ -165,6 +166,7 @@ fn graphic_type_0_of_a_pict_pair_keys_its_sheet_by_the_spin() {
             frames: NonZeroU16::new(2).expect("non-zero"),
             frame_width: 4,
             frame_height: 4,
+            image_size: (4, 4),
         })
     );
 }
@@ -185,6 +187,7 @@ fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
             frames: NonZeroU16::MAX,
             frame_width: 1,
             frame_height: 1,
+            image_size: (1, 1),
         })
     );
 }

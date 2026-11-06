@@ -106,6 +106,7 @@ mod tests {
                 frames: NonZeroU16::new(4).expect("non-zero"),
                 frame_width: 8,
                 frame_height: 8,
+                image_size: (8, 8),
             };
             SystemContents {
                 id,

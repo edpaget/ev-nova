@@ -769,6 +769,7 @@ pub(in crate::flight) fn stellar(
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 20,
             frame_height: 20,
+            image_size: (20, 20),
         }),
         dead_sprite: None,
         animation: AnimationData {
@@ -798,6 +799,7 @@ pub(in crate::flight) fn dying(
             frames: NonZeroU16::MIN,
             frame_width: 30,
             frame_height: 30,
+            image_size: (30, 30),
         })),
         ..stellar(id, name, at, frames)
     }
@@ -843,6 +845,7 @@ impl SystemCatalog for FakeCatalog {
                 frames: NonZeroU16::new(frames).expect("non-zero"),
                 frame_width: width,
                 frame_height: width,
+                image_size: (width, width),
             };
             for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
                 stellar.sprite = Ok(square(1129, moon.width, moon.frames));
@@ -866,6 +869,7 @@ impl SystemCatalog for FakeCatalog {
                 frames: NonZeroU16::MIN,
                 frame_width: zero,
                 frame_height: zero,
+                image_size: (zero, zero),
             }),
             problems: Vec::new(),
         }

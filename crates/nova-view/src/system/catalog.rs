@@ -18,10 +18,16 @@ pub struct StellarSheet {
     pub image: SheetImage,
     /// How many frames it has; never zero.
     pub frames: NonZeroU16,
-    /// Each frame's width in pixels.
+    /// Each frame's box's width in pixels: the header's, what the stellar
+    /// is clicked and placed by.
     pub frame_width: u32,
-    /// Each frame's height in pixels.
+    /// Each frame's box's height in pixels.
     pub frame_height: u32,
+    /// Each frame's image's width and height: the frame's, unless the
+    /// sheet draws past its frame box, as a 32-bit `rlëD` does (see
+    /// `nova_data::graphics::SpriteSheet::box_origin`). Its image is then
+    /// padded to keep the box at its centre.
+    pub image_size: (u32, u32),
 }
 
 /// A stellar's animation fields, raw from its `spöb`. The view decides

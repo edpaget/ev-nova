@@ -27,7 +27,7 @@ use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
 use crate::outline::{self, StellarStandIn};
-use crate::{Blend, Color, DrawList, Point};
+use crate::{Blend, Color, DrawCommand, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
 pub const PLACEHOLDER_SIZE: f32 = 64.0;
@@ -167,6 +167,15 @@ impl SceneStellar {
         };
         let size = (sheet.frame_width as f32, sheet.frame_height as f32);
         Some((sheet.image.frame(frame), size))
+    }
+
+    /// Whether the sheet drawn draws past its frame box, as a 32-bit
+    /// `rlëD` does ([`StellarSheet::image_size`]).
+    fn overhangs(&self) -> bool {
+        matches!(
+            self.drawn(),
+            Some(Ok(sheet)) if sheet.image_size != (sheet.frame_width, sheet.frame_height)
+        )
     }
 
     /// The sheet `which` names (see [`drawn`](Self::drawn)).
@@ -521,6 +530,17 @@ impl SystemScene {
 /// `_HandleStellarSprites` murks it at its stellar's position
 /// (@0x2ee57-0x2eea4, [`SeenMurk::at`]); the placeholder and the names are
 /// not, as they are not the original's. The system view passes none.
+///
+/// A sheet that draws past its frame box (a 32-bit `rlëD`, rendering
+/// phase 1) is cut to the box when the box is not wholly inside the
+/// list's world clip ([`DrawList::world_clip`], standing in for the
+/// original's world rect, the play area). The draw proc
+/// (`_BlitPixieRLETranslucentDrawProc` @0xbb3fc) clips the box to the
+/// world and takes the plain blit only when that leaves it whole
+/// (@0xbb56d-0xbb579, @0xbb770-0xbb789); otherwise the clipped blit
+/// (`_BlitPixieRLEClipped` @0xbde9c-0xbe0b3) draws only the box's columns
+/// and rows within the world, so the overhang disappears, and a box wholly
+/// outside the world draws nothing (@0xbb480-0xbb4a9).
 pub fn draw_stellars(
     list: &mut DrawList,
     scene: &SystemScene,
@@ -537,7 +557,25 @@ pub fn draw_stellars(
                 let at = stellar.sprite_centre(camera, size);
                 let position = Vec2::new(stellar.position.x, stellar.position.y);
                 let colorize = seen.map(|seen| seen.at(position));
-                list.mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
+                let sprite =
+                    DrawCommand::mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
+                let frame_box = Bounds::at(
+                    Point::new(at.x - size.0 / 2.0, at.y - size.1 / 2.0),
+                    size.0,
+                    size.1,
+                );
+                match list.world_clip() {
+                    Some(world)
+                        if stellar.overhangs()
+                            && !(world.contains(frame_box.min)
+                                && world.contains(frame_box.max)) =>
+                    {
+                        list.clipped(frame_box, sprite);
+                    }
+                    _ => {
+                        list.push(sprite);
+                    }
+                }
                 (at, size)
             }
             (Some(Err(_)), None) if let Some(stand_in) = &stellar.stand_in => {
@@ -571,6 +609,29 @@ pub fn draw_stellars(
     }
     for (name, at) in labels {
         list.text(name, at, NAME_SIZE, None, Color::DIM);
+    }
+}
+
+/// Draws `scene`'s stellars as [`draw_stellars`] does in a world clipped
+/// to `clip`, each command, the names included, cut to `clip` and appended
+/// to `list` in the overlay, with no world clip of its own. The flight's
+/// rescue repaints them so over its space area, which is no sprite world:
+/// what the closing's `_SWUpdateSpriteWorld` (@0x6c0d) draws through the
+/// same clipped draw proc, so a sheet that draws past its box is cut to
+/// the box at the play area's edge there too.
+pub fn draw_stellars_clipped_to(
+    list: &mut DrawList,
+    scene: &SystemScene,
+    camera: &Camera,
+    seen: Option<SeenMurk>,
+    clip: Bounds,
+) {
+    let mut stellars = DrawList::new();
+    stellars.world_in(clip, |stellars| {
+        draw_stellars(stellars, scene, camera, seen);
+    });
+    for command in &stellars {
+        list.clipped(clip, command.clone());
     }
 }
 
@@ -617,6 +678,7 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 8,
             frame_height: 8,
+            image_size: (8, 8),
         }
     }
 
@@ -896,6 +958,7 @@ mod tests {
         let dead_sheet = StellarSheet {
             frame_width: 16,
             frame_height: 16,
+            image_size: (16, 16),
             ..sheet(2150, 3)
         };
         FakeCatalog::new(vec![system(
@@ -1514,6 +1577,7 @@ mod tests {
         catalog.systems[0].type_zero_sprite = Ok(StellarSheet {
             frame_width: 40,
             frame_height: 40,
+            image_size: (40, 40),
             ..sheet(TYPE_ZERO, 2)
         });
         let mut scene = SystemScene::load(&catalog, SystemId(134));
@@ -1728,6 +1792,7 @@ mod tests {
         let sized = |image_id, (frame_width, frame_height)| StellarSheet {
             frame_width,
             frame_height,
+            image_size: (frame_width, frame_height),
             ..sheet(image_id, 1)
         };
         let stellars = vec![

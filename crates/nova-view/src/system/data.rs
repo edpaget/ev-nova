@@ -136,6 +136,7 @@ fn sheet(image: SheetImage, sheet: &SpriteSheet) -> StellarSheet {
         frames: NonZeroU16::new(count).unwrap_or(NonZeroU16::MIN),
         frame_width: sheet.frame_width(),
         frame_height: sheet.frame_height(),
+        image_size: (sheet.image_width(), sheet.image_height()),
     }
 }
 
@@ -240,6 +241,7 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,
+            image_size: (size, size),
         }
     }
 

@@ -361,6 +361,34 @@ impl DrawCommand {
 }
 
 impl DrawCommand {
+    /// `image` at `center` at `tint`, combined by `blend`: a
+    /// [`DrawCommand::Colorized`] when `colorize` mixes, otherwise a plain
+    /// [`DrawCommand::Sprite`] ([`DrawList::mixed_sprite`]'s command).
+    #[must_use]
+    pub fn mixed_sprite(
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Option<Colorize>,
+    ) -> Self {
+        match colorize.filter(|colorize| colorize.mixes()) {
+            Some(colorize) => Self::Colorized {
+                image,
+                center,
+                tint,
+                blend,
+                colorize,
+            },
+            None => Self::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            },
+        }
+    }
+
     /// Whether it draws text: a [`DrawCommand::Text`], clipped or not.
     fn is_text(&self) -> bool {
         match self {
@@ -558,15 +586,9 @@ impl DrawList {
         blend: Blend,
         colorize: Option<Colorize>,
     ) -> &mut Self {
-        match colorize.filter(|colorize| colorize.mixes()) {
-            Some(colorize) => self.colorized_sprite(image, center, tint, blend, colorize),
-            None => self.push(DrawCommand::Sprite {
-                image,
-                center,
-                tint,
-                blend,
-            }),
-        }
+        self.push(DrawCommand::mixed_sprite(
+            image, center, tint, blend, colorize,
+        ))
     }
 
     /// Appends a [`DrawCommand::Picture`].

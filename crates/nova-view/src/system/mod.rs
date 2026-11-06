@@ -25,6 +25,8 @@ mod pict_pair_tests;
 pub mod scene;
 pub mod starfield;
 pub mod view;
+#[cfg(test)]
+mod wide_sheet_tests;
 
 pub use animation::{Frames, is_animated};
 pub use camera::Camera;

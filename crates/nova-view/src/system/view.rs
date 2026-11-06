@@ -227,6 +227,7 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,
+            image_size: (size, size),
         }
     }
 

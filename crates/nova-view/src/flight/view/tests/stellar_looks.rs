@@ -752,6 +752,7 @@ fn uncounted_gate() -> FakeCatalog {
             frames: NonZeroU16::new(6).expect("non-zero"),
             frame_width: 100,
             frame_height: 100,
+            image_size: (100, 100),
         })),
         ..stellar(141, "Gate", (200, 100), 6)
     });
