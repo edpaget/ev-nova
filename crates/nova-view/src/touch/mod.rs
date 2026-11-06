@@ -9,7 +9,10 @@
 //!   finger is the claimant's until it ends or is cancelled, even after it
 //!   slides off them, and goes out as [`Routed::Claimed`], never as the
 //!   pointer. The app's claimant is the screen
-//!   ([`Screen::claims_touch`](crate::Screen::claims_touch)).
+//!   ([`Screen::claims_touch`](crate::Screen::claims_touch)), which
+//!   claims for flight's on-screen touch controls
+//!   ([`crate::flight::touch_controls`]) while flight shows with nothing
+//!   over it, and nothing elsewhere.
 //! - **The primary finger.** The first *unclaimed* finger down while no
 //!   other unclaimed finger is down is the UI's pointer
 //!   ([`Routed::Pointer`]): a move to its point and a press, its moves,

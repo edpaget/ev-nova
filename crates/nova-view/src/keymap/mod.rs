@@ -9,6 +9,10 @@
 //! gamepad's table, [`PadMap`], sits beside it, with the default table
 //! rdm:phase/key-bindings/phase-7-gamepad-input's findings record; a pad
 //! button reaches a screen as `Input::PadButton` and reads as a key does.
+//! Flight's on-screen touch controls are the third device
+//! (rdm:phase/key-bindings/phase-15-touch-flight-controls): a control
+//! names its command outright, so they need no table, and reach flight
+//! as `Input::TouchControl`, read as a key is.
 //!
 //! # How it fits together
 //!
@@ -25,7 +29,11 @@
 //!   `PadButton` or a `PadAxis`: [`PadEntry`] (a button and the layer it
 //!   needs), the [`PadMap`] with its defaults, [`Gamepad`], the buttons
 //!   down with their layers and the stick axes, the lookup over a pad
-//!   button's input and the flight dead zone ([`dead_zoned`]).
+//!   button's input, the flight dead zone ([`dead_zoned`]) and the press
+//!   and release thresholds ([`gamepad::crossing`]).
+//! - [`touch`] is the touch controls' side, the only one that reads an
+//!   `Input::TouchControl`: [`touch::TouchDevice`], the commands their
+//!   controls hold down and the touch stick, read as flight's two axes.
 //! - [`bindings`] holds every device's table ([`Bindings`]), the lookup
 //!   ([`Bindings::resolve`], [`Bindings::held`]), the clash query
 //!   ([`Bindings::clashes`], and [`Bindings::clashes_with`] for a rebind

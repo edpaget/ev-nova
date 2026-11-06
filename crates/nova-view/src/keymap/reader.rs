@@ -184,8 +184,9 @@ impl CommandReader {
     ///
     /// A press means the command [`Bindings::resolve`] finds; a repeat
     /// means what its press meant (or, with that forgotten, what it means
-    /// now); a release lets go of what its press meant. A pad button reads
-    /// as a key does. A stick axis's move changes the axis amounts
+    /// now); a release lets go of what its press meant. A pad button, and
+    /// a touch control's button, reads as a key does. A stick axis's move,
+    /// the pad's or the touch stick's, changes the axis amounts
     /// ([`CommandReader::axis`]) and presses nothing, and the
     /// surroundings set the device ([`CommandReader::device`]).
     pub fn follow(&mut self, input: &Input) -> Option<CommandInput> {

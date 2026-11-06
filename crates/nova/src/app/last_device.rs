@@ -20,6 +20,12 @@
 //! family than the last is a change, so the screens are told it. A
 //! screen's pad button, which comes from the pads merged, is taken to be
 //! the last pad used's.
+//!
+//! Flight's touch controls follow it with no rule of their own
+//! (rdm:phase/key-bindings/phase-15-touch-flight-controls): they show
+//! while it is `Touch`, and any other device hides them. A touch that
+//! brings them back is not claimed, as the screens hear of the device
+//! after the input that switched it: it is the pointer.
 
 use std::collections::BTreeMap;
 
