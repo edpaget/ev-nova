@@ -113,6 +113,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 use crate::ui::quantity::QuantityDialog;
 use crate::ui::text_box::TextBox;
+use crate::ui::touch_aids::ModifierToggle;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -292,6 +293,8 @@ pub struct TradeScreen {
     /// Option for the quantity ask, the play keys and the shared UI keys.
     keys: CommandReader,
     sounds: Vec<Sound>,
+    /// Trade Most's touch toggle (the `touch` module).
+    toggle: ModifierToggle,
 }
 
 impl TradeScreen {
@@ -323,7 +326,9 @@ impl TradeScreen {
                 metrics: MetricsHandle(metrics),
             }
         });
+        let toggle = touch::toggle(laid.as_ref().ok().map(|laid| laid.dialog.bounds()));
         let mut screen = Self {
+            toggle,
             laid,
             market,
             colors: ListColors::STOCK,
@@ -818,10 +823,11 @@ fn inverted_box(laid: &Laid, list: &mut DrawList, text: &str, rect: Bounds) {
     TextBox::new(text, TEXT_FONT, TEXT_SIZE, BOX_TEXT, rect, &laid.metrics.0).draw(list);
 }
 
-impl Screen for TradeScreen {
+impl TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
-    /// it is open; it never quits.
-    fn input(&mut self, input: &Input) -> ScreenAction {
+    /// it is open; it never quits. Trade Most's touch toggle sees it
+    /// first ([`Screen::input`]).
+    fn take_input(&mut self, input: &Input) -> ScreenAction {
         // Its keys are followed under the offer and the quantity dialog
         // too, so a release there is not lost.
         let command = self.keys.follow(input);
@@ -900,6 +906,12 @@ impl Screen for TradeScreen {
         }
         ScreenAction::None
     }
+}
+
+impl Screen for TradeScreen {
+    fn input(&mut self, input: &Input) -> ScreenAction {
+        crate::ui::touch_aids::host::input(self, input)
+    }
 
     /// The wait for the next offer runs down, the quantity dialog
     /// covering the trade center while it is open.
@@ -938,21 +950,12 @@ impl Screen for TradeScreen {
         if let Some(offering) = &self.offering {
             offering.draw(list);
         }
+        crate::ui::touch_aids::host::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
-        if self
-            .offering
-            .as_mut()
-            .is_some_and(VenueOffers::cancel_pointer)
-        {
-            return;
-        }
-        if !self.quantity.cancel_pointer()
-            && let Ok(laid) = &mut self.laid
-        {
-            laid.dialog.cancel_pointer();
-        }
+        self.cancel_own_pointer();
+        crate::ui::touch_aids::host::cancel(self);
     }
 
     /// Lets go of its keys, Alt among them, and of the keys held in the
@@ -978,6 +981,7 @@ impl Screen for TradeScreen {
 }
 
 pub(crate) mod pad;
+mod touch;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]

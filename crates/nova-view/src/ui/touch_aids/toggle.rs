@@ -30,11 +30,16 @@ use super::place::{BOTTOM_FIRST, CELL_PT, place};
 use super::press::{Press, Step};
 use crate::draw::DrawList;
 use crate::flight::touch_controls::draw::label;
-use crate::geometry::Bounds;
+use crate::geometry::{Bounds, Point};
 use crate::input::{Device, Input, MouseButton, Surroundings, TouchControl};
 #[cfg(doc)]
 use crate::keymap::CLICK_MODIFIERS;
 use crate::keymap::Command;
+use crate::view_shape::CLASSIC_SIZE;
+
+/// The classic canvas's size, in logical units.
+#[allow(clippy::cast_precision_loss)]
+const CLASSIC: (f32, f32) = (CLASSIC_SIZE.0 as f32, CLASSIC_SIZE.1 as f32);
 
 /// A modifier click's toggle: see the module docs.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +77,15 @@ impl ModifierToggle {
             press: Press::default(),
             wrapping: false,
         }
+    }
+
+    /// The toggle for `command` over a host drawing in the classic
+    /// 1024 × 768 canvas, with its dialog at `dialog` if it has one.
+    #[must_use]
+    pub fn classic(command: Command, dialog: Option<Bounds>) -> Self {
+        let canvas = Bounds::at(Point::new(0.0, 0.0), CLASSIC.0, CLASSIC.1);
+        let none = Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0);
+        Self::new(command, canvas, dialog.unwrap_or(none))
     }
 
     /// The command it holds across a tap.
@@ -225,7 +239,6 @@ impl ModifierToggle {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::geometry::Point;
     use crate::input::ControllerFamily;
     use crate::keymap::TradeCommand;
 
@@ -548,6 +561,16 @@ mod tests {
         assert_eq!(after.min.x, 56.0, "the new left, past 8 pt");
         assert_eq!(after.width(), 192.0, "96 pt at half a point a pixel");
         assert_eq!(after.max.y, 724.0);
+    }
+
+    #[test]
+    fn a_classic_toggle_is_placed_in_the_classic_canvas_clear_of_its_dialog() {
+        let mut toggle = ModifierToggle::classic(COMMAND, Some(dialog()));
+        toggle.input(&touch());
+        assert_eq!(toggle.rect(), self::toggle().rect());
+        let mut bare = ModifierToggle::classic(COMMAND, None);
+        bare.input(&touch());
+        assert_eq!(bare.rect(), Bounds::at(Point::new(8.0, 716.0), 96.0, 44.0));
     }
 
     #[test]

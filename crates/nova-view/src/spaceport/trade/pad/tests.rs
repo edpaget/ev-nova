@@ -62,6 +62,12 @@ impl PadProbe for Probe {
         self.0 = screen().with_focus_ring(ring);
         true
     }
+
+    fn touch_aids_drawn(&mut self) -> Vec<crate::draw::DrawCommand> {
+        let mut list = crate::draw::DrawList::new();
+        crate::ui::touch_aids::host::draw(&self.0, &mut list);
+        list.iter().cloned().collect()
+    }
 }
 
 /// The trade center's row in the pad's every-screen table.

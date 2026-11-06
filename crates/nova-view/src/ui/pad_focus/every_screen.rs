@@ -87,6 +87,13 @@ pub(crate) trait PadProbe {
     fn exit_control(&self) -> Option<(&'static str, Bounds)> {
         None
     }
+
+    /// What the screen's touch aids (`ui::touch_aids`) draw now, which a
+    /// safe-area change legitimately moves and touch legitimately shows:
+    /// the tests that compare drawings across those leave them out.
+    fn touch_aids_drawn(&mut self) -> Vec<DrawCommand> {
+        Vec::new()
+    }
 }
 
 /// A row: the screen's name and how to build it.
@@ -235,6 +242,17 @@ impl Run {
         let mut list = DrawList::new();
         self.probe.screen().draw(&mut list);
         list.iter().cloned().collect()
+    }
+
+    /// What it draws but its touch aids ([`PadProbe::touch_aids_drawn`]).
+    fn drawn_without_aids(&mut self) -> Vec<DrawCommand> {
+        let mut drawn = self.drawn();
+        for aid in self.probe.touch_aids_drawn() {
+            if let Some(at) = drawn.iter().position(|command| *command == aid) {
+                drawn.remove(at);
+            }
+        }
+        drawn
     }
 
     fn result(&mut self) -> (String, Vec<ScreenAction>) {
@@ -588,7 +606,11 @@ fn new_surroundings_with_the_same_device_change_nothing_drawn() {
             };
             let mut kept = moved();
             let mut retold = moved().sends(&[resized(device)]);
-            assert_eq!(retold.drawn(), kept.drawn(), "{screen}: {device:?}");
+            assert_eq!(
+                retold.drawn_without_aids(),
+                kept.drawn_without_aids(),
+                "{screen}: {device:?}"
+            );
             assert_eq!(retold.result(), kept.result(), "{screen}: {device:?}");
         }
     }
@@ -617,7 +639,7 @@ fn after_the_pad_the_keyboard_ring_draws_as_it_always_did() {
                 }
                 let mut after = after.sends(&[told(device)]).sends(&tab).sends(&tab);
                 assert_eq!(
-                    after.drawn(),
+                    after.drawn_without_aids(),
                     keyboard.drawn(),
                     "{screen}: {ring:?} {device:?}"
                 );

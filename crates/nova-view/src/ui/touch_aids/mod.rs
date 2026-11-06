@@ -3,6 +3,7 @@
 //! gives the keyboard and mouse player
 //! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
 
+pub mod host;
 pub mod look;
 pub mod place;
 pub mod press;
