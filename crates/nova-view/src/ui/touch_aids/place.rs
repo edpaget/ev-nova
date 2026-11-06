@@ -237,6 +237,26 @@ mod tests {
     }
 
     #[test]
+    fn a_rect_wider_than_the_region_is_in_no_corner_even_one_clear_of_the_host() {
+        // 50 wide: a 96 pt aid sticks out of the region's left at either
+        // right corner, so neither counts, and the first corner is taken
+        // over the host rather than the clear top one.
+        let told = Surroundings {
+            safe_area: Bounds::at(Point::new(400.0, 0.0), 66.0, 768.0),
+            ..WINDOWS[0].classic_surroundings()
+        };
+        let bottom = Bounds::at(Point::new(0.0, 400.0), 1024.0, 368.0);
+        let rect = place(
+            CELL_PT,
+            &told,
+            canvas(),
+            bottom,
+            &[Corner::BottomRight, Corner::TopRight],
+        );
+        assert_eq!(rect.max, Point::new(458.0, 760.0), "the bottom-right");
+    }
+
+    #[test]
     fn with_no_safe_area_in_the_canvas_the_canvas_is_the_region() {
         let told = Surroundings {
             safe_area: Bounds::at(Point::new(2000.0, 2000.0), 30.0, 20.0),

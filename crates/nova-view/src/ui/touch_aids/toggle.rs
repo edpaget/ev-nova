@@ -618,6 +618,16 @@ mod tests {
     }
 
     #[test]
+    fn it_says_whether_its_host_is_replaying_what_it_gave_back() {
+        let mut toggle = toggle();
+        assert!(!TouchAid::replaying(&toggle));
+        toggle.set_replaying(true);
+        assert!(TouchAid::replaying(&toggle));
+        toggle.set_replaying(false);
+        assert!(!TouchAid::replaying(&toggle));
+    }
+
+    #[test]
     fn keys_and_text_pass_whether_armed_or_not() {
         let mut toggle = toggle();
         {

@@ -266,6 +266,16 @@ mod tests {
     }
 
     #[test]
+    fn it_says_whether_its_host_is_replaying_what_it_gave_back() {
+        let mut keys = keys();
+        assert!(!keys.replaying());
+        keys.set_replaying(true);
+        assert!(keys.replaying());
+        keys.set_replaying(false);
+        assert!(!keys.replaying());
+    }
+
+    #[test]
     fn a_press_that_slides_off_and_lifts_does_nothing() {
         let mut keys = keys();
         let at = keys.rects()[0].center();
