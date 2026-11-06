@@ -27,8 +27,12 @@
 //!
 //! Each order sets only the heading it wants (+0x68), and `_HandleShip`
 //! turns the ship to it ([`flight::turn_to`]); order 0 wants its own whole
-//! heading, the low level's default (@0x8522d). Every order writes the
-//! burst word ([`Word::Writes`](crate::traffic::held_burst::Word)). The
+//! heading, the low level's default (@0x8522d). Orders 0x13 and 0x15
+//! write the thrust word +0x30 alone (@0x881bc-0x881c4,
+//! @0x8857b-0x88583) and keep the burst word +0x34
+//! ([`Word::Keeps`](crate::traffic::held_burst::Word)), so a ship that
+//! owes a held gate burst bursts it out on its first thrust; order 0x14
+//! writes neither, and order 0 writes no +0x30. The
 //! acceleration is its `_ShipAccelRate`, the flying handling's, at a frame
 //! scale of 1. None of these orders has an inertialess or disabled
 //! branch: a disabled ship's goal is reset before it flies one, and an
@@ -48,7 +52,7 @@ use crate::flight::Controls;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::speed_mult::SpeedMult;
-use crate::traffic::held_burst::Flight;
+use crate::traffic::held_burst::{Flight, Word};
 use crate::traffic::npc::Npc;
 use crate::traffic::slot_word::Cap;
 use crate::trig;
@@ -135,8 +139,10 @@ pub(crate) fn scoop(
 /// The flight of `npc` wanting `wanted` on `handling`, thrusting, when
 /// `thrusts`, while it faces `wanted` within its turn and
 /// [`THRUST_SLACK`], strictly, as it heads at its slot, before
-/// `_HandleShip` turns it ([`flight::turn_to`]). Orders 0x13 and 0x15
-/// keep the head's +0x34 (@0x881c4, @0x88583).
+/// `_HandleShip` turns it ([`flight::turn_to`]). It writes +0x30 alone,
+/// its thrust `handling`'s acceleration ([`Word::thrusting`]), keeping
+/// the head's +0x34 (@0x881bc-0x881c4, @0x8857b-0x88583), so an owed held
+/// burst bursts out on its first thrust.
 fn steer(npc: &Npc, wanted: i16, handling: &Handling, thrusts: bool) -> Flight {
     let thrust =
         thrusts && mine_orders::faces(npc.state.heading, wanted, handling.turn_rate, THRUST_SLACK);
@@ -144,7 +150,8 @@ fn steer(npc: &Npc, wanted: i16, handling: &Handling, thrusts: bool) -> Flight {
         thrust,
         ..Controls::default()
     };
-    Flight::writes(controls, wanted, Cap::Slot)
+    // Not a word that writes +0x34: these orders keep it.
+    Flight::writes(controls, wanted, Cap::Slot).doing(Word::thrusting(controls, handling))
 }
 
 #[cfg(test)]

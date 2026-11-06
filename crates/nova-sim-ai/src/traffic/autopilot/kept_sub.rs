@@ -18,7 +18,9 @@
 //!   nudge and lead by asteroid slot 0 (@0x88140-0x88443,
 //!   [`mine_flight::by_order`]), and 0x15's steer or brake toward the
 //!   nearest box (@0x8844b-0x88642, [`mine_flight::scoop`]), which with no
-//!   box stores sub 0 (@0x88636).
+//!   box stores sub 0 (@0x88636). A kept 0x13 or 0x15 writes +0x30
+//!   alone, so it bursts what a ship owes when double time's second pass
+//!   flies its word ([`held_burst`](crate::traffic::held_burst)).
 //! - **A fight sub, 0xe included** ([`waiting_pursuit::held_sub`]): the
 //!   frame the think's [`waiting_pursuit::under_wait`] stored, its last
 //!   body flown at the ship +0x70 names, there and not disabled
