@@ -94,7 +94,7 @@ pub(crate) fn pad_probe_overflowing() -> Box<dyn PadProbe> {
 }
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn opened(offers: &mut VenueOffers) {

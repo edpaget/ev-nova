@@ -64,7 +64,7 @@ fn tap(dialog: &mut Dialog, button: PadButton) -> Option<DialogEvent> {
 }
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn key(key: Key) -> Input {

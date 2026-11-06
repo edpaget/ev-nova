@@ -1358,9 +1358,9 @@ mod tests {
     fn told_pad(bindings: Bindings, family: crate::input::ControllerFamily) -> CommandReader {
         let mut keys =
             CommandReader::new(contexts::FLIGHT).with_bindings(SharedBindings::new(bindings));
-        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings {
-            device: crate::input::Device::Gamepad(family),
-        }));
+        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings::of(
+            crate::input::Device::Gamepad(family),
+        )));
         keys
     }
 

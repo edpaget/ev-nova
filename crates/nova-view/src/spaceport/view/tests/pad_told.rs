@@ -11,7 +11,7 @@ use crate::ui::pad_focus::every_screen::PadProbe;
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn tap(view: &mut SpaceportView, button: PadButton) {

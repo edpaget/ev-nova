@@ -202,9 +202,9 @@ fn from_pads(
 fn recording_jettison_on_the_pad(screen: &mut AppScreen) {
     use nova_view::{ControllerFamily, Device, Surroundings};
     open_keys(screen);
-    screen.input(&Input::Surroundings(Surroundings {
-        device: Device::Gamepad(ControllerFamily::Generic),
-    }));
+    screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+        ControllerFamily::Generic,
+    ))));
     tap(screen, Key::ArrowRight);
     select_jettison(screen);
     tap(screen, Key::Enter);

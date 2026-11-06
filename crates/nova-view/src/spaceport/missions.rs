@@ -2308,9 +2308,9 @@ pub(super) mod tests {
             computer(),
             ButtonStyle::STOCK,
         );
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         assert_eq!(
             texts(&screen),
             [(
@@ -2970,9 +2970,9 @@ pub(super) mod tests {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let mut screen =
             MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         assert_eq!(
             info_drawn(&screen),
             [DrawCommand::Text {

@@ -11,7 +11,7 @@ use nova_view::{ControllerFamily, Device, PadButton, Surroundings};
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn pad(button: PadButton, pressed: bool) -> Input {

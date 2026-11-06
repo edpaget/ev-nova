@@ -679,9 +679,7 @@ impl PrefsDialog {
             self.style,
             Rc::clone(&self.metrics),
         );
-        screen.input(&Input::Surroundings(Surroundings {
-            device: self.device(),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(self.device())));
         self.keys_screen = Some(screen);
     }
 

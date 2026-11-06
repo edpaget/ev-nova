@@ -2635,9 +2635,9 @@ mod tests {
                 stock(),
             )
             .with_bindings(SharedBindings::new(bindings));
-            screen.input(&Input::Surroundings(crate::input::Surroundings {
-                device: crate::input::Device::Gamepad(family),
-            }));
+            screen.input(&Input::Surroundings(crate::input::Surroundings::of(
+                crate::input::Device::Gamepad(family),
+            )));
             texts(&screen)
         };
         assert_eq!(

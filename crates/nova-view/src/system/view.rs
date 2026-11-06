@@ -287,9 +287,9 @@ mod tests {
     /// last.
     fn help_on_pad(bindings: crate::keymap::Bindings) -> String {
         let mut view = sol().with_bindings(SharedBindings::new(bindings));
-        view.input(&Input::Surroundings(crate::input::Surroundings {
-            device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
-        }));
+        view.input(&Input::Surroundings(crate::input::Surroundings::of(
+            crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+        )));
         texts(&drawn(&view)).last().cloned().unwrap_or_default()
     }
 

@@ -236,6 +236,14 @@ pub struct Surroundings {
     pub device: Device,
 }
 
+impl Surroundings {
+    /// The default surroundings with `device` the device used last.
+    #[must_use]
+    pub fn of(device: Device) -> Self {
+        Self { device }
+    }
+}
+
 /// A gamepad button, by its position on the pad (SDL's names: South is
 /// the bottom face button, whatever its label), never by its printed
 /// label: [`pad_button_name`] names it by the pad's family. Each stick's four
@@ -690,9 +698,7 @@ mod tests {
                 axis: PadAxis::LeftY,
                 value: 0.25,
             },
-            Input::Surroundings(Surroundings {
-                device: Device::Gamepad(ControllerFamily::Generic),
-            }),
+            Input::Surroundings(Surroundings::of(Device::Gamepad(ControllerFamily::Generic))),
         ] {
             assert_eq!(unmoved.translated(by), unmoved);
         }
@@ -727,6 +733,14 @@ mod tests {
         for unknown in ["LeftX", "+leftx", "leftx~", ""] {
             assert_eq!(PadAxis::from_name(unknown), None, "{unknown}");
         }
+    }
+
+    #[test]
+    fn of_is_the_default_with_that_device() {
+        let pad = Device::Gamepad(ControllerFamily::PlayStation);
+        let of = Surroundings::of(pad);
+        assert_eq!(of.device, pad);
+        assert_eq!(Surroundings::of(Device::Keyboard), Surroundings::default());
     }
 
     #[test]

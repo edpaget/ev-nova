@@ -173,7 +173,7 @@ pub(crate) fn pad(button: PadButton, pressed: bool) -> Input {
 }
 
 pub(crate) fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn key(key: Key, pressed: bool) -> Input {

@@ -59,7 +59,7 @@ pub(crate) fn pad_probe() -> Box<dyn PadProbe> {
 }
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn tap(screen: &mut BarScreen, button: PadButton) {

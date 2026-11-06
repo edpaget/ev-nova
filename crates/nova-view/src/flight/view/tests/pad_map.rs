@@ -20,7 +20,7 @@ use nova_sim::MissionId;
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
 fn told(view: &mut Faked, device: Device) {
-    view.input(&Input::Surroundings(Surroundings { device }));
+    view.input(&Input::Surroundings(Surroundings::of(device)));
 }
 
 fn pad_input(button: PadButton, pressed: bool) -> Input {

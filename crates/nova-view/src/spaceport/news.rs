@@ -395,9 +395,9 @@ mod tests {
     fn without_its_dialog_south_presses_nothing_and_east_still_closes_it() {
         use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
         let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), None);
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         for (button, closes) in [(PadButton::South, false), (PadButton::East, true)] {
             for pressed in [true, false] {
                 screen.input(&Input::PadButton { button, pressed });
@@ -746,9 +746,9 @@ mod tests {
     fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         assert_eq!(
             texts(&screen),
             ["Cannot show the news: no DLOG 1014. Press South or East to close it."]

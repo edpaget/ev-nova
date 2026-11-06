@@ -1868,9 +1868,9 @@ fn stock_pictured_texts_scroll_in_3004_and_1020() {
 
 /// The pad's own surroundings and taps, for the stock New Pilot.
 fn told_the_pad() -> Input {
-    Input::Surroundings(nova_view::input::Surroundings {
-        device: nova_view::input::Device::Gamepad(nova_view::input::ControllerFamily::Generic),
-    })
+    Input::Surroundings(nova_view::input::Surroundings::of(
+        nova_view::input::Device::Gamepad(nova_view::input::ControllerFamily::Generic),
+    ))
 }
 
 fn pad_tap(screen: &mut impl Screen, button: nova_view::input::PadButton) {

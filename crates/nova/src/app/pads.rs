@@ -81,8 +81,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// Tells the screen the device used last.
     pub(super) fn tell_device(&mut self) -> Control {
-        self.route(Input::Surroundings(Surroundings {
-            device: self.last_device.device(),
-        }))
+        self.route(Input::Surroundings(Surroundings::of(
+            self.last_device.device(),
+        )))
     }
 }

@@ -14,9 +14,9 @@ fn without_the_dialog_it_names_the_buttons_with_a_pad_last_used() {
         art() as Rc<dyn OutfitterCatalog>,
         ButtonStyle::STOCK,
     );
-    screen.input(&Input::Surroundings(Surroundings {
-        device: Device::Gamepad(ControllerFamily::Generic),
-    }));
+    screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+        ControllerFamily::Generic,
+    ))));
     assert_eq!(
         drawn(&screen),
         [DrawCommand::Text {

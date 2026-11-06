@@ -402,9 +402,9 @@ fn the_dpad_reaches_each_stock_main_screen_button() {
         return;
     };
     let mut menu = MainMenu::new(Some(art), data.button_style(), Rc::new(MonoMetrics));
-    menu.input(&Input::Surroundings(Surroundings {
-        device: Device::Gamepad(ControllerFamily::Generic),
-    }));
+    menu.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+        ControllerFamily::Generic,
+    ))));
     let mut reached = vec![menu.pad_highlight()];
     for button in [
         PadButton::DPadDown,

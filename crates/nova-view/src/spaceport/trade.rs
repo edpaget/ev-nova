@@ -2753,9 +2753,9 @@ mod tests {
             market(),
             ButtonStyle::STOCK,
         );
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         assert_eq!(
             drawn(&screen),
             [DrawCommand::Text {

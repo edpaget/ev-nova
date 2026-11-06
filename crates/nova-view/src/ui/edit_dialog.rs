@@ -530,7 +530,7 @@ mod tests {
         let pad = Device::Gamepad(ControllerFamily::Generic);
         let mut dialog = dialog();
         dialog.flush_typed_key();
-        dialog.input(&Input::Surroundings(Surroundings { device: pad }));
+        dialog.input(&Input::Surroundings(Surroundings::of(pad)));
         dialog.input(&Input::Text('b'));
         assert_eq!(dialog.field().text(), "abc", "still flushed");
         assert_eq!(dialog.dialog.device(), pad, "the dialog is told");

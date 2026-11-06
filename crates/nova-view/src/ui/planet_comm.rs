@@ -520,7 +520,7 @@ mod tests {
         crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
 
     fn told(device: crate::input::Device) -> Input {
-        Input::Surroundings(crate::input::Surroundings { device })
+        Input::Surroundings(crate::input::Surroundings::of(device))
     }
 
     #[test]

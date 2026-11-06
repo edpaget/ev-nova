@@ -520,9 +520,9 @@ mod tests {
     const XBOX: Device = Device::Gamepad(ControllerFamily::Xbox);
 
     fn told(reader: &mut CommandReader, device: Device) {
-        reader.follow(&crate::Input::Surroundings(crate::input::Surroundings {
+        reader.follow(&crate::Input::Surroundings(crate::input::Surroundings::of(
             device,
-        }));
+        )));
     }
 
     const SPELLINGS: [Spelling; 4] = [Spelling::Bound, Spelling::Prose, ENGINE, BIBLE];

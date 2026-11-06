@@ -283,9 +283,9 @@ mod tests {
         let mut dialog = dialog();
         let before = dialog.field().text().to_owned();
         dialog.flush_typed_key();
-        dialog.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        dialog.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         dialog.input(&Input::Text('7'));
         assert_eq!(dialog.field().text(), before, "still flushed");
         assert_eq!(dialog.take_outcome(), None);

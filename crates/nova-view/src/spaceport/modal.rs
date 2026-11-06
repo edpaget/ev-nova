@@ -317,7 +317,7 @@ mod tests {
     const ALERT: Sound = Sound::Ui(UiSound::Alert);
 
     fn told(device: crate::input::Device) -> Input {
-        Input::Surroundings(crate::input::Surroundings { device })
+        Input::Surroundings(crate::input::Surroundings::of(device))
     }
 
     const PAD: crate::input::Device =

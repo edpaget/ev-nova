@@ -742,7 +742,7 @@ mod tests {
     }
 
     fn told(device: Device) -> Input {
-        Input::Surroundings(Surroundings { device })
+        Input::Surroundings(Surroundings::of(device))
     }
 
     fn axis(axis: PadAxis, value: f32) -> Input {

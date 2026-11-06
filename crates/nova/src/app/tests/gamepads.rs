@@ -26,7 +26,7 @@ fn south(pressed: bool) -> PadEvent {
 }
 
 fn told(device: Device) -> Surroundings {
-    Surroundings { device }
+    Surroundings::of(device)
 }
 
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);

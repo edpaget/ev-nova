@@ -777,7 +777,7 @@ mod tests {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let pad = Device::Gamepad(ControllerFamily::Generic);
         let mut screen = open();
-        screen.input(&Input::Surroundings(Surroundings { device: pad }));
+        screen.input(&Input::Surroundings(Surroundings::of(pad)));
         screen.input(&key(Key::AltLeft, true, false));
         let racer = centre(&screen, FIRST_RACER_ITEM);
         screen.input(&pointer(true, racer));
@@ -803,9 +803,9 @@ mod tests {
             screen.input(&pad(button, false));
         };
         let mut padded = open();
-        padded.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        padded.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         tap(&mut padded, PadButton::DPadUp);
         let racer = padded
             .dialog()
@@ -846,7 +846,7 @@ mod tests {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let pad = Device::Gamepad(ControllerFamily::Generic);
         let mut screen = open();
-        screen.input(&Input::Surroundings(Surroundings { device: pad }));
+        screen.input(&Input::Surroundings(Surroundings::of(pad)));
         screen.show_result(0, 5_000);
         assert_eq!(screen.dialog().map(Dialog::device), Some(pad));
         assert!(screen.dialog().and_then(Dialog::pad_highlight).is_some());
@@ -1198,9 +1198,9 @@ mod tests {
         use crate::input::{ControllerFamily, Device, Surroundings};
         let mut screen =
             RaceScreen::new(Err("no DLOG 1023".to_owned()), None, ButtonStyle::STOCK, 5);
-        screen.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Generic),
-        }));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
         assert_eq!(
             texts(&screen),
             ["Cannot show the race: no DLOG 1023. Press South or East to leave it."]

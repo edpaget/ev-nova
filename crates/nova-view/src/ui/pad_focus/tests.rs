@@ -621,7 +621,7 @@ fn told_reads_the_keyboard_before_any() {
 }
 
 fn surroundings(device: Device) -> Input {
-    Input::Surroundings(crate::input::Surroundings { device })
+    Input::Surroundings(crate::input::Surroundings::of(device))
 }
 
 /// A screen that records its inputs.

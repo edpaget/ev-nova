@@ -148,9 +148,9 @@ mod tests {
     /// [`keys`], told an Xbox pad was used last.
     fn told_pad(bindings: Bindings) -> CommandReader {
         let mut keys = keys(bindings, FakeKeyNames::new());
-        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings {
-            device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
-        }));
+        keys.follow(&crate::Input::Surroundings(crate::input::Surroundings::of(
+            crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+        )));
         keys
     }
 

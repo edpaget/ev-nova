@@ -394,9 +394,9 @@ fn help_on_pad(
 ) -> String {
     let mut keys = crate::keymap::CommandReader::new(crate::keymap::contexts::FLIGHT)
         .with_bindings(crate::keymap::SharedBindings::new(bindings));
-    keys.follow(&Input::Surroundings(crate::input::Surroundings {
-        device: crate::input::Device::Gamepad(family),
-    }));
+    keys.follow(&Input::Surroundings(crate::input::Surroundings::of(
+        crate::input::Device::Gamepad(family),
+    )));
     help_line(&keys)
 }
 

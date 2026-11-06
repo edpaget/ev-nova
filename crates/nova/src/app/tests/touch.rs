@@ -391,9 +391,7 @@ fn mouse_events_while_a_finger_is_down_are_dropped_and_switch_no_device() {
     );
     assert_eq!(
         app.screen().surroundings.last(),
-        Some(&Surroundings {
-            device: Device::Mouse
-        })
+        Some(&Surroundings::of(Device::Mouse))
     );
 }
 
@@ -410,17 +408,13 @@ fn a_touch_tells_the_screen_touch_was_used_last() {
     handle(&mut app, &mut window, down(1, (10.0, 10.0)));
     assert_eq!(
         app.screen().surroundings,
-        [Surroundings {
-            device: Device::Touch
-        }],
+        [Surroundings::of(Device::Touch)],
         "even in a bar"
     );
     handle(&mut app, &mut window, key(Key::KeyA, true));
     assert_eq!(
         app.screen().surroundings.last(),
-        Some(&Surroundings {
-            device: Device::Keyboard
-        })
+        Some(&Surroundings::of(Device::Keyboard))
     );
     for event in [to(2, IN_GAME), up(2, IN_GAME)] {
         let mut window = pillarboxed();
@@ -428,9 +422,7 @@ fn a_touch_tells_the_screen_touch_was_used_last() {
         handle(&mut app, &mut window, event);
         assert_eq!(
             app.screen().surroundings,
-            [Surroundings {
-                device: Device::Touch
-            }],
+            [Surroundings::of(Device::Touch)],
             "{event:?}"
         );
     }

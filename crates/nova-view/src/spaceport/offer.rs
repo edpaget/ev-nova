@@ -2012,9 +2012,9 @@ mod tests {
             prompt("Yes", Some("No")),
             ButtonStyle::STOCK,
         );
-        dialog.input(&Input::Surroundings(Surroundings {
-            device: Device::Gamepad(ControllerFamily::Xbox),
-        }));
+        dialog.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Xbox,
+        ))));
         assert_eq!(
             texts(&dialog),
             ["Cannot show the mission offer: no DLOG 1016. Press A to accept it."]
@@ -2685,10 +2685,10 @@ mod tests {
         let pad = Device::Gamepad(ControllerFamily::Generic);
         let player = MockMoviePlayer::playing((160, 120), 2);
         let mut dialog = dialog_of(filmed(0)).with_movies(&movies(&player));
-        dialog.input(&Input::Surroundings(Surroundings { device: pad }));
+        dialog.input(&Input::Surroundings(Surroundings::of(pad)));
         assert!(player.calls().is_empty(), "{:?}", player.calls());
         let mut plain = offer();
-        plain.input(&Input::Surroundings(Surroundings { device: pad }));
+        plain.input(&Input::Surroundings(Surroundings::of(pad)));
         assert_eq!(plain.laid.as_ref().expect("laid out").device(), pad);
     }
 

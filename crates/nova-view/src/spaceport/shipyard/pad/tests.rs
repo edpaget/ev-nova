@@ -118,7 +118,7 @@ pub(crate) fn info_pad_probe() -> Box<dyn PadProbe> {
 }
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn pad(button: PadButton, pressed: bool) -> Input {

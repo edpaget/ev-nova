@@ -55,9 +55,7 @@ impl PlayerInfoScreen {
     /// The surroundings for a new Jettison question, so it shows the
     /// pad's highlight from its first frame.
     pub(super) fn told(&self) -> Input {
-        Input::Surroundings(Surroundings {
-            device: self.device(),
-        })
+        Input::Surroundings(Surroundings::of(self.device()))
     }
 
     /// The device used last changed.

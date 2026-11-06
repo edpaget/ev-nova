@@ -215,9 +215,7 @@ fn a_stick_outside_the_dead_zone_fades_the_cursor_as_a_helm_key() {
 fn the_surroundings_reach_flight_s_reader() {
     let mut view = at_rest(catalog());
     let used = crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
-    view.input(&Input::Surroundings(crate::input::Surroundings {
-        device: used,
-    }));
+    view.input(&Input::Surroundings(crate::input::Surroundings::of(used)));
     assert_eq!(view.keys.device(), used);
     assert_eq!(view.device(), used, "what flight says it names");
 }

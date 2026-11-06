@@ -8,7 +8,7 @@ use crate::screen::Screen;
 const PAD: Device = Device::Gamepad(ControllerFamily::Generic);
 
 fn told(device: Device) -> Input {
-    Input::Surroundings(Surroundings { device })
+    Input::Surroundings(Surroundings::of(device))
 }
 
 fn pad(screen: &mut KeysScreen, button: PadButton) {

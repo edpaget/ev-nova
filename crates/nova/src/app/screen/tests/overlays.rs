@@ -219,7 +219,7 @@ fn with_a_pad_last_used_the_hint_names_the_pad_s_inputs_through_nova_view() {
     let mut screen =
         with_dialogs(data()).with_bindings(nova_view::SharedBindings::new(bindings.clone()));
     let keyed = hint_text(&screen);
-    screen.input(&Input::Surroundings(Surroundings { device: pad }));
+    screen.input(&Input::Surroundings(Surroundings::of(pad)));
     let entries: [(Command, &str); 4] = [
         (UiCommand::Tab.into(), "ships / galaxy map"),
         (MainScreenCommand::Fly.into(), "fly"),
@@ -241,9 +241,7 @@ fn with_a_pad_last_used_the_hint_names_the_pad_s_inputs_through_nova_view() {
         .collect();
     assert_eq!(hint_text(&screen), expected.join("   "));
     assert_ne!(hint_text(&screen), keyed, "the pad's names, not the keys");
-    screen.input(&Input::Surroundings(Surroundings {
-        device: Device::Keyboard,
-    }));
+    screen.input(&Input::Surroundings(Surroundings::of(Device::Keyboard)));
     assert_eq!(
         hint_text(&screen),
         keyed,

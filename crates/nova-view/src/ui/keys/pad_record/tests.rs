@@ -12,7 +12,7 @@ use crate::screen::Screen;
 const XBOX: Device = Device::Gamepad(ControllerFamily::Xbox);
 
 fn told(screen: &mut KeysScreen, device: Device) {
-    screen.input(&Input::Surroundings(Surroundings { device }));
+    screen.input(&Input::Surroundings(Surroundings::of(device)));
 }
 
 fn down(screen: &mut KeysScreen, button: P) {

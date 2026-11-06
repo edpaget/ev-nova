@@ -1084,7 +1084,7 @@ mod tests {
     fn a_new_hail_keeps_the_pads_device_and_focus() {
         use crate::input::{PadButton, Surroundings};
         let mut dialog = dialog(&view());
-        dialog.input(&Input::Surroundings(Surroundings { device: PAD }));
+        dialog.input(&Input::Surroundings(Surroundings::of(PAD)));
         tap(&mut dialog, PadButton::RightShoulder);
         tap(&mut dialog, PadButton::South);
         assert_eq!(dialog.take_press(), Some(CommPress::Option(1)));

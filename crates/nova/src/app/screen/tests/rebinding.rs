@@ -196,9 +196,9 @@ fn menu_focus_after_down_then_north(
         });
     };
     let highlight = |screen: &AppScreen| screen.main_menu().expect("a main menu").pad_highlight();
-    screen.input(&Input::Surroundings(Surroundings {
-        device: Device::Gamepad(ControllerFamily::Generic),
-    }));
+    screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+        ControllerFamily::Generic,
+    ))));
     tap(screen, PadButton::DPadDown);
     let after_down = highlight(screen);
     tap(screen, PadButton::North);

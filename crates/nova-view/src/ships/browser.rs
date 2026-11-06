@@ -920,9 +920,9 @@ mod tests {
             let catalog = three_ships();
             let mut browser =
                 ShipBrowser::new(&catalog).with_bindings(SharedBindings::new(bindings));
-            browser.input(&Input::Surroundings(crate::input::Surroundings {
-                device: crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
-            }));
+            browser.input(&Input::Surroundings(crate::input::Surroundings::of(
+                crate::input::Device::Gamepad(crate::input::ControllerFamily::Xbox),
+            )));
             texts(&drawn(&browser))
                 .into_iter()
                 .find(|text| text.starts_with("Ship 1 of 3"))

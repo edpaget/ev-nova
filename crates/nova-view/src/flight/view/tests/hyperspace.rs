@@ -35,7 +35,7 @@ fn hints_on(bindings: SharedBindings, rules: &Rulebook, device: Device) -> (Stri
     });
     let mut view = scripted_over(catalog(), fake, rules);
     view.set_bindings(bindings);
-    view.input(&Input::Surroundings(crate::input::Surroundings { device }));
+    view.input(&Input::Surroundings(crate::input::Surroundings::of(device)));
     let mut said = |hint| {
         view.sim
             .queue_event(FlightEvent::Message(SimMessage::Tutorial(hint)));

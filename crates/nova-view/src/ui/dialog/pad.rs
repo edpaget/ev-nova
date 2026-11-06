@@ -171,9 +171,8 @@ impl Dialog {
             self.focus.set_by_keys(None);
         }
         self.surroundings(old.device());
-        self.keys.follow(&Input::Surroundings(Surroundings {
-            device: old.device(),
-        }));
+        self.keys
+            .follow(&Input::Surroundings(Surroundings::of(old.device())));
     }
 
     /// The item the pad's highlight is on (from 1), if it shows.
