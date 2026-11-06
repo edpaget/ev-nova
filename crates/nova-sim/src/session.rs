@@ -706,6 +706,7 @@ mod tractor_hold;
 mod trade_dialog;
 mod trip_days;
 mod tutorial;
+mod uncounted_slots;
 #[cfg(test)]
 mod vacated_berths;
 mod voices;

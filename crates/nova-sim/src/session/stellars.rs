@@ -403,6 +403,10 @@ impl Session {
     /// stellar with no `Type` sheet is hit by the frame its sprite slot
     /// holds (`_CheckShotProximities` @0x37288-0x372a8 collides with the
     /// slot's sprite), by [`RuleKey::TypeSheetFallback`]'s engine reading.
+    /// The disc is centred where the slot's rect is
+    /// ([`Space::slot_centre`]): a frame frozen sits from the centre less
+    /// 16, as `_CheckShotProximities` reads the slot's rect (@0x372a8; see
+    /// the `uncounted_slots` module).
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
         self.chart
             .sites
@@ -412,10 +416,11 @@ impl Session {
                 let frame = self
                     .space
                     .drawn_frame_size(&self.statics, &self.setup, site)?;
+                let position = self.space.slot_centre(&self.statics, &self.setup, site)?;
                 let life = self.statics.lives.get(&site.id)?;
                 wreck::destroyable(life).then(|| StellarTarget {
                     stellar: site.id,
-                    position: site.position,
+                    position,
                     radius: frame_radius(frame),
                     strength: self
                         .space
@@ -622,7 +627,7 @@ impl Space {
     }
 
     /// [`Session::frame_frozen`].
-    fn frame_frozen(&self, setup: &Setup, stellar: StellarId) -> bool {
+    pub(super) fn frame_frozen(&self, setup: &Setup, stellar: StellarId) -> bool {
         setup.rules.source_for(RuleKey::UncountedSheet) == RuleSource::Engine
             && self.rebuilt.frozen(stellar)
     }
@@ -875,7 +880,7 @@ impl Chart {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::RelocateRefusal;
     use crate::ai::{Goal, Peaceful};
@@ -927,7 +932,7 @@ mod tests {
             .destroyed
     }
 
-    fn quiet(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn quiet(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.take_events();
         session.take_save_due();
@@ -2991,14 +2996,14 @@ mod tests {
 
     /// `Y128`, a frame, `U128` and a frame: the slot keeps the `DeadType`
     /// frame through the `Type` clone that counts none.
-    fn keeps_a_dead_frame(session: &mut Session) {
+    pub(in crate::session) fn keeps_a_dead_frame(session: &mut Session) {
         run(session, "Y128");
         frame(session);
         run(session, "U128");
         frame(session);
     }
 
-    fn uncounted_sheet(reading: RuleSource) -> Rulebook {
+    pub(in crate::session) fn uncounted_sheet(reading: RuleSource) -> Rulebook {
         Rulebook::default().with_override(RuleKey::UncountedSheet, reading)
     }
 
@@ -3307,7 +3312,7 @@ mod tests {
 
     /// [`clicking`]'s stellar 128, 40 square, with a `DeadType` sheet 200
     /// square that counts, whose `Type` counts no frames.
-    fn frozen_on_dead() -> FakePilotCatalog {
+    pub(in crate::session) fn frozen_on_dead() -> FakePilotCatalog {
         let mut catalog = clicking(Some((200, 200)), Some((100, 100)));
         catalog.sites[0].1[0].type_counts_frames = false;
         catalog
@@ -3432,7 +3437,7 @@ mod tests {
     }
 
     /// `session` with the player at (`x`, `y`).
-    fn player_at(session: &mut Session, x: f32, y: f32) {
+    pub(in crate::session) fn player_at(session: &mut Session, x: f32, y: f32) {
         session.ship.player.position = Vec2::new(x, y);
     }
 

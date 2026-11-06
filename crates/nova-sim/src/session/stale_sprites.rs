@@ -43,7 +43,8 @@
 //! its placed mask, its sheet's run-length tokens (see the `deadly_masks`
 //! module, rdm:phase/play-feel-8/phase-1-sprite-pixel-masks), and by its
 //! disc, half the larger side of its frame across and centred on its
-//! rect, where a mask can't be read.
+//! rect ([`Space::slot_centre`], a frame frozen's from the centre less 16;
+//! see the `uncounted_slots` module), where a mask can't be read.
 
 use super::{Chart, PlayerShip, Session, Setup, Space, Statics};
 use crate::catalog::LandingSite;
@@ -164,6 +165,10 @@ impl PlayerShip {
 
 impl Space {
     /// The disc of `site`, shown, as it is drawn: none when nothing is.
+    /// It is centred where the slot's rect is ([`Space::slot_centre`]): a
+    /// frame frozen sits from the centre less 16, as
+    /// `_HandleDeadlyStellars` reads the slot's rect (@0x39d97; see the
+    /// `uncounted_slots` module).
     fn drawn_disc(
         &self,
         statics: &Statics,
@@ -171,7 +176,7 @@ impl Space {
         site: &LandingSite,
     ) -> Option<DeadlyDisc> {
         Some(DeadlyDisc {
-            at: site.position,
+            at: self.slot_centre(statics, setup, site)?,
             radius: sprite_radius(self.drawn_frame_size(statics, setup, site)?),
         })
     }
