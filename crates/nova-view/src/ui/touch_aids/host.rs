@@ -1,5 +1,6 @@
-//! How a screen hosts a touch aid ([`TouchAid`]: a [`ModifierToggle`],
-//! the [`PlayKeys`](super::PlayKeys)): the aid sees each input first and
+//! How a screen hosts a touch aid ([`TouchAid`]: a
+//! [`ModifierToggle`](super::ModifierToggle), the
+//! [`PlayKeys`](super::PlayKeys)): the aid sees each input first and
 //! gives back the inputs the host runs through its own input, in order;
 //! the host's pointer cancel ends what the aid holds; and the aid shows
 //! only while the host says nothing of its own is open over it.
@@ -14,7 +15,8 @@ use crate::draw::DrawList;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
 
-/// What an aid does for its host: see [`ModifierToggle`] and
+/// What an aid does for its host: see
+/// [`ModifierToggle`](super::ModifierToggle) and
 /// [`PlayKeys`](super::PlayKeys).
 pub trait TouchAid {
     /// Follows `input` ahead of the host: the inputs the host should run
