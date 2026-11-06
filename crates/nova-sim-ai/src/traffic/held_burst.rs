@@ -120,10 +120,12 @@ use crate::traffic::warp_out::FOLLOW_BURST;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Word {
     /// It writes +0x34 when it thrusts: every substate but 1, 0xe and
-    /// 0x12, whose thrust drops an owed burst (F8).
+    /// 0x12, and mining orders 0x13 and 0x15 (@0x881bc-0x881c4,
+    /// @0x8857b-0x88583), whose thrust drops an owed burst (F8).
     Writes,
-    /// It leaves +0x34 alone (subs 1, 0xe and 0x12), writing +0x30 alone:
-    /// `thrust` is |+0x30| in pixels a tick, 0 when it doesn't thrust.
+    /// It leaves +0x34 alone (subs 1, 0xe and 0x12, and mining orders 0x13
+    /// and 0x15), writing +0x30 alone: `thrust` is |+0x30| in pixels a
+    /// tick, 0 when it doesn't thrust.
     Keeps {
         /// |+0x30|.
         thrust: f32,
@@ -131,7 +133,9 @@ pub(crate) enum Word {
 }
 
 impl Word {
-    /// Sub 0x12's word, and an inertial sniper's (sub 0xe): its thrust,
+    /// Sub 0x12's word, an inertial sniper's (sub 0xe), and mining orders
+    /// 0x13 and 0x15's (`mine_flight::steer`, @0x881bc-0x881c4,
+    /// @0x8857b-0x88583): its thrust,
     /// `flown`'s acceleration, while `controls` thrust.
     pub(crate) fn thrusting(controls: Controls, flown: &Handling) -> Self {
         Self::Keeps {
