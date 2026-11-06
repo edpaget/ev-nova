@@ -26,7 +26,8 @@
 //!
 //! - Keys are physical, so on a layout other than QWERTY egui's shortcuts
 //!   (Command+A, +Z, +X, +C) follow the key's position. Typed text comes
-//!   from [`WindowEvent::Text`], so it is unaffected.
+//!   from [`WindowEvent::Text`], and the input method's from
+//!   [`WindowEvent::Committed`], so it is unaffected.
 //! - Only the wheel's vertical axis is kept, as the game's
 //!   [`WindowEvent::Scroll`] keeps it.
 //! - The Back and Forward buttons are the game's `MouseButton::Other`, so
@@ -137,7 +138,8 @@ impl EguiInput {
                 pressed,
                 repeat,
             } => self.key(key, pressed, repeat),
-            WindowEvent::Text(c) => {
+            // A commit is the input method's text, typed as a key's is.
+            WindowEvent::Text(c) | WindowEvent::Committed(c) => {
                 let held = self.modifiers();
                 // A command's character (Command-C's "c") is not typed.
                 // (egui-winit also tests `mac_cmd`, which is held only
@@ -853,6 +855,18 @@ mod tests {
         for &(nova, egui) in TABLE {
             assert_eq!(super::egui_key(nova), Some(egui), "{nova:?}");
         }
+    }
+
+    #[test]
+    fn a_commit_types_as_text_does() {
+        assert_eq!(
+            at_2x(&[WindowEvent::Committed('日')]),
+            [Event::Text("日".to_owned())]
+        );
+        assert_eq!(
+            at_2x(&[WindowEvent::Committed('a')]),
+            at_2x(&[WindowEvent::Text('a')])
+        );
     }
 
     #[test]

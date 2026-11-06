@@ -541,7 +541,7 @@ impl AppScreen {
     }
 
     /// Every overlay open, in the router's order.
-    fn overlays_opened(&self) -> Vec<Overlay> {
+    pub(super) fn overlays_opened(&self) -> Vec<Overlay> {
         self.overlays_open()
             .into_iter()
             .filter_map(|row| row.open.then_some(row.overlay))

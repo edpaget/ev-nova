@@ -181,6 +181,7 @@ mod px_rect;
 mod safe_area;
 mod scaling;
 pub mod screen;
+pub mod text_entry;
 mod touch;
 mod updates;
 mod wheel;
@@ -290,6 +291,11 @@ pub enum WindowEvent {
     /// A printable character was typed: it follows the [`WindowEvent::Key`]
     /// press that typed it.
     Text(char),
+    /// A character the input method committed (an IME's composition, or
+    /// a soft keyboard's text): no key press goes with it, so it goes
+    /// wherever keys go now, the developer overlay while it shows and the
+    /// screen otherwise, as [`Input::Text`]. It counts as the keyboard's.
+    Committed(char),
     /// The pointer moved to a window position in physical pixels.
     PointerMoved {
         /// Where, in physical pixels from the window's top-left.
@@ -453,6 +459,12 @@ pub struct App<S, C = AppScreen> {
     safe_px: PxRect,
     /// The surroundings the screen was told last ([`safe_area`]).
     told: Surroundings,
+    /// The platform's text entry ([`App::with_text_entry`]);
+    /// [`NoTextEntry`](crate::text_entry::NoTextEntry) until one is given.
+    text_entry: Box<dyn crate::text_entry::TextEntry>,
+    /// The field and focus count entry was last started at, while started
+    /// ([`text_entry`]).
+    told_entry: Option<(PxRect, u32)>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -492,6 +504,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             touch: TouchRouter::default(),
             safe_px: window.safe_area(),
             told: Surroundings::default(),
+            text_entry: Box::new(crate::text_entry::NoTextEntry),
+            told_entry: None,
         }
     }
 
@@ -1009,6 +1023,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     routing,
                 },
             },
+            // macOS sends no key with a committing keystroke, so a commit
+            // can't follow `last_key`: it may be the overlay's toggle.
+            WindowEvent::Committed(_) if self.overlay.as_ref().is_some_and(DevOverlay::visible) => {
+                overlay
+            }
+            WindowEvent::Committed(c) => game(self.route(Input::Text(c))),
             WindowEvent::PointerMoved { px } => self.pointer_moved(px),
             WindowEvent::PointerLeft => {
                 self.pointer = None;
@@ -1152,6 +1172,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.offer_display(window);
         let mut list = DrawList::new();
         self.screen.draw(&mut list);
+        self.tell_text_entry(list.text_entry());
         // An upscaler picked since the last frame draws this one.
         self.switch_upscaler(gpu);
         let report = self.renderer.render(&list, &self.viewport, gpu);
@@ -1402,6 +1423,11 @@ fn device_input(event: &WindowEvent) -> Option<Input> {
             pressed: true,
             repeat: false,
         }),
+        WindowEvent::Committed(_) => Some(Input::Key {
+            key: Key::Unidentified,
+            pressed: true,
+            repeat: false,
+        }),
         WindowEvent::PointerMoved { .. }
         | WindowEvent::PointerButton { .. }
         | WindowEvent::Scroll { .. } => Some(Input::PointerMoved(Point::new(0.0, 0.0))),
@@ -1587,6 +1613,8 @@ mod tests {
         /// It claims a touch on a control flight's touch controls place
         /// with the menu so, in the surroundings it was told last, if set.
         claims_menu: Option<nova_view::flight::touch_controls::layout::MenuView>,
+        /// What each frame it draws asks of text entry, if anything.
+        entry_ask: Option<nova_view::EntryAsk>,
     }
 
     impl RecordingScreen {
@@ -1633,6 +1661,9 @@ mod tests {
                 .borrow_mut()
                 .push(self.surroundings.last().copied());
             list.sprite(ImageKey::sprite(1, 0), Point::new(0.0, 0.0), Color::WHITE);
+            if let Some(ask) = self.entry_ask {
+                list.ask_text_entry(ask);
+            }
         }
 
         fn release_keys(&mut self) {
@@ -1707,6 +1738,7 @@ mod tests {
     mod pointer_outside;
     mod pointer_release;
     mod safe_area;
+    mod text_entry;
     mod touch;
     mod touch_controls;
     mod updates;

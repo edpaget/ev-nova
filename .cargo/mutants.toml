@@ -410,6 +410,10 @@ exclude_re = [
     # window. The decisions in them are the tested `deepest`,
     # `monitor_mode`, `offers_exclusive` and `safe_rect`.
     "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name|safe_area)",
+    # The text entry adapter's one call into a real winit window, a
+    # one-line forward observable only with a window. The adapter's
+    # decisions are tested over `StrictIme` (`platform::text_entry`).
+    "impl ImeWindow for Arc<dyn Window>>::request_ime_update",
     # The port's defaults for a window with no pointer of its own, that
     # cannot go fullscreen or be sized, do nothing already.
     "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",

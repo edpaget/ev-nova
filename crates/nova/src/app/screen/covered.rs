@@ -13,9 +13,17 @@
 //!   of it. A mission dialog's map over flight is drawn in front of the
 //!   dialogs it opened from, so only an overlay the router puts in front
 //!   of that map ([`AppScreen::overlay_in_front`]) covers it.
+//! - **The galaxy side** (the developer's viewer, and its Find) is covered
+//!   by any overlay open.
+//! - **Each open overlay** is covered unless it is the one in front, so a
+//!   text dialog under another (New Pilot, the christening, the capture
+//!   naming) asks for no text entry and draws no on-screen keyboard
+//!   (rdm:phase/key-bindings/phase-17-text-entry-port). A mission dialog's
+//!   map is told through flight.
 //!
-//! What a covered aid does, and how the spaceport and flight pass the word
-//! on, is `nova_view`'s (`ui::touch_aids::host`).
+//! What a covered aid or text dialog does, and how the spaceport and
+//! flight pass the word on, is `nova_view`'s (`ui::touch_aids::host`,
+//! `ui::entry_keyboard`).
 
 use nova_view::Screen;
 
@@ -23,8 +31,9 @@ use super::AppScreen;
 use super::routing::Overlay;
 
 impl AppScreen {
-    /// Tells the spaceport and flight whether anything the router shows
-    /// covers them (see the module docs).
+    /// Tells the spaceport, flight, the galaxy side and each open overlay
+    /// whether anything the router shows covers them (see the module
+    /// docs).
     pub(super) fn tell_covered(&mut self) {
         let front = self.overlay_in_front();
         let spaceport = front.is_some() || self.port_map_open();
@@ -34,6 +43,12 @@ impl AppScreen {
         }
         if let Some(view) = &mut self.flight {
             view.set_covered(flight);
+        }
+        self.galaxy.set_covered(front.is_some());
+        for overlay in self.overlays_opened() {
+            if let Some(screen) = self.overlay_screen_mut(overlay) {
+                screen.set_covered(front != Some(overlay));
+            }
         }
     }
 }

@@ -95,6 +95,7 @@ use super::loop_sender::LoopEvents;
 #[cfg(target_os = "macos")]
 use super::loop_sender::LoopSender;
 use super::run_end::{Ending, Run};
+use super::text_entry::WinitTextEntry;
 use super::window::WinitWindow;
 use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
@@ -393,6 +394,7 @@ impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
                     Some(pads) => app.with_gamepads(pads),
                     None => app,
                 };
+                let app = app.with_text_entry(Box::new(WinitTextEntry::new(window.0.clone())));
                 // Once NSApplication has finished launching, where Sparkle
                 // expects to be started.
                 let mut app = match self.updates.take() {

@@ -31,6 +31,13 @@
 //! the primary finger itself. Pens are dropped; 0.30 delivered a pen on
 //! Windows as a touch, and dropped it too.
 //!
+//! The input method's commits are [`WindowEvent::Committed`], one a
+//! character ([`ime_events`]); its composition, which no field draws yet,
+//! and its other events are dropped. The iPad's soft keyboard sends its
+//! characters as keys, and its Return as an unidentified key whose
+//! logical key is a newline, which [`keyboard_event`] makes Return.
+//! [`text_entry`] starts and stops the IME, and the soft keyboard with it.
+//!
 //! The system can make the window fullscreen, or a window again, without
 //! the app asking, and winit sends no event for it. So [`window_events`]
 //! reports the window's state, [`WindowEvent::FullscreenChanged`], ahead
@@ -48,6 +55,7 @@ mod loop_sender;
 mod menu_bar;
 mod run_end;
 mod runner;
+pub mod text_entry;
 #[cfg(any(target_os = "macos", windows))]
 mod updater;
 mod window;
@@ -74,10 +82,10 @@ pub const APP_ID: &str = env!("NOVA_APP_ID");
 use std::time::Duration;
 
 use winit::event::{
-    ButtonSource, ElementState, MouseScrollDelta, PointerKind, PointerSource,
+    ButtonSource, ElementState, Ime, MouseScrollDelta, PointerKind, PointerSource,
     WindowEvent as WinitEvent,
 };
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{Key as LogicalKey, KeyCode, PhysicalKey};
 
 use crate::app::{WheelDelta, WindowEvent, WindowPort};
 use nova_view::{Key, MouseButton};
@@ -96,9 +104,12 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             size_px: window.size_px(),
             scale_factor: *scale_factor,
         },
-        WinitEvent::KeyboardInput { event, .. } => {
-            key_event(event.physical_key, event.state, event.repeat)
-        }
+        WinitEvent::KeyboardInput { event, .. } => keyboard_event(
+            event.physical_key,
+            &event.logical_key,
+            event.state,
+            event.repeat,
+        ),
         // winit 0.31 sends no move after the pointer comes in, where 0.30
         // did: the game learns where it is from the enter.
         WinitEvent::PointerMoved {
@@ -215,11 +226,56 @@ pub fn window_events(
     .then(|| WindowEvent::FullscreenChanged {
         fullscreen: window.is_fullscreen(),
     });
+    let commits = match event {
+        WinitEvent::Ime(ime) => ime_events(ime),
+        _ => Vec::new(),
+    };
     let event = match event {
         WinitEvent::RedrawRequested => Some(WindowEvent::Redraw { elapsed }),
         other => translate(other, window),
     };
-    fullscreen.into_iter().chain(event)
+    fullscreen.into_iter().chain(event).chain(commits)
+}
+
+/// The app's events for an input method's `ime` event: a commit is one
+/// [`WindowEvent::Committed`] for each character, control characters
+/// dropped as [`text_event`] drops them; the composition (`Preedit`, which
+/// no field draws yet), `Enabled`, `Disabled` and `DeleteSurrounding` (the
+/// game sends no surrounding text) are nothing.
+#[must_use]
+pub fn ime_events(ime: &Ime) -> Vec<WindowEvent> {
+    match ime {
+        Ime::Commit(text) => text
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(WindowEvent::Committed)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A key going down or up, as [`key_event`] makes it, but for the iPad's
+/// soft keyboard's Return: winit's `UIKit` backend sends it as a key it
+/// can't identify, whose logical key is a newline, which is Return here,
+/// so it presses a dialog's default as Return does. Every other key is
+/// [`key_event`]'s.
+#[must_use]
+pub fn keyboard_event(
+    key: PhysicalKey,
+    logical: &LogicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> WindowEvent {
+    let soft_return = matches!(key, PhysicalKey::Unidentified(_))
+        && matches!(logical, LogicalKey::Character(c) if c == "\n" || c == "\r");
+    if soft_return {
+        return WindowEvent::Key {
+            key: Key::Enter,
+            pressed: state.is_pressed(),
+            repeat,
+        };
+    }
+    key_event(key, state, repeat)
 }
 
 /// A key going down or up; `repeat` is winit's flag for a press the OS
@@ -1898,6 +1954,70 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn an_ime_commit_becomes_one_committed_event_per_character() {
+        let commit = WinitEvent::Ime(Ime::Commit("日本".to_owned()));
+        assert_eq!(
+            events(&commit, false),
+            [WindowEvent::Committed('日'), WindowEvent::Committed('本')]
+        );
+    }
+
+    #[test]
+    fn an_ime_commit_drops_control_characters() {
+        assert_eq!(
+            ime_events(&Ime::Commit("a\nb\u{7f}".to_owned())),
+            [WindowEvent::Committed('a'), WindowEvent::Committed('b')]
+        );
+    }
+
+    #[test]
+    fn preedit_and_the_ime_s_other_events_become_nothing() {
+        for ime in [
+            Ime::Preedit("にほ".to_owned(), Some((0, 6))),
+            Ime::Enabled,
+            Ime::Disabled,
+            Ime::DeleteSurrounding {
+                before_bytes: 1,
+                after_bytes: 0,
+            },
+        ] {
+            assert_eq!(events(&WinitEvent::Ime(ime.clone()), true), [], "{ime:?}");
+        }
+    }
+
+    #[test]
+    fn the_soft_keyboard_s_return_is_return() {
+        let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        for newline in ["\n", "\r"] {
+            let logical = LogicalKey::Character(newline.into());
+            for state in [ElementState::Pressed, ElementState::Released] {
+                assert_eq!(
+                    keyboard_event(unknown, &logical, state, false),
+                    WindowEvent::Key {
+                        key: Key::Enter,
+                        pressed: state.is_pressed(),
+                        repeat: false
+                    },
+                    "{newline:?} {state:?}"
+                );
+            }
+        }
+        let letter = LogicalKey::Character("a".into());
+        assert_eq!(
+            keyboard_event(unknown, &letter, ElementState::Pressed, false),
+            key_event(unknown, ElementState::Pressed, false),
+            "a soft keyboard's letter is the unidentified key it was"
+        );
+        let return_key = PhysicalKey::Code(KeyCode::KeyA);
+        let newline = LogicalKey::Character("\n".into());
+        assert_eq!(
+            keyboard_event(return_key, &newline, ElementState::Pressed, true),
+            key_event(return_key, ElementState::Pressed, true),
+            "a key the keyboard names is its own key"
+        );
     }
 
     #[test]

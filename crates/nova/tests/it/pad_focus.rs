@@ -6,7 +6,8 @@
 //! From the main menu, the pad alone opens Preferences and closes it,
 //! and creates or opens a pilot and flies it, through the router's
 //! telling the main menu and the screens it opens the device
-//! (rdm:phase/key-bindings/phase-11-gamepad-menus).
+//! (rdm:phase/key-bindings/phase-11-gamepad-menus), naming it on the
+//! on-screen keyboard (rdm:phase/key-bindings/phase-17-text-entry-port).
 //!
 //! Over `preferences`' synthetic "new prefs dialog". Where the focus
 //! lands, and what each button does, is nova-view's, pinned there
@@ -373,6 +374,59 @@ fn the_pad_alone_creates_a_pilot_and_flies_it() {
     app.fly_in();
     assert_eq!(app.game.showing(), Showing::Flight);
     assert_eq!(store.keys(), ["Ada Lovelace"], "saved under the default");
+}
+
+/// The pad alone names a new pilot on the on-screen keyboard
+/// (rdm:phase/key-bindings/phase-17-text-entry-port) and flies it: New
+/// Pilot, the shoulder to the name, South raising the keyboard, its keys
+/// by the d-pad and South (Clear, "Zoe", Done, which presses OK), the
+/// christening's OK, Enter Ship, and the intro's picture ended with
+/// South.
+#[test]
+fn the_pad_alone_names_a_new_pilot_on_the_on_screen_keyboard_and_flies_it() {
+    use nova_view::ui::entry_keyboard::{self, EntryHost, KeyId};
+    use nova_view::ui::new_pilot::NAME_ITEM;
+    let store = MemoryPilots::new();
+    let mut app = PadPilots::opening(&store);
+    app.choose(MenuChoice::NewPilot);
+    assert_eq!(app.game.showing(), Showing::NewPilot);
+    let dialog = |app: &PadPilots| app.game.app.screen().new_pilot().expect("open").clone();
+    for _ in 0..8 {
+        if dialog(&app).dialog().pad_highlight() == Some(NAME_ITEM) {
+            break;
+        }
+        app.tap(PadButton::LeftShoulder);
+    }
+    assert_eq!(dialog(&app).dialog().pad_highlight(), Some(NAME_ITEM));
+    app.tap(PadButton::South);
+    let raised = dialog(&app);
+    let layout = entry_keyboard::shown(&raised).expect("South raises the keyboard");
+    let from = raised.keyboard().pad_focus().expect("the pad's focus");
+    let keys = [
+        KeyId::Clear,
+        KeyId::Char('z'),
+        KeyId::Char('o'),
+        KeyId::Char('e'),
+        KeyId::Done,
+    ];
+    for input in layout.pad_presses(from, &keys) {
+        let nova_view::Input::PadButton { button, pressed } = input else {
+            panic!("pad inputs alone: {input:?}");
+        };
+        app.pads.push(vec![PadEvent::Button {
+            pad: PAD,
+            button,
+            pressed,
+        }]);
+        app.game.frame();
+    }
+    assert_eq!(app.game.showing(), Showing::Christening, "Done pressed OK");
+    app.tap(PadButton::South);
+    assert_eq!(app.game.showing(), Showing::MainMenu);
+    app.choose(MenuChoice::EnterShip);
+    app.fly_in();
+    assert_eq!(app.game.showing(), Showing::Flight);
+    assert_eq!(store.keys(), ["Zoe"], "saved under the name typed");
 }
 
 /// The pad alone opens a saved pilot from the list and flies it.

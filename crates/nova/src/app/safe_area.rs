@@ -61,9 +61,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.safe_px = window.safe_area();
     }
 
-    /// The surroundings as they are now: the device used last, and the
-    /// safe area and points per pixel through the viewport, kept as last
-    /// told while the window has no area.
+    /// The surroundings as they are now: the device used last, the safe
+    /// area and points per pixel through the viewport, kept as last told
+    /// while the window has no area, and whether the platform has a soft
+    /// keyboard ([`TextEntry::soft_keyboard`](crate::text_entry::TextEntry::soft_keyboard)).
     fn surroundings(&self) -> Surroundings {
         let (safe_area, points_per_pixel) = fit(self.safe_px, &self.viewport)
             .unwrap_or((self.told.safe_area, self.told.points_per_pixel));
@@ -71,7 +72,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             device: self.last_device.device(),
             safe_area,
             points_per_pixel,
-            soft_keyboard: false,
+            soft_keyboard: self.soft_keyboard(),
         }
     }
 

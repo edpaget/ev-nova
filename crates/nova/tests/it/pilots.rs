@@ -415,6 +415,14 @@ impl Harness {
         }
     }
 
+    /// The harness's app with the platform's text entry `entry`.
+    pub(crate) fn with_text_entry(self, entry: Box<dyn nova::text_entry::TextEntry>) -> Self {
+        Self {
+            app: self.app.with_text_entry(entry),
+            ..self
+        }
+    }
+
     /// The app on the main menu as `main` builds it, keeping pilots in
     /// `store` and opening the last pilot at launch, before any frame.
     fn launching(store: &MemoryPilots) -> Self {
