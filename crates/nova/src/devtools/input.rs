@@ -14,6 +14,13 @@
 //!   there is no clipboard.
 //! - Typed text is egui's text, except while Control or Command is held.
 //! - Losing focus lets go of every modifier, as their releases won't come.
+//! - A finger is the pointer as egui-winit's `on_touch` emulates it: the
+//!   first finger down while none is followed moves the pointer to its
+//!   point and presses the primary button, its moves move it, its lift
+//!   releases the button where it last was and the pointer goes, and its
+//!   cancel makes the pointer go with no release. Other fingers, and the
+//!   leave winit sends after a lift, give nothing; egui's own `Touch`
+//!   events, which no panel reads, aren't sent.
 //!
 //! What the overlay no longer gets, none of it input the panels need:
 //!
@@ -35,7 +42,7 @@ use egui::{
     TouchPhase, ViewportId, vec2,
 };
 use nova_render::wgpu::MAX_TEXTURE_SIDE;
-use nova_view::{Key, MouseButton};
+use nova_view::{FingerId, Key, MouseButton};
 
 use crate::app::{WheelDelta, WindowEvent};
 
@@ -63,6 +70,8 @@ pub struct EguiInput {
     /// Where the pointer last was, in points; none before it moves in, or
     /// once it has left.
     pointer: Option<Pos2>,
+    /// The finger that is egui's pointer, while it is down.
+    finger: Option<FingerId>,
     /// Which of [`MODIFIER_KEYS`] are held.
     held: [bool; 8],
     /// Whether the window takes keyboard input.
@@ -80,6 +89,7 @@ impl EguiInput {
             scale: scale_factor,
             mac,
             pointer: None,
+            finger: None,
             held: [false; 8],
             focused: true,
             events: Vec::new(),
@@ -147,11 +157,46 @@ impl EguiInput {
                 self.focused = true;
             }
             WindowEvent::Resized { scale_factor, .. } => self.scale = scale_factor,
+            WindowEvent::TouchStarted { finger, px } => {
+                if self.finger.is_none() {
+                    self.finger = Some(finger);
+                    let at = self.point(px);
+                    self.pointer = Some(at);
+                    self.events.push(Event::PointerMoved(at));
+                    self.events.push(Event::PointerButton {
+                        pos: at,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: self.modifiers(),
+                    });
+                }
+            }
+            WindowEvent::TouchMoved { finger, px } => {
+                if self.finger == Some(finger) {
+                    let at = self.point(px);
+                    self.pointer = Some(at);
+                    self.events.push(Event::PointerMoved(at));
+                }
+            }
+            WindowEvent::TouchEnded { finger, .. } => {
+                if self.finger == Some(finger) {
+                    if let Some(pos) = self.pointer {
+                        self.events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed: false,
+                            modifiers: self.modifiers(),
+                        });
+                    }
+                    self.finger_gone();
+                }
+            }
+            WindowEvent::TouchCancelled { finger } => {
+                if self.finger == Some(finger) {
+                    self.finger_gone();
+                }
+            }
             WindowEvent::Redraw { .. }
-            | WindowEvent::TouchStarted { .. }
-            | WindowEvent::TouchMoved { .. }
-            | WindowEvent::TouchEnded { .. }
-            | WindowEvent::TouchCancelled { .. }
             | WindowEvent::FullscreenChanged { .. }
             | WindowEvent::CloseRequested
             | WindowEvent::Menu(_)
@@ -183,6 +228,14 @@ impl EguiInput {
             .or_default()
             .native_pixels_per_point = Some(scale_factor as f32);
         input
+    }
+
+    /// The pointer's finger lifted or was cancelled: the pointer vanishes,
+    /// so nothing stays hovered, as egui-winit has it.
+    fn finger_gone(&mut self) {
+        self.finger = None;
+        self.pointer = None;
+        self.events.push(Event::PointerGone);
     }
 
     /// Window pixel `px` in points.
@@ -488,6 +541,118 @@ mod tests {
                 button(MouseButton::Left, true),
             ]),
             [Event::PointerMoved(pos2(10.0, 20.0)), Event::PointerGone]
+        );
+    }
+
+    fn finger(f: usize) -> nova_view::FingerId {
+        nova_view::FingerId::new(f)
+    }
+
+    fn touch_down(f: usize, x: f64, y: f64) -> WindowEvent {
+        WindowEvent::TouchStarted {
+            finger: finger(f),
+            px: (x, y),
+        }
+    }
+
+    fn touch_moved(f: usize, x: f64, y: f64) -> WindowEvent {
+        WindowEvent::TouchMoved {
+            finger: finger(f),
+            px: (x, y),
+        }
+    }
+
+    fn touch_up(f: usize, x: f64, y: f64) -> WindowEvent {
+        WindowEvent::TouchEnded {
+            finger: finger(f),
+            px: (x, y),
+        }
+    }
+
+    fn touch_cancelled(f: usize) -> WindowEvent {
+        WindowEvent::TouchCancelled { finger: finger(f) }
+    }
+
+    #[test]
+    fn a_first_finger_is_egui_s_pointer_pressing_and_releasing() {
+        let at = pos2(10.0, 20.0);
+        assert_eq!(
+            at_2x(&[touch_down(1, 20.0, 40.0), touch_up(1, 20.0, 40.0)]),
+            [
+                Event::PointerMoved(at),
+                egui_button(at, PointerButton::Primary, true),
+                egui_button(at, PointerButton::Primary, false),
+                Event::PointerGone,
+            ]
+        );
+    }
+
+    #[test]
+    fn its_moves_move_the_pointer() {
+        assert_eq!(
+            at_2x(&[
+                touch_down(1, 20.0, 40.0),
+                touch_moved(1, 40.0, 60.0),
+                touch_up(1, 40.0, 60.0),
+            ]),
+            [
+                Event::PointerMoved(pos2(10.0, 20.0)),
+                egui_button(pos2(10.0, 20.0), PointerButton::Primary, true),
+                Event::PointerMoved(pos2(20.0, 30.0)),
+                egui_button(pos2(20.0, 30.0), PointerButton::Primary, false),
+                Event::PointerGone,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_finger_gives_nothing() {
+        let first = at_2x(&[touch_down(1, 20.0, 40.0)]);
+        assert_eq!(
+            at_2x(&[
+                touch_down(1, 20.0, 40.0),
+                touch_down(2, 80.0, 80.0),
+                touch_moved(2, 90.0, 90.0),
+                touch_up(2, 90.0, 90.0),
+                touch_cancelled(2),
+            ]),
+            first
+        );
+    }
+
+    #[test]
+    fn a_cancelled_touch_is_pointer_gone_without_a_release() {
+        let at = pos2(10.0, 20.0);
+        assert_eq!(
+            at_2x(&[
+                touch_down(1, 20.0, 40.0),
+                touch_cancelled(1),
+                button(MouseButton::Left, false),
+            ]),
+            [
+                Event::PointerMoved(at),
+                egui_button(at, PointerButton::Primary, true),
+                Event::PointerGone,
+            ],
+            "and the point is forgotten"
+        );
+    }
+
+    #[test]
+    fn the_leave_after_a_lift_gives_nothing() {
+        let lift = at_2x(&[touch_down(1, 20.0, 40.0), touch_up(1, 20.0, 40.0)]);
+        assert_eq!(
+            at_2x(&[
+                touch_down(1, 20.0, 40.0),
+                touch_up(1, 20.0, 40.0),
+                touch_cancelled(1),
+            ]),
+            lift
+        );
+        assert_eq!(
+            at_2x(&[touch_down(2, 2.0, 2.0)])[..1],
+            [Event::PointerMoved(pos2(1.0, 1.0))],
+            "the next finger is the pointer"
         );
     }
 
