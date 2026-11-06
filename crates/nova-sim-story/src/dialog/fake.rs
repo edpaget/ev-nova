@@ -2,10 +2,12 @@
 //!
 //! A [`FakeLoader`] maps compiled texts to [`FakeDialog`]s scripted by
 //! hand: knots of lines and choices, each choice once-only or sticky, with
-//! its own lines and the variables it sets, and the variables the story
-//! declares. The fake runs no Ink: a knot is entered by its whole path
-//! (`ledger.open`), a choice's lines end the story, and a choice sets
-//! fixed values rather than evaluating expressions.
+//! its own lines, the variables it sets and the knot it diverts to, and the
+//! variables the story declares. The fake runs no Ink: a knot is entered by
+//! its whole path (`ledger.open`), a choice's lines end the story unless it
+//! diverts ([`FakeChoice::then`]), and a choice sets fixed values rather
+//! than evaluating expressions. A divert to a knot the story lacks fails
+//! the step, as a [`DialogError::Runtime`].
 //!
 //! What it does is stated once, by the port's contract
 //! ([`check_contract`](super::fixture::check_contract)), which it passes
@@ -122,14 +124,15 @@ impl FakeKnot {
 }
 
 /// A choice of a [`FakeKnot`]: what it offers, whether it is spent once
-/// taken, the lines it steps and the variables it sets. Its lines end the
-/// story.
+/// taken, the lines it steps, the variables it sets and the knot it diverts
+/// to. Its lines end the story unless it diverts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FakeChoice {
     offer: Choice,
     once: bool,
     lines: Vec<Line>,
     sets: Vec<(String, Value)>,
+    then: Option<String>,
 }
 
 impl FakeChoice {
@@ -154,6 +157,7 @@ impl FakeChoice {
             once,
             lines: Vec::new(),
             sets: Vec::new(),
+            then: None,
         }
     }
 
@@ -168,6 +172,14 @@ impl FakeChoice {
     #[must_use]
     pub fn sets(mut self, name: &str, value: Value) -> Self {
         self.sets.push((name.to_owned(), value));
+        self
+    }
+
+    /// Once its lines are stepped, diverts to the knot `path`, which steps
+    /// its own lines and offers its own choices.
+    #[must_use]
+    pub fn then(mut self, path: &str) -> Self {
+        self.then = Some(path.to_owned());
         self
     }
 }
@@ -354,19 +366,36 @@ impl Dialog for FakeDialog {
     }
 
     fn step(&mut self) -> Result<Option<Line>, DialogError> {
-        let Some(at) = &mut self.at else {
-            return Ok(None);
-        };
-        let knot = &self.knots[at.knot];
-        let lines = match at.choice {
-            None => &knot.lines,
-            Some(choice) => &knot.choices[choice].lines,
-        };
-        let line = lines.get(at.next).cloned();
-        if line.is_some() {
-            at.next += 1;
+        loop {
+            let Some(at) = &mut self.at else {
+                return Ok(None);
+            };
+            let knot = &self.knots[at.knot];
+            let (lines, then) = match at.choice {
+                None => (&knot.lines, None),
+                Some(choice) => {
+                    let choice = &knot.choices[choice];
+                    (&choice.lines, choice.then.as_deref())
+                }
+            };
+            if let Some(line) = lines.get(at.next) {
+                at.next += 1;
+                return Ok(Some(line.clone()));
+            }
+            let Some(then) = then else {
+                return Ok(None);
+            };
+            let knot = self
+                .knots
+                .iter()
+                .position(|k| k.path == then)
+                .ok_or_else(|| DialogError::Runtime(format!("no knot `{then}` to divert to")))?;
+            self.at = Some(At {
+                knot,
+                choice: None,
+                next: 0,
+            });
         }
-        Ok(line)
     }
 
     fn choices(&self) -> Vec<Choice> {
@@ -463,7 +492,53 @@ mod tests {
         assert_eq!(check_contract(&FakeLoader::meeting_the_contract()), Ok(()));
     }
 
-    // The log is fake-only: the contract can't reach it.
+    // Diverts and the log are fake-only: the contract can't reach them.
+
+    #[test]
+    fn a_choice_that_diverts_steps_into_the_knot_and_offers_its_choices() {
+        let loader = FakeLoader::default().story(
+            "s",
+            FakeDialog::default()
+                .knot(
+                    FakeKnot::new("a")
+                        .choice(FakeChoice::sticky("Go", &[]).line("Going.", &[]).then("b")),
+                )
+                .knot(
+                    FakeKnot::new("b")
+                        .line("Arrived.", &["t"])
+                        .choice(FakeChoice::sticky("Stay", &[])),
+                ),
+        );
+        let mut dialog = loader.open("s").unwrap();
+        dialog.enter("a").unwrap();
+        assert_eq!(dialog.step(), Ok(None));
+        dialog.choose(0).unwrap();
+        assert_eq!(dialog.step(), Ok(Some(line("Going.", &[]))));
+        assert_eq!(dialog.choices(), []);
+        assert_eq!(dialog.step(), Ok(Some(line("Arrived.", &["t"]))));
+        assert_eq!(dialog.step(), Ok(None));
+        assert_eq!(
+            dialog.choices(),
+            [Choice {
+                text: "Stay".to_owned(),
+                tags: Vec::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_divert_to_a_missing_knot_fails_the_step() {
+        let mut dialog = FakeDialog::default()
+            .knot(FakeKnot::new("a").choice(FakeChoice::sticky("Go", &[]).then("nowhere")));
+        dialog.enter("a").unwrap();
+        dialog.choose(0).unwrap();
+        assert_eq!(
+            dialog.step(),
+            Err(DialogError::Runtime(
+                "no knot `nowhere` to divert to".to_owned()
+            ))
+        );
+    }
 
     #[test]
     fn a_dialog_logs_the_calls_it_receives_failed_or_not() {

@@ -20,7 +20,12 @@
 //! A dialog holds no `Send` bound: `bladeink`'s story is built on `Rc`s.
 //! A dialog that must cross a thread is kept as its [`SavedDialog`] and
 //! its compiled text, and opened again on the other side.
+//!
+//! [`conversation`] plays a story a page at a time over this port, for a
+//! screen to show: the lines, then the choices, kept as a save between
+//! choices so the conversation is a plain value.
 
+pub mod conversation;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fake;
 #[cfg(any(test, feature = "fixture"))]
