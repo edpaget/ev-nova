@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The default `Screen::claims_touch` already returns false, so its
+    # `false` mutant is the code itself; the `true` mutant is caught by
+    # `a_screen_claims_no_touch_by_default`.
+    "nova-view/src/screen\\.rs:[0-9]+:[0-9]+: replace Screen::claims_touch -> bool with false$",
     # An inertialess plunderer's matched speed floored at none: `<=` also
     # sets a speed of exactly none to 0.0. A 0.0 stays 0.0; only a -0.0,
     # which needs a -0.0 speed already and no gain or acceleration, would

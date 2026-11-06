@@ -42,10 +42,11 @@ struct Pinching {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TouchRouter {
     /// The fingers down, in the order they landed.
+    ///
+    /// No flag is kept for "the primary lifted while another was down": a
+    /// finger becomes primary only while no unclaimed finger is down, so
+    /// none presses until every unclaimed finger has lifted.
     fingers: Vec<Finger>,
-    /// Whether the primary lifted while another unclaimed finger was down:
-    /// no unclaimed finger presses until every one has lifted.
-    spent: bool,
     /// The pinch under way, if any.
     pinch: Option<Pinching>,
 }
@@ -79,7 +80,6 @@ impl TouchRouter {
         while let Some(finger) = self.fingers.first() {
             self.lift(finger.id, None, &mut out);
         }
-        self.spent = false;
         out
     }
 
@@ -121,7 +121,7 @@ impl TouchRouter {
         let role = if claimant.claims(at) {
             out.push(Routed::Claimed(claimed(finger, TouchPhase::Started(at))));
             Role::Claimed
-        } else if self.unclaimed() == 0 && !self.spent {
+        } else if self.unclaimed() == 0 {
             out.push(Routed::Pointer(PointerStep::Moved(at)));
             out.push(Routed::Pointer(PointerStep::Pressed(at)));
             Role::Primary
@@ -198,13 +198,6 @@ impl TouchRouter {
             }
             (Role::Primary, None) => out.push(Routed::Pointer(PointerStep::Cancelled)),
             (Role::Other, _) => {}
-        }
-        let unclaimed = self.unclaimed();
-        if lifted.role == Role::Primary && unclaimed > 0 {
-            self.spent = true;
-        }
-        if unclaimed == 0 {
-            self.spent = false;
         }
     }
 }
@@ -473,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_primary_with_another_down_leaves_the_router_spent() {
+    fn a_cancelled_primary_with_another_down_leaves_no_primary_until_all_lift() {
         let mut fingers = Drive::new(never);
         fingers.down(1, p(10.0, 10.0));
         fingers.down(2, p(300.0, 300.0));
@@ -488,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claimed_finger_down_does_not_keep_the_router_spent() {
+    fn a_claimed_finger_down_does_not_keep_the_next_from_being_primary_after_all_lift() {
         let mut fingers = Drive::new(Asked::new());
         fingers.down(1, p(500.0, 500.0));
         fingers.down(2, p(50.0, 50.0));
@@ -675,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_all_clears_spent() {
+    fn after_cancel_all_the_next_finger_is_primary() {
         let mut fingers = Drive::new(never);
         fingers.down(1, p(10.0, 10.0));
         fingers.down(2, p(300.0, 300.0));
