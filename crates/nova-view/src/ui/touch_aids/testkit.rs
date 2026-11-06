@@ -121,3 +121,61 @@ impl Window {
         }
     }
 }
+
+/// Told touch, `screen`'s toggle at `toggle` tapped, then each of `taps`,
+/// one finger through the touch router as the app delivers it.
+pub(crate) fn toggle_then_taps<S: crate::screen::Screen>(
+    screen: &mut S,
+    toggle: impl Fn(&S) -> Point,
+    taps: &[Point],
+) {
+    screen.input(&crate::input::Input::Surroundings(Surroundings::of(
+        Device::Touch,
+    )));
+    let at = toggle(screen);
+    let mut fingers = crate::touch::testkit::Fingers::on(screen);
+    for &point in std::iter::once(&at).chain(taps) {
+        fingers.down(1, point);
+        fingers.up(1, point);
+    }
+}
+
+/// `modifier` held through a mouse click at `at` (a move there, the
+/// press and the release), as the keyboard and mouse player makes a
+/// modifier click.
+pub(crate) fn modifier_click(
+    screen: &mut impl crate::screen::Screen,
+    modifier: crate::input::Key,
+    at: Point,
+) {
+    use crate::input::{Input, MouseButton};
+    let key = |pressed| Input::Key {
+        key: modifier,
+        pressed,
+        repeat: false,
+    };
+    screen.input(&key(true));
+    screen.input(&Input::PointerMoved(at));
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+    screen.input(&key(false));
+}
+
+/// What `screen` draws.
+pub(crate) fn drawn(screen: &impl crate::screen::Screen) -> Vec<crate::draw::DrawCommand> {
+    let mut list = crate::draw::DrawList::new();
+    screen.draw(&mut list);
+    list.iter().cloned().collect()
+}
+
+/// The devices other than touch.
+pub(crate) const OTHER_DEVICES: [Device; 3] = [
+    Device::Keyboard,
+    Device::Mouse,
+    Device::Gamepad(crate::input::ControllerFamily::Generic),
+];

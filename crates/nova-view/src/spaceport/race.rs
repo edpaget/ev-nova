@@ -156,6 +156,8 @@ pub struct RaceScreen {
     help: bool,
     closed: bool,
     sounds: Vec<Sound>,
+    /// Ask Bet's touch toggle (the `touch` module).
+    toggle: crate::ui::touch_aids::ModifierToggle,
 }
 
 impl RaceScreen {
@@ -198,6 +200,7 @@ impl RaceScreen {
             }
         });
         Self {
+            toggle: touch::toggle(laid.as_ref().ok().map(|laid| laid.dialog.bounds())),
             laid,
             style,
             quantity: QuantityAsk::new(quantity, style, contexts::RACE, RaceCommand::Ask),
@@ -403,6 +406,9 @@ impl Screen for RaceScreen {
     /// Enter and Escape press Leave, and a click presses the button it is
     /// released on; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
         // The surroundings are no player input: they reach the dialog and
         // the bet's, open or opened later, and do nothing else.
         if self.quantity.follow_surroundings(input) {
@@ -480,9 +486,11 @@ impl Screen for RaceScreen {
             }
         }
         self.quantity.draw(list);
+        crate::ui::touch_aids::host::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         if self.quantity.cancel_pointer() {
             return;
         }
@@ -500,6 +508,8 @@ impl Screen for RaceScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+mod touch;
 
 #[cfg(test)]
 pub(crate) use tests::pad_probe;
@@ -577,7 +587,7 @@ mod tests {
     /// Where the dialog goes: (1024 - 470) / 2 and (768 - 230) / 2.
     const ORIGIN: Point = Point::new(277.0, 269.0);
 
-    fn open() -> RaceScreen {
+    pub(super) fn open() -> RaceScreen {
         RaceScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
             Some(quantity_template()),
@@ -586,7 +596,7 @@ mod tests {
         )
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -602,7 +612,7 @@ mod tests {
         }
     }
 
-    fn centre(screen: &RaceScreen, item: usize) -> Point {
+    pub(super) fn centre(screen: &RaceScreen, item: usize) -> Point {
         screen
             .dialog()
             .expect("laid out")
@@ -612,13 +622,13 @@ mod tests {
     }
 
     /// Clicks `item`, down and up on it.
-    fn click(screen: &mut RaceScreen, item: usize) {
+    pub(super) fn click(screen: &mut RaceScreen, item: usize) {
         let at = centre(screen, item);
         screen.input(&pointer(true, at));
         screen.input(&pointer(false, at));
     }
 
-    fn racer_item(racer: u8) -> usize {
+    pub(super) fn racer_item(racer: u8) -> usize {
         FIRST_RACER_ITEM + usize::from(racer)
     }
 
@@ -764,6 +774,12 @@ mod tests {
 
         fn default_control(&self) -> Option<&'static str> {
             Some("Leave")
+        }
+
+        fn touch_aids_drawn(&mut self) -> Vec<crate::draw::DrawCommand> {
+            let mut list = crate::draw::DrawList::new();
+            crate::ui::touch_aids::host::draw(&self.0, &mut list);
+            list.iter().cloned().collect()
         }
     }
 

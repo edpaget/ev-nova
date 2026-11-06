@@ -16,7 +16,7 @@
 //!   a later plain click into one the player didn't ask for.
 //! - **Cancels.** The host's `cancel_pointer` calls [`ModifierToggle::cancel`],
 //!   which forgets a press on the toggle and, mid-tap, gives back the
-//!   command's release for the host to run after its own cancel. Told any
+//!   command's release for the host to run. Told any
 //!   device but touch, it hides and disarms, giving back the release if a
 //!   tap is wrapped.
 //! - **Silent**, as phase 15's overlay is: the wrapped tap's sounds are the
@@ -41,6 +41,17 @@ use crate::view_shape::CLASSIC_SIZE;
 #[allow(clippy::cast_precision_loss)]
 const CLASSIC: (f32, f32) = (CLASSIC_SIZE.0 as f32, CLASSIC_SIZE.1 as f32);
 
+/// The toggle's one-shot latch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Latch {
+    /// The next tap elsewhere is plain.
+    Off,
+    /// The next tap elsewhere is wrapped.
+    Armed,
+    /// A tap is wrapped now: its command is held.
+    Wrapping,
+}
+
 /// A modifier click's toggle: see the module docs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModifierToggle {
@@ -54,12 +65,13 @@ pub struct ModifierToggle {
     told: Surroundings,
     /// Whether the host lets it show.
     live: bool,
-    /// Whether the next tap elsewhere is wrapped.
-    armed: bool,
+    /// Whether the next tap elsewhere is wrapped, or one is now.
+    latch: Latch,
     /// A press on the toggle itself.
     press: Press,
-    /// Whether a tap is wrapped now: its command is held.
-    wrapping: bool,
+    /// Whether its host is running the inputs it gave back, which pass it
+    /// by ([`super::host`]).
+    pub(super) replaying: bool,
 }
 
 impl ModifierToggle {
@@ -73,9 +85,9 @@ impl ModifierToggle {
             occupied,
             told: Surroundings::default(),
             live: true,
-            armed: false,
+            latch: Latch::Off,
             press: Press::default(),
-            wrapping: false,
+            replaying: false,
         }
     }
 
@@ -115,7 +127,7 @@ impl ModifierToggle {
     /// Whether the next tap elsewhere is wrapped.
     #[must_use]
     pub const fn armed(&self) -> bool {
-        self.armed
+        matches!(self.latch, Latch::Armed)
     }
 
     /// The surroundings it was told last.
@@ -128,8 +140,8 @@ impl ModifierToggle {
     /// wrapped still ends with its release).
     pub fn set_live(&mut self, live: bool) {
         self.live = live;
-        if !live {
-            self.armed = false;
+        if !live && self.latch == Latch::Armed {
+            self.latch = Latch::Off;
             self.press.cancel();
         }
     }
@@ -141,13 +153,15 @@ impl ModifierToggle {
             self.told = told;
             let mut out = vec![*input];
             if told.device != Device::Touch {
-                self.armed = false;
+                if self.latch == Latch::Armed {
+                    self.latch = Latch::Off;
+                }
                 self.press.cancel();
                 out.extend(self.unwrap());
             }
             return out;
         }
-        if self.wrapping {
+        if self.latch == Latch::Wrapping {
             return match *input {
                 Input::PointerButton {
                     button: MouseButton::Left,
@@ -168,13 +182,17 @@ impl ModifierToggle {
         };
         match self.press.input(input, &rects) {
             Step::Acted(_) => {
-                self.armed = !self.armed;
+                self.latch = if self.armed() {
+                    Latch::Off
+                } else {
+                    Latch::Armed
+                };
                 return Vec::new();
             }
             Step::Taken => return Vec::new(),
             Step::Passed => {}
         }
-        if self.armed
+        if self.armed()
             && self.shown()
             && let Input::PointerButton {
                 button: MouseButton::Left,
@@ -182,7 +200,7 @@ impl ModifierToggle {
                 ..
             } = *input
         {
-            self.wrapping = true;
+            self.latch = Latch::Wrapping;
             return vec![self.button(true), *input];
         }
         vec![*input]
@@ -190,7 +208,7 @@ impl ModifierToggle {
 
     /// The host's pointer was let go of: a press on the toggle is
     /// forgotten, and a wrapped tap ends, giving back its command's
-    /// release for the host to run after its own cancel.
+    /// release for the host to run.
     pub fn cancel(&mut self) -> Vec<Input> {
         self.press.cancel();
         self.unwrap()
@@ -199,10 +217,9 @@ impl ModifierToggle {
     /// Ends a wrapped tap: disarmed, and the command's release, if one was
     /// wrapped.
     fn unwrap(&mut self) -> Vec<Input> {
-        if !std::mem::take(&mut self.wrapping) {
+        if std::mem::replace(&mut self.latch, Latch::Off) != Latch::Wrapping {
             return Vec::new();
         }
-        self.armed = false;
         vec![self.button(false)]
     }
 
@@ -219,7 +236,7 @@ impl ModifierToggle {
         if !self.shown() {
             return;
         }
-        let fill = if self.armed || self.press.held().is_some() {
+        let fill = if self.armed() || self.press.held().is_some() {
             look::HIGHLIGHT
         } else {
             look::FILL

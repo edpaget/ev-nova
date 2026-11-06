@@ -1,19 +1,21 @@
 //! How a screen hosts a [`ModifierToggle`]: the toggle sees each input
 //! first and gives back the inputs the host runs through its own input,
 //! in order; the host's pointer cancel ends a wrapped tap; and the toggle
-//! is live only while the host says nothing of its own is open over it.
+//! shows only while the host says nothing of its own is open over it.
 //!
-//! A host implements [`ToggleHost`] in a sibling module of its own and
-//! its [`Screen`](crate::Screen) methods call [`input`], [`cancel`] and
-//! [`draw`]: one line each in the host's file.
+//! A host implements [`ToggleHost`] in a sibling module of its own, and
+//! its [`Screen`] methods call [`intercept`] (at the head of `input`),
+//! [`cancel`] (in `cancel_pointer`) and [`draw`] (at the end of `draw`):
+//! one line each in the host's file. The inputs the toggle gives back run
+//! through the host's [`Screen::input`] again, past the toggle.
 
 use super::ModifierToggle;
 use crate::draw::DrawList;
 use crate::input::Input;
-use crate::screen::ScreenAction;
+use crate::screen::{Screen, ScreenAction};
 
 /// A screen with a modifier toggle.
-pub trait ToggleHost {
+pub trait ToggleHost: Screen {
     /// Its toggle.
     fn toggle(&self) -> &ModifierToggle;
 
@@ -23,33 +25,32 @@ pub trait ToggleHost {
     /// Whether the toggle may show: nothing of the host's own (a quantity
     /// dialog, an offer, Find) is open over it.
     fn toggle_live(&self) -> bool;
-
-    /// The host's own input, past the toggle.
-    fn own_input(&mut self, input: &Input) -> ScreenAction;
 }
 
-/// `input` through `host`'s toggle, then each input it gives back through
-/// the host's own; the last action that isn't [`ScreenAction::None`].
-pub fn input(host: &mut impl ToggleHost, input: &Input) -> ScreenAction {
-    settle_live(host);
-    let mut action = ScreenAction::None;
-    for each in host.toggle_mut().input(input) {
-        let got = host.own_input(&each);
-        if got != ScreenAction::None {
-            action = got;
-        }
+/// Runs `input` through `host`'s toggle at the head of the host's
+/// [`Screen::input`]: `None` when the host takes `input` as it is, or
+/// else the action of the inputs the toggle gave back, each run through
+/// the host's input past the toggle (the last that isn't
+/// [`ScreenAction::None`]).
+pub fn intercept(host: &mut impl ToggleHost, input: &Input) -> Option<ScreenAction> {
+    if host.toggle().replaying {
+        return None;
     }
     settle_live(host);
-    action
+    let given = host.toggle_mut().input(input);
+    if given == [*input] {
+        return None;
+    }
+    Some(replay(host, &given))
 }
 
-/// After the host's own pointer cancel: a press on the toggle forgotten,
-/// and a wrapped tap's command released through the host's input.
+/// In the host's pointer cancel: a press on the toggle forgotten, and a
+/// wrapped tap's command released through the host's input. A modifier
+/// is read at a press or a release, which the cancel abandons, so it may
+/// run before or after the host's own cancel.
 pub fn cancel(host: &mut impl ToggleHost) {
-    for each in host.toggle_mut().cancel() {
-        host.own_input(&each);
-    }
-    settle_live(host);
+    let given = host.toggle_mut().cancel();
+    replay(host, &given);
 }
 
 /// Draws `host`'s toggle over it while the host lets it show now, so one
@@ -58,6 +59,22 @@ pub fn draw(host: &impl ToggleHost, list: &mut DrawList) {
     if host.toggle_live() {
         host.toggle().draw(list);
     }
+}
+
+/// Runs `inputs` through the host's input past the toggle; the last
+/// action that isn't [`ScreenAction::None`].
+fn replay(host: &mut impl ToggleHost, inputs: &[Input]) -> ScreenAction {
+    host.toggle_mut().replaying = true;
+    let mut action = ScreenAction::None;
+    for each in inputs {
+        let got = host.input(each);
+        if got != ScreenAction::None {
+            action = got;
+        }
+    }
+    host.toggle_mut().replaying = false;
+    settle_live(host);
+    action
 }
 
 /// Tells the toggle whether the host lets it show.
@@ -97,8 +114,23 @@ mod tests {
         fn toggle_live(&self) -> bool {
             !self.open
         }
+    }
 
-        fn own_input(&mut self, input: &Input) -> ScreenAction {
+    impl Screen for Recorder {
+        fn tick(&mut self, _dt: std::time::Duration) {}
+
+        fn draw(&self, list: &mut DrawList) {
+            draw(self, list);
+        }
+
+        fn cancel_pointer(&mut self) {
+            cancel(self);
+        }
+
+        fn input(&mut self, input: &Input) -> ScreenAction {
+            if let Some(action) = intercept(self, input) {
+                return action;
+            }
             self.got.push(*input);
             if matches!(*input, Input::PointerButton { pressed: false, at, .. } if at == OPENS) {
                 self.open = true;
@@ -118,10 +150,7 @@ mod tests {
             got: Vec::new(),
             open: false,
         };
-        input(
-            &mut host,
-            &Input::Surroundings(Surroundings::of(Device::Touch)),
-        );
+        host.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
         host
     }
 
@@ -142,8 +171,8 @@ mod tests {
 
     fn arm(host: &mut Recorder) {
         let at = host.toggle.rect().center();
-        input(host, &button(true, at));
-        input(host, &button(false, at));
+        host.input(&button(true, at));
+        host.input(&button(false, at));
     }
 
     #[test]
@@ -152,8 +181,8 @@ mod tests {
         arm(&mut host);
         host.got.clear();
         let at = Point::new(400.0, 300.0);
-        assert_eq!(input(&mut host, &button(true, at)), ScreenAction::Quit);
-        input(&mut host, &button(false, at));
+        assert_eq!(host.input(&button(true, at)), ScreenAction::Quit);
+        host.input(&button(false, at));
         assert_eq!(
             host.got,
             [
@@ -169,12 +198,12 @@ mod tests {
     fn a_host_dialog_opened_by_the_wrapped_tap_hides_the_toggle_after_it() {
         let mut host = host();
         arm(&mut host);
-        input(&mut host, &button(true, OPENS));
-        input(&mut host, &button(false, OPENS));
+        host.input(&button(true, OPENS));
+        host.input(&button(false, OPENS));
         assert!(!host.toggle.shown(), "hidden under the host's dialog");
         assert_eq!(host.got.last(), Some(&command(false)));
         host.open = false;
-        input(&mut host, &Input::PointerMoved(OPENS));
+        host.input(&Input::PointerMoved(OPENS));
         assert!(host.toggle.shown(), "back once it closes");
     }
 
@@ -183,7 +212,7 @@ mod tests {
         let mut host = host();
         let drawn = |host: &Recorder| {
             let mut list = DrawList::new();
-            draw(host, &mut list);
+            host.draw(&mut list);
             list.len()
         };
         assert!(drawn(&host) > 0);
@@ -195,11 +224,11 @@ mod tests {
     fn the_hosts_cancel_releases_a_wrapped_command_through_its_input() {
         let mut host = host();
         arm(&mut host);
-        input(&mut host, &button(true, Point::new(400.0, 300.0)));
+        host.input(&button(true, Point::new(400.0, 300.0)));
         host.got.clear();
-        cancel(&mut host);
+        host.cancel_pointer();
         assert_eq!(host.got, [command(false)]);
-        cancel(&mut host);
+        host.cancel_pointer();
         assert_eq!(host.got, [command(false)], "once");
     }
 }

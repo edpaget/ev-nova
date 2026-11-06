@@ -7,9 +7,7 @@
 
 use super::TradeScreen;
 use crate::geometry::Bounds;
-use crate::input::Input;
 use crate::keymap::{Command, TradeCommand};
-use crate::screen::ScreenAction;
 use crate::ui::touch_aids::ModifierToggle;
 use crate::ui::touch_aids::host::ToggleHost;
 
@@ -35,30 +33,9 @@ impl ToggleHost for TradeScreen {
                 .as_ref()
                 .is_none_or(|offering| offering.dialog().is_none())
     }
-
-    fn own_input(&mut self, input: &Input) -> ScreenAction {
-        self.take_input(input)
-    }
 }
 
 impl TradeScreen {
-    /// Its pointer let go of: the offer's, the quantity dialog's or the
-    /// exchange's press.
-    pub(super) fn cancel_own_pointer(&mut self) {
-        if self
-            .offering
-            .as_mut()
-            .is_some_and(super::VenueOffers::cancel_pointer)
-        {
-            return;
-        }
-        if !self.quantity.cancel_pointer()
-            && let Ok(laid) = &mut self.laid
-        {
-            laid.dialog.cancel_pointer();
-        }
-    }
-
     /// Its touch toggle, for tests.
     #[cfg(test)]
     pub(crate) const fn touch_toggle(&self) -> &ModifierToggle {
@@ -73,7 +50,7 @@ mod tests {
     use super::*;
     use crate::draw::{DrawCommand, DrawList};
     use crate::geometry::Point;
-    use crate::input::{ControllerFamily, Device, Key, MouseButton, Surroundings};
+    use crate::input::{ControllerFamily, Device, Input, Key, MouseButton, Surroundings};
     use crate::screen::Screen;
     use crate::sound::Sound;
     use crate::touch::testkit::Fingers;

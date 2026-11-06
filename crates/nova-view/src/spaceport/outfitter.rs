@@ -535,6 +535,8 @@ pub struct OutfitterScreen {
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
     sounds: Vec<Sound>,
+    /// Ask Count's touch toggle (the `touch` module).
+    toggle: crate::ui::touch_aids::ModifierToggle,
 }
 
 impl OutfitterScreen {
@@ -590,6 +592,7 @@ impl OutfitterScreen {
         });
         let arrow_moves = ArrowMoves::from_rules(&outfitter.rules);
         let mut screen = Self {
+            toggle: touch::toggle(laid.as_ref().ok().map(|laid| laid.dialog.bounds())),
             laid,
             outfitter,
             colors: catalog.grid_colors(),
@@ -1326,6 +1329,9 @@ impl Screen for OutfitterScreen {
     /// open (Alt still followed), or else to the quantity dialog while it
     /// is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
         if self.tell_held(input) {
             return ScreenAction::None;
         }
@@ -1453,9 +1459,11 @@ impl Screen for OutfitterScreen {
         if let Some(offering) = &self.offering {
             offering.draw(list);
         }
+        crate::ui::touch_aids::host::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         if self
             .offering
             .as_mut()
@@ -1497,6 +1505,7 @@ impl Screen for OutfitterScreen {
 }
 
 pub(crate) mod pad;
+mod touch;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]

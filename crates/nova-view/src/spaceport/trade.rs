@@ -823,11 +823,13 @@ fn inverted_box(laid: &Laid, list: &mut DrawList, text: &str, rect: Bounds) {
     TextBox::new(text, TEXT_FONT, TEXT_SIZE, BOX_TEXT, rect, &laid.metrics.0).draw(list);
 }
 
-impl TradeScreen {
+impl Screen for TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
-    /// it is open; it never quits. Trade Most's touch toggle sees it
-    /// first ([`Screen::input`]).
-    fn take_input(&mut self, input: &Input) -> ScreenAction {
+    /// it is open; it never quits.
+    fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
         // Its keys are followed under the offer and the quantity dialog
         // too, so a release there is not lost.
         let command = self.keys.follow(input);
@@ -906,12 +908,6 @@ impl TradeScreen {
         }
         ScreenAction::None
     }
-}
-
-impl Screen for TradeScreen {
-    fn input(&mut self, input: &Input) -> ScreenAction {
-        crate::ui::touch_aids::host::input(self, input)
-    }
 
     /// The wait for the next offer runs down, the quantity dialog
     /// covering the trade center while it is open.
@@ -954,8 +950,19 @@ impl Screen for TradeScreen {
     }
 
     fn cancel_pointer(&mut self) {
-        self.cancel_own_pointer();
         crate::ui::touch_aids::host::cancel(self);
+        if self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::cancel_pointer)
+        {
+            return;
+        }
+        if !self.quantity.cancel_pointer()
+            && let Ok(laid) = &mut self.laid
+        {
+            laid.dialog.cancel_pointer();
+        }
     }
 
     /// Lets go of its keys, Alt among them, and of the keys held in the
