@@ -85,7 +85,10 @@
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date.
 //! - `storylines/`, `missions/`, `news/`, `characters/`, `dialog/`: they
-//!   belong to `engine-story`.
+//!   belong to `engine-story`. `dialog/` will be read as the compiled
+//!   `<file>.ink.json` that game-bible's `galaxy` writes beside each
+//!   `.ink`, and played through the dialog port
+//!   (`nova_sim_story::dialog`), in engine-story phase 2.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
 //!   read for the stand-ins ([`looks`]), and the export media paths for the
 //!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.
