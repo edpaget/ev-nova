@@ -37,6 +37,10 @@
 //! of its own and its link's gate's stability, and of parallel gates the
 //! best wins, as the traveller can take it. A lane is one-way
 //! ([`GateLanes::one_way`]) when no lane leads back.
+//!
+//! With the `fixture` feature, `GateLanes::fixture` builds lanes as
+//! given, for the tests of the crates above (the story's news spreads
+//! over them).
 
 use std::collections::BTreeMap;
 
@@ -138,6 +142,20 @@ impl GateLanes {
     #[must_use]
     pub fn one_way(&self, from: SystemId, to: SystemId) -> bool {
         self.lanes.contains_key(&(from, to)) && !self.lanes.contains_key(&(to, from))
+    }
+
+    /// Lanes as given, for other crates' tests: each `(from, to,
+    /// stability)` a lane, in order, served by one gate numbered by its
+    /// place in `lanes` (from 0). A lane given twice keeps the better
+    /// stability, as parallel gates do.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn fixture(lanes: &[(i16, i16, GateStability)]) -> Self {
+        let mut built = Self::default();
+        for (gate, &(from, to, stability)) in (0..).zip(lanes) {
+            built.serve(SystemId(from), SystemId(to), StellarId(gate), stability);
+        }
+        built
     }
 }
 
@@ -489,6 +507,35 @@ mod tests {
             map.route(SystemId(1), SystemId(3), HyperlinkRule::Engine),
             Ok(ids(&[2, 3]))
         );
+    }
+
+    #[test]
+    fn a_fixture_s_lanes_answer_as_given() {
+        let lanes = GateLanes::fixture(&[
+            (1, 2, GateStability::Stable),
+            (2, 1, GateStability::Dead),
+            (1, 3, GateStability::Unstable),
+            (1, 3, GateStability::Stable),
+        ]);
+        assert_eq!(lanes.listed(SystemId(1)), ids(&[2, 3]));
+        assert_eq!(lanes.listed(SystemId(2)), ids(&[1]));
+        assert_eq!(lanes.listed(SystemId(3)), ids(&[]));
+        assert_eq!(
+            lanes.stability(SystemId(1), SystemId(2)),
+            Some(GateStability::Stable)
+        );
+        assert_eq!(
+            lanes.stability(SystemId(2), SystemId(1)),
+            Some(GateStability::Dead)
+        );
+        assert_eq!(
+            lanes.stability(SystemId(1), SystemId(3)),
+            Some(GateStability::Stable),
+            "the better of two"
+        );
+        assert_eq!(lanes.stability(SystemId(3), SystemId(1)), None);
+        assert!(lanes.one_way(SystemId(1), SystemId(3)));
+        assert_eq!(lanes.gates(SystemId(1), SystemId(3)), stellars(&[2, 3]));
     }
 
     #[test]
