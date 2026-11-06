@@ -518,6 +518,34 @@ fn the_highlight_shows_only_while_the_pad_was_used_last() {
     }
 }
 
+/// Surroundings with `device` and the rest changed, as a resize or a
+/// safe-area change tells them.
+fn resized(device: Device) -> Input {
+    let told = Surroundings::of(device);
+    Input::Surroundings(Surroundings {
+        safe_area: told.safe_area.inset(40.0, 12.0),
+        points_per_pixel: 0.75,
+        ..told
+    })
+}
+
+#[test]
+fn new_surroundings_with_the_same_device_change_nothing_drawn() {
+    for (screen, build) in rows() {
+        for device in [PAD, Device::Keyboard, Device::Mouse, Device::Touch] {
+            let moved = || {
+                let mut run = Run::new(build).sends(&[told(device)]);
+                run.tap(PadButton::DPadDown);
+                run
+            };
+            let mut kept = moved();
+            let mut retold = moved().sends(&[resized(device)]);
+            assert_eq!(retold.drawn(), kept.drawn(), "{screen}: {device:?}");
+            assert_eq!(retold.result(), kept.result(), "{screen}: {device:?}");
+        }
+    }
+}
+
 #[test]
 fn after_the_pad_the_keyboard_ring_draws_as_it_always_did() {
     let tab = [key(Key::Tab, true), key(Key::Tab, false)];

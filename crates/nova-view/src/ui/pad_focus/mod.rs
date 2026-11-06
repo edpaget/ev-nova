@@ -487,7 +487,7 @@ pub const fn from_pad(input: &Input) -> bool {
 /// passes on to each screen it holds or opens: the app tells a screen the
 /// device only when it changes or the screen opens, so a screen opened
 /// inside another that forgot it would hold back the pad's focus.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Told(Option<Surroundings>);
 
 impl Told {

@@ -1,6 +1,6 @@
 //! Input events, in the core's own terms and logical coordinates.
 
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 
 mod glyphs;
 mod touch;
@@ -227,20 +227,49 @@ impl ControllerFamily {
 }
 
 /// What the app tells every screen about where it runs, as data: sent as
-/// [`Input::Surroundings`] whenever it changes, and again to a screen the
-/// app switches to. Later phases add fields (the safe area, points per
-/// logical pixel, whether a soft keyboard exists).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// [`Input::Surroundings`] whenever any field changes (`nova`'s app tells
+/// it after every event and before every frame, only when it differs from
+/// what it last told), and again to a screen the app switches to.
+///
+/// A screen must not take every `Surroundings` as a device switch: a
+/// resize or a safe-area change sends one with the device unchanged.
+/// Every screen reads [`Surroundings::device`]; only flight's touch
+/// controls read the safe area and points per pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surroundings {
     /// The device the player used last.
     pub device: Device,
+    /// The part of the canvas the system leaves clear (a notch, the home
+    /// indicator, rounded corners), in the logical space of the shape shown
+    /// now and clipped to its canvas: the whole canvas where the window
+    /// has no inset.
+    pub safe_area: Bounds,
+    /// Points per logical pixel: the window's size in points against the
+    /// logical size it shows, so a size in points `p` is `p /
+    /// points_per_pixel` logical units.
+    pub points_per_pixel: f32,
+}
+
+impl Default for Surroundings {
+    /// The keyboard, the classic canvas (0, 0)-(1024, 768) all clear, at
+    /// one point per logical pixel: a 1024 × 768 pt window.
+    fn default() -> Self {
+        Self {
+            device: Device::Keyboard,
+            safe_area: Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0),
+            points_per_pixel: 1.0,
+        }
+    }
 }
 
 impl Surroundings {
     /// The default surroundings with `device` the device used last.
     #[must_use]
     pub fn of(device: Device) -> Self {
-        Self { device }
+        Self {
+            device,
+            ..Self::default()
+        }
     }
 }
 
@@ -741,6 +770,39 @@ mod tests {
         let of = Surroundings::of(pad);
         assert_eq!(of.device, pad);
         assert_eq!(Surroundings::of(Device::Keyboard), Surroundings::default());
+    }
+
+    #[test]
+    fn the_default_surroundings_are_the_classic_canvas_at_one_point_per_pixel() {
+        let told = Surroundings::default();
+        assert_eq!(told.device, Device::Keyboard);
+        assert_eq!(
+            told.safe_area,
+            Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0)
+        );
+        assert_eq!(told.points_per_pixel, 1.0);
+        assert_eq!(Surroundings::of(Device::Touch).safe_area, told.safe_area);
+        assert_eq!(Surroundings::of(Device::Touch).points_per_pixel, 1.0);
+    }
+
+    #[test]
+    fn surroundings_compare_by_every_field() {
+        let told = Surroundings::of(Device::Touch);
+        assert_ne!(
+            Surroundings {
+                safe_area: told.safe_area.inset(10.0, 0.0),
+                ..told
+            },
+            told
+        );
+        assert_ne!(
+            Surroundings {
+                points_per_pixel: 2.0,
+                ..told
+            },
+            told
+        );
+        assert_ne!(Surroundings::of(Device::Mouse), told);
     }
 
     #[test]
