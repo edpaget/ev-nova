@@ -52,6 +52,9 @@ pub struct RledInfo {
     /// Whether any frame has a run, so the decoded sheet would keep
     /// [`SpriteSheet::solid_frames`].
     pub has_runs: bool,
+    /// The header's depth, as the decoded sheet's [`SpriteSheet::depth`]:
+    /// 16, 8, 32 or another the original draws.
+    pub depth: u16,
 }
 
 /// Decodes an `rlëD` to its frames, arranged by `layout` (or
@@ -138,14 +141,15 @@ pub fn decode_rled_with(
     let (width, height) = (header.width, header.height);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
     if header.depth != DEPTH && header.depth != DEPTH_8 {
-        return decode_wide(data, &header, layout, readings.thirty_two_bit);
+        return decode_wide(data, &header, layout, readings.thirty_two_bit)
+            .map(|sheet| sheet.with_depth(header.depth));
     }
     let reading = readings.eight_bit;
     let units = Units::of(&header, reading);
     if header.depth == DEPTH_8 {
         let mut painter = Rled8::new(reading, width, height, header.count);
         walk(data, r.pos(), &header, units, &mut painter)?;
-        Ok(painter.finish(layout))
+        Ok(painter.finish(layout).with_depth(DEPTH_8))
     } else {
         let mut painter = Painter {
             width,
@@ -182,6 +186,7 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
             frame_height: header.height,
             frames: header.count,
             has_runs: sheet.solid_frames().is_some(),
+            depth: header.depth,
         });
     }
     let units = Units::of(&header, EightBitReading::AsDrawn);
@@ -192,6 +197,7 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
         frame_height: header.height,
         frames: header.count,
         has_runs: scanner.has_runs,
+        depth: header.depth,
     })
 }
 
@@ -779,6 +785,51 @@ mod tests {
         );
     }
 
+    /// One-pixel sheets of depth 16, 8 and 32.
+    fn sheets_of_each_depth() -> [(u16, Vec<u8>); 3] {
+        [
+            (
+                16,
+                RledBuilder::new(1, 1)
+                    .frame(|f| f.line().pixels(&[RED]))
+                    .build(),
+            ),
+            (
+                8,
+                RledBuilder::new(2, 1)
+                    .depth(8)
+                    .frame(|f| f.line().pixels8(&[0x00, 0x7C]))
+                    .build(),
+            ),
+            (
+                32,
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+                    .build(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_sheet_reports_its_header_depth_under_either_reading() {
+        for (depth, bytes) in sheets_of_each_depth() {
+            for reading in [EightBitReading::AsDrawn, EightBitReading::SystemPalette] {
+                let sheet = decode_rled_as(&bytes, None, reading).unwrap();
+                assert_eq!(sheet.depth(), depth, "{depth} {reading:?}");
+            }
+            assert_eq!(decode(&bytes).unwrap().depth(), depth);
+        }
+    }
+
+    #[test]
+    fn a_scan_reports_the_header_depth() {
+        for (depth, bytes) in sheets_of_each_depth() {
+            assert_eq!(scan_rled(&bytes).map(|info| info.depth), Ok(depth));
+        }
+    }
+
     #[test]
     fn a_truncated_sheet_is_an_unexpected_end() {
         let bytes = RledBuilder::new(3, 2)
@@ -985,6 +1036,7 @@ mod tests {
             frame_height: sheet.frame_height(),
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
+            depth: sheet.depth(),
         }
     }
 
@@ -999,6 +1051,7 @@ mod tests {
             frame_height: 2,
             frames: 2,
             has_runs: true,
+            depth: 16,
         };
         assert_eq!(scan_rled(&bytes), Ok(expected));
         assert_eq!(decode(&bytes).map(|sheet| info_of(&sheet)), Ok(expected));
@@ -1018,6 +1071,7 @@ mod tests {
                 frame_height: 1,
                 frames: 3,
                 has_runs: false,
+                depth: 16,
             })
         );
     }

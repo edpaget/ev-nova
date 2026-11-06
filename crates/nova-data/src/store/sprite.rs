@@ -663,6 +663,7 @@ mod tests {
                 frame_height: sheet.frame_height(),
                 frames: sheet.frames().len() as u16,
                 has_runs: sheet.solid_frames().is_some(),
+                depth: sheet.depth(),
             },
             layout: sheet.layout(),
         }

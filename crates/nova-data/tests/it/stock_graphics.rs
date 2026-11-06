@@ -118,7 +118,7 @@ fn every_stock_rled_decodes_its_frames_at_the_header_size() {
 }
 
 /// A scan reads what the decode gives, for every stock sheet: its frame
-/// size, frame count and whether it has runs, or the same error.
+/// size, frame count, depth and whether it has runs, or the same error.
 #[test]
 fn every_stock_rled_scans_as_it_decodes() {
     check_all("rlëD", 282, |data, problems| {
@@ -127,6 +127,7 @@ fn every_stock_rled_scans_as_it_decodes() {
             frame_height: sheet.frame_height(),
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
+            depth: sheet.depth(),
         });
         let scanned = scan_rled(data);
         if scanned != decoded {

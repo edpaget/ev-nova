@@ -208,6 +208,14 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_sheet_is_16_bit() {
+        // `_ConvertSpriteToRLE` makes it a 16-bit RLE, so the draw proc
+        // takes its 16-bit branches.
+        let sprites = distinct(2, 2);
+        assert_eq!(cut(&sprites, SheetMask::Itself, 2, 2).depth(), 16);
+    }
+
+    #[test]
     fn colours_keep_their_top_five_bits() {
         let sprites = picture(2, 1, &[[0x12, 0x34, 0x56], [0xFF, 0x07, 0xF8]]);
         let sheet = cut(&sprites, SheetMask::Picture(&white(2, 1)), 2, 1);

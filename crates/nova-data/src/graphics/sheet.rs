@@ -53,6 +53,8 @@ pub struct SpriteSheet {
     layout: SheetLayout,
     /// The frames' solid runs alone, when any frame has one.
     solid: Option<Vec<Image>>,
+    /// The depth the original's draw proc sees (see [`Self::depth`]).
+    depth: u16,
 }
 
 impl SpriteSheet {
@@ -73,6 +75,7 @@ impl SpriteSheet {
             frames,
             layout,
             solid: None,
+            depth: 16,
         }
     }
 
@@ -99,6 +102,11 @@ impl SpriteSheet {
     /// none.
     pub(crate) fn with_solid(self, solid: Option<Vec<Image>>) -> Self {
         Self { solid, ..self }
+    }
+
+    /// The sheet with `depth` as its header's depth (16 unless set).
+    pub(crate) fn with_depth(self, depth: u16) -> Self {
+        Self { depth, ..self }
     }
 
     /// Width of every frame's box: the header's width.
@@ -160,6 +168,15 @@ impl SpriteSheet {
     #[must_use]
     pub fn into_solid_frames(self) -> Option<Vec<Image>> {
         self.solid
+    }
+
+    /// The depth of the frames the original's draw proc sees, which it
+    /// branches on (+0x20, @0xbb5a4, @0xbb792): an `rlëD`'s header depth
+    /// (16, 8, 32 or another), under either reading, and 16 for a `PICT`
+    /// pair's cut, which `_ConvertSpriteToRLE` makes a 16-bit RLE.
+    #[must_use]
+    pub fn depth(&self) -> u16 {
+        self.depth
     }
 
     /// The layout the sheet was decoded with.
