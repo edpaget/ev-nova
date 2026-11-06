@@ -79,8 +79,8 @@ impl Port {
         landed: Option<StellarId>,
     ) -> Option<ConversationPage> {
         let stellar = landed?;
-        let (compiled, knot) = statics.stellar_dialogs.place(stellar)?;
-        let conversation = Conversation::open(setup.dialog_loader(), compiled, knot);
+        let at = statics.stellar_dialogs.place(stellar)?;
+        let conversation = Conversation::open(setup.dialog_loader(), at.compiled, at.knot);
         let page = conversation.page().clone();
         self.conversation = Some(OpenConversation {
             stellar,
@@ -103,7 +103,7 @@ impl Port {
             .conversation
             .as_mut()
             .filter(|open| Some(open.stellar) == landed)?;
-        let (compiled, _) = statics.stellar_dialogs.place(open.stellar)?;
+        let compiled = statics.stellar_dialogs.place(open.stellar)?.compiled;
         open.conversation
             .choose(setup.dialog_loader(), compiled, index)
             .ok()?;

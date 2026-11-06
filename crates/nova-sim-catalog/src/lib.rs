@@ -20,8 +20,9 @@
 //!   Nova's [`NovaBits`]; and running a set expression
 //!   ([`control::execute`]).
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
-//! - [`dialogs`]: each stellar's conversation, its compiled story and the
-//!   knot it enters ([`StellarDialogs`](dialogs::StellarDialogs)).
+//! - [`dialogs`]: each stellar's conversation, its Ink file, its compiled
+//!   story and the knot it enters
+//!   ([`StellarDialogs`](dialogs::StellarDialogs)).
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   builders for the catalog's records and mocks of the [`ControlBits`]
 //!   port, for the tests of this crate and the nova-sim crates above.

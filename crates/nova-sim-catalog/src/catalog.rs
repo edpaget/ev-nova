@@ -3304,6 +3304,7 @@ mod tests {
         fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
             crate::dialogs::StellarDialogs::default().with(
                 StellarId(128),
+                "dialog/story.ink",
                 std::sync::Arc::from("{story}"),
                 "greet",
             )
@@ -3540,7 +3541,8 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_catalogs_forward_the_stellar_conversations() {
-        let talking = r#"Some(("{story}", "greet"))"#;
+        let talking =
+            r#"Some(DialogAt { file: "dialog/story.ink", compiled: "{story}", knot: "greet" })"#;
         assert_eq!(reads(One)[46], talking);
         assert_eq!(
             reads(&One)[46],

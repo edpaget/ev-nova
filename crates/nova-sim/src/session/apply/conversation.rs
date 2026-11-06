@@ -75,6 +75,7 @@ mod tests {
         FakePilotCatalog {
             stellar_dialogs: nova_sim_catalog::dialogs::StellarDialogs::default().with(
                 StellarId(128),
+                "dialog/offer.ink",
                 Arc::from(STORY),
                 "offer",
             ),
@@ -125,6 +126,7 @@ mod tests {
         elsewhere.statics = Rc::new(crate::session::Statics {
             stellar_dialogs: nova_sim_catalog::dialogs::StellarDialogs::default().with(
                 StellarId(129),
+                "dialog/offer.ink",
                 Arc::from(STORY),
                 "offer",
             ),
