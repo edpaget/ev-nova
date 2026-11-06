@@ -1823,6 +1823,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         defence_ships: defence_ships_of(&saved.defence_ships),
         flags: flags_of(saved.flags),
         dialogs: dialogs_of(saved.dialogs),
+        story: crate::storylines::state::StoryState::default(),
     })
 }
 
@@ -2000,6 +2001,7 @@ mod tests {
             defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
             flags: crate::flags::WorldFlags::default(),
             dialogs: crate::dialog::states::DialogStates::default(),
+            story: crate::storylines::state::StoryState::default(),
         }
     }
 

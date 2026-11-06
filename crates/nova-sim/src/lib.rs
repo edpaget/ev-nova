@@ -524,6 +524,7 @@ pub use nova_sim_state::stats;
 pub mod status_cargo;
 pub use nova_sim_catalog::strings;
 pub use nova_sim_story::story;
+pub use nova_sim_story::storylines;
 pub mod target_panel;
 pub use nova_sim_ai::targeting;
 #[cfg(test)]

@@ -118,6 +118,7 @@ use crate::outfit_effects::Rgb15;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
+use crate::storylines::state::StoryState;
 use crate::trade_dialog::MissionLoad;
 use crate::traffic::stellar_defence::DefenceShips;
 
@@ -275,6 +276,11 @@ pub struct Pilot {
     /// The story state of each Ink file the pilot has played (see
     /// [`states`](crate::dialog::states)): none on a new pilot.
     pub dialogs: DialogStates,
+    /// The new game's story as the pilot has played it: the day of the
+    /// game, where each mission is, the jump points play has changed and
+    /// the news released (see [`storylines`](crate::storylines)). Empty
+    /// on a new pilot, and always in the stock game.
+    pub story: StoryState,
 }
 
 impl Pilot {
@@ -344,6 +350,7 @@ impl Pilot {
             defence_ships: DefenceShips::default(),
             flags: WorldFlags::default(),
             dialogs: DialogStates::default(),
+            story: StoryState::default(),
         })
     }
 
@@ -672,10 +679,11 @@ impl Pilot {
 
     /// The tons the ship holds, as `_TotalCargo` (@0x4a0b) counts them for
     /// the player: every good held, and the mission cargo aboard
-    /// ([`ActiveMissions::cargo_aboard`]).
+    /// ([`ActiveMissions::cargo_aboard`]), and the new game's missions'
+    /// cargo aboard ([`StoryState::cargo_aboard`]).
     #[must_use]
     pub fn total_cargo(&self) -> i64 {
-        self.goods_held() + self.missions.cargo_aboard()
+        self.goods_held() + self.missions.cargo_aboard() + self.story.cargo_aboard()
     }
 
     /// Every good held, in [`Good`] order, with the tons held.
@@ -1103,6 +1111,16 @@ mod tests {
             .put(4, crate::mission::fixture::carrying(140, 5));
         assert_eq!(pilot.goods_held(), 9, "the mission's food is no good held");
         assert_eq!(pilot.total_cargo(), 14);
+        pilot.story.missions.insert(
+            "plate".to_owned(),
+            crate::storylines::state::MissionState::Active {
+                cargo: 10,
+                met: false,
+            },
+        );
+        assert_eq!(pilot.goods_held(), 9, "the story's plate is no good held");
+        assert_eq!(pilot.total_cargo(), 24, "it counts in the hold");
+        pilot.story.missions.clear();
         pilot.cargo.insert(Good::Commodity(0), u32::MAX);
         assert_eq!(
             pilot.goods_held(),

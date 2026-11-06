@@ -64,6 +64,10 @@
 //!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
 //!   static galaxy, which every reader sees through the
 //!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
+//! - [`storylines`]: the new game's missions: when one is offered or
+//!   happens, what its outcomes and effects set, and how its news
+//!   spreads, over the pilot's story state
+//!   ([`StoryState`](storylines::state::StoryState)).
 //! - [`text_parse`]: the conditional text (`{G "he" "she"}`, `{bnnn …}`,
 //!   `{Pnnn …}`) every loaded text is resolved by, as the original's
 //!   `_ParseTextDescription` ([`text_parse::conditional_text`]).
@@ -110,5 +114,6 @@ pub mod person;
 pub mod pilot;
 pub mod rank;
 pub mod story;
+pub mod storylines;
 pub mod text_parse;
 pub mod text_tags;
