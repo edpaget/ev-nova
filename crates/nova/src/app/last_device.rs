@@ -6,6 +6,9 @@
 //!
 //! - `Keyboard` on a key's press;
 //! - `Mouse` on a pointer button, a move or a scroll;
+//! - `Touch` on a finger touching down, moving or lifting, wherever it is,
+//!   a letterbox bar included; a touch the system cancels, and a pinch,
+//!   change nothing;
 //! - `Gamepad(family)` on a pad button's press, a trigger pulled past
 //!   the press threshold, or a stick leaving the flight dead zone (analog
 //!   flight input below the press threshold is real input). A stick
@@ -21,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use nova_view::keymap::dead_zoned;
-use nova_view::{ControllerFamily, Device, Input, PadAxis};
+use nova_view::{ControllerFamily, Device, Input, PadAxis, Touch, TouchPhase};
 
 use crate::gamepad::family::family_of;
 use crate::gamepad::inputs::PRESS_THRESHOLD;
@@ -63,6 +66,11 @@ impl LastDevice {
             | Input::PointerMoved(_)
             | Input::PointerMovedOutside(_)
             | Input::Scroll { .. } => Device::Mouse,
+            // A cancel is the system's, not the player's.
+            Input::Touch(Touch {
+                phase: TouchPhase::Started(_) | TouchPhase::Moved(_) | TouchPhase::Ended(_),
+                ..
+            }) => Device::Touch,
             Input::PadButton { pressed: true, .. } => Device::Gamepad(self.last_family),
             _ => return None,
         };
@@ -128,7 +136,9 @@ impl LastDevice {
 #[cfg(test)]
 mod tests {
     use nova_view::keymap::FLIGHT_DEAD_ZONE;
-    use nova_view::{Key, MouseButton, PadButton, Point, ScrollDelta};
+    use nova_view::{
+        FingerId, Key, MouseButton, PadButton, Pinch, Point, ScrollDelta, Touch, TouchPhase,
+    };
 
     use super::*;
 
@@ -185,6 +195,47 @@ mod tests {
             let mut last = LastDevice::new();
             assert_eq!(last.input(&input), Some(Device::Mouse), "{input:?}");
         }
+    }
+
+    fn touch(phase: TouchPhase) -> Input {
+        Input::Touch(Touch {
+            finger: FingerId::new(1),
+            phase,
+        })
+    }
+
+    #[test]
+    fn a_touch_makes_it_touch() {
+        let at = Point::new(1.0, 1.0);
+        for phase in [
+            TouchPhase::Started(at),
+            TouchPhase::Moved(at),
+            TouchPhase::Ended(at),
+        ] {
+            let mut last = LastDevice::new();
+            assert_eq!(last.input(&touch(phase)), Some(Device::Touch), "{phase:?}");
+            assert_eq!(last.input(&touch(phase)), None, "no change");
+        }
+    }
+
+    #[test]
+    fn a_cancelled_touch_or_a_pinch_changes_nothing() {
+        let mut last = LastDevice::new();
+        assert_eq!(last.input(&touch(TouchPhase::Cancelled)), None);
+        assert_eq!(last.input(&Input::Pinch(Pinch::ZoomIn)), None);
+        assert_eq!(last.device(), Device::Keyboard);
+    }
+
+    #[test]
+    fn a_key_or_the_mouse_after_a_touch_switches_back() {
+        let mut last = LastDevice::new();
+        last.input(&touch(TouchPhase::Started(Point::new(1.0, 1.0))));
+        assert_eq!(last.input(&key(true)), Some(Device::Keyboard));
+        last.input(&touch(TouchPhase::Started(Point::new(1.0, 1.0))));
+        assert_eq!(
+            last.input(&Input::PointerMoved(Point::new(1.0, 1.0))),
+            Some(Device::Mouse)
+        );
     }
 
     #[test]
