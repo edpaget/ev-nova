@@ -181,6 +181,11 @@
 //!   file's story state (`dialogs`), which the original has no
 //!   counterpart of (see the `story_state` module). No older save kept
 //!   them, so the upgrade gives `[]` and `[]`.
+//! - Version 40: adds the new game's story (`story`): the day of the game,
+//!   where each mission is, the jump points play has changed and the day
+//!   each news item broke, which the original has no counterpart of (see
+//!   the `storylines` module). No older save kept it, so the upgrade gives
+//!   day 0 and three empty lists.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -268,6 +273,7 @@
 //! no longer has keeps its state as saved.
 
 mod story_state;
+mod storylines;
 
 use std::collections::BTreeMap;
 
@@ -293,9 +299,10 @@ use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 use crate::traffic::stellar_defence::DefenceShips;
 use crate::voice::VoiceVariant;
 use story_state::{SavedDialogState, dialogs_of, flags_of, saved_dialogs, saved_flags};
+use storylines::{SavedStory, saved_story, story_of};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 39;
+pub const CURRENT: u64 = 40;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1096,6 +1103,7 @@ struct Saved {
     defence_ships: Vec<SavedDefenceShips>,
     flags: Vec<String>,
     dialogs: Vec<SavedDialogState>,
+    story: SavedStory,
 }
 
 /// A saved reinforcement countdown: a system and its days left.
@@ -1276,6 +1284,7 @@ pub fn encode(pilot: &Pilot) -> String {
         defence_ships: saved_defence_ships(&pilot.defence_ships),
         flags: saved_flags(&pilot.flags),
         dialogs: saved_dialogs(&pilot.dialogs),
+        story: saved_story(&pilot.story),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -1321,7 +1330,19 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     class_orders,
     escort_berths,
     flags_and_dialogs,
+    story_state_40,
 ];
+
+/// Version 39 to 40: the new game's story empty, on day 0, as no older
+/// save kept it.
+fn story_state_40(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert(
+            "story".to_owned(),
+            serde_json::json!({"day": 0, "missions": [], "points": [], "news": []}),
+        );
+    }
+}
 
 /// Version 38 to 39: no world flag set and no Ink file's story state, as
 /// no older save kept them.
@@ -1742,6 +1763,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
     let saved = Saved::deserialize(save).map_err(|error| unusable(error.to_string()))?;
     let date = date_of(saved.date)?;
     let missions = missions_of(saved.missions)?;
+    let story = story_of(saved.story)?;
     Ok(Pilot {
         name: saved.name,
         nickname: saved.nickname,
@@ -1823,7 +1845,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         defence_ships: defence_ships_of(&saved.defence_ships),
         flags: flags_of(saved.flags),
         dialogs: dialogs_of(saved.dialogs),
-        story: crate::storylines::state::StoryState::default(),
+        story,
     })
 }
 
@@ -2163,7 +2185,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 39);
+        assert_eq!(CURRENT, 40);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2252,7 +2274,7 @@ mod tests {
         );
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 39"), "{text}");
+        assert!(text.contains("\n  \"version\": 40"), "{text}");
     }
 
     #[test]
@@ -4850,12 +4872,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 39", "\"version\": 40");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 40 }));
+        let newer = encode(&seasoned()).replace("\"version\": 40", "\"version\": 41");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 41 }));
         assert_eq!(
-            SaveError::Newer { version: 40 }.to_string(),
+            SaveError::Newer { version: 41 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 40, and this version of Nova reads up to 39)."
+             (it is version 41, and this version of Nova reads up to 40)."
         );
     }
 

@@ -87,7 +87,6 @@ mod tests {
     fn flags_and_story_states_are_saved_ascending() {
         let value = json(&encode(&storied()));
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 39);
         assert_eq!(
             value["flags"],
             serde_json::json!(["dock_regular", "verge_open"])
