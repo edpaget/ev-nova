@@ -60,6 +60,8 @@ pub mod strings;
 mod test_store;
 pub mod voice;
 pub mod warp;
+#[cfg(test)]
+mod wide_sheet_sites;
 
 pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,

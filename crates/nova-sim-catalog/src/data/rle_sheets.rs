@@ -10,7 +10,9 @@
 //! the kind, and a box graphic's, `spïn` 500 + the graphic. Every stock
 //! sheet of these reads (`nova-sim`'s `stock_contact_masks`). The shift
 //! is the sheet's depth shifted right by 4, as `_SWCreateFrame` sets
-//! +0x5e (@0xad5f3-0xad611).
+//! +0x5e (@0xad5f3-0xad611): 0 at 8 bits, 1 at 16, 2 at 32. A 32-bit
+//! sheet touches by its own pixels at its box's size
+//! (`_BlitPixieRLECollisionProc` @0xbbab2-0xbbae9).
 //! Each call reads the sheet afresh: the session asks once per sheet and
 //! keeps it.
 
@@ -41,7 +43,8 @@ pub(super) fn rle_sheet(data: &GameData, sheet: MaskSheet) -> Option<RleSheet> {
 
 /// `words` as the collision reads them.
 fn of_words(words: RleWords) -> RleSheet {
-    // 16 >> 4 and 8 >> 4 fit a byte.
+    // 32 >> 4, 16 >> 4 and 8 >> 4 fit a byte, and no other depth has
+    // words.
     #[allow(clippy::cast_possible_truncation)]
     let shift = (words.depth >> 4) as u8;
     RleSheet {
@@ -167,6 +170,26 @@ mod tests {
             ]
         );
         assert_eq!(cut.starts, [Some(0), Some(4)]);
+    }
+
+    #[test]
+    fn a_32_bit_stellar_sheet_touches_at_a_shift_of_2_by_its_box() {
+        let data = store(&[
+            (Spin::TYPE, 1007, spin(2007, -1, 2, 1, 1)),
+            (
+                RLED,
+                2007,
+                RledBuilder::new(2, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[1, 2]))
+                    .build(),
+            ),
+        ]);
+        let rle = data.rle_sheet(MaskSheet::Stellar(7)).expect("reads");
+        assert_eq!((rle.width, rle.height, rle.shift), (2, 1, 2));
+        assert_eq!(rle.words, [0x0100_000C, 0x0200_0008, 1, 2, 0]);
+        assert_eq!(rle.starts, [Some(0)]);
     }
 
     #[test]
