@@ -149,10 +149,17 @@ impl KeysScreen {
         }
     }
 
-    /// Follows a pad button going down or up, recording it while the
-    /// gamepad tab records, or clearing the selected row on West. Says
-    /// whether it took the input, so the pad's reader acts on none of it.
-    pub(super) fn pad_button(&mut self, button: PadButton, pressed: bool) -> bool {
+    /// Follows a pad button going down, repeating or going up, recording
+    /// it while the gamepad tab records, or clearing the selected row on
+    /// West. Says whether it took the input, so the pad's reader acts on
+    /// none of it. A repeat (`repeat`) changes nothing held: while
+    /// recording it is taken and records nothing, as a key's repeat does,
+    /// and otherwise it passes to the reader; West's clear acts on its
+    /// fresh press alone.
+    pub(super) fn pad_button(&mut self, button: PadButton, pressed: bool, repeat: bool) -> bool {
+        if repeat {
+            return self.capture.is_some_and(|capture| capture.pad);
+        }
         let held = self.pads_down.clone();
         self.pads_down.retain(|&down| down != button);
         if pressed {

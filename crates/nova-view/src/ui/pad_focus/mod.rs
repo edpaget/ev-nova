@@ -30,6 +30,14 @@
 //! do. A release passes, as it only finishes a press the pad made while
 //! its focus showed.
 //!
+//! # Repeats
+//!
+//! A held d-pad direction repeats (`nova`'s pad module makes the repeats),
+//! and its repeats move the focus again, as a held Tab or arrow key does.
+//! A repeat never activates: South doesn't repeat, and a repeat of
+//! Activate rebound onto a direction reads as nothing
+//! ([`FocusState::read_pad`]).
+//!
 //! A press that arrives before the surroundings doesn't make the focus
 //! appear either. The app tells each screen the device used last, and a
 //! screen that showed the highlight on its own would never be told when
@@ -139,7 +147,7 @@ pub enum PadRead {
     /// Nothing: a press held back while the pad's focus can't show, or a
     /// focus move's release.
     Nothing,
-    /// A focus move's press.
+    /// A focus move's press, or its repeat.
     Move(FocusMove),
     /// South went down.
     Press,
@@ -361,7 +369,10 @@ impl<T: Copy + Eq> FocusState<T> {
 
     /// What the pad's command `input` means to a screen with this focus,
     /// under the module docs' "Nothing hidden acts": a held-back press, or
-    /// a focus move's release, is [`PadRead::Nothing`].
+    /// a focus move's release, is [`PadRead::Nothing`]. A repeat of a
+    /// focus move moves again, as a held Tab or arrow does; a repeat of
+    /// Activate (rebound onto a direction) is [`PadRead::Nothing`], so a
+    /// repeat never activates.
     #[must_use]
     pub fn read_pad(&self, input: CommandInput) -> PadRead {
         if self.pad_holds_back(input) {
@@ -375,7 +386,9 @@ impl<T: Copy + Eq> FocusState<T> {
             };
         }
         if input.command == Command::Ui(UiCommand::Activate) {
-            return if input.pressed {
+            return if input.repeat {
+                PadRead::Nothing
+            } else if input.pressed {
                 PadRead::Press
             } else {
                 PadRead::Release

@@ -526,6 +526,25 @@ fn a_move_acts_on_its_press_only() {
 }
 
 #[test]
+fn a_repeat_moves_the_focus_and_never_activates() {
+    let mut state = FocusState::<u8>::default();
+    state.surroundings(PAD, None, false);
+    let repeat = |command| CommandInput {
+        repeat: true,
+        ..ui_input(command, true)
+    };
+    assert_eq!(
+        state.read_pad(repeat(UiCommand::FocusDown)),
+        PadRead::Move(FocusMove::Toward(Direction::Down))
+    );
+    assert_eq!(
+        state.read_pad(repeat(UiCommand::Activate)),
+        PadRead::Nothing,
+        "Activate rebound onto a direction"
+    );
+}
+
+#[test]
 fn south_reads_as_press_then_release() {
     let mut state = FocusState::<u8>::default();
     state.surroundings(PAD, None, false);

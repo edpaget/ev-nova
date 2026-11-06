@@ -337,3 +337,63 @@ fn the_chord_s_button_let_go_of_is_no_longer_the_map_key() {
     view.input(&key(MAP, false));
     assert!(!view.map_open());
 }
+
+fn pad_repeat(view: &mut Faked, button: PadButton) {
+    view.input(&Input::PadButton {
+        button,
+        pressed: true,
+        repeat: true,
+    });
+}
+
+#[test]
+fn a_held_stick_directions_repeats_keep_it_held() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::LeftY, -0.8);
+    pad(&mut view, PadButton::LeftStickDown, true);
+    for _ in 0..3 {
+        pad_repeat(&mut view, PadButton::LeftStickDown);
+        assert!(
+            stepped(&mut view).controls.reverse,
+            "held through its repeats"
+        );
+    }
+    pad(&mut view, PadButton::LeftStickDown, false);
+    axis(&mut view, PadAxis::LeftY, 0.0);
+    assert!(!stepped(&mut view).controls.reverse, "let go of once");
+}
+
+#[test]
+fn a_held_chord_directions_repeats_press_nothing_again() {
+    use super::faked_screen::{in_flight, sent_since};
+    let mut view = in_flight();
+    pad(&mut view, PadButton::Select, true);
+    pad(&mut view, PadButton::DPadRight, true);
+    for _ in 0..3 {
+        pad_repeat(&mut view, PadButton::DPadRight);
+    }
+    pad(&mut view, PadButton::DPadRight, false);
+    pad(&mut view, PadButton::Select, false);
+    ticked(&mut view, 1);
+    assert_eq!(
+        sent_since(&view, 0),
+        [FlightCommand::SelectNextSystem],
+        "hyper select's press, once, as its key's repeats"
+    );
+}
+
+#[test]
+fn holding_the_maps_chord_past_the_delay_neither_closes_nor_reopens_it() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        for _ in 0..4 {
+            pad_repeat(&mut view, PadButton::RightStickUp);
+            assert!(view.map_open(), "start first: {start_first}");
+            assert!(view.map_key_held, "start first: {start_first}");
+        }
+        chord_released(&mut view, start_first);
+        ticked(&mut view, 2);
+        assert!(view.map_open(), "start first: {start_first}: still open");
+        assert!(!view.map_key_held, "start first: {start_first}");
+    }
+}

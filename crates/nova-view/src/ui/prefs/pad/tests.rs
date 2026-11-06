@@ -320,3 +320,52 @@ fn untold_the_pads_focus_moves_and_south_do_nothing_but_east_cancels() {
     tap(&mut dialog, PadButton::East);
     assert!(dialog.closed(), "East is Escape's");
 }
+
+#[test]
+fn holding_the_left_stick_up_steps_the_effects_volume_as_a_held_up_arrow_does() {
+    const REPEATS: usize = 4;
+    let key_input = |key, pressed, repeat| Input::Key {
+        key,
+        pressed,
+        repeat,
+    };
+    let stick = |pressed, repeat| Input::PadButton {
+        button: PadButton::LeftStickUp,
+        pressed,
+        repeat,
+    };
+    let mut keyed = prefs();
+    for _ in 0..13 {
+        keyed.input(&key(Key::Tab));
+    }
+    assert_eq!(keyed.focus(), Some(Focus::EffectsVolume));
+    let mut padded = prefs();
+    padded.input(&told(PAD));
+    reach(
+        &mut padded,
+        PrefsTarget::Arrow(Focus::EffectsVolume, Arrow::Down),
+    );
+    for _ in 0..=crate::sound::MAX_LEVEL {
+        keyed.input(&key_input(Key::ArrowDown, true, false));
+        keyed.input(&key_input(Key::ArrowDown, false, false));
+        tap(&mut padded, PadButton::LeftStickDown);
+    }
+    assert_eq!(keyed.effects_volume().level(), 0);
+    assert_eq!(padded.effects_volume().level(), 0);
+    keyed.input(&key_input(Key::ArrowUp, true, false));
+    padded.input(&stick(true, false));
+    for _ in 0..REPEATS {
+        keyed.input(&key_input(Key::ArrowUp, true, true));
+        padded.input(&stick(true, true));
+    }
+    keyed.input(&key_input(Key::ArrowUp, false, false));
+    padded.input(&stick(false, false));
+    let stepped = u8::try_from(REPEATS + 1).expect("a few");
+    assert!(stepped < crate::sound::MAX_LEVEL, "short of the cap");
+    assert_eq!(keyed.effects_volume().level(), stepped, "the held arrow");
+    assert_eq!(
+        padded.effects_volume().level(),
+        keyed.effects_volume().level(),
+        "the held stick, as the held arrow"
+    );
+}

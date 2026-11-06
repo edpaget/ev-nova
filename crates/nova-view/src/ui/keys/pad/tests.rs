@@ -243,3 +243,55 @@ fn untold_the_pads_focus_moves_and_south_do_nothing_but_east_cancels() {
     pad(&mut screen, PadButton::East);
     assert!(screen.closed(), "East is Cancel's, as Escape is");
 }
+
+/// `press` then `repeats` repeats of it, then its release.
+fn held_for(screen: &mut KeysScreen, press: Input, repeats: usize) {
+    let repeat = match press {
+        Input::Key { key, .. } => Input::Key {
+            key,
+            pressed: true,
+            repeat: true,
+        },
+        Input::PadButton { button, .. } => Input::PadButton {
+            button,
+            pressed: true,
+            repeat: true,
+        },
+        other => panic!("not a key or pad button: {other:?}"),
+    };
+    screen.input(&press);
+    for _ in 0..repeats {
+        screen.input(&repeat);
+    }
+    screen.input(&press.released());
+}
+
+#[test]
+fn holding_the_left_stick_down_walks_the_list_as_a_held_down_arrow_does() {
+    const REPEATS: usize = 12;
+    let mut keyed = screen();
+    held_for(&mut keyed, key(Key::ArrowDown, true), REPEATS);
+    let mut padded = screen();
+    padded.input(&told(PAD));
+    let stick = Input::PadButton {
+        button: PadButton::LeftStickDown,
+        pressed: true,
+        repeat: false,
+    };
+    held_for(&mut padded, stick, REPEATS);
+    let mut tapped = screen();
+    for _ in 0..=REPEATS {
+        tap(&mut tapped, Key::ArrowDown);
+    }
+    assert!(keyed.row_list().selected().is_some());
+    assert_eq!(
+        keyed.row_list().selected(),
+        tapped.row_list().selected(),
+        "a held arrow steps once a press and once a repeat"
+    );
+    assert_eq!(
+        padded.row_list().selected(),
+        keyed.row_list().selected(),
+        "the held stick, as the held arrow"
+    );
+}

@@ -607,3 +607,37 @@ fn the_gamepad_cells_name_the_family_last_told() {
         "the keyboard tab names keys"
     );
 }
+
+fn repeat(screen: &mut KeysScreen, button: P) {
+    screen.input(&Input::PadButton {
+        button,
+        pressed: true,
+        repeat: true,
+    });
+}
+
+#[test]
+fn a_pad_repeat_while_recording_records_nothing() {
+    let mut screen = gamepad_tab();
+    let before = on_pad(&screen, Fc::Accelerate);
+    recording(&mut screen, Fc::Accelerate);
+    repeat(&mut screen, P::DPadRight);
+    assert_eq!(
+        screen.recording(),
+        Some(Fc::Accelerate.into()),
+        "still recording"
+    );
+    assert_eq!(on_pad(&screen, Fc::Accelerate), before);
+    pad(&mut screen, P::DPadRight);
+    assert_eq!(on_pad(&screen, Fc::Accelerate), plain(P::DPadRight));
+}
+
+#[test]
+fn a_repeat_of_west_clears_nothing() {
+    let mut screen = gamepad_tab();
+    select(&mut screen, Fc::Accelerate);
+    let before = on_pad(&screen, Fc::Accelerate);
+    repeat(&mut screen, P::West);
+    assert_eq!(on_pad(&screen, Fc::Accelerate), before);
+    assert_ne!(before, PadBinding::Unbound);
+}

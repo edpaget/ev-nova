@@ -398,6 +398,65 @@ mod tests {
         assert!(shown(&touched).is_some(), "touch has no pad focus to leave");
     }
 
+    fn pad_repeat(button: PadButton) -> Input {
+        Input::PadButton {
+            button,
+            pressed: true,
+            repeat: true,
+        }
+    }
+
+    /// The field's text after South's tap on `host`.
+    fn typed_by_south(host: &mut Recorder) -> String {
+        host.input(&pad(PadButton::South, true));
+        host.input(&pad(PadButton::South, false));
+        host.field.as_ref().expect("a field").text().to_owned()
+    }
+
+    /// A pad host with the keyboard raised.
+    fn raised() -> Recorder {
+        let mut host = host(PAD);
+        host.keyboard.field_pressed(Some(FIELD));
+        assert!(shown(&host).is_some());
+        host
+    }
+
+    #[test]
+    fn a_held_dpad_direction_walks_the_keys_and_its_release_stays_taken() {
+        let mut held = raised();
+        held.input(&pad(PadButton::DPadRight, true));
+        held.input(&pad_repeat(PadButton::DPadRight));
+        held.input(&pad_repeat(PadButton::DPadRight));
+        held.input(&pad(PadButton::DPadRight, false));
+        assert_eq!(held.got, [], "the host gets none of it");
+        let mut tapped = raised();
+        for _ in 0..3 {
+            tapped.input(&pad(PadButton::DPadRight, true));
+            tapped.input(&pad(PadButton::DPadRight, false));
+        }
+        let mut still = raised();
+        let held_typed = typed_by_south(&mut held);
+        assert_eq!(held_typed, typed_by_south(&mut tapped), "three keys on");
+        assert_ne!(held_typed, typed_by_south(&mut still), "it moved");
+        held.got.clear();
+        held.input(&pad(PadButton::DPadRight, false));
+        assert_eq!(
+            held.got,
+            [pad(PadButton::DPadRight, false)],
+            "only one release was taken"
+        );
+    }
+
+    #[test]
+    fn a_south_repeat_types_nothing() {
+        let mut host = raised();
+        host.input(&pad(PadButton::South, true));
+        let typed = host.field.as_ref().expect("a field").text().to_owned();
+        host.input(&pad_repeat(PadButton::South));
+        host.input(&pad_repeat(PadButton::South));
+        assert_eq!(host.field.as_ref().expect("a field").text(), typed);
+    }
+
     #[test]
     fn what_it_does_not_take_reaches_the_host_once() {
         let mut host = host(PAD);

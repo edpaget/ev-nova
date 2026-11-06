@@ -881,3 +881,48 @@ fn click(dialog: &mut Dialog, at: Point) -> Option<DialogEvent> {
     let up = dialog.input(&press(false));
     down.or(up)
 }
+
+fn pad_repeat(button: PadButton) -> Input {
+    Input::PadButton {
+        button,
+        pressed: true,
+        repeat: true,
+    }
+}
+
+#[test]
+fn a_held_dpad_direction_moves_the_focus_again_on_each_repeat() {
+    let mut dialog = dialog(&row());
+    dialog.input(&told(PAD));
+    assert_eq!(dialog.input(&pad(PadButton::DPadLeft, true)), None);
+    assert_eq!(dialog.focus(), Some(2));
+    assert_eq!(dialog.input(&pad_repeat(PadButton::DPadLeft)), None);
+    assert_eq!(dialog.focus(), Some(3), "the first repeat");
+    assert_eq!(dialog.input(&pad_repeat(PadButton::DPadLeft)), None);
+    assert_eq!(dialog.focus(), Some(3), "no wrap");
+    assert_eq!(dialog.input(&pad(PadButton::DPadLeft, false)), None);
+    assert_eq!(dialog.focus(), Some(3));
+}
+
+#[test]
+fn south_still_acts_on_its_own_press_and_release_with_repeats_of_the_dpad_before() {
+    let mut dialog = dialog(&row());
+    dialog.input(&told(PAD));
+    let events: Vec<Option<DialogEvent>> = [
+        pad(PadButton::DPadLeft, true),
+        pad_repeat(PadButton::DPadLeft),
+        pad_repeat(PadButton::DPadLeft),
+        pad(PadButton::South, true),
+    ]
+    .iter()
+    .map(|input| dialog.input(input))
+    .collect();
+    assert_eq!(events, [None; 4], "no repeat activates anything");
+    assert_eq!(dialog.pressed_item(), Some(3), "South's press");
+    assert_eq!(
+        dialog.input(&pad(PadButton::South, false)),
+        Some(DialogEvent::Item(3)),
+        "once, on South's release"
+    );
+    assert_eq!(dialog.input(&pad(PadButton::DPadLeft, false)), None);
+}

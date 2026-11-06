@@ -77,8 +77,10 @@ impl KeysScreen {
         }
         let taken = match *input {
             Input::PadButton {
-                button, pressed, ..
-            } => self.pad_button(button, pressed),
+                button,
+                pressed,
+                repeat,
+            } => self.pad_button(button, pressed, repeat),
             _ => false,
         };
         if let Some(command) = self.reader.follow(input)

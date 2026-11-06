@@ -578,8 +578,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   a fresh press, which the OS sends only after a release, ends the
     ///   wait.
     ///
-    /// A pad button, or a touch control's button, is tracked as a key that
-    /// never repeats.
+    /// A pad button is tracked as a key: a held d-pad or stick direction
+    /// repeats as a held key does. A touch control's button is tracked as
+    /// a key that never repeats.
     pub(super) fn track_held(&mut self, input: &Input) {
         let Some(crate::keymap::Change { pressed, repeat }) = crate::keymap::Devices::change(input)
         else {

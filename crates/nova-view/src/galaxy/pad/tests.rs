@@ -192,6 +192,40 @@ fn the_left_stick_pans_as_the_arrows_do() {
 }
 
 #[test]
+fn holding_the_left_stick_pans_as_a_held_arrow_does() {
+    const REPEATS: usize = 3;
+    let mut padded = map();
+    padded.input(&told(PAD));
+    let before = scroll(&padded);
+    padded.input(&pad(PadButton::LeftStickRight, true));
+    let pressed = scroll(&padded);
+    for _ in 0..REPEATS {
+        padded.input(&Input::PadButton {
+            button: PadButton::LeftStickRight,
+            pressed: true,
+            repeat: true,
+        });
+    }
+    padded.input(&pad(PadButton::LeftStickRight, false));
+    let mut keyed = map();
+    keyed.input(&Input::Key {
+        key: Key::ArrowRight,
+        pressed: true,
+        repeat: false,
+    });
+    for _ in 0..REPEATS {
+        keyed.input(&Input::Key {
+            key: Key::ArrowRight,
+            pressed: true,
+            repeat: true,
+        });
+    }
+    assert_ne!(scroll(&padded), pressed, "the repeats pan on");
+    assert_ne!(pressed, before);
+    assert_eq!(scroll(&padded), scroll(&keyed));
+}
+
+#[test]
 fn the_triggers_zoom_as_minus_and_equals_do() {
     for (trigger, zoom_key) in [
         (PadButton::RightTrigger, Key::Equal),

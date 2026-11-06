@@ -22,7 +22,9 @@
 //!   the button focus, so neither is held back before the map is told the
 //!   pad.
 //! - **Everything else** the pad means (the left stick's arrows, the
-//!   triggers' zoom, East) goes on to the map as its key's.
+//!   triggers' zoom, East) goes on to the map as its key's. A held stick
+//!   direction repeats, so it pans on as a held arrow does; the triggers
+//!   never repeat, so a pull zooms one step.
 //!
 //! The developer viewer has no buttons and no pad focus.
 

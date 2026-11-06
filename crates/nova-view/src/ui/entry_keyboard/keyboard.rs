@@ -14,7 +14,8 @@
 //!   South (types the focused key on the press) and East (lowers it).
 //!   Every other input passes to the host: the shoulders (so Tab still
 //!   switches fields), the keys and typed text. A pad button whose press
-//!   it took has its release taken too.
+//!   it took has its release taken too. A held d-pad direction's repeats
+//!   move the focus again, as its press did; a repeat never types a key.
 //! - **Gives back** what a key types, for the host to run through its
 //!   own input as real keys ([`super::intercept`]): a character
 //!   ([`Input::Text`]), Space a space, Delete a Backspace press and
@@ -217,7 +218,9 @@ impl EntryKeyboard {
         };
         match *input {
             Input::PadButton {
-                button, pressed, ..
+                button,
+                pressed,
+                repeat,
             } => {
                 let read = self.keys.follow(input);
                 if !self.focus.pad_shown() {
@@ -245,7 +248,9 @@ impl EntryKeyboard {
                         }
                         _ => return vec![*input],
                     };
-                if pressed {
+                // A repeat's button is taken already, by its press: one
+                // release ends it.
+                if pressed && !repeat {
                     self.taken.push(button);
                 }
                 given
