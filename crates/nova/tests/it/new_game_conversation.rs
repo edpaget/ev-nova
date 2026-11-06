@@ -110,7 +110,7 @@ fn app(store: &MemoryPilots) -> Harness {
 
 /// The app over the fixture, wired as `main` wires it, with a new pilot
 /// flying in its start system, Hearth.
-fn flying() -> Harness {
+pub(crate) fn flying() -> Harness {
     flying_in(&MemoryPilots::new())
 }
 
@@ -142,7 +142,7 @@ fn resumed(store: &MemoryPilots) -> Harness {
 }
 
 /// Puts the ship over the fixture's stellar `id` and lands there.
-fn land_at(game: &mut Harness, id: &str) {
+pub(crate) fn land_at(game: &mut Harness, id: &str) {
     let at = position_of(id);
     game.app
         .screen_mut()
@@ -156,7 +156,7 @@ fn land_at(game: &mut Harness, id: &str) {
 }
 
 /// The texts the next frame draws.
-fn drawn(game: &mut Harness) -> Vec<String> {
+pub(crate) fn drawn(game: &mut Harness) -> Vec<String> {
     texts(&game.frame())
 }
 
