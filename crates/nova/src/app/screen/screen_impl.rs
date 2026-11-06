@@ -155,6 +155,7 @@ impl Screen for AppScreen {
         self.tell_close_keys();
         let action = self.settled_input(input);
         self.tell_new_overlays();
+        self.tell_covered();
         if action == ScreenAction::Quit {
             return action;
         }
@@ -229,6 +230,7 @@ impl Screen for AppScreen {
         self.settle_live_input();
         self.quit_on_held_chords();
         self.tell_new_overlays();
+        self.tell_covered();
         if self.feed_touch_controls() == ScreenAction::Quit {
             self.quit_due = true;
         }
@@ -627,6 +629,7 @@ impl Screen for AppScreen {
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
         let action = self.run_menu_command(command);
         self.tell_new_overlays();
+        self.tell_covered();
         self.settle_live_input();
         if action == ScreenAction::Quit {
             return action;

@@ -388,6 +388,7 @@ mod build;
 mod capture_naming;
 mod christening;
 mod close_waits;
+mod covered;
 mod defection;
 mod entry;
 mod escort_dialog;
