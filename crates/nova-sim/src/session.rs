@@ -625,6 +625,8 @@ mod plunder_loop;
 mod port;
 mod port_desc;
 mod precalced;
+#[cfg(test)]
+mod quote_roll_order;
 mod radar;
 mod ranks;
 #[cfg(test)]

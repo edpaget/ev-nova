@@ -88,6 +88,7 @@ use super::game_work::PassStart;
 use super::npc_escape::{AtStep, escape_may_run};
 use super::{Session, Setup, Space, Statics, TrafficMarks};
 use crate::ai::Behaviour;
+use crate::catalog::CommCatalog;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
 use crate::traffic::npc::NpcId;
@@ -146,12 +147,27 @@ impl Session {
     /// gate settles nothing after the loop: the next hits settled lose it
     /// ([`Session::lose_escorts`]), with the same save due wherever they
     /// fall.
+    ///
+    /// Handed `quotes`, the loop ends on `_HandleShip`'s hail quote roll
+    /// (@0x33f0f-0x33fba, [`Session::roll_quotes_in_loop`]), on either
+    /// pass: after the fly half's end and the docks' and repairs' lines,
+    /// and before the reinforcement clock's tick, the traffic's tail on the
+    /// advance pass and after the asteroids on the second, as
+    /// `_HandleShip` (@0x44483) comes before `_HandleReinforcements`
+    /// (@0x44504). So the roll's line-free gate (@0x33f42-0x33f4b) reads
+    /// the line before the reinforcements raise theirs, and a fleet's line
+    /// replaces a quote's (`_DisplayComm` @0x9024b, @0x90251). The
+    /// original rolls slot by slot, inside the loop, among the docks' and
+    /// repairs' lines; that order is
+    /// rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines.
+    #[allow(clippy::too_many_arguments)] // the pass's collaborators, and the quotes' catalog
     pub(super) fn ship_loop(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         start: &PassStart,
         motion: Motion,
         pass: GamePass,
+        quotes: Option<&dyn CommCatalog>,
         rules: Rules,
         chance: &mut dyn Chance,
     ) -> BTreeSet<NpcId> {
@@ -240,21 +256,38 @@ impl Session {
                 self.after_traffic_motion(&marks, &mut &mut *chance);
                 // The docks and repairs the fly half made, on the line.
                 self.settle_line_queue(rules.law, chance);
+                self.roll_quotes_after_loop(pass, quotes, chance);
                 self.traffic_tail(&mut &mut *chance);
             }
             Motion::Unpopulated => {
+                self.roll_quotes_after_loop(pass, quotes, chance);
                 self.traffic_tail(&mut &mut *chance);
             }
             Motion::Again => {
                 if let Some(marks) = again_marks {
                     self.mission_ships_left(&marks);
                 }
+                self.roll_quotes_after_loop(pass, quotes, chance);
             }
         }
         self.lay_out_displayed();
         self.space.traffic.step_fades(self.speed_mult());
         self.space.traffic.after_firing(&self.statics.arsenal);
         displayed
+    }
+
+    /// `_HandleShip`'s quote roll at the loop's end, on `pass`, read from
+    /// `quotes` when the pass was handed it
+    /// ([`Session::roll_quotes_in_loop`]); a pass handed none rolls none.
+    fn roll_quotes_after_loop(
+        &mut self,
+        pass: GamePass,
+        quotes: Option<&dyn CommCatalog>,
+        chance: &mut dyn Chance,
+    ) {
+        if let Some(catalog) = quotes {
+            self.roll_quotes_in_loop(pass, catalog, chance);
+        }
     }
 
     /// NPC `id`'s frames stepped at its display in the ship loop, on

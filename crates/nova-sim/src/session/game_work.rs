@@ -71,7 +71,11 @@
 //!    `ship_display` module); an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
+//!    settled, and `_HandleShip`'s hail quote roll (@0x33f0f-0x33fba),
+//!    on both passes, before the reinforcement clock's tick
+//!    (`_HandleReinforcements` @0x44504), which on the advance pass comes
+//!    with the traffic's tail at the loop's end ([`Session::ship_loop`]);
+//!    then the +0x47 pass, each nav
 //!    stellar with a defence ship in the system marked under attack
 //!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
 //!    stellar guns
@@ -148,7 +152,7 @@ use super::hit_turns::Turns;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
-use crate::catalog::{PilotCatalog, TrafficCatalog};
+use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::asteroid_walk::AsteroidField;
@@ -169,6 +173,21 @@ pub(super) struct PassStart {
     /// Where the player stood before the pass's move, which the scoop
     /// lays every mask out from (see the `contact_masks` module).
     stood: Vec2,
+}
+
+/// The catalog views a pass reads, one per port ([`Session::pass_from_key_block`]).
+#[derive(Clone, Copy)]
+pub(super) struct PassCatalogs<'a> {
+    /// The advance pass's AI, its traffic drawn from the catalog it holds;
+    /// none on the second pass.
+    pub(super) ai: Option<&'a dyn TrafficCatalog>,
+    /// The deadly stellars' masks; none on the second pass, which reads
+    /// those the first kept.
+    pub(super) sheets: Option<&'a dyn PilotCatalog>,
+    /// The hail quotes' lines, which the ship loop's quote roll reads;
+    /// none on a pass that rolls no quotes ([`Session::game_work`],
+    /// [`Session::tick_again`]).
+    pub(super) quotes: Option<&'a dyn CommCatalog>,
 }
 
 /// What `_HandlePlayer` computes of the player at its top
@@ -237,10 +256,28 @@ impl Session {
     /// as the fight and the traffic stand still then, the rescue among it.
     /// Through a jump it runs on in its own order, as the world does (see
     /// the `warp_stage` module).
+    ///
+    /// It runs no hail quote roll; a frame's steps roll it in the ship
+    /// loop ([`Session::step`], `Session::game_work_quoting`).
     pub fn game_work(
         &mut self,
         controls: Controls,
         catalog: &(impl PilotCatalog + TrafficCatalog),
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> bool {
+        self.game_work_quoting(controls, catalog, None, behaviour, rules, chance)
+    }
+
+    /// [`Session::game_work`], `_HandleShip`'s hail quote roll run at the
+    /// ship loop's end, read from `quotes`, when it is handed them (see
+    /// [`Session::ship_loop`]).
+    pub(crate) fn game_work_quoting(
+        &mut self,
+        controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        quotes: Option<&dyn CommCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
@@ -269,15 +306,12 @@ impl Session {
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
-        self.pass_after_move(
-            &start,
-            pass,
-            Some(catalog),
-            Some(catalog),
-            behaviour,
-            rules,
-            chance,
-        );
+        let catalogs = PassCatalogs {
+            ai: Some(catalog),
+            sheets: Some(catalog),
+            quotes,
+        };
+        self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
         false
     }
 
@@ -323,23 +357,21 @@ impl Session {
     /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
     /// the head of the player's display step, up to `_HandlePlayer`'s key
     /// block ([`Session::player_display_head`]), then the pass from the
-    /// key block on ([`Session::pass_from_key_block`], which reads `ai`
-    /// and `sheets`). Both passes run it, [`Session::game_work`] and
+    /// key block on ([`Session::pass_from_key_block`], which reads
+    /// `catalogs`). Both passes run it, [`Session::game_work`] and
     /// [`Session::tick_again`], as the original runs one routine,
     /// `_DoPlayGameWork(pass)`, for both (see the module docs).
-    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
     pub(super) fn pass_after_move(
         &mut self,
         start: &PassStart,
         pass: GamePass,
-        ai: Option<&dyn TrafficCatalog>,
-        sheets: Option<&dyn PilotCatalog>,
+        catalogs: PassCatalogs<'_>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
         self.player_display_head(start.player_head(), chance);
-        self.pass_from_key_block(start, pass, ai, sheets, behaviour, rules, chance);
+        self.pass_from_key_block(start, pass, catalogs, behaviour, rules, chance);
     }
 
     /// A pass of the game's work from `_HandlePlayer`'s key block on: the
@@ -353,7 +385,7 @@ impl Session {
     /// the rest of the frame a dialog opened on runs it alone (see the
     /// `opening_rest` module).
     ///
-    /// `ai` is the advance pass's AI, its traffic drawn from the catalog
+    /// `catalogs.ai` is the advance pass's AI, its traffic drawn from the catalog
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
     /// past it (@0x4402a to @0x44350). Where the original branches on its
     /// argument, this branches on `ai`: with it, the arrivals come and
@@ -368,21 +400,25 @@ impl Session {
     /// (`_HandleReinforcements` @0x44504) ticks after the asteroids and
     /// before the beams (see [`Session::ship_loop`]).
     ///
-    /// `sheets` is the advance pass's catalog too, which the deadly
+    /// `catalogs.sheets` is the advance pass's catalog too, which the deadly
     /// stellars' masks are asked of before the beams' phase reads them
     /// (see [`Session::beams_phase`]); the second pass has none and reads
     /// those the first kept.
-    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
+    ///
+    /// `catalogs.quotes`, on either pass, is what the ship loop's hail
+    /// quote roll reads, at the loop's end and before the reinforcement
+    /// clock's tick (`_HandleShip` @0x44483 before `_HandleReinforcements`
+    /// @0x44504; see [`Session::ship_loop`]); a pass handed none rolls none.
     pub(super) fn pass_from_key_block(
         &mut self,
         start: &PassStart,
         pass: GamePass,
-        ai: Option<&dyn TrafficCatalog>,
-        sheets: Option<&dyn PilotCatalog>,
+        catalogs: PassCatalogs<'_>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
+        let PassCatalogs { ai, sheets, quotes } = catalogs;
         // The end of `_HandlePlayer` from its key block, and its display
         // (@0x43e29).
         self.player_display_rest(behaviour, pass, rules, start.player_head(), chance);
@@ -434,7 +470,7 @@ impl Session {
             Some(None) => Motion::Unpopulated,
             None => Motion::Again,
         };
-        let displayed = self.ship_loop(behaviour, start, motion, pass, rules, chance);
+        let displayed = self.ship_loop(behaviour, start, motion, pass, quotes, rules, chance);
         // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).

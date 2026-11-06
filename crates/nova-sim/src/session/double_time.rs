@@ -136,9 +136,10 @@
 //! still one counter tick apart from the last, so the difference is a
 //! constant phase of one pass that no player can see.
 
-use super::game_work::PassStart;
+use super::game_work::{PassCatalogs, PassStart};
 use super::{PlayerShip, Session};
 use crate::ai::Behaviour;
+use crate::catalog::CommCatalog;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::flight::Controls;
@@ -191,12 +192,30 @@ impl Session {
     /// The escape pod's countdown running out on it stops it, the rescue
     /// then due ([`Session::rescue_if_due`], which its caller asks after
     /// this pass as after the advance pass). Its caller then answers
-    /// what the session left ([`Session::answer_strikes`]) and runs
-    /// the second-pass quote roll, the attack quotes the answers raise
-    /// first ([`Session::tick_quotes_again`]).
+    /// what the session left ([`Session::answer_strikes`]) and says the
+    /// attack quotes left after the pass
+    /// (`Session::say_attack_quotes_left`).
+    ///
+    /// It runs no hail quote roll; a frame's steps roll it in the ship
+    /// loop ([`Session::step`], `Session::tick_again_quoting`).
     pub fn tick_again(
         &mut self,
         controls: Controls,
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.tick_again_quoting(controls, None, behaviour, rules, chance);
+    }
+
+    /// [`Session::tick_again`], `_HandleShip`'s hail quote roll run at the
+    /// ship loop's end on the quote clock unmoved, read from `quotes`,
+    /// when it is handed them ([`Session::tick_quotes_again`], see
+    /// [`Session::ship_loop`]).
+    pub(crate) fn tick_again_quoting(
+        &mut self,
+        controls: Controls,
+        quotes: Option<&dyn CommCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
@@ -215,7 +234,12 @@ impl Session {
             return;
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
-        self.pass_after_move(&start, pass, None, None, behaviour, rules, chance);
+        let catalogs = PassCatalogs {
+            ai: None,
+            sheets: None,
+            quotes,
+        };
+        self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
     }
 }
 

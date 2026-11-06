@@ -92,7 +92,7 @@ use super::{Outbox, Session, Setup, Space, Statics, hire};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch, SystemId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
-use crate::combat::{ShipRef, Strike};
+use crate::combat::{GamePass, ShipRef, Strike};
 use crate::flight_frame::RaisedLine;
 use crate::hail::likes_player;
 use crate::person::{
@@ -216,6 +216,12 @@ impl Session {
     /// tick: ours moves it once a frame in place of `TickCount`, and
     /// double time's second pass reads it unmoved
     /// ([`Session::tick_quotes_again`]).
+    ///
+    /// A frame's advance pass runs it at its ship loop's end, before the
+    /// reinforcement clock's tick ([`Session::roll_quotes_in_loop`]), so
+    /// the attack quotes `_HandleShot` and the ship loop queued are said
+    /// there; those the beams, the fight's tail and the after-pass answers
+    /// queue are said after the pass ([`Session::say_attack_quotes_left`]).
     pub(crate) fn tick_quotes(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -241,6 +247,10 @@ impl Session {
     /// move on a tick or two between the passes, which only shifts the
     /// personal gap ([`QUOTE_GAP_TICKS`]) by less than a frame, so no
     /// player can see it. While the ship is landed nothing happens.
+    ///
+    /// The second pass runs it at its ship loop's end, before its
+    /// reinforcement clock's tick, as [`Session::tick_quotes`] runs on the
+    /// advance pass ([`Session::roll_quotes_in_loop`]).
     pub(crate) fn tick_quotes_again(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -250,6 +260,49 @@ impl Session {
             return;
         }
         self.roll_quotes(catalog, chance);
+    }
+
+    /// `_HandleShip`'s quote roll (@0x33f0f-0x33fba) at the ship loop's
+    /// end, before `_HandleReinforcements` (@0x44504), read from
+    /// `catalog`, drawing on `chance`: [`Session::tick_quotes`] on the
+    /// advance pass, [`Session::tick_quotes_again`] on the second (see
+    /// [`Session::ship_loop`]).
+    pub(super) fn roll_quotes_in_loop(
+        &mut self,
+        pass: GamePass,
+        catalog: &dyn CommCatalog,
+        chance: &mut dyn Chance,
+    ) {
+        match pass {
+            GamePass::Advance { .. } => self.tick_quotes(catalog, chance),
+            GamePass::Again => self.tick_quotes_again(catalog, chance),
+        }
+    }
+
+    /// Says the attack quotes still queued after a pass, read from
+    /// `catalog`, drawing on `chance`: those queued after its ship loop's
+    /// quote roll ([`Session::roll_quotes_in_loop`]), by the beams
+    /// (`_HandleBeams` @0x4453d, after `_HandleReinforcements` @0x44504),
+    /// the fight's tail and the session's own calls answered after the
+    /// pass ([`Session::answer_strikes`]), so each is said on its own
+    /// frame, after the reinforcements' lines, as the original says them
+    /// (`_ShowPersonHailQuote` @0x89ce1). While the ship is landed nothing
+    /// is said, and they stay queued.
+    ///
+    /// A person whose goal turns on the player only in those after-pass
+    /// answers (the session's own calls, such as the Good Samaritan's) is
+    /// rolled at the next frame's ship loop; its attack quote, if one was
+    /// queued, is still said here, on this frame.
+    pub(super) fn say_attack_quotes_left(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
+        if self.mode.landed().is_some() {
+            return;
+        }
+        let lines = catalog.string_list(HAIL_QUOTES);
+        self.say_queued_attack_quotes(catalog, &lines, chance);
     }
 
     /// The quote block of [`Session::tick_quotes`], the clock unmoved.
@@ -2442,7 +2495,11 @@ mod tests {
     #[test]
     fn a_due_quote_said_after_a_fleets_arrival_quote_replaces_its_line_and_count() {
         // `_ShowPersonHailQuote` shows its line through `_DisplayComm`,
-        // which replaces the slot and the count (@0x9024b, @0x90251).
+        // which replaces the slot and the count (@0x9024b, @0x90251). A
+        // fleet said by `_EnterMoreShips` (@0x44237, before the AI loop)
+        // comes before the ship loop's roll; one the reinforcement clock
+        // brings (@0x44504) comes after it (see the `quote_roll_order`
+        // tests).
         let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
         session.space.say(
             &mut session.out,

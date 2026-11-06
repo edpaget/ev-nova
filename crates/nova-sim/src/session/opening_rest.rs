@@ -67,9 +67,9 @@
 //! in flight saves nothing by default.
 
 use super::Session;
-use super::game_work::PassStart;
+use super::game_work::{PassCatalogs, PassStart};
 use crate::ai::Behaviour;
-use crate::catalog::{PilotCatalog, TrafficCatalog};
+use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{GamePass, Rules};
@@ -123,10 +123,13 @@ impl Session {
     /// gain as it stands, the traffic drawn from `catalog` and deciding as
     /// `behaviour` says, the fight by `rules`, drawing on `chance`: the
     /// pass's head, the work from the key block, then the pass from the
-    /// key block on, the player's head left out (see the module docs).
+    /// key block on, the player's head left out (see the module docs);
+    /// `_HandleShip`'s hail quote roll runs at its ship loop's end, read
+    /// from `quotes`, when it is handed them (see [`Session::ship_loop`]).
     pub(super) fn rest_of_opening_pass(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
+        quotes: Option<&dyn CommCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
@@ -144,15 +147,12 @@ impl Session {
         // of the opening frame, which is now.
         let start = PassStart::of(self);
         self.load_sprite_masks(catalog);
-        self.pass_from_key_block(
-            &start,
-            pass,
-            Some(catalog),
-            Some(catalog),
-            behaviour,
-            rules,
-            chance,
-        );
+        let catalogs = PassCatalogs {
+            ai: Some(catalog),
+            sheets: Some(catalog),
+            quotes,
+        };
+        self.pass_from_key_block(&start, pass, catalogs, behaviour, rules, chance);
     }
 
     /// The work on `frame` that `_HandlePlayer` and `_DoPlayGameWork` run

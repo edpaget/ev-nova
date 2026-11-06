@@ -1178,6 +1178,7 @@ pub(super) mod tests {
             &start,
             super::super::ship_loop::Motion::Again,
             pass,
+            None,
             Rules::default(),
             &mut NeverFires,
         );

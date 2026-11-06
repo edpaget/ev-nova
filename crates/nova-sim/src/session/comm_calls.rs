@@ -32,16 +32,20 @@
 //!   flight starts at 0 (`_ResetPlayer` @0x1d904). No jump, gate or
 //!   arrival writes it: an arrival's own line sets it.
 //! - It counts down once a frame on the advance pass, at the head of the
-//!   hail quotes' tick ([`Session::tick_quotes`]), never while landed,
-//!   as `_HandleComm` runs on the advance pass only (`_DoPlayGameWork`
-//!   @0x4421e). The original counts down at the head of its frame, before
-//!   any ship thinks; ours counts down after the frame's traffic and
-//!   fight, before the quotes, so a line raised by the frame's traffic
-//!   or fight is read by the next frame's calls one tick shorter, as the
-//!   original's is, and a quote said behind the countdown (one from
-//!   `_HandleShot`, the ship loop or the beams, or the roll) one tick
-//!   longer: a one-frame lag before a call that crosses no boundary the
-//!   player sees.
+//!   hail quotes' tick ([`Session::tick_quotes`]), at the ship loop's
+//!   end and before the reinforcement clock's tick (see
+//!   [`Session::ship_loop`]), never while landed, as `_HandleComm` runs
+//!   on the advance pass only (`_DoPlayGameWork` @0x4421e). The original
+//!   counts down at the head of its frame, before any ship thinks; ours
+//!   counts down after the frame's calls, `_HandleShot` and the ship
+//!   loop, so a line they raise is read by the next frame's calls one
+//!   tick shorter, as the original's is. A line raised after the ship
+//!   loop (the reinforcements', the stellar guns', the beams', the
+//!   fight's tail's, the after-pass answers' and the attack quotes they
+//!   leave) is first counted down at the next frame's roll point, after
+//!   that frame's calls, where the original counts it down at @0x4421e
+//!   before them, so those calls read it a tick longer: a one-frame lag
+//!   before a call that crosses no boundary the player sees.
 //!
 //! **The calls.** Each think's call ([`Decision::comm_call`](crate::ai::Decision::comm_call),
 //! queued on the line, [`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line))
@@ -117,8 +121,10 @@
 //! (`_SpawnStellarDefenseShip` @0x3d498) and a declined bribe come before
 //! `_AIDispatch`'s loop, so [`Session::game_work`] says them just ahead of
 //! the line's settle ([`Session::say_quotes_before_the_line`]), ahead of
-//! every call. What `_HandleShot`, the ship loop and the beams raise comes
-//! after the loop, so it stays with [`Session::tick_quotes`].
+//! every call. What `_HandleShot` and the ship loop raise comes after the
+//! loop, so it is said with [`Session::tick_quotes`] at the ship loop's
+//! end; what the beams and the after-pass answers raise is said after the
+//! pass ([`Session::say_attack_quotes_left`]).
 //!
 //! Two orders are left out, each in
 //! rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines:
