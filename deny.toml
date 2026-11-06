@@ -45,6 +45,7 @@ deny = [
     # - nova-data (on nova-rsrc, nova-galaxy-format and nova-galaxy-media);
     # - the layered nova-sim crates (roadmap nova-sim-layered-crates):
     #   catalog, state, combat, ai, story, port;
+    # - nova-ink (on nova-sim-story; the dialog adapter, wired by nova);
     # - nova-sim (the facade);
     # - nova-view;
     # - nova-render, nova-audio and nova-movie;
@@ -54,7 +55,8 @@ deny = [
     # (nova-render, macOS), nova-appkit (nova, macOS), nova-win32 (nova,
     # Windows) and nova-winres (nova's build script and Windows build, and
     # nova-bundle). The leaf tools nova-dump (on nova-rsrc and nova-data)
-    # and nova-bundle (on nova-winres) have no dependents, so no entry.
+    # and nova-bundle (on nova-winres) have no dependents, so no entry, and
+    # nor does nova-ink until nova wires it in (engine-story phase 2).
     #
     # Each entry's `wrappers` is exactly the crate's direct dependents
     # (normal, dev and build, on every target), including the crate itself
@@ -85,6 +87,8 @@ deny = [
     { crate = "winit", wrappers = ["nova"], reason = "only the game opens a window" },
     { crate = "glyphon", wrappers = ["nova-render"], reason = "only the renderer draws text" },
     { crate = "kira", wrappers = ["nova-audio"], reason = "only the audio crate plays sound" },
+    # Compiled Ink is played only by nova-ink, the dialog port's adapter.
+    { crate = "bladeink", wrappers = ["nova-ink"], reason = "only nova-ink plays the new game's compiled Ink" },
     # glTF models are decoded only by nova-galaxy-media, which turns them
     # into silhouettes as data.
     { crate = "gltf", wrappers = ["nova-galaxy-media"], reason = "only nova-galaxy-media decodes the new game's models" },
@@ -98,6 +102,6 @@ deny = [
     { crate = "nova-sim-state", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-story"], reason = "the state layer sits on the foundation and the catalog, below every other nova-sim crate, and is reached through the nova-sim facade" },
     { crate = "nova-sim-combat", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-port", "nova-sim-story"], reason = "the combat layer sits on the foundation, the catalog and the state, below the ai, story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-ai", wrappers = ["nova-sim", "nova-sim-port", "nova-sim-story"], reason = "the ai and traffic layer sits on the foundation, the catalog, the state and combat, below the story, port and session layers, and is reached through the nova-sim facade" },
-    { crate = "nova-sim-story", wrappers = ["nova-sim", "nova-sim-port"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },
+    { crate = "nova-sim-story", wrappers = ["nova-ink", "nova-sim", "nova-sim-port"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-port", wrappers = ["nova-sim"], reason = "the port layer sits on the foundation, the catalog, the state, combat, the ai and the story, below the session layer, and is reached through the nova-sim facade" },
 ]

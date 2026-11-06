@@ -30,6 +30,7 @@ nova-sim-combat = { path = "crates/nova-sim-combat" }
 nova-sim-ai = { path = "crates/nova-sim-ai" }
 nova-sim-story = { path = "crates/nova-sim-story" }
 nova-sim-port = { path = "crates/nova-sim-port" }
+nova-ink = { path = "crates/nova-ink" }
 nova-audio = { path = "crates/nova-audio" }
 nova-movie = { path = "crates/nova-movie" }
 nova-galaxy-format = { path = "crates/nova-galaxy-format" }
@@ -73,6 +74,11 @@ serde-saphyr = { version = "2.0.0", default-features = false, features = ["deser
 # `galaxy` tool pins it: only the data, no image decoding or URI fetching.
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names"] }
 thiserror = "2"
+# The Ink runtime that plays the new game's compiled dialog (nova-ink only,
+# as `deny.toml` bans it elsewhere). Pinned exactly: the dialog port's
+# contract and nova-ink's tests pin what this version plays, and a new
+# version is taken on purpose, with those tests rerun.
+bladeink = "=2.1.0"
 # Reads the synthetic test fonts back in nova-data's fixture tests; the
 # version glyphon's font stack already locks.
 ttf-parser = "0.25.1"
