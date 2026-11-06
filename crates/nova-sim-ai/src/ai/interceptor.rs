@@ -302,8 +302,9 @@ pub fn search_shut(npc: &Npc, around: &Surroundings) -> bool {
 /// gate (the engine's goal 0 and 1) with +0x70 set goes to @0x8d13f
 /// unprovoked or with the slot inactive (@0x8cc93-0x8ccc9), as an ally
 /// goal 4 spared or a hit for no damage leaves it
-/// ([`held_attack`](super::held_attack)). A provoked one has taken goal 4
-/// on it already. Behind the closed gate it reaches @0x8d13f all the same,
+/// ([`held_attack`](super::held_attack)). A provoked one with no warp
+/// under way has taken goal 4 on it already
+/// ([`provoked_branch_open`](super::held_attack::provoked_branch_open)). Behind the closed gate it reaches @0x8d13f all the same,
 /// and keeps the target there too
 /// ([`keeps_behind_gate`](super::held_attack::keeps_behind_gate)).
 #[must_use]
@@ -2576,6 +2577,30 @@ mod tests {
             );
             assert_eq!(decision.goal, Goal::Inspect(n(3)), "{provoked} {govt:?}");
         }
+    }
+
+    #[test]
+    fn an_inspecting_interceptor_whose_warp_is_under_way_answers_no_provoker_by_the_other_reading()
+    {
+        // The provoked branch takes goal 4 only with +0x50 at or below 0
+        // (@0x8cc1f-0x8cc26, `held_attack::provoked_branch_open`), and so
+        // does the provoker an inspection answers by the other reading.
+        let (cop, trader) = trader_cop_inspecting();
+        let mut warping = Npc {
+            target: Some(n(3)),
+            provoked: 5.0,
+            ..cop
+        };
+        warping.warp.stage = 1.0;
+        let hitter = ship(3, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = hit_decided(
+            RuleSource::Bible,
+            warping,
+            &[trader, hitter],
+            (0.0, -1000.0),
+            &[],
+        );
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
     }
 
     #[test]

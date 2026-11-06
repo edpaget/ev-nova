@@ -191,7 +191,7 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::held_attack::{interceptor_hunt, warship_hunt};
+use crate::ai::held_attack::{interceptor_hunt, provoked_branch_open, warship_hunt};
 use crate::ai::interceptor::inspection_holds;
 use crate::ai::odds::cached_odds;
 use crate::ai::reinforcements::odds_factor;
@@ -451,7 +451,10 @@ fn unworded(
     let keep = |ship: ShipRef| keeps(npc, ship, around, retreat);
     let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
     let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
-    let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
+    // The provoked branch's +0x50 gate (@0x8cc1f-0x8cc26).
+    let provoker = npc
+        .target
+        .filter(|&ship| npc.provoked > 0.0 && provoked_branch_open(npc) && held(ship));
     // Inspecting (state 7: its search needs state 1 or below, or 0x14,
     // @0x8cc6d-0x8cc7d, and its provoked branch leaves state 7 out,
     // @0x8cc0d; its re-pick comes after, see `interceptor`), it answers
