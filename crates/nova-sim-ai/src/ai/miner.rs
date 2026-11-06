@@ -1270,7 +1270,8 @@ mod tests {
     #[test]
     fn a_miner_clears_its_target_on_its_stop_its_leaves_and_disabled() {
         // `_MinerAI`'s four -1 writes: disabled (@0x8b238), the `MINES`
-        // stop (@0x8b2c5), which stands through a later scoop, the
+        // stop (@0x8b2c5), which stands through a later scoop, mine
+        // return and the shuttle's landing and wait-idle, the
         // full-hold leave (@0x8b31e) and the shuttle's leave (@0x8b43f).
         let boxes = [cargo(500.0, 0.0, true)];
         assert_eq!(
@@ -1282,6 +1283,25 @@ mod tests {
             its_target(miner(MINER_BITS, true), &stellars(), None, &boxes),
             (Goal::Scoop, true, None),
             "the stop's -1 stands through the scoop"
+        );
+        assert_eq!(
+            its_target(miner(MINER_BITS, true), &stellars(), None, &[]),
+            (Goal::Mine, true, None),
+            "the stop's -1 stands through the mine return"
+        );
+        assert_eq!(
+            its_target(miner(MINER_BITS, false), &stellars(), None, &[]),
+            (Goal::Land(StellarId(129)), true, None),
+            "the stop's -1 stands through the shuttle's landing"
+        );
+        let waiting = Npc {
+            ai_wait: 5.0,
+            ..miner(MINER_BITS, false)
+        };
+        assert_eq!(
+            its_target(waiting, &stellars(), None, &[]),
+            (Goal::Idle, true, None),
+            "the stop's -1 stands through the shuttle's wait-idle"
         );
         let mut full = miner(SCOOPS, true);
         full.cargo.add(0, 20);
