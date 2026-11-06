@@ -72,7 +72,6 @@ use nova_sim_catalog::dialogs::DialogAt;
 
 use super::conversation::OpenConversation;
 use super::free_cargo::free_cargo_in;
-use super::precalced::ResetCause;
 use super::{MissionRun, Outbox, Port, Session, Setup, Statics};
 
 /// The storylines' landing hook ([`Play::landed`]).
@@ -274,13 +273,12 @@ pub(super) fn settle_outcome(
 
 impl Session {
     /// Makes the outfit changes the storylines' effects have queued on the
-    /// [`Outbox`], in order, each through `G` or `D`
-    /// ([`Session::apply_op`]) drawing on `chance`, then, when there were
-    /// any, resets the precalculated values as a set expression's end
-    /// does, and marks the galaxy stale when the pilot changed, so a
-    /// `Visibility` test reading outfits is refreshed as after a script's
-    /// `G` (see the module docs and the `precalced` module). It makes no
-    /// save due itself: the change that applied the block has.
+    /// [`Outbox`], in order, each through `G` or `D` drawing on `chance`,
+    /// and, when there were any, ends as a set expression does
+    /// ([`Session::apply_set_ops`]): the observer sees each, the
+    /// precalculated values reset, and a changed pilot marks the galaxy
+    /// stale, so a `Visibility` test reading outfits is refreshed as after
+    /// a script's `G` (see the module docs and the `precalced` module).
     ///
     /// The changes are made at the end of the call that queued them,
     /// rather than where their block applied, as the ship isn't the
@@ -290,18 +288,16 @@ impl Session {
         if self.out.story_outfits.is_empty() {
             return;
         }
-        let before = self.pilot.clone();
-        for change in std::mem::take(&mut self.out.story_outfits) {
-            let op = match change {
-                OutfitChange::Grant(outfit) => SetOp::GrantOutfit(outfit),
-                OutfitChange::Remove(outfit) => SetOp::RemoveOutfit(outfit),
-            };
-            self.apply_op(&op, chance);
-        }
-        self.reset_precalced_for(ResetCause::SetExpr);
-        if self.pilot != before {
-            self.chart.galaxy_stale = true;
-        }
+        let changes = std::mem::take(&mut self.out.story_outfits);
+        self.apply_set_ops(true, chance, |session, chance, apply| {
+            for change in changes {
+                let op = match change {
+                    OutfitChange::Grant(outfit) => SetOp::GrantOutfit(outfit),
+                    OutfitChange::Remove(outfit) => SetOp::RemoveOutfit(outfit),
+                };
+                apply(&op, session, chance);
+            }
+        });
     }
 
     /// The news `system` has heard by today, over the galaxy's lanes, by
@@ -1173,6 +1169,33 @@ mod tests {
         converse(&mut session, Converse::Open);
         converse(&mut session, Converse::Choose(0));
         assert_eq!(owned(&session), 1);
+    }
+
+    /// Records each set operator it sees.
+    #[derive(Debug, Default)]
+    struct Ops(std::cell::RefCell<Vec<SetOp>>);
+
+    impl crate::session::control::SetOpObserver for Ops {
+        fn saw(&self, op: &SetOp, _session: &Session) {
+            self.0.borrow_mut().push(op.clone());
+        }
+    }
+
+    #[test]
+    fn the_set_op_observer_sees_each_story_grant_and_removal() {
+        let job = StoryMission {
+            on_accept: changing(&[PASS], &[PASS]),
+            ..job(10)
+        };
+        let catalog = lending(&[("job", job)]);
+        let ops = Rc::new(Ops::default());
+        let mut session = landed(&catalog).with_set_op_observer(ops.clone());
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        assert_eq!(
+            *ops.0.borrow(),
+            [SetOp::GrantOutfit(PASS), SetOp::RemoveOutfit(PASS)]
+        );
     }
 
     #[test]
