@@ -23,7 +23,8 @@
 //! an edit, then hands the app the window's
 //! GPU wrapped in `WithOverlay` with the layer as its painter. Of the
 //! window events it gave the app, it forwards to [`DevTools::on_event`]
-//! those `App::overlay_wants` ([`overlay_feed`]).
+//! each that `App::overlay_wants`, by how the app handled it; the app
+//! decides where the text a key types goes, with its key.
 
 pub mod input;
 pub mod layer;
@@ -36,7 +37,7 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_view::devtools::{DevOverlay, PilotDesk};
 
-use crate::app::{Handled, WindowEvent, WindowPort};
+use crate::app::{WindowEvent, WindowPort};
 
 pub use input::EguiInput;
 pub use layer::EguiLayer;
@@ -99,85 +100,10 @@ impl DevTools {
     }
 }
 
-/// The events of one platform event that the overlay sees, in order: each
-/// of `taken`, the events the app took with how it handled each, that
-/// `wants` gives it (`App::overlay_wants`), and then `typed`, the text the
-/// key press typed, if `wants` gave it that key, the last of `taken`. The
-/// text is part of its key press, so the toggle key's backquote is never
-/// typed into the panel it opens.
-pub fn overlay_feed(
-    taken: &[(WindowEvent, Handled)],
-    typed: Option<WindowEvent>,
-    wants: impl Fn(Handled) -> bool,
-) -> Vec<WindowEvent> {
-    let key_wanted = taken.last().is_some_and(|&(_, handled)| wants(handled));
-    taken
-        .iter()
-        .filter(|&&(_, handled)| wants(handled))
-        .map(|(event, _)| *event)
-        .chain(typed.filter(|_| key_wanted))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use nova_render::wgpu::MAX_TEXTURE_SIDE;
-    use nova_view::Key;
-    use nova_view::devtools::{MAX_PREVIEW_SIDE, Routing};
-
-    use super::*;
-    use crate::app::{Control, Handled};
-
-    fn handled(routing: Routing) -> Handled {
-        Handled {
-            control: Control::Continue,
-            routing,
-        }
-    }
-
-    fn press(key: Key) -> WindowEvent {
-        WindowEvent::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        }
-    }
-
-    /// What the app would want, shown: all but the toggle key's.
-    fn shown(handled: Handled) -> bool {
-        handled.routing != Routing::Toggle
-    }
-
-    #[test]
-    fn the_overlay_sees_each_event_it_wants() {
-        let resized = WindowEvent::Resized {
-            size_px: (800, 600),
-            scale_factor: 2.0,
-        };
-        let fullscreen = WindowEvent::FullscreenChanged { fullscreen: false };
-        let taken = [
-            (fullscreen, handled(Routing::Game)),
-            (resized, handled(Routing::Game)),
-        ];
-        assert_eq!(overlay_feed(&taken, None, shown), [fullscreen, resized]);
-        assert_eq!(overlay_feed(&taken, None, |_| false), []);
-    }
-
-    #[test]
-    fn the_text_a_key_types_goes_where_its_key_went() {
-        let typed = WindowEvent::Text('a');
-        let taken = [(press(Key::KeyA), handled(Routing::Overlay))];
-        assert_eq!(
-            overlay_feed(&taken, Some(typed), shown),
-            [press(Key::KeyA), typed]
-        );
-        // The toggle key's backquote is not typed into the panel it opens.
-        let taken = [(press(Key::Backquote), handled(Routing::Toggle))];
-        assert_eq!(
-            overlay_feed(&taken, Some(WindowEvent::Text('`')), shown),
-            []
-        );
-    }
+    use nova_view::devtools::MAX_PREVIEW_SIDE;
 
     #[test]
     fn every_previewed_frame_fits_in_a_texture() {

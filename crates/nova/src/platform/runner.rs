@@ -64,9 +64,10 @@
 //! With the `dev-tools` feature and `Runner::with_dev_tools`, it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
-//! and submits the frame with the panel painted over it, and the window
-//! events it gave the app that the app says the overlay wants go to egui
-//! (`devtools::overlay_feed`), the typed text with its key.
+//! and submits the frame with the panel painted over it, and each window
+//! event it gave the app goes to egui when the app says the overlay wants
+//! it ([`App::overlay_wants`]), by how the app handled it: the typed text
+//! too, which the app sends where its key went.
 
 use std::cell::RefCell;
 use std::io::Write;
@@ -100,7 +101,7 @@ use super::{dialogs, text_event, window_events};
 use crate::app::MenuSync;
 use crate::app::{App, AppScreen, Control, Handled, UpdaterSource, WindowEvent, choose};
 #[cfg(feature = "dev-tools")]
-use crate::devtools::{DevTools, overlay_feed};
+use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
 use crate::gamepad::Gamepads;
 use crate::settings::GameKeeper;
@@ -467,13 +468,6 @@ impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
         // The fullscreen report goes first (see `window_events`).
         let events: Vec<WindowEvent> =
             window_events(&raw, &running.window, self.start.elapsed()).collect();
-        let mut taken = Vec::with_capacity(events.len());
-        let mut exit = false;
-        for event in events {
-            let handled = running.handle(event);
-            exit |= handled.control == Control::Exit;
-            taken.push((event, handled));
-        }
         // The text a key press types follows the key.
         let typed = match &raw {
             WinitEvent::KeyboardInput { event, .. } => {
@@ -481,20 +475,23 @@ impl<S: ImageSource + 'static> ApplicationHandler for Runner<S> {
             }
             _ => None,
         };
-        if let Some(event) = typed {
-            exit |= running.handle(event).control == Control::Exit;
+        let mut taken = Vec::with_capacity(events.len() + 1);
+        let mut exit = false;
+        for event in events.into_iter().chain(typed) {
+            let handled = running.handle(event);
+            exit |= handled.control == Control::Exit;
+            taken.push((event, handled));
         }
-        // The overlay sees the events the app gave it, the text with its
-        // key.
+        // The overlay sees each event the app says it wants, by where the
+        // app sent it.
         #[cfg(feature = "dev-tools")]
         {
             let running = &mut *running;
             if let Some(dev_tools) = &mut running.dev_tools {
-                let app = &running.app;
-                for event in
-                    overlay_feed(&taken, typed, |handled| app.overlay_wants(Some(&handled)))
-                {
-                    dev_tools.on_event(&event);
+                for (event, handled) in &taken {
+                    if running.app.overlay_wants(Some(handled)) {
+                        dev_tools.on_event(event);
+                    }
                 }
             }
         }

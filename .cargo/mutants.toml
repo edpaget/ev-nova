@@ -322,15 +322,17 @@ exclude_re = [
     # recording why it could not), installing the macOS menu bar and the
     # Apple event handlers and the will-terminate observer, forwarding
     # each window event and loop event to `App::handle` (including acting
-    # on its `Control`) and the screen's offers to the menu bar, telling the app the run is over (`Running`'s
+    # on its `Control`), the ones the overlay wants to it and the screen's
+    # offers to the menu bar, telling the app the run is over (`Running`'s
     # `Ending::end`, which `run_end::Run` calls once, on the runner's drop
     # or from the will-terminate observer) and printing what it reports,
     # and starting the startup warnings' sheet once the loop waits. It
     # needs a real window, display and, for the menu bar, the handlers,
     # the observer and the sheet, `NSApplication` on the main thread. The
-    # decisions it forwards to (`translate`, `App::handle`, `App::exiting`,
-    # `run_end::Run`, `MenuSync`, `choose`, `gpu_failure`, `exit::exit`,
-    # `Report::take_alert`, `overlay_feed`, `LoopEvents::drain`) are mutated and tested, and `MenuBar::install` /
+    # decisions it forwards to (`translate`, `App::handle`,
+    # `App::overlay_wants`, `App::exiting`, `run_end::Run`, `MenuSync`,
+    # `choose`, `gpu_failure`, `exit::exit`, `Report::take_alert`,
+    # `LoopEvents::drain`) are mutated and tested, and `MenuBar::install` /
     # `set_enabled`, `AppleEvents::install` and `WillTerminate::install`
     # run on the main thread in nova-appkit's `tests/it`.
     "impl ApplicationHandler for Runner<S>>::(can_create_surfaces|window_event|proxy_wake_up|about_to_wait)",
@@ -381,8 +383,7 @@ exclude_re = [
     # The developer tools' window glue (the `dev-tools` feature): each
     # forwards to tested parts: the input (`EguiInput`, which turns the
     # game's window events into egui's), the panel (`DevPanel`), the painter
-    # (`EguiLayer`) and the app's routing (`App::overlay_wants`, through
-    # `overlay_feed`).
+    # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size,
     # scale factor and fullscreen state, a redraw request, showing or hiding

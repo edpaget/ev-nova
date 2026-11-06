@@ -385,6 +385,9 @@ pub struct App<S, C = AppScreen> {
     /// went down, and the screen is never sent the moves outside it
     /// would need to tell.
     left_held: bool,
+    /// Where the last key went: the text a key press types follows its
+    /// key there ([`App::handle_routed`]).
+    last_key: Routing,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
@@ -433,6 +436,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             pointer_hidden: false,
             cursor_synced: false,
             left_held: false,
+            last_key: Routing::Game,
             failures: Vec::new(),
             overlay: None,
             audio: None,
@@ -777,7 +781,11 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// screen abandon its pointer gesture and let go of its keys. While it
     /// shows, every other key, pointer and scroll event goes to it alone, wherever
     /// the pointer is, though the pointer's position is still recorded. Every
-    /// redraw also gives the overlay its time.
+    /// redraw also gives the overlay its time. The text a key press types
+    /// goes where its key went, and is handled as that key was: to the
+    /// overlay with a key it took, and nowhere ([`Routing::Toggle`]) with
+    /// its toggle key's, so the backquote is typed neither into the panel
+    /// it opens nor into the screen it gives the keys back to.
     ///
     /// After the event, a fullscreen kind the Preferences dialog chose is
     /// entered, and a Preferences dialog just opened is offered the display
@@ -929,14 +937,19 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 key,
                 pressed,
                 repeat,
-            } => self.handle_key(key, pressed, repeat, window),
-            WindowEvent::Text(_) if self.fullscreen.drops_text() => game(Control::Continue),
-            WindowEvent::Text(c) => {
-                if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
-                    return overlay;
-                }
-                game(self.route(Input::Text(c)))
+            } => {
+                let handled = self.handle_key(key, pressed, repeat, window);
+                self.last_key = handled.routing;
+                handled
             }
+            WindowEvent::Text(_) if self.fullscreen.drops_text() => game(Control::Continue),
+            WindowEvent::Text(c) => match self.last_key {
+                Routing::Game => game(self.route(Input::Text(c))),
+                routing => Handled {
+                    control: Control::Continue,
+                    routing,
+                },
+            },
             WindowEvent::PointerMoved { px } => self.pointer_moved(px),
             WindowEvent::PointerLeft => {
                 self.pointer = None;
@@ -2474,16 +2487,49 @@ mod tests {
     fn typed_text_goes_to_the_overlay_alone_while_it_shows() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(Key::KeyA, true));
         assert_eq!(
             routed(&mut app, &mut window, WindowEvent::Text('a')),
             handled(Control::Continue, Routing::Game)
         );
         routed(&mut app, &mut window, key(BACKQUOTE, true));
+        routed(&mut app, &mut window, key(Key::KeyB, true));
         assert_eq!(
             routed(&mut app, &mut window, WindowEvent::Text('b')),
             handled(Control::Continue, Routing::Overlay)
         );
-        assert_eq!(app.screen().inputs, [Input::Text('a')]);
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::Key {
+                    key: Key::KeyA,
+                    pressed: true,
+                    repeat: false
+                },
+                Input::Text('a')
+            ]
+        );
+    }
+
+    #[test]
+    fn the_toggle_keys_text_goes_where_the_key_went_nowhere() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        let toggle = handled(Control::Continue, Routing::Toggle);
+        // Opening: the overlay shows, but the backquote isn't typed into it.
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let typed = routed(&mut app, &mut window, WindowEvent::Text('`'));
+        assert_eq!(typed, toggle);
+        assert!(visible(&app));
+        assert!(!app.overlay_wants(Some(&typed)));
+        // Closing: nor into the screen the overlay gives the keys back to.
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::Text('`')),
+            toggle
+        );
+        assert!(!visible(&app));
+        assert_eq!(app.screen().inputs, []);
     }
 
     #[test]
