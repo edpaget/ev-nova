@@ -52,6 +52,8 @@ pub const CONTRACT_JSON: &str = include_str!("fixture/contract.ink.json");
 ///    knot it was in, and before any knot was entered; junk doesn't
 ///    restore.
 /// 9. Entering a knot drops the choices that were pending.
+/// 10. A failed enter changes nothing: the choices pending before it are
+///     still offered and can still be taken.
 ///
 /// # Errors
 ///
@@ -69,6 +71,7 @@ pub fn check_contract(loader: &impl DialogLoader) -> Result<(), String> {
     a_save_keeps_spent_choices_in_another_knot(loader)?;
     a_save_before_entering_restores_to_nothing(loader)?;
     entering_a_knot_drops_pending_choices(loader)?;
+    a_failed_enter_keeps_pending_choices(loader)?;
     Ok(())
 }
 
@@ -425,6 +428,28 @@ fn entering_a_knot_drops_pending_choices(loader: &impl DialogLoader) -> Result<(
     expect_choices(dialog.as_ref(), &[choice("Close it", &[])], clause)
 }
 
+fn a_failed_enter_keeps_pending_choices(loader: &impl DialogLoader) -> Result<(), String> {
+    let clause = "failed enter";
+    let mut dialog = open(loader)?;
+    enter(dialog.as_mut(), "greet", clause)?;
+    expect_lines(dialog.as_mut(), &greet_lines(), clause)?;
+    match dialog.enter("nowhere") {
+        Err(DialogError::NoSuchKnot(knot)) if knot == "nowhere" => {}
+        other => {
+            return Err(format!(
+                "{clause}: entering `nowhere` gave {other:?}, not NoSuchKnot"
+            ));
+        }
+    }
+    expect_choices(dialog.as_ref(), &greet_choices(), clause)?;
+    choose(dialog.as_mut(), 0, clause)?;
+    expect_lines(
+        dialog.as_mut(),
+        &[line("There's a run to Marrow.", &["outcome: accept"])],
+        clause,
+    )
+}
+
 /// The contract rejects dialogs that break it: each test wraps the fake
 /// with one fault and checks the clause that should catch it. These test
 /// [`check_contract`], not the fake, which the contract alone describes.
@@ -449,6 +474,7 @@ mod tests {
         MisnamesAnUndeclaredVariable,
         IgnoresRestores,
         KeepsChoicesOnEntering,
+        ClearsChoicesOnAFailedEnter,
     }
 
     struct FaultyLoader(Fault);
@@ -490,6 +516,12 @@ mod tests {
             };
             match (self.fault, result) {
                 (Fault::EntersAnyKnot, Err(_)) => Ok(()),
+                (Fault::ClearsChoicesOnAFailedEnter, Err(e)) => {
+                    // As `bladeink` does: the call stack is reset, and the
+                    // choices with it, before the path fails to resolve.
+                    self.inner.enter("ledger.open")?;
+                    Err(e)
+                }
                 (Fault::MisnamesAMissingKnot, Err(_)) => {
                     Err(DialogError::NoSuchKnot("elsewhere".to_owned()))
                 }
@@ -661,5 +693,14 @@ mod tests {
             entering_a_knot_drops_pending_choices,
         );
         assert!(error.contains("entering drops choices"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_failed_enter_that_drops_choices() {
+        let error = fails(
+            Fault::ClearsChoicesOnAFailedEnter,
+            a_failed_enter_keeps_pending_choices,
+        );
+        assert!(error.contains("failed enter: offered"), "{error}");
     }
 }

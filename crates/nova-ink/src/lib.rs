@@ -5,8 +5,9 @@
 //! of the port's calls to one `bladeink` call, adding only what the port
 //! promises and `bladeink` doesn't check: a leading byte order mark is
 //! skipped, an unknown knot, a choice past the end and an undeclared
-//! variable are refused as such, and lines with neither text nor tags (the
-//! empty output of a divert) are stepped over.
+//! variable are refused as such (an unknown knot before anything changes),
+//! and lines with neither text nor tags (the empty output of a divert) are
+//! stepped over.
 //!
 //! Only this crate may depend on `bladeink` (`deny.toml`). Its story is
 //! built on `Rc`s, so an [`InkDialog`] is not `Send`.
@@ -50,9 +51,14 @@ pub struct InkDialog(Story);
 
 impl Dialog for InkDialog {
     fn enter(&mut self, knot: &str) -> Result<(), DialogError> {
-        self.0
-            .choose_path_string(knot, true, None)
-            .map_err(|_| DialogError::NoSuchKnot(knot.to_owned()))
+        // `choose_path_string` resets the call stack and clears the choices
+        // before it finds the path doesn't resolve, so the path is checked
+        // first. `get_visit_count_at_path_string` resolves a knot's path as
+        // it does, and only reads.
+        if self.0.get_visit_count_at_path_string(knot).is_err() {
+            return Err(DialogError::NoSuchKnot(knot.to_owned()));
+        }
+        self.0.choose_path_string(knot, true, None).map_err(runtime)
     }
 
     fn step(&mut self) -> Result<Option<Line>, DialogError> {

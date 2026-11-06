@@ -45,7 +45,9 @@ pub trait Dialog {
     ///
     /// # Errors
     ///
-    /// [`DialogError::NoSuchKnot`] when the story has no such knot.
+    /// [`DialogError::NoSuchKnot`] when the story has no such knot. A failed
+    /// enter changes nothing: the dialog stays where it was, with the same
+    /// choices pending.
     fn enter(&mut self, knot: &str) -> Result<(), DialogError>;
 
     /// The next line, with its trailing newline trimmed, or `None` once
