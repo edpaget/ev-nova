@@ -207,17 +207,20 @@ mod decoded;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
+mod gate_stability;
 mod interface;
 pub mod order;
 mod ship_desc;
 mod shot_spin;
 mod spin_sprite;
 mod sprite;
+mod stand_in;
 mod stellar_sprite;
 #[cfg(test)]
 mod tests;
 mod walk;
 
+pub use self::gate_stability::GateStability;
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
@@ -228,6 +231,7 @@ pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
     ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
+pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 
 /// Why the store could not be opened at all.
@@ -366,6 +370,12 @@ pub struct GameData {
     tests: Mutex<HashMap<Box<str>, ParsedTest>>,
     /// Each set expression parsed so far, by its text.
     sets: Mutex<HashMap<Box<str>, ParsedSet>>,
+    /// What each ship or stellar with no sprite draws instead: the new
+    /// game's ([`GameData::with_stand_ins`]); none in a stock store.
+    stand_ins: BTreeMap<StandInOf, StandIn>,
+    /// Each jump point's own stability, by its gate's `spöb`: the new
+    /// game's ([`GameData::with_gate_stabilities`]); none in a stock store.
+    gate_stabilities: BTreeMap<crate::wire::id::StellarId, GateStability>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -416,6 +426,8 @@ impl GameData {
             index,
             tests: Mutex::default(),
             sets: Mutex::default(),
+            stand_ins: BTreeMap::new(),
+            gate_stabilities: BTreeMap::new(),
         })
     }
 

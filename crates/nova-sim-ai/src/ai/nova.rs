@@ -122,7 +122,7 @@ pub struct NovaAi {
 }
 
 impl Default for NovaAi {
-    /// Nova's four, by the engine.
+    /// Nova's four and its escorts' AI, each rule by its default.
     fn default() -> Self {
         Self::from_rulebook(&Rulebook::default())
     }
@@ -1668,16 +1668,12 @@ mod tests {
         let guarding = Goal::Formation {
             guard: Some(ShipRef::Npc(NpcId(2))),
         };
-        assert_eq!(decide(&NovaAi::default()), guarding);
-        assert_eq!(
-            decide(&NovaAi::from_rulebook(&Rulebook::default())),
-            guarding
-        );
+        let attacking = Goal::Attack(ShipRef::Npc(NpcId(2)));
+        assert_eq!(decide(&NovaAi::default()), attacking);
+        let engine = Rulebook::default().with_override(RuleKey::EscortAi, RuleSource::Engine);
+        assert_eq!(decide(&NovaAi::from_rulebook(&engine)), guarding);
         let bible = Rulebook::default().with_override(RuleKey::EscortAi, RuleSource::Bible);
-        assert_eq!(
-            decide(&NovaAi::from_rulebook(&bible)),
-            Goal::Attack(ShipRef::Npc(NpcId(2)))
-        );
+        assert_eq!(decide(&NovaAi::from_rulebook(&bible)), attacking);
     }
 
     /// What `npc`, carrying a front quadrant turret and heading 350,

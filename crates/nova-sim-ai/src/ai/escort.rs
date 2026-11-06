@@ -46,10 +46,10 @@
 //!     substates 1, 9, 0xb and 0xc, [`unprovoked`]); a guard disabled or
 //!     gone between thinks it drops there;
 //!   - by the Bible (`shïp` `InherentAI`: "What AI the ship uses when
-//!     it's escorting the player"), it flies as its AI type would: a
-//!     warship or interceptor attacks the best threat to the player at
-//!     any distance with every weapon, keeping formation while there is
-//!     none, and a trader keeps formation and fires nothing.
+//!     it's escorting the player"), the default, it flies as its AI type
+//!     would: a warship or interceptor attacks the best threat to the
+//!     player at any distance with every weapon, keeping formation while
+//!     there is none, and a trader keeps formation and fires nothing.
 //! - **Return to Hangar**: a carried fighter (one with a
 //!   [`Carrier`](crate::bay::Carrier)) drops its target and docks with
 //!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing

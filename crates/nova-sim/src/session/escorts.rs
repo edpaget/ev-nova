@@ -3011,8 +3011,14 @@ pub(super) mod tests {
     }
 
     /// Nova's AI, but every interceptor sits as it is.
+    /// Nova's AI, with escorts on the original's formation
+    /// ([`RuleKey::EscortAi`] by the engine, not the default) and
+    /// interceptors sitting still.
     fn sitting_ai() -> NovaAi {
-        NovaAi::default().with(AiType::Interceptor, Rc::new(Sitting))
+        NovaAi::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::EscortAi, RuleSource::Engine),
+        )
+        .with(AiType::Interceptor, Rc::new(Sitting))
     }
 
     /// Adds a pirate interceptor at (`x`, `y`) with `goal`.

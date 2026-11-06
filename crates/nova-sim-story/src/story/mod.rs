@@ -3989,14 +3989,15 @@
 pub mod day;
 pub mod dispatch;
 pub mod galaxy;
+mod galaxy_links;
 pub mod rebuild;
 pub mod sprite_pool;
 pub mod wreck;
 
 pub use dispatch::DuplicateSubscription;
 pub use galaxy::{
-    Countdown, GalaxyOverlay, HiddenMove, NebulaOverride, OverlaidGalaxy, StellarOverride,
-    SystemOverride, Whereabouts, listers_of,
+    Countdown, GalaxyOverlay, HiddenMove, LinkSource, NebulaOverride, OverlaidGalaxy,
+    StellarOverride, SystemOverride, Whereabouts, listers_of,
 };
 pub use rebuild::DrawnSheet;
 

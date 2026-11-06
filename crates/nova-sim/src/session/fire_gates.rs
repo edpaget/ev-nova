@@ -452,3 +452,38 @@ fn a_dogfighter_leads_with_a_pick_it_does_not_carry_by_the_sessions_weapon_recor
     // straight down before `_AIDispatch` (@0x4429d) reads it.
     assert_eq!(dogfight_heading(WeaponId(140), false), Some(178));
 }
+
+#[test]
+fn the_traffic_steps_and_spawns_in_worlds_holding_the_rulebooks_gate_readings() {
+    let catalog = armed();
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        let rules = [
+            RuleKey::DestinationReach,
+            RuleKey::ArrivalsThroughGates,
+            RuleKey::DeparturesThroughGates,
+        ]
+        .into_iter()
+        .fold(Rulebook::default(), |rules, key| {
+            rules.with_override(key, source)
+        });
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let readings = |world: &crate::traffic::World| {
+            (
+                world.destination_reach,
+                world.arrivals_through_gates,
+                world.departures_through_gates,
+            )
+        };
+        assert_eq!(readings(&session.world()), (source, source, source));
+        let entered = session.world_in(session.system());
+        assert_eq!(readings(&entered), (source, source, source));
+        let stellars = entered.stellars();
+        assert_eq!(
+            (stellars.rules.reach, stellars.rules.through_gates),
+            (source, source)
+        );
+        let mut flown = None;
+        session.step_traffic(|_, world| flown = Some(readings(&world)));
+        assert_eq!(flown, Some((source, source, source)));
+    }
+}

@@ -66,6 +66,15 @@
 //!   day's, so asked again they answer from the rolls kept. A ship's name
 //!   prompt alone draws its default name afresh at each ask and keeps
 //!   nothing ([`ScreenAsk::draws_afresh`]).
+//! - **A press the flight asks the view to make is a frame field**: the
+//!   gate autopilot's L
+//!   ([`FlightFrame::gate_pilot`](nova_sim::flight_frame::FlightFrame::gate_pilot)),
+//!   read after each frame's steps, which the view sends as the land
+//!   key's own `FlightCommand::Land`, unlabelled: the flight counts it as
+//!   the autopilot's while its ask stands (`FlightView::gate_pilot_frame`).
+//!   J's [`Answer::GatePilot`](nova_sim::flight_frame::Answer::GatePilot)
+//!   says the autopilot engaged, and `fixture::check_contract` checks the
+//!   frame after it shows the autopilot.
 //! - **A fact the router reads between commands is a frame field**:
 //!   whether Recharge is enabled
 //!   ([`FlightFrame::recharge_enabled`](nova_sim::flight_frame::FlightFrame::recharge_enabled))

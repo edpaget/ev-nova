@@ -23,6 +23,17 @@
 //! current system (`_DrawMap` @0xebd8-0xed31), and selects it as it
 //! opens ([`Session::map_preselection`], `_DoSystemMap` @0x124ac-0x124ff).
 //!
+//! **Gate lanes.** By [`RuleKey::GateLanes`]' other reading, the new
+//! game's, the current system's "Con slots" below are the systems its
+//! gate lanes reach, each once
+//! ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)),
+//! and a slot noted (+0x6c, `travel::of_slot`) is a lane's index: Hyper
+//! Select, the map's Tab cycle and the floating map step through the
+//! lanes, the cue selects a first hop a lane reaches, and J's selection is
+//! none, as no lane is a hyperspace link, so J refuses silently with a
+//! selection. A hypergate's exit along the course cues its next hop by
+//! [`RuleKey::GateCourse`]'s other reading (see the `course` module).
+//!
 //! **Setters** (mode / selection):
 //!
 //! - Flight start, a new or a loaded pilot, and the escape pod's rescue
@@ -68,6 +79,13 @@
 //!   a click on none is silent.
 //! - The land key ([`Session::land`], @0x6a8ed-0x6a932): with no stellar
 //!   selected in mode 2, mode 2 with the nearest, in silence.
+//! - The gate autopilot, by [`RuleKey::GateAutopilot`]'s other reading,
+//!   which has no original: as J engages it and at each step while it
+//!   flies, mode 2 with the gate it flies to, the brackets' fly-in
+//!   started, as the land key's own pick selects, and only when the nav
+//!   doesn't hold that gate already, so the dock request stands (see the
+//!   `gate_pilot` module). A stellar key's or a click's selection is
+//!   overridden at the next step.
 //! - Landing writes neither: the ship lands in mode 2, the land key
 //!   having selected first.
 //! - The take-off's tail ([`Session::take_off`], `_HandlePlayerDockRequest`
@@ -229,6 +247,7 @@ use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
 use crate::pilot::Pilot;
 use crate::sound::SimSound;
+use crate::story::LinkSource;
 use crate::{RuleKey, RuleSource, StellarPick};
 
 /// How many Con slots a `sÿst` has, `Con1-Con16`: the slots the
@@ -665,7 +684,15 @@ impl Chart {
     /// J also takes a selection with no slot that the rule's jumps hold,
     /// a system linking to this one alone; by the engine's rule those
     /// jumps all stand in a slot already.
+    ///
+    /// By [`RuleKey::GateLanes`]' other reading none: the links are gate
+    /// lanes, and none is a hyperspace link, so J refuses with no
+    /// destination, silently with a selection, and never starts a
+    /// pre-jump.
     pub(super) fn jump_selection(&self, pilot: &Pilot, setup: &Setup) -> Option<SystemId> {
+        if self.galaxy.link_source() == LinkSource::Gates {
+            return None;
+        }
         if !matches!(self.nav, NavMode::Hyperspace(Some(_))) {
             return None;
         }
@@ -968,9 +995,14 @@ impl Chart {
     /// (`_FindActiveCoLocatedSystem` @0x6a21f). Each is the raw slot, not
     /// the system standing for it: its box is at the slot's own position
     /// (@0x6a25c-0x6a2af), and mode 3 selects it raw (@0x6a719-0x6a727).
+    ///
+    /// By [`RuleKey::GateLanes`]' other reading the slots are the systems
+    /// the current system's gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)),
+    /// as for every reader of the slots below.
     fn floating_links<'a>(&'a self, pilot: &Pilot) -> impl Iterator<Item = SystemId> + 'a {
         self.galaxy
-            .con_slots(pilot.system)
+            .link_slots(pilot.system)
             .iter()
             .copied()
             .filter(|&slot| self.flags(slot))
@@ -1005,7 +1037,7 @@ impl Chart {
     /// system `test` passes, empty slots (−1) passed over.
     fn slot_at(&self, pilot: &Pilot, test: impl Fn(SystemId) -> bool) -> Option<usize> {
         self.galaxy
-            .con_slots(pilot.system)
+            .link_slots(pilot.system)
             .iter()
             .take(CON_SLOTS)
             .position(|&slot| self.galaxy.exists(slot) && test(slot))
@@ -1095,7 +1127,7 @@ impl Chart {
     /// started from is the last one tried (`_MapFilter` @0x13f77-0x13f9b).
     fn next_link_slot(&self, pilot: &Pilot, from: i32) -> Option<(usize, SystemId)> {
         let start = usize::try_from(from + 1).unwrap_or(CON_SLOTS - 1);
-        let slots = self.galaxy.con_slots(pilot.system);
+        let slots = self.galaxy.link_slots(pilot.system);
         let slots = &slots[..slots.len().min(CON_SLOTS)];
         (start..slots.len()).chain(0..start).find_map(|at| {
             slots

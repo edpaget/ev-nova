@@ -142,6 +142,20 @@ pub mod flags {
     pub const ONLY_WHEN_DESTROYED: u32 = 0x80;
 }
 
+/// The Bible's gate bits of [`Stellar::flags2`], the one place they are
+/// spelled out: the new game's mapping (`nova_data::new_game`) sets them,
+/// and `nova_sim_state::landing::GateKind` reads them, the hypergate bit
+/// first, as the original does.
+pub mod flags2 {
+    /// A hypergate: landing on it opens the hypergate map, whose pick
+    /// leaves through the first of its `HyperLink1-8` (`spöb` IDs) whose
+    /// system is the one picked.
+    pub const HYPERGATE: u16 = 0x1000;
+    /// A wormhole: entering it leads through one of its `HyperLink1-8`
+    /// (`spöb` IDs) at random.
+    pub const WORMHOLE: u16 = 0x2000;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +177,11 @@ mod tests {
             ],
             [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80]
         );
+    }
+
+    #[test]
+    fn the_gate_bits_are_the_bibles() {
+        assert_eq!([flags2::HYPERGATE, flags2::WORMHOLE], [0x1000, 0x2000]);
     }
 
     #[test]

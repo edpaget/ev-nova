@@ -643,6 +643,22 @@ pub struct Character {
     pub storylines: Vec<Id>,
 }
 
+/// A start (`starts/<id>.md`): where and in what a new pilot begins. The
+/// game offers the first start, in id order.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Start {
+    /// Display name (a placeholder).
+    pub name: String,
+    /// The system the pilot starts in (`systems/<id>.md`).
+    pub system: Id,
+    /// The ship the pilot starts in (`ships/<id>.md`): a hull, with no
+    /// `base` and no `mods`.
+    pub ship: Id,
+    /// The credits the pilot starts with.
+    pub cash: u32,
+}
+
 /// A kind of content file: one folder of the data folder, one file per item.
 pub trait Kind {
     /// The kind's name in messages, e.g. `system`.
@@ -671,6 +687,7 @@ kinds! {
     Mission => "mission" in "missions",
     News => "news" in "news",
     Character => "character" in "characters",
+    Start => "start" in "starts",
 }
 
 #[cfg(test)]
@@ -714,6 +731,26 @@ mod tests {
         assert_eq!(point.stability, Stability::Unstable);
         assert_eq!(point.owner, None);
         assert!(!point.one_way);
+    }
+
+    #[test]
+    fn a_start_reads_its_name_system_ship_and_cash() {
+        let start: Start =
+            read("name: Dock hand\nsystem: marrow\nship: shuttle\ncash: 5000\n").unwrap();
+        assert_eq!(start.name, "Dock hand");
+        assert_eq!(start.system.as_str(), "marrow");
+        assert_eq!(start.ship.as_str(), "shuttle");
+        assert_eq!(start.cash, 5000);
+    }
+
+    #[test]
+    fn a_start_refuses_a_field_it_does_not_have() {
+        let error =
+            read::<Start>("name: Dock hand\nsystem: marrow\nship: shuttle\ncash: 5000\ndate: 1\n")
+                .unwrap_err();
+        assert!(error.contains("unknown field `date`"), "{error}");
+        let error = read::<Start>("name: Dock hand\nsystem: marrow\nship: shuttle\n").unwrap_err();
+        assert!(error.contains("missing field `cash`"), "{error}");
     }
 
     /// Every name the schema gives `T`'s values.

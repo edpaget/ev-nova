@@ -300,6 +300,32 @@ mod tests {
     }
 
     #[test]
+    fn the_new_game_s_readings_reach_its_rulebook_and_an_override_still_moves_one() {
+        let readings = crate::ruleset::Ruleset::NewGame.profile().readings;
+        let (rulebook, warnings) = ruleset_rulebook(None, readings);
+        assert_eq!(warnings, Vec::<String>::new());
+        for &(key, source) in readings {
+            assert_eq!(rulebook.source_for(key), source, "{key:?}");
+            assert_ne!(source, Rulebook::default().source_for(key), "{key:?}");
+        }
+        let mut store = MemorySettings::holding(
+            r#"{"rules": "engine", "rule_overrides": {"arrivals_through_gates": "engine"}}"#,
+        );
+        let (rulebook, warnings) = ruleset_rulebook(Some(&mut store), readings);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook.source_for(RuleKey::ArrivalsThroughGates),
+            RuleSource::Engine,
+            "the override"
+        );
+        assert_eq!(
+            rulebook.source_for(RuleKey::DestinationReach),
+            RuleSource::Bible,
+            "\"rules\" moves no pinned reading"
+        );
+    }
+
+    #[test]
     fn a_ruleset_s_readings_leave_the_values_alone() {
         let (rulebook, warnings) = pinned_of(r#"{"rule_values": {"thrust_divisor": 3000}}"#);
         assert_eq!(warnings, Vec::<String>::new());

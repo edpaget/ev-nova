@@ -5,18 +5,31 @@
 //! and the frames drawn until the screen has settled ([`Frames::settle`],
 //! [`Frames::settle_until`]).
 //!
-//! This module is the only place `NOVA_DATA` is read. The game data is
-//! copyrighted and never committed, so each stock test asks [`nova_data`] for
-//! the `Nova Files` directory and skips, passing, when it is unset.
+//! This module is the only place `NOVA_DATA` and `GAME_DATA` are read. The
+//! game data is copyrighted and never committed, so each stock test asks
+//! [`nova_data`] for the `Nova Files` directory and skips, passing, when it
+//! is unset. The new game's sample lives in the game-bible checkout, so the
+//! sample tests ask [`game_data`] for its `data` folder and skip the same
+//! way.
 
 use std::path::PathBuf;
 
 /// The `Nova Files` directory named by `NOVA_DATA`, or `None` (after printing
 /// a skip message) when it is unset.
 pub fn nova_data() -> Option<PathBuf> {
-    let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
+    env_dir("NOVA_DATA")
+}
+
+/// The new game's data folder named by `GAME_DATA` (game-bible's `data`),
+/// or `None` (after printing a skip message) when it is unset.
+pub fn game_data() -> Option<PathBuf> {
+    env_dir("GAME_DATA")
+}
+
+fn env_dir(var: &str) -> Option<PathBuf> {
+    let dir = std::env::var_os(var).map(PathBuf::from);
     if dir.is_none() {
-        eprintln!("skipping: NOVA_DATA not set");
+        eprintln!("skipping: {var} not set");
     }
     dir
 }

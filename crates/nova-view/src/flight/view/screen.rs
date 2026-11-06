@@ -273,6 +273,7 @@ impl<
         // From here the frame's own writes come before the held lines.
         self.writing_in_frame = true;
         self.settle_faded_keys(jumping);
+        self.gate_pilot_frame();
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();

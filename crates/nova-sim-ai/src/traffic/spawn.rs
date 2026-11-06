@@ -267,7 +267,7 @@ use crate::market::Good;
 use crate::rulebook::RuleSource;
 use crate::traffic::ShipGoal;
 use crate::traffic::emerge::{
-    EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
+    EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, EmergeRules, emerge_stellar,
 };
 use crate::traffic::npc::{AiType, MissionMark};
 use crate::traffic::spawn_ai::SpawnAi;
@@ -376,6 +376,9 @@ pub struct Stellars<'a> {
     pub sites: &'a [LandingSite],
     /// Every government and their relations.
     pub govts: &'a Governments,
+    /// The readings the pick goes by: which gates are in reach, and
+    /// whether every arrival with a usable gate comes out of one.
+    pub rules: EmergeRules,
 }
 
 /// No governments at all.
@@ -386,6 +389,10 @@ impl Stellars<'static> {
     pub const NONE: Self = Self {
         sites: &[],
         govts: &NO_GOVERNMENTS,
+        rules: EmergeRules {
+            reach: RuleSource::Engine,
+            through_gates: RuleSource::Engine,
+        },
     };
 }
 
@@ -1237,7 +1244,13 @@ pub fn fleet(
         return;
     }
     let lead = out.len();
-    let (state, entry) = match emerge_stellar(record.govt, stellars.sites, stellars.govts, chance) {
+    let (state, entry) = match emerge_stellar(
+        record.govt,
+        stellars.sites,
+        stellars.govts,
+        stellars.rules,
+        chance,
+    ) {
         Some(site) => emerging(site, chance),
         None => (hyperspace_entry(chance), Entry::JumpingIn),
     };
@@ -1276,20 +1289,7 @@ pub fn fleet(
             continue;
         };
         for _ in 0..count {
-            let placed = escort_offset(&state, chance);
-            let (placed, escort_entry) = match entry {
-                Entry::Emerging { gate, .. } => (
-                    state,
-                    Entry::Emerging {
-                        ticks_left: EMERGE_TICKS
-                            + crate::traffic::ai_wait::ticks(
-                                ESCORT_EMERGE_EXTRA + chance.below(ESCORT_EMERGE_SPREAD),
-                            ),
-                        gate,
-                    },
-                ),
-                Entry::Placed | Entry::JumpingIn => (placed, entry),
-            };
+            let (placed, escort_entry) = escort_entry(&state, entry, chance);
             out.push(NewShip {
                 ship: escort.ship,
                 govt: record.govt,
@@ -1315,6 +1315,32 @@ pub fn fleet(
                 clears_mark: false,
             });
         }
+    }
+}
+
+/// Where a fleet's escort comes in, and how, beside a lead at `state`
+/// coming in by `entry`: its spread from the lead is drawn either way; out
+/// of the lead's gate it waits there, its emergence drawn a little longer
+/// than the lead's, and otherwise it comes in at the spread, as the lead
+/// does.
+fn escort_entry(
+    state: &ShipState,
+    entry: Entry,
+    chance: &mut (impl Chance + ?Sized),
+) -> (ShipState, Entry) {
+    let placed = escort_offset(state, chance);
+    match entry {
+        Entry::Emerging { gate, .. } => (
+            *state,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS
+                    + crate::traffic::ai_wait::ticks(
+                        ESCORT_EMERGE_EXTRA + chance.below(ESCORT_EMERGE_SPREAD),
+                    ),
+                gate,
+            },
+        ),
+        Entry::Placed | Entry::JumpingIn => (placed, entry),
     }
 }
 
@@ -1450,7 +1476,7 @@ fn arrival(
     stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
 ) -> (ShipState, Entry) {
-    match emerge_stellar(govt, stellars.sites, stellars.govts, chance) {
+    match emerge_stellar(govt, stellars.sites, stellars.govts, stellars.rules, chance) {
         Some(site) => emerging(site, chance),
         None => (jump_in, Entry::JumpingIn),
     }
@@ -4675,6 +4701,7 @@ mod tests {
         Stellars {
             sites,
             govts: &PLAIN,
+            rules: EmergeRules::default(),
         }
     }
 
@@ -4762,6 +4789,7 @@ mod tests {
         let stellars = Stellars {
             sites: &sites,
             govts: &govts,
+            rules: EmergeRules::default(),
         };
         let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 0, 0]);
         let ships = arrivals(&table(), 0, &mut nobody(), stellars, &mut chance);
@@ -4858,6 +4886,44 @@ mod tests {
         );
         assert_eq!(&chance.asked[..2], [2, 360]);
         assert!(out.iter().all(|ship| ship.state == at_gate(200.0)));
+    }
+
+    #[test]
+    fn through_gates_a_fleet_whose_draw_gave_the_edge_comes_out_of_the_gate_escorts_and_all() {
+        // The engine's draw 0 is the planet: the edge. By the other reading
+        // of `ArrivalsThroughGates` the one draw is over the gate alone.
+        let sites = gated(90);
+        let through = Stellars {
+            rules: EmergeRules {
+                reach: RuleSource::Engine,
+                through_gates: RuleSource::Bible,
+            },
+            ..among(&sites)
+        };
+        let mut chance = Draws::of(&[0, 0, 0, 0, 7, 0, 299, 299, 14, 0]);
+        let mut out = Vec::new();
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            through,
+            FleetCall::default(),
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(chance.asked[0], 1, "over the one gate");
+        assert_eq!(out.len(), 3);
+        assert!(
+            out.iter().all(|ship| matches!(
+                ship.entry,
+                Entry::Emerging {
+                    gate: StellarId(129),
+                    ..
+                }
+            )),
+            "{out:?}"
+        );
+        assert!(out.iter().all(|ship| ship.state == at_gate(90.0)));
     }
 
     #[test]
@@ -4999,6 +5065,7 @@ mod tests {
         let at_war = Stellars {
             sites: &hostile,
             govts: &govts,
+            rules: EmergeRules::default(),
         };
         let (dude_ship, draws) = scenarios()[0];
         assert_eq!(

@@ -994,10 +994,15 @@ pub(super) mod tests {
 
     /// Nova's AI, but every interceptor and wimpy trader sits as it is:
     /// the pirates and the traders here.
+    /// Nova's AI, with escorts on the original's formation
+    /// ([`RuleKey::EscortAi`] by the engine, not the default) and
+    /// interceptors and wimpy traders sitting still.
     pub(in crate::session) fn sitting_ai() -> NovaAi {
-        NovaAi::default()
-            .with(AiType::Interceptor, Rc::new(Sitting))
-            .with(AiType::WimpyTrader, Rc::new(Sitting))
+        NovaAi::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::EscortAi, RuleSource::Engine),
+        )
+        .with(AiType::Interceptor, Rc::new(Sitting))
+        .with(AiType::WimpyTrader, Rc::new(Sitting))
     }
 
     /// Adds a pirate interceptor, a medium ship, at (`x`, `y`), idle.
@@ -3960,6 +3965,7 @@ pub(super) mod tests {
             flags2: HYPERGATE,
             links,
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         };
         let mut to = [None; 8];
         to[0] = Some(StellarId(310));
