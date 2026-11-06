@@ -2494,6 +2494,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
     fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
         (**self).rle_sheet(sheet)
     }
+
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        (**self).stellar_dialogs()
+    }
 }
 
 /// A shared catalog is a catalog, so the sim and the views can read the
@@ -2661,6 +2665,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
         (**self).rle_sheet(sheet)
+    }
+
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        (**self).stellar_dialogs()
     }
 }
 
@@ -3291,6 +3299,15 @@ mod tests {
                 starts: vec![Some(0)],
             })
         }
+
+        /// Stellar 128 talks, from `greet`.
+        fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+            crate::dialogs::StellarDialogs::default().with(
+                StellarId(128),
+                std::sync::Arc::from("{story}"),
+                "greet",
+            )
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -3347,6 +3364,7 @@ mod tests {
                 "{:?}",
                 catalog.landing_site(StellarId(140)).map(|site| site.id)
             ),
+            format!("{:?}", catalog.stellar_dialogs().place(StellarId(128))),
         ]
     }
 
@@ -3517,6 +3535,22 @@ mod tests {
             [(SystemId(130), first)],
             "131 lists none and 132 doesn't exist: neither is asked, as the \
              star map isn't read"
+        );
+    }
+
+    #[test]
+    fn borrowed_and_shared_catalogs_forward_the_stellar_conversations() {
+        let talking = r#"Some(("{story}", "greet"))"#;
+        assert_eq!(reads(One)[46], talking);
+        assert_eq!(
+            reads(&One)[46],
+            talking,
+            "forwarded, not the default's none"
+        );
+        assert_eq!(
+            reads(Rc::new(One))[46],
+            talking,
+            "forwarded, not the default's none"
         );
     }
 
