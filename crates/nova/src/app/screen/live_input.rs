@@ -318,7 +318,7 @@ mod tests {
         let (j, one, two) = (Key::KeyJ, Key::Digit1, Key::Digit2);
         let mut live = LiveInput::default();
         live.note(&key(j, true));
-        assert_eq!(down_before(&live), [], "not polled yet");
+        assert_eq!(down_before(&live), [] as [Key; 0], "not polled yet");
         live.poll();
         live.note(&key(j, false));
         live.note(&key(one, true));
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(down_before(&live), [j], "kept");
         live.settle(FlightInput::Back);
         live.poll();
-        assert_eq!(down_before(&live), [], "the next poll's");
+        assert_eq!(down_before(&live), [] as [Key; 0], "the next poll's");
     }
 
     #[test]
@@ -353,7 +353,7 @@ mod tests {
         live.note(&key(Key::ArrowUp, true));
         live.note(&button(true));
         live.forget();
-        assert_eq!(down(&live), []);
+        assert_eq!(down(&live), [] as [Key; 0]);
         assert!(!live.button);
         assert!(live.settle(FlightInput::Back), "still handed back, empty");
     }

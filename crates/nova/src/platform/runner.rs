@@ -7,7 +7,7 @@
 //! quit and Preferences events the system sends (the Dock's Quit, logout,
 //! restart, shutdown, `osascript`'s `quit app`, and Sparkle's quit to
 //! install an update), comes back through the event loop as a
-//! [`LoopEvent::Menu`] user event, which the app takes as
+//! [`LoopEvent::Menu`], which the app takes as
 //! [`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`], and after
 //! every event the menu bar is told what the app now offers (`MenuSync`).
 //! The quit event is the menu's Quit, so it quits as Command-Q does,
@@ -22,16 +22,25 @@
 //!
 //! WinSparkle asks the game to quit, before its installer replaces
 //! `nova.exe`, from a thread of its own: the request comes back through
-//! the event loop's proxy as [`LoopEvent::UpdaterQuit`], which the app
-//! takes on the main thread as the Quit command.
+//! the event loop as [`LoopEvent::UpdaterQuit`], which the app takes on the
+//! main thread as the Quit command.
 //!
-//! The event loop's end (`ApplicationHandler::exiting`) is the backstop
-//! for a quit that never reached the game: on macOS a `terminate:` sent
-//! before the handlers are installed, or by something else, which ends the
-//! process from `applicationWillTerminate:`. It tells the app to quit
-//! ([`App::exiting`]), so the pilot is saved, and prints what the app
-//! reports. winit ends every run through it, so it follows the game's own
-//! quits too, and then does nothing more.
+//! Every [`LoopEvent`] comes through the loop events' channel
+//! (`platform::loop_sender`), as winit 0.31's proxy only wakes the loop:
+//! the runner drains it in `proxy_wake_up`, and again in `about_to_wait`,
+//! since Windows can lose a wake-up (winit#3687).
+//!
+//! The window and its surface open in `can_create_surfaces`, once.
+//!
+//! The runner's drop is the backstop for a quit that never reached the
+//! game: on macOS a `terminate:` sent before the handlers are installed,
+//! or by something else, which ends the process from
+//! `applicationWillTerminate:`, where winit drops the handler. It tells
+//! the app to quit ([`App::exiting`]), so the pilot is saved, and prints
+//! what the app reports. Every run ends in it, after the loop returns, so
+//! it follows the game's own quits too, and then does nothing more. (winit
+//! 0.31 has no `exiting` callback; rdm:task/quit-from-app-menu-may-skip-save
+//! tracks the quits that bypass the game.)
 //!
 //! With [`Runner::with_audio`], the app it opens plays sound, with
 //! [`Runner::with_settings`] it saves the player's settings, and with
@@ -72,16 +81,17 @@ use nova_render::{FontFaces, ImageSource, Upscaler};
 use winit::application::ApplicationHandler;
 use winit::error::EventLoopError;
 use winit::event::WindowEvent as WinitEvent;
-#[cfg(target_os = "macos")]
-use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowAttributes, WindowId};
 
+use super::loop_sender::LoopEvents;
+#[cfg(target_os = "macos")]
+use super::loop_sender::LoopSender;
 use super::window::WinitWindow;
 use super::{dialogs, text_event, window_events};
 #[cfg(target_os = "macos")]
 use crate::app::MenuSync;
-use crate::app::{App, AppScreen, Control, Handled, LoopEvent, UpdaterSource, WindowEvent, choose};
+use crate::app::{App, AppScreen, Control, Handled, UpdaterSource, WindowEvent, choose};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::{DevTools, overlay_feed};
 use crate::exit::OpenFailure;
@@ -108,10 +118,14 @@ struct Running<S> {
 }
 
 /// Runs the app in a winit event loop.
-pub struct Runner<S> {
+pub struct Runner<S: ImageSource> {
     pending: Option<(S, AppScreen, FontFaces)>,
     running: Option<Running<S>>,
-    failure: Option<OpenFailure>,
+    /// Why the window could not be opened, shared with `main`, which reads
+    /// it once the loop, which owns the runner, has ended.
+    failure: Rc<RefCell<Option<OpenFailure>>>,
+    /// The loop events sent and not yet taken; none until given.
+    loop_events: Option<LoopEvents>,
     start: Instant,
     #[cfg(feature = "dev-tools")]
     dev_catalog: Option<Rc<GameData>>,
@@ -123,7 +137,7 @@ pub struct Runner<S> {
     diagnostics: Option<Box<dyn Write>>,
     /// Where the menu bar sends its picks, until it is installed.
     #[cfg(target_os = "macos")]
-    menu_proxy: Option<EventLoopProxy<LoopEvent>>,
+    menu_sender: Option<LoopSender>,
     /// What the platform offers to update with, until the app is opened.
     updates: Option<Box<dyn UpdaterSource>>,
     /// The startup report, shared with `main`, which reports the run's
@@ -140,7 +154,8 @@ impl<S: ImageSource> Runner<S> {
         Self {
             pending: Some((images, screen, fonts)),
             running: None,
-            failure: None,
+            failure: Rc::default(),
+            loop_events: None,
             start: Instant::now(),
             #[cfg(feature = "dev-tools")]
             dev_catalog: None,
@@ -148,7 +163,7 @@ impl<S: ImageSource> Runner<S> {
             settings: None,
             diagnostics: None,
             #[cfg(target_os = "macos")]
-            menu_proxy: None,
+            menu_sender: None,
             updates: None,
             report: None,
             gamepads: None,
@@ -165,11 +180,19 @@ impl<S: ImageSource> Runner<S> {
     }
 
     /// The runner with the macOS menu bar: once the window opens, it
-    /// installs it, sending each pick through `proxy` as a user event.
+    /// installs it, sending each pick through `sender`.
     #[cfg(target_os = "macos")]
     #[must_use]
-    pub fn with_menu_proxy(mut self, proxy: EventLoopProxy<LoopEvent>) -> Self {
-        self.menu_proxy = Some(proxy);
+    pub fn with_menu_sender(mut self, sender: LoopSender) -> Self {
+        self.menu_sender = Some(sender);
+        self
+    }
+
+    /// The runner taking the loop events sent through `events`' channel:
+    /// the menu bar's picks, the Apple events and WinSparkle's quit.
+    #[must_use]
+    pub fn with_loop_events(mut self, events: LoopEvents) -> Self {
+        self.loop_events = Some(events);
         self
     }
 
@@ -223,10 +246,13 @@ impl<S: ImageSource> Runner<S> {
         self
     }
 
-    /// Why the window could not be opened, if it could not; the event loop
-    /// exits as soon as that happens.
-    pub fn open_failure(&self) -> Option<&OpenFailure> {
-        self.failure.as_ref()
+    /// Where the runner keeps why the window could not be opened, if it
+    /// could not; the event loop exits as soon as that happens. It is
+    /// shared, so `main` reads it after the loop, which takes the runner,
+    /// has ended and dropped it.
+    #[must_use]
+    pub fn failure_slot(&self) -> Rc<RefCell<Option<OpenFailure>>> {
+        Rc::clone(&self.failure)
     }
 }
 
@@ -251,12 +277,12 @@ fn gpu_failure(error: &InitError) -> OpenFailure {
 /// Opens the 1024x768-point, resizable "EV Nova" window and its surface,
 /// drawing text in `fonts`.
 fn open(
-    event_loop: &ActiveEventLoop,
+    event_loop: &dyn ActiveEventLoop,
     fonts: &FontFaces,
 ) -> Result<(WinitWindow, SurfaceGpu), OpenFailure> {
-    let attributes = Window::default_attributes()
+    let attributes = WindowAttributes::default()
         .with_title("EV Nova")
-        .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
+        .with_surface_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
         .with_resizable(true);
     #[cfg(windows)]
     let attributes = super::window::with_exe_icon(attributes);
@@ -267,11 +293,15 @@ fn open(
         target_os = "netbsd",
         target_os = "openbsd"
     ))]
-    let attributes = super::window::with_app_id(attributes);
-    let window = event_loop
-        .create_window(attributes)
-        .map_err(|error| OpenFailure::Window(error.to_string()))?;
-    let window = Arc::new(window);
+    let attributes = {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        super::window::with_app_id(attributes, event_loop.is_wayland())
+    };
+    let window: Arc<dyn Window> = Arc::from(
+        event_loop
+            .create_window(attributes)
+            .map_err(|error| OpenFailure::Window(error.to_string()))?,
+    );
     // Flight's world drawn natively until the app restores the Scaling the
     // settings choose (`App::restore_scaling`), which needs this device to
     // say which upscalers it can use.
@@ -285,23 +315,25 @@ fn open(
     Ok((WinitWindow(window), gpu))
 }
 
-/// The event loop the game runs on, carrying the menu bar's picks as user
-/// events.
+/// The event loop the game runs on.
 ///
-/// On macOS it has no winit menu. winit 0.30's
-/// (`platform_impl/macos/menu.rs`) gives its Quit item, Command-Q, the
+/// On macOS it has no winit menu. winit's (0.30's
+/// `platform_impl/macos/menu.rs`, 0.31's in winit-appkit) gives its Quit
+/// item, Command-Q, the
 /// action `terminate:`, which `AppKit` handles before the window sees the
 /// key: the process ends through `applicationWillTerminate:` with no close
 /// request and no key event, so the screen never hears of it and the
 /// pilot flying is not saved. The game's own menu bar comes from
-/// `nova_appkit` instead, installed in `resumed` once the window opens:
+/// `nova_appkit` instead, installed in `can_create_surfaces` once the
+/// window opens:
 /// its Quit sends the game's quit (Command-Q's, which saves), never
 /// `terminate:`. So do the Dock's Quit, logout and `osascript`'s `quit
 /// app`: their quit Apple event, which `AppKit` would answer with
 /// `terminate:`, is handled by `nova_appkit::AppleEvents`, installed with
 /// the menu bar, and sends the menu's Quit. A `terminate:` that still
-/// comes (a quit event before the handlers are installed) ends the loop
-/// through `ApplicationHandler::exiting`, which saves the pilot. A quit
+/// comes (a quit event before the handlers are installed) drops the
+/// runner in `applicationWillTerminate:`, and its drop saves the pilot. A
+/// quit
 /// event that arrives while an `AppKit` modal runs (the startup warnings
 /// sheet, a file dialog) is taken at once, but its command waits in the
 /// loop until the modal ends, as Command-Q's does. Before the loop runs,
@@ -309,8 +341,8 @@ fn open(
 /// (`nova::platform::dialogs`): a quit there cancels the panel and ends
 /// the launch, and they are dropped before the loop launches the app. It
 /// needs the OS, so no test runs it.
-pub fn event_loop() -> Result<EventLoop<LoopEvent>, EventLoopError> {
-    let mut builder = EventLoop::<LoopEvent>::with_user_event();
+pub fn event_loop() -> Result<EventLoop, EventLoopError> {
+    let mut builder = EventLoop::builder();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
@@ -319,8 +351,8 @@ pub fn event_loop() -> Result<EventLoop<LoopEvent>, EventLoopError> {
     builder.build()
 }
 
-impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl<S: ImageSource> ApplicationHandler for Runner<S> {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let Some((images, screen, fonts)) = self.pending.take() else {
             return;
         };
@@ -384,8 +416,8 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
                     window,
                 };
                 #[cfg(target_os = "macos")]
-                if let Some(proxy) = self.menu_proxy.take() {
-                    for warning in running.install_menu(&proxy) {
+                if let Some(sender) = self.menu_sender.take() {
+                    for warning in running.install_menu(&sender) {
                         startup_warning(self.report.as_ref(), &warning);
                     }
                 }
@@ -393,13 +425,13 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
                 self.running = Some(running);
             }
             Err(failure) => {
-                self.failure = Some(failure);
+                *self.failure.borrow_mut() = Some(failure);
                 event_loop.exit();
             }
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WinitEvent) {
+    fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _id: WindowId, event: WinitEvent) {
         let Some(running) = &mut self.running else {
             return;
         };
@@ -438,37 +470,50 @@ impl<S: ImageSource> ApplicationHandler<LoopEvent> for Runner<S> {
         running.after_events(event_loop, exit);
     }
 
-    /// Once the window is up and the application running: the startup
-    /// warnings, if any, as a sheet over the window. The report gives them
-    /// once, and only without a terminal.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    /// Once the window is up and the application running: the loop events
+    /// whose wake-up was lost, then the startup warnings, if any, as a
+    /// sheet over the window. The report gives them once, and only without
+    /// a terminal.
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.take_loop_events(event_loop);
         if let (Some(running), Some(report)) = (&self.running, &self.report)
             && let Some(body) = report.borrow_mut().take_alert()
         {
-            dialogs::show_warnings(&running.window.0, &body);
+            dialogs::show_warnings(&*running.window.0, &body);
         }
     }
 
-    /// A menu bar pick or the updater's quit: the app takes it as its
-    /// window event ([`WindowEvent::Menu`] or
-    /// [`WindowEvent::CheckForUpdates`]).
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: LoopEvent) {
-        let Some(running) = &mut self.running else {
+    /// The loop was woken for the loop events sent.
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.take_loop_events(event_loop);
+    }
+}
+
+impl<S: ImageSource> Runner<S> {
+    /// Each loop event waiting (a menu bar pick, an Apple event or the
+    /// updater's quit): the app takes it as its window event
+    /// ([`WindowEvent::Menu`] or [`WindowEvent::CheckForUpdates`]).
+    fn take_loop_events(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let (Some(running), Some(events)) = (&mut self.running, &self.loop_events) else {
             return;
         };
-        let exit = running.handle(event.into()).control == Control::Exit;
-        running.after_events(event_loop, exit);
+        for event in events.drain() {
+            let exit = running.handle(event.into()).control == Control::Exit;
+            running.after_events(event_loop, exit);
+        }
     }
+}
 
-    /// The event loop is ending: tells the app, which quits unless it
-    /// already has (saving the pilot flying), and prints what it reports.
-    ///
-    /// winit ends every run here, after the game's own quit too, when the
-    /// app has nothing more to do. On macOS a `terminate:` that bypassed
-    /// the game also ends here, inside `applicationWillTerminate:`, and
-    /// `AppKit` ends the process right after: `main`'s report never runs,
-    /// so a failed save goes to stderr only.
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+/// The run is over: tells the app, which quits unless it already has
+/// (saving the pilot flying), and prints what it reports.
+///
+/// Every run ends here, after the game's own quit too, when the app has
+/// nothing more to do. On macOS a `terminate:` that bypassed the game
+/// also ends here, as winit-appkit drops the handler inside
+/// `applicationWillTerminate:`, and `AppKit` ends the process right after:
+/// `main`'s report never runs, so a failed save goes to stderr only.
+impl<S: ImageSource> Drop for Runner<S> {
+    fn drop(&mut self) {
         let Some(running) = &mut self.running else {
             return;
         };
@@ -481,7 +526,7 @@ impl<S: ImageSource> Running<S> {
     /// After the events of one winit event: prints the image failures and
     /// the warnings the app kept, tells the menu bar what the screen now
     /// offers, and ends the event loop when the app exits.
-    fn after_events(&mut self, event_loop: &ActiveEventLoop, exit: bool) {
+    fn after_events(&mut self, event_loop: &dyn ActiveEventLoop, exit: bool) {
         self.print_reports();
         self.sync_menu();
         if exit {
@@ -500,22 +545,22 @@ impl<S: ImageSource> Running<S> {
     }
 
     /// Installs the menu bar and the Apple event handlers, their picks and
-    /// events sent through `proxy`. One that can't be installed is a
+    /// events sent through `sender`. One that can't be installed is a
     /// warning, given back, and the game runs without it.
     #[cfg(target_os = "macos")]
-    fn install_menu(&mut self, proxy: &EventLoopProxy<LoopEvent>) -> Vec<String> {
+    fn install_menu(&mut self, sender: &LoopSender) -> Vec<String> {
         // A closed loop drops the pick: the app is exiting.
-        let send = |proxy: EventLoopProxy<LoopEvent>| {
+        let send = |sender: LoopSender| {
             move |command| {
-                let _ = proxy.send_event(LoopEvent::Menu(super::menu_bar::pick(command)));
+                sender.send(crate::app::LoopEvent::Menu(super::menu_bar::pick(command)));
             }
         };
         let mut warnings = Vec::new();
-        match nova_appkit::MenuBar::install("EV Nova", send(proxy.clone())) {
+        match nova_appkit::MenuBar::install("EV Nova", send(sender.clone())) {
             Ok(bar) => self.menu = Some((bar, MenuSync::new())),
             Err(error) => warnings.push(format!("nova: no menu bar: {error}")),
         }
-        match nova_appkit::AppleEvents::install(send(proxy.clone())) {
+        match nova_appkit::AppleEvents::install(send(sender.clone())) {
             Ok(events) => self.apple_events = Some(events),
             Err(error) => warnings.push(format!("nova: no quit event handler: {error}")),
         }
@@ -614,12 +659,15 @@ mod tests {
 
     #[test]
     fn the_runner_reports_the_failure_that_stopped_the_window_opening() {
-        let mut runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
-        assert_eq!(runner.open_failure(), None);
-        runner.failure = Some(OpenFailure::Window("no display".into()));
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
+        let slot = runner.failure_slot();
+        assert_eq!(*slot.borrow(), None);
+        *runner.failure.borrow_mut() = Some(OpenFailure::Window("no display".into()));
+        drop(runner);
         assert_eq!(
-            runner.open_failure(),
-            Some(&OpenFailure::Window("no display".into()))
+            *slot.borrow(),
+            Some(OpenFailure::Window("no display".into())),
+            "kept once the loop has dropped the runner"
         );
     }
 

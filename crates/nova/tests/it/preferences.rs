@@ -338,7 +338,7 @@ impl Harness {
     /// Presses Command+comma through winit's translation, as the player
     /// opens the Preferences in flight, where P is the player info.
     fn command_comma(&mut self) {
-        let super_key = PhysicalKey::Code(KeyCode::SuperLeft);
+        let super_key = PhysicalKey::Code(KeyCode::MetaLeft);
         self.send(platform::key_event(super_key, ElementState::Pressed, false));
         self.press_physical(KeyCode::Comma);
         self.send(platform::key_event(

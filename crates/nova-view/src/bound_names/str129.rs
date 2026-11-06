@@ -160,14 +160,17 @@ pub const STR_129: [&str; 128] = [
 
 /// Each key the Mac has a virtual key code for, with that code.
 ///
-/// The codes are winit's (`physicalkey_to_scancode` in its macOS backend),
-/// so a key reaches the game and is named at the same code; `nova`'s
-/// platform tests check the two agree. Where winit names no code, the
-/// code is Apple's (`HIToolbox/Events.h`): the ISO `§` key
-/// (`kVK_ISO_Section`), Caps Lock, Fn, the JIS keys and the context menu
-/// key. Three keys are left out, each a code another key holds: Help
-/// (0x72, winit's Insert), the keypad's Clear (0x47, which winit reports as
-/// Num Lock) and Mute (0x4a, winit's Volume Down).
+/// The codes are winit's (`physicalkey_to_scancode` in its macOS backend,
+/// winit-appkit since 0.31), so a key reaches the game and is named at the
+/// same code; `nova`'s platform tests check the two agree. They are
+/// Apple's (`HIToolbox/Events.h`) too, where Apple names the key: winit
+/// 0.31 gave the volume keys Apple's codes (Up 0x48, Down 0x49, Mute
+/// 0x4a) where 0.30 had Up and Down one code higher, and names the ISO
+/// `§` key (`kVK_ISO_Section`), Caps Lock, Fn, the JIS keys and the
+/// context menu key, which this table had at Apple's codes before winit
+/// did. Power, at 0x7f, is winit's alone. Two keys are left out, each a
+/// code another key holds: Help (0x72, winit's Insert) and the keypad's
+/// Clear (0x47, which winit reports as Num Lock).
 const MAC_CODES: &[(Key, u8)] = &[
     (Key::KeyA, 0x00),
     (Key::KeyS, 0x01),
@@ -237,8 +240,9 @@ const MAC_CODES: &[(Key, u8)] = &[
     (Key::NumpadMultiply, 0x43),
     (Key::NumpadAdd, 0x45),
     (Key::NumLock, 0x47),
-    (Key::AudioVolumeUp, 0x49),
-    (Key::AudioVolumeDown, 0x4a),
+    (Key::AudioVolumeUp, 0x48),
+    (Key::AudioVolumeDown, 0x49),
+    (Key::AudioVolumeMute, 0x4a),
     (Key::NumpadDivide, 0x4b),
     (Key::NumpadEnter, 0x4c),
     (Key::NumpadSubtract, 0x4e),
@@ -288,6 +292,7 @@ const MAC_CODES: &[(Key, u8)] = &[
     (Key::ArrowRight, 0x7c),
     (Key::ArrowDown, 0x7d),
     (Key::ArrowUp, 0x7e),
+    (Key::Power, 0x7f),
 ];
 
 /// The Mac virtual key code `key` sits at, or `None` for a key the Mac
@@ -336,6 +341,15 @@ mod tests {
     fn the_quote_is_curly_and_the_backquote_a_tilde() {
         assert_eq!(str129_name(Key::Quote), Some("\u{2019}"));
         assert_eq!(str129_name(Key::Backquote), Some("~"));
+    }
+
+    #[test]
+    fn the_volume_keys_and_power_are_at_winit_s_mac_codes() {
+        assert_eq!(mac_code(Key::AudioVolumeUp), Some(0x48));
+        assert_eq!(mac_code(Key::AudioVolumeDown), Some(0x49));
+        assert_eq!(mac_code(Key::AudioVolumeMute), Some(0x4a));
+        assert_eq!(mac_code(Key::Power), Some(0x7f));
+        assert_eq!(str129_name(Key::AudioVolumeMute), Some(""));
     }
 
     #[test]

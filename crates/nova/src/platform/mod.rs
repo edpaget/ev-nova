@@ -18,6 +18,7 @@ pub mod dialogs;
 pub mod gamepads;
 mod key_names;
 mod keyboard_access;
+mod loop_sender;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 mod runner;
@@ -28,6 +29,7 @@ mod window;
 pub use dialogs::Dialogs;
 pub use key_names::system_key_names;
 pub use keyboard_access::system_keyboard_access;
+pub use loop_sender::{LoopEvents, LoopSender, loop_channel};
 pub use runner::{Runner, event_loop};
 #[cfg(target_os = "macos")]
 pub use updater::SparkleSource;
@@ -45,7 +47,10 @@ pub const APP_ID: &str = env!("NOVA_APP_ID");
 
 use std::time::Duration;
 
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent as WinitEvent};
+use winit::event::{
+    ButtonSource, ElementState, MouseScrollDelta, PointerKind, PointerSource,
+    WindowEvent as WinitEvent,
+};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 use crate::app::{WheelDelta, WindowEvent, WindowPort};
@@ -57,7 +62,7 @@ use nova_view::{Key, MouseButton};
 /// not carry one.
 pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowEvent> {
     Some(match event {
-        WinitEvent::Resized(size) => WindowEvent::Resized {
+        WinitEvent::SurfaceResized(size) => WindowEvent::Resized {
             size_px: (size.width, size.height),
             scale_factor: window.scale_factor(),
         },
@@ -68,11 +73,29 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::KeyboardInput { event, .. } => {
             key_event(event.physical_key, event.state, event.repeat)
         }
-        WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
+        // winit 0.31 sends no move after the pointer comes in, where 0.30
+        // did: the game learns where it is from the enter.
+        WinitEvent::PointerMoved {
+            position,
+            source: PointerSource::Mouse,
+            ..
+        }
+        | WinitEvent::PointerEntered {
+            position,
+            kind: PointerKind::Mouse,
+            ..
+        } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
-        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
-        WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
+        WinitEvent::PointerLeft {
+            kind: PointerKind::Mouse,
+            ..
+        } => WindowEvent::PointerLeft,
+        WinitEvent::PointerButton {
+            state,
+            button: ButtonSource::Mouse(button),
+            ..
+        } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
         },
@@ -89,11 +112,13 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
 /// The vertical part of winit's wheel `delta`, toward the text's end for
 /// positive, or `None` for one only across. winit's positive y scrolls
 /// toward the top (the wheel turned away from the user, or a trackpad
-/// swiped down with natural scrolling), so the sign flips.
+/// swiped down with natural scrolling), so the sign flips. A kind of
+/// delta a later winit adds is `None` until the game reads it.
 fn wheel_delta(delta: MouseScrollDelta) -> Option<WheelDelta> {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => (y != 0.0).then(|| WheelDelta::Lines(-y)),
         MouseScrollDelta::PixelDelta(at) => (at.y != 0.0).then(|| WheelDelta::Px(-at.y)),
+        _ => None,
     }
 }
 
@@ -113,7 +138,7 @@ pub fn window_events(
 ) -> impl Iterator<Item = WindowEvent> {
     let fullscreen = matches!(
         event,
-        WinitEvent::Resized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
+        WinitEvent::SurfaceResized(_) | WinitEvent::Occluded(_) | WinitEvent::RedrawRequested
     )
     .then(|| WindowEvent::FullscreenChanged {
         fullscreen: window.is_fullscreen(),
@@ -162,7 +187,8 @@ macro_rules! same_names {
             IntlYen, KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL,
             KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
             Minus, Period, Quote, Semicolon, Slash, AltLeft, AltRight, Backspace, CapsLock,
-            ContextMenu, ControlLeft, ControlRight, Enter, ShiftLeft, ShiftRight, Space, Tab,
+            ContextMenu, ControlLeft, ControlRight, Enter, MetaLeft, MetaRight, ShiftLeft,
+            ShiftRight, Space, Tab,
             Convert, KanaMode, Lang1, Lang2, Lang3, Lang4, Lang5, NonConvert, Delete, End, Help,
             Home, Insert, PageDown, PageUp, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, NumLock,
             Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8,
@@ -190,9 +216,9 @@ macro_rules! same_names {
 /// (0x1B and 0x4E) together, `_HandlePlayer` polling both and `_MapFilter`
 /// comparing the key code with both, so no screen tells them apart. Every
 /// other key is its own key, the right modifiers and the keypad's Enter
-/// included. A key winit can't identify, and winit's legacy `Meta`,
-/// `Hyper` and `Turbo` (which `Key` has only as deprecated names), are
-/// [`Key::Unidentified`].
+/// included. A key winit can't identify, and the legacy `Hyper`, `Super`
+/// and `Turbo` (deprecated names in `Key`, which winit's `KeyCode` is),
+/// are [`Key::Unidentified`].
 ///
 /// Which screen reads which key, where it isn't plain:
 /// - Page Up and Page Down (Mac key codes 0x74 and 0x79, fn+Up and fn+Down
@@ -210,9 +236,9 @@ macro_rules! same_names {
 ///   Escape (`` ` ``) the developer tools' toggle, or flight's Nav Off
 ///   without them.
 /// - Caps Lock toggles double time on each press, an accepted difference
-///   from the original's following the lock state. winit 0.30.13 sends no
-///   Caps Lock key on macOS (its `key_to_modifier` maps Alt, Control,
-///   Super and Shift alone), so there it never arrives.
+///   from the original's following the lock state. winit 0.31.0-beta.4
+///   sends no Caps Lock key on macOS (winit-appkit's `key_to_modifier`
+///   maps Alt, Control, Meta and Shift alone), so there it never arrives.
 /// - The right Shift is its own key: flight and the map's click poll the
 ///   left Shift's key code alone, where the trade, the player info and
 ///   the map's Tab take either.
@@ -227,7 +253,7 @@ macro_rules! same_names {
 ///   key: macOS keeps it for itself unless "Use F1, F2, etc. keys as
 ///   standard function keys" is set, and fn-F12 reaches the game
 ///   otherwise.
-/// - Command is winit's Super (the Windows key off a Mac), so it arrives
+/// - Command is winit's Meta (the Windows key off a Mac), so it arrives
 ///   as `Key::MetaLeft` or `Key::MetaRight`. Flight polls the left
 ///   Command's key code alone, where the menus' chords take either.
 #[must_use]
@@ -237,13 +263,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         ($key:expr; $($name:ident),* $(,)?) => {
             match $key {
                 $(PhysicalKey::Code(KeyCode::$name) => Key::$name,)*
-                // Command, Super off a Mac.
-                PhysicalKey::Code(KeyCode::SuperLeft) => Key::MetaLeft,
-                PhysicalKey::Code(KeyCode::SuperRight) => Key::MetaRight,
                 // `-` or the keypad's: the map's zoom out.
                 PhysicalKey::Code(KeyCode::NumpadSubtract) => Key::Minus,
-                // winit's `KeyCode` is `#[non_exhaustive]`; its legacy
-                // `Meta`, `Hyper` and `Turbo` land here too.
+                // winit's `KeyCode` is `#[non_exhaustive]`; the legacy
+                // `Hyper`, `Super` and `Turbo` land here too.
                 _ => Key::Unidentified,
             }
         };
@@ -263,8 +286,6 @@ pub(crate) fn key_code(key: Key) -> Option<KeyCode> {
         ($key:expr; $($name:ident),* $(,)?) => {
             match $key {
                 $(Key::$name => Some(KeyCode::$name),)*
-                Key::MetaLeft => Some(KeyCode::SuperLeft),
-                Key::MetaRight => Some(KeyCode::SuperRight),
                 Key::NumpadSubtract => Some(KeyCode::NumpadSubtract),
                 _ => None,
             }
@@ -304,7 +325,7 @@ mod tests {
     use std::time::Duration;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use winit::event::{DeviceId, MouseButton as WinitButton, TouchPhase};
+    use winit::event::{MouseButton as WinitButton, ScrollSource, TouchPhase};
 
     use super::*;
 
@@ -384,8 +405,8 @@ mod tests {
             (KeyCode::KeyN, Key::KeyN),
             (KeyCode::KeyG, Key::KeyG),
             (KeyCode::KeyQ, Key::KeyQ),
-            (KeyCode::SuperLeft, Key::MetaLeft),
-            (KeyCode::SuperRight, Key::MetaRight),
+            (KeyCode::MetaLeft, Key::MetaLeft),
+            (KeyCode::MetaRight, Key::MetaRight),
             (KeyCode::CapsLock, Key::CapsLock),
             (KeyCode::Backquote, Key::Backquote),
             (KeyCode::Backslash, Key::Backslash),
@@ -413,7 +434,8 @@ mod tests {
         assert_eq!(map_key(unknown), Key::Unidentified);
         let mac = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::MacOS(0x7f));
         assert_eq!(map_key(mac), Key::Unidentified);
-        for legacy in [KeyCode::Meta, KeyCode::Hyper, KeyCode::Turbo] {
+        #[expect(deprecated, reason = "the legacy codes the test is about")]
+        for legacy in [KeyCode::Hyper, KeyCode::Super, KeyCode::Turbo] {
             assert_eq!(
                 map_key(PhysicalKey::Code(legacy)),
                 Key::Unidentified,
@@ -636,8 +658,8 @@ mod tests {
             KeyCode::AltRight,
             KeyCode::ControlLeft,
             KeyCode::ControlRight,
-            KeyCode::SuperLeft,
-            KeyCode::SuperRight,
+            KeyCode::MetaLeft,
+            KeyCode::MetaRight,
             KeyCode::Enter,
             KeyCode::Escape,
             KeyCode::Space,
@@ -690,8 +712,8 @@ mod tests {
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn every_key_map_key_names_maps_back_but_an_unidentified_one() {
-        assert_eq!(key_code(Key::MetaLeft), Some(KeyCode::SuperLeft));
-        assert_eq!(key_code(Key::MetaRight), Some(KeyCode::SuperRight));
+        assert_eq!(key_code(Key::MetaLeft), Some(KeyCode::MetaLeft));
+        assert_eq!(key_code(Key::MetaRight), Some(KeyCode::MetaRight));
         assert_eq!(key_code(Key::F35), Some(KeyCode::F35));
         assert_eq!(key_code(Key::ArrowUp), Some(KeyCode::ArrowUp));
         assert_eq!(key_code(Key::Unidentified), None);
@@ -703,10 +725,10 @@ mod tests {
     #[test]
     fn every_key_s_str_129_code_is_the_mac_code_winit_reports_it_at() {
         use winit::platform::scancode::PhysicalKeyExtScancode;
-        /// Every key `map_key` names alike, and the three it renames.
+        /// Every key `map_key` names alike, and the one it folds.
         macro_rules! every_key {
             ($_unused:tt; $($name:ident),* $(,)?) => {
-                [$(Key::$name,)* Key::MetaLeft, Key::MetaRight, Key::NumpadSubtract]
+                [$(Key::$name,)* Key::NumpadSubtract]
             };
         }
         let mut checked = 0;
@@ -732,8 +754,8 @@ mod tests {
             KeyCode::AltRight,
             KeyCode::ControlLeft,
             KeyCode::ControlRight,
-            KeyCode::SuperLeft,
-            KeyCode::SuperRight,
+            KeyCode::MetaLeft,
+            KeyCode::MetaRight,
         ];
         let others = [
             KeyCode::Enter,
@@ -876,7 +898,7 @@ mod tests {
             Key::AltLeft => KeyCode::AltLeft,
             Key::ControlLeft => KeyCode::ControlLeft,
             Key::ShiftLeft => KeyCode::ShiftLeft,
-            Key::MetaLeft => KeyCode::SuperLeft,
+            Key::MetaLeft => KeyCode::MetaLeft,
             Key::F1 => KeyCode::F1,
             Key::F2 => KeyCode::F2,
             Key::F3 => KeyCode::F3,
@@ -1023,9 +1045,9 @@ mod tests {
         (Key::ArrowUp, KeyCode::ArrowUp),
         (Key::ArrowDown, KeyCode::ArrowDown),
         // Flight's jettison key's modifier, and the menus' Command.
-        (Key::MetaLeft, KeyCode::SuperLeft),
+        (Key::MetaLeft, KeyCode::MetaLeft),
         // The menus' Command.
-        (Key::MetaRight, KeyCode::SuperRight),
+        (Key::MetaRight, KeyCode::MetaRight),
         // The player info's Tab goes back with Shift held.
         (Key::ShiftLeft, KeyCode::ShiftLeft),
         (Key::ShiftRight, KeyCode::ShiftRight),
@@ -1112,12 +1134,12 @@ mod tests {
         assert_eq!(map_button(WinitButton::Right), MouseButton::Right);
         assert_eq!(map_button(WinitButton::Middle), MouseButton::Middle);
         assert_eq!(map_button(WinitButton::Back), MouseButton::Other);
-        assert_eq!(map_button(WinitButton::Other(7)), MouseButton::Other);
+        assert_eq!(map_button(WinitButton::Button8), MouseButton::Other);
     }
 
     #[test]
     fn a_resize_carries_the_windows_scale_factor() {
-        let event = WinitEvent::Resized(PhysicalSize::new(1280, 960));
+        let event = WinitEvent::SurfaceResized(PhysicalSize::new(1280, 960));
         assert_eq!(
             translate(&event, &WINDOWED),
             Some(WindowEvent::Resized {
@@ -1134,33 +1156,43 @@ mod tests {
 
     /// The pointer moving to `(x, y)` in physical pixels.
     fn moved_to(x: f64, y: f64) -> Vec<WinitEvent> {
-        vec![WinitEvent::CursorMoved {
-            device_id: DeviceId::dummy(),
+        vec![WinitEvent::PointerMoved {
+            device_id: None,
             position: PhysicalPosition::new(x, y),
+            primary: true,
+            source: PointerSource::Mouse,
         }]
     }
 
-    /// The pointer coming into the window at `(x, y)`: winit 0.30 sends
-    /// `CursorEntered`, then a move there.
+    /// The pointer coming into the window at `(x, y)`: winit 0.31 sends
+    /// only `PointerEntered`, where 0.30 sent a move there after it.
     fn entered_at(x: f64, y: f64) -> Vec<WinitEvent> {
-        let entered = WinitEvent::CursorEntered {
-            device_id: DeviceId::dummy(),
-        };
-        [vec![entered], moved_to(x, y)].concat()
+        vec![WinitEvent::PointerEntered {
+            device_id: None,
+            position: PhysicalPosition::new(x, y),
+            primary: true,
+            kind: PointerKind::Mouse,
+        }]
     }
 
     /// The pointer leaving the window.
     fn left() -> Vec<WinitEvent> {
-        vec![WinitEvent::CursorLeft {
-            device_id: DeviceId::dummy(),
+        vec![WinitEvent::PointerLeft {
+            device_id: None,
+            position: None,
+            primary: true,
+            kind: PointerKind::Mouse,
         }]
     }
 
     fn mouse_input(button: WinitButton, state: ElementState) -> Vec<WinitEvent> {
-        vec![WinitEvent::MouseInput {
-            device_id: DeviceId::dummy(),
+        vec![WinitEvent::PointerButton {
+            device_id: None,
             state,
-            button,
+            position: PhysicalPosition::new(0.0, 0.0),
+            primary: true,
+            button: ButtonSource::Mouse(button),
+            is_macos_activation_click: false,
         }]
     }
 
@@ -1265,7 +1297,7 @@ mod tests {
                 pressed(WinitButton::Back),
                 released(WinitButton::Back),
                 pressed(WinitButton::Forward),
-                pressed(WinitButton::Other(7)),
+                pressed(WinitButton::Button8),
             ]),
             [
                 WindowEvent::PointerButton {
@@ -1290,9 +1322,10 @@ mod tests {
 
     fn wheel(delta: MouseScrollDelta) -> WinitEvent {
         WinitEvent::MouseWheel {
-            device_id: DeviceId::dummy(),
+            device_id: None,
             delta,
             phase: TouchPhase::Moved,
+            source: ScrollSource::Wheel,
         }
     }
 
@@ -1372,7 +1405,7 @@ mod tests {
 
     #[test]
     fn a_resize_reports_the_windows_fullscreen_state_before_the_new_size() {
-        let raw = WinitEvent::Resized(PhysicalSize::new(3024, 1964));
+        let raw = WinitEvent::SurfaceResized(PhysicalSize::new(3024, 1964));
         for fullscreen in [true, false] {
             assert_eq!(
                 events(&raw, fullscreen),

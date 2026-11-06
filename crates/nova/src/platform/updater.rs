@@ -24,9 +24,10 @@
 //! finding it beside `nova.exe`, and `winsparkle_source`, what Windows
 //! offers to update with: the core's [`crate::winsparkle::WinSparkleSource`]
 //! over the build's compiled-in feed, whose shutdown request sends
-//! `LoopEvent::UpdaterQuit` through the event loop's proxy. winit hands it
-//! to the app on the main thread, as the Quit command; a closed loop drops
-//! it, since the game is already exiting.
+//! `LoopEvent::UpdaterQuit` through the loop events' channel
+//! (`LoopSender`), which wakes the event loop. The runner hands it to the
+//! app on the main thread, as the Quit command; a closed loop drops it,
+//! since the game is already exiting.
 //!
 //! The DLL's calls start WinSparkle's checks and windows, so no unit test
 //! makes them: nova-win32's tests load the real DLL (`NOVA_WINSPARKLE_DLL`),
@@ -86,9 +87,9 @@ mod windows {
     use std::path::PathBuf;
 
     use nova_win32::{WINSPARKLE_FILE, WinSparkleDll};
-    use winit::event_loop::EventLoopProxy;
 
     use crate::app::LoopEvent;
+    use crate::platform::LoopSender;
     use crate::winsparkle::{
         BUILD_VERSION, FEED, PUBLIC_KEY, ShutdownRequest, WinSparkleApi, WinSparkleConfig,
         WinSparkleLoader, WinSparkleSource,
@@ -164,9 +165,9 @@ mod windows {
     }
 
     /// WinSparkle beside `nova.exe`, over the feed this build compiled in,
-    /// its shutdown request sent through `proxy`.
+    /// its shutdown request sent through `sender`.
     #[must_use]
-    pub fn winsparkle_source(proxy: EventLoopProxy<LoopEvent>) -> WinSparkleSource<DllLoader> {
+    pub fn winsparkle_source(sender: LoopSender) -> WinSparkleSource<DllLoader> {
         let config =
             WinSparkleConfig::new(FEED, PUBLIC_KEY, BUILD_VERSION, env!("CARGO_PKG_VERSION"));
         WinSparkleSource::new(
@@ -174,7 +175,7 @@ mod windows {
             DllLoader::beside_exe(),
             Box::new(move || {
                 // A closed loop drops it: the game is already exiting.
-                let _ = proxy.send_event(LoopEvent::UpdaterQuit);
+                sender.send(LoopEvent::UpdaterQuit);
             }),
         )
     }

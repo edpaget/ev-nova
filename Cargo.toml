@@ -84,7 +84,12 @@ glyphon = "0.12.0"
 # directions: the versions swash 0.2.10 (under glyphon) already locks.
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 zeno = { version = "0.3.3", default-features = false, features = ["eval", "std"] }
-winit = "0.30.13"
+# winit's newest beta, pinned exactly: its 0.31 pointer model merges the
+# mouse, touch and pen into one set of events, which the key-bindings
+# roadmap's touch input is built on, and it gives the window's safe area.
+# A caret requirement on a pre-release would let `cargo update` take a
+# later beta's breaking renames, so each bump is deliberate.
+winit = "=0.31.0-beta.4"
 # The physical key names nova-view's `Key` is (`Code`), with `Display` and
 # `FromStr` for the settings file. Its `serde` feature is not needed.
 keyboard-types = "0.8.3"

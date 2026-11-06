@@ -1035,7 +1035,7 @@ fn in_flight_a_plain_q_or_g_does_nothing_and_command_q_exits() {
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.redraw(), Control::Continue);
     game.send(platform::key_event(
-        PhysicalKey::Code(KeyCode::SuperLeft),
+        PhysicalKey::Code(KeyCode::MetaLeft),
         ElementState::Pressed,
         false,
     ));

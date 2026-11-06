@@ -8,12 +8,15 @@
 //! window lists no modes ([`offers_exclusive`]), and the Preferences
 //! dialog offers only borderless.
 
+use std::borrow::Cow;
+use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
 
 use nova_view::{FullscreenKind, MonitorMode, VideoMode};
 use winit::dpi::{PhysicalInsets, PhysicalSize};
-use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use winit::window::{Fullscreen, Window};
+use winit::monitor::{Fullscreen, VideoMode as WinitMode};
+use winit::raw_window_handle::RawWindowHandle;
+use winit::window::Window;
 
 use crate::app::{PxRect, WindowPort};
 
@@ -30,16 +33,19 @@ pub(crate) fn deepest<T>(
         .map(|(_, value)| value)
 }
 
-/// One of a monitor's modes, in the core's terms.
-fn monitor_mode(handle: &winit::monitor::VideoModeHandle) -> MonitorMode {
-    let size = handle.size();
+/// One of a monitor's modes, in the core's terms. A bit depth or refresh
+/// rate the platform doesn't give is 0, so [`deepest`] prefers any known
+/// depth, and a saved mode, whose rate is known, never matches an unknown
+/// one.
+fn monitor_mode(mode: &WinitMode) -> MonitorMode {
+    let size = mode.size();
     MonitorMode {
         mode: VideoMode {
             width: size.width,
             height: size.height,
-            refresh_millihertz: handle.refresh_rate_millihertz(),
+            refresh_millihertz: mode.refresh_rate_millihertz().map_or(0, NonZeroU32::get),
         },
-        bit_depth: handle.bit_depth(),
+        bit_depth: mode.bit_depth().map_or(0, NonZeroU16::get),
     }
 }
 
@@ -48,13 +54,6 @@ fn monitor_mode(handle: &winit::monitor::VideoModeHandle) -> MonitorMode {
 /// down, as wide and tall as the insets on both sides leave it. Insets
 /// too large for the surface leave an empty rect at its edge, never one
 /// outside it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "`WinitWindow::safe_area` forwards to it from winit 0.31"
-    )
-)]
 pub(crate) fn safe_rect(surface: PhysicalSize<u32>, insets: PhysicalInsets<u32>) -> PxRect {
     PxRect {
         x: insets.left.min(surface.width),
@@ -85,19 +84,24 @@ pub(crate) fn offers_exclusive(raw: Option<RawWindowHandle>) -> bool {
 pub(crate) fn with_exe_icon(
     attributes: winit::window::WindowAttributes,
 ) -> winit::window::WindowAttributes {
-    use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
-    use winit::window::Icon;
-    let icon = Icon::from_resource(nova_winres::ICON_ID, None).ok();
+    use winit::icon::Icon;
+    use winit::platform::windows::{WinIcon, WindowAttributesWindows};
+    let icon = WinIcon::from_resource(nova_winres::ICON_ID, None)
+        .ok()
+        .map(Icon::from);
     attributes
         .with_window_icon(icon.clone())
-        .with_taskbar_icon(icon)
+        .with_platform_attributes(Box::new(
+            WindowAttributesWindows::default().with_taskbar_icon(icon),
+        ))
 }
 
 /// `attributes` with the game's app id ([`APP_ID`](super::APP_ID)) as
-/// the window's Wayland app id and X11 `WM_CLASS` (class and instance),
-/// so the desktop file of that name gives the dock and task switcher the
-/// game's icon and name. The X11 and Wayland traits' `with_name` set the
-/// same field, so the one call covers both.
+/// the window's Wayland app id (on the Wayland backend, `wayland`) or its
+/// X11 `WM_CLASS` (class and instance) otherwise, so the desktop file of
+/// that name gives the dock and task switcher the game's icon and name.
+/// Since winit 0.31 each backend has its own attributes, set in the one
+/// platform slot, so the backend running decides which.
 #[cfg(any(
     target_os = "linux",
     target_os = "dragonfly",
@@ -107,18 +111,28 @@ pub(crate) fn with_exe_icon(
 ))]
 pub(crate) fn with_app_id(
     attributes: winit::window::WindowAttributes,
+    wayland: bool,
 ) -> winit::window::WindowAttributes {
-    use winit::platform::wayland::WindowAttributesExtWayland;
-    WindowAttributesExtWayland::with_name(attributes, super::APP_ID, super::APP_ID)
+    use winit::platform::wayland::WindowAttributesWayland;
+    use winit::platform::x11::WindowAttributesX11;
+    let id = super::APP_ID;
+    if wayland {
+        attributes.with_platform_attributes(Box::new(
+            WindowAttributesWayland::default().with_name(id, id),
+        ))
+    } else {
+        attributes
+            .with_platform_attributes(Box::new(WindowAttributesX11::default().with_name(id, id)))
+    }
 }
 
 /// A [`WindowPort`] over a winit window.
 #[derive(Clone, Debug)]
-pub struct WinitWindow(pub Arc<Window>);
+pub struct WinitWindow(pub Arc<dyn Window>);
 
 impl WindowPort for WinitWindow {
     fn size_px(&self) -> (u32, u32) {
-        let size = self.0.inner_size();
+        let size = self.0.surface_size();
         (size.width, size.height)
     }
 
@@ -144,27 +158,33 @@ impl WindowPort for WinitWindow {
                 .and_then(|monitor| {
                     let modes = monitor
                         .video_modes()
-                        .map(|handle| (monitor_mode(&handle), handle));
-                    deepest(modes, mode)
+                        .map(|video_mode| (monitor_mode(&video_mode), video_mode));
+                    let chosen = deepest(modes, mode)?;
+                    Some(Fullscreen::Exclusive(monitor, chosen))
                 })
-                .map_or(Fullscreen::Borderless(None), Fullscreen::Exclusive),
+                .unwrap_or(Fullscreen::Borderless(None)),
         });
         self.0.set_fullscreen(fullscreen);
     }
 
     fn video_modes(&self) -> Vec<MonitorMode> {
-        let raw = self.0.window_handle().ok().map(|handle| handle.as_raw());
+        let raw = self
+            .0
+            .rwh_06_window_handle()
+            .window_handle()
+            .ok()
+            .map(|handle| handle.as_raw());
         match self.0.current_monitor() {
             Some(monitor) if offers_exclusive(raw) => monitor
                 .video_modes()
-                .map(|handle| monitor_mode(&handle))
+                .map(|video_mode| monitor_mode(&video_mode))
                 .collect(),
             _ => Vec::new(),
         }
     }
 
     fn monitor_name(&self) -> Option<String> {
-        self.0.current_monitor()?.name()
+        self.0.current_monitor()?.name().map(Cow::into_owned)
     }
 
     fn is_fullscreen(&self) -> bool {
@@ -174,7 +194,13 @@ impl WindowPort for WinitWindow {
     fn request_inner_size(&mut self, (width, height): (u32, u32)) {
         // The size it takes comes in a resize; the one returned at once
         // on some platforms adds nothing to that.
-        let _ = self.0.request_inner_size(PhysicalSize::new(width, height));
+        let _ = self
+            .0
+            .request_surface_size(PhysicalSize::new(width, height).into());
+    }
+
+    fn safe_area(&self) -> PxRect {
+        safe_rect(self.0.surface_size(), self.0.safe_area())
     }
 }
 
@@ -219,6 +245,64 @@ mod tests {
             (at(fhd(60), 24), "24"),
         ];
         assert_eq!(deepest(modes, fhd(60)), Some("32"));
+    }
+
+    /// winit's mode of `width` × `height`, at `bit_depth` bits and
+    /// `millihertz`, each `None` where the platform doesn't say.
+    fn winit_mode(
+        (width, height): (u32, u32),
+        bit_depth: Option<u16>,
+        millihertz: Option<u32>,
+    ) -> WinitMode {
+        WinitMode::new(
+            PhysicalSize::new(width, height),
+            bit_depth.and_then(NonZeroU16::new),
+            millihertz.and_then(NonZeroU32::new),
+        )
+    }
+
+    #[test]
+    fn a_known_mode_is_its_size_rate_and_depth() {
+        assert_eq!(
+            monitor_mode(&winit_mode((1920, 1080), Some(32), Some(59_940))),
+            MonitorMode {
+                mode: VideoMode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_millihertz: 59_940
+                },
+                bit_depth: 32
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_depth_is_zero() {
+        let mode = monitor_mode(&winit_mode((1920, 1080), None, Some(60_000)));
+        assert_eq!(mode, at(fhd(60), 0));
+    }
+
+    #[test]
+    fn an_unknown_rate_is_zero() {
+        let mode = monitor_mode(&winit_mode((1920, 1080), Some(24), None));
+        assert_eq!(mode.mode.refresh_millihertz, 0);
+        assert_eq!(mode.bit_depth, 24);
+    }
+
+    #[test]
+    fn deepest_prefers_a_known_depth_to_an_unknown_one() {
+        let modes = [
+            winit_mode((1920, 1080), None, Some(60_000)),
+            winit_mode((1920, 1080), Some(16), Some(60_000)),
+        ];
+        let chosen = deepest(modes.iter().map(|m| (monitor_mode(m), *m)), fhd(60));
+        assert_eq!(chosen, Some(modes[1]));
+    }
+
+    #[test]
+    fn a_saved_rate_never_matches_an_unknown_one() {
+        let unknown = winit_mode((1920, 1080), Some(32), None);
+        assert_eq!(deepest([(monitor_mode(&unknown), unknown)], fhd(60)), None);
     }
 
     fn insets(top: u32, left: u32, bottom: u32, right: u32) -> PhysicalInsets<u32> {
@@ -286,5 +370,43 @@ mod tests {
             Win32WindowHandle::new(hwnd)
         ))));
         assert!(offers_exclusive(None), "no handle: let winit decide");
+    }
+
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    mod app_id {
+        use winit::platform::wayland::WindowAttributesWayland;
+        use winit::platform::x11::WindowAttributesX11;
+        use winit::window::WindowAttributes;
+
+        use super::super::with_app_id;
+        use crate::platform::APP_ID;
+
+        #[test]
+        fn the_wayland_backend_gets_wayland_attributes_named_for_the_app() {
+            let attributes = with_app_id(WindowAttributes::default(), true);
+            let platform = attributes.platform.as_deref().expect("set");
+            let wayland = platform
+                .cast_ref::<WindowAttributesWayland>()
+                .expect("Wayland's");
+            let named = WindowAttributesWayland::default().with_name(APP_ID, APP_ID);
+            assert_eq!(format!("{wayland:?}"), format!("{named:?}"));
+            assert!(platform.cast_ref::<WindowAttributesX11>().is_none());
+        }
+
+        #[test]
+        fn the_x11_backend_gets_x11_attributes_named_for_the_app() {
+            let attributes = with_app_id(WindowAttributes::default(), false);
+            let platform = attributes.platform.as_deref().expect("set");
+            let x11 = platform.cast_ref::<WindowAttributesX11>().expect("X11's");
+            let named = WindowAttributesX11::default().with_name(APP_ID, APP_ID);
+            assert_eq!(format!("{x11:?}"), format!("{named:?}"));
+            assert!(platform.cast_ref::<WindowAttributesWayland>().is_none());
+        }
     }
 }

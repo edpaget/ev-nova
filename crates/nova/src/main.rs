@@ -169,17 +169,18 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nova::app::LoopEvent;
 use nova::app::{AppScreen, start_screen};
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
 use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
+use nova::exit::OpenFailure;
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::movie::{movie_folders, movie_player};
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
 use nova::platform::{
-    Dialogs, Runner, event_loop, menu_key_equivalents, system_key_names, system_keyboard_access,
+    Dialogs, Runner, event_loop, loop_channel, menu_key_equivalents, system_key_names,
+    system_keyboard_access,
 };
 use nova::rulebook::eight_bit_reading;
 use nova::ruleset::Ruleset;
@@ -287,29 +288,34 @@ fn with_gamepads(
 
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
 /// back through the loop and Sparkle offered as the updater on macOS, and
-/// WinSparkle on Windows, its quit sent back through the loop; gives the
-/// runner back.
+/// WinSparkle on Windows, its quit sent back through the loop; gives back
+/// why the window could not open, if it could not. The loop takes the
+/// runner and drops it as it ends.
 fn run(
-    mut runner: Runner<GameImages<Rc<GameData>>>,
-    event_loop: EventLoop<LoopEvent>,
+    runner: Runner<GameImages<Rc<GameData>>>,
+    event_loop: EventLoop,
 ) -> (
-    Runner<GameImages<Rc<GameData>>>,
+    Option<OpenFailure>,
     Result<(), winit::error::EventLoopError>,
 ) {
+    let (sender, events) = loop_channel(event_loop.create_proxy());
+    let mut runner = runner.with_loop_events(events);
     #[cfg(target_os = "macos")]
     {
         runner = runner
-            .with_menu_proxy(event_loop.create_proxy())
+            .with_menu_sender(sender)
             .with_updater_source(Box::new(nova::platform::SparkleSource));
     }
     #[cfg(windows)]
     {
-        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(
-            event_loop.create_proxy(),
-        )));
+        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(sender)));
     }
-    let result = event_loop.run_app(&mut runner);
-    (runner, result)
+    #[cfg(not(any(target_os = "macos", windows)))]
+    drop(sender);
+    let failure = runner.failure_slot();
+    let result = event_loop.run_app(runner);
+    let failure = failure.borrow_mut().take();
+    (failure, result)
 }
 
 /// Where the startup report says stderr goes: on Windows, once stderr is
@@ -443,11 +449,8 @@ fn main() -> ExitCode {
     };
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
-    let (runner, result) = run(runner, event_loop);
-    let ended = Fatal::ending(
-        result.map_err(|error| error.to_string()),
-        runner.open_failure(),
-    );
+    let (failure, result) = run(runner, event_loop);
+    let ended = Fatal::ending(result.map_err(|error| error.to_string()), failure.as_ref());
     match ended {
         Some(fatal) => ExitCode::from(report.borrow_mut().fail(&fatal, &mut Dialogs)),
         None => ExitCode::SUCCESS,
