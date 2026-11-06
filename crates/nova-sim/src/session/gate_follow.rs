@@ -249,15 +249,20 @@ pub(super) mod tests {
     }
 
     /// [`ships_catalog`] with `ships`, düde 150's government 131 of
-    /// `Flags2` `flags2`; in 130, hypergate 300 at (-3000, 0), linked to
-    /// 310 in 131 at (100, 200), and unlinked wormhole 400 at (0, 3000),
-    /// leading to unlinked wormhole 410 in 131 at (-300, 40).
+    /// `Flags2` `flags2`, and [`with_gates`]' gates.
     pub(in crate::session) fn gated(ships: MissionShip, flags2: u16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(ships);
         catalog.govts = vec![crate::catalog::GovtRecord {
             flags2,
             ..govt(131)
         }];
+        with_gates(catalog)
+    }
+
+    /// `catalog` with, in 130, hypergate 300 at (-3000, 0), linked to
+    /// 310 in 131 at (100, 200), and unlinked wormhole 400 at (0, 3000),
+    /// leading to unlinked wormhole 410 in 131 at (-300, 40).
+    pub(in crate::session) fn with_gates(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
         let mut hypergate = planet(300, HYPERGATE_AT.x, HYPERGATE_AT.y);
         hypergate.flags2 = HYPERGATE;
         let mut wormhole = planet(400, WORMHOLE_AT.x, WORMHOLE_AT.y);

@@ -501,6 +501,7 @@ mod escort_hits;
 mod escort_land;
 #[cfg(test)]
 mod escort_loss;
+mod escort_person_reset;
 #[cfg(test)]
 mod escort_rounds;
 mod escorts;
@@ -2024,13 +2025,17 @@ impl Session {
     /// its colour (`_PrepareAllSprites` @0x3a783, @0x2bf8a). It keeps its
     /// cloak, fade and direction (`_RespawnEscort` writes neither +0x64
     /// nor +0xc8d8) and its afterburner (+0xbd); a loaded pilot's escorts
-    /// roll theirs on `chance`.
+    /// roll theirs on `chance`. By the engine reading of
+    /// [`RuleKey::PersonEscortRespawn`], `_RespawnEscort` (@0x3d531) first
+    /// forgets each escort's person, before the system's people are drawn
+    /// (see the `escort_person_reset` module).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entry: Option<Entry>,
     ) {
+        escort_person_reset::forget_escort_persons(&mut self.pilot, &self.statics, &self.setup);
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
         let left = std::mem::take(&mut self.space.strikes);

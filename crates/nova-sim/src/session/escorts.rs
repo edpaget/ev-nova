@@ -51,7 +51,12 @@
 //! [`market`](crate::market)).
 //!
 //! **Person escorts.** An escort that is a person
-//! ([`Escort::person`](crate::Escort)) flies as itself in every system:
+//! ([`Escort::person`](crate::Escort)) flies as itself in every system
+//! by the default reading of
+//! [`RuleKey::PersonEscortRespawn`](crate::RuleKey::PersonEscortRespawn)
+//! (by the original's, each respawn forgets its person, `_RespawnEscort`
+//! @0x3d531, and it flies on as its class: see the `escort_person_reset`
+//! module):
 //! its person's fitted ship (its weapon slots and `ShieldMod`, see
 //! [`person`](crate::person)), named by its record, with its grudge;
 //! taking off and flying a pilot restock it full to that fitted ship as
@@ -1424,7 +1429,7 @@ pub(super) mod tests {
         assert_eq!(orders(session), [Some(EscortOrder::Defend); 2]);
     }
 
-    fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
         work_with(
             session,
             catalog,
@@ -1518,12 +1523,12 @@ pub(super) mod tests {
     // The fleet in flight.
 
     /// The warship escort's ship type: `EscortType` 2, `InherentAI` 3.
-    const WARSHIP: ShipId = ShipId(150);
+    pub(in crate::session) const WARSHIP: ShipId = ShipId(150);
     /// The freighter escort's ship type: `EscortType` 3, `InherentAI` 1.
     const FREIGHTER: ShipId = ShipId(151);
     /// The turret the warship carries: 10 pixels a tick for 30 ticks,
     /// every 5, 5 energy damage.
-    const TURRET: WeaponId = WeaponId(140);
+    pub(in crate::session) const TURRET: WeaponId = WeaponId(140);
 
     /// [`catalog`] (systems 130 and 131 linked, planet 128 under the
     /// ship) with the escort ship types, in neither system's traffic: the
@@ -1592,7 +1597,7 @@ pub(super) mod tests {
     }
 
     /// Worn reserves: 10 of 30 shield, 20 of 45 armour, 120 of 300 fuel.
-    fn worn() -> Reserves {
+    pub(in crate::session) fn worn() -> Reserves {
         Reserves {
             shield: Gauge {
                 now: 10.0,
@@ -1630,7 +1635,7 @@ pub(super) mod tests {
     }
 
     /// The escorts' NPCs, in fleet order.
-    fn escort_npcs(session: &Session) -> Vec<&Npc> {
+    pub(in crate::session) fn escort_npcs(session: &Session) -> Vec<&Npc> {
         session
             .space
             .escorts
@@ -3609,7 +3614,7 @@ pub(super) mod tests {
     /// [`fleeted`] with "Ace" (`përs` 700), who appears nowhere, flying the
     /// warship with two more turrets, its `ShieldMod` 200, its `HailPict`
     /// 7800 and its hail quote 1 (`STR#` 7101 "Hi!").
-    fn with_ace() -> FakePilotCatalog {
+    pub(in crate::session) fn with_ace() -> FakePilotCatalog {
         let mut catalog = fleeted();
         catalog.persons = vec![crate::catalog::PersonRecord {
             name: "Ace".to_owned(),
@@ -3629,7 +3634,7 @@ pub(super) mod tests {
     }
 
     /// A pilot whose fleet is Ace, worn.
-    fn with_ace_escort(catalog: &FakePilotCatalog) -> Pilot {
+    pub(in crate::session) fn with_ace_escort(catalog: &FakePilotCatalog) -> Pilot {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.escorts = vec![Escort {
             person: Some(PersonId(700)),
@@ -3639,7 +3644,7 @@ pub(super) mod tests {
     }
 
     /// [`with_ace_escort`]'s session, its first traffic tick done.
-    fn flying_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn flying_ace(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::fly(catalog, with_ace_escort(catalog)).expect("flies");
         tick(&mut session, catalog);
         session

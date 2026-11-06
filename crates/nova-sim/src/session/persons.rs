@@ -78,7 +78,11 @@
 //! them. An invincible person (`ShieldMod` below 0) ends each fight tick
 //! with its shield and armour full, and is never disabled nor broken up
 //! (the original refills them every frame; its order against a shot's
-//! damage is not traced).
+//! damage is not traced). By the engine reading of
+//! [`RuleKey::PersonEscortRespawn`](crate::RuleKey::PersonEscortRespawn),
+//! an escort whose person a respawn forgot (see the `escort_person_reset`
+//! module) carries no person: its death leaves the person alive and the
+//! player's hits give it no grudge.
 
 use crate::pilot::Pilot;
 use std::rc::Rc;
