@@ -86,18 +86,24 @@ fn the_gamepad_tab_lists_every_command_but_the_ui_rows_with_the_axes_and_their_i
         .collect();
     assert_eq!(commands, expected);
     assert!(!rows.contains(&Row::Heading(Context::Ui)));
-    for axis in [Fc::TurnAxis, Fc::ThrottleAxis] {
+    let axes: [Command; 4] = [
+        Fc::TurnAxis.into(),
+        Fc::ThrottleAxis.into(),
+        crate::keymap::MapCommand::CursorX.into(),
+        crate::keymap::MapCommand::CursorY.into(),
+    ];
+    for axis in axes {
         let at = rows
             .iter()
-            .position(|&row| row == Row::Command(axis.into()))
+            .position(|&row| row == Row::Command(axis))
             .expect("listed");
-        assert_eq!(rows[at + 1], Row::Invert(axis.into()), "{axis:?}");
+        assert_eq!(rows[at + 1], Row::Invert(axis), "{axis:?}");
     }
     assert_eq!(
         rows.iter()
             .filter(|row| matches!(row, Row::Invert(_)))
             .count(),
-        2
+        4
     );
     let keyboard = super::super::rows(Column::Keyboard);
     assert!(keyboard.contains(&Row::Command(UiCommand::Back.into())));

@@ -132,6 +132,13 @@
 //!   commands on one axis clash, and so does an axis with a plain entry
 //!   on one of its directions in a context active together, which flight
 //!   would leave dead.
+//!
+//!   The galaxy map's cursor axes ([`MapCommand::CursorX`] and
+//!   [`MapCommand::CursorY`], the right stick by default) read through the
+//!   same dead zone. With no layer held their stick's plain directions
+//!   mean nothing on a map: the map's context axis-shadows the shared UI's
+//!   paging there ([`contexts::axis_shadows`]), so the two neither resolve
+//!   together nor clash (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
 //! - **Saved form.** A command saves by its stable name, `Context.Variant`
 //!   ([`Command::name`]), and a combo as its W3C modifier names then
 //!   `Code`'s W3C key name, joined by `+` (`Meta+Digit5`), so the file

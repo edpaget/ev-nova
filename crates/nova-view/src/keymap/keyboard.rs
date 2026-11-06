@@ -464,7 +464,8 @@ const fn default_main_menu(command: MainMenuCommand) -> Binding {
 }
 
 /// The galaxy map's defaults (`_MapFilter`): B, C, F, `-` and `=`, the
-/// shared Tab with Shift, and the left Shift (`_DoSystemMap`).
+/// shared Tab with Shift, and the left Shift (`_DoSystemMap`). The pad's
+/// Centre and cursor axes have no key.
 const fn default_map(command: MapCommand) -> Binding {
     match command {
         MapCommand::Borders => bare(Key::KeyB),
@@ -477,6 +478,9 @@ const fn default_map(command: MapCommand) -> Binding {
             plus: Modifiers::SHIFT,
         },
         MapCommand::PlotCourse => bare(Key::ShiftLeft),
+        // The pad's centre and cursor: Space stays the shared Activate,
+        // and an axis takes no key.
+        MapCommand::Centre | MapCommand::CursorX | MapCommand::CursorY => Binding::Unbound,
     }
 }
 
@@ -1120,6 +1124,17 @@ mod tests {
     }
 
     #[test]
+    fn the_map_centre_and_cursor_have_no_default_key() {
+        for command in [MapCommand::Centre, MapCommand::CursorX, MapCommand::CursorY] {
+            assert_eq!(
+                KeyMap::default().binding(Command::Map(command)),
+                Binding::Unbound,
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
     fn flight_s_defaults_are_the_original_s() {
         use FlightCommand as F;
         assert_eq!(
@@ -1442,6 +1457,11 @@ mod tests {
                 row(M::ZoomIn, Key::Equal, NO),
                 row(M::TabBack, Key::Tab, SHIFT),
                 row(M::PlotCourse, Key::ShiftLeft, NO),
+                // The pad's centre and cursor
+                // (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
+                (M::Centre.into(), None),
+                (M::CursorX.into(), None),
+                (M::CursorY.into(), None),
             ]
         );
         let mut map = KeyMap::default();
@@ -1516,7 +1536,10 @@ mod tests {
         ]
         .map(Command::Ui)
         .into_iter()
-        .chain([Command::Intro(IntroCommand::Skip)])
+        .chain([
+            Command::Intro(IntroCommand::Skip),
+            Command::Map(MapCommand::Centre),
+        ])
         .collect::<Vec<_>>();
         let map = KeyMap::default();
         for command in Command::all().filter(|c| c.kind() != Kind::Axis && !pad_only.contains(c)) {

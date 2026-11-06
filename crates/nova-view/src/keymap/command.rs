@@ -713,6 +713,17 @@ context_commands! {
         /// left Shift, as `_DoSystemMap` polls its key code
         /// (`_KeyCheck(0x38)` @0x13071), so it has no right twin.
         PlotCourse: Held "Plot Course",
+        /// Centre the map on the current system and select it, as Space
+        /// does (`_MapFilter` @0x140e0-0x14169): the pad's, which the
+        /// original has no key for, so the keyboard leaves it unbound
+        /// (rdm:phase/key-bindings/phase-20-gamepad-map-cursor).
+        Centre: Pressed "Centre Map",
+        /// Move the in-flight maps' pad cursor across: a stick axis, which
+        /// the original has none of (`galaxy::cursor`).
+        CursorX: Axis "Cursor Across",
+        /// Move the in-flight maps' pad cursor up and down: a stick axis,
+        /// pushed up moving it up the screen.
+        CursorY: Axis "Cursor Up and Down",
     }
 }
 
@@ -887,6 +898,17 @@ mod tests {
         assert_eq!(Command::from(PauseCommand::Pause).kind(), Kind::Pressed);
         assert_eq!(Command::from(PlayCommand::GalaxyMap).kind(), Kind::Held);
         assert_eq!(Command::from(EscortMenuCommand::Group1).kind(), Kind::Held);
+    }
+
+    #[test]
+    fn the_map_cursor_commands_are_axes_and_centre_is_pressed() {
+        for axis in [MapCommand::CursorX, MapCommand::CursorY] {
+            assert_eq!(Command::from(axis).kind(), Kind::Axis, "{axis:?}");
+            assert_eq!(Command::from(axis).context(), Context::Map, "{axis:?}");
+        }
+        assert_eq!(Command::from(MapCommand::Centre).kind(), Kind::Pressed);
+        assert_eq!(Command::from(MapCommand::Centre).context(), Context::Map);
+        assert_eq!(Command::from(MapCommand::Centre).label(), "Centre Map");
     }
 
     #[test]

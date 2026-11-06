@@ -86,6 +86,10 @@ const PINNED: &[(&str, &str)] = &[
     ("Race.Ask", "west"),
     ("Map.ZoomOut", "lefttrigger"),
     ("Map.ZoomIn", "righttrigger"),
+    ("Map.PlotCourse", "west"),
+    ("Map.Centre", "north"),
+    ("Map.CursorX", "rightx"),
+    ("Map.CursorY", "righty"),
     ("Intro.Activate", "south"),
     ("Intro.Skip", "east"),
 ];

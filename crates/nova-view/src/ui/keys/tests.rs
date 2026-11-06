@@ -836,3 +836,46 @@ pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProb
     select(&mut screen, FlightCommand::Accelerate);
     Box::new(Probe(screen))
 }
+
+/// The rows of `column`'s tab under the galaxy map's heading, up to the
+/// next heading.
+fn map_rows(column: Column) -> Vec<Row> {
+    rows(column)
+        .into_iter()
+        .skip_while(|&row| row != Row::Heading(crate::keymap::Context::Map))
+        .skip(1)
+        .take_while(|row| !matches!(row, Row::Heading(_)))
+        .collect()
+}
+
+#[test]
+fn the_pad_tab_lists_the_map_cursor_axes_with_invert_rows_and_centre() {
+    use crate::keymap::MapCommand as M;
+    let rows = map_rows(Column::Gamepad);
+    let tail: Vec<Row> = rows[rows.len() - 5..].to_vec();
+    assert_eq!(
+        tail,
+        vec![
+            Row::Command(M::Centre.into()),
+            Row::Command(M::CursorX.into()),
+            Row::Invert(M::CursorX.into()),
+            Row::Command(M::CursorY.into()),
+            Row::Invert(M::CursorY.into()),
+        ]
+    );
+}
+
+#[test]
+fn the_keyboard_tab_lists_centre_unbound_and_no_cursor_axis() {
+    use crate::keymap::MapCommand as M;
+    let rows = map_rows(Column::Keyboard);
+    assert_eq!(rows.last(), Some(&Row::Command(M::Centre.into())));
+    for axis in [M::CursorX, M::CursorY] {
+        assert!(!rows.contains(&Row::Command(axis.into())), "{axis:?}");
+    }
+    assert_eq!(
+        Bindings::default().keyboard.combo(M::Centre.into()),
+        None,
+        "unbound"
+    );
+}

@@ -39,7 +39,9 @@ use super::command::{
     Command, Context, EscortMenuCommand, FlightCommand, IntroCommand, MapCommand, OutfitterCommand,
     PauseCommand, PlayCommand, RaceCommand, TradeCommand, UiCommand,
 };
-use super::contexts::{SCREENS, ScreenContexts, router_shadows, shadows, together_on};
+use super::contexts::{
+    SCREENS, ScreenContexts, axis_shadows, router_shadows, shadows, together_on,
+};
 use crate::input::{Input, PadAxis, PadButton};
 
 /// The flight dead zone: a stick whose position lies within this of its
@@ -278,7 +280,9 @@ impl PadMap {
     /// if any: flight reads that stick as an axis, so with no layer held
     /// the direction means nothing else ([`meanings`]), and the keys
     /// screen refuses `command` the entry rather than bind it dead. A
-    /// layered entry, or one off the sticks, lies on no axis.
+    /// layered entry, or one off the sticks, lies on no axis, and an axis
+    /// command whose context axis-shadows `command`'s ([`axis_shadows`])
+    /// holds nothing against it.
     #[must_use]
     pub fn axis_holder(&self, command: Command, entry: PadEntry) -> Option<Command> {
         if entry.layer.is_some() {
@@ -287,6 +291,7 @@ impl PadMap {
         let (axis, _) = entry.button.stick_direction()?;
         Command::all()
             .filter(|&reader| reader != command && self.axis(reader) == Some(axis))
+            .filter(|&reader| !axis_shadows(reader.context(), command.context()))
             .find(|&reader| together_on(SCREENS, reader.context(), command.context()))
     }
 
@@ -335,8 +340,9 @@ impl PadMap {
     /// (inverted or not), in contexts active together on some screen, a
     /// shadowing context's pairs with the one it shadows left out; then
     /// each axis command with each command whose plain entry lies on one
-    /// of its axis's directions in a context active together
-    /// ([`PadMap::axis_holder`]). `PadMap::default()` has none.
+    /// of its axis's directions in a context active together and not
+    /// axis-shadowed by the axis command's ([`axis_shadows`],
+    /// [`PadMap::axis_holder`]). `PadMap::default()` has none.
     #[must_use]
     pub fn clashes(&self) -> Vec<Clash> {
         self.clashes_on(SCREENS)
@@ -375,7 +381,10 @@ impl PadMap {
                             .stick_direction()
                             .is_some_and(|(along, _)| along == axis)
                 });
-                if on_axis && together_on(screens, reader.context(), other.context()) {
+                if on_axis
+                    && !axis_shadows(reader.context(), other.context())
+                    && together_on(screens, reader.context(), other.context())
+                {
                     clashes.push(Clash {
                         first: reader.min(other),
                         second: reader.max(other),
@@ -568,10 +577,20 @@ const fn default_play(command: PlayCommand) -> PadBinding {
 /// triggers zoom, as `=` and `-` do. Plain, so a held layer (the map
 /// chord's Start) never zooms; no context a map reads binds a plain
 /// trigger, and flight's are [`Context::Flight`]'s, which no map lists.
+///
+/// rdm:phase/key-bindings/phase-20-gamepad-map-cursor adds the cursor on
+/// the right stick, whose plain directions the map's axes win over the
+/// shared UI's paging ([`axis_shadows`](super::contexts::axis_shadows));
+/// North, unbound on every context a map lists, centres the map as Space
+/// does; and West held is Plot Course, as phase 9's West is Option.
 const fn default_map(command: MapCommand) -> PadBinding {
     match command {
         MapCommand::ZoomIn => plain(PadButton::RightTrigger),
         MapCommand::ZoomOut => plain(PadButton::LeftTrigger),
+        MapCommand::CursorX => PadBinding::Axis(AxisBinding::plain(PadAxis::RightX)),
+        MapCommand::CursorY => PadBinding::Axis(AxisBinding::plain(PadAxis::RightY)),
+        MapCommand::Centre => plain(PadButton::North),
+        MapCommand::PlotCourse => plain(PadButton::West),
         _ => PadBinding::Unbound,
     }
 }
@@ -816,8 +835,12 @@ pub(super) fn fresh_press(input: &Input) -> Option<Input> {
 /// 2. With no layer and flight active, a direction of a stick flight
 ///    reads as an axis means Reverse Course (the throttle's back
 ///    direction) or nothing.
-/// 3. A shadowing context's commands on the entry, if any.
-/// 4. Otherwise every other active context's.
+/// 3. With no layer held, a direction of a stick an active context's
+///    axis command reads leaves out the contexts that context
+///    axis-shadows ([`axis_shadows`]): on a map, the cursor's right stick
+///    pages nothing.
+/// 4. A shadowing context's commands on the entry, if any.
+/// 5. Otherwise every other active context's.
 ///
 /// Unlike a key, a pad button a shadowing context binds under another
 /// layer stays the shadowed context's: the escort menu's groups on Start
@@ -842,6 +865,23 @@ pub(super) fn meanings(
     {
         return derived;
     }
+    let shadowed_by_axis = |context: Context| {
+        layer.is_none()
+            && button.stick_direction().is_some_and(|(axis, _)| {
+                active.iter().any(|&reader| {
+                    axis_shadows(reader, context)
+                        && reader
+                            .commands()
+                            .any(|command| map.axis(command) == Some(axis))
+                })
+            })
+    };
+    let active: Vec<Context> = active
+        .iter()
+        .copied()
+        .filter(|&context| !shadowed_by_axis(context))
+        .collect();
+    let active = active.as_slice();
     let pressed = PadEntry { button, layer }.canonical();
     let met = |entry: PadEntry| entry == pressed;
     let on = |context: Context| -> Vec<Command> {
@@ -1210,6 +1250,19 @@ mod tests {
             // a map as `=` and `-` do.
             (Command::Map(MapCommand::ZoomIn), plain(P::RightTrigger)),
             (Command::Map(MapCommand::ZoomOut), plain(P::LeftTrigger)),
+            // rdm:phase/key-bindings/phase-20-gamepad-map-cursor: the right
+            // stick moves the map's cursor, North centres the map as Space
+            // does, and West held is Plot Course, as Shift is.
+            (
+                Command::Map(MapCommand::CursorX),
+                Axis(AxisBinding::plain(PadAxis::RightX)),
+            ),
+            (
+                Command::Map(MapCommand::CursorY),
+                Axis(AxisBinding::plain(PadAxis::RightY)),
+            ),
+            (Command::Map(MapCommand::Centre), plain(P::North)),
+            (Command::Map(MapCommand::PlotCourse), plain(P::West)),
             // rdm:phase/key-bindings/phase-11-gamepad-menus: South ends an
             // intro picture as Space does.
             (Command::Intro(IntroCommand::Activate), plain(P::South)),
@@ -1346,6 +1399,93 @@ mod tests {
             "a held layer never leaks a focus move"
         );
         assert_eq!(pressed(&[P::Select, P::South]), None);
+    }
+
+    /// What `buttons`, pressed in turn on a fresh reader of `screen`, mean
+    /// last.
+    fn pressed_on(screen: crate::keymap::ScreenContexts, buttons: &[PadButton]) -> Option<Command> {
+        let mut reader = crate::keymap::CommandReader::new(screen);
+        let mut meant = None;
+        for &button in buttons {
+            meant = reader.follow(&press(button)).map(|c| c.command);
+        }
+        meant
+    }
+
+    const RIGHT_STICK: [PadButton; 4] = [
+        P::RightStickUp,
+        P::RightStickDown,
+        P::RightStickLeft,
+        P::RightStickRight,
+    ];
+
+    #[test]
+    fn on_the_course_map_a_plain_right_stick_direction_means_nothing() {
+        use crate::keymap::contexts;
+        let map = PadMap::default();
+        for screen in [contexts::COURSE_MAP, contexts::GALAXY_VIEWER] {
+            let active: Vec<Context> = screen.entries.iter().map(|e| e.context).collect();
+            for button in RIGHT_STICK {
+                assert_eq!(
+                    meanings(&map, button, None, &active),
+                    vec![],
+                    "{}: {button:?}",
+                    screen.name
+                );
+                assert_eq!(pressed_on(screen, &[button]), None, "{button:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn in_a_dialog_the_right_stick_still_pages() {
+        use crate::keymap::contexts;
+        assert_eq!(
+            pressed_on(contexts::DIALOG, &[P::RightStickUp]),
+            Some(ui(U::PageUp))
+        );
+        assert_eq!(
+            pressed_on(contexts::DIALOG, &[P::RightStickDown]),
+            Some(ui(U::PageDown))
+        );
+    }
+
+    #[test]
+    fn the_map_chord_still_reads_with_the_cursor_on_the_right_stick() {
+        use crate::keymap::contexts;
+        assert_eq!(
+            pressed_on(contexts::COURSE_MAP, &[P::Start, P::RightStickUp]),
+            Some(Command::Play(PlayCommand::GalaxyMap))
+        );
+        assert_eq!(
+            pressed_on(contexts::COURSE_MAP, &[P::Start, P::RightStickDown]),
+            Some(Command::Play(PlayCommand::PlayerInfo))
+        );
+    }
+
+    #[test]
+    fn a_play_command_on_a_plain_right_stick_direction_clashes_with_the_map_cursor() {
+        let mut pad = PadMap::default();
+        let info = Command::Play(PlayCommand::PlayerInfo);
+        let cursor = Command::Map(MapCommand::CursorY);
+        assert_eq!(
+            pad.axis_holder(info, PadEntry::plain(P::RightStickDown)),
+            Some(cursor)
+        );
+        assert_eq!(
+            pad.axis_holder(ui(U::PageDown), PadEntry::plain(P::RightStickDown)),
+            None,
+            "the map's axis shadows the shared UI's paging"
+        );
+        pad.bind(info, PadBinding::Entry(PadEntry::plain(P::RightStickDown)));
+        assert!(
+            pad.clashes().contains(&Clash {
+                first: info.min(cursor),
+                second: info.max(cursor),
+            }),
+            "{:?}",
+            pad.clashes()
+        );
     }
 
     #[test]

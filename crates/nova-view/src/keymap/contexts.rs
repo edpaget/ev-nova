@@ -13,7 +13,10 @@
 //! menu shows), but counted as active together with the rest of its list
 //! all the same. A context may **shadow** another ([`shadows`]): listed
 //! first, it wins the keys it binds, so the other's commands on those keys
-//! neither resolve nor clash with it.
+//! neither resolve nor clash with it. On the pad, an axis command's
+//! context may likewise shadow another's plain entries on its stick's
+//! directions ([`axis_shadows`]): the galaxy map's cursor over the shared
+//! UI's paging.
 //!
 //! The app's router reads every key before the developer's sides
 //! ([`ROUTED`]: the ship browser, and the galaxy viewer and system view
@@ -395,6 +398,20 @@ pub const fn shadows(shadowing: Context, shadowed: Context) -> bool {
     )
 }
 
+/// Whether an axis command of `reader` wins its stick's plain directions
+/// over `shadowed`'s plain entries on them, with no layer held, on the
+/// screens where both are active: true only for the galaxy map's cursor
+/// axes over the shared UI's paging
+/// (rdm:phase/key-bindings/phase-20-gamepad-map-cursor). The shared UI is
+/// the pad's fixed rows, so the player couldn't move the clash any other
+/// way, and the map has no pages. Declared rather than read from list
+/// order, so a player's plain direction in another context (Play, say)
+/// still clashes with the cursor and is refused.
+#[must_use]
+pub const fn axis_shadows(reader: Context, shadowed: Context) -> bool {
+    matches!((reader, shadowed), (Context::Map, Context::Ui))
+}
+
 /// Whether the router's `shadowing`, read before a [`ROUTED`] screen's
 /// keys, wins its key over the screen's `shadowed` by design, so the two
 /// don't clash: the main screen's Fly over the galaxy viewer's Find, both
@@ -512,6 +529,22 @@ mod tests {
             Command::MainScreen(MainScreenCommand::About),
             find
         ));
+    }
+
+    #[test]
+    fn only_the_map_axis_shadows_the_shared_ui() {
+        for &a in Context::ALL {
+            for &b in Context::ALL {
+                assert_eq!(
+                    axis_shadows(a, b),
+                    (a, b) == (Context::Map, Context::Ui),
+                    "{a:?} over {b:?}"
+                );
+            }
+        }
+        assert!(!axis_shadows(Context::Flight, Context::Ui));
+        assert!(!axis_shadows(Context::Map, Context::Play));
+        assert!(!axis_shadows(Context::Ui, Context::Map));
     }
 
     #[test]
