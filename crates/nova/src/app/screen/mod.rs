@@ -675,6 +675,9 @@ pub struct AppScreen {
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.
     person_rules: Rc<dyn PersonRules>,
+    /// What opens the stellars' compiled conversations in each flight
+    /// ([`AppScreen::with_dialog_loader`]): none until the edge wires one.
+    dialog_loader: Option<crate::dialogs::SharedLoader>,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,

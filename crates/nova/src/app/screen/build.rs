@@ -100,6 +100,7 @@ impl AppScreen {
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
+            dialog_loader: None,
             comm: None,
             escort_dialog: None,
             planet_comm: None,
@@ -225,6 +226,18 @@ impl AppScreen {
     pub fn with_control_bits(self, control_bits: Rc<dyn ControlBits>) -> Self {
         Self {
             control_bits,
+            ..self
+        }
+    }
+
+    /// The router with `loader` opening the stellars' compiled
+    /// conversations in each flight
+    /// (`nova_sim::Session::with_dialog_loader`); none until it is given,
+    /// so a conversation shows that it can't open.
+    #[must_use]
+    pub fn with_dialog_loader(self, loader: Rc<dyn nova_sim::dialog::DialogLoader>) -> Self {
+        Self {
+            dialog_loader: Some(crate::dialogs::SharedLoader(loader)),
             ..self
         }
     }
@@ -382,7 +395,10 @@ impl AppScreen {
             control_bits: Rc::clone(&self.control_bits),
             person_rules: Rc::clone(&self.person_rules),
             strings: Some(Rc::clone(&self.data) as Rc<dyn CommCatalog>),
-            dialogs: None,
+            dialogs: self
+                .dialog_loader
+                .as_ref()
+                .map(|loader| Rc::clone(&loader.0)),
             carry: CarryOver {
                 slot_sprites: Some(self.slot_sprites.clone()),
                 stellar_sprite_pool: Some(self.stellar_sprites.clone()),

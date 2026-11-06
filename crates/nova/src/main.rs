@@ -370,6 +370,8 @@ fn main() -> ExitCode {
         .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
         .with_pilots(pilots, Rc::clone(&metrics))
+        // The new game's conversations play on the Ink runtime.
+        .with_dialog_loader(nova::dialogs::loader(seed))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
         .with_flight_overlays(overlays)

@@ -55,8 +55,7 @@ deny = [
     # (nova-render, macOS), nova-appkit (nova, macOS), nova-win32 (nova,
     # Windows) and nova-winres (nova's build script and Windows build, and
     # nova-bundle). The leaf tools nova-dump (on nova-rsrc and nova-data)
-    # and nova-bundle (on nova-winres) have no dependents, so no entry, and
-    # nor does nova-ink until nova wires it in (engine-story phase 2).
+    # and nova-bundle (on nova-winres) have no dependents, so no entry.
     #
     # Each entry's `wrappers` is exactly the crate's direct dependents
     # (normal, dev and build, on every target), including the crate itself
@@ -103,5 +102,6 @@ deny = [
     { crate = "nova-sim-combat", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-port", "nova-sim-story"], reason = "the combat layer sits on the foundation, the catalog and the state, below the ai, story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-ai", wrappers = ["nova-sim", "nova-sim-port", "nova-sim-story"], reason = "the ai and traffic layer sits on the foundation, the catalog, the state and combat, below the story, port and session layers, and is reached through the nova-sim facade" },
     { crate = "nova-sim-story", wrappers = ["nova-ink", "nova-sim", "nova-sim-port"], reason = "the story layer sits on the foundation, the catalog, the state, combat and the ai, below the port and session layers, and is reached through the nova-sim facade" },
+    { crate = "nova-ink", wrappers = ["nova"], reason = "only the game wires the dialog adapter" },
     { crate = "nova-sim-port", wrappers = ["nova-sim"], reason = "the port layer sits on the foundation, the catalog, the state, combat, the ai and the story, below the session layer, and is reached through the nova-sim facade" },
 ]

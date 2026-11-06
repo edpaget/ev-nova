@@ -17,6 +17,7 @@ use nova_data::store::OpenError;
 
 use crate::cli::Usage;
 use crate::config::Os;
+use crate::dialogs::InkCheck;
 use crate::settings::{GameSettings, SettingsKeeper};
 
 use super::new_game::NewGameOpened;
@@ -72,8 +73,16 @@ impl DataSource for DiskData {
         std::fs::symlink_metadata(dir.join(name)).is_ok()
     }
 
+    /// Opens the new game's folder, then checks each stellar's
+    /// conversation against the Ink runtime ([`InkCheck`]), so a knot the
+    /// story lacks is reported against the stellar's file.
     fn open_new_game(&self, dir: &Path) -> NewGameOpened<GameData> {
-        nova_data::new_game::open(dir).into()
+        nova_data::new_game::open(dir)
+            .map(|mut game| {
+                game.check_dialogs(&InkCheck);
+                game
+            })
+            .into()
     }
 }
 
@@ -1256,6 +1265,52 @@ mod tests {
         assert_eq!(loaded.systems, 1);
         assert_eq!(loaded.problems, Vec::<String>::new());
         assert_eq!(loaded.data.files()[0].path, dir.path());
+    }
+
+    /// Copies the folder `from` into `to`, files and folders alike.
+    fn copy_folder(from: &Path, to: &Path) {
+        fs::create_dir_all(to).expect("creates");
+        for entry in fs::read_dir(from).expect("lists") {
+            let entry = entry.expect("an entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a type").is_dir() {
+                copy_folder(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).expect("copies");
+            }
+        }
+    }
+
+    #[test]
+    fn the_new_game_fixture_opens_with_its_conversation_checked_and_no_problems() {
+        let NewGameOpened::Loaded(loaded) =
+            DiskData.open_new_game(&nova_data::new_game::fixture::folder())
+        else {
+            panic!("loads");
+        };
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        assert_eq!(loaded.data.dialogs().stellars.len(), 1);
+    }
+
+    #[test]
+    fn a_stellar_naming_a_knot_its_story_lacks_is_warned_against_its_file() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        copy_folder(&nova_data::new_game::fixture::folder(), dir.path());
+        let dock = dir.path().join("stellars").join("hearth-dock.md");
+        let text = fs::read_to_string(&dock).expect("reads");
+        let named = "dialog/dock-job.ink#job_offer";
+        assert!(text.contains(named), "{text}");
+        fs::write(&dock, text.replace(named, "dialog/dock-job.ink#nowhere")).expect("writes");
+        let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(dir.path()) else {
+            panic!("loads");
+        };
+        assert_eq!(
+            loaded.problems,
+            [
+                "stellars/hearth-dock.md: dialog dialog/dock-job.ink#nowhere: no knot or stitch `nowhere`"
+            ]
+        );
+        assert!(loaded.data.dialogs().stellars.is_empty());
     }
 
     #[test]

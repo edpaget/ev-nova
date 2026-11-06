@@ -12,6 +12,9 @@ publish.workspace = true
 # `main` opens.
 nova-audio.workspace = true
 nova-data.workspace = true
+# The dialog port's adapter over the bladeink runtime, which plays the new
+# game's compiled Ink conversations and checks each stellar's knot at load.
+nova-ink.workspace = true
 # The movie decoder: FFmpeg, built from source and linked statically.
 nova-movie.workspace = true
 nova-render.workspace = true

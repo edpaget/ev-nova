@@ -1863,6 +1863,7 @@ dependencies = [
  "nova-appkit",
  "nova-audio",
  "nova-data",
+ "nova-ink",
  "nova-movie",
  "nova-render",
  "nova-rsrc",
