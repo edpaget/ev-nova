@@ -594,6 +594,24 @@ impl EscortMenu {
         false
     }
 
+    /// A double-time step's held second pass, `pass`, run at `now` as the
+    /// hold goes or is dropped (the `between_passes` module of the flight
+    /// view): as [`EscortMenu::run_passes`] runs it, but a redraw owed by
+    /// a press is left for the next pass. The flight ran the held pass
+    /// before the press reached it, so its rows predate what the press
+    /// changed. Whether it closed.
+    pub fn run_held_pass(&mut self, now: Duration, pass: Option<EscortMenuPass>) -> bool {
+        let owed = self
+            .open
+            .as_mut()
+            .map(|shown| std::mem::take(&mut shown.pending));
+        let closed = self.run_passes(now, pass);
+        if let Some(shown) = &mut self.open {
+            shown.pending |= owed.unwrap_or(false);
+        }
+        closed
+    }
+
     /// `_DrawEscortMenuInFrame` (@0x56268) over `rows`, while the menu
     /// shows.
     fn redraw(&mut self, rows: &[ClassRow; 4]) {
@@ -1623,6 +1641,48 @@ mod tests {
         assert!(!menu.run_passes(AT, []), "a dead player's: none reported");
         assert!(!menu.run_passes(AT, [pass_of(attacking, 2, false)]));
         assert!(shows(&menu, MenuRows::Held, "Attack", Color::WHITE));
+    }
+
+    #[test]
+    fn a_held_pass_leaves_the_redraw_a_later_press_owes() {
+        // The held second pass ran before the press reached the flight:
+        // its rows predate the command, so the next pass's pay the debt.
+        let attacking = with(
+            rows(),
+            EscortClass::Warship,
+            true,
+            Some(EscortOrder::Attack),
+        );
+        let mut menu = EscortMenu::default();
+        menu.toggle(AT, &rows());
+        assert!(!menu.run_passes(AT, [pass_of(rows(), 2, false)]));
+        menu.touch(AT);
+        assert!(!menu.run_held_pass(AT, Some(pass_of(rows(), 2, false))));
+        assert!(!menu.run_passes(AT, [pass_of(attacking, 2, false)]));
+        assert!(shows(&menu, MenuRows::Held, "Attack", Color::WHITE));
+    }
+
+    #[test]
+    fn a_held_pass_still_redraws_on_its_own_count_change_and_clear() {
+        let attacking = with(
+            rows(),
+            EscortClass::Warship,
+            true,
+            Some(EscortOrder::Attack),
+        );
+        let mut menu = EscortMenu::default();
+        menu.toggle(AT, &rows());
+        assert!(!menu.run_passes(AT, [pass_of(rows(), 2, false)]));
+        assert!(!menu.run_held_pass(AT, Some(pass_of(attacking, 1, false))));
+        assert!(
+            shows(&menu, MenuRows::Held, "Attack", Color::WHITE),
+            "count"
+        );
+        assert!(!menu.run_held_pass(AT, Some(pass_of(rows(), 1, true))));
+        assert!(
+            !shows(&menu, MenuRows::Held, "Attack", Color::WHITE),
+            "clear"
+        );
     }
 
     #[test]

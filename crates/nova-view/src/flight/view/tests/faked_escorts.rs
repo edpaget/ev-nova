@@ -1502,3 +1502,26 @@ fn a_dropped_holds_second_pass_shuts_the_menu_and_beeps_with_e_held() {
     assert_eq!(title_alpha(&view), None);
     assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
 }
+
+#[test]
+fn an_order_given_after_a_hold_was_taken_shows_on_the_next_steps_frame() {
+    // The held second pass ran before the command reached the flight, so
+    // its rows can't pay the redraw the command owes (@0x6e2a2).
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    single_steps(&mut view, 1);
+    let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
+    held_double_step(&mut view, pass, pass, between);
+    view.sim
+        .queue_answer(commanded(EscortGroup::All, EscortCommand::Attack, false));
+    press(&mut view, ESCORT_ATTACK_KEY);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    frame_rows(&mut view, attacking);
+    steps_reporting(&mut view, &[vec![Some(rows_pass(attacking, 1, false))]]);
+    assert!(menu_shows(&view, "Attack", Color::WHITE));
+}

@@ -86,7 +86,10 @@
 //! block runs, at the time the hold was taken, as the hold is let go or
 //! dropped ([`FlightView::run_held_escort_menu`]), before the next
 //! report's passes. It runs on a drop too, as it is the flight's state,
-//! not an effect.
+//! not an effect. It leaves a redraw a press between the frames owes (a
+//! command, a group selected) to the next report's passes: the flight ran
+//! the held pass before the press, so its rows don't carry what the press
+//! changed.
 //!
 //! **A held pass is heard on its own frame.** Its combat sounds are made as
 //! the hold is taken ([`FlightView::hear_held_pass`]), because the
@@ -224,14 +227,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Runs the escort-menu block of a held second pass, `menu`, at `at`,
     /// the time the hold was taken (see the module docs): its fade's drop
-    /// and its redraws ([`EscortMenu::run_passes`](crate::flight::escorts::EscortMenu::run_passes)),
+    /// and its redraws ([`EscortMenu::run_held_pass`](crate::flight::escorts::EscortMenu::run_held_pass)),
     /// before the next report's passes, beeping as the fade's end beeps.
+    /// A redraw a press owes is left for the next report's passes, as the
+    /// held pass's rows predate the press.
     fn run_held_escort_menu(
         &mut self,
         at: Duration,
         menu: Option<nova_sim::flight_frame::EscortMenuPass>,
     ) {
-        if self.escort_menu.run_passes(at, menu) {
+        if self.escort_menu.run_held_pass(at, menu) {
             self.shut_escort_menu_by_key();
         }
     }
