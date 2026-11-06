@@ -107,6 +107,7 @@ pub(super) fn settle(
                 storylines: &statics.storylines,
                 flags: &mut pilot.flags,
                 story: &mut pilot.story,
+                outfits: &mut out.story_outfits,
             }
             .day_passed();
         }
@@ -151,6 +152,7 @@ impl Port {
                 storylines: &statics.storylines,
                 flags: &mut pilot.flags,
                 story: &mut pilot.story,
+                outfits: &mut out.story_outfits,
             }
             .next_scene(stellar, &self.scenes_shown, has_own)?;
             self.scenes_shown.insert(scene.clone());
@@ -164,6 +166,7 @@ impl Port {
             storylines: &statics.storylines,
             flags: &mut pilot.flags,
             story: &mut pilot.story,
+            outfits: &mut out.story_outfits,
         };
         out.save_due |= match &scene {
             Scene::Offer(id) => play.make_offer(id),
@@ -212,6 +215,7 @@ impl Port {
             storylines: &statics.storylines,
             flags: &mut pilot.flags,
             story: &mut pilot.story,
+            outfits: &mut out.story_outfits,
         }
         .landed(stellar);
     }
@@ -244,6 +248,7 @@ pub(super) fn settle_outcome(
         storylines: &statics.storylines,
         flags: &mut pilot.flags,
         story: &mut pilot.story,
+        outfits: &mut out.story_outfits,
     }
     .decide(id, outcome, room);
 }

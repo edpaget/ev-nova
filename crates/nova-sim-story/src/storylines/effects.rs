@@ -1,10 +1,26 @@
 //! Applying a mission's effect block: flags set and cleared, jump points
-//! changed, and news released.
+//! changed, and news released, and its outfit grants and removals handed
+//! to the caller.
+//!
+//! An outfit lives on the pilot's ship, which the story doesn't hold, so
+//! a block's outfit changes are collected as [`OutfitChange`]s for the
+//! session to make (through the `G` and `D` set operators, so the stock
+//! rules for each apply).
 
 use nova_sim_catalog::storylines::StoryEffects;
 
 use super::state::StoryState;
+use crate::catalog::OutfitId;
 use crate::flags::WorldFlags;
+
+/// An outfit change an effect block hands to the caller to make.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutfitChange {
+    /// Grant one of the outfit.
+    Grant(OutfitId),
+    /// Remove one of the outfit, if owned.
+    Remove(OutfitId),
+}
 
 /// Applies `effects` to `flags` and `story`:
 ///
@@ -13,8 +29,16 @@ use crate::flags::WorldFlags;
 /// - changes each point's owner and stability, each field given on its
 ///   own, over any change made before;
 /// - releases each news item on today's day. An item released before
-///   keeps the day it first broke.
-pub fn apply(effects: &StoryEffects, flags: &mut WorldFlags, story: &mut StoryState) {
+///   keeps the day it first broke;
+/// - pushes onto `outfits` a grant for each of `grant_outfits`, then a
+///   removal for each of `remove_outfits`, in list order, a repeated id
+///   once for each time it is listed.
+pub fn apply(
+    effects: &StoryEffects,
+    flags: &mut WorldFlags,
+    story: &mut StoryState,
+    outfits: &mut Vec<OutfitChange>,
+) {
     for flag in &effects.flags {
         flags.set(flag);
     }
@@ -34,6 +58,15 @@ pub fn apply(effects: &StoryEffects, flags: &mut WorldFlags, story: &mut StorySt
     for news in &effects.news {
         story.news.entry(news.clone()).or_insert(today);
     }
+    let grants = effects
+        .grant_outfits
+        .iter()
+        .map(|&id| OutfitChange::Grant(id));
+    let removals = effects
+        .remove_outfits
+        .iter()
+        .map(|&id| OutfitChange::Remove(id));
+    outfits.extend(grants.chain(removals));
 }
 
 #[cfg(test)]
@@ -44,6 +77,7 @@ mod tests {
     use nova_sim_catalog::storylines::{PointStability, PointState};
 
     use super::*;
+    use crate::catalog::OutfitId;
     use crate::storylines::state::PointChange;
 
     fn texts(names: &[&str]) -> Vec<String> {
@@ -69,7 +103,7 @@ mod tests {
             clear_flags: texts(&["old", "both"]),
             ..setting(&["new", "both"])
         };
-        apply(&effects, &mut flags, &mut story);
+        apply(&effects, &mut flags, &mut story, &mut Vec::new());
         assert_eq!(flags.iter().collect::<Vec<_>>(), ["new"]);
         assert_eq!(story, StoryState::default());
     }
@@ -82,6 +116,7 @@ mod tests {
             &change(None, Some(PointStability::Dead)),
             &mut flags,
             &mut story,
+            &mut Vec::new(),
         );
         assert_eq!(
             story.points["hearth/road"],
@@ -90,7 +125,12 @@ mod tests {
                 stability: Some(PointStability::Dead),
             }
         );
-        apply(&change(Some("guild"), None), &mut flags, &mut story);
+        apply(
+            &change(Some("guild"), None),
+            &mut flags,
+            &mut story,
+            &mut Vec::new(),
+        );
         assert_eq!(
             story.points["hearth/road"],
             PointChange {
@@ -103,6 +143,7 @@ mod tests {
             &change(Some("warden"), Some(PointStability::Unstable)),
             &mut flags,
             &mut story,
+            &mut Vec::new(),
         );
         assert_eq!(
             story.points["hearth/road"],
@@ -124,7 +165,7 @@ mod tests {
             news: texts(&["closed"]),
             ..StoryEffects::default()
         };
-        apply(&effects, &mut flags, &mut story);
+        apply(&effects, &mut flags, &mut story, &mut Vec::new());
         story.day = 5;
         apply(
             &StoryEffects {
@@ -133,10 +174,55 @@ mod tests {
             },
             &mut flags,
             &mut story,
+            &mut Vec::new(),
         );
         assert_eq!(
             story.news,
             BTreeMap::from([("closed".to_owned(), 3), ("opened".to_owned(), 5)])
         );
+    }
+
+    fn outfits(ids: &[i16]) -> Vec<OutfitId> {
+        ids.iter().copied().map(OutfitId).collect()
+    }
+
+    #[test]
+    fn outfits_are_granted_then_removed_in_list_order() {
+        let effects = StoryEffects {
+            grant_outfits: outfits(&[130, 128, 130]),
+            remove_outfits: outfits(&[129, 128]),
+            ..StoryEffects::default()
+        };
+        let mut changes = vec![OutfitChange::Remove(OutfitId(140))];
+        apply(
+            &effects,
+            &mut WorldFlags::default(),
+            &mut StoryState::default(),
+            &mut changes,
+        );
+        assert_eq!(
+            changes,
+            [
+                OutfitChange::Remove(OutfitId(140)),
+                OutfitChange::Grant(OutfitId(130)),
+                OutfitChange::Grant(OutfitId(128)),
+                OutfitChange::Grant(OutfitId(130)),
+                OutfitChange::Remove(OutfitId(129)),
+                OutfitChange::Remove(OutfitId(128)),
+            ],
+            "pushed after what was there, a repeated id twice"
+        );
+    }
+
+    #[test]
+    fn a_block_without_outfits_hands_none() {
+        let mut changes = Vec::new();
+        apply(
+            &setting(&["a"]),
+            &mut WorldFlags::default(),
+            &mut StoryState::default(),
+            &mut changes,
+        );
+        assert_eq!(changes, []);
     }
 }

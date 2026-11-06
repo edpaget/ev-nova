@@ -28,7 +28,10 @@
 //! # Rules
 //!
 //! - [`requires::holds`]: whether a mission's conditions hold.
-//! - [`effects::apply`]: one effect block.
+//! - [`effects::apply`]: one effect block. Its outfit grants and removals
+//!   are handed back as [`OutfitChange`](effects::OutfitChange)s, which
+//!   the session makes through the `G` and `D` set operators, as the ship
+//!   isn't the story's.
 //! - [`lifecycle`]: a mission's life from offer to success, events, and
 //!   the scenes a landed visit shows ([`Play`](lifecycle::Play)), and the
 //!   outcome an offer's conversation reaches

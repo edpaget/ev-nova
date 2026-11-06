@@ -59,7 +59,7 @@ use nova_sim_catalog::storylines::{
     MissionObjective, Outcome, StoryEffects, StoryMission, Storylines,
 };
 
-use super::effects;
+use super::effects::{self, OutfitChange};
 use super::requires;
 use super::state::{MissionState, StoryState};
 use crate::catalog::StellarId;
@@ -87,6 +87,10 @@ pub struct Play<'a> {
     pub flags: &'a mut WorldFlags,
     /// The pilot's story state.
     pub story: &'a mut StoryState,
+    /// The outfit changes the effects applied hand back, in the order
+    /// they applied ([`effects::apply`]), for the caller to make: the
+    /// ship isn't the story's to change.
+    pub outfits: &'a mut Vec<OutfitChange>,
 }
 
 impl Play<'_> {
@@ -292,7 +296,7 @@ impl Play<'_> {
     }
 
     fn apply(&mut self, effects: &StoryEffects) {
-        effects::apply(effects, self.flags, self.story);
+        effects::apply(effects, self.flags, self.story, self.outfits);
     }
 }
 
@@ -337,7 +341,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::catalog::SystemId;
+    use crate::catalog::{OutfitId, SystemId};
     use crate::storylines::state::PointChange;
 
     const DOCK: i16 = 128;
@@ -348,11 +352,13 @@ mod tests {
         nova_sim_catalog::fixture::storylines::place(FILE, knot)
     }
 
-    /// A pilot's flags and story, and the data they play over.
+    /// A pilot's flags and story, the data they play over, and the outfit
+    /// changes handed back.
     struct Fixture {
         storylines: Storylines,
         flags: WorldFlags,
         story: StoryState,
+        outfits: Vec<OutfitChange>,
     }
 
     impl Fixture {
@@ -383,6 +389,7 @@ mod tests {
                 },
                 flags: WorldFlags::default(),
                 story: StoryState::default(),
+                outfits: Vec::new(),
             }
         }
 
@@ -391,6 +398,7 @@ mod tests {
                 storylines: &self.storylines,
                 flags: &mut self.flags,
                 story: &mut self.story,
+                outfits: &mut self.outfits,
             }
         }
 
@@ -450,6 +458,42 @@ mod tests {
         assert!(!f.play().make_offer("job"), "offered again: no change");
         assert!(!f.flags.is_set("offered"));
         assert_eq!(f.story.news["word"], 0);
+    }
+
+    #[test]
+    fn a_cascade_hands_back_its_outfit_changes_in_order() {
+        let pass = OutfitId(130);
+        let mut f = Fixture::new(&[
+            (
+                "job",
+                StoryMission {
+                    on_accept: StoryEffects {
+                        grant_outfits: vec![pass],
+                        ..setting(&["accepted"])
+                    },
+                    ..job()
+                },
+            ),
+            (
+                "recall",
+                StoryMission {
+                    offer: None,
+                    requires: requiring(&["accepted"]),
+                    on_offer: StoryEffects {
+                        remove_outfits: vec![pass],
+                        ..StoryEffects::default()
+                    },
+                    ..StoryMission::default()
+                },
+            ),
+        ]);
+        f.play().make_offer("job");
+        assert_eq!(f.outfits, []);
+        assert!(f.play().decide("job", Outcome::Accept, 10));
+        assert_eq!(
+            f.outfits,
+            [OutfitChange::Grant(pass), OutfitChange::Remove(pass)]
+        );
     }
 
     #[test]

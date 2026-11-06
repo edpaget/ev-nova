@@ -19,6 +19,7 @@ use crate::message::SimMessage;
 use crate::navigation::NavMode;
 use crate::player_wrap::PlayerWrap;
 use crate::sound::SimSound;
+use crate::storylines::effects::OutfitChange;
 
 use super::{InterfaceLoad, MissionShown, PersonQuote, SessionEvent, TextBar};
 
@@ -39,6 +40,12 @@ pub(super) struct Outbox {
     /// Whether the save due is one written even in flight (see the
     /// `in_flight_save` module and [`Outbox::save_now`]).
     pub(super) save_in_flight: bool,
+    /// The outfit grants and removals the storylines' effects have handed
+    /// back, in the order they applied, until the session makes them
+    /// (`Session::apply_story_outfits`, in the `story_outfits` module).
+    /// Every entry that plays the storylines drains it before it returns,
+    /// so none is left at a frame, a dialog page or a save; never saved.
+    pub(super) story_outfits: Vec<OutfitChange>,
     /// Whether the hold ran out on a tick since
     /// [`Session::take_hold_expired`](super::Session::take_hold_expired) was last asked.
     pub(super) hold_expiry_due: bool,
