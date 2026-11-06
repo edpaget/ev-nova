@@ -395,15 +395,6 @@ fn the_ship_stays_at_the_play_areas_centre_as_the_stellars_go_by() {
 }
 
 #[test]
-fn the_stellars_animate_with_time() {
-    let mut view = at_rest(catalog());
-    ticked(&mut view, 1);
-    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 1));
-    ticked(&mut view, 2);
-    assert_eq!(sprites(&flown(&view))[1].0, ImageKey::sprite(1129, 3));
-}
-
-#[test]
 fn a_ship_without_a_sheet_is_a_placeholder_with_the_reason() {
     let sheetless = FakeCatalog {
         sheet: Err("no shän 128 for shïp 128".to_owned()),

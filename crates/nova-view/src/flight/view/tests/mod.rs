@@ -129,7 +129,6 @@ mod ship_outlines;
 mod shots;
 mod stars;
 mod stellar_looks;
-mod stellar_passes;
 mod stellars;
 mod stepping;
 mod whole_pixels;
@@ -168,10 +167,6 @@ fn held(key: Key) -> Input {
         repeat: true,
     }
 }
-
-/// The second half of a tick: `TICK / 2` rounds down, so this is a
-/// nanosecond longer.
-const REST_OF_TICK: Duration = Duration::from_nanos(16_666_667);
 
 fn drawn(view: &FlightView<FakeCatalog, impl FlightSim>) -> DrawList {
     let mut list = DrawList::new();

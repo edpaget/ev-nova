@@ -75,7 +75,7 @@ use super::between_passes::{self, BetweenPasses};
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
     JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point,
-    show_combat, show_frozen_frames, show_gate_frames, stars, window_width,
+    show_combat, show_stellars, stars, window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars, the world, the
@@ -400,15 +400,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// out. Last the sheets of a system the session populated afresh are
     /// read. Flight and the jump's warp both step this way.
     ///
-    /// The comm notes and quotes are said before the gates' frames are
-    /// shown, where the view once showed the frames first: the two touch
-    /// nothing in common, and both are set before the frame is drawn.
+    /// The comm notes and quotes are said after the stellars' looks and
+    /// frames are shown from `drawn` (the hold, when a double-time frame
+    /// is drawn between its passes): the two touch nothing in common, and
+    /// both are set before the frame is drawn.
     pub(super) fn run_steps(&mut self, steps: u32, pod: Option<super::rescue::PodFrame>) {
         let rescued = self.step_frame(steps, self.anchor());
         let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
-            show_frozen_frames(scene, drawn);
-            show_gate_frames(scene, drawn);
+            show_stellars(scene, drawn);
         }
         self.relay_messages();
         self.relay_last_line();

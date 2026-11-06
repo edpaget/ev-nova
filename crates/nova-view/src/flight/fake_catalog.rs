@@ -31,7 +31,7 @@ use crate::flight::view::*;
 use crate::flight::weapons::BEAM_UNDER_SHIPS;
 use crate::galaxy::{Galaxy, GalaxyCatalog, SystemEntry};
 use crate::system::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
 };
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::{Color, Font, Input, Key, Point, Screen};
@@ -774,7 +774,7 @@ pub(in crate::flight) fn stellar(
             eight_bit: false,
         }),
         dead_sprite: None,
-        animation: AnimationData {
+        animation: StellarAnimation {
             delay: 1,
             frame0_bias: 0,
             flags2: 0,

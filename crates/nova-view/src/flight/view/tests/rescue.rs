@@ -218,6 +218,24 @@ fn the_rescue_fades_the_pods_last_frame_to_black_and_steps_no_more() {
 }
 
 #[test]
+fn a_rescues_fade_draws_each_stellar_on_the_frame_the_pod_last_showed() {
+    let mut view = in_the_pod();
+    view.sim.frame_mut().stellars[1].frame = 2;
+    view.tick(TICK);
+    let moon = |view: &Faked| sprites(&drawn(view))[1].0;
+    assert_eq!(moon(&view), crate::ImageKey::sprite(1129, 2));
+    rescue(&mut view);
+    for _ in 0..4 {
+        ticks(&mut view, RESCUE_FADE_FOR / 8);
+        assert_eq!(
+            moon(&view),
+            crate::ImageKey::sprite(1129, 2),
+            "no tick of the rescue changes it"
+        );
+    }
+}
+
+#[test]
 fn the_rescue_is_laid_out_only_once_the_fade_out_is_over() {
     let mut view = in_the_pod();
     rescue(&mut view);

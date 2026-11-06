@@ -132,10 +132,9 @@ fn a_destroyed_stellar_whose_dead_type_is_a_pict_pair_draws_it() {
     let mut scene = SystemScene::load(&data, SystemId(131));
     assert_eq!(scene.problems(), [] as [String; 0]);
     assert_eq!(drawn(&scene), (vec![ImageKey::sprite(1001, 0)], false));
-    scene.set_destroyed(|_| StellarLook {
+    scene.set_looks(|_| StellarLook {
         destroyed: true,
         drawn: DrawnSheet::Dead,
-        counted: DrawnSheet::Dead,
         ..StellarLook::default()
     });
     let (sprites, placeholder) = drawn(&scene);

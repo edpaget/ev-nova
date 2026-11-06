@@ -236,7 +236,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
                 SessionEvent::StarfieldReset => redrawn.stars = true,
-                SessionEvent::StellarFramesReset => redrawn.frames_reset = true,
+                // The session resets every stellar's frames itself.
+                SessionEvent::StellarFramesReset => {}
             }
         }
         if redrawn.galaxy {

@@ -28,7 +28,7 @@ pub(super) fn hold(view: &mut Faked, k: Key, pressed: bool) {
 /// player as `now` says (as it was without), the step drawn whole
 /// (alpha 0), the cursor stepped and the HUD advanced.
 pub(super) fn tick_to(view: &mut Faked, now: Option<FrameShip>) {
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     let before = view.frame.player().place();
     view.sim.queue_report(StepReport {
         steps: vec![StepRun {

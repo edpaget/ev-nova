@@ -275,7 +275,7 @@ fn with_the_escort_menu_open_command_5_picks_freighters_not_a_stellar() {
 
 /// `view`'s escort menu past its timeout and 10 steps into its fade.
 fn fading(view: &mut Faked) {
-    view.step_stellars(crate::flight::escorts::MENU_TIMEOUT + TICK);
+    view.advance_clock(crate::flight::escorts::MENU_TIMEOUT + TICK);
     super::faked_escorts::single_steps(view, 10);
     assert_eq!(view.escort_menu().level(), Some(22), "fading");
 }

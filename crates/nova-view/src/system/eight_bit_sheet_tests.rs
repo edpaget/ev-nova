@@ -20,7 +20,7 @@ use nova_sim::Vec2;
 
 use super::camera::Camera;
 use super::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
 use super::scene::{SystemScene, draw_stellars};
@@ -61,7 +61,7 @@ fn sol(eight_bit: bool) -> SystemScene {
             y: 0,
             sprite: Ok(sheet(eight_bit)),
             dead_sprite: None,
-            animation: AnimationData::default(),
+            animation: StellarAnimation::default(),
             stand_in: None,
         }],
         type_zero_sprite: Err("none".to_owned()),

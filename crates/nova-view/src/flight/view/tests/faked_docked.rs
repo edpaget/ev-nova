@@ -552,7 +552,7 @@ fn flashing(name: &str) -> NavDisplay {
 /// One frame of `dt` on `view`'s clock, as a frame's tick moves it: the
 /// stellars stepped, then the HUD advanced.
 fn frame_of(view: &mut Faked, dt: Duration) {
-    view.step_stellars(dt);
+    view.advance_clock(dt);
     view.advance_hud();
 }
 

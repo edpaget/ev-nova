@@ -26,7 +26,6 @@ use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
-use crate::system::kept_frames::KeptFrames;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
@@ -168,7 +167,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// (`with_slot_sprites`'). The kept frame is filled afresh, the cargo
     /// area's labels with it (`with_strings`').
     pub fn show_set_up(&mut self, slots_carried: bool) {
-        self.show_destroyed();
+        self.show_stellars();
         if slots_carried {
             self.read_npc_sheets();
         }
@@ -614,7 +613,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
             frame_rate: crate::flight::frame_rate::FrameRate::with_shown(false),
             sim,
             scene: opening.scene,
-            kept_frames: KeptFrames::new(),
             sheet: opening.sheet,
             outline: opening.outline,
             sheet_ship: opening.sheet_ship,

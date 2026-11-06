@@ -389,6 +389,64 @@ fn a_real_steps_pass_reports_the_escort_menus_rows_and_count() {
     assert!(menu.rows.iter().any(|row| row.present));
 }
 
+/// `FlightSim::step` then `frame`, at the adapter: each step's frame
+/// reports the frame its session stepped each stellar to
+/// (`FrameStellar::frame`), here Alpha Prime animating over its 2-frame
+/// sheet every pass ([`animated_data`]), turning over as the session's
+/// gain ramps up.
+#[test]
+fn a_real_step_reports_each_stellars_frame() {
+    let data = animated_data();
+    let session = SessionBuilder::flying(&data).build();
+    let view = FlightView::from_session(Rc::clone(&data), session.into(), &Rulebook::default());
+    let mut sim = view.sim().clone();
+    let frames: Vec<u16> = (0..30)
+        .map(|_| {
+            let mut report = nova_sim::flight_frame::StepReport::default();
+            sim.step(
+                &nova_sim::flight_frame::StepInput::default(),
+                1,
+                &mut report,
+            );
+            frame_of(&sim)
+                .stellar(StellarId(128))
+                .expect("listed")
+                .frame
+        })
+        .collect();
+    let turns = frames.windows(2).filter(|pair| pair[0] != pair[1]).count();
+    assert!(turns >= 10, "{frames:?}");
+    assert!(frames.iter().all(|&frame| frame < 2), "{frames:?}");
+}
+
+/// [`data`] with Alpha Prime of graphic type 1 and `AnimDelay` 1, its
+/// `spïn` 1001 2 tiles across over a 2-frame `rlëD` 1001.
+fn animated_data() -> Rc<GameData> {
+    use nova_data::graphics::RLED;
+    use nova_data::graphics::fixture::RledBuilder;
+    use nova_data::records::spin::Spin;
+    let mut prime = planet();
+    put_i16s(&mut prime, 0x04, &[1]);
+    put_i16s(&mut prime, 0x22, &[1, 0]);
+    let mut spin = vec![0; Spin::SIZE.expect("fixed")];
+    put_i16s(&mut spin, 0x00, &[1001, -1, 4, 4, 2, 1]);
+    let sheet = (0..2)
+        .fold(RledBuilder::new(4, 4), |sheet, _| {
+            sheet.frame(|f| (0..4).fold(f, |f, _| f.line().pixels(&[0x7C00; 4])))
+        })
+        .build();
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[], &[128]))
+        .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &prime)
+        .resource(Spin::TYPE, 1001, None, &spin)
+        .resource(RLED, 1001, None, &sheet)
+        .build()
+        .bytes;
+    Rc::new(one_file(fork).load())
+}
+
 /// `FlightSim::apply` then `frame`, at the adapter: a stellar key's
 /// command reaches the session and the next frame shows the selection.
 #[test]

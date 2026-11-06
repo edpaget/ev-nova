@@ -1,8 +1,8 @@
 //! The scene as the kept frame holds its stellars, on [`FakeFlight`]
 //! (rdm:phase/view-sim-seam/phase-7-world-frame): laid out, placed and
 //! read again from the flight's events, each stellar drawn on the sheet
-//! its record says (whole, dead, graphic type 0's, none, frozen), its
-//! animation over the frames its record counts, kept across layouts. What
+//! its record says (whole, dead, graphic type 0's, none, frozen), on the
+//! frame its record reports. What
 //! the session decides (which events a set expression, a jump, a gate or
 //! a move raise; which sheet a rule draws; which stellars a system
 //! shows) is nova-sim's, named where a test leans on it.
@@ -15,7 +15,6 @@ use super::faked_world::{world, world_list};
 use super::nav::{faked_nav_icons, nav_at};
 use super::stellars::proxima_in_sol;
 use super::*;
-use crate::system::animation::Frames;
 
 /// What a catch-up of `view` redraws, with no status bar to follow
 /// (the session's, phase 8's).
@@ -57,8 +56,8 @@ pub(super) fn showing(system: i16, stellars: Vec<FrameStellar>) -> FlightFrame {
     }
 }
 
-/// Stellar `id`'s record, shown, drawing `drawn` and counting its frames,
-/// destroyed as `destroyed` says.
+/// Stellar `id`'s record, shown, drawing `drawn` on frame 0, destroyed
+/// as `destroyed` says.
 pub(super) fn looking(id: i16, drawn: DrawnSheet, destroyed: bool) -> FrameStellar {
     FrameStellar {
         destroyed,
@@ -438,118 +437,66 @@ fn a_whole_stellar_with_no_type_sheet_draws_type_zero_or_its_placeholder_as_its_
     assert!(texts(&world_list(&typed)).contains(&reason));
 }
 
-// The stellars' animation (stellar-fidelity phases 1, 8, 10 and 12).
+// The stellars' frames (rendering phase 11): the session steps every
+// stellar's frame and reports it (nova-sim's `stellar_frames` module);
+// the view draws the frame the record gives, and steps none of its own.
 
 /// The Moon's frame shown.
 pub(super) fn moon_on(view: &Faked) -> u16 {
     sprites(&world_list(view))[1].0.frame
 }
 
-/// Steps `view`'s stellars a tick, its frozen and gate frames shown from
-/// its frame as a tick's steps leave them.
+/// A tick of `view`'s clock with no step, the stellars shown from its
+/// frame as it is now.
 pub(super) fn tick_stellars(view: &mut Faked) {
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     view.refresh_frame();
-    if let Some(scene) = &mut view.scene {
-        super::super::show_frozen_frames(scene, &view.frame);
-        super::super::show_gate_frames(scene, &view.frame);
-    }
+    view.show_stellars();
+}
+
+/// `view`'s Moon reported on `frame`, from the next fill.
+fn moon_reported(view: &mut Faked, frame: u16) {
+    changed(view, |flight| flight.stellars[1].frame = frame);
 }
 
 #[test]
-fn two_half_tick_steps_step_the_stellars_once() {
+fn each_stellar_draws_the_frame_the_kept_frame_reports() {
     let mut view = faked_from(catalog(), showing(130, sol()));
-    view.step_stellars(TICK / 2);
-    assert_eq!(moon_on(&view), 0, "not on half a tick");
-    view.step_stellars(REST_OF_TICK);
-    assert_eq!(moon_on(&view), 1, "on the tick's second half");
+    moon_reported(&mut view, 3);
+    tick_stellars(&mut view);
+    assert_eq!(sprites(&world_list(&view))[1].0, ImageKey::sprite(1129, 3));
+    moon_reported(&mut view, 0);
+    tick_stellars(&mut view);
+    assert_eq!(sprites(&world_list(&view))[1].0, ImageKey::sprite(1129, 0));
 }
 
-/// A flight in Sol whose Moon (129) animates a frame a tick only while
-/// destroyed (`Flags2` 0x0080), over a `Type` sheet of `frames` frames
-/// and a 3-frame `DeadType` sheet.
-fn flickering(frames: u16) -> FakeCatalog {
-    FakeCatalog {
-        lives: vec![life(129, 0x0080)],
-        moon: Some(MoonSheets {
-            width: 50,
-            dead_width: Some(70),
-            zero_width: 90,
-            frames,
-            dead_frames: 3,
-            flags2: 0x0080,
-        }),
-        ..catalog()
+#[test]
+fn the_view_steps_no_stellar_of_its_own() {
+    // Ticks with no step, whatever their length, leave the frame drawn as
+    // the record reports it.
+    let mut view = faked_from(catalog(), showing(130, sol()));
+    moon_reported(&mut view, 2);
+    tick_stellars(&mut view);
+    for dt in [TICK / 2, TICK, TICK * 7] {
+        view.advance_clock(dt);
+        view.refresh_frame();
+        view.show_stellars();
+        assert_eq!(moon_on(&view), 2, "{dt:?}");
     }
 }
 
-/// The Moon's frames shown over `n` ticks, each of its `DeadType` sheet.
-fn dead_moon_on(view: &mut Faked, n: usize) -> Vec<u16> {
-    (0..n)
-        .map(|_| {
-            tick_stellars(view);
-            let image = sprites(&world_list(view))[1].0;
-            assert_eq!(image.id, 2129, "the DeadType sheet");
-            image.frame
-        })
-        .collect()
-}
-
 #[test]
-fn a_stellar_animates_over_the_frames_of_the_sheet_its_record_counts() {
-    // Which sheet it counts after `Y` and a rebuild point: the session's
-    // (nova-sim's `by_the_engine_a_stellar_counts_the_sheet_of_its_last_rebuild_point`,
-    // `by_the_bible_a_stellar_counts_the_sheet_it_draws`).
-    let mut view = faked_from(flickering(4), showing(130, sol()));
-    changed(&mut view, |frame| {
-        frame.stellars[1] = FrameStellar {
-            counted: DrawnSheet::Type,
-            ..looking(129, DrawnSheet::Dead, true)
-        };
-    });
-    raising(&mut view, &[SessionEvent::GalaxyChanged]);
+fn a_take_offs_reset_event_leaves_the_frames_to_the_session() {
+    let mut view = faked_from(catalog(), showing(130, sol()));
+    moon_reported(&mut view, 2);
+    tick_stellars(&mut view);
+    raising(&mut view, &[SessionEvent::StellarFramesReset]);
     caught_up(&mut view);
-    assert_eq!(
-        dead_moon_on(&mut view, 9),
-        [1, 2, 0, 0, 1, 2, 0, 0, 1],
-        "Type's 4 frames over the DeadType's 3"
-    );
-    // The rebuild keeps current frame 1, next 2, from the Type's count.
-    changed(&mut view, |frame| {
-        frame.stellars[1].counted = DrawnSheet::Dead;
-    });
-    raising(&mut view, &[SessionEvent::StellarsRebuilt]);
-    caught_up(&mut view);
-    assert_eq!(
-        dead_moon_on(&mut view, 7),
-        [2, 0, 1, 2, 0, 1, 2],
-        "the DeadType's 3"
-    );
+    assert_eq!(moon_on(&view), 2, "as the record reports it");
 }
 
-#[test]
-fn a_stellar_counting_a_one_frame_sheet_stays_still() {
-    let mut view = faked_from(flickering(1), showing(130, sol()));
-    changed(&mut view, |frame| {
-        frame.stellars[1] = FrameStellar {
-            counted: DrawnSheet::Type,
-            ..looking(129, DrawnSheet::Dead, true)
-        };
-    });
-    raising(&mut view, &[SessionEvent::GalaxyChanged]);
-    caught_up(&mut view);
-    assert_eq!(dead_moon_on(&mut view, 6), [0; 6]);
-    changed(&mut view, |frame| {
-        frame.stellars[1].counted = DrawnSheet::Dead;
-    });
-    raising(&mut view, &[SessionEvent::StellarsRebuilt]);
-    caught_up(&mut view);
-    assert_eq!(dead_moon_on(&mut view, 4), [1, 2, 0, 1]);
-}
-
-/// A flight in Sol whose Moon (129) can be destroyed and animates a
-/// frame a tick while whole, over a 4-frame `Type` sheet 50 square with
-/// a 2-frame `DeadType` sheet 70 square.
+/// A flight in Sol whose Moon (129) can be destroyed, over a 4-frame
+/// `Type` sheet 50 square with a 2-frame `DeadType` sheet 70 square.
 fn uncounted_moon() -> FakeCatalog {
     FakeCatalog {
         lives: vec![life(129, 0)],
@@ -578,10 +525,11 @@ fn moon_drawn(view: &Faked) -> Vec<(ImageKey, Point)> {
 }
 
 #[test]
-fn a_stellar_drawing_no_frame_draws_nothing_and_a_frozen_one_its_kept_frame_shifted() {
-    // When its slot shows none, counts none or is frozen: the session's
-    // (nova-sim's
-    // `a_whole_stellar_whose_type_counts_no_frames_draws_no_frame_then_keeps_its_dead_frame_frozen`).
+fn a_stellar_drawing_no_frame_draws_nothing_and_a_frozen_one_its_frame_shifted() {
+    // When its slot shows none or is frozen, and the frame it keeps: the
+    // session's (nova-sim's
+    // `a_whole_stellar_whose_type_counts_no_frames_draws_no_frame_then_keeps_its_dead_frame_frozen`,
+    // `a_frozen_slot_keeps_the_frame_from_before_the_pass_that_froze_it`).
     let mut view = faked_from(
         uncounted_moon(),
         showing(
@@ -596,8 +544,9 @@ fn a_stellar_drawing_no_frame_draws_nothing_and_a_frozen_one_its_kept_frame_shif
     assert_eq!(moon_drawn(&view), [], "its slot shows no frame");
     changed(&mut view, |frame| {
         frame.stellars[1] = FrameStellar {
-            counts_none: true,
-            ..looking(129, DrawnSheet::Dead, true)
+            frozen: true,
+            frame: 1,
+            ..looking(129, DrawnSheet::Dead, false)
         };
     });
     raising(&mut view, &[SessionEvent::GalaxyChanged]);
@@ -605,29 +554,12 @@ fn a_stellar_drawing_no_frame_draws_nothing_and_a_frozen_one_its_kept_frame_shif
     tick_stellars(&mut view);
     assert_eq!(
         moon_drawn(&view),
-        [(ImageKey::sprite(2129, 0), Point::new(0.0, 0.0))],
-        "its `DeadType`, still: it counts none"
+        [(
+            ImageKey::sprite(2129, 1),
+            Point::new(35.0 - 16.0, 35.0 - 16.0)
+        )],
+        "the `DeadType` frame reported, where a 32-pixel slot puts it"
     );
-    changed(&mut view, |frame| {
-        frame.stellars[1] = FrameStellar {
-            frozen: true,
-            counts_none: true,
-            ..looking(129, DrawnSheet::Dead, false)
-        };
-    });
-    raising(&mut view, &[SessionEvent::GalaxyChanged]);
-    caught_up(&mut view);
-    for _ in 0..4 {
-        tick_stellars(&mut view);
-        assert_eq!(
-            moon_drawn(&view),
-            [(
-                ImageKey::sprite(2129, 0),
-                Point::new(35.0 - 16.0, 35.0 - 16.0)
-            )],
-            "the `DeadType` frame kept, where a 32-pixel slot puts it"
-        );
-    }
 }
 
 #[test]
@@ -658,7 +590,6 @@ fn the_nav_brackets_round_a_slot_whose_frames_count_none_are_32_square() {
     changed(&mut view, |frame| {
         frame.stellars[1] = FrameStellar {
             frozen: true,
-            counts_none: true,
             ..looking(129, DrawnSheet::Dead, false)
         };
     });
@@ -682,256 +613,26 @@ fn the_nav_brackets_round_a_slot_whose_frames_count_none_are_32_square() {
 }
 
 #[test]
-fn a_move_within_the_system_keeps_its_stellars_animations() {
-    let mut view = faked_from(catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 2);
-    raising(&mut view, &[SessionEvent::SystemChanged]);
-    assert!(caught_up(&mut view).system, "laid out");
-    assert_eq!(moon_on(&view), 2, "where it was");
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 3, "and on from there");
-}
-
-#[test]
-fn a_stellar_left_on_frame_2_shows_frame_2_after_another_system_and_back() {
-    let mut view = faked_from(catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 2);
-    changed(&mut view, |frame| {
-        *frame = showing(131, vec![looking(140, DrawnSheet::Type, false)]);
-    });
-    raising(&mut view, &[SessionEvent::SystemChanged]);
-    assert!(caught_up(&mut view).system, "laid out in Alpha Centauri");
-    for _ in 0..5 {
-        tick_stellars(&mut view);
-    }
-    changed(&mut view, |frame| *frame = showing(130, sol()));
-    raising(&mut view, &[SessionEvent::SystemChanged]);
-    assert!(caught_up(&mut view).system, "laid out in Sol again");
-    assert_eq!(moon_on(&view), 2, "nothing stepped while away");
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 3, "and on from there");
-}
-
-/// The Moon's animation state in `view`'s scene.
-pub(super) fn moon_frames(view: &Faked) -> Frames {
-    view.scene().expect("laid out").stellars()[1].frames
-}
-
-#[test]
-fn a_take_offs_reset_restarts_every_stellar_from_frame_0_with_next_0() {
-    let mut view = faked_from(catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 2);
-    let mut zeroed = moon_frames(&view);
-    zeroed.take_off_reset();
-    raising(&mut view, &[SessionEvent::StellarFramesReset]);
-    assert!(caught_up(&mut view).frames_reset);
-    assert_eq!(moon_on(&view), 0, "frame 0 shown");
-    assert_eq!(moon_frames(&view), zeroed, "current 0, next 0");
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 0, "next 0");
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 1, "then on");
-}
-
-#[test]
-fn a_gate_exits_reset_zeroes_the_stellars_left_behind_and_starts_the_new_ones_with_next_0() {
-    let mut view = faked_from(catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 2);
-    changed(&mut view, |frame| {
-        *frame = showing(131, vec![looking(140, DrawnSheet::Type, false)]);
-    });
-    raising(
-        &mut view,
-        &[
-            SessionEvent::SystemChanged,
-            SessionEvent::StarfieldReset,
-            SessionEvent::StellarFramesReset,
-        ],
-    );
-    let redrawn = caught_up(&mut view);
-    assert!(redrawn.system && redrawn.frames_reset);
-    assert_eq!(
-        view.scene().expect("laid out").stellars()[0].frames,
-        Frames::after_reset(),
-        "never shown before: next 0"
-    );
-    changed(&mut view, |frame| *frame = showing(130, sol()));
-    raising(&mut view, &[SessionEvent::SystemChanged]);
-    caught_up(&mut view);
-    assert_eq!(moon_on(&view), 0, "zeroed as it was kept");
-    tick_stellars(&mut view);
-    assert_eq!(moon_on(&view), 0, "next 0");
-}
-
-#[test]
-fn without_the_reset_a_catch_up_keeps_the_stellars_frames() {
-    let mut view = faked_from(catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    let before = moon_frames(&view);
-    raising(&mut view, &[SessionEvent::StellarsRebuilt]);
-    assert!(!caught_up(&mut view).frames_reset);
-    assert_eq!(moon_frames(&view), before);
-}
-
-#[test]
-fn a_galaxy_change_keeps_the_stellars_animations() {
-    let mut view = faked_from(destructible_catalog(), showing(130, sol()));
-    tick_stellars(&mut view);
-    tick_stellars(&mut view);
-    raising(&mut view, &[SessionEvent::GalaxyChanged]);
-    assert!(caught_up(&mut view).galaxy);
-    assert_eq!(moon_on(&view), 2, "not laid out afresh");
-}
-
-/// A flight in Sol with hypergate 141 at (200, 100), which opens only
-/// while destroyed (`Flags2` 0x0080) and steps every tick, its `Type`
-/// sheet (1141) 20 square and its `DeadType` sheet (2141), 100 square,
-/// counting 6.
-fn uncounted_gate() -> FakeCatalog {
-    let mut catalog = trafficked(&[130], 1, 129, 3);
-    catalog.sol_more.push(StellarContents {
-        dead_sprite: Some(Ok(StellarSheet {
-            image: crate::SheetImage::Rled(2141),
-            frames: NonZeroU16::new(6).expect("non-zero"),
-            frame_width: 100,
-            frame_height: 100,
-            image_size: (100, 100),
-            eight_bit: false,
-        })),
-        ..stellar(141, "Gate", (200, 100), 6)
-    });
-    catalog.lives = vec![life(141, 0x0080)];
-    catalog
-}
-
-/// The frames of hypergate 141's sheets drawn.
-fn gate_on(view: &Faked) -> Vec<ImageKey> {
-    sprites(&world_list(view))
-        .into_iter()
-        .map(|(image, _)| image)
-        .filter(|image| [1141, 2141].contains(&image.id))
-        .collect()
-}
-
-#[test]
-fn a_gate_frozen_keeps_the_frame_it_showed_before_its_gate_frame_changes() {
-    // The view reads the freeze before the gate frames: on the tick the
-    // slot freezes, it holds the frame drawn on the tick before, not the
-    // one the record steps the gate to on this one.
-    let gate = |frame, destroyed| FrameStellar {
-        gate_frame: Some(frame),
-        ..looking(141, DrawnSheet::Dead, destroyed)
-    };
-    let mut frame = showing(130, sol());
-    frame.stellars.push(gate(3, true));
-    let mut view = faked_from(uncounted_gate(), frame);
-    let shown = gate_on(&view);
-    assert_eq!(
-        shown,
-        [ImageKey::sprite(2141, 3)],
-        "opening while destroyed"
-    );
-    changed(&mut view, |frame| {
-        frame.stellars[2] = FrameStellar {
-            frozen: true,
-            counts_none: true,
-            ..gate(0, false)
-        };
-    });
-    for _ in 0..4 {
-        tick_stellars(&mut view);
-        assert_eq!(gate_on(&view), shown, "the frame shown before, kept");
-    }
-}
-
-#[test]
-fn a_held_frames_gate_frames_and_frozen_looks_show_until_it_goes() {
-    // The Moon (129) stops stepping once a frozen look reaches the scene,
-    // and the gate draws the frame its record gives.
-    let gate = |frame| FrameStellar {
-        gate_frame: Some(frame),
-        ..looking(141, DrawnSheet::Dead, true)
-    };
+fn a_frame_held_between_its_passes_draws_its_own_stellar_frames() {
+    // Double time's frame between its passes draws the stellars as its
+    // first pass left them, then the kept frame's once it goes.
     let mut flight = showing(130, sol());
-    flight.stellars.push(gate(0));
-    let mut view = faked_from(uncounted_gate(), flight.clone());
+    let mut view = faked_from(catalog(), flight.clone());
     let mut first = flight.clone();
-    first.stellars[1].frozen = true;
-    first.stellars[2] = gate(1);
-    let mut now = flight;
-    now.stellars[2] = gate(3);
-    view.sim.set_frame(now);
+    first.stellars[1].frame = 1;
+    flight.stellars[1].frame = 2;
+    view.sim.set_frame(flight);
     let pass = nova_sim::flight_frame::PassReport::default();
     let report = super::stepping::doubled(pass.clone(), pass, first);
     view.sim.queue_report(report);
     view.tick(TICK);
-    assert_eq!(
-        gate_on(&view),
-        [ImageKey::sprite(2141, 1)],
-        "the first pass's"
-    );
-    let moon = moon_on(&view);
-    view.tick(TICK);
-    assert_eq!(moon_on(&view), moon, "the Moon frozen, as that frame says");
+    assert_eq!(moon_on(&view), 1, "the first pass's");
     view.sim.queue_report(nova_sim::flight_frame::StepReport {
         steps: Vec::new(),
         stopped: true,
     });
     view.tick(TICK);
-    assert_eq!(gate_on(&view), [ImageKey::sprite(2141, 3)], "the flight's");
-    view.tick(TICK);
-    assert_ne!(moon_on(&view), moon, "stepping again");
-}
-
-/// The Moon's frames over 3 ticks of a flight in Sol whose Moon (129), of
-/// 4 frames a tick, has `flags2`, its effects drawn on `draws`: those
-/// frames, and what the effects' chance was asked.
-fn moon_frames_on(flags2: u16, draws: &[u32]) -> (Vec<u16>, Vec<u32>) {
-    let (effects, effects_chance) = scripted(draws);
-    let mut view = faked_from(
-        FakeCatalog {
-            moon: Some(MoonSheets {
-                width: 50,
-                dead_width: None,
-                zero_width: 90,
-                frames: 4,
-                dead_frames: 1,
-                flags2,
-            }),
-            ..catalog()
-        },
-        showing(130, sol()),
-    );
-    view.effects_chance = effects_chance;
-    let frames = (0..3)
-        .map(|_| {
-            tick_stellars(&mut view);
-            moon_on(&view)
-        })
-        .collect();
-    let asked = effects.borrow().asked.clone();
-    (frames, asked)
-}
-
-#[test]
-fn a_random_stellars_frames_roll_on_the_effects_chance() {
-    let random = nova_sim::gate_sprite::RANDOM;
-    let (frames, asked) = moon_frames_on(random, &[0, 0, 0]);
-    // From 1, a draw of 0 is frame 0; from 0, frame 1.
-    assert_eq!(frames, [1, 0, 1]);
-    assert_eq!(asked, [3, 3, 3]);
-    let (plain, unasked) = moon_frames_on(0, &[]);
-    assert_eq!(plain, [1, 2, 3]);
-    assert!(unasked.is_empty(), "{unasked:?}");
+    assert_eq!(moon_on(&view), 2, "the flight's");
 }
 
 #[test]

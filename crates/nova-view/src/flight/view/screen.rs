@@ -65,8 +65,8 @@ impl<
     /// whose first act, steps or none, settles the asteroid field of a
     /// session started or loaded in flight, so the first frame drawn shows
     /// it (see `nova_sim::Session::step`), and
-    /// advances the stellars' animations, each hypergate drawing the frame
-    /// the session stepped it to ([`show_gate_frames`](super::show_gate_frames)). While the map is
+    /// shows each stellar on the frame the session stepped it to
+    /// ([`show_stellars`](super::show_stellars)). While the map is
     /// open nothing moves. The session flies on through the whole jump, its
     /// warp included: the jump's effect starts once the jump has begun,
     /// fades to white from the first step the session's `_hyperGamma` is
@@ -256,7 +256,7 @@ impl<
             return;
         }
         let pod = self.pod_frame();
-        self.step_stellars(dt);
+        self.advance_clock(dt);
         self.settle_dialog_latch();
         if self.faded_keys_frame() {
             return;

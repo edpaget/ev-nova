@@ -729,7 +729,6 @@ use crate::galaxy::map::MapPicture;
 use crate::outline::{self, Outline};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
-use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::ui::mission_info::MISSION_INFO_KEY;
@@ -1429,13 +1428,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     names: Rc<Names>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
-    /// Each stellar's animation state as the scene that last showed it
-    /// left it: the original's per-`spöb` current frame, next frame and
-    /// timer (+0x476, +0x478, +0x490), kept per flight so a stellar shown
-    /// again resumes where it stood ([`KeptFrames`], stellar-fidelity
-    /// phase 12). A load or a new pilot is a new flight, so every stellar
-    /// starts afresh then.
-    kept_frames: KeptFrames,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
     /// What the player's ship draws in place of `sheet` when it cannot be
@@ -1889,11 +1881,6 @@ struct Redrawn {
     rebuilt: bool,
     /// The stars were scattered afresh.
     stars: bool,
-    /// A take-off or a gate's exit reset every stellar's frames: those
-    /// shown and those kept were zeroed once the scene was laid out, among
-    /// the stellar passes ([`FlightView::reset_stellar_frames`],
-    /// [`FlightView::replay_stellar_passes`]).
-    frames_reset: bool,
 }
 
 /// How the flight holds stellar `id` as `frame` records it
@@ -1901,53 +1888,37 @@ struct Redrawn {
 /// its galaxy holds it, with the sheet the session says it draws
 /// (`nova_sim::Session::drawn_sheet`: its `DeadType` sheet, graphic type
 /// 0's or its `Type` sheet, story-runtime phases 7 and 9, stellar-fidelity
-/// phase 1), which the click box reads too, and animating over the frame
-/// count the session says (`nova_sim::Session::counted_sheet`,
-/// stellar-fidelity phase 1), or over none
-/// (`nova_sim::Session::counts_no_frames`), its frame frozen when the
+/// phase 1), which the click box reads too, its frame frozen when the
 /// session says (`nova_sim::Session::frame_frozen`, stellar-fidelity phase
-/// 8). A stellar the frame doesn't record, one its system doesn't list,
-/// looks whole, on its `Type` sheet, never frozen, as the session holds a
-/// stellar it doesn't show.
+/// 8), and on the frame of that sheet the session reports its slot shows
+/// (`nova_sim::Session::stellar_frame`, rendering phase 11). A stellar the
+/// frame doesn't record, one its system doesn't list, looks whole, on its
+/// `Type` sheet's frame 0, never frozen, as the session holds a stellar
+/// it doesn't show.
 fn look(frame: &FlightFrame, id: StellarId) -> StellarLook {
     frame.stellar(id).map_or(
         StellarLook {
             destroyed: false,
             drawn: nova_sim::DrawnSheet::Type,
-            counted: nova_sim::DrawnSheet::Type,
             frozen: false,
-            counts_none: false,
+            frame: Some(0),
         },
         |stellar| StellarLook {
             destroyed: stellar.destroyed,
             drawn: stellar.drawn,
-            counted: stellar.counted,
             frozen: stellar.frozen,
-            counts_none: stellar.counts_none,
+            frame: Some(stellar.frame),
         },
     )
 }
 
-/// Draws each stellar of `scene` as `frame` holds it ([`look`]), as the
-/// original's per-frame sprite tick swaps its sheet.
-fn show_destroyed(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_destroyed(|id| look(frame, id));
-}
-
-/// Marks each stellar of `scene` frozen as `frame` holds it
-/// ([`FrameStellar::frozen`](nova_sim::flight_frame::FrameStellar::frozen)):
-/// after the steps of each tick, as a flight frame freezes or thaws a slot
-/// with no event (stellar-fidelity phase 8).
-fn show_frozen_frames(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_frozen(|id| look(frame, id).frozen);
-}
-
-/// Draws each hypergate of `scene` on the frame `frame` gives it
-/// ([`FrameStellar::gate_frame`](nova_sim::flight_frame::FrameStellar::gate_frame)),
-/// opening while an NPC comes out of it: after each tick of the traffic,
-/// and as the system is laid out.
-fn show_gate_frames(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_gate_frames(|id| frame.stellar(id).and_then(|stellar| stellar.gate_frame));
+/// Draws each stellar of `scene` as `frame` holds it ([`look`]): its
+/// look and the frame its session reports. The view keeps no animation
+/// of its own in a flight, so whatever frame it reads them from (the kept
+/// frame, or a double-time hold), the looks and the frames come from the
+/// same one.
+fn show_stellars(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_looks(|id| look(frame, id));
 }
 
 /// The system `frame`'s player is in, read from `catalog`, with only the
@@ -1959,13 +1930,11 @@ fn shown_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene
     SystemScene::load_shown(catalog, frame.system, &shown)
 }
 
-/// The scene a flight opens on: the stellars `frame` shows, each
-/// destroyed one as it looks destroyed and each hypergate on the frame
-/// the session stepped it to.
+/// The scene a flight opens on: the stellars `frame` shows, each as it
+/// looks and on the frame the session reports ([`show_stellars`]).
 fn opening_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
     let mut scene = shown_scene(catalog, frame);
-    show_destroyed(&mut scene, frame);
-    show_gate_frames(&mut scene, frame);
+    show_stellars(&mut scene, frame);
     scene
 }
 

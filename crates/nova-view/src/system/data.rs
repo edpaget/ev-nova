@@ -12,7 +12,7 @@ use nova_data::records::system::System;
 use nova_data::{GameData, Record, StandIn, StandInOf, StellarSprite, StoreEntry, stellar_spin_id};
 
 use super::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
 use crate::color::Color;
@@ -99,7 +99,7 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             .map(|sprite| sprite.as_ref().map(stellar_sheet))
             .map_err(|err| err.to_string())
             .transpose(),
-        animation: AnimationData {
+        animation: StellarAnimation {
             delay: record.anim_delay,
             frame0_bias: record.frame0_bias,
             flags2: record.flags2.bits(),
@@ -159,7 +159,7 @@ mod tests {
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;
-    use crate::system::catalog::{AnimationData, StellarContents, StellarId, StellarSheet};
+    use crate::system::catalog::{StellarAnimation, StellarContents, StellarId, StellarSheet};
 
     /// A resource: type, ID, name and bytes.
     type Res = (ResType, i16, Option<&'static str>, Vec<u8>);
@@ -309,7 +309,7 @@ mod tests {
             y: 0,
             sprite: Ok(sheet_of(1000, 1, 8)),
             dead_sprite: None,
-            animation: AnimationData::default(),
+            animation: StellarAnimation::default(),
             stand_in: None,
         }
     }
@@ -396,7 +396,7 @@ mod tests {
                         y: -600,
                         sprite: Ok(sheet_of(1001, 4, 6)),
                         dead_sprite: None,
-                        animation: AnimationData {
+                        animation: StellarAnimation {
                             delay: 2,
                             frame0_bias: -1,
                             flags2: 0x2000,
@@ -508,8 +508,8 @@ mod tests {
             resources.push((Stellar::TYPE, id, None, animated(0, 0, 0, flags2, 3, 2)));
         }
         let contents = store(&resources).system(SystemId(131));
-        let flags: Vec<AnimationData> = contents.stellars.iter().map(|s| s.animation).collect();
-        let data = |flags2| AnimationData {
+        let flags: Vec<StellarAnimation> = contents.stellars.iter().map(|s| s.animation).collect();
+        let data = |flags2| StellarAnimation {
             delay: 3,
             frame0_bias: 2,
             flags2,

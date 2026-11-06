@@ -20,7 +20,6 @@
 //! Nothing the player sees depends on it.
 
 use nova_sim::flight_frame::{FlightEvent, LoadedDesc};
-use nova_sim::gate_sprite::StellarPass;
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
@@ -66,8 +65,6 @@ pub(super) struct Inbox {
     rescue_desc: Option<LoadedDesc>,
     /// The message the last take-off left on.
     leave_message: Option<String>,
-    /// The stellar passes, in order.
-    stellar_passes: Vec<StellarPass>,
 }
 
 impl Inbox {
@@ -100,7 +97,8 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
-                FlightEvent::StellarPass(pass) => self.stellar_passes.push(pass),
+                // The session steps every stellar in each pass itself.
+                FlightEvent::StellarPass(_) => {}
             }
         }
     }
@@ -216,11 +214,6 @@ impl Inbox {
     pub(super) fn take_leave_message(&mut self) -> Option<String> {
         self.leave_message.take()
     }
-
-    /// The stellar passes, in order; taking them empties the list.
-    pub(super) fn take_stellar_passes(&mut self) -> Vec<StellarPass> {
-        std::mem::take(&mut self.stellar_passes)
-    }
 }
 
 #[cfg(test)]
@@ -232,7 +225,6 @@ mod tests {
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;
-    use nova_sim::SpeedMult;
 
     /// `dësc` `id` as the rescue loaded it.
     fn rescued(id: i16) -> LoadedDesc {
@@ -292,26 +284,6 @@ mod tests {
             ship_name: "Kestrel".to_owned(),
             done: Help::Repair,
         }
-    }
-
-    #[test]
-    fn the_stellar_passes_are_taken_in_order_across_receives_once() {
-        let mut inbox = received(vec![
-            FlightEvent::StellarPass(StellarPass::entry(SpeedMult::FULL)),
-            FlightEvent::StellarPass(StellarPass::ticked(SpeedMult::FULL)),
-        ]);
-        inbox.receive(vec![FlightEvent::StellarPass(StellarPass::ticked(
-            SpeedMult::ZERO,
-        ))]);
-        assert_eq!(
-            inbox.take_stellar_passes(),
-            [
-                StellarPass::entry(SpeedMult::FULL),
-                StellarPass::ticked(SpeedMult::FULL),
-                StellarPass::ticked(SpeedMult::ZERO)
-            ]
-        );
-        assert_eq!(inbox.take_stellar_passes(), []);
     }
 
     #[test]

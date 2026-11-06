@@ -16,7 +16,7 @@ use std::num::NonZeroU16;
 
 use super::camera::Camera;
 use super::catalog::{
-    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
+    StellarAnimation, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
 use super::scene::{SystemScene, draw_stellars, draw_stellars_clipped_to};
@@ -66,7 +66,7 @@ fn sol(image_size: (u32, u32)) -> SystemScene {
             y: 0,
             sprite: Ok(sheet(image_size)),
             dead_sprite: None,
-            animation: AnimationData::default(),
+            animation: StellarAnimation::default(),
             stand_in: None,
         }],
         type_zero_sprite: Ok(StellarSheet {

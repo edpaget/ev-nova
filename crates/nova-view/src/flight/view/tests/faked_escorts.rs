@@ -133,7 +133,7 @@ pub(super) fn single_steps(view: &mut Faked, n: u32) {
 /// `dt` of flight time, then the escort menu's frame of one single-time
 /// flight step, as a frame's tick runs it.
 fn menu_tick(view: &mut Faked, dt: Duration) {
-    view.step_stellars(dt);
+    view.advance_clock(dt);
     single_steps(view, 1);
 }
 
@@ -251,7 +251,7 @@ fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
     ui_heard(&mut view);
     menu_tick(&mut view, MENU_TIMEOUT);
     assert_eq!(view.escort_menu().level(), Some(32), "480 ticks: not yet");
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     single_steps(&mut view, 0);
     assert_eq!(view.escort_menu().level(), Some(32), "no step, no drop");
     single_steps(&mut view, 2);
@@ -1152,7 +1152,7 @@ fn in_double_time_the_menu_fades_a_level_on_each_pass_and_shuts_16_steps_after_i
             view.held.insert(MENU_KEY);
         }
         ui_heard(&mut view);
-        view.step_stellars(MENU_TIMEOUT + TICK);
+        view.advance_clock(MENU_TIMEOUT + TICK);
         double_steps(&mut view, 1);
         assert_eq!(view.escort_menu().level(), Some(30), "two levels a step");
         double_steps(&mut view, 14);
@@ -1190,7 +1190,7 @@ fn a_double_step_whose_second_pass_counts_none_flying_fades_on_that_pass_only() 
     press(&mut view, GROUP_KEYS[3]);
     let flying = Some(menu_pass(&view, false));
     let none = Some(EscortMenuPass::default());
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     steps_reporting(&mut view, &[vec![flying, none]]);
     assert_eq!(view.escort_menu().level(), Some(31), "not timed out: once");
     assert_eq!(view.escort_menu().group(), EscortGroup::All);
@@ -1220,7 +1220,7 @@ fn the_menu_is_drawn_at_its_fades_level() {
     let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
     press(&mut view, MENU_KEY);
     assert_eq!(title_alpha(&view), Some(255), "in full");
-    view.step_stellars(MENU_TIMEOUT + TICK);
+    view.advance_clock(MENU_TIMEOUT + TICK);
     single_steps(&mut view, 16);
     assert_eq!(view.escort_menu().level(), Some(16));
     assert_eq!(title_alpha(&view), Some(128), "at 16/32");
@@ -1441,7 +1441,7 @@ fn held_double_steps_shut_the_menu_on_the_release_after_the_16th() {
     press(&mut view, MENU_KEY);
     view.held.insert(MENU_KEY);
     ui_heard(&mut view);
-    view.step_stellars(MENU_TIMEOUT + TICK);
+    view.advance_clock(MENU_TIMEOUT + TICK);
     for _ in 0..16 {
         let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
         held_double_step(&mut view, pass, pass, between);
@@ -1490,7 +1490,7 @@ fn a_dropped_holds_second_pass_shuts_the_menu_and_beeps_with_e_held() {
     press(&mut view, MENU_KEY);
     view.held.insert(MENU_KEY);
     ui_heard(&mut view);
-    view.step_stellars(MENU_TIMEOUT + TICK);
+    view.advance_clock(MENU_TIMEOUT + TICK);
     for _ in 0..16 {
         let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
         held_double_step(&mut view, pass, pass, between);

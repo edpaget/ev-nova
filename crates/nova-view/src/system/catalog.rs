@@ -5,6 +5,7 @@ use std::num::NonZeroU16;
 use std::rc::Rc;
 
 pub use nova_data::{StellarId, SystemId};
+pub use nova_sim::stellar_frames::StellarAnimation;
 
 use crate::outline::StellarStandIn;
 use crate::sheet_image::SheetImage;
@@ -35,20 +36,6 @@ pub struct StellarSheet {
     pub eight_bit: bool,
 }
 
-/// A stellar's animation fields, raw from its `spöb`. The view decides
-/// what they mean.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AnimationData {
-    /// `AnimDelay`: how many 1/30 s ticks each frame shows for.
-    pub delay: i16,
-    /// `Frame0Bias`: how many times longer frame 0 shows for.
-    pub frame0_bias: i16,
-    /// `Flags2`, raw: the view reads its animation bits (0x0001 alternate
-    /// with frame 0, 0x0002 random next frame, 0x0080 animate only when
-    /// destroyed) and its hypergate bit (0x1000).
-    pub flags2: u16,
-}
-
 /// One stellar object, placed in its system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StellarContents {
@@ -66,8 +53,9 @@ pub struct StellarContents {
     /// cannot be shown; `None` when it draws no different graphic (a
     /// `DeadType` outside 0 to 255).
     pub dead_sprite: Option<Result<StellarSheet, String>>,
-    /// Its animation fields.
-    pub animation: AnimationData,
+    /// Its animation fields, which the sim's rule reads
+    /// (`nova_sim::stellar_frames`).
+    pub animation: StellarAnimation,
     /// What it draws in place of its sprite when the sprite cannot be
     /// shown ([`StellarStandIn`]): only the new game's stellars have one.
     /// `None` draws the crossed box and the reason.

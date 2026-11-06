@@ -38,7 +38,7 @@ pub(super) fn flown(view: &Faked) -> DrawList {
 /// One tick's HUD work, as a flight's tick ends: the clock moved on a
 /// tick, then the HUD advanced ([`FlightView::advance_hud`]).
 pub(super) fn hud_tick(view: &mut Faked) {
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
     view.advance_hud();
 }
 
