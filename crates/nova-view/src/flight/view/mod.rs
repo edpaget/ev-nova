@@ -660,21 +660,35 @@
 //! ([`DrawList::world`](crate::DrawList::world),
 //! [`DrawLayer`](crate::DrawLayer)): the stars, the
 //! stellars, asteroids and boxes, the beams, the ships with their glow and
-//! lights, the shots, the effects and the smoke, everything the original
-//! draws into its sprite world. The brackets, the alerts, the floating
-//! map, the escort menu, the title and help, the status bar, the cursor,
-//! the fades and the course map are overlay, and so is every text: the
-//! message line and a placeholder's reason too, though they are drawn
-//! among the world's commands. Drawn at the window's resolution the
-//! layers change nothing, as each command is drawn in the list's order.
-//! Under a frame upscaler, which draws the world first and the overlay
-//! over it, the message line's box stays in the world under the sprites
-//! and its text draws over the ships, as in the original, but over the
-//! particles too, where the original has it under them
-//! (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled).
-//! A placeholder's reason draws over the world on purpose: it is the
-//! engine's own diagnostic, with no counterpart in the original, and is
-//! there to be read.
+//! lights, the shots, the effects and the smoke, the brackets, the cursor
+//! and the alerts, the message line's box, the floating map and the escort
+//! menu, everything the original draws into its sprite world. The title
+//! and help, the status bar, the fades and the course map are overlay, and
+//! so is every text: the message line, the floaters' names and orders and
+//! a placeholder's reason too, though they are drawn among the world's
+//! commands. Drawn at the window's resolution the layers change nothing,
+//! as each command is drawn in the list's order.
+//!
+//! The world's tail ([`DrawList::start_world_tail`](crate::DrawList::start_world_tail))
+//! starts at the floaters, which the original draws after every sprite
+//! layer and the over-ship beams and before the particles
+//! (`_PostDrawCallback`, 0x38c80). Under a frame upscaler, which draws the
+//! world at the logical resolution and enlarges it, the world before the
+//! tail is enlarged and the overlay drawn before the tail goes over it;
+//! the tail (the floaters, their text and the particles) then draws at the
+//! window's resolution over that, in the list's order. So the message
+//! line's box stays in the world under the sprites, its text draws over
+//! the ships and the over-ship beams and under the particles, as in the
+//! original, and so do the floating map's and the escort menu's. The
+//! floaters' boxes and lines and the particles' dots are drawn at the
+//! window's resolution there, not enlarged with the world: at an integer
+//! scale under sharp bilinear that is the same picture, and at other
+//! scales or under the smoothing upscalers they stay crisp.
+//!
+//! A placeholder's reason is overlay before the tail: it draws over the
+//! world before the floaters, and under the floaters and the particles. It
+//! draws over the world on purpose: it is the engine's own diagnostic,
+//! with no counterpart in the original, and is there to be read.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};

@@ -128,7 +128,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
     /// The message line's box is drawn over the stars and its text with
     /// the floaters; the text, the floating map's and the escort menu's
-    /// included, is overlay among the world ([`DrawList::world`]).
+    /// included, is overlay among the world ([`DrawList::world`]). The
+    /// world's tail ([`DrawList::start_world_tail`]) starts at the
+    /// floaters, so a renderer that enlarges the world still draws their
+    /// text under the particles and over everything before them.
     pub(super) fn draw_world(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
         let beams = self.shown_beams(camera);
         let lightning = (self.presentation.zig_zag, self.shot_looks.lightning());
@@ -155,7 +158,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 WorldPass::Layer(SpriteLayer::Targets) => {
                     self.draw_targets(list, (scene, camera));
                 }
-                WorldPass::Floaters => self.draw_floaters(list),
+                WorldPass::Floaters => {
+                    list.start_world_tail();
+                    self.draw_floaters(list);
+                }
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
@@ -224,11 +230,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///
     /// The text of all three (the message, the floating map's names, the
     /// escort menu's title, rows and orders) is overlay
-    /// ([`DrawList::world`]). Drawn at the window's resolution every
-    /// command draws in list order, so the text stays under the
-    /// particles; drawn into a world texture under a frame upscaler, the
-    /// world is laid out before the overlay and the text draws over the
-    /// particles (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled).
+    /// ([`DrawList::world`]). [`FlightView::draw_world`] starts the world's
+    /// tail ([`DrawList::start_world_tail`]) just before them, so under a
+    /// frame upscaler the floaters, their text and the particles draw at
+    /// the window's resolution over the enlarged world, in list order: the
+    /// text stays under the particles and over the over-ship beams, as
+    /// natively.
     fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {

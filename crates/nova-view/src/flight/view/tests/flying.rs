@@ -315,6 +315,8 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         let scene = view.scene().expect("a scene");
         scene::draw_stellars(expected, scene, &view.camera(), Some(view.seen_murk()));
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
+        // The floaters and the particles, none of them up.
+        expected.start_world_tail();
     });
     let bar = view.status_bar.as_ref().expect("a status bar");
     hud::draw(
