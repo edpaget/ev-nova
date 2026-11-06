@@ -226,7 +226,7 @@ impl Session {
         }
         self.space.count_down_comm_line();
         self.roll_quotes_by_hand(catalog, chance);
-        self.tick_quote_clock();
+        self.space.tick_quote_clock();
     }
 
     /// Double time's second pass of the hail quotes, run by hand as
@@ -378,12 +378,6 @@ impl Session {
         }
         let lines = catalog.string_list(HAIL_QUOTES);
         self.say_hail_quote(id, catalog, &lines, chance);
-    }
-
-    /// Moves the hail quotes' clock on a tick, once a frame on the advance
-    /// pass, after its ship loop, in place of `TickCount`.
-    pub(super) fn tick_quote_clock(&mut self) {
-        self.space.escorts.quote_clock.ticks += 1;
     }
 
     /// Says each attack quote queued, its line read from `catalog` or

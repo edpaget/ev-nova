@@ -289,7 +289,7 @@ impl Session {
             }
         }
         if advance && quotes.is_some() {
-            self.tick_quote_clock();
+            self.space.tick_quote_clock();
         }
         self.lay_out_displayed();
         self.space.traffic.step_fades(self.speed_mult());

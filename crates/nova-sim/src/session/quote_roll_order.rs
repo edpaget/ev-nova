@@ -448,6 +448,32 @@ fn a_collision_hits_quote_is_said_before_the_fleet_arriving_in_its_frame_whose_l
 }
 
 #[test]
+fn a_collision_hits_quote_ending_its_frame_is_counted_down_once_in_it() {
+    // `_DamageShip` from `_HandleShipHit` (@0x36c7a) says the quote in the
+    // collision passes (@0x43e70-0x44010), before `_HandleComm` counts the
+    // line down (@0x4421e): with no later line, the frame ends on the quote
+    // a tick short of its count.
+    let catalog = crate::session::tests::quoting_armed();
+    let session = facing_a_coasting_person(&catalog);
+    let (session, report) = the_frame_of_the_hit(
+        session,
+        &catalog,
+        |_| {},
+        || Box::new(NeverFires),
+        hits_npc_0,
+    );
+    assert_eq!(
+        said(&report),
+        [vec![DIE.to_owned()]],
+        "the hit's quote said"
+    );
+    assert_eq!(last_quote(&report).as_deref(), Some(DIE), "the quote last");
+    let mut line = shown(crate::person::QUOTE_SHOWN_TICKS);
+    line.tick();
+    assert_eq!(session.comm_line(), line, "counted down once");
+}
+
+#[test]
 fn a_declined_bribes_quote_and_a_collision_hits_come_before_the_fleet_arriving_in_their_frame() {
     // A declined bribe (`_DoCommDialog` @0x9621f, `Session::act`'s attack,
     // which queues the quote as `turn_with_quote` does here) is said at the

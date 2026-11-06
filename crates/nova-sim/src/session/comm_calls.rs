@@ -408,6 +408,13 @@ impl Space {
         self.comm_line.tick();
     }
 
+    /// Moves the hail quotes' clock on a tick, once a frame on the advance
+    /// pass, after its ship loop, in place of `TickCount` (see the
+    /// `persons` module).
+    pub(super) fn tick_quote_clock(&mut self) {
+        self.escorts.quote_clock.ticks += 1;
+    }
+
     /// A landing (`_HandlePlayerDockRequest` @0x66d7f) and the escape
     /// pod's rescue (`_ResetPlayer` @0x1d904) set the line's count to 0.
     pub(super) fn reset_comm_line(&mut self) {
