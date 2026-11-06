@@ -9,6 +9,7 @@ mod common;
 mod enlarged_atlas;
 mod flight_frame;
 mod frame_cost;
+mod message_line;
 mod metal_fx;
 mod prefs_labels;
 mod sharp_bilinear;
