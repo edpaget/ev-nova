@@ -47,11 +47,12 @@
 //!   system has a first stellar, at that stellar plus
 //!   [`STATIONARY_DISTANCE`] at angle `Rand(360)`, at rest, then heading
 //!   `Rand(360)` (`_RandomShipSpawn` @0x3c254-0x3c324, @0x3c410). The
-//!   stellar is the first the galaxy overlay shows for the system,
-//!   destroyed or not, as the original reads its first stellar slot with
-//!   no other check. Here that is the first readable `spöb` of its
-//!   `nav_def`s: where slot 0 is empty or unreadable, the original falls
-//!   back to the box and this takes the next stellar. A person never is:
+//!   stellar is the one in slot 0 of the system's `NavDefs`
+//!   (@0x3c274-0x3c27d), shown or not, owned elsewhere or not, destroyed
+//!   or not, as the original reads that slot with no other check
+//!   ([`World::nav_def_0`](super::World::nav_def_0)); where slot 0 is
+//!   empty, or names a `spöb` that didn't load, the ship falls back to the
+//!   box whatever the later slots hold. A person never is:
 //!   `_SpawnPerson` places it through `_GenericRandomShipSpawn`'s box
 //!   alone (@0x3ccf0-0x3cd1a).
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer

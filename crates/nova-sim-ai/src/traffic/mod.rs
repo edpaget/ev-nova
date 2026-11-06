@@ -322,6 +322,8 @@ pub mod mine_flight;
 mod miner_hit_target_tests;
 #[cfg(test)]
 mod mode_wait_sub_1_tests;
+#[cfg(test)]
+mod nav_def_zero_tests;
 pub mod npc;
 #[cfg(test)]
 mod npc_landing_tests;
@@ -702,6 +704,11 @@ pub struct World<'a> {
     /// arrival may come out of ([`World::stellars`]). [`World::new`] gives
     /// `sites`.
     pub listed: &'a [LandingSite],
+    /// The stellar in slot 0 of the system's `NavDefs`, none when the slot
+    /// is empty or names a `spöb` that didn't load (`_RandomShipSpawn`
+    /// @0x3c262-0x3c27d): where a stationary warship is placed, looked up
+    /// in [`World::listed`]. [`World::new`] gives the first of `sites`.
+    pub nav_def_0: Option<StellarId>,
     /// The player's ship, while it flies in the system.
     pub player: Option<PlayerSide>,
     /// Every government and their relations.
@@ -924,6 +931,7 @@ impl<'a> World<'a> {
         Self {
             sites,
             listed: sites,
+            nav_def_0: sites.first().map(|site| site.id),
             player: None,
             govts: bare.govts,
             system_govt: None,
@@ -1322,7 +1330,8 @@ impl Traffic {
     /// Enters a system whose traffic is drawn from `table` in `world`: its
     /// NPCs are replaced with its initial population, rolled on `chance`,
     /// its persons as the world's persons say, and its stationary
-    /// warships placed by the world's first stellar.
+    /// warships placed by the stellar in slot 0 of its `NavDefs`, shown or
+    /// not ([`World::nav_def_0`]), or in the box when that slot is empty.
     pub fn enter_in(
         &mut self,
         table: SpawnTable,
@@ -1375,7 +1384,10 @@ impl Traffic {
             &mut *chance,
         );
         let mut draw = PersonDraw::new(world.persons);
-        let first_stellar = world.sites.first().map(|site| site.position);
+        let first_stellar = world
+            .nav_def_0
+            .and_then(|id| world.listed.iter().find(|site| site.id == id))
+            .map(|site| site.position);
         let ships = spawn::initial(
             &self.table,
             &mut draw,

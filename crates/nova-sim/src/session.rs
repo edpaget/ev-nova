@@ -672,6 +672,8 @@ mod sprite_load;
 mod sprite_sheets;
 mod stale_sprites;
 mod statics;
+#[cfg(test)]
+mod stationary_slot_zero;
 mod status_cargo;
 mod steering;
 #[cfg(test)]
@@ -2073,6 +2075,9 @@ impl Session {
             // Every stellar the system lists, shown or not, which a fleet
             // may come out of (see the `npc_destinations` module).
             listed: &self.chart.listed,
+            // Where a stationary warship is placed, shown or not (see the
+            // `stationary_slot_zero` module).
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             // The entry flies no ship (`Traffic::enter_with`), so its
             // gain moves nothing; it reads the frame's all the same.
             speed_mult: self.speed_mult(),
@@ -2206,6 +2211,7 @@ impl Session {
         let world = World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2310,6 +2316,7 @@ impl Session {
         World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
