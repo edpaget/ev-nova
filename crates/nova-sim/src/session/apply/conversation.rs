@@ -28,10 +28,14 @@ impl Session {
         let landed = self.mode.landed();
         let room = self.ship.free_cargo(&self.pilot);
         let page = match converse {
-            Converse::Open => {
-                self.port
-                    .open_next_scene(&self.statics, &self.setup, &mut self.pilot, landed, room)
-            }
+            Converse::Open => self.port.open_next_scene(
+                &self.statics,
+                &self.setup,
+                &mut self.pilot,
+                &mut self.out,
+                landed,
+                room,
+            ),
             Converse::Choose(index) => self.port.choose_in_conversation(
                 &self.statics,
                 &self.setup,

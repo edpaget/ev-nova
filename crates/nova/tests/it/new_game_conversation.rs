@@ -79,7 +79,7 @@ fn opened() -> Rc<GameData> {
 }
 
 /// Where the fixture's stellar `id` sits.
-fn position_of(id: &str) -> Vec2 {
+pub(crate) fn position_of(id: &str) -> Vec2 {
     let game = fixture();
     let nova = game
         .ids
@@ -99,7 +99,7 @@ fn position_of(id: &str) -> Vec2 {
 
 /// The app over the fixture, wired as `main` wires it, keeping pilots in
 /// `store`, on the main menu.
-fn app(store: &MemoryPilots) -> Harness {
+pub(crate) fn app(store: &MemoryPilots) -> Harness {
     let rules = ruleset_rulebook(None, Ruleset::NewGame.profile().readings).0;
     Harness::wired(opened(), store, |screen| {
         screen
@@ -115,7 +115,7 @@ pub(crate) fn flying() -> Harness {
 }
 
 /// [`flying`], keeping the pilot, Ada, in `store`.
-fn flying_in(store: &MemoryPilots) -> Harness {
+pub(crate) fn flying_in(store: &MemoryPilots) -> Harness {
     let mut game = app(store);
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
@@ -130,7 +130,7 @@ fn flying_in(store: &MemoryPilots) -> Harness {
 
 /// A new app over `store`, with the pilot Ada opened through Open Pilot
 /// and flying where she was saved.
-fn resumed(store: &MemoryPilots) -> Harness {
+pub(crate) fn resumed(store: &MemoryPilots) -> Harness {
     let mut game = app(store);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);

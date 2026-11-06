@@ -24,10 +24,16 @@
 //!   reached leaves the offer offered.
 //! - **Landing and days.** The `Storylines` consumer's subscriptions run
 //!   [`Play::landed`] on each landing and [`Play::day_passed`] on each
-//!   day, in the story dispatch, which settles before the next frame and
-//!   before the view asks for the conversation. A change makes a save
-//!   due. A session whose data holds no storylines (the stock game's)
-//!   registers neither.
+//!   day, in the story dispatch. A landing only raises its event, and the
+//!   app asks for the visit's first scene as the spaceport opens, before
+//!   the next settling dispatches it. So the visit's landing is settled
+//!   once, by whichever comes first: the dispatch, or the first
+//!   [`Converse::Open`](crate::flight_frame::Converse::Open), which settles
+//!   it before picking a scene, so a delivery made by the landing shows
+//!   its completion first ([`Port::settle_landing`]). A change makes a
+//!   save due. A session whose data holds no storylines (the stock
+//!   game's) registers neither hook, and settling its landing finds
+//!   nothing to do.
 //! - **News.** [`Session::heard_news`] lists what a system has heard over
 //!   the galaxy's lanes ([`news::heard`]).
 
@@ -79,20 +85,28 @@ impl MissionRun {
 }
 
 /// The `Storylines` consumer's effect on `event`: a landing's deliveries
-/// and successes, or a day gone by, over `pilot`'s story, each then
-/// checking events. A change makes a save due.
-pub(super) fn settle(statics: &Statics, pilot: &mut Pilot, out: &mut Outbox, event: &StoryEvent) {
-    let mut play = Play {
-        storylines: &statics.storylines,
-        flags: &mut pilot.flags,
-        story: &mut pilot.story,
-    };
-    let changed = match *event {
-        StoryEvent::Landed { stellar } => play.landed(stellar),
-        StoryEvent::DayPassed { .. } => play.day_passed(),
-        _ => false,
-    };
-    out.save_due |= changed;
+/// and successes, unless the visit has settled them already
+/// ([`Port::settle_landing`]), or a day gone by, over `pilot`'s story,
+/// each then checking events. A change makes a save due.
+pub(super) fn settle(
+    statics: &Statics,
+    port: &mut Port,
+    pilot: &mut Pilot,
+    out: &mut Outbox,
+    event: &StoryEvent,
+) {
+    match *event {
+        StoryEvent::Landed { stellar } => port.settle_landing(statics, pilot, out, stellar),
+        StoryEvent::DayPassed { .. } => {
+            out.save_due |= Play {
+                storylines: &statics.storylines,
+                flags: &mut pilot.flags,
+                story: &mut pilot.story,
+            }
+            .day_passed();
+        }
+        _ => {}
+    }
 }
 
 /// Where `scene`'s conversation is: its Ink file, compiled story and knot,
@@ -117,10 +131,14 @@ impl Port {
         statics: &Statics,
         setup: &Setup,
         pilot: &mut Pilot,
+        out: &mut Outbox,
         landed: Option<StellarId>,
         room: i64,
     ) -> Option<ConversationPage> {
         let stellar = landed?;
+        // The landing's story first, so its deliveries' completions are
+        // due (see the module docs).
+        self.settle_landing(statics, pilot, out, stellar);
         let has_own = statics.stellar_dialogs.place(stellar).is_some();
         let (scene, at) = loop {
             let scene = Play {
@@ -170,6 +188,30 @@ impl Port {
     /// Forgets the scenes this visit has shown, as the ship takes off.
     pub(super) fn forget_scenes(&mut self) {
         self.scenes_shown.clear();
+        self.landing_settled = None;
+    }
+
+    /// Settles the storylines' side of the landing at `stellar`
+    /// ([`Play::landed`]) once a visit: its deliveries, its successes and
+    /// the events they make happen, over `pilot`'s story, a change making a
+    /// save due. Nothing when this visit has settled it already.
+    pub(super) fn settle_landing(
+        &mut self,
+        statics: &Statics,
+        pilot: &mut Pilot,
+        out: &mut Outbox,
+        stellar: StellarId,
+    ) {
+        if self.landing_settled == Some(stellar) {
+            return;
+        }
+        self.landing_settled = Some(stellar);
+        out.save_due |= Play {
+            storylines: &statics.storylines,
+            flags: &mut pilot.flags,
+            story: &mut pilot.story,
+        }
+        .landed(stellar);
     }
 }
 
@@ -645,6 +687,63 @@ mod tests {
         );
         assert_eq!(state(&session, "job"), Some(MissionState::Offered));
         assert_eq!(free(&session), room, "nothing loaded");
+    }
+
+    /// Lands at the dock without settling the landing's story, as the app
+    /// asks for the first scene before its next settling.
+    fn land_unsettled(session: &mut Session) {
+        assert_eq!(land_now(session), Ok(StellarId(DOCK)));
+    }
+
+    #[test]
+    fn open_settles_a_landing_not_yet_dispatched_before_picking_the_scene() {
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = flying(&catalog);
+        session.pilot.story.missions.insert(
+            "job".to_owned(),
+            MissionState::Active {
+                cargo: 10,
+                met: false,
+            },
+        );
+        land_unsettled(&mut session);
+        session.out.save_due = false;
+        assert_eq!(
+            lines(&converse(&mut session, Converse::Open)),
+            ["Paid in full.", "Signed for."],
+            "delivered by the landing: the completion first"
+        );
+        assert_eq!(state(&session, "job"), Some(MissionState::Done));
+        assert!(session.out.save_due);
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+    }
+
+    #[test]
+    fn a_landing_open_has_settled_is_not_settled_again_by_the_dispatch() {
+        // Offered at the dock and bound for it: delivered only by a later
+        // landing, never by the landing it was taken at.
+        let catalog = talking(&[("job", job(10))]);
+        let mut session = flying(&catalog);
+        land_unsettled(&mut session);
+        converse(&mut session, Converse::Open);
+        converse(&mut session, Converse::Choose(0));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 10,
+                met: false
+            })
+        );
+        visit_again(&mut session, &catalog);
+        assert_eq!(
+            state(&session, "job"),
+            Some(MissionState::Active {
+                cargo: 0,
+                met: true
+            }),
+            "the next landing delivers it"
+        );
     }
 
     #[test]

@@ -310,3 +310,85 @@ fn closing_an_offer_shows_the_stellar_s_own_conversation_next() {
         ]
     );
 }
+
+/// `data` with a deliverable job: an event that loads ten tons of plate
+/// at the first landing, bound for the planet the ship lands on, and
+/// completed there by the story's `done` knot.
+fn delivering(data: Rc<GameData>) -> Rc<GameData> {
+    let data = Rc::into_inner(data).expect("one owner");
+    let mut dialogs = data.dialogs().clone();
+    dialogs
+        .compiled
+        .insert("dialog/dock.ink".to_owned(), Arc::from(STORY));
+    let job = nova_data::StoryMission {
+        objective: Some(nova_data::MissionObjective::Deliver {
+            cargo: "Plate".to_owned(),
+            tons: 10,
+            to: nova_data::StellarId(128),
+        }),
+        complete: Some(nova_data::MissionCompletion {
+            at: None,
+            dialog: DialogPlace {
+                file: "dialog/dock.ink".to_owned(),
+                knot: "done".to_owned(),
+            },
+        }),
+        ..nova_data::StoryMission::default()
+    };
+    Rc::new(
+        data.with_dialogs(dialogs)
+            .with_storylines(nova_data::Storylines {
+                missions: BTreeMap::from([("job".to_owned(), job)]),
+                ..nova_data::Storylines::default()
+            }),
+    )
+}
+
+/// [`loader`]'s story with the job's completion, `done`.
+fn delivering_loader() -> FakeLoader {
+    let done = FakeKnot::new("done").line("Signed for.", &[]);
+    let offer = FakeKnot::new("offer")
+        .line("A job?", &[])
+        .choice(FakeChoice::sticky("Leave", &[]).line("Bye.", &[]));
+    FakeLoader::default().story(STORY, FakeDialog::default().knot(done).knot(offer))
+}
+
+/// Takes off from the spaceport and lands at the same planet again.
+fn take_off_and_land_again(screen: &mut AppScreen) {
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 30);
+    land_twice(screen);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+}
+
+#[test]
+fn a_landing_that_delivers_shows_the_completion_before_the_stellar_s_own() {
+    let loader = delivering_loader();
+    let mut screen = talking(delivering(talking_data()), &loader);
+    land(&mut screen);
+    // The job happened as the ship landed: its plate is aboard, not yet
+    // delivered, so the planet's own conversation shows.
+    assert!(shows(&screen, "A job?"));
+    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    take_off_and_land_again(&mut screen);
+    assert!(shows(&screen, "Signed for."), "the completion first");
+    assert!(!shows(&screen, "A job?"));
+}
+
+#[test]
+fn a_landing_that_delivers_at_a_stellar_with_no_conversation_shows_the_completion() {
+    let loader = delivering_loader();
+    let mut screen = talking(delivering(data()), &loader);
+    land(&mut screen);
+    assert_eq!(
+        drawn(&screen),
+        drawn(spaceport(&screen)),
+        "nothing to show yet"
+    );
+    take_off_and_land_again(&mut screen);
+    assert!(shows(&screen, "Signed for."), "the completion");
+}

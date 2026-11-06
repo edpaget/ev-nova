@@ -404,3 +404,61 @@ fn the_app_offers_the_dock_job_and_closes_back_to_the_spaceport() {
     assert!(!page.contains(&CLOSE_HINT.to_owned()), "{page:?}");
     assert!(!page.contains(&OFFER[0].to_owned()), "{page:?}");
 }
+
+/// The app over the real router: no test call settles the landing, so the
+/// first scene is picked as the app picks it, as the spaceport opens.
+#[test]
+fn the_app_shows_the_completion_first_at_the_landing_that_delivers() {
+    use crate::new_game_conversation::{drawn, flying_in, position_of, resumed};
+    use crate::pilots::saved;
+    use nova::app::Showing;
+    use nova_sim::PilotStore;
+    use nova_sim::fixture::MemoryPilots;
+    use winit::keyboard::KeyCode;
+
+    let store = MemoryPilots::new();
+    // A new pilot is saved at once; she is put in the Verge with the dock
+    // job taken.
+    drop(flying_in(&store));
+    let (_, game) = opened();
+    let mut pilot = saved(&store, "Ada");
+    pilot.system = SystemId(nova_of(&game.ids.systems, "verge"));
+    pilot.stellar = None;
+    pilot.story.missions.insert(
+        "dock-job".to_owned(),
+        MissionState::Active {
+            cargo: 10,
+            met: false,
+        },
+    );
+    pilot.flags.set("hauling_plate");
+    store
+        .write("Ada", &nova_sim::save::encode(&pilot))
+        .expect("writes");
+
+    let mut app = resumed(&store);
+    // The camp is an ungoverned outpost: one L lands, with no clearance
+    // to wait for.
+    let camp = position_of("verge-camp");
+    app.app
+        .screen_mut()
+        .flight_view_mut()
+        .expect("flying")
+        .change_sim(|sim| {
+            nova_sim::fixture::put_player_at(sim.session_mut().expect("a session"), camp);
+        });
+    app.press(KeyCode::KeyL);
+    assert_eq!(app.showing(), Showing::Spaceport, "landed at Verge Camp");
+    let page = drawn(&mut app);
+    assert!(
+        page.contains(&"The camp boss signs for the plate.".to_owned()),
+        "the completion first: {page:?}"
+    );
+    assert!(!page.contains(&GREETING[0].to_owned()), "{page:?}");
+    app.press(KeyCode::Enter);
+    let page = drawn(&mut app);
+    assert!(
+        page.contains(&GREETING[0].to_owned()),
+        "then the camp's own: {page:?}"
+    );
+}

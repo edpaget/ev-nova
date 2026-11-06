@@ -261,6 +261,7 @@ impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // gone by (see the `storylines` module).
             Consumer::Storylines => super::storylines::settle(
                 &self.session.statics,
+                &mut self.session.port,
                 &mut self.session.pilot,
                 &mut self.session.out,
                 event,

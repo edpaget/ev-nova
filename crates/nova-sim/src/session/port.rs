@@ -132,6 +132,11 @@ pub(super) struct Port {
     /// The conversations this visit has shown, each once (see the
     /// `storylines` module): forgotten at take-off. Not saved.
     pub(super) scenes_shown: BTreeSet<crate::storylines::lifecycle::Scene>,
+    /// The stellar whose landing this visit has settled the storylines'
+    /// side of, by the dispatch or the first conversation's opening,
+    /// whichever came first (see the `storylines` module): forgotten at
+    /// take-off. Not saved.
+    pub(super) landing_settled: Option<StellarId>,
 }
 
 /// Where the port's own `dësc` stands (see the `port_desc` module).
@@ -182,6 +187,7 @@ impl Port {
             own_desc: OwnDesc::None,
             conversation: None,
             scenes_shown: BTreeSet::new(),
+            landing_settled: None,
         }
     }
 
