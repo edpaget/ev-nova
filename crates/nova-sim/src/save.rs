@@ -177,6 +177,10 @@
 //!   that order (see the session's `loaded_berths` module). No older save
 //!   kept it, so the upgrade gives `null`, and its escorts load in fleet
 //!   order.
+//! - Version 39: adds the new game's world flags (`flags`) and each Ink
+//!   file's story state (`dialogs`), which the original has no counterpart
+//!   of (see [`story_state`]). No older save kept them, so the upgrade
+//!   gives `[]` and `[]`.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -257,6 +261,13 @@
 //! The recent rank `<RRK>` reads is not saved, as the original's isn't.
 //! One whose record is gone is kept as saved, and flying the pilot drops
 //! it, as `_LoadPilotData` does (@0x75e47-0x75eb6).
+//!
+//! The world flags set (`flags`) are their names, ascending, and the story
+//! states (`dialogs`) are each an Ink `file` with its adapter's `state` as
+//! text, by file ascending ([`story_state`]). A file the data no longer
+//! has keeps its state as saved.
+
+mod story_state;
 
 use std::collections::BTreeMap;
 
@@ -281,9 +292,10 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 use crate::traffic::stellar_defence::DefenceShips;
 use crate::voice::VoiceVariant;
+use story_state::{SavedDialogState, dialogs_of, flags_of, saved_dialogs, saved_flags};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 38;
+pub const CURRENT: u64 = 39;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1082,6 +1094,8 @@ struct Saved {
     ranks: Vec<i16>,
     seen_intro: bool,
     defence_ships: Vec<SavedDefenceShips>,
+    flags: Vec<String>,
+    dialogs: Vec<SavedDialogState>,
 }
 
 /// A saved reinforcement countdown: a system and its days left.
@@ -1161,6 +1175,7 @@ fn saved_legal(legal: &BTreeMap<GovtId, i16>) -> Vec<SavedRecord> {
 
 /// `pilot` as the current version's save: pretty JSON.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one field of the save for each of the pilot's
 pub fn encode(pilot: &Pilot) -> String {
     let saved = Saved {
         version: CURRENT,
@@ -1259,6 +1274,8 @@ pub fn encode(pilot: &Pilot) -> String {
         ranks: pilot.ranks.iter().map(|rank| rank.0).collect(),
         seen_intro: pilot.seen_intro,
         defence_ships: saved_defence_ships(&pilot.defence_ships),
+        flags: saved_flags(&pilot.flags),
+        dialogs: saved_dialogs(&pilot.dialogs),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -1303,7 +1320,14 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     fighter_voices,
     class_orders,
     escort_berths,
+    flags_and_dialogs,
 ];
+
+/// Version 38 to 39: no world flag set and no Ink file's story state, as
+/// no older save kept them.
+fn flags_and_dialogs(save: &mut Value) {
+    add_empty(save, &["flags", "dialogs"]);
+}
 
 /// Version 37 to 38: no escort's berth, as no older save kept it, so its
 /// escorts load in fleet order.
@@ -1696,6 +1720,7 @@ fn explored_of(explored: &[i16], charted: &[i16]) -> std::collections::BTreeSet<
 /// [`SaveError::Unusable`] for text that is not a save (not JSON, no
 /// version, a missing field or one of the wrong type) or whose values
 /// cannot be a pilot's (a date the calendar does not have).
+#[allow(clippy::too_many_lines)] // one field of the pilot for each of the save's
 pub fn decode(text: &str) -> Result<Pilot, SaveError> {
     let unusable = |reason: String| SaveError::Unusable(reason);
     let mut save: Value =
@@ -1796,6 +1821,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         ranks: saved.ranks.into_iter().map(RankId).collect(),
         seen_intro: saved.seen_intro,
         defence_ships: defence_ships_of(&saved.defence_ships),
+        flags: flags_of(saved.flags),
+        dialogs: dialogs_of(saved.dialogs),
     })
 }
 
@@ -1915,7 +1942,7 @@ mod tests {
     }
 
     /// A pilot with every field away from its default.
-    fn seasoned() -> Pilot {
+    pub(super) fn seasoned() -> Pilot {
         Pilot {
             name: "Ada Lovelace".to_owned(),
             ship: ShipId(140),
@@ -1971,6 +1998,8 @@ mod tests {
             seen_intro: true,
             nickname: String::new(),
             defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
+            flags: crate::flags::WorldFlags::default(),
+            dialogs: crate::dialog::states::DialogStates::default(),
         }
     }
 
@@ -2132,7 +2161,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 38);
+        assert_eq!(CURRENT, 39);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2221,7 +2250,7 @@ mod tests {
         );
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 38"), "{text}");
+        assert!(text.contains("\n  \"version\": 39"), "{text}");
     }
 
     #[test]
@@ -4819,12 +4848,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 38", "\"version\": 39");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 39 }));
+        let newer = encode(&seasoned()).replace("\"version\": 39", "\"version\": 40");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 40 }));
         assert_eq!(
-            SaveError::Newer { version: 39 }.to_string(),
+            SaveError::Newer { version: 40 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 39, and this version of Nova reads up to 38)."
+             (it is version 40, and this version of Nova reads up to 39)."
         );
     }
 

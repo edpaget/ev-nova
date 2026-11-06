@@ -10,7 +10,7 @@
 //!
 //! A flag is its name as text; the data's format checks the names when it
 //! loads. A flag the set doesn't hold is unset: there is no third state.
-//! They are kept in the pilot (`Pilot::flags`)
+//! They are kept in the pilot ([`Pilot::flags`](crate::pilot::Pilot::flags))
 //! and saved with it. The stock game's scripting uses numbered control bits
 //! instead, and never touches these.
 

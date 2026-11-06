@@ -6,7 +6,7 @@
 //! keyed as a ref names it (`dialog/dock-job.ink`). A conversation reads
 //! and writes its file's state
 //! ([`Conversation::open`](super::conversation::Conversation::open)); the
-//! pilot holds them (`Pilot::dialogs`).
+//! pilot holds them ([`Pilot::dialogs`](crate::pilot::Pilot::dialogs)).
 //!
 //! A file the data no longer has keeps its state as saved, as the save
 //! keeps other records whose data is gone. It is never read again.

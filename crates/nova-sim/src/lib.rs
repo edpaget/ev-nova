@@ -440,6 +440,7 @@ pub use nova_sim_state::domination;
 pub use nova_sim_story::dialog;
 pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
+pub use nova_sim_story::flags;
 pub use nova_sim_story::map_walk;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;

@@ -85,6 +85,12 @@
 //! pilot (`_ResetGameData` @0x1dfdb), and set once the pilot has entered
 //! play past the intro (`_EnterGameFromMainScreen` @0x19ea2-0x19ebc).
 //!
+//! It keeps the new game's world flags, its named on/off facts
+//! ([`WorldFlags`]), and the story state of each Ink file it has played
+//! ([`DialogStates`]), so a conversation's read counts and spent choices
+//! carry across scenes and saves (see [`dialog`](crate::dialog)): none of
+//! either on a new pilot. The stock game's pilots never gain any.
+//!
 //! A `nova_sim::Session` flies a pilot and changes it as the rules
 //! say.
 
@@ -101,6 +107,8 @@ pub use crate::control::Gender;
 use crate::control::{Bit, ControlBitSet};
 use crate::cron::CronState;
 use crate::date::GameDate;
+use crate::dialog::states::DialogStates;
+use crate::flags::WorldFlags;
 pub use crate::fleet::Escort;
 use crate::fleet::OrderWord;
 use crate::legal::LegalRecords;
@@ -261,6 +269,12 @@ pub struct Pilot {
     /// starts from the decoded counts, as `_DoNewPilot` reloads the
     /// records (@0x190f0).
     pub defence_ships: DefenceShips,
+    /// The new game's world flags that are set (see
+    /// [`flags`](crate::flags)): none on a new pilot.
+    pub flags: WorldFlags,
+    /// The story state of each Ink file the pilot has played (see
+    /// [`states`](crate::dialog::states)): none on a new pilot.
+    pub dialogs: DialogStates,
 }
 
 impl Pilot {
@@ -328,6 +342,8 @@ impl Pilot {
             ranks: BTreeSet::new(),
             seen_intro: false,
             defence_ships: DefenceShips::default(),
+            flags: WorldFlags::default(),
+            dialogs: DialogStates::default(),
         })
     }
 
@@ -1186,6 +1202,13 @@ mod tests {
             ..pilot
         };
         assert!(seen.seen_intro());
+    }
+
+    #[test]
+    fn a_new_pilot_holds_no_world_flag_and_no_story_state() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.flags, WorldFlags::default());
+        assert_eq!(pilot.dialogs, DialogStates::default());
     }
 
     #[test]
