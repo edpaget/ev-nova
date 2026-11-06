@@ -12,12 +12,17 @@
 //! - [`dialog`]: the dialog port, which plays the new game's compiled Ink
 //!   conversations a line at a time ([`Dialog`](dialog::Dialog), opened by
 //!   a [`DialogLoader`](dialog::DialogLoader)); its adapter is `nova-ink`.
+//!   Each Ink file's story state is kept per file
+//!   ([`DialogStates`](dialog::states::DialogStates)).
 //! - [`exchange_events`]: what the commodity exchange says of the `öops`
 //!   price events at the stellar docked at, the disputed
 //!   [`exchange_events::exchange_events`]: the first local event's line
 //!   ([`exchange_events::event_line`]), or every local event's name.
 //! - [`exploration`]: which walks a map outfit runs
 //!   ([`exploration::map_walks`]) and which systems are inhabited.
+//! - [`flags`]: the new game's world flags, named on/off facts
+//!   ([`WorldFlags`](flags::WorldFlags)) that missions set and clear and
+//!   conversations read.
 //! - [`map_walk`]: the exploration walk a map grant, the take-off and a
 //!   jump's re-explore run, as `_AutoSetExploration` runs it
 //!   ([`map_walk::auto_set_exploration`]), over a
@@ -96,6 +101,7 @@ use nova_sim_state::{
 pub mod dialog;
 pub mod exchange_events;
 pub mod exploration;
+pub mod flags;
 pub mod map_walk;
 pub mod mission;
 pub mod nebula;

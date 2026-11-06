@@ -24,12 +24,17 @@
 //! [`conversation`] plays a story a page at a time over this port, for a
 //! screen to show: the lines, then the choices, kept as a save between
 //! choices so the conversation is a plain value.
+//!
+//! [`states`] keeps one story state per Ink file
+//! ([`DialogStates`](states::DialogStates)), so a file's read counts and
+//! spent choices carry from one of its scenes to the next.
 
 pub mod conversation;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fake;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
+pub mod states;
 
 /// Opens compiled Ink stories.
 pub trait DialogLoader {
