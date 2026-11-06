@@ -14,6 +14,7 @@ use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 use super::fleet::{self, TRAFFIC_SHIPS};
 use super::gates;
 use super::ids::{CIVILIAN_DUDE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate};
+use super::outfits;
 use super::records::{
     clamp_i16, neutral_govt, neutral_stellar, neutral_system, rgb, stellar_flags, text_desc,
 };
@@ -36,9 +37,9 @@ pub struct Mapped {
     pub problems: Vec<Problem>,
 }
 
-/// Maps `galaxy`'s factions, systems, stellars, jump points, hulls and
-/// starts to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`, `shän`, `düde` and
-/// `chär` records.
+/// Maps `galaxy`'s factions, systems, stellars, jump points, hulls,
+/// starts and outfits to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`, `shän`,
+/// `düde`, `chär` and `oütf` records.
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
     let mut problems = Vec::new();
@@ -69,6 +70,7 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
         gates,
         ships,
         starts: BTreeMap::new(),
+        outfits: outfits::number_outfits(galaxy, &mut problems),
     };
     ids.starts = fleet::number_starts(galaxy, &ids, &mut problems);
     let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
@@ -119,6 +121,9 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
     records.extend(traffic);
     for (id, &nova) in &ids.starts {
         records.push(fleet::character(&ids, nova, &galaxy.starts[id]));
+    }
+    for (id, &nova) in &ids.outfits {
+        records.push(outfits::outfit(nova, &galaxy.outfits[id]));
     }
     Mapped {
         records,

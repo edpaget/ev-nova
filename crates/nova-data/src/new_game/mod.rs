@@ -22,6 +22,7 @@
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
 //! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, doing nothing, with no `Max` and never for sale (`TechLevel` 0x7fff); `mount`, `damage`, `range`, `reload` and `model` aren't read |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
@@ -96,7 +97,9 @@
 //!   dead points are travelled as stable ones until `play-the-sample`
 //!   phase 1.
 //! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
-//!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
+//!   phase 3. `outfits/` map only as things a pilot can own
+//!   ([`outfits`]): no weapon or system reads them, and no hardpoint is
+//!   fitted, so the hulls are unarmed.
 //!   A livery's `decals` aren't drawn.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
@@ -124,6 +127,7 @@ pub mod ids;
 pub mod looks;
 mod map;
 pub mod missions;
+pub mod outfits;
 pub mod records;
 #[cfg(test)]
 mod tests;
