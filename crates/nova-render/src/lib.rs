@@ -55,12 +55,14 @@
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
 //! the work to [`wgpu::WgpuRenderer`], which draws each frame into an
 //! offscreen scene and blits it to the target; an OR batch reads a backdrop
-//! copy of the rectangle the core says it covers, in its layer's pixels
-//! ([`Frame::pixels_covered`]). The renderer draws the world with an
-//! upscaler ([`wgpu::Upscale`]): native draws it straight into the scene
-//! in the frame's order, as before there were layers, and
+//! copy of the rectangle the core says it covers, in the pixels of the
+//! canvas it draws into ([`Frame::pixels_covered`]). The renderer draws the
+//! world with an upscaler ([`wgpu::Upscale`]): native draws it straight
+//! into the scene in the frame's order, as before there were layers, and
 //! [`wgpu::SharpBilinear`] draws it into a texture of the logical size
-//! and enlarges that onto the viewport, the overlay over it. On macOS,
+//! and enlarges that onto the viewport, the overlay over it, and the
+//! world's tail ([`Frame::world_tail`]) over that at the window's
+//! resolution. On macOS,
 //! MetalFX's spatial scaler (through the `nova_metalfx` crate, the one
 //! place unsafe code lives) does the same in a command buffer of its own,
 //! falling back to sharp-bilinear, with one warning, for a size it won't

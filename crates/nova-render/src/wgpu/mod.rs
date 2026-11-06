@@ -16,7 +16,8 @@
 //! ([`Blend::OrCrossfade`](nova_view::Blend::OrCrossfade)) and a
 //! translucent OR batch
 //! ([`Blend::OrTranslucent`](nova_view::Blend::OrTranslucent)) read a backdrop
-//! copy of the rectangle the core says it covers, in its layer's pixels
+//! copy of the rectangle the core says it covers, in the pixels of the
+//! canvas it draws into
 //! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
 //! before it.
 //!
@@ -32,7 +33,9 @@
 //! enlarges it onto the viewport ([`Upscale::enlarge`]), and the whole
 //! overlay is drawn over it, in the frame's order: an overlay drawn before
 //! the world in the frame lands over it, unlike natively (the renderer's
-//! layout says why). On macOS, MetalFX's spatial scaler
+//! layout says why). The world's tail
+//! ([`Frame::world_tail`](crate::Frame::world_tail)) is drawn last, into
+//! the scene in the frame's order, world and overlay alike, as natively. On macOS, MetalFX's spatial scaler
 //! (`metal_fx::MetalFxSpatial`, through the `nova_metalfx` crate's safe
 //! API) draws the world into a texture as sharp-bilinear does, scales it
 //! in a command buffer of its own, and copies the result onto the

@@ -114,7 +114,8 @@ struct Pass {
 /// A world drawn into a texture of its own ([`WorldSpace::Texture`]) is
 /// drawn first, into a world canvas of the logical size; the scene is
 /// cleared, the upscaler enlarges the world onto the viewport
-/// ([`Upscale::enlarge`]), and the overlay is drawn over it
+/// ([`Upscale::enlarge`]), and the overlay is drawn over it, then the
+/// world's tail ([`Frame::world_tail`]) at the window's resolution
 /// (`lay_out` says in what order).
 pub struct WgpuRenderer {
     device: wgpu::Device,
@@ -433,8 +434,10 @@ impl WgpuRenderer {
     /// colour, as the scene's first pass does natively), each pass over
     /// the whole texture with the same projection; then the scene is
     /// cleared (the bars), the upscaler enlarges the world onto the
-    /// viewport, and the overlay is drawn over it, an OR batch's backdrop
-    /// taken from the enlarged world.
+    /// viewport, and the overlay before the world's tail is drawn over it,
+    /// then the whole tail, its world batches with the overlay's projection
+    /// onto the viewport; an OR batch's backdrop is taken from the
+    /// enlarged world and what was drawn over it.
     pub fn draw(&mut self, frame: &Frame, view: &wgpu::TextureView) {
         self.ensure_scene(frame.target);
         self.queue.write_buffer(
@@ -1017,8 +1020,9 @@ struct Layout<'a> {
     /// What to draw for each batch, in order.
     draws: Vec<Draw>,
     /// The scissor each of `draws` is encoded with, index for index, in
-    /// its canvas's pixels: [`Frame::world_scissor`] for a world draw of a
-    /// clipped world, and the whole canvas for every other draw.
+    /// its canvas's pixels: [`Frame::world_scissor_in`] its canvas for a
+    /// world draw of a clipped world, and the whole canvas for every other
+    /// draw.
     scissors: Vec<PixelRect>,
     /// For a world drawn into a texture of its own, the render passes its
     /// draws are split into, in order: the first clears the texture, and
@@ -1033,15 +1037,14 @@ struct Layout<'a> {
 
 impl<'a> Layout<'a> {
     /// Lays out the batch at `index` of `frame` at the end of `passes`,
-    /// scissored to `scissors`' rect for its layer, opening a pass for an
-    /// OR batch. It is left out when its scissor is empty, and an OR batch
-    /// is when it covers no pixel in its layer.
+    /// scissored to `scissors`' rect for its layer and the space it draws
+    /// in ([`Frame::space_of`]), opening a pass for an OR batch. It is left
+    /// out when its scissor is empty, and an OR batch is when it covers no
+    /// pixel in that space.
     fn push(&mut self, frame: &'a Frame, index: usize, scissors: Scissors, passes: &mut Vec<Pass>) {
         let batch = &frame.batches[index];
-        let scissor = match frame.layer(index) {
-            DrawLayer::World => scissors.world,
-            DrawLayer::Overlay => scissors.overlay,
-        };
+        let space = frame.space_of(index);
+        let scissor = scissors.for_draw(frame.layer(index), space);
         if scissor.w == 0 || scissor.h == 0 {
             return;
         }
@@ -1051,7 +1054,7 @@ impl<'a> Layout<'a> {
             _ => None,
         };
         if let Some(quads) = backdrop_quads {
-            let Some(rect) = frame.pixels_covered(frame.layer(index), quads) else {
+            let Some(rect) = frame.pixels_covered(space, quads) else {
                 return;
             };
             passes.push(Pass {
@@ -1112,10 +1115,15 @@ impl<'a> Layout<'a> {
 /// pixels.
 #[derive(Clone, Copy)]
 struct Scissors {
-    /// A world draw's: [`Frame::world_scissor`] when the world is clipped,
-    /// and otherwise the whole canvas it is drawn into (the target, or the
-    /// world's texture).
+    /// A world draw's in [`Frame::world_space`]: [`Frame::world_scissor`]
+    /// when the world is clipped, and otherwise the whole canvas it is
+    /// drawn into (the target, or the world's texture).
     world: PixelRect,
+    /// A world draw's in the target, as a world draw of the tail
+    /// ([`Frame::world_tail`]) is whatever the world's space:
+    /// [`Frame::world_scissor_in`] the target when the world is clipped,
+    /// and otherwise the whole target.
+    world_target: PixelRect,
     /// An overlay draw's: the whole target, as the overlay is never
     /// clipped.
     overlay: PixelRect,
@@ -1135,18 +1143,35 @@ impl Scissors {
             (None, WorldSpace::Texture { size: (w, h) }) => PixelRect { x: 0, y: 0, w, h },
             (None, WorldSpace::Target) => target,
         };
+        let world_target = match frame.world_clip {
+            Some(_) => frame.world_scissor_in(WorldSpace::Target),
+            None => target,
+        };
         Self {
             world,
+            world_target,
             overlay: target,
+        }
+    }
+
+    /// The scissor of a draw in `layer` drawn into `space`
+    /// ([`Frame::space_of`]). It must act on both layers: a world draw is
+    /// clipped and an overlay draw never is.
+    fn for_draw(self, layer: DrawLayer, space: WorldSpace) -> PixelRect {
+        match (layer, space) {
+            (DrawLayer::World, WorldSpace::Texture { .. }) => self.world,
+            (DrawLayer::World, WorldSpace::Target) => self.world_target,
+            (DrawLayer::Overlay, _) => self.overlay,
         }
     }
 }
 
 /// Lays a frame's batches out in one instance buffer, one vertex buffer
 /// and a list of text batches, with what to draw for each batch, split
-/// into passes at each OR batch. An OR batch that covers no pixel in its
-/// layer ([`Frame::pixels_covered`]: texels for a world drawn into a
-/// texture, target pixels otherwise) is left out.
+/// into passes at each OR batch. An OR batch that covers no pixel in the
+/// space it draws in ([`Frame::space_of`], [`Frame::pixels_covered`]:
+/// texels for a world batch drawn into a texture, target pixels
+/// otherwise) is left out.
 ///
 /// A world drawn into the target ([`WorldSpace::Target`]) is laid out in
 /// the frame's order with the overlay, as if there were no layers.
@@ -1161,19 +1186,26 @@ impl Scissors {
 /// overlay batch that comes before the world in the frame is drawn over
 /// the world here, where natively the world draws over it; and a second
 /// world run after an overlay run is drawn with the first, under that
-/// overlay. This differs from native on purpose. It remains for text
-/// among flight's world: the floaters' text, the message line's included,
-/// draws over the particles under a texture world
-/// (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled),
-/// and a placeholder's reason over the world, on purpose. A dialog's map doesn't
+/// overlay. This differs from native on purpose. A dialog's map doesn't
 /// meet it: flight's scene comes first, under the dialogs and the map
 /// (rdm:phase/play-feel-7/phase-2-paused-flight-under-mission-dialogs).
-/// Text is never world (the batcher keeps it in the overlay), so it is
-/// always laid out with the overlay; no rule here singles it out.
+/// A placeholder's reason, overlay before the tail, draws over the
+/// world before the floaters, on purpose.
+///
+/// The world's tail ([`Frame::world_tail`]) is the exception: every batch
+/// from it on is laid out into the scene after the overlay before it, in
+/// the frame's order, its world batches projected onto the viewport in
+/// target pixels ([`Frame::space_of`]). Flight starts its tail at the
+/// floaters, so their text draws under the particles and over the
+/// over-ship beams, as `_PostDrawCallback` (0x38c80) draws
+/// `_FloaterDrawCallback` (@0x38c8d) before `_DrawParticlesOffscreen`
+/// (@0x38c9a). Text is never world (the batcher keeps it in the
+/// overlay), so it is always laid out with the overlay, before the tail
+/// or in it; no rule here singles it out.
 ///
 /// Each world draw of a clipped world (`nova_view::DrawList::world_in`)
-/// is scissored to [`Frame::world_scissor`], in target pixels or texels
-/// as the world is drawn, and one whose scissor is empty is left out, its
+/// is scissored to [`Frame::world_scissor_in`] the space it draws in, in
+/// target pixels or texels, and one whose scissor is empty is left out, its
 /// OR pass with it. Every other draw, the overlay's text included, has the
 /// whole canvas it is drawn into, which also resets a world draw's
 /// scissor before the overlay over it.
@@ -1181,8 +1213,7 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut layout = Layout::default();
     let scissors = Scissors::of(frame);
     let indices = 0..frame.batches.len();
-    let textured = matches!(frame.world_space, WorldSpace::Texture { .. });
-    let in_world = |&index: &usize| textured && frame.layer(index) == DrawLayer::World;
+    let in_world = |&index: &usize| matches!(frame.space_of(index), WorldSpace::Texture { .. });
     let mut world = Vec::new();
     if indices.clone().any(|index| in_world(&index)) {
         world.push(layout.fresh_pass());
@@ -1407,6 +1438,7 @@ mod tests {
             world_space: WorldSpace::Target,
             world: Vec::new(),
             world_clip: None,
+            world_tail: None,
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
@@ -1493,7 +1525,7 @@ mod tests {
             sprites(Blend::Or, vec![quad(5.0)]),
             sprites(Blend::Normal, vec![quad(6.0)]),
         ]);
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(DrawLayer::Overlay, quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(WorldSpace::Target, quads);
 
         let layout = lay_out(&frame);
 
@@ -1533,7 +1565,7 @@ mod tests {
             sprites(Blend::OrCrossfade, vec![quad(1.0), quad(3.0)]),
             sprites(Blend::Normal, vec![quad(6.0)]),
         ]);
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(DrawLayer::Overlay, quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(WorldSpace::Target, quads);
 
         let layout = lay_out(&frame);
 
@@ -1575,7 +1607,7 @@ mod tests {
                     draws: 0..0
                 },
                 Pass {
-                    backdrop: frame.pixels_covered(DrawLayer::Overlay, &[quad(2.0)]),
+                    backdrop: frame.pixels_covered(WorldSpace::Target, &[quad(2.0)]),
                     draws: 0..1
                 },
             ]
@@ -1640,6 +1672,7 @@ mod tests {
             batches,
             world: Vec::new(),
             world_clip: None,
+            world_tail: None,
         }
     }
 
@@ -1738,7 +1771,7 @@ mod tests {
         assert_eq!(layout.passes.len(), 2);
         assert_eq!(
             layout.passes[1].backdrop,
-            frame.pixels_covered(DrawLayer::Overlay, &[quad(2.0)])
+            frame.pixels_covered(WorldSpace::Target, &[quad(2.0)])
         );
         assert!(layout.passes[1].backdrop.is_some());
         assert_eq!(layout.passes[1].draws, 1..2);
@@ -2048,6 +2081,98 @@ mod tests {
                 scissored(&layout, &layout.passes),
                 vec![WHOLE_TARGET; frame.batches.len() - frame.world.len()]
             );
+        }
+    }
+
+    /// A textured frame of a world solid, overlay text, a world solid and
+    /// overlay text, its world's tail starting at the second solid.
+    fn tailed() -> Frame {
+        textured(Frame {
+            world: vec![0, 2],
+            world_tail: Some(2),
+            ..frame_of(vec![
+                Batch::Solid(vec![solid(4.0)]),
+                Batch::Text(vec![run("a")]),
+                Batch::Solid(vec![solid(5.0)]),
+                Batch::Text(vec![run("b")]),
+            ])
+        })
+    }
+
+    #[test]
+    fn lay_out_draws_a_texture_worlds_tail_into_the_scene_after_the_overlay_before_it() {
+        let frame = tailed();
+        let layout = lay_out(&frame);
+
+        let (a, b) = (
+            Draw::Solid { vertices: 0..6 },
+            Draw::Solid { vertices: 6..12 },
+        );
+        let (t1, t2) = (Draw::Text { renderer: 0 }, Draw::Text { renderer: 1 });
+        assert_eq!(drawn(&layout, &layout.world), [&a]);
+        assert_eq!(drawn(&layout, &layout.passes), [&t1, &b, &t2]);
+        assert_eq!(layout.world[0].backdrop, None, "clears the world first");
+        assert_eq!(layout.passes.len(), 1);
+    }
+
+    #[test]
+    fn lay_out_scissors_a_tail_world_draw_to_the_world_clip_in_target_pixels() {
+        let frame = clipped_to(tailed(), 0.0, 24.0);
+        assert_eq!(frame.world_scissor(), pixels(0, 0, 24, 32));
+        let in_target = frame.world_scissor_in(WorldSpace::Target);
+        assert_eq!(in_target, pixels(0, 0, 48, 64));
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(scissored(&layout, &layout.world), [frame.world_scissor()]);
+        assert_eq!(
+            scissored(&layout, &layout.passes),
+            [WHOLE_TARGET, in_target, WHOLE_TARGET]
+        );
+    }
+
+    #[test]
+    fn lay_out_takes_a_tail_or_batchs_backdrop_in_target_pixels() {
+        let frame = textured(Frame {
+            world: vec![0, 1],
+            world_tail: Some(1),
+            ..frame_of(vec![
+                Batch::Solid(vec![solid(4.0)]),
+                Batch::OrFill(vec![quad(2.0)]),
+            ])
+        });
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            drawn(&layout, &layout.world),
+            [&Draw::Solid { vertices: 0..6 }]
+        );
+        assert_eq!(layout.passes.len(), 2);
+        let backdrop = frame.pixels_covered(WorldSpace::Target, &[quad(2.0)]);
+        // quad(2.0) is (2, 2)-(3, 3): two target pixels a unit.
+        assert_eq!(backdrop, Some(pixels(4, 4, 2, 2)));
+        assert_eq!(layout.passes[1].backdrop, backdrop);
+        assert_eq!(
+            drawn(&layout, &layout.passes[1..]),
+            [&Draw::OrFill { instances: 0..1 }]
+        );
+    }
+
+    #[test]
+    fn natively_lay_out_ignores_the_world_tail() {
+        for frame in layered_frames() {
+            let frame = clipped_to(frame, 0.0, 24.0);
+            let untailed = lay_out(&frame);
+            for tail in 0..=frame.batches.len() {
+                let tailed = Frame {
+                    world_tail: Some(tail),
+                    ..frame.clone()
+                };
+                let layout = lay_out(&tailed);
+                assert_same_layout(&layout, &untailed);
+                assert_eq!(layout.world, []);
+            }
         }
     }
 

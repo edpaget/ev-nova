@@ -141,7 +141,13 @@ impl<S: ImageSource> Renderer<S> {
     /// every text run is in target pixels. The list's world clip
     /// ([`DrawList::world_in`]) is the frame's ([`Frame::world_clip`]): the
     /// batches are the same with it or without, and the GPU cuts the
-    /// world's draws to it ([`Frame::world_scissor`]).
+    /// world's draws to it ([`Frame::world_scissor`]). The list's world
+    /// tail ([`DrawList::start_world_tail`]) settles the run it falls in,
+    /// so no batch straddles it, and the index of the first batch from it
+    /// on is the frame's ([`Frame::world_tail`]): the frame's batch count
+    /// for a tail at or past the list's end, an empty tail. Drawn in the
+    /// target, the extra cut changes no pixel: it splits one batch into
+    /// two of the same kind, drawn one after the other.
     ///
     /// A movie frame ([`DrawCommand::MovieFrame`]) is uploaded onto its
     /// stream's page only when the page doesn't hold it yet
@@ -164,12 +170,24 @@ impl<S: ImageSource> Renderer<S> {
         self.rebuild(gpu);
         let target = Target { rect, scale };
         let mut layers = Layers::default();
-        for (layer, command) in list.layered() {
+        let tail = list.world_tail();
+        for (index, (layer, command)) in list.layered().enumerate() {
+            if tail == Some(index) {
+                layers.start_tail();
+            }
             let run = layers.run_in(layer);
             self.draw(command, None, target, run, gpu, &mut report);
         }
+        if tail.is_some_and(|tail| tail >= list.len()) {
+            layers.start_tail();
+        }
         self.streams.end_frame();
-        let Layers { batches, world, .. } = layers.settled();
+        let Layers {
+            batches,
+            world,
+            tail,
+            ..
+        } = layers.settled();
         gpu.submit(&Frame {
             target: viewport.window_px(),
             viewport: rect,
@@ -184,6 +202,7 @@ impl<S: ImageSource> Renderer<S> {
                 w: clip.width(),
                 h: clip.height(),
             }),
+            world_tail: tail,
         });
         report
     }
@@ -613,6 +632,8 @@ struct Layers {
     /// The run being batched, and its layer.
     run: Vec<Batch>,
     layer: DrawLayer,
+    /// The index of the world's tail's first batch, once it has started.
+    tail: Option<usize>,
 }
 
 impl Layers {
@@ -633,6 +654,13 @@ impl Layers {
             self.world.extend(start..start + self.run.len());
         }
         self.batches.append(&mut self.run);
+    }
+
+    /// Starts the world's tail: settles the current run, so no batch
+    /// straddles the tail, and marks the next batch as its first.
+    fn start_tail(&mut self) {
+        self.settle();
+        self.tail = Some(self.batches.len());
     }
 
     /// Every run settled.
@@ -1103,6 +1131,7 @@ mod tests {
                     }],
                     world: Vec::new(),
                     world_clip: None,
+                    world_tail: None,
                 }),
             ]
         );
@@ -2969,6 +2998,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_world_tail_breaks_the_world_run_and_marks_its_first_batch() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .start_world_tail()
+                .line(at(0.0, 2.0), at(4.0, 2.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [("solid", 1, WORLD), ("solid", 1, WORLD)]
+        );
+        assert_eq!(frame.world_tail, Some(1));
+    }
+
+    #[test]
+    fn the_world_tail_after_overlay_text_marks_the_next_batch() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .start_world_tail()
+                .text("b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+                .dot(at(1.0, 1.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(
+            layered_shape(&frame),
+            [
+                ("solid", 1, WORLD),
+                ("text", 1, OVERLAY),
+                ("text", 1, OVERLAY),
+                ("solid", 1, WORLD),
+            ]
+        );
+        assert_eq!(frame.world_tail, Some(2));
+    }
+
+    #[test]
+    fn a_list_with_no_world_tail_makes_a_frame_with_none() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE);
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.world_tail, None);
+    }
+
+    #[test]
+    fn a_world_tail_after_the_last_command_is_empty() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+                .start_world_tail();
+        });
+
+        let frame = render_through(&list, &mut RecordingGpu::new());
+
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(frame.world_tail, Some(frame.batches.len()));
+    }
+
     /// The world's clip in the clip tests: the 64x48 logical space less a
     /// 16-unit column at the right, as flight's play area leaves the
     /// status bar's.
@@ -3076,7 +3174,7 @@ mod tests {
                     ..
                 } => {
                     let layer = frame.layer(at);
-                    (layer, frame.pixels_covered(layer, quads))
+                    (layer, frame.pixels_covered(frame.space_of(at), quads))
                 }
                 other => panic!("an OR batch: {other:?}"),
             })

@@ -38,6 +38,7 @@ fn black_frame() -> Frame {
         batches: Vec::new(),
         world: Vec::new(),
         world_clip: None,
+        world_tail: None,
     }
 }
 

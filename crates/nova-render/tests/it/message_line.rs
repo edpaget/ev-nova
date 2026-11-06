@@ -2,7 +2,10 @@
 //! adapter: its box goes into the world texture under the sprites and its
 //! text draws over them, as `_DisplayComm` (0x90201) erases the box into
 //! the background frame and `_FloaterDrawCallback` (@0x38b52-0x38b90)
-//! blits that rect over the sprites. The scene is built by hand from
+//! blits that rect over the sprites. The OR fill and the text are the
+//! world's tail (`DrawList::start_world_tail`), drawn at the window's
+//! resolution over the enlarged world; `floater_text` pins the tail's
+//! order against the beams and particles. The scene is built by hand from
 //! `DrawList` primitives in flight's order; that flight draws them so is
 //! nova-view's, pinned there. Needs a GPU adapter; skips, passing, without
 //! one.
@@ -19,43 +22,43 @@ use super::wgpu_offscreen::{Images, gpu_with};
 
 /// The window: twice the logical 32x24, so the upscaled world fills it
 /// exactly.
-const WINDOW: (u32, u32) = (64, 48);
+pub(super) const WINDOW: (u32, u32) = (64, 48);
 
 /// The 5-bit colour `rgb5` widened to 8 bits, as the original's 16-bit
 /// screen shows it.
-fn w555(rgb5: [u8; 3]) -> [u8; 4] {
+pub(super) fn w555(rgb5: [u8; 3]) -> [u8; 4] {
     let widen = |c: u8| (c << 3) | (c >> 2);
     [widen(rgb5[0]), widen(rgb5[1]), widen(rgb5[2]), 255]
 }
 
-fn rgba([r, g, b, a]: [u8; 4]) -> Color {
+pub(super) fn rgba([r, g, b, a]: [u8; 4]) -> Color {
     Color::rgba(r, g, b, a)
 }
 
-fn area(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+pub(super) fn area(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
     Bounds {
         min: Point::new(left, top),
         max: Point::new(right, bottom),
     }
 }
 
-const BLACK: [u8; 4] = [0, 0, 0, 255];
-const WHITE: [u8; 4] = [255, 255, 255, 255];
+pub(super) const BLACK: [u8; 4] = [0, 0, 0, 255];
+pub(super) const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// The starfield's colour: a dark blue.
-const STARS: [u8; 3] = [0, 0, 8];
+pub(super) const STARS: [u8; 3] = [0, 0, 8];
 /// The message box's colour, the system's background: a dark grey.
-const BOX: [u8; 3] = [4, 4, 4];
+pub(super) const BOX: [u8; 3] = [4, 4, 4];
 /// A ship's colour: red.
-const SHIP: [u8; 3] = [31, 0, 0];
+pub(super) const SHIP: [u8; 3] = [31, 0, 0];
 
 /// The message box, in logical units.
-fn message_box() -> Bounds {
+pub(super) fn message_box() -> Bounds {
     area(2.0, 14.0, 30.0, 22.0)
 }
 
 /// A ship over the box's left part, in logical units.
-fn ship() -> Bounds {
+pub(super) fn ship() -> Bounds {
     area(4.0, 10.0, 14.0, 20.0)
 }
 
@@ -72,14 +75,16 @@ fn text(list: &mut DrawList) {
 }
 
 /// Flight's message line among its world, in flight's order: the stars,
-/// the box over them, a ship over the box, the box's colour OR-ed over the
-/// ship (the floaters' blit), then the text, which stays in the overlay.
+/// the box over them, a ship over the box, then the world's tail, which
+/// starts at the floaters: the box's colour OR-ed over the ship (the
+/// floaters' blit), then the text, which stays in the overlay.
 fn message_scene() -> DrawList {
     let mut list = DrawList::new();
     list.world_in(area(0.0, 0.0, 32.0, 24.0), |list| {
         fill(list, area(0.0, 0.0, 32.0, 24.0), rgba(w555(STARS)));
         fill(list, message_box(), rgba(w555(BOX)));
         fill(list, ship(), rgba(w555(SHIP)));
+        list.start_world_tail();
         list.or_fill(message_box(), rgba(w555(BOX)));
         text(list);
     });
@@ -94,13 +99,13 @@ fn text_alone() -> DrawList {
 }
 
 /// The faces with the block font as Charcoal, so a glyph's inside is solid.
-fn faces() -> FontFaces {
+pub(super) fn faces() -> FontFaces {
     FontFaces::bundled().with_charcoal(block_font("Charcoal"))
 }
 
 /// `list` drawn into `viewport` with `upscaler`, read back; `None` with no
 /// adapter.
-fn drawn(list: &DrawList, viewport: &Viewport, upscaler: Upscaler) -> Option<Vec<u8>> {
+pub(super) fn drawn(list: &DrawList, viewport: &Viewport, upscaler: Upscaler) -> Option<Vec<u8>> {
     let (w, h) = viewport.window_px();
     let mut gpu = gpu_with(w, h, &faces())?;
     gpu.set_upscaler(upscaler);
@@ -109,19 +114,19 @@ fn drawn(list: &DrawList, viewport: &Viewport, upscaler: Upscaler) -> Option<Vec
     Some(gpu.read_pixels().expect("read back"))
 }
 
-fn pixel(pixels: &[u8], (x, y): (u32, u32)) -> [u8; 4] {
+pub(super) fn pixel(pixels: &[u8], (x, y): (u32, u32)) -> [u8; 4] {
     let at = ((y * WINDOW.0 + x) * 4) as usize;
     pixels[at..at + 4].try_into().expect("four bytes")
 }
 
 /// The window pixels inside `area`, at two pixels a logical unit.
-fn pixels_in(area: Bounds) -> impl Iterator<Item = (u32, u32)> {
+pub(super) fn pixels_in(area: Bounds) -> impl Iterator<Item = (u32, u32)> {
     let (left, right) = (area.min.x as u32 * 2, area.max.x as u32 * 2);
     let (top, bottom) = (area.min.y as u32 * 2, area.max.y as u32 * 2);
     (top..bottom).flat_map(move |y| (left..right).map(move |x| (x, y)))
 }
 
-fn inside(area: Bounds, (x, y): (u32, u32)) -> bool {
+pub(super) fn inside(area: Bounds, (x, y): (u32, u32)) -> bool {
     let (x, y) = (x as f32 / 2.0, y as f32 / 2.0);
     (area.min.x..area.max.x).contains(&x) && (area.min.y..area.max.y).contains(&y)
 }
