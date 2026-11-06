@@ -821,7 +821,11 @@ mod tests {
     #[test]
     fn a_pad_alone_asks_the_bet_with_west_held_and_bets_its_count() {
         use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
-        let pad = |button, pressed| Input::PadButton { button, pressed };
+        let pad = |button, pressed| Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        };
         let tap = |screen: &mut RaceScreen, button| {
             screen.input(&pad(button, true));
             screen.input(&pad(button, false));

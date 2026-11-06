@@ -16,7 +16,11 @@ fn axis(view: &mut Faked, axis: PadAxis, value: f32) {
 }
 
 fn pad(view: &mut Faked, button: PadButton, pressed: bool) {
-    view.input(&Input::PadButton { button, pressed });
+    view.input(&Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    });
 }
 
 /// The raw stick value whose dead-zoned amount is `amount`, on one axis.

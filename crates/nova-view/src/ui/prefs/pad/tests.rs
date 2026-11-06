@@ -12,7 +12,11 @@ fn told(device: Device) -> Input {
 
 fn tap(dialog: &mut PrefsDialog, button: PadButton) {
     for pressed in [true, false] {
-        dialog.input(&Input::PadButton { button, pressed });
+        dialog.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
     }
 }
 
@@ -158,12 +162,14 @@ fn south_on_key_settings_opens_the_keys_screen() {
     dialog.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert!(dialog.keys_screen().is_none(), "on the release");
     assert_eq!(dialog.dialog().pressed_item(), Some(KEY_SETTINGS_ITEM));
     dialog.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert_eq!(
         dialog.keys_screen().expect("open").device(),
@@ -180,12 +186,14 @@ fn a_dpad_press_while_south_is_held_drops_the_press() {
     dialog.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert!(dialog.music().pressed());
     tap(&mut dialog, PadButton::DPadDown);
     dialog.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(!dialog.music().on());
     assert!(!dialog.music().pressed());

@@ -346,6 +346,7 @@ mod tests {
         reader.follow(&Input::PadButton {
             button: PadButton::South,
             pressed: true,
+            repeat: false,
         });
         reader.follow(&Input::Key {
             key: Key::KeyA,
@@ -364,6 +365,7 @@ mod tests {
                 Input::PadButton {
                     button: PadButton::South,
                     pressed: true,
+                    repeat: false,
                 },
                 touch(FIRE, true),
                 touch(FlightCommand::Afterburner, true),

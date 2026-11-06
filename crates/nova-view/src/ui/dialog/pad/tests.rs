@@ -54,7 +54,11 @@ fn dialog(template: &DialogTemplate) -> Dialog {
 }
 
 fn pad(button: PadButton, pressed: bool) -> Input {
-    Input::PadButton { button, pressed }
+    Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    }
 }
 
 fn tap(dialog: &mut Dialog, button: PadButton) -> Option<DialogEvent> {

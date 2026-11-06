@@ -200,6 +200,7 @@ impl EntryKeyboard {
         if let Input::PadButton {
             button,
             pressed: false,
+            ..
         } = *input
             && let Some(at) = self.taken.iter().position(|&taken| taken == button)
         {
@@ -215,7 +216,9 @@ impl EntryKeyboard {
             return vec![*input];
         };
         match *input {
-            Input::PadButton { button, pressed } => {
+            Input::PadButton {
+                button, pressed, ..
+            } => {
                 let read = self.keys.follow(input);
                 if !self.focus.pad_shown() {
                     return vec![*input];

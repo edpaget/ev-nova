@@ -258,7 +258,8 @@ mod tests {
         assert_eq!(
             screen_side.input(&Input::PadButton {
                 button: PadButton::South,
-                pressed: true
+                pressed: true,
+                repeat: false
             }),
             Some(PAD)
         );
@@ -289,7 +290,8 @@ mod tests {
         assert_eq!(
             last.input(&Input::PadButton {
                 button: PadButton::South,
-                pressed: true
+                pressed: true,
+                repeat: false
             }),
             None,
             "a merged press is the last pad's family"
@@ -480,7 +482,8 @@ mod tests {
         assert_eq!(
             last.input(&Input::PadButton {
                 button: PadButton::East,
-                pressed: false
+                pressed: false,
+                repeat: false
             }),
             None
         );

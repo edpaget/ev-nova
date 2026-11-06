@@ -15,10 +15,12 @@ fn tap(screen: &mut PlayerInfoScreen, button: PadButton) {
     screen.input(&Input::PadButton {
         button,
         pressed: true,
+        repeat: false,
     });
     screen.input(&Input::PadButton {
         button,
         pressed: false,
+        repeat: false,
     });
 }
 
@@ -68,11 +70,13 @@ fn south_presses_the_focused_button_on_its_release_silently() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert_eq!(screen.tab(), Tab::General, "the press chooses nothing");
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     let PlayerInfoButton::Tab(tab) = focused else {
         unreachable!()
@@ -88,11 +92,13 @@ fn a_dpad_press_while_south_is_held_drops_the_press() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     tap(&mut screen, PadButton::DPadUp);
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(!screen.closed(), "Done's press was dropped");
 }
@@ -182,12 +188,14 @@ fn south_on_a_focus_no_longer_shown_presses_nothing() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     tap(&mut screen, PadButton::LeftShoulder);
     assert_eq!(screen.tab(), Tab::Cargo, "Jettison shows again");
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(
         !screen.confirm_open(),

@@ -1875,7 +1875,11 @@ fn told_the_pad() -> Input {
 
 fn pad_tap(screen: &mut impl Screen, button: nova_view::input::PadButton) {
     for pressed in [true, false] {
-        screen.input(&Input::PadButton { button, pressed });
+        screen.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
     }
 }
 

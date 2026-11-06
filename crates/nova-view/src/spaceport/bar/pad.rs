@@ -66,10 +66,12 @@ fn tap(screen: &mut BarScreen, button: PadButton) {
     screen.input(&Input::PadButton {
         button,
         pressed: true,
+        repeat: false,
     });
     screen.input(&Input::PadButton {
         button,
         pressed: false,
+        repeat: false,
     });
 }
 

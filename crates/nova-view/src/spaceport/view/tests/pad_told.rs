@@ -16,7 +16,11 @@ fn told(device: Device) -> Input {
 
 fn tap(view: &mut SpaceportView, button: PadButton) {
     for pressed in [true, false] {
-        view.input(&Input::PadButton { button, pressed });
+        view.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
     }
 }
 
@@ -250,6 +254,7 @@ fn south_on_the_landscape_plays_its_ambient_sound_as_a_press_does() {
     view.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     let mut pressed = kane();
     frame(&mut pressed);
@@ -265,6 +270,7 @@ fn south_on_the_landscape_plays_its_ambient_sound_as_a_press_does() {
     view.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert_eq!(view.take_sounds(), [], "not the release");
 }
@@ -342,17 +348,20 @@ fn a_south_held_over_from_flight_takes_off_only_on_a_fresh_press() {
     view.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(!view.left(), "the held-over release does nothing");
     assert_eq!(view.dialog().expect("laid out").pressed_item(), None);
     view.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert!(!view.left(), "a press arms Leave");
     view.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(view.left(), "its release takes off");
 }

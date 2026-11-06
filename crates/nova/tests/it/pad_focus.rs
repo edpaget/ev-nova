@@ -410,7 +410,10 @@ fn the_pad_alone_names_a_new_pilot_on_the_on_screen_keyboard_and_flies_it() {
         KeyId::Done,
     ];
     for input in layout.pad_presses(from, &keys) {
-        let nova_view::Input::PadButton { button, pressed } = input else {
+        let nova_view::Input::PadButton {
+            button, pressed, ..
+        } = input
+        else {
             panic!("pad inputs alone: {input:?}");
         };
         app.pads.push(vec![PadEvent::Button {

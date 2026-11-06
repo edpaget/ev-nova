@@ -182,7 +182,11 @@ pub(crate) fn pointer(pressed: bool, at: Point) -> Input {
 }
 
 pub(crate) fn pad(button: PadButton, pressed: bool) -> Input {
-    Input::PadButton { button, pressed }
+    Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    }
 }
 
 pub(crate) fn told(device: Device) -> Input {

@@ -77,7 +77,11 @@ fn told(device: Device) -> Input {
 }
 
 fn pad(button: PadButton, pressed: bool) -> Input {
-    Input::PadButton { button, pressed }
+    Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    }
 }
 
 fn tap(screen: &mut OutfitterScreen, button: PadButton) {

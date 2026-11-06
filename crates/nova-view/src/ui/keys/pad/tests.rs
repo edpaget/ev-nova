@@ -13,7 +13,11 @@ fn told(device: Device) -> Input {
 
 fn pad(screen: &mut KeysScreen, button: PadButton) {
     for pressed in [true, false] {
-        screen.input(&Input::PadButton { button, pressed });
+        screen.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
     }
 }
 
@@ -76,11 +80,13 @@ fn south_on_the_list_records_the_selected_row() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert_eq!(screen.recording(), Some(FlightCommand::Accelerate.into()));
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert_eq!(
         screen.recording(),
@@ -172,12 +178,14 @@ fn south_on_a_button_presses_it_on_its_release() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     assert!(screen.trackers[KeysButton::Cancel.index()].pressed());
     assert!(!screen.closed());
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(screen.closed());
 }
@@ -209,12 +217,14 @@ fn a_dpad_press_while_south_is_held_on_a_button_drops_the_press() {
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     });
     pad(&mut screen, PadButton::DPadRight);
     assert!(!screen.trackers[KeysButton::Cancel.index()].pressed());
     screen.input(&Input::PadButton {
         button: PadButton::South,
         pressed: false,
+        repeat: false,
     });
     assert!(!screen.closed(), "Cancel's press was dropped");
 }

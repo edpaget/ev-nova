@@ -120,6 +120,7 @@ fn each_offer_opened_is_told_the_device_the_venue_was_told() {
     let south = |pressed| Input::PadButton {
         button: PadButton::South,
         pressed,
+        repeat: false,
     };
     offers.input(&south(true), &mut Vec::new());
     offers.input(&south(false), &mut Vec::new());

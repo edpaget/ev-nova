@@ -973,7 +973,11 @@ mod tests {
 
     fn tap(dialogs: &mut MissionDialogs, button: crate::input::PadButton) {
         for pressed in [true, false] {
-            dialogs.input(&Input::PadButton { button, pressed });
+            dialogs.input(&Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            });
         }
     }
 

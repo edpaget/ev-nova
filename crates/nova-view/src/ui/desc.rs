@@ -1602,7 +1602,11 @@ mod tests {
 
     #[test]
     fn the_right_stick_pages_a_desc_text_as_page_up_and_down_do() {
-        let pad = |button, pressed| Input::PadButton { button, pressed };
+        let pad = |button, pressed| Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        };
         let mut keyed = long_desc();
         keyed.input(&key(Key::PageDown));
         let mut padded = long_desc();

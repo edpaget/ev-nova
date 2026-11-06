@@ -189,10 +189,12 @@ fn menu_focus_after_down_then_north(
         screen.input(&Input::PadButton {
             button,
             pressed: true,
+            repeat: false,
         });
         screen.input(&Input::PadButton {
             button,
             pressed: false,
+            repeat: false,
         });
     };
     let highlight = |screen: &AppScreen| screen.main_menu().expect("a main menu").pad_highlight();

@@ -382,10 +382,12 @@ mod tests {
             screen.input(&Input::PadButton {
                 button,
                 pressed: true,
+                repeat: false,
             });
             screen.input(&Input::PadButton {
                 button,
                 pressed: false,
+                repeat: false,
             });
         }
         assert!(screen.closed(), "East");
@@ -400,7 +402,11 @@ mod tests {
         ))));
         for (button, closes) in [(PadButton::South, false), (PadButton::East, true)] {
             for pressed in [true, false] {
-                screen.input(&Input::PadButton { button, pressed });
+                screen.input(&Input::PadButton {
+                    button,
+                    pressed,
+                    repeat: false,
+                });
             }
             assert_eq!(screen.closed(), closes, "{button:?}");
         }

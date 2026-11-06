@@ -508,7 +508,11 @@ mod tests {
     }
 
     fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
-        Input::PadButton { button, pressed }
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
     }
 
     fn tap(screen: &mut impl Screen, button: crate::input::PadButton) {

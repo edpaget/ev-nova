@@ -9,7 +9,11 @@ use crate::input::PadButton;
 
 fn tap(view: &mut SpaceportView, button: PadButton) {
     for pressed in [true, false] {
-        view.input(&Input::PadButton { button, pressed });
+        view.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
     }
 }
 

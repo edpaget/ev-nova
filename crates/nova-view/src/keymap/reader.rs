@@ -325,6 +325,7 @@ impl CommandReader {
             .map(|button| Input::PadButton {
                 button,
                 pressed: true,
+                repeat: false,
             });
         let touch = self.devices.touch().buttons().map(|command| {
             Input::TouchControl(TouchControl::Button {
@@ -753,7 +754,11 @@ mod tests {
     }
 
     fn pad(button: PadButton, pressed: bool) -> Input {
-        Input::PadButton { button, pressed }
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
     }
 
     fn told(device: Device) -> Input {

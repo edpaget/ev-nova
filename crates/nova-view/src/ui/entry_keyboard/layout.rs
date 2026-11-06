@@ -264,7 +264,13 @@ impl Layout {
             (Direction::Left, PadButton::DPadLeft),
             (Direction::Right, PadButton::DPadRight),
         ];
-        let tap = |button| [true, false].map(|pressed| Input::PadButton { button, pressed });
+        let tap = |button| {
+            [true, false].map(|pressed| Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            })
+        };
         let mut inputs = Vec::new();
         let mut at = from;
         for &key in keys {

@@ -41,7 +41,11 @@ fn a_flight_left_for_another_screen_is_still_told_the_surroundings() {
 }
 
 fn pad(button: nova_view::PadButton, pressed: bool) -> Input {
-    Input::PadButton { button, pressed }
+    Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    }
 }
 
 #[test]

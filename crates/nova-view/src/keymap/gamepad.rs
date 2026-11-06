@@ -631,6 +631,7 @@ impl Gamepad {
             Input::PadButton {
                 button,
                 pressed: true,
+                ..
             } => {
                 if !self.is_down(button) {
                     let layer = self.layer_among(button, &layers);
@@ -645,6 +646,7 @@ impl Gamepad {
             Input::PadButton {
                 button,
                 pressed: false,
+                ..
             } => {
                 self.down.retain(|down| down.button != button);
                 self.presses.remove(&button);
@@ -700,6 +702,7 @@ impl Gamepad {
         if let Input::PadButton {
             button,
             pressed: true,
+            ..
         } = *input
         {
             for record in [&mut self.presses, &mut self.meant] {
@@ -731,6 +734,7 @@ impl Gamepad {
         let Input::PadButton {
             button,
             pressed: false,
+            ..
         } = *input
         else {
             return None;
@@ -778,6 +782,7 @@ pub(super) fn fresh_press(input: &Input) -> Option<Input> {
     Some(Input::PadButton {
         button,
         pressed: true,
+        repeat: false,
     })
 }
 
@@ -851,6 +856,7 @@ pub(super) fn resolve(
     let Input::PadButton {
         button,
         pressed: true,
+        ..
     } = *input
     else {
         return None;
@@ -950,6 +956,7 @@ mod tests {
         Input::PadButton {
             button,
             pressed: true,
+            repeat: false,
         }
     }
 
@@ -957,6 +964,7 @@ mod tests {
         Input::PadButton {
             button,
             pressed: false,
+            repeat: false,
         }
     }
 

@@ -154,7 +154,11 @@ impl PadInputs {
     fn tell(&self, button: PadButton, was: bool, out: &mut Vec<Input>) {
         let pressed = self.is_down(button);
         if pressed != was {
-            out.push(Input::PadButton { button, pressed });
+            out.push(Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            });
         }
     }
 
@@ -169,6 +173,7 @@ impl PadInputs {
                 out.push(Input::PadButton {
                     button,
                     pressed: false,
+                    repeat: false,
                 });
             }
         }
@@ -206,7 +211,11 @@ mod tests {
     }
 
     fn pressed(button: PadButton, pressed: bool) -> Input {
-        Input::PadButton { button, pressed }
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
     }
 
     fn value(axis: PadAxis, value: f32) -> Input {

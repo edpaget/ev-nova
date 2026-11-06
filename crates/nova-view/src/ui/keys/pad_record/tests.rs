@@ -19,6 +19,7 @@ fn down(screen: &mut KeysScreen, button: P) {
     screen.input(&Input::PadButton {
         button,
         pressed: true,
+        repeat: false,
     });
 }
 
@@ -26,6 +27,7 @@ fn up(screen: &mut KeysScreen, button: P) {
     screen.input(&Input::PadButton {
         button,
         pressed: false,
+        repeat: false,
     });
 }
 

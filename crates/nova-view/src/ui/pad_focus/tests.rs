@@ -428,6 +428,7 @@ fn only_a_pad_button_is_from_the_pad() {
     assert!(from_pad(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     }));
     assert!(!from_pad(&Input::Key {
         key: crate::input::Key::Space,
@@ -597,6 +598,7 @@ fn told_keeps_the_last_surroundings_and_nothing_else() {
     assert!(!told.keep(&Input::PadButton {
         button: PadButton::South,
         pressed: true,
+        repeat: false,
     }));
     assert_eq!(told, Told::default());
     assert!(told.keep(&surroundings(PAD)));

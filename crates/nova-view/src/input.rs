@@ -572,11 +572,16 @@ pub enum Input {
     /// A gamepad button went down or up: a button by position, a trigger
     /// or a stick direction past the press threshold. Pads merge: a button
     /// is down while any pad holds it.
+    ///
+    /// `repeat` is never set yet: nothing repeats a held pad button.
     PadButton {
         /// The button.
         button: PadButton,
         /// Down (`true`) or up.
         pressed: bool,
+        /// Whether this press repeats a held direction; never set on a
+        /// release.
+        repeat: bool,
     },
     /// A stick axis moved to `value`, -1 to 1 (see [`PadAxis`] for the
     /// signs), as the pad reports it, before any dead zone: flight reads
@@ -690,6 +695,7 @@ impl Input {
             Self::PadButton { button, .. } => Self::PadButton {
                 button,
                 pressed: false,
+                repeat: false,
             },
             other => other,
         }
@@ -720,7 +726,11 @@ mod tests {
     }
 
     fn pad(button: PadButton, pressed: bool) -> Input {
-        Input::PadButton { button, pressed }
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
     }
 
     #[test]
@@ -916,6 +926,17 @@ mod tests {
         assert_eq!(fire.translated(by), fire);
         let stick = Input::TouchControl(TouchControl::Stick { x: 0.5, y: -0.25 });
         assert_eq!(stick.translated(by), stick);
+    }
+
+    #[test]
+    fn a_pad_repeats_release_is_no_repeat() {
+        let repeat = Input::PadButton {
+            button: PadButton::DPadDown,
+            pressed: true,
+            repeat: true,
+        };
+        assert_eq!(repeat.released(), pad(PadButton::DPadDown, false));
+        assert!(repeat.same_key(&pad(PadButton::DPadDown, true)));
     }
 
     #[test]

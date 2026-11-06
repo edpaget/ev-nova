@@ -24,7 +24,11 @@ fn told(view: &mut Faked, device: Device) {
 }
 
 fn pad_input(button: PadButton, pressed: bool) -> Input {
-    Input::PadButton { button, pressed }
+    Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    }
 }
 
 /// `button` over flight, where flight takes the input.

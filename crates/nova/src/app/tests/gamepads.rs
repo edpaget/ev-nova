@@ -68,7 +68,8 @@ fn a_pads_events_reach_the_screen_before_its_tick() {
         [
             Input::PadButton {
                 button: PadButton::South,
-                pressed: true
+                pressed: true,
+                repeat: false
             },
             Input::PadAxis {
                 axis: PadAxis::LeftY,
@@ -76,7 +77,8 @@ fn a_pads_events_reach_the_screen_before_its_tick() {
             },
             Input::PadButton {
                 button: PadButton::LeftStickDown,
-                pressed: true
+                pressed: true,
+                repeat: false
             },
         ]
     );
@@ -162,7 +164,8 @@ fn presses_queued_while_unfocused_are_dropped_on_focus_gained() {
         app.screen().inputs.last(),
         Some(&Input::PadButton {
             button: PadButton::South,
-            pressed: false
+            pressed: false,
+            repeat: false
         }),
         "its release follows the press the pad state kept"
     );
@@ -291,7 +294,8 @@ fn the_pads_input_goes_nowhere_while_the_overlay_shows_and_its_release_follows_o
         pads_inputs,
         [&Input::PadButton {
             button: PadButton::South,
-            pressed: false
+            pressed: false,
+            repeat: false
         }],
         "its release follows the press the pad state kept, as a key's \
          release after the overlay reaches the screen"

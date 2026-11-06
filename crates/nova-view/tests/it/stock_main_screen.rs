@@ -414,7 +414,11 @@ fn the_dpad_reaches_each_stock_main_screen_button() {
         PadButton::DPadUp,
     ] {
         for pressed in [true, false] {
-            menu.input(&Input::PadButton { button, pressed });
+            menu.input(&Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            });
         }
         reached.push(menu.pad_highlight());
     }
