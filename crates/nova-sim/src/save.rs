@@ -178,9 +178,9 @@
 //!   kept it, so the upgrade gives `null`, and its escorts load in fleet
 //!   order.
 //! - Version 39: adds the new game's world flags (`flags`) and each Ink
-//!   file's story state (`dialogs`), which the original has no counterpart
-//!   of (see [`story_state`]). No older save kept them, so the upgrade
-//!   gives `[]` and `[]`.
+//!   file's story state (`dialogs`), which the original has no
+//!   counterpart of (see the `story_state` module). No older save kept
+//!   them, so the upgrade gives `[]` and `[]`.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -264,8 +264,8 @@
 //!
 //! The world flags set (`flags`) are their names, ascending, and the story
 //! states (`dialogs`) are each an Ink `file` with its adapter's `state` as
-//! text, by file ascending ([`story_state`]). A file the data no longer
-//! has keeps its state as saved.
+//! text, by file ascending (see the `story_state` module). A file the data
+//! no longer has keeps its state as saved.
 
 mod story_state;
 
