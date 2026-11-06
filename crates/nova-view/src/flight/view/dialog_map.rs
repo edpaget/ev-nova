@@ -145,6 +145,25 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 .is_some_and(|opened| matches!(opened.by, MapOpening::Dialog(..)))
     }
 
+    /// The frame of a mission dialog's map open over flight, which the app
+    /// runs in place of flight's while it ticks the dialogs under the map:
+    /// the map's own frame ([`FlightView::tick_open_map`]), and no flight
+    /// step. Nothing while no dialog's map is open.
+    pub fn tick_dialog_map(&mut self, dt: std::time::Duration) {
+        if self.dialog_map_open() {
+            self.tick_open_map(dt);
+        }
+    }
+
+    /// The open map's own frame: its borders' null events and its pad
+    /// cursor, none while it waits for M's release (`_BusyIdle` runs
+    /// none).
+    pub(super) fn tick_open_map(&mut self, dt: std::time::Duration) {
+        if !self.map_closing {
+            crate::Screen::tick(&mut self.map, dt);
+        }
+    }
+
     /// The restore of the map's opener, after its close (see the module
     /// docs): the bar's ([`Session::restore_bar_nav`](nova_sim::Session::restore_bar_nav)), a port screen's
     /// ([`PortScreen`]), or a mission dialog's.

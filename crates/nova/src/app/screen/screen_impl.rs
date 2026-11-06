@@ -206,6 +206,11 @@ impl Screen for AppScreen {
         self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);
+            // A mission dialog's map over flight runs its own frame,
+            // flight under it paused.
+            if self.flight_dialog_map_open() {
+                self.flight.as_mut().expect(ENTERED).tick_dialog_map(dt);
+            }
             // The spaceport isn't ticked under it, so says so: the
             // original's port window comes back to the front once the
             // overlay closes.

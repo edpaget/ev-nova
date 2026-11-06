@@ -173,3 +173,27 @@ fn losing_the_keys_completes_a_dialogs_map_close_over_flight() {
     assert!(!flight(&screen).map_open(), "closed");
     assert_eq!(screen.showing(), Showing::Offer, "back to the offer");
 }
+
+#[test]
+fn a_dialogs_map_over_flight_ticks_its_borders_and_its_pad_cursor() {
+    use nova_sim::map_borders::Next;
+    use nova_view::input::PadAxis;
+    let mut screen = offered_in_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert!(flight(&screen).dialog_map_open());
+    let passes = |screen: &AppScreen| flight(screen).course_map().border_passes().next();
+    assert_eq!(passes(&screen), Next::Unstarted, "the open's coarse pass");
+    let cursor = flight(&screen).course_map().cursor();
+    screen.input(&Input::PadAxis {
+        axis: PadAxis::RightX,
+        value: 1.0,
+    });
+    screen.tick(Duration::from_millis(100));
+    assert_eq!(passes(&screen), Next::Idle, "the router ticks the map");
+    assert_ne!(
+        flight(&screen).course_map().cursor(),
+        cursor,
+        "the right stick moves the cursor"
+    );
+}

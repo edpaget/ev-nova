@@ -569,3 +569,24 @@ fn a_dialogs_map_gives_the_keys_of_its_wait_at_the_close() {
         assert_eq!(view.take_map_replay(), [key(Key::Enter, true)]);
     }
 }
+
+#[test]
+fn a_dialogs_map_over_flight_ticks_through_its_own_frame_alone() {
+    use nova_sim::map_borders::Next;
+    let mut view = faked_dialogs(in_sol(), MapMarks::NONE, MOON);
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    let passes = |view: &Faked| view.course_map().border_passes().next();
+    assert_eq!(passes(&view), Next::Unstarted);
+    let frame = view.frame.clone();
+    view.tick_dialog_map(std::time::Duration::from_millis(100));
+    assert_eq!(passes(&view), Next::Idle, "the map's frame");
+    assert_eq!(view.frame, frame, "no flight step");
+    let mut plain = faked_sol(in_sol());
+    plain.open_map();
+    plain.tick_dialog_map(std::time::Duration::from_millis(100));
+    assert_eq!(
+        passes(&plain),
+        Next::Unstarted,
+        "flight's own map: flight ticks it"
+    );
+}

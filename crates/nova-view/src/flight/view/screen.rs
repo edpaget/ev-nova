@@ -254,11 +254,7 @@ impl<
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
-            // The map's own frame: its borders' null events, none while
-            // it waits for M's release (`_BusyIdle` runs none).
-            if !self.map_closing {
-                self.map.tick(dt);
-            }
+            self.tick_open_map(dt);
             return;
         }
         if self.death_frame(dt) {
