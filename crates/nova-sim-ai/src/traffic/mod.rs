@@ -2939,8 +2939,8 @@ impl Traffic {
     /// ([`Traffic::turn_with_quote`]), since they were last taken, in
     /// order, an NPC once for each time; taking them empties the list.
     /// A think's isn't among them: it goes on the line
-    /// ([`OnLine::AttackQuote`]), and the session says these either side of
-    /// the line's work (see `nova_sim`'s `comm_calls` module).
+    /// ([`OnLine::AttackQuote`]), and the session says these where the
+    /// frame reaches them (see `nova_sim`'s `comm_calls` module).
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)

@@ -32,15 +32,18 @@
 //!    reaction block runs in them (see the `hit_turns` module), a shot's
 //!    hit that starts a ship dying queuing the victory of the escort
 //!    attacking it (`_HandleShipHit`
-//!    @0x36c7f-0x36d45).
+//!    @0x36c7f-0x36d45), and the quote of a person a hit turned said as
+//!    its hit settles ([`Session::say_attack_quotes_now`]), as every
+//!    hit's is wherever it lands; then the strikes left answered and
+//!    their quotes said.
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
-//!    module), the damage aimed read after the passes
+//!    module), the message line counted down (`_HandleComm` @0x4421e, see
+//!    the `comm_calls` module), the damage aimed read after the passes
 //!    (`_CalculateTargetedDamage` @0x44223), the arrivals
 //!    (`_EnterMoreShips` @0x44237) and the passes run for every ship
 //!    before the first slot, the fleets announced and the arrivals of a
-//!    Derelict government held; the attack quotes from before the loop
-//!    said ([`Session::say_quotes_before_the_line`]); then `_AIDispatch`'s
+//!    Derelict government held; then `_AIDispatch`'s
 //!    loop ([`Session::dispatch_npcs`]): for each occupied slot in turn,
 //!    its think, the refuel it gave landed, its point defence and fighter
 //!    launches (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
@@ -56,11 +59,13 @@
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit, each
 //!    lock settled and answered before the next visit, the fighters lent
-//!    afresh after it (see the `hit_turns` module;
+//!    afresh after it, its quote said (see the `hit_turns` module;
 //!    [`Session::shots_phase`]).
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
-//!    inactive, its self-repair (see the `self_repair` module), its flight (the traffic's fly half, one NPC at a time),
+//!    inactive, its self-repair (see the `self_repair` module), its hail
+//!    quote roll (@0x33f0f-0x33fba, [`Session::roll_quote_at_turn`]), on
+//!    both passes, its flight (the traffic's fly half, one NPC at a time),
 //!    reloads, regeneration, fire and death timer's tick, a dying NPC's
 //!    dying branch, a mission escort it still is leaving the formation
 //!    (see the `mission_escorts` module), and its escape pods and
@@ -70,11 +75,10 @@
 //!    later slots before they move, then steps its frame (see the
 //!    `ship_display` module); an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
-//!    after the fly half, the line work its docks and repairs queued
-//!    settled, and `_HandleShip`'s hail quote roll (@0x33f0f-0x33fba),
-//!    on both passes, before the reinforcement clock's tick
-//!    (`_HandleReinforcements` @0x44504), which on the advance pass comes
-//!    with the traffic's tail at the loop's end ([`Session::ship_loop`]);
+//!    after the fly half, and the quote clock's tick and the
+//!    reinforcement clock's (`_HandleReinforcements` @0x44504), which on
+//!    the advance pass come with the traffic's tail at the loop's end
+//!    ([`Session::ship_loop`]);
 //!    then the +0x47 pass, each nav
 //!    stellar with a defence ship in the system marked under attack
 //!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
@@ -184,9 +188,13 @@ pub(super) struct PassCatalogs<'a> {
     /// The deadly stellars' masks; none on the second pass, which reads
     /// those the first kept.
     pub(super) sheets: Option<&'a dyn PilotCatalog>,
-    /// The hail quotes' lines, which the ship loop's quote roll reads;
-    /// none on a pass that rolls no quotes ([`Session::game_work`],
-    /// [`Session::tick_again`]).
+    /// The hail quotes' lines, which the ship loop's quote roll reads at
+    /// each NPC's turn. Handed them, the advance pass also counts the
+    /// message line down at `_HandleComm`'s place (@0x4421e) and moves the
+    /// quote clock on after its ship loop. A frame's steps always hand
+    /// them ([`Session::step`]); none goes to a pass run alone, which
+    /// rolls no quotes and counts nothing down ([`Session::game_work`],
+    /// [`Session::tick_again`]), for the tests that count a pass's work.
     pub(super) quotes: Option<&'a dyn CommCatalog>,
 }
 
@@ -257,8 +265,10 @@ impl Session {
     /// Through a jump it runs on in its own order, as the world does (see
     /// the `warp_stage` module).
     ///
-    /// It runs no hail quote roll; a frame's steps roll it in the ship
-    /// loop ([`Session::step`], `Session::game_work_quoting`).
+    /// It runs no hail quote roll and doesn't count the message line down
+    /// or move the quote clock; a frame's steps run all three
+    /// ([`Session::step`], `Session::game_work_quoting`). Each hit's
+    /// attack quote is still said as its hit settles.
     pub fn game_work(
         &mut self,
         controls: Controls,
@@ -270,9 +280,10 @@ impl Session {
         self.game_work_quoting(controls, catalog, None, behaviour, rules, chance)
     }
 
-    /// [`Session::game_work`], `_HandleShip`'s hail quote roll run at the
-    /// ship loop's end, read from `quotes`, when it is handed them (see
-    /// [`Session::ship_loop`]).
+    /// [`Session::game_work`], handed `quotes`: then `_HandleShip`'s hail
+    /// quote roll runs at each NPC's turn of the ship loop, read from
+    /// them, the message line counts down at `_HandleComm`'s place and the
+    /// quote clock moves on after the loop (see [`PassCatalogs::quotes`]).
     pub(crate) fn game_work_quoting(
         &mut self,
         controls: Controls,
@@ -406,9 +417,15 @@ impl Session {
     /// those the first kept.
     ///
     /// `catalogs.quotes`, on either pass, is what the ship loop's hail
-    /// quote roll reads, at the loop's end and before the reinforcement
-    /// clock's tick (`_HandleShip` @0x44483 before `_HandleReinforcements`
-    /// @0x44504; see [`Session::ship_loop`]); a pass handed none rolls none.
+    /// quote roll reads, at each NPC's turn of the loop (`_HandleShip`
+    /// @0x44483; see [`Session::ship_loop`]); a pass handed none rolls
+    /// none, and on the advance pass counts the message line down
+    /// nowhere, where with it the line counts down after the collision
+    /// passes and before the arrivals (`_HandleComm` @0x4421e).
+    ///
+    /// Each hit's attack quote is said as its hit settles
+    /// ([`Session::settle_landed`]), and those the collision passes'
+    /// leftover answers queue right after them, before the arrivals.
     pub(super) fn pass_from_key_block(
         &mut self,
         start: &PassStart,
@@ -428,18 +445,24 @@ impl Session {
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
+        // The quotes those answers queued, before the arrivals and the
+        // first slot's line work (see the `comm_calls` module).
+        self.say_attack_quotes_now(chance);
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
             // `_HandleVoiceSound` (@0x44219), before `_AIDispatch`
             // (@0x4429d; see the `voices` module).
             self.space
                 .handle_voice(&self.statics, &mut self.out, &mut *chance);
+            // `_HandleComm` (@0x4421e) counts the line down, after the
+            // collision passes and before the arrivals (see the
+            // `comm_calls` module).
+            if quotes.is_some() {
+                self.space.count_down_comm_line();
+            }
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
-            // The quotes from before the loop, ahead of the first slot's
-            // line work (see the `comm_calls` module).
-            self.say_quotes_before_the_line(chance);
             #[cfg(test)]
             for event in std::mem::take(&mut self.space.queued_in_frame) {
                 self.space.traffic.queue_pirate_event(event);
@@ -673,8 +696,10 @@ impl Session {
     /// pushes; each NPC newly
     /// downed raising its fate; the strikes answered for crimes and kills,
     /// then weighed and answered by the NPCs in turn, as `behaviour` says
-    /// ([`Session::settle_strikes`]). A target the phase left dying or
-    /// cloaked is kept: the next
+    /// ([`Session::settle_strikes`]), and the quote of each person an
+    /// answer turned on the player said ([`Session::say_attack_quotes_now`]),
+    /// as `_DamageShip` says it at the hit (@0x3be69). A target the phase
+    /// left dying or cloaked is kept: the next
     /// pass's head lets go of it (see the `lost_target` module).
     ///
     /// Between the fates and the strikes, every escort the phase left
@@ -720,6 +745,10 @@ impl Session {
         self.space.sync_fleet(&mut self.pilot);
         self.lose_escorts(was, &struck);
         self.settle_strikes(behaviour, (strikes, losses), was, rules.law, chance);
+        // `_DamageShip` says a turned person's quote at the hit
+        // (`_AIMakeShipAttackPlayer` @0x3be69, `_ShowPersonHailQuote`
+        // @0x89ce1), before the next hit lands.
+        self.say_attack_quotes_now(chance);
     }
 
     /// Runs `phase`, one that lands hits, as [`Session::with_fighters`]

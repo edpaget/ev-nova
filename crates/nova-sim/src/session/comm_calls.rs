@@ -31,21 +31,15 @@
 //! - A landing sets it to 0 (`_HandlePlayerDockRequest` @0x66d7f), and a
 //!   flight starts at 0 (`_ResetPlayer` @0x1d904). No jump, gate or
 //!   arrival writes it: an arrival's own line sets it.
-//! - It counts down once a frame on the advance pass, at the head of the
-//!   hail quotes' tick ([`Session::tick_quotes`]), at the ship loop's
-//!   end and before the reinforcement clock's tick (see
-//!   [`Session::ship_loop`]), never while landed, as `_HandleComm` runs
-//!   on the advance pass only (`_DoPlayGameWork` @0x4421e). The original
-//!   counts down at the head of its frame, before any ship thinks; ours
-//!   counts down after the frame's calls, `_HandleShot` and the ship
-//!   loop, so a line they raise is read by the next frame's calls one
-//!   tick shorter, as the original's is. A line raised after the ship
-//!   loop (the reinforcements', the stellar guns', the beams', the
-//!   fight's tail's, the after-pass answers' and the attack quotes they
-//!   leave) is first counted down at the next frame's roll point, after
-//!   that frame's calls, where the original counts it down at @0x4421e
-//!   before them, so those calls read it a tick longer: a one-frame lag
-//!   before a call that crosses no boundary the player sees.
+//! - It counts down once a frame on the advance pass, at `_HandleComm`'s
+//!   place (`_DoPlayGameWork` @0x4421e): after the collision passes and
+//!   before the arrivals (`_EnterMoreShips` @0x44237) and `_AIDispatch`'s
+//!   loop, never while landed, as `_HandleComm` runs on the advance pass
+//!   only. So a collision hit's quote ends its frame a tick short, every
+//!   line raised after the countdown ends its frame at its full count, and
+//!   the next frame's calls read the frame's last line a tick down, as the
+//!   original's do. A pass that rolls no quotes (`Session::game_work`
+//!   and `Session::tick_again` called alone) counts nothing down.
 //!
 //! **The calls.** Each think's call ([`Decision::comm_call`](crate::ai::Decision::comm_call),
 //! queued on the line, [`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line))
@@ -93,7 +87,7 @@
 //! the scans' law is at hand; a pirate's dock with the player starts at
 //! its slot too (the traffic's `dispatch_leave`). [`Session::settle_line_queue`]
 //! settles what is left after the loop, and again after the ship loop for
-//! the repairs the fly half completed:
+//! anything queued since:
 //!
 //! - an earlier slot's attack quote, scan line, stolen line, refuel or
 //!   repair note keeps a later slot's distress call and pre-scan hail
@@ -116,23 +110,29 @@
 //!
 //! **The other attack quotes.** The quotes the traffic holds apart
 //! ([`Traffic::take_attack_quotes`](crate::traffic::Traffic::take_attack_quotes))
-//! settle where the frame reaches them. A collision hit
-//! (`_DamageShip` in the passes @0x43e70-0x44010), a defence ship's respawn
-//! (`_SpawnStellarDefenseShip` @0x3d498) and a declined bribe come before
-//! `_AIDispatch`'s loop, so [`Session::game_work`] says them just ahead of
-//! the line's settle ([`Session::say_quotes_before_the_line`]), ahead of
-//! every call. What `_HandleShot` and the ship loop raise comes after the
-//! loop, so it is said with [`Session::tick_quotes`] at the ship loop's
-//! end; what the beams and the after-pass answers raise is said after the
-//! pass ([`Session::say_attack_quotes_left`]).
+//! are said as the hit that queued them settles
+//! ([`Session::say_attack_quotes_now`] at the end of
+//! [`Session::settle_landed`]), as `_DamageShip` says each at its hit: a
+//! collision hit's in the collision passes (@0x43e70-0x44010), so before
+//! the countdown, the arrivals' fleet line and every call; `_HandleShot`'s
+//! lock (@0x35855) after the AI loop's lines and before the ship loop's;
+//! a beam's at its own hit. The session's own calls answered after the
+//! collision passes are said right after them, still before the arrivals;
+//! those answered after the pass are said there
+//! ([`Session::say_attack_quotes_left`]). A declined bribe's
+//! (`_DoCommDialog` @0x9621f, raised in the dialog in the original) is said
+//! at the next pass's first settle, the player's display (@0x43e29), ahead
+//! of the collision passes, the fleet's line and every call, but after any
+//! line `_HandlePlayer` raises before its display in that pass; that order
+//! and the other lines a frame still raises out of the original's order
+//! beside its quotes are
+//! rdm:phase/npc-ai-2/phase-10-lines-left-out-of-quote-order.
 //!
-//! Two orders are left out, each in
-//! rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines:
-//! a quote from before the loop lands after the frame's fleet arrival line
-//! ([`Session::say_quotes_before_the_line`] follows `announce_fleets`),
-//! where the collision passes come before `_EnterMoreShips` @0x44237 and
-//! `_HyperSpawnFleet` @0x42607-0x426f4; and those after the loop aren't in
-//! slot order against the fly half's docks and repairs.
+//! `_HandleShip`'s quote roll (@0x33f0f-0x33fba) runs at each NPC's turn
+//! of the ship loop, after its self-repair's line and before its move
+//! ([`Session::roll_quote_at_turn`], see [`Session::ship_loop`]), so it
+//! reads the line as the lower slots left it and its quote takes its slot
+//! among the ship loop's own lines.
 
 use super::{Outbox, Session, Setup, Space, Statics};
 use crate::ai::CommCall;
@@ -1965,7 +1965,9 @@ mod tests {
     #[test]
     fn a_hit_in_handle_shots_phase_follows_the_frames_calls() {
         // `_DamageShip` from `_HandleShot` (@0x35855) comes after
-        // `_AIDispatch`'s loop: a slow homing missile's lock, here.
+        // `_AIDispatch`'s loop: a slow homing missile's lock, here. Its
+        // quote is said as the lock settles, in the pass, so it replaces
+        // the call and its count (@0x9024b, @0x90251).
         let missile = crate::catalog::WeaponRecord {
             guidance: 1,
             count: 40,
@@ -1985,14 +1987,16 @@ mod tests {
             matches!(messages[..], [SimMessage::CallForHelp(_)]),
             "{messages:?}"
         );
-        assert_eq!(said(&mut hit), Vec::<String>::new(), "not yet");
-        hit.tick_quotes(&catalog, &mut NeverFires);
-        assert_eq!(said(&mut hit), [QUOTE]);
+        assert_eq!(said(&mut hit), [QUOTE], "said at the lock");
         assert_eq!(hit.comm_line(), showing_a_quote(), "the quote last");
     }
 
     #[test]
-    fn double_times_second_pass_leaves_a_hits_quote_to_its_quote_roll() {
+    fn double_times_second_pass_says_a_quote_queued_before_it_at_its_first_settle() {
+        // The second pass's first hits settle at the player's display
+        // (@0x43e29), where a quote queued before the pass is said, as
+        // `_DamageShip` says each at its hit (`_ShowPersonHailQuote`
+        // @0x89ce1).
         let mut catalog = calling_catalog();
         catalog.strings = vec![(crate::person::HAIL_QUOTES, vec![QUOTE.to_owned()])];
         let mut session = flying(&catalog);
@@ -2008,8 +2012,6 @@ mod tests {
             Rules::default(),
             &mut NeverFires,
         );
-        assert_eq!(said(&mut session), Vec::<String>::new());
-        session.tick_quotes_again(&catalog, &mut NeverFires);
         assert_eq!(said(&mut session), [QUOTE]);
     }
 
@@ -2079,7 +2081,7 @@ mod tests {
             .traffic
             .turn_with_quote(quoting, crate::person::GateView::default());
         session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
-        session.say_quotes_before_the_line(&mut NeverFires);
+        session.say_attack_quotes_now(&mut NeverFires);
         assert_eq!(said(&mut session), Vec::<String>::new());
         assert_eq!(
             session.space.traffic.take_attack_quotes(),

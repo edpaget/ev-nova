@@ -9,7 +9,9 @@
 //! whose slot is inactive is let go, whatever else the pass does. Then its
 //! self-repair (@0x33950-0x33bdb, [`Session::repair_at_turn`], see the
 //! `self_repair` module): disabled, it may repair itself and fly and
-//! fight the turn whole. Then it flies (its position step @0x34274-0x342aa,
+//! fight the turn whole. Then its hail quote roll (@0x33f0f-0x33fba,
+//! [`Session::roll_quote_at_turn`]), after its self-repair's line
+//! (@0x33bac). Then it flies (its position step @0x34274-0x342aa,
 //! after `_AdjustInertialessShipVelocity` @0x3425f; the traffic's
 //! [`fly_npc`](crate::traffic::Traffic::fly_npc)), then takes its step:
 //! its reloads, regeneration (@0x34424), fire (@0x34ffd) and death timer
@@ -38,6 +40,14 @@
 //!   moves by the push on the next pass.
 //! - **Each NPC's fire** reads the ships of earlier slots where their own
 //!   flight left them, and those of later slots where they stood.
+//! - **The loop's lines** are raised at their NPC's turn: its self-repair
+//!   line, then its quote roll's quote, then its display's shockwave's
+//!   downing lines (`_DamageShip` @0x2da89). Each goes through
+//!   `_DisplayComm` (@0x9024b, @0x90251), so the highest slot's line ends
+//!   the loop, and a roll's line-free gate reads the lines of the lower
+//!   slots. The shockwave is no direct hit (@0x2da52), so `_DamageShip`
+//!   skips its reaction block (@0x3b44d) and no person it strikes says a
+//!   quote.
 //! - **A slot's let-go** reads the ships as the loop has left them: a ship
 //!   of a later slot than a wreck or a gate entry lets go in that pass, an
 //!   earlier one at its step in the next, and its idle bays hold from there
@@ -112,8 +122,9 @@ impl Session {
     /// every NPC's stray provocation eases (@0x35374-0x353b2); then, slot
     /// by slot, each NPC lets go of a target whose slot is inactive
     /// ([`Traffic::let_go_at_step`](crate::traffic::Traffic::let_go_at_step)),
-    /// may repair itself ([`Session::repair_at_turn`]), flies and takes its
-    /// step, a dying one running its
+    /// may repair itself ([`Session::repair_at_turn`]), rolls its hail
+    /// quote when handed `quotes` ([`Session::roll_quote_at_turn`]), flies
+    /// and takes its step, a dying one running its
     /// escape pods and escape-ship roll against its condition as the pass
     /// `start`ed (see the `npc_escape` module), the words the pass's stray
     /// beams stepped settled first, between its step and its display, and
@@ -136,10 +147,10 @@ impl Session {
     /// The rest of what the departures leave the session (each mission
     /// ship that left raising its fate, the persons' offers, the fighters
     /// orphaned, the watched ships observed), the fly half's end
-    /// (the docks started, the repairs queued, the waits counted down, the
-    /// followers released, the fuel), the docks' and repairs' work on the
-    /// line ([`Session::settle_line_queue`]), the reinforcement clock and
-    /// the gates' sprites all settle after the loop, where the original
+    /// (the waits counted down, the followers released, the fuel), any
+    /// work left on the line ([`Session::settle_line_queue`]), the
+    /// reinforcement clock and the gates' sprites all settle after the
+    /// loop, where the original
     /// runs them in each NPC's own `_HandleShip` or `_AIDispatch`
     /// (`_HandleReinforcements` itself comes after the loop, @0x44504).
     /// No step in the loop reads them, and all settle before the frame is
@@ -148,18 +159,17 @@ impl Session {
     /// ([`Session::lose_escorts`]), with the same save due wherever they
     /// fall.
     ///
-    /// Handed `quotes`, the loop ends on `_HandleShip`'s hail quote roll
-    /// (@0x33f0f-0x33fba, [`Session::roll_quotes_in_loop`]), on either
-    /// pass: after the fly half's end and the docks' and repairs' lines,
-    /// and before the reinforcement clock's tick, the traffic's tail on the
-    /// advance pass and after the asteroids on the second, as
-    /// `_HandleShip` (@0x44483) comes before `_HandleReinforcements`
-    /// (@0x44504). So the roll's line-free gate (@0x33f42-0x33f4b) reads
-    /// the line before the reinforcements raise theirs, and a fleet's line
-    /// replaces a quote's (`_DisplayComm` @0x9024b, @0x90251). The
-    /// original rolls slot by slot, inside the loop, among the docks' and
-    /// repairs' lines; that order is
-    /// rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines.
+    /// Handed `quotes`, each NPC rolls `_HandleShip`'s hail quote
+    /// (@0x33f0f-0x33fba, [`Session::roll_quote_at_turn`]) at its own
+    /// turn, on either pass: after its self-repair, whose line
+    /// (@0x33bac) comes first, and before its move (@0x34274). So the
+    /// roll's line-free gate (@0x33f42-0x33f4b) reads the line as the
+    /// lower slots' self-repairs, displays and rolls left it, and each
+    /// quote takes its slot among the loop's lines, the higher slot's
+    /// replacing the lower's (`_DisplayComm` @0x9024b, @0x90251); the
+    /// reinforcements' lines (`_HandleReinforcements` @0x44504) come after
+    /// every roll. On the advance pass the quote clock then moves on a
+    /// tick, after the loop; the second pass reads it unmoved.
     #[allow(clippy::too_many_arguments)] // the pass's collaborators, and the quotes' catalog
     pub(super) fn ship_loop(
         &mut self,
@@ -197,6 +207,11 @@ impl Session {
             // Its self-repair (@0x33950-0x33bdb), between the two, so a
             // ship repaired flies and fights its turn whole.
             self.repair_at_turn(id, rules, &mut *chance);
+            // Its quote roll (@0x33f0f-0x33fba), after its self-repair's
+            // line and before its move, on either pass.
+            if let Some(catalog) = quotes {
+                self.roll_quote_at_turn(id, catalog, &mut *chance);
+            }
             if let Some(fly) = fly.as_mut() {
                 self.fly_in_loop(fly, id, chance);
             }
@@ -251,43 +266,35 @@ impl Session {
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);
         }
+        // The quote clock moves on once a frame, on the advance pass, after
+        // its rolls; the second pass reads it unmoved.
+        let advance = !matches!(motion, Motion::Again);
         match motion {
             Motion::Fly(marks) => {
                 self.after_traffic_motion(&marks, &mut &mut *chance);
-                // The docks and repairs the fly half made, on the line.
+                // Whatever went on the line since the AI loop's last settle:
+                // the docks and repairs settle at their own slots of the
+                // AI loop (`Session::dispatch_npcs`), and the ship loop's
+                // own lines are raised at their turns.
                 self.settle_line_queue(rules.law, chance);
-                self.roll_quotes_after_loop(pass, quotes, chance);
                 self.traffic_tail(&mut &mut *chance);
             }
             Motion::Unpopulated => {
-                self.roll_quotes_after_loop(pass, quotes, chance);
                 self.traffic_tail(&mut &mut *chance);
             }
             Motion::Again => {
                 if let Some(marks) = again_marks {
                     self.mission_ships_left(&marks);
                 }
-                self.roll_quotes_after_loop(pass, quotes, chance);
             }
+        }
+        if advance && quotes.is_some() {
+            self.tick_quote_clock();
         }
         self.lay_out_displayed();
         self.space.traffic.step_fades(self.speed_mult());
         self.space.traffic.after_firing(&self.statics.arsenal);
         displayed
-    }
-
-    /// `_HandleShip`'s quote roll at the loop's end, on `pass`, read from
-    /// `quotes` when the pass was handed it
-    /// ([`Session::roll_quotes_in_loop`]); a pass handed none rolls none.
-    fn roll_quotes_after_loop(
-        &mut self,
-        pass: GamePass,
-        quotes: Option<&dyn CommCatalog>,
-        chance: &mut dyn Chance,
-    ) {
-        if let Some(catalog) = quotes {
-            self.roll_quotes_in_loop(pass, catalog, chance);
-        }
     }
 
     /// NPC `id`'s frames stepped at its display in the ship loop, on

@@ -36,13 +36,14 @@
 //!    ([`Session::answer_strikes`]): the pass answers every hit it lands
 //!    as its phase settles, the beams' and shockwaves' included, as
 //!    `_DamageShip` does (@0x44385, @0x4453d), so only the session's own
-//!    calls are left here, before the frame is drawn. `_HandleShip`'s
-//!    quote roll (@0x33f0f-0x33fba; [`Session::tick_quotes`]) ran in the
-//!    pass, at its ship loop's end, before the reinforcement clock's tick
-//!    (`_HandleReinforcements` @0x44504; see [`Session::ship_loop`]), so
-//!    here only the attack quotes queued after it, by the beams, the
-//!    fight's tail and these answers, are said (`_ShowPersonHailQuote`
-//!    @0x89ce1; [`Session::say_attack_quotes_left`]), and the pass's quotes,
+//!    calls are left here, before the frame is drawn. The pass said each
+//!    hit's attack quote as its hit settled, counted the line down at
+//!    `_HandleComm`'s place (@0x4421e) and ran `_HandleShip`'s quote roll
+//!    (@0x33f0f-0x33fba; [`Session::roll_quote_at_turn`]) at each NPC's
+//!    turn of its ship loop (see [`Session::ship_loop`]), so here only
+//!    the attack quotes these answers queue are said
+//!    (`_ShowPersonHailQuote` @0x89ce1;
+//!    [`Session::say_attack_quotes_left`]), and the pass's quotes,
 //!    fight events and ships are reported ([`PassReport`]), with its
 //!    escort-menu block ([`PassReport::escort_menu`], see the
 //!    `class_orders` module): whether an escort flew as its fade counted
@@ -56,8 +57,9 @@
 //!    asked after it
 //!    ([`Session::rescue_if_due`]), the strikes answered, the attack
 //!    quotes left said, and its own report. Its ship loop ran the quote
-//!    roll on the clock unmoved ([`Session::tick_quotes_again`]), before
-//!    its reinforcement clock's tick. The lines the second pass raises, the rescue's among them,
+//!    roll on the clock unmoved, with no countdown, as `_HandleComm` runs
+//!    on the advance pass alone. The lines the second pass raises, the
+//!    rescue's among them,
 //!    are held apart while it runs ([`StepRun::second_pass_lines`]), off
 //!    the step's comm, its quotes, the messages and its last line. The
 //!    original's `_DisplayComm` draws its line into the background and

@@ -124,8 +124,10 @@ impl Session {
     /// `behaviour` says, the fight by `rules`, drawing on `chance`: the
     /// pass's head, the work from the key block, then the pass from the
     /// key block on, the player's head left out (see the module docs);
-    /// `_HandleShip`'s hail quote roll runs at its ship loop's end, read
-    /// from `quotes`, when it is handed them (see [`Session::ship_loop`]).
+    /// `_HandleShip`'s hail quote roll runs at each NPC's turn of its ship
+    /// loop, read from `quotes`, when it is handed them, and the message
+    /// line counts down at `_HandleComm`'s place (see
+    /// [`Session::ship_loop`], [`PassCatalogs::quotes`]).
     pub(super) fn rest_of_opening_pass(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),

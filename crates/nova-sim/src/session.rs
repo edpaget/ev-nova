@@ -329,7 +329,7 @@
 //! kept on the pilot with no save due. A person hailed says its comm
 //! quote as the rule set reads [`RuleKey::CommQuote`], and in flight its
 //! hail
-//! quote on its trigger ([`Session::tick_quotes`],
+//! quote on its trigger ([`Session::roll_quote_at_turn`],
 //! [`Session::take_quotes`]). A person's `LinkMission` is resolved as it
 //! spawns, and offered in place of the comm dialog when it is hailed
 //! ([`Session::open_hail`]), or, with `Flags` 0x0200, in place of the

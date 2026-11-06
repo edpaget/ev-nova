@@ -109,13 +109,14 @@
 //!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
 //!   The pass answers every hit it lands as its phase settles, the
 //!   beams' and shockwaves' included, and its caller answers what the
-//!   session left after it ([`Session::answer_strikes`]) and says the
-//!   attack quotes ([`Session::tick_quotes_again`]), before the frame is
-//!   drawn. The
+//!   session left after it ([`Session::answer_strikes`]), each hit's
+//!   attack quote said as its hit settles
+//!   ([`Session::say_attack_quotes_now`]), before the frame is drawn. The
 //!   block plays no sound and tells no comm.
 //! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
 //!   test, so each eligible person draws `Rand(140)` on both passes
-//!   ([`Session::tick_quotes_again`], after the attack quotes). The
+//!   ([`Session::roll_quote_at_turn`], at each NPC's turn of the ship
+//!   loop). The
 //!   display timer (`_commCount`, the session's
 //!   [`CommLine`](crate::CommLine)) is counted down only by `_HandleComm`
 //!   (@0x301ce-0x301de), on the advance pass, so after any line on the
@@ -196,8 +197,10 @@ impl Session {
     /// attack quotes left after the pass
     /// (`Session::say_attack_quotes_left`).
     ///
-    /// It runs no hail quote roll; a frame's steps roll it in the ship
-    /// loop ([`Session::step`], `Session::tick_again_quoting`).
+    /// It runs no hail quote roll; a frame's steps roll it at each NPC's
+    /// turn of the ship loop ([`Session::step`],
+    /// `Session::tick_again_quoting`). Each hit's attack quote is still
+    /// said as its hit settles.
     pub fn tick_again(
         &mut self,
         controls: Controls,
@@ -208,10 +211,10 @@ impl Session {
         self.tick_again_quoting(controls, None, behaviour, rules, chance);
     }
 
-    /// [`Session::tick_again`], `_HandleShip`'s hail quote roll run at the
-    /// ship loop's end on the quote clock unmoved, read from `quotes`,
-    /// when it is handed them ([`Session::tick_quotes_again`], see
-    /// [`Session::ship_loop`]).
+    /// [`Session::tick_again`], `_HandleShip`'s hail quote roll run at each
+    /// NPC's turn of the ship loop on the quote clock unmoved, read from
+    /// `quotes`, when it is handed them ([`Session::roll_quote_at_turn`],
+    /// see [`Session::ship_loop`]).
     pub(crate) fn tick_again_quoting(
         &mut self,
         controls: Controls,
