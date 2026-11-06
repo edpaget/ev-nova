@@ -82,6 +82,21 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_schema_lists_the_outfit_effects() {
+        let (_, mission) = &schemas()[5];
+        let value: serde_json::Value = serde_json::from_str(mission).unwrap();
+        let effects = &value["definitions"]["Effects"]["properties"];
+        for field in ["grant_outfits", "remove_outfits"] {
+            assert!(
+                effects[field]["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("outfit")),
+                "{field}: {mission}"
+            );
+        }
+    }
+
+    #[test]
     fn the_stellar_schema_lists_its_conversation() {
         let (_, stellar) = &schemas()[3];
         let value: serde_json::Value = serde_json::from_str(stellar).unwrap();

@@ -593,6 +593,16 @@ pub struct Effects {
     /// from its `from` system.
     #[serde(default)]
     pub news: Vec<Id>,
+    /// Outfits given to the player (`outfits/<id>.md`), one for each
+    /// entry, so an id listed twice gives two. They are given after the
+    /// flags, points and news, and before any removal.
+    #[serde(default)]
+    pub grant_outfits: Vec<Id>,
+    /// Outfits taken from the player (`outfits/<id>.md`), one for each
+    /// entry, after the grants. Taking an outfit the player doesn't own
+    /// does nothing.
+    #[serde(default)]
+    pub remove_outfits: Vec<Id>,
 }
 
 /// A piece of news (`news/<id>.md`), released by a mission's effects. The
@@ -942,6 +952,34 @@ mod tests {
         let ids: Vec<_> = mission.on_offer.news.iter().map(Id::as_str).collect();
         assert_eq!(ids, ["road-fails", "toll-rises"]);
         assert!(mission.on_success.news.is_empty());
+    }
+
+    #[test]
+    fn an_effect_grants_and_removes_outfits() {
+        let mission: Mission = read(&format!(
+            "{MISSION}on_accept:\n  grant_outfits: [dock-pass, dock-pass]\n\
+             on_success:\n  remove_outfits: [dock-pass]\n"
+        ))
+        .unwrap();
+        let granted: Vec<_> = (mission.on_accept.grant_outfits.iter())
+            .map(Id::as_str)
+            .collect();
+        assert_eq!(granted, ["dock-pass", "dock-pass"]);
+        let removed: Vec<_> = (mission.on_success.remove_outfits.iter())
+            .map(Id::as_str)
+            .collect();
+        assert_eq!(removed, ["dock-pass"]);
+        assert!(mission.on_accept.remove_outfits.is_empty());
+        assert!(mission.on_success.grant_outfits.is_empty());
+        assert!(mission.on_offer.grant_outfits.is_empty());
+        assert!(mission.on_offer.remove_outfits.is_empty());
+    }
+
+    #[test]
+    fn an_effect_still_refuses_an_unknown_field() {
+        let err =
+            read::<Mission>(&format!("{MISSION}on_accept:\n  outfits: [dock-pass]\n")).unwrap_err();
+        assert!(err.contains("outfits"), "{err}");
     }
 
     #[test]
