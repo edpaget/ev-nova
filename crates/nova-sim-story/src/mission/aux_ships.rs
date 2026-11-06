@@ -25,6 +25,7 @@ use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
 use crate::mission::select::GovtCode;
+use crate::rulebook::RuleSource;
 
 /// `Flags`: the mission's auxiliary ships come again in full on every
 /// restart of their countdown (@0x99fc0, @0x634f8), and none that comes
@@ -167,7 +168,8 @@ impl AuxShips {
 /// Whether the auxiliary ships of `AuxShipSyst` `code` may come into the
 /// player's system `player`, `holders` being the systems that hold the
 /// mission's destination and return stellars now (`None` with no such
-/// stop or no holder), over `map` and the relations of `govts`
+/// stop or no holder), over `map` and the relations of `govts`, 5000-9998
+/// by `links`
 /// (`_ValidAuxShipSystem` @0x992b5-0x9959d):
 ///
 /// - -1 and -6: any system. The original allows only the system it is
@@ -180,11 +182,17 @@ impl AuxShips {
 ///   (@0x99307-0x99336).
 /// - 128-2175: that system, or the visible system standing for it at its
 ///   place (`_FindActiveCoLocatedSystem`, @0x99338-0x99361).
-/// - 5000-9998: system `code - 4872` (5000 is system 128; the Bible's 5128 is wrong), or any system
-///   its raw Con slots list ([`StarMap::con_slots`]), with no stand-in and
-///   no visibility test (@0x99363-0x993ac). A system the map doesn't hold
-///   lists none; the original reads past its table for codes of 7048 and
-///   up (@0x99383-0x9939b), which isn't modelled.
+/// - 5000-9998: system `code - 4872` (5000 is system 128; the Bible's 5128 is wrong), or, by the
+///   engine's reading of `links`,
+///   [`aux_ship_links`](crate::RuleKey::AuxShipLinks), any system its raw
+///   Con slots list ([`StarMap::con_slots`]), with no stand-in and no
+///   visibility test (@0x99363-0x993ac). These are the raw Con slots
+///   whatever the map's links are. A system the map doesn't hold lists
+///   none; the original reads past its table for codes of 7048 and up
+///   (@0x99383-0x9939b), which isn't modelled. By the other reading, any
+///   system it links to on the map ([`StarMap::listed_links`]): its own
+///   list, so under the gate lanes a lane out of it counts and one into it
+///   doesn't, and a hidden system lists none.
 /// - 9999-14999: the player's system is that government's, an independent
 ///   for 9999 (@0x993b1-0x993dd).
 /// - 15000-19999: the player's system is governed, by that government
@@ -211,6 +219,7 @@ pub fn aux_system_allows(
     (destination, return_to): (Option<SystemId>, Option<SystemId>),
     map: &StarMap,
     govts: &Governments,
+    links: RuleSource,
 ) -> bool {
     match code {
         -1 | -6 => true,
@@ -222,7 +231,11 @@ pub fn aux_system_allows(
         }
         5000..=9998 => {
             let system = SystemId(code - 4872);
-            system == player || map.con_slots(system).contains(&player)
+            let listed = match links {
+                RuleSource::Engine => map.con_slots(system),
+                RuleSource::Bible => map.listed_links(system),
+            };
+            system == player || listed.contains(&player)
         }
         _ => GovtCode::of(code).is_some_and(|of| govt_allows(of, map.catalog_govt(player), govts)),
     }
@@ -550,7 +563,14 @@ mod tests {
     /// Whether `code` allows the player in `player`, over [`map`] and
     /// [`govts`], with no stops.
     fn allows(code: i16, player: i16) -> bool {
-        aux_system_allows(code, SystemId(player), (None, None), &map(), &govts())
+        aux_system_allows(
+            code,
+            SystemId(player),
+            (None, None),
+            &map(),
+            &govts(),
+            RuleSource::Engine,
+        )
     }
 
     #[test]
@@ -558,8 +578,16 @@ mod tests {
         let map = map();
         let govts = govts();
         let holders = (Some(SystemId(132)), Some(SystemId(130)));
-        let allows =
-            |code, player| aux_system_allows(code, SystemId(player), holders, &map, &govts);
+        let allows = |code, player| {
+            aux_system_allows(
+                code,
+                SystemId(player),
+                holders,
+                &map,
+                &govts,
+                RuleSource::Engine,
+            )
+        };
         for code in [-1, -6] {
             assert!(allows(code, 130) && allows(code, 132), "{code}: any");
         }
@@ -599,6 +627,78 @@ mod tests {
         assert!(!allows(9998, 130));
     }
 
+    /// Whether `code` allows the player in `player` by `links`,
+    /// `aux_ship_links`' reading, over [`map`] and [`govts`], with no
+    /// stops.
+    fn allows_by(links: RuleSource, code: i16, player: i16) -> bool {
+        aux_system_allows(
+            code,
+            SystemId(player),
+            (None, None),
+            &map(),
+            &govts(),
+            links,
+        )
+    }
+
+    #[test]
+    fn aux_5000s_by_the_other_reading_read_the_named_systems_map_links_not_its_raw_con() {
+        let other = |code, player| allows_by(RuleSource::Bible, code, player);
+        assert!(allows(5003, 132), "the hidden 131's raw Con lists 132");
+        assert!(!other(5003, 132), "the hidden 131 lists nothing on the map");
+        assert!(other(5003, 131), "131 itself, hidden");
+        assert!(other(5012, 133), "140 links to 133 on the map");
+        assert!(!other(5012, 132));
+        assert!(other(5002, 130), "130 itself");
+        assert!(!other(9998, 130));
+    }
+
+    /// Whether `code` allows the player in `player` by `links`, over a map
+    /// of drift 130, hearth 131 and verge 132 whose links are the gate
+    /// lanes drift to hearth and verge to drift, while drift's Con slot
+    /// names verge alone.
+    fn allows_over_lanes(links: RuleSource, code: i16, player: i16) -> bool {
+        use crate::catalog::GateStability::Dead;
+        use crate::gate_lanes::GateLanes;
+        let lanes = GateLanes::fixture(&[(130, 131, Dead), (132, 130, Dead)]);
+        let map = StarMap::with_lanes(
+            vec![
+                system(130, (0.0, 0.0), &[132], None),
+                system(131, (100.0, 0.0), &[], None),
+                system(132, (200.0, 0.0), &[], None),
+            ],
+            &BTreeSet::new(),
+            CoLocated::Lowest,
+            &lanes,
+        );
+        aux_system_allows(code, SystemId(player), (None, None), &map, &govts(), links)
+    }
+
+    #[test]
+    fn aux_5000s_by_the_other_reading_take_the_named_systems_map_links() {
+        // 5002 names drift, 130.
+        let (engine, other) = (RuleSource::Engine, RuleSource::Bible);
+        assert!(
+            !allows_over_lanes(engine, 5002, 131),
+            "hearth is in no Con slot of drift"
+        );
+        assert!(
+            allows_over_lanes(other, 5002, 131),
+            "drift's lane reaches hearth, dead or not"
+        );
+        assert!(
+            !allows_over_lanes(other, 5002, 132),
+            "verge only has a lane into drift"
+        );
+        assert!(
+            allows_over_lanes(engine, 5002, 132),
+            "drift's raw Con slot names verge"
+        );
+        for links in [engine, other] {
+            assert!(allows_over_lanes(links, 5002, 130), "drift itself");
+        }
+    }
+
     #[test]
     fn codes_5000_and_9998_are_the_ends_of_the_con_range() {
         // 128 and 5126, the first and last systems the range names, each
@@ -612,8 +712,16 @@ mod tests {
             &BTreeSet::new(),
             CoLocated::Lowest,
         );
-        let allows =
-            |code, player| aux_system_allows(code, SystemId(player), (None, None), &map, &govts());
+        let allows = |code, player| {
+            aux_system_allows(
+                code,
+                SystemId(player),
+                (None, None),
+                &map,
+                &govts(),
+                RuleSource::Engine,
+            )
+        };
         assert!(allows(5000, 128), "128 itself");
         assert!(allows(5000, 130), "128's Con lists 130");
         assert!(allows(9998, 5126), "5126 itself");
@@ -724,9 +832,16 @@ mod tests {
         let (map, govts) = (map(), govts());
         let hidden = (Some(SystemId(131)), Some(SystemId(131)));
         assert!(
-            !aux_system_allows(-2, SystemId(130), hidden, &map, &govts),
+            !aux_system_allows(-2, SystemId(130), hidden, &map, &govts, RuleSource::Engine),
             "130 stands for 131, but the owner is compared as it is"
         );
-        assert!(!aux_system_allows(-3, SystemId(130), hidden, &map, &govts));
+        assert!(!aux_system_allows(
+            -3,
+            SystemId(130),
+            hidden,
+            &map,
+            &govts,
+            RuleSource::Engine
+        ));
     }
 }
