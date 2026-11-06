@@ -21,6 +21,7 @@ fn expected(app: &TestApp, window: &FakeWindow, device: Device) -> Surroundings 
         device,
         safe_area,
         points_per_pixel,
+        soft_keyboard: false,
     }
 }
 

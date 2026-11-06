@@ -71,6 +71,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             device: self.last_device.device(),
             safe_area,
             points_per_pixel,
+            soft_keyboard: false,
         }
     }
 

@@ -248,16 +248,25 @@ pub struct Surroundings {
     /// logical size it shows, so a size in points `p` is `p /
     /// points_per_pixel` logical units.
     pub points_per_pixel: f32,
+    /// Whether the platform shows its own keyboard on screen when text
+    /// entry starts (iOS, Android), as `nova`'s `TextEntry` port reports
+    /// it. Only the text-entry hosts read it
+    /// ([`EntryMode`](crate::text_entry::EntryMode)): with touch, they
+    /// ask for the system's keyboard where there is one, and draw the
+    /// game's own where there is none.
+    pub soft_keyboard: bool,
 }
 
 impl Default for Surroundings {
     /// The keyboard, the classic canvas (0, 0)-(1024, 768) all clear, at
-    /// one point per logical pixel: a 1024 × 768 pt window.
+    /// one point per logical pixel: a 1024 × 768 pt window, with no soft
+    /// keyboard.
     fn default() -> Self {
         Self {
             device: Device::Keyboard,
             safe_area: Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0),
             points_per_pixel: 1.0,
+            soft_keyboard: false,
         }
     }
 }
@@ -768,6 +777,7 @@ mod tests {
             device: Device::Gamepad(ControllerFamily::Generic),
             safe_area: Bounds::at(Point::new(30.0, 20.0), 900.0, 700.0),
             points_per_pixel: 0.75,
+            soft_keyboard: true,
         };
         assert_eq!(
             Input::Surroundings(told).translated(by),
@@ -775,7 +785,7 @@ mod tests {
                 safe_area: Bounds::at(Point::new(-140.0, 22.0), 900.0, 700.0),
                 ..told
             }),
-            "the device and the points per pixel kept"
+            "the device, the points per pixel and the soft keyboard kept"
         );
     }
 
@@ -832,6 +842,25 @@ mod tests {
     }
 
     #[test]
+    fn the_default_surroundings_have_no_soft_keyboard() {
+        assert!(!Surroundings::default().soft_keyboard);
+        assert!(!Surroundings::of(Device::Touch).soft_keyboard);
+    }
+
+    #[test]
+    fn translating_surroundings_keeps_the_soft_keyboard() {
+        let told = Surroundings {
+            soft_keyboard: true,
+            ..Surroundings::of(Device::Touch)
+        };
+        let Input::Surroundings(moved) = Input::Surroundings(told).translated(Point::new(5.0, 0.0))
+        else {
+            panic!("still the surroundings");
+        };
+        assert!(moved.soft_keyboard);
+    }
+
+    #[test]
     fn surroundings_compare_by_every_field() {
         let told = Surroundings::of(Device::Touch);
         assert_ne!(
@@ -849,6 +878,13 @@ mod tests {
             told
         );
         assert_ne!(Surroundings::of(Device::Mouse), told);
+        assert_ne!(
+            Surroundings {
+                soft_keyboard: true,
+                ..told
+            },
+            told
+        );
     }
 
     fn button(command: crate::keymap::Command, pressed: bool) -> Input {

@@ -88,6 +88,7 @@ impl Window {
                 max: Point::new(w - side / ppp, h - bottom / ppp),
             },
             points_per_pixel: ppp,
+            soft_keyboard: false,
         }
     }
 
@@ -118,6 +119,7 @@ impl Window {
             device: Device::Touch,
             safe_area: intersection(safe, canvas).unwrap_or(canvas),
             points_per_pixel: ppp,
+            soft_keyboard: false,
         }
     }
 }

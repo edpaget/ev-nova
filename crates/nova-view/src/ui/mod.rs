@@ -88,6 +88,7 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod entry_keyboard;
 pub mod escort_dialog;
 pub mod faded_texts;
 mod held_keys;
