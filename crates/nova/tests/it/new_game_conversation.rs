@@ -1,21 +1,25 @@
 //! The new game's offer conversation played through in the app, over the
 //! checked-in fixture (`nova_data::new_game::fixture::folder`) opened as
 //! the app opens it (`DiskData::open_new_game`, which checks each
-//! stellar's knot against the Ink runtime), with `nova::dialogs::loader`
-//! wired as `main` wires it and the new game's rulebook.
+//! stellar's and each mission's knot against the Ink runtime), with
+//! `nova::dialogs::loader` wired as `main` wires it and the new game's
+//! rulebook.
 //!
 //! A new pilot's ship, put over Hearth Dock, lands with two L presses, and
-//! the dock's offer (`dialog/dock-job.ink#job_offer`, compiled and checked
-//! in beside its `.ink`) opens over the spaceport. The test asks about
-//! the route, takes the job, and closes the ended page back to the
-//! spaceport. Hearth Dock is the only stellar that names one. What the
-//! screen, the session and the story do is pinned in their own crates;
-//! this pins that they meet.
+//! the dock job's offer (the mission `dock-job`, whose offer is
+//! `dialog/dock-job.ink#job_offer`, compiled and checked in beside its
+//! `.ink`) opens over the spaceport. The test asks about the route, takes
+//! the job, and closes the ended page back to the spaceport, as Hearth
+//! Dock has no conversation of its own. Verge Camp is the only stellar
+//! that names one. What the screen, the session and the story do is
+//! pinned in their own crates; this pins that they meet. The fixture's
+//! missions are played through in `new_game_missions`.
 //!
 //! The story's state goes into the pilot's save: a pilot who asked about
-//! the route, then closed the window (which saves it) and was opened again
-//! in a new app through Open Pilot, hears `"You know the way by now."` at
-//! the dock and isn't offered the question again. A pilot saved with the
+//! the route and thought it over (deferring the job), then closed the
+//! window (which saves it) and was opened again in a new app through Open
+//! Pilot, is offered the job again at the dock, hears `"You know the way
+//! by now."` and isn't offered the question again. A pilot saved with the
 //! world flag `dock_regular` is greeted as a regular.
 
 use std::rc::Rc;
@@ -46,10 +50,11 @@ const OFFER: [&str; 5] = [
 ];
 
 /// The page after asking about the route.
-const ROUTE: [&str; 3] = [
+const ROUTE: [&str; 4] = [
     "\"Two gates lead to Verge. Either will do.\"",
     "1. Take it",
     "2. Pass",
+    "3. Think it over",
 ];
 
 /// The offer's first page on a later visit, once the route was asked
@@ -197,19 +202,25 @@ fn the_dock_s_offer_plays_through_choice_by_choice_and_closes_back_to_the_spacep
 }
 
 #[test]
-fn only_hearth_dock_names_a_conversation_once_opened_and_checked() {
+fn only_verge_camp_names_a_conversation_and_the_dock_job_is_offered_at_hearth_dock() {
     // Hearth Moon offers no services, so it can't be landed on, and Verge
     // Camp is a jump away: the router's own tests land at a stellar with
     // no conversation (`app::screen::tests::conversation`).
     let data = opened();
+    let nova_of = |id: &str| {
+        fixture()
+            .ids
+            .stellars
+            .iter()
+            .find_map(|(bible, &nova)| (bible.as_str() == id).then_some(nova))
+            .expect("a fixture stellar")
+    };
     let talking: Vec<i16> = data.dialogs().stellars.keys().map(|id| id.0).collect();
-    let dock = fixture()
-        .ids
-        .stellars
-        .iter()
-        .find_map(|(bible, &nova)| (bible.as_str() == "hearth-dock").then_some(nova))
-        .expect("Hearth Dock");
-    assert_eq!(talking, [dock]);
+    assert_eq!(talking, [nova_of("verge-camp")]);
+    let job = &data.storylines().missions["dock-job"];
+    let offer = job.offer.as_ref().expect("offered");
+    assert_eq!(offer.at.0, nova_of("hearth-dock"));
+    assert_eq!(offer.dialog.as_ref_text(), "dialog/dock-job.ink#job_offer");
 }
 
 #[test]
@@ -218,8 +229,10 @@ fn a_read_count_is_still_read_after_saving_quitting_and_loading() {
     let mut game = flying_in(&store);
     land_at(&mut game, "hearth-dock");
     ends_with(&drawn(&mut game), &OFFER);
+    // Asks about the route, then thinks it over: a defer, so the job is
+    // offered again at the next landing (an accepted job isn't).
     game.press(KeyCode::Digit2);
-    game.press(KeyCode::Digit1);
+    game.press(KeyCode::Digit3);
     game.press(KeyCode::Enter);
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);

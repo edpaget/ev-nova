@@ -270,7 +270,7 @@ fn stellar_file(ids: &IdTable, stellar: StellarId) -> String {
 pub mod fixture {
     use super::DialogCheck;
 
-    /// The fixture folder's offer conversation
+    /// The fixture folder's conversations
     /// (`tests/fixtures/new-game/dialog/dock-job.ink`), compiled.
     pub const DOCK_JOB_JSON: &str =
         include_str!("../../tests/fixtures/new-game/dialog/dock-job.ink.json");
@@ -295,7 +295,18 @@ pub mod fixture {
         /// Knows [`DOCK_JOB_JSON`]'s knots.
         #[must_use]
         pub fn meeting_the_contract() -> Self {
-            Self::default().story(DOCK_JOB_JSON, &["walkthrough", "scene_end", "job_offer"])
+            Self::default().story(
+                DOCK_JOB_JSON,
+                &[
+                    "walkthrough",
+                    "scene_end",
+                    "job_offer",
+                    "job_done",
+                    "camp_greeting",
+                    "toll_offer",
+                    "road_offer",
+                ],
+            )
         }
     }
 

@@ -32,8 +32,9 @@ use nova_galaxy_media::BARE;
 /// points two of which lead from `hearth` to `verge`, a dead pair between
 /// `verge` and `drift`, and `drift`'s one-way back door to `verge`; the
 /// civilian hull `hauler` and the crown hull `cutter`; the start
-/// `dock-hand`, in the hauler in `hearth`; and the offer conversation
-/// `dialog/dock-job.ink`, compiled, which `hearth-dock` names.
+/// `dock-hand`, in the hauler in `hearth`; the storyline `dock-work`,
+/// whose four missions and two news items run over the conversations of
+/// `dialog/dock-job.ink`, compiled, whose greeting `verge-camp` names.
 fn fixture() -> PathBuf {
     new_game::fixture::folder()
 }
@@ -77,9 +78,9 @@ fn the_fixture_folder_loads_without_problems_or_pointers() {
 }
 
 #[test]
-fn hearth_dock_names_the_fixture_s_offer_conversation() {
+fn verge_camp_names_the_fixture_s_one_stellar_conversation() {
     let game = new_game::open(&fixture()).expect("lists");
-    let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
+    let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
     let dialogs = game.data.dialogs();
     let places: Vec<_> = dialogs
         .stellars
@@ -88,14 +89,63 @@ fn hearth_dock_names_the_fixture_s_offer_conversation() {
         .collect();
     assert_eq!(
         places,
-        [(dock, "dialog/dock-job.ink#job_offer".to_owned())],
-        "the moon and the camp name none"
+        [(camp, "dialog/dock-job.ink#camp_greeting".to_owned())],
+        "the dock's job is a mission's, and the moon names none"
     );
-    let (_, compiled) = dialogs.stellar(dock).expect("its compiled story");
+    let (_, compiled) = dialogs.stellar(camp).expect("its compiled story");
     assert_eq!(
         &**compiled,
         nova_data::new_game::dialogs::fixture::DOCK_JOB_JSON
     );
+}
+
+#[test]
+fn the_fixture_maps_four_missions_two_news_items_and_nine_jump_points() {
+    let game = new_game::open(&fixture()).expect("lists");
+    let storylines = game.data.storylines();
+    let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(storylines.missions.keys().collect()),
+        [
+            "clear-the-road",
+            "dock-job",
+            "side-road-closes",
+            "warden-toll"
+        ]
+    );
+    assert_eq!(
+        keys(storylines.news.keys().collect()),
+        ["plate-arrives", "side-road-closes"]
+    );
+    assert_eq!(storylines.points.len(), 9);
+    let dock = StellarId(game.ids.stellars[&id("hearth-dock")]);
+    let camp = StellarId(game.ids.stellars[&id("verge-camp")]);
+    let job = &storylines.missions["dock-job"];
+    let offer = job.offer.as_ref().expect("offered");
+    assert_eq!(
+        (offer.at, offer.dialog.as_ref_text()),
+        (dock, "dialog/dock-job.ink#job_offer".to_owned()),
+        "the dock job is offered at Hearth Dock"
+    );
+    assert_eq!(
+        job.objective,
+        Some(nova_data::MissionObjective::Deliver {
+            cargo: "Hull plate".to_owned(),
+            tons: 10,
+            to: camp,
+        })
+    );
+    assert_eq!(
+        storylines.missions["side-road-closes"].offer, None,
+        "an event"
+    );
+    assert_eq!(
+        storylines.news["side-road-closes"].from,
+        SystemId(game.ids.systems[&id("hearth")])
+    );
+    let road = &storylines.points["verge/hearth-road"];
+    assert_eq!(road.owner.as_deref(), Some("warden"));
+    assert_eq!(road.stability, nova_data::GateStability::Unstable);
 }
 
 #[test]
