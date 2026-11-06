@@ -117,21 +117,41 @@ fn byte_len(text: &str) -> u32 {
     len
 }
 
-/// The value of a leading three-digit octal escape and the text after it.
-pub(crate) fn octal_prefix(text: &str) -> Option<(u32, &str)> {
-    let digits = text.strip_prefix('\\')?.get(..3)?;
-    if !digits.chars().all(|d| d.is_digit(8)) {
-        return None;
+/// The value of the first byte, however otool printed it (a three-digit
+/// octal escape, a named escape or a raw char), and the text after it.
+fn first_byte(text: &str) -> Option<(u32, &str)> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if c != '\\' {
+        return Some((u32::from(c), chars.as_str()));
     }
-    Some((u32::from_str_radix(digits, 8).ok()?, &text[4..]))
+    let escaped = chars.as_str();
+    if let Some(digits) = escaped.get(..3)
+        && digits.chars().all(|d| d.is_digit(8))
+    {
+        return Some((u32::from_str_radix(digits, 8).ok()?, &escaped[3..]));
+    }
+    let value = match escaped.chars().next()? {
+        'a' => 0x07,
+        'b' => 0x08,
+        't' => 0x09,
+        'n' => 0x0a,
+        'v' => 0x0b,
+        'f' => 0x0c,
+        'r' => 0x0d,
+        '\\' => u32::from(b'\\'),
+        _ => return None,
+    };
+    Some((value, &escaped[1..]))
 }
 
 impl CString {
     /// The string's text after a Pascal length byte, when its first byte
-    /// (an octal escape) equals the length of the rest.
+    /// (an octal escape, a named escape or a raw char) equals the length
+    /// of the rest.
     #[must_use]
     pub fn pascal(&self) -> Option<&str> {
-        let (n, rest) = octal_prefix(&self.text)?;
+        let (n, rest) = first_byte(&self.text)?;
         (n == byte_len(rest)).then_some(rest)
     }
 }
@@ -161,7 +181,9 @@ mod tests {
             [
                 (0xd8200, "Hello world", 11),
                 (0xd820c, "\\005Pilot", 6),
-                (0xd8220, "Line\\n", 5)
+                (0xd8220, "Line\\n", 5),
+                (0xd8230, "\\aCommand", 8),
+                (0xd8240, "!Thirty-three bytes after the bang", 34)
             ]
         );
     }
@@ -202,7 +224,68 @@ mod tests {
         let s = parse(CSTRINGS);
         // "Line\n" is five bytes at 0xd8220: its NUL is at 0xd8225.
         assert_eq!(listed(s.string_at(0xd8225).as_ref()), Some(("Line\\n", 5)));
-        assert_eq!(s.string_at(0xd8226), None);
+        assert_eq!(s.string_at(0xd8226), Some(StringRef::Unlisted));
+        // The last string, 34 bytes at 0xd8240, has its NUL at 0xd8262.
+        assert!(listed(s.string_at(0xd8262).as_ref()).is_some());
+        assert_eq!(s.string_at(0xd8263), None);
+    }
+
+    fn pascal(text: &str) -> Option<&str> {
+        let line = format!("000d8000  {text}\n");
+        let s = parse(&line);
+        let rest = s.strings()[0].pascal()?.len();
+        Some(&text[text.len() - rest..])
+    }
+
+    #[test]
+    fn a_length_byte_printed_as_an_octal_escape_is_pascal() {
+        assert_eq!(pascal("\\005Pilot"), Some("Pilot"));
+        assert_eq!(pascal("\\004Pilot"), None);
+    }
+
+    #[test]
+    fn a_length_byte_printed_as_a_named_escape_is_pascal() {
+        for (text, rest) in [
+            ("\\aCommand", "Command"),
+            ("\\bCommands", "Commands"),
+            ("\\tCommanded", "Commanded"),
+            ("\\n0123456789", "0123456789"),
+            ("\\v0123456789a", "0123456789a"),
+            ("\\f0123456789ab", "0123456789ab"),
+            ("\\r0123456789abc", "0123456789abc"),
+        ] {
+            assert_eq!(pascal(text), Some(rest), "{text}");
+        }
+        assert_eq!(pascal("\\aPilot"), None);
+        // A backslash byte (92) before 92 bytes.
+        let long = "x".repeat(92);
+        assert_eq!(pascal(&format!("\\\\{long}")), Some(long.as_str()));
+    }
+
+    #[test]
+    fn a_length_byte_printed_raw_is_pascal() {
+        assert_eq!(
+            pascal("!Thirty-three bytes after the bang"),
+            Some("Thirty-three bytes after the bang")
+        );
+        assert_eq!(pascal("Hello world"), None);
+        assert_eq!(pascal(""), None);
+    }
+
+    #[test]
+    fn the_fixture_s_pascal_strings_read_without_their_length_byte() {
+        let s = parse(CSTRINGS);
+        let got: Vec<_> = s.strings().iter().map(CString::pascal).collect();
+        assert_eq!(
+            got,
+            [
+                None,
+                Some("Pilot"),
+                None,
+                Some("Command"),
+                Some("Thirty-three bytes after the bang")
+            ]
+        );
     }
 
     #[test]
