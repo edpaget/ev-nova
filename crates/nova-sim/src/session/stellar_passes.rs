@@ -515,6 +515,56 @@ mod tests {
     }
 
     #[test]
+    fn game_entry_steps_every_other_stellar_three_times_the_third_after_the_setup_when_owed() {
+        use crate::stellar_frames::{StellarAnimation, StellarFrames};
+        // A planet of 5 frames stepping every pass, beside the gate.
+        let animated = LandingSite {
+            animation: SiteAnimation {
+                delay: 1,
+                type_frames: 5,
+                type_sheet_frames: 5,
+                ..SiteAnimation::default()
+            },
+            ..planet(140, -100.0, 200.0)
+        };
+        let catalog = showing([gate(300, 5), animated]);
+        let id = StellarId(140);
+        let five = std::num::NonZeroU16::new(5).expect("non-zero");
+        let anim = StellarAnimation::of(&animated);
+        let stepped = |mut frames: StellarFrames, passes: usize| {
+            for _ in 0..passes {
+                frames.step_by(SpeedMult::FULL, anim, false, five, five, &mut NeverFires);
+            }
+            frames
+        };
+        let frames = |session: &Session| session.space.stellar_frames[&id].frames;
+        // A first entry: the third pass owed to the first step's setup.
+        let mut session = begun(&catalog);
+        assert!(session.space.traffic_due);
+        let start = frames(&session);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        assert_eq!(frames(&session), stepped(start, 2), "two, the third owed");
+        tick(&mut session, &catalog);
+        let oracle = stepped(start, 4);
+        assert_eq!(frames(&session), oracle, "the third, beside the step's own");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+        // A re-entry: all three at once.
+        let mut session = Session::start(&catalog).expect("starts");
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        tick(&mut session, &catalog);
+        assert!(!session.space.traffic_due);
+        let before = frames(&session);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        let oracle = stepped(before, 3);
+        assert_eq!(frames(&session), oracle, "all three");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+        tick(&mut session, &catalog);
+        let oracle = stepped(before, 4);
+        assert_eq!(frames(&session), oracle, "the step's own alone");
+        assert_eq!(session.stellar_frame(id), oracle.shown());
+    }
+
+    #[test]
     fn a_session_never_entered_steps_its_gates_by_the_first_steps_own_alone() {
         let catalog = one_gate();
         let mut session = Session::start(&catalog).expect("starts");
