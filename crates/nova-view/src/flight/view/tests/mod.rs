@@ -82,6 +82,7 @@ mod escorts;
 mod faded_keys;
 mod faked_board;
 mod faked_combat;
+mod faked_conversation;
 mod faked_desk;
 mod faked_docked;
 mod faked_escorts;

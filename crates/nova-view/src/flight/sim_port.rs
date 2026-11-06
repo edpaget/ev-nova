@@ -132,6 +132,12 @@
 //!   a test there, one test per field, each filling over a stale frame.
 //! - **An action** is a [`FlightCommand`] variant, answered with its
 //!   [`Answer`] in `session/apply.rs` or a module under `session/apply/`.
+//!   A landed stellar's conversation is one: each
+//!   [`FlightCommand::Converse`] (open, choose, close) is answered with
+//!   the page to show ([`Answer::Conversation`]) in
+//!   `session/apply/conversation.rs`, and the screen that shows it
+//!   ([`ConversationScreen`](crate::spaceport::ConversationScreen)) takes
+//!   the page as plain data.
 //! - **A one-shot output** is a [`FlightEvent`] variant, drained in
 //!   `session/flight_events.rs`.
 //! - **A screen's question** is a [`ScreenAsk`] and [`ScreenAnswer`]
