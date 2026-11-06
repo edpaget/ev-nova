@@ -20,6 +20,13 @@ The clerk looks up.
 {ask.work: You asked about work.|You never asked.}
 -> END
 
+=== dice ===
+{RANDOM(1, 1000)}
+{RANDOM(1, 1000)}
+{~calm|tense|bored|curious|tired|cheerful}
+{~north|south|east|west|up|down}
+-> END
+
 === broken ===
 This knot is a tunnel, entered as a knot.
 ->->

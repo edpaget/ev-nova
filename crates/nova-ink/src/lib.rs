@@ -134,8 +134,8 @@ fn runtime(error: impl std::fmt::Display) -> DialogError {
 
 /// The adapter's own tests, over its own fixture story,
 /// `tests/fixtures/recall.ink`: what the port's contract story can't show
-/// without running Ink (conditional text, read counts, lists and runtime
-/// errors). The port's contract itself is played only through
+/// without running Ink (conditional text, read counts, lists, seeded
+/// random draws and runtime errors). The port's contract itself is played only through
 /// `check_contract`.
 ///
 /// `recall.ink.json` is compiled by hand with Inky 0.15.2's `inklecate`
@@ -222,6 +222,23 @@ mod tests {
             recall().variable("mood"),
             Err(DialogError::Unsupported("mood".to_owned()))
         );
+    }
+
+    /// The lines `dice` steps, in a story opened with `seed`.
+    fn dice(seed: i32) -> Vec<String> {
+        let mut dialog = InkLoader::seeded(seed).open(RECALL_JSON).unwrap();
+        dialog.enter("dice").unwrap();
+        lines(dialog.as_mut())
+    }
+
+    #[test]
+    fn the_seed_is_fixed() {
+        assert_eq!(dice(7), dice(7));
+    }
+
+    #[test]
+    fn another_seed_draws_differently() {
+        assert_ne!(dice(7), dice(8));
     }
 
     #[test]

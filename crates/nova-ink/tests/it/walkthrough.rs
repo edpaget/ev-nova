@@ -1,7 +1,7 @@
 //! nova-ink's own fixture story (`tests/fixtures/recall.ink`, regenerated
 //! as nova-ink's unit tests module says), played through the dialog port
 //! alone: every knot but `broken` (whose runtime error the unit tests
-//! pin), and every choice.
+//! pin) and `dice` (whose random draws they pin), and every choice.
 
 use nova_ink::InkLoader;
 use nova_sim_story::dialog::{Dialog, DialogLoader};
