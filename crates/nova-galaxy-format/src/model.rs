@@ -181,6 +181,12 @@ pub struct Stellar {
     /// station or outpost).
     #[serde(default)]
     pub visual: Option<Visual>,
+    /// The conversation a landed pilot is offered here
+    /// (`dialog/<file>.ink#knot` or `dialog/<file>.ink#knot.stitch`). The
+    /// game reads the compiled `dialog/<file>.ink.json` and opens the
+    /// knot on landing. Omit if the stellar has nothing to say.
+    #[serde(default)]
+    pub dialog: Option<DialogRef>,
 }
 
 /// How a stellar looks: one or the other.
@@ -1033,6 +1039,25 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(station.visual, Some(Visual::Asset(id)) if id.as_str() == "station-hub"));
+    }
+
+    #[test]
+    fn a_stellar_may_name_its_conversation() {
+        let stellar: Stellar = read(
+            "name: S\nkind: station\nsystem: s\nposition: [0, 0]\n\
+             dialog: dialog/dock-job.ink#job_offer\n",
+        )
+        .unwrap();
+        assert_eq!(
+            stellar.dialog.map(|d| d.as_str().to_owned()).as_deref(),
+            Some("dialog/dock-job.ink#job_offer")
+        );
+        let silent: Stellar = read("name: S\nkind: moon\nsystem: s\nposition: [0, 0]\n").unwrap();
+        assert!(silent.dialog.is_none());
+        let bad = read::<Stellar>(
+            "name: S\nkind: moon\nsystem: s\nposition: [0, 0]\ndialog: dialog/a.ink\n",
+        );
+        assert!(bad.is_err());
     }
 
     #[test]
