@@ -199,10 +199,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # xvfb gives the installed app's zenity a display for the test.
       # ostree is for the Flatpak repo test, which publishes this bundle
-      # into a repo of its own.
+      # into a repo of its own. flatpak and flatpak-builder come from the
+      # Flatpak PPA: the finish-args' --device=input (gilrs's gamepads)
+      # needs flatpak 1.15.6 or newer, and Ubuntu 24.04's 1.14 refuses it
+      # in build-finish ("Unknown device type input").
       - run: |
+          sudo add-apt-repository -y ppa:flatpak/stable
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb ostree
+          flatpak --version
+          flatpak-builder --version
       # Ubuntu 24.04 restricts unprivileged user namespaces through
       # AppArmor, which bubblewrap needs for every build and run sandbox.
       - name: Allow bubblewrap's user namespaces
