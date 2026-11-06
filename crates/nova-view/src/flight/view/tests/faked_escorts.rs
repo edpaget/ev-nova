@@ -1454,3 +1454,51 @@ fn held_double_steps_shut_the_menu_on_the_release_after_the_16th() {
     assert_eq!(title_alpha(&view), None, "not drawn on that frame");
     assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
 }
+
+#[test]
+fn a_dropped_holds_second_pass_still_fades_and_redraws_the_menu() {
+    // Seating the ship afresh drops the hold unreplayed, but its second
+    // pass's escort-menu block is the flight's state, not an effect.
+    let mut view = faded_to(22);
+    let attacking = with_row(
+        view.frame.hud.escort_rows,
+        EscortClass::Warship,
+        true,
+        Some(EscortOrder::Attack),
+    );
+    let between = view.frame.clone();
+    let first = Some(menu_pass(&view, false));
+    held_double_step(
+        &mut view,
+        first,
+        Some(rows_pass(attacking, 1, true)),
+        between,
+    );
+    assert_eq!(view.escort_menu().level(), Some(21), "the first pass's");
+    view.place_ship();
+    assert_eq!(
+        view.escort_menu().level(),
+        Some(32),
+        "the dropped pass dropped, then cleared"
+    );
+    assert!(menu_shows(&view, "Attack", Color::WHITE), "and redrew");
+}
+
+#[test]
+fn a_dropped_holds_second_pass_shuts_the_menu_and_beeps_with_e_held() {
+    let mut view = world(catalog(), fleet_of(&[EscortClass::Warship])).with_overlays(TITLED);
+    press(&mut view, MENU_KEY);
+    view.held.insert(MENU_KEY);
+    ui_heard(&mut view);
+    view.step_stellars(MENU_TIMEOUT + TICK);
+    for _ in 0..16 {
+        let (pass, between) = (Some(menu_pass(&view, false)), view.frame.clone());
+        held_double_step(&mut view, pass, pass, between);
+    }
+    assert_eq!(view.escort_menu().level(), Some(1), "31 passes run");
+    assert_eq!(ui_heard(&mut view), []);
+    view.place_ship();
+    assert!(!view.escort_menu().is_open(), "the 16th's dropped pass");
+    assert_eq!(title_alpha(&view), None);
+    assert_eq!(ui_heard(&mut view), [UiSound::EscortMenuToggled]);
+}
