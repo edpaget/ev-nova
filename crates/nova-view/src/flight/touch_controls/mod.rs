@@ -136,6 +136,12 @@ impl TouchControls {
         }
     }
 
+    /// The surroundings the app told last.
+    #[must_use]
+    pub const fn told(&self) -> Surroundings {
+        self.told
+    }
+
     /// Keeps the flight view's size, in logical units.
     pub const fn set_view(&mut self, view: (f32, f32)) {
         self.view = view;

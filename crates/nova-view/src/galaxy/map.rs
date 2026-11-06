@@ -642,6 +642,8 @@ pub struct GalaxyMap {
     pad: MapPad,
     /// The pinch on the map, while one is ([`touch`](super::touch)).
     pub(super) pinch: Option<MapPinch>,
+    /// Plot Course's touch toggle ([`toggle`](super::toggle)).
+    pub(super) toggle: crate::ui::touch_aids::ModifierToggle,
 }
 
 /// How a map is laid out: the viewer full-screen with its own pan and
@@ -735,6 +737,7 @@ impl GalaxyMap {
             nebula_pick: PicturePick::LargestThatFits,
             borders,
             pad: MapPad::default(),
+            toggle: super::toggle::toggle(),
         };
         map.settle_borders();
         map
@@ -2133,6 +2136,9 @@ impl Screen for GalaxyMap {
     /// The surroundings are no player input: the map's reader follows
     /// them, the pad's focus keeps them, and Find is told while open.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = crate::ui::touch_aids::host::intercept(self, input) {
+            return action;
+        }
         if let Input::Surroundings(_) = input {
             self.keys.follow(input);
             let buttons = matches!(self.look, Look::Dialog(_));
@@ -2174,12 +2180,14 @@ impl Screen for GalaxyMap {
         if let Some(dialog) = &self.find {
             dialog.draw(list);
         }
+        crate::ui::touch_aids::host::draw(self, list);
     }
 
     /// Forgets the left-button press, if any: the map stops dragging and the
     /// release, wherever it ends up, is not a click, on the map, on the
     /// "Enter system" button, on Done or Find, or in Find.
     fn cancel_pointer(&mut self) {
+        crate::ui::touch_aids::host::cancel(self);
         self.press = None;
         self.pending = None;
         self.awaiting = None;

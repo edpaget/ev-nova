@@ -408,6 +408,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.let_go_of_held();
         }
         self.map_open = true;
+        // Its frame moves with where it shows (`map_offset`): over flight
+        // or over the spaceport.
+        let told = Input::Surroundings(self.touch_controls.told());
+        self.map.input(&self.map_frame_input(&told));
         if let Some(sources) = borders {
             self.map.show_border_sources(sources);
         }

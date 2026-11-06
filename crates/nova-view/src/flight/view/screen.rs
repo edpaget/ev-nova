@@ -310,9 +310,11 @@ impl<
         // A stick's move (the pad's or the touch stick's) and the app's
         // surroundings press nothing: flight's reader takes them whatever
         // shows, the rescue included, the axes for the next step. The
-        // course map is told the surroundings too, open or not, so a map
-        // opened later, over flight, over the spaceport or by a mission
-        // dialog, already knows the device, and so are the touch controls.
+        // course map is told the surroundings too, open or not, in its own
+        // frame ([`FlightView::map_frame_input`]), so a map opened later,
+        // over flight, over the spaceport or by a mission dialog, already
+        // knows the device and its safe area, and so are the touch
+        // controls.
         if matches!(
             input,
             Input::PadAxis { .. }
@@ -321,7 +323,7 @@ impl<
         ) {
             self.keys.follow(input);
             if let Input::Surroundings(told) = *input {
-                self.map.input(input);
+                self.map.input(&self.map_frame_input(input));
                 self.touch_controls.tell(told);
             }
             return ScreenAction::None;

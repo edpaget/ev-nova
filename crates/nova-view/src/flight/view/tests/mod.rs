@@ -115,6 +115,7 @@ mod map_borders;
 mod map_find;
 mod map_key_wait;
 mod map_opening;
+mod map_safe_area;
 mod maps;
 mod missions;
 mod murk_sprites;

@@ -396,6 +396,12 @@ impl PadProbe for MapProbe {
     fn default_control(&self) -> Option<&'static str> {
         Some(name(MapButton::Done))
     }
+
+    fn touch_aids_drawn(&mut self) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        crate::ui::touch_aids::host::draw(&self.0, &mut list);
+        list.iter().cloned().collect()
+    }
 }
 
 const fn name(button: MapButton) -> &'static str {
