@@ -301,7 +301,6 @@ impl NewPilotDialog {
     #[must_use]
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
         self.dialog.set_bindings(bindings.clone());
-        self.keyboard.set_bindings(bindings.clone());
         self.keys.set_bindings(bindings);
         self
     }

@@ -145,7 +145,6 @@ impl<P: Confirm> EditDialog<P> {
     /// The dialog reading its keys (Return for OK) through `bindings`.
     #[must_use]
     pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
-        self.keyboard.set_bindings(bindings.clone());
         self.dialog.set_bindings(bindings);
         self
     }
@@ -805,6 +804,33 @@ mod tests {
                 .center(),
         );
         assert_eq!(asked(&touched), Some(again));
+    }
+
+    #[test]
+    fn a_click_on_another_item_focuses_no_field() {
+        let mut template = template();
+        template
+            .items
+            .push(item(rect(180.0, 50.0, 16.0, 16.0), true, ItemSpec::User));
+        let mut dialog = EditDialog::laid_out(
+            &template,
+            ITEMS,
+            &[],
+            "Asked:",
+            "abc",
+            Scripted::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let first = asked(&dialog).expect("asked");
+        click(&mut dialog, 5);
+        assert_eq!(asked(&dialog), Some(first), "no new focus");
+        click(&mut dialog, ITEMS.field);
+        assert_eq!(
+            asked(&dialog).map(|ask| ask.focused),
+            Some(first.focused + 1)
+        );
     }
 
     #[test]

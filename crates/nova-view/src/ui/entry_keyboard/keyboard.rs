@@ -29,7 +29,7 @@ use crate::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Device, Input, Key, PadButton, Surroundings};
-use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
+use crate::keymap::{Command, CommandReader, UiCommand, contexts};
 use crate::text_entry::EntryMode;
 use crate::ui::pad_focus::{FocusMove, FocusState, PadRead, Target, draw_highlight};
 use crate::ui::touch_aids::look::{FILL, HIGHLIGHT, draw_square};
@@ -64,8 +64,6 @@ pub struct EntryKeyboard {
     keys: CommandReader,
     /// The pad buttons whose press it took, whose release it takes too.
     taken: Vec<PadButton>,
-    /// Whether its host is running what it gave back.
-    replaying: bool,
 }
 
 impl Default for EntryKeyboard {
@@ -75,9 +73,10 @@ impl Default for EntryKeyboard {
 }
 
 impl EntryKeyboard {
-    /// Hidden, told nothing, no field focused yet, reading the pad over
-    /// the default bindings until given its host's
-    /// ([`EntryKeyboard::set_bindings`]).
+    /// Hidden, told nothing, no field focused yet. It reads the pad over
+    /// the default bindings: the shared UI context's pad rows, which are
+    /// all it reads, are fixed (`PadMap::is_fixed`), so a host's bindings
+    /// read them the same.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -90,13 +89,7 @@ impl EntryKeyboard {
             focus: FocusState::default(),
             keys: CommandReader::new(contexts::DIALOG),
             taken: Vec::new(),
-            replaying: false,
         }
-    }
-
-    /// Reads the pad's commands through `bindings`, its host's.
-    pub fn set_bindings(&mut self, bindings: SharedBindings) {
-        self.keys.set_bindings(bindings);
     }
 
     /// The surroundings it was told last.
@@ -312,17 +305,6 @@ impl EntryKeyboard {
     #[must_use]
     pub const fn covered(&self) -> bool {
         self.covered
-    }
-
-    /// Whether its host is running what it gave back, which passes it by.
-    #[must_use]
-    pub const fn replaying(&self) -> bool {
-        self.replaying
-    }
-
-    /// Notes whether its host is running what it gave back.
-    pub const fn set_replaying(&mut self, replaying: bool) {
-        self.replaying = replaying;
     }
 
     /// Draws it at `layout`: a panel behind the keys, each key as a touch
@@ -721,6 +703,7 @@ mod tests {
     #[test]
     fn covered_it_hides_and_lets_go_of_a_press() {
         let mut keyboard = touch();
+        assert!(!keyboard.covered());
         let at = keyboard
             .layout(DIALOG)
             .key(KeyId::Char('7'))
@@ -732,6 +715,7 @@ mod tests {
         assert!(!keyboard.shows(true));
         assert!(!keyboard.asks(true));
         keyboard.set_covered(false);
+        assert!(!keyboard.covered());
         assert!(keyboard.shows(true));
         assert_eq!(
             send(&mut keyboard, &click(false, at), 0),
@@ -796,6 +780,30 @@ mod tests {
         send(&mut keyboard, &click(false, seven.center()), 0);
         tap_key(&mut keyboard, KeyId::Shift, 0);
         assert_eq!(fill_of(&drawn(&keyboard), shift), Some(FILL));
+    }
+
+    #[test]
+    fn its_panel_reaches_two_points_past_the_keys() {
+        let mut keyboard = EntryKeyboard::new();
+        keyboard.input(
+            &Input::Surroundings(Surroundings {
+                points_per_pixel: 2.0,
+                ..Surroundings::of(Device::Touch)
+            }),
+            None,
+            0,
+        );
+        let layout = keyboard.layout(DIALOG);
+        let mut list = DrawList::new();
+        keyboard.draw(&layout, &mut list);
+        assert_eq!(
+            list.iter().next(),
+            Some(&crate::draw::fill_command(
+                layout.bounds().grown(1.0),
+                PANEL
+            )),
+            "two points at two points a unit: one unit"
+        );
     }
 
     #[test]

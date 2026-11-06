@@ -414,6 +414,11 @@ exclude_re = [
     # one-line forward observable only with a window. The adapter's
     # decisions are tested over `StrictIme` (`platform::text_entry`).
     "impl ImeWindow for Arc<dyn Window>>::request_ime_update",
+    # The adapter's soft keyboard is `cfg!(any(target_os = "ios",
+    # target_os = "android"))`: `false` on every host the mutants and CI run
+    # on, so its `false` mutant is the code itself there
+    # (`the_desktop_has_no_soft_keyboard` pins it).
+    "nova/src/platform/text_entry\\.rs:[0-9]+:[0-9]+: replace <impl TextEntry for WinitTextEntry<W>>::soft_keyboard -> bool with false$",
     # The port's defaults for a window with no pointer of its own, that
     # cannot go fullscreen or be sized, do nothing already.
     "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",

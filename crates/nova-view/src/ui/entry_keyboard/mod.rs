@@ -96,9 +96,6 @@ fn stays_raised(host: &impl EntryHost) -> bool {
 /// the host's input past the keyboard (the last that isn't
 /// [`ScreenAction::None`]).
 pub fn intercept(host: &mut impl EntryHost, input: &Input) -> Option<ScreenAction> {
-    if host.keyboard().replaying() {
-        return None;
-    }
     if !stays_raised(host) {
         host.keyboard_mut().lower();
     }
@@ -110,7 +107,8 @@ pub fn intercept(host: &mut impl EntryHost, input: &Input) -> Option<ScreenActio
     if given == [*input] {
         return None;
     }
-    host.keyboard_mut().set_replaying(true);
+    // What it gives back is typed text and keys, which it passes on, so
+    // they reach the host's own input past it.
     let mut action = ScreenAction::None;
     for each in &given {
         let got = host.input(each);
@@ -118,7 +116,6 @@ pub fn intercept(host: &mut impl EntryHost, input: &Input) -> Option<ScreenActio
             action = got;
         }
     }
-    host.keyboard_mut().set_replaying(false);
     Some(action)
 }
 
