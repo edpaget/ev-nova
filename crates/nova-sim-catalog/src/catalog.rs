@@ -2178,6 +2178,13 @@ pub trait PilotCatalog {
     /// ([`PilotCatalog::listed_stellars`]), owner-first (see the
     /// `nova_sim::gate` module).
     fn gate_sites(&self) -> Vec<GateSite>;
+    /// Each stellar's conversation: the compiled story and the knot a
+    /// landed pilot's conversation enters (see the
+    /// [`dialogs`](crate::dialogs) module). None by default: the stock
+    /// game has no stellar conversations.
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        crate::dialogs::StellarDialogs::default()
+    }
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;

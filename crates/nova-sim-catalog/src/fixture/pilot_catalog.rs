@@ -157,6 +157,8 @@ pub struct FakePilotCatalog {
     pub rle_sheets: Vec<(MaskSheet, RleSheet)>,
     /// Each sheet asked for, in order.
     pub rle_sheets_asked: RefCell<Vec<MaskSheet>>,
+    /// Each stellar's conversation: none, by default.
+    pub stellar_dialogs: crate::dialogs::StellarDialogs,
 }
 
 impl FakePilotCatalog {
@@ -273,6 +275,7 @@ pub fn catalog() -> FakePilotCatalog {
         nav_defs: Vec::new(),
         rle_sheets: Vec::new(),
         rle_sheets_asked: RefCell::default(),
+        stellar_dialogs: crate::dialogs::StellarDialogs::default(),
     }
 }
 
@@ -540,6 +543,10 @@ impl PilotCatalog for FakePilotCatalog {
             .iter()
             .find(|(held, _)| *held == sheet)
             .map(|(_, rle)| rle.clone())
+    }
+
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        self.stellar_dialogs.clone()
     }
 
     /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,

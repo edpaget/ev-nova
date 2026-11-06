@@ -20,6 +20,8 @@
 //!   Nova's [`NovaBits`]; and running a set expression
 //!   ([`control::execute`]).
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
+//! - [`dialogs`]: each stellar's conversation, its compiled story and the
+//!   knot it enters ([`StellarDialogs`](dialogs::StellarDialogs)).
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   builders for the catalog's records and mocks of the [`ControlBits`]
 //!   port, for the tests of this crate and the nova-sim crates above.
@@ -48,6 +50,7 @@ pub mod buoy;
 pub mod catalog;
 pub mod control;
 pub mod data;
+pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 #[cfg(test)]
