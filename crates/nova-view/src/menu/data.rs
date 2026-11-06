@@ -10,11 +10,12 @@
 //! decisions are the core's.
 
 use nova_data::GameData;
-use nova_data::graphics::{Image, PICT, RLED, SpriteSheet, decode_pict, decode_rled};
+use nova_data::graphics::{Image, PICT, decode_pict};
 use nova_data::records::character::Character;
 use nova_data::records::colors::Colors;
 use nova_data::records::ship::Ship;
 use nova_data::records::spin::Spin;
+use nova_data::store::{SpinSheet, SpinSpriteError};
 use nova_sim::catalog::{CommCatalog, ShipId};
 use nova_sim::news::MISC_STRINGS;
 
@@ -24,6 +25,7 @@ use super::art::{
 };
 use super::intro::{CharacterIntro, IntroPicture, IntroSource};
 use super::pilot_panel::{PanelLabels, PanelLooks, PanelShip, PilotPanelSource};
+use crate::SheetImage;
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Point;
@@ -101,14 +103,13 @@ impl MainScreenSource for GameData {
         let background = picture(self, BACKGROUND_PICT)?;
         let mut buttons = Vec::with_capacity(BUTTON_SPINS.len());
         for (spin_id, position) in BUTTON_SPINS.into_iter().zip(colors.button) {
-            let spin = spin(self, spin_id)?;
-            let sheet = sheet(self, spin_id, &spin)?;
-            // A decoded sheet always has a frame.
-            let [frame, ..] = sheet.frames() else {
-                unreachable!("rlëD {} decoded with no frames", spin.sprites_id)
+            let sheet = sheet(self, spin_id)?;
+            // A decoded or cut sheet always has a frame.
+            let [frame, ..] = sheet.sheet.frames() else {
+                unreachable!("spïn {spin_id}'s sheet has no frames")
             };
             buttons.push(ButtonArt {
-                sprite: spin.sprites_id,
+                image: SheetImage::of(sheet.kind, sheet.spin_id, sheet.image_id),
                 position: point(position),
                 mask: SpriteMask::from_alpha(frame),
             });
@@ -120,8 +121,7 @@ impl MainScreenSource for GameData {
             slides.push(pict_frames(self, spin_id, point(position))?);
         }
         let slides: [PictFrames; 3] = slides.try_into().map_err(|_| "three slides".to_owned())?;
-        let rollover_spin = spin(self, ROLLOVER_SPIN)?;
-        let rollover = sheet(self, ROLLOVER_SPIN, &rollover_spin)?;
+        let rollover = sheet(self, ROLLOVER_SPIN)?;
         Ok(MainScreenArt {
             background: BACKGROUND_PICT,
             background_size: (background.width(), background.height()),
@@ -129,12 +129,13 @@ impl MainScreenSource for GameData {
             logo,
             slides,
             rollover: RolloverArt {
-                sprite: rollover_spin.sprites_id,
+                image: SheetImage::of(rollover.kind, rollover.spin_id, rollover.image_id),
                 frame_size: (
-                    rollover.frame_width() as f32,
-                    rollover.frame_height() as f32,
+                    rollover.sheet.frame_width() as f32,
+                    rollover.sheet.frame_height() as f32,
                 ),
-                frames: u16::try_from(rollover.frames().len()).unwrap_or(u16::MAX),
+                // `+0x54`, the "none" frame's source (@0x179b3).
+                frames: u16::try_from(rollover.stellar_frame_count()).unwrap_or(u16::MAX),
                 position: point(colors.rollover),
             },
         })
@@ -170,14 +171,14 @@ fn spin(data: &GameData, id: i16) -> Result<Spin, String> {
     }
 }
 
-/// The `rlëD` `spin` (`spïn` `id`) names, decoded.
-fn sheet(data: &GameData, id: i16, spin: &Spin) -> Result<SpriteSheet, String> {
-    let sprite = spin.sprites_id;
-    let found = data
-        .resource(RLED, sprite)
-        .ok_or_else(|| format!("spïn {id} names rlëD {sprite}, which is missing"))?;
-    decode_rled(found.resource.data(), spin.sheet_layout())
-        .map_err(|err| format!("rlëD {sprite}: {err}"))
+/// `spïn` `id`'s sheet, its `rlëD` or with none its `PICT` pair cut, as
+/// `_LoadSprites` loads the buttons and the rollover (@0x20e81-0x20fee,
+/// @0x212c9-0x21409).
+fn sheet(data: &GameData, id: i16) -> Result<SpinSheet<'_>, String> {
+    data.spin_sheet(id).map_err(|err| match err {
+        SpinSpriteError::Decode(err) => format!("spïn {id}: {err}"),
+        err => err.to_string(),
+    })
 }
 
 /// `PICT` `id`, decoded.
@@ -192,17 +193,19 @@ fn picture(data: &GameData, id: i16) -> Result<Image, String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use nova_data::Record;
+    use nova_data::graphics::RLED;
     use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::string_list::StrList;
     use nova_rsrc::ResType;
 
     use super::*;
+    use crate::SheetImage;
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SIZE, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME,
         LOGO_FRAMES, LOGO_PICT, LOGO_POSITION, ROLLOVER_FRAMES, ROLLOVER_POSITION, ROLLOVER_SIZE,
         ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_FRAMES, SLIDE_PICTS, SLIDE_POSITIONS,
-        game_data as game, main_screen_resources,
+        game_data as game, main_screen_resources, pict_pair_resources,
     };
     use crate::target_picture::ShipPicture;
 
@@ -244,8 +247,8 @@ mod tests {
             art.background_size,
             (u32::from(BACKGROUND_SIZE.0), u32::from(BACKGROUND_SIZE.1))
         );
-        let sprites: Vec<i16> = art.buttons.iter().map(|button| button.sprite).collect();
-        assert_eq!(sprites, BUTTON_SPRITES);
+        let images: Vec<SheetImage> = art.buttons.iter().map(|button| button.image).collect();
+        assert_eq!(images, BUTTON_SPRITES.map(SheetImage::Rled));
         let positions: Vec<Point> = art.buttons.iter().map(|button| button.position).collect();
         assert_eq!(positions, BUTTON_POSITIONS.map(point));
         assert_eq!(
@@ -261,12 +264,65 @@ mod tests {
         assert_eq!(
             art.rollover,
             RolloverArt {
-                sprite: ROLLOVER_SPRITE,
+                image: SheetImage::Rled(ROLLOVER_SPRITE),
                 frame_size: (f32::from(ROLLOVER_SIZE.0), f32::from(ROLLOVER_SIZE.1)),
                 frames: ROLLOVER_FRAMES,
                 position: point(ROLLOVER_POSITION),
             }
         );
+    }
+
+    #[test]
+    fn a_button_spin_with_a_pict_pair_is_keyed_by_its_spin() {
+        let art = game(&pict_pair_resources(600))
+            .main_screen_art()
+            .expect("resolves");
+        let images: Vec<SheetImage> = art.buttons.iter().map(|button| button.image).collect();
+        let mut expected = BUTTON_SPRITES.map(SheetImage::Rled);
+        expected[0] = SheetImage::Spin(600);
+        assert_eq!(images, expected);
+        let mask = &art.buttons[0].mask;
+        assert_eq!(
+            (mask.width(), mask.height()),
+            (u32::from(BUTTON_SIZE.0), u32::from(BUTTON_SIZE.1))
+        );
+        let corner = (i64::from(CLEAR_CORNER.0), i64::from(CLEAR_CORNER.1));
+        assert!(!mask.opaque_at(corner.0, corner.1), "a clear corner");
+        assert!(mask.opaque_at(2, 1), "the middle");
+    }
+
+    #[test]
+    fn a_rollover_spin_with_a_pict_pair_is_keyed_by_its_spin_and_counts_its_tiles() {
+        let art = game(&pict_pair_resources(ROLLOVER_SPIN))
+            .main_screen_art()
+            .expect("resolves");
+        assert_eq!(
+            art.rollover,
+            RolloverArt {
+                image: SheetImage::Spin(ROLLOVER_SPIN),
+                frame_size: (f32::from(ROLLOVER_SIZE.0), f32::from(ROLLOVER_SIZE.1)),
+                frames: ROLLOVER_FRAMES,
+                position: point(ROLLOVER_POSITION),
+            }
+        );
+    }
+
+    #[test]
+    fn the_rollover_counts_its_spins_tiles_when_fewer_than_its_rleds_frames() {
+        // `spïn` 607 tiled 1 x 4 over the seven-frame `rlëD`: `+0x54` holds
+        // the tiles (@0x212d6), and the "none" frame is `+0x54 - 1`
+        // (@0x179b3).
+        let resources: Vec<_> = main_screen_resources()
+            .into_iter()
+            .map(|(ty, id, mut bytes)| {
+                if (ty, id) == (Spin::TYPE, ROLLOVER_SPIN) {
+                    bytes[0x0A..0x0C].copy_from_slice(&4_i16.to_be_bytes());
+                }
+                (ty, id, bytes)
+            })
+            .collect();
+        let art = game(&resources).main_screen_art().expect("resolves");
+        assert_eq!(art.rollover.frames, 4);
     }
 
     #[test]
@@ -352,7 +408,7 @@ mod tests {
             (without(Spin::TYPE, 603), "no spïn 603"),
             (
                 without(RLED, 8053),
-                "spïn 603 names rlëD 8053, which is missing",
+                "spïn 603: no rlëD or PICT 8053 for its sprites",
             ),
             (without(Spin::TYPE, 606), "no spïn 606"),
             (
@@ -362,7 +418,7 @@ mod tests {
             (without(Spin::TYPE, 607), "no spïn 607"),
             (
                 without(RLED, ROLLOVER_SPRITE),
-                "spïn 607 names rlëD 8020, which is missing",
+                "spïn 607: no rlëD or PICT 8020 for its sprites",
             ),
             (without(Spin::TYPE, 608), "no spïn 608"),
             (without(Spin::TYPE, 610), "no spïn 610"),

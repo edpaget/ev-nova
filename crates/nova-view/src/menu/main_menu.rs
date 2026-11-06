@@ -225,10 +225,7 @@ impl ArtLayout {
                 continue;
             }
             let frame = u16::from(pressed == Some(index));
-            list.picture(
-                ImageKey::sprite(button.sprite, frame),
-                self.button_origin(index),
-            );
+            list.picture(button.image.frame(frame), self.button_origin(index));
         }
         self.rollover.draw(list, &self.art.rollover, corner);
     }
@@ -682,6 +679,7 @@ mod tests {
     use super::*;
     use crate::draw::{Blend, lights_tint};
     use crate::input::Key;
+    use crate::menu::art::MainScreenSource;
     use crate::menu::fixture::{
         BACKGROUND_SIZE, BUTTON_POSITIONS, BUTTON_SPRITES, CLEAR_CORNER, LOGO_FRAME, LOGO_PICT,
         LOGO_POSITION, ROLLOVER_POSITION, ROLLOVER_SIZE, ROLLOVER_SPRITE, SLIDE_FRAME, SLIDE_PICTS,
@@ -845,6 +843,33 @@ mod tests {
             expected[index] = 1;
             assert_eq!(frames, expected, "{choice:?}");
         }
+    }
+
+    #[test]
+    fn a_pict_pair_button_draws_its_cut_frames() {
+        let art = crate::menu::fixture::game_data(&crate::menu::fixture::pict_pair_resources(600))
+            .main_screen_art()
+            .expect("resolves");
+        let mut menu = MainMenu::new(Some(art), ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        let drawn = |menu: &MainMenu| {
+            let mut list = DrawList::new();
+            menu.draw(&mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Picture { image, top_left }
+                        if image.kind == ImageKind::SpinSheet =>
+                    {
+                        Some((*image, *top_left))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(drawn(&menu), [(ImageKey::spin_sheet(600, 0), origin(0))]);
+        let opaque = Point::new(origin(0).x + 2.5, origin(0).y + 1.5);
+        menu.input(&button(true, opaque));
+        assert_eq!(menu.take_sounds(), [DOWN]);
+        assert_eq!(drawn(&menu), [(ImageKey::spin_sheet(600, 1), origin(0))]);
     }
 
     #[test]

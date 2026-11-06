@@ -59,7 +59,9 @@ impl SpinSheet<'_> {
 
     /// How many frames a stellar or the starfield drawn from this sheet
     /// animates over ([`master_frame_count`]): `_LoadSprites` counts the
-    /// star master the same way (@0x210a4-0x210d2, @0x21218-0x21225).
+    /// star master the same way (@0x210a4-0x210d2, @0x21218-0x21225),
+    /// and the main screen's rollover (`spïn` 607) too
+    /// (@0x212d6-0x21301, @0x213fc-0x21409).
     /// [`SpinSheet::frame_count`] stays the decoded count, which effects
     /// and the cursor use.
     #[must_use]

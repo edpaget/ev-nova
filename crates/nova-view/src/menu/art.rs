@@ -3,9 +3,9 @@
 //!
 //! `_LoadMainScreenAnim` @0x1781d and `_DoMainScreen` load it from the
 //! game data: `PICT` 8000 behind everything, the six buttons' `spïn` 600
-//! to 605 (each an `rlëD` whose frame 0 is up and frame 1 down), the
-//! logo's `spïn` 606 (a `PICT` of frames), the rollover's `spïn` 607 (an
-//! `rlëD`, a frame per button and a last one for none), the three slides'
+//! to 605 (each a sheet whose frame 0 is up and frame 1 down), the
+//! logo's `spïn` 606 (a `PICT` of frames), the rollover's `spïn` 607 (a
+//! sheet, a frame per button and a last one for none), the three slides'
 //! `spïn` 608 to 610 (each a `PICT` of frames, a row of buttons sliding
 //! in, `_GetSpriteInfo(608 + i)` @0x178fa), and their positions from
 //! `cölr` 128, offsets from `menuTopCorner`
@@ -16,11 +16,20 @@
 //! and nothing on the main screen changes a button's current frame from
 //! 0 (the pressed look is blitted straight from frame 1). So only frame
 //! 0's mask is kept.
+//!
+//! The buttons' and the rollover's sheets load through `_LoadSprites`
+//! (buttons @0x20e14-0x2102b, rollover @0x21263-0x21445): an `rlëD`
+//! (@0x20eb3, @0x212c9), or with none a `PICT` pair cut into frames
+//! (`_SWCreateSpriteFromSinglePictXY` @0x20f56, @0x21395), as every
+//! `spïn` resolves ([`SheetImage`]). The logo and the slides are plain
+//! `PICT`s that `_LoadMainScreenAnim` loads itself (@0x178a0, @0x17935),
+//! with no `rlëD` and no mask.
 
 use std::rc::Rc;
 
 use nova_data::graphics::Image;
 
+use crate::SheetImage;
 use crate::geometry::Point;
 
 /// The main screen's picture.
@@ -67,7 +76,8 @@ impl SpriteMask {
     }
 
     /// `image`'s mask: opaque where its alpha is above 0. A decoded
-    /// `rlëD` frame is straight-alpha, so its alpha is its mask.
+    /// sheet frame is straight-alpha (a cut `PICT` frame's alpha is its
+    /// mask `PICT`), so its alpha is its mask.
     #[must_use]
     pub fn from_alpha(image: &Image) -> Self {
         let (pixels, _) = image.pixels().as_chunks::<4>();
@@ -125,12 +135,12 @@ impl SpriteMask {
     }
 }
 
-/// One of the six buttons: `rlëD` `sprite`, frame 0 up and frame 1 down,
+/// One of the six buttons: sheet `image`, frame 0 up and frame 1 down,
 /// drawn at `position` from `menuTopCorner`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonArt {
-    /// The `rlëD`'s ID.
-    pub sprite: i16,
+    /// Its sheet: its `spïn`'s `rlëD`, or its `PICT` pair cut.
+    pub image: SheetImage,
     /// Where its top-left goes, from `menuTopCorner` (`cölr` 128's
     /// `Button1x & y` to `Button6x & y`).
     pub position: Point,
@@ -168,15 +178,18 @@ impl PictFrames {
     }
 }
 
-/// The rollover: `rlëD` `sprite`, a frame per button and a last one for
+/// The rollover: sheet `image`, a frame per button and a last one for
 /// none, drawn at `position` from `menuTopCorner`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RolloverArt {
-    /// The `rlëD`'s ID.
-    pub sprite: i16,
+    /// Its sheet: `spïn` 607's `rlëD`, or its `PICT` pair cut.
+    pub image: SheetImage,
     /// Each frame's width and height.
     pub frame_size: (f32, f32),
-    /// How many frames there are.
+    /// How many frames there are: `+0x54`, which `_LoadMainScreenAnim`
+    /// takes the "none" frame from (@0x179a8-0x179bd). That is the
+    /// `spïn`'s tiles, or the `rlëD`'s decoded frames when there are
+    /// fewer or no tiles (@0x212d6-0x21301, @0x213fc-0x21409).
     pub frames: u16,
     /// Where its top-left goes, from `menuTopCorner` (`cölr` 128's
     /// `RolloverX & Y`).
