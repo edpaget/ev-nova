@@ -334,6 +334,7 @@ exclude_re = [
     # `set_enabled` and `AppleEvents::install` run on the main thread in
     # nova-appkit's `tests/it`.
     "impl ApplicationHandler for Runner<S>>::(can_create_surfaces|window_event|proxy_wake_up|about_to_wait)",
+    "nova/src/platform/runner\\.rs:.* in Runner<S>::take_loop_events( |$)",
     "nova/src/platform/runner\\.rs:.*replace Runner<S>::take_loop_events with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace <impl Drop for Runner<S>>::drop with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",

@@ -130,7 +130,9 @@ impl EguiInput {
             WindowEvent::Text(c) => {
                 let held = self.modifiers();
                 // A command's character (Command-C's "c") is not typed.
-                if !(held.ctrl || held.command || held.mac_cmd) {
+                // (egui-winit also tests `mac_cmd`, which is held only
+                // with `command`.)
+                if !(held.ctrl || held.command) {
                     self.events.push(Event::Text(c.to_string()));
                 }
             }
@@ -161,8 +163,8 @@ impl EguiInput {
         self.scale = scale_factor;
         let (width, height) = size_px;
         let points = vec2(width as f32, height as f32) / scale_factor as f32;
+        // The root viewport, `RawInput`'s default, is the only one.
         let mut input = RawInput {
-            viewport_id: ViewportId::ROOT,
             screen_rect: (points.x > 0.0 && points.y > 0.0)
                 .then(|| Rect::from_min_size(Pos2::ZERO, points)),
             max_texture_side: Some(MAX_TEXTURE_SIDE as usize),
