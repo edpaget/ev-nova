@@ -1381,11 +1381,12 @@ impl Session {
     /// mission escort left it.
     fn unmark_mission_ships(&mut self, ids: &[NpcId]) {
         let mut reform = false;
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         for &id in ids {
             if self.mode.landed().is_some() {
                 self.space.traffic.remove(id);
             } else {
-                reform |= self.space.unmark_mission_ship(&self.statics, id);
+                reform |= self.space.unmark_mission_ship(&self.statics, id, burst);
             }
         }
         if reform {

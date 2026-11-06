@@ -22,10 +22,24 @@
 //! order [`packing_order`] gives. A record from an older save holds none,
 //! and takes its berth after every record with one, in fleet order.
 //!
+//! The load packs once ([`Space::hold_loaded_berths`]), and the records
+//! hold those berths until the fleet is first placed, as the original's
+//! ships sit in their slots from the load on: one leaving the fleet before
+//! take-off (a fighter lost buying a ship, an escort sold at the shipyard)
+//! frees only its own slot, which the next hire takes, as `_SpawnEscort`
+//! takes the lowest inactive slot (F1 and F2 of
+//! rdm:phase/npc-ai/phase-11-unplaced-loaded-escorts-keep-their-slots).
+//! A save with a hole reloads packed again, as `_LoadPilotData` respawns
+//! from slot 1 up. Once the fleet is placed the hold ends
+//! ([`Space::release_loaded_berths`]), so records a reset of the system
+//! leaves unplaced pack as before.
+//!
 //! A saved ship whose class has no record is dropped as the pilot loads
 //! ([`drop_unknown_classes`]), as `_LoadPilotData` spawns none for it, and
 //! the load counts as repaired
 //! ([`Session::load_repaired`](super::Session::load_repaired)).
+
+use std::collections::BTreeSet;
 
 use super::{Pilot, Space};
 use crate::catalog::ShipRecord;
@@ -57,7 +71,41 @@ pub(super) fn packing_order(escorts: &[Escort], mut unplaced: Vec<usize>) -> Vec
     unplaced
 }
 
+/// Gives each record of `escorts` not placed yet (its `berths` entry
+/// none) the berth it holds ([`Escort::berth`]) while it is free of
+/// `taken`, taking it, in [`packing_order`], so of two records holding
+/// the same berth the first in fleet order keeps it and the other packs.
+pub(super) fn keep_held(escorts: &[Escort], taken: &mut BTreeSet<u32>, berths: &mut [Option<u32>]) {
+    let unplaced = (0..berths.len())
+        .filter(|&index| berths[index].is_none())
+        .collect();
+    for index in packing_order(escorts, unplaced) {
+        if let Some(berth) = escorts[index].berth
+            && taken.insert(berth)
+        {
+            berths[index] = Some(berth);
+        }
+    }
+}
+
 impl Space {
+    /// Packs `pilot`'s records into the berths the load spawns them in
+    /// ([`Space::record_berths`] over an empty system) and holds them
+    /// there while they are not placed (F1, F2).
+    pub(super) fn hold_loaded_berths(&mut self, pilot: &mut Pilot) {
+        // Pack from the order the records were saved in.
+        self.escorts.loaded_berths_held = false;
+        self.record_berths(pilot);
+        self.escorts.loaded_berths_held = true;
+    }
+
+    /// Ends the hold [`Space::hold_loaded_berths`] set, as the fleet is
+    /// placed: from then on a record left unplaced (by a reset of the
+    /// system) packs again.
+    pub(super) fn release_loaded_berths(&mut self) {
+        self.escorts.loaded_berths_held = false;
+    }
+
     /// Writes each of `pilot`'s escort records the berth it holds, as
     /// [`Space::fleet_berths`] gives it: its NPC's, or for a record not
     /// yet placed, the packed berth it will take, so a save written now
@@ -72,6 +120,7 @@ impl Space {
 
 #[cfg(test)]
 mod tests {
+    use super::super::escort_land::tests::{YARD, mark, yards};
     use super::super::fighters::tests::{fleet_npcs, flying_by, launch, pilot};
     use super::super::hire::tests::{BAR_AT, paid, paying};
     use super::super::voices::tests::{MEDIUM, MEDIUM_EVEN, VIPER, escort, voiced};
@@ -79,6 +128,7 @@ mod tests {
     use crate::ai::lost_sight::SearchTimer;
     use crate::catalog::ShipId;
     use crate::chance::NeverFires;
+    use crate::fleet::EscortMark;
     use crate::flight::Controls;
     use crate::rulebook::Rulebook;
     use crate::session::Session;
@@ -279,5 +329,81 @@ mod tests {
             berths(&session),
             [(MEDIUM, 2), (MEDIUM_EVEN, 1), (VIPER, 3)]
         );
+    }
+
+    #[test]
+    fn a_loaded_record_lost_before_placing_leaves_its_berth_to_the_next_hire() {
+        let mut catalog = paying();
+        let bar = &mut catalog.sites[0].1[0];
+        bar.flags |= crate::landing::StellarFlags::SHIPYARD;
+        bar.tech_level = 5;
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.cash = 1_000_000;
+        pilot.escorts = vec![
+            Escort {
+                berth: Some(1),
+                ..paid(129, None, true)
+            },
+            Escort {
+                berth: Some(2),
+                ..paid(129, None, false)
+            },
+            Escort {
+                berth: Some(3),
+                ..paid(130, None, false)
+            },
+        ];
+        pilot.stellar = Some(BAR_AT);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
+        assert_eq!(session.space.escorts.fleet, [], "none placed yet");
+        session
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+            .expect("bought");
+        session.hire(ShipId(129), &mut NeverFires).expect("hired");
+        assert_eq!(
+            recorded(&session),
+            [Some(2), Some(3), Some(1)],
+            "B and C keep the berths the load spawned them in, the hire takes the fighter's"
+        );
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(
+            berths(&session),
+            [(ShipId(129), 2), (ShipId(130), 3), (ShipId(129), 1)]
+        );
+    }
+
+    #[test]
+    fn an_escort_sold_at_the_shipyard_leaves_its_berth_empty_at_take_off() {
+        let catalog = yards();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.escorts = vec![
+            saved(ShipId(131), Some(1)),
+            saved(ShipId(129), Some(2)),
+            saved(ShipId(130), Some(3)),
+        ];
+        pilot.stellar = Some(YARD);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(land_now(&mut session), Ok(YARD));
+        assert_eq!(session.space.escorts.fleet, [], "none placed yet");
+        mark(&mut session, 0, EscortMark::Sell);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(berths(&session), [(ShipId(129), 2), (ShipId(130), 3)]);
+    }
+
+    #[test]
+    fn once_the_fleet_is_placed_the_records_left_unplaced_pack_again() {
+        let mut session = loaded(vec![
+            saved(MEDIUM, Some(1)),
+            saved(MEDIUM_EVEN, Some(2)),
+            saved(VIPER, Some(3)),
+        ]);
+        session.space.escorts.fleet.clear();
+        session.pilot.escorts.remove(0);
+        assert_eq!(session.space.fleet_berths(&session.pilot), [1, 2]);
     }
 }

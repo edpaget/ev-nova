@@ -362,7 +362,10 @@ impl Behaviour for FleetEscortAi {
     /// (the lost-parent branch writes none), unless [`escort::unprovoked`]
     /// drops it (+0x70 = -1, @0x80e9d); holding, docking or keeping
     /// formation with no guard, none; keeping a count wait or an assist,
-    /// the target it has, as those branches write none.
+    /// the target it has, as those branches write none. A count wait's is
+    /// what the high level's head left it, which clears it while the wait
+    /// runs ([`board_wait::lapse`](crate::traffic::board_wait::lapse),
+    /// @0x8d480).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Attack(ship) | Goal::Snipe(ship) => Some(ship),

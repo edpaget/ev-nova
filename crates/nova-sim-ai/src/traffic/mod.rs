@@ -203,7 +203,9 @@ pub mod autopilot;
 pub mod berth_blink;
 pub mod berth_exits;
 pub mod berth_kept;
+pub mod berth_marks;
 pub mod berth_picks;
+pub mod berth_scoops;
 pub mod berth_search;
 pub mod berth_voices;
 pub mod board_wait;
@@ -217,6 +219,8 @@ mod cloak_think_tests;
 mod comm_call_tests;
 #[cfg(test)]
 mod count_wait_turn_tests;
+#[cfg(test)]
+mod data_ai_tests;
 pub mod destination;
 #[cfg(test)]
 mod disabled_burst_tests;
@@ -245,6 +249,8 @@ pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
 pub mod formation_places;
+#[cfg(test)]
+mod fought_tests;
 mod frame_target;
 #[cfg(test)]
 mod gate_approach_tests;
@@ -266,6 +272,8 @@ mod held_burst_tests;
 #[cfg(test)]
 mod held_target_tests;
 #[cfg(test)]
+mod held_wait_target_tests;
+#[cfg(test)]
 mod hit_goal_tests;
 #[cfg(test)]
 mod hopeless_flee_tests;
@@ -279,7 +287,11 @@ pub mod inertialess;
 mod inspection_hit_tests;
 #[cfg(test)]
 mod interceptor_goal4_tests;
+#[cfg(test)]
+mod interceptor_hit_target_tests;
 pub mod ionization;
+#[cfg(test)]
+mod jump_begun_tests;
 #[cfg(test)]
 mod jump_out_hit_tests;
 pub mod jump_with_leader;
@@ -294,6 +306,9 @@ mod last_wait_frame;
 mod last_wait_frame_tests;
 mod launch_room;
 pub mod leave_flight;
+pub mod leave_write;
+#[cfg(test)]
+mod leave_write_tests;
 #[cfg(test)]
 mod let_go_think_tests;
 #[cfg(test)]
@@ -305,6 +320,12 @@ mod lost_sight_ai_tests;
 #[cfg(test)]
 mod lost_sight_tests;
 pub mod mine_flight;
+#[cfg(test)]
+mod miner_hit_target_tests;
+#[cfg(test)]
+mod mode_wait_sub_1_tests;
+#[cfg(test)]
+mod nav_def_zero_tests;
 pub mod npc;
 #[cfg(test)]
 mod npc_landing_tests;
@@ -351,6 +372,7 @@ pub mod slot_word;
 mod slot_word_tests;
 pub mod snipe;
 pub mod spawn;
+pub mod spawn_ai;
 pub mod stellar_attack;
 pub mod stellar_defence;
 #[cfg(test)]
@@ -359,6 +381,8 @@ pub mod strength;
 pub mod succession;
 #[cfg(test)]
 mod successor_inspect_tests;
+#[cfg(test)]
+mod successor_jump_tests;
 #[cfg(test)]
 mod successor_plunder_tests;
 mod swarm_low_level;
@@ -375,6 +399,8 @@ mod trader_hit_target_tests;
 pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;
+#[cfg(test)]
+mod wait_kept_sub_tests;
 #[cfg(test)]
 mod wait_sub_1_tests;
 pub mod waiting_think;
@@ -417,7 +443,9 @@ use crate::speed_mult::SpeedMult;
 use autopilot::{Outcome, TopSpeeds};
 use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
+use berth_marks::BerthMarks;
 use berth_picks::BerthPicks;
+use berth_scoops::BerthScoops;
 use berth_search::BerthSearch;
 use berth_voices::BerthVoices;
 pub use dispatch_leave::NoBay;
@@ -678,6 +706,11 @@ pub struct World<'a> {
     /// arrival may come out of ([`World::stellars`]). [`World::new`] gives
     /// `sites`.
     pub listed: &'a [LandingSite],
+    /// The stellar in slot 0 of the system's `NavDefs`, none when the slot
+    /// is empty or names a `spöb` that didn't load (`_RandomShipSpawn`
+    /// @0x3c262-0x3c27d): where a stationary warship is placed, looked up
+    /// in [`World::listed`]. [`World::new`] gives the first of `sites`.
+    pub nav_def_0: Option<StellarId>,
     /// The player's ship, while it flies in the system.
     pub player: Option<PlayerSide>,
     /// Every government and their relations.
@@ -917,6 +950,7 @@ impl<'a> World<'a> {
         Self {
             sites,
             listed: sites,
+            nav_def_0: sites.first().map(|site| site.id),
             player: None,
             govts: bare.govts,
             system_govt: None,
@@ -1074,7 +1108,7 @@ pub struct Traffic {
     /// or left. Never saved.
     words: BTreeMap<NpcId, slot_word::SlotWord>,
     /// How each ship's flight ended at its slot of this tick's AI loop
-    /// ([`dispatch_autopilot`]: a landing, a jump begun), which its step
+    /// ([`dispatch_autopilot`]: a landing, a gate's box reached), which its step
     /// on the advance pass reports, flying nothing: cleared as the loop
     /// opens.
     slot_outcomes: BTreeMap<NpcId, Outcome>,
@@ -1169,6 +1203,16 @@ pub struct Traffic {
     /// ([`berth_voices`]): kept as it dies or leaves, across systems, and
     /// handed on to the next traffic ([`kept_berths`]).
     berth_voices: BerthVoices,
+    /// The can-scoop flag (+0xc3) the last writer at each berth left,
+    /// which a new ship there holds unless its spawn asks its own
+    /// ([`berth_scoops`]): kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
+    berth_scoops: BerthScoops,
+    /// The escort-command mark (+0xc4) the last ship at each berth left,
+    /// which a new ship there holds unless its placement clears it
+    /// ([`berth_marks`]): kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
+    berth_marks: BerthMarks,
     /// The word (+0x28/+0x2c) each berth holds, as the frame's dispatches
     /// have left it ([`formation_places`]): it outlives its ship, across
     /// systems, and is handed on to the next traffic ([`kept_berths`]).
@@ -1277,6 +1321,8 @@ impl Traffic {
             first_class: ship_display::FirstClass::default(),
             berth_search: BerthSearch::default(),
             berth_voices: BerthVoices::default(),
+            berth_scoops: BerthScoops::default(),
+            berth_marks: BerthMarks::default(),
             berth_places: BerthPlaces::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
@@ -1313,7 +1359,8 @@ impl Traffic {
     /// Enters a system whose traffic is drawn from `table` in `world`: its
     /// NPCs are replaced with its initial population, rolled on `chance`,
     /// its persons as the world's persons say, and its stationary
-    /// warships placed by the world's first stellar.
+    /// warships placed by the stellar in slot 0 of its `NavDefs`, shown or
+    /// not ([`World::nav_def_0`]), or in the box when that slot is empty.
     pub fn enter_in(
         &mut self,
         table: SpawnTable,
@@ -1366,7 +1413,10 @@ impl Traffic {
             &mut *chance,
         );
         let mut draw = PersonDraw::new(world.persons);
-        let first_stellar = world.sites.first().map(|site| site.position);
+        let first_stellar = world
+            .nav_def_0
+            .and_then(|id| world.listed.iter().find(|site| site.id == id))
+            .map(|site| site.position);
         let ships = spawn::initial(
             &self.table,
             &mut draw,
@@ -1646,7 +1696,7 @@ impl Traffic {
                 .filter_map(|(npc, decision)| Some((npc.id, (*decision)?.voice?))),
         );
         board_wait::resolve(&self.npcs, &mut decisions);
-        let last_words: Vec<Option<Option<ShipRef>>> = decisions
+        let mut last_words: Vec<Option<Option<ShipRef>>> = decisions
             .iter()
             .map(|decision| decision.and_then(|decision| decision.last_target()))
             .collect();
@@ -1670,7 +1720,10 @@ impl Traffic {
         let entering = jump_with_leader::entering(&decisions);
         self.take_goals(decisions, &world);
         jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
-        board_wait::lapse(&mut self.npcs, &due);
+        let ended = board_wait::lapse(&mut self.npcs, &due);
+        for (word, ended) in last_words.iter_mut().zip(ended) {
+            *word = ended.or(*word);
+        }
         self.plunder(plunders, &world, chance);
         self.swarm_checks(&picks, &jump_path);
         let high_levels: Vec<bool> = self
@@ -2543,8 +2596,26 @@ impl Traffic {
     }
 
     /// Adds `npc` to the system at berth `berth`, numbered as the next NPC,
-    /// and gives its number.
+    /// and gives its number. Its spawn asks `_ShipCanScoop`, as every
+    /// caller's does (`_SpawnEscort` @0x3ff6b, `_LaunchFighter` @0x3d74e,
+    /// `_DoShipCapture` @0x41255): its `can_scoop` is written to the berth.
+    /// It clears the escort-command mark, as `_RespawnEscort` (@0x3d546)
+    /// and `_LaunchFighter` (@0x3d9c2) do; a placement that keeps it takes
+    /// [`Traffic::add_npc_keeping_mark`] ([`berth_marks`]).
     pub fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
+        self.add_npc_scooped(npc, berth, true, true)
+    }
+
+    /// [`Traffic::add_npc_at`], for a spawn that asks `_ShipCanScoop` or
+    /// not ([`berth_scoops`]), and that clears the escort-command mark or
+    /// keeps its berth's ([`berth_marks`]).
+    fn add_npc_scooped(
+        &mut self,
+        npc: Npc,
+        berth: u32,
+        asks_scoop: bool,
+        clears_mark: bool,
+    ) -> NpcId {
         self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
@@ -2573,6 +2644,14 @@ impl Traffic {
         // A voice set up is written to the berth (+0xc922); with none, the
         // ship holds the berth's word.
         npc.voice = self.berth_voices.bring_in(berth, npc.voice);
+        // A spawn that asks `_ShipCanScoop` writes +0xc3 to the berth; with
+        // none, the ship holds the berth's by the rule ([`berth_scoops`]).
+        npc.can_scoop =
+            self.berth_scoops
+                .bring_in(berth, asks_scoop.then_some(npc.can_scoop), npc.can_scoop);
+        // A clearing placement writes +0xc4 = 0; with none, the ship holds
+        // the berth's by the rule ([`berth_marks`]).
+        npc.berth_mark = self.berth_marks.bring_in(berth, clears_mark);
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -2750,7 +2829,10 @@ impl Traffic {
     /// writes an order word ([`Decision::order_word`]) sets
     /// [`Npc::order_word`]. Each decision writes whether its flight is the
     /// attack block's or the plunder's hopeless chase
-    /// ([`Npc::fled_hopeless`]). Each
+    /// ([`Npc::fled_hopeless`]). One whose think wrote the leave
+    /// ([`Decision::leaves`]) takes its +0x50 floor and +0xa4 stamp
+    /// ([`Npc::takes_leave_write`]) with the goal, after the clock moved on
+    /// for the tick, so a stage under way runs from t = 0. Each
     /// decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, world: &World) {
@@ -2849,6 +2931,9 @@ impl Traffic {
                 npc.leave_fleet();
             }
             npc.fled_hopeless = decision.hopeless_flee;
+            if decision.leaves {
+                npc.takes_leave_write(world.held_burst);
+            }
             npc.goal = goal;
         }
     }
@@ -2895,8 +2980,8 @@ impl Traffic {
     /// ([`Traffic::turn_with_quote`]), since they were last taken, in
     /// order, an NPC once for each time; taking them empties the list.
     /// A think's isn't among them: it goes on the line
-    /// ([`OnLine::AttackQuote`]), and the session says these either side of
-    /// the line's work (see `nova_sim`'s `comm_calls` module).
+    /// ([`OnLine::AttackQuote`]), and the session says these where the
+    /// frame reaches them (see `nova_sim`'s `comm_calls` module).
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
@@ -3064,6 +3149,16 @@ impl Traffic {
                 .rolls_voice
                 .then(|| crate::voice::roll_variant(None, &mut *chance));
             let voice = self.berth_voices.bring_in(berth, drawn);
+            // Only a spawn that asks `_ShipCanScoop` writes +0xc3 (@0x3c603);
+            // `_GenericRandomShipSpawn` leaves the slot's (@0x3cb83-0x3cbc9).
+            let can_scoop = self.berth_scoops.bring_in(
+                berth,
+                ship.asks_scoop.then_some(kind.can_scoop),
+                kind.can_scoop,
+            );
+            // Only `_RandomShipSpawn` clears +0xc4 (@0x3c6ff);
+            // `_GenericRandomShipSpawn` leaves the slot's ([`berth_marks`]).
+            let berth_mark = self.berth_marks.bring_in(berth, ship.clears_mark);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             if let Some(lead) = leader.filter(|lead| !leads.contains(lead)) {
@@ -3081,7 +3176,7 @@ impl Traffic {
                 ship: ship.ship,
                 // Independent until it joins its government below.
                 govt: None,
-                ai_type: ship.ai_type,
+                ai_type: ship.ai_type.ai_type(kind.hull.inherent_ai),
                 leader,
                 class: kind.escort_class,
                 escort: None,
@@ -3135,7 +3230,7 @@ impl Traffic {
                 skill_mult: 1.0,
                 still: kind.still,
                 miner: kind.miner,
-                can_scoop: kind.can_scoop,
+                can_scoop,
                 holds: kind.holds,
                 class_fuel: kind.class_fuel,
                 former: None,
@@ -3163,13 +3258,14 @@ impl Traffic {
                 slot_place: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 ordered_by_lead: false,
+                berth_mark,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,
                 warp: warp_out::Warp::default(),
                 display,
                 odds: odds_cache::STALE,
-                no_ai: false,
-                kept_escort_ai: false,
+                no_ai: ship.ai_type.no_ai(),
+                kept_escort_ai: ship.ai_type.escort_ai(),
                 mission_let_go: false,
                 mission_dropped: false,
                 defends: None,
@@ -4018,13 +4114,10 @@ mod tests {
         traffic.npcs[0].goal = Goal::Land(StellarId(140));
         traffic.npcs[1].goal = Goal::JumpOut;
         let sites = [planet(140, 0.0, 0.0)];
+        // Its warp out begins at its slot, and with warp sounds of no
+        // length the sub 4 it runs there ends it (see `warp_out`).
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
-        assert_eq!(traffic.departed(), [], "the lander stays");
         assert_eq!(traffic.npcs()[0].visited, Some(StellarId(140)));
-        assert!(traffic.npcs()[1].jumping(), "its warp out begins");
-        // With warp sounds of no length, its warp is over on its first
-        // advance pass (see `warp_out`).
-        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         let ids: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
         assert_eq!(ids, [NpcId(0)], "waiting at 140");
         assert_eq!(traffic.departed(), [(NpcId(1), Outcome::JumpedOut)]);
@@ -4107,11 +4200,11 @@ mod tests {
             assert!(ticks < 400, "never gone");
         }
         assert_eq!(traffic.departed(), [(NpcId(0), Outcome::JumpedOut)]);
-        // A tick to begin it, then its clock from the next: 364 / 1.3 =
-        // 280 Mac ticks, 140 ticks, on the 141st after the begin.
-        assert_eq!(ticks, 142);
+        // Its clock from the tick it begins, as sub 4 runs at that slot:
+        // 364 / 1.3 = 280 Mac ticks, 140 ticks, gone on the 141st.
+        assert_eq!(ticks, 141);
         // 0.35 × 364 / 1.69 = 75.4 Mac ticks: it moves off on its 38th.
-        assert_eq!(moved_off, Some(40));
+        assert_eq!(moved_off, Some(39));
     }
 
     #[test]
@@ -5608,6 +5701,7 @@ mod tests {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: false,
+            leaves: false,
             holds_target: None,
             writes_sub: false,
             plunders: None,
@@ -6952,7 +7046,7 @@ mod tests {
         NewShip {
             ship: ShipId(200),
             govt: Some(GovtId(131)),
-            ai_type: AiType::Interceptor,
+            ai_type: AiType::Interceptor.into(),
             lead: None,
             state: ShipState {
                 position: Vec2::new(x, 0.0),
@@ -6977,6 +7071,8 @@ mod tests {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
+            clears_mark: false,
         }
     }
 

@@ -8,7 +8,8 @@
 //! 1. **Guards** (@0x8c12e-0x8c159): a ship disabled or dying, or in a
 //!    count wait (goal 0x16), keeps everything, and no warship think runs.
 //! 2. **The stellar** ([`enemy_stellar`], @0x8c15f-0x8c1de): the first of
-//!    the system's stellars, in its `sÿst` order, still whole, of
+//!    the stellars the system's `NavDefs` list, in their order, shown or
+//!    not ([`Surroundings::listed`]), still whole, of
 //!    `Strength` above 0 ([`Surroundings::destroyable`]), whose government
 //!    `_GovtEnemies` finds its enemy. Its travel stellar (+0x6c) is set to
 //!    it at once (@0x8c286).
@@ -144,12 +145,14 @@ impl Behaviour for DeathStar {
 }
 
 /// The stellar `npc` attacks among `around` (@0x8c15f-0x8c1de): the first
-/// of the system's stellars, in its `sÿst` order, not destroyed, that shots
-/// can shoot down ([`Surroundings::destroyable`]) and whose government is
-/// an enemy of `npc`'s (`_GovtEnemies(ship +0x98, stellar +0x0a)`).
+/// of the stellars the system's `NavDefs` list, in their order, shown or not
+/// ([`Surroundings::listed`]; the walk reads neither the shown flag +0x44
+/// nor the owner +0x14), not destroyed, that shots can shoot down
+/// ([`Surroundings::destroyable`]) and whose government is an enemy of
+/// `npc`'s (`_GovtEnemies(ship +0x98, stellar +0x0a)`).
 #[must_use]
 pub fn enemy_stellar<'a>(npc: &Npc, around: &Surroundings<'a>) -> Option<&'a LandingSite> {
-    around.sites.iter().find(|site| {
+    around.listed.iter().find(|site| {
         !site.destroyed
             && around.destroyable.contains(&site.id)
             && around.govts.enemies(npc.govt, site.govt)
@@ -295,9 +298,14 @@ pub fn planet_gun_pick(npc: &Npc) -> Option<WeaponId> {
 /// the pick it had, as the low level's preamble clears only the flag
 /// (@0x851e6-0x851f6). It never asks for its point defence or its bays.
 /// While its AI wait runs the fight holds it ([`fire::gated`]).
+///
+/// The aim reads the quarry's `spöb` record (@0x88653-0x88690), not its
+/// sprite or shown flag, so it fires at a stellar the system lists but
+/// does not show ([`Surroundings::listed`]); the combat offers its shots
+/// only the stellars shown, so they pass through such a quarry.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
-    let Some((Band::Aim, site)) = attack_band(npc, around.sites, around.weapons) else {
+    let Some((Band::Aim, site)) = attack_band(npc, around.listed, around.weapons) else {
         return Trigger::default();
     };
     let bearing = trig::intercept_angle(npc.state.position, site.position);
@@ -558,6 +566,52 @@ mod tests {
             Goal::AttackStellar(StellarId(131)),
             "its decision's goal"
         );
+    }
+
+    /// What `npc` decides by [`DeathStar`] with `sites` shown and `listed`
+    /// listed, armed with a planet gun.
+    fn decided_listing(sites: &[LandingSite], listed: &[LandingSite]) -> Decision {
+        let gun = planet_gun(130, -1);
+        let armed = arsenal(&[gun], &[(130, 1)]);
+        let govts: Governments = govts(0, 0);
+        let destroyable = destroyable();
+        let npcs = [attacker(&[gun])];
+        let around = Surroundings {
+            govts: &govts,
+            weapons: &armed,
+            destroyable: &destroyable,
+            listed,
+            ..Surroundings::new(sites, &npcs)
+        };
+        DeathStar {
+            warship: Recording::answering(Goal::JumpOut),
+        }
+        .decision(&npcs[0], &around, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn a_death_star_takes_an_enemy_stellar_the_system_lists_but_does_not_show_as_its_quarry() {
+        // The walk reads `NavDefs` (@0x8c15f-0x8c1de), never the shown
+        // flag (+0x44) or the owner (+0x14).
+        let all = sites();
+        let shown = [all[0]];
+        let decision = decided_listing(&shown, &all);
+        assert_eq!(decision.goal, Goal::AttackStellar(StellarId(131)));
+        assert_eq!(decision.travel, TravelWrite::Set(StellarId(131)));
+    }
+
+    #[test]
+    fn a_listed_enemy_destroyed_or_not_destroyable_is_skipped_for_the_next_listed() {
+        let all = sites();
+        let shown = [all[0]];
+        let only_unfit = [all[0], all[1], all[2]];
+        assert_eq!(
+            decided_listing(&shown, &only_unfit).goal,
+            Goal::JumpOut,
+            "129 destroyed, 130 of Strength 0"
+        );
+        let decision = decided_listing(&shown, &[all[1], all[2], all[4]]);
+        assert_eq!(decision.goal, Goal::AttackStellar(StellarId(132)));
     }
 
     #[test]
@@ -973,6 +1027,11 @@ mod tests {
     /// bearing to 131, at (60, 0), moving `velocity`, attacking it with a
     /// planet gun of range 100.
     fn aimed(off: i16, velocity: (f32, f32), goal: Goal) -> Trigger {
+        aimed_at(off, velocity, goal, true)
+    }
+
+    /// As [`aimed`], with 131 listed and, by `shown`, shown or not.
+    fn aimed_at(off: i16, velocity: (f32, f32), goal: Goal, shown: bool) -> Trigger {
         let planet_gun = WeaponRecord {
             count: 25,
             speed: 400,
@@ -988,11 +1047,13 @@ mod tests {
         let bearing = crate::trig::intercept_angle(npc.state.position, site.position);
         npc.state.heading = f32::from(bearing + off);
         npc.state.velocity = Vec2::new(velocity.0, velocity.1);
-        let sites = [site];
+        let listed = [site];
+        let sites = if shown { &listed[..] } else { &[] };
         let npcs = [npc.clone()];
         let around = Surroundings {
             weapons: &armed,
-            ..Surroundings::new(&sites, &npcs)
+            listed: &listed,
+            ..Surroundings::new(sites, &npcs)
         };
         let range = armed.weapon(WeaponId(130)).map_or(0.0, WeaponSpec::range);
         assert!(
@@ -1023,5 +1084,19 @@ mod tests {
         );
         assert_eq!(aimed(0, (1.0, 0.0), attack), Trigger::default(), "braking");
         assert_eq!(aimed(0, (0.0, 0.0), Goal::Idle), Trigger::default());
+    }
+
+    #[test]
+    fn a_death_star_in_aim_fires_at_an_unshown_quarry() {
+        // The aim reads the quarry's `spöb` record (@0x88653-0x88690),
+        // never its shown flag or sprite, and `_AIFirePlanetGun` fires
+        // (@0x80536-0x805c9).
+        let fired = Trigger {
+            only: Some(WeaponId(130)),
+            keep: Some(WeaponId(130)),
+            ..Trigger::default()
+        };
+        let attack = Goal::AttackStellar(StellarId(131));
+        assert_eq!(aimed_at(0, (0.0, 0.0), attack, false), fired);
     }
 }

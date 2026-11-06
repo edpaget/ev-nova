@@ -23,10 +23,13 @@
 //!   @0x8d756-0x8d7c9), and otherwise stops and waits (state 6,
 //!   @0x8d803-0x8d80f), keeping its target
 //!   ([`trader_target`](crate::ai::trader_target::trader_target)), which the
-//!   threat tests then read ([`Npc::fought`]). The timer is not touched. The leave's +0x50 clamp
-//!   and +0xa4 stamp are the warp stage's
-//!   (rdm:phase/ship-handling-fidelity/phase-8-warp-out), as the mission
-//!   hunt's give-up's are.
+//!   threat tests then read ([`Npc::fought`]). The timer is not touched.
+//!   The leave is an inlined `_AIMakeShipLeave`, its +0x50 floor and
+//!   +0xa4 stamp built ([`Decision::leaves`]; see
+//!   [`leave_write`](crate::traffic::leave_write)). The floor can't act
+//!   here, as the high level's hold has zeroed +0x50 before the block
+//!   (@0x8d513-0x8d52e) on any goal but 2, 3 and 0xb; the stamp shows only
+//!   on a stage still under way.
 //! - Unseen by any other ship (@0x8d814), it stops (sub 1, +0x50 0) and
 //!   searches, its travel stellar cleared on each frame (+0x6c -1,
 //!   @0x8d833, [`TravelWrite::Clear`]; see [`travel`](crate::ai::travel)):
@@ -68,8 +71,6 @@
 //!   inspects and re-picks over its attacker (`_InterceptorAI` spares
 //!   state 7 its provocation, @0x8cc0d), where the engine's turns on it:
 //!   rdm:phase/combat-ai-fidelity/phase-27-left-out-of-phase-21.
-//! - The warp-stage writes of the trader's leave (+0x50, +0xa4), the
-//!   warp stage's (rdm:phase/ship-handling-fidelity/phase-8-warp-out).
 //! - The NPC target picks' own sight of a cloaked ship
 //!   (rdm:phase/cloaking-fidelity/phase-4-npc-cloak-visibility): until
 //!   then a warship that gives up its search re-picks the cloaked ship on
@@ -159,6 +160,7 @@ pub fn after_think(
             Decision {
                 goal: Goal::JumpOut,
                 clears_target: true,
+                leaves: true,
                 ..decision
             }
         } else {
@@ -499,6 +501,7 @@ mod tests {
             let decision = lost(&trader, of(Goal::Attack(n(2))), &mut chance);
             assert_eq!(decision.goal, Goal::JumpOut, "{ai_type:?}");
             assert!(decision.clears_target);
+            assert!(decision.leaves, "its +0x50 floor and +0xa4 stamp");
             assert_eq!(decision.lost_sight, None, "the timer is untouched");
             assert_eq!(decision.travel, TravelWrite::Keep, "no +0x6c write");
             assert!(chance.asked.is_empty());
@@ -506,6 +509,7 @@ mod tests {
             let decision = lost(&trader, of(Goal::Attack(n(2))), &mut chance);
             assert_eq!(decision.goal, Goal::Wait, "{ai_type:?} at the floor");
             assert!(!decision.clears_target, "state 6 keeps its target");
+            assert!(!decision.leaves, "the stop");
             assert_eq!(decision.lost_sight, None);
             assert_eq!(decision.travel, TravelWrite::Keep);
             trader.class_fuel = 100;

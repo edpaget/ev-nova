@@ -329,7 +329,7 @@
 //! kept on the pilot with no save due. A person hailed says its comm
 //! quote as the rule set reads [`RuleKey::CommQuote`], and in flight its
 //! hail
-//! quote on its trigger ([`Session::tick_quotes`],
+//! quote on its trigger ([`Session::roll_quote_at_turn`],
 //! [`Session::take_quotes`]). A person's `LinkMission` is resolved as it
 //! spawns, and offered in place of the comm dialog when it is hailed
 //! ([`Session::open_hail`]), or, with `Flags` 0x0200, in place of the
@@ -447,6 +447,8 @@ mod asteroid_seekers;
 mod asteroids;
 mod auto_refuel;
 mod aux_ships;
+#[cfg(test)]
+mod berth_marks;
 mod board_attempt;
 mod board_repair;
 mod brackets;
@@ -501,6 +503,7 @@ mod escort_hits;
 mod escort_land;
 #[cfg(test)]
 mod escort_loss;
+mod escort_person_reset;
 #[cfg(test)]
 mod escort_rounds;
 mod escorts;
@@ -629,6 +632,8 @@ mod plunder_loop;
 mod port;
 mod port_desc;
 mod precalced;
+#[cfg(test)]
+mod quote_roll_order;
 mod radar;
 mod ranks;
 #[cfg(test)]
@@ -659,6 +664,8 @@ mod shipyard_listing;
 mod shot_gain;
 mod shot_slots;
 #[cfg(test)]
+mod slot_scoop;
+#[cfg(test)]
 mod slot_search;
 mod slot_visibility;
 #[cfg(test)]
@@ -670,6 +677,8 @@ mod sprite_load;
 mod sprite_sheets;
 mod stale_sprites;
 mod statics;
+#[cfg(test)]
+mod stationary_slot_zero;
 mod status_cargo;
 mod steering;
 #[cfg(test)]
@@ -1431,6 +1440,9 @@ impl Session {
         // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
         // see the `class_table` module).
         session.space.seed_class_orders(&session.pilot);
+        // `_LoadPilotData` spawns the escorts and fighters into their
+        // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
+        session.space.hold_loaded_berths(&mut session.pilot);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
@@ -2029,13 +2041,17 @@ impl Session {
     /// its colour (`_PrepareAllSprites` @0x3a783, @0x2bf8a). It keeps its
     /// cloak, fade and direction (`_RespawnEscort` writes neither +0x64
     /// nor +0xc8d8) and its afterburner (+0xbd); a loaded pilot's escorts
-    /// roll theirs on `chance`.
+    /// roll theirs on `chance`. By the engine reading of
+    /// [`RuleKey::PersonEscortRespawn`], `_RespawnEscort` (@0x3d531) first
+    /// forgets each escort's person, before the system's people are drawn
+    /// (see the `escort_person_reset` module).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entry: Option<Entry>,
     ) {
+        escort_person_reset::forget_escort_persons(&mut self.pilot, &self.statics, &self.setup);
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
         let left = std::mem::take(&mut self.space.strikes);
@@ -2069,6 +2085,9 @@ impl Session {
             // Every stellar the system lists, shown or not, which a fleet
             // may come out of (see the `npc_destinations` module).
             listed: &self.chart.listed,
+            // Where a stationary warship is placed, shown or not (see the
+            // `stationary_slot_zero` module).
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             // The entry flies no ship (`Traffic::enter_with`), so its
             // gain moves nothing; it reads the frame's all the same.
             speed_mult: self.speed_mult(),
@@ -2078,6 +2097,7 @@ impl Session {
         };
         let last = self.space.last_npc();
         let berths = self.space.fleet_berths(&self.pilot);
+        self.space.release_loaded_berths();
         self.space.traffic.reserve(berths.iter().copied().collect());
         self.space
             .traffic
@@ -2201,6 +2221,7 @@ impl Session {
         let world = World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2308,6 +2329,7 @@ impl Session {
         World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -16899,7 +16921,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_tick_that_populates_the_system_moves_no_one() {
+    fn the_tick_that_populates_the_system_dispatches_and_flies_every_ship_it_sets_up() {
+        // `_DoPlayGameWork`'s AI loop (@0x44270-0x442ae) dispatches every
+        // ship `_SetupShipsInSystem` set up, and its ship loop (@0x44483)
+        // flies each, that frame: as a frame after a setup outside it.
         let catalog = trafficked(130, 2, 1);
         let mut ticked = Session::start(&catalog).expect("starts");
         work_with(
@@ -16912,13 +16937,25 @@ pub(super) mod tests {
         );
         let mut populated = Session::start(&catalog).expect("starts");
         populated.populate(&catalog, &mut NeverFires);
-        // The pass's ship loop displays them (@0x444ad), rolling their
-        // displays, but moves none.
         let states = |session: &Session| -> Vec<ShipState> {
             session.npcs().iter().map(|npc| npc.state).collect()
         };
-        assert_eq!(states(&ticked), states(&populated));
+        let set_up = states(&populated);
+        work_with(
+            &mut populated,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(npc_ids(&ticked), npc_ids(&populated));
+        for id in npc_ids(&ticked) {
+            let word = ticked.space.traffic.word_of(id);
+            assert!(word.is_some(), "{id:?} dispatched");
+        }
+        assert_ne!(states(&ticked), set_up, "flown");
+        assert_eq!(states(&ticked), states(&populated));
     }
 
     #[test]

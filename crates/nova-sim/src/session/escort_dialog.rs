@@ -58,6 +58,7 @@ use crate::SimSound;
 use crate::control::Gate;
 use crate::escort_dialog::{self, EscortButton, EscortDialogView};
 use crate::fleet::EscortMark;
+use crate::rulebook::RuleKey;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 
 /// The escort dialog open: the escort hailed, and whether it can be
@@ -191,11 +192,12 @@ impl Session {
             .statics
             .ship_record(ship)
             .map(|record| AiType::from_raw(record.inherent_ai));
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         if let Some(npc) = self.space.npc_mut(id) {
             if let Some(ai_type) = inherent {
                 npc.ai_type = ai_type;
             }
-            super::hail::make_leave(npc);
+            super::hail::make_leave(npc, burst);
         }
         self.space.traffic.dispatch_places(id);
     }
@@ -244,6 +246,7 @@ pub(super) mod tests {
     use crate::escort_dialog::{SaleLine, UpgradeLine};
     use crate::fleet::OrderWord;
     use crate::hail::{HailOptions, ShownWage};
+    use crate::rulebook::RuleSource;
     use crate::self_repair::FormerEscort;
     use crate::session::Hailed;
     use crate::session::hail::tests::{hailable, npc, targeting};
@@ -475,6 +478,21 @@ pub(super) mod tests {
         assert!(session.take_save_due());
         assert_eq!(session.take_sounds(), [SimSound::EscortDialogClosed]);
         assert_eq!(session.escort_dialog(), None);
+    }
+
+    #[test]
+    fn an_escort_released_while_following_the_players_jump_restarts_its_clock() {
+        // `_AIMakeShipLeave` (@0x95652 → @0x7e2b0-0x7e2e7) keeps a +0x50
+        // above 0 and stamps +0xa4, so its own jump takes a whole jump's
+        // time from the release, not the player's clock it copied.
+        let catalog = upgradable();
+        let mut session = escorting(&catalog);
+        npc(&mut session).follow_player_jump(3.0, 50, RuleSource::Engine);
+        opened(&mut session, &catalog);
+        assert_eq!(session.press_escort(EscortButton::Release), None);
+        let released = npc(&mut session);
+        assert_eq!(released.goal, Goal::JumpOut);
+        assert_eq!((released.warp.stage, released.warp.since), (3.0, 0));
     }
 
     #[test]

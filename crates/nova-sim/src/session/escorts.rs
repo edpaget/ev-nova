@@ -51,7 +51,12 @@
 //! [`market`](crate::market)).
 //!
 //! **Person escorts.** An escort that is a person
-//! ([`Escort::person`](crate::Escort)) flies as itself in every system:
+//! ([`Escort::person`](crate::Escort)) flies as itself in every system
+//! by the default reading of
+//! [`RuleKey::PersonEscortRespawn`](crate::RuleKey::PersonEscortRespawn)
+//! (by the original's, each respawn forgets its person, `_RespawnEscort`
+//! @0x3d531, and it flies on as its class: see the `escort_person_reset`
+//! module):
 //! its person's fitted ship (its weapon slots and `ShieldMod`, see
 //! [`person`](crate::person)), named by its record, with its grudge;
 //! taking off and flying a pilot restock it full to that fitted ship as
@@ -226,6 +231,22 @@ pub(super) struct KeptEscort {
     pub(super) arms: Option<(Armament, LauncherRounds)>,
 }
 
+/// How an escort's placement writes its ship slot's escort-command mark
+/// (+0xc4; see [`berth_marks`](crate::traffic::berth_marks)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Placement {
+    /// `_RespawnEscort` (@0x3d546) clears it: the fleet placed on entering
+    /// a system, each take-off and a load's first entry included.
+    Respawn,
+    /// `_SpawnEscort` (@0x3fe8f) and `_DoShipCapture`'s spawn of the old
+    /// ship (@0x4114d), through `_GenericRandomShipSpawn`, leave it, so
+    /// the escort holds its berth's by
+    /// [`RuleKey::ReusedSlotMark`]: a hire,
+    /// an escort's upgrade in the port and the old ship of "Use As My
+    /// Ship".
+    Spawn,
+}
+
 impl Session {
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, but on a `jump`'s arrival by
@@ -296,6 +317,7 @@ impl Session {
                     index,
                     berths.get(index).copied(),
                     kept.skill,
+                    Placement::Respawn,
                     &mut *chance,
                 )?;
                 let loaded = self
@@ -360,9 +382,10 @@ impl Session {
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
-    /// skill rolled on `chance` (see [`Session::place_escort_at`]).
+    /// skill rolled on `chance`, spawned as `_SpawnEscort` and a capture's
+    /// spawn do (see [`Session::place_escort_at`]).
     pub(super) fn place_escort(&mut self, index: usize, chance: &mut dyn Chance) -> Option<NpcId> {
-        self.place_escort_at(index, None, None, chance)
+        self.place_escort_at(index, None, None, Placement::Spawn, chance)
     }
 
     /// Escort `index` as an NPC in the system, at `berth` or else the
@@ -371,13 +394,14 @@ impl Session {
     /// `afterburner_roll` module); none when its ship type has no record.
     /// It flies at `skill`, or one rolled on `chance` as `_SpawnEscort`
     /// rolls it (through `_GenericRandomShipSpawn` @0x3cad1), of no
-    /// government.
+    /// government. Its escort-command mark is as `placement` writes it.
     #[allow(clippy::too_many_lines)] // one line for each of the NPC's fields
     pub(super) fn place_escort_at(
         &mut self,
         index: usize,
         berth: Option<u32>,
         skill: Option<f32>,
+        placement: Placement,
         chance: &mut dyn Chance,
     ) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
@@ -477,6 +501,7 @@ impl Session {
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
             ordered_by_lead: false,
+            berth_mark: false,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as
@@ -515,9 +540,11 @@ impl Session {
                 self.setup.rules.source_for(RuleKey::FighterCapacity),
             );
         }
-        Some(match berth {
-            Some(berth) => self.space.traffic.add_npc_at(npc, berth),
-            None => self.space.traffic.add_npc(npc),
+        let traffic = &mut self.space.traffic;
+        Some(match (placement, berth) {
+            (Placement::Respawn, Some(berth)) => traffic.add_npc_at(npc, berth),
+            (Placement::Respawn, None) => traffic.add_npc(npc),
+            (Placement::Spawn, berth) => traffic.add_npc_keeping_mark(npc, berth),
         })
     }
 
@@ -842,8 +869,9 @@ impl Session {
             self.destroy_cargo_share(holds, false, Some(id));
         }
         self.dismiss(id);
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         if let Some(npc) = self.space.npc_mut(id) {
-            reset_released(npc);
+            reset_released(npc, burst);
         }
         self.reform();
     }
@@ -1031,9 +1059,14 @@ impl Space {
     /// berth not already chosen, in the order of the berths they were
     /// saved at ([`loaded_berths::packing_order`]), before anything else
     /// is set up, as `_LoadPilotData` spawns a loaded pilot's escorts
-    /// first, walking their old slots up (@0x759a4-0x75b91). The old ship
-    /// kept after a capture and a ship hired are placed at once, so they
-    /// keep theirs.
+    /// first, walking their old slots up (@0x759a4-0x75b91). Until the
+    /// fleet is first placed, a loaded pilot's records keep the berths the
+    /// load packed them into ([`Space::hold_loaded_berths`]), as
+    /// `_LoadPilotData` spawns each into its slot at once
+    /// (@0x759af-0x75b91) and a ship leaving frees only its own; a record
+    /// holding none (a hire not placed) packs into the lowest free. The
+    /// old ship kept after a capture and a ship hired are placed at once,
+    /// so they keep theirs.
     pub(super) fn fleet_berths(&self, pilot: &Pilot) -> Vec<u32> {
         let mut berths: Vec<Option<u32>> = (0..pilot.escorts.len())
             .map(|index| {
@@ -1042,6 +1075,9 @@ impl Space {
             })
             .collect();
         let mut taken: BTreeSet<u32> = berths.iter().flatten().copied().collect();
+        if self.escorts.loaded_berths_held {
+            loaded_berths::keep_held(&pilot.escorts, &mut taken, &mut berths);
+        }
         let unplaced = (0..berths.len()).filter(|&index| berths[index].is_none());
         for index in loaded_berths::packing_order(&pilot.escorts, unplaced.collect()) {
             let free = (1..=u32::MAX)
@@ -1243,13 +1279,14 @@ impl Space {
 /// boarded (+0xb9 1), it is no former escort (+0xc8de -1), `_AISetup`
 /// clears its order word (+0xc90a), its swarm leader and its formation
 /// parent (@0x7f40c-0x7f41e), and it leaves the system
-/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]).
-pub(super) fn reset_released(npc: &mut Npc) {
+/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]), owing any burst by
+/// `burst`'s reading of [`RuleKey::HeldGateBurst`].
+pub(super) fn reset_released(npc: &mut Npc, burst: RuleSource) {
     npc.boarded = true;
     npc.former = None;
     npc.order_word = crate::fleet::OrderWord::NONE;
     npc.clear_swarm_words();
-    super::hail::make_leave(npc);
+    super::hail::make_leave(npc, burst);
 }
 
 /// `npc` falls in with the player, as a hired escort joining
@@ -1414,7 +1451,7 @@ pub(super) mod tests {
         assert_eq!(orders(session), [Some(EscortOrder::Defend); 2]);
     }
 
-    fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
         work_with(
             session,
             catalog,
@@ -1508,12 +1545,12 @@ pub(super) mod tests {
     // The fleet in flight.
 
     /// The warship escort's ship type: `EscortType` 2, `InherentAI` 3.
-    const WARSHIP: ShipId = ShipId(150);
+    pub(in crate::session) const WARSHIP: ShipId = ShipId(150);
     /// The freighter escort's ship type: `EscortType` 3, `InherentAI` 1.
     const FREIGHTER: ShipId = ShipId(151);
     /// The turret the warship carries: 10 pixels a tick for 30 ticks,
     /// every 5, 5 energy damage.
-    const TURRET: WeaponId = WeaponId(140);
+    pub(in crate::session) const TURRET: WeaponId = WeaponId(140);
 
     /// [`catalog`] (systems 130 and 131 linked, planet 128 under the
     /// ship) with the escort ship types, in neither system's traffic: the
@@ -1582,7 +1619,7 @@ pub(super) mod tests {
     }
 
     /// Worn reserves: 10 of 30 shield, 20 of 45 armour, 120 of 300 fuel.
-    fn worn() -> Reserves {
+    pub(in crate::session) fn worn() -> Reserves {
         Reserves {
             shield: Gauge {
                 now: 10.0,
@@ -1620,7 +1657,7 @@ pub(super) mod tests {
     }
 
     /// The escorts' NPCs, in fleet order.
-    fn escort_npcs(session: &Session) -> Vec<&Npc> {
+    pub(in crate::session) fn escort_npcs(session: &Session) -> Vec<&Npc> {
         session
             .space
             .escorts
@@ -1648,9 +1685,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_first_traffic_tick_places_each_escort_on_its_slot_beside_the_player() {
+    fn populating_places_each_escort_on_its_slot_beside_the_player() {
+        // As the setup leaves them, before the frame's AI loop dispatches
+        // and flies them.
         let catalog = fleeted();
-        let session = flying(&catalog, RuleSource::Bible);
+        let mut session = Session::fly(&catalog, escorted(&catalog))
+            .expect("flies")
+            .with_rules(
+                Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible),
+            );
+        session.populate(&catalog, &mut NeverFires);
         let escorts = escort_npcs(&session);
         assert_eq!(escorts.len(), 2);
         assert_eq!(session.npcs().len(), 2, "no traffic but them");
@@ -3598,7 +3642,7 @@ pub(super) mod tests {
     /// [`fleeted`] with "Ace" (`përs` 700), who appears nowhere, flying the
     /// warship with two more turrets, its `ShieldMod` 200, its `HailPict`
     /// 7800 and its hail quote 1 (`STR#` 7101 "Hi!").
-    fn with_ace() -> FakePilotCatalog {
+    pub(in crate::session) fn with_ace() -> FakePilotCatalog {
         let mut catalog = fleeted();
         catalog.persons = vec![crate::catalog::PersonRecord {
             name: "Ace".to_owned(),
@@ -3618,7 +3662,7 @@ pub(super) mod tests {
     }
 
     /// A pilot whose fleet is Ace, worn.
-    fn with_ace_escort(catalog: &FakePilotCatalog) -> Pilot {
+    pub(in crate::session) fn with_ace_escort(catalog: &FakePilotCatalog) -> Pilot {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.escorts = vec![Escort {
             person: Some(PersonId(700)),
@@ -3628,7 +3672,7 @@ pub(super) mod tests {
     }
 
     /// [`with_ace_escort`]'s session, its first traffic tick done.
-    fn flying_ace(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn flying_ace(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::fly(catalog, with_ace_escort(catalog)).expect("flies");
         tick(&mut session, catalog);
         session

@@ -34,6 +34,13 @@
 //!   [`Npc::leave_fleet`] keeps a bribed ship's word.
 //! - -1, no AI ([`NO_AI`]): the player's eject hulk (`_HandlePlayer`
 //!   @0x6f31f).
+//! - Any word, raw, from data: a spawn's `düde` `AIType` above 0, else its
+//!   `shïp`'s `InherentAI` (`_RandomShipSpawn` @0x3c212-0x3c245, and
+//!   `_MissionDudeSpawn` and `_SpecificDudeSpawn` alike), a fleet lead's
+//!   `InherentAI` (`_HyperSpawnFleet` @0x41d5d-0x41d69), a person's
+//!   `AIType` (`_SpawnPerson`). See [`SpawnAi`]: 0 or below is
+//!   [`Npc::no_ai`], above 4 [`Npc::kept_escort_ai`], as `_AIDispatch`'s
+//!   type chain sends it to `_EscortAI` (@0x8ff9b-0x90016) with no parent.
 //! - Its class's `InherentAI`: `_DamageShip` @0x3b0d7, on a hit that
 //!   leaves `_IsDisabled` a ship the player leads with no mission (+0x9a
 //!   0, +0xc8d2 -1, @0x3ae58-0x3ae62, @0x3af8f-0x3afa5), AI 5 and 6 alike
@@ -52,8 +59,9 @@
 //! takes it out of its fleet at once ([`Npc::leave_fleet`]) and marks it
 //! ([`Npc::kept_escort_ai`], see
 //! [`disabled_reset`](super::disabled_reset)), and
-//! [`Npc::settle_original_ai_type`] clears the mark at that first think.
-//! A `ShipBehav` 2 mission ship keeps it for its stay too, as
+//! [`Npc::settle_original_ai_type`] clears the mark at that first think,
+//! inside the ship's own run, so a higher slot reads the class's word in
+//! that tick, as the original's (see its **Ordering**). A `ShipBehav` 2 mission ship keeps it for its stay too, as
 //! `_DeathStarAI` thinks in the type think's place and writes no +0x88
 //! (@0x8ff3a).
 //!
@@ -86,6 +94,7 @@
 //! Nothing here plays a sound or draws a random number.
 
 use super::npc::{AiType, Npc};
+use super::spawn_ai::SpawnAi;
 use crate::ai::miner;
 use crate::rulebook::RuleSource;
 
@@ -155,16 +164,21 @@ impl Npc {
     /// The bribe (`_DoCommDialog` @0x961f8): +0x88 = [`BRIBED_AI`], kept
     /// over its leader or carrier ([`Npc::spared`]), as
     /// [`AiType::WimpyTrader`]. A fighter is one no longer, and holds its
-    /// class's capacities (see the `fighter_capacity` module).
+    /// class's capacities (see the `fighter_capacity` module). The word is
+    /// above 0, so a ship without AI ([`Npc::no_ai`]) thinks from then on.
     pub fn take_bribe(&mut self) {
+        self.no_ai = false;
         self.spared = true;
         self.ai_type = AiType::WimpyTrader;
         self.hold_capacities(RuleSource::Bible);
     }
 
     /// A write of +0x88 over the bribe's word, which was its only state:
-    /// [`Npc::spared`] cleared (see the module docs).
+    /// [`Npc::spared`] cleared (see the module docs). Every such write the
+    /// engine models (a capture's or hire's 6, a lead's release) is above
+    /// 0, so a ship without AI ([`Npc::no_ai`]) thinks from then on.
     pub fn overwrite_bribe(&mut self) {
+        self.no_ai = false;
         self.spared = false;
     }
 
@@ -173,17 +187,30 @@ impl Npc {
     /// class's `InherentAI` (@0x83c4a); kept while it is disabled, and for
     /// its stay if it thinks as a miner ([`miner::thinks_for`],
     /// @0x8ff76-0x8ff8d) or as `_DeathStarAI` ([`Npc::attacks_stellars`],
-    /// @0x8ff3a), neither of which reaches that write.
+    /// @0x8ff3a), neither of which reaches that write. The write is raw:
+    /// a class word of 0 or below leaves it with no AI ([`Npc::no_ai`]), and
+    /// one above 4 keeps the mark, as `_EscortAI` thinks it again.
     ///
-    /// **Ordering.** The original clears it inside the ship's own
-    /// dispatch, in slot order; the traffic's tick settles it after the
-    /// tick's decisions. So a higher slot's reader in that same tick reads
-    /// 6 a tick late: only a brave trader whose target's first think once
-    /// whole falls in that tick, whose distress call is drawn on the
-    /// message line. Filed in `play-feel-5-followups`.
+    /// **Ordering.** It settles inside the ship's own run
+    /// ([`Traffic::take_goals`](super::Traffic::take_goals)), and under the
+    /// engine reading of [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)
+    /// each berth runs alone (`nova_sim::Session::dispatch_npcs`,
+    /// [`Traffic::think_holding`](super::Traffic::think_holding)). So a
+    /// higher slot reads the class's word in that tick and a lower one read
+    /// 6, as `_EscortAI` writes +0x88 inside the ship's own dispatch
+    /// (@0x83c4a), before any higher slot's dispatch of the frame reads it
+    /// (a brave trader's distress call, `_BraveTraderAI` @0x8b707). Under
+    /// the batch reading every slot decides from the tick as it began, and
+    /// reads 6 for the tick.
     pub fn settle_original_ai_type(&mut self) {
-        if !self.condition.disabled() && !miner::thinks_for(self) && !self.attacks_stellars() {
-            self.kept_escort_ai = false;
+        if self.kept_escort_ai
+            && !self.condition.disabled()
+            && !miner::thinks_for(self)
+            && !self.attacks_stellars()
+        {
+            let word = SpawnAi(self.hull.inherent_ai);
+            self.no_ai = word.no_ai();
+            self.kept_escort_ai = word.escort_ai();
         }
     }
 }
@@ -238,6 +265,28 @@ mod tests {
             ..ship(AiType::Warship)
         };
         assert_eq!(hulk.original_ai_type(), -1);
+    }
+
+    #[test]
+    fn a_bribe_gives_a_ship_without_ai_the_bribed_word() {
+        let mut ship = Npc {
+            no_ai: true,
+            ..ship(AiType::Warship)
+        };
+        ship.take_bribe();
+        assert!(!ship.no_ai);
+        assert_eq!(ship.original_ai_type(), BRIBED_AI);
+    }
+
+    #[test]
+    fn a_write_over_the_bribe_gives_a_ship_without_ai_its_word() {
+        let mut ship = Npc {
+            no_ai: true,
+            ..ship(AiType::Warship)
+        };
+        ship.overwrite_bribe();
+        assert!(!ship.no_ai);
+        assert_eq!(ship.original_ai_type(), AiType::Warship.raw());
     }
 
     #[test]
@@ -412,5 +461,22 @@ mod tests {
         };
         miner.settle_original_ai_type();
         assert!(miner.kept_escort_ai, "a miner keeps it for its stay");
+    }
+
+    #[test]
+    fn the_lost_parents_write_of_its_class_word_0_leaves_no_ai_and_above_4_the_mark() {
+        let marked = |inherent_ai| {
+            let mut ship = Npc {
+                kept_escort_ai: true,
+                ..ship(AiType::WimpyTrader)
+            };
+            ship.hull.inherent_ai = inherent_ai;
+            ship.settle_original_ai_type();
+            (ship.no_ai, ship.kept_escort_ai)
+        };
+        assert_eq!(marked(0), (true, false), "@0x83c4a writes 0");
+        assert_eq!(marked(-1), (true, false));
+        assert_eq!(marked(5), (false, true), "and 5 raw");
+        assert_eq!(marked(1), (false, false));
     }
 }

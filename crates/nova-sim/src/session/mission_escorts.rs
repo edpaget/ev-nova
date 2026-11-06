@@ -130,6 +130,7 @@ use crate::ai::{Goal, travel};
 use crate::combat::hull::Condition;
 use crate::escort::{EscortClass, FormationSlot};
 use crate::mission::ships::ShipBehav;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 
 impl Session {
@@ -262,7 +263,12 @@ impl Space {
     /// NPC `id` loses its mission's mark; a mission escort also leaves
     /// the formation, takes its ship type's `InherentAI` and leaves the
     /// system (see the module docs). Whether it was a mission escort.
-    pub(super) fn unmark_mission_ship(&mut self, statics: &Statics, id: NpcId) -> bool {
+    pub(super) fn unmark_mission_ship(
+        &mut self,
+        statics: &Statics,
+        id: NpcId,
+        burst: RuleSource,
+    ) -> bool {
         let Some(npc) = self.npc(id) else {
             return false;
         };
@@ -287,7 +293,7 @@ impl Space {
             npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
             npc.kept_escort_ai = true;
         } else if escort {
-            leave_formation(npc, inherent);
+            leave_formation(npc, inherent, burst);
         }
         escort
     }
@@ -295,12 +301,13 @@ impl Space {
 
 /// Mission escort `npc` leaves the formation and the system: its AI type
 /// its ship type's `inherent` one (kept as it was when its ship type has
-/// no record), and it leaves ([`super::hail::make_leave`]).
-fn leave_formation(npc: &mut Npc, inherent: Option<AiType>) {
+/// no record), and it leaves ([`super::hail::make_leave`]), owing any
+/// burst by `burst`'s reading of `HeldGateBurst`.
+fn leave_formation(npc: &mut Npc, inherent: Option<AiType>, burst: RuleSource) {
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
     }
-    super::hail::make_leave(npc);
+    super::hail::make_leave(npc, burst);
 }
 
 #[cfg(test)]
@@ -1253,6 +1260,32 @@ pub(super) mod tests {
         assert_eq!(hired_slot(&session), (2, 2), "the hired escort re-forms");
     }
 
+    #[test]
+    fn aborted_while_it_glides_in_a_mission_escort_ends_the_glide_owing_as_the_rulebook_reads() {
+        // `_AIDispatch`'s mark-clear leave (@0x8fc3a-0x8fc96) floors the
+        // glide's -999.0, so the glide ends (@0x8fcf5).
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = inherent_catalog(escorting(-1, 0));
+            let (mut session, ids) = flying_with_escorts(&catalog);
+            session.setup.rules =
+                Rulebook::default().with_override(RuleKey::HeldGateBurst, reading);
+            let gliding = session.space.npc_mut(ids[0]).expect("in the system");
+            gliding.mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
+            let mut expected = gliding.clone();
+            expected.takes_leave_write(reading);
+            assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+            let left = session.space.npc(ids[0]).expect("still here as it leaves");
+            assert_eq!(left.goal, Goal::JumpOut, "{reading:?}");
+            assert_eq!(left.mode, crate::traffic::npc::Mode::Flying, "{reading:?}");
+            assert_eq!(left.owed_burst, expected.owed_burst, "{reading:?}");
+            assert_eq!(
+                left.owed_burst.is_some(),
+                reading == RuleSource::Engine,
+                "{reading:?}"
+            );
+        }
+    }
+
     /// Two pirates escorting the player: [`ships_catalog`] with düde 150's
     /// government 131 plundering and its ship 200 of `InherentAI` 3.
     fn pirate_escorts() -> FakePilotCatalog {
@@ -2024,6 +2057,17 @@ pub(super) mod tests {
         assert_eq!(orders(&session), [None; 2]);
     }
 
+    /// The rules with [`RuleKey::EscortOrders`] by `source`, and by the
+    /// other reading of [`RuleKey::ReusedSlotMark`], so a mission escort
+    /// set up again on a commanded escort's berth comes in unmarked (by
+    /// the engine it holds the berth's mark, and its class's order: see
+    /// the `class_orders` module's tests).
+    fn unmarked_by(source: RuleSource) -> Rulebook {
+        Rulebook::default()
+            .with_override(RuleKey::EscortOrders, source)
+            .with_override(RuleKey::ReusedSlotMark, RuleSource::Bible)
+    }
+
     #[test]
     fn a_jump_resets_mission_escorts_orders_by_the_engine_and_keeps_the_classs_by_the_bible() {
         for (source, kept) in [
@@ -2032,7 +2076,8 @@ pub(super) mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = unmarked_by(source);
+            session.space.read_reused_slot_rules(&session.setup.rules);
             session.pilot.escorts.push(hired());
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
@@ -2076,7 +2121,8 @@ pub(super) mod tests {
         ] {
             let catalog = ships_catalog(escorting(-6, 0));
             let mut session = accepted(&catalog);
-            session.setup.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.setup.rules = unmarked_by(source);
+            session.space.read_reused_slot_rules(&session.setup.rules);
             take_off(&mut session, &catalog);
             session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
             jump_to(&mut session, &catalog, 131);

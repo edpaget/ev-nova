@@ -99,9 +99,9 @@
 //! toward 0. Arrivals (`_EnterMoreShips` @0x44237) come before the AI loop
 //! and are dispatched. The ships `_SetupShipsInSystem` sets up
 //! (`_HandlePlayer` @0x69114) are dispatched in the same frame's AI loop
-//! (@0x44270-0x442ae) before the ship loop; the engine's populating pass
-//! flies none of them (`nova_sim::Session::ship_loop`'s `Populated`), so
-//! each flies first after its first low level, as there. Which heading a
+//! (@0x44270-0x442ae) before the ship loop, and so are those the engine's
+//! populating pass sets up (`nova_sim::Session::traffic_think`), so each
+//! flies first after its first low level, as there. Which heading a
 //! new ship gets is
 //! [`RuleKey::ReusedSlotHeading`](crate::RuleKey::ReusedSlotHeading)'s:
 //! the berth's last by the engine, its own whole heading, so no turn, by

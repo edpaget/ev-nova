@@ -61,6 +61,7 @@
 //! (`_DamageShip` @0x3afdd), so none marked can be disabled here.
 
 use super::Session;
+use super::escorts::Placement;
 use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::escort_dialog;
@@ -181,7 +182,15 @@ impl Session {
             return;
         };
         self.space.traffic.remove(old.id);
-        let placed = self.place_escort_at(index, Some(old.berth), Some(old.skill), chance);
+        // Through `_SpawnEscort`, which keeps +0xc4 until the take-off's
+        // respawn clears it.
+        let placed = self.place_escort_at(
+            index,
+            Some(old.berth),
+            Some(old.skill),
+            Placement::Spawn,
+            chance,
+        );
         if let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) {
             npc.afterburner = old.afterburner;
             npc.aux = old.aux;
@@ -198,7 +207,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{LandingSite, ShipId, ShipRecord, SystemId};
     use crate::chance::NeverFires;
@@ -214,7 +223,7 @@ mod tests {
 
     /// The shipyard's stellar, 128, at the centre, under the ship as it
     /// starts.
-    const YARD: crate::catalog::StellarId = crate::catalog::StellarId(128);
+    pub(in crate::session) const YARD: crate::catalog::StellarId = crate::catalog::StellarId(128);
 
     fn yard() -> LandingSite {
         LandingSite {
@@ -239,7 +248,7 @@ mod tests {
     /// Planet 128 a shipyard with a bar; class 129 upgrades to 130 for
     /// 6,000, class 131 sells for 499; class 130 is bigger and costs
     /// 30,000.
-    fn yards() -> FakePilotCatalog {
+    pub(in crate::session) fn yards() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![
                 (SystemId(130), vec![yard(), planet(129, 2000.0, 0.0)]),
@@ -287,7 +296,7 @@ mod tests {
         session
     }
 
-    fn mark(session: &mut Session, index: usize, mark: EscortMark) {
+    pub(in crate::session) fn mark(session: &mut Session, index: usize, mark: EscortMark) {
         session.pilot.escorts[index].mark = Some(mark);
     }
 

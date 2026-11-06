@@ -105,7 +105,7 @@ pub struct FlyPass {
     /// ship with none flies its spawn's.
     words: BTreeMap<NpcId, SlotWord>,
     /// How each ship's flight ended at its slot of this tick's AI loop (a
-    /// landing, a jump begun), which its step reports, flying nothing:
+    /// landing, a gate's box reached), which its step reports, flying nothing:
     /// none on double time's second pass.
     slot_outcomes: BTreeMap<NpcId, Outcome>,
     /// Each berth's last heading as the half began, which a ship with no
@@ -481,9 +481,10 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 /// ([`autopilot::step`]), an inertialess ship's velocity pulled by
 /// `adjust` (its step's `_ShipAccelRate` before the ion block), at
 /// `speeds`, rolling on `chance`; on the advance pass, a flight that
-/// ended at its slot (a landing, a jump begun) reports it and flies
-/// nothing, its jump neither, though a warp under way settles
-/// ([`warp_out::settle`]). Its turn rate and top speed are read at its
+/// ended at its slot (a landing, a gate's box reached) reports it and
+/// flies nothing, though a warp under way settles
+/// ([`warp_out::settle`]). A jump begun at its slot ran sub 4 there, so
+/// its warp-out flies it. Its turn rate and top speed are read at its
 /// step ([`AtStep::of_npc`]).
 fn fly_steered(
     npc: &mut Npc,
@@ -495,8 +496,9 @@ fn fly_steered(
 ) -> Outcome {
     // The goal it holds, not the one it flies (see `fly_one`).
     let paused = pass.paused.contains(&npc.id);
-    // A flight that ended at its slot flies nothing, not even a jump begun
-    // there, whose warp-out would read an aim its leaves wrote before it.
+    // A flight that ended at its slot flies nothing. A jump begun there is
+    // no ended flight: it ran sub 4 at the slot (@0x8585b), so the
+    // warp-out below reads sub 4's aim.
     let outcome = if let Some(&ended) = pass.slot_outcomes.get(&npc.id) {
         ended
     } else if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, paused, adjust) {

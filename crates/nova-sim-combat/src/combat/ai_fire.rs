@@ -253,11 +253,17 @@ impl PlayerRating {
 
 /// The velocity `spec`'s recoil leaves its firer in, as it moves in
 /// `state`, of `hull` and class speed `class_speed` (@0x88ee2-0x88f71):
-/// `Recoil` over its mass, pushed along `(heading + 180) mod 360` up to
-/// its class speed ([`launch_velocity`], `_AdjustedAccel`); none when the
-/// weapon does not recoil ([`WeaponSpec::recoils`]). A massless hull takes
-/// none, where the original divides by its mass of 0 and leaves the
-/// velocity infinite or not a number.
+/// `Recoil` over its class `Mass`, pushed along `(heading + 180) mod 360`
+/// up to its class speed ([`launch_velocity`], `_AdjustedAccel`); none
+/// when the weapon does not recoil ([`WeaponSpec::recoils`]).
+///
+/// The original reads `Mass` signed, with no gate on it
+/// ([`HullSpec::signed_mass`], `_FireAIShipWeapon` @0x88f24, and the
+/// player's `_FirePlayerWeapon` the same way @0x62ee8-0x62f35), so a
+/// negative `Mass` shoves the firer forward, uncapped like a negative
+/// `Recoil`. A `Mass` of 0 takes none: the original divides by it
+/// (@0x88f2f, @0x62ef3) and leaves the velocity infinite or not a
+/// number, which isn't modelled.
 #[must_use]
 pub fn recoil(
     state: &ShipState,
@@ -265,14 +271,15 @@ pub fn recoil(
     class_speed: f32,
     spec: &WeaponSpec,
 ) -> Option<Vec2> {
-    if !spec.recoils() || hull.mass <= 0.0 {
+    let mass = f32::from(hull.signed_mass);
+    if !spec.recoils() || mass == 0.0 {
         return None;
     }
     let away = (state.heading + 180.0) % 360.0;
     Some(launch_velocity(
         state.velocity,
         away,
-        spec.recoil / hull.mass,
+        spec.recoil / mass,
         class_speed,
     ))
 }
@@ -633,6 +640,7 @@ mod tests {
     fn recoil_pushes_the_firer_away_from_its_heading_by_recoil_over_mass_up_to_its_class_speed() {
         let hull = HullSpec {
             mass: 50.0,
+            signed_mass: 50,
             ..HullSpec::default()
         };
         let kicks = |raw: i16| WeaponSpec {
@@ -663,6 +671,29 @@ mod tests {
             None,
             "mass 0"
         );
+    }
+
+    #[test]
+    fn a_negative_mass_recoils_the_firer_forward_past_its_class_speed() {
+        // `Recoil` over the signed `Mass`, ungated (@0x88f24): 100 / -50
+        // is -2 along heading + 180, so 2 along the heading.
+        let hull = HullSpec {
+            mass: 0.0,
+            signed_mass: -50,
+            ..HullSpec::default()
+        };
+        let kicks = WeaponSpec {
+            recoil: 100.0,
+            ..guided(-1)
+        };
+        let pushed = recoil(&firer(), &hull, 10.0, &kicks).expect("recoils");
+        assert!((pushed - facing(0.0) * 2.0).length() < 1e-5, "{pushed:?}");
+        let at_class_speed = ShipState {
+            velocity: facing(0.0) * 10.0,
+            ..firer()
+        };
+        let past = recoil(&at_class_speed, &hull, 10.0, &kicks).expect("recoils");
+        assert!((past - facing(0.0) * 12.0).length() < 1e-5, "{past:?}");
     }
 
     fn rated(rating: i64, yardstick: i16) -> PlayerRating {

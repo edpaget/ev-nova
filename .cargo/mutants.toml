@@ -16,6 +16,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The leave write's +0x50 floor (`if 0 > +0x50`): `<=` also writes 0.0
+    # over a stage of exactly 0.0 (or -0.0, which compares equal to it), so
+    # the stage reads the same either way.
+    "nova-sim-ai/src/traffic/leave_write\\.rs:[0-9]+:[0-9]+: replace < with <= in Npc::takes_leave_write$",
     # The gate autopilot's turn keys: an off of exactly 0° is within half a
     # turn step (`off.abs() <= step / 2.0`), so `off < 0.0` and `off <= 0.0`
     # are never asked of it. A step can't be negative.
@@ -772,4 +776,7 @@ exclude_re = [
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
+    # The heaviest-class fold's `mass > heaviest`: `>=` also takes a mass
+    # equal to the heaviest so far, which leaves the same value.
+    "nova-sim-ai/src/ai/candidates\\.rs:[0-9]+:[0-9]+: replace > with >= in nearest$",
 ]

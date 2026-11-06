@@ -22,9 +22,10 @@
 //! `Flags` 0x0200 when boarded, in place of the comm dialog or the
 //! plunder (see the `person_offers` module).
 //!
-//! **Hail quotes.** Each tick in flight ([`Session::tick_quotes`]) a
-//! person may say its hail quote (a plug-in's `'STR '` 4999 +
-//! `HailQuote`, else `STR#` 7101 #`HailQuote`, its tags read; the
+//! **Hail quotes.** Each pass in flight, at its NPC's turn of the ship
+//! loop ([`Session::roll_quote_at_turn`]), a person may say its hail
+//! quote (a plug-in's `'STR '` 4999 + `HailQuote`, else `STR#` 7101
+//! #`HailQuote`, its tags read; the
 //! `'STR '` of any open file in its place, `_ShowPersonHailQuote`
 //! @0x445b8-0x445e1), on the trigger its `Flags` give: when it begins to
 //! attack the player, now and then, and so on (see
@@ -51,10 +52,10 @@
 //! `_AIMakeShipAttackPlayer` has it, while it is no threat to the player
 //! yet (`_ExtendedIsThreatToPlayer`,
 //! [`Npc::threatens_player_extended`](crate::traffic::npc::Npc::threatens_player_extended)),
-//! says its quote with no draw and none of the filters above: where the
-//! frame reaches it, in the line's slot order for a think's, just ahead of
-//! that for what came before the loop, and at the start of the next quote
-//! tick for the rest (see the `comm_calls` module). It turns so through
+//! says its quote with no draw and none of the filters above: in the
+//! line's slot order for a think's, and for the rest as the hit or call
+//! that turned it settles ([`Session::say_attack_quotes_now`]; see the
+//! `comm_calls` module). It turns so through
 //! the player's hit on a
 //! ship whose wait runs, that the player can't see or that is in a goal
 //! the threat leaves out; a declined bribe; or a warship's or
@@ -78,7 +79,11 @@
 //! them. An invincible person (`ShieldMod` below 0) ends each fight tick
 //! with its shield and armour full, and is never disabled nor broken up
 //! (the original refills them every frame; its order against a shot's
-//! damage is not traced).
+//! damage is not traced). By the engine reading of
+//! [`RuleKey::PersonEscortRespawn`](crate::RuleKey::PersonEscortRespawn),
+//! an escort whose person a respawn forgot (see the `escort_person_reset`
+//! module) carries no person: its death leaves the person alive and the
+//! player's hits give it no grudge.
 
 use crate::pilot::Pilot;
 use std::rc::Rc;
@@ -197,21 +202,20 @@ impl Session {
         self.space.npc_subtitle(&self.pilot, npc)
     }
 
-    /// A tick of the persons' hail quotes in flight, each drawn on
-    /// `chance` and read from `catalog`, its `'STR '` patch before
-    /// `STR#` 7101 (@0x445b8-0x445e1; see the module docs and
-    /// [`person`](crate::person)), at whose head the message line counts
-    /// down a frame, as `_HandleComm` does on the advance pass (see the
-    /// `comm_calls` module): first each attack quote queued since the
-    /// line's settle, said with no draw; then, in order, each person NPC
-    /// whose quote may be said draws `Rand(140)`, and says it when it is due now, or
-    /// on a draw of 0 when the message line is free
-    /// ([`CommLine::free_for_calls`](crate::CommLine::free_for_calls))
-    /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
-    /// ship is landed nothing happens. Then the quote clock moves on a
-    /// tick: ours moves it once a frame in place of `TickCount`, and
-    /// double time's second pass reads it unmoved
-    /// ([`Session::tick_quotes_again`]).
+    /// A tick of the persons' hail quotes in flight, as a frame's advance
+    /// pass has them, run by hand for the tests of the roll's rules, each
+    /// drawn on `chance` and read from `catalog`: the message line counts
+    /// down a frame, as `_HandleComm` does (@0x4421e, see the `comm_calls`
+    /// module); each attack quote still queued is said, with no draw; then
+    /// each NPC in berth order rolls its quote
+    /// ([`Session::roll_quote_at_turn`]); then the quote clock moves on a
+    /// tick. While the ship is landed nothing happens.
+    ///
+    /// A frame runs these where the original does instead: the countdown
+    /// at `_HandleComm`'s place, each attack quote as its hit settles, each
+    /// roll at its NPC's turn of the ship loop and the clock after the
+    /// loop (see [`Session::ship_loop`]).
+    #[cfg(test)]
     pub(crate) fn tick_quotes(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -221,22 +225,21 @@ impl Session {
             return;
         }
         self.space.count_down_comm_line();
-        self.roll_quotes(catalog, chance);
-        self.space.escorts.quote_clock.ticks += 1;
+        self.roll_quotes_by_hand(catalog, chance);
+        self.space.tick_quote_clock();
     }
 
-    /// Double time's second pass of the hail quotes: the attack quotes
-    /// queued, then each eligible person's `Rand(140)` roll, as
-    /// [`Session::tick_quotes`] has them, on the quote clock as the
-    /// advance pass left it, which this never moves. `_HandleShip`
-    /// (@0x44483) runs on both passes and its quote block
+    /// Double time's second pass of the hail quotes, run by hand as
+    /// [`Session::tick_quotes`] is: the attack quotes queued, then each
+    /// NPC's roll in berth order, on the quote clock as the advance pass
+    /// left it, which this never moves, and with no countdown.
+    /// `_HandleShip` (@0x44483) runs on both passes and its quote block
     /// (@0x33f0f-0x33fba) tests no pass, while `_HandleComm` counts the
     /// display timer down on the advance pass only (@0x4421e): after any
     /// quote on the advance pass only a quote due now follows, and
-    /// otherwise each frame's odds double. The original's `TickCount` can
-    /// move on a tick or two between the passes, which only shifts the
-    /// personal gap ([`QUOTE_GAP_TICKS`]) by less than a frame, so no
-    /// player can see it. While the ship is landed nothing happens.
+    /// otherwise each frame's odds double. While the ship is landed
+    /// nothing happens.
+    #[cfg(test)]
     pub(crate) fn tick_quotes_again(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
@@ -245,94 +248,136 @@ impl Session {
         if self.mode.landed().is_some() {
             return;
         }
-        self.roll_quotes(catalog, chance);
+        self.roll_quotes_by_hand(catalog, chance);
     }
 
-    /// The quote block of [`Session::tick_quotes`], the clock unmoved.
-    fn roll_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
+    /// The attack quotes still queued said, then each NPC's roll in berth
+    /// order, read from `catalog`, drawing on `chance`.
+    #[cfg(test)]
+    fn roll_quotes_by_hand(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
         let lines = catalog.string_list(HAIL_QUOTES);
         self.say_queued_attack_quotes(catalog, &lines, chance);
+        let mut order: Vec<(u32, NpcId)> =
+            self.npcs().iter().map(|npc| (npc.berth, npc.id)).collect();
+        order.sort_unstable();
+        for (_, id) in order {
+            self.roll_quote_at_turn(id, catalog, chance);
+        }
+    }
+
+    /// Says the attack quotes still queued after a pass, read from
+    /// `catalog`, drawing on `chance`: those the session's own calls
+    /// answered after the pass queued ([`Session::answer_strikes`]), so
+    /// each is said on its own frame, after the reinforcements' lines, as
+    /// the original says them (`_ShowPersonHailQuote` @0x89ce1). Every hit
+    /// the pass lands says its own as it settles
+    /// ([`Session::say_attack_quotes_now`]). While the ship is landed
+    /// nothing is said, and they stay queued.
+    ///
+    /// A person whose goal turns on the player only in those after-pass
+    /// answers (the session's own calls, such as the Good Samaritan's) is
+    /// rolled at its turn of the next frame's ship loop; its attack quote,
+    /// if one was queued, is still said here, on this frame.
+    pub(super) fn say_attack_quotes_left(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
+        if self.mode.landed().is_some() {
+            return;
+        }
+        let lines = catalog.string_list(HAIL_QUOTES);
+        self.say_queued_attack_quotes(catalog, &lines, chance);
+    }
+
+    /// `_HandleShip`'s quote roll (@0x33f0f-0x33fba) for NPC `id`, at its
+    /// turn of the ship loop, read from `catalog`, drawing on `chance`:
+    /// the NPC as the loop has left it, when it flies a person that is no
+    /// escort of the player's and not gone for good (@0x33c62), is tested
+    /// as the module docs say, its 0x0400 mission check naming nobody
+    /// after it (@0x33dfb, @0x33e25); then, eligible, it draws
+    /// `Rand(140)`, and says its quote when it is due now, or on a draw of
+    /// 0 when the message line is free
+    /// ([`CommLine::free_for_calls`](crate::CommLine::free_for_calls),
+    /// `_commCount` read at its own slot, @0x33f42-0x33f4b) and its own
+    /// last is more than [`QUOTE_GAP_TICKS`] back on the quote clock, which
+    /// it keeps as the time of this one (@0x33fba). The queued attack
+    /// quotes are not its to say: each hit's settle has said them
+    /// ([`Session::say_attack_quotes_now`]).
+    pub(super) fn roll_quote_at_turn(
+        &mut self,
+        id: NpcId,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) {
+        let Some(npc) = self.space.npc(id) else {
+            return;
+        };
+        // A person escorting the player says no hail quote: the original's
+        // joined ship is a mission ship, not the person.
+        if npc.escort.is_some() {
+            return;
+        }
+        // One gone for good says none (@0x33c62).
+        let Some(person) = npc.person.filter(|person| !self.pilot.gone(person.id)) else {
+            return;
+        };
         let player_ai = self
             .statics
             .ship_record(self.pilot.ship)
             .map_or(0, |record| record.inherent_ai);
-        let mut mission_checked = false;
-        let decided: Vec<(NpcId, Eligible)> = {
+        let linked = self
+            .space
+            .traffic
+            .person(person.id)
+            .and_then(|spawned| spawned.record.link_mission);
+        let (eligible, mission_checked) = {
             let world = self.world();
             let around = world.around(self.npcs());
-            self.npcs()
-                .iter()
-                // A person escorting the player says no hail quote: the
-                // original's joined ship is a mission ship, not the person.
-                .filter(|npc| npc.escort.is_none())
-                .filter_map(|npc| {
-                    // One gone for good says none (@0x33c62).
-                    let person = npc.person.filter(|person| !self.pilot.gone(person.id))?;
-                    let linked = self
-                        .space
-                        .traffic
-                        .person(person.id)
-                        .and_then(|spawned| spawned.record.link_mission);
-                    // The ship's sight of the player gates the whole
-                    // quote block (`_HandleShip` @0x33c87).
-                    let seen = around.sees(npc, ShipRef::Player);
-                    mission_checked |= checks_mission(
-                        npc,
-                        &person,
-                        linked.is_some(),
-                        self.jumping().is_some(),
-                        seen,
-                    );
-                    let view = QuoteView {
-                        liked: likes_player(npc, &around, self.mission_hail(npc)),
-                        player_jumping: self.jumping().is_some(),
-                        seen,
-                        player_ai,
-                        mission_available: linked.is_some_and(|mission| {
-                            self.quoted_mission_available(MissionId(mission))
-                        }),
-                    };
-                    Some((npc.id, quote_eligible(npc, &person, &view, self.npcs())))
-                })
-                .collect()
+            // The ship's sight of the player gates the whole quote block
+            // (`_HandleShip` @0x33c87).
+            let seen = around.sees(npc, ShipRef::Player);
+            let jumping = self.jumping().is_some();
+            let checked = checks_mission(npc, &person, linked.is_some(), jumping, seen);
+            let view = QuoteView {
+                liked: likes_player(npc, &around, self.mission_hail(npc)),
+                player_jumping: jumping,
+                seen,
+                player_ai,
+                mission_available: linked
+                    .is_some_and(|mission| self.quoted_mission_available(MissionId(mission))),
+            };
+            (quote_eligible(npc, &person, &view, self.npcs()), checked)
         };
         if mission_checked {
             // The 0x0400 filter names the ship around its check and puts
             // -1 back (@0x33dfb, @0x33e25).
             self.run.offering_ship = None;
         }
-        let ticks = self.space.escorts.quote_clock.ticks;
-        for (id, eligible) in decided {
-            if eligible == Eligible::No {
-                continue;
-            }
-            let draw = chance.below(QUOTE_ODDS);
-            let Some(npc) = self
-                .space
-                .traffic
-                .npcs_mut()
-                .iter_mut()
-                .find(|npc| npc.id == id)
-            else {
-                continue;
-            };
-            let Some(person) = npc.person.as_mut() else {
-                continue;
-            };
-            // No quote showing: the message line free, whatever shows on
-            // it (`_HandleShip` @0x33f42-0x33f4b reads `_commCount`).
-            let quiet = self.space.comm_line.free_for_calls();
-            let rested = person
-                .quoted_at
-                .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
-            if eligible != Eligible::Now && !(draw == 0 && quiet && rested) {
-                continue;
-            }
-            // `_HandleShip` keeps the time of its last quote (+0xac,
-            // @0x33fba).
-            person.quoted_at = Some(ticks);
-            self.say_hail_quote(id, catalog, &lines, chance);
+        if eligible == Eligible::No {
+            return;
         }
+        let draw = chance.below(QUOTE_ODDS);
+        let ticks = self.space.escorts.quote_clock.ticks;
+        // No quote showing: the message line free, whatever shows on it
+        // (`_HandleShip` @0x33f42-0x33f4b reads `_commCount`).
+        let quiet = self.space.comm_line.free_for_calls();
+        let rested = person
+            .quoted_at
+            .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
+        if eligible != Eligible::Now && !(draw == 0 && quiet && rested) {
+            return;
+        }
+        // `_HandleShip` keeps the time of its last quote (+0xac, @0x33fba).
+        if let Some(person) = self.space.npc_mut(id).and_then(|npc| npc.person.as_mut()) {
+            person.quoted_at = Some(ticks);
+        }
+        let lines = catalog.string_list(HAIL_QUOTES);
+        self.say_hail_quote(id, catalog, &lines, chance);
     }
 
     /// Says each attack quote queued, its line read from `catalog` or
@@ -349,11 +394,14 @@ impl Session {
         }
     }
 
-    /// Says each attack quote queued so far, as the frame reaches
-    /// `_AIDispatch`'s loop (see the `comm_calls` module), read from the
-    /// session's own string lists, drawing on `chance`. While the ship is
-    /// landed nothing is said, and they stay queued.
-    pub(super) fn say_quotes_before_the_line(&mut self, chance: &mut dyn Chance) {
+    /// Says each attack quote queued so far, read from the session's own
+    /// string lists, drawing on `chance`: where a hit's settle reaches it
+    /// ([`Session::settle_landed`]), as `_DamageShip` says it at the hit
+    /// (`_AIMakeShipAttackPlayer` @0x3be69, `_ShowPersonHailQuote`
+    /// @0x89ce1), and after the collision passes' answers (see the
+    /// `comm_calls` module). While the ship is landed nothing is said, and
+    /// they stay queued.
+    pub(super) fn say_attack_quotes_now(&mut self, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;
         }
@@ -2438,7 +2486,11 @@ mod tests {
     #[test]
     fn a_due_quote_said_after_a_fleets_arrival_quote_replaces_its_line_and_count() {
         // `_ShowPersonHailQuote` shows its line through `_DisplayComm`,
-        // which replaces the slot and the count (@0x9024b, @0x90251).
+        // which replaces the slot and the count (@0x9024b, @0x90251). A
+        // fleet said by `_EnterMoreShips` (@0x44237, before the AI loop)
+        // comes before the ship loop's roll; one the reinforcement clock
+        // brings (@0x44504) comes after it (see the `quote_roll_order`
+        // tests).
         let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
         session.space.say(
             &mut session.out,
@@ -2635,6 +2687,36 @@ mod tests {
             .space
             .traffic
             .turn_with_quote(ace, crate::person::GateView::default());
+    }
+
+    #[test]
+    fn an_attack_quote_queued_after_the_roll_is_said_after_the_pass_with_no_roll() {
+        // The beams (`_HandleBeams` @0x4453d) and the after-pass answers
+        // queue theirs after the ship loop's roll; the step says them
+        // after the pass (`_ShowPersonHailQuote` @0x89ce1), with no draw,
+        // the line not counted down and the quote clock unmoved.
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        turn_ace(&mut session);
+        let clock = session.space.escorts.quote_clock.ticks;
+        let mut chance = Draws::of(&[]);
+        session.say_attack_quotes_left(&catalog, &mut chance);
+        let said: Vec<_> = session.take_quotes().into_iter().map(|q| q.text).collect();
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+        assert_eq!(chance.asked, Vec::<u32>::new(), "no roll");
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(QUOTE_SHOWN_TICKS);
+        assert_eq!(session.comm_line(), line, "shown, not counted down");
+        assert_eq!(session.space.escorts.quote_clock.ticks, clock);
+    }
+
+    #[test]
+    fn landed_the_attack_quotes_left_stay_queued() {
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, 0]);
+        turn_ace(&mut session);
+        session.mode = crate::session::Mode::Landed(crate::catalog::StellarId(128));
+        session.say_attack_quotes_left(&catalog, &mut NeverFires);
+        assert_eq!(session.take_quotes(), Vec::new());
+        assert_eq!(session.space.traffic.take_attack_quotes().len(), 1);
     }
 
     #[test]

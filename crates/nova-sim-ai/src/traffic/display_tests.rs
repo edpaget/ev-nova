@@ -74,7 +74,7 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
     let ship = |entry, booty| NewShip {
         ship: ShipId(200),
         govt: Some(GovtId(130)),
-        ai_type: AiType::WimpyTrader,
+        ai_type: AiType::WimpyTrader.into(),
         lead: None,
         state: ShipState::default(),
         entry,
@@ -91,6 +91,8 @@ fn a_spawn_glows_folds_and_owes_its_rolls() {
         cargo: None,
         boarded: false,
         rolls_voice: false,
+        asks_scoop: false,
+        clears_mark: false,
     };
     let came = traffic.bring_in_within(
         vec![ship(Entry::Placed, None), ship(Entry::JumpingIn, Some(0))],

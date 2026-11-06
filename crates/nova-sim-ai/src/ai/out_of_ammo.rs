@@ -100,7 +100,8 @@ pub fn drop_when_dry(npc: &Npc, goal: Goal) -> Goal {
 /// gate, after its out-of-ammo retreat (see the module docs): retreating,
 /// it flees the ship it inspects or plunders (+0x70, a plunder kept
 /// behind the gate, @0x8d343-0x8d391), or the target it kept with any
-/// other goal ([`Npc::target`], such as the ally goal 4's drop spared,
+/// other goal ([`Npc::target`], such as the ally goal 4's drop spared, or
+/// a hit's kept behind the closed gate on a stop, hold, mine or scoop;
 /// [`held_attack`](super::held_attack)), and stops ([`Goal::Idle`]) with
 /// none, but leaving by hyperspace ([`Goal::JumpOut`], state 2) it leaves.
 #[must_use]

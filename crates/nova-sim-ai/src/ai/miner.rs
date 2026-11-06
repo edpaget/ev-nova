@@ -18,7 +18,15 @@
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
 //!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
-//!   [`call_for_help`](crate::ai::call_for_help)). The target is +0x70,
+//!   [`call_for_help`](crate::ai::call_for_help)). The test reads +0x70 not
+//!   -1 whatever its slot holds (@0x8b254-0x8b263), so an attacker gone from
+//!   the system whose freed slot +0x70 still names is fled too
+//!   ([`provoked_by_gone`]), on the one think before a slot test clears it;
+//!   the high level then ends that flight zeroed (@0x8d4e4-0x8d50d →
+//!   @0x8e228-0x8e23d, see
+//!   [`with_flight_end`](crate::traffic::provocation::with_flight_end)). The
+//!   miner has no leader branch (@0x8b1bd's): `_AIDispatch` sends it only
+//!   ships with +0x9a -1. The target is +0x70,
 //!   which names the inspected ship of a goal 7 a successor copied from a
 //!   lost interceptor lead ([`Npc::slot_target`]), so it flees that ship.
 //!   Unprovoked, the tests below write a goal every think, so a copied
@@ -37,7 +45,9 @@
 //!   mines (state 16, @0x8b346-0x8b34c), asteroids or none; otherwise it
 //!   shuttles. Without a scoop it shuttles, so an Asteroid Miner (0x0003)
 //!   without one never mines, scoops or stops. A jettisoned box is never
-//!   scoopable, so it is no reason to scoop.
+//!   scoopable, so it is no reason to scoop. A ship whose spawn asks no
+//!   `_ShipCanScoop` holds its berth's flag, not its class's
+//!   ([`berth_scoops`](crate::traffic::berth_scoops)).
 //! - **[`MINES`] alone** keeps the goal the first test gave.
 //! - **The shuttle** (@0x8b35f-0x8b463): while its AI wait (+0x4c) runs
 //!   ([`Npc::wait_running`]), state 0 with no travel stellar
@@ -64,6 +74,19 @@
 //! 6 from 0: the stop shows only to a hail, which finds a waiting ship busy
 //! (`_AIIsShipBusy` @0x82fac-0x82fe4, see [`hail`](crate::hail)).
 //!
+//! **Its target (+0x70).** It writes -1 in four places
+//! ([`Decision::clears_target`]): disabled (@0x8b238), the [`MINES`] stop
+//! with no live asteroid (@0x8b2c5), which stands through the same think's
+//! later scoop, mine or leave, the full-hold leave (@0x8b31e) and the
+//! shuttle's leave (@0x8b43f). It writes none on a mine (@0x8b2ba,
+//! @0x8b34c), a scoop (@0x8b33b), a [`MINES`]-alone leave it keeps
+//! (@0x8b2a7), or the shuttle's landing (@0x8b3a5), stop (@0x8b452) or
+//! wait-idle (@0x8b45d), so a hit's target is kept there until the
+//! handler's slot test ([`kept_target`]), and the threat tests read it
+//! ([`Npc::fought`]). On a mine, the low level's order 0x14 clears it on
+//! each frame it fires at slot 0 (@0x8843a), for any type; the traffic
+//! makes that write as it sets the frame (`traffic::frame_target`).
+//!
 //! No `PlaySound` or `_beepSnd` call is anywhere in it; the distress
 //! call's beep is `_AICallForHelp`'s.
 //!
@@ -72,16 +95,24 @@
 //! [`mine_flight`](crate::traffic::mine_flight)'s and
 //! [`fire_untargeted`](crate::ai::fire_untargeted)'s.
 //!
-//! State 2's +0x50 clamp (a negative stage raised to 0) and +0xa4 stamp
-//! (@0x8b307-0x8b329, @0x8b428-0x8b44a) need no port: the leave's own
-//! jump, sub 4, starts any stage at 0 or below at 1.0 and stamps the
-//! clock again (@0x858a4-0x858b0, see
-//! [`warp_out`](crate::traffic::warp_out)), and nothing reads the clock or
-//! a stage at or below 0 before then.
+//! State 2's writes are `_AIMakeShipLeave`'s, inlined (@0x8b307-0x8b329,
+//! @0x8b428-0x8b44a): its +0x50 floor (a negative stage raised to 0) and
+//! +0xa4 stamp are built ([`Decision::leaves`], which the traffic takes
+//! with [`Npc::takes_leave_write`]; see
+//! [`leave_write`](crate::traffic::leave_write)), on every think that
+//! reaches either leave, one already held too, but not on [`MINES`]
+//! alone keeping it. The floor shows to no reader here: a miner never has
+//! a parent (`_AIDispatch` @0x8ff80), so no successor's pause reads a
+//! stage below 0, and the leave's own jump, sub 4, starts any stage at 0
+//! or below at 1.0 with its own stamp (@0x858a4-0x858b0). The stamp shows
+//! on a stage under way, which sub 4 then keeps, so the miner goes a
+//! whole jump's time after its last think's write.
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::travel::{self, TravelWrite};
-use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by};
+use crate::ai::{
+    Behaviour, Decision, Goal, Surroundings, kept_target, leave, provoked_by, provoked_by_gone,
+};
 use crate::cargo_box::any_scoopable;
 use crate::catalog::StellarId;
 use crate::chance::Chance;
@@ -129,7 +160,11 @@ impl Behaviour for MinerAi {
     /// (@0x8b46c-0x8b483, [`when_fleeing`]), and the stellar it sets off for
     /// recorded as visited (+0x92 = +0x6c, @0x8b3ae).
     fn decision(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
-        let (goal, travel) = think(npc, around);
+        let Thought {
+            goal,
+            travel,
+            clears_target,
+        } = think(npc, around);
         // Only the shuttle lands (state 1): the mining path gives a mine,
         // a stop or a leave.
         let visits = match goal {
@@ -141,44 +176,81 @@ impl Behaviour for MinerAi {
             comm_call: when_fleeing(goal),
             visits,
             travel,
+            leaves: writes_leave(npc, goal),
+            clears_target,
             ..Decision::default()
         }
     }
 
-    /// Its attacker while it flees; no ship otherwise, as the stop and the
-    /// leave clear its target (@0x8b2c5, @0x8b31e, @0x8b43f).
-    fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
-        npc.goal.quarry()
+    /// Its attacker while it flees; otherwise the target it holds while
+    /// that ship's slot is active ([`kept_target::kept`]), as its think
+    /// writes +0x70 only on its stop, its leaves and disabled
+    /// ([`Decision::clears_target`], see the module docs).
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        npc.goal.quarry().or_else(|| kept_target::kept(npc, around))
     }
+}
+
+/// Whether `npc`'s think of `goal` made `_MinerAI`'s leave, its inlined
+/// `_AIMakeShipLeave` (see the module docs): the scoop-full leave
+/// (@0x8b307-0x8b329) and the shuttle's (@0x8b428-0x8b44a) write it on
+/// every think that reaches them, a leave already held too; [`MINES`]
+/// alone keeps a state 2 it held, writing none.
+fn writes_leave(npc: &Npc, goal: Goal) -> bool {
+    goal == Goal::JumpOut && npc.miner & MINER_BITS != MINES
 }
 
 /// `npc`'s goal among `around`, as `_MinerAI` decides it (see the module
 /// docs): its think's.
 #[must_use]
 pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
-    think(npc, around).0
+    think(npc, around).goal
+}
+
+/// What `_MinerAI`'s think leaves: its goal, how it wrote the travel
+/// stellar (+0x6c), and whether it wrote +0x70 -1 on the way.
+struct Thought {
+    goal: Goal,
+    travel: TravelWrite,
+    clears_target: bool,
+}
+
+impl Thought {
+    /// `goal`, writing +0x6c as `travel` and +0x70 -1 as `clears_target`.
+    fn of(goal: Goal, travel: TravelWrite, clears_target: bool) -> Self {
+        Self {
+            goal,
+            travel,
+            clears_target,
+        }
+    }
 }
 
 /// `npc`'s goal among `around` and how `_MinerAI` writes its travel
-/// stellar (+0x6c) on the way (see the module docs).
-fn think(npc: &Npc, around: &Surroundings) -> (Goal, TravelWrite) {
+/// stellar (+0x6c) and its target (+0x70) on the way (see the module
+/// docs).
+fn think(npc: &Npc, around: &Surroundings) -> Thought {
     if npc.condition != Condition::Intact {
         // +0x6c and +0x70 -1 (@0x8b232-0x8b238).
-        return (Goal::Idle, TravelWrite::Clear);
+        return Thought::of(Goal::Idle, TravelWrite::Clear, true);
     }
     if let Goal::CountWait = npc.goal {
-        return (npc.goal, TravelWrite::Keep);
+        return Thought::of(npc.goal, TravelWrite::Keep, false);
     }
-    if let Some(attacker) = provoked_by(npc, around) {
+    let attacker = provoked_by(npc, around)
+        .or_else(|| provoked_by_gone(npc, around).map(|gone| ShipRef::Npc(gone.id)));
+    if let Some(attacker) = attacker {
         // `_MinerAI` tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483):
         // its decision carries the call (`MinerAi::decision`).
-        return (Goal::Flee(attacker), TravelWrite::Keep);
+        return Thought::of(Goal::Flee(attacker), TravelWrite::Keep, false);
     }
     let mines = npc.miner & MINES != 0;
     let scoops = npc.miner & SCOOPS != 0;
     let mut state = npc.goal;
     let mut held = travel::held(npc);
     let mut write = TravelWrite::Keep;
+    // The stop's -1 stands through the same think's later writes.
+    let mut stopped = false;
     if mines && state != Goal::JumpOut {
         if around.mining_rock.is_some() {
             state = Goal::Mine;
@@ -187,42 +259,47 @@ fn think(npc: &Npc, around: &Surroundings) -> (Goal, TravelWrite) {
             state = Goal::Wait;
             held = None;
             write = TravelWrite::Clear;
+            stopped = true;
         }
     }
     if !scoops {
         return if mines {
-            (state, write)
+            Thought::of(state, write, stopped)
         } else {
-            shuttle(npc, around, state, held)
+            shuttle(npc, around, state, held, stopped)
         };
     }
     if npc.can_scoop {
         if npc.cargo.total() >= u64::from(npc.holds) {
-            return (Goal::JumpOut, write);
+            // The full-hold leave's -1 (@0x8b31e).
+            return Thought::of(Goal::JumpOut, write, true);
         }
         if any_scoopable(around.boxes) {
-            return (Goal::Scoop, write);
+            return Thought::of(Goal::Scoop, write, stopped);
         }
         if mines {
-            return (Goal::Mine, write);
+            return Thought::of(Goal::Mine, write, stopped);
         }
     }
-    shuttle(npc, around, state, held)
+    shuttle(npc, around, state, held, stopped)
 }
 
 /// The nearest-stellar shuttle (@0x8b35f-0x8b463) of `npc` among
 /// `around`, its state so far `state` and the travel stellar it holds
 /// `held` (see the module docs), and how it writes +0x6c: -1 while its
 /// wait runs (@0x8b45d), the pick's result when it held none (@0x8b386),
-/// and nothing when it held one.
+/// and nothing when it held one. Its leave writes +0x70 -1 (@0x8b43f);
+/// its landing, stop and wait-idle none, so `stopped`, the `MINES` stop's
+/// -1 earlier in the think, stands.
 fn shuttle(
     npc: &Npc,
     around: &Surroundings,
     state: Goal,
     held: Option<StellarId>,
-) -> (Goal, TravelWrite) {
+    stopped: bool,
+) -> Thought {
     if npc.wait_running() {
-        return (Goal::Idle, TravelWrite::Clear);
+        return Thought::of(Goal::Idle, TravelWrite::Clear, stopped);
     }
     let (nav, write) = if let Some(stellar) = held {
         (Some(stellar), TravelWrite::Keep)
@@ -241,7 +318,7 @@ fn shuttle(
         _ if leave::can_jump(npc, around.jump_fuel) => Goal::JumpOut,
         _ => Goal::Wait,
     };
-    (goal, write)
+    Thought::of(goal, write, stopped || goal == Goal::JumpOut)
 }
 
 #[cfg(test)]
@@ -324,9 +401,10 @@ mod tests {
         zephyr.goal = Goal::Land(StellarId(129));
         assert_eq!(deciding(&zephyr, &stellars(), None), Goal::Wait, "state 6");
         assert_eq!(deciding(&zephyr, &stellars(), Some(rock())), Goal::Mine);
-        let npcs = [zephyr.clone()];
-        let around = Surroundings::new(&[], &npcs);
-        assert_eq!(MinerAi.target(&zephyr, &around), None);
+        assert!(
+            decision(&zephyr, &stellars(), None).clears_target,
+            "+0x70 -1 (@0x8b2c5)"
+        );
     }
 
     #[test]
@@ -725,6 +803,50 @@ mod tests {
     }
 
     #[test]
+    fn its_scoop_full_and_shuttle_leaves_write_the_leave_and_a_mining_keep_none() {
+        // `_MinerAI`'s copies of `_AIMakeShipLeave` (@0x8b307-0x8b329,
+        // @0x8b428-0x8b44a), on every think that reaches them.
+        let mut full = miner(SCOOPS, true);
+        full.cargo.add(0, 20);
+        let shuttle = miner(SCOOPS, false);
+        let mut kept = miner(MINES, false);
+        kept.goal = Goal::JumpOut;
+        for (npc, sites, why) in [
+            (full.clone(), stellars(), "scoop-full"),
+            (
+                Npc {
+                    goal: Goal::JumpOut,
+                    ..full
+                },
+                stellars(),
+                "scoop-full, leaving already",
+            ),
+            (shuttle.clone(), Vec::new(), "the shuttle"),
+            (
+                Npc {
+                    goal: Goal::JumpOut,
+                    ..shuttle
+                },
+                stellars(),
+                "the shuttle, leaving already",
+            ),
+        ] {
+            let decided = decision(&npc, &sites, None);
+            assert_eq!(
+                (decided.goal, decided.leaves),
+                (Goal::JumpOut, true),
+                "{why}"
+            );
+        }
+        let decided = decision(&kept, &stellars(), Some(rock()));
+        assert_eq!(
+            (decided.goal, decided.leaves),
+            (Goal::JumpOut, false),
+            "MINES alone keeps state 2"
+        );
+    }
+
+    #[test]
     fn a_scooping_miner_leaves_on_a_full_hold_mines_with_0x0001_and_else_shuttles() {
         let mut full = miner(SCOOPS, true);
         full.cargo.add(0, 12);
@@ -968,6 +1090,78 @@ mod tests {
         assert_eq!(decision.comm_call, None);
     }
 
+    /// The decision by `behaviour` of a miner in slot `berth`, `provoked`
+    /// its provocation, whose target names a pirate in slot 2 gone from
+    /// the system as `freed` says.
+    fn decided_on_gone_by(
+        behaviour: &dyn Behaviour,
+        freed: crate::traffic::gone::Freed,
+        berth: u32,
+        provoked: f32,
+    ) -> crate::ai::Decision {
+        use crate::traffic::gone::GoneShip;
+        let mut npc = miner(MINER_BITS, true);
+        npc.provoked = provoked;
+        npc.target = Some(n(2));
+        npc.berth = berth;
+        let mut attacker = ship(2, PIRATES, AiType::Warship, 50.0, 0.0);
+        attacker.berth = 2;
+        let gone = [GoneShip {
+            ship: attacker,
+            freed,
+        }];
+        let npcs = [npc];
+        let around = Surroundings {
+            gone: &gone,
+            ..Surroundings::new(&[], &npcs)
+        };
+        behaviour.decision(&npcs[0], &around, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn a_provoked_miner_flees_a_gone_attacker_its_target_names_calls_for_help_and_the_flight_ends_zeroed()
+     {
+        // The provoked test finds +0x70 not -1 (@0x8b254-0x8b263), writes
+        // goal 3 (@0x8b265) and calls for help (@0x8b46c-0x8b483); the
+        // slot test makes +0x70 -1 (@0x8d4e4-0x8d50d) and goal 3's block
+        // zeroes (@0x8e228-0x8e23d).
+        use crate::traffic::gone::Freed;
+        for (freed, berth) in [(Freed::InDispatch, 3), (Freed::InShipPass, 1)] {
+            let think = decided_on_gone_by(&MinerAi, freed, berth, 5.0);
+            assert_eq!(think.goal, Goal::Flee(n(2)), "{freed:?}: the think's");
+            assert_eq!(think.travel, TravelWrite::Keep, "{freed:?}");
+            assert_eq!(
+                think.comm_call,
+                Some(crate::ai::CommCall::Distress),
+                "{freed:?}"
+            );
+            let flown = decided_on_gone_by(&crate::ai::NovaAi::default(), freed, berth, 5.0);
+            assert_eq!(flown.goal, Goal::Idle, "{freed:?}");
+            assert!(flown.clears_target, "{freed:?}");
+            assert!(flown.forgets_provocation, "{freed:?}");
+            assert_eq!(
+                flown.comm_call,
+                Some(crate::ai::CommCall::Distress),
+                "{freed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provoked_miner_does_not_read_a_gone_attacker_once_a_slot_test_has_cleared_it_or_unprovoked()
+     {
+        use crate::traffic::gone::Freed;
+        for (freed, berth, provoked) in [
+            (Freed::InDispatch, 1, 5.0),
+            (Freed::InShipPass, 3, 5.0),
+            (Freed::InDispatch, 3, 0.0),
+        ] {
+            let decision = decided_on_gone_by(&MinerAi, freed, berth, provoked);
+            assert_eq!(decision.goal, Goal::Mine, "{freed:?} {berth}");
+            assert_eq!(decision.comm_call, None, "{freed:?} {berth}");
+        }
+    }
+
     #[test]
     fn a_disabled_miner_idles_with_no_target() {
         let mut disabled = miner(SCOOPS, false);
@@ -980,12 +1174,156 @@ mod tests {
             ship(2, PIRATES, AiType::Warship, 50.0, 0.0),
         ];
         let around = Surroundings::new(&[], &npcs);
-        assert_eq!(decide(&disabled, &around), Goal::Idle);
-        let idle = Npc {
-            goal: Goal::Idle,
-            ..disabled
+        let decided = MinerAi.decision(&disabled, &around, &mut Draws::of(&[]));
+        assert_eq!(decided.goal, Goal::Idle);
+        assert_eq!(decided.last_target(), Some(None), "+0x70 -1 (@0x8b238)");
+    }
+
+    // Its +0x70.
+
+    /// `npc` holding NPC 2, which is alive 600 off and doesn't provoke it,
+    /// decided among `sites`, with `rock` in slot 0 and `boxes` in space:
+    /// its goal, whether the think cleared its target, and the target the
+    /// frame ends with (the decision's, or else its target step's on the
+    /// goal decided).
+    fn its_target(
+        npc: Npc,
+        sites: &[LandingSite],
+        rock: Option<Asteroid>,
+        boxes: &[CargoBox],
+    ) -> (Goal, bool, Option<ShipRef>) {
+        let holding = Npc {
+            target: Some(n(2)),
+            ..npc
         };
-        assert_eq!(MinerAi.target(&idle, &around), None);
+        let npcs = [
+            holding.clone(),
+            ship(2, PIRATES, AiType::Warship, 600.0, 0.0),
+        ];
+        let around = Surroundings {
+            mining_rock: rock,
+            boxes,
+            ..Surroundings::new(sites, &npcs)
+        };
+        let decided = MinerAi.decision(&holding, &around, &mut Draws::of(&[]));
+        let after = Npc {
+            goal: decided.goal,
+            ..holding
+        };
+        let target = decided
+            .last_target()
+            .unwrap_or_else(|| MinerAi.target(&after, &around));
+        (decided.goal, decided.clears_target, target)
+    }
+
+    #[test]
+    fn a_miner_keeps_its_target_where_its_think_writes_none() {
+        // Mine (@0x8b2ba), scoop (@0x8b33b), the shuttle's landing
+        // (@0x8b3a5), stop (@0x8b452) and wait-idle (@0x8b45d), and a
+        // `MINES`-alone leave it keeps (@0x8b2a7): no +0x70 write.
+        let kept = Some(n(2));
+        let boxes = [cargo(500.0, 0.0, true)];
+        assert_eq!(
+            its_target(miner(MINES, false), &stellars(), Some(rock()), &[]),
+            (Goal::Mine, false, kept),
+            "mine"
+        );
+        assert_eq!(
+            its_target(miner(SCOOPS, true), &stellars(), None, &boxes),
+            (Goal::Scoop, false, kept),
+            "scoop"
+        );
+        let leaving = Npc {
+            goal: Goal::JumpOut,
+            ..miner(MINES, false)
+        };
+        assert_eq!(
+            its_target(leaving, &stellars(), None, &[]),
+            (Goal::JumpOut, false, kept),
+            "MINES alone keeps its leave"
+        );
+        assert_eq!(
+            its_target(miner(SCOOPS, false), &stellars(), None, &[]),
+            (Goal::Land(StellarId(129)), false, kept),
+            "the shuttle's landing"
+        );
+        let stranded = Npc {
+            class_fuel: 99,
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            its_target(stranded, &[], None, &[]),
+            (Goal::Wait, false, kept),
+            "the shuttle's stop"
+        );
+        let waiting = Npc {
+            ai_wait: 5.0,
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            its_target(waiting, &stellars(), None, &[]),
+            (Goal::Idle, false, kept),
+            "the shuttle's wait-idle"
+        );
+    }
+
+    #[test]
+    fn a_miner_clears_its_target_on_its_stop_its_leaves_and_disabled() {
+        // `_MinerAI`'s four -1 writes: disabled (@0x8b238), the `MINES`
+        // stop (@0x8b2c5), which stands through a later scoop, mine
+        // return and the shuttle's landing and wait-idle, the
+        // full-hold leave (@0x8b31e) and the shuttle's leave (@0x8b43f).
+        let boxes = [cargo(500.0, 0.0, true)];
+        assert_eq!(
+            its_target(miner(MINES, false), &stellars(), None, &[]),
+            (Goal::Wait, true, None),
+            "the stop"
+        );
+        assert_eq!(
+            its_target(miner(MINER_BITS, true), &stellars(), None, &boxes),
+            (Goal::Scoop, true, None),
+            "the stop's -1 stands through the scoop"
+        );
+        assert_eq!(
+            its_target(miner(MINER_BITS, true), &stellars(), None, &[]),
+            (Goal::Mine, true, None),
+            "the stop's -1 stands through the mine return"
+        );
+        assert_eq!(
+            its_target(miner(MINER_BITS, false), &stellars(), None, &[]),
+            (Goal::Land(StellarId(129)), true, None),
+            "the stop's -1 stands through the shuttle's landing"
+        );
+        let waiting = Npc {
+            ai_wait: 5.0,
+            ..miner(MINER_BITS, false)
+        };
+        assert_eq!(
+            its_target(waiting, &stellars(), None, &[]),
+            (Goal::Idle, true, None),
+            "the stop's -1 stands through the shuttle's wait-idle"
+        );
+        let mut full = miner(SCOOPS, true);
+        full.cargo.add(0, 20);
+        assert_eq!(
+            its_target(full, &stellars(), None, &[]),
+            (Goal::JumpOut, true, None),
+            "the full-hold leave"
+        );
+        assert_eq!(
+            its_target(miner(SCOOPS, false), &[], None, &[]),
+            (Goal::JumpOut, true, None),
+            "the shuttle's leave"
+        );
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            its_target(disabled, &stellars(), None, &[]),
+            (Goal::Idle, true, None),
+            "disabled"
+        );
     }
 
     #[test]

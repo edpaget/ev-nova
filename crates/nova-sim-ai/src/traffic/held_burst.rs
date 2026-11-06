@@ -20,6 +20,8 @@
 //!   whether or not it thrusts (@0x860a6), which the autopilot's fight
 //!   drops it for.
 //! - **What keeps it** (F5, F6): the swarm's thrust (sub 0x12, @0x8533d),
+//!   the mining orders' chase and scoop (0x13 @0x881bc-0x881c4, 0x15
+//!   @0x8857b-0x88583; [`mine_flight`](crate::traffic::mine_flight)),
 //!   sub 1's brakes (inertialess -0.5 × `_ShipAccelRate` @0x853e0-0x853fe;
 //!   inertial, its full thrust from 1.75 on an axis @0x85510-0x8551e or
 //!   half of it @0x85526-0x8558d) and sub 0xe's (inertialess
@@ -90,10 +92,8 @@
 //!   is another matter: that block runs on
 //!   ([`autopilot::burst_motion`]).
 //!
-//! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. The
-//! mining orders' thrusts are
-//! rdm:phase/npc-ai/phase-13-mining-orders-burst-an-owed-burst's;
-//! sub 0xc's inspection hold is dead code on any data
+//! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. Sub
+//! 0xc's inspection hold is dead code on any data
 //! (rdm:phase/escort-fleet-fidelity-followups/phase-2-left-out-of-formation-flight).
 //!
 //! The engine sets the burst's velocity and moves the ship in the tick
@@ -120,10 +120,12 @@ use crate::traffic::warp_out::FOLLOW_BURST;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Word {
     /// It writes +0x34 when it thrusts: every substate but 1, 0xe and
-    /// 0x12, whose thrust drops an owed burst (F8).
+    /// 0x12, and mining orders 0x13 and 0x15 (@0x881bc-0x881c4,
+    /// @0x8857b-0x88583), whose thrust drops an owed burst (F8).
     Writes,
-    /// It leaves +0x34 alone (subs 1, 0xe and 0x12), writing +0x30 alone:
-    /// `thrust` is |+0x30| in pixels a tick, 0 when it doesn't thrust.
+    /// It leaves +0x34 alone (subs 1, 0xe and 0x12, and mining orders 0x13
+    /// and 0x15), writing +0x30 alone: `thrust` is |+0x30| in pixels a
+    /// tick, 0 when it doesn't thrust.
     Keeps {
         /// |+0x30|.
         thrust: f32,
@@ -131,7 +133,9 @@ pub(crate) enum Word {
 }
 
 impl Word {
-    /// Sub 0x12's word, and an inertial sniper's (sub 0xe): its thrust,
+    /// Sub 0x12's word, an inertial sniper's (sub 0xe), and mining orders
+    /// 0x13 and 0x15's (`mine_flight::steer`, @0x881bc-0x881c4,
+    /// @0x8857b-0x88583): its thrust,
     /// `flown`'s acceleration, while `controls` thrust.
     pub(crate) fn thrusting(controls: Controls, flown: &Handling) -> Self {
         Self::Keeps {
@@ -349,10 +353,14 @@ pub(crate) fn settle(
 /// ([`Goal::Idle`], its kept pursuit, docking and any sub 4 or 0xd
 /// dropped) unless it assists the player (goal 9 or 0xf, @0x82e96); its
 /// travel stellar cleared (+0x6c = -1), its stage ended (+0x50 = 0,
-/// @0x82eb0) and its burst gone (+0x34 = 0). Its target is kept.
+/// @0x82eb0) and its burst gone (+0x34 = 0). Its target is kept. Sub-goal
+/// 0 (+0xc8ca, @0x82e9f) also drops a kept mining order or sub 1's brake
+/// ([`Npc::mine_order`], [`Npc::stopping`]), so the wait after runs sub 0.
 fn stop_jumping(npc: &mut Npc) {
     if !matches!(npc.goal, Goal::Assist(_)) {
         npc.goal = Goal::Idle;
+        npc.mine_order = crate::ai::mine_orders::MineOrder::Stop;
+        npc.stopping = false;
         npc.pursuit.kept = None;
         npc.docking = None;
         npc.warp.goal = None;
@@ -855,6 +863,29 @@ mod tests {
                 assert_eq!(npc.warp.stage, 0.0, "{goal:?} {stage}");
                 assert_eq!(npc.warp.goal, sub, "{goal:?} {stage}");
             }
+        }
+    }
+
+    #[test]
+    fn the_end_of_a_burst_clears_a_mining_sub_goal_but_an_assisters() {
+        // Sub-goal 0 with goal 0 (@0x82e9f), skipped under goal 9
+        // (@0x82e7d-0x82e94).
+        use crate::ai::mine_orders::MineOrder;
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        for (goal, expected) in [
+            (Goal::Mine, (MineOrder::Stop, false)),
+            (Goal::Scoop, (MineOrder::Stop, false)),
+            (Goal::Assist(Help::Refuel), (MineOrder::Chase, true)),
+        ] {
+            let mut npc = owing(Some(5.0));
+            npc.goal = goal;
+            npc.mine_order = MineOrder::Chase;
+            npc.stopping = true;
+            settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[0]));
+            assert_eq!((npc.mine_order, npc.stopping), expected, "{goal:?}");
         }
     }
 

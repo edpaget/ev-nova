@@ -493,22 +493,24 @@ fn the_warp_outs_heading_write_is_the_berths_last() {
     assert_eq!(traffic.berth_headings.left(6), Some(123));
 }
 
-/// A ship jumping out at rest 2000 east, beyond the leave's reach, heading
-/// 100, of `warp` (its aim and stage), in berth 6, not yet on its own
-/// jump: after its slot, where its low level begins it (sub 4,
-/// [`Leg::Jump`](crate::ai::leave::Leg::Jump)), and after its step on the
-/// advance pass, which reports it.
-fn jump_begun_at_slot(warp: Warp) -> (Traffic, NpcId, Npc) {
+/// A ship jumping out at rest 2000 east, beyond the leave's reach, facing
+/// `heading`, of `warp` (its aim and stage), in berth 6, not yet on its own
+/// jump, in a world whose warp sound runs 600 Mac ticks: after its slot,
+/// where its low level begins it (sub 4,
+/// [`Leg::Jump`](crate::ai::leave::Leg::Jump)) and its sub 4 runs, and
+/// after its step on the advance pass, which flies its warp-out.
+fn jump_begun_at_slot(warp: Warp, heading: f32) -> (Traffic, NpcId, Npc) {
     let mut traffic = Traffic::with_interval(1);
     let mut runner = ship(0, TRADERS, AiType::WimpyTrader, 2000.0, 0.0);
     runner.goal = Goal::JumpOut;
     runner.warp = warp;
-    runner.state.heading = 100.0;
+    runner.state.heading = heading;
     let runner = traffic.add_npc_at(runner, 6);
-    traffic.think_holding(&Keeps, World::new(&[]), &[], &mut NeverFires);
+    let mut world = World::new(&[]);
+    world.warp.durations = [600, 600];
+    traffic.think_holding(&Keeps, world, &[], &mut NeverFires);
     let at_slot = of(&traffic, runner).clone();
     assert!(at_slot.jumping(), "its jump begun at its slot");
-    let world = World::new(&[]);
     let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), crate::traffic::FlyHalf::Advance);
     let outcome = traffic.fly_npc(&mut pass, runner, &world, &mut NeverFires);
     assert_eq!(outcome, Some(crate::traffic::autopilot::Outcome::Flying));
@@ -516,36 +518,35 @@ fn jump_begun_at_slot(warp: Warp) -> (Traffic, NpcId, Npc) {
 }
 
 #[test]
-fn a_jump_begun_at_its_slot_flies_nothing_at_its_step() {
-    // Sub 4 begun at the slot (state 2 @0x8dd99) moves the ship nothing
-    // that tick: its warp-out flies it from the next pass, so its step
-    // neither turns it toward its warp's aim nor writes that aim as its
+fn a_jump_begun_at_its_slot_flies_its_warp_out_at_its_step() {
+    // Sub 4 runs at the slot where state 2 begins it (@0x8dd99, @0x8585b),
+    // its aim the bearing out (@0x85892-0x8589e) over a stale one, so its
+    // step's warp-out turns the ship toward it and writes it as its
     // berth's last heading (@0x347ba).
     let stale = Warp {
         aim: 123,
         ..Warp::default()
     };
-    let (traffic, runner, at_slot) = jump_begun_at_slot(stale);
-    assert_eq!(of(&traffic, runner).state, at_slot.state);
-    assert_eq!(traffic.berth_headings.left(6), Some(100));
+    let (traffic, runner, at_slot) = jump_begun_at_slot(stale, 100.0);
+    assert_eq!(at_slot.warp.aim, 90, "sub 4's aim at the slot");
+    let turn = at_slot.own_handling().turn_rate;
+    assert_eq!(of(&traffic, runner).state.heading, 100.0 - turn);
+    assert_eq!(traffic.berth_headings.left(6), Some(90));
 }
 
 #[test]
-fn a_flight_ended_at_its_slot_still_settles_its_warp_under_way_at_its_step() {
-    // `_HandleShip`'s warp-out block (@0x347ba on) runs at every step, a
-    // flight's that ended at its slot too: a stage under way, on its aim,
-    // moves the ship out along its heading as its jump begun at its slot
-    // flies nothing else.
+fn a_jump_begun_at_its_slot_with_a_stage_under_way_moves_out_at_its_step() {
+    // `_HandleShip`'s warp-out block (@0x347ba on) flies the stage sub 4
+    // moved on at the slot (@0x858e4-0x858f9), the ship on its aim.
     let under_way = Warp {
-        aim: 100,
+        aim: 90,
         stage: 3.0,
         since: 200,
-        goal: None,
-        joining: false,
+        ..Warp::default()
     };
-    let (traffic, runner, at_slot) = jump_begun_at_slot(under_way);
+    let (traffic, runner, at_slot) = jump_begun_at_slot(under_way, 90.0);
+    assert_eq!(at_slot.warp.stage, 4.0, "sub 4 at the slot");
     let stepped = of(&traffic, runner);
-    assert_eq!(stepped.state.heading, at_slot.state.heading);
     assert_ne!(stepped.state.position, at_slot.state.position, "moved out");
 }
 

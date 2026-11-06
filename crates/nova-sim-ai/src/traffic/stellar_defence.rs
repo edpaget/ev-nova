@@ -362,7 +362,7 @@ pub fn defender(
     // `_SpecificDudeSpawn`'s ship already has no lead, mission or aux mark.
     Some(NewShip {
         govt: site.govt,
-        ai_type: AiType::Warship,
+        ai_type: AiType::Warship.into(),
         state: crate::flight::ShipState {
             position: site.position,
             velocity: crate::geometry::Vec2::ZERO,
@@ -787,6 +787,18 @@ mod tests {
     }
 
     use nova_sim_base::fixture::Ranged;
+
+    #[test]
+    fn a_defender_asks_no_scoop() {
+        let ship = defender(
+            &defence_table("", false),
+            &earth(3),
+            crate::traffic::persons::PersonWorld::NONE.gate(),
+            &mut Ranged::of(&[(360, 90)]),
+        )
+        .expect("a ship");
+        assert!(!ship.asks_scoop, "`_SpawnStellarDefenseShip` asks none");
+    }
 
     #[test]
     fn a_defender_comes_at_its_stellar_at_top_speed_attacking_the_player() {

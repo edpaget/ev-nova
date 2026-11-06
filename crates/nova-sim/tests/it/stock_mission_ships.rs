@@ -114,7 +114,10 @@ fn a_stock_missions_special_ships_spawn_in_their_system_and_no_other() {
     for npc in marked {
         assert!(dude_ships.contains(&npc.ship), "{:?}", npc.ship);
         assert_eq!(npc.govt.map(|govt| govt.0), Some(128), "the düde's");
-        assert_eq!(npc.state.position, earth, "at Earth");
+        // Set up at Earth, then flown on the frame that set them up
+        // (`_DoPlayGameWork`'s ship loop @0x44483).
+        let set_up = npc.state.position - npc.state.velocity;
+        assert!((set_up - earth).length() < 1e-3, "at Earth: {set_up:?}");
     }
 
     let elsewhere = if start == SOL { SystemId(131) } else { start };

@@ -95,7 +95,7 @@ fn brought_in(data: &GameData, ship: i16, govt: i16) -> (f32, f32) {
         vec![NewShip {
             ship: ShipId(ship),
             govt: Some(GovtId(govt)),
-            ai_type: AiType::WimpyTrader,
+            ai_type: AiType::WimpyTrader.into(),
             lead: None,
             state: ShipState::default(),
             entry: Entry::Placed,
@@ -112,6 +112,8 @@ fn brought_in(data: &GameData, ship: i16, govt: i16) -> (f32, f32) {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: false,
+            clears_mark: false,
         }],
         8,
         &govts,

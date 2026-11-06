@@ -7,6 +7,7 @@
 //! [`waiting_think`]: super::waiting_think
 #![allow(clippy::float_cmp)]
 
+use super::ai_wait;
 use super::autopilot::Outcome;
 use super::board_wait::BOARD_WAIT;
 use super::emerge::EXIT_SPEED;
@@ -527,6 +528,53 @@ fn an_interceptor_held_at_its_gate_searches_nothing_until_its_hold_runs_out() {
             assert_fire_held(&traffic, cop);
         }
         held += 1;
+    }
+    // The engine may search a tick after the original's first unwaited
+    // dispatch: a lag no player sees, so it isn't filed (CLAUDE.md,
+    // "Ordering against the original").
+    for _ in 0..2 {
+        if of(&traffic, cop).goal != Goal::Idle {
+            break;
+        }
+        traffic.tick_in(
+            &NovaAi::default(),
+            world(&sites, &govts),
+            &[],
+            &mut NeverFires,
+        );
+    }
+    assert_eq!(of(&traffic, cop).goal, Goal::Attack(n(pirate.0)));
+}
+
+/// Flying, `_InterceptorAI`'s search needs +0x4c at most 0 (@0x8cc83-0x8cc8d,
+/// `ucomiss 0x4c`, `jb 0x8d13f`), and `_HandleShip` counts +0x4c down
+/// (@0x35037-0x35048), so an unprovoked interceptor under its AI wait keeps
+/// its goal and takes no target until the wait runs out.
+#[test]
+fn a_flying_interceptor_searches_nothing_until_its_ai_wait_runs_out() {
+    let govts = govts(0, 0);
+    let sites = [gate()];
+    let (mut traffic, cop, pirate) = interceptor_and_pirate(Mode::Flying, Goal::Idle);
+    traffic
+        .npcs_mut()
+        .iter_mut()
+        .filter(|npc| npc.id == cop)
+        .for_each(|npc| npc.ai_wait = ai_wait::ticks(3));
+    let mut waited = 0;
+    while ai_wait::running(of(&traffic, cop).ai_wait) {
+        assert!(waited < 10, "the wait runs out");
+        traffic.tick_in(
+            &NovaAi::default(),
+            world(&sites, &govts),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, cop);
+        if ai_wait::running(ship.ai_wait) {
+            assert_eq!(ship.goal, Goal::Idle, "tick {waited}: no search");
+            assert_eq!(ship.target, None, "tick {waited}");
+        }
+        waited += 1;
     }
     // The engine may search a tick after the original's first unwaited
     // dispatch: a lag no player sees, so it isn't filed (CLAUDE.md,

@@ -34,7 +34,8 @@
 //! - **The count wait**: `_HighLevelAIHandler` holds goal 0x16 while +0x4c
 //!   is above 0, firing nothing (sub 1, a stop), and at 0 sets goal 0
 //!   (@0x8d462-0x8d4ac), the per-type think having returned on 0x16 that
-//!   frame (@0x8c2ee); `_HandleShip` takes a frame off +0x4c after the
+//!   frame (@0x8c2ee, and every other type's too); while it holds, it
+//!   clears the target, and at 0 keeps it ([`lapse`]); `_HandleShip` takes a frame off +0x4c after the
 //!   thinks (@0x35037-0x35048), on each of double time's passes. So the
 //!   frame that sets 120 holds and leaves 119, the 120th frame after ends
 //!   the wait, and the pirate searches again on the 121st. The wait is the
@@ -67,7 +68,7 @@ use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
 use crate::rulebook::RuleSource;
 use crate::traffic::ai_wait;
-use crate::traffic::npc::Npc;
+use crate::traffic::npc::{Npc, NpcId};
 
 /// The ticks a pirate waits while another ship boards its victim (+0x4c
 /// = 120.0, 0x42f00000 @0x8c71c).
@@ -160,15 +161,63 @@ pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
     }
 }
 
-/// The end of each count wait among `npcs` whose think was `due` this
-/// tick: once its AI wait no longer runs (+0x4c > 0.0 @0x8d474), goal 0 (`_HighLevelAIHandler`
-/// @0x8d497-0x8d4a3), [`Goal::Idle`].
-pub fn lapse(npcs: &mut [Npc], due: &[bool]) {
-    for (npc, _) in npcs.iter_mut().zip(due).filter(|(_, due)| **due) {
-        if npc.goal == Goal::CountWait && !ai_wait::running(npc.ai_wait) {
+/// The count-wait block at `_HighLevelAIHandler`'s head
+/// (@0x8d462-0x8d4ac) for each ship among `npcs` in goal 0x16 whose think
+/// was `due` this tick, whatever its type. While its AI wait runs (+0x4c >
+/// 0.0 @0x8d474) the block writes +0x70 -1 (@0x8d480), which clears
+/// [`Npc::target`], so a hit's target is held only until the ship's next
+/// run; its other writes there need nothing here: +0xba 0 is the low
+/// level's every frame, +0x6c -1 is in [`travel`](crate::ai::travel)'s
+/// "Not written", and sub 1 is the stop the count wait flies
+/// ([`autopilot`](crate::traffic::autopilot)). Once the wait no longer
+/// runs, goal 0 and sub 0 with +0x70 kept (@0x8d497-0x8d4a3),
+/// [`Goal::Idle`], and the handler goes on to its slot test, which clears
+/// a gone slot's (@0x8d4e4-0x8d50d).
+///
+/// The slot test is [`kept_target::kept`](crate::ai::kept_target::kept)'s,
+/// read from the slots before any write here: an NPC's slot is active by
+/// [`Condition::active`](crate::combat::hull::Condition::active), as
+/// [`Surroundings::active`](crate::ai::Surroundings::active) reads it, and
+/// the player's always is. It is not called, as `npcs` is borrowed to be
+/// written and no [`Surroundings`](crate::ai::Surroundings) is built at
+/// this step, whose player, `None` off its flight, would let the player go.
+///
+/// Each ship's word on the target its frame ends with
+/// ([`Decision::last_target`](crate::ai::Decision::last_target)'s shape):
+/// for one whose wait it ended, the target kept, which the traffic writes
+/// over its type's target step, as the block reads no type; none for any
+/// other.
+// `Decision::last_target`'s own shape: none for no word, then the word.
+#[allow(clippy::option_option)]
+pub fn lapse(npcs: &mut [Npc], due: &[bool]) -> Vec<Option<Option<ShipRef>>> {
+    let active: Vec<NpcId> = npcs
+        .iter()
+        .filter(|npc| npc.condition.active())
+        .map(|npc| npc.id)
+        .collect();
+    let in_slot = |ship: &ShipRef| match ship {
+        ShipRef::Player => true,
+        ShipRef::Npc(id) => active.contains(id),
+    };
+    let mut words = vec![None; npcs.len()];
+    for ((npc, word), _) in npcs
+        .iter_mut()
+        .zip(&mut words)
+        .zip(due)
+        .filter(|(_, due)| **due)
+    {
+        if npc.goal != Goal::CountWait {
+            continue;
+        }
+        if ai_wait::running(npc.ai_wait) {
+            npc.target = None;
+        } else {
             npc.goal = Goal::Idle;
+            npc.target = npc.target.filter(in_slot);
+            *word = Some(npc.target);
         }
     }
+    words
 }
 
 #[cfg(test)]
@@ -178,7 +227,7 @@ mod tests {
     use crate::ai::pursuit::{Body, Frame, Kept, Pursuit};
     use crate::ai::{Behaviour, Surroundings};
     use crate::chance::Chance;
-    use crate::combat::NpcId;
+
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
@@ -491,6 +540,79 @@ mod tests {
             [Goal::Idle, Goal::CountWait, Goal::CountWait, Goal::Hold],
             "another goal at none left is no count wait to end"
         );
+    }
+
+    #[test]
+    fn a_running_count_wait_clears_the_target_for_every_type() {
+        // The block at the handler's head reads no type: while +0x4c runs
+        // it writes +0x70 -1 (@0x8d480).
+        let mut warship = waiting(1, 30);
+        warship.ai_type = crate::traffic::npc::AiType::Warship;
+        warship.target = Some(n(5));
+        let mut escort = waiting(2, 30);
+        escort.leader = Some(NpcId(5));
+        escort.target = Some(n(6));
+        let mut npcs = vec![warship, escort];
+        lapse(&mut npcs, &[true, true]);
+        for npc in &npcs {
+            assert_eq!(npc.goal, Goal::CountWait, "{:?}", npc.id);
+            assert_eq!(npc.target, None, "{:?}", npc.id);
+        }
+    }
+
+    #[test]
+    fn a_count_wait_ending_keeps_the_target_and_one_not_due_keeps_both() {
+        // With +0x4c out the block writes goal 0 and sub 0 and keeps +0x70
+        // (@0x8d497-0x8d4a3), and its frame ends with it, whatever the
+        // type's target step answers.
+        let mut out = waiting(1, 0);
+        out.target = Some(n(2));
+        let mut not_due = waiting(2, 30);
+        not_due.target = Some(n(1));
+        let mut npcs = vec![out, not_due];
+        let words = lapse(&mut npcs, &[true, false]);
+        assert_eq!(npcs[0].goal, Goal::Idle);
+        assert_eq!(npcs[0].target, Some(n(2)), "the wait out keeps +0x70");
+        assert_eq!(npcs[1].goal, Goal::CountWait);
+        assert_eq!(npcs[1].target, Some(n(1)), "no high level ran");
+        assert_eq!(words, [Some(Some(n(2))), None]);
+    }
+
+    #[test]
+    fn a_count_wait_ending_on_a_gone_slot_lets_it_go() {
+        // The slot test after the wait exit (@0x8d4e4-0x8d50d): a ship
+        // breaking up is still active, the player always there, and a ship
+        // still listed but destroyed is not.
+        let mut gone = waiting(1, 0);
+        gone.target = Some(n(9));
+        let mut on_player = waiting(2, 0);
+        on_player.target = Some(ShipRef::Player);
+        let mut on_wreck = waiting(3, 0);
+        on_wreck.target = Some(n(4));
+        let mut wreck = ship(4, 4, Goal::Idle);
+        wreck.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        let mut on_destroyed = waiting(5, 0);
+        on_destroyed.target = Some(n(6));
+        let mut destroyed = ship(6, 6, Goal::Idle);
+        destroyed.condition = Condition::Destroyed;
+        let mut npcs = vec![gone, on_player, on_wreck, wreck, on_destroyed, destroyed];
+        let words = lapse(&mut npcs, &[true; 6]);
+        assert_eq!(
+            words,
+            [
+                Some(None),
+                Some(Some(ShipRef::Player)),
+                Some(Some(n(4))),
+                None,
+                Some(None),
+                None
+            ]
+        );
+        assert_eq!(npcs[0].target, None);
+        assert_eq!(npcs[4].target, None, "listed, but its slot inactive");
     }
 
     #[test]

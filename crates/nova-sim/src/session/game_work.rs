@@ -32,15 +32,18 @@
 //!    reaction block runs in them (see the `hit_turns` module), a shot's
 //!    hit that starts a ship dying queuing the victory of the escort
 //!    attacking it (`_HandleShipHit`
-//!    @0x36c7f-0x36d45).
+//!    @0x36c7f-0x36d45), and the quote of a person a hit turned said as
+//!    its hit settles ([`Session::say_attack_quotes_now`]), as every
+//!    hit's is wherever it lands; then the strikes left answered and
+//!    their quotes said.
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
-//!    module), the damage aimed read after the passes
+//!    module), the message line counted down (`_HandleComm` @0x4421e, see
+//!    the `comm_calls` module), the damage aimed read after the passes
 //!    (`_CalculateTargetedDamage` @0x44223), the arrivals
 //!    (`_EnterMoreShips` @0x44237) and the passes run for every ship
 //!    before the first slot, the fleets announced and the arrivals of a
-//!    Derelict government held; the attack quotes from before the loop
-//!    said ([`Session::say_quotes_before_the_line`]); then `_AIDispatch`'s
+//!    Derelict government held; then `_AIDispatch`'s
 //!    loop ([`Session::dispatch_npcs`]): for each occupied slot in turn,
 //!    its think, the refuel it gave landed, its point defence and fighter
 //!    launches (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
@@ -56,11 +59,13 @@
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit, each
 //!    lock settled and answered before the next visit, the fighters lent
-//!    afresh after it (see the `hit_turns` module;
+//!    afresh after it, its quote said (see the `hit_turns` module;
 //!    [`Session::shots_phase`]).
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
 //!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
-//!    inactive, its self-repair (see the `self_repair` module), its flight (the traffic's fly half, one NPC at a time),
+//!    inactive, its self-repair (see the `self_repair` module), its hail
+//!    quote roll (@0x33f0f-0x33fba, [`Session::roll_quote_at_turn`]), on
+//!    both passes, its flight (the traffic's fly half, one NPC at a time),
 //!    reloads, regeneration, fire and death timer's tick, a dying NPC's
 //!    dying branch, a mission escort it still is leaving the formation
 //!    (see the `mission_escorts` module), and its escape pods and
@@ -70,8 +75,11 @@
 //!    later slots before they move, then steps its frame (see the
 //!    `ship_display` module); an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
-//!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
+//!    after the fly half, and the quote clock's tick and the
+//!    reinforcement clock's (`_HandleReinforcements` @0x44504), which on
+//!    the advance pass come with the traffic's tail at the loop's end
+//!    ([`Session::ship_loop`]);
+//!    then the +0x47 pass, each nav
 //!    stellar with a defence ship in the system marked under attack
 //!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
 //!    stellar guns
@@ -148,7 +156,7 @@ use super::hit_turns::Turns;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
-use crate::catalog::{PilotCatalog, TrafficCatalog};
+use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::asteroid_walk::AsteroidField;
@@ -169,6 +177,25 @@ pub(super) struct PassStart {
     /// Where the player stood before the pass's move, which the scoop
     /// lays every mask out from (see the `contact_masks` module).
     stood: Vec2,
+}
+
+/// The catalog views a pass reads, one per port ([`Session::pass_from_key_block`]).
+#[derive(Clone, Copy)]
+pub(super) struct PassCatalogs<'a> {
+    /// The advance pass's AI, its traffic drawn from the catalog it holds;
+    /// none on the second pass.
+    pub(super) ai: Option<&'a dyn TrafficCatalog>,
+    /// The deadly stellars' masks; none on the second pass, which reads
+    /// those the first kept.
+    pub(super) sheets: Option<&'a dyn PilotCatalog>,
+    /// The hail quotes' lines, which the ship loop's quote roll reads at
+    /// each NPC's turn. Handed them, the advance pass also counts the
+    /// message line down at `_HandleComm`'s place (@0x4421e) and moves the
+    /// quote clock on after its ship loop. A frame's steps always hand
+    /// them ([`Session::step`]); none goes to a pass run alone, which
+    /// rolls no quotes and counts nothing down ([`Session::game_work`],
+    /// [`Session::tick_again`]), for the tests that count a pass's work.
+    pub(super) quotes: Option<&'a dyn CommCatalog>,
 }
 
 /// What `_HandlePlayer` computes of the player at its top
@@ -237,10 +264,31 @@ impl Session {
     /// as the fight and the traffic stand still then, the rescue among it.
     /// Through a jump it runs on in its own order, as the world does (see
     /// the `warp_stage` module).
+    ///
+    /// It runs no hail quote roll and doesn't count the message line down
+    /// or move the quote clock; a frame's steps run all three
+    /// ([`Session::step`], `Session::game_work_quoting`). Each hit's
+    /// attack quote is still said as its hit settles.
     pub fn game_work(
         &mut self,
         controls: Controls,
         catalog: &(impl PilotCatalog + TrafficCatalog),
+        behaviour: &(impl Behaviour + ?Sized),
+        rules: Rules,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> bool {
+        self.game_work_quoting(controls, catalog, None, behaviour, rules, chance)
+    }
+
+    /// [`Session::game_work`], handed `quotes`: then `_HandleShip`'s hail
+    /// quote roll runs at each NPC's turn of the ship loop, read from
+    /// them, the message line counts down at `_HandleComm`'s place and the
+    /// quote clock moves on after the loop (see [`PassCatalogs::quotes`]).
+    pub(crate) fn game_work_quoting(
+        &mut self,
+        controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        quotes: Option<&dyn CommCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
@@ -269,15 +317,12 @@ impl Session {
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
-        self.pass_after_move(
-            &start,
-            pass,
-            Some(catalog),
-            Some(catalog),
-            behaviour,
-            rules,
-            chance,
-        );
+        let catalogs = PassCatalogs {
+            ai: Some(catalog),
+            sheets: Some(catalog),
+            quotes,
+        };
+        self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
         false
     }
 
@@ -323,23 +368,21 @@ impl Session {
     /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
     /// the head of the player's display step, up to `_HandlePlayer`'s key
     /// block ([`Session::player_display_head`]), then the pass from the
-    /// key block on ([`Session::pass_from_key_block`], which reads `ai`
-    /// and `sheets`). Both passes run it, [`Session::game_work`] and
+    /// key block on ([`Session::pass_from_key_block`], which reads
+    /// `catalogs`). Both passes run it, [`Session::game_work`] and
     /// [`Session::tick_again`], as the original runs one routine,
     /// `_DoPlayGameWork(pass)`, for both (see the module docs).
-    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
     pub(super) fn pass_after_move(
         &mut self,
         start: &PassStart,
         pass: GamePass,
-        ai: Option<&dyn TrafficCatalog>,
-        sheets: Option<&dyn PilotCatalog>,
+        catalogs: PassCatalogs<'_>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
         self.player_display_head(start.player_head(), chance);
-        self.pass_from_key_block(start, pass, ai, sheets, behaviour, rules, chance);
+        self.pass_from_key_block(start, pass, catalogs, behaviour, rules, chance);
     }
 
     /// A pass of the game's work from `_HandlePlayer`'s key block on: the
@@ -353,7 +396,7 @@ impl Session {
     /// the rest of the frame a dialog opened on runs it alone (see the
     /// `opening_rest` module).
     ///
-    /// `ai` is the advance pass's AI, its traffic drawn from the catalog
+    /// `catalogs.ai` is the advance pass's AI, its traffic drawn from the catalog
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
     /// past it (@0x4402a to @0x44350). Where the original branches on its
     /// argument, this branches on `ai`: with it, the arrivals come and
@@ -368,21 +411,31 @@ impl Session {
     /// (`_HandleReinforcements` @0x44504) ticks after the asteroids and
     /// before the beams (see [`Session::ship_loop`]).
     ///
-    /// `sheets` is the advance pass's catalog too, which the deadly
+    /// `catalogs.sheets` is the advance pass's catalog too, which the deadly
     /// stellars' masks are asked of before the beams' phase reads them
     /// (see [`Session::beams_phase`]); the second pass has none and reads
     /// those the first kept.
-    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
+    ///
+    /// `catalogs.quotes`, on either pass, is what the ship loop's hail
+    /// quote roll reads, at each NPC's turn of the loop (`_HandleShip`
+    /// @0x44483; see [`Session::ship_loop`]); a pass handed none rolls
+    /// none, and on the advance pass counts the message line down
+    /// nowhere, where with it the line counts down after the collision
+    /// passes and before the arrivals (`_HandleComm` @0x4421e).
+    ///
+    /// Each hit's attack quote is said as its hit settles
+    /// ([`Session::settle_landed`]), and those the collision passes'
+    /// leftover answers queue right after them, before the arrivals.
     pub(super) fn pass_from_key_block(
         &mut self,
         start: &PassStart,
         pass: GamePass,
-        ai: Option<&dyn TrafficCatalog>,
-        sheets: Option<&dyn PilotCatalog>,
+        catalogs: PassCatalogs<'_>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
+        let PassCatalogs { ai, sheets, quotes } = catalogs;
         // The end of `_HandlePlayer` from its key block, and its display
         // (@0x43e29).
         self.player_display_rest(behaviour, pass, rules, start.player_head(), chance);
@@ -392,18 +445,24 @@ impl Session {
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
+        // The quotes those answers queued, before the arrivals and the
+        // first slot's line work (see the `comm_calls` module).
+        self.say_attack_quotes_now(chance);
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
             // `_HandleVoiceSound` (@0x44219), before `_AIDispatch`
             // (@0x4429d; see the `voices` module).
             self.space
                 .handle_voice(&self.statics, &mut self.out, &mut *chance);
+            // `_HandleComm` (@0x4421e) counts the line down, after the
+            // collision passes and before the arrivals (see the
+            // `comm_calls` module).
+            if quotes.is_some() {
+                self.space.count_down_comm_line();
+            }
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
-            // The quotes from before the loop, ahead of the first slot's
-            // line work (see the `comm_calls` module).
-            self.say_quotes_before_the_line(chance);
             #[cfg(test)]
             for event in std::mem::take(&mut self.space.queued_in_frame) {
                 self.space.traffic.queue_pirate_event(event);
@@ -431,10 +490,10 @@ impl Session {
         // (@0x444ad), slot by slot.
         let motion = match thought {
             Some(Some(marks)) => Motion::Fly(marks),
-            Some(None) => Motion::Populated,
+            Some(None) => Motion::Unpopulated,
             None => Motion::Again,
         };
-        let displayed = self.ship_loop(behaviour, start, motion, pass, rules, chance);
+        let displayed = self.ship_loop(behaviour, start, motion, pass, quotes, rules, chance);
         // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
@@ -496,15 +555,18 @@ impl Session {
 
     /// The advance pass's AI, reading `catalog`, deciding as `behaviour`
     /// says and drawing on `chance`: on the first pass in a system not
-    /// yet set up, its population ([`Session::populate`]), which moves
-    /// from the next; otherwise the session's work before the AI and the
-    /// traffic's think up to the first slot's
+    /// yet set up, its population first ([`Session::populate`]), as
+    /// `_HandlePlayer`'s `_SetupShipsInSystem` comes before the AI loop
+    /// (@0x69114), which dispatches every ship it set up, and the ship
+    /// loop flies them (@0x44270-0x442ae, @0x44483); then the session's
+    /// work before the AI and the traffic's think up to the first slot's
     /// ([`Traffic::open_think`]: the arrivals, as `_EnterMoreShips` comes
     /// before the loop, @0x44237, and the succession and formations, whose
     /// marking pass runs before every dispatch), and the fleets it brings said
     /// (`Space::announce_fleets`). Each slot's think comes in
     /// [`Session::dispatch_npcs`]. What its motion is read against, when
-    /// it opened.
+    /// it opened: none while the jump is under way with the system due,
+    /// as no system is set up then and the reset emptied the traffic.
     ///
     /// [`Traffic::open_think`]: crate::traffic::Traffic::open_think
     fn traffic_think(
@@ -515,11 +577,11 @@ impl Session {
     ) -> Option<TrafficMarks> {
         if self.space.traffic_due {
             // No system is set up while the jump is under way.
-            if self.jumping().is_none() {
-                self.populate(catalog, chance);
-                self.take_entry_gate_pass(chance);
+            if self.jumping().is_some() {
+                return None;
             }
-            return None;
+            self.populate(catalog, chance);
+            self.take_entry_gate_pass(chance);
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
         self.step_traffic(|traffic, world| {
@@ -634,8 +696,10 @@ impl Session {
     /// pushes; each NPC newly
     /// downed raising its fate; the strikes answered for crimes and kills,
     /// then weighed and answered by the NPCs in turn, as `behaviour` says
-    /// ([`Session::settle_strikes`]). A target the phase left dying or
-    /// cloaked is kept: the next
+    /// ([`Session::settle_strikes`]), and the quote of each person an
+    /// answer turned on the player said ([`Session::say_attack_quotes_now`]),
+    /// as `_DamageShip` says it at the hit (@0x3be69). A target the phase
+    /// left dying or cloaked is kept: the next
     /// pass's head lets go of it (see the `lost_target` module).
     ///
     /// Between the fates and the strikes, every escort the phase left
@@ -681,6 +745,10 @@ impl Session {
         self.space.sync_fleet(&mut self.pilot);
         self.lose_escorts(was, &struck);
         self.settle_strikes(behaviour, (strikes, losses), was, rules.law, chance);
+        // `_DamageShip` says a turned person's quote at the hit
+        // (`_AIMakeShipAttackPlayer` @0x3be69, `_ShowPersonHailQuote`
+        // @0x89ce1), before the next hit lands.
+        self.say_attack_quotes_now(chance);
     }
 
     /// Runs `phase`, one that lands hits, as [`Session::with_fighters`]
@@ -1142,6 +1210,7 @@ mod tests {
         let mut session = warmed(&catalog);
         // The player's class, of no mass in the fixture, given one.
         session.ship.fit.hull.mass = 40.0;
+        session.ship.fit.hull.signed_mass = 40;
         let stood = session.player().position;
         session.hold_trigger(FIRE);
         pass(
@@ -1484,5 +1553,81 @@ mod tests {
         assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
         assert_eq!(read, [leaver], "the higher slot's think that pass");
         assert_eq!(reads(&mut session), [leaver], "its record stands");
+    }
+
+    // The populating frame.
+
+    #[test]
+    fn the_populating_frame_runs_every_ships_think() {
+        // `_DoPlayGameWork`'s AI loop (@0x44270-0x442ae) dispatches every
+        // ship `_SetupShipsInSystem` set up before it, with no test of a
+        // fresh setup.
+        let catalog = crate::session::tests::trafficked(130, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        let behaviour = Recording::default();
+        pass(&mut session, &catalog, Controls::default(), &behaviour);
+        let ids: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(ids.len(), 2, "set up");
+        let thought: Vec<NpcId> = behaviour.take().iter().map(|seen| seen.id).collect();
+        assert_eq!(thought, ids);
+    }
+
+    #[test]
+    fn the_populating_frame_sets_up_each_mission_ship_once() {
+        // The frame's `_EnterMoreShips` (@0x44237) runs after the setup,
+        // and counts the ships it set up as come.
+        use crate::session::mission_ships::tests::{
+            accepted, marked, shipping, ships_catalog, take_off,
+        };
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        // A relocation's reset, as a load in flight leaves it.
+        session.space.traffic_due = true;
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        assert_eq!(marked(&session), [0, 0]);
+    }
+
+    #[test]
+    fn a_jump_under_way_with_the_system_due_sets_up_nothing_and_flies_nothing() {
+        use crate::testkit::{begin_jump_now, fly_out};
+        let catalog = crate::session::tests::trafficked(130, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        fly_out(&mut session, &catalog);
+        begin_jump_now(&mut session, &catalog).expect("jumps");
+        session.space.traffic_due = true;
+        let before: Vec<(NpcId, crate::flight::ShipState)> = session
+            .npcs()
+            .iter()
+            .map(|npc| (npc.id, npc.state))
+            .collect();
+        pass(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &NovaAi::default(),
+        );
+        let after: Vec<(NpcId, crate::flight::ShipState)> = session
+            .npcs()
+            .iter()
+            .map(|npc| (npc.id, npc.state))
+            .collect();
+        assert_eq!(after, before, "nothing set up or flown");
+        assert!(session.space.traffic_due);
     }
 }

@@ -12,7 +12,8 @@
 //! escorts ([`has_escorts`]) and issues nothing. Each order sets the
 //! ship's mark too
 //! ([`Npc::ordered_by_lead`](super::npc::Npc::ordered_by_lead), +0xc4,
-//! @0x89b71). Each leader issues at the head of its own slot's run, before
+//! @0x89b71), and its berth's word, which a ship placed there next may
+//! keep ([`berth_marks`](super::berth_marks)). Each leader issues at the head of its own slot's run, before
 //! its decision ([`dispatch_head`](super::dispatch_head)).
 //!
 //! **Ordering.** The original issues at each leader's own `_AIDispatch`,
@@ -61,6 +62,8 @@ impl Traffic {
             }) {
                 npc.order_word = for_class(table, npc.class);
                 npc.ordered_by_lead = true;
+                // The byte is the slot's: its next ship may keep it.
+                self.berth_marks.mark(npc.berth);
             }
         }
     }
@@ -78,6 +81,7 @@ mod tests {
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::fleet::OrderWord;
     use crate::geometry::Vec2;
+    use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -204,6 +208,36 @@ mod tests {
         assert_eq!(marks(&traffic), [false; 4], "off its frame");
         issue(&mut traffic, 0);
         assert_eq!(marks(&traffic), [false, true, false, false]);
+    }
+
+    #[test]
+    fn an_order_issued_marks_the_ships_berth_which_a_ship_kept_placed_there_takes() {
+        // The mark is the slot's byte (+0xc4 @0x89b71): it outlives the
+        // ship, and `_GenericRandomShipSpawn` leaves it to the next
+        // (`berth_marks`).
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let mut traffic = traffic([leader(), led(EscortClass::Fighter)]);
+            traffic.set_reused_slot_mark(reading);
+            let escort = traffic.npcs()[1].clone();
+            assert_eq!(traffic.berth_mark(escort.berth), Some(false), "cleared");
+            issue(&mut traffic, 0);
+            assert_eq!(traffic.berth_mark(escort.berth), Some(true), "{reading:?}");
+            assert_eq!(traffic.berth_mark(traffic.npcs()[0].berth), Some(false));
+            traffic.remove(escort.id);
+            assert_eq!(traffic.berth_mark(escort.berth), Some(true), "{reading:?}");
+            let next = traffic.add_npc_keeping_mark(npc(0, ShipStats::new(FAST, &[])), None);
+            let next = traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == next)
+                .expect("placed");
+            assert_eq!(next.berth, escort.berth, "the same berth");
+            assert_eq!(
+                next.berth_mark,
+                reading == RuleSource::Engine,
+                "{reading:?}"
+            );
+        }
     }
 
     #[test]

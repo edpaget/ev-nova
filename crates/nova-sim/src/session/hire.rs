@@ -64,6 +64,7 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use super::escorts::Placement;
 use super::{Chart, Outbox, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
@@ -249,7 +250,9 @@ impl Session {
         if let Some(berth) = berth {
             let index = self.pilot.escorts.len() - 1;
             self.space.escorts.fleet.resize(index, None);
-            let placed = self.place_escort_at(index, Some(berth), None, chance);
+            // `_SpawnEscort` keeps +0xc4: the hire holds its berth's while
+            // landed, until the take-off's respawn clears it (@0x42c79).
+            let placed = self.place_escort_at(index, Some(berth), None, Placement::Spawn, chance);
             // `_SpawnEscort` rolls its afterburner (@0x3ff51).
             if let Some(id) = placed {
                 self.roll_escort_afterburner(id, chance);
@@ -370,7 +373,7 @@ pub(in crate::session) mod tests {
 
     /// [`catalog`] with planet 128 a bar of tech level 7 and these ships
     /// besides the player's own (ship 128, never for hire).
-    fn barred(ships: Vec<ShipRecord>) -> FakePilotCatalog {
+    pub(in crate::session) fn barred(ships: Vec<ShipRecord>) -> FakePilotCatalog {
         let mut records = vec![ship(128, FAST)];
         records.extend(ships);
         FakePilotCatalog {
@@ -385,7 +388,7 @@ pub(in crate::session) mod tests {
 
     /// Ship `id` at 10,000 credits, tech level 1, for hire `hire_random`
     /// % of days.
-    fn hireable(id: i16, hire_random: i16) -> ShipRecord {
+    pub(in crate::session) fn hireable(id: i16, hire_random: i16) -> ShipRecord {
         ShipRecord {
             hire_random,
             ..ship(id, FAST)
@@ -393,7 +396,7 @@ pub(in crate::session) mod tests {
     }
 
     /// A session of `catalog`'s with `cash` credits, landed at the bar.
-    fn landed(catalog: &FakePilotCatalog, cash: i64) -> Session {
+    pub(in crate::session) fn landed(catalog: &FakePilotCatalog, cash: i64) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.pilot.cash = cash;
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
