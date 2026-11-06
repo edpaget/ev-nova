@@ -159,6 +159,8 @@ pub struct FakePilotCatalog {
     pub rle_sheets_asked: RefCell<Vec<MaskSheet>>,
     /// Each stellar's conversation: none, by default.
     pub stellar_dialogs: crate::dialogs::StellarDialogs,
+    /// The missions, news and jump points: none, by default.
+    pub storylines: crate::storylines::Storylines,
 }
 
 impl FakePilotCatalog {
@@ -276,6 +278,7 @@ pub fn catalog() -> FakePilotCatalog {
         rle_sheets: Vec::new(),
         rle_sheets_asked: RefCell::default(),
         stellar_dialogs: crate::dialogs::StellarDialogs::default(),
+        storylines: crate::storylines::Storylines::default(),
     }
 }
 
@@ -547,6 +550,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
         self.stellar_dialogs.clone()
+    }
+
+    fn storylines(&self) -> crate::storylines::Storylines {
+        self.storylines.clone()
     }
 
     /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,

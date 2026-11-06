@@ -2185,6 +2185,13 @@ pub trait PilotCatalog {
     fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
         crate::dialogs::StellarDialogs::default()
     }
+    /// The new game's missions, news and jump points, with the stories
+    /// their missions' conversations play (see the
+    /// [`storylines`](crate::storylines) module). None by default: the
+    /// stock game has no storylines.
+    fn storylines(&self) -> crate::storylines::Storylines {
+        crate::storylines::Storylines::default()
+    }
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
@@ -2498,6 +2505,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
     fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
         (**self).stellar_dialogs()
     }
+
+    fn storylines(&self) -> crate::storylines::Storylines {
+        (**self).storylines()
+    }
 }
 
 /// A shared catalog is a catalog, so the sim and the views can read the
@@ -2669,6 +2680,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
         (**self).stellar_dialogs()
+    }
+
+    fn storylines(&self) -> crate::storylines::Storylines {
+        (**self).storylines()
     }
 }
 
@@ -3309,6 +3324,17 @@ mod tests {
                 "greet",
             )
         }
+
+        /// One mission, `job`.
+        fn storylines(&self) -> crate::storylines::Storylines {
+            crate::storylines::Storylines {
+                missions: BTreeMap::from([(
+                    "job".to_owned(),
+                    crate::storylines::StoryMission::default(),
+                )]),
+                ..crate::storylines::Storylines::default()
+            }
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -3366,6 +3392,7 @@ mod tests {
                 catalog.landing_site(StellarId(140)).map(|site| site.id)
             ),
             format!("{:?}", catalog.stellar_dialogs().place(StellarId(128))),
+            format!("{:?}", catalog.storylines().missions.keys()),
         ]
     }
 

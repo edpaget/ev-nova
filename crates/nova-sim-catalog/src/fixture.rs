@@ -3,7 +3,8 @@
 //! records, each a plain record that tests change with struct-update
 //! syntax; mocks of the [`ControlBits`] port; and [`bits_allowing`], the
 //! control bits that make a test hold, for setting a pilot up directly.
-//! [`rle_sheets`] holds the contract of [`PilotCatalog::rle_sheet`],
+//! [`storylines`] builds the new game's missions. [`rle_sheets`] holds
+//! the contract of [`PilotCatalog::rle_sheet`],
 //! which the fake and the `GameData` adapter both meet.
 //!
 //! [`PilotCatalog::rle_sheet`]: crate::catalog::PilotCatalog::rle_sheet
@@ -11,6 +12,7 @@
 mod bits;
 mod pilot_catalog;
 pub mod rle_sheets;
+pub mod storylines;
 
 pub use bits::bits_allowing;
 pub use pilot_catalog::{FakePilotCatalog, START, catalog, starting};

@@ -123,6 +123,10 @@ impl PilotCatalog for GameData {
         crate::dialogs::stellar_dialogs(self)
     }
 
+    fn storylines(&self) -> crate::storylines::Storylines {
+        crate::storylines::storylines(self)
+    }
+
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         let (_, first) = self
             .records::<Character>()
