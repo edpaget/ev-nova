@@ -324,6 +324,52 @@ fn the_toll_is_offered_after_the_side_road_closes_and_the_dock_job() {
     );
 }
 
+/// Paid, the toll has no objective, so accepting it completes it: Done,
+/// with `on_accept`'s `paid_the_toll` set. The road's offer needs
+/// `refused_the_toll`, so the visit goes straight to the camp's greeting.
+#[test]
+fn the_toll_is_paid_and_done_on_accept() {
+    let mut play = Play::new("verge", |pilot| {
+        pilot
+            .story
+            .missions
+            .insert("dock-job".to_owned(), MissionState::Done);
+        pilot.flags.set("dock_regular");
+        // Day 3 has come; the event happens at the next check.
+        pilot.story.day = 3;
+    });
+    play.land("verge-camp");
+    assert_eq!(
+        play.open(),
+        texts(&[
+            "A warden leans on the camp's gate. \"The side road's shut. Our road costs.\"",
+            "Pay the toll",
+            "Refuse",
+            "Later",
+        ])
+    );
+    assert_eq!(play.choose(0), texts(&["\"Pleasure.\""]));
+    assert_eq!(play.state("warden-toll"), Some(MissionState::Done));
+    assert!(play.flag("paid_the_toll"));
+    assert!(play.flag("met_the_wardens"), "on_offer's flag stays");
+    assert!(!play.flag("refused_the_toll"));
+    play.close();
+    assert_eq!(
+        play.open(),
+        texts(&GREETING),
+        "no road offer once the toll is paid"
+    );
+    play.close();
+    assert_eq!(play.converse(Converse::Open), Answer::Refused);
+    assert_eq!(play.state("clear-the-road"), None);
+    play.visit_again("verge-camp");
+    assert_eq!(
+        play.open(),
+        texts(&GREETING),
+        "a done toll isn't offered again"
+    );
+}
+
 #[test]
 fn a_declined_dock_job_never_comes_back() {
     let mut play = Play::new("hearth", |_| {});
