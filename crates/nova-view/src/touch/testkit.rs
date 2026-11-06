@@ -71,6 +71,11 @@ impl<'a, C: TouchClaimant> Fingers<'a, C> {
         self.go(id, TouchPhase::Started(at))
     }
 
+    /// Finger `id` moves to `at`.
+    pub(crate) fn move_to(&mut self, id: usize, at: Point) -> Vec<ScreenAction> {
+        self.go(id, TouchPhase::Moved(at))
+    }
+
     /// Finger `id` lifts at `at`.
     pub(crate) fn up(&mut self, id: usize, at: Point) -> Vec<ScreenAction> {
         self.go(id, TouchPhase::Ended(at))

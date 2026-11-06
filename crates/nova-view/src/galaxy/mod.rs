@@ -47,6 +47,7 @@ pub mod nebulae;
 pub mod pad;
 pub mod panel;
 pub mod place;
+pub mod touch;
 pub mod update;
 pub mod view;
 

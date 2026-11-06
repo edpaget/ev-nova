@@ -46,6 +46,8 @@
 //!   as [`GalaxyMap::cancel_pointer`], which ends the drag and clicks
 //!   nothing.
 //! - A press outside the map area is a panel's or a button's.
+//! - Two fingers pinching on the map area zoom it in its own steps
+//!   ([`touch`](super::touch)).
 //! - Return (a press, not its repeats), or a click on the "Enter system"
 //!   button the panel shows while a system is selected, asks to enter the
 //!   selected system. The map only records the request; its owner takes
@@ -287,6 +289,7 @@ use super::nebulae::{NebulaFrame, PicturePick, draw_nebulae};
 use super::pad::{MapPad, PadStep};
 use super::panel::draw_panel;
 use super::place::MapPlace;
+use super::touch::MapPinch;
 use super::update::MapUpdate;
 use super::view::{Bounds, MAP_CENTER, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP, Transform};
 use crate::draw::fill_rect;
@@ -637,6 +640,8 @@ pub struct GalaxyMap {
     borders: MapBorders,
     /// The pad's focus over an in-flight map's buttons ([`pad`](super::pad)).
     pad: MapPad,
+    /// The pinch on the map, while one is ([`touch`](super::touch)).
+    pub(super) pinch: Option<MapPinch>,
 }
 
 /// How a map is laid out: the viewer full-screen with its own pan and
@@ -712,6 +717,7 @@ impl GalaxyMap {
             entry: None,
             pending: None,
             awaiting: None,
+            pinch: None,
             current: None,
             route: Vec::new(),
             panel: None,
@@ -1320,7 +1326,7 @@ impl GalaxyMap {
     /// through its view, an in-flight map as the dialog does
     /// ([`MapDialog::command`]). Return, Space and Find act on a press
     /// alone; the rest on their repeats too.
-    fn command(&mut self, command: Command, repeat: bool) {
+    pub(super) fn command(&mut self, command: Command, repeat: bool) {
         match command {
             // Return enters once, however long it is held.
             Command::Ui(UiCommand::Confirm) => {
@@ -1974,7 +1980,7 @@ fn icon(list: &mut DrawList, id: i16, top_left: (i32, i32)) {
 impl GalaxyMap {
     /// Whether `at` is in the map area: on the viewer above its panel, on
     /// an in-flight map in item 3 ([`in_map_item`]).
-    fn in_map(&self, at: Point) -> bool {
+    pub(super) fn in_map(&self, at: Point) -> bool {
         match self.look {
             Look::Viewer(_) => at.y < MAP_HEIGHT,
             Look::Dialog(_) => in_map_item(at),
@@ -2041,6 +2047,10 @@ impl GalaxyMap {
         let meant = self.keys.follow(input);
         if self.finding() {
             self.find_input(input);
+            return;
+        }
+        if let Input::Pinch(pinch) = *input {
+            self.pinch_input(pinch);
             return;
         }
         if let Look::Dialog(dialog) = &mut self.look {
@@ -2174,6 +2184,7 @@ impl Screen for GalaxyMap {
         self.pending = None;
         self.awaiting = None;
         self.armed = false;
+        self.pinch = None;
         self.pad.forget_press();
         if let Look::Dialog(dialog) = &mut self.look
             && dialog.cancel_pointer()

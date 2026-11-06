@@ -135,6 +135,7 @@ mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
 mod surroundings;
+mod touch_map;
 mod wheel;
 mod widescreen;
 
