@@ -1,13 +1,17 @@
 //! Flight's world layer through the whole app, over the persons' game
 //! ([`crate::persons`]): flight's frame reaches the Gpu as its world layer
 //! then an overlay, in a 4:3 and a 16:9 window, a hail's comm dialog is
-//! drawn over flight's world, and the spaceport draws no world. What goes
-//! in which layer, and where, is nova-view's, pinned there.
+//! drawn over flight's world, under the sharp-bilinear upscaler the message
+//! line's box goes into the world texture and its text stays overlay, and
+//! the spaceport draws no world. What goes in which layer, and where, is
+//! nova-view's, pinned there.
 
 use nova::app::Showing;
-use nova_render::{Batch, Frame, QuadInstance};
+use nova_render::{Batch, Frame, QuadInstance, Upscaler, WorldSpace};
 use nova_sim::fixture::MemoryPilots;
-use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Screen};
+use nova_view::flight::hud;
+use nova_view::geometry::Bounds;
+use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Point, Screen};
 
 use crate::common::Frames;
 use crate::persons::{BOTH, Game, idle};
@@ -85,6 +89,69 @@ fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
     assert!(
         frame.in_layer(WORLD).next().is_some(),
         "flight's world beneath"
+    );
+}
+
+/// The areas the solid quads drawn in `layer` cover: each one's corners'
+/// bounds.
+fn solids_in(frame: &Frame, layer: DrawLayer) -> Vec<Bounds> {
+    frame
+        .in_layer(layer)
+        .flat_map(|batch| match batch {
+            Batch::Solid(quads) => quads
+                .iter()
+                .map(|quad| {
+                    let [first, rest @ ..] = quad.corners;
+                    rest.iter().fold(
+                        Bounds {
+                            min: first,
+                            max: first,
+                        },
+                        |area, corner| Bounds {
+                            min: Point::new(area.min.x.min(corner.x), area.min.y.min(corner.y)),
+                            max: Point::new(area.max.x.max(corner.x), area.max.y.max(corner.y)),
+                        },
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn under_sharp_bilinear_flights_message_text_is_overlay_and_its_box_world() {
+    let store = MemoryPilots::new();
+    let mut game = flying((1024, 768), &store);
+    game.upscale_with(Upscaler::SharpBilinear);
+    game.tap(Key::Char('l'));
+    game.settle_until("a message on the line", |game| {
+        game.app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .message()
+            .is_some()
+    });
+    let frame = game.frame();
+    let flight = game.app.screen().flight_view().expect("flying");
+    let message = flight.message().expect("a message on the line").to_owned();
+    assert!(
+        matches!(frame.world_space, WorldSpace::Texture { .. }),
+        "{:?}",
+        frame.world_space
+    );
+    assert!(
+        texts_in(&frame, OVERLAY).contains(&message),
+        "{message}: {:?}",
+        texts_in(&frame, OVERLAY)
+    );
+    assert!(texts_in(&frame, WORLD).is_empty());
+    let view = (frame.logical.w as f32, frame.logical.h as f32);
+    let message_box = hud::message_box(view);
+    assert!(
+        solids_in(&frame, WORLD).contains(&message_box),
+        "the box in the world texture: {message_box:?}"
     );
 }
 
