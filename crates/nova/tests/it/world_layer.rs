@@ -2,12 +2,14 @@
 //! ([`crate::persons`]): flight's frame reaches the Gpu as its world layer
 //! then an overlay, in a 4:3 and a 16:9 window, a hail's comm dialog is
 //! drawn over flight's world, under the sharp-bilinear upscaler the message
-//! line's box goes into the world texture and its text stays overlay, and
-//! the spaceport draws no world. What goes in which layer, and where, is
+//! line's box goes into the world texture and its text stays overlay, the
+//! world's tail starts between them so the text draws in the target, and
+//! natively the tail moves nothing out of it, and the spaceport draws no
+//! world. What goes in which layer, and where the tail starts, is
 //! nova-view's, pinned there.
 
 use nova::app::Showing;
-use nova_render::{Batch, Frame, QuadInstance, Upscaler, WorldSpace};
+use nova_render::{Batch, Frame, QuadInstance, SolidQuad, Upscaler, WorldSpace};
 use nova_sim::fixture::MemoryPilots;
 use nova_view::flight::hud;
 use nova_view::geometry::Bounds;
@@ -92,38 +94,39 @@ fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
     );
 }
 
-/// The areas the solid quads drawn in `layer` cover: each one's corners'
-/// bounds.
+/// The area a solid quad covers: its corners' bounds.
+fn solid_area(quad: &SolidQuad) -> Bounds {
+    let [first, rest @ ..] = quad.corners;
+    rest.iter().fold(
+        Bounds {
+            min: first,
+            max: first,
+        },
+        |area, corner| Bounds {
+            min: Point::new(area.min.x.min(corner.x), area.min.y.min(corner.y)),
+            max: Point::new(area.max.x.max(corner.x), area.max.y.max(corner.y)),
+        },
+    )
+}
+
+/// The areas the solid quads drawn in `layer` cover.
 fn solids_in(frame: &Frame, layer: DrawLayer) -> Vec<Bounds> {
     frame
         .in_layer(layer)
         .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads
-                .iter()
-                .map(|quad| {
-                    let [first, rest @ ..] = quad.corners;
-                    rest.iter().fold(
-                        Bounds {
-                            min: first,
-                            max: first,
-                        },
-                        |area, corner| Bounds {
-                            min: Point::new(area.min.x.min(corner.x), area.min.y.min(corner.y)),
-                            max: Point::new(area.max.x.max(corner.x), area.max.y.max(corner.y)),
-                        },
-                    )
-                })
-                .collect(),
+            Batch::Solid(quads) => quads.iter().map(solid_area).collect(),
             _ => Vec::new(),
         })
         .collect()
 }
 
-#[test]
-fn under_sharp_bilinear_flights_message_text_is_overlay_and_its_box_world() {
-    let store = MemoryPilots::new();
-    let mut game = flying((1024, 768), &store);
-    game.upscale_with(Upscaler::SharpBilinear);
+/// The game in flight in a 1024x768 window, upscaled with `upscaler`
+/// (none: native) and with a message on the line, and that message.
+fn with_a_message(store: &MemoryPilots, upscaler: Option<Upscaler>) -> (Game, String) {
+    let mut game = flying((1024, 768), store);
+    if let Some(upscaler) = upscaler {
+        game.upscale_with(upscaler);
+    }
     game.tap(Key::Char('l'));
     game.settle_until("a message on the line", |game| {
         game.app
@@ -133,9 +136,22 @@ fn under_sharp_bilinear_flights_message_text_is_overlay_and_its_box_world() {
             .message()
             .is_some()
     });
+    let message = game
+        .app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .message()
+        .expect("a message on the line")
+        .to_owned();
+    (game, message)
+}
+
+#[test]
+fn under_sharp_bilinear_flights_message_text_is_overlay_and_its_box_world() {
+    let store = MemoryPilots::new();
+    let (mut game, message) = with_a_message(&store, Some(Upscaler::SharpBilinear));
     let frame = game.frame();
-    let flight = game.app.screen().flight_view().expect("flying");
-    let message = flight.message().expect("a message on the line").to_owned();
     assert!(
         matches!(frame.world_space, WorldSpace::Texture { .. }),
         "{:?}",
@@ -168,4 +184,51 @@ fn the_spaceport_draws_no_world() {
     let frame = game.frame();
     assert_eq!(frame.world, [0_usize; 0]);
     assert!(!frame.batches.is_empty());
+}
+
+#[test]
+fn under_sharp_bilinear_flights_floaters_draw_in_the_target_from_the_world_tail() {
+    let store = MemoryPilots::new();
+    let (mut game, message) = with_a_message(&store, Some(Upscaler::SharpBilinear));
+    let frame = game.frame();
+    let view = (frame.logical.w as f32, frame.logical.h as f32);
+    let message_box = hud::message_box(view);
+    let box_at = (0..frame.batches.len())
+        .find(|&at| {
+            frame.layer(at) == WORLD
+                && matches!(&frame.batches[at], Batch::Solid(quads)
+                    if quads.iter().any(|quad| solid_area(quad) == message_box))
+        })
+        .expect("the message's box");
+    let text_at = (0..frame.batches.len())
+        .find(|&at| {
+            matches!(&frame.batches[at], Batch::Text(runs)
+                if runs.iter().any(|run| run.text == message))
+        })
+        .expect("the message's text");
+    assert!(
+        frame
+            .world_tail
+            .is_some_and(|tail| box_at < tail && tail <= text_at),
+        "box {box_at}, text {text_at}, tail {:?}",
+        frame.world_tail
+    );
+    assert!(
+        matches!(frame.space_of(box_at), WorldSpace::Texture { .. }),
+        "{:?}",
+        frame.space_of(box_at)
+    );
+    assert_eq!(frame.space_of(text_at), WorldSpace::Target);
+}
+
+#[test]
+fn natively_flights_world_tail_moves_no_batch_out_of_the_target() {
+    let store = MemoryPilots::new();
+    let (mut game, _) = with_a_message(&store, None);
+    let frame = game.frame();
+    assert_eq!(frame.world_space, WorldSpace::Target);
+    assert!(frame.world_tail.is_some());
+    for at in 0..frame.batches.len() {
+        assert_eq!(frame.space_of(at), WorldSpace::Target, "batch {at}");
+    }
 }
