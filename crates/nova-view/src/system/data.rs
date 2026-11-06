@@ -225,6 +225,39 @@ mod tests {
         bytes
     }
 
+    /// [`spin`] with `y_tiles` down as well.
+    fn spin_tiles(image: i16, x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(image, x_tiles);
+        put_i16s(&mut bytes, 0x0A, &[y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn a_spin_counting_no_frames_reads_its_sheet_with_no_problem() {
+        // `_HandleStellarSystemVisibility` only writes crash-log lines for
+        // a slot with no frame or one not locked (@0x332d5-0x3330b): no
+        // alert, so no problem line.
+        for (x, y) in [(0, 1), (2, 0), (-1, 2)] {
+            let mut resources = sol();
+            let earth_spin = resources
+                .iter_mut()
+                .find(|(ty, id, ..)| *ty == Spin::TYPE && *id == 1000)
+                .expect("Earth's spïn");
+            earth_spin.3 = spin_tiles(1000, x, y);
+            let data = store(&resources);
+            let contents = data.system(SystemId(130));
+            assert_eq!(contents.problems, Vec::<String>::new(), "{x} x {y}");
+            let earth = contents
+                .stellars
+                .iter()
+                .find(|stellar| stellar.id == StellarId(128))
+                .expect("Earth");
+            assert!(earth.sprite.is_ok(), "{x} x {y}: {:?}", earth.sprite);
+            let scene = crate::system::SystemScene::load(&data, SystemId(130));
+            assert!(scene.problems().is_empty(), "{x} x {y}");
+        }
+    }
+
     /// An `rlëD` of `frames` frames, each `size` x `size`.
     fn sheet(frames: u16, size: u16) -> Vec<u8> {
         (0..frames)
