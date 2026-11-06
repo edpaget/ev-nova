@@ -769,6 +769,134 @@ mod tests {
     }
 
     #[test]
+    fn a_slot_counting_no_frames_stays_on_frame_0_until_a_rebuild_point_that_counts() {
+        // Animating only while destroyed, its `Type` counting no frames:
+        // the start, a rebuild point, copies a count of none. Destroyed,
+        // a frame clones in its `DeadType` of 4, which counts, and it
+        // draws that, but the count copied stays until the next point.
+        let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 4, 4);
+        catalog.sites[0].1[1].type_counts_frames = false;
+        let mut session = Session::start(&catalog).expect("starts");
+        let anim = anim(&session);
+        run(&mut session, "Y140");
+        let mut oracle = StellarFrames::new();
+        for pass in 0..5 {
+            work(&mut session, &catalog, Controls::default());
+            assert!(session.counts_no_frames(ANIMATED), "{pass}");
+            assert_eq!(session.drawn_sheet(ANIMATED), DrawnSheet::Dead);
+            oracle.step(anim, true, NonZeroU16::MIN, count(4), &mut NeverFires);
+            assert_eq!(session.stellar_frame(ANIMATED), oracle.shown(), "{pass}");
+        }
+        assert_eq!(oracle.shown(), 0, "never animated");
+        session.rebuild_stellars();
+        assert!(!session.counts_no_frames(ANIMATED), "its `DeadType` counts");
+        oracle.reshow(count(4), false);
+        let mut animated_again = false;
+        for pass in 0..3 {
+            work(&mut session, &catalog, Controls::default());
+            oracle.step(anim, true, count(4), count(4), &mut NeverFires);
+            assert_eq!(
+                session.stellar_frame(ANIMATED),
+                oracle.shown(),
+                "{pass} rebuilt"
+            );
+            animated_again |= oracle.shown() != 0;
+        }
+        assert!(animated_again);
+    }
+
+    #[test]
+    fn a_destroyed_stellar_drawing_graphic_type_0_is_reshown_on_frame_0_and_shown_over_its_frames()
+    {
+        // Animating only while destroyed over a `Type` of 5, with no
+        // `DeadType` sheet: a rebuild point while destroyed fills its slot
+        // with graphic type 0, of 3 frames here.
+        let mut catalog = animated(ONLY_WHEN_DESTROYED, 1, 5, 0);
+        let site = &mut catalog.sites[0].1[1];
+        site.dead_graphic = None;
+        site.dead_frame_size = None;
+        let mut session = Session::start(&catalog).expect("starts");
+        session.statics_mut().fallback_frames = 3;
+        let anim = anim(&session);
+        run(&mut session, "Y140");
+        let mut oracle = StellarFrames::new();
+        for _ in 0..2 {
+            work(&mut session, &catalog, Controls::default());
+            oracle.step(anim, true, count(5), count(5), &mut NeverFires);
+        }
+        assert_eq!(session.stellar_frame(ANIMATED), oracle.shown());
+        assert_eq!(oracle.shown() % 3, 2, "off frame 0 of graphic type 0's");
+        let three = count(3);
+        session.rebuild_stellars();
+        assert_eq!(session.drawn_sheet(ANIMATED), DrawnSheet::TypeZero);
+        oracle.reshow(three, true);
+        assert_eq!(session.stellar_frame(ANIMATED), oracle.shown(), "reshown");
+        assert_eq!(oracle.shown(), 0);
+        // Counting its `Type`, the sheet its slot held at the rebuild
+        // point, shown on graphic type 0's.
+        let mut seen = Vec::new();
+        for pass in 0..6 {
+            work(&mut session, &catalog, Controls::default());
+            oracle.step(anim, true, count(5), three, &mut NeverFires);
+            assert_eq!(session.stellar_frame(ANIMATED), oracle.shown(), "{pass}");
+            seen.push(oracle.shown());
+        }
+        assert!(seen.contains(&2), "over 3 frames: {seen:?}");
+        // From the next rebuild point it counts graphic type 0's.
+        session.rebuild_stellars();
+        oracle.reshow(three, true);
+        assert_eq!(session.stellar_frame(ANIMATED), oracle.shown(), "again");
+        for pass in 0..4 {
+            work(&mut session, &catalog, Controls::default());
+            oracle.step(anim, true, three, three, &mut NeverFires);
+            assert_eq!(
+                session.stellar_frame(ANIMATED),
+                oracle.shown(),
+                "{pass} counting graphic type 0's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stellar_steps_over_the_sheet_the_frame_count_rule_counts_and_wraps_on_the_one_drawn() {
+        // Animating only while destroyed, a `Type` of 5 and a `DeadType`
+        // of 2: destroyed with no rebuild point since, its slot held its
+        // `Type`, and it draws its `DeadType`.
+        let catalog = animated(ONLY_WHEN_DESTROYED, 1, 5, 2);
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::StellarFrameCount, reading);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            let anim = anim(&session);
+            run(&mut session, "Y140");
+            // By the engine its slot's `Type` at the last rebuild point,
+            // by the Bible the `DeadType` it draws.
+            let (counted, other_count) = if reading == RuleSource::Engine {
+                (count(5), count(2))
+            } else {
+                (count(2), count(5))
+            };
+            let (mut oracle, mut other) = (StellarFrames::new(), StellarFrames::new());
+            let mut stepped_alike = true;
+            for pass in 0..8 {
+                work(&mut session, &catalog, Controls::default());
+                oracle.step(anim, true, counted, count(2), &mut NeverFires);
+                other.step(anim, true, other_count, count(2), &mut NeverFires);
+                assert_eq!(
+                    session.stellar_frame(ANIMATED),
+                    oracle.shown(),
+                    "{reading:?} {pass}"
+                );
+                stepped_alike &= other.shown() == oracle.shown();
+            }
+            assert!(
+                !stepped_alike,
+                "{reading:?}: the other count shows otherwise"
+            );
+        }
+    }
+
+    #[test]
     fn a_stellar_not_shown_reports_frame_0() {
         let catalog = animated(0, 1, 4, 0);
         let mut session = Session::start(&catalog).expect("starts");
