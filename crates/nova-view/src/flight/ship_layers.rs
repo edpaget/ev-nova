@@ -834,6 +834,45 @@ mod tests {
                 .collect();
             assert_eq!(ids, [1000]);
         }
+
+        /// A hull 1000 that is `hull_eight_bit` or not, whose glow 1100,
+        /// alt 1400 and shield 1500 are `layers_eight_bit` or not.
+        fn mixed(hull_eight_bit: bool, layers_eight_bit: bool) -> ShipSheet {
+            ShipSheet {
+                eight_bit: hull_eight_bit,
+                ..sheet(layers_eight_bit, false)
+            }
+        }
+
+        #[test]
+        fn mid_fade_each_sprite_reads_its_own_sheets_flag() {
+            let spec = FrameSpec::NONE;
+            let (hull16, hull8) = (mixed(false, true), mixed(true, false));
+            let lit = |sheet| ShipDraw {
+                glow: Some(10),
+                shield: Some(10),
+                ..cloaked(sheet, &spec, CloakShown::Fading(21.5))
+            };
+            // A 16-bit hull draws; its 8-bit alt, in the hull's state, and
+            // its 8-bit glow and shield draw nothing.
+            assert_eq!(ids(&lit(&hull16)), [1000]);
+            // An 8-bit hull draws nothing; its 16-bit glow, alt and shield
+            // still draw.
+            assert_eq!(ids(&lit(&hull8)), [1100, 1400, 1500]);
+        }
+
+        #[test]
+        fn an_8_bit_glow_at_31_is_dropped_beside_a_16_bit_hull() {
+            let spec = FrameSpec::NONE;
+            let (hull16, hull8) = (mixed(false, true), mixed(true, false));
+            let glowing = |sheet| ShipDraw {
+                glow: Some(31),
+                ..ship(sheet, &spec)
+            };
+            // The opaque hull and its alt draw plainly at either depth.
+            assert_eq!(ids(&glowing(&hull16)), [1000, 1400]);
+            assert_eq!(ids(&glowing(&hull8)), [1000, 1100, 1400]);
+        }
     }
 
     #[test]
