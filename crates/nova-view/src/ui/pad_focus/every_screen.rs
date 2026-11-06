@@ -21,6 +21,12 @@
 //! - A second finger presses nothing while the first holds a control, and
 //!   after the first lifts, a finger left down presses nothing.
 //!
+//! And it keeps the list of screens a pointer can't leave
+//! (rdm:phase/key-bindings/phase-16-touch-pointer-gaps) empty: wherever
+//! Escape does something, a tap on one of the screen's controls does the
+//! same ([`escape_s_way_out_is_also_a_tap`]), so a screen added with no
+//! pointer exit fails it.
+//!
 //! A new screen with a pad focus adds its row to [`rows`], from a
 //! `pad_probe` fixture its own module publishes for tests.
 
@@ -73,6 +79,13 @@ pub(crate) trait PadProbe {
     fn click(&self, _name: &'static str, rect: Bounds) -> Vec<Input> {
         let at = rect.center();
         vec![pointer(true, at), pointer(false, at)]
+    }
+
+    /// The control a tap on which does what Escape does, where
+    /// [`escape_s_way_out_is_also_a_tap`]'s search of [`Self::controls`]
+    /// can't see it; `None` to search them.
+    fn exit_control(&self) -> Option<(&'static str, Bounds)> {
+        None
     }
 }
 
@@ -480,6 +493,41 @@ fn east_does_what_escape_does() {
         let mut padded = Run::new(build).sends(&[told(PAD)]);
         padded.tap(PadButton::East);
         assert_eq!(padded.result(), escaped.result(), "{screen}");
+    }
+}
+
+/// A run of one finger tapping `at`.
+fn tapped_at(build: fn() -> Box<dyn PadProbe>, at: Point) -> Run {
+    touched(build, |fingers| {
+        fingers.down(1, at);
+        fingers.up(1, at);
+    })
+}
+
+/// Every screen Escape leaves (or acts on) can be left by a tap too: when
+/// Escape changes a fresh build's result, a tap on one of its controls (or
+/// the row's [`PadProbe::exit_control`]) gives that same result. A row
+/// with no such control is a screen a pointer can't leave, and needs a
+/// touch way out (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+#[test]
+fn escape_s_way_out_is_also_a_tap() {
+    for (screen, build) in rows() {
+        let mut escaped = Run::new(build).sends(&[key(Key::Escape, true), key(Key::Escape, false)]);
+        let escaped = escaped.result();
+        if escaped == Run::new(build).result() {
+            continue;
+        }
+        let probe = build();
+        let candidates = probe
+            .exit_control()
+            .map_or_else(|| probe.controls(), |exit| vec![exit]);
+        let tapped = candidates.iter().find(|&&(name, rect)| {
+            tapped_at(build, click_point(build, name, rect)).result() == escaped
+        });
+        assert!(
+            tapped.is_some(),
+            "{screen}: no tap does what Escape does ({escaped:?})"
+        );
     }
 }
 
