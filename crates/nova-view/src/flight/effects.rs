@@ -41,9 +41,10 @@
 //!     (`_GetSpriteXSize`/`_GetSpriteYSize` @0x26d4-0x2731), each
 //!     [`EffectSheet`](super::catalog::EffectSheet)'s frame width and
 //!     height; their 32-pixel fallback can't happen for a shown explosion.
-//!   - Left out: the 8-bit blits
-//!     (@0xbb5a9-0xbb88b), as the engine draws at 16 bits only
-//!     (rdm:phase/rendering/phase-2-translucent-8-bit-sheets).
+//!   - Left out: an 8-bit sheet's blits (@0xbb5a9-0xbb88b), which the
+//!     stellars and ships take ([`eight_bit_blit`](crate::eight_bit_blit))
+//!     and an explosion does not yet
+//!     (rdm:phase/rendering-2/phase-1-eight-bit-blit-other-sprites).
 //!     The frozen flag `*0x3b523c`'s gates on the delay countdown
 //!     (@0x2f629) and the frame step (@0x2f7eb) under `_PlayGame`'s and
 //!     `_EnterGameFromMainScreen`'s frozen game-work pass, as the engine

@@ -2448,9 +2448,11 @@
 //!     `_BlitPixieRLETranslucentClipped8`, `_BlitPixieRLEAddOver8` and
 //!     `_BlitPixieRLEAddOverClipped8` (@0xbb7ed-0xbb890, @0xbb8b6-0xbb9ec),
 //!     where levels 0x20 and up that are not the plain add-over case draw
-//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). A stellar reaches them
-//!     only when murk gives it translucency (+0xa8 > 0), which the engine
-//!     does not model yet; a ship reaches them under cloak or fade.
+//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). Built since rendering
+//!     phase 2 for the stellars and ships (`nova_view`'s `eight_bit_blit`
+//!     module docs): the translucent and add-over routines crash the
+//!     original's 16-bit world, so those cases draw as a 16-bit sheet's.
+//!     The other sprites are rendering-2 phase 1.
 //!
 //! ## Built by stellar-fidelity phase 5
 //!

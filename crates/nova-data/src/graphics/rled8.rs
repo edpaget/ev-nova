@@ -35,10 +35,12 @@
 //! 256-colour table, at full width. A run fills its bytes with its word's
 //! first byte in the file.
 //!
-//! The rulebook's `eight_bit_sheet` key chooses between them. The full
-//! address record, with what was left out (an 8-bit sheet drawn
-//! translucent, the legacy 8-bit world), is in `nova_sim_story`'s
-//! "Checked for stellar-fidelity phase 4".
+//! The rulebook's `eight_bit_sheet` key chooses between them. Either way
+//! the sheet reports depth 8 ([`SpriteSheet::depth`](super::SpriteSheet::depth)),
+//! so a view can draw it translucent as the draw proc's depth-8 branches
+//! do (`nova_view`'s `eight_bit_blit`, rendering phase 2). The full
+//! address record, with what was left out (the legacy 8-bit world), is in
+//! `nova_sim_story`'s "Checked for stellar-fidelity phase 4".
 
 use super::color::rgb555;
 use super::image::Image;

@@ -801,8 +801,9 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 ///
 /// Where this deviates from the original:
 ///
-/// - **The 8-bit depth is not modelled**: its alpha-table blits were not
-///   traced.
+/// - **An 8-bit sheet** takes the draw proc's depth-8 branches instead,
+///   which draw a layer only at level 32 uncolorized, the add-over
+///   ([`eight_bit_blit`](crate::eight_bit_blit)).
 ///
 /// A cloaking ship's layers take no bias either: `_HandleShipDisplay`
 /// leaves +0xb0 alone below a full fade and caps each channel factor at
