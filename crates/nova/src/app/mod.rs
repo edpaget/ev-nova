@@ -882,6 +882,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self.cancel_touches();
         self.screen.cancel_pointer();
         self.screen.release_keys();
+        self.stop_gamepad_repeat();
         self.screen.focus_lost();
         self.feed_audio();
         self.background = true;
@@ -1146,7 +1147,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             overlay.frame(elapsed);
         }
         self.read_safe_area(window);
-        if self.poll_gamepads() == Control::Exit {
+        if self.poll_gamepads(elapsed.saturating_sub(self.last_redraw)) == Control::Exit {
             return Control::Exit;
         }
         self.screen.tick(elapsed.saturating_sub(self.last_redraw));

@@ -148,8 +148,9 @@ fn check_event(event: &PadEvent, connected: &mut BTreeSet<PadId>) -> Result<(), 
     }
 }
 
-/// Whether `button` is a trigger.
-fn is_trigger(button: PadButton) -> bool {
+/// Whether `button` is a trigger: the buttons a [`PadEvent::Trigger`]
+/// presses as its value crosses the threshold.
+pub(crate) fn is_trigger(button: PadButton) -> bool {
     matches!(button, PadButton::LeftTrigger | PadButton::RightTrigger)
 }
 

@@ -29,6 +29,20 @@ fn f_enters_flight_from_each_screen_and_escape_goes_back_to_it() {
 }
 
 #[test]
+fn a_pad_repeat_is_no_press_at_the_router() {
+    let mut screen = AppScreen::new(data());
+    let tab = |repeat| Input::PadButton {
+        button: nova_view::PadButton::RightShoulder,
+        pressed: true,
+        repeat,
+    };
+    assert_eq!(screen.input(&tab(true)), ScreenAction::None);
+    assert_eq!(screen.showing(), Showing::ShipBrowser, "a repeat of Tab");
+    screen.input(&tab(false));
+    assert_eq!(screen.showing(), Showing::GalaxyMap, "its press");
+}
+
+#[test]
 fn an_f_repeat_or_release_does_not_enter_flight() {
     let mut screen = AppScreen::new(data());
     assert_eq!(screen.input(&held(Key::KeyF)), ScreenAction::None);

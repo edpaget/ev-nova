@@ -855,8 +855,8 @@ fn offer_gap(chance: &mut dyn nova_sim::Chance) -> std::time::Duration {
     nova_sim::mission::screens::mac_ticks(nova_sim::mission::offer_gap(chance))
 }
 
-/// Whether `input` is a key's press, not its repeat nor its release, a
-/// pad button's press (a pad never repeats), or a touch control's press.
+/// Whether `input` is a key's or a pad button's press, not its repeat
+/// nor its release, or a touch control's press.
 pub(super) fn is_press(input: &Input) -> bool {
     matches!(
         input,
@@ -864,7 +864,10 @@ pub(super) fn is_press(input: &Input) -> bool {
             pressed: true,
             repeat: false,
             ..
-        } | Input::PadButton { pressed: true, .. }
-            | Input::TouchControl(nova_view::TouchControl::Button { pressed: true, .. })
+        } | Input::PadButton {
+            pressed: true,
+            repeat: false,
+            ..
+        } | Input::TouchControl(nova_view::TouchControl::Button { pressed: true, .. })
     )
 }

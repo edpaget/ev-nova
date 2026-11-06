@@ -15,7 +15,10 @@
 //! - [`inputs`] ([`inputs::PadInputs`]) decides what the events mean for
 //!   the screens: buttons pass through, a stick or trigger past the press
 //!   threshold presses a button (with hysteresis), two pads merge, and a
-//!   lost pad lets go of everything it held.
+//!   lost pad lets go of everything it held. It repeats a held d-pad or
+//!   stick direction through [`repeat`] ([`repeat::Repeater`]), a pure
+//!   state machine on the time each frame takes, at the macOS keyboard's
+//!   default delay and rate.
 //! - [`family`] ([`family::family_of`]) decides which `nova_view`
 //!   `ControllerFamily` a pad is from the vendor and product ids
 //!   ([`PadIds`]) its connect carries, which the adapter only forwards.
@@ -30,6 +33,7 @@ pub mod family;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod inputs;
+pub mod repeat;
 
 use nova_view::{PadAxis, PadButton};
 

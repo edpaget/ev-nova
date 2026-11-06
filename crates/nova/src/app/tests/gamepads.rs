@@ -2,12 +2,14 @@
 //! tick; what they did routed as screen input; the device used last told
 //! as surroundings when it changes; what they did in the background
 //! dropped as the focus comes back; and their input dropped while the
-//! developer overlay shows.
+//! developer overlay shows. A held direction repeats on later redraws,
+//! by the time between them.
 
 use nova_view::{ControllerFamily, Device, PadAxis, PadButton, Surroundings};
 
 use super::*;
 use crate::gamepad::fixture::FakeGamepads;
+use crate::gamepad::repeat::{REPEAT_DELAY, REPEAT_INTERVAL};
 use crate::gamepad::{PadEvent, PadId};
 
 const ONE: PadId = PadId(0);
@@ -304,5 +306,114 @@ fn the_pads_input_goes_nowhere_while_the_overlay_shows_and_its_release_follows_o
         app.screen().surroundings,
         [told(PAD), told(Device::Keyboard)],
         "the toggle key's press told the keyboard, and a release tells nothing"
+    );
+}
+
+fn dpad_down(pressed: bool) -> PadEvent {
+    PadEvent::Button {
+        pad: ONE,
+        button: PadButton::DPadDown,
+        pressed,
+    }
+}
+
+/// How many repeats of `button` the screen has been given.
+fn repeats_of(app: &TestApp, button: PadButton) -> usize {
+    let repeat = Input::PadButton {
+        button,
+        pressed: true,
+        repeat: true,
+    };
+    app.screen()
+        .inputs
+        .iter()
+        .filter(|input| **input == repeat)
+        .count()
+}
+
+#[test]
+fn a_held_dpad_direction_reaches_the_screen_as_repeats_on_later_redraws() {
+    const FRAME: u64 = 16;
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE), dpad_down(true)]]);
+    let mut app = app(&window).with_gamepads(Box::new(pads));
+    let pressed_at = Duration::from_millis(FRAME);
+    let held_at = |ms| Duration::from_millis(ms).saturating_sub(pressed_at);
+    let mut ms = FRAME;
+    loop {
+        redraw_at(&mut app, &mut window, ms);
+        let held = held_at(ms);
+        let repeats = repeats_of(&app, PadButton::DPadDown);
+        if held < REPEAT_DELAY {
+            assert_eq!(repeats, 0, "held {held:?}");
+        } else {
+            assert_eq!(repeats, 1, "the redraw reaching the delay, held {held:?}");
+            break;
+        }
+        ms += FRAME;
+    }
+    let first = ms;
+    while ms < first + 1000 {
+        ms += FRAME;
+        redraw_at(&mut app, &mut window, ms);
+    }
+    let held = held_at(ms);
+    let expected = held.saturating_sub(REPEAT_DELAY).as_nanos() / REPEAT_INTERVAL.as_nanos() + 1;
+    assert_eq!(
+        repeats_of(&app, PadButton::DPadDown) as u128,
+        expected,
+        "the rate over a further second"
+    );
+}
+
+#[test]
+fn nothing_held_across_the_background_repeats_on_focus_gained() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE), dpad_down(true)]]);
+    let mut app = app(&window).with_gamepads(Box::new(pads.clone()));
+    redraw_at(&mut app, &mut window, 16);
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    redraw_at(&mut app, &mut window, 2_000);
+    assert_eq!(
+        repeats_of(&app, PadButton::DPadDown),
+        0,
+        "no repeat of what the focus loss let go of"
+    );
+    pads.push(vec![PadEvent::Axis {
+        pad: ONE,
+        axis: PadAxis::LeftY,
+        value: -0.9,
+    }]);
+    handle(&mut app, &mut window, WindowEvent::FocusGained);
+    for ms in [2_016, 4_000, 6_000] {
+        redraw_at(&mut app, &mut window, ms);
+    }
+    assert_eq!(repeats_of(&app, PadButton::DPadDown), 0, "held across");
+    assert_eq!(
+        repeats_of(&app, PadButton::LeftStickDown),
+        0,
+        "pushed in the background"
+    );
+}
+
+#[test]
+fn the_overlay_drops_the_repeats_too() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let pads = FakeGamepads::with([vec![PadEvent::connected(ONE)]]);
+    let mut app = app(&window)
+        .with_gamepads(Box::new(pads.clone()))
+        .with_dev_overlay();
+    redraw_at(&mut app, &mut window, 16);
+    pads.push(vec![dpad_down(true)]);
+    redraw_at(&mut app, &mut window, 32);
+    toggle_overlay(&mut app, &mut window);
+    redraw_at(&mut app, &mut window, 2_000);
+    assert_eq!(repeats_of(&app, PadButton::DPadDown), 0);
+    toggle_overlay(&mut app, &mut window);
+    redraw_at(&mut app, &mut window, 2_000 + 100);
+    assert_eq!(
+        repeats_of(&app, PadButton::DPadDown),
+        1,
+        "the direction still held repeats on once the overlay hides"
     );
 }

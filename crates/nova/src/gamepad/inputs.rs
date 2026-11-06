@@ -22,6 +22,15 @@
 //!   and routes each stick axis again over the pads left, none when no
 //!   other pad pushes it, as the router's `release_keys` lets go on a
 //!   focus loss.
+//! - A held d-pad or stick direction repeats, as a held key does
+//!   ([`super::repeat`]): [`PadInputs::advance`] makes the repeats for the
+//!   time a frame takes, and every button input `feed` makes starts or
+//!   stops them. The app advances before it feeds the frame's events, so
+//!   time held before this poll yields its repeats and a release in it
+//!   then stops them; a press in it starts its delay from now. When in a
+//!   frame a repeat falls is invisible to the player: it reaches the
+//!   screen before the frame is drawn. [`PadInputs::drain`] (the window
+//!   in the background) stops them, so only a fresh push repeats again.
 //!
 //! The thresholds and the rule between them ([`crossing`]) are
 //! `nova_view`'s (`nova_view::keymap::gamepad`), which flight's touch stick
@@ -29,10 +38,12 @@
 //! rdm:phase/key-bindings/phase-7-gamepad-input's findings.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use nova_view::keymap::gamepad::crossing;
 use nova_view::{Input, PadAxis, PadButton};
 
+use super::repeat::Repeater;
 use super::{PadEvent, PadId};
 
 /// One pad's buttons down and the last value of each of its stick axes.
@@ -53,6 +64,8 @@ pub struct PadInputs {
     pads: BTreeMap<PadId, Pad>,
     /// The stick directions the merged sticks press.
     directions: BTreeSet<PadButton>,
+    /// The direction repeating, following the button inputs `feed` makes.
+    repeater: Repeater,
 }
 
 impl PadInputs {
@@ -66,8 +79,31 @@ impl PadInputs {
     /// screens to `out`.
     pub fn feed(&mut self, events: &[PadEvent], out: &mut Vec<Input>) {
         for event in events {
+            let from = out.len();
             self.follow(event, out);
+            for input in &out[from..] {
+                self.repeater.follow(input);
+            }
         }
+    }
+
+    /// Lets `dt` pass, appending to `out` the repeats of the direction
+    /// held that it reaches ([`Repeater::advance`]).
+    pub fn advance(&mut self, dt: Duration, out: &mut Vec<Input>) {
+        self.repeater.advance(dt, out);
+    }
+
+    /// Follows `events` as [`PadInputs::feed`] does, telling no screen,
+    /// and stops any repeat: a direction held across, or pressed in, the
+    /// time the events were queued repeats only once pushed afresh.
+    pub fn drain(&mut self, events: &[PadEvent]) {
+        self.feed(events, &mut Vec::new());
+        self.stop_repeating();
+    }
+
+    /// Stops any repeat ([`Repeater::stop`]).
+    pub const fn stop_repeating(&mut self) {
+        self.repeater.stop();
     }
 
     /// Whether any pad holds `button` down, or the merged sticks press it.
@@ -185,9 +221,14 @@ impl PadInputs {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::super::Gamepads;
-    use super::super::fixture::FakeGamepads;
+    use super::super::fixture::{FakeGamepads, is_trigger};
+    use super::super::repeat::{REPEAT_DELAY, REPEAT_INTERVAL};
     use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
 
     const ONE: PadId = PadId(0);
     const TWO: PadId = PadId(1);
@@ -540,6 +581,120 @@ mod tests {
             [pressed(PadButton::RightStickRight, false)]
         );
         assert!(polls[2].contains(&value(PadAxis::RightX, 0.0)));
+    }
+
+    /// What `inputs` makes over `dt` of hold.
+    fn advanced(inputs: &mut PadInputs, dt: Duration) -> Vec<Input> {
+        let mut out = Vec::new();
+        inputs.advance(dt, &mut out);
+        out
+    }
+
+    fn repeat(button: PadButton) -> Input {
+        Input::PadButton {
+            button,
+            pressed: true,
+            repeat: true,
+        }
+    }
+
+    #[test]
+    fn a_stick_pushed_past_the_threshold_repeats_its_direction() {
+        let mut inputs = PadInputs::new();
+        inputs.feed(
+            &[PadEvent::connected(ONE), axis(ONE, PadAxis::LeftY, -0.9)],
+            &mut Vec::new(),
+        );
+        assert_eq!(advanced(&mut inputs, REPEAT_DELAY.saturating_sub(MS)), []);
+        assert_eq!(
+            advanced(&mut inputs, MS + REPEAT_INTERVAL),
+            [repeat(PadButton::LeftStickDown); 2]
+        );
+        let mut out = Vec::new();
+        inputs.feed(&[axis(ONE, PadAxis::LeftY, 0.0)], &mut out);
+        assert_eq!(buttons(&out), [pressed(PadButton::LeftStickDown, false)]);
+        assert_eq!(advanced(&mut inputs, REPEAT_DELAY * 4), [], "let go");
+    }
+
+    #[test]
+    fn a_dpad_direction_held_repeats_and_its_release_stops_it() {
+        let dpad = |pressed| PadEvent::Button {
+            pad: ONE,
+            button: PadButton::DPadUp,
+            pressed,
+        };
+        let mut inputs = PadInputs::new();
+        inputs.feed(&[PadEvent::connected(ONE), dpad(true)], &mut Vec::new());
+        assert_eq!(
+            advanced(&mut inputs, REPEAT_DELAY),
+            [repeat(PadButton::DPadUp)]
+        );
+        inputs.feed(&[dpad(false)], &mut Vec::new());
+        assert_eq!(advanced(&mut inputs, REPEAT_DELAY * 4), []);
+    }
+
+    #[test]
+    fn a_held_trigger_never_repeats() {
+        let pulled: Vec<PadButton> = PadButton::ALL
+            .into_iter()
+            .filter(|&button| is_trigger(button) && !button.repeats())
+            .collect();
+        assert!(
+            !pulled.is_empty(),
+            "a value-crossing button that doesn't repeat"
+        );
+        for button in pulled {
+            let mut inputs = PadInputs::new();
+            let mut out = Vec::new();
+            inputs.feed(
+                &[
+                    PadEvent::connected(ONE),
+                    PadEvent::Trigger {
+                        pad: ONE,
+                        button,
+                        value: 1.0,
+                    },
+                ],
+                &mut out,
+            );
+            assert_eq!(out, [pressed(button, true)], "{button:?}");
+            assert_eq!(
+                advanced(&mut inputs, Duration::from_secs(2)),
+                [],
+                "{button:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lost_pad_stops_its_repeat() {
+        let mut inputs = PadInputs::new();
+        inputs.feed(
+            &[PadEvent::connected(ONE), axis(ONE, PadAxis::RightX, 0.9)],
+            &mut Vec::new(),
+        );
+        inputs.feed(&[PadEvent::Disconnected(ONE)], &mut Vec::new());
+        assert_eq!(advanced(&mut inputs, REPEAT_DELAY * 4), []);
+    }
+
+    #[test]
+    fn draining_stops_the_repeat_and_follows_the_events() {
+        let mut inputs = PadInputs::new();
+        inputs.feed(
+            &[PadEvent::connected(ONE), axis(ONE, PadAxis::LeftX, 0.9)],
+            &mut Vec::new(),
+        );
+        inputs.drain(&[PadEvent::Button {
+            pad: ONE,
+            button: PadButton::DPadDown,
+            pressed: true,
+        }]);
+        assert!(inputs.is_down(PadButton::DPadDown), "followed, unrouted");
+        assert_eq!(
+            advanced(&mut inputs, REPEAT_DELAY * 4),
+            [],
+            "neither the stick held across nor the press drained repeats"
+        );
     }
 
     #[test]
