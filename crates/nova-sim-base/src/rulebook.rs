@@ -40,6 +40,7 @@
 //! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see `nova_sim::story`) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
+//! | [`ThirtyTwoBitSheet`](RuleKey::ThirtyTwoBitSheet) | `thirty_two_bit_sheet` | a 32-bit `rlëD` draws as its bytes fall into the 16-bit world: each pixel swapped to little-endian, then two RGB555 pixels, twice its width from the box's left edge, cut to the box when the box touches the world's edge (`_BlitPixieRLESwap` @0xbe46e-0xbe48e, `_BlitPixieRLETranslucentDrawProc` @0xbb56d-0xbb579, `_BlitPixieRLE` @0xbddd0-0xbde97, `_BlitPixieRLEClipped` @0xbde9c-0xbe0b3; see `nova_render::GameImages` and `nova_data::graphics`) | each pixel one `xRRGGBB` true-colour pixel, opaque, at the box's width\* |
 //! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
 //! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`); and state 20's approach to a hypergate or wormhole outside its box flies sub 2 too, never braking (@0x8dc42-0x8dc55; see `nova_sim_ai::traffic::gate_entry`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach, which brakes by its stopping distance, for the gate approach too\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
@@ -345,7 +346,8 @@
 //! `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `type_sheet_fallback`,
-//! `eight_bit_sheet`, `uncounted_sheet`, `npc_landing`, `landing_speed`,
+//! `eight_bit_sheet`, `thirty_two_bit_sheet`, `uncounted_sheet`, `npc_landing`,
+//! `landing_speed`,
 //! `gate_pick_range`,
 //! `repeat_mission_failure`,
 //! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
@@ -1113,6 +1115,23 @@ rule_keys! {
     /// (`nova_render::GameImages`; see the `nova_sim::story` module's
     /// "Checked for stellar-fidelity phase 4").
     EightBitSheet => "eight_bit_sheet",
+    /// How an `rlëD` whose header says 32 bits is drawn: by the engine, as
+    /// its bytes fall into the original's 16-bit world. `_BlitPixieRLESwap`
+    /// swaps each 32-bit pixel to little-endian (@0xbe46e-0xbe48e), and
+    /// the draw proc takes the 16-bit routines for every depth but 8
+    /// (`_BlitPixieRLETranslucentDrawProc` @0xbb56d-0xbb579, @0xbb770-0xbb789),
+    /// whose byte copy (`_BlitPixieRLE` @0xbddd0-0xbde97) lays each pixel
+    /// down as two RGB555 pixels: the row is twice the box's width from its
+    /// left edge, and the clipped blit (`_BlitPixieRLEClipped`
+    /// @0xbde9c-0xbe0b3) cuts it to the box when the box touches the
+    /// world's edge. By the other reading, each pixel is one `xRRGGBB`
+    /// true-colour pixel, opaque, at the box's width. The Bible calls
+    /// `rlëD`s 16-bit and says nothing of 32, so the other reading is the
+    /// intended alternative, not anything the Bible says. The reading is
+    /// applied where the game's images are decoded
+    /// (`nova_render::GameImages`; see `nova_data::graphics`'s `rled_wide`
+    /// module docs and rendering phase 1).
+    ThirtyTwoBitSheet => "thirty_two_bit_sheet",
     /// What a stellar's sprite slot shows when the graphic it clones has a
     /// `spïn` whose `xTiles` × `yTiles` is 0 or less, the master's frame
     /// count (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97). By the engine,
@@ -7179,6 +7198,15 @@ mod tests {
             Some(RuleKey::EightBitSheet)
         );
         assert_eq!(RuleKey::EightBitSheet.default_source(), RuleSource::Engine);
+        assert_eq!(RuleKey::ThirtyTwoBitSheet.key(), "thirty_two_bit_sheet");
+        assert_eq!(
+            RuleKey::from_key("thirty_two_bit_sheet"),
+            Some(RuleKey::ThirtyTwoBitSheet)
+        );
+        assert_eq!(
+            RuleKey::ThirtyTwoBitSheet.default_source(),
+            RuleSource::Engine
+        );
         assert_eq!(RuleKey::UncountedSheet.key(), "uncounted_sheet");
         assert_eq!(
             RuleKey::from_key("uncounted_sheet"),
@@ -7226,6 +7254,7 @@ mod tests {
                 RuleKey::StellarFrameCount,
                 RuleKey::TypeSheetFallback,
                 RuleKey::EightBitSheet,
+                RuleKey::ThirtyTwoBitSheet,
                 RuleKey::UncountedSheet,
                 RuleKey::NpcLanding,
                 RuleKey::HireFee,
@@ -8690,7 +8719,7 @@ mod tests {
                 .source_for(rule),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(302), Some(&rule));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(303), Some(&rule));
     }
 
     #[test]
