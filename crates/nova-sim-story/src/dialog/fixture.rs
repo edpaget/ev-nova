@@ -696,11 +696,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_failed_enter_that_drops_choices() {
+    fn rejects_a_failed_enter_that_drops_choices_or_misnames_the_knot() {
         let error = fails(
             Fault::ClearsChoicesOnAFailedEnter,
             a_failed_enter_keeps_pending_choices,
         );
         assert!(error.contains("failed enter: offered"), "{error}");
+        let error = fails(
+            Fault::MisnamesAMissingKnot,
+            a_failed_enter_keeps_pending_choices,
+        );
+        assert!(error.contains("not NoSuchKnot"), "{error}");
     }
 }
