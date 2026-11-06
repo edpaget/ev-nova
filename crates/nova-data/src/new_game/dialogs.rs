@@ -9,7 +9,11 @@
 //! extension, so it is asked for `json` rather than `ink.json`.
 //!
 //! A stellar's ref whose compiled file is missing is a problem against the
-//! stellar's file, and that stellar has no conversation. Whether the knot
+//! stellar's file, and that stellar has no conversation. One file that
+//! isn't text fails the whole listing: that is one problem against
+//! `dialog/`, and each ref's own file is then read on its own, so a ref is
+//! reported missing only when its file is, and unreadable when it can't be
+//! read. Whether the knot
 //! the ref names is in the story is a question only an Ink runtime can
 //! answer, so it is asked through a port, [`DialogCheck`], which
 //! [`NewGame::check_dialogs`] runs after loading: `nova` adapts it over
@@ -64,46 +68,77 @@ pub fn read(
     source: &impl Source,
     problems: &mut Vec<Problem>,
 ) -> Dialogs {
-    let compiled: BTreeMap<String, Arc<str>> = match source.files("dialog", "json") {
-        Ok(files) => files
-            .into_iter()
-            .filter_map(|file| {
-                // Refs are lower case, so a name in another case matches
-                // none: it isn't read.
-                let stem = file.path.strip_suffix(".ink.json")?;
-                Some((format!("{stem}.ink"), Arc::from(file.text)))
-            })
-            .collect(),
-        Err(e) => {
-            problems.push(Problem::new("dialog/", format!("listing failed: {e}")));
-            BTreeMap::new()
-        }
-    };
+    let (mut compiled, listed): (BTreeMap<String, Arc<str>>, bool) =
+        match source.files("dialog", "json") {
+            Ok(files) => (
+                files
+                    .into_iter()
+                    .filter_map(|file| {
+                        // Refs are lower case, so a name in another case
+                        // matches none: it isn't read.
+                        let stem = file.path.strip_suffix(".ink.json")?;
+                        Some((format!("{stem}.ink"), Arc::from(file.text)))
+                    })
+                    .collect(),
+                true,
+            ),
+            Err(e) => {
+                problems.push(Problem::new("dialog/", format!("listing failed: {e}")));
+                (BTreeMap::new(), false)
+            }
+        };
     let mut stellars = BTreeMap::new();
     for (id, doc) in &galaxy.stellars {
         let (Some(dialog), Some(&nova)) = (&doc.data.dialog, ids.stellars.get(id)) else {
             continue;
         };
-        if compiled.contains_key(dialog.file()) {
+        let file = dialog.file();
+        let json = format!("{file}.json");
+        // A folder that failed to list (one unreadable file fails it all)
+        // still yields each ref's own file, read on its own.
+        if !listed && !compiled.contains_key(file) {
+            match read_one(source, &json) {
+                Ok(Some(text)) => {
+                    compiled.insert(file.to_owned(), Arc::from(text));
+                }
+                Ok(None) => {}
+                Err(why) => {
+                    problems.push(Problem::new(
+                        &doc.path,
+                        format!("dialog {dialog}: {json} couldn't be read: {why}"),
+                    ));
+                    continue;
+                }
+            }
+        }
+        if compiled.contains_key(file) {
             stellars.insert(
                 StellarId(nova),
                 DialogPlace {
-                    file: dialog.file().to_owned(),
+                    file: file.to_owned(),
                     knot: dialog.path().to_owned(),
                 },
             );
         } else {
             problems.push(Problem::new(
                 &doc.path,
-                format!(
-                    "dialog {dialog}: no {}.json; compile {} with inklecate",
-                    dialog.file(),
-                    dialog.file()
-                ),
+                format!("dialog {dialog}: no {json}; compile {file} with inklecate"),
             ));
         }
     }
     Dialogs { compiled, stellars }
+}
+
+/// The text of the file at `path`, `None` if there is none, or why it
+/// couldn't be read as text.
+fn read_one(source: &impl Source, path: &str) -> Result<Option<String>, String> {
+    match source.bytes(path) {
+        Ok(Some(bytes)) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 impl NewGame {
@@ -320,18 +355,59 @@ mod tests {
     }
 
     #[test]
-    fn a_dialog_folder_that_fails_to_list_is_one_problem() {
+    fn a_folder_that_fails_to_list_is_one_problem_and_each_ref_is_read_on_its_own() {
+        // One bad file fails the whole listing; the ref's own file still
+        // reads, so it isn't reported missing.
         let source = with_yard_dialog().with_bytes("dialog/bad.ink.json", &[0xff, 0xfe]);
         let game = loaded(&source);
-        assert_eq!(game.problems.len(), 2, "{:?}", game.problems);
+        assert_eq!(game.problems.len(), 1, "{:?}", game.problems);
         assert_eq!(game.problems[0].file, "dialog/");
         assert!(
             game.problems[0].message.starts_with("listing failed: "),
             "{}",
             game.problems[0].message
         );
+        let dialogs = game.data.dialogs();
+        assert_eq!(
+            dialogs.stellars,
+            BTreeMap::from([(yard(&game), place("dialog/yard.ink", "greet"))])
+        );
+        assert_eq!(&*dialogs.compiled["dialog/yard.ink"], "{yard}");
+    }
+
+    #[test]
+    fn a_ref_s_own_unreadable_file_is_reported_as_unreadable_not_missing() {
+        let source = with_yard_dialog().with_bytes("dialog/yard.ink.json", &[0xff, 0xfe]);
+        let game = loaded(&source);
+        assert_eq!(game.problems.len(), 2, "{:?}", game.problems);
+        assert_eq!(game.problems[0].file, "dialog/");
         assert_eq!(game.problems[1].file, "stellars/alpha-yard.md");
+        let message = &game.problems[1].message;
+        assert!(
+            message.starts_with(
+                "dialog dialog/yard.ink#greet: dialog/yard.ink.json couldn't be read: "
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("inklecate"), "{message}");
         assert_eq!(game.data.dialogs(), &Dialogs::default());
+    }
+
+    #[test]
+    fn with_the_folder_unlisted_a_missing_ref_is_still_missing() {
+        let source = with_yard_dialog()
+            .without("dialog/yard.ink.json")
+            .with_bytes("dialog/bad.ink.json", &[0xff, 0xfe]);
+        let game = loaded(&source);
+        assert_eq!(game.problems.len(), 2, "{:?}", game.problems);
+        assert_eq!(
+            game.problems[1],
+            Problem::new(
+                "stellars/alpha-yard.md",
+                "dialog dialog/yard.ink#greet: no dialog/yard.ink.json; \
+                 compile dialog/yard.ink with inklecate"
+            )
+        );
     }
 
     #[test]
