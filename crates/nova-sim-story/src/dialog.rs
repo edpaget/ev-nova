@@ -6,7 +6,7 @@
 //! story ([`DialogLoader::open`]), enter a knot or a stitch
 //! ([`Dialog::enter`]), step its lines with their tags ([`Dialog::step`]),
 //! list the choices it waits on ([`Dialog::choices`]), take one
-//! ([`Dialog::choose`]), read and write its variables, and save and restore
+//! ([`Dialog::choose`]), list, read and write its variables, and save and restore
 //! its state ([`Dialog::save`], [`Dialog::restore`]).
 //!
 //! The adapter is `nova-ink`'s `nova_ink::InkLoader`, over the `bladeink`
@@ -83,6 +83,10 @@ pub trait Dialog {
     /// [`DialogError::Unsupported`] when the variable holds a list, a
     /// divert target or a variable pointer.
     fn variable(&self, name: &str) -> Result<Option<Value>, DialogError>;
+
+    /// The names of the global variables the story declares (its `VAR`s,
+    /// lists included), sorted by name, each once.
+    fn variables(&self) -> Vec<String>;
 
     /// Sets the global variable `name`.
     ///

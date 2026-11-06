@@ -55,6 +55,10 @@ pub const CONTRACT_JSON: &str = include_str!("fixture/contract.ink.json");
 /// 9. Entering a knot drops the choices that were pending.
 /// 10. A failed enter changes nothing: the choices pending before it are
 ///     still offered and can still be taken.
+/// 11. The story's variables are listed by name: `coins`, `met`, `name`,
+///     `rate`.
+/// 12. A variable set after a restore reads the value set, not the one the
+///     save held.
 ///
 /// # Errors
 ///
@@ -74,6 +78,8 @@ pub fn check_contract(loader: &impl DialogLoader) -> Result<(), String> {
     a_choice_after_a_restore_plays_on(loader)?;
     entering_a_knot_drops_pending_choices(loader)?;
     a_failed_enter_keeps_pending_choices(loader)?;
+    variables_are_listed_by_name(loader)?;
+    a_variable_set_after_a_restore_holds(loader)?;
     Ok(())
 }
 
@@ -475,6 +481,33 @@ fn a_failed_enter_keeps_pending_choices(loader: &impl DialogLoader) -> Result<()
     )
 }
 
+fn variables_are_listed_by_name(loader: &impl DialogLoader) -> Result<(), String> {
+    let dialog = open(loader)?;
+    let names = dialog.variables();
+    if names == ["coins", "met", "name", "rate"] {
+        Ok(())
+    } else {
+        Err(format!(
+            "variables: listed {names:?}, not [\"coins\", \"met\", \"name\", \"rate\"]"
+        ))
+    }
+}
+
+fn a_variable_set_after_a_restore_holds(loader: &impl DialogLoader) -> Result<(), String> {
+    let clause = "set after a restore";
+    let mut dialog = open(loader)?;
+    set_all(dialog.as_mut(), &[("met", Value::Bool(true))], clause)?;
+    let saved = dialog
+        .save()
+        .map_err(|e| format!("{clause}: saving failed: {e}"))?;
+    let mut fresh = open(loader)?;
+    fresh
+        .restore(&saved)
+        .map_err(|e| format!("{clause}: restoring failed: {e}"))?;
+    set_all(fresh.as_mut(), &[("met", Value::Bool(false))], clause)?;
+    expect_variable(fresh.as_ref(), "met", Some(&Value::Bool(false)), clause)
+}
+
 /// The contract rejects dialogs that break it: each test wraps the fake
 /// with one fault and checks the clause that should catch it. These test
 /// [`check_contract`], not the fake, which the contract alone describes.
@@ -501,6 +534,8 @@ mod tests {
         KeepsChoicesOnEntering,
         ClearsChoicesOnAFailedEnter,
         StallsAfterARestore,
+        MisordersVariables,
+        IgnoresSetsAfterARestore,
     }
 
     struct FaultyLoader(Fault);
@@ -603,7 +638,18 @@ mod tests {
             }
         }
 
+        fn variables(&self) -> Vec<String> {
+            let mut names = self.inner.variables();
+            if self.fault == Fault::MisordersVariables {
+                names.reverse();
+            }
+            names
+        }
+
         fn set_variable(&mut self, name: &str, value: Value) -> Result<(), DialogError> {
+            if self.fault == Fault::IgnoresSetsAfterARestore && self.restored {
+                return Ok(());
+            }
             match (self.fault, self.inner.set_variable(name, value)) {
                 (Fault::MisnamesAnUndeclaredVariable, Err(_)) => {
                     Err(DialogError::Undeclared("other".to_owned()))
@@ -751,5 +797,20 @@ mod tests {
             a_failed_enter_keeps_pending_choices,
         );
         assert!(error.contains("not NoSuchKnot"), "{error}");
+    }
+
+    #[test]
+    fn rejects_variables_listed_out_of_order() {
+        let error = fails(Fault::MisordersVariables, variables_are_listed_by_name);
+        assert!(error.contains("variables: listed"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_set_lost_after_a_restore() {
+        let error = fails(
+            Fault::IgnoresSetsAfterARestore,
+            a_variable_set_after_a_restore_holds,
+        );
+        assert!(error.contains("set after a restore: `met` read"), "{error}");
     }
 }

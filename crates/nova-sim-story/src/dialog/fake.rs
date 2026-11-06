@@ -428,6 +428,10 @@ impl Dialog for FakeDialog {
         Ok(self.variables.get(name).cloned())
     }
 
+    fn variables(&self) -> Vec<String> {
+        self.variables.keys().cloned().collect()
+    }
+
     fn set_variable(&mut self, name: &str, value: Value) -> Result<(), DialogError> {
         let slot = self
             .variables

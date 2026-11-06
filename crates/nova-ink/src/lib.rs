@@ -126,6 +126,10 @@ impl Dialog for InkDialog {
         }))
     }
 
+    fn variables(&self) -> Vec<String> {
+        self.story.get_global_variables()
+    }
+
     fn set_variable(&mut self, name: &str, value: Value) -> Result<(), DialogError> {
         if self.story.get_variable(name).is_none() {
             return Err(DialogError::Undeclared(name.to_owned()));
@@ -262,6 +266,27 @@ mod tests {
             recall().variable("mood"),
             Err(DialogError::Unsupported("mood".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_variable_set_after_a_restore_is_read_in_text() {
+        let dialog = recall();
+        let saved = dialog.save().unwrap();
+        assert_eq!(dialog.variable("met"), Ok(Some(Value::Bool(false))));
+
+        let mut fresh = recall();
+        fresh.restore(&saved).unwrap();
+        fresh.set_variable("met", Value::Bool(true)).unwrap();
+        fresh.enter("recall").unwrap();
+        assert_eq!(
+            lines(fresh.as_mut()),
+            ["Welcome back, Tally.", "You never asked."]
+        );
+    }
+
+    #[test]
+    fn variables_lists_every_global_list_included() {
+        assert_eq!(recall().variables(), ["met", "mood", "name"]);
     }
 
     /// The lines `dice` steps, in a story opened with `seed`.
