@@ -713,6 +713,27 @@ mod tests {
     }
 
     #[test]
+    fn by_the_original_a_16_bit_and_an_8_bit_sheet_each_shift_by_their_own_depth_and_stop_at_the_firsts_width()
+     {
+        use MaskWalk::Original;
+        // Pixels 0 and 2 of 3: 16-bit (shift 1), and 8-bit (bytes 0 and 3
+        // of 6, shift 0).
+        let wide = sheet(&[&["#.#"]]);
+        let bytes = sheet8(&[&["#..#.."]]);
+        assert_eq!(wide.shift, 1);
+        assert_eq!((bytes.width, bytes.shift), (3, 0));
+        // 16-bit A: its width doubles to 2, and B's local rect keeps its
+        // own shift of 0, so B's byte 3 meets A's bytes 0 and 1.
+        assert!(touch(&wide, (0, 0), &bytes, (-2, 0), Original));
+        // 8-bit A: B's local rect still doubles by B's own shift of 1, so
+        // B's pixel 2 (bytes 4 and 5) meets A's byte 0.
+        assert!(touch(&bytes, (0, 0), &wide, (-2, 0), Original));
+        // The walk stops at A's shifted width of 2, before A's byte 3 is
+        // compared with B's pixel 2.
+        assert!(!touch(&bytes, (0, 0), &wide, (-1, 0), Original));
+    }
+
+    #[test]
     fn a_lower_row_is_reached_past_the_lines_above_it() {
         let both = sheet(&[&["##", "##"]]);
         for walk in BOTH {
