@@ -1,6 +1,32 @@
 [profile.default]
 # A hung test fails the run instead of hanging it.
 slow-timeout = { period = "30s", terminate-after = 4 }
+# Several agent sessions share this machine, each in its own worktree, and
+# nextest starts one process per test. Its default (one thread per core,
+# 18 here) per session stacked up past what the Mac could take; see
+# .claude/rules/resource-limits.md. CI's runners have fewer cores than this.
+test-threads = 8
+
+# Tests that open a wgpu device. Many at once have stalled WindowServer and
+# rebooted the Mac (.claude/rules/slow-tests.md). The default profile's
+# overrides apply to every profile, CI's and mutants' included.
+[test-groups]
+gpu = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'binary_id(nova-render::it) | (package(nova-render) & test(/^wgpu::/)) | (binary_id(nova::it) & test(/^(dev_tools_paint|stock_take_off_cost)::/))'
+test-group = 'gpu'
 
 [profile.ci]
 fail-fast = false
+# CI's runner is the only job on its machine.
+test-threads = "num-cpus"
+
+# `mise run mutants` selects this profile (NEXTEST_PROFILE). A mutant can turn
+# a loop into one that never ends and keeps allocating: nine of them once held
+# 37 GB before the default 120 s timeout killed them. Correct tests finish in
+# well under a second, so 20 s is ample. Fewer threads, since mutants builds
+# and tests two mutants at once (CARGO_MUTANTS_JOBS).
+[profile.mutants]
+slow-timeout = { period = "10s", terminate-after = 2 }
+test-threads = 4
