@@ -834,6 +834,23 @@ mod tests {
         }
     }
 
+    /// A dialog button whose press sounds: OK beeping at a name too
+    /// long, tapped, beeps as the click does.
+    #[test]
+    fn a_tap_on_ok_beeps_as_a_click_does() {
+        let long = "x".repeat(25);
+        let mut clicked = filled(&stock(), &long, "Ace");
+        let ok = center(&clicked, OK_ITEM);
+        clicked.input(&Input::PointerMoved(ok));
+        let clicked_sounds = click(&mut clicked, ok);
+        let mut tapped = filled(&stock(), &long, "Ace");
+        crate::touch::testkit::tap(&mut tapped, ok);
+        assert_eq!(tapped.take_sounds(), clicked_sounds);
+        assert_eq!(clicked_sounds, [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(tapped.take_outcome(), clicked.take_outcome());
+        assert_eq!(tapped.field().selection(), clicked.field().selection());
+    }
+
     #[test]
     fn ok_over_24_in_the_nickname_moves_the_focus_to_it() {
         let mut dialog = filled(&stock(), "Ada", &"y".repeat(25));

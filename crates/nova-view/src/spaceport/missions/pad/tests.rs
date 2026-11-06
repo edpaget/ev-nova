@@ -195,6 +195,29 @@ fn south_on_a_row_selects_and_shows_it_as_a_click_does() {
 }
 
 #[test]
+fn a_tap_on_a_row_selects_and_shows_it_as_a_click_does() {
+    let mut tapped = screen();
+    tapped.take_text_request();
+    let row = tapped
+        .rows()
+        .and_then(|rows| rows.row_bounds(1))
+        .expect("row 1");
+    crate::touch::testkit::tap(&mut tapped, row.center());
+    let mut clicked = screen();
+    clicked.take_text_request();
+    clicked.input(&Input::PointerMoved(row.center()));
+    click(&mut clicked, row);
+    assert_eq!(tapped.rows().and_then(RowList::selected), Some(1));
+    assert_eq!(
+        tapped.rows().and_then(RowList::selected),
+        clicked.rows().and_then(RowList::selected)
+    );
+    let shown = tapped.take_text_request();
+    assert!(shown.is_some(), "row 1 shown");
+    assert_eq!(shown, clicked.take_text_request());
+}
+
+#[test]
 fn the_left_stick_scrolls_and_the_cells_follow() {
     let mut screen = long_computer();
     screen.input(&told(PAD));

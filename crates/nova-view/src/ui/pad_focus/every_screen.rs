@@ -10,6 +10,17 @@
 //! - The highlight shows only while the pad was the device used last, and
 //!   after the pad the keyboard's ring draws as it always did.
 //!
+//! The table also checks touch (rdm:phase/key-bindings/phase-14-touch-input),
+//! driving each screen with fingers through the touch router
+//! ([`crate::touch`]) as the app does:
+//!
+//! - A tap presses each control as a mouse click there does (a move, a
+//!   press and a release), with a click's sounds.
+//! - A cancelled touch on a control does what a mouse press there and
+//!   [`Screen::cancel_pointer`] do: it fires nothing.
+//! - A second finger presses nothing while the first holds a control, and
+//!   after the first lifts, a finger left down presses nothing.
+//!
 //! A new screen with a pad focus adds its row to [`rows`], from a
 //! `pad_probe` fixture its own module publishes for tests.
 
@@ -24,6 +35,7 @@ use crate::input::{ControllerFamily, Device, Input, Key, MouseButton, PadButton,
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::fixture::MonoMetrics;
+use crate::touch::testkit::Fingers;
 use crate::ui::dialog::{
     Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement,
 };
@@ -317,6 +329,146 @@ fn a_pad_press_sounds_as_a_click_does() {
                 clicked.send(&input);
             }
             assert_eq!(padded.sounds(), clicked.sounds(), "{screen}: {name}");
+        }
+    }
+}
+
+/// The point a click on control `name` presses: its click's own, or its
+/// rect's centre for a control clicked by key (the keys screen's list).
+fn click_point(build: fn() -> Box<dyn PadProbe>, name: &'static str, rect: Bounds) -> Point {
+    build()
+        .click(name, rect)
+        .into_iter()
+        .find_map(|input| match input {
+            Input::PointerButton { at, .. } => Some(at),
+            _ => None,
+        })
+        .unwrap_or_else(|| rect.center())
+}
+
+/// A mouse click at `at` as the platform sends it: a move there first.
+fn mouse_click(at: Point) -> [Input; 3] {
+    [
+        Input::PointerMoved(at),
+        pointer(true, at),
+        pointer(false, at),
+    ]
+}
+
+/// The fingers the touch tests use: none claimed.
+type Free<'a> = Fingers<'a, fn(Point) -> bool>;
+
+/// A run whose screen `touch` drives with fingers.
+fn touched(build: fn() -> Box<dyn PadProbe>, touch: impl FnOnce(&mut Free<'_>)) -> Run {
+    let mut run = Run::new(build);
+    let mut fingers = Fingers::on(run.probe.screen());
+    touch(&mut fingers);
+    let actions = fingers.take_actions();
+    run.actions.extend(
+        actions
+            .into_iter()
+            .filter(|&action| action != ScreenAction::None),
+    );
+    run
+}
+
+#[test]
+fn a_tap_presses_each_control_as_a_click_does() {
+    for (screen, build) in rows() {
+        for (name, rect) in build().controls() {
+            let at = click_point(build, name, rect);
+            let mut tapped = touched(build, |fingers| {
+                fingers.down(1, at);
+                fingers.up(1, at);
+            });
+            let mut clicked = Run::new(build).sends(&mouse_click(at));
+            assert_eq!(tapped.result(), clicked.result(), "{screen}: {name}");
+        }
+    }
+}
+
+#[test]
+fn a_tap_sounds_as_a_click_does() {
+    for (screen, build) in rows() {
+        for (name, rect) in build().controls() {
+            let at = click_point(build, name, rect);
+            let mut tapped = touched(build, |fingers| {
+                fingers.down(1, at);
+                fingers.up(1, at);
+            });
+            let mut clicked = Run::new(build).sends(&mouse_click(at));
+            assert_eq!(tapped.sounds(), clicked.sounds(), "{screen}: {name}");
+        }
+    }
+}
+
+#[test]
+fn a_cancelled_touch_on_a_control_fires_nothing() {
+    for (screen, build) in rows() {
+        for (name, rect) in build().controls() {
+            let at = click_point(build, name, rect);
+            let mut cancelled = touched(build, |fingers| {
+                fingers.down(1, at);
+                fingers.cancel(1);
+            });
+            let mut pressed = Run::new(build).sends(&mouse_click(at)[..2]);
+            pressed.probe.screen().cancel_pointer();
+            assert_eq!(cancelled.result(), pressed.result(), "{screen}: {name}");
+            assert_eq!(cancelled.sounds(), pressed.sounds(), "{screen}: {name}");
+            assert_eq!(cancelled.drawn(), pressed.drawn(), "{screen}: {name}");
+        }
+    }
+}
+
+#[test]
+fn a_second_finger_presses_nothing_while_the_first_holds_a_control() {
+    for (screen, build) in rows() {
+        let controls = build().controls();
+        for &(name, rect) in &controls {
+            let at = click_point(build, name, rect);
+            let mut touched = touched(build, |fingers| {
+                fingers.down(1, at);
+                for &(other, other_rect) in &controls {
+                    let elsewhere = click_point(build, other, other_rect);
+                    fingers.down(2, elsewhere);
+                    fingers.up(2, elsewhere);
+                }
+                fingers.up(1, at);
+            });
+            let mut clicked = Run::new(build).sends(&mouse_click(at));
+            assert_eq!(touched.result(), clicked.result(), "{screen}: {name}");
+        }
+    }
+}
+
+#[test]
+fn after_the_primary_lifts_a_finger_left_down_presses_nothing() {
+    let empty = Point::new(1.0, 1.0);
+    for (screen, build) in rows() {
+        for (name, rect) in build().controls() {
+            let at = click_point(build, name, rect);
+            let left_down = |fingers: &mut Free<'_>| {
+                fingers.down(1, empty);
+                fingers.down(2, at);
+                fingers.up(1, empty);
+                fingers.up(2, at);
+            };
+            let mut touched = touched(build, left_down);
+            let mut clicked = Run::new(build).sends(&mouse_click(empty));
+            assert_eq!(touched.result(), clicked.result(), "{screen}: {name}");
+            let mut tapped_after = self::touched(build, |fingers| {
+                left_down(fingers);
+                fingers.down(3, at);
+                fingers.up(3, at);
+            });
+            let mut clicked_after = Run::new(build)
+                .sends(&mouse_click(empty))
+                .sends(&mouse_click(at));
+            assert_eq!(
+                tapped_after.result(),
+                clicked_after.result(),
+                "{screen}: {name}, a fresh tap"
+            );
         }
     }
 }

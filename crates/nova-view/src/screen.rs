@@ -6,6 +6,7 @@ use std::time::Duration;
 use nova_sim::SimDiagnostic;
 
 use crate::draw::DrawList;
+use crate::geometry::Point;
 use crate::input::Input;
 use crate::keymap::Bindings;
 use crate::menu_command::MenuCommand;
@@ -268,6 +269,16 @@ pub trait Screen {
     fn hides_pointer(&self) -> bool {
         false
     }
+    /// Whether a touch starting at `at` (logical) falls on controls of
+    /// the screen's own that take fingers (phase 15's touch overlay), so
+    /// the touch router ([`crate::touch`]) hands that finger to the screen
+    /// as [`Input::Touch`] rather than making it the pointer. Asked only
+    /// as a touch starts; the finger stays the screen's until it ends or
+    /// is cancelled. `false` by default.
+    fn claims_touch(&self, at: Point) -> bool {
+        let _ = at;
+        false
+    }
     /// Whether keys typed now would come after keys the screen holds back
     /// for a press (a dialog's held press, `ui::held_keys`): true from the
     /// press until the replay of what it held back has run. The router
@@ -393,6 +404,12 @@ mod tests {
     fn a_screen_leaves_the_system_pointer_shown_by_default() {
         let screen: &dyn Screen = &Counter::default();
         assert!(!screen.hides_pointer());
+    }
+
+    #[test]
+    fn a_screen_claims_no_touch_by_default() {
+        let screen: &dyn Screen = &Counter::default();
+        assert!(!screen.claims_touch(Point::new(10.0, 10.0)));
     }
 
     #[test]

@@ -414,6 +414,42 @@ mod tests {
     }
 
     #[test]
+    fn a_tap_on_ok_closes_the_note_as_a_click_does_with_its_sounds() {
+        let mut clicked = note(&template());
+        let ok = clicked.dialog().item_bounds(OK_ITEM).expect("OK").center();
+        clicked.input(&Input::PointerMoved(ok));
+        click(&mut clicked);
+        let mut tapped = note(&template());
+        crate::touch::testkit::tap(&mut tapped, ok);
+        assert!(tapped.closed());
+        assert_eq!(tapped.closed(), clicked.closed());
+        assert_eq!(tapped.take_sounds(), clicked.take_sounds());
+    }
+
+    #[test]
+    fn a_cancelled_touch_on_ok_leaves_it_unpressed_and_unfired() {
+        let mut note = note(&template());
+        let ok = note.dialog().item_bounds(OK_ITEM).expect("OK").center();
+        let mut untouched = DrawList::new();
+        note.draw(&mut untouched);
+        {
+            let mut fingers = crate::touch::testkit::Fingers::on(&mut note);
+            fingers.down(1, ok);
+            fingers.cancel(1);
+            fingers.up(1, ok);
+        }
+        assert!(!note.closed(), "nothing answered");
+        let mut drawn = DrawList::new();
+        note.draw(&mut drawn);
+        assert_eq!(
+            drawn.iter().collect::<Vec<_>>(),
+            untouched.iter().collect::<Vec<_>>(),
+            "OK isn't drawn pressed"
+        );
+        assert_eq!(note.take_sounds(), [], "the cancel is silent");
+    }
+
+    #[test]
     fn the_note_is_dlog_3000() {
         assert_eq!(NOTE_DIALOG, 3000);
     }
