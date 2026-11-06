@@ -3,13 +3,21 @@
 //! [`PlayKeys`](super::PlayKeys)): the aid sees each input first and
 //! gives back the inputs the host runs through its own input, in order;
 //! the host's pointer cancel ends what the aid holds; and the aid shows
-//! only while the host says nothing of its own is open over it.
+//! only while the host is the screen in front: nothing of its own is open
+//! over it ([`AidHost::aid_live`]), and nothing its holder shows covers it
+//! ([`Screen::set_covered`], [`cover`]).
 //!
 //! A host implements [`AidHost`] in a sibling module of its own, and its
 //! [`Screen`] methods call [`intercept`] (at the head of `input`),
-//! [`cancel`] (in `cancel_pointer`) and [`draw`] (at the end of `draw`):
-//! one line each in the host's file. The inputs the aid gives back run
-//! through the host's [`Screen::input`] again, past the aid.
+//! [`cancel`] (in `cancel_pointer`), [`cover`] (in `set_covered`) and
+//! [`draw`] (at the end of `draw`): one line each in the host's file. The
+//! inputs the aid gives back run through the host's [`Screen::input`]
+//! again, past the aid.
+//!
+//! A screen that holds others tells each whether it is covered, from its
+//! own `set_covered` and wherever it opens or closes something over them:
+//! the spaceport tells the screen open over it (and the bar its race),
+//! flight its course map, and the app the spaceport and flight.
 
 use crate::draw::DrawList;
 use crate::input::Input;
@@ -39,6 +47,12 @@ pub trait TouchAid {
 
     /// Notes that its host is, or no longer is, running them.
     fn set_replaying(&mut self, replaying: bool);
+
+    /// Whether its host's holder covers the host ([`cover`]).
+    fn covered(&self) -> bool;
+
+    /// Notes whether its host's holder covers the host.
+    fn set_covered(&mut self, covered: bool);
 }
 
 /// A screen with a touch aid.
@@ -82,12 +96,32 @@ pub fn cancel(host: &mut impl AidHost) {
     replay(host, &given);
 }
 
-/// Draws `host`'s aid over it while the host lets it show now, so one
-/// opened by a call rather than an input (an offer) hides it at once.
+/// In the host's [`Screen::set_covered`]: whether something its holder
+/// shows covers the host. Covered, the aid hides and takes no tap, and as
+/// it is covered it lets go as the host's pointer cancel does ([`cancel`]):
+/// a press on it is forgotten, a wrapped tap ends with its command's
+/// release through the host's input, and an armed toggle disarms.
+/// Uncovered, it shows again while the host lets it.
+pub fn cover(host: &mut impl AidHost, covered: bool) {
+    let newly = covered && !host.aid().covered();
+    host.aid_mut().set_covered(covered);
+    if newly {
+        cancel(host);
+    }
+    settle_live(host);
+}
+
+/// Draws `host`'s aid over it while it shows now, so one opened by a call
+/// rather than an input (an offer) hides it at once.
 pub fn draw(host: &impl AidHost, list: &mut DrawList) {
-    if host.aid_live() {
+    if shows(host) {
         host.aid().draw(list);
     }
+}
+
+/// Whether `host` lets its aid show and nothing covers the host.
+fn shows(host: &impl AidHost) -> bool {
+    host.aid_live() && !host.aid().covered()
 }
 
 /// Runs `inputs` through the host's input past the aid; the last action
@@ -106,9 +140,9 @@ fn replay(host: &mut impl AidHost, inputs: &[Input]) -> ScreenAction {
     action
 }
 
-/// Tells the aid whether the host lets it show.
+/// Tells the aid whether it may show.
 fn settle_live(host: &mut impl AidHost) {
-    let live = host.aid_live();
+    let live = shows(host);
     host.aid_mut().set_live(live);
 }
 
@@ -157,6 +191,10 @@ mod tests {
 
         fn cancel_pointer(&mut self) {
             cancel(self);
+        }
+
+        fn set_covered(&mut self, covered: bool) {
+            cover(self, covered);
         }
 
         fn input(&mut self, input: &Input) -> ScreenAction {
@@ -262,5 +300,37 @@ mod tests {
         assert_eq!(host.got, [command(false)]);
         host.cancel_pointer();
         assert_eq!(host.got, [command(false)], "once");
+    }
+
+    #[test]
+    fn covered_mid_tap_the_wrapped_command_is_released_through_the_host_once() {
+        let mut host = host();
+        arm(&mut host);
+        host.input(&button(true, Point::new(400.0, 300.0)));
+        host.got.clear();
+        host.set_covered(true);
+        assert_eq!(host.got, [command(false)]);
+        host.set_covered(true);
+        assert_eq!(host.got, [command(false)], "once");
+    }
+
+    #[test]
+    fn covered_it_is_neither_drawn_nor_tapped_and_uncovered_it_comes_back() {
+        let mut host = host();
+        let drawn = |host: &Recorder| {
+            let mut list = DrawList::new();
+            host.draw(&mut list);
+            list.len()
+        };
+        let at = host.toggle.rect().center();
+        host.set_covered(true);
+        assert_eq!(drawn(&host), 0, "not drawn");
+        host.input(&button(true, at));
+        host.input(&button(false, at));
+        assert!(!host.toggle.armed(), "the tap passed it by");
+        assert_eq!(host.got.len(), 3, "to the host: {:?}", host.got);
+        host.set_covered(false);
+        assert!(drawn(&host) > 0, "drawn again");
+        assert!(host.toggle.shown());
     }
 }

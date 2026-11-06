@@ -15,9 +15,12 @@
 //! # The rules every aid keeps
 //!
 //! - **Shown** only while the host was last told
-//!   [`Device::Touch`](crate::input::Device::Touch) and the host says it
-//!   is live; hidden, an aid passes every input through untouched, so a
-//!   keyboard, mouse or pad player's screen is exactly what it was.
+//!   [`Device::Touch`](crate::input::Device::Touch) and the host is the
+//!   screen in front: it says it is live, and whoever holds it doesn't
+//!   cover it ([`Screen::set_covered`](crate::screen::Screen::set_covered),
+//!   [`host::cover`]). Hidden, an aid passes every input through
+//!   untouched, so a keyboard, mouse or pad player's screen is exactly
+//!   what it was; covered, it lets go and a toggle disarms.
 //! - **Reaches the screen as the touch device**: an aid raises
 //!   [`Input::TouchControl`](crate::input::Input::TouchControl) presses
 //!   and releases of the same command the key, or the pad, gives, through
@@ -38,7 +41,11 @@
 //! does there (a toggled tap does what the modifier click does, the aid
 //! hides under the host's modals and for any other device) in its own
 //! `touch` module. The table in `tests.rs` pairs every modifier click
-//! with a host; a new one fails it until it has a toggle. The
+//! with a host, a new one failing it until it has a toggle, and pins that
+//! each host's toggle hides and disarms covered. Each holder pins what
+//! covers the screens it holds: the spaceport's in its
+//! `tests::covered_aids`, flight's in its `tests::map_covered`, and the
+//! app's in its own tests. The
 //! every-screen table (`ui::pad_focus::every_screen`) leaves an aid's own
 //! drawing out of its drawing comparisons (`PadProbe::touch_aids_drawn`).
 

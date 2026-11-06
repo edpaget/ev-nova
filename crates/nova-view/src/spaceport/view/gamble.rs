@@ -129,6 +129,7 @@ impl SpaceportView {
                 self.settle_gamble();
             }
         }
+        self.settle_cover();
     }
 
     /// The racer and the bet the bar's race asked for since this was last
@@ -153,6 +154,7 @@ impl SpaceportView {
         }
         self.gambling.after = Some(AfterTexts::Winnings);
         self.settle_gamble();
+        self.settle_cover();
     }
 
     /// Whether the race's Help has asked for its text since this was last
@@ -173,6 +175,7 @@ impl SpaceportView {
                 movie: after,
             }]);
         }
+        self.settle_cover();
     }
 
     /// Whether the race's result text has closed since this was last
@@ -225,7 +228,7 @@ impl SpaceportView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::spaceport) mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -241,7 +244,7 @@ mod tests {
     use crate::ui::dialog::{Dialog, ItemSpec, ItemTemplate, Placement};
 
     /// Stock `DITL` 1023's frame and items, enough to lay the race out.
-    fn race_template() -> DialogTemplate {
+    pub(in crate::spaceport) fn race_template() -> DialogTemplate {
         let item = |x, y, w, h| ItemTemplate {
             bounds: Bounds::at(Point::new(x, y), w, h),
             enabled: false,

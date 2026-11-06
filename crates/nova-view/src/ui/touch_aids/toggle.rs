@@ -1,10 +1,11 @@
 //! [`ModifierToggle`]: the on-screen toggle that gives a touch player one
 //! of the original's modifier clicks ([`CLICK_MODIFIERS`]).
 //!
-//! - **Shown** only while touch was the device used last and its host says
-//!   it is live (no modal of its own open over it); hidden, it passes every
-//!   input through untouched, so a keyboard, mouse or pad player's clicks
-//!   are exactly what they were.
+//! - **Shown** only while touch was the device used last and its host is
+//!   the screen in front: it says it is live (no modal of its own open over
+//!   it) and its holder doesn't cover it ([`super::host::cover`]); hidden,
+//!   it passes every input through untouched, so a keyboard, mouse or pad
+//!   player's clicks are exactly what they were. Covered, it disarms.
 //! - **One-shot.** A tap on it arms it, acting on the release inside it; a
 //!   second tap disarms it. Armed, the next tap anywhere else is wrapped
 //!   in its command's press and release as the touch device's
@@ -69,6 +70,8 @@ pub struct ModifierToggle {
     latch: Latch,
     /// A press on the toggle itself.
     press: Press,
+    /// Whether its host's holder covers the host ([`super::host::cover`]).
+    covered: bool,
     /// Whether its host is running the inputs it gave back, which pass it
     /// by ([`super::host`]).
     replaying: bool,
@@ -88,6 +91,7 @@ impl ModifierToggle {
             latch: Latch::Off,
             press: Press::default(),
             replaying: false,
+            covered: false,
         }
     }
 
@@ -274,6 +278,14 @@ impl TouchAid for ModifierToggle {
 
     fn set_replaying(&mut self, replaying: bool) {
         self.replaying = replaying;
+    }
+
+    fn covered(&self) -> bool {
+        self.covered
+    }
+
+    fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
     }
 }
 

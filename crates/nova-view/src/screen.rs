@@ -142,6 +142,14 @@ pub trait Screen {
     /// it. A screen that acts on held keys over time stops acting on them.
     /// Does nothing by default.
     fn release_keys(&mut self) {}
+    /// Whether something its holder shows over it covers it now, so it
+    /// isn't the screen in front. A touch aid it hosts
+    /// ([`crate::ui::touch_aids`]) shows, takes taps and stays armed only
+    /// while its host is in front: covered, it hides, lets go and
+    /// disarms. A holder tells each screen it holds whenever what covers
+    /// it may have changed, and passes it on to the screens it holds in
+    /// turn. Does nothing by default.
+    fn set_covered(&mut self, _covered: bool) {}
     /// The window has come back to the front: the original's resume or
     /// activate event, which runs `_SwitchedIn` (@0x513cc-0x513dc). Called
     /// on the screen shown, and on any screen held under it that keeps
@@ -525,6 +533,18 @@ mod tests {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         screen.release_keys();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn being_covered_does_nothing_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.set_covered(true);
+        screen.set_covered(false);
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);

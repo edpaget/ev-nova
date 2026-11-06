@@ -2183,6 +2183,12 @@ impl Screen for GalaxyMap {
         crate::ui::touch_aids::host::draw(self, list);
     }
 
+    /// Plot Course's toggle hides and disarms while something the map's
+    /// holder shows covers it ([`crate::ui::touch_aids::host::cover`]).
+    fn set_covered(&mut self, covered: bool) {
+        crate::ui::touch_aids::host::cover(self, covered);
+    }
+
     /// Forgets the left-button press, if any: the map stops dragging and the
     /// release, wherever it ends up, is not a click, on the map, on the
     /// "Enter system" button, on Done or Find, or in Find.

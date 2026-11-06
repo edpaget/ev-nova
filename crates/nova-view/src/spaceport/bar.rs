@@ -1086,6 +1086,15 @@ impl Screen for BarScreen {
         }
     }
 
+    /// Passes it on to the race, the one screen it holds with a touch aid,
+    /// which takes every input while open, so nothing of the bar's own is
+    /// in front of it.
+    fn set_covered(&mut self, covered: bool) {
+        if let Some(race) = &mut self.race {
+            race.set_covered(covered);
+        }
+    }
+
     fn cancel_pointer(&mut self) {
         if let Some(race) = &mut self.race {
             race.cancel_pointer();

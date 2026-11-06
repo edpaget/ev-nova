@@ -112,6 +112,7 @@ mod layers;
 mod leaving_cursor;
 mod live_keys;
 mod map_borders;
+mod map_covered;
 mod map_find;
 mod map_key_wait;
 mod map_opening;

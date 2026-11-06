@@ -1588,6 +1588,7 @@ impl SpaceportView {
                 }
             }
         }
+        self.settle_cover();
     }
 
     /// The offer dialog open: the spaceport's, or the one over the venue
@@ -1675,6 +1676,7 @@ impl SpaceportView {
                     }]);
                 }
                 self.port_dialog_closed = Some(PortDialog::MissionComputer);
+                self.settle_cover();
                 return;
             }
         };
@@ -1766,6 +1768,7 @@ impl SpaceportView {
         }
         self.dispose_answered_offer();
         self.close_bought_shipyard();
+        self.settle_cover();
     }
 
     /// Tells the offer dialog open, the spaceport's or the one over the
@@ -1920,6 +1923,7 @@ impl SpaceportView {
             .with_key_held(self.close_keys.player_info),
         );
         self.tell_player_info();
+        self.settle_cover();
     }
 
     /// The player info screen open, if it is.
@@ -1973,6 +1977,7 @@ impl SpaceportView {
             dialogs.open_info_with_map(info, !over_mission_dialog);
             self.sounds.extend(dialogs.take_sounds());
         }
+        self.settle_cover();
     }
 
     /// Lets go of the press and the keys of what is shown, before an
@@ -2085,6 +2090,7 @@ impl SpaceportView {
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.show_descs(vec![DescShown::str_text(text, after)]);
         }
+        self.settle_cover();
     }
 
     /// Whether mission texts (or their movies) are queued over the
@@ -2378,6 +2384,7 @@ impl Screen for SpaceportView {
         }
         let action = self.route_input(input);
         self.settle_gamble();
+        self.settle_cover();
         action
     }
 
@@ -2390,6 +2397,7 @@ impl Screen for SpaceportView {
     fn tick(&mut self, dt: Duration) {
         self.tick_screens(dt);
         self.settle_gamble();
+        self.settle_cover();
     }
 
     /// What is open, the spaceport's offer, the mission info screen, the
@@ -2407,6 +2415,12 @@ impl Screen for SpaceportView {
             screen.draw(list);
         }
         crate::ui::touch_aids::host::draw(self, list);
+    }
+
+    /// Its play keys hide while whoever holds it covers it, and so does
+    /// what the screen open hosts ([`SpaceportView::cover_aids`]).
+    fn set_covered(&mut self, covered: bool) {
+        self.cover_aids(covered);
     }
 
     fn cancel_pointer(&mut self) {
@@ -2704,6 +2718,7 @@ impl SpaceportView {
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
     mod close_keys;
+    mod covered_aids;
     mod flushing_layers;
     mod held_keys;
     mod mission_screen_keys;

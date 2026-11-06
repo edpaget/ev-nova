@@ -136,6 +136,13 @@ impl<
         self.cursor.left();
     }
 
+    /// Passes it on to the course map, whose Plot Course toggle hides
+    /// under what covers flight: nothing of flight's own opens over its
+    /// map.
+    fn set_covered(&mut self, covered: bool) {
+        self.map.set_covered(covered);
+    }
+
     /// Lets go of every flight key: the ship stops thrusting and turning,
     /// and coasts. The map key counts as let go too, so a key-down the
     /// course map doesn't take no longer closes it, and a map waiting for

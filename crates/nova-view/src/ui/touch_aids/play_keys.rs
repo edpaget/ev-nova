@@ -22,9 +22,10 @@
 //!   opens what its key opens there, and does nothing where its key does
 //!   nothing (the outfitter ignores player info, as `_OutfitFilter` never
 //!   reads it).
-//! - **Shown** only while touch was used last and the host is live (the
-//!   mission texts, which take every input, hide it); hidden, it passes
-//!   every input through.
+//! - **Shown** only while touch was used last, the host is live (the
+//!   mission texts, which take every input, hide it) and its holder
+//!   doesn't cover it ([`super::host::cover`]); hidden, it passes every
+//!   input through.
 
 use super::host::TouchAid;
 use super::look::{self, label};
@@ -73,6 +74,8 @@ pub struct PlayKeys {
     live: bool,
     /// A press on one of its controls.
     press: Press,
+    /// Whether its host's holder covers the host ([`super::host::cover`]).
+    covered: bool,
     /// Whether its host is running the inputs it gave back.
     replaying: bool,
 }
@@ -90,6 +93,7 @@ impl PlayKeys {
             live: true,
             press: Press::default(),
             replaying: false,
+            covered: false,
         }
     }
 
@@ -197,6 +201,14 @@ impl TouchAid for PlayKeys {
 
     fn set_replaying(&mut self, replaying: bool) {
         self.replaying = replaying;
+    }
+
+    fn covered(&self) -> bool {
+        self.covered
+    }
+
+    fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
     }
 }
 

@@ -1462,6 +1462,12 @@ impl Screen for OutfitterScreen {
         crate::ui::touch_aids::host::draw(self, list);
     }
 
+    /// Its toggle hides and disarms while something the spaceport shows
+    /// covers it ([`crate::ui::touch_aids::host::cover`]).
+    fn set_covered(&mut self, covered: bool) {
+        crate::ui::touch_aids::host::cover(self, covered);
+    }
+
     fn cancel_pointer(&mut self) {
         crate::ui::touch_aids::host::cancel(self);
         if self
