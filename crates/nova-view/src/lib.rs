@@ -105,6 +105,7 @@ pub mod system;
 pub mod target_picture;
 pub mod text;
 mod time;
+pub mod touch;
 pub mod ui;
 mod ui_sound_cue;
 pub mod upscaler;
