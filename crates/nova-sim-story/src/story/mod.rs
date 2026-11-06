@@ -1767,11 +1767,12 @@
 //!   `SessionEvent::StellarsRebuilt` even with the dead set unchanged: a
 //!   stellar with no `DeadType` still destroyed at a second rebuild point
 //!   goes from `Type` to `TypeZero`.
-//! - **The frame state** is the view's: each `SceneStellar` holds its
-//!   current frame, next frame, timer and the frame shown
-//!   (`system::animation::Frames` in nova-view), stepped once a tick of
-//!   1/30 s, as the original's sprite tick steps the stellar every play
-//!   frame. The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
+//! - **The frame state** was the view's, and is the session's since
+//!   rendering phase 11: each stellar's record holds its current frame,
+//!   next frame, timer and the frame shown
+//!   (`nova_sim::stellar_frames::StellarFrames`), stepped once a pass, as
+//!   the original's sprite tick steps the stellar in every game-work
+//!   pass (the session's `stellar_frames` module). The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
 //!   `Frame0Bias` while the current frame is 0 and the bias is above 1,
 //!   the current frame takes the next, the next becomes the one after it
 //!   modulo the counted sheet's frame count, and the sheet drawn shows the
@@ -2970,9 +2971,10 @@
 //!
 //! A stellar's frames advance by the whole of `_HandleStellarSprites`'
 //! sequential branch (@0x2ec4b-0x2ee35): `Flags2` 0x0001 and 0x0002, and
-//! an `AnimDelay` of 0 or less. The view builds it
-//! (`nova_view::system::animation`'s `Frames`), as the frame a non-gate
-//! stellar shows is drawn state the session never reads.
+//! an `AnimDelay` of 0 or less. The view built it, as drawn state the
+//! session never read; rendering phase 11 moved it into the sim
+//! (`nova_sim::stellar_frames`), as the deadly-stellar touch reads the
+//! frame shown.
 //!
 //! - **The gate.** A stellar animates when its counted frames are above 1,
 //!   its destroyed state is the one 0x0080 names, and it is not a
@@ -3087,17 +3089,14 @@
 //! outlives the system it is shown in, as the original keeps it on the
 //! `spöb` record (+0x476, +0x478, +0x490), not on the sprite slot.
 //!
-//! - **Ordinary stellars, in the view.** The flight keeps each stellar's
-//!   frames as its scene is let go, on a jump, a move or a rebuild that
-//!   changes the stellars shown (`nova_view::system::KeptFrames`), and the
-//!   next scene to show it resumes them on the sheet it now draws: the
-//!   current frame modulo that sheet's count, or frame 0 on graphic type
-//!   0's (`SystemScene::resume`, as the rebuild sets the slot @0x33096,
-//!   @0x332d0). A stellar not shown stands still. One the flight has never
-//!   shown starts at current 0, next 1, timer 0. The frame a non-gate
-//!   stellar shows is drawn state the session never reads, and the state
-//!   is not saved, so the view owns it: it settles as the scene is laid
-//!   out, before the first frame drawn there.
+//! - **Ordinary stellars, in the session** (the view's until rendering
+//!   phase 11). The session keeps each stellar's frames, shown or not
+//!   (`Space`'s stellar frames; the `nova_sim` `stellar_frames` module),
+//!   and a stellar shown again resumes them on the sheet it now draws:
+//!   the current frame modulo that sheet's count, or frame 0 on graphic
+//!   type 0's, as the rebuild sets the slot (@0x33096, @0x332d0). A
+//!   stellar not shown stands still. One the flight has never shown
+//!   starts at current 0, next 1, timer 0. The state is not saved.
 //! - **Hypergates, in the session.** A gate keeps its sprite (the same
 //!   three fields) in `Space`'s gate sprites while it is not shown, and
 //!   stands still there; it starts closed only the first time a flight
@@ -3482,14 +3481,12 @@
 //!   2 × `AnimDelay` - 1 ticks. Each raises
 //!   `nova_sim::SessionEvent::StellarFramesReset`; a refused hypergate
 //!   resets nothing.
-//! - **The view** (`nova_view`'s flight view) takes the event in the
-//!   catch-up after the take-off or the exit, once the scene is laid out,
-//!   between the entry's stellar pass and the rest, and resets the frames
-//!   of every stellar shown (`SystemScene::take_off_reset`) and kept
-//!   (`KeptFrames::reset`), the scene just left among them, as the
-//!   original zeroes every `spöb` whether a slot shows it or not, frame 0
-//!   shown. A stellar first shown after it starts at current 0, next 0,
-//!   timer 0.
+//! - **Every other stellar** (the view's until rendering phase 11, the
+//!   session's since): the session resets the frames of every stellar it
+//!   keeps, shown or not, between the entry's stellar pass and the rest,
+//!   as the original zeroes every `spöb` whether a slot shows it or not,
+//!   frame 0 shown (the `nova_sim` `takeoff_frames` module). A stellar
+//!   first shown after it starts at current 0, next 0, timer 0.
 //! - **Readings.** No key: the Bible says nothing, and the engine had no
 //!   other reading. No sound.
 //! - **Left out**: the 16-bit decrement of an empty slot's count (0xffff
@@ -3558,7 +3555,8 @@
 //! ## Built by play-feel-7 phase 3
 //!
 //! Each `_PrepareAllSprites` runs a `_HandleStellarSprites` pass on the
-//! gates and the view's stellars: at gain 0 after a landing, which zeroes
+//! gates and every other stellar (the session's since rendering phase
+//! 11): at gain 0 after a landing, which zeroes
 //! `_gSpeedMult` (@0x6375e-0x63769), and at full gain elsewhere, a gate's
 //! entry adding one on the exit system's stellars before this reset. See
 //! `nova_sim::Session::enter_game` and the session's `stellar_passes`
