@@ -398,6 +398,24 @@ mod tests {
     }
 
     #[test]
+    fn only_a_sheet_of_a_depth_but_8_and_16_must_decode() {
+        // A run too large to draw passes the lock walk.
+        let runaway = |depth| {
+            sheet(1, 1, depth)
+                .frame(|f| f.line().token(4, 0xFF_FFFF).raw(&[0; 4]))
+                .build()
+        };
+        assert!(matches!(
+            rled_words(&runaway(24)),
+            Err(GraphicsError::TooLarge { .. })
+        ));
+        for depth in [16, 8] {
+            let words = rled_words(&runaway(depth)).expect("not decoded");
+            assert_eq!(words.starts, [0], "{depth}");
+        }
+    }
+
+    #[test]
     fn a_line_count_short_of_a_word_starts_the_next_frame_at_its_byte() {
         // Line 0 counts 6 bytes, a skip and 2 more: frame 0 ends at byte
         // 10 and frame 1 starts at byte 14.
