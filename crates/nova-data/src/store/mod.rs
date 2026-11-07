@@ -153,12 +153,15 @@
 //! [`GameData::ship_sprite`] follows a `shïp` to the `shän` with the same
 //! ID (the Bible: a ship's `shän` shares its ID), then to the `rlëD` named
 //! by the `shän`'s base image, decoded with the `shän`'s frames per
-//! rotation as the sheet's columns. A base image that is a `PICT` rather
-//! than an `rlëD` is not supported and reports [`SpriteError::NoSheet`].
+//! rotation as the sheet's columns. With no such `rlëD`, the base image's
+//! sprites and mask `PICT`s are cut into exactly the frames the `shän`
+//! loads, as `_LoadExtendedShipSprites` does ([`ShipImage`]); with
+//! neither, it reports [`SpriteError::NoSheet`].
 //!
-//! [`GameData::ship_layers`] follows the same `shän` to its engine glow and
-//! running lights images, when it defines them (an image ID above 0; stock
-//! data uses -1 for none). Each layer is decoded with the base's layout and
+//! [`GameData::ship_layers`] follows the same `shän` to its glow, lights,
+//! weapon, alt and shield images, when it defines them (an image ID above
+//! 0; stock data uses -1 for none), each from its `rlëD` or its own `PICT`
+//! pair. Each layer is decoded with the base's layout and
 //! resolves or fails ([`LayerError`]) on its own. A layer frame is usually
 //! larger than a base frame (the `shän`'s `GlowXSize` and `LightXSize`), so
 //! it lines up with the base by sharing its centre.
@@ -174,7 +177,10 @@
 //! ([`GameData::spin_sheet`], [`SheetKind::PictPair`]). Each missing or bad
 //! link is its own [`StellarSpriteError`]. An `rlëD`'s decoded frames are
 //! authoritative: the `spïn`'s frame size is not checked against them.
-//! Ship sprites ([`GameData::ship_sprite`]) still read `rlëD`s only.
+//! Ship sprites ([`GameData::ship_sprite`], [`GameData::ship_layers`]) read
+//! each image's `rlëD` too, or with none its own `PICT` pair, cut by the
+//! `shän`'s frame size into exactly as many frames as it loads
+//! ([`ShipImage`], [`GameData::ship_image`]).
 //!
 //! # Ship descriptions
 //!
@@ -210,7 +216,9 @@ pub mod fs;
 mod gate_stability;
 mod interface;
 pub mod order;
+mod pict_pair;
 mod ship_desc;
+mod ship_pict;
 mod shot_spin;
 mod spin_sprite;
 mod sprite;
@@ -224,9 +232,11 @@ pub use self::gate_stability::GateStability;
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
+pub use self::pict_pair::SheetKind;
 pub use self::ship_desc::ship_desc_id;
+pub use self::ship_pict::{ShipImage, ShipImageError, ShipImageFields};
 pub use self::shot_spin::shot_spin_id;
-pub use self::spin_sprite::{SheetKind, SpinSheet, SpinSpriteError};
+pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
 pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
     ShipSpriteInfo, ShipSpriteWords, SpriteError,

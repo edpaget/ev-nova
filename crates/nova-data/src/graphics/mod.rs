@@ -169,7 +169,7 @@ pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
 pub use pict::{PICT, PictFrame, decode_pict, decode_pict_deep, pict_frame, scan_pict};
-pub use pict_sheet::{SheetMask, cut_pict_sheet};
+pub use pict_sheet::{FrameLimit, SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{
     RLED, RledInfo, RledReadings, decode_rled, decode_rled_as, decode_rled_with, scan_rled,

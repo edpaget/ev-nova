@@ -1,6 +1,7 @@
 //! Resolving a stellar object to its sprite sheet.
 
-use super::spin_sprite::{SheetKind, SpinSpriteError, mask_label};
+use super::pict_pair::SheetKind;
+use super::spin_sprite::{SpinSpriteError, mask_label};
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{GraphicsError, SpriteSheet};

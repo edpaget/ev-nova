@@ -1,12 +1,15 @@
 //! Resolving a `spïn` to its sprite sheet: the link stellars, shots and
 //! explosions share.
 
+use super::pict_pair::{PICT_SHEET_DEPTH, PairCut, PairError, SheetKind};
 use super::stellar_sprite::master_frame_count;
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
+#[cfg(doc)]
+use crate::graphics::cut_pict_sheet;
 use crate::graphics::{
-    GraphicsError, Image, PICT, RLED, RleWords, SheetMask, SpriteSheet, cut_pict_sheet,
-    decode_pict, decode_rled, rled_words, sheet_rle_words,
+    FrameLimit, GraphicsError, PICT, RLED, RleWords, SpriteSheet, decode_rled, rled_words,
+    sheet_rle_words,
 };
 use crate::records::spin::Spin;
 use crate::wire::id::NovaId;
@@ -31,21 +34,6 @@ pub struct SpinSheet<'a> {
     pub spin: &'a SourceFile,
     /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub sheet_source: &'a SourceFile,
-}
-
-/// What a `spïn`'s sheet was read from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SheetKind {
-    /// The `rlëD` named by its `SpritesID`.
-    Rled,
-    /// The sprites `PICT` named by its `SpritesID` and the mask `PICT`
-    /// `mask_id` (its `MasksID`, which may be the sprites themselves), cut
-    /// into frames as the original does with no `rlëD`
-    /// ([`cut_pict_sheet`]).
-    PictPair {
-        /// The mask `PICT`'s ID.
-        mask_id: i16,
-    },
 }
 
 impl SpinSheet<'_> {
@@ -115,10 +103,6 @@ pub enum SpinSpriteError {
         source: GraphicsError,
     },
 }
-
-/// The depth a cut `PICT` sheet's tokens are made at: the 16-bit world's,
-/// as `_SWCreateRLEData` parses each frame's 16-bit pixels.
-const PICT_SHEET_DEPTH: u16 = 16;
 
 /// A `MasksID` for an error message: the ID, or "none".
 pub(super) fn mask_label(mask_id: Option<i16>) -> String {
@@ -210,35 +194,23 @@ impl GameData {
         record: &Spin,
         sprites: &[u8],
     ) -> Result<(i16, SpriteSheet), SpinSpriteError> {
-        let image_id = record.sprites_id;
-        let decode = |pict_id: i16, data: &[u8]| {
-            decode_pict(data).map_err(|source| SpinSpriteError::Picture { pict_id, source })
+        let mask_id = record.masks_id.map(NovaId::raw);
+        let cut = PairCut {
+            x_size: record.x_size,
+            y_size: record.y_size,
+            limit: FrameLimit::WholeGrid,
+            layout: record.sheet_layout(),
         };
-        let sprites = decode(image_id, sprites)?;
-        let no_mask = SpinSpriteError::NoMask {
-            spin: spin_id,
-            mask_id: record.masks_id.map(NovaId::raw),
-        };
-        let mask_id = record.masks_id.ok_or(no_mask.clone())?.raw();
-        let mask: Option<Image> = if mask_id == image_id {
-            None
-        } else {
-            let found = self.resource(PICT, mask_id).ok_or(no_mask)?;
-            Some(decode(mask_id, found.resource.data())?)
-        };
-        let mask = mask.as_ref().map_or(SheetMask::Itself, SheetMask::Picture);
-        let sheet = cut_pict_sheet(
-            &sprites,
-            mask,
-            record.x_size,
-            record.y_size,
-            record.sheet_layout(),
-        )
-        .map_err(|source| SpinSpriteError::Picture {
-            pict_id: image_id,
-            source,
-        })?;
-        Ok((mask_id, sheet))
+        self.cut_pict_pair(record.sprites_id, sprites, mask_id, cut)
+            .map_err(|error| match error {
+                PairError::NoMask => SpinSpriteError::NoMask {
+                    spin: spin_id,
+                    mask_id,
+                },
+                PairError::Picture { pict_id, source } => {
+                    SpinSpriteError::Picture { pict_id, source }
+                }
+            })
     }
 }
 

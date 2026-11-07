@@ -212,6 +212,16 @@ pub enum GraphicsError {
         /// The pixel value.
         index: u8,
     },
+    /// A `PICT` sprite grid holding other than the exact number of frames
+    /// its cut needs (see `FrameLimit::Exactly` in the `pict_sheet` module),
+    /// or a cut asked for zero or fewer.
+    #[error("the picture holds {frames} frames, not {expected}")]
+    FrameCountMismatch {
+        /// The frames the picture's grid holds.
+        frames: u32,
+        /// The frames the cut needs.
+        expected: i32,
+    },
     /// A mask picture whose size differs from the picture it masks.
     #[error("the {mask_width}x{mask_height} mask does not fit the {width}x{height} picture")]
     MaskSizeMismatch {
@@ -257,6 +267,7 @@ impl GraphicsError {
             | Self::UnsupportedDepth { .. }
             | Self::NoFrames
             | Self::PartialGrid { .. }
+            | Self::FrameCountMismatch { .. }
             | Self::MissingColour { .. }
             | Self::MaskSizeMismatch { .. } => None,
         }
@@ -325,6 +336,13 @@ mod tests {
                     height: 4,
                     frame_width: 2,
                     frame_height: 2,
+                },
+                None,
+            ),
+            (
+                E::FrameCountMismatch {
+                    frames: 6,
+                    expected: 36,
                 },
                 None,
             ),
@@ -475,6 +493,13 @@ mod tests {
                     frame_height: 2,
                 },
                 "the 5x4 picture is not a whole grid of 2x2 frames",
+            ),
+            (
+                GraphicsError::FrameCountMismatch {
+                    frames: 6,
+                    expected: 36,
+                },
+                "the picture holds 6 frames, not 36",
             ),
             (
                 GraphicsError::UnsupportedToken {
