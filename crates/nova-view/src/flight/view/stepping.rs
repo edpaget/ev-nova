@@ -344,6 +344,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // the glows (@0x2c7ed). The shot looks read it from `pass` for
         // `_HandleSmoke` (@0x2e3d6).
         let gain = pass.speed_mult;
+        self.moved_at = gain;
         self.effects.show_step(&breakups, &scene, &self.looks, gain);
         let shown = (&mut self.effects, &mut self.flashes);
         let sheets = (&self.sheet, &self.npc_sheets);

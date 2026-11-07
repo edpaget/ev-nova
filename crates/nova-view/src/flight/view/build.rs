@@ -11,7 +11,7 @@ use std::time::Duration;
 use nova_sim::SimCatalog;
 use nova_sim::combat::SpriteLoad;
 use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
-use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
+use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook, SpeedMult};
 
 use crate::flight::cadence::HudCadence;
 use crate::flight::catalog::{CombatLooks, Looks, ShipSprites, StatusBars};
@@ -624,6 +624,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             alpha: 0.0,
             elapsed: Duration::ZERO,
             since_step: Duration::ZERO,
+            moved_at: SpeedMult::FULL,
             held: HashSet::new(),
             latched_down: HashSet::new(),
             latch_at_close: false,

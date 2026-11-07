@@ -625,17 +625,25 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// The share of its velocity a shot, box or asteroid is drawn back
+    /// by: `1 − alpha` of the move it last made, `velocity × g` at the
+    /// last pass's gain ([`FlightView::moved_at`]).
+    fn moved_behind(&self) -> f32 {
+        self.moved_at.times(1.0 - self.shown_alpha())
+    }
+
     /// The shots in flight in the order they are drawn
     /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
-    /// each where it is drawn: `alpha` of the way from where it was a step
-    /// ago, as the ships are, placed from that point by its sheet's width
+    /// each where it is drawn: `alpha` of the way along the move it last
+    /// made, `velocity × g` at the last pass's gain
+    /// ([`FlightView::moved_behind`]), as the ships are, placed from that point by its sheet's width
     /// ([`FlightView::shot_placed`]); each at the frame of its sheet the
     /// frame carries, and its murk where
     /// the frame holds it, seen from the player's ship as the frame holds
     /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a
     /// pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
-        let behind = 1.0 - self.shown_alpha();
+        let behind = self.moved_behind();
         let seen = self.seen_murk();
         self.drawn()
             .shots
@@ -673,13 +681,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The cargo boxes in space, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the shots are, its bottom right
+    /// way along the move it last made at the last pass's gain
+    /// ([`FlightView::moved_behind`]), as the shots are, its bottom right
     /// on that point's whole pixels ([`Camera::box_centre`], a crossed box
     /// at its [whole point](Camera::whole_point)); each with its
     /// murk where the frame holds it ([`FlightView::seen_murk`]), as
     /// `_HandleBoxes` murks it (@0x2e15e-0x2e181).
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
-        let behind = 1.0 - self.shown_alpha();
+        let behind = self.moved_behind();
         let seen = self.seen_murk();
         self.drawn()
             .cargo_boxes
@@ -704,13 +713,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The asteroids in the field, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the cargo boxes are, placed by
+    /// way along the move it last made at the last pass's gain
+    /// ([`FlightView::moved_behind`]), as the cargo boxes are, placed by
     /// its own sheet's sides ([`Camera::sprite_centre`], a crossed box at
     /// its [whole point](Camera::whole_point)), at the frame the simulation
     /// shows (`nova_sim::asteroid::Asteroid::shown_frame`), murked
     /// as the cargo boxes are (`_HandleAsteroids` @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
-        let behind = 1.0 - self.shown_alpha();
+        let behind = self.moved_behind();
         let seen = self.seen_murk();
         self.drawn()
             .asteroids

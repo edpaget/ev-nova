@@ -1463,6 +1463,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// more the next step holds its gain (`StepInput::held`; see
     /// `nova_sim::speed_mult`).
     since_step: Duration,
+    /// The gain the last pass ran at
+    /// ([`nova_sim::flight_frame::PassReport::speed_mult`]): the share of its
+    /// velocity each shot, box and asteroid last moved by
+    /// (`flight::moved`), which the draws between passes back them off
+    /// by. The engine's own interpolation, with no counterpart in the
+    /// original.
+    moved_at: SpeedMult,
     /// The flight keys held down. A dialog over flight lets go of them,
     /// and its close gets back those `_HandlePlayer` polls with no latch
     /// that are still down ([`FlightView::take_back_live_input`]).
