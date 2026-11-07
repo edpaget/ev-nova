@@ -154,6 +154,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn through_true_colour_a_pixel_is_solid_only_when_runs_wrote_all_four_bytes() {
+        // Bytes 0..3 from a run, byte 3 from a pixel token.
+        let bytes = RledBuilder::new(1, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run8(3, [0x21; 4]).pixels32(&[0x0044_5566]))
+            .build();
+        let sheet = through_true_colour(&bytes).unwrap();
+        let solid = sheet.solid_frames().expect("solid frames");
+        assert_eq!(in_box(&sheet, &solid[0]), [CLEAR]);
+        assert_eq!(
+            in_box(&sheet, &sheet.frames()[0]),
+            [[0x21, 0x21, 0x21, 255]]
+        );
+    }
+
+    #[test]
+    fn through_true_colour_a_part_pixel_at_a_rows_end_is_clear() {
+        // Six bytes: one pixel, then two bytes of the next.
+        let bytes = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run8(6, [0x21; 4]))
+            .build();
+        let sheet = through_true_colour(&bytes).unwrap();
+        assert_eq!(
+            in_box(&sheet, &sheet.frames()[0]),
+            [[0x21, 0x21, 0x21, 255], CLEAR]
+        );
+    }
+
     /// The reading changes only the colours: a sheet loads, or fails, as
     /// the original's does, with the same images about the same box, so
     /// the store, which decides the fallback and the sizes by the

@@ -532,6 +532,43 @@ mod tests {
     }
 
     #[test]
+    fn a_32_bit_rows_tokens_draw_one_after_another() {
+        // A skip of two pixels (8 bytes), then two pixel tokens.
+        let bytes = sheet(4, 1, 32)
+            .frame(|f| {
+                f.line()
+                    .skip32(2)
+                    .pixels32(&[0x0000_7C00])
+                    .pixels32(&[0x0000_001F])
+            })
+            .build();
+        let sheet = decode(&bytes).unwrap();
+        assert_eq!((sheet.image_width(), sheet.box_origin()), (12, (4, 0)));
+        let (red, blue, black) = (rgb555(0x7C00), rgb555(0x001F), rgb555(0));
+        let mut drawn = vec![CLEAR; 8];
+        drawn.extend([red, black, blue, black]);
+        assert_eq!(frames(&sheet), [drawn]);
+    }
+
+    #[test]
+    fn a_world_pixel_is_solid_only_when_runs_wrote_both_its_bytes() {
+        // Bytes 0..3 from a run, 3..7 (66 55 44 00 once swapped) from a
+        // pixel token: the world pixel of bytes 2 and 3 is half a run's.
+        let bytes = sheet(1, 1, 32)
+            .frame(|f| f.line().run8(3, [0x21; 4]).pixels32(&[0x0044_5566]))
+            .build();
+        let sheet = decode(&bytes).unwrap();
+        assert_eq!((sheet.image_width(), sheet.box_origin()), (7, (3, 0)));
+        let run = rgb555(0x2121);
+        let mut drawn = vec![CLEAR; 3];
+        drawn.extend([run, rgb555(0x6621), rgb555(0x4455), CLEAR]);
+        let mut solid = vec![CLEAR; 3];
+        solid.extend([run, CLEAR, CLEAR, CLEAR]);
+        assert_eq!(solids(&sheet), Some(vec![solid]));
+        assert_eq!(frames(&sheet), [drawn]);
+    }
+
+    #[test]
     fn a_32_bit_pixel_tail_draws_as_the_swap_left_it() {
         // The swap swaps one word, then reads the tail word 03 44 00 00
         // as a skip and swaps it to 00 00 44 03.
