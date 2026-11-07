@@ -32,7 +32,8 @@
 //!   atlas afresh at the next frame ([`Gpu::clear_pages`]).
 //! - [`quickdraw_stretch`]: QuickDraw's stretch, by which the original
 //!   draws a picture at a size not its own: the rows and columns it shows
-//!   and its merges when shrinking. The [`Renderer`] resamples a stretch
+//!   and its merges when shrinking, by the picture's depth. The
+//!   [`Renderer`] resamples a stretch
 //!   to whole pixels by it wherever the GPU's sampling would show others.
 //! - [`super_xbr`]: [`SuperXbr`], the enlarger that doubles each image
 //!   but a pattern with Hyllian's Super-xBR, ported to the CPU.

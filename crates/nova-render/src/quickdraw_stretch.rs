@@ -27,16 +27,29 @@
 //!   nothing read copies one column, and otherwise the columns read until
 //!   the carry merge. The last span stops at the source's last column,
 //!   where the original reads past the row.
-//! - **Merging** ([`stretched`]): a direct source's merged rows are
-//!   averaged first, then its merged columns, each channel truncated
-//!   (`MakeAverage`, lines 3950-3980, and `AverageH32`). The renderer's
-//!   pictures are RGBA8, so it averages 8-bit channels. A 16-bit picture's
-//!   are averaged on its 5-bit channels in the original, and an indexed
-//!   picture keeps the largest index; neither can be done without the
-//!   picture's depth
-//!   (rdm:phase/rendering/phase-16-quickdraw-shrink-at-the-pictures-depth).
+//! - **Merging** ([`stretched`]): merged rows are merged first, into a
+//!   buffer as wide as the source, then merged columns, by the source's
+//!   depth ([`PixelDepth`], the depth the picture was stored at, as
+//!   `_DrawPicHandle` stretches the picture's own image: `AmbrosiaTools`
+//!   `__PICT_HandleBits` @0x55967-0x55a22). `NextAverageV16` and
+//!   `NextAverageV32` are chosen by depth at line 3855.
+//!   - 32-bit: each 8-bit channel averaged, truncated (`MakeAverage`,
+//!     lines 3950-3980, `NextAverageV32`, and `AverageH32`, line 7592).
+//!   - 16-bit: each 5-bit channel averaged, truncated (`NextAverageV16`,
+//!     line 4005, and `AverageH16`, line 7690), then widened to 8 bits as
+//!     the decoder widens it ([`widen_five`]).
+//!   - Indexed: the colour of the merged pixel with the largest index
+//!     (`NDEEP`, lines 3649-3700, and `PIXSHRNK`'s point loop, line
+//!     7796ff). The row buffer keeps the chosen index, so the column pass
+//!     compares indices too. Equal indices are one colour under one table,
+//!     and the first is kept.
+//!
+//!   A span of one pixel copies it unchanged at every depth. Alpha, which
+//!   is a mask's, is averaged on 8 bits at every depth. The original
+//!   stretches the mask apart from the picture, through `CopyDeepMask`,
+//!   and that merge isn't modelled here.
 
-use nova_data::graphics::Image;
+use nova_data::graphics::{DeepImage, Image, PixelDepth, widen_five};
 
 /// The source rows (or columns) one destination row (or column) shows:
 /// `count` of them from `first`, averaged when there are several.
@@ -177,31 +190,44 @@ fn repeats_alike(map: &[Span], src: u32, dst: u32) -> bool {
 }
 
 /// `image` stretched to `width` x `height` as QuickDraw stretches it: its
-/// rows by [`rows`], merged ones averaged, then its columns by
-/// [`columns`], likewise.
+/// rows by [`rows`], merged ones merged by the picture's depth, then its
+/// columns by [`columns`], likewise (see the module docs' "Merging").
 #[must_use]
-pub fn stretched(image: &Image, width: u32, height: u32) -> Image {
-    let source_width = image.width();
-    let rows = rows(image.height(), height);
-    let mut tall = Vec::with_capacity(rows.len() * source_width as usize * 4);
+pub fn stretched(image: &DeepImage, width: u32, height: u32) -> Image {
+    let depth = image.depth();
+    let source = image.image();
+    let source_width = source.width();
+    let index = |x: u32, y: u32| match depth {
+        PixelDepth::Indexed { indices } => indices[y as usize * source_width as usize + x as usize],
+        PixelDepth::Direct16 | PixelDepth::Direct32 => 0,
+    };
+    let rows = rows(source.height(), height);
+    let mut tall = Vec::with_capacity(rows.len() * source_width as usize);
     for span in &rows {
         for x in 0..source_width {
-            tall.extend(average(
-                (span.first..span.first + span.count).map(|y| pixel(image, x, y)),
+            tall.push(merge(
+                depth,
+                (span.first..span.first + span.count).map(|y| (pixel(source, x, y), index(x, y))),
             ));
         }
     }
-    let tall = Image::from_rgba(source_width, height, tall).expect("sized by its rows");
     let mut out = Vec::with_capacity(width as usize * height as usize * 4);
     let columns = columns(source_width, width);
-    for y in 0..height {
+    for row in tall
+        .chunks(source_width.max(1) as usize)
+        .take(height as usize)
+    {
         for span in &columns {
-            out.extend(average(
-                (span.first..span.first + span.count).map(|x| pixel(&tall, x, y)),
-            ));
+            let (rgba, _) = merge(
+                depth,
+                row[span.first as usize..(span.first + span.count) as usize]
+                    .iter()
+                    .copied(),
+            );
+            out.extend(rgba);
         }
     }
-    Image::from_rgba(width, height, out).expect("sized by its columns")
+    Image::from_rgba(width, height, out).expect("sized by its rows and columns")
 }
 
 /// The pixel at (`x`, `y`) of `image`.
@@ -211,13 +237,43 @@ fn pixel(image: &Image, x: u32, y: u32) -> [u8; 4] {
     [p[0], p[1], p[2], p[3]]
 }
 
-/// The average of `pixels`, each channel truncated.
-fn average(pixels: impl Iterator<Item = [u8; 4]>) -> [u8; 4] {
+/// `pixels` (each a colour and its index) merged into one by `depth`. One
+/// pixel is copied unchanged. Several average their alpha on 8 bits, and
+/// their colours: on 8-bit channels at [`PixelDepth::Direct32`], on 5-bit
+/// ones widened back at [`PixelDepth::Direct16`], or as the pixel with the
+/// largest index (the first of equals) at [`PixelDepth::Indexed`].
+fn merge(depth: &PixelDepth, pixels: impl Iterator<Item = ([u8; 4], u8)>) -> ([u8; 4], u8) {
+    let pixels: Vec<([u8; 4], u8)> = pixels.collect();
+    if let [one] = pixels[..] {
+        return one;
+    }
+    let colours = || pixels.iter().map(|&(rgba, _)| rgba);
+    let [_, _, _, alpha] = average(colours(), |channel| channel);
+    match depth {
+        PixelDepth::Direct32 => (average(colours(), |channel| channel), 0),
+        PixelDepth::Direct16 => {
+            let [r, g, b, _] = average(colours(), |channel| channel >> 3);
+            ([widen_five(r), widen_five(g), widen_five(b), alpha], 0)
+        }
+        PixelDepth::Indexed { .. } => {
+            let (rgba, largest) = pixels
+                .iter()
+                .copied()
+                .reduce(|kept, next| if next.1 > kept.1 { next } else { kept })
+                .unwrap_or_default();
+            ([rgba[0], rgba[1], rgba[2], alpha], largest)
+        }
+    }
+}
+
+/// The average of `pixels`' channels, each read through `channel` and
+/// truncated.
+fn average(pixels: impl Iterator<Item = [u8; 4]>, channel: impl Fn(u8) -> u8) -> [u8; 4] {
     let mut sum = [0_u32; 4];
     let mut count = 0_u32;
     for pixel in pixels {
-        for (total, channel) in sum.iter_mut().zip(pixel) {
-            *total += u32::from(channel);
+        for (total, value) in sum.iter_mut().zip(pixel) {
+            *total += u32::from(channel(value));
         }
         count += 1;
     }
@@ -226,6 +282,9 @@ fn average(pixels: impl Iterator<Item = [u8; 4]>) -> [u8; 4] {
 
 #[cfg(test)]
 mod tests {
+    use nova_data::graphics::decode_pict_deep;
+    use nova_data::graphics::fixture::{Ctab, DirectBits, IndexedBits, PictBuilder, rgb888_pict};
+
     use super::*;
 
     fn one(first: u32) -> Span {
@@ -358,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_wide_picture_shrunk_to_one_pixel_reads_only_its_own_row() {
-        let picture = image(300, 1, &[[8, 0, 0, 255]; 300]);
+        let picture = deep32(image(300, 1, &[[8, 0, 0, 255]; 300]));
         assert_eq!(stretched(&picture, 1, 1), image(1, 1, &[[8, 0, 0, 255]]));
     }
 
@@ -378,6 +437,10 @@ mod tests {
         Image::from_rgba(width, height, pixels.concat()).expect("sized")
     }
 
+    fn deep32(image: Image) -> DeepImage {
+        DeepImage::new(image, PixelDepth::Direct32).expect("direct")
+    }
+
     #[test]
     fn a_two_by_two_picture_stretched_to_three_by_three() {
         let [a, b, c, d] = [
@@ -386,7 +449,7 @@ mod tests {
             [3, 0, 0, 255],
             [4, 0, 0, 255],
         ];
-        let picture = image(2, 2, &[a, b, c, d]);
+        let picture = deep32(image(2, 2, &[a, b, c, d]));
         assert_eq!(
             stretched(&picture, 3, 3),
             image(3, 3, &[a, a, b, a, a, b, c, c, d])
@@ -397,7 +460,7 @@ mod tests {
     /// (`MakeAverage` lines 3950-3980), then columns (`AverageH32`).
     #[test]
     fn a_shrink_averages_rows_then_columns_truncating() {
-        let picture = image(
+        let picture = deep32(image(
             2,
             2,
             &[
@@ -406,8 +469,174 @@ mod tests {
                 [1, 20, 100, 0],
                 [2, 21, 101, 0],
             ],
-        );
+        ));
         // Rows: (0+1)/2 = 0, (1+2)/2 = 1; then columns: (0+1)/2 = 0.
         assert_eq!(stretched(&picture, 1, 1), image(1, 1, &[[0, 15, 150, 127]]));
+    }
+
+    /// `pict` decoded with its depth, as the renderer gets it.
+    fn decoded(pict: &[u8]) -> DeepImage {
+        decode_pict_deep(pict).expect("decodes")
+    }
+
+    /// A 16-bit picture `width` x `height` of `words`.
+    fn pict_16(width: i16, height: i16, words: &[u16]) -> DeepImage {
+        let bounds = [0, 0, height, width];
+        decoded(
+            &PictBuilder::new(bounds)
+                .direct_bits(&DirectBits::rgb555(bounds, words))
+                .end()
+                .build(),
+        )
+    }
+
+    /// The word of 5-bit channels `r`, `g`, `b`.
+    fn word(r: u16, g: u16, b: u16) -> u16 {
+        (r << 10) | (g << 5) | b
+    }
+
+    /// One pixel decoded from a 16-bit `word`: what the 5-bit average
+    /// shows, widened by the decoder's own rule.
+    fn shown_16(word: u16) -> Image {
+        pict_16(1, 1, &[word]).into_image()
+    }
+
+    /// AC1: two rows of 5-bit channels 1 and 2 (decoded 8 and 16) merge
+    /// to 5-bit 1 (`NextAverageV16`, line 4005), shown as 8, where the
+    /// 8-bit average would be 12.
+    #[test]
+    fn a_16_bit_shrink_of_two_rows_averages_5_bit_channels() {
+        let picture = pict_16(1, 2, &[word(1, 3, 30), word(2, 4, 31)]);
+        assert_eq!(picture.depth(), &PixelDepth::Direct16);
+        let shrunk = stretched(&picture, 1, 1);
+        assert_eq!(shrunk, shown_16(word(1, 3, 30)));
+        let eight_bit = stretched(&deep32(picture.image().clone()), 1, 1);
+        assert_eq!(eight_bit.pixel(0, 0).map(|p| p[0]), Some(12));
+        assert_ne!(shrunk, eight_bit);
+    }
+
+    /// Columns merge on 5-bit channels too (`AverageH16`, line 7690).
+    #[test]
+    fn a_16_bit_shrink_of_two_columns_averages_5_bit_channels() {
+        let picture = pict_16(2, 1, &[word(1, 3, 30), word(2, 4, 31)]);
+        assert_eq!(stretched(&picture, 1, 1), shown_16(word(1, 3, 30)));
+    }
+
+    /// Three rows of 1, 1, 2 average to 4 / 3, truncated to 1 (shown as
+    /// 8), where the 8-bit average of 8, 8, 16 is 10.
+    #[test]
+    fn a_16_bit_shrink_of_three_truncates() {
+        let picture = pict_16(1, 3, &[word(1, 0, 0), word(1, 0, 0), word(2, 31, 0)]);
+        assert_eq!(stretched(&picture, 1, 1), shown_16(word(1, 10, 0)));
+    }
+
+    /// A 16-bit picture's alpha (a mask's) still averages on 8 bits.
+    #[test]
+    fn a_16_bit_shrinks_alpha_averages_on_8_bits() {
+        let picture = pict_16(1, 2, &[word(4, 4, 4); 2]);
+        let mut pixels = picture.image().pixels().to_vec();
+        (pixels[3], pixels[7]) = (255, 0);
+        let masked = picture
+            .with_image(Image::from_rgba(1, 2, pixels).expect("1 x 2"))
+            .expect("same size");
+        let shrunk = stretched(&masked, 1, 1);
+        assert_eq!(shrunk.pixel(0, 0).map(|p| p[3]), Some(127));
+    }
+
+    /// AC2: a 32-bit picture's two rows still average 8-bit channels,
+    /// truncated (`NextAverageV32`).
+    #[test]
+    fn a_32_bit_shrink_of_two_rows_averages_8_bit_channels() {
+        let picture = decoded(&rgb888_pict(1, 2, &[[10, 100, 7], [13, 201, 8]]));
+        assert_eq!(picture.depth(), &PixelDepth::Direct32);
+        assert_eq!(stretched(&picture, 1, 1), image(1, 1, &[[11, 150, 7, 255]]));
+    }
+
+    /// An 8-bit picture whose larger indices are darker: 0 white, 1 light
+    /// grey, 2 dark grey, 3 black.
+    fn pict_indexed(width: i16, height: i16, indices: &[u8]) -> DeepImage {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![
+                (0, [0xFFFF; 3]),
+                (1, [0xC000; 3]),
+                (2, [0x4000; 3]),
+                (3, [0; 3]),
+            ],
+        };
+        let bounds = [0, 0, height, width];
+        decoded(
+            &PictBuilder::new(bounds)
+                .packbits_rect(&IndexedBits::new(bounds, 8, &ctab, indices))
+                .end()
+                .build(),
+        )
+    }
+
+    /// The colour of index `index` in [`pict_indexed`]'s table.
+    fn shown_indexed(index: u8) -> Image {
+        pict_indexed(1, 1, &[index]).into_image()
+    }
+
+    /// AC3: a 2 x 2 shrink keeps the largest index's colour (`NDEEP`,
+    /// lines 3649-3700, and `PIXSHRNK`, line 7796ff): not the average,
+    /// and not the brightest.
+    #[test]
+    fn an_indexed_shrink_keeps_the_largest_indexs_colour() {
+        let picture = pict_indexed(2, 2, &[0, 2, 1, 0]);
+        assert!(matches!(picture.depth(), PixelDepth::Indexed { .. }));
+        assert_eq!(stretched(&picture, 1, 1), shown_indexed(2));
+    }
+
+    /// The row pass keeps each merged pixel's index, so the column pass
+    /// compares indices: 3 in the second row, second column, wins over the
+    /// first row's 2 in the first column.
+    #[test]
+    fn an_indexed_shrinks_index_survives_the_row_pass() {
+        let picture = pict_indexed(2, 2, &[2, 0, 1, 3]);
+        assert_eq!(stretched(&picture, 1, 1), shown_indexed(3));
+        let picture = pict_indexed(2, 2, &[0, 1, 3, 0]);
+        assert_eq!(stretched(&picture, 1, 1), shown_indexed(3));
+        let rows_only = pict_indexed(2, 2, &[1, 0, 0, 2]);
+        assert_eq!(
+            stretched(&rows_only, 2, 1),
+            image(
+                2,
+                1,
+                &[
+                    shown_indexed(1).pixel(0, 0).expect("one"),
+                    shown_indexed(2).pixel(0, 0).expect("one"),
+                ]
+            )
+        );
+    }
+
+    /// An indexed picture's alpha (a mask's) averages on 8 bits.
+    #[test]
+    fn an_indexed_shrinks_alpha_averages_on_8_bits() {
+        let picture = pict_indexed(2, 1, &[3, 1]);
+        let mut pixels = picture.image().pixels().to_vec();
+        (pixels[3], pixels[7]) = (0, 201);
+        let masked = picture
+            .with_image(Image::from_rgba(2, 1, pixels).expect("2 x 1"))
+            .expect("same size");
+        assert_eq!(stretched(&masked, 1, 1).pixel(0, 0), Some([0, 0, 0, 100]));
+    }
+
+    /// An expansion repeats pixels unchanged at every depth, colours a
+    /// 16-bit decode would never make included.
+    #[test]
+    fn an_expansion_copies_pixels_unchanged_at_every_depth() {
+        let odd = image(2, 1, &[[1, 2, 3, 4], [250, 6, 7, 8]]);
+        let sixteen = pict_16(2, 1, &[0, 0])
+            .with_image(odd.clone())
+            .expect("same size");
+        let indexed = pict_indexed(2, 1, &[1, 0])
+            .with_image(odd.clone())
+            .expect("same size");
+        let expected = image(3, 1, &[[1, 2, 3, 4], [1, 2, 3, 4], [250, 6, 7, 8]]);
+        for picture in [sixteen, indexed, deep32(odd)] {
+            assert_eq!(stretched(&picture, 3, 1), expected, "{:?}", picture.depth());
+        }
     }
 }

@@ -435,8 +435,10 @@ impl<S: ImageSource> Renderer<S> {
     /// stretch ([`crate::quickdraw_stretch`]). So a rectangle a whole
     /// number of pixels wide and high, where that stretch would show other
     /// pixels than the GPU's sampling ([`quickdraw_stretch::differs`]),
-    /// draws from an entry of its own: the frame decoded once more,
-    /// resampled by [`quickdraw_stretch::stretched`], turned by the
+    /// draws from an entry of its own: the frame decoded once more with
+    /// the depth it was stored at ([`ImageSource::deep_frames`]),
+    /// resampled by [`quickdraw_stretch::stretched`] (which merges by that
+    /// depth), turned by the
     /// enlarger as any frame is, placed in the atlas and kept by key and
     /// size until the atlas starts afresh. It is drawn at its own size,
     /// with the crop and the blend of any other. A fractional rectangle
@@ -496,7 +498,7 @@ impl<S: ImageSource> Renderer<S> {
         if let Some(placed) = self.stretches.get(&(image, size)) {
             return *placed;
         }
-        let frames = self.images.frames(image.kind, image.id).ok();
+        let frames = self.images.deep_frames(image.kind, image.id).ok();
         let placed = frames
             .as_ref()
             .and_then(|frames| frames.get(usize::from(image.frame)))
@@ -945,7 +947,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    use nova_data::graphics::Image;
+    use nova_data::graphics::{DeepImage, Image, PixelDepth};
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
@@ -963,12 +965,23 @@ mod tests {
     #[derive(Default)]
     struct FakeImages {
         resources: BTreeMap<(ImageKind, i16), Result<Vec<Image>, ImageError>>,
+        /// Pictures with the depth they were stored at; any other
+        /// resource's frames are 32-bit.
+        deep: BTreeMap<(ImageKind, i16), DeepImage>,
         calls: RefCell<Vec<(ImageKind, i16)>>,
     }
 
     impl FakeImages {
         fn with(mut self, kind: ImageKind, id: i16, frames: Vec<Image>) -> Self {
             self.resources.insert((kind, id), Ok(frames));
+            self
+        }
+
+        /// A picture of one frame, `deep`, at the depth it holds.
+        fn with_deep(mut self, kind: ImageKind, id: i16, deep: DeepImage) -> Self {
+            self.resources
+                .insert((kind, id), Ok(vec![deep.image().clone()]));
+            self.deep.insert((kind, id), deep);
             self
         }
 
@@ -990,6 +1003,19 @@ mod tests {
                 .cloned()
                 .unwrap_or(Err(ImageError::Missing))
         }
+
+        fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+            let frames = self.frames(kind, id)?;
+            Ok(match self.deep.get(&(kind, id)) {
+                Some(deep) => vec![deep.clone()],
+                None => frames.into_iter().map(direct32).collect(),
+            })
+        }
+    }
+
+    /// `image` stored at 32 bits.
+    fn direct32(image: Image) -> DeepImage {
+        DeepImage::new(image, PixelDepth::Direct32).expect("direct")
     }
 
     /// A `w` x `h` image of one colour.
@@ -3676,7 +3702,7 @@ mod tests {
         let report = renderer.render(&list, &viewport(), &mut gpu);
 
         assert_eq!(report, RenderReport::default());
-        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        let resampled = crate::quickdraw_stretch::stretched(&direct32(two_by_two()), 2, 3);
         let rows: Vec<u8> = (0..3)
             .map(|y| resampled.pixel(0, y).expect("inside")[0])
             .collect();
@@ -3701,6 +3727,36 @@ mod tests {
                 tint: WHITE,
                 colorize: NO_COLORIZE,
             }]
+        );
+    }
+
+    /// A 16-bit picture's stretch merges its 5-bit channels: two rows of
+    /// red 1 and 2 (decoded 8 and 16) show red 1 (8), not the 8-bit
+    /// average, 12.
+    #[test]
+    fn a_16_bit_pictures_stretch_merges_by_its_depth() {
+        use nova_data::graphics::decode_pict_deep;
+        use nova_data::graphics::fixture::{DirectBits, PictBuilder};
+        let pict = PictBuilder::new([0, 0, 2, 1])
+            .direct_bits(&DirectBits::rgb555([0, 0, 2, 1], &[1 << 10, 2 << 10]))
+            .end()
+            .build();
+        let deep = decode_pict_deep(&pict).expect("decodes");
+        assert_eq!(deep.depth(), &PixelDepth::Direct16);
+        let images = FakeImages::default().with_deep(ImageKind::Pict, 301, deep.clone());
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(301), at(0.0, 0.0), 1.0, 1.0);
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let resampled = crate::quickdraw_stretch::stretched(&deep, 1, 1);
+        assert_eq!(resampled.pixel(0, 0), Some([8, 0, 0, 255]));
+        assert_eq!(
+            uploads(&gpu.calls),
+            [
+                &GpuCall::upload(PageId(0), rect(0, 0, 1, 2), deep.image()),
+                &GpuCall::upload(PageId(0), rect(2, 0, 1, 1), &resampled),
+            ]
         );
     }
 
@@ -3842,7 +3898,7 @@ mod tests {
         renderer.set_enlarger(Box::new(NativeDetail));
         let mut again = RecordingGpu::new();
         renderer.render(&list, &viewport(), &mut again);
-        let resampled = crate::quickdraw_stretch::stretched(&two_by_two(), 2, 3);
+        let resampled = crate::quickdraw_stretch::stretched(&direct32(two_by_two()), 2, 3);
         assert_eq!(
             uploads(&again.calls),
             [

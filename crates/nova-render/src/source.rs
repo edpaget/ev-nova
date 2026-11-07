@@ -13,8 +13,9 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 
 use nova_data::graphics::{
-    CICN, EightBitReading, Image, PICT, PPAT, RLED, RledReadings, ThirtyTwoBitReading, apply_mask,
-    decode_cicn, decode_pict, decode_ppat, decode_rled_with,
+    CICN, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
+    ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
+    decode_rled_with,
 };
 use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
 use nova_view::ImageKind;
@@ -80,10 +81,44 @@ impl<D: Borrow<GameData>> GameImages<D> {
         }
     }
 
-    /// The interface file's `PICT` `id`, decoded.
-    fn interface_picture(&self, id: i16) -> Result<Image, ImageError> {
+    /// The interface file's `PICT` `id`, decoded with its depth.
+    fn interface_picture(&self, id: i16) -> Result<DeepImage, ImageError> {
         let interface = self.interface.as_ref().ok_or(ImageError::Missing)?;
-        Ok(interface.picture(PictId(id)).ok_or(ImageError::Missing)??)
+        Ok(interface
+            .picture_deep(PictId(id))
+            .ok_or(ImageError::Missing)??)
+    }
+
+    /// The bytes of the store's `PICT` `id`.
+    fn pict_bytes(&self, id: i16) -> Result<&[u8], ImageError> {
+        self.data
+            .borrow()
+            .resource(PICT, id)
+            .map(|found| found.resource.data())
+            .ok_or(ImageError::Missing)
+    }
+
+    /// A picture's one frame, with its depth, for the kinds that decode a
+    /// `PICT`: `None` for the others.
+    fn deep_picture(&self, kind: ImageKind, id: i16) -> Option<Result<DeepImage, ImageError>> {
+        let deep =
+            |id| -> Result<DeepImage, ImageError> { Ok(decode_pict_deep(self.pict_bytes(id)?)?) };
+        Some(match kind {
+            ImageKind::Pict => deep(id),
+            ImageKind::InterfacePict => self.interface_picture(id),
+            ImageKind::MaskedPict { mask } => deep(id).and_then(|picture| {
+                let mask = decode_pict(self.pict_bytes(mask)?)?;
+                let masked = apply_mask(picture.image(), &mask)?;
+                Ok(picture
+                    .with_image(masked)
+                    .expect("a mask keeps the picture's size"))
+            }),
+            ImageKind::Rled
+            | ImageKind::RledSolid
+            | ImageKind::Pattern
+            | ImageKind::Icon
+            | ImageKind::SpinSheet => return None,
+        })
     }
 
     /// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): an
@@ -107,8 +142,16 @@ impl<D: Borrow<GameData>> GameImages<D> {
     }
 }
 
+/// A picture (`Pict`, `MaskedPict`, `InterfacePict`) has its depth: the
+/// one it was stored at ([`decode_pict_deep`]), the mask setting only its
+/// alpha. Every other kind (`rlëD`s, `ppat`s, `cicn`s and `spïn` sheets)
+/// gives its frames at [`PixelDepth::Direct32`]: none goes through
+/// `_DrawPicHandle`, and no stock site stretches one.
 impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+        if let Some(picture) = self.deep_picture(kind, id) {
+            return Ok(vec![picture?.into_image()]);
+        }
         let bytes = |ty, id| {
             self.data
                 .borrow()
@@ -120,19 +163,26 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
             Ok(decode_rled_with(bytes(RLED, id)?, None, self.readings)?)
         };
         Ok(match kind {
-            ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
-            ImageKind::InterfacePict => vec![self.interface_picture(id)?],
             ImageKind::Rled => rled(id)?.into_frames(),
             ImageKind::RledSolid => rled(id)?.into_solid_frames().ok_or(ImageError::Missing)?,
-            ImageKind::MaskedPict { mask } => {
-                let picture = decode_pict(bytes(PICT, id)?)?;
-                let mask = decode_pict(bytes(PICT, mask)?)?;
-                vec![apply_mask(&picture, &mask)?]
-            }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
             ImageKind::SpinSheet => self.spin_frames(id)?,
+            ImageKind::Pict | ImageKind::InterfacePict | ImageKind::MaskedPict { .. } => {
+                unreachable!("a picture is decoded deep")
+            }
         })
+    }
+
+    fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+        match self.deep_picture(kind, id) {
+            Some(picture) => Ok(vec![picture?]),
+            None => Ok(self
+                .frames(kind, id)?
+                .into_iter()
+                .filter_map(|frame| DeepImage::new(frame, PixelDepth::Direct32))
+                .collect()),
+        }
     }
 }
 
@@ -144,6 +194,10 @@ impl ImageSource for GameData {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         GameImages::new(self, EightBitReading::AsDrawn).frames(kind, id)
     }
+
+    fn deep_frames(&self, kind: ImageKind, id: i16) -> Result<Vec<DeepImage>, ImageError> {
+        GameImages::new(self, EightBitReading::AsDrawn).deep_frames(kind, id)
+    }
 }
 
 #[cfg(test)]
@@ -153,8 +207,9 @@ mod tests {
     use nova_data::graphics::GraphicsError;
     use std::rc::Rc;
 
+    use nova_data::graphics::PixelDepth;
     use nova_data::graphics::fixture::{
-        BitMap, Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
+        BitMap, Cicn, Ctab, DirectBits, IndexedBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
     use nova_data::records::spin::Spin;
     use nova_data::store::fixture::{interface_of, store_of};
@@ -704,5 +759,143 @@ mod tests {
             data.frames(ImageKind::Rled, 200),
             Err(ImageError::Decode(_))
         ));
+    }
+
+    /// A 2x1 16-bit picture: red, then blue.
+    fn picture_16() -> Vec<u8> {
+        PictBuilder::new([0, 0, 1, 2])
+            .direct_bits(&DirectBits::rgb555([0, 0, 1, 2], &[0x7C00, 0x001F]))
+            .end()
+            .build()
+    }
+
+    /// A 3x2 8-bit indexed picture of indices 0 to 5.
+    fn picture_indexed() -> Vec<u8> {
+        let entries = (0..6).map(|i| (i, [i * 0x2000; 3])).collect();
+        let ctab = Ctab {
+            device: false,
+            entries,
+        };
+        PictBuilder::new([0, 0, 2, 3])
+            .packbits_rect(&IndexedBits::new(
+                [0, 0, 2, 3],
+                8,
+                &ctab,
+                &[0, 1, 2, 3, 4, 5],
+            ))
+            .end()
+            .build()
+    }
+
+    fn indexed(indices: &[u8]) -> PixelDepth {
+        PixelDepth::Indexed {
+            indices: indices.to_vec(),
+        }
+    }
+
+    /// The depth and colours of (`kind`, `id`)'s one deep frame, after
+    /// checking its colours are `frames`'s.
+    fn deep_one(source: &impl ImageSource, kind: ImageKind, id: i16) -> PixelDepth {
+        let deep = source.deep_frames(kind, id).expect("decodes");
+        let frames = source.frames(kind, id).expect("decodes");
+        assert_eq!(deep.len(), 1);
+        assert_eq!(deep[0].image(), &frames[0], "the colours are frames'");
+        deep[0].depth().clone()
+    }
+
+    #[test]
+    fn a_pictures_deep_frame_has_the_depth_it_was_stored_at() {
+        let data = store(&[
+            (PICT, 128, picture()),
+            (PICT, 129, picture_16()),
+            (PICT, 130, picture_indexed()),
+        ]);
+        let images = GameImages::new(&data, EightBitReading::AsDrawn);
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 128),
+            PixelDepth::Direct32
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 129),
+            PixelDepth::Direct16
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::Pict, 130),
+            indexed(&[0, 1, 2, 3, 4, 5])
+        );
+        // The game data itself answers as its images do.
+        assert_eq!(deep_one(&data, ImageKind::Pict, 129), PixelDepth::Direct16);
+    }
+
+    #[test]
+    fn a_masked_picture_keeps_its_pictures_depth_with_the_masks_alpha() {
+        let data = store(&[(PICT, 130, picture_indexed()), (PICT, 228, mask())]);
+        let masked = ImageKind::MaskedPict { mask: 228 };
+        assert_eq!(deep_one(&data, masked, 130), indexed(&[0, 1, 2, 3, 4, 5]));
+        let deep = data.deep_frames(masked, 130).expect("decodes");
+        assert_eq!(deep[0].image().pixel(1, 0).map(|p| p[3]), Some(0));
+    }
+
+    #[test]
+    fn an_interface_pictures_deep_frame_has_its_depth() {
+        let data = store(&[]);
+        let interface = Rc::new(interface_of(&[
+            (PICT, 128, interface_picture()),
+            (PICT, 129, picture_16()),
+        ]));
+        let images = GameImages::new(&data, EightBitReading::AsDrawn).with_interface(interface);
+        assert_eq!(
+            deep_one(&images, ImageKind::InterfacePict, 128),
+            indexed(&[1, 0])
+        );
+        assert_eq!(
+            deep_one(&images, ImageKind::InterfacePict, 129),
+            PixelDepth::Direct16
+        );
+    }
+
+    #[test]
+    fn other_kinds_deep_frames_are_their_frames_at_32_bits() {
+        let data = store(&[(RLED, 200, sheet())]);
+        let deep = data.deep_frames(ImageKind::Rled, 200).expect("decodes");
+        let frames = data.frames(ImageKind::Rled, 200).expect("decodes");
+        assert_eq!(deep.len(), 2);
+        for (deep, frame) in deep.iter().zip(&frames) {
+            assert_eq!(deep.depth(), &PixelDepth::Direct32);
+            assert_eq!(deep.image(), frame);
+        }
+    }
+
+    #[test]
+    fn a_deep_frame_fails_as_its_frame_does() {
+        let data = store(&[
+            (PICT, 128, picture()),
+            (PICT, 228, mask()),
+            (PICT, 1, vec![0; 3]),
+            (PICT, 2, picture_16()),
+        ]);
+        let interface = Rc::new(interface_of(&[(PICT, 1, vec![0; 3])]));
+        let images = GameImages::new(&data, EightBitReading::AsDrawn).with_interface(interface);
+        let bare = GameImages::new(&data, EightBitReading::AsDrawn);
+        for (source, kind, id) in [
+            (&images, ImageKind::Pict, 1),
+            (&images, ImageKind::Pict, 3),
+            (&images, ImageKind::MaskedPict { mask: 228 }, 1),
+            (&images, ImageKind::MaskedPict { mask: 1 }, 128),
+            (&images, ImageKind::MaskedPict { mask: 229 }, 128),
+            (&images, ImageKind::MaskedPict { mask: 228 }, 129),
+            (&images, ImageKind::MaskedPict { mask: 2 }, 128),
+            (&images, ImageKind::InterfacePict, 1),
+            (&images, ImageKind::InterfacePict, 2),
+            (&bare, ImageKind::InterfacePict, 1),
+        ] {
+            let frames = source.frames(kind, id).map(|_| ());
+            assert!(frames.is_err(), "{kind:?} {id}");
+            assert_eq!(
+                source.deep_frames(kind, id).map(|_| ()),
+                frames,
+                "{kind:?} {id}"
+            );
+        }
     }
 }
