@@ -645,6 +645,23 @@ mod tests {
     }
 
     #[test]
+    fn a_run_trimmed_at_the_right_counts_the_extra_byte_for_where_its_fill_ends() {
+        // A 32-bit sheet with a 2-pixel box (bytes 0-3), its tokens counted
+        // in bytes as `skip8` and `run8` write them: the plain decode
+        // reads a 1-byte skip as none and a 5-byte run as one pixel, but
+        // the blit trims a 5-byte run from byte 1 to bytes 1-3 and hands on
+        // a count of 4 (one byte past the right). So byte 3 is the fill's
+        // byte 2, not the one-byte tail's byte 0 that a count of 3 draws.
+        let bytes = sheet(2, 1, 32)
+            .frame(|f| f.line().skip8(1).run8(5, [0x11, 0x22, 0x33, 0x44]))
+            .build();
+        assert_eq!(
+            frames(&clipped(&bytes, cut(0, 0))),
+            [vec![CLEAR, rgb555(0x2233)]]
+        );
+    }
+
+    #[test]
     fn uncut_a_sheet_without_quirks_draws_its_box_as_the_plain_decode() {
         let sixteen = sheet(3, 2, 16)
             .frame(|f| {
