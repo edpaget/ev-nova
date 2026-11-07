@@ -291,3 +291,23 @@ fn rollover_sheet() -> Vec<u8> {
         })
         .build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pict_pairs_mask_is_its_sprites_plus_100() {
+        for (spin, sprites) in [
+            (BUTTON_SPINS[0], BUTTON_SPRITES[0]),
+            (ROLLOVER_SPIN, ROLLOVER_SPRITE),
+        ] {
+            let picts: Vec<i16> = pict_pair_resources(spin)
+                .into_iter()
+                .filter(|&(ty, id, _)| ty == PICT && (id == sprites || id == sprites + 100))
+                .map(|(_, id, _)| id)
+                .collect();
+            assert_eq!(picts, [sprites, sprites + 100], "spïn {spin}");
+        }
+    }
+}
