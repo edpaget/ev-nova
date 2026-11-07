@@ -2,8 +2,8 @@
 //! data: [`PilotCatalog::rle_sheet`](crate::catalog::PilotCatalog::rle_sheet)'s
 //! adapter.
 //!
-//! A ship's base sheet is its `shän`'s `rlëD` (`GameData::ship_sprite_words`;
-//! a `PICT` base image isn't read, so its touch falls back to discs). A
+//! A ship's base sheet is its `shän`'s base image, an `rlëD` or a cut
+//! `PICT` pair (`GameData::ship_sprite_words`). A
 //! stellar graphic's is `spïn` 1000 + its type's, an `rlëD` or a cut
 //! `PICT` pair (`GameData::spin_words`), as is a shot's, `spïn` 3000 + its
 //! weapon's `Graphic` (none below 0), an asteroid kind's, `spïn` 800 +
@@ -212,6 +212,34 @@ mod tests {
         assert_eq!((rle.width, rle.height, rle.shift), (2, 1, 1));
         assert_eq!(words_of(&rle), [0x0100_0008, 0x0200_0004, 0x7C00_7C00, 0]);
         assert_eq!(rle.starts, [0]);
+    }
+
+    #[test]
+    fn a_ships_pict_pair_base_touches_by_its_cut_tokens() {
+        // Ship 129's base is the pair graphic type 4 cuts, in the same
+        // 2x1 frames: its `shän` loads 2 frames of one set.
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2004)
+            .base_mask_id(2104)
+            .base_x_size(2)
+            .base_y_size(1)
+            .base_set_count(1)
+            .frames_per(2)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 129, vec![0; Ship::SIZE.expect("fixed")]),
+            (ShipAnim::TYPE, 129, anim),
+            (PICT, 2004, rgb888_pict(4, 1, &[[0x80; 3]; 4])),
+            (
+                PICT,
+                2104,
+                rgb888_pict(4, 1, &[[0xFF; 3], [0; 3], [0; 3], [0xFF; 3]]),
+            ),
+        ]);
+        let ship = data
+            .rle_sheet(MaskSheet::Ship(ShipId(129)))
+            .expect("a PICT pair");
+        assert_eq!(Some(ship), self::data().rle_sheet(PICT_TYPE));
     }
 
     #[test]
