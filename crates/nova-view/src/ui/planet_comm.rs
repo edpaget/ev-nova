@@ -40,7 +40,7 @@ use nova_sim::planet_comm::{
 };
 
 use crate::color::Color;
-use crate::draw::DrawList;
+use crate::draw::{Blend, DrawCommand, DrawList};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -90,8 +90,9 @@ const REPLY_BACKING: TextBacking = TextBacking {
 };
 
 /// The stellar's frame the flight shows, keyed, with its width and
-/// height, and the width and height its sprite slot is placed as
-/// (`_GetSpriteXSize`, 32 square for a frozen frame): what item 5 draws.
+/// height, the width and height its sprite slot is placed as
+/// (`_GetSpriteXSize`, 32 square for a frozen frame) and its image's
+/// width and height: what item 5 draws.
 pub type StellarFrame = crate::system::ShownFrame;
 
 /// `status`'s colour, and whether it is bold (@0x90fb6-0x910e1).
@@ -333,20 +334,44 @@ impl PlanetCommDialog {
     /// @0x90f97-0x90faf). The frame is drawn at its own size from there
     /// (`_BlitPixieRLEDrawProc` @0xbb142-0xbb163), so a frame frozen sits
     /// from the centre less 16.
+    ///
+    /// The picture is cut to that box, the slot's: `_PlanetCommDialogUpdate`
+    /// draws the frame into the sprite world's work frame and copies only
+    /// the box back to the dialog (`CopyBits` @0x90e26, source and
+    /// destination rect both the box). So an image drawn past its box (a
+    /// 32-bit `rlëD`'s, or a frozen frame larger than 32 square) is cut to
+    /// the box on every side, and one within it is drawn as it is. The
+    /// draw proc's own clip never cuts it: the box lies inside the work
+    /// frame, so `_BlitPixieRLEDrawProc` takes the plain blit
+    /// (@0xbb2a0-0xbb2ac) and the clipped blit's frame is never drawn
+    /// here, even for a sheet with clip quirks.
     fn draw_sprite(&self, list: &mut DrawList) {
-        let (Some((image, (width, height), (placed_w, placed_h))), Some(at)) =
-            (self.sprite, self.dialog.item_bounds(SPRITE_ITEM))
-        else {
+        let (Some(shown), Some(at)) = (self.sprite, self.dialog.item_bounds(SPRITE_ITEM)) else {
             return;
         };
+        let ((width, height), (placed_w, placed_h)) = (shown.size, shown.placed_as);
         let centre = |min: f32, max: f32| f32::midpoint(min, max).trunc();
         let left = centre(at.min.x, at.max.x) - (placed_w / 2.0).trunc();
         let top = centre(at.min.y, at.max.y) - (placed_h / 2.0).trunc();
-        list.sprite(
-            image,
-            Point::new(left + width / 2.0, top + height / 2.0),
-            Color::WHITE,
+        let center = Point::new(left + width / 2.0, top + height / 2.0);
+        let slot = Bounds::at(Point::new(left, top), placed_w, placed_h);
+        let (image_w, image_h) = shown.image_size;
+        let drawn = Bounds::at(
+            Point::new(center.x - image_w / 2.0, center.y - image_h / 2.0),
+            image_w,
+            image_h,
         );
+        let sprite = DrawCommand::Sprite {
+            image: shown.image,
+            center,
+            tint: Color::WHITE,
+            blend: Blend::Normal,
+        };
+        if slot.contains(drawn.min) && slot.contains(drawn.max) {
+            list.push(sprite);
+        } else {
+            list.clipped(slot, sprite);
+        }
     }
 }
 
@@ -462,7 +487,6 @@ mod tests {
     use nova_sim::StellarId;
 
     use super::*;
-    use crate::draw::DrawCommand;
     use crate::text::fixture::MonoMetrics;
 
     /// Earth greeting, its buttons Greetings and Demand Tribute.
@@ -506,7 +530,12 @@ mod tests {
         }
     }
 
-    const SPRITE: StellarFrame = (ImageKey::sprite(1000, 3), (101.0, 64.0), (101.0, 64.0));
+    const SPRITE: StellarFrame = StellarFrame {
+        image: ImageKey::sprite(1000, 3),
+        size: (101.0, 64.0),
+        placed_as: (101.0, 64.0),
+        image_size: (101.0, 64.0),
+    };
 
     fn dialog(view: &PlanetCommView) -> PlanetCommDialog {
         PlanetCommDialog::new(
@@ -711,26 +740,99 @@ mod tests {
         // slot's `_GetSpriteXSize` (@0x90d42-0x90d66, @0x90f97-0x90faf),
         // 32 for a frozen slot, and draws the frame at its own size from
         // there (@0xbb142-0xbb163).
-        let frozen = (ImageKey::sprite(2000, 1), (70.0, 70.0), (32.0, 32.0));
+        let frozen = StellarFrame {
+            image: ImageKey::sprite(2000, 1),
+            size: (70.0, 70.0),
+            placed_as: (32.0, 32.0),
+            image_size: (70.0, 70.0),
+        };
+        let centres: Vec<_> = picture(frozen)
+            .into_iter()
+            .map(|(image, centre, _)| (image, centre))
+            .collect();
+        // Item 5's centre is (377, 146): the top left (361, 130).
+        assert_eq!(
+            centres,
+            [(frozen.image, Point::new(361.0 + 35.0, 130.0 + 35.0))]
+        );
+    }
+
+    /// `frame`'s picture as item 5 draws it: its image, centre and the
+    /// box it is cut to, if it is.
+    fn picture(frame: StellarFrame) -> Vec<(ImageKey, Point, Option<Bounds>)> {
         let shown = PlanetCommDialog::new(
             &stock(),
             &greeting(),
-            Some(frozen),
+            Some(frame),
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
         .expect("builds");
-        let sprites: Vec<_> = drawn(&shown)
+        drawn(&shown)
             .into_iter()
             .filter_map(|command| match command {
-                DrawCommand::Sprite { image, center, .. } => Some((image, center)),
+                DrawCommand::Sprite { image, center, .. } => Some((image, center, None)),
+                DrawCommand::Clipped { clip, command } => match *command {
+                    DrawCommand::Sprite { image, center, .. } => Some((image, center, Some(clip))),
+                    _ => None,
+                },
                 _ => None,
             })
-            .collect();
-        // Item 5's centre is (377, 146): the top left (361, 130).
+            .collect()
+    }
+
+    #[test]
+    fn an_overhanging_frame_is_cut_to_its_box_as_the_copy_back_cuts_it() {
+        // `_PlanetCommDialogUpdate` copies only the slot's box back to the
+        // dialog (`CopyBits` @0x90e26): the 101 x 64 box from (327, 114).
+        let wide = StellarFrame {
+            image_size: (105.0, 66.0),
+            ..SPRITE
+        };
         assert_eq!(
-            sprites,
-            [(frozen.0, Point::new(361.0 + 35.0, 130.0 + 35.0))]
+            picture(wide),
+            [(
+                SPRITE.image,
+                Point::new(327.0 + 50.5, 114.0 + 32.0),
+                Some(Bounds::at(Point::new(327.0, 114.0), 101.0, 64.0))
+            )]
+        );
+    }
+
+    #[test]
+    fn a_frozen_frame_larger_than_32_square_is_cut_to_the_32_box() {
+        let frozen = StellarFrame {
+            image: ImageKey::sprite(2000, 1),
+            size: (70.0, 70.0),
+            placed_as: (32.0, 32.0),
+            image_size: (70.0, 70.0),
+        };
+        assert_eq!(
+            picture(frozen),
+            [(
+                frozen.image,
+                Point::new(361.0 + 35.0, 130.0 + 35.0),
+                Some(Bounds::at(Point::new(361.0, 130.0), 32.0, 32.0))
+            )]
+        );
+    }
+
+    #[test]
+    fn a_frame_within_its_box_draws_as_a_plain_sprite() {
+        assert_eq!(
+            picture(SPRITE),
+            [(SPRITE.image, Point::new(327.0 + 50.5, 114.0 + 32.0), None)]
+        );
+        // A frozen frame smaller than its 32 box: from (361, 130).
+        let small = StellarFrame {
+            image: ImageKey::sprite(2000, 1),
+            size: (20.0, 20.0),
+            placed_as: (32.0, 32.0),
+            image_size: (20.0, 20.0),
+        };
+        assert_eq!(
+            picture(small),
+            [(small.image, Point::new(361.0 + 10.0, 130.0 + 10.0), None)]
         );
     }
 
@@ -747,7 +849,7 @@ mod tests {
         // (327, 114).
         assert_eq!(
             sprites,
-            [(SPRITE.0, Point::new(327.0 + 50.5, 114.0 + 32.0))]
+            [(SPRITE.image, Point::new(327.0 + 50.5, 114.0 + 32.0))]
         );
         let none = PlanetCommDialog::new(
             &stock(),

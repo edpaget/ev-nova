@@ -116,7 +116,7 @@ fn a_murky_stellar_sprite_far_from_the_player_is_mixed_and_one_beside_it_is_not(
         .stellars()
         .iter()
         .find_map(|stellar| {
-            let (image, _, _) = scene.shown_frame(stellar.id)?;
+            let image = scene.shown_frame(stellar.id)?.image;
             Some((stellar.position, image))
         })
         .expect("a stellar sprite");

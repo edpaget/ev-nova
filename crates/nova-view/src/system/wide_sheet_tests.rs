@@ -251,3 +251,13 @@ fn the_rescue_repaint_cuts_an_overhanging_stellar_to_its_box_at_the_play_areas_e
             command: Box::new(sprite.clone()),
         }));
 }
+#[test]
+fn a_stellars_shown_frame_carries_the_size_its_image_is_drawn_at() {
+    let shown = |image_size| {
+        sol(image_size)
+            .shown_frame(StellarId(140))
+            .map(|shown| (shown.size, shown.image_size))
+    };
+    assert_eq!(shown(WIDE), Some(((2.0, 2.0), (6.0, 2.0))));
+    assert_eq!(shown(BOXED), Some(((2.0, 2.0), (2.0, 2.0))));
+}

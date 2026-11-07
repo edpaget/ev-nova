@@ -50,10 +50,21 @@ const STAND_IN_FRAME: (u32, u32) = (STAND_IN_SIDE as u32, STAND_IN_SIDE as u32);
 /// frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
 const FROZEN_SIDE: u32 = 32;
 
-/// A stellar's frame as [`SystemScene::shown_frame`] gives it: keyed,
-/// with its width and height, and the width and height its sprite slot is
-/// placed as ([`SceneStellar::slot_size`]).
-pub type ShownFrame = (ImageKey, (f32, f32), (f32, f32));
+/// A stellar's frame as [`SystemScene::shown_frame`] gives it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShownFrame {
+    /// The frame.
+    pub image: ImageKey,
+    /// Its box's width and height.
+    pub size: (f32, f32),
+    /// The width and height its sprite slot is placed as
+    /// ([`SceneStellar::slot_size`]): 32 square for a frozen frame.
+    pub placed_as: (f32, f32),
+    /// The width and height of the image drawn for it
+    /// ([`StellarSheet::image_size`]): its box's, unless its sheet draws
+    /// past the box, padded to keep the box at its centre.
+    pub image_size: (f32, f32),
+}
 
 /// One stellar, placed in the scene.
 #[derive(Clone, Debug, PartialEq)]
@@ -403,7 +414,16 @@ impl SystemScene {
         let placed_as = stellar
             .slot_size()
             .map_or(size, |(width, height)| (width as f32, height as f32));
-        Some((image, size, placed_as))
+        let sheet = stellar.drawn()?.as_ref().ok()?;
+        // An image's sides are far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let image_size = (sheet.image_size.0 as f32, sheet.image_size.1 as f32);
+        Some(ShownFrame {
+            image,
+            size,
+            placed_as,
+            image_size,
+        })
     }
 
     /// Where the camera may go: the box round the system's centre and every
@@ -978,14 +998,14 @@ mod tests {
         let mut scene = SystemScene::load(&catalog(), SystemId(130));
         scene.step(3, &mut NeverFires);
         let shown = scene.shown_frame(StellarId(129)).expect("drawn");
-        assert_eq!(shown.0, drawn(&scene)[1], "as drawn");
+        assert_eq!(shown.image, drawn(&scene)[1], "as drawn");
         let sheet = scene.stellars()[1]
             .drawn()
             .and_then(|sheet| sheet.as_ref().ok())
             .copied()
             .expect("a sheet");
         assert_eq!(
-            shown.1,
+            shown.size,
             (sheet.frame_width as f32, sheet.frame_height as f32)
         );
         scene.set_looks(|id| StellarLook {
@@ -993,7 +1013,7 @@ mod tests {
             ..WHOLE
         });
         assert_eq!(
-            scene.shown_frame(StellarId(129)).map(|shown| shown.0),
+            scene.shown_frame(StellarId(129)).map(|shown| shown.image),
             Some(ImageKey::sprite(1001, 2))
         );
         assert_eq!(scene.shown_frame(StellarId(999)), None, "not in it");
@@ -1041,12 +1061,22 @@ mod tests {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
         assert_eq!(
             scene.shown_frame(StellarId(153)),
-            Some((ImageKey::sprite(1003, 0), (8.0, 8.0), (8.0, 8.0)))
+            Some(ShownFrame {
+                image: ImageKey::sprite(1003, 0),
+                size: (8.0, 8.0),
+                placed_as: (8.0, 8.0),
+                image_size: (8.0, 8.0),
+            })
         );
         frozen_153_frameless_151(&mut scene);
         assert_eq!(
             scene.shown_frame(StellarId(153)),
-            Some((ImageKey::sprite(1003, 0), (8.0, 8.0), (32.0, 32.0)))
+            Some(ShownFrame {
+                image: ImageKey::sprite(1003, 0),
+                size: (8.0, 8.0),
+                placed_as: (32.0, 32.0),
+                image_size: (8.0, 8.0),
+            })
         );
         assert_eq!(scene.shown_frame(StellarId(151)), None, "no frame");
     }

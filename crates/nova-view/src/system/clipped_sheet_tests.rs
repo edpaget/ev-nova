@@ -269,3 +269,14 @@ fn the_rescue_repaint_draws_a_quirky_sheet_clipped_by_its_cut() {
         list.iter().collect::<Vec<_>>()
     );
 }
+
+/// The planet comm dialog draws the frame [`SystemScene::shown_frame`]
+/// gives, and the scene gives a quirky sheet's plain frame: the comm
+/// dialog's box lies inside the work frame it draws into, so its draw
+/// proc never takes the clipped blit (`_PlanetCommDialogUpdate`
+/// @0x90cc6-0x90e26), and its picture never draws the clipped key.
+#[test]
+fn a_quirky_sheets_shown_frame_is_its_plain_frame() {
+    let shown = quirky().shown_frame(StellarId(140)).expect("shown");
+    assert_eq!(shown.image, ImageKey::sprite(1001, 0));
+}
