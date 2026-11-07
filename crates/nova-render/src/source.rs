@@ -606,6 +606,19 @@ mod tests {
             data.frames(ship_sheet(ShipImage::Glow), 128),
             data.frames(ImageKind::Rled, 200)
         );
+        // Through the rlëD path, so under the images' readings: a 32-bit
+        // sheet in true colour, not as `GameData::ship_image` decodes it.
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().pixels32(&[0x0000_7C00, 0x0000_03E0]))
+            .build();
+        let data = ship_store(200, &[(RLED, 200, thirty_two)]);
+        let images = GameImages::new(&data, EightBitReading::AsDrawn)
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        let glow = images.frames(ship_sheet(ShipImage::Glow), 128).unwrap();
+        assert_eq!(Ok(glow.clone()), images.frames(ImageKind::Rled, 200));
+        assert_ne!(Ok(glow), data.frames(ImageKind::Rled, 200));
     }
 
     #[test]

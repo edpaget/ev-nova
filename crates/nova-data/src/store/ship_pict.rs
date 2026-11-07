@@ -525,6 +525,9 @@ mod tests {
             let anim = decoded(ShipAnimBuilder::new().alt_image_id(5).alt_set_count(sets));
             assert!(!ShipImage::Alt.defined(&anim), "{sets}");
         }
+        // And an `AltImageID` above 0.
+        let anim = decoded(ShipAnimBuilder::new().alt_image_id(0).alt_set_count(1));
+        assert!(!ShipImage::Alt.defined(&anim));
     }
 
     #[test]
