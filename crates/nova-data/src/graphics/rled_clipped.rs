@@ -857,4 +857,56 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn the_flag_follows_each_tokens_place_along_its_row() {
+        // After a pixel token from byte 1 to 3, a one-byte run lands on
+        // byte 4, an even end.
+        let after_pixels = sheet(3, 1, 8)
+            .frame(|f| f.line().skip8(1).pixels8(&[1, 2, 3]).run8(1, [5; 4]))
+            .build();
+        assert!(plain(&after_pixels).clip_quirks());
+        let after_run = sheet(3, 1, 8)
+            .frame(|f| f.line().skip8(1).run8(3, [5; 4]).run8(1, [6; 4]))
+            .build();
+        assert!(plain(&after_run).clip_quirks());
+        // A run of no bytes ends on no byte.
+        let empty_run = sheet(2, 1, 8)
+            .frame(|f| f.line().skip8(1).run8(0, [3; 4]).skip8(1))
+            .build();
+        assert!(!plain(&empty_run).clip_quirks());
+    }
+
+    #[test]
+    fn a_token_draws_only_its_own_bytes() {
+        // Byte 3, the pixel token's pad, stays unwritten.
+        let bytes = sheet(2, 1, 8)
+            .frame(|f| f.line().pixels8(&[1, 2, 3]))
+            .build();
+        assert_eq!(
+            frames(&clipped(&bytes, cut(0, 0))),
+            [vec![rgb555(0x0201), CLEAR]]
+        );
+    }
+
+    #[test]
+    fn a_pixel_half_written_by_a_run_is_not_solid() {
+        let bytes = sheet(2, 1, 8)
+            .frame(|f| f.line().pixels8(&[1, 2, 3]).run8(1, [9; 4]))
+            .build();
+        let sheet = clipped(&bytes, cut(0, 0));
+        assert_eq!(frames(&sheet), [vec![rgb555(0x0201), rgb555(0x0903)]]);
+        assert_eq!(solids(&sheet), Some(vec![vec![CLEAR, CLEAR]]));
+    }
+
+    #[test]
+    fn tokens_after_a_run_draw_where_it_ends() {
+        let bytes = sheet(4, 1, 16)
+            .frame(|f| f.line().skip(1).run(2, RED, BLUE).pixels(&[GREEN]))
+            .build();
+        assert_eq!(
+            frames(&clipped(&bytes, cut(0, 0))),
+            [vec![CLEAR, rgb555(BLUE), rgb555(RED), rgb555(GREEN)]]
+        );
+    }
 }
