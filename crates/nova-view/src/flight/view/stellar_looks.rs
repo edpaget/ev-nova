@@ -119,7 +119,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// Lays out `system`, the frame's: its scene ([`FlightView::show_scene`]),
     /// each stellar shown before resuming its animation where it was left,
     /// the course map's course, and the ship drawn from where the frame,
-    /// filled afresh, has it, the last system's NPCs and effects let go.
+    /// filled afresh, has it, the last system's NPCs and effects let go,
+    /// the NPCs' flashes and glows held for the escorts the fleet keeps
+    /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).
     fn lay_out(&mut self, system: SystemId) {
         self.drop_between_passes();
         self.show_scene();
@@ -128,9 +130,8 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
-        self.flashes.clear();
+        self.held_displays.hold(&mut self.flashes, &mut self.glows);
         self.held_alts.get_mut().clear();
-        self.glows.clear();
         self.shot_looks.clear();
         self.read_npc_sheets();
     }

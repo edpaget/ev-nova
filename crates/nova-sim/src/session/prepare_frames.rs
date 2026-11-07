@@ -48,6 +48,16 @@
 //! already there (@0x768c), so a session no entry prepares (the
 //! developer's flight) still draws its ships from the first frame.
 //!
+//! # The kept escorts' glows and flashes
+//!
+//! Each display steps the ship's weapon glow (+0xc8e8) and shield flash
+//! (+0xc8f0) too, which the flight view keeps and steps. Every NPC is new
+//! at a way in, but a kept escort, which `_RespawnEscort` leaves both
+//! for: so each NPC slot displayed here notes its prepare's gain
+//! (`Session::display_slots`), and the view is told the gains each kept
+//! escort's glow and flash are owed as the fleet is placed (see the
+//! `display_carry` module).
+//!
 //! # A loaded pilot's escorts at the entry
 //!
 //! `_LoadPilotData` spawns a loaded pilot's escorts into slots 1 and up
@@ -142,14 +152,17 @@ impl Session {
                     gain,
                     &mut *chance,
                 ),
-                ShipRef::Npc(id) => self.space.display_npc_frames(
-                    id,
-                    prepared.disabled,
-                    gain,
-                    &self.statics,
-                    &self.setup,
-                    &mut *chance,
-                ),
+                ShipRef::Npc(id) => {
+                    self.space.display_npc_frames(
+                        id,
+                        prepared.disabled,
+                        gain,
+                        &self.statics,
+                        &self.setup,
+                        &mut *chance,
+                    );
+                    self.space.escorts.carry.prepared(id, gain);
+                }
             }
         }
     }

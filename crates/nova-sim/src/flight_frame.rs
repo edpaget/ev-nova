@@ -1588,6 +1588,32 @@ pub enum FlightEvent {
     RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
+    /// The fleet was placed afresh (`_RespawnEscort`, from
+    /// `_SetupShipsInSystem` @0x42c79): each kept escort's display
+    /// carried into its new NPC, empty when none was kept. Every other
+    /// NPC's display went with the system left, so the view lets go of
+    /// whatever else it held through the change.
+    DisplaysCarried(Vec<CarriedDisplay>),
+}
+
+/// A kept escort's display carried into its new NPC
+/// ([`FlightEvent::DisplaysCarried`]): `_RespawnEscort` (@0x3d4b8-0x3d62c)
+/// writes neither its weapon glow (+0xc8e8) nor its shield flash
+/// (+0xc8f0), so both go on from where its last flight display left them,
+/// stepped once by each `_PrepareAllSprites` that displayed it since, at
+/// that prepare's gain.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CarriedDisplay {
+    /// Its NPC before the placement.
+    pub from: NpcId,
+    /// Its NPC now.
+    pub to: NpcId,
+    /// The gain of each `_PrepareAllSprites` that displayed it, as `from`
+    /// or as `to`, since its last flight display, in order: one at a
+    /// jump's arrival, two at a gate's exit (three when the exit is in
+    /// the system gone in) and at a wormhole with no exit, two at a
+    /// take-off at its gain of 0.
+    pub prepares: Vec<SpeedMult>,
 }
 
 /// What a frame's fixed steps are given

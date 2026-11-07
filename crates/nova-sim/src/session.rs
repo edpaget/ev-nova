@@ -482,6 +482,7 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod disabled_mission_escorts;
+mod display_carry;
 mod display_gain;
 mod display_step;
 mod dock_tail;

@@ -182,6 +182,9 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> BTreeSet<NpcId> {
         self.space.traffic.ease_stray(self.speed_mult());
+        // The view steps every glow and flash at this pass (see the
+        // `display_carry` module).
+        self.space.escorts.carry.flown();
         let again_marks = matches!(motion, Motion::Again)
             .then(|| self.space.mission_marks())
             .filter(|_| !self.space.traffic_due);

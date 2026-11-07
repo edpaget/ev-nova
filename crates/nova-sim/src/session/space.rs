@@ -254,6 +254,11 @@ pub(super) struct Escorts {
     /// `prepare_frames` module): set by `Session::enter_game` in a system
     /// not yet set up, taken as the escorts enter. Never saved.
     pub(super) entry_display_owed: Option<crate::SpeedMult>,
+    /// The kept escorts' displays the view is owed: the prepares that
+    /// displayed each NPC since the last flight pass, and each kept
+    /// escort's old and new NPC since the last placement (see the
+    /// `display_carry` module). Never saved.
+    pub(super) carry: super::display_carry::DisplayCarry,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
@@ -330,6 +335,7 @@ impl Space {
                 skip_bookkeeping: false,
                 loaded_berths_held: false,
                 entry_display_owed: None,
+                carry: super::display_carry::DisplayCarry::default(),
                 quote_clock: persons::QuoteClock::default(),
             },
             voice: crate::voice::VoiceChannel::default(),

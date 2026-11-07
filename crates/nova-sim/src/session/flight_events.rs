@@ -5,7 +5,7 @@
 //! Each kind is moved across with its own take, so the stream holds
 //! exactly what the takes would have given, and taking a kind after a
 //! drain finds none. The kinds come in the [`Outbox`]'s field order, then
-//! the two held elsewhere:
+//! the three held elsewhere:
 //!
 //! 1. the sounds ([`FlightEvent::Sound`]), the messages
 //!    ([`FlightEvent::Message`]) and the session events
@@ -28,7 +28,10 @@
 //! 8. the take-off's nav ([`FlightEvent::TakeoffNav`]);
 //! 9. the rescue's `dësc` ([`FlightEvent::RescueDesc`], on the
 //!    `PlayerShip`) and the leave message ([`FlightEvent::LeaveMessage`],
-//!    on the `MissionRun`).
+//!    on the `MissionRun`);
+//! 10. the kept escorts' displays carried ([`FlightEvent::DisplaysCarried`],
+//!     on the `Space`), once after each placement of the fleet (see the
+//!     `display_carry` module).
 //!
 //! Within a kind the order is the session's. The script notes are not
 //! drained: no view takes them. Nor are the fight's events, which come
@@ -93,6 +96,10 @@ impl Session {
         into.extend(self.take_takeoff_nav().map(FlightEvent::TakeoffNav));
         into.extend(self.take_rescue_desc().map(FlightEvent::RescueDesc));
         into.extend(self.take_leave_message().map(FlightEvent::LeaveMessage));
+        into.extend(
+            self.take_carried_displays()
+                .map(FlightEvent::DisplaysCarried),
+        );
     }
 }
 
@@ -441,6 +448,7 @@ mod tests {
     #[test]
     fn the_kinds_come_in_the_documented_order() {
         let mut session = started();
+        session.space.escorts.carry.placed([(NpcId(1), NpcId(2))]);
         session.ship.fate.rescue_desc = Some(rescued());
         session.run.leave_with("Bye.");
         session.out.takeoff_nav = Some(NavMode::Off);
@@ -496,6 +504,11 @@ mod tests {
                 FlightEvent::TakeoffNav(NavMode::Off),
                 FlightEvent::RescueDesc(rescued()),
                 FlightEvent::LeaveMessage("Bye.".to_owned()),
+                FlightEvent::DisplaysCarried(vec![crate::flight_frame::CarriedDisplay {
+                    from: NpcId(1),
+                    to: NpcId(2),
+                    prepares: Vec::new(),
+                }]),
             ]
         );
     }

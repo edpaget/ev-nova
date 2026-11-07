@@ -713,7 +713,7 @@ use super::catalog::{Looks, ShipSheet, ShipSprites, TargetCard};
 use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{EscortMenu, EscortMenuColors};
-use super::flash::ShieldFlash;
+use super::flash::{FlashLook, ShieldFlash};
 use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
@@ -1737,6 +1737,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
+    /// The NPCs' flashes and glows let go of at the last change of system
+    /// or landing, held for the escorts the fleet keeps
+    /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).
+    held_displays: crate::flight::carried_displays::HeldDisplays,
     /// What the view keeps of the shots in flight, drawn on the effects'
     /// chance ([`ShotLooks`](shots::ShotLooks)).
     shot_looks: shots::ShotLooks,
@@ -2113,6 +2117,30 @@ fn show_combat(
     glows
 }
 
+/// What `ship`'s display among a pass's `ships` holds its shield flash by
+/// ([`FlashLook`]): its shield, its class's own loaded `Shield` (class
+/// +0x5c @0x2c8aa, [`FrameShip::class_shield`]) and whether its class's
+/// sheet among `sheets` has a shield layer; `None` for a ship no longer
+/// in the system.
+fn flash_look(
+    ships: &[FrameShip],
+    (player, sheets): Sheets<'_>,
+    ship: ShipRef,
+) -> Option<FlashLook> {
+    let shown = ships.iter().find(|shown| shown.ship == ship)?;
+    let sheet = match ship {
+        ShipRef::Player => player.as_ref().ok(),
+        ShipRef::Npc(_) => sheets
+            .get(&shown.class)
+            .and_then(|sheet| sheet.as_ref().ok()),
+    };
+    Some(FlashLook {
+        shield: shown.shield.now,
+        base: shown.class_shield.unwrap_or(shown.shield.max),
+        has_layer: sheet.is_some_and(|sheet| sheet.shield.is_some()),
+    })
+}
+
 /// How fast `ship`'s weapon glow falls a frame, out of 32
 /// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or,
 /// for an NPC among a pass's `ships`, the NPCs' `sheets`, none for a sheet
@@ -2152,18 +2180,10 @@ fn step_flashes(
     gain: SpeedMult,
 ) {
     flashes.retain(|&ship, flash| {
-        let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
+        let Some(look) = flash_look(ships, (player, sheets), ship) else {
             return false;
         };
-        let sheet = match ship {
-            ShipRef::Player => player.as_ref().ok(),
-            ShipRef::Npc(_) => sheets
-                .get(&shown.class)
-                .and_then(|sheet| sheet.as_ref().ok()),
-        };
-        let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
-        let base = shown.class_shield.unwrap_or(shown.shield.max);
-        flash.step(shown.shield.now, base, has_layer, gain);
+        flash.step(look.shield, look.base, look.has_layer, gain);
         flash.shown() > 0.0
     });
 }

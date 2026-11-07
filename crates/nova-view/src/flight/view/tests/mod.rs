@@ -82,6 +82,7 @@ mod effects_gain;
 mod escorts;
 mod faded_keys;
 mod faked_board;
+mod faked_carried_displays;
 mod faked_combat;
 mod faked_desk;
 mod faked_docked;

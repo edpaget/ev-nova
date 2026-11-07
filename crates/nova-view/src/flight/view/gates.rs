@@ -81,9 +81,10 @@ impl<
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.blank_message();
                 self.effects.clear();
-                self.flashes.clear();
+                // The escorts keep theirs through the landing (see the
+                // `carried_displays` module).
+                self.held_displays.hold(&mut self.flashes, &mut self.glows);
                 self.held_alts.get_mut().clear();
-                self.glows.clear();
                 self.shot_looks.clear();
                 self.land_with_movie(stellar);
             }
