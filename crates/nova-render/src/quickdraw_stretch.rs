@@ -611,6 +611,20 @@ mod tests {
         );
     }
 
+    /// Of equal largest indices the first is kept. Under one colour table
+    /// they share a colour, so colours told apart by hand show which.
+    #[test]
+    fn an_indexed_shrink_keeps_the_first_of_equal_indices() {
+        let picture = pict_indexed(3, 1, &[2, 0, 2])
+            .with_image(image(
+                3,
+                1,
+                &[[1, 2, 3, 255], [9, 9, 9, 255], [4, 5, 6, 255]],
+            ))
+            .expect("same size");
+        assert_eq!(stretched(&picture, 1, 1), image(1, 1, &[[1, 2, 3, 255]]));
+    }
+
     /// An indexed picture's alpha (a mask's) averages on 8 bits.
     #[test]
     fn an_indexed_shrinks_alpha_averages_on_8_bits() {
