@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_0x7fff_deep_answers_at_a_shift_of_31() {
+    fn a_sheet_0x7fff_deep_takes_a_shift_of_31() {
         let rle = data().rle_sheet(WRAPPING_SHOT).expect("reads");
         assert_eq!(rle.shift, 31);
         assert_eq!(rle.starts, [0]);
