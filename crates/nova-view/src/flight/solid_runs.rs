@@ -38,12 +38,17 @@
 //! [`LayerSheet::solid`]: super::catalog::LayerSheet::solid
 //! [`ShipSheet::solid`]: super::catalog::ShipSheet::solid
 
-use crate::{Color, DrawList, ImageKey, Point};
+use crate::box_cut::BoxCut;
+use crate::{Blend, Color, DrawList, ImageKey, Point};
 
 /// Draws frame `frame` of `rlëD` `sheet_id`'s solid runs at `at`: plainly,
-/// opaque and uncolorized, over the layer just drawn.
-pub fn solid_overlay(list: &mut DrawList, sheet_id: i16, frame: u16, at: Point) {
-    list.sprite(ImageKey::solid_runs(sheet_id, frame), at, Color::WHITE);
+/// opaque and uncolorized, over the layer just drawn, and cut at the
+/// world's edge as that layer is (`cut`): to its box, and as the clipped
+/// blit fills the runs ([`ImageKey::clipped_solid_runs`]) where it draws
+/// the layer's clipped frame, as every clipped blit fills a run raw too.
+pub fn solid_overlay(list: &mut DrawList, cut: BoxCut, sheet_id: i16, frame: u16, at: Point) {
+    let plain = (Color::WHITE, Blend::Normal, None);
+    cut.mixed_sprite(list, ImageKey::solid_runs(sheet_id, frame), at, plain);
 }
 
 #[cfg(test)]
@@ -63,7 +68,7 @@ mod tests {
     #[test]
     fn the_overlay_is_the_runs_frame_drawn_plainly_in_white() {
         let mut list = DrawList::new();
-        solid_overlay(&mut list, 1930, 13, AT);
+        solid_overlay(&mut list, BoxCut::WHOLE, 1930, 13, AT);
         assert_eq!(
             list.iter().collect::<Vec<_>>(),
             [&DrawCommand::Sprite {

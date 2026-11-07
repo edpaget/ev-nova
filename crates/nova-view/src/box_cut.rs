@@ -33,7 +33,9 @@
 //! has whole: only its image changes. A decision is a value, so a sprite's
 //! companion command (a ship's solid-run overlay) takes the same one.
 
-use crate::draw::{DrawCommand, DrawList};
+use crate::color::Color;
+use crate::colorize::Colorize;
+use crate::draw::{Blend, DrawCommand, DrawList};
 use crate::geometry::{Bounds, Point};
 use crate::image::{ImageKey, ImageKind};
 
@@ -133,6 +135,20 @@ impl BoxCut {
         }
     }
 
+    /// Appends `image` at `center` as [`DrawCommand::mixed_sprite`] draws
+    /// it, its key as [`BoxCut::key`] gives it and cut to the box when it
+    /// is.
+    pub fn mixed_sprite(
+        self,
+        list: &mut DrawList,
+        image: ImageKey,
+        center: Point,
+        (tint, blend, colorize): (Color, Blend, Option<Colorize>),
+    ) {
+        let command = DrawCommand::mixed_sprite(self.key(image), center, tint, blend, colorize);
+        self.push(list, command);
+    }
+
     /// Appends `command` to `list`, cut to the box when it is.
     pub fn push(self, list: &mut DrawList, command: DrawCommand) {
         match self.clip {
@@ -158,7 +174,6 @@ fn cut_by(world: Bounds, frame_box: Bounds, (width, height): (f32, f32)) -> (u16
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::Color;
 
     /// The world: 100 square from the origin.
     const WORLD: Option<Bounds> = Some(Bounds {
@@ -192,7 +207,7 @@ mod tests {
             image,
             Point::new(1.0, 2.0),
             Color::WHITE,
-            crate::Blend::Normal,
+            Blend::Normal,
             None,
         )
     }
@@ -294,6 +309,25 @@ mod tests {
                 "{edge}"
             );
         }
+    }
+
+    #[test]
+    fn a_mixed_sprite_takes_the_cuts_key_and_box() {
+        let centre = Point::new(2.0, 1.0);
+        let cut = BoxCut::of(WORLD, centre, quirky());
+        let mut list = DrawList::new();
+        let colorize = Some(Colorize::toward(16, 0x0034_c2ff));
+        let look = (Color::WHITE, Blend::Or, colorize);
+        cut.mixed_sprite(&mut list, ImageKey::sprite(1001, 3), centre, look);
+        let image = ImageKey::clipped_sprite(1001, 3, (3, 3));
+        let command = DrawCommand::mixed_sprite(image, centre, Color::WHITE, Blend::Or, colorize);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Clipped {
+                clip: box_at(centre),
+                command: Box::new(command),
+            }]
+        );
     }
 
     #[test]
