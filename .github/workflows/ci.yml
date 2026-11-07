@@ -115,8 +115,10 @@ jobs:
         env:
           NOVA_LINUX_VALIDATORS: ${{ runner.os == 'Linux' && '1' || '' }}
 
-  # infra/github's structural checks: tofu fmt, validate and the
-  # mocked-provider tests. It gets no secrets, no GITHUB_TOKEN and no OP_*
+  # The infra/ roots' structural checks (infra/github and
+  # infra/windows-signing): tofu fmt, validate, the mocked-provider tests and
+  # the encryption guard. It gets no secrets, no Azure credential, no
+  # GITHUB_TOKEN and no OP_*
   # variables, and needs the network only for `tofu init` to download the
   # pinned providers. The dummy state passphrase lives in the infra-check
   # task itself; no state exists here, so it protects nothing. Nothing

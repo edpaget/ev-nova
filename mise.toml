@@ -10,7 +10,7 @@ rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 hk = "2.4.0"
 pkl = "0.32.1"
-# infra/github's config (the infra-* tasks); CI installs it only in the infra job.
+# The infra/ roots' config (the infra-* tasks); CI installs it only in the infra job.
 opentofu = "1.13.2"
 
 [env]
@@ -161,8 +161,20 @@ run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh
 description = "Apply infra/github to the LIVE repository, interactively (gh token, 1Password approvals); kept out of ci and hk on purpose"
 run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/github/op.env -- sh -c 'tofu -chdir=infra/github init -input=false -lockfile=readonly && tofu -chdir=infra/github apply'"
 
+# infra/windows-signing: Azure Artifact Signing and the windows-signing
+# environment (README.md there). The same rules as infra-plan/infra-apply,
+# plus the operator's `az login`; its own root, so infra-plan never needs
+# Azure credentials.
+[tasks.infra-windows-signing-plan]
+description = "Plan infra/windows-signing against LIVE Azure and GitHub (az login, gh token, 1Password); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/windows-signing/op.env -- sh -c 'tofu -chdir=infra/windows-signing init -input=false -lockfile=readonly && tofu -chdir=infra/windows-signing plan'"
+
+[tasks.infra-windows-signing-apply]
+description = "Apply infra/windows-signing to LIVE Azure and GitHub, interactively (az login, gh token, 1Password); kept out of ci and hk on purpose"
+run = "GITHUB_TOKEN=$(gh auth token) op run --env-file=infra/windows-signing/op.env -- sh -c 'tofu -chdir=infra/windows-signing init -input=false -lockfile=readonly && tofu -chdir=infra/windows-signing apply'"
+
 [tasks.infra-check]
-description = "fmt, validate, mocked-provider tests and the state-encryption guard for infra/github, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
+description = "fmt, validate, mocked-provider tests and the state-encryption guard for every infra/ root, with no credentials. The one non-cargo check: cargo can't test HCL, and a Rust wrapper would need tofu and the network (not hermetic). Runs only here and in CI's infra job, never in ci or hk"
 # Evaluating the encryption block needs some passphrase. No state exists
 # where this runs, so the value protects nothing.
 env = { TF_VAR_state_passphrase = "check-only-not-a-secret" }
@@ -171,5 +183,10 @@ run = [
   "tofu -chdir=infra/github init -backend=false -input=false -lockfile=readonly",
   "tofu -chdir=infra/github validate",
   "tofu -chdir=infra/github test",
-  "sh infra/github/check-encryption.sh",
+  "tofu -chdir=infra/windows-signing fmt -check -recursive",
+  "tofu -chdir=infra/windows-signing init -backend=false -input=false -lockfile=readonly",
+  "tofu -chdir=infra/windows-signing validate",
+  "tofu -chdir=infra/windows-signing test",
+  "sh infra/check-encryption.sh infra/github",
+  "sh infra/check-encryption.sh infra/windows-signing",
 ]

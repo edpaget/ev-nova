@@ -19,8 +19,9 @@ terraform {
   # (`op.env`), which reaches OpenTofu only as TF_VAR_state_passphrase in the
   # infra-plan/infra-apply tasks' `op run` child process. There is no
   # `fallback` block, so a plaintext state is never read or migrated, and
-  # `enforced` refuses to write one. check-encryption.sh guards both, and
-  # README.md covers rotating the passphrase.
+  # `enforced` refuses to write one. infra/check-encryption.sh guards both,
+  # and README.md covers rotating the passphrase. infra/windows-signing has a
+  # copy of this block; keep the two in step.
   encryption {
     key_provider "pbkdf2" "main" {
       passphrase = var.state_passphrase

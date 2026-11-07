@@ -668,10 +668,12 @@ fails while the temporary block is in place (its guard expects
 
 `mise run infra-check` runs `tofu fmt -check`, `tofu init -backend=false`,
 `tofu validate`, `tofu test` with mocked providers, and
-`check-encryption.sh`. It needs no credentials and is what CI's `infra` job
-runs.
+`infra/check-encryption.sh infra/github`, for this root and then for
+`infra/windows-signing`. It needs no credentials and is what CI's `infra`
+job runs.
 
-`tofu test` can't see the encryption block, so `check-encryption.sh` guards
+`tofu test` can't see the encryption block, so `infra/check-encryption.sh`
+(shared by every root under `infra/`, which it takes as its argument) guards
 it by behaviour, in a temporary directory with copies of the `*.tf` files and
 the infra-check task's dummy passphrase. It checks that the config refuses a
 planted plaintext state and a plaintext plan file ("unencrypted payload"),
