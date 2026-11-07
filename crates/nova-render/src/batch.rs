@@ -153,8 +153,9 @@ impl<S: ImageSource> Renderer<S> {
     /// A movie frame ([`DrawCommand::MovieFrame`]) is uploaded onto its
     /// stream's page only when the page doesn't hold it yet
     /// ([`crate::streams`]); a stream not drawn in this frame frees its
-    /// page. A clipped sprite ([`ImageKind::RledClipped`]) is placed on
-    /// such a page too, never in the atlas ([`Renderer::clipped_entry`]).
+    /// page. A clipped sprite ([`ImageKind::RledClipped`]), and its solid
+    /// runs ([`ImageKind::RledClippedSolid`]), are placed on such a page
+    /// too, never in the atlas ([`Renderer::clipped_entry`]).
     ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
     /// atlas afresh, the stream pages with it; a zero-area viewport leaves
@@ -547,7 +548,10 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
         report: &mut RenderReport,
     ) -> Option<Placed> {
-        if matches!(key.kind, ImageKind::RledClipped { .. }) {
+        if matches!(
+            key.kind,
+            ImageKind::RledClipped { .. } | ImageKind::RledClippedSolid { .. }
+        ) {
             return self.clipped_entry(key, gpu, report);
         }
         let resource = (key.kind, key.id);
@@ -573,7 +577,8 @@ impl<S: ImageSource> Renderer<S> {
     }
 
     /// The placement of `key`, a clipped sprite
-    /// ([`ImageKind::RledClipped`]), on a transient page
+    /// ([`ImageKind::RledClipped`]) or its solid runs
+    /// ([`ImageKind::RledClippedSolid`]), on a transient page
     /// ([`crate::streams`]) rather than in the atlas: its cut changes every
     /// frame a stellar scrolls across the world's edge, and the atlas never
     /// evicts. A key drawn again while its page holds it is not decoded or
@@ -4083,6 +4088,27 @@ mod tests {
                 }],
             }]
         );
+    }
+
+    #[test]
+    fn a_clipped_sprites_solid_runs_are_placed_on_a_transient_page_not_in_the_atlas() {
+        let key = ImageKey::clipped_solid_runs(300, 0, (0, 1));
+        let images = FakeImages::default().with(key.kind, 300, vec![solid(4, 2, [255, 0, 0, 255])]);
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&drawing_sprites(&[key]), &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4, 2), &solid(4, 2, [255, 0, 0, 255])),
+            ]
+        );
+        assert_eq!(renderer.atlas.page_count(), 0);
     }
 
     #[test]

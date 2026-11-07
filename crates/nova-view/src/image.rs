@@ -42,6 +42,16 @@ pub enum ImageKind {
         /// The box's pixels left of the world's left edge.
         left: u16,
     },
+    /// An `rlëD`'s solid runs alone ([`ImageKind::RledSolid`]) as the
+    /// clipped blit draws them at a cut ([`ImageKind::RledClipped`]): the
+    /// clipped draw's runs, drawn plainly over its frame, as the original's
+    /// clipped blits fill a run raw too.
+    RledClippedSolid {
+        /// The box's rows above the world's top edge.
+        top: u16,
+        /// The box's pixels left of the world's left edge.
+        left: u16,
+    },
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -146,6 +156,18 @@ impl ImageKey {
     pub const fn clipped_sprite(id: i16, frame: u16, (top, left): (u16, u16)) -> Self {
         Self {
             kind: ImageKind::RledClipped { top, left },
+            id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of `rlëD` `id`'s solid runs as the original draws
+    /// them with the box cut by `(top, left)`
+    /// ([`ImageKind::RledClippedSolid`]).
+    #[must_use]
+    pub const fn clipped_solid_runs(id: i16, frame: u16, (top, left): (u16, u16)) -> Self {
+        Self {
+            kind: ImageKind::RledClippedSolid { top, left },
             id,
             frame,
         }
@@ -264,5 +286,21 @@ mod tests {
         );
         assert_ne!(key, ImageKey::sprite(1930, 13));
         assert_ne!(key, ImageKey::clipped_sprite(1930, 13, (5, 2)));
+    }
+
+    #[test]
+    fn a_clipped_sprites_solid_runs_name_their_cut() {
+        let key = ImageKey::clipped_solid_runs(1930, 13, (2, 5));
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledClippedSolid { top: 2, left: 5 },
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::solid_runs(1930, 13));
+        assert_ne!(key, ImageKey::clipped_sprite(1930, 13, (2, 5)));
+        assert_ne!(key, ImageKey::clipped_solid_runs(1930, 13, (5, 2)));
     }
 }

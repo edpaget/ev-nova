@@ -1,6 +1,7 @@
 //! Images streamed onto pages of their own, outside the atlas: movie
 //! frames ([`nova_view::DrawCommand::MovieFrame`]), and sprite frames the
-//! clipped blit draws ([`nova_view::ImageKind::RledClipped`]), whose cut
+//! clipped blit draws ([`nova_view::ImageKind::RledClipped`], and their
+//! solid runs, [`nova_view::ImageKind::RledClippedSolid`]), whose cut
 //! changes each frame a stellar scrolls across the world's edge, so the
 //! atlas, which never evicts, must not hold them.
 //!

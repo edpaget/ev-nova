@@ -66,10 +66,11 @@ mod tests {
     use super::*;
 
     /// Every kind of image resource.
-    const KINDS: [ImageKind; 9] = [
+    const KINDS: [ImageKind; 10] = [
         ImageKind::Rled,
         ImageKind::RledSolid,
         ImageKind::RledClipped { top: 1, left: 2 },
+        ImageKind::RledClippedSolid { top: 1, left: 2 },
         ImageKind::Pict,
         ImageKind::InterfacePict,
         ImageKind::MaskedPict { mask: 7 },

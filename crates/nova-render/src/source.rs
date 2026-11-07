@@ -1,6 +1,7 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
 //! sheets (whole, their solid runs, or as the clipped blit draws them at
-//! the world's edge, [`ImageKind::RledClipped`]), the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
+//! the world's edge, [`ImageKind::RledClipped`], and their solid runs so,
+//! [`ImageKind::RledClippedSolid`]), the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
 //! `ppat` pixel patterns and `cicn` colour icons, decoded on request; and,
 //! when it is given one, from the interface file (`Nova-DF.rsrc` or
 //! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
@@ -117,6 +118,7 @@ impl<D: Borrow<GameData>> GameImages<D> {
             ImageKind::Rled
             | ImageKind::RledSolid
             | ImageKind::RledClipped { .. }
+            | ImageKind::RledClippedSolid { .. }
             | ImageKind::Pattern
             | ImageKind::Icon
             | ImageKind::SpinSheet => return None,
@@ -170,6 +172,12 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
             ImageKind::RledClipped { top, left } => {
                 let cut = ClipCut { top, left };
                 decode_rled_clipped(bytes(RLED, id)?, None, self.readings, cut)?.into_frames()
+            }
+            ImageKind::RledClippedSolid { top, left } => {
+                let cut = ClipCut { top, left };
+                decode_rled_clipped(bytes(RLED, id)?, None, self.readings, cut)?
+                    .into_solid_frames()
+                    .ok_or(ImageError::Missing)?
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
@@ -621,6 +629,37 @@ mod tests {
             [(2, [clear, [0, 0x03, 0xE0, 255]].concat())]
         );
         assert_eq!(data.frames(clipped(0, 1), 202), Err(ImageError::Missing));
+    }
+
+    /// A clipped solid key ([`ImageKind::RledClippedSolid`]) gives the
+    /// clipped draw's solid runs alone, and is missing for a sheet with
+    /// none.
+    #[test]
+    fn a_clipped_sprites_solid_runs_are_the_clipped_draws_runs() {
+        let two_colour = RledBuilder::new(4, 1)
+            .count_lines()
+            .frame(|f| f.line().run(4, 0x7C00, 0x001F))
+            .build();
+        let no_runs = RledBuilder::new(2, 1)
+            .count_lines()
+            .frame(|f| f.line().pixels(&[0x7C00, 0x001F]))
+            .build();
+        let data = store(&[(RLED, 200, two_colour), (RLED, 201, no_runs)]);
+        let solid = |top, left| ImageKind::RledClippedSolid { top, left };
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, blue, clear) = ([255, 0, 0, 255], [0, 0, 255, 255], [0; 4]);
+        // The run restarts at the cut, as the clipped draw fills it.
+        assert_eq!(
+            rgba(data.frames(solid(0, 1), 200).unwrap()),
+            [(4, [clear, blue, red, blue].concat())]
+        );
+        assert_eq!(data.frames(solid(0, 1), 201), Err(ImageError::Missing));
+        assert_eq!(data.frames(solid(0, 1), 202), Err(ImageError::Missing));
     }
 
     /// The game data resolves a sheet by the original's reading, which
