@@ -1,7 +1,8 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
 //! sheets (whole, their solid runs, or as the clipped blit draws them at
 //! the world's edge, [`ImageKind::RledClipped`], and their solid runs so,
-//! [`ImageKind::RledClippedSolid`]), the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
+//! [`ImageKind::RledClippedSolid`]), the sheets `spïn`s and a `shän`'s
+//! images resolve to (a `PICT` pair cut into frames),
 //! `ppat` pixel patterns and `cicn` colour icons, decoded on request; and,
 //! when it is given one, from the interface file (`Nova-DF.rsrc` or
 //! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
@@ -19,7 +20,7 @@ use nova_data::graphics::{
     ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
     decode_rled_clipped, decode_rled_with,
 };
-use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
+use nova_data::{GameData, InterfaceData, PictId, SheetKind, ShipId, ShipImage, SpinSpriteError};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -121,7 +122,8 @@ impl<D: Borrow<GameData>> GameImages<D> {
             | ImageKind::RledClippedSolid { .. }
             | ImageKind::Pattern
             | ImageKind::Icon
-            | ImageKind::SpinSheet => return None,
+            | ImageKind::SpinSheet
+            | ImageKind::ShipSheet { .. } => return None,
         })
     }
 
@@ -144,11 +146,29 @@ impl<D: Borrow<GameData>> GameImages<D> {
             ) => Err(ImageError::Missing),
         }
     }
+
+    /// The frames `shïp` `ship`'s `image` resolves to
+    /// ([`GameData::ship_image`]): an `rlëD`'s as [`ImageKind::Rled`]
+    /// decodes them, or its `PICT` pair cut. A link that is not there is
+    /// [`ImageError::Missing`], a sheet that does not decode or cut is
+    /// [`ImageError::Decode`].
+    fn ship_frames(&self, ship: i16, image: ShipImage) -> Result<Vec<Image>, ImageError> {
+        match self.data.borrow().ship_image(ShipId(ship), image) {
+            Ok(sheet) if sheet.kind == SheetKind::Rled => {
+                self.frames(ImageKind::Rled, sheet.image_id)
+            }
+            Ok(sheet) => Ok(sheet.sheet.into_frames()),
+            Err(err) => Err(err.graphics().map_or(ImageError::Missing, |source| {
+                ImageError::Decode(source.clone())
+            })),
+        }
+    }
 }
 
 /// A picture (`Pict`, `MaskedPict`, `InterfacePict`) has its depth: the
 /// one it was stored at ([`decode_pict_deep`]), the mask setting only its
-/// alpha. Every other kind (`rlëD`s, `ppat`s, `cicn`s and `spïn` sheets)
+/// alpha. Every other kind (`rlëD`s, `ppat`s, `cicn`s, and `spïn` and
+/// ship sheets)
 /// gives its frames at [`PixelDepth::Direct32`]: none goes through
 /// `_DrawPicHandle`, and no stock site stretches one.
 impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
@@ -182,6 +202,7 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
             ImageKind::SpinSheet => self.spin_frames(id)?,
+            ImageKind::ShipSheet { image } => self.ship_frames(id, image)?,
             ImageKind::Pict | ImageKind::InterfacePict | ImageKind::MaskedPict { .. } => {
                 unreachable!("a picture is decoded deep")
             }
@@ -221,10 +242,14 @@ mod tests {
     use nova_data::graphics::GraphicsError;
     use std::rc::Rc;
 
+    use nova_data::ShipImage;
     use nova_data::graphics::PixelDepth;
     use nova_data::graphics::fixture::{
         BitMap, Cicn, Ctab, DirectBits, IndexedBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
+    use nova_data::records::ship::Ship;
+    use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::store::fixture::{interface_of, store_of};
 
@@ -516,6 +541,102 @@ mod tests {
         assert_eq!(
             data.frames(ImageKind::SpinSheet, 3003).map(|f| f.len()),
             Ok(2)
+        );
+    }
+
+    /// Ship 128 of a `shän` of one set of 3 frames per rotation, base
+    /// sprites `PICT` 2000 masked by 2100 in 1x1 frames, and glow `glow`:
+    /// sprites `PICT` 2002 masked by itself, in 2x1 frames.
+    fn ship_store(glow: i16, extra: &[(ResType, i16, Vec<u8>)]) -> GameData {
+        let anim = ShipAnimBuilder::new()
+            .frames_per(3)
+            .base_set_count(1)
+            .base_image_id(2000)
+            .base_mask_id(2100)
+            .base_x_size(1)
+            .base_y_size(1)
+            .glow_image_id(glow)
+            .glow_mask_id(2002)
+            .glow_x_size(2)
+            .glow_y_size(1)
+            .build();
+        let mut resources = vec![
+            (Ship::TYPE, 128, ShipBuilder::new().build()),
+            (ShipAnim::TYPE, 128, anim),
+        ];
+        resources.extend_from_slice(extra);
+        store(&resources)
+    }
+
+    /// A ship image's key kind.
+    fn ship_sheet(image: ShipImage) -> ImageKind {
+        ImageKind::ShipSheet { image }
+    }
+
+    #[test]
+    fn a_ship_sheet_is_the_frames_its_pict_pair_cuts() {
+        let data = ship_store(
+            2002,
+            &[
+                (
+                    PICT,
+                    2000,
+                    rgb888_pict(3, 1, &[[255, 0, 0], [0, 255, 0], [0, 0, 255]]),
+                ),
+                (PICT, 2100, rgb888_pict(3, 1, &[[255; 3]; 3])),
+                (PICT, 2002, rgb888_pict(6, 1, &[[0; 3]; 6])),
+            ],
+        );
+        let frames = data.frames(ship_sheet(ShipImage::Base), 128).unwrap();
+        assert_eq!(frames.len(), 3, "3 frames of 1x1");
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[2].pixel(0, 0), Some([0, 0, 255, 255]));
+        // The glow is its own pair, of its own size.
+        let glow = data.frames(ship_sheet(ShipImage::Glow), 128).unwrap();
+        assert_eq!(glow.len(), 3);
+        assert_eq!((glow[0].width(), glow[0].height()), (2, 1));
+        // The base read as an `rlëD` is missing.
+        assert_eq!(data.frames(ImageKind::Rled, 2000), Err(ImageError::Missing));
+    }
+
+    #[test]
+    fn a_ship_sheet_of_an_rled_is_its_rled() {
+        let data = ship_store(200, &[(RLED, 200, sheet())]);
+        assert_eq!(
+            data.frames(ship_sheet(ShipImage::Glow), 128),
+            data.frames(ImageKind::Rled, 200)
+        );
+    }
+
+    #[test]
+    fn a_ship_sheet_with_a_missing_link_is_missing_and_a_bad_cut_a_decode_error() {
+        let pair = [(PICT, 2000, rgb888_pict(3, 1, &[[0; 3]; 3]))];
+        let data = ship_store(-1, &pair);
+        for (image, ship, why) in [
+            (ShipImage::Base, 128, "no mask"),
+            (ShipImage::Glow, 128, "no glow"),
+            (ShipImage::Base, 129, "no shïp"),
+        ] {
+            assert_eq!(
+                data.frames(ship_sheet(image), ship),
+                Err(ImageError::Missing),
+                "{why}"
+            );
+        }
+        // 4 frames, not 3.
+        let data = ship_store(
+            -1,
+            &[
+                (PICT, 2000, rgb888_pict(4, 1, &[[0; 3]; 4])),
+                (PICT, 2100, rgb888_pict(4, 1, &[[255; 3]; 4])),
+            ],
+        );
+        assert_eq!(
+            data.frames(ship_sheet(ShipImage::Base), 128),
+            Err(ImageError::Decode(GraphicsError::FrameCountMismatch {
+                frames: 4,
+                expected: 3
+            }))
         );
     }
 

@@ -172,7 +172,7 @@ fn stock_shan_141s_weapon_glow_is_rled_1826_falling_by_its_decay() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let sheet = data.ship_sheet(ShipId(141)).expect("shän 141");
     let weapon = sheet.weapon.expect("a WeapImageID");
-    assert_eq!(weapon.image_id, 1826);
+    assert_eq!(weapon.image, nova_view::SheetImage::Rled(1826));
     assert_eq!(sheet.weap_decay, 5);
     assert!((sheet.weapon_decay() - 1.665).abs() < 1e-6, "5 × 0.333");
 }

@@ -5,10 +5,11 @@ use std::num::NonZeroU16;
 
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::ship::Ship;
-use nova_data::{GameData, LayerError, LayerSprite, Record, StoreEntry};
+use nova_data::{GameData, LayerError, LayerSprite, Record, ShipImage, StoreEntry};
 use nova_sim::data::ship_blink;
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
+use crate::SheetImage;
 
 /// Each lookup is decoded afresh on every call; the browser asks once per
 /// selection.
@@ -31,11 +32,19 @@ impl ShipCatalog for GameData {
         let sprite = self
             .ship_sprite(id)
             .map_err(|err| err.to_string())
-            .map(|sprite| sheet_info(sprite.image_id, &sprite.sheet));
+            .map(|sprite| {
+                let image =
+                    SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id);
+                sheet_info(image, &sprite.sheet)
+            });
         // A ship whose layers cannot be looked up has no sprite either, and
         // the sprite's error already says why.
         let (glow, lights) = self.ship_layers(id).map_or((None, None), |layers| {
-            (layers.glow.map(layer_info), layers.lights.map(layer_info))
+            let info = |image| move |layer| layer_info(id, image, layer);
+            (
+                layers.glow.map(info(ShipImage::Glow)),
+                layers.lights.map(info(ShipImage::Lights)),
+            )
         });
         ShipEntry {
             id,
@@ -50,10 +59,16 @@ impl ShipCatalog for GameData {
     }
 }
 
-fn layer_info(layer: Result<LayerSprite<'_>, LayerError>) -> Result<SheetInfo, String> {
-    layer
-        .map_err(|err| err.to_string())
-        .map(|layer| sheet_info(layer.image_id, &layer.sheet))
+/// Ship `ship`'s layer `image`, or why it failed.
+fn layer_info(
+    ship: ShipId,
+    image: ShipImage,
+    layer: Result<LayerSprite<'_>, LayerError>,
+) -> Result<SheetInfo, String> {
+    layer.map_err(|err| err.to_string()).map(|layer| {
+        let sheet = SheetImage::of_ship(layer.kind, ship.0, image, layer.image_id);
+        sheet_info(sheet, &layer.sheet)
+    })
 }
 
 /// The ship's resource name; if that is empty, its shipyard name; if that
@@ -81,13 +96,14 @@ fn stats(ship: &Ship) -> ShipStats {
     }
 }
 
-/// The sheet's ID and frame count.
-fn sheet_info(image_id: i16, sheet: &SpriteSheet) -> SheetInfo {
+/// The sheet's image and frame count.
+fn sheet_info(image: SheetImage, sheet: &SpriteSheet) -> SheetInfo {
     // An `rlëD` header counts its frames in a u16, and the decoder rejects
-    // a sheet with none (`GraphicsError::NoFrames`).
+    // a sheet with none (`GraphicsError::NoFrames`), as the cutter does a
+    // `PICT` pair with none.
     let frames = NonZeroU16::new(sheet.frames().len() as u16)
-        .expect("a decoded rlëD has at least one frame");
-    SheetInfo { image_id, frames }
+        .expect("a decoded sheet has at least one frame");
+    SheetInfo { image, frames }
 }
 
 #[cfg(test)]
@@ -176,9 +192,38 @@ mod tests {
         shield: -40,
     };
 
+    #[test]
+    fn a_pict_pair_base_is_keyed_by_the_ship_with_the_cuts_count() {
+        use nova_data::graphics::PICT;
+        use nova_data::graphics::fixture::rgb888_pict;
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(2)
+            .base_y_size(2)
+            .base_set_count(1)
+            .frames_per(3)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 128, None, ship(STATS, "")),
+            (ShipAnim::TYPE, 128, None, anim),
+            (PICT, 2000, None, rgb888_pict(6, 2, &[[0; 3]; 12])),
+        ]);
+        assert_eq!(
+            data.ship(ShipId(128)).sprite,
+            Ok(SheetInfo {
+                image: crate::SheetImage::Ship {
+                    ship: 128,
+                    image: ShipImage::Base
+                },
+                frames: NonZeroU16::new(3).expect("non-zero"),
+            })
+        );
+    }
+
     fn info(image_id: i16, frames: u16) -> SheetInfo {
         SheetInfo {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
     }
@@ -259,7 +304,9 @@ mod tests {
         assert_eq!(entry.sprite, Ok(info(1000, 4)));
         assert_eq!(
             entry.glow,
-            Some(Err("shïp 130: no rlëD 1101 for its glow image".to_owned()))
+            Some(Err(
+                "shïp 130: no rlëD or PICT 1101 for its glow image".to_owned()
+            ))
         );
         assert_eq!(entry.lights, None);
     }

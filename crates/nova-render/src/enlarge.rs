@@ -66,7 +66,7 @@ mod tests {
     use super::*;
 
     /// Every kind of image resource.
-    const KINDS: [ImageKind; 10] = [
+    const KINDS: [ImageKind; 11] = [
         ImageKind::Rled,
         ImageKind::RledSolid,
         ImageKind::RledClipped { top: 1, left: 2 },
@@ -77,6 +77,9 @@ mod tests {
         ImageKind::Pattern,
         ImageKind::Icon,
         ImageKind::SpinSheet,
+        ImageKind::ShipSheet {
+            image: nova_data::ShipImage::Base,
+        },
     ];
 
     #[test]

@@ -15,7 +15,9 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::decode_snd;
-use nova_data::{GameData, LayerError, LayerSprite, SheetScan, StandIn, StandInOf, shot_spin_id};
+use nova_data::{
+    GameData, LayerError, LayerSprite, SheetScan, ShipImage, StandIn, StandInOf, shot_spin_id,
+};
 use nova_rsrc::ResType;
 use nova_sim::TICKS_PER_SECOND;
 use nova_sim::combat::weapon::loaded_falloff;
@@ -49,18 +51,18 @@ impl ShipSprites for GameData {
         let [glow, lights, weapon, alt, shield] =
             self.ship_layer_infos(id).map_or([None; 5], |layers| {
                 [
-                    layers.glow,
-                    layers.lights,
-                    layers.weapon,
-                    layers.alt,
-                    layers.shield,
+                    (ShipImage::Glow, layers.glow),
+                    (ShipImage::Lights, layers.lights),
+                    (ShipImage::Weapon, layers.weapon),
+                    (ShipImage::Alt, layers.alt),
+                    (ShipImage::Shield, layers.shield),
                 ]
-                .map(|layer| layer.and_then(layer_sheet))
+                .map(|(image, layer)| layer.and_then(|layer| layer_sheet(id, image, layer)))
             });
         let anim = self.get::<ShipAnim>(id.0).and_then(Result::ok);
         let field = |read: fn(&ShipAnim) -> i16| anim.map_or(0, |anim| read(anim.record));
         Ok(ShipSheet {
-            image_id: sprite.image_id,
+            image: SheetImage::of_ship(sprite.kind, id.0, ShipImage::Base, sprite.image_id),
             rotations,
             frame_width: sheet.info.frame_width,
             frame_height: sheet.info.frame_height,
@@ -109,17 +111,21 @@ pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
     }
 }
 
-/// A resolved layer's ID, frame count, frame size, image size, clip
-/// quirks, whether it holds solid runs and whether it is 8-bit; `None` for
-/// one that failed.
-fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
+/// Ship `ship`'s resolved layer `image`'s image, frame count, frame size,
+/// image size, clip quirks, whether it holds solid runs and whether it is
+/// 8-bit; `None` for one that failed.
+fn layer_sheet(
+    ship: ShipId,
+    image: ShipImage,
+    layer: Result<LayerSprite<'_, SheetScan>, LayerError>,
+) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
     // (`GraphicsError::NoFrames`).
     let frames =
         NonZeroU16::new(layer.sheet.info.frames).expect("a scanned rlëD has at least one frame");
     Some(LayerSheet {
-        image_id: layer.image_id,
+        image: SheetImage::of_ship(layer.kind, ship.0, image, layer.image_id),
         frames,
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,
@@ -310,7 +316,7 @@ impl CombatLooks for GameData {
     fn pod_sheet(&self) -> Result<EffectSheet, String> {
         let sheet = self.ship_sheet(nova_sim::ESCAPE_POD_SHIP)?;
         Ok(EffectSheet {
-            image: SheetImage::Rled(sheet.image_id),
+            image: sheet.image,
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
             frame_height: sheet.frame_height,
@@ -527,7 +533,7 @@ mod tests {
     /// A layer of `frames` 3 x 2 frames, as [`sheet`] builds them.
     fn layer(image_id: i16, frames: u16) -> LayerSheet {
         LayerSheet {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
             frame_height: 2,
@@ -562,7 +568,7 @@ mod tests {
         assert_eq!(
             data.ship_sheet(ShipId(128)),
             Ok(ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
@@ -776,6 +782,50 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_pict_pair_hull_and_glow_are_keyed_by_the_ship_and_image() {
+        use nova_data::graphics::fixture::rgb888_pict;
+        // Two frames of 3 x 2 each, masked by their own white.
+        let pict = || rgb888_pict(6, 2, &[[0; 3]; 12]);
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(3)
+            .base_y_size(2)
+            .glow_image_id(2002)
+            .glow_mask_id(2002)
+            .glow_x_size(3)
+            .glow_y_size(2)
+            .base_set_count(1)
+            .frames_per(2)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, pict()),
+            (PICT, 2002, pict()),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        let pair = |image| SheetImage::Ship { ship: 128, image };
+        assert_eq!(found.image, pair(ShipImage::Base));
+        assert_eq!(found.rotations.get(), 2);
+        assert_eq!((found.size(), found.image_size), ((3, 2), (3, 2)));
+        assert!(!found.solid && !found.eight_bit && !found.clip_quirks);
+        assert_eq!(
+            found.glow,
+            Some(LayerSheet {
+                image: pair(ShipImage::Glow),
+                frames: NonZeroU16::new(2).expect("non-zero"),
+                frame_width: 3,
+                frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
+                solid: false,
+                eight_bit: false,
+            })
+        );
+    }
+
+    #[test]
     fn a_ships_sheet_carries_its_glow_and_lights_layers() {
         // The glow has as many frames as the base; the lights one set of
         // rotations under the two-set base.
@@ -787,7 +837,7 @@ mod tests {
             (RLED, 1200, sheet(8)),
         ]);
         let found = data.ship_sheet(ShipId(128)).expect("a sheet");
-        assert_eq!(found.image_id, 1000);
+        assert_eq!(found.image, SheetImage::Rled(1000));
         assert_eq!(found.glow, Some(layer(1100, 16)));
         assert_eq!(found.lights, Some(layer(1200, 8)));
     }
@@ -880,7 +930,7 @@ mod tests {
         );
         assert_eq!(
             data.ship_sheet(ShipId(129)),
-            Err("shïp 129: no rlëD 1001 for its base image".to_owned())
+            Err("shïp 129: no rlëD or PICT 1001 for its base image".to_owned())
         );
         assert_eq!(data.ship_sheet(ShipId(140)), Err("no shïp 140".to_owned()));
     }

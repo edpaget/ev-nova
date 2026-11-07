@@ -21,7 +21,7 @@ use nova_sim::{HashedRolls, lights_level};
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
 use crate::draw::{crossed_box, lights_tint};
 use crate::time::ticks;
-use crate::{Color, DrawList, Font, ImageKey, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Font, Input, Key, Point, Screen, ScreenAction};
 
 /// Where the ship's centre goes, in the 1024x768 logical space. The base,
 /// glow and lights frames are all centred here: a layer frame is often
@@ -140,17 +140,13 @@ impl<C: ShipCatalog> ShipBrowser<C> {
                 // by set, so wrapping the base frame picks the same frame or
                 // the same rotation.
                 let frame = self.frame_of(*base);
-                list.sprite(
-                    ImageKey::sprite(base.image_id, frame),
-                    SHIP_CENTER,
-                    Color::WHITE,
-                );
+                list.sprite(base.image.frame(frame), SHIP_CENTER, Color::WHITE);
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let lights = lights_level(&ship.blink, tick, &self.blink_rolls).map(lights_tint);
                 for (layer, tint) in [(&ship.glow, Some(Color::WHITE)), (&ship.lights, lights)] {
                     if let (Some(Ok(layer)), Some(tint)) = (layer, tint) {
                         let frame = frame % layer.frames.get();
-                        list.or_sprite(ImageKey::sprite(layer.image_id, frame), SHIP_CENTER, tint);
+                        list.or_sprite(layer.image.frame(frame), SHIP_CENTER, tint);
                     }
                 }
             }
@@ -324,7 +320,7 @@ mod tests {
 
     fn sheet(image_id: i16, frames: u16) -> SheetInfo {
         SheetInfo {
-            image_id,
+            image: crate::SheetImage::Rled(image_id),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
     }
@@ -581,6 +577,31 @@ mod tests {
             lights: Some(Ok(sheet(1200, 9))),
             ..entry(128)
         }
+    }
+
+    #[test]
+    fn a_ship_whose_base_and_glow_came_from_pict_pairs_draws_their_cut_frames() {
+        use nova_data::ShipImage;
+        let pair = |image, frames| SheetInfo {
+            image: crate::SheetImage::Ship { ship: 128, image },
+            frames: NonZeroU16::new(frames).expect("non-zero"),
+        };
+        let ship = ShipEntry {
+            sprite: Ok(pair(ShipImage::Base, 9)),
+            glow: Some(Ok(pair(ShipImage::Glow, 3))),
+            ..layered()
+        };
+        let catalog = FakeCatalog::with(vec![ship]);
+        let mut browser = ShipBrowser::new(&catalog);
+        browser.tick(tick() * 7);
+        assert_eq!(
+            sprites(&drawn(&browser)),
+            [
+                (ImageKey::ship_sheet(128, ShipImage::Base, 7), SHIP_CENTER),
+                (ImageKey::ship_sheet(128, ShipImage::Glow, 1), SHIP_CENTER),
+                (ImageKey::sprite(1200, 7), SHIP_CENTER),
+            ]
+        );
     }
 
     #[test]

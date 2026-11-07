@@ -282,7 +282,7 @@ pub(in crate::flight) fn sheet() -> ShipSheet {
     ShipSheet {
         weapon: None,
         weap_decay: 0,
-        image_id: 2000,
+        image: crate::SheetImage::Rled(2000),
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
         frame_height: 40,
@@ -961,7 +961,7 @@ impl ShipSprites for FakeCatalog {
             895 => Err("no shän 895".to_owned()),
             129 if self.npc_sheet.is_some() => self.npc_sheet.ok_or_else(String::new),
             129 => Ok(ShipSheet {
-                image_id: 2001,
+                image: crate::SheetImage::Rled(2001),
                 rotations: NonZeroU16::new(72).expect("non-zero"),
                 glow: Some(layer(2101, 72)),
                 lights: Some(layer(2201, 72)),
@@ -971,7 +971,7 @@ impl ShipSprites for FakeCatalog {
             }),
             130 => Err("no shän 130".to_owned()),
             131 => Ok(ShipSheet {
-                image_id: 2002,
+                image: crate::SheetImage::Rled(2002),
                 frame_width: 100,
                 frame_height: 100,
                 image_size: (100, 100),
@@ -1961,7 +1961,7 @@ pub(in crate::flight) fn at(x: f32, y: f32) -> Point {
 /// square.
 pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
-        image_id,
+        image: crate::SheetImage::Rled(image_id),
         frames: NonZeroU16::new(frames).expect("non-zero"),
         frame_width: LAYER_SIDE,
         frame_height: LAYER_SIDE,

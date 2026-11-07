@@ -19,11 +19,11 @@ use crate::outline::Outline;
 use crate::sheet_image::SheetImage;
 
 /// One of a ship's `shän` layers drawn over its base sprite: the layer's
-/// `rlëD`, how many frames it holds and their size.
+/// image, how many frames it holds and their size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayerSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// Where its frames come from: its `rlëD`, or its `PICT` pair cut.
+    pub image: SheetImage,
     /// The layer's frames. The base's rotation frame `f` is drawn with the
     /// layer's frame `f % frames`.
     pub frames: NonZeroU16,
@@ -69,7 +69,7 @@ impl LayerSheet {
     }
 }
 
-/// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
+/// A ship's resolved sprite sheet: its image, how many frames make one
 /// turn, each frame's size, and the engine glow and running lights drawn
 /// over it.
 ///
@@ -78,8 +78,9 @@ impl LayerSheet {
 /// says nothing. The ship browser is where layer errors are reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShipSheet {
-    /// The `rlëD`'s ID.
-    pub image_id: i16,
+    /// Where its hull's frames come from: its `rlëD`, or its `PICT` pair
+    /// cut.
+    pub image: SheetImage,
     /// The `shän`'s frames per rotation: the frames of one set, which turn
     /// the ship once round.
     pub rotations: NonZeroU16,
@@ -814,7 +815,7 @@ mod tests {
             Ok(ShipSheet {
                 weapon: None,
                 weap_decay: 0,
-                image_id: id.0,
+                image: SheetImage::Rled(id.0),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 48,
                 frame_height: 48,
@@ -841,8 +842,8 @@ mod tests {
         }
     }
 
-    fn image(catalog: impl ShipSprites, id: i16) -> Result<i16, String> {
-        catalog.ship_sheet(ShipId(id)).map(|sheet| sheet.image_id)
+    fn image(catalog: impl ShipSprites, id: i16) -> Result<SheetImage, String> {
+        catalog.ship_sheet(ShipId(id)).map(|sheet| sheet.image)
     }
 
     fn outline_reach(catalog: impl ShipSprites, id: i16) -> Option<f32> {
@@ -853,8 +854,8 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_catalogs_are_catalogs() {
-        assert_eq!(image(&Sheets, 130), Ok(130));
-        assert_eq!(image(Rc::new(Sheets), 131), Ok(131));
+        assert_eq!(image(&Sheets, 130), Ok(SheetImage::Rled(130)));
+        assert_eq!(image(Rc::new(Sheets), 131), Ok(SheetImage::Rled(131)));
         assert_eq!(outline_reach(&Sheets, 130), Some(130.0));
         assert_eq!(outline_reach(Rc::new(Sheets), 131), Some(131.0));
     }

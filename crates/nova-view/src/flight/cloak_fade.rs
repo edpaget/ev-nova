@@ -397,7 +397,7 @@ mod tests {
 
         fn layer(image_id: i16) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: crate::flight::fake_catalog::LAYER_SIDE,
                 frame_height: crate::flight::fake_catalog::LAYER_SIDE,
@@ -415,7 +415,7 @@ mod tests {
         /// alt 1400 and shield 1500.
         fn sheet() -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 10,
                 frame_height: 10,

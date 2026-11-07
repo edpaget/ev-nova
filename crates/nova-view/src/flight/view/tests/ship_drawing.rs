@@ -102,7 +102,7 @@ pub(super) fn shown(
 /// The NPC's sheet: `rlëD` 2001 of 72 rotations, glow 2101, lights 2201.
 pub(super) fn npc_sheet() -> ShipSheet {
     ShipSheet {
-        image_id: 2001,
+        image: crate::SheetImage::Rled(2001),
         rotations: NonZeroU16::new(72).expect("non-zero"),
         glow: Some(layer(2101, 72)),
         lights: Some(layer(2201, 72)),

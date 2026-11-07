@@ -74,6 +74,13 @@
 //!   clipped blit's frame. Its solid runs take its decision. A held alt
 //!   of a sheet the ship no longer has is drawn whole.
 //!
+//! - **Its images** ([`SheetImage`](crate::SheetImage)): the hull and each
+//!   layer draw their `rlëD`'s frames, or, for an image cut from its `PICT`
+//!   pair (`nova_data::ShipImage`), the ship's frames of that image
+//!   ([`ImageKey::ship_sheet`](crate::ImageKey::ship_sheet)). A pair has no
+//!   clipped frame and no runs. A held alt takes its sheet's cut only when
+//!   the whole key matches.
+//!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
 //! plainly, or in their paint. Each one whose sheet holds solid runs draws them raw right
@@ -93,7 +100,7 @@ use super::weapon_glow::npc_glow_level;
 use crate::box_cut::BoxCut;
 use crate::draw::lights_tint;
 use crate::eight_bit_blit::{DrawProcState, EightBitBlit, Look};
-use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
+use crate::{Blend, Color, Colorize, DrawList, Point};
 
 /// Where a ship's sprite of a frame's size (width, height) is centred on
 /// screen: placed at whole pixels from the player, as the original places
@@ -287,7 +294,7 @@ impl ShipDraw<'_> {
         let (tint, colorize, blend) = look.unwrap_or_else(|| self.hull_tint());
         let at = self.moved(place(layer.size()));
         Some(AltLayer {
-            image: ImageKey::sprite(layer.image_id, frame),
+            image: layer.image.frame(frame),
             at,
             shown: look.is_some(),
             tint,
@@ -313,10 +320,10 @@ impl ShipDraw<'_> {
         {
             let at = self.moved(place(self.sheet.size()));
             let cut = BoxCut::of(list.world_clip(), at, self.sheet.edge());
-            let hull = ImageKey::sprite(self.sheet.image_id, frame);
+            let hull = self.sheet.image.frame(frame);
             cut.mixed_sprite(list, hull, at, (tint, blend, hull_colorize));
             if self.sheet.solid {
-                solid_overlay(list, cut, self.sheet.image_id, frame, at);
+                solid_overlay(list, cut, self.sheet.image, frame, at);
             }
         }
         // A cloak holds the glow and lights to its cap, or hides them, and
@@ -362,12 +369,12 @@ impl ShipDraw<'_> {
                     return;
                 };
                 let frame = frame % layer.frames.get();
-                let image = ImageKey::sprite(layer.image_id, frame);
+                let image = layer.image.frame(frame);
                 let at = self.moved(place(layer.size()));
                 let cut = BoxCut::of(list.world_clip(), at, layer.edge());
                 cut.mixed_sprite(list, image, at, (tint, blend, colorize));
                 if layer.solid && level > 0 {
-                    solid_overlay(list, cut, layer.image_id, frame, at);
+                    solid_overlay(list, cut, layer.image, frame, at);
                 }
             };
         let lights_murk = if self.held { lights_murk(murk) } else { 0 };
@@ -382,17 +389,18 @@ impl ShipDraw<'_> {
         let spec = turning(self.spec, self.sheet);
         if let Some(alt) = alt.filter(|alt| alt.shown) {
             // A held alt of a sheet the ship no longer has is drawn whole:
-            // its sheet isn't known.
+            // its sheet isn't known. The sheet is matched by its whole key,
+            // so an `rlëD` and a `PICT` pair of one ID never match.
             let alt_sheet = self
                 .sheet
                 .alt
-                .filter(|layer| layer.image_id == alt.image.id);
+                .filter(|layer| layer.image.frame(alt.image.frame) == alt.image);
             let cut = alt_sheet.map_or(BoxCut::WHOLE, |layer| {
                 BoxCut::of(list.world_clip(), alt.at, layer.edge())
             });
             cut.mixed_sprite(list, alt.image, alt.at, (alt.tint, alt.blend, alt.colorize));
-            if alt_sheet.is_some_and(|layer| layer.solid) {
-                solid_overlay(list, cut, alt.image.id, alt.image.frame, alt.at);
+            if let Some(layer) = alt_sheet.filter(|layer| layer.solid) {
+                solid_overlay(list, cut, layer.image, alt.image.frame, alt.at);
             }
         }
         let shield = self
@@ -404,11 +412,11 @@ impl ShipDraw<'_> {
         {
             let at = place(layer.size());
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
-            let image = ImageKey::sprite(layer.image_id, frame);
+            let image = layer.image.frame(frame);
             let cut = BoxCut::of(list.world_clip(), at, layer.edge());
             cut.mixed_sprite(list, image, at, (tint, blend, colorize));
             if layer.solid && level > 0 {
-                solid_overlay(list, cut, layer.image_id, frame, at);
+                solid_overlay(list, cut, layer.image, frame, at);
             }
         }
     }
@@ -454,7 +462,7 @@ mod tests {
         /// A layer `rlëD` `image_id` of `width` x `height` frames.
         fn layer(image_id: i16, (frame_width, frame_height): (u32, u32)) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width,
                 frame_height,
@@ -469,7 +477,7 @@ mod tests {
         /// 1300, alt 1400 and shield 1500 each have a frame of its own.
         fn sheet() -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 7,
                 frame_height: 6,
@@ -581,9 +589,9 @@ mod tests {
         use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
-        use crate::DrawCommand;
         use crate::flight::cloak_fade::CloakDraw;
         use crate::flight::held_alt::HeldAlts;
+        use crate::{DrawCommand, ImageKey};
 
         const AT: Point = Point::new(100.0, 50.0);
 
@@ -592,7 +600,7 @@ mod tests {
         /// A 4 x 4 layer `rlëD` `image_id` of 36 frames.
         fn layer(image_id: i16, eight_bit: bool, solid: bool) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 4,
                 frame_height: 4,
@@ -607,7 +615,7 @@ mod tests {
         /// sheet 8-bit or not and holding solid runs or not.
         fn sheet(eight_bit: bool, solid: bool) -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 10,
                 frame_height: 10,
@@ -912,7 +920,9 @@ mod tests {
         use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
+        use crate::ImageKey;
         use crate::box_cut::drawn_cuts;
+        use crate::flight::held_alt::AltLayer;
         use crate::geometry::Bounds;
 
         /// The world: 200 x 100 from the origin.
@@ -924,7 +934,7 @@ mod tests {
         /// A 4 x 4 layer `rlëD` `image_id` of 36 frames, its image `image`.
         fn layer(image_id: i16, image: (u32, u32)) -> LayerSheet {
             LayerSheet {
-                image_id,
+                image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 4,
                 frame_height: 4,
@@ -939,7 +949,7 @@ mod tests {
         /// glow 1100.
         fn sheet(image: (u32, u32)) -> ShipSheet {
             ShipSheet {
-                image_id: 1000,
+                image: crate::SheetImage::Rled(1000),
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 10,
                 frame_height: 10,
@@ -1082,6 +1092,80 @@ mod tests {
                     (ImageKey::sprite(1100, 0), Some(box_of(LEFT, 4.0))),
                 ]
             );
+        }
+
+        #[test]
+        fn a_pict_pair_hull_and_layer_at_the_edge_draw_their_frames_cut_to_their_boxes() {
+            use nova_data::ShipImage;
+            let pair = |image| crate::SheetImage::Ship { ship: 128, image };
+            // Even marked quirky and solid, a pair has no clipped frame and
+            // no runs: its 16-bit RLE is cut to its box.
+            let sheet = ShipSheet {
+                image: pair(ShipImage::Base),
+                clip_quirks: true,
+                solid: true,
+                glow: Some(LayerSheet {
+                    image: pair(ShipImage::Glow),
+                    clip_quirks: true,
+                    solid: true,
+                    ..layer(1100, (4, 4))
+                }),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            assert_eq!(
+                drawn_at(&ship(&sheet, &spec), LEFT),
+                [
+                    (
+                        ImageKey::ship_sheet(128, ShipImage::Base, 0),
+                        Some(box_of(LEFT, 10.0))
+                    ),
+                    (
+                        ImageKey::ship_sheet(128, ShipImage::Glow, 0),
+                        Some(box_of(LEFT, 4.0))
+                    ),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_held_alt_takes_its_sheets_cut_only_when_its_whole_key_matches() {
+            use nova_data::ShipImage;
+            let pair = crate::SheetImage::Ship {
+                ship: 1400,
+                image: ShipImage::Alt,
+            };
+            let sheet = ShipSheet {
+                glow: None,
+                // Overhanging its box, so a cut shows.
+                alt: Some(LayerSheet {
+                    image: pair,
+                    ..layer(1400, (8, 4))
+                }),
+                ..sheet((10, 10))
+            };
+            let spec = FrameSpec::NONE;
+            let held = |image| AltLayer {
+                image,
+                at: LEFT,
+                shown: true,
+                tint: Color::WHITE,
+                colorize: None,
+                blend: Blend::Normal,
+            };
+            let alt_of = |alt: AltLayer| {
+                let mut list = DrawList::new();
+                list.world_in(WORLD, |list| {
+                    ship(&sheet, &spec).draw(list, &|_| LEFT, Some(alt));
+                });
+                drawn_cuts(&list)[1]
+            };
+            // Its own sheet's key: cut by that sheet's box.
+            let own = pair.frame(2);
+            assert_eq!(alt_of(held(own)), (own, Some(box_of(LEFT, 4.0))));
+            // An `rlëD` of the same ID is another sheet: drawn whole.
+            let other = ImageKey::sprite(1400, 2);
+            assert_eq!(alt_of(held(other)), (other, None));
         }
 
         #[test]

@@ -32,6 +32,13 @@ pub enum ImageKind {
     /// a `spïn` drawn from a `PICT` pair, which has no `rlëD` to key it
     /// by (see [`SheetImage`](crate::SheetImage)).
     SpinSheet,
+    /// The frames `GameData::ship_image` resolves `shïp` `id`'s `image`
+    /// to, used for a ship image drawn from a `PICT` pair, which has no
+    /// `rlëD` to key it by (see [`SheetImage`](crate::SheetImage)).
+    ShipSheet {
+        /// Which of the ship's images.
+        image: nova_data::ShipImage,
+    },
     /// An `rlëD`'s frames as the original draws a frame whose box the
     /// world's edge cuts (`_BlitPixieRLEClipped`, see
     /// `nova_data::graphics::decode_rled_clipped`): each the box's size,
@@ -133,6 +140,17 @@ impl ImageKey {
         Self {
             kind: ImageKind::SpinSheet,
             id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of the sheet `shïp` `ship`'s `image` resolves to
+    /// ([`ImageKind::ShipSheet`]).
+    #[must_use]
+    pub const fn ship_sheet(ship: i16, image: nova_data::ShipImage, frame: u16) -> Self {
+        Self {
+            kind: ImageKind::ShipSheet { image },
+            id: ship,
             frame,
         }
     }
@@ -257,6 +275,26 @@ mod tests {
                 frame: 35
             }
         );
+    }
+
+    #[test]
+    fn a_ship_sheet_is_keyed_by_its_ship_and_image() {
+        use nova_data::ShipImage;
+        let key = ImageKey::ship_sheet(128, ShipImage::Glow, 3);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::ShipSheet {
+                    image: ShipImage::Glow
+                },
+                id: 128,
+                frame: 3
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(128, 3));
+        assert_ne!(key, ImageKey::spin_sheet(128, 3));
+        assert_ne!(key, ImageKey::ship_sheet(128, ShipImage::Lights, 3));
+        assert_ne!(key, ImageKey::ship_sheet(129, ShipImage::Glow, 3));
     }
 
     #[test]

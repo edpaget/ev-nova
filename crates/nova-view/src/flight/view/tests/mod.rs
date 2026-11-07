@@ -124,6 +124,7 @@ mod nav;
 mod outputs;
 mod painted_ships;
 mod particle_pixels;
+mod pict_pair_ships;
 mod port_screen_map;
 mod rescue;
 mod ship_drawing;
