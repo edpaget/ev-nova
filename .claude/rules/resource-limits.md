@@ -38,7 +38,8 @@ Each rung runs only when the one below passes and the work has reached it.
    - the full gate, `mise run ci`, once;
    - the stock tests of the crates the change touches, one crate at a time
      (`NOVA_DATA=... cargo nextest run -p <crate> -E 'test(/stock_/)'`);
-   - mutants once over the branch (`.claude/rules/mutants.md`).
+   - mutants once over the phase's own commits
+     (`--in-diff <(git diff <previous commit>...HEAD)`, `.claude/rules/mutants.md`).
    Run these one after another, never alongside each other. Rerun only the
    one that failed, and only the crate that failed it, after a fix.
 4. **Landing** (`rdm:land`) runs the gate and stock tests again.

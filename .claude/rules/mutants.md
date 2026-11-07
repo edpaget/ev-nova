@@ -8,8 +8,11 @@ paths:
 
 Let the tool generate and run the mutants rather than editing source by hand.
 
-- Run mutants once over everything on the branch:
-  `mise run mutants -- --in-diff <(git diff main...HEAD)`. Use three dots:
+- Run mutants once per phase (or task), over that phase's own commits:
+  `mise run mutants -- --in-diff <(git diff <previous commit>...HEAD)`, where
+  `<previous commit>` is the commit the phase started from (its
+  `started_head`). On a roadmap's shared worktree, `main...HEAD` would take in
+  every earlier phase's changes too. Use three dots:
   `git diff main` also holds `main`'s newer changes in reverse once `main`
   moves on, and mutates lines the branch never touched.
 - To confirm the fixes for missed mutants, rerun the same command with
