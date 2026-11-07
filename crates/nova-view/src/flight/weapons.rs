@@ -36,6 +36,7 @@
 use super::catalog::{Looks, WeaponId, WeaponLook};
 use super::lightning::{self, StepRolls};
 use super::shot_fade::{ShotShade, shot_shade};
+use crate::box_cut::BoxCut;
 use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
@@ -177,6 +178,12 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
 /// mixed by its murk's colorize. Nothing for a weapon whose shots
 /// have no graphic, and a crossed box for one whose look or sheet was not
 /// read.
+///
+/// A shot is a sprite of the sprite world, drawn through
+/// `_BlitPixieRLETranslucentDrawProc` (@0xbb3fc-0xbba11): where the
+/// world's edge cuts its box, an overhanging sheet is cut to the box and
+/// one with clip quirks draws the clipped blit's frame
+/// ([`BoxCut`], @0xbb56d-0xbb579, @0xbb770-0xbb789).
 pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: RuleSource) {
     let Some(look) = looks.weapon(shot.weapon) else {
         crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -192,7 +199,8 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
                 ShotShade::Translucent(t) => (see_through(t), Blend::OrCrossfade),
                 ShotShade::Additive(n) => (lights_tint(n), Blend::Or),
             };
-            list.mixed_sprite(image, shot.at, tint, blend, Some(shot.colorize));
+            let cut = BoxCut::of(list.world_clip(), shot.at, sheet.edge());
+            cut.mixed_sprite(list, image, shot.at, (tint, blend, Some(shot.colorize)));
         }
     }
 }
@@ -269,6 +277,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::ImageKey;
+    use crate::box_cut::{box_of, drawn_cuts};
     use crate::flight::catalog::EffectSheet;
     use nova_sim::combat::shot_fade::at_full_gain;
 
@@ -750,5 +759,89 @@ mod tests {
         };
         assert_eq!(lines(true), [(BEAM, 1.0)]);
         assert_eq!(lines(false), [(BEAM, 1.0), (Color::ERROR, 1.0)]);
+    }
+
+    /// What a shot of weapon 128, its sheet `rlëD` 3500 of 10 x 8 frames
+    /// edged as `edge` says, draws at `centre` in a 100-square world.
+    fn shot_cut_at(edge: impl Fn(EffectSheet) -> EffectSheet, centre: Point) -> Vec<CutSprite> {
+        let sheet = EffectSheet {
+            frame_width: 10,
+            frame_height: 8,
+            image_size: (10, 8),
+            ..sheet(3500, 36)
+        };
+        let looks = looks(&[(
+            128,
+            WeaponLook {
+                sheet: Some(Ok(edge(sheet))),
+                ..WeaponLook::default()
+            },
+        )]);
+        let shot = ShotShown {
+            id: ShotId(1),
+            frame: Some(9),
+            colorize: Colorize::default(),
+            at: centre,
+            life: 1.0,
+            fade: 0.0,
+            weapon: WeaponId(128),
+            layer: SpriteLayer::Shots,
+        };
+        let mut list = DrawList::new();
+        list.world_in(EDGE_WORLD, |list| {
+            draw_shot(list, &shot, &looks, RuleSource::Engine);
+        });
+        drawn_cuts(&list)
+    }
+
+    type CutSprite = (ImageKey, Option<crate::geometry::Bounds>);
+
+    /// A 100-square world from the origin.
+    const EDGE_WORLD: crate::geometry::Bounds = crate::geometry::Bounds {
+        min: Point { x: 0.0, y: 0.0 },
+        max: Point { x: 100.0, y: 100.0 },
+    };
+
+    fn overhanging(sheet: EffectSheet) -> EffectSheet {
+        EffectSheet {
+            image_size: (14, 8),
+            ..sheet
+        }
+    }
+
+    fn quirky(sheet: EffectSheet) -> EffectSheet {
+        EffectSheet {
+            clip_quirks: true,
+            ..sheet
+        }
+    }
+
+    #[test]
+    fn an_overhanging_shot_straddling_the_worlds_edge_is_cut_to_its_box() {
+        let centre = at(2.0, 50.0);
+        assert_eq!(
+            shot_cut_at(overhanging, centre),
+            [(ImageKey::sprite(3500, 9), Some(box_of(centre, (10.0, 8.0))))]
+        );
+    }
+
+    #[test]
+    fn an_overhanging_shot_wholly_inside_the_world_draws_whole() {
+        assert_eq!(
+            shot_cut_at(overhanging, at(50.0, 50.0)),
+            [(ImageKey::sprite(3500, 9), None)]
+        );
+    }
+
+    #[test]
+    fn a_quirky_shot_cut_at_the_left_draws_its_clipped_frame() {
+        let centre = at(2.0, 50.0);
+        assert_eq!(
+            shot_cut_at(quirky, centre),
+            [(
+                ImageKey::clipped_sprite(3500, 9, (0, 3)),
+                Some(box_of(centre, (10.0, 8.0)))
+            )]
+        );
     }
 }

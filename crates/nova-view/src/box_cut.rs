@@ -171,6 +171,32 @@ fn cut_by(world: Bounds, frame_box: Bounds, (width, height): (f32, f32)) -> (u16
     )
 }
 
+/// What a test of a draw site reads of its commands: each sprite's image
+/// and the box it is cut to, if it is.
+#[cfg(test)]
+pub(crate) fn drawn_cuts(list: &DrawList) -> Vec<(ImageKey, Option<Bounds>)> {
+    let sprite = |command: &DrawCommand| match *command {
+        DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. } => Some(image),
+        _ => None,
+    };
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Clipped { clip, command } => Some((sprite(command)?, Some(*clip))),
+            other => Some((sprite(other)?, None)),
+        })
+        .collect()
+}
+
+/// The box of a frame of `(width, height)` centred on `centre`.
+#[cfg(test)]
+pub(crate) fn box_of(centre: Point, (width, height): (f32, f32)) -> Bounds {
+    Bounds::at(
+        Point::new(centre.x - width / 2.0, centre.y - height / 2.0),
+        width,
+        height,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

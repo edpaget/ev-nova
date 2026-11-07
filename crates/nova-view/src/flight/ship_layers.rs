@@ -912,7 +912,7 @@ mod tests {
         use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 
         use super::super::*;
-        use crate::DrawCommand;
+        use crate::box_cut::drawn_cuts;
         use crate::geometry::Bounds;
 
         /// The world: 200 x 100 from the origin.
@@ -985,12 +985,12 @@ mod tests {
         fn drawn_at(ship: &ShipDraw<'_>, at: Point) -> Vec<(ImageKey, Option<Bounds>)> {
             let mut list = DrawList::new();
             list.world_in(WORLD, |list| ship.draw(list, &|_| at, None));
-            drawn_at_list(&list)
+            drawn_cuts(&list)
         }
 
         /// The box of a `side`-square frame centred on `at`.
         fn box_of(at: Point, side: f32) -> Bounds {
-            Bounds::at(Point::new(at.x - side / 2.0, at.y - side / 2.0), side, side)
+            crate::box_cut::box_of(at, (side, side))
         }
 
         /// Straddling the world's left edge: the hull's box and the glow's.
@@ -1112,7 +1112,7 @@ mod tests {
             });
             let layer_box = box_of(LEFT, 4.0);
             let cut = (0, 1);
-            let layers: Vec<_> = drawn_at_list(&list)
+            let layers: Vec<_> = drawn_cuts(&list)
                 .into_iter()
                 .filter(|(image, _)| image.id != 1000)
                 .collect();
@@ -1126,23 +1126,6 @@ mod tests {
                 })
                 .collect();
             assert_eq!(layers, expected);
-        }
-
-        /// Each command of `list`: its image and the box it is cut to.
-        fn drawn_at_list(list: &DrawList) -> Vec<(ImageKey, Option<Bounds>)> {
-            list.iter()
-                .map(|command| match command {
-                    DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. } => {
-                        (*image, None)
-                    }
-                    DrawCommand::Clipped { clip, command } => match **command {
-                        DrawCommand::Sprite { image, .. }
-                        | DrawCommand::Colorized { image, .. } => (image, Some(*clip)),
-                        ref other => panic!("{other:?}"),
-                    },
-                    other => panic!("{other:?}"),
-                })
-                .collect()
         }
     }
 
