@@ -63,7 +63,7 @@ fn held_on_row_0(view: &mut SpaceportView, keys: &[Input]) {
 fn a_key_held_during_a_computer_list_press_acts_after_the_release() {
     let mut view = computer();
     view.input(&button(true, ROW_0));
-    view.input(&key(Key::Down));
+    view.input(&key(Key::ArrowDown));
     assert_eq!(selected(&view), Some(0), "it waits");
     view.input(&button(false, ROW_0));
     assert_eq!(selected(&view), Some(1));
@@ -73,7 +73,7 @@ fn a_key_held_during_a_computer_list_press_acts_after_the_release() {
 #[test]
 fn the_computers_rest_after_a_held_leave_reaches_the_spaceport() {
     let mut view = computer();
-    held_on_row_0(&mut view, &[key(Key::Escape), key(Key::Char('m'))]);
+    held_on_row_0(&mut view, &[key(Key::Escape), key(Key::KeyM)]);
     assert!(view.mission_computer().is_none(), "left");
     assert_eq!(
         view.take_map_request(),
@@ -89,7 +89,7 @@ fn the_info_screens_rest_after_a_held_close_reaches_the_computer_beneath() {
     let at = info_row_0(&view);
     view.input(&button(true, at));
     view.input(&key(Key::Escape));
-    view.input(&key(Key::Down));
+    view.input(&key(Key::ArrowDown));
     assert!(view.mission_info().is_some(), "it waits");
     view.input(&button(false, at));
     assert!(view.mission_info().is_none(), "closed");
@@ -100,7 +100,7 @@ fn the_info_screens_rest_after_a_held_close_reaches_the_computer_beneath() {
 fn keys_held_through_an_accept_are_dropped_when_it_is_taken_and_run_when_the_slots_are_full() {
     for (taken, after) in [(true, Some(0)), (false, Some(1))] {
         let mut view = computer();
-        held_on_row_0(&mut view, &[key(Key::Char('a')), key(Key::Down)]);
+        held_on_row_0(&mut view, &[key(Key::KeyA), key(Key::ArrowDown)]);
         assert_eq!(view.take_mission_accept(), Some(MissionId(130)));
         assert_eq!(selected(&view), Some(0), "taken {taken}: it waits");
         assert!(view.holds_back_keys(), "taken {taken}: for the answer");
@@ -109,7 +109,7 @@ fn keys_held_through_an_accept_are_dropped_when_it_is_taken_and_run_when_the_slo
         assert!(!view.holds_back_keys(), "taken {taken}");
     }
     let mut texted = computer();
-    held_on_row_0(&mut texted, &[key(Key::Char('a')), key(Key::Down)]);
+    held_on_row_0(&mut texted, &[key(Key::KeyA), key(Key::ArrowDown)]);
     texted.show_mission_texts(vec![MissionText {
         kind: MissionTextKind::Brief,
         mission: MissionId(130),
@@ -126,7 +126,7 @@ fn keys_held_through_an_accept_are_dropped_when_it_is_taken_and_run_when_the_slo
 #[test]
 fn the_rest_after_an_accept_that_leaves_nothing_reaches_the_spaceport() {
     let mut view = computer();
-    held_on_row_0(&mut view, &[key(Key::Char('a')), key(Key::Char('m'))]);
+    held_on_row_0(&mut view, &[key(Key::KeyA), key(Key::KeyM)]);
     assert_eq!(view.take_mission_accept(), Some(MissionId(130)));
     view.set_mission_computer(Err(ComputerRefusal::NoneAvailable), true);
     assert!(
@@ -144,7 +144,7 @@ fn a_cancelled_computer_press_whose_tick_leaves_closes_the_computer() {
     let mut view = computer();
     view.input(&button(true, ROW_0));
     view.input(&key(Key::Escape));
-    view.input(&key(Key::Char('m')));
+    view.input(&key(Key::KeyM));
     view.cancel_pointer();
     assert!(view.mission_computer().is_some(), "until the tick");
     view.tick(Duration::ZERO);
@@ -163,11 +163,11 @@ fn a_cancelled_computer_press_whose_tick_leaves_closes_the_computer() {
 fn the_computer_is_told_whether_missions_are_listed() {
     let mut view = computer();
     view.set_computer_missions_listed(false);
-    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::Down)]);
+    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::ArrowDown)]);
     assert!(!view.take_mission_info_request(), "nothing listed");
     assert_eq!(selected(&view), Some(1), "the Down ran on");
     view.set_computer_missions_listed(true);
-    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::Down)]);
+    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::ArrowDown)]);
     assert!(view.take_mission_info_request());
     assert_eq!(
         selected(&view),
@@ -182,7 +182,7 @@ fn an_abort_tells_the_computer_beneath_whether_missions_are_still_listed() {
     view.open_mission_info(actives(1));
     view.set_mission_info(actives(0));
     assert!(view.mission_info().is_none(), "nothing left");
-    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::Down)]);
+    held_on_row_0(&mut view, &[key(MISSION_INFO_KEY), key(Key::ArrowDown)]);
     assert!(!view.take_mission_info_request());
     assert_eq!(selected(&view), Some(1), "the Down ran on");
 }
@@ -208,7 +208,7 @@ fn the_rest_after_an_abort_reaches_the_computer_beneath_as_the_info_is_set() {
         .center();
     view.input(&button(true, abort));
     view.input(&key(Key::Escape));
-    view.input(&key(Key::Down));
+    view.input(&key(Key::ArrowDown));
     view.input(&button(false, abort));
     assert_eq!(view.take_mission_abort(), Some(0));
     assert!(view.mission_info().is_some(), "the Escape waits");

@@ -208,7 +208,7 @@ mod view_tests {
         }
         for letter in ['o', 's', 'b'] {
             let mut view = bare();
-            view.input(&key(Key::Char(letter)));
+            view.input(&key(crate::input::letter_key(letter).expect("a letter key")));
             untouched(&mut view, &format!("{letter}"));
         }
     }
@@ -247,7 +247,7 @@ mod view_tests {
         click_item(&mut view, 4);
         untouched(&mut view, "a click");
         for letter in ['r', 'f'] {
-            view.input(&key(Key::Char(letter)));
+            view.input(&key(crate::input::letter_key(letter).expect("a letter key")));
             assert!(view.take_recharge(), "{letter}");
             assert_eq!(view.take_sounds(), [], "{letter}");
         }
@@ -263,7 +263,7 @@ mod view_tests {
         view.set_recharge_enabled(true);
         disabled(&view, 4);
         click_item(&mut view, 4);
-        view.input(&key(Key::Char('r')));
+        view.input(&key(Key::KeyR));
         assert!(!view.take_recharge());
     }
 

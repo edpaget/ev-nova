@@ -27,6 +27,11 @@
 //! `_GetDialogPortRect` @0x481d0, half-open, so its right column and
 //! bottom row are outside); a press outside it does nothing. Without its dialog it says why, and Return or Escape still
 //! closes it.
+//!
+//! With the pad (rdm:phase/key-bindings/phase-9-gamepad-spaceport), the
+//! frame is the one target: South's press closes it, as a press inside
+//! does, and East closes it as Escape does. Until the news is told the pad
+//! was the device used last, the d-pad and South do nothing.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -35,17 +40,20 @@ use nova_sim::News;
 use nova_sim::news::DEFAULT_NEWS_PICTURE;
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::DialogTemplate;
+use crate::ui::pad_focus::{FocusState, PadRead, Target, draw_highlight, from_pad};
 use crate::ui::text_box::TextBox;
 
 /// The news dialog's `DLOG` ID.
@@ -89,7 +97,11 @@ pub struct NewsScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::DIALOG`]): Confirm and Back.
+    keys: CommandReader,
     sounds: Vec<Sound>,
+    /// The pad's focus, on the frame or nothing.
+    focus: FocusState<()>,
 }
 
 impl NewsScreen {
@@ -139,8 +151,17 @@ impl NewsScreen {
         Self {
             laid,
             closed: false,
+            keys: CommandReader::new(contexts::DIALOG),
             sounds: vec![Sound::Ui(UiSound::NewsOpened)],
+            focus: FocusState::default(),
         }
+    }
+
+    /// The news reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The dialog's frame on the screen, if it could be laid out.
@@ -167,6 +188,13 @@ impl NewsScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
+    /// The device the player used last, as the last surroundings it was
+    /// told said; the keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> crate::input::Device {
+        self.focus.device()
+    }
+
     /// Whether the player has closed it.
     #[must_use]
     pub fn closed(&self) -> bool {
@@ -183,15 +211,49 @@ impl NewsScreen {
 }
 
 impl Screen for NewsScreen {
-    /// Return, Enter or Escape closes it, and so does a press inside its
-    /// frame; nothing else does anything. It never quits.
+    /// Return, Enter or Escape (Confirm or Back) closes it, and so does a
+    /// press inside its frame; nothing else does anything. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let command = self.keys.follow(input);
+        if let Input::Surroundings(surroundings) = *input {
+            let initial = self.bounds().map(|_| ());
+            self.focus.surroundings(surroundings.device, initial, false);
+            return ScreenAction::None;
+        }
+        if from_pad(input)
+            && let Some(command) = command
+        {
+            match self.focus.read_pad(command) {
+                PadRead::Other => {}
+                PadRead::Move(mv) => {
+                    if let Some(frame) = self.bounds() {
+                        self.focus.move_by_pad(&[Target::at((), frame)], (), mv);
+                    }
+                    return ScreenAction::None;
+                }
+                // Told the pad, the focus is on the frame whenever there is
+                // one: a press without its dialog presses nothing.
+                PadRead::Press if self.bounds().is_some() => {
+                    self.close();
+                    return ScreenAction::None;
+                }
+                PadRead::Press | PadRead::Release | PadRead::Nothing => {
+                    return ScreenAction::None;
+                }
+            }
+        }
+        if let Some(command) = command
+            && command.pressed
+            && !command.repeat
+            && matches!(
+                command.command,
+                Command::Ui(UiCommand::Confirm | UiCommand::Back)
+            )
+        {
+            self.close();
+            return ScreenAction::None;
+        }
         match *input {
-            Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => self.close(),
             Input::PointerButton {
                 pressed: true, at, ..
             } if self
@@ -206,6 +268,11 @@ impl Screen for NewsScreen {
     }
 
     fn tick(&mut self, _dt: Duration) {}
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
+    }
 
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
@@ -223,10 +290,16 @@ impl Screen for NewsScreen {
                     fill_rect(list, text.rect(), Color::BLACK);
                     text.draw(list);
                 }
+                if self.focus.pad_highlight().is_some() {
+                    draw_highlight(list, laid.bounds, Color::WHITE);
+                }
             }
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the news: {reason}. Press Return or Escape to close it."),
+                    format!(
+                        "Cannot show the news: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -243,10 +316,13 @@ impl Screen for NewsScreen {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::Placement;
 
@@ -271,6 +347,69 @@ mod tests {
 
     fn open() -> NewsScreen {
         NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news(), None)
+    }
+
+    struct Probe(NewsScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            vec![("frame", self.0.bounds().expect("laid out"))]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.closed())
+        }
+    }
+
+    /// The news's row in the pad's every-screen table, its opening beep
+    /// already taken, as it is no press's.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut news = open();
+        news.take_sounds();
+        Box::new(Probe(news))
+    }
+
+    #[test]
+    fn untold_the_dpad_and_south_do_nothing_but_east_closes() {
+        use crate::input::PadButton;
+        let mut screen = open();
+        for button in [PadButton::DPadUp, PadButton::South, PadButton::East] {
+            assert!(!screen.closed(), "{button:?}");
+            screen.input(&Input::PadButton {
+                button,
+                pressed: true,
+                repeat: false,
+            });
+            screen.input(&Input::PadButton {
+                button,
+                pressed: false,
+                repeat: false,
+            });
+        }
+        assert!(screen.closed(), "East");
+    }
+
+    #[test]
+    fn without_its_dialog_south_presses_nothing_and_east_still_closes_it() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), None);
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        for (button, closes) in [(PadButton::South, false), (PadButton::East, true)] {
+            for pressed in [true, false] {
+                screen.input(&Input::PadButton {
+                    button,
+                    pressed,
+                    repeat: false,
+                });
+            }
+            assert_eq!(screen.closed(), closes, "{button:?}");
+        }
     }
 
     fn texts(screen: &NewsScreen) -> Vec<String> {
@@ -479,9 +618,44 @@ mod tests {
         assert_eq!(screen.take_sounds(), [], "closing once");
     }
 
+    /// The news reads its keys through the key map it is given: Back
+    /// rebound to Q closes it on Q and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_it_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = open().with_bindings(bindings);
+        screen.input(&key(Key::Escape, false));
+        assert!(!screen.closed(), "Escape no longer closes it");
+        screen.input(&key(Key::KeyQ, false));
+        assert!(screen.closed());
+    }
+
+    /// Letting go of the keys forgets a modifier held: Back on Shift-Q
+    /// no longer closes it on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Back, KeyCombo::with(Key::KeyQ, Modifiers::SHIFT)),
+        );
+        let mut screen = open().with_bindings(bindings.clone());
+        screen.input(&key(Key::ShiftLeft, false));
+        screen.release_keys();
+        screen.input(&key(Key::KeyQ, false));
+        assert!(!screen.closed(), "Shift was let go of");
+        let mut held = open().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft, false));
+        held.input(&key(Key::KeyQ, false));
+        assert!(held.closed(), "Shift-Q with Shift still held");
+    }
+
     #[test]
     fn return_enter_or_escape_closes_it_on_a_press() {
-        for close in [Key::Enter, Key::Escape] {
+        for close in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = open();
             screen.input(&key(close, true));
             assert!(!screen.closed(), "{close:?} repeating");
@@ -495,7 +669,7 @@ mod tests {
             assert!(screen.closed(), "{close:?}");
         }
         let mut screen = open();
-        screen.input(&key(Key::Char('n'), false));
+        screen.input(&key(Key::KeyN, false));
         screen.input(&key(Key::Space, false));
         assert!(!screen.closed(), "other keys do nothing");
     }
@@ -556,6 +730,35 @@ mod tests {
         let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
         screen.input(&key(Key::Enter, false));
         assert!(screen.closed());
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
+        screen.input(&key(Key::NumpadEnter, false));
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000))
+            .with_bindings(SharedBindings::new(
+                Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+            ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the news: no DLOG 1014. Press Q or Escape to close it."]
+        );
+    }
+
+    #[test]
+    fn without_its_dialog_it_names_the_buttons_with_a_pad_last_used() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the news: no DLOG 1014. Press South or East to close it."]
+        );
     }
 
     /// `_NewsDialogFilter` @0x48160 maps Return and Escape to item 1 with no

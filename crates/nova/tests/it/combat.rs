@@ -499,8 +499,8 @@ impl Harness {
             effects,
             frames: 0,
         };
-        harness.key(Key::Char('f'), true);
-        harness.key(Key::Char('f'), false);
+        harness.key(Key::KeyF, true);
+        harness.key(Key::KeyF, false);
         assert_eq!(harness.app.screen().showing(), Showing::Flight);
         harness.settle_until("the system's traffic", |harness| {
             harness
@@ -1267,9 +1267,9 @@ impl Boarder {
 /// The flight keys a press of which `controls` hold.
 fn flight_keys(controls: nova_sim::Controls) -> [(Key, bool); 3] {
     [
-        (Key::Up, controls.thrust),
-        (Key::Left, controls.turn == nova_sim::Turn::Left),
-        (Key::Right, controls.turn == nova_sim::Turn::Right),
+        (Key::ArrowUp, controls.thrust),
+        (Key::ArrowLeft, controls.turn == nova_sim::Turn::Left),
+        (Key::ArrowRight, controls.turn == nova_sim::Turn::Right),
     ]
 }
 
@@ -1367,7 +1367,11 @@ fn boarded_by(store: &MemoryPilots, rules: nova_sim::Rulebook) -> Boarder {
         game.session().npcs()[0].condition == nova_sim::Condition::Disabled
     });
     game.key(Key::Space, false);
-    let mut held = [(Key::Up, false), (Key::Left, false), (Key::Right, false)];
+    let mut held = [
+        (Key::ArrowUp, false),
+        (Key::ArrowLeft, false),
+        (Key::ArrowRight, false),
+    ];
     for _ in 0..6000 {
         let quarry = game
             .session()
@@ -1383,7 +1387,7 @@ fn boarded_by(store: &MemoryPilots, rules: nova_sim::Rulebook) -> Boarder {
                 was.1 = now.1;
             }
         }
-        game.tap(Key::Char('b'));
+        game.tap(Key::KeyB);
         if game.showing() == Showing::Plunder {
             break;
         }
@@ -1675,7 +1679,7 @@ fn a_hail_option_registered_at_the_edge_shows_its_button_and_its_reply() {
         |screen| screen.with_hail_options(options),
     );
     harness.tap(Key::Tab);
-    harness.tap(Key::Char('y'));
+    harness.tap(Key::KeyY);
     harness.settle();
     assert_eq!(harness.app.screen().showing(), Showing::Comm);
     assert!(
@@ -1987,10 +1991,10 @@ fn the_escort_dialog_opens_with_the_rulebooks_focus_ring() {
     ] {
         let store = MemoryPilots::new();
         let mut game = escorted(&store, &[], &[129], |screen| screen.with_rules(rules));
-        game.key(Key::Alt, true);
+        game.key(Key::AltLeft, true);
         game.tap(Key::Tab);
-        game.key(Key::Alt, false);
-        game.tap(Key::Char('y'));
+        game.key(Key::AltLeft, false);
+        game.tap(Key::KeyY);
         assert_eq!(game.showing(), Showing::EscortDialog);
         assert_eq!(
             game.app
@@ -2008,13 +2012,13 @@ fn option_tab_and_y_reach_the_escort_dialog_and_its_release_reaches_the_saved_fl
     let mut game = escorted(&store, &[], &[129], |screen| {
         screen.with_rules(saving_in_flight())
     });
-    game.key(Key::Alt, true);
+    game.key(Key::AltLeft, true);
     game.tap(Key::Tab);
-    game.key(Key::Alt, false);
-    game.tap(Key::Char('y'));
+    game.key(Key::AltLeft, false);
+    game.tap(Key::KeyY);
     game.settle();
     assert_eq!(game.showing(), Showing::EscortDialog);
-    game.tap(Key::Char('r'));
+    game.tap(Key::KeyR);
     game.settle();
     assert_eq!(game.showing(), Showing::Flight, "released");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -2049,7 +2053,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         let mut game = escorted(&store, &[], &[130], |screen| {
             screen.with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source))
         });
-        game.tap(Key::Char('d'));
+        game.tap(Key::KeyD);
         game.settle();
         let shown = run_texts(&game.last_frame());
         assert!(
@@ -2059,9 +2063,9 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
             "{shown:?}"
         );
         // L requests clearance, a second L lands.
-        game.tap(Key::Char('l'));
+        game.tap(Key::KeyL);
         game.approach();
-        game.tap(Key::Char('l'));
+        game.tap(Key::KeyL);
         assert_eq!(game.showing(), Showing::Spaceport, "landed");
         let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
         assert_eq!(
@@ -2079,7 +2083,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         game.populated();
         assert_eq!(game.escorts().len(), 1, "{text}");
         assert_eq!(game.pilot().escorts()[0].order, order, "{text}");
-        game.tap(Key::Char('e'));
+        game.tap(Key::KeyE);
         game.settle();
         let shown = run_texts(&game.last_frame());
         assert!(
@@ -2252,13 +2256,13 @@ impl Boarder {
 
     /// W, then Control held until a fighter is out; the frame then.
     fn launch(&mut self) -> Frame {
-        self.tap(Key::Char('w'));
+        self.tap(Key::KeyW);
         let out = self.fighters_out();
-        self.key(Key::Control, true);
+        self.key(Key::ControlLeft, true);
         for _ in 0..120 {
             let frame = self.frame();
             if self.fighters_out() > out {
-                self.key(Key::Control, false);
+                self.key(Key::ControlLeft, false);
                 return frame;
             }
         }
@@ -2319,9 +2323,9 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     });
     game.launch();
     // L requests clearance, a second L lands.
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.approach();
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
     assert_eq!(saved.escorts(), []);
@@ -2331,7 +2335,7 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     });
     game.open_pilot_to(Showing::Flight);
     assert_eq!(game.fighters_out(), 0, "no fighter out");
-    game.tap(Key::Char('w'));
+    game.tap(Key::KeyW);
     game.settle_until("W's secondary selected", |game| {
         game.session().secondary().is_some()
     });

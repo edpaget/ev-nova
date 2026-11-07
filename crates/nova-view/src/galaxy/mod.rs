@@ -26,8 +26,13 @@
 //!   held for the map's owner to answer.
 //! - [`buttons`]: the in-flight maps' six buttons, as `_DrawMapButtons`
 //!   draws them and `_TrackMapButtons` tracks them.
+//! - [`pad`]: the in-flight maps' pad focus over their six buttons.
+//! - [`cursor`]: the in-flight maps' pad cursor, which the right stick
+//!   moves and South clicks with.
 //! - [`find`]: the map's Find dialog, `DLOG` 3005, as `_DoSystemSearch`
 //!   opens it.
+//! - [`help`]: the viewer's help line and Enter label, naming the keys
+//!   the map reads.
 //! - [`lanes`]: the in-flight maps' gate lanes, each way of a link in its
 //!   stability's look, by `RuleKey::MapLaneStyle`'s other reading.
 
@@ -36,15 +41,20 @@ pub mod buttons;
 pub mod catalog;
 pub mod click;
 pub mod clip;
+pub mod cursor;
 pub mod data;
 pub mod dialog;
 pub mod find;
+pub mod help;
 pub mod lanes;
 pub mod map;
 pub mod model;
 pub mod nebulae;
+pub mod pad;
 pub mod panel;
 pub mod place;
+pub mod toggle;
+pub mod touch;
 pub mod update;
 pub mod view;
 

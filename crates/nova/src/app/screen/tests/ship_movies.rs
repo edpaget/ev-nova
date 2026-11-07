@@ -53,8 +53,8 @@ fn the_shipyards_selected_ship_loops_its_movie_file_on_the_looping_player() {
         click_port_item(&mut screen, 9);
         assert!(spaceport(&screen).open_shipyard().is_some(), "shipbuying");
         assert_eq!(reeled(&reel), [], "nothing selected yet");
-        screen.input(&key(Key::Right, true));
-        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::ArrowRight, true));
+        screen.input(&key(Key::ArrowRight, false));
         assert_eq!(
             reeled(&reel),
             [Call::Start("Sold.mov".into())],
@@ -74,7 +74,7 @@ fn the_hire_screens_selected_ship_loops_its_movie_file_on_the_looping_player() {
     let (mut screen, main, reel) = filmed_port(false);
     let landing = reeled(&main);
     click_port_item(&mut screen, 11);
-    screen.input(&key(Key::Char('h'), true));
+    screen.input(&key(Key::KeyH, true));
     assert!(
         spaceport(&screen)
             .open_bar()
@@ -82,8 +82,8 @@ fn the_hire_screens_selected_ship_loops_its_movie_file_on_the_looping_player() {
             .is_some(),
         "for hire"
     );
-    screen.input(&key(Key::Right, true));
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, true));
+    screen.input(&key(Key::ArrowRight, false));
     assert_eq!(reeled(&reel), [Call::Start("Hired.mov".into())]);
     screen.input(&key(Key::Escape, true));
     assert!(

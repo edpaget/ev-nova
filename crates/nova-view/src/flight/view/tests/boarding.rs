@@ -152,12 +152,12 @@ fn the_plunder_messages_are_the_originals() {
 
 #[test]
 fn the_help_line_names_board() {
-    assert!(HELP.contains("B: board"), "{HELP}");
+    assert!(default_help().contains("B: board"), "{}", default_help());
 }
 
 // Hailing.
 
 #[test]
 fn the_help_line_names_hail() {
-    assert!(HELP.contains("Y: hail"), "{HELP}");
+    assert!(default_help().contains("Y: hail"), "{}", default_help());
 }

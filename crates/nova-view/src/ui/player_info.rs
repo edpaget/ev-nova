@@ -58,10 +58,14 @@
 //! screen; with no Yes/No dialog the answer is no. No button is inert
 //! ([`INERT_BUTTONS`]).
 //!
-//! **Keys** (`_PlayerInfoFilter` 0x53ae9). Tab, a press or a repeat,
-//! shows the next tab, or with Shift held the previous one, wrapping
-//! (@0x53b14-0x53b80). Return, Enter, Escape and P (a press) close it
-//! (@0x53b86-0x53bb6). The original closes on any key pressed while P
+//! **Keys** (`_PlayerInfoFilter` 0x53ae9), read as commands through the
+//! key map ([`contexts::PLAYER_INFO`]). The shared UI context's Tab, a
+//! press or a repeat, shows the next tab, and the player info context's
+//! Tab Back (Shift-Tab, following Tab wherever it is bound, as the filter
+//! reads the `shiftKey` bit beside it, set by either Shift) the previous
+//! one, wrapping (@0x53b14-0x53b80). Confirm (Return, Enter), Back
+//! (Escape) and the shared play keys' Player Info (P), each a press,
+//! close it (@0x53b86-0x53bb6). The original closes on any key pressed while P
 //! is held; that stays press-only by the user's decision (2026-10-23),
 //! so P's own press is the only held-P close here.
 //!
@@ -90,18 +94,26 @@ use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
 use super::key_wait::KeyWait;
+use super::pad_focus::{FocusState, from_pad};
 use super::text_box::TextBox;
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key, MouseButton};
+use crate::keymap::{
+    Command, CommandInput, CommandReader, PlayCommand, PlayerInfoCommand, SharedBindings,
+    UiCommand, contexts,
+};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
 use crate::spaceport::layout::DONE_LABEL;
 use crate::spaceport::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::text::{TextMetrics, wrap};
+
+mod pad;
 
 /// The player info screen's `DLOG` (and `DITL`) ID.
 pub const PLAYER_INFO_DIALOG: i16 = 1017;
@@ -170,23 +182,16 @@ pub const CONTENT_ITEM: usize = 6;
 /// Jettison's item.
 pub const JETTISON_ITEM: usize = 7;
 
-/// The player info key: the original's default `playerInfoKey`
-/// (`_keyPrefs` +0x32, key code 0x23, `_loadKeys` @0xce5a9-0xce5cc).
-pub const PLAYER_INFO_KEY: Key = Key::Char('p');
-/// The key that, held, makes Tab go back (`shiftKey`, 0x0200).
-pub const BACKWARDS_KEY: Key = Key::Shift;
-
-/// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
-/// asks for the player info screen where the original's filters read the
-/// key.
-#[must_use]
-pub fn is_player_info_press(input: &Input) -> bool {
-    *input
-        == Input::Key {
-            key: PLAYER_INFO_KEY,
-            pressed: true,
-            repeat: false,
-        }
+/// The key the player info key's command, [`PlayCommand::PlayerInfo`],
+/// is bound to in `bindings`, if any: what a close waits on. A key wait
+/// compares the key itself (the phase's fixed keys).
+fn player_info_key(bindings: &SharedBindings) -> Option<Key> {
+    bindings.with(|bindings| {
+        bindings
+            .keyboard
+            .combo(PlayCommand::PlayerInfo.into())
+            .map(|combo| combo.key)
+    })
 }
 
 /// The tabs' labels, `STR#` 150 #36-#39.
@@ -582,13 +587,16 @@ pub struct PlayerInfoScreen {
     /// The button a click is held on, and its tracking.
     tracked: Option<PlayerInfoButton>,
     tracker: ButtonTracker,
-    /// Whether Shift is held.
-    backwards: bool,
     jettison: bool,
     closed: bool,
-    /// The close's wait for [`PLAYER_INFO_KEY`]'s release
-    /// (@0x5a6aa-0x5a6d4).
+    /// The close's wait for the player info key's release
+    /// (@0x5a6aa-0x5a6d4): the key [`PlayCommand::PlayerInfo`] is bound to.
     wait: KeyWait,
+    /// Its keys, as commands ([`contexts::PLAYER_INFO`]).
+    keys: CommandReader,
+    /// The pad's focus on the buttons, and the device used last (the
+    /// `pad` module): the keyboard has no focus here.
+    focus: FocusState<PlayerInfoButton>,
 }
 
 impl PlayerInfoScreen {
@@ -617,22 +625,35 @@ impl PlayerInfoScreen {
             tab: Tab::General,
             tracked: None,
             tracker: ButtonTracker::default(),
-            backwards: false,
             jettison: false,
             closed: false,
-            wait: KeyWait::new(PLAYER_INFO_KEY, false),
+            wait: KeyWait::new(player_info_key(&SharedBindings::default()), false),
+            keys: CommandReader::new(contexts::PLAYER_INFO),
+            focus: FocusState::default(),
         }
     }
 
-    /// The screen opened with [`PLAYER_INFO_KEY`] down or up, as `held`
-    /// says: a close made while it is down waits for its release.
+    /// The screen reading its keys through `bindings`: its close waits on
+    /// the key Player Info is bound to there.
     #[must_use]
-    pub fn with_key_held(mut self, held: bool) -> Self {
-        self.wait = KeyWait::new(PLAYER_INFO_KEY, held);
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.wait.set_key(player_info_key(&bindings));
+        self.wait.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
         self
     }
 
-    /// Whether a close waits for [`PLAYER_INFO_KEY`]'s release: the
+    /// The screen opened with the player info key down or up, as `held`
+    /// says: a close made while it is down waits for its release.
+    #[must_use]
+    pub fn with_key_held(mut self, held: bool) -> Self {
+        let bindings = self.keys.bindings().clone();
+        self.wait = KeyWait::new(player_info_key(&bindings), held);
+        self.wait.set_bindings(bindings);
+        self
+    }
+
+    /// Whether a close waits for the player info key's release: the
     /// screen stays drawn and takes no input but the wait's.
     #[must_use]
     pub fn waiting(&self) -> bool {
@@ -645,7 +666,7 @@ impl PlayerInfoScreen {
         self.wait.take_replay()
     }
 
-    /// Closes now, or once [`PLAYER_INFO_KEY`] is let go if it is down.
+    /// Closes now, or once the player info key is let go if it is down.
     fn close(&mut self) {
         if self.wait.close() {
             self.closed = true;
@@ -752,8 +773,10 @@ impl PlayerInfoScreen {
             .with_buttons(ButtonSkin::NOVA, self.style)
             .with_default(Some(YES_ITEM))
             .with_cancel(None)
-            .with_focus_ring(self.focus_ring);
+            .with_focus_ring(self.focus_ring)
+            .with_bindings(self.keys.bindings().clone());
         dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
+        dialog.input(&self.told());
         self.confirm = Some(dialog);
     }
 
@@ -880,8 +903,10 @@ fn lay_out(
 
 impl Screen for PlayerInfoScreen {
     /// The Yes/No dialog takes everything while it asks. Otherwise Tab
-    /// changes the tab, Return, Enter, Escape and P close, and a click
-    /// goes to the buttons. It never quits.
+    /// and Tab Back (or Previous Field, the pad's left shoulder) change
+    /// the tab, Confirm, Back and Player Info close, the pad's d-pad and
+    /// South move the pad's focus and press the button it is on (the
+    /// `pad` module), and a click goes to the buttons. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.wait.waiting() {
             if self.wait.input(input) {
@@ -890,37 +915,54 @@ impl Screen for PlayerInfoScreen {
             return ScreenAction::None;
         }
         self.wait.note(input);
-        if let Input::Key {
-            key: BACKWARDS_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.backwards = pressed;
+        let command = self.keys.follow(input);
+        if let Input::Surroundings(surroundings) = *input {
+            self.pad_surroundings(surroundings.device);
         }
         if self.confirm.is_some() {
             self.confirm_input(input);
             return ScreenAction::None;
         }
-        match *input {
-            Input::Key {
-                key: Key::Tab,
+        if from_pad(input) && self.pad_command(command) {
+            return ScreenAction::None;
+        }
+        match command {
+            Some(CommandInput {
+                command:
+                    tab @ (Command::Ui(UiCommand::Tab | UiCommand::PrevFocus)
+                    | Command::PlayerInfo(PlayerInfoCommand::TabBack)),
                 pressed: true,
-                ..
-            } if self.laid.is_ok() => {
-                self.tab = if self.backwards {
+                repeat,
+            }) if self.laid.is_ok() => {
+                // A repeat reads Shift as it is now, as the filter reads
+                // `shiftKey` on each autoKey event.
+                let tab = if repeat {
+                    self.keys.peek(input).unwrap_or(tab)
+                } else {
+                    tab
+                };
+                self.tab = if matches!(
+                    tab,
+                    Command::PlayerInfo(PlayerInfoCommand::TabBack)
+                        | Command::Ui(UiCommand::PrevFocus)
+                ) {
                     self.tab.previous()
                 } else {
                     self.tab.next()
                 };
             }
-            Input::Key {
-                key: Key::Enter | Key::Escape | PLAYER_INFO_KEY,
+            Some(CommandInput {
+                command:
+                    Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                    | Command::Play(PlayCommand::PlayerInfo),
                 pressed: true,
                 repeat: false,
-            } => self.close(),
-            Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
-            _ => {}
+            }) => self.close(),
+            _ => {
+                if let Input::PointerButton { .. } | Input::PointerMoved(_) = input {
+                    self.pointer(input);
+                }
+            }
         }
         ScreenAction::None
     }
@@ -934,7 +976,8 @@ impl Screen for PlayerInfoScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the player info: {reason}. Press Return or Escape to close it."
+                        "Cannot show the player info: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -960,6 +1003,7 @@ impl Screen for PlayerInfoScreen {
             );
         }
         self.draw_content(laid, list);
+        self.draw_pad_highlight(list);
         if let Some(dialog) = &self.confirm {
             fill_rect(list, dialog.bounds(), Color::BLACK);
             dialog.draw(list);
@@ -975,7 +1019,7 @@ impl Screen for PlayerInfoScreen {
     }
 
     fn release_keys(&mut self) {
-        self.backwards = false;
+        self.keys.let_go();
         if self.wait.release() {
             self.closed = true;
         }
@@ -1013,11 +1057,17 @@ impl PlayerInfoScreen {
 }
 
 #[cfg(test)]
+pub(crate) use tests::{confirm_pad_probe, pad_probe};
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::keymap::KeyMap;
+    use crate::keymap::test_keys::PLAYER_INFO_KEY;
     use nova_sim::player_info::CheatIds;
 
+    use crate::keymap::{Bindings, KeyCombo};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
@@ -1098,7 +1148,7 @@ mod tests {
         }
     }
 
-    fn info() -> PlayerInfo {
+    pub(super) fn info() -> PlayerInfo {
         PlayerInfo {
             pilot_name: "Ada".to_owned(),
             date: "June 23rd, 1177 NC".to_owned(),
@@ -1160,11 +1210,11 @@ mod tests {
         )
     }
 
-    fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
+    pub(super) fn screen_of(info: PlayerInfo) -> PlayerInfoScreen {
         screen_with(info, stock())
     }
 
-    fn screen() -> PlayerInfoScreen {
+    pub(super) fn screen() -> PlayerInfoScreen {
         screen_of(info())
     }
 
@@ -1176,7 +1226,7 @@ mod tests {
         }
     }
 
-    fn press(key_pressed: Key) -> Input {
+    pub(super) fn press(key_pressed: Key) -> Input {
         key(key_pressed, true, false)
     }
 
@@ -1194,12 +1244,99 @@ mod tests {
         screen.input(&mouse(false, at));
     }
 
-    fn click_button(screen: &mut PlayerInfoScreen, button: PlayerInfoButton) {
+    pub(super) fn click_button(screen: &mut PlayerInfoScreen, button: PlayerInfoButton) {
         let at = screen.button_bounds(button).expect("laid out").center();
         click(screen, at);
     }
 
-    fn drawn(screen: &PlayerInfoScreen) -> Vec<DrawCommand> {
+    /// The screen on its Cargo tab, with cargo to jettison.
+    pub(super) fn on_cargo() -> PlayerInfoScreen {
+        let mut screen = screen();
+        click_button(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        screen
+    }
+
+    fn outcome_of(screen: &mut PlayerInfoScreen) -> String {
+        format!(
+            "{:?}, closed {}, asking {}, jettison {}",
+            screen.tab(),
+            screen.closed(),
+            screen.confirm_open(),
+            screen.take_jettison()
+        )
+    }
+
+    struct Probe(PlayerInfoScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let at = |button| self.0.button_bounds(button).expect("laid out");
+            vec![
+                ("Done", at(PlayerInfoButton::Done)),
+                ("General", at(PlayerInfoButton::Tab(Tab::General))),
+                ("Cargo", at(PlayerInfoButton::Tab(Tab::Cargo))),
+                ("Extras", at(PlayerInfoButton::Tab(Tab::Extras))),
+                ("Honors", at(PlayerInfoButton::Tab(Tab::Honors))),
+                ("Jettison", at(PlayerInfoButton::Jettison)),
+            ]
+        }
+
+        fn outcome(&mut self) -> String {
+            outcome_of(&mut self.0)
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+    }
+
+    /// The player info screen's row in the pad's every-screen table, on
+    /// its Cargo tab with cargo, so Jettison shows.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(on_cargo()))
+    }
+
+    struct ConfirmProbe(PlayerInfoScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for ConfirmProbe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            let confirm = self.0.confirm().expect("asking");
+            let at = |item| confirm.item_bounds(item).expect("item");
+            vec![("OK", at(YES_ITEM)), ("Cancel", at(NO_ITEM))]
+        }
+
+        fn outcome(&mut self) -> String {
+            outcome_of(&mut self.0)
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("OK")
+        }
+
+        fn set_ring(&mut self, ring: FocusRing) -> bool {
+            let mut screen = on_cargo().with_focus_ring(ring);
+            click_button(&mut screen, PlayerInfoButton::Jettison);
+            self.0 = screen;
+            true
+        }
+    }
+
+    /// The Jettison question's row in the pad's every-screen table.
+    pub(crate) fn confirm_pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        let mut screen = on_cargo();
+        click_button(&mut screen, PlayerInfoButton::Jettison);
+        Box::new(ConfirmProbe(screen))
+    }
+
+    pub(super) fn drawn(screen: &PlayerInfoScreen) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
         screen.draw(&mut list);
         list.iter().cloned().collect()
@@ -1240,7 +1377,12 @@ mod tests {
         );
         assert_eq!(LABEL_COLOR, Color::rgba(192, 192, 192, 255));
         assert_eq!(TEXT_SIZE, 9.0);
-        assert_eq!(PLAYER_INFO_KEY, Key::Char('p'));
+        assert_eq!(
+            KeyMap::default()
+                .combo(PlayCommand::PlayerInfo.into())
+                .map(|combo| combo.key),
+            Some(Key::KeyP)
+        );
     }
 
     #[test]
@@ -1823,6 +1965,52 @@ mod tests {
         assert_eq!(screen.tab(), Tab::General);
     }
 
+    /// `_PlayerInfoFilter` reads `shiftKey` (@0x53b1e), which either
+    /// Shift sets.
+    #[test]
+    fn either_shift_takes_tab_back_until_both_are_let_go() {
+        let mut screen = screen();
+        screen.input(&press(Key::ShiftRight));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Honors, "back with the right Shift");
+        screen.input(&press(Key::ShiftLeft));
+        screen.input(&key(Key::ShiftRight, false, false));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Extras, "the left one still down");
+        screen.input(&key(Key::ShiftLeft, false, false));
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::Honors, "forward once both are up");
+    }
+
+    /// The screen reads its keys through the key map it is given: Player
+    /// Info rebound to O closes it on O, waiting for O's release, and no
+    /// longer on P; Tab rebound to F7 steps the tabs on F7, and Shift-F7
+    /// back, and no longer on Tab.
+    #[test]
+    fn a_rebound_player_info_key_and_tab_act_on_their_new_keys_alone() {
+        let o = Key::KeyO;
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(PlayCommand::PlayerInfo, KeyCombo::key(o))
+                .rebound(UiCommand::Tab, KeyCombo::key(Key::F7)),
+        );
+        let mut screen = screen().with_bindings(bindings);
+        screen.input(&press(Key::Tab));
+        assert_eq!(screen.tab(), Tab::General, "Tab no longer steps");
+        screen.input(&press(Key::F7));
+        assert_eq!(screen.tab(), Tab::Cargo);
+        screen.input(&press(Key::ShiftRight));
+        screen.input(&press(Key::F7));
+        assert_eq!(screen.tab(), Tab::General, "Shift-F7 steps back");
+        screen.input(&key(Key::ShiftRight, false, false));
+        screen.input(&press(PLAYER_INFO_KEY));
+        assert!(!screen.closed() && !screen.waiting(), "P no longer closes");
+        screen.input(&press(o));
+        assert!(screen.waiting(), "O's press waits for its release");
+        screen.input(&key(o, false, false));
+        assert!(screen.closed());
+    }
+
     #[test]
     fn tab_and_shift_tab_cycle_and_wrap() {
         let mut screen = screen();
@@ -1835,15 +2023,15 @@ mod tests {
         screen.input(&press(Key::Tab));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::General, "wrapped");
-        screen.input(&press(Key::Shift));
+        screen.input(&press(Key::ShiftLeft));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Honors, "back, wrapped");
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Extras);
-        screen.input(&key(Key::Shift, false, false));
+        screen.input(&key(Key::ShiftLeft, false, false));
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::Honors, "forward again");
-        screen.input(&press(Key::Shift));
+        screen.input(&press(Key::ShiftLeft));
         screen.release_keys();
         screen.input(&press(Key::Tab));
         assert_eq!(screen.tab(), Tab::General, "let go of Shift");
@@ -1851,7 +2039,7 @@ mod tests {
 
     #[test]
     fn return_enter_escape_and_p_close_it_but_not_a_repeat_or_release() {
-        for closing in [Key::Enter, Key::Escape, PLAYER_INFO_KEY] {
+        for closing in [Key::Enter, Key::NumpadEnter, Key::Escape, PLAYER_INFO_KEY] {
             let mut screen = screen();
             screen.input(&key(closing, true, true));
             screen.input(&key(closing, false, false));
@@ -1864,7 +2052,7 @@ mod tests {
             assert!(screen.closed(), "{closing:?}");
         }
         let mut screen = screen();
-        screen.input(&press(Key::Char('x')));
+        screen.input(&press(Key::KeyX));
         assert!(!screen.closed(), "another key");
     }
 
@@ -1985,7 +2173,7 @@ mod tests {
     fn losing_focus_during_the_wait_closes_it_with_nothing_to_replay() {
         let mut screen = held();
         screen.input(&press(Key::Enter));
-        screen.input(&press(Key::Char('x')));
+        screen.input(&press(Key::KeyX));
         screen.release_keys();
         assert!(screen.closed());
         assert_eq!(screen.take_replay(), []);
@@ -2365,7 +2553,7 @@ mod tests {
     /// routine, and neither does `_MyModalDialog` @0x59954.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for closing in [Key::Enter, Key::Escape, PLAYER_INFO_KEY] {
+        for closing in [Key::Enter, Key::NumpadEnter, Key::Escape, PLAYER_INFO_KEY] {
             let mut screen = screen();
             assert_eq!(screen.take_sounds(), Vec::<Sound>::new());
             screen.input(&press(closing));
@@ -2415,6 +2603,58 @@ mod tests {
             stock(),
         );
         assert_eq!(screen.problem(), Some("its dialog has no item 7"));
+    }
+
+    #[test]
+    fn without_its_template_it_names_the_keys_bound_to_close_it() {
+        let screen = PlayerInfoScreen::new(
+            Err("no DLOG 1017".to_owned()),
+            Ok(yes_no()),
+            info(),
+            ButtonStyle::STOCK,
+            stock(),
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            texts(&screen),
+            ["Cannot show the player info: no DLOG 1017. Press Q or Escape to close it."]
+        );
+    }
+
+    #[test]
+    fn the_close_prompt_names_south_and_east_with_a_pad_last_used() {
+        use crate::input::ControllerFamily as F;
+        let unplaced = |bindings: Bindings, family: crate::input::ControllerFamily| {
+            let mut screen = PlayerInfoScreen::new(
+                Err("no DLOG 1017".to_owned()),
+                Ok(yes_no()),
+                info(),
+                ButtonStyle::STOCK,
+                stock(),
+            )
+            .with_bindings(SharedBindings::new(bindings));
+            screen.input(&Input::Surroundings(crate::input::Surroundings::of(
+                crate::input::Device::Gamepad(family),
+            )));
+            texts(&screen)
+        };
+        assert_eq!(
+            unplaced(Bindings::default(), F::Xbox),
+            ["Cannot show the player info: no DLOG 1017. Press A or B to close it."]
+        );
+        assert_eq!(
+            unplaced(Bindings::default(), F::Generic),
+            ["Cannot show the player info: no DLOG 1017. Press South or East to close it."]
+        );
+        let mut unbound = Bindings::default();
+        unbound.gamepad.unbind(UiCommand::Back.into());
+        assert_eq!(
+            unplaced(unbound, F::PlayStation),
+            ["Cannot show the player info: no DLOG 1017. Press Cross or Escape to close it."],
+            "unbound on the pad, its key"
+        );
     }
 
     /// `_EVYesNoDialog` @0x5558c, the Jettison question, runs the

@@ -169,16 +169,19 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nova::app::LoopEvent;
-use nova::app::start_screen;
+use nova::app::{AppScreen, start_screen};
 use nova::audio::{game_audio, music_warning, voice_limit};
 use nova::chance::SplitMix;
 use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
+use nova::exit::OpenFailure;
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::movie::{movie_folders, movie_player};
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
-use nova::platform::{Dialogs, Runner, event_loop, system_keyboard_access};
+use nova::platform::{
+    Dialogs, Runner, event_loop, loop_channel, menu_key_equivalents, system_key_names,
+    system_keyboard_access,
+};
 use nova::rulebook::eight_bit_reading;
 use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
@@ -192,6 +195,7 @@ use nova_data::{GameData, InterfaceData, open_interface};
 use nova_render::GameImages;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{Chance, PilotKeeper, PilotStore, Rulebook};
+use nova_view::SharedBindings;
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use winit::event_loop::EventLoop;
@@ -266,31 +270,49 @@ fn run_seed() -> u64 {
         })
 }
 
+/// `runner` with the gamepads, through gilrs. Without them (no udev on a
+/// Linux host, say) the game runs on the keyboard and mouse, with a
+/// warning to `report`.
+fn with_gamepads(
+    runner: Runner<GameImages<Rc<GameData>>>,
+    report: &RefCell<Report>,
+) -> Runner<GameImages<Rc<GameData>>> {
+    match nova::platform::gamepads::GilrsGamepads::new() {
+        Ok(pads) => runner.with_gamepads(Box::new(pads)),
+        Err(warning) => {
+            report.borrow_mut().warn(&warning);
+            runner
+        }
+    }
+}
+
 /// Runs `runner` on `event_loop` until it exits, the menu bar's picks sent
 /// back through the loop and Sparkle offered as the updater on macOS, and
-/// WinSparkle on Windows, its quit sent back through the loop; gives the
-/// runner back.
+/// WinSparkle on Windows, its quit sent back through the loop; gives back
+/// why the window could not open, if it could not. The loop takes the
+/// runner and drops it as it ends.
 fn run(
-    mut runner: Runner<GameImages<Rc<GameData>>>,
-    event_loop: EventLoop<LoopEvent>,
+    runner: Runner<GameImages<Rc<GameData>>>,
+    event_loop: EventLoop,
 ) -> (
-    Runner<GameImages<Rc<GameData>>>,
+    Option<OpenFailure>,
     Result<(), winit::error::EventLoopError>,
 ) {
+    let (sender, events) = loop_channel(event_loop.create_proxy());
+    let runner = runner.with_loop_events(events);
     #[cfg(target_os = "macos")]
-    {
-        runner = runner
-            .with_menu_proxy(event_loop.create_proxy())
-            .with_updater_source(Box::new(nova::platform::SparkleSource));
-    }
+    let runner = runner
+        .with_menu_sender(sender)
+        .with_updater_source(Box::new(nova::platform::SparkleSource));
     #[cfg(windows)]
-    {
-        runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(
-            event_loop.create_proxy(),
-        )));
-    }
-    let result = event_loop.run_app(&mut runner);
-    (runner, result)
+    let runner = runner.with_updater_source(Box::new(nova::platform::winsparkle_source(sender)));
+    // Nothing sends loop events elsewhere.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    drop(sender);
+    let failure = runner.failure_slot();
+    let result = event_loop.run_app(runner);
+    let failure = failure.borrow_mut().take();
+    (failure, result)
 }
 
 /// Where the startup report says stderr goes: on Windows, once stderr is
@@ -305,6 +327,24 @@ fn stderr_terminal() -> impl Terminal {
 #[cfg(not(windows))]
 fn stderr_terminal() -> impl Terminal {
     nova::startup::StdTerminal
+}
+
+/// `screen` with what Preferences asks the platform: whether the player
+/// has turned on keyboard access to every control (its focus ring
+/// follows it), and, for the keys screen, the menu bar's key equivalents,
+/// which it binds to nothing. The layout's key names ride on the bindings
+/// ([`player_bindings`]).
+fn with_platform(screen: AppScreen) -> AppScreen {
+    screen
+        .with_keyboard_access(system_keyboard_access())
+        .with_reserved_combos(menu_key_equivalents())
+}
+
+/// The app's one handle on `saved`, the keys the settings file saves,
+/// with the player's layout on it, which names them wherever a text names
+/// a key: the one place the layout is wired.
+fn player_bindings(saved: nova_view::Bindings) -> SharedBindings {
+    SharedBindings::new(saved).with_key_names(system_key_names())
 }
 
 fn main() -> ExitCode {
@@ -369,16 +409,17 @@ fn main() -> ExitCode {
         // The shipyard's looping ship movie plays on a player of its own.
         .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
+        // The keys the settings file saves, read by every screen built.
+        .with_bindings(player_bindings(settings.bindings.clone()))
         .with_pilots(pilots, Rc::clone(&metrics))
         // The new game's conversations play on the Ink runtime.
         .with_dialog_loader(nova::dialogs::loader(seed))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
         .with_flight_overlays(overlays)
-        // Preferences' focus ring follows the system's full keyboard access.
-        .with_keyboard_access(system_keyboard_access())
         // Every disputed rule as the settings' rulebook chooses.
         .with_rulebook(&rulebook);
+    screen = with_platform(screen);
     let interface = open_interface_file(&dir, &mut report);
     if let Some(interface) = &interface {
         screen = screen.with_dialogs(Rc::<InterfaceData>::clone(interface), metrics);
@@ -394,7 +435,7 @@ fn main() -> ExitCode {
         GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook)),
         GameImages::with_interface,
     );
-    let runner = Runner::new(images, screen, fonts)
+    let runner = with_gamepads(Runner::new(images, screen, fonts), &report)
         .with_diagnostics(Box::new(std::io::stderr()))
         .with_report(Rc::clone(&report));
     let runner = match audio {
@@ -407,13 +448,26 @@ fn main() -> ExitCode {
     };
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
-    let (runner, result) = run(runner, event_loop);
-    let ended = Fatal::ending(
-        result.map_err(|error| error.to_string()),
-        runner.open_failure(),
-    );
+    let (failure, result) = run(runner, event_loop);
+    let ended = Fatal::ending(result.map_err(|error| error.to_string()), failure.as_ref());
     match ended {
         Some(fatal) => ExitCode::from(report.borrow_mut().fail(&fatal, &mut Dialogs)),
         None => ExitCode::SUCCESS,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_player_s_bindings_are_the_saved_ones_named_through_the_platform_s_layout() {
+        let saved = nova_view::Bindings::default().unbound(nova_view::keymap::FlightCommand::Eject);
+        let bindings = player_bindings(saved.clone());
+        assert_eq!(bindings.get(), saved);
+        assert_eq!(
+            format!("{:?}", bindings.names()),
+            format!("{:?}", system_key_names())
+        );
     }
 }

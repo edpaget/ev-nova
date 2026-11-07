@@ -33,10 +33,10 @@ winit.workspace = true
 # The developer tools overlay, only with the `dev-tools` feature.
 egui = { workspace = true, optional = true }
 egui-wgpu = { workspace = true, optional = true }
-egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
-# The macOS menu bar, built behind nova-appkit's safe API.
+# The macOS menu bar, built behind nova-appkit's safe API, and the
+# keyboard layout's key names.
 [target.'cfg(target_os = "macos")'.dependencies]
 nova-appkit.workspace = true
 
@@ -46,6 +46,9 @@ nova-appkit.workspace = true
 # without it) and zenity's alerts.
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 rfd.workspace = true
+# The gamepads, behind the `Gamepads` port (`platform::gamepads`): the
+# desktops only, so an iOS build adds its own adapter without gilrs.
+gilrs.workspace = true
 
 # rfd's Linux backend: the FileChooser portal over a `dlopen`ed libdbus,
 # falling back to zenity, with no GTK or Wayland crates. Turned on here, for
@@ -54,8 +57,9 @@ rfd.workspace = true
 rfd = { workspace = true, features = ["xdg-portal"] }
 
 # The console calls behind nova-win32's safe API: attaching to the
-# terminal's console, as `nova.exe` is a Windows-subsystem program; and
-# the icon's resource id, which the window loads its icon by.
+# terminal's console, as `nova.exe` is a Windows-subsystem program; the
+# keyboard layout's key names; and the icon's resource id, which the
+# window loads its icon by.
 [target.'cfg(windows)'.dependencies]
 nova-win32.workspace = true
 nova-winres.workspace = true
@@ -98,7 +102,7 @@ object.workspace = true
 [features]
 # The developer tools overlay (egui), toggled with the backquote key. Off by
 # default and in release builds; `mise run dev` turns it on.
-dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
+dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:wgpu"]
 # Exposes the test support this crate's integration tests reach the app
 # through: the current screen to change (`App::screen_mut`) and the
 # flight screen to ask (`AppScreen::flight_view_mut`), as a screen's ask

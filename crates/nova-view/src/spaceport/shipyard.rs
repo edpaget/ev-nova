@@ -92,7 +92,9 @@
 //! "Text Input" dialog, the prompt is laid out by
 //! [`TextInputDialog::fallback`].
 //!
-//! Info, clicked or with Space ([`INFO_KEY`]), opens the "Shipyard Info" panel (`DLOG`/`DITL`
+//! Info, clicked or with Space (the shared [`UiCommand::Activate`] through
+//! the key map, as `_ShipyardFilter` maps Space to item 10, @0x60526-0x60537),
+//! opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
 //! and in item 5 what `_ShipDescDialogUpdate` draws (@0x4fb4a-0x50f17),
 //! each text placed by its baseline ([`spec_lines`]). Two columns of a
@@ -179,14 +181,18 @@ use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::ship_movie::ShipMovie;
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::bound_names::{CONFIRM_OR_BACK, press_clause};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::flight::PortScreen;
-use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{
+    Command, CommandInput, CommandReader, PlayCommand, SharedBindings, ShipyardCommand, UiCommand,
+    contexts,
+};
 use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
@@ -194,9 +200,8 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
-use crate::ui::mission_info::is_mission_info_press;
+use crate::ui::pad_focus::{Told, from_pad};
 use crate::ui::picture_variant::{VariantTemplates, shown_graphic};
-use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_box::TextBox;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
@@ -260,15 +265,6 @@ pub const PANEL_GRAPHIC_ITEM: usize = 7;
 /// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4),
 /// as it does for every `dësc`.
 pub use crate::ui::desc::LAST_UNSHOWN_GRAPHIC;
-
-/// Buys the selected ship, as Buy Ship does: the original's default.
-pub const BUY_KEY: Key = Key::Char('b');
-/// Opens the info panel, as Info does: Space, which `_ShipyardFilter`
-/// maps to item 10 (@0x60526-0x60537). Nothing in it reads I, which asks
-/// for the mission info screen
-/// ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), pref
-/// +0x50 @0x60947-0x6096d).
-pub const INFO_KEY: Key = Key::Space;
 
 /// The first ship's `PICT`; ship n's is n - 128 after it.
 pub const FIRST_SHIP_PICTURE: i16 = 5000;
@@ -822,22 +818,32 @@ impl Panel {
         self
     }
 
+    /// It reading its dialog's keys through `bindings`.
+    pub(super) fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
+    }
+
     /// Its dialog.
     pub(super) fn dialog(&self) -> &Dialog {
         &self.dialog
     }
 
-    /// Its input, silent under the pointer as `_TrackShipyardButtons`
-    /// @0x2a54e: whether Done, Return, Escape or Space closed it. Space is
-    /// Done as `_ShipDescFilter` maps it (@0x511a6-0x511b9), whatever the
-    /// focus ring, and on a keyDown only (@0x510f4), so its repeats do
-    /// nothing.
-    pub(super) fn input(&mut self, input: &Input) -> bool {
-        if let Input::Key {
-            key: Key::Space,
+    /// Its input, with `command`, what its host's reader said `input`
+    /// meant, silent under the pointer as `_TrackShipyardButtons`
+    /// @0x2a54e: whether Done, Return, Escape or Space (the shared
+    /// Activate) closed it. Space is Done as `_ShipDescFilter` maps it
+    /// (@0x511a6-0x511b9), whatever the focus ring, and on a keyDown only
+    /// (@0x510f4), so its repeats do nothing.
+    pub(super) fn input(&mut self, input: &Input, command: Option<CommandInput>) -> bool {
+        if from_pad(input) {
+            return self.pad_input(input);
+        }
+        if let Some(CommandInput {
+            command: Command::Ui(UiCommand::Activate),
             pressed: true,
             repeat,
-        } = *input
+        }) = command
         {
             return !repeat;
         }
@@ -978,10 +984,10 @@ pub(super) fn open_panel(
 /// The info screens the shipyard has asked for, until taken.
 #[derive(Clone, Copy, Debug, Default)]
 struct InfoAsks {
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo)
     /// asked for the player info screen.
     player_info: bool,
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// asked for the mission info screen.
     mission_info: bool,
     /// The map the map key asked for: the shipyard's, or the Info
@@ -1016,6 +1022,9 @@ pub struct ShipyardScreen {
     asked_by_key: bool,
     /// The name prompt, while it is open, and the ship it names.
     naming: ModalHost<ShipId, TextInputDialog>,
+    /// The surroundings it was told last, which its info panel is told
+    /// as it opens (the `pad` module).
+    told: Told,
     /// The ship ordered, named, until it is taken.
     order: Option<ShipOrder>,
     /// The ship declined at its name prompt, until it is taken.
@@ -1029,6 +1038,9 @@ pub struct ShipyardScreen {
     description_request: Option<i16>,
     /// The selected ship's movie, looping in item 8.
     movie: ShipMovie,
+    /// Its keys, as commands ([`contexts::SHIPYARD`]): Buy Ship, the play
+    /// keys and the shared UI keys, its Info panel's among them.
+    keys: CommandReader,
     sounds: Vec<Sound>,
 }
 
@@ -1102,6 +1114,7 @@ impl ShipyardScreen {
             request: None,
             asked_by_key: false,
             naming: ModalHost::default(),
+            told: Told::default(),
             order: None,
             declined: None,
             offering: None,
@@ -1109,10 +1122,12 @@ impl ShipyardScreen {
             closed: false,
             description_request: None,
             movie: ShipMovie::new(movies),
+            keys: CommandReader::new(contexts::SHIPYARD),
             sounds: Vec::new(),
         };
         screen.read_pictures();
         screen.selected_changed();
+        screen.sync_pad_cells();
         screen
     }
 
@@ -1129,6 +1144,20 @@ impl ShipyardScreen {
         self
     }
 
+    /// The shipyard reading its keys through `bindings`: its own, its
+    /// dialog's and those of each dialog it opens after it.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_bindings(bindings.clone());
+        }
+        if let Some(offering) = &mut self.offering {
+            offering.set_bindings(bindings.clone());
+        }
+        self.keys.set_bindings(bindings);
+        self
+    }
+
     /// The shipyard with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
@@ -1136,7 +1165,11 @@ impl ShipyardScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
+            offering: Some(
+                VenueOffers::asking(templates)
+                    .with_focus_ring(self.focus_ring)
+                    .with_bindings(self.keys.bindings().clone()),
+            ),
             ..self
         }
     }
@@ -1152,7 +1185,7 @@ impl ShipyardScreen {
         }
     }
 
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// Whether [the player info key](crate::keymap::PlayCommand::PlayerInfo) has asked for the player info screen
     /// since this was last asked, in the shipyard, its Info panel or its
     /// offer (`_ShipyardFilter` @0x6091a, `_ShipDescFilter` @0x51132),
     /// never at the name prompt, which takes P as a letter.
@@ -1180,7 +1213,7 @@ impl ShipyardScreen {
         self.offering.as_mut()?.take_map_request()
     }
 
-    /// Whether [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// Whether [the mission info key](crate::keymap::PlayCommand::MissionInfo)
     /// has asked for the mission info screen since this was last asked,
     /// here or in its offer.
     pub fn take_info_request(&mut self) -> bool {
@@ -1374,7 +1407,10 @@ impl ShipyardScreen {
         if self.asked_by_key {
             prompt.flush_typed_key();
         }
-        self.naming.open(naming.ship, prompt);
+        self.naming.open(
+            naming.ship,
+            prompt.with_bindings(self.keys.bindings().clone()),
+        );
     }
 
     /// The name prompt, while it is open.
@@ -1446,6 +1482,7 @@ impl ShipyardScreen {
         } else {
             self.selected_changed();
         }
+        self.sync_pad_cells();
     }
 
     /// Reads each listed ship's picture, when there is a dialog to show
@@ -1545,7 +1582,12 @@ impl ShipyardScreen {
             &laid.metrics.0,
             self.style,
         )
-        .map(|panel| panel.with_focus_ring(self.focus_ring));
+        .map(|panel| {
+            panel
+                .with_focus_ring(self.focus_ring)
+                .with_bindings(self.keys.bindings().clone())
+                .told(self.told)
+        });
     }
 
     /// Activates dialog item `item`: Done closes, Buy Ship asks, Info
@@ -1600,12 +1642,13 @@ impl ShipyardScreen {
         self.grid.cells().cell_under(grid, at)
     }
 
-    /// The info panel's input: Done, Return, Escape and Space close it.
-    fn panel_input(&mut self, input: &Input) {
+    /// The info panel's input, `command` what it meant: Done, Return,
+    /// Escape and Space close it.
+    fn panel_input(&mut self, input: &Input, command: Option<CommandInput>) {
         let Some(panel) = &mut self.panel else {
             return;
         };
-        if panel.input(input) {
+        if panel.input(input, command) {
             self.panel = None;
         }
     }
@@ -1679,18 +1722,24 @@ impl Screen for ShipyardScreen {
     /// Every input goes to the shipyard, or to its name prompt or info
     /// panel while that is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let command = self.keys.follow(input);
+        let pressed = command.filter(|command| command.pressed);
+        let fresh = pressed
+            .filter(|command| !command.repeat)
+            .map(|command| command.command);
+        if self.tell_held(input) {
+            return ScreenAction::None;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
             return ScreenAction::None;
         }
         if self.laid.is_err() {
-            if let Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } = *input
-            {
+            if matches!(
+                fresh,
+                Some(Command::Ui(UiCommand::Confirm | UiCommand::Back))
+            ) {
                 self.closed = true;
             }
             return ScreenAction::None;
@@ -1707,34 +1756,31 @@ impl Screen for ShipyardScreen {
             }
             return ScreenAction::None;
         }
-        if is_map_press(input) {
-            self.asks.map = Some(if self.panel.is_some() {
-                PortScreen::ShipDescription
-            } else {
-                PortScreen::Shipyard
-            });
-            return ScreenAction::None;
-        }
-        if is_player_info_press(input) {
-            self.asks.player_info = true;
-            return ScreenAction::None;
-        }
-        if is_mission_info_press(input) {
-            self.asks.mission_info = true;
-            return ScreenAction::None;
+        match fresh {
+            Some(Command::Play(PlayCommand::GalaxyMap)) => {
+                self.asks.map = Some(if self.panel.is_some() {
+                    PortScreen::ShipDescription
+                } else {
+                    PortScreen::Shipyard
+                });
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::PlayerInfo)) => {
+                self.asks.player_info = true;
+                return ScreenAction::None;
+            }
+            Some(Command::Play(PlayCommand::MissionInfo)) => {
+                self.asks.mission_info = true;
+                return ScreenAction::None;
+            }
+            _ => {}
         }
         if self.panel.is_some() {
-            self.panel_input(input);
+            self.panel_input(input, command);
             return ScreenAction::None;
         }
         let count = self.shipyard.rows.len();
-        let arrow = match *input {
-            Input::Key {
-                key, pressed: true, ..
-            } => self.grid.arrow(key, count),
-            _ => false,
-        };
-        let pressed_once = |wanted: Key| matches!(*input, Input::Key { key, pressed: true, repeat: false } if key == wanted);
+        let arrow = pressed.is_some_and(|command| self.grid.arrow(command.command, count));
         let on_grid = match *input {
             Input::PointerButton {
                 pressed: true, at, ..
@@ -1745,18 +1791,20 @@ impl Screen for ShipyardScreen {
         };
         if arrow {
             self.selected_changed();
-        } else if pressed_once(BUY_KEY) {
+        } else if fresh == Some(Command::Shipyard(ShipyardCommand::Buy)) {
             self.ask(true);
-        } else if pressed_once(INFO_KEY) {
+        } else if fresh == Some(Command::Ui(UiCommand::Activate)) && !from_pad(input) {
             self.open_info();
         } else if on_grid {
             // The grid took the press.
         } else if let Ok(laid) = &mut self.laid {
-            let event = laid.dialog.input(input);
-            if let Some(DialogEvent::Item(item)) = event {
-                self.activate(item);
+            match laid.dialog.input(input) {
+                Some(DialogEvent::Item(item)) => self.activate(item),
+                Some(DialogEvent::Cell(cell)) => self.press_pad_cell(cell),
+                None => {}
             }
         }
+        self.sync_pad_cells();
         ScreenAction::None
     }
 
@@ -1778,6 +1826,7 @@ impl Screen for ShipyardScreen {
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
+        self.sync_pad_cells();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1786,7 +1835,8 @@ impl Screen for ShipyardScreen {
             Err(reason) => {
                 list.text(
                     format!(
-                        "Cannot show the shipyard: {reason}. Press Return or Escape to close it."
+                        "Cannot show the shipyard: {reason}.{}",
+                        press_clause(&self.keys, &CONFIRM_OR_BACK, "close it")
                     ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
@@ -1814,6 +1864,12 @@ impl Screen for ShipyardScreen {
         }
     }
 
+    /// Its name prompt asks for no text entry while something the
+    /// spaceport shows covers it.
+    fn set_covered(&mut self, covered: bool) {
+        self.naming.set_covered(covered);
+    }
+
     fn cancel_pointer(&mut self) {
         if self
             .offering
@@ -1839,6 +1895,11 @@ impl Screen for ShipyardScreen {
             .is_some_and(VenueOffers::holds_back_keys)
     }
 
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
+    }
+
     /// The offer's and the naming dialog's sounds, in order. The buttons
     /// are silent under the pointer, as `_TrackShipyardButtons` @0x2a54e
     /// plays nothing.
@@ -1846,6 +1907,8 @@ impl Screen for ShipyardScreen {
         std::mem::take(&mut self.sounds)
     }
 }
+
+pub(crate) mod pad;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -1856,8 +1919,8 @@ mod tests {
 
     use super::*;
     use crate::draw::{DrawCommand, frame_rect};
-    use crate::flight::view::MAP_KEY;
-    use crate::input::MouseButton;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
+    use crate::input::{Key, MouseButton};
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
     use crate::spaceport::credits::AMOUNT_COLUMN;
@@ -1867,6 +1930,7 @@ mod tests {
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     mod movie;
+    mod unplaced_pad;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -2132,16 +2196,16 @@ mod tests {
     fn screen_with(shipyard: Shipyard, art: &Rc<FakeArt>) -> ShipyardScreen {
         let mut screen = opened_with(shipyard, art);
         if screen.selected().is_none() {
-            press(&mut screen, Key::Right);
+            press(&mut screen, Key::ArrowRight);
         }
         screen
     }
 
-    fn screen_of(shipyard: Shipyard) -> ShipyardScreen {
+    pub(super) fn screen_of(shipyard: Shipyard) -> ShipyardScreen {
         screen_with(shipyard, &art())
     }
 
-    fn screen() -> ShipyardScreen {
+    pub(super) fn screen() -> ShipyardScreen {
         screen_of(shipyard())
     }
 
@@ -2181,7 +2245,7 @@ mod tests {
             .expect("an item")
     }
 
-    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+    pub(super) fn key(key: Key, pressed: bool, repeat: bool) -> Input {
         Input::Key {
             key,
             pressed,
@@ -2193,7 +2257,7 @@ mod tests {
         screen.input(&key(k, true, false));
     }
 
-    fn click(screen: &mut ShipyardScreen, at: Point) {
+    pub(super) fn click(screen: &mut ShipyardScreen, at: Point) {
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -2203,7 +2267,7 @@ mod tests {
         }
     }
 
-    fn click_item(screen: &mut ShipyardScreen, number: usize) {
+    pub(super) fn click_item(screen: &mut ShipyardScreen, number: usize) {
         let at = item(screen, number).center();
         click(screen, at);
     }
@@ -2272,7 +2336,15 @@ mod tests {
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
             (1, 3, 5)
         );
-        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Space));
+        let keys = crate::keymap::KeyMap::default();
+        let key = |command: Command| keys.combo(command).map(|combo| combo.key);
+        assert_eq!(
+            (
+                key(Command::Shipyard(ShipyardCommand::Buy)),
+                key(Command::Ui(UiCommand::Activate))
+            ),
+            (Some(Key::KeyB), Some(Key::Space))
+        );
         assert_eq!(FIRST_SHIP_PICTURE, 5000);
         assert_eq!(
             [BUY_SHIP_LABEL, INFO_LABEL, PRICE_LABEL, TRADE_IN_LABEL],
@@ -2481,7 +2553,7 @@ mod tests {
             assert!(contains(&commands, &frame(&screen, index)), "{index}");
         }
         assert!(contains(&commands, &bright_frame(&screen, 0)), "selected");
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let commands = drawn(&screen);
         assert!(!contains(&commands, &bright_frame(&screen, 0)));
         assert!(contains(&commands, &bright_frame(&screen, 1)));
@@ -2515,7 +2587,7 @@ mod tests {
     }
 
     /// `count` ships, numbered from 200.
-    fn long(count: usize) -> Shipyard {
+    pub(super) fn long(count: usize) -> Shipyard {
         Shipyard {
             rows: (0..count)
                 .map(|n| {
@@ -2530,12 +2602,12 @@ mod tests {
     #[test]
     fn the_selection_moves_by_click_and_arrows_and_the_grid_scrolls() {
         let mut screen = screen_of(long(22));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(1));
-        press(&mut screen, Key::Down);
+        press(&mut screen, Key::ArrowDown);
         assert_eq!(screen.selected(), Some(5));
-        press(&mut screen, Key::Up);
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowUp);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(0));
         click_cell(&mut screen, 6);
         assert_eq!(screen.selected(), Some(6));
@@ -2619,7 +2691,7 @@ mod tests {
     #[test]
     fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
         let mut screen = screen_with(shipyard(), &art());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let picture = item(&screen, PICTURE_ITEM);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
     }
@@ -2631,7 +2703,7 @@ mod tests {
         assert_eq!(screen.take_description_request(), None, "once");
         screen.show_description(13000, "Loaded.");
         assert!(words(&screen).contains(&"Loaded.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.take_description_request(), Some(13001));
         screen.show_description(13000, "Stale.");
         assert!(
@@ -2652,9 +2724,9 @@ mod tests {
             height: 200.0,
         }));
         assert!(words(&screen).contains(&"dësc 13000.".to_owned()));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(in_picture(&screen), no_picture_lines(picture));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(
             drawn(&screen).contains(&DrawCommand::StretchedPicture {
                 image: ImageKey::picture(5002),
@@ -2664,7 +2736,7 @@ mod tests {
             }),
             "its own"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(
             drawn(&screen).contains(&DrawCommand::StretchedPicture {
                 image: ImageKey::picture(5000),
@@ -2818,16 +2890,16 @@ mod tests {
             }),
             "the picture is still drawn"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(!info_box(&screen).is_empty(), "the Heavy Shuttle's lines");
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert!(info_box(&screen).is_empty(), "none again for the Shuttle");
     }
 
     /// The shipyard's screen with the Heavy Shuttle (not flown) selected.
     fn heavy_selected(shipyard: Shipyard) -> ShipyardScreen {
         let mut screen = screen_of(shipyard);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         screen
     }
 
@@ -2927,47 +2999,96 @@ mod tests {
     fn buy_ship_is_greyed_when_the_ship_cannot_be_bought() {
         let mut screen = screen();
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "the class flown");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(
             screen.take_request(),
             None,
             "the class flown asks for nothing"
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(enabled(&screen, BUY_SHIP_LABEL));
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "too dear");
         click_item(&mut screen, BUY_ITEM);
-        press(&mut screen, BUY_KEY);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::KeyB);
+        press(&mut screen, Key::ArrowRight);
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "not for sale");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_request(), None, "greyed asks for nothing");
         assert!(enabled(&screen, DONE_LABEL));
         assert!(enabled(&screen, INFO_LABEL));
     }
 
+    /// The shipyard reads its keys through the key map it is given: Buy
+    /// Ship rebound to Q requests on Q and no longer on B, and the shared
+    /// Activate rebound to X opens Info on X and no longer on Space.
+    #[test]
+    fn a_rebound_buy_and_info_act_on_their_new_keys_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, ShipyardCommand, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(ShipyardCommand::Buy, KeyCombo::key(Key::KeyQ))
+                .rebound(UiCommand::Activate, KeyCombo::key(Key::KeyX)),
+        );
+        let mut screen = screen().with_bindings(bindings);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::KeyB);
+        assert_eq!(screen.take_request(), None, "B no longer buys");
+        press(&mut screen, Key::KeyQ);
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        press(&mut screen, Key::Space);
+        assert!(screen.info_panel().is_none(), "Space no longer opens Info");
+        press(&mut screen, Key::KeyX);
+        assert!(screen.info_panel().is_some());
+        press(&mut screen, Key::Space);
+        assert!(screen.info_panel().is_some(), "nor closes it");
+        press(&mut screen, Key::KeyX);
+        assert!(screen.info_panel().is_none(), "X closes it");
+    }
+
+    /// Letting go of the keys forgets a modifier held: Buy Ship on
+    /// Shift-Q no longer requests on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, ShipyardCommand};
+        let bindings = SharedBindings::new(Bindings::default().rebound(
+            ShipyardCommand::Buy,
+            KeyCombo::with(Key::KeyQ, Modifiers::SHIFT),
+        ));
+        let mut let_go = screen().with_bindings(bindings.clone());
+        press(&mut let_go, Key::ArrowRight);
+        press(&mut let_go, Key::ShiftLeft);
+        let_go.release_keys();
+        press(&mut let_go, Key::KeyQ);
+        assert_eq!(let_go.take_request(), None, "Shift was let go of");
+        let mut held = screen().with_bindings(bindings);
+        press(&mut held, Key::ArrowRight);
+        press(&mut held, Key::ShiftLeft);
+        press(&mut held, Key::KeyQ);
+        assert_eq!(held.take_request(), Some(ShipId(129)), "with Shift held");
+    }
+
     #[test]
     fn buy_ship_requests_the_selected_ship_and_b_only_on_a_press() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         assert_eq!(screen.take_request(), None, "once");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         for _ in 0..3 {
-            screen.input(&key(BUY_KEY, true, true));
+            screen.input(&key(Key::KeyB, true, true));
             assert_eq!(screen.take_request(), None, "a repeat buys nothing");
         }
-        screen.input(&key(BUY_KEY, false, false));
+        screen.input(&key(Key::KeyB, false, false));
         assert_eq!(screen.take_request(), None, "nor a release");
     }
 
     #[test]
     fn a_new_shipyard_shows_and_regreys_keeping_the_ship_selected() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let mut bought = shipyard();
         bought.current = ShipId(129);
         bought.cash = 0;
@@ -2994,8 +3115,8 @@ mod tests {
         )));
         assert!(info_box(&screen).is_empty());
         assert!(!enabled(&screen, BUY_SHIP_LABEL));
-        press(&mut screen, BUY_KEY);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::KeyB);
+        press(&mut screen, Key::Space);
         click_item(&mut screen, INFO_ITEM);
         assert_eq!(screen.take_request(), None);
         assert!(screen.info_panel().is_none());
@@ -3019,20 +3140,20 @@ mod tests {
             (screen.selected(), enabled(&screen, BUY_SHIP_LABEL))
         };
         let engine = Rulebook::default;
-        assert_eq!(arrowed(engine(), 1, Key::Down), (Some(1), true));
+        assert_eq!(arrowed(engine(), 1, Key::ArrowDown), (Some(1), true));
         assert_eq!(arrowed(engine(), 1, Key::PageDown), (Some(1), true));
-        assert_eq!(arrowed(engine(), 2, Key::Up), (Some(2), false));
+        assert_eq!(arrowed(engine(), 2, Key::ArrowUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 2, Key::PageUp), (Some(2), false));
         assert_eq!(arrowed(engine(), 0, Key::PageDown), (Some(0), false));
         let clamped =
             || Rulebook::default().with_override(nova_sim::RuleKey::GridArrows, RuleSource::Bible);
         assert_eq!(
-            arrowed(clamped(), 1, Key::Down),
+            arrowed(clamped(), 1, Key::ArrowDown),
             (Some(3), false),
             "the Viper, not for sale"
         );
         assert_eq!(
-            arrowed(clamped(), 2, Key::Up),
+            arrowed(clamped(), 2, Key::ArrowUp),
             (Some(0), false),
             "the class flown"
         );
@@ -3238,23 +3359,23 @@ mod tests {
                 &art(),
             );
             if rules == Rulebook::default() {
-                press(&mut screen, BUY_KEY);
+                press(&mut screen, Key::KeyB);
                 assert_eq!(screen.take_request(), None, "nothing selected");
                 assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::BuyRefused)]);
-                press(&mut screen, INFO_KEY);
+                press(&mut screen, Key::Space);
                 assert!(screen.info_panel().is_none());
                 assert_eq!(screen.take_sounds(), [], "Info with no ship is silent");
             }
             click_cell(&mut screen, 0);
-            press(&mut screen, BUY_KEY);
+            press(&mut screen, Key::KeyB);
             assert_eq!(screen.take_request(), None, "the class flown");
             assert_eq!(
                 screen.take_sounds(),
                 [Sound::Ui(UiSound::BuyRefused)],
                 "{rules:?}"
             );
-            press(&mut screen, Key::Right);
-            press(&mut screen, BUY_KEY);
+            press(&mut screen, Key::ArrowRight);
+            press(&mut screen, Key::KeyB);
             assert_eq!(screen.take_request(), Some(ShipId(129)));
             assert_eq!(screen.take_sounds(), [], "a buy does not beep");
         }
@@ -3263,15 +3384,15 @@ mod tests {
     #[test]
     fn by_the_engine_an_arrow_from_nothing_selected_picks_the_first_or_last_shown() {
         let mut screen = opened_with(long(30), &art());
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert_eq!(screen.selected(), Some(0));
         click_item(&mut screen, SCROLL_DOWN_ITEM);
-        press(&mut screen, Key::Left);
+        press(&mut screen, Key::ArrowLeft);
         assert_eq!(screen.selected(), Some(23), "the last shown");
         assert!(enabled(&screen, BUY_SHIP_LABEL));
         let mut short = opened_with(shipyard(), &art());
         click_cell(&mut short, 5);
-        press(&mut short, Key::Up);
+        press(&mut short, Key::ArrowUp);
         assert_eq!(short.selected(), Some(3), "the last listed");
     }
 
@@ -3346,16 +3467,19 @@ mod tests {
 
     fn typed(screen: &mut ShipyardScreen, text: &str) {
         for c in text.chars() {
-            press(screen, Key::Char(c.to_ascii_lowercase()));
+            press(
+                screen,
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified),
+            );
             screen.input(&Input::Text(c));
         }
     }
 
     /// The screen with B pressed on ship 129 and its prompt open.
-    fn naming_by_key() -> ShipyardScreen {
+    pub(super) fn naming_by_key() -> ShipyardScreen {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         screen.open_naming(&naming());
         screen
@@ -3384,7 +3508,7 @@ mod tests {
             "the B that asked types nothing"
         );
         typed(&mut screen, "Kestrel");
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_none(), "the prompt takes the keys");
         assert_eq!(screen.take_order(), None);
         press(&mut screen, Key::Enter);
@@ -3446,7 +3570,7 @@ mod tests {
     #[test]
     fn a_click_on_buy_ship_does_not_flush_text() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(screen.take_request(), Some(ShipId(129)));
         screen.open_naming(&naming());
@@ -3464,7 +3588,7 @@ mod tests {
             art(),
             ButtonStyle::STOCK,
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, BUY_ITEM);
         screen.take_request();
         screen.open_naming(&naming());
@@ -3767,8 +3891,8 @@ mod tests {
             .map(|n| stock(1, &format!("Gun {n}"), None))
             .collect();
         let mut screen = screen_of(shipyard);
-        press(&mut screen, Key::Right);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::Space);
         let area = panel_item(&screen, PANEL_TEXT_ITEM);
         assert_eq!(area.height(), 214.0);
         let drawn = texts(&drawn(&screen));
@@ -3812,9 +3936,9 @@ mod tests {
             catalog,
             ButtonStyle::STOCK,
         );
-        press(&mut taller, Key::Right);
-        press(&mut taller, Key::Right);
-        press(&mut taller, INFO_KEY);
+        press(&mut taller, Key::ArrowRight);
+        press(&mut taller, Key::ArrowRight);
+        press(&mut taller, Key::Space);
         assert_eq!(panel_item(&taller, PANEL_TEXT_ITEM).height(), 218.0);
         let words: Vec<String> = texts(&self::drawn(&taller))
             .into_iter()
@@ -3827,7 +3951,7 @@ mod tests {
     #[test]
     fn info_and_i_open_the_panel_with_the_ships_name_and_stats() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         click_item(&mut screen, INFO_ITEM);
         let panel = screen.info_panel().expect("open");
         assert_eq!(
@@ -3896,15 +4020,15 @@ mod tests {
         assert!(screen.info_panel().is_none());
         assert!(!screen.closed());
         assert_eq!(screen.take_sounds(), [], "Info and Done are silent");
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_some(), "Space opens it");
-        screen.input(&key(INFO_KEY, true, true));
+        screen.input(&key(Key::Space, true, true));
         assert!(screen.info_panel().is_some());
     }
 
     #[test]
     fn p_asks_for_the_player_info_from_the_shipyard_and_its_panel_not_its_prompt() {
-        let p = crate::ui::player_info::PLAYER_INFO_KEY;
+        let p = crate::keymap::test_keys::PLAYER_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_player_info_request());
         screen.input(&key(p, true, true));
@@ -3912,7 +4036,7 @@ mod tests {
         press(&mut screen, p);
         assert!(screen.take_player_info_request());
         assert!(!screen.take_player_info_request(), "once");
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         press(&mut screen, p);
         assert!(screen.take_player_info_request(), "the Info panel");
         assert!(screen.info_panel().is_some(), "which stays open");
@@ -3933,7 +4057,7 @@ mod tests {
         assert_eq!(screen.take_map_request(), Some(PortScreen::Shipyard));
         assert_eq!(screen.take_map_request(), None, "once");
         assert!(!screen.closed());
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         press(&mut screen, MAP_KEY);
         assert_eq!(
             screen.take_map_request(),
@@ -3976,7 +4100,7 @@ mod tests {
     fn space_closes_the_panel_but_not_the_press_that_opened_it_nor_its_repeats() {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             let mut screen = screen().with_focus_ring(ring);
-            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Space);
             assert!(screen.info_panel().is_some(), "the press that opened it");
             screen.input(&key(Key::Space, true, true));
             assert!(screen.info_panel().is_some(), "a repeat, {ring:?}");
@@ -3991,11 +4115,11 @@ mod tests {
 
     #[test]
     fn return_and_escape_close_the_panel_alone_and_it_takes_every_input() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = screen();
-            press(&mut screen, INFO_KEY);
-            press(&mut screen, BUY_KEY);
-            press(&mut screen, Key::Right);
+            press(&mut screen, Key::Space);
+            press(&mut screen, Key::KeyB);
+            press(&mut screen, Key::ArrowRight);
             assert_eq!(screen.take_request(), None, "the panel takes it");
             assert_eq!(screen.selected(), Some(0));
             screen.input(&key(k, true, true));
@@ -4007,7 +4131,7 @@ mod tests {
             assert!(screen.closed());
         }
         let mut screen = screen();
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         let done = panel_item(&screen, PANEL_DONE_ITEM).center();
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -4071,7 +4195,7 @@ mod tests {
         let mut shipyard = shipyard();
         shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
         let mut screen = screen_with(shipyard, art);
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         screen
     }
 
@@ -4080,7 +4204,7 @@ mod tests {
         let art = art_with(vec![(13_001, 5002)]);
         let mut screen = long_named(&art);
         art.asked.borrow_mut().clear();
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(205.0, 115.0, 614.0, 537.0));
         assert_eq!(
@@ -4137,7 +4261,7 @@ mod tests {
     fn info_on_a_class_whose_graphic_is_missing_opens_1005_over_the_picture_background() {
         let art = art_with(vec![(13_001, 20_130)]);
         let mut screen = long_named(&art);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
         let commands = drawn(&screen);
@@ -4177,14 +4301,14 @@ mod tests {
             Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
             ButtonStyle::STOCK,
         );
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         assert!(enabled(&screen, INFO_LABEL));
-        press(&mut screen, Key::Right);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_none());
         // A class without a graphic still opens 1005.
-        press(&mut screen, Key::Left);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::ArrowLeft);
+        press(&mut screen, Key::Space);
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
     }
@@ -4238,8 +4362,8 @@ mod tests {
         shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
         shipyard.rows[1].specs.weapons = weapons;
         let mut screen = screen_with(shipyard, &art);
-        press(&mut screen, Key::Right);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::Space);
         screen
     }
 
@@ -4404,8 +4528,8 @@ mod tests {
         let mut shipyard = shipyard();
         shipyard.rows[1].specs.weapons = five_weapons();
         let mut screen = screen_with(shipyard, &art);
-        press(&mut screen, Key::Right);
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::ArrowRight);
+        press(&mut screen, Key::Space);
         assert_eq!(
             screen.info_panel().expect("open").bounds(),
             rect(387.0, 241.0, 250.0, 285.0)
@@ -4447,7 +4571,7 @@ mod tests {
             (art_with(vec![(13_001, 5002)]), "The Long 129"),
         ] {
             let mut screen = long_named(&art);
-            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Space);
             let area = panel_item(&screen, PANEL_TITLE_ITEM);
             let middle = f32::midpoint(area.min.x, area.max.x).floor();
             let width = MonoMetrics.width(Font::Times, 18.0, title);
@@ -4482,10 +4606,10 @@ mod tests {
             );
             assert!(!enabled(&screen, INFO_LABEL));
             for _ in 0..=select {
-                press(&mut screen, Key::Right);
+                press(&mut screen, Key::ArrowRight);
             }
             assert_eq!(screen.selected(), Some(select));
-            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Space);
             click_item(&mut screen, INFO_ITEM);
             assert!(screen.info_panel().is_none(), "{select}");
         }
@@ -4497,7 +4621,7 @@ mod tests {
     #[test]
     fn buy_ship_is_item_1_and_done_is_item_7() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let labels = texts(&drawn(&screen));
         for (label, number) in [(BUY_SHIP_LABEL, 1), (DONE_LABEL, 7)] {
             let bounds = item(&screen, number);
@@ -4522,7 +4646,7 @@ mod tests {
         let mut screen = screen();
         click_item(&mut screen, DONE_ITEM);
         assert!(screen.closed());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = screen_of(shipyard());
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
@@ -4538,7 +4662,7 @@ mod tests {
     #[test]
     fn pointer_click_is_silent_as_the_original_and_cancelling_the_pointer_abandons_a_click() {
         let mut screen = screen();
-        press(&mut screen, Key::Right);
+        press(&mut screen, Key::ArrowRight);
         let buy = item(&screen, BUY_ITEM).center();
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,
@@ -4550,7 +4674,7 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.take_request(), None);
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), [], "keys are silent");
         let debug = format!("{screen:?}");
@@ -4573,7 +4697,7 @@ mod tests {
 
     #[test]
     fn without_the_dialog_it_says_why_and_return_or_escape_closes_it() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let art = art();
             let mut screen = ShipyardScreen::new(
                 Err("no DLOG 1004".to_owned()),
@@ -4590,8 +4714,8 @@ mod tests {
             for other in [
                 key(k, true, true),
                 key(k, false, false),
-                key(BUY_KEY, true, false),
-                key(INFO_KEY, true, false),
+                key(Key::KeyB, true, false),
+                key(Key::Space, true, false),
             ] {
                 screen.input(&other);
             }
@@ -4606,6 +4730,34 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    #[test]
+    fn without_the_dialog_it_names_the_keys_bound_to_close_it() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings};
+        let screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            art() as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        )
+        .with_bindings(SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::KeyQ)),
+        ));
+        assert_eq!(
+            drawn(&screen),
+            [DrawCommand::Text {
+                text: "Cannot show the shipyard: no DLOG 1004. Press Q or Escape to close it."
+                    .to_owned(),
+                font: Font::Geneva,
+                origin: PROBLEM_AT,
+                size: PROBLEM_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            }]
+        );
     }
 
     // The shipyard's mission offers.
@@ -4703,7 +4855,7 @@ mod tests {
         offer.draw(&mut over);
         expected.extend(over.iter().cloned());
         assert_eq!(drawn(&screen), expected, "drawn over the shipyard");
-        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::KeyB);
         assert_eq!(screen.take_request(), None, "B went to the offer");
         assert_eq!(screen.take_offer_choice(), None);
         press(&mut screen, Key::Enter);
@@ -4763,7 +4915,7 @@ mod tests {
         let mut screen = offering().with_offer_clock(RuleSource::Bible);
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_some());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request(), "paused under the info panel");
@@ -4790,7 +4942,7 @@ mod tests {
         let mut screen = offering();
         assert!(screen.take_offer_request());
         screen.rearm(ms(600));
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_some());
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request(), "not under the info panel");
@@ -4841,7 +4993,7 @@ mod tests {
 
     #[test]
     fn the_mission_info_key_asks_from_the_shipyard_and_its_panel_not_its_prompt() {
-        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let i = crate::keymap::test_keys::MISSION_INFO_KEY;
         let mut screen = screen();
         assert!(!screen.take_info_request());
         screen.input(&key(i, true, true));
@@ -4851,7 +5003,7 @@ mod tests {
         assert!(!screen.take_info_request(), "once");
         assert!(screen.info_panel().is_none(), "I no longer opens the panel");
         assert!(!screen.closed());
-        press(&mut screen, INFO_KEY);
+        press(&mut screen, Key::Space);
         assert!(screen.info_panel().is_some(), "Space does");
         press(&mut screen, i);
         assert!(screen.take_info_request(), "the Info panel");
@@ -4873,7 +5025,7 @@ mod tests {
             Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
             ButtonStyle::STOCK,
         );
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(!screen.take_info_request());
     }
 
@@ -4881,7 +5033,7 @@ mod tests {
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
-        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        press(&mut screen, crate::keymap::test_keys::MISSION_INFO_KEY);
         assert!(screen.take_info_request());
         assert!(screen.offer_dialog().is_some());
     }
@@ -4890,13 +5042,13 @@ mod tests {
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
         for k in [
-            Key::Right,
-            Key::Down,
-            Key::Left,
-            Key::Up,
-            BUY_KEY,
-            INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
+            Key::ArrowRight,
+            Key::ArrowDown,
+            Key::ArrowLeft,
+            Key::ArrowUp,
+            Key::KeyB,
+            Key::Space,
+            crate::keymap::test_keys::PLAYER_INFO_KEY,
             Key::Enter,
             Key::Escape,
         ] {
@@ -4908,7 +5060,7 @@ mod tests {
                     repeat: false,
                 });
             }
-            let refused: &[Sound] = if k == BUY_KEY {
+            let refused: &[Sound] = if k == Key::KeyB {
                 &[Sound::Ui(UiSound::BuyRefused)]
             } else {
                 &[]
@@ -4948,7 +5100,7 @@ mod tests {
             (FocusRing::Off, None),
         ] {
             let mut screen = screen().with_focus_ring(ring);
-            press(&mut screen, INFO_KEY);
+            press(&mut screen, Key::Space);
             press(&mut screen, Key::Tab);
             let panel = screen.info_panel().expect("open");
             assert_eq!(panel.focus_ring(), ring);

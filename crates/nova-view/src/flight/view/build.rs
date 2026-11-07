@@ -3,7 +3,7 @@
 //! view's own builders and settings, and a test's view over a session it
 //! built.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use crate::flight::hud::{self};
 use crate::flight::sim_adapter::SessionFlight;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::keymap::{CommandReader, SharedBindings, contexts};
 use crate::system::camera::VIEW_SIZE;
 use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
@@ -235,6 +236,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
             metrics: Some(Metrics(metrics)),
             ..self
         }
+    }
+
+    /// The flight reading its keys through `bindings`, the app's
+    /// ([`FlightView::set_bindings`]).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.set_bindings(bindings);
+        self
+    }
+
+    /// Reads flight's keys through `bindings` from the next input on, and
+    /// hands them to all it builds that reads keys: the course map, its
+    /// wait for the map key's release, and the movie playing or to come.
+    pub fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.map.set_bindings(bindings.clone());
+        self.wait_keys.set_bindings(bindings.clone());
+        self.wait_keys
+            .set_waited(super::map_wait::map_key(&bindings));
+        if let Some(movie) = &mut self.movie {
+            movie.set_bindings(bindings.clone());
+        }
+        self.pad_down.set_bindings(bindings.clone());
+        self.keys.set_bindings(bindings);
+        self.latched_down.retain(|&command| self.keys.held(command));
+    }
+
+    /// The bindings flight reads its keys through.
+    #[must_use]
+    pub fn bindings(&self) -> &SharedBindings {
+        self.keys.bindings()
     }
 
     /// The flight with the course map at `zoom`, the run's: `_mapZoom` is
@@ -587,8 +618,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map: opening.map,
             map_open: false,
             map_key_held: false,
+            pad_down: CommandReader::new(contexts::KEY_WAIT),
+            touch_controls: {
+                let mut controls = crate::flight::touch_controls::TouchControls::default();
+                controls.set_view(VIEW_SIZE);
+                controls
+            },
             map_closing: false,
-            wait_keys: crate::ui::key_wait::WaitKeys::new(super::MAP_KEY),
+            wait_keys: crate::ui::key_wait::WaitKeys::new(super::map_wait::map_key(
+                &crate::keymap::SharedBindings::default(),
+            )),
             map_replay: Vec::new(),
             map_opened: None,
             map_missions: Vec::new(),
@@ -626,11 +665,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             alpha: 0.0,
             elapsed: Duration::ZERO,
             since_step: Duration::ZERO,
-            held: HashSet::new(),
-            latched_down: HashSet::new(),
+            keys: CommandReader::new(contexts::FLIGHT),
+            latched_down: BTreeSet::new(),
             latch_at_close: false,
             latched_at_site: false,
-            read_on_press: HashSet::new(),
+            read_on_press: Vec::new(),
             after_poll: Vec::new(),
             nav_latch: false,
             select_latch: false,

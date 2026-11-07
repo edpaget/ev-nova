@@ -369,7 +369,7 @@ fn docked_the_close_puts_back_the_selection_the_map_opened_with_on_every_map() {
             earth,
         );
         open(&mut view);
-        view.port_map_input(&key(Key::Char('c'), true));
+        view.port_map_input(&key(Key::KeyC, true));
         assert_eq!(sent(&view), [FlightCommand::ClearRoute], "{what}");
         faked_press_map(&mut view);
         assert_eq!(
@@ -417,7 +417,7 @@ fn a_borders_change_on_a_dialogs_map_saves_in_flight_and_not_docked() {
     for (landed, saved) in [(None, Some(false)), (Some(StellarId(128)), None)] {
         let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
         view.open_dialog_map(MapOpener::MissionInfo(Some(0)));
-        view.port_map_input(&key(Key::Char('b'), true));
+        view.port_map_input(&key(Key::KeyB, true));
         faked_press_map(&mut view);
         assert_eq!(view.take_map_borders_save(), saved, "docked at {landed:?}");
     }
@@ -568,4 +568,25 @@ fn a_dialogs_map_gives_the_keys_of_its_wait_at_the_close() {
         view.port_map_input(&key(MAP, false));
         assert_eq!(view.take_map_replay(), [key(Key::Enter, true)]);
     }
+}
+
+#[test]
+fn a_dialogs_map_over_flight_ticks_through_its_own_frame_alone() {
+    use nova_sim::map_borders::Next;
+    let mut view = faked_dialogs(in_sol(), MapMarks::NONE, MOON);
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    let passes = |view: &Faked| view.course_map().border_passes().next();
+    assert_eq!(passes(&view), Next::Unstarted);
+    let frame = view.frame.clone();
+    view.tick_dialog_map(std::time::Duration::from_millis(100));
+    assert_eq!(passes(&view), Next::Idle, "the map's frame");
+    assert_eq!(view.frame, frame, "no flight step");
+    let mut plain = faked_sol(in_sol());
+    plain.open_map();
+    plain.tick_dialog_map(std::time::Duration::from_millis(100));
+    assert_eq!(
+        passes(&plain),
+        Next::Unstarted,
+        "flight's own map: flight ticks it"
+    );
 }

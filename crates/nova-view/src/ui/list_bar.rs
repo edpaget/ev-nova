@@ -118,6 +118,25 @@ impl ListBar {
         self.rect
     }
 
+    /// Where the arrow `part` ([`BarPart::Up`] or [`BarPart::Down`]) is: a
+    /// square of the bar's width at its top or bottom. `None` for another
+    /// part.
+    #[must_use]
+    pub fn arrow(&self, part: BarPart) -> Option<Bounds> {
+        let (left, right) = (self.rect.min.x, self.rect.max.x);
+        match part {
+            BarPart::Up => Some(Bounds {
+                min: self.rect.min,
+                max: Point::new(right, self.rect.min.y + BAR_WIDTH),
+            }),
+            BarPart::Down => Some(Bounds {
+                min: Point::new(left, self.rect.max.y - BAR_WIDTH),
+                max: self.rect.max,
+            }),
+            BarPart::PageUp | BarPart::PageDown | BarPart::Thumb => None,
+        }
+    }
+
     /// The track between the arrows, less the thumb's height: where the
     /// thumb's top moves, in pixels.
     fn span(&self) -> u64 {

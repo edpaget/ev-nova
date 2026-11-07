@@ -14,7 +14,7 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
     // How far a thrust carries the ship is nova-sim's
     // (`thrust_accelerates_along_the_heading_and_then_moves`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -23.4), 0.0)));
     assert!(last_controls(&view).thrust, "Up held");
     tick_to(&mut view, Some(ship_at(Vec2::new(0.0, -26.1), 0.0)));
@@ -30,9 +30,9 @@ fn holding_up_thrusts_the_ship_up_and_the_camera_follows() {
 fn releasing_up_coasts() {
     // That a coast keeps its velocity is nova-sim's (`a_ship_coasts_without_drag`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     ticked(&mut view, 1);
-    hold(&mut view, Key::Up, false);
+    hold(&mut view, Key::ArrowUp, false);
     ticked(&mut view, 1);
     let thrusts: Vec<bool> = view
         .sim
@@ -49,15 +49,15 @@ fn left_and_right_turn_the_ship_and_its_frame() {
     // (`right_turns_clockwise_and_left_anticlockwise_at_the_turn_rate`,
     // `turning_alone_does_not_move_the_ship`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::ArrowRight, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 30.0)));
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 33.0)));
     assert_eq!(last_controls(&view).turn, Turn::Right);
     // Drawn a step behind.
     assert_eq!(view.shown_heading(), 30.0);
     assert_eq!(view.frame(), Some(3));
-    hold(&mut view, Key::Right, false);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowRight, false);
+    hold(&mut view, Key::ArrowLeft, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 330.0)));
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 327.0)));
     assert_eq!(last_controls(&view).turn, Turn::Left);
@@ -67,15 +67,15 @@ fn left_and_right_turn_the_ship_and_its_frame() {
 #[test]
 fn left_and_right_together_cancel() {
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Left, true);
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::ArrowLeft, true);
+    hold(&mut view, Key::ArrowRight, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).turn, Turn::None);
 }
 
 #[test]
 fn z_is_the_afterburner_key_held() {
-    assert_eq!(AFTERBURNER_KEY, Key::Char('z'));
+    assert_eq!(AFTERBURNER_KEY, Key::KeyZ);
     let mut view = at_rest(catalog());
     assert!(!view.controls().afterburner);
     hold(&mut view, AFTERBURNER_KEY, true);
@@ -92,7 +92,7 @@ fn up_and_z_held_with_an_afterburner_pass_the_top_speed_and_burn_fuel() {
     // `the_fuel_drains_to_none_and_the_afterburner_stops_the_tick_after`,
     // `released_the_box_bleeds_at_accel_x_0_4_a_tick_holding_the_velocity_to_it`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     hold(&mut view, AFTERBURNER_KEY, true);
     ticked(&mut view, 1);
     let controls = last_controls(&view);
@@ -108,20 +108,20 @@ fn a_turns_the_ship_toward_its_target_and_alt_a_toward_the_nav_stellar() {
     // How the face key turns the ship is nova-sim's
     // (`the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`,
     // `while_the_auto_turn_aims_the_turn_keys_do_nothing`).
-    assert_eq!(FACE_TARGET_KEY, Key::Char('a'));
+    assert_eq!(FACE_TARGET_KEY, Key::KeyA);
     let mut view = at_rest(catalog());
     hold(&mut view, FACE_TARGET_KEY, true);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowLeft, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).face, Face::Target);
-    hold(&mut view, Key::Left, false);
-    hold(&mut view, Key::Alt, true);
+    hold(&mut view, Key::ArrowLeft, false);
+    hold(&mut view, Key::AltLeft, true);
     ticked(&mut view, 1);
     assert_eq!(last_controls(&view).face, Face::Stellar, "Alt-A");
     // Let go of, the turn keys turn the ship again.
     hold(&mut view, FACE_TARGET_KEY, false);
-    hold(&mut view, Key::Alt, false);
-    hold(&mut view, Key::Right, true);
+    hold(&mut view, Key::AltLeft, false);
+    hold(&mut view, Key::ArrowRight, true);
     ticked(&mut view, 1);
     let controls = last_controls(&view);
     assert_eq!((controls.face, controls.turn), (Face::Off, Turn::Right));
@@ -133,8 +133,8 @@ fn down_turns_the_ship_against_its_motion() {
     // nova-sim's (`reverse_aims_against_the_velocity_from_0_05_on_either_axis`,
     // `the_auto_turn_turns_while_more_than_a_turn_off_and_stops_without_snapping`).
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Down, true);
-    hold(&mut view, Key::Left, true);
+    hold(&mut view, Key::ArrowDown, true);
+    hold(&mut view, Key::ArrowLeft, true);
     tick_to(&mut view, Some(ship_at(Vec2::ZERO, 177.0)));
     let controls = last_controls(&view);
     assert!(controls.reverse, "{controls:?}");
@@ -146,9 +146,9 @@ fn down_turns_the_ship_against_its_motion() {
 #[test]
 fn a_release_without_a_press_does_nothing() {
     let mut view = at_rest(catalog());
-    hold(&mut view, Key::Up, false);
+    hold(&mut view, Key::ArrowUp, false);
     ticked(&mut view, 1);
-    assert!(view.held.is_empty());
+    assert!(view.holds_no_key());
     assert_eq!(last_controls(&view), Controls::default());
 }
 
@@ -243,7 +243,7 @@ fn the_title_and_help_are_not_drawn_by_default() {
     assert_eq!(view.overlays(), TITLED);
     let texts = texts(&flown(&barred(catalog(), among(Vec::new()))));
     assert!(!texts.contains(&"Sol (sÿst 130)".to_owned()), "{texts:?}");
-    assert!(!texts.contains(&HELP.to_owned()), "{texts:?}");
+    assert!(!texts.contains(&default_help()), "{texts:?}");
 }
 
 /// The flight's draw list's commands up to the HUD's first, whose
@@ -269,7 +269,7 @@ fn the_title_draws_when_turned_on() {
         Some(&overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE)),
         "over the flight, under the HUD"
     );
-    assert!(!texts(&list).contains(&HELP.to_owned()));
+    assert!(!texts(&list).contains(&default_help()));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn the_help_line_draws_when_turned_on() {
     let before = before_the_hud(&list);
     assert_eq!(
         before.last(),
-        Some(&overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM)),
+        Some(&overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM)),
         "over the flight, under the HUD"
     );
     assert!(!texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
@@ -293,7 +293,7 @@ fn the_help_line_draws_when_turned_on() {
         before[before.len() - 2..],
         [
             overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE),
-            overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
+            overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM),
         ],
         "the title, then the help"
     );
@@ -362,10 +362,108 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         ]
     );
     assert_eq!(
-        HELP,
+        default_help(),
         "Arrows: fly   A: face target   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   I: mission info   Cmd-,: preferences   Esc: leave"
     );
     assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
+}
+
+#[test]
+fn the_help_line_names_each_command_s_key_through_the_layout() {
+    use crate::key_names::fixture::FakeKeyNames;
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo};
+    let azerty = help_with(Bindings::default(), Rc::new(FakeKeyNames::azerty()));
+    assert!(azerty.contains("   Z: weapon   "), "{azerty}");
+    assert!(
+        azerty.contains("   Q: face target   "),
+        "AZERTY prints q at the US A: {azerty}"
+    );
+    let rebound = help_with(
+        Bindings::default().rebound(Fc::HyperJump, KeyCombo::key(Key::KeyK)),
+        Rc::new(crate::key_names::NoKeyNames),
+    );
+    assert!(rebound.contains("   K: jump   "), "{rebound}");
+    assert!(!rebound.contains("J: jump"), "{rebound}");
+}
+
+/// Flight's help line over `bindings`, read by a reader told `family`'s
+/// pad was used last.
+fn help_on_pad(
+    bindings: crate::keymap::Bindings,
+    family: crate::input::ControllerFamily,
+) -> String {
+    let mut keys = crate::keymap::CommandReader::new(crate::keymap::contexts::FLIGHT)
+        .with_bindings(crate::keymap::SharedBindings::new(bindings));
+    keys.follow(&Input::Surroundings(crate::input::Surroundings::of(
+        crate::input::Device::Gamepad(family),
+    )));
+    help_line(&keys)
+}
+
+#[test]
+fn with_a_pad_last_used_the_help_line_names_its_buttons_and_an_unbound_one_its_key() {
+    use crate::input::ControllerFamily;
+    use crate::keymap::{Bindings, FlightCommand as Fc};
+    let xbox = help_on_pad(Bindings::default(), ControllerFamily::Xbox);
+    for entry in [
+        "D-Up/D-Down/D-Left/D-Right: fly   ",
+        "   Y: face target   A: fire   ",
+        "   View+A: jump   ",
+        "   Cmd-,: preferences   View+Menu: leave",
+    ] {
+        assert!(xbox.contains(entry), "{entry}: {xbox}");
+    }
+    let mut unbound = Bindings::default();
+    unbound.gamepad.unbind(Fc::Autopilot.into());
+    let generic = help_on_pad(unbound, ControllerFamily::Generic);
+    assert!(
+        generic.contains("   A: face target   South: fire   "),
+        "the key, unbound on the pad: {generic}"
+    );
+}
+
+#[test]
+fn the_drawn_help_line_names_the_keys_the_view_reads() {
+    use crate::key_names::fixture::FakeKeyNames;
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, SharedBindings};
+    let helped = FlightOverlays {
+        title: false,
+        help: true,
+        cheats: false,
+    };
+    let bindings =
+        SharedBindings::new(Bindings::default().rebound(Fc::HyperJump, KeyCombo::key(Key::KeyK)))
+            .with_key_names(Rc::new(FakeKeyNames::azerty()));
+    let view = barred(catalog(), among(Vec::new()))
+        .with_overlays(helped)
+        .with_bindings(bindings);
+    let texts = texts(&flown(&view));
+    let help = texts
+        .iter()
+        .find(|text| text.contains(": fly   "))
+        .expect("a help line");
+    assert!(help.contains("   K: jump   "), "rebound: {help}");
+    assert!(help.contains("   Z: weapon   "), "AZERTY: {help}");
+    assert!(!texts.contains(&default_help()), "{texts:?}");
+}
+
+#[test]
+fn the_help_line_leaves_out_an_unbound_command_and_groups_what_is_left() {
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo};
+    let names = || -> Rc<dyn crate::key_names::KeyNames> { Rc::new(crate::key_names::NoKeyNames) };
+    let unbound = help_with(Bindings::default().unbound(Fc::Board), names());
+    assert!(!unbound.contains("board"), "{unbound}");
+    assert!(unbound.contains("R: nearest   Y: hail"), "{unbound}");
+    let one_escort = help_with(Bindings::default().unbound(Fc::DefendMe), names());
+    assert!(one_escort.contains("   F/V/C: escorts   "), "{one_escort}");
+    let turned = help_with(
+        Bindings::default().rebound(Fc::Accelerate, KeyCombo::key(Key::KeyW)),
+        names(),
+    );
+    assert!(
+        turned.starts_with("W/Down Arrow/Left Arrow/Right Arrow: fly   "),
+        "{turned}"
+    );
 }
 
 #[test]
@@ -753,7 +851,7 @@ fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
     assert_eq!(bar.iter().next(), Some(&background));
     assert_eq!(dots_on_radar(&bar), [(926, 96)], "the blank radar");
     assert_eq!(sprites(&bar), [], "no stellars or ship");
-    assert!(!texts(&bar).contains(&HELP.to_owned()), "no help line");
+    assert!(!texts(&bar).contains(&default_help()), "no help line");
     let flown = flown(&view);
     let from = flown
         .iter()
@@ -1000,7 +1098,7 @@ fn the_bars_show_the_sessions_reserves() {
 fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
     let mut view = at_rest(catalog());
     view.status_bar = Err("no ïntf 128".to_owned());
-    hold(&mut view, Key::Up, true);
+    hold(&mut view, Key::ArrowUp, true);
     ticked(&mut view, 5);
     assert!(last_controls(&view).thrust, "flight goes on");
     let list = flown(&view);

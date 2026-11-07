@@ -104,14 +104,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.pending_offer.take()
     }
 
-    /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// The mission info key
+    /// ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo))
     /// asked for the mission info screen on, once: the router opens the
     /// screen on it over the paused flight.
     pub fn take_mission_info_request(&mut self) -> Option<MissionInfo> {
         self.pending_mission_info.take()
     }
 
-    /// Presses [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY),
+    /// Presses the mission info key
+    /// ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo)),
     /// as `_HandlePlayer` does (@0x70405-0x705a8), the flight deciding
     /// ([`FlightCommand::PressMissionInfo`],
     /// `nova_sim::Session::press_mission_info`): with an active mission
@@ -135,7 +137,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// The mission info key
+    /// ([`PlayCommand::MissionInfo`](crate::keymap::PlayCommand::MissionInfo))
     /// read on the pass a jump collapsed under the white
     /// ([`FadedPress::MissionInfo`]): refused by `_DoMissionInfoDialog`'s
     /// guard (@0x9e1ac), letting go of the latched keys

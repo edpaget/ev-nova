@@ -40,7 +40,7 @@ fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
 fn caps_lock_is_no_flight_key() {
     let mut view = super::faked_flight::at_rest(catalog());
     super::faked_flight::hold(&mut view, Key::CapsLock, true);
-    assert!(view.held.is_empty());
+    assert!(view.holds_no_key());
     super::faked_flight::ticked(&mut view, 1);
     assert_eq!(
         super::faked_flight::last_controls(&view),
@@ -77,6 +77,28 @@ fn a_left_click_on_a_drawn_ship_targets_it_with_the_target_beep() {
     let world = view.camera().screen_to_world(over);
     assert_eq!(*at, Vec2::new(world.x, world.y));
     assert!(drawn.npcs.iter().any(|&(npc, _)| npc == id), "{drawn:?}");
+}
+
+/// Phase 16's premise: with no claimant, a finger is flight's pointer, so
+/// a tap on a ship targets it as a click does, and the cursor follows the
+/// finger, hiding as it lifts (the pointer leaving).
+#[test]
+fn a_tap_in_space_does_what_a_click_does() {
+    let (mut by_mouse, id) = faked_with_npc();
+    let over = npc_on_screen(&by_mouse, id);
+    by_mouse.input(&Input::PointerMoved(over));
+    left_press(&mut by_mouse, over);
+    left_release(&mut by_mouse, over);
+    // A lifted finger is the pointer leaving
+    // (rdm:phase/key-bindings/phase-16-touch-pointer-gaps).
+    by_mouse.input(&Input::PointerLeft);
+    let (mut by_touch, _) = faked_with_npc();
+    crate::touch::testkit::tap(&mut by_touch, over);
+    assert!(clicked(&by_touch), "{:?}", sent(&by_touch));
+    assert_eq!(sent(&by_touch), sent(&by_mouse));
+    let cursor = |view: &Faked| cursor_sprites(&super::faked_world::world_list(view));
+    assert_eq!(cursor(&by_touch), cursor(&by_mouse));
+    assert!(cursor(&by_touch).is_empty(), "the cursor hides on the lift");
 }
 
 #[test]
@@ -468,7 +490,7 @@ fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
     super::faked_flight::hold(&mut view, TARGET_KEY, false);
     super::faked_flight::ticked(&mut view, 1);
     assert_eq!(faked_cursor_alpha(&view), Some(247), "31 of 32");
-    super::faked_flight::hold(&mut view, Key::Up, true);
+    super::faked_flight::hold(&mut view, Key::ArrowUp, true);
     super::faked_flight::ticked(&mut view, 2);
     assert_eq!(faked_cursor_alpha(&view), Some(231), "held: 29 of 32");
 }
@@ -480,11 +502,7 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
         Some(239),
         "held: 30 of 32"
     );
-    assert_ne!(
-        faked_alpha_holding(Key::Char('q')),
-        Some(239),
-        "a key not held"
-    );
+    assert_ne!(faked_alpha_holding(Key::KeyQ), Some(239), "a key not held");
     assert_eq!(
         faked_alpha_holding(SELECT_KEY),
         Some(239),
@@ -496,7 +514,7 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
     });
     assert_eq!(
         faked_alpha_of(none_selected, DESELECT_KEY),
-        faked_alpha_holding(Key::Char('q')),
+        faked_alpha_holding(Key::KeyQ),
         "S with none selected: nothing, @0x6ade1"
     );
 }
@@ -506,11 +524,7 @@ fn b_held_fades_the_cursor_as_a_flight_key() {
     // `_HandlePlayer` sets the cursor's fade every frame B is down
     // (@0x6a98b-0x6a999), a target or not.
     assert_eq!(faked_alpha_holding(BOARD_KEY), Some(239), "held: 30 of 32");
-    assert_ne!(
-        faked_alpha_holding(Key::Char('q')),
-        Some(239),
-        "a key not held"
-    );
+    assert_ne!(faked_alpha_holding(Key::KeyQ), Some(239), "a key not held");
 }
 
 #[test]
@@ -557,13 +571,13 @@ fn option_backquote_turns_into_nav_off_when_option_is_let_go() {
         nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
         ..in_sol()
     });
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_press(&mut view, NAV_OFF_KEY);
     for _ in 0..3 {
         view.nav_held_frame();
     }
     assert_eq!(block_presses(&view), 0, "Option held");
-    view.track_held(&key(Key::Alt, false));
+    view.track_held(&key(Key::AltLeft, false));
     assert_eq!(block_presses(&view), 0, "at the next frame");
     view.nav_held_frame();
     assert_eq!(
@@ -633,7 +647,7 @@ fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
     // Whether a target is let go is nova-sim's
     // (`option_backquote_lets_go_of_the_target`).
     let mut view = faked(in_sol());
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_press(&mut view, NAV_OFF_KEY);
     view.nav_held_frame();
     faked_press(&mut view, NEAREST_KEY);
@@ -650,14 +664,14 @@ fn option_backquote_held_lets_go_of_a_target_picked_the_next_tick() {
 #[test]
 fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_tick() {
     let mut view = faked(in_sol());
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_press(&mut view, NAV_OFF_KEY);
     view.nav_held_frame();
     faked_press(&mut view, NEAREST_KEY);
     faked_release(&mut view, NEAREST_KEY);
     let picked = sent(&view).len();
-    faked_press(&mut view, Key::Char('q'));
-    faked_release(&mut view, Key::Char('q'));
+    faked_press(&mut view, Key::KeyQ);
+    faked_release(&mut view, Key::KeyQ);
     assert_eq!(sent(&view).len(), picked, "no press of the block");
 }
 
@@ -665,7 +679,7 @@ fn another_key_pressed_while_option_backquote_is_held_leaves_the_target_to_the_t
 fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
     let mut view = faked(in_sol());
     view.sim.queue_screen(floating_shown(sol_drawing(), None));
-    view.track_held(&key(Key::Alt, true));
+    view.track_held(&key(Key::AltLeft, true));
     faked_press(&mut view, NAV_OFF_KEY);
     view.nav_held_frame();
     faked_press(&mut view, HYPERSPACE_MODE_KEY);
@@ -681,7 +695,7 @@ fn option_backquote_held_blocks_h_but_not_its_map_nor_with_h_held_its_target() {
 
 #[test]
 fn a_slot_key_held_fades_the_cursor_while_the_slot_block_polls_it() {
-    let pressed_only = faked_alpha_holding(Key::Char('q'));
+    let pressed_only = faked_alpha_holding(Key::KeyQ);
     assert_ne!(pressed_only, Some(239));
     for k in [
         STELLAR_SLOT_KEYS[1][0],
@@ -721,7 +735,7 @@ fn faked_double_time_drawn(view: &Faked) -> bool {
 
 /// A view over a flight showing the player at rest and NPC 0 of ship 129
 /// at (100, -100), and its id.
-fn faked_with_npc() -> (Faked, NpcId) {
+pub(super) fn faked_with_npc() -> (Faked, NpcId) {
     let npc = npc_129(0, Vec2::new(100.0, -100.0), 90.0);
     let view = super::faked_world::world(trafficked(&[130], 1, 129, 3), among(vec![npc]));
     (view, NpcId(0))
@@ -785,7 +799,7 @@ fn block_presses(view: &Faked) -> usize {
 // (@0x69f24); a pass with both up clears it (@0x6a764).
 
 /// A left press at `at`, through flight's input.
-fn left_press(view: &mut Faked, at: Point) {
+pub(super) fn left_press(view: &mut Faked, at: Point) {
     view.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: true,
@@ -794,7 +808,7 @@ fn left_press(view: &mut Faked, at: Point) {
 }
 
 /// A left release at `at`, through flight's input.
-fn left_release(view: &mut Faked, at: Point) {
+pub(super) fn left_release(view: &mut Faked, at: Point) {
     view.input(&Input::PointerButton {
         button: MouseButton::Left,
         pressed: false,
@@ -803,7 +817,7 @@ fn left_release(view: &mut Faked, at: Point) {
 }
 
 /// Whether `view` sent a click in space.
-fn clicked(view: &Faked) -> bool {
+pub(super) fn clicked(view: &Faked) -> bool {
     sent(view)
         .iter()
         .any(|command| matches!(command, FlightCommand::ClickInSpace { .. }))

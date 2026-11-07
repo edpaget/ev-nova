@@ -14,6 +14,11 @@
 //! and `_LoadMainScreenAnim` sets its last step to 0 (@0x17a73), so its
 //! first idle steps.
 //!
+//! A finger is the pointer only while it is down
+//! ([`crate::touch::PointerStep::Left`] follows its lift), so under touch
+//! the rollover names the button under a finger while it is down and
+//! fades to the none frame once it lifts.
+//!
 //! The engine steps once for each whole Mac tick that passes, carrying
 //! the rest, as the original's idle, polled far more often than a tick,
 //! steps each tick.

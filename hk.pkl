@@ -19,6 +19,7 @@ local crates = List(
     "nova-audio",
     "nova-bundle",
     "nova-data",
+    "nova-disasm",
     "nova-dump",
     "nova-galaxy-format",
     "nova-galaxy-media",

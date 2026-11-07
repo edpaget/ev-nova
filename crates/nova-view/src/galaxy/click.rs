@@ -40,7 +40,7 @@ pub fn hits(model: &GalaxyModel, at: Point, transform: &Transform) -> Vec<System
 /// The 20 × 20 hit box round the whole-pixel point (h, v), tested half-open
 /// as `PtInRect` tests it ([`Bounds::contains_half_open`]).
 #[allow(clippy::cast_precision_loss)] // Screen pixels.
-fn hit_box(h: i32, v: i32) -> Bounds {
+pub(super) fn hit_box(h: i32, v: i32) -> Bounds {
     let side = (2 * HIT_HALF) as f32;
     Bounds::at(pixel(h - HIT_HALF, v - HIT_HALF), side, side)
 }

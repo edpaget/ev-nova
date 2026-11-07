@@ -3,8 +3,9 @@
 
 use nova_sim::{RuleKey, RuleSource, VenueOffer};
 use nova_view::flight::FlightView;
+use nova_view::keymap::{Command, MainScreenCommand, UiCommand};
 use nova_view::spaceport::offer::OfferChoice;
-use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
+use nova_view::{Input, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
     abort_and_refresh, close_mission_texts, close_port_dialogs, collect_race_winnings,
@@ -37,7 +38,7 @@ impl AppScreen {
     /// and so does a mission dialog's, an offer's, the computer's, mission
     /// info's or the accept's briefing's
     /// ([`FlightView::open_dialog_map`](nova_view::flight::FlightView::open_dialog_map)). While it is open it takes every
-    /// input: an Escape press closes it ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)), as in
+    /// input: a press of its Back (Escape by default) closes it ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)), as in
     /// flight, and anything else goes to it ([`FlightView::port_map_input`](nova_view::flight::FlightView::port_map_input),
     /// where M closes it too).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
@@ -363,8 +364,9 @@ impl AppScreen {
     /// Whether `input` is a Preferences key, which the router takes, with
     /// dialogs to open them by: Command+comma on every side, as the
     /// original's app menu opens them (`_PrefAEVTHandler` @0x56181), and
-    /// P on the main menu, the ship browser and the galaxy viewer, away
-    /// from flight and the spaceport, where P is the player info key. A
+    /// the main screen's Preferences (P by default) on the main menu, the
+    /// ship browser and the galaxy viewer, away from flight and the
+    /// spaceport, where P is the player info key. A
     /// press opens them; its release does nothing, and so do its repeats
     /// but on the main menu, where `_MainScreenKey` reads a repeat of P as
     /// it reads a press (@0x1abaf): one that reaches the menu once the
@@ -384,11 +386,13 @@ impl AppScreen {
         };
         let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
         let chord = chord_command(key) == Some(MenuCommand::Preferences);
-        let taken = (chord && self.command_held) || (key == Key::Char('p') && away);
+        let preferences = away
+            && self.keys.means(input) == Some(Command::MainScreen(MainScreenCommand::Preferences));
+        let taken = (chord && self.command_held.held()) || preferences;
         if !taken || self.dialogs.is_none() {
             return false;
         }
-        let menu_key = self.side == Side::MainMenu && key == Key::Char('p') && !self.command_held;
+        let menu_key = self.side == Side::MainMenu && preferences && !self.command_held.held();
         if pressed && (!repeat || menu_key) {
             // `_MainScreenKey`'s P (@0x1ac59) clicks first; a Command key
             // goes to the original's menus (`MenuKey`), which do not.
@@ -540,6 +544,43 @@ impl AppScreen {
         ]
     }
 
+    /// Every overlay open, in the router's order.
+    pub(super) fn overlays_opened(&self) -> Vec<Overlay> {
+        self.overlays_open()
+            .into_iter()
+            .filter_map(|row| row.open.then_some(row.overlay))
+            .collect()
+    }
+
+    /// Tells every open overlay `input`, the app's surroundings.
+    pub(super) fn tell_overlays(&mut self, input: &Input) {
+        for overlay in self.overlays_opened() {
+            if let Some(screen) = self.overlay_screen_mut(overlay) {
+                screen.input(input);
+            }
+        }
+        self.told_overlays = self.overlays_opened();
+    }
+
+    /// Tells each overlay opened since the router last looked the app's
+    /// surroundings, so a dialog opened by a pad press shows the pad's
+    /// highlight on its first frame. Run after each input, tick and menu
+    /// command. An overlay closed and opened again in between is not
+    /// seen as new; the screens that reopen within one call are told
+    /// by whoever opens them.
+    pub(super) fn tell_new_overlays(&mut self) {
+        let open = self.overlays_opened();
+        let told = Input::Surroundings(self.surroundings);
+        for &overlay in &open {
+            if !self.told_overlays.contains(&overlay)
+                && let Some(screen) = self.overlay_screen_mut(overlay)
+            {
+                screen.input(&told);
+            }
+        }
+        self.told_overlays = open;
+    }
+
     /// The overlay open in front, if any: the one [`AppScreen::route`]
     /// gives every input to.
     pub(super) fn overlay_in_front(&self) -> Option<Overlay> {
@@ -659,7 +700,7 @@ impl AppScreen {
         if let Input::Key {
             key, pressed: true, ..
         } = *input
-            && self.command_held
+            && self.command_held.held()
             && chord_command(key) == Some(MenuCommand::Quit)
         {
             return ScreenAction::Quit;
@@ -678,14 +719,9 @@ impl AppScreen {
             Side::Spaceport => return self.spaceport_input(input),
             Side::MainMenu | Side::Ships | Side::Galaxy => {}
         }
-        if let Input::Key {
-            key: Key::Char('i'),
-            pressed,
-            repeat,
-        } = *input
-            && self.dialogs.is_some()
-        {
-            if pressed && !repeat {
+        let meant = self.keys.means(input);
+        if meant == Some(Command::MainScreen(MainScreenCommand::About)) && self.dialogs.is_some() {
+            if is_press(input) {
                 self.open_about();
             }
             return ScreenAction::None;
@@ -693,23 +729,26 @@ impl AppScreen {
         if self.side == Side::MainMenu {
             return self.menu_input(input);
         }
-        if let Input::Key {
-            key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
-            pressed,
-            repeat,
-        } = *input
+        if let Some(
+            command @ (Command::Ui(UiCommand::Tab | UiCommand::Back)
+            | Command::MainScreen(MainScreenCommand::Fly)),
+        ) = meant
         {
-            if !pressed || repeat {
+            if !is_press(input) {
                 return ScreenAction::None;
             }
-            match key {
-                Key::Escape if self.showing() == Showing::System => {
+            match command {
+                Command::Ui(UiCommand::Back) if self.showing() == Showing::System => {
                     return self.galaxy.input(input);
                 }
-                Key::Escape if self.menu.is_some() => self.switch_to(Side::MainMenu),
-                Key::Escape => return ScreenAction::Quit,
-                Key::Tab if self.side == Side::Ships => self.switch_to(Side::Galaxy),
-                Key::Tab => self.switch_to(Side::Ships),
+                Command::Ui(UiCommand::Back) if self.menu.is_some() => {
+                    self.switch_to(Side::MainMenu);
+                }
+                Command::Ui(UiCommand::Back) => return ScreenAction::Quit,
+                Command::Ui(UiCommand::Tab) if self.side == Side::Ships => {
+                    self.switch_to(Side::Galaxy);
+                }
+                Command::Ui(UiCommand::Tab) => self.switch_to(Side::Ships),
                 _ => self.enter_flight(),
             }
             return ScreenAction::None;
@@ -717,17 +756,20 @@ impl AppScreen {
         self.shown_mut().input(input)
     }
 
-    /// Keeps whether Command and the physical S, L and E keys are held.
+    /// Keeps whether Command is held, and what the router's keys hold
+    /// ([`AppScreen`]'s `keys` and `flight_keys`).
     pub(super) fn note_keys(&mut self, input: &Input) {
-        if let Input::Key { key, pressed, .. } = *input {
-            match key {
-                Key::Command => self.command_held = pressed,
-                Key::Char('s') => self.keys_held.s = pressed,
-                Key::Char('l') => self.keys_held.l = pressed,
-                Key::Char('e') => self.keys_held.e = pressed,
-                _ => {}
-            }
-        }
+        self.command_held.follow(input);
+        self.keys.follow(input);
+        self.flight_keys.follow(input);
+    }
+
+    /// Lets go of what the router notes as held: Command and its keys'
+    /// commands.
+    pub(super) fn let_go_of_noted_keys(&mut self) {
+        self.command_held.let_go();
+        self.keys.let_go();
+        self.flight_keys.let_go();
     }
 
     /// Keeps where a pointer input puts the pointer, moved back into the
@@ -815,4 +857,21 @@ pub(super) enum Overlay {
 /// `_OfferMissionFromPort` @0xa37a3), in the Mac's ticks as a duration.
 fn offer_gap(chance: &mut dyn nova_sim::Chance) -> std::time::Duration {
     nova_sim::mission::screens::mac_ticks(nova_sim::mission::offer_gap(chance))
+}
+
+/// Whether `input` is a key's or a pad button's press, not its repeat
+/// nor its release, or a touch control's press.
+pub(super) fn is_press(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::Key {
+            pressed: true,
+            repeat: false,
+            ..
+        } | Input::PadButton {
+            pressed: true,
+            repeat: false,
+            ..
+        } | Input::TouchControl(nova_view::TouchControl::Button { pressed: true, .. })
+    )
 }

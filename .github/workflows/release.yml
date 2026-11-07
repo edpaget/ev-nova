@@ -113,10 +113,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # gpg and curl are on the runner.
+      # gpg and curl are on the runner. flatpak comes from the Flatpak PPA,
+      # as in ci.yml's `flatpak`: the bundle's --device=input needs flatpak
+      # 1.15.6 or newer, and Ubuntu 24.04 ships 1.14.
       - run: |
+          sudo add-apt-repository -y ppa:flatpak/stable
           sudo apt-get update
           sudo apt-get install -y flatpak ostree
+          flatpak --version
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
@@ -126,6 +130,11 @@ jobs:
         with:
           key: flatpak-repo
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # Built here, with no secret in the environment.
       - name: Build nova-flatpak-repo
         shell: bash
@@ -284,6 +293,11 @@ jobs:
         with:
           key: publish
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # Built here, with no secret in the environment, because compiling
       # runs every dependency's build scripts and proc macros. The signing
       # step runs the built binary and compiles nothing.
@@ -448,6 +462,11 @@ jobs:
         with:
           key: pages
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # Without merge-multiple, each matching artifact lands in its own
       # `<path>/<artifact name>/`. With no match it downloads nothing and
       # succeeds, and the assembly step deploys the root page alone.

@@ -253,8 +253,22 @@ fn tarball(record: &SourceRecord) -> io::Result<PathBuf> {
         let fresh = sha256_of(&cached).is_ok_and(|sum| sum == record.sha256);
         if !fresh {
             let part = cache.join(format!("{}.{}.part", record.file_name(), std::process::id()));
+            // ffmpeg.org often refuses or resets a connection, which plain
+            // `--retry` doesn't count as transient: retry on every error,
+            // and give up on a connection after 30 s rather than curl's
+            // default of over two minutes.
             let status = Command::new("curl")
-                .args(["-fsSL", "--retry", "3", "-o"])
+                .args([
+                    "-fsSL",
+                    "--retry",
+                    "5",
+                    "--retry-all-errors",
+                    "--retry-delay",
+                    "5",
+                    "--connect-timeout",
+                    "30",
+                    "-o",
+                ])
                 .arg(&part)
                 .arg(&record.url)
                 .status()?;

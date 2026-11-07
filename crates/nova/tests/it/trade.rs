@@ -400,10 +400,10 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&one_file_at(path, file), path).expect("loads")
 }
 
-struct Harness {
-    app: App<Rc<GameData>>,
+pub(crate) struct Harness {
+    pub(crate) app: App<Rc<GameData>>,
     gpu: RecordingGpu,
-    frames: u64,
+    pub(crate) frames: u64,
 }
 
 impl Harness {
@@ -428,8 +428,28 @@ impl Harness {
         self.app.handle(event, &mut FakeWindow, &mut self.gpu)
     }
 
-    fn send(&mut self, event: WindowEvent) {
+    pub(crate) fn send(&mut self, event: WindowEvent) {
         assert_eq!(self.handle(event), Control::Continue, "{event:?}");
+    }
+
+    /// A new pilot, Ada, flown from the main menu and landed, the app
+    /// reading `pads`: the spaceport with its Trade Center
+    /// (`pad_focus`'s wiring test).
+    pub(crate) fn landed_with_pads(
+        store: &MemoryPilots,
+        pads: Box<dyn nova::gamepad::Gamepads>,
+    ) -> Self {
+        let mut game = Self::opening(store, RuleSource::Engine);
+        game.app = game.app.with_gamepads(pads);
+        let new_pilot = game.menu_button(MenuChoice::NewPilot);
+        game.click(new_pilot);
+        game.type_name("Ada");
+        game.press(KeyCode::Enter);
+        game.press(KeyCode::Enter);
+        game.enter_ship();
+        game.land();
+        assert_eq!(game.showing(), Showing::Spaceport);
+        game
     }
 
     /// Presses and releases the physical key `code`, typing `text` (as
@@ -500,7 +520,7 @@ impl Harness {
             .press_point(choice)
     }
 
-    fn showing(&self) -> Showing {
+    pub(crate) fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 

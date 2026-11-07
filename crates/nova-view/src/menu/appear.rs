@@ -44,7 +44,7 @@ use std::time::Duration;
 
 use crate::draw::fill_rect;
 use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
-use crate::{Color, DrawList, Input, Key, MouseButton};
+use crate::{COMMAND_KEYS, Color, DrawList, Input, MouseButton};
 
 /// What an [`Appear`] does with an input or a close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +156,9 @@ impl Appear {
     pub fn input(&mut self, input: &Input, command_held: bool) -> Verdict {
         let verdict = match (self.kind, input) {
             (Kind::LiveReturn, _) => Verdict::Pass,
-            (Kind::StartUp, Input::Key { key, .. }) if *key == Key::Command || command_held => {
+            (Kind::StartUp, Input::Key { key, .. })
+                if COMMAND_KEYS.contains(key) || command_held =>
+            {
                 Verdict::Held
             }
             (Kind::Return, Input::Key { .. } | Input::Text(_)) => Verdict::Held,
@@ -236,7 +238,7 @@ fn fading() -> Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DrawCommand, Point};
+    use crate::{DrawCommand, Key, Point};
 
     const VIEW: (f32, f32) = (1024.0, 768.0);
 
@@ -371,14 +373,14 @@ mod tests {
     /// Every kind of input, a Command key's included.
     fn every_input() -> Vec<(Input, bool)> {
         vec![
-            (key(Key::Char('n'), true), false),
-            (key(Key::Char('n'), false), false),
+            (key(Key::KeyN, true), false),
+            (key(Key::KeyN, false), false),
             (Input::Text('n'), false),
             (key(Key::Escape, true), false),
-            (key(Key::Command, true), false),
-            (key(Key::Char('q'), true), true),
-            (key(Key::Char('q'), false), true),
-            (key(Key::Command, false), true),
+            (key(Key::MetaLeft, true), false),
+            (key(Key::KeyQ, true), true),
+            (key(Key::KeyQ, false), true),
+            (key(Key::MetaLeft, false), true),
             (Input::Text('q'), true),
             (button(MouseButton::Left, true), false),
             (button(MouseButton::Right, true), false),
@@ -421,6 +423,18 @@ mod tests {
     }
 
     #[test]
+    fn at_start_up_either_command_key_is_held() {
+        for command in [Key::MetaLeft, Key::MetaRight] {
+            let mut appear = Appear::start_up();
+            assert_eq!(
+                appear.input(&key(command, true), false),
+                Verdict::Held,
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_close_is_held_at_start_up_dropped_on_a_return_and_passed_live() {
         let mut start_up = Appear::start_up();
         assert_eq!(start_up.close(), Verdict::Held);
@@ -436,8 +450,8 @@ mod tests {
     #[test]
     fn held_inputs_come_back_in_order() {
         let mut appear = Appear::start_up();
-        let command = key(Key::Command, true);
-        let quit = key(Key::Char('q'), true);
+        let command = key(Key::MetaLeft, true);
+        let quit = key(Key::KeyQ, true);
         appear.input(&command, false);
         appear.input(&Input::Text('x'), true);
         appear.close();
@@ -454,9 +468,9 @@ mod tests {
 
         let mut appear = Appear::returning(false, false);
         let typed = [
-            key(Key::Char('n'), true),
+            key(Key::KeyN, true),
             Input::Text('n'),
-            key(Key::Char('n'), false),
+            key(Key::KeyN, false),
         ];
         for input in &typed {
             appear.input(input, false);
@@ -467,7 +481,7 @@ mod tests {
 
     #[test]
     fn a_letting_go_of_the_keys_waits_after_the_presses_held_before_it() {
-        let command = key(Key::Command, true);
+        let command = key(Key::MetaLeft, true);
         for mut appear in [Appear::start_up(), Appear::returning(false, true)] {
             appear.input(&command, false);
             assert_eq!(appear.release_keys(), Verdict::Held);

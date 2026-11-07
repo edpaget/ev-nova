@@ -256,7 +256,7 @@ fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
     for scale in [1.0, 2.0] {
         let mut harness = Harness::new(scale, true);
         harness.frame();
-        harness.press(Key::Char('i'));
+        harness.press(Key::KeyI);
         assert_eq!(harness.showing(), Showing::About);
         let frame = harness.frame();
         let scale = harness.scale();
@@ -294,7 +294,7 @@ fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
 fn a_click_on_done_in_window_pixels_closes_it() {
     for scale in [1.0, 2.0] {
         let mut harness = Harness::new(scale, true);
-        harness.press(Key::Char('i'));
+        harness.press(Key::KeyI);
         let done = harness.item_bounds(DONE_ITEM);
         harness.click(done.center());
         assert_eq!(harness.showing(), Showing::ShipBrowser, "at {scale}");
@@ -308,7 +308,7 @@ fn a_click_on_done_in_window_pixels_closes_it() {
 #[allow(clippy::float_cmp)] // Whole pixels, unmoved.
 fn a_held_arrow_let_go_of_off_the_window_stops_scrolling() {
     let mut harness = Harness::new(1.0, true);
-    harness.press(Key::Char('i'));
+    harness.press(Key::KeyI);
     let arrow = harness.item_bounds(SCROLL_DOWN_ITEM).center();
     harness.frame();
     harness.press_at(arrow);
@@ -333,7 +333,7 @@ fn a_held_arrow_let_go_of_off_the_window_stops_scrolling() {
 fn return_and_escape_close_it_without_quitting() {
     for key in [Key::Enter, Key::Escape] {
         let mut harness = Harness::new(1.0, true);
-        harness.press(Key::Char('i'));
+        harness.press(Key::KeyI);
         harness.press(key);
         assert_eq!(harness.showing(), Showing::ShipBrowser, "{key:?}");
         assert!(harness.app.screen().about().is_none());
@@ -343,7 +343,7 @@ fn return_and_escape_close_it_without_quitting() {
 #[test]
 fn without_dialogs_i_does_nothing() {
     let mut harness = Harness::new(1.0, false);
-    harness.press(Key::Char('i'));
+    harness.press(Key::KeyI);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
     let frame = harness.frame();
     assert!(
@@ -356,8 +356,8 @@ fn without_dialogs_i_does_nothing() {
 #[test]
 fn input_does_not_reach_the_screen_below() {
     let mut harness = Harness::new(1.0, true);
-    harness.press(Key::Char('i'));
-    for key in [Key::Tab, Key::Char('f'), Key::Right] {
+    harness.press(Key::KeyI);
+    for key in [Key::Tab, Key::KeyF, Key::ArrowRight] {
         harness.press(key);
     }
     assert_eq!(harness.showing(), Showing::About);

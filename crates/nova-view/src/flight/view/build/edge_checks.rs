@@ -404,9 +404,9 @@ fn the_edges_rules_reach_the_course_map() {
     );
     ticks(&mut view, 3);
     assert_eq!(passes(&view).next(), Next::Idle);
-    view.input(&key(Key::Char('f'), true));
+    view.input(&key(Key::KeyF, true));
     view.input(&Input::Text('f'));
-    view.input(&key(Key::Char('f'), false));
+    view.input(&key(Key::KeyF, false));
     for c in "Sol".chars() {
         view.input(&Input::Text(c));
     }

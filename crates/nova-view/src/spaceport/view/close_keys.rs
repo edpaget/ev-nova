@@ -20,9 +20,9 @@ use crate::spaceport::offer::VenueOffers;
 /// Which of the keys a close waits on are physically down.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CloseKeys {
-    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), P.
+    /// [the player info key](crate::keymap::PlayCommand::PlayerInfo), P.
     pub player_info: bool,
-    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), I.
+    /// [the mission info key](crate::keymap::PlayCommand::MissionInfo), I.
     pub mission_info: bool,
 }
 

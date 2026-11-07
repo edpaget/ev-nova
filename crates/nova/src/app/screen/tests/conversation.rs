@@ -101,7 +101,7 @@ fn a_digit_shows_the_next_page() {
     let loader = loader();
     let mut screen = talking(talking_data(), &loader);
     land(&mut screen);
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     assert!(shows(&screen, "Two gates."));
     assert!(shows(&screen, "Either will do."));
     assert!(shows(&screen, "1. Take it"));
@@ -128,7 +128,7 @@ fn the_end_closes_back_to_the_spaceport_and_a_second_escape_takes_off() {
     let loader = loader();
     let mut screen = talking(talking_data(), &loader);
     land(&mut screen);
-    screen.input(&key(Key::Char('2'), true));
+    screen.input(&key(Key::Digit2, true));
     assert!(shows(&screen, "Bye."));
     assert!(shows(
         &screen,
@@ -170,8 +170,8 @@ fn taking_off_and_landing_again_opens_it_afresh() {
     let loader = loader();
     let mut screen = talking(talking_data(), &loader);
     land(&mut screen);
-    screen.input(&key(Key::Char('1'), true));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
+    screen.input(&key(Key::Digit1, true));
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
     assert_eq!(
@@ -232,9 +232,9 @@ fn without_an_interface_file_it_is_drawn_over_the_stand_in_and_plays_to_its_clos
         assert_eq!(screen.showing(), Showing::Spaceport, "{k:?}");
     }
     assert!(shows(&screen, "A job?"));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     assert!(shows(&screen, "1. Take it"));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     assert!(shows(&screen, "Go."));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
@@ -286,14 +286,14 @@ fn closing_an_offer_shows_the_stellar_s_own_conversation_next() {
     let mut screen = talking(offering_data(), &loader);
     land(&mut screen);
     assert!(shows(&screen, "Work?"), "the offer first");
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     assert!(shows(&screen, "Done."));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(screen.showing(), Showing::Spaceport);
     assert!(shows(&screen, "A job?"), "then the stellar's own");
     assert!(shows(&screen, "1. Leave"));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     screen.input(&key(Key::Enter, true));
     assert_eq!(
         drawn(&screen),
@@ -371,7 +371,7 @@ fn a_landing_that_delivers_shows_the_completion_before_the_stellar_s_own() {
     // The job happened as the ship landed: its plate is aboard, not yet
     // delivered, so the planet's own conversation shows.
     assert!(shows(&screen, "A job?"));
-    screen.input(&key(Key::Char('1'), true));
+    screen.input(&key(Key::Digit1, true));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     take_off_and_land_again(&mut screen);

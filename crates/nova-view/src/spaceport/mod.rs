@@ -82,7 +82,6 @@ pub use bar::{BarScreen, Hiring};
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
 pub use conversation::{ConversationChoice, ConversationScreen};
 pub use hire::HireScreen;
-pub use layout::{PORT_KEYS, PortKey};
 pub use missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 pub use news::NewsScreen;
 pub use offer::{OfferChoice, OfferDialog};

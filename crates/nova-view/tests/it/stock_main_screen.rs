@@ -392,3 +392,46 @@ fn every_stock_ship_has_a_picture_over_black() {
         &lit[..lit.len().min(20)]
     );
 }
+
+/// From pad inputs alone, the d-pad reaches each of the stock main
+/// screen's buttons: down the left column, across, and up the right.
+#[test]
+fn the_dpad_reaches_each_stock_main_screen_button() {
+    use nova_view::input::{ControllerFamily, Device, PadButton, Surroundings};
+    let Some((data, art)) = stock() else {
+        return;
+    };
+    let mut menu = MainMenu::new(Some(art), data.button_style(), Rc::new(MonoMetrics));
+    menu.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+        ControllerFamily::Generic,
+    ))));
+    let mut reached = vec![menu.pad_highlight()];
+    for button in [
+        PadButton::DPadDown,
+        PadButton::DPadDown,
+        PadButton::DPadRight,
+        PadButton::DPadUp,
+        PadButton::DPadUp,
+    ] {
+        for pressed in [true, false] {
+            menu.input(&Input::PadButton {
+                button,
+                pressed,
+                repeat: false,
+            });
+        }
+        reached.push(menu.pad_highlight());
+    }
+    assert_eq!(
+        reached,
+        [
+            MenuChoice::NewPilot,
+            MenuChoice::OpenPilot,
+            MenuChoice::Quit,
+            MenuChoice::About,
+            MenuChoice::Preferences,
+            MenuChoice::EnterShip,
+        ]
+        .map(Some)
+    );
+}

@@ -4,7 +4,7 @@
 
 use super::*;
 use nova_view::fade::DEATH_FADE_FOR;
-use nova_view::menu::intro::{INTRO_SOUND, SKIP_KEY};
+use nova_view::menu::intro::INTRO_SOUND;
 
 const SECOND: Duration = DEATH_FADE_FOR;
 
@@ -143,11 +143,11 @@ fn click_anywhere(screen: &mut AppScreen) {
 
 /// Command-Q, as typed: Command, Q with its text, then both let go of.
 fn command_q(screen: &mut AppScreen) {
-    screen.input(&key(Key::Command, true));
-    screen.input(&key(Key::Char('q'), true));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::KeyQ, true));
     screen.input(&Input::Text('q'));
-    screen.input(&key(Key::Char('q'), false));
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::KeyQ, false));
+    screen.input(&key(Key::MetaLeft, false));
 }
 
 /// Ticks out the main screen's fade, into the intro's first picture.
@@ -238,7 +238,7 @@ fn the_handovers_warm_up_frame_reads_the_coming_traffics_sheet_and_card_before_a
     for _ in 0..1000 {
         match screen.showing() {
             Showing::Flight => break,
-            Showing::Intro => tap(&mut screen, SKIP_KEY),
+            Showing::Intro => tap(&mut screen, Key::Escape),
             Showing::IntroText => tap(&mut screen, Key::Enter),
             _ => {}
         }
@@ -269,15 +269,15 @@ fn keys_held_as_play_starts_do_nothing_until_their_next_repeat() {
         .expect("a session")
         .player();
     choose(&mut screen, MenuChoice::EnterShip);
-    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::ArrowUp, true));
     screen.input(&key(Key::Space, true));
     screen.tick(SECOND / 2);
-    screen.input(&held(Key::Up));
+    screen.input(&held(Key::ArrowUp));
     screen.input(&held(Key::Space));
     screen.tick(SECOND / 2);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(ship(&screen), before, "the warm-up frame moved nothing");
-    screen.input(&held(Key::Up));
+    screen.input(&held(Key::ArrowUp));
     screen.input(&held(Key::Space));
     screen.tick(SECOND);
     assert!(!screen.entering());
@@ -294,7 +294,7 @@ fn keys_held_as_play_starts_do_nothing_until_their_next_repeat() {
             .is_empty(),
         "no shot"
     );
-    screen.input(&held(Key::Up));
+    screen.input(&held(Key::ArrowUp));
     screen.tick(TICK * 3);
     assert_ne!(
         ship(&screen).velocity,
@@ -325,7 +325,7 @@ fn reentering_shuts_the_escort_menu_and_starts_the_cursor_hidden() {
     open_held(&mut screen);
     enter_ship(&mut screen);
     screen.tick(TICK);
-    tap(&mut screen, nova_view::flight::escorts::MENU_KEY);
+    tap(&mut screen, Key::KeyE);
     assert!(flight(&screen).escort_menu().is_open());
     screen.input(&Input::PointerMoved(Point::new(300.0, 300.0)));
     assert!(flight(&screen).cursor_at().is_some());
@@ -445,7 +445,7 @@ fn the_developers_f_still_enters_flight_at_once() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     screen.input(&key(Key::Tab, true));
-    screen.input(&key(Key::Char('f'), true));
+    screen.input(&key(Key::KeyF, true));
     assert_eq!(screen.showing(), Showing::Flight);
     assert!(!screen.entering());
     assert_eq!(cover(&screen), None);
@@ -457,10 +457,10 @@ fn letting_go_of_the_keys_or_the_pointer_during_the_entry_reaches_nothing_else()
     let mut screen = menu(&store);
     create_held(&mut screen, "Ada");
     choose(&mut screen, MenuChoice::EnterShip);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.release_keys();
     screen.cancel_pointer();
-    screen.input(&key(Key::Char('q'), true));
+    screen.input(&key(Key::KeyQ, true));
     through_entry(&mut screen);
     assert!(!screen.take_quit(), "Command was let go of");
     assert_eq!(screen.showing(), Showing::Flight);
@@ -507,13 +507,13 @@ fn no_arrow_held(screen: &mut AppScreen) {
 fn command_tab_away_during_the_entry_leaves_command_up_in_flight() {
     let store = MemoryPilots::new();
     let mut screen = entering_with_cargo(&store);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     screen.input(&key(Key::Tab, true));
     screen.release_keys();
     into_play(&mut screen);
     no_arrow_held(&mut screen);
     assert_eq!(pilot(&screen).held(FOOD), 5, "carried into play");
-    tap(&mut screen, nova_view::flight::view::JETTISON_KEY);
+    tap(&mut screen, Key::KeyK);
     screen.tick(TICK);
     assert_eq!(
         pilot(&screen).held(FOOD),
@@ -526,10 +526,10 @@ fn command_tab_away_during_the_entry_leaves_command_up_in_flight() {
 fn an_arrow_let_go_of_after_command_during_the_entry_isnt_held_in_flight() {
     let store = MemoryPilots::new();
     let mut screen = entering_with_cargo(&store);
-    screen.input(&key(Key::Command, true));
-    screen.input(&key(Key::Up, true));
-    screen.input(&key(Key::Command, false));
-    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::MetaLeft, true));
+    screen.input(&key(Key::ArrowUp, true));
+    screen.input(&key(Key::MetaLeft, false));
+    screen.input(&key(Key::ArrowUp, false));
     into_play(&mut screen);
     no_arrow_held(&mut screen);
 }
@@ -541,9 +541,9 @@ fn command_comma_during_the_entry_opens_the_preferences_over_play() {
     create(&mut screen, "Ada");
     escape_to_menu(&mut screen);
     choose(&mut screen, MenuChoice::EnterShip);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     tap(&mut screen, PREFERENCES_KEY);
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     assert!(screen.preferences().is_none(), "held");
     screen.tick(SECOND);
     assert!(screen.game_in_progress().is_none(), "handed over");
@@ -555,14 +555,14 @@ fn command_comma_during_the_entry_opens_the_preferences_over_play() {
 fn command_escape_during_the_entry_doesnt_leave_play() {
     let store = MemoryPilots::new();
     let mut screen = entering_with_cargo(&store);
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     tap(&mut screen, Key::Escape);
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     screen.tick(SECOND);
     assert_eq!(screen.showing(), Showing::Flight, "handed over");
-    screen.input(&key(Key::Command, true));
+    screen.input(&key(Key::MetaLeft, true));
     tap(&mut screen, Key::Escape);
-    screen.input(&key(Key::Command, false));
+    screen.input(&key(Key::MetaLeft, false));
     into_play(&mut screen);
     no_arrow_held(&mut screen);
 }
@@ -654,7 +654,7 @@ fn the_text_is_desc_dialog_over_black_under_its_fade_in() {
 
 #[test]
 fn a_picture_advances_early_on_return_space_or_a_click() {
-    for advance in [Key::Enter, Key::Space, Key::Other] {
+    for advance in [Key::Enter, Key::Space, Key::Unidentified] {
         let store = MemoryPilots::new();
         let mut screen = intro_menu(&store);
         create_held(&mut screen, "Ada");
@@ -662,7 +662,7 @@ fn a_picture_advances_early_on_return_space_or_a_click() {
         faded_out(&mut screen);
         picture_in(&mut screen);
         screen.tick(Duration::from_millis(100));
-        if advance == Key::Other {
+        if advance == Key::Unidentified {
             click_anywhere(&mut screen);
         } else {
             tap(&mut screen, advance);
@@ -680,7 +680,7 @@ fn the_skip_key_during_the_first_picture_skips_the_second_and_the_text() {
     choose(&mut screen, MenuChoice::EnterShip);
     faded_out(&mut screen);
     picture_in(&mut screen);
-    tap(&mut screen, SKIP_KEY);
+    tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Intro, "its fade out");
     screen.tick(SECOND);
     assert_eq!(screen.showing(), Showing::Flight, "no 8201, no text");

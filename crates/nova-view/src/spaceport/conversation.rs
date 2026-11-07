@@ -34,7 +34,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect, frame_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, key_letter};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::{TextMetrics, wrap};
 
@@ -178,10 +178,11 @@ impl ConversationScreen {
                 repeat: false,
             } if self.page.ended => Some(ConversationChoice::Close),
             Input::Key {
-                key: Key::Char(digit @ '1'..='9'),
+                key,
                 pressed: true,
                 repeat: false,
             } => {
+                let digit = key_letter(key).filter(|c| ('1'..='9').contains(c))?;
                 let index = digit.to_digit(10)? as usize - 1;
                 (index < self.page.choices.len()).then_some(ConversationChoice::Choose(index))
             }
@@ -228,7 +229,7 @@ impl Screen for ConversationScreen {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{MouseButton, letter_key};
     use crate::text::fixture::MonoMetrics;
 
     fn page(lines: &[&str], choices: &[&str], ended: bool) -> ConversationPage {
@@ -358,23 +359,23 @@ mod tests {
     fn a_digit_takes_its_choice_and_one_past_them_or_a_repeat_takes_none() {
         let mut screen = offer();
         assert_eq!(
-            key(&mut screen, Key::Char('2'), false),
+            key(&mut screen, letter_key('2').unwrap(), false),
             Some(ConversationChoice::Choose(1))
         );
         assert_eq!(
-            key(&mut screen, Key::Char('1'), false),
+            key(&mut screen, letter_key('1').unwrap(), false),
             Some(ConversationChoice::Choose(0))
         );
         assert_eq!(
-            key(&mut screen, Key::Char('3'), false),
+            key(&mut screen, letter_key('3').unwrap(), false),
             Some(ConversationChoice::Choose(2))
         );
-        assert_eq!(key(&mut screen, Key::Char('4'), false), None);
-        assert_eq!(key(&mut screen, Key::Char('9'), false), None);
-        assert_eq!(key(&mut screen, Key::Char('0'), false), None);
-        assert_eq!(key(&mut screen, Key::Char('2'), true), None);
+        assert_eq!(key(&mut screen, letter_key('4').unwrap(), false), None);
+        assert_eq!(key(&mut screen, letter_key('9').unwrap(), false), None);
+        assert_eq!(key(&mut screen, letter_key('0').unwrap(), false), None);
+        assert_eq!(key(&mut screen, letter_key('2').unwrap(), true), None);
         let released = screen.input(&Input::Key {
-            key: Key::Char('2'),
+            key: letter_key('2').unwrap(),
             pressed: false,
             repeat: false,
         });
@@ -388,7 +389,7 @@ mod tests {
         let ten: Vec<&str> = ten.iter().map(String::as_str).collect();
         let mut screen = ConversationScreen::new(page(&[], &ten, false), Rc::new(MonoMetrics));
         assert_eq!(
-            key(&mut screen, Key::Char('9'), false),
+            key(&mut screen, letter_key('9').unwrap(), false),
             Some(ConversationChoice::Choose(8))
         );
         assert_eq!(
@@ -487,7 +488,7 @@ mod tests {
             click(&mut screen, Point::new(10.0, 10.0)),
             Some(ConversationChoice::Close)
         );
-        assert_eq!(key(&mut screen, Key::Char('1'), false), None);
+        assert_eq!(key(&mut screen, letter_key('1').unwrap(), false), None);
     }
 
     #[test]

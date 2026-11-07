@@ -233,7 +233,10 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         assert!(!lines.is_empty());
         assert!(lines.iter().all(|at| text_box.contains(*at)), "{lines:?}");
 
-        assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
+        assert_eq!(
+            desc.input(&key(Key::ArrowDown)),
+            nova_view::ScreenAction::None
+        );
         assert_eq!(desc.scroll_offset(), ARROW_UNITS);
         // The line Down took part of off the top is cut at the box.
         assert!(
@@ -1737,7 +1740,7 @@ fn a_long_offer_scrolls_ten_pixels_on_down_in_1016_and_1020_and_shows_both_arrow
         for (id, graphic) in [(OFFER_DIALOG, None), (PICTURE_OFFER_DIALOG, Some(5005))] {
             let template = ui.dialog_template(id).expect("converts");
             let mut offer = offer_of(template, &long_text, graphic, ("Yes", "No"));
-            offer.input(&key(Key::Down));
+            offer.input(&key(Key::ArrowDown));
             let laid = offer.dialog().expect("laid out");
             let text = laid.scroll_text().expect("the text");
             assert_eq!(text.offset(), ARROW_UNITS, "DLOG {id}");
@@ -1859,6 +1862,59 @@ fn stock_pictured_texts_scroll_in_3004_and_1020() {
         assert_eq!(
             offers,
             [4069, 4233, 4345, 4468, 4485, 4581, 4591, 4602, 4620]
+        );
+    }
+}
+
+/// The pad's own surroundings and taps, for the stock New Pilot.
+fn told_the_pad() -> Input {
+    Input::Surroundings(nova_view::input::Surroundings::of(
+        nova_view::input::Device::Gamepad(nova_view::input::ControllerFamily::Generic),
+    ))
+}
+
+fn pad_tap(screen: &mut impl Screen, button: nova_view::input::PadButton) {
+    for pressed in [true, false] {
+        screen.input(&Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        });
+    }
+}
+
+/// The stock New Pilot's pad targets are exactly its controls: OK,
+/// Cancel, Strict Play, the two fields and the gender control, so no
+/// dead item of `DITL` 3102 needs leaving out.
+#[test]
+fn the_stock_new_pilot_dialogs_pad_targets_are_its_controls() {
+    use nova_view::input::PadButton;
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        dialog.input(&told_the_pad());
+        let mut reached = Vec::new();
+        for _ in 0..template.items.len() {
+            reached.extend(dialog.dialog().pad_highlight());
+            pad_tap(&mut dialog, PadButton::LeftShoulder);
+        }
+        reached.sort_unstable();
+        reached.dedup();
+        assert_eq!(
+            reached,
+            [
+                NEW_PILOT_OK_ITEM,
+                CANCEL_ITEM,
+                STRICT_PLAY_ITEM,
+                NAME_ITEM,
+                NICKNAME_ITEM,
+                GENDER_ITEM
+            ],
+            "{}",
+            path.display()
         );
     }
 }

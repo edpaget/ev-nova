@@ -196,6 +196,9 @@ fn fallback_template() -> DialogTemplate {
 }
 
 #[cfg(test)]
+pub(crate) use tests::pad_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::draw::{DrawCommand, DrawList, fill_rect};
@@ -267,6 +270,65 @@ mod tests {
         .expect("builds")
     }
 
+    /// Its row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(crate::ui::edit_dialog::EditProbe(dialog()))
+    }
+
+    /// AC 2 of rdm:phase/key-bindings/phase-17-text-entry-port for the
+    /// shipyard's naming (and the christening and the capture naming,
+    /// the same dialog): it asks for the system's entry as it opens with
+    /// the keyboard, and from pad inputs alone the on-screen keyboard
+    /// names the ship, which OK confirms.
+    #[test]
+    fn the_pad_alone_names_the_ship_and_confirms_it() {
+        use crate::text_entry::EntryAsk;
+        use crate::ui::edit_dialog::pad_entry::{asked_at_open, pad_types};
+        use crate::ui::entry_keyboard::KeyId;
+        let mut dialog = dialog();
+        assert_eq!(
+            asked_at_open(&dialog),
+            Some(EntryAsk {
+                field: dialog.field().rect(),
+                focused: 1,
+            }),
+            "asks for text entry when it opens"
+        );
+        pad_types(
+            &mut dialog,
+            &[
+                KeyId::Char('k'),
+                KeyId::Char('e'),
+                KeyId::Char('s'),
+                KeyId::Char('t'),
+                KeyId::Char('r'),
+                KeyId::Char('e'),
+                KeyId::Char('l'),
+                KeyId::Done,
+            ],
+        );
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(TextInputOutcome::Confirm("Kestrel".to_owned()))
+        );
+    }
+
+    /// The surroundings are no player input: the flush of the opening
+    /// key's character waits past them.
+    #[test]
+    fn the_surroundings_are_no_player_input() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut dialog = dialog();
+        let before = dialog.field().text().to_owned();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        dialog.input(&Input::Text('7'));
+        assert_eq!(dialog.field().text(), before, "still flushed");
+        assert_eq!(dialog.take_outcome(), None);
+    }
+
     fn key(key: Key) -> Input {
         Input::Key {
             key,
@@ -278,7 +340,9 @@ mod tests {
     fn typed(dialog: &mut TextInputDialog, text: &str) {
         for c in text.chars() {
             // As the platform sends them: the key, then its character.
-            dialog.input(&key(Key::Char(c.to_ascii_lowercase())));
+            dialog.input(&key(
+                crate::input::letter_key(c).unwrap_or(Key::Unidentified)
+            ));
             dialog.input(&Input::Text(c));
         }
     }
@@ -442,6 +506,37 @@ mod tests {
         assert_eq!(dialog.take_sounds(), Vec::<Sound>::new());
     }
 
+    /// Clear empties the field even after OK refused a long name and
+    /// selected its first characters, by a tap and by the pad
+    /// (rdm:phase/key-bindings/phase-17-text-entry-port).
+    #[test]
+    fn clear_empties_a_refused_name() {
+        use crate::input::{Device, Surroundings};
+        use crate::ui::edit_dialog::pad_entry::pad_types;
+        use crate::ui::entry_keyboard::{EntryHost, KeyId};
+        let refused = |dialog: &mut TextInputDialog| {
+            typed(dialog, &"x".repeat(70));
+            dialog.input(&key(Key::Enter));
+            assert_eq!(dialog.take_outcome(), None, "refused");
+            assert!(dialog.field().selected());
+        };
+        let mut tapped = dialog();
+        tapped.input(&Input::Surroundings(Surroundings::of(Device::Touch)));
+        refused(&mut tapped);
+        let at = tapped
+            .keyboard()
+            .layout(tapped.dialog_bounds())
+            .key(KeyId::Clear)
+            .expect("Clear")
+            .center();
+        crate::touch::testkit::tap(&mut tapped, at);
+        assert_eq!(tapped.field().text(), "", "by a tap");
+        let mut padded = dialog();
+        refused(&mut padded);
+        pad_types(&mut padded, &[KeyId::Clear]);
+        assert_eq!(padded.field().text(), "", "by the pad");
+    }
+
     #[test]
     fn a_text_of_exactly_the_most_is_confirmed() {
         let mut dialog = dialog();
@@ -456,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_a_backdrop_the_dialog_and_the_field() {
+    fn it_draws_a_backdrop_the_dialog_and_the_field_and_asks_for_entry_at_it() {
         let dialog = dialog();
         let mut list = DrawList::new();
         dialog.draw(&mut list);
@@ -466,6 +561,10 @@ mod tests {
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
         dialog.field().draw(&MonoMetrics, &mut expected);
+        expected.ask_text_entry(crate::text_entry::EntryAsk {
+            field: dialog.field().rect(),
+            focused: 1,
+        });
         assert_eq!(list, expected);
     }
 

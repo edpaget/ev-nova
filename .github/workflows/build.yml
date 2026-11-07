@@ -96,13 +96,14 @@ jobs:
       # checkout and mise, ALSA's headers (nova-audio plays through cpal,
       # which builds against ALSA on Linux), objdump (binutils) for the
       # tarball's glibc check, libclang for bindgen over the FFmpeg
-      # nova-movie builds (curl and xz-utils fetch and unpack its source).
+      # nova-movie builds (curl and xz-utils fetch and unpack its source),
+      # and libudev's headers for gilrs, nova's gamepads.
       - if: runner.os == 'Linux'
         run: |
           apt-get update
           # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils libclang-dev
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils libclang-dev libudev-dev
       # As in ci.yml: FFmpeg's configure and make run in MSYS2.
       - if: runner.os == 'Windows'
         run: C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
@@ -124,6 +125,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The FFmpeg source tarball, as in ci.yml's `ci` job.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/nova-ffmpeg
+          key: nova-ffmpeg-${{ runner.os }}-${{ hashFiles('third_party/ffmpeg-source.toml') }}
       # Default features only: never --features dev-tools or --all-features,
       # so egui stays out of published builds. The release build must stay on
       # the same default feature set that `mise run deny` checks in `ci`.

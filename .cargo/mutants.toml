@@ -16,6 +16,17 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The touch stick's clamp: at a length of exactly 1, dividing by the
+    # length leaves the offset as it is, so `>=` reads the same as `>`.
+    "nova-view/src/flight/touch_controls/stick\\.rs:[0-9]+:[0-9]+: replace > with >= in offset$",
+    # The edge row's next search start: the slot just filled no longer
+    # fits, so starting the search at it (`index * 1`) finds the same
+    # next slot as starting past it.
+    "nova-view/src/flight/touch_controls/layout\\.rs:[0-9]+:[0-9]+: replace \\+ with \\* in Placer<'_>::edge_row$",
+    # The default `Screen::claims_touch` already returns false, so its
+    # `false` mutant is the code itself; the `true` mutant is caught by
+    # `a_screen_claims_no_touch_by_default`.
+    "nova-view/src/screen\\.rs:[0-9]+:[0-9]+: replace Screen::claims_touch -> bool with false$",
     # The leave write's +0x50 floor (`if 0 > +0x50`): `<=` also writes 0.0
     # over a stage of exactly 0.0 (or -0.0, which compares equal to it), so
     # the stage reads the same either way.
@@ -55,6 +66,10 @@ exclude_re = [
     # CI leg runs its tests (`nova-win32/tests/it`, `nova/tests/it/windows_exe.rs`).
     "nova-win32/src/console\\.rs:",
     "nova-win32/src/winsparkle\\.rs:",
+    # The keyboard layout's key names (`key_label`, `keyboard_layout_language`):
+    # the windows-2025 leg runs `nova-win32/tests/it/key_label.rs` and nova's
+    # `the_windows_adapter_asks_win32_about_each_key_s_own_scancode`.
+    "nova-win32/src/key_label\\.rs:",
     "nova/src/platform/console\\.rs:[0-9]+:[0-9]+: replace <impl StdConsole for Win32Console>",
     # WinSparkle's Windows forwards, each one call into nova-win32: the
     # windows-2025 legs run `a_test_binary_has_no_dll_beside_it` and
@@ -65,9 +80,10 @@ exclude_re = [
     "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::DllLoader::beside_exe ",
     "nova/src/platform/updater\\.rs:[0-9]+:[0-9]+: replace windows::winsparkle_source ",
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_exe_icon ",
-    # Linux- and BSD-only code: the window's app id (`with_app_id`), which
-    # winit gives no way to read back, so no test can see it even there.
-    # The hand check in packaging/README.txt covers it.
+    # Linux- and BSD-only code, which the macOS host never builds: the
+    # window's app id (`with_app_id`). On Linux its tests read the backend's
+    # attributes back, and the hand check in packaging/README.txt covers
+    # the running window.
     "nova/src/platform/window\\.rs:[0-9]+:[0-9]+: replace with_app_id ",
     # An NPC's landing box widens below a turn of 8 (`npc_box`); at exactly
     # 8, trunc((9 - 8) x 8 + 32) is the plain box's 40, so `<=` gives the
@@ -210,6 +226,10 @@ exclude_re = [
     # directory into a keeper, part of `main`'s wiring (excluded below);
     # where the directory is, is `config::pilots_dir`'s, tested there.
     "nova/src/main.rs:.*replace open_pilots -> ",
+    # `run` (nova's `main.rs`) runs the real event loop, which needs a
+    # display: `main`'s wiring (excluded below). What it gives back, the
+    # open failure, is the runner's `failure_slot`, tested in `runner.rs`.
+    "nova/src/main.rs:.*replace run -> ",
     # nova-movie's FFmpeg set-up: FFmpeg 9 registers nothing at `init`,
     # and the log level only silences FFmpeg's own messages on stderr,
     # which no test reads.
@@ -328,18 +348,25 @@ exclude_re = [
     "replace main -> ExitCode",
     # The winit event-loop glue: opening the window and its surface (or
     # recording why it could not), installing the macOS menu bar and the
-    # Apple event handlers, forwarding each window event and menu pick to
-    # `App::handle` (including acting on its `Control`) and the screen's
-    # offers to the menu bar, telling the app the loop is ending
-    # (`exiting`) and printing what it reports, and starting the startup
-    # warnings' sheet once the loop waits. It needs a real window, display
-    # and, for the menu bar, the handlers and the sheet, `NSApplication` on
-    # the main thread. The decisions it forwards to (`translate`,
-    # `App::handle`, `App::exiting`, `MenuSync`, `choose`, `gpu_failure`,
-    # `exit::exit`, `Report::take_alert`) are mutated and tested, and
-    # `MenuBar::install` / `set_enabled` and `AppleEvents::install` run on
-    # the main thread in nova-appkit's `tests/it`.
-    "impl ApplicationHandler<LoopEvent> for Runner<S>>::(resumed|window_event|user_event|about_to_wait|exiting)",
+    # Apple event handlers and the will-terminate observer, forwarding
+    # each window event and loop event to `App::handle` (including acting
+    # on its `Control`), the ones the overlay wants to it and the screen's
+    # offers to the menu bar, telling the app the run is over (`Running`'s
+    # `Ending::end`, which `run_end::Run` calls once, on the runner's drop
+    # or from the will-terminate observer) and printing what it reports,
+    # and starting the startup warnings' sheet once the loop waits. It
+    # needs a real window, display and, for the menu bar, the handlers,
+    # the observer and the sheet, `NSApplication` on the main thread. The
+    # decisions it forwards to (`translate`, `App::handle`,
+    # `App::overlay_wants`, `App::exiting`, `run_end::Run`, `MenuSync`,
+    # `choose`, `gpu_failure`, `exit::exit`, `Report::take_alert`,
+    # `LoopEvents::drain`) are mutated and tested, and `MenuBar::install` /
+    # `set_enabled`, `AppleEvents::install` and `WillTerminate::install`
+    # run on the main thread in nova-appkit's `tests/it`.
+    "impl ApplicationHandler for Runner<S>>::(can_create_surfaces|window_event|proxy_wake_up|about_to_wait)",
+    "nova/src/platform/runner\\.rs:.* in Runner<S>::take_loop_events( |$)",
+    "nova/src/platform/runner\\.rs:.*replace Runner<S>::take_loop_events with \\(\\)$",
+    "nova/src/platform/runner\\.rs:.*replace <impl Ending for Running<S>>::end with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::(after_events|sync_menu|install_menu|print_reports) with \\(\\)$",
     "nova/src/platform/runner\\.rs:.*replace Running<S>::install_menu -> Vec<String> with ",
     # `AppleEvents`'s drop removes its handlers from `NSAppleEventManager`.
@@ -348,6 +375,18 @@ exclude_re = [
     # nova-appkit's `tests/it` checks that, and can't tell the removal
     # from its absence. It is kept so nothing relies on that.
     "nova-appkit/src/apple_event_handler\\.rs:.*replace <impl Drop for AppleEvents>::drop with \\(\\)$",
+    # `WillTerminate`'s drop removes its observer from the notification
+    # center. Since macOS 10.11 the center holds an observer added with a
+    # selector weakly and stops calling it once it is freed, so a post after
+    # the drop calls no one either way: nova-appkit's `tests/it` checks
+    # that, and can't tell the removal from its absence. It is kept so
+    # nothing relies on that.
+    "nova-appkit/src/will_terminate\\.rs:.*replace <impl Drop for WillTerminate>::drop with \\(\\)$",
+    # The current keyboard layout's drop guard releases the input source
+    # `key_label` copied. Without it the source leaks, one Core Foundation
+    # object per key named, and every answer stays the same, so no test can
+    # tell. It is kept so the game doesn't leak a source per key it names.
+    "nova-appkit/src/key_layout\\.rs:.*replace <impl Drop for CurrentLayout>::drop with \\(\\)$",
     # The startup dialogs (`platform/dialogs.rs`): rfd's open panel, error
     # alert and warnings sheet, which need a display and `NSApplication`
     # (and a person to dismiss them). The decisions around them (when to
@@ -376,27 +415,33 @@ exclude_re = [
     # `names_feed`, which `feed_configured` asks of the app's bundle.
     "nova-appkit/src/updater\\.rs:.*replace feed_configured -> bool with false$",
     "nova/src/platform/updater\\.rs:.*replace (macos::)?<impl UpdaterSource for SparkleSource>::feed_configured -> bool with false$",
-    # The developer tools' window glue (the `dev-tools` feature): egui-winit's
-    # input state over a real winit window, which tests cannot build. Each
-    # forwards to tested parts: the panel (`DevPanel`), the painter
+    # The developer tools' window glue (the `dev-tools` feature): each
+    # forwards to tested parts: the input (`EguiInput`, which turns the
+    # game's window events into egui's), the panel (`DevPanel`), the painter
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
-    "DevTools::(new|on_window_event|run_frame|layer_mut)",
+    "DevTools::(new|on_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size,
     # scale factor and fullscreen state, a redraw request, showing or hiding
     # the system pointer, the fullscreen and size requests, and its
-    # monitor's modes and name, observable only with a window. The
-    # decisions in them are the tested `deepest` and `offers_exclusive`.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name)",
+    # monitor's modes and name, and its safe area, observable only with a
+    # window. The decisions in them are the tested `deepest`,
+    # `monitor_mode`, `offers_exclusive` and `safe_rect`.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible|set_fullscreen|is_fullscreen|request_inner_size|video_modes|monitor_name|safe_area)",
+    # The text entry adapter's one call into a real winit window, a
+    # one-line forward observable only with a window. The adapter's
+    # decisions are tested over `StrictIme` (`platform::text_entry`).
+    "impl ImeWindow for Arc<dyn Window>>::request_ime_update",
+    # The adapter's soft keyboard is `cfg!(any(target_os = "ios",
+    # target_os = "android"))`: `false` on every host the mutants and CI run
+    # on, so its `false` mutant is the code itself there
+    # (`the_desktop_has_no_soft_keyboard` pins it).
+    "nova/src/platform/text_entry\\.rs:[0-9]+:[0-9]+: replace <impl TextEntry for WinitTextEntry<W>>::soft_keyboard -> bool with false$",
     # The port's defaults for a window with no pointer of its own, that
     # cannot go fullscreen or be sized, do nothing already.
     "replace WindowPort::(set_pointer_visible|set_fullscreen|request_inner_size) with \\(\\)",
     # Its default `video_modes` is `Vec::new()`; replacing it with `vec![]`
     # builds the same empty list, so it cannot be observed.
     "replace WindowPort::video_modes -> Vec<MonitorMode> with vec!\\[\\]",
-    # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
-    # tests cannot build these events. Each arm only delegates (to the
-    # tested `key_event`, or reads the window port).
-    "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
     # The surface adapter's raw calls, as whole bodies only: pages,
     # uploads and clearing the pages delegate to `WgpuRenderer` (tested
     # offscreen), and `submit`
@@ -755,7 +800,7 @@ exclude_re = [
     # down" clear it is at its end (it fits, End cleared it, or a try
     # failed there), so the scroll the open gate lets through moves
     # nothing, keeps a wheel's leftover and leaves both flags as they were.
-    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_key$",
+    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_command$",
     # The trait's default, already an empty list.
     "nova-view/src/spaceport/modal\\.rs:[0-9]+:[0-9]+: replace Modal::take_unclaimed -> Vec<Input> with vec!\\[\\]$",
     # Whether a follower's berth is below its parent's: a berth holds one
@@ -782,6 +827,25 @@ exclude_re = [
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:28: replace > with >= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:20: replace < with <= in rows$",
     "nova-render/src/quickdraw_stretch\\.rs:[0-9]+:12: replace < with <= in columns$",
+    # The escort menu's groups' guard: a group's command resolves only
+    # while the EscortMenu context is active, and `sync_escort_keys` sets
+    # that to `escort_menu.is_open()` at the start of every input, before
+    # the press reaches `escort_command`, so the guard always holds there.
+    "nova-view/src/flight/view/cockpit\\.rs:[0-9]+:[0-9]+: replace match guard self\\.escort_menu\\.is_open\\(\\) with true in FlightView<C, S>::escort_command$",
+    # A thrust amount of none thrusting: `adjusted_accel` adds a push of
+    # 0.0 to each axis (or the circle adds facing × 0.0), which leaves the
+    # velocity as it was, so `>=` changes nothing a step can show.
+    "nova-sim-base/src/flight\\.rs:[0-9]+:[0-9]+: replace > with >= in advance_by$",
+    # A stick direction's sign is 1 or -1 (`PadButton::stick_direction`),
+    # never 0, so `<= 0` is `< 0`.
+    "nova-view/src/keymap/gamepad\\.rs:[0-9]+:[0-9]+: replace < with <= in PadMap::flight_direction$",
+    # gilrs's poll: what it reads is gilrs's event queue and the pads
+    # found at the start, which only a real pad fills, and no hermetic
+    # test attaches one. Its translation is `Forward`'s, tested on every
+    # host, and the adapter's contract test runs the poll with whatever
+    # is attached.
+    "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: replace <impl Gamepads for GilrsGamepads>::poll with \\(\\)$",
+    "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: delete ! in <impl Gamepads for GilrsGamepads>::poll$",
     # The heaviest-class fold's `mass > heaviest`: `>=` also takes a mass
     # equal to the heaviest so far, which leaves the same value.
     "nova-sim-ai/src/ai/candidates\\.rs:[0-9]+:[0-9]+: replace > with >= in nearest$",

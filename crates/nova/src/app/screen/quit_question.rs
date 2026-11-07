@@ -174,7 +174,8 @@ impl AppScreen {
                 self.data.button_style(),
                 Rc::clone(&dialogs.metrics),
             )
-            .with_focus_ring(self.dialog_focus_ring()),
+            .with_focus_ring(self.dialog_focus_ring())
+            .with_bindings(self.bindings.clone()),
         )
     }
 

@@ -1,0 +1,399 @@
+//! Flying from a gamepad: the stick axes' analog turn and throttle in the
+//! step input, the d-pad's full-rate turn and thrust, the throttle's back
+//! direction as reverse, the layers, the map key's chord whichever of its
+//! buttons goes up first, and a lost pad. The table's rules
+//! are the keymap's (`keymap::gamepad`'s tests); these pin that flight
+//! reads them into its step.
+
+use super::faked_flight::{at_rest, last_step_input, ticked};
+use super::*;
+use crate::input::{PadAxis, PadButton};
+use crate::keymap::FLIGHT_DEAD_ZONE;
+use nova_sim::{Amounts, Turn};
+
+fn axis(view: &mut Faked, axis: PadAxis, value: f32) {
+    view.input(&Input::PadAxis { axis, value });
+}
+
+fn pad(view: &mut Faked, button: PadButton, pressed: bool) {
+    view.input(&Input::PadButton {
+        button,
+        pressed,
+        repeat: false,
+    });
+}
+
+/// The raw stick value whose dead-zoned amount is `amount`, on one axis.
+fn raw(amount: f32) -> f32 {
+    amount.signum() * (FLIGHT_DEAD_ZONE + amount.abs() * (1.0 - FLIGHT_DEAD_ZONE))
+}
+
+/// The step input after a tick.
+fn stepped(view: &mut Faked) -> nova_sim::flight_frame::StepInput {
+    ticked(view, 1);
+    last_step_input(view)
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-5
+}
+
+#[test]
+fn the_right_stick_x_carries_a_signed_turn_amount_into_the_step() {
+    for (value, way) in [(0.4, Turn::Right), (-0.7, Turn::Left), (1.0, Turn::Right)] {
+        let mut view = at_rest(catalog());
+        axis(&mut view, PadAxis::RightX, raw(value));
+        let input = stepped(&mut view);
+        assert_eq!(input.controls.turn, way, "{value}");
+        assert!(near(input.amounts.turn, value.abs()), "{value}: {input:?}");
+        assert!(!input.controls.thrust, "{value}");
+    }
+}
+
+#[test]
+fn the_left_stick_y_forward_carries_a_throttle_amount() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::LeftY, raw(0.6));
+    let input = stepped(&mut view);
+    assert!(input.controls.thrust);
+    assert!(near(input.amounts.thrust, 0.6), "{input:?}");
+    assert_eq!(input.controls.turn, Turn::None);
+    assert!(!input.controls.reverse, "below the press threshold");
+    axis(&mut view, PadAxis::LeftY, raw(-0.3));
+    let input = stepped(&mut view);
+    assert!(!input.controls.thrust, "pulled back: no thrust");
+    assert_eq!(input.amounts.thrust, 0.0);
+}
+
+#[test]
+fn a_stick_inside_the_dead_zone_carries_zero() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::RightX, 0.1);
+    axis(&mut view, PadAxis::LeftY, -0.1);
+    let input = stepped(&mut view);
+    assert_eq!(input.controls, Controls::default());
+    assert_eq!(
+        input.amounts,
+        Amounts {
+            turn: 0.0,
+            thrust: 0.0
+        }
+    );
+}
+
+#[test]
+fn with_keys_only_each_amount_is_none_or_full() {
+    let mut view = at_rest(catalog());
+    let input = stepped(&mut view);
+    assert_eq!(
+        input.amounts,
+        Amounts {
+            turn: 0.0,
+            thrust: 0.0
+        }
+    );
+    super::faked_flight::hold(&mut view, Key::ArrowUp, true);
+    super::faked_flight::hold(&mut view, Key::ArrowLeft, true);
+    let input = stepped(&mut view);
+    assert_eq!(input.amounts, Amounts::FULL);
+    assert!(input.controls.thrust);
+    assert_eq!(input.controls.turn, Turn::Left);
+}
+
+#[test]
+fn the_dpad_turns_and_thrusts_at_full_rate() {
+    let mut view = at_rest(catalog());
+    pad(&mut view, PadButton::DPadUp, true);
+    pad(&mut view, PadButton::DPadRight, true);
+    let input = stepped(&mut view);
+    assert!(input.controls.thrust);
+    assert_eq!(input.controls.turn, Turn::Right);
+    assert_eq!(input.amounts, Amounts::FULL);
+    pad(&mut view, PadButton::DPadRight, false);
+    pad(&mut view, PadButton::DPadLeft, true);
+    assert_eq!(stepped(&mut view).controls.turn, Turn::Left);
+    pad(&mut view, PadButton::DPadUp, false);
+    pad(&mut view, PadButton::DPadLeft, false);
+    assert_eq!(stepped(&mut view).controls, Controls::default());
+}
+
+#[test]
+fn a_key_wins_over_a_smaller_stick_amount() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::RightX, raw(0.4));
+    axis(&mut view, PadAxis::LeftY, raw(0.3));
+    super::faked_flight::hold(&mut view, Key::ArrowLeft, true);
+    super::faked_flight::hold(&mut view, Key::ArrowUp, true);
+    let input = stepped(&mut view);
+    assert_eq!(input.controls.turn, Turn::Left, "the key's way");
+    assert_eq!(input.amounts, Amounts::FULL);
+    assert!(input.controls.thrust);
+}
+
+#[test]
+fn pulling_the_throttle_back_past_the_threshold_holds_reverse_and_letting_it_back_releases_it() {
+    let mut view = at_rest(catalog());
+    // `nova`'s pad module presses the direction past the threshold, and
+    // sends the axis's value beside it.
+    axis(&mut view, PadAxis::LeftY, -0.8);
+    pad(&mut view, PadButton::LeftStickDown, true);
+    let input = stepped(&mut view);
+    assert!(input.controls.reverse);
+    assert!(!input.controls.thrust);
+    pad(&mut view, PadButton::LeftStickDown, false);
+    axis(&mut view, PadAxis::LeftY, -0.2);
+    assert!(!stepped(&mut view).controls.reverse);
+}
+
+#[test]
+fn south_fires_the_primary_and_select_south_jumps_not() {
+    let mut view = at_rest(catalog());
+    pad(&mut view, PadButton::South, true);
+    assert_eq!(stepped(&mut view).fire, (true, false));
+    pad(&mut view, PadButton::South, false);
+    assert_eq!(stepped(&mut view).fire, (false, false));
+    pad(&mut view, PadButton::Select, true);
+    assert_eq!(stepped(&mut view).fire, (false, false), "Select alone");
+    pad(&mut view, PadButton::South, true);
+    assert_eq!(
+        stepped(&mut view).fire,
+        (false, false),
+        "Select and South: the jump, not the fire"
+    );
+    assert!(view.keys.held(crate::keymap::FlightCommand::HyperJump));
+}
+
+#[test]
+fn a_lost_pad_leaves_nothing_held_and_both_axes_zero() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::RightX, raw(0.5));
+    axis(&mut view, PadAxis::LeftY, raw(0.5));
+    pad(&mut view, PadButton::South, true);
+    pad(&mut view, PadButton::DPadLeft, true);
+    let held = stepped(&mut view);
+    assert!(held.controls.thrust && held.fire.0);
+    // What `nova` sends as a pad is lost: each button's release, and each
+    // axis at none.
+    pad(&mut view, PadButton::South, false);
+    pad(&mut view, PadButton::DPadLeft, false);
+    for each in PadAxis::ALL {
+        axis(&mut view, each, 0.0);
+    }
+    let input = stepped(&mut view);
+    assert_eq!(input.controls, Controls::default());
+    assert_eq!(input.fire, (false, false));
+    assert_eq!(
+        input.amounts,
+        Amounts {
+            turn: 0.0,
+            thrust: 0.0
+        }
+    );
+}
+
+#[test]
+fn release_keys_zeroes_the_flight_axes() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::RightX, raw(0.5));
+    axis(&mut view, PadAxis::LeftY, raw(0.5));
+    pad(&mut view, PadButton::DPadUp, true);
+    view.release_keys();
+    let input = stepped(&mut view);
+    assert_eq!(input.controls, Controls::default());
+    assert_eq!(input.amounts.turn, 0.0);
+    assert_eq!(input.amounts.thrust, 0.0);
+}
+
+#[test]
+fn a_stick_outside_the_dead_zone_fades_the_cursor_as_a_helm_key() {
+    let mut view = at_rest(catalog());
+    view.frame.key_fades = nova_sim::flight_frame::KeyFades::EVERY;
+    assert!(!view.cursor_keyed());
+    axis(&mut view, PadAxis::RightX, 0.1);
+    assert!(!view.cursor_keyed(), "in the dead zone");
+    axis(&mut view, PadAxis::RightX, raw(0.2));
+    assert!(view.cursor_keyed());
+}
+
+#[test]
+fn the_surroundings_reach_flight_s_reader() {
+    let mut view = at_rest(catalog());
+    let used = crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+    view.input(&Input::Surroundings(crate::input::Surroundings::of(used)));
+    assert_eq!(view.keys.device(), used);
+    assert_eq!(view.device(), used, "what flight says it names");
+}
+
+/// A view in Sol with its course map opened by the pad's chord, Start
+/// then the right stick up ([`PlayCommand::GalaxyMap`]'s default), both
+/// still down.
+///
+/// [`PlayCommand::GalaxyMap`]: crate::keymap::PlayCommand::GalaxyMap
+fn chord_opened() -> Faked {
+    let mut view = faked_sol(in_sol());
+    pad(&mut view, PadButton::Start, true);
+    pad(&mut view, PadButton::RightStickUp, true);
+    assert!(view.map_open(), "the chord opens the map");
+    view
+}
+
+/// The chord's two buttons going up: Start first, or the stick first.
+fn chord_released(view: &mut Faked, start_first: bool) {
+    let order = if start_first {
+        [PadButton::Start, PadButton::RightStickUp]
+    } else {
+        [PadButton::RightStickUp, PadButton::Start]
+    };
+    for button in order {
+        pad(view, button, false);
+    }
+}
+
+#[test]
+fn the_chord_s_map_lets_go_of_the_map_key_whichever_button_goes_up_first() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        assert!(view.map_key_held, "start first: {start_first}");
+        chord_released(&mut view, start_first);
+        assert!(!view.map_key_held, "start first: {start_first}");
+        // With the map key up, a press the map doesn't take closes nothing.
+        pad(&mut view, PadButton::West, true);
+        assert!(view.map_open(), "start first: {start_first}");
+    }
+}
+
+#[test]
+fn the_chord_closes_its_map_on_its_release_whichever_button_goes_up_first() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        chord_released(&mut view, false);
+        assert!(!view.map_key_held);
+        pad(&mut view, PadButton::Start, true);
+        pad(&mut view, PadButton::RightStickUp, true);
+        assert!(view.map_open(), "start first: {start_first}: it waits");
+        chord_released(&mut view, start_first);
+        assert!(!view.map_open(), "start first: {start_first}: closed");
+        ticked(&mut view, 2);
+        assert!(!view.map_open(), "start first: {start_first}: stays closed");
+    }
+}
+
+#[test]
+fn start_pressed_again_over_the_held_stick_closes_the_chord_s_map_once() {
+    let mut view = chord_opened();
+    pad(&mut view, PadButton::Start, false);
+    // The stick is still down, so the map key is: Start's press closes
+    // the map, waiting for the stick.
+    pad(&mut view, PadButton::Start, true);
+    assert!(view.map_open(), "it waits for the stick");
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(!view.map_open(), "closed on the stick's release");
+    pad(&mut view, PadButton::Start, false);
+    ticked(&mut view, 2);
+    assert!(!view.map_open(), "nothing opens it again");
+    // A fresh chord opens it again.
+    pad(&mut view, PadButton::Start, true);
+    pad(&mut view, PadButton::RightStickUp, true);
+    assert!(view.map_open());
+}
+
+#[test]
+fn m_s_map_still_closes_on_m_s_release() {
+    let mut view = faked_sol(in_sol());
+    view.input(&key(MAP, true));
+    assert!(view.map_open());
+    view.input(&key(MAP, false));
+    assert!(!view.map_key_held);
+    view.input(&key(MAP, true));
+    assert!(view.map_open(), "it waits");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
+}
+
+#[test]
+fn focus_lost_forgets_the_chord_s_button_as_the_map_key() {
+    let mut view = chord_opened();
+    view.release_keys();
+    assert!(view.map_open(), "nothing waited, so nothing closes");
+    // M closes the map, waiting for M: the stick's release, its press
+    // gone with the focus, isn't the map key's.
+    view.input(&key(MAP, true));
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(view.map_open(), "still waiting for M");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
+}
+
+#[test]
+fn the_chord_s_button_let_go_of_is_no_longer_the_map_key() {
+    let mut view = chord_opened();
+    chord_released(&mut view, false);
+    // M closes the map, waiting for M; the stick tapped alone meanwhile
+    // means nothing, its release no map key's.
+    view.input(&key(MAP, true));
+    pad(&mut view, PadButton::RightStickUp, true);
+    pad(&mut view, PadButton::RightStickUp, false);
+    assert!(view.map_open(), "still waiting for M");
+    view.input(&key(MAP, false));
+    assert!(!view.map_open());
+}
+
+fn pad_repeat(view: &mut Faked, button: PadButton) {
+    view.input(&Input::PadButton {
+        button,
+        pressed: true,
+        repeat: true,
+    });
+}
+
+#[test]
+fn a_held_stick_directions_repeats_keep_it_held() {
+    let mut view = at_rest(catalog());
+    axis(&mut view, PadAxis::LeftY, -0.8);
+    pad(&mut view, PadButton::LeftStickDown, true);
+    for _ in 0..3 {
+        pad_repeat(&mut view, PadButton::LeftStickDown);
+        assert!(
+            stepped(&mut view).controls.reverse,
+            "held through its repeats"
+        );
+    }
+    pad(&mut view, PadButton::LeftStickDown, false);
+    axis(&mut view, PadAxis::LeftY, 0.0);
+    assert!(!stepped(&mut view).controls.reverse, "let go of once");
+}
+
+#[test]
+fn a_held_chord_directions_repeats_press_nothing_again() {
+    use super::faked_screen::{in_flight, sent_since};
+    let mut view = in_flight();
+    pad(&mut view, PadButton::Select, true);
+    pad(&mut view, PadButton::DPadRight, true);
+    for _ in 0..3 {
+        pad_repeat(&mut view, PadButton::DPadRight);
+    }
+    pad(&mut view, PadButton::DPadRight, false);
+    pad(&mut view, PadButton::Select, false);
+    ticked(&mut view, 1);
+    assert_eq!(
+        sent_since(&view, 0),
+        [FlightCommand::SelectNextSystem],
+        "hyper select's press, once, as its key's repeats"
+    );
+}
+
+#[test]
+fn holding_the_maps_chord_past_the_delay_neither_closes_nor_reopens_it() {
+    for start_first in [true, false] {
+        let mut view = chord_opened();
+        for _ in 0..4 {
+            pad_repeat(&mut view, PadButton::RightStickUp);
+            assert!(view.map_open(), "start first: {start_first}");
+            assert!(view.map_key_held, "start first: {start_first}");
+        }
+        chord_released(&mut view, start_first);
+        ticked(&mut view, 2);
+        assert!(view.map_open(), "start first: {start_first}: still open");
+        assert!(!view.map_key_held, "start first: {start_first}");
+    }
+}

@@ -17,6 +17,7 @@ use crate::screen::Screen;
 use crate::sound::Sound;
 use crate::ui::desc::DescDialog;
 use crate::ui::edit_dialog::{Confirm, EditDialog};
+use crate::ui::pad_focus::Told;
 
 /// A dialog a screen hosts modally: a [`Screen`] that reports, once, what
 /// the player chose. Reporting an outcome is what closes it.
@@ -63,8 +64,14 @@ impl Modal for DescDialog {
 #[derive(Clone, Debug)]
 pub struct ModalHost<T, D> {
     open: Option<(T, D)>,
+    /// The surroundings the host was told last, which each dialog it
+    /// opens is told as it opens (the pad's focus shows in it at once).
+    told: Told,
     /// What the dialog left as it closed, until taken.
     unclaimed: Vec<Input>,
+    /// Whether whoever holds the screen covers it, which each dialog it
+    /// opens is told as it opens ([`Screen::set_covered`]).
+    covered: bool,
 }
 
 impl<T, D> Default for ModalHost<T, D> {
@@ -72,15 +79,32 @@ impl<T, D> Default for ModalHost<T, D> {
     fn default() -> Self {
         Self {
             open: None,
+            told: Told::default(),
             unclaimed: Vec::new(),
+            covered: false,
         }
     }
 }
 
 impl<T, D: Modal> ModalHost<T, D> {
-    /// Opens `dialog` for `payload`, in place of any dialog open.
-    pub fn open(&mut self, payload: T, dialog: D) {
+    /// Opens `dialog` for `payload`, in place of any dialog open, telling
+    /// it the surroundings the host was told last and whether it is
+    /// covered.
+    pub fn open(&mut self, payload: T, mut dialog: D) {
+        self.told.tell(&mut dialog);
+        dialog.set_covered(self.covered);
         self.open = Some((payload, dialog));
+    }
+
+    /// Whether whoever holds the screen covers it: the open dialog is
+    /// told, and so is each one opened while it lasts. A covered text
+    /// dialog asks for no text entry and draws no on-screen keyboard
+    /// (`ui::entry_keyboard`).
+    pub fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
+        if let Some((_, dialog)) = &mut self.open {
+            dialog.set_covered(covered);
+        }
     }
 
     /// Whether a dialog is open.
@@ -99,11 +123,31 @@ impl<T, D: Modal> ModalHost<T, D> {
     /// `sounds`. Once the dialog reports an outcome, the host closes and
     /// gives `(payload, outcome)`. When the host is closed it does nothing
     /// and gives `None`.
+    ///
+    /// The surroundings are kept whether a dialog is open or not
+    /// ([`ModalHost::follow_surroundings`]), so a host forwards them here
+    /// even while nothing is open.
     pub fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> Option<(T, D::Outcome)> {
+        if self.follow_surroundings(input) {
+            return None;
+        }
         let (_, dialog) = self.open.as_mut()?;
         dialog.input(input);
         sounds.extend(dialog.take_sounds());
         self.close_on_outcome()
+    }
+
+    /// Keeps `input` if it is the surroundings, and tells the open dialog;
+    /// whether it was. The surroundings are no player input: nothing
+    /// closes on them.
+    pub fn follow_surroundings(&mut self, input: &Input) -> bool {
+        if !self.told.keep(input) {
+            return false;
+        }
+        if let Some((_, dialog)) = &mut self.open {
+            dialog.input(input);
+        }
+        true
     }
 
     /// Closes once the dialog reports an outcome, keeping what it left
@@ -289,6 +333,36 @@ mod tests {
     const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
     const ALERT: Sound = Sound::Ui(UiSound::Alert);
 
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings::of(device))
+    }
+
+    const PAD: crate::input::Device =
+        crate::input::Device::Gamepad(crate::input::ControllerFamily::Generic);
+
+    #[test]
+    fn a_dialog_opened_is_told_what_the_host_was_told() {
+        let mut host = ModalHost::default();
+        let (before, log) = FakeDialog::new([None::<u32>]);
+        host.open("row", before);
+        assert!(log.borrow().inputs.is_empty(), "nothing told yet");
+        host.input(&told(crate::input::Device::Mouse), &mut Vec::new());
+        host.input(&told(PAD), &mut Vec::new());
+        let (fake, log) = FakeDialog::new([None::<u32>]);
+        host.open("row", fake);
+        assert_eq!(log.borrow().inputs, [told(PAD)]);
+    }
+
+    #[test]
+    fn an_open_dialog_follows_the_surroundings() {
+        let mut host = ModalHost::default();
+        let (fake, log) = FakeDialog::new([Some(1_u32), Some(2)]);
+        host.open("row", fake);
+        assert_eq!(host.input(&told(PAD), &mut Vec::new()), None, "no outcome");
+        assert!(host.is_open(), "the surroundings close nothing");
+        assert_eq!(log.borrow().inputs, [told(PAD)]);
+    }
+
     #[test]
     fn a_closed_host_takes_no_input_draws_nothing_and_gives_nothing() {
         let mut host = ModalHost::<&str, FakeDialog<u32>>::default();
@@ -311,10 +385,10 @@ mod tests {
         host.open("row", fake);
         assert!(host.is_open());
         let mut sounds = Vec::new();
-        host.input(&key(Key::Char('2')), &mut sounds);
+        host.input(&key(Key::Digit2), &mut sounds);
         host.input(&key(Key::Enter), &mut sounds);
         host.input(&key(Key::Escape), &mut sounds);
-        assert_eq!(log.borrow().inputs, [key(Key::Char('2')), key(Key::Enter)]);
+        assert_eq!(log.borrow().inputs, [key(Key::Digit2), key(Key::Enter)]);
     }
 
     #[test]
@@ -322,7 +396,7 @@ mod tests {
         let mut host = ModalHost::default();
         let (fake, _log) = FakeDialog::new([None::<u32>]);
         host.open("row", fake);
-        assert_eq!(host.input(&key(Key::Char('2')), &mut Vec::new()), None);
+        assert_eq!(host.input(&key(Key::Digit2), &mut Vec::new()), None);
         assert!(host.is_open());
         assert!(host.dialog().is_some());
     }
@@ -404,7 +478,7 @@ mod tests {
         let (fake, _log) = FakeDialog::new([None, Some(5_u32)]);
         host.open("row", fake.sounding([vec![DOWN], vec![ALERT, UP]]));
         let mut sounds = vec![UP];
-        host.input(&key(Key::Char('9')), &mut sounds);
+        host.input(&key(Key::Digit9), &mut sounds);
         assert_eq!(sounds, [UP, DOWN]);
         assert_eq!(host.input(&key(Key::Enter), &mut sounds), Some(("row", 5)));
         assert_eq!(sounds, [UP, DOWN, ALERT, UP]);
@@ -421,6 +495,30 @@ mod tests {
             Some(("row", 7))
         );
         assert!(!host.is_open());
+    }
+
+    #[test]
+    fn covering_the_host_covers_its_dialog() {
+        let quantity =
+            || QuantityDialog::fallback(7, "Buy", PROMPT, ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        let asks = |host: &ModalHost<&str, QuantityDialog>| {
+            let mut list = DrawList::new();
+            host.draw(&mut list);
+            list.text_entry().is_some()
+        };
+        let mut host = ModalHost::default();
+        host.open("row", quantity());
+        assert!(asks(&host));
+        host.set_covered(true);
+        assert!(!asks(&host), "the open dialog is told");
+        host.input(&key(Key::Enter), &mut Vec::new());
+        host.open("next", quantity());
+        assert!(!asks(&host), "one opened while covered is told as it opens");
+        host.set_covered(false);
+        assert!(asks(&host));
+        let mut closed: ModalHost<&str, QuantityDialog> = ModalHost::default();
+        closed.set_covered(true);
+        assert!(!closed.is_open(), "covering opens nothing");
     }
 
     /// "Desc Dialog"'s shape, small: Done (1) at (100, 90), a parked
@@ -485,7 +583,7 @@ mod tests {
             .center();
         host.input(&left(true, done), &mut Vec::new());
         host.input(&key(Key::Enter), &mut Vec::new());
-        host.input(&key(Key::Char('b')), &mut Vec::new());
+        host.input(&key(Key::KeyB), &mut Vec::new());
         host.cancel_pointer();
     }
 
@@ -521,7 +619,7 @@ mod tests {
         host.open((), desc());
         cancelled_with_a_return(&mut host);
         host.tick(Duration::ZERO);
-        assert_eq!(host.take_unclaimed(), [key(Key::Char('b'))]);
+        assert_eq!(host.take_unclaimed(), [key(Key::KeyB)]);
         assert_eq!(host.take_unclaimed(), [], "once");
     }
 
@@ -529,7 +627,7 @@ mod tests {
     fn the_desc_dialog_reports_done_once_as_a_modal() {
         for input in [key(Key::Enter), key(Key::Escape)] {
             let mut dialog = desc();
-            dialog.input(&key(Key::Down));
+            dialog.input(&key(Key::ArrowDown));
             assert_eq!(dialog.take_outcome(), None, "{input:?}");
             dialog.input(&input);
             assert_eq!(dialog.take_outcome(), Some(()), "{input:?}");
@@ -553,7 +651,7 @@ mod tests {
         assert_eq!(dialog.take_outcome(), None);
         let mut host = ModalHost::default();
         host.open((), desc());
-        assert_eq!(host.input(&key(Key::Char('i')), &mut Vec::new()), None);
+        assert_eq!(host.input(&key(Key::KeyI), &mut Vec::new()), None);
         assert!(host.is_open());
         assert_eq!(
             host.input(&key(Key::Enter), &mut Vec::new()),

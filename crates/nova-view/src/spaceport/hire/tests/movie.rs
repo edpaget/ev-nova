@@ -44,7 +44,7 @@ fn opened_on(art: &Rc<FakeArt>, reel: &Rc<MockMoviePlayer>, on: bool) -> HireScr
 /// [`opened_on`] [`filmed`], movies on, ship 128 selected by Right.
 fn first_on(reel: &Rc<MockMoviePlayer>) -> HireScreen {
     let mut screen = opened_on(&filmed(), reel, true);
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, false));
     assert_eq!(screen.selected(), Some(0));
     screen
 }
@@ -126,7 +126,7 @@ fn the_movie_restarts_when_it_ends() {
 fn a_new_selection_an_empty_cell_or_done_stops_it() {
     let reel = MockMoviePlayer::playing((32, 32), 3);
     let mut screen = first_on(&reel);
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, false));
     assert_eq!(reel.calls(), [start("Ship.mov"), Call::Stop], "ship 140");
     click_cell(&mut screen, 0);
     click_cell(&mut screen, 5);
@@ -149,7 +149,7 @@ fn a_new_selection_an_empty_cell_or_done_stops_it() {
 fn the_info_panel_does_not_stop_it_and_it_holds_its_frame() {
     let reel = MockMoviePlayer::playing((32, 32), 100);
     let mut screen = first_on(&reel);
-    screen.input(&key(INFO_KEY, false));
+    screen.input(&key(Key::Space, false));
     assert!(screen.info_panel().is_some());
     screen.tick(Duration::from_millis(100));
     screen.tick_covered(Duration::from_millis(100));
@@ -173,7 +173,7 @@ fn the_info_panel_does_not_stop_it_and_it_holds_its_frame() {
 fn with_movies_off_or_a_refusing_player_the_picture_is_drawn() {
     let reel = MockMoviePlayer::playing((32, 32), 3);
     let mut screen = opened_on(&filmed(), &reel, false);
-    screen.input(&key(Key::Right, false));
+    screen.input(&key(Key::ArrowRight, false));
     assert!(reel.calls().is_empty());
     assert!(pictured(&screen));
     let refusing = MockMoviePlayer::refusing();

@@ -15,12 +15,15 @@ use crate::devtools::{DevDesk, FlightDesk};
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::{MapCycle, MapMode, PendingPress, PressAnswer};
+use crate::keymap::{
+    Command, FlightCommand as F, MapCommand, PlayCommand, UiCommand, is_modifier_input,
+};
 use crate::system::catalog::SystemCatalog;
 use crate::view_shape::classic_offset;
-use crate::{DrawList, Input, Key, Point, Screen, UiSound};
+use crate::{DrawList, Input, Point, Screen, UiSound};
 
 use super::dialog_map::{MapOpened, MapOpening};
-use super::{BOARD_KEY, FlightView, JUMP_KEY, MAP_KEY, Redrawn};
+use super::{FlightView, Redrawn};
 
 impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
     /// The pilot flying, as the developer tools' desk: its reading and
@@ -74,7 +77,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the arrival tick still counts as jumping, and the first tick after
     /// it is the original's first frame to act (@0x6c625).
     pub(super) fn held_keys_frame(&mut self) {
-        let (jump, board) = (self.reads_down(JUMP_KEY), self.held.contains(&BOARD_KEY));
+        let (jump, board) = (self.reads_down(F::HyperJump), self.held(F::Board));
         self.nav_held_frame();
         self.target_poll();
         // The Board key's and the jump's frames ask their own gates
@@ -294,7 +297,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// The input while the map waits for [`MAP_KEY`]'s release to close
+    /// The input while the map waits for the map key's release to close
     /// (`_DoSystemMap`'s `BusyIdle` loop, @0x13a2e-0x13a46): M's release
     /// runs the close `close`, and nothing else does anything, as the loop
     /// reads no events.
@@ -304,11 +307,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::take_map_replay`]; the `map_wait` module). Over
     /// flight nothing reads them, and what is still down is already held.
     fn closing_input(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
-        if let Input::Key {
-            key: MAP_KEY,
-            pressed: false,
-            ..
-        } = *input
+        if crate::keymap::Devices::change(input).is_some_and(|change| !change.pressed)
+            && self.is_map_key(input)
         {
             self.map_key_held = false;
             self.map_replay = self.wait_keys.finish();
@@ -405,9 +405,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if by == MapOpening::Plain {
             self.keep_unlatched_keys();
         } else {
-            self.held.clear();
+            self.let_go_of_held();
         }
         self.map_open = true;
+        // Its frame moves with where it shows (`map_offset`): over flight
+        // or over the spaceport.
+        let told = Input::Surroundings(self.touch_controls.told());
+        self.map.input(&self.map_frame_input(&told));
         if let Some(sources) = borders {
             self.map.show_border_sources(sources);
         }
@@ -488,7 +492,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Opens the course map on a press of [`MAP_KEY`] in flight, held from
+    /// Opens the course map on a press of the map key in flight, held from
     /// then on. `_HandlePlayer`'s `_beepSnd[2]` (@0x6a809) is the key's,
     /// not the map's: the hypergate's map opens without it.
     pub(super) fn open_map_by_key(&mut self) {
@@ -506,7 +510,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::close_map`]'s in port.
     ///
     /// The bar asks for it only on the map key (`_BarFilter`'s item 8), so
-    /// it opens with [`MAP_KEY`] held, and a close before its release
+    /// it opens with the map key held, and a close before its release
     /// waits for it ([`FlightView::close_map`]).
     pub fn open_bar_map(&mut self) {
         self.open_map_as(MapOpening::Bar);
@@ -516,25 +520,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::map_input`]'s input, translated into the map's frame,
     /// before the panels follow the selection: whether it closes the map,
     /// which the caller then does ([`FlightView::close_map`]), at once.
-    /// A key-down the filter doesn't take with [`MAP_KEY`] held closes it
+    /// A key-down the filter doesn't take with the map key held closes it
     /// before anything else; Return or Done after the rest.
     pub(super) fn map_input_taken(&mut self, input: &Input) -> bool {
-        if let Input::Key {
-            key: MAP_KEY,
-            pressed,
-            ..
-        } = *input
+        let change = crate::keymap::Devices::change(input);
+        if let Some(crate::keymap::Change { pressed, .. }) = change
+            && self.is_map_key(input)
         {
             self.map_key_held = pressed;
         }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
+        if change.is_some_and(|change| change.pressed && !change.repeat)
             && self.map_key_held
             && !self.map.finding()
-            && !self.map_filter_takes(key)
+            && !self.map_filter_takes(input)
         {
             return true;
         }
@@ -614,34 +612,79 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.retake_nav();
     }
 
-    /// Whether `_MapFilter` takes `key` before its map-key close, which a
-    /// key it takes never reaches (@0x13cdd-0x144d6): Return, Enter,
-    /// Escape, Tab and `\` (off a planet, @0x13d20), Space, B, C, `-`,
-    /// `=` and `+` (the keypad's too), the arrows, and F and S. The keys
-    /// later phases port are taken already, so none of them closes the
-    /// map. A modifier is taken too: a Mac sends no key-down for one
-    /// alone, so the filter never sees it.
-    fn map_filter_takes(&self, key: Key) -> bool {
-        let docked = self.frame.docked();
-        match key {
-            Key::Shift
-            | Key::Control
-            | Key::Alt
-            | Key::Command
-            | Key::CapsLock
-            | Key::Enter
-            | Key::Escape
-            | Key::Space
-            | Key::Left
-            | Key::Right
-            | Key::Up
-            | Key::Down => true,
-            Key::Tab => !docked,
-            Key::Char(c) => match c.to_ascii_lowercase() {
-                '\\' => !docked,
-                'b' | 'c' | '-' | '=' | '+' | 'f' | 's' => true,
-                _ => false,
-            },
+    /// Whether `input` (a press, a repeat or a release) is of the map
+    /// key, the key flight's reader reads as
+    /// [`PlayCommand::GalaxyMap`]: what the map's own close waits on.
+    ///
+    /// A pad button on a map opened over a screen (the bar's, a port
+    /// screen's, a mission dialog's) is read by the pad reader the router
+    /// feeds ([`FlightView::note_pad`]), as flight's own reader never sees
+    /// the chord's Start go down there. Its release is the map key's
+    /// whichever of the chord's buttons goes up first.
+    #[must_use]
+    pub fn is_map_key(&self, input: &Input) -> bool {
+        let reader = if matches!(input, Input::PadButton { .. }) && !self.plain_map_open() {
+            &self.pad_down
+        } else {
+            &self.keys
+        };
+        reader.means(input) == Some(Command::Play(PlayCommand::GalaxyMap))
+    }
+
+    /// Notes `input`, if it is a pad button's, for the pad's map key over a
+    /// screen ([`FlightView::is_map_key`]); anything else is ignored. The
+    /// router calls it with every live input, whatever shows, before
+    /// routing it, and nothing else feeds it: a replayed input would bring
+    /// back a button let go of.
+    pub fn note_pad(&mut self, input: &Input) {
+        if let Input::PadButton { .. } = input {
+            self.pad_down.follow(input);
+        }
+    }
+
+    /// Whether `_MapFilter` takes `input`'s key before its map-key close,
+    /// which a key it takes never reaches (@0x13cdd-0x144d6): what the
+    /// map reads it as, through its bindings
+    /// ([`GalaxyMap::peek`](crate::galaxy::GalaxyMap::peek)). That is
+    /// Confirm (Return, Enter), Back (Escape), Tab and Shift-Tab (Tab and
+    /// `\`, off a planet, @0x13d20), Activate (Space), the arrows and
+    /// every map command (B, C, `-`, `=` and `+`, the keypad's too, F and
+    /// S); not the shared scroll keys nor the play keys, the map key's own
+    /// press among them. The keys later phases port are taken already, so
+    /// none of them closes the map. A modifier is taken too
+    /// ([`is_modifier_input`]): a Mac sends no key-down for one alone, so
+    /// the filter never sees it.
+    ///
+    /// The pad's own map controls, which no key of the original's is, are
+    /// taken as what they stand for (rdm:phase/key-bindings/phase-10-gamepad-map):
+    /// the d-pad's focus moves always, as they act on the map's buttons,
+    /// and the left shoulder's Previous Field under Tab's rule, as it is
+    /// the map's Tab Back. The triggers' zoom is a map command.
+    fn map_filter_takes(&self, input: &Input) -> bool {
+        if is_modifier_input(input) {
+            return true;
+        }
+        match self.map.peek(input) {
+            Some(
+                Command::Ui(UiCommand::Tab | UiCommand::PrevFocus)
+                | Command::Map(MapCommand::TabBack),
+            ) => !self.frame.docked(),
+            Some(
+                Command::Map(_)
+                | Command::Ui(
+                    UiCommand::Confirm
+                    | UiCommand::Back
+                    | UiCommand::Up
+                    | UiCommand::Down
+                    | UiCommand::Left
+                    | UiCommand::Right
+                    | UiCommand::Activate
+                    | UiCommand::FocusUp
+                    | UiCommand::FocusDown
+                    | UiCommand::FocusLeft
+                    | UiCommand::FocusRight,
+                ),
+            ) => true,
             _ => false,
         }
     }

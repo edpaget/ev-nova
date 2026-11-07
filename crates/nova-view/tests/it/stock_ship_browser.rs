@@ -71,7 +71,7 @@ fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut browser = ShipBrowser::new(&data);
     let right = Input::Key {
-        key: Key::Right,
+        key: Key::ArrowRight,
         pressed: true,
         repeat: false,
     };

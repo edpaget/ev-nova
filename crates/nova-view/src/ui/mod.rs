@@ -38,6 +38,9 @@
 //! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
 //!   "Text Input" and quantity dialogs share, each with its own
 //!   [`Confirm`] policy.
+//! - [`entry_keyboard`]: the on-screen keyboard a text dialog shows for
+//!   the pad and for touch without a soft keyboard, and its ask for the
+//!   system's text entry otherwise.
 //! - [`text_input`]: the "Text Input" dialog ([`TextInputDialog`]): a
 //!   prompt and a line of text to type, such as the new ship's name.
 //! - [`quantity`]: the quantity dialog ([`QuantityDialog`]): how many
@@ -52,8 +55,13 @@
 //!   the game runs fullscreen, its arrows stepping through the modes.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
-//! - [`mission_info`]: the key that asks for the mission info screen
-//!   ([`MISSION_INFO_KEY`](mission_info::MISSION_INFO_KEY)).
+//! - [`keys`]: the keys screen ([`KeysScreen`]) Preferences' Key
+//!   Settings opens: every command's key, recorded, cleared or restored.
+//! - `pad_focus`: the pad's focus: the directional picker over a
+//!   screen's controls, the one focus a screen keeps for the pad and the
+//!   keyboard, and the pad's highlight.
+//! - [`mission_info`]: the key that asks for the mission info screen,
+//!   the shared play keys' Mission Info, as a key wait waits on it.
 //! - [`mission_dialogs`]: the mission texts and the mission info screen
 //!   under them ([`MissionDialogs`](mission_dialogs::MissionDialogs)),
 //!   over the spaceport or over flight.
@@ -83,16 +91,20 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
+pub mod entry_keyboard;
 pub mod escort_dialog;
 pub mod faded_texts;
 mod held_keys;
 pub(crate) mod key_wait;
+pub mod keys;
 pub mod list_bar;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;
 pub mod new_pilot;
 pub mod note;
+mod own_keys;
+pub(crate) mod pad_focus;
 pub mod picker;
 pub mod picture_variant;
 pub mod planet_comm;
@@ -109,6 +121,7 @@ pub mod text_field;
 pub mod text_input;
 pub(crate) mod text_shrink;
 pub mod toggle;
+pub mod touch_aids;
 pub mod volume;
 pub mod yes_no;
 
@@ -121,6 +134,7 @@ pub use dialog::{
     ItemTemplate, Placement, Role, TextBacking,
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
+pub use keys::KeysScreen;
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use note::NoteDialog;
 pub use player_info::{PlayerInfoButton, PlayerInfoScreen, Tab};

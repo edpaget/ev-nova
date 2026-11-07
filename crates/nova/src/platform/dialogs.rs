@@ -171,7 +171,7 @@ impl FatalAlert for Dialogs {
 /// and returns at once: the sheet stays until the player dismisses it,
 /// while the game goes on beneath it.
 #[cfg(target_os = "macos")]
-pub fn show_warnings(window: &Window, body: &str) {
+pub fn show_warnings(window: &dyn Window, body: &str) {
     // rfd's macOS backend begins the sheet as the future is made, and its
     // completion keeps the alert alive: the future itself is not needed.
     drop(
@@ -194,7 +194,7 @@ pub fn show_warnings(window: &Window, body: &str) {
 /// window's handle here, on the event loop's thread, and rfd marks it
 /// `Send`, so the thread only runs it.
 #[cfg(windows)]
-pub fn show_warnings(window: &Window, body: &str) {
+pub fn show_warnings(window: &dyn Window, body: &str) {
     let dialog = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(WARNINGS_TITLE)
@@ -210,7 +210,7 @@ pub fn show_warnings(window: &Window, body: &str) {
 /// As on Windows, rfd's async dialog is a lazy future here, so a dropped
 /// one shows nothing; and zenity takes no parent window, so none is set.
 #[cfg(target_os = "linux")]
-pub fn show_warnings(_window: &Window, body: &str) {
+pub fn show_warnings(_window: &dyn Window, body: &str) {
     let dialog = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(WARNINGS_TITLE)
@@ -234,7 +234,7 @@ impl FatalAlert for Dialogs {
 
 /// No sheet: stderr and the log have the warnings.
 #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
-pub fn show_warnings(_window: &Window, _body: &str) {}
+pub fn show_warnings(_window: &dyn Window, _body: &str) {}
 
 /// The notice to show before the folder picker asks with `prompt`: the
 /// prompt itself when it re-asks after a pick that held no data, `None`

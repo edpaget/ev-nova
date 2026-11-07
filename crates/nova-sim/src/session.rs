@@ -438,6 +438,7 @@
 mod afterburner;
 mod afterburner_roll;
 mod ai_gain;
+mod analog;
 mod answer_flag;
 mod apply;
 mod arrival_system;
@@ -1865,10 +1866,11 @@ impl Session {
                     }
                     let flight = self.setup.flight_rules();
                     let caps = self.player_caps();
+                    let held = self.ship.held_at(controls);
                     player_step(
                         &mut self.ship.player,
                         &handling,
-                        controls,
+                        held,
                         aim,
                         caps,
                         flight,

@@ -8,9 +8,9 @@ use nova_view::{
     ScreenAction, Showing, Sound, UiSound, VideoMode, ViewShape,
 };
 
+use super::hint::router_hint;
 use super::{
-    AppScreen, CLASSIC_VIEW, ENTERED, HINT, HINT_AT, HINT_COLOR, HINT_SIZE, HINT_WITHOUT_DIALOGS,
-    Held, LANDED, MENU_HINT, MENU_HINT_WITHOUT_DIALOGS, MenuHold, MenuKeys, Side,
+    AppScreen, CLASSIC_VIEW, ENTERED, HINT_AT, HINT_COLOR, HINT_SIZE, Held, LANDED, MenuHold, Side,
 };
 
 impl Screen for AppScreen {
@@ -105,18 +105,65 @@ impl Screen for AppScreen {
     ///
     /// What is physically down is noted as it arrives, and handed back
     /// to flight as its input comes back from a dialog or the spaceport
-    /// (see `live_input`).
+    /// (see `live_input`). Flight's pad reader is fed every live input
+    /// too ([`FlightView::note_pad`](nova_view::flight::FlightView::note_pad)), for the pad's map chord over a
+    /// screen.
+    ///
+    /// The app's surroundings go to the router's readers, the flight, if
+    /// built, the spaceport, if landed, the main menu, if any, the intro's
+    /// text, while it is open, and every overlay open, whatever shows; a flight built later is told them as it starts, a spaceport
+    /// as it is built (`show_spaceport`), and an overlay opened later as
+    /// it opens (`routing`'s `tell_new_overlays`, after each input, tick
+    /// and menu command), and the intro's text as it opens
+    /// (`advance_entry`). The spaceport passes them on to every screen it
+    /// holds or opens (rdm:phase/key-bindings/phase-9-gamepad-spaceport).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Surroundings(surroundings) = *input {
+            self.surroundings = surroundings;
+            self.note_keys(input);
+            if let Some(flight) = &mut self.flight {
+                flight.input(input);
+            }
+            if let Some(spaceport) = &mut self.spaceport {
+                spaceport.input(input);
+            }
+            if let Some(menu) = &mut self.menu {
+                menu.screen.input(input);
+            }
+            self.tell_intro_text(input);
+            self.tell_overlays(input);
+            // Another device hides flight's overlay, letting go of it.
+            return self.feed_touch_controls();
+        }
         if self.away_takes_input(input) {
             return ScreenAction::None;
         }
-        self.live.note(input);
+        // A finger flight's touch controls claimed is theirs, whatever
+        // shows (the `touch_controls` module).
+        if let Input::Touch(_) = input {
+            self.touch_to_flight(input);
+            return self.feed_touch_controls();
+        }
+        self.live.note(input, &self.bindings);
+        // Flight's pad reader sees every live pad button, whatever shows,
+        // so a map over a screen reads the pad's map chord
+        // (rdm:phase/key-bindings/phase-10-gamepad-map). Replays never
+        // come through here.
+        if let Some(flight) = &mut self.flight {
+            flight.note_pad(input);
+        }
         self.tell_close_keys();
         let action = self.settled_input(input);
+        self.tell_new_overlays();
+        self.tell_covered();
         if action == ScreenAction::Quit {
             return action;
         }
-        self.replayed_held_chords()
+        let action = self.replayed_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            return ScreenAction::Quit;
+        }
+        action
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -159,6 +206,11 @@ impl Screen for AppScreen {
         self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);
+            // A mission dialog's map over flight runs its own frame,
+            // flight under it paused.
+            if self.flight_dialog_map_open() {
+                self.flight.as_mut().expect(ENTERED).tick_dialog_map(dt);
+            }
             // The spaceport isn't ticked under it, so says so: the
             // original's port window comes back to the front once the
             // overlay closes.
@@ -182,6 +234,11 @@ impl Screen for AppScreen {
         self.save_if_due();
         self.settle_live_input();
         self.quit_on_held_chords();
+        self.tell_new_overlays();
+        self.tell_covered();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -222,14 +279,8 @@ impl Screen for AppScreen {
         if self.side == Side::Spaceport {
             self.draw_conversation(list);
         }
-        let hint = match (self.side, self.dialogs.is_some()) {
-            (Side::Ships | Side::Galaxy, true) => Some(HINT),
-            (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
-            (Side::MainMenu, true) => Some(MENU_HINT),
-            (Side::MainMenu, false) => Some(MENU_HINT_WITHOUT_DIALOGS),
-            (Side::Flight | Side::Spaceport, _) => None,
-        };
-        if let Some(hint) = hint {
+        self.draw_touch_controls(list);
+        if let Some(hint) = router_hint(&self.keys, self.side, self.dialogs.is_some()) {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
         // The dialogs, in their 1024 x 768 frame, centred over a widened
@@ -298,6 +349,9 @@ impl Screen for AppScreen {
     fn cancel_pointer(&mut self) {
         self.cancel_screen_pointer();
         self.quit_on_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// What is physically down is forgotten (see `live_input`), then the
@@ -310,6 +364,9 @@ impl Screen for AppScreen {
         self.settle_released_waits();
         self.hold_let_go();
         self.quit_on_held_chords();
+        if self.feed_touch_controls() == ScreenAction::Quit {
+            self.quit_due = true;
+        }
     }
 
     /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
@@ -456,6 +513,11 @@ impl Screen for AppScreen {
         self.prefs_change.take()
     }
 
+    /// The bindings the keys screen's OK accepted, once.
+    fn take_bindings(&mut self) -> Option<nova_view::Bindings> {
+        self.bindings_change.take()
+    }
+
     /// Offers the open Preferences dialog the display modes, on the kind
     /// the game runs fullscreen in now and the kind chosen; with none
     /// open, nothing changes.
@@ -542,6 +604,12 @@ impl Screen for AppScreen {
             .collect()
     }
 
+    /// A touch on flight's touch controls, while flight shows with nothing
+    /// over it (the `touch_controls` module).
+    fn claims_touch(&self, at: Point) -> bool {
+        self.claims_touch_control(at)
+    }
+
     /// Widened while flight shows, with anything over it; classic on the
     /// main menu, the developer's sides and the spaceport, with anything
     /// over it (see the module docs).
@@ -568,6 +636,8 @@ impl Screen for AppScreen {
     /// `menu_commands`).
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
         let action = self.run_menu_command(command);
+        self.tell_new_overlays();
+        self.tell_covered();
         self.settle_live_input();
         if action == ScreenAction::Quit {
             return action;
@@ -639,8 +709,7 @@ impl AppScreen {
             }
             return;
         }
-        self.command_held = false;
-        self.keys_held = MenuKeys::default();
+        self.let_go_of_noted_keys();
         // A mission dialog's map over flight sits among the overlays, in
         // front of the dialog it opened from, so flight lets go too: its
         // map waiting for M's release closes

@@ -5,8 +5,11 @@
 
 use std::rc::Rc;
 
+use super::routing::Overlay;
+
 use nova_sim::{HailView, OfferPrompt, RuleKey, RuleSource, Taken};
 use nova_view::flight::{FlightStart, FlightView, MapOpener};
+use nova_view::keymap::{AppCommand, Command, PauseCommand, PlayCommand};
 use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
@@ -16,7 +19,7 @@ use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
 use nova_view::ui::player_info::{
-    BackgroundSizes, PLAYER_INFO_DIALOG, PLAYER_INFO_KEY, PlayerInfoScreen, YES_NO_DIALOG,
+    BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
 };
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
@@ -24,7 +27,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescriptionSource, DialogResources, FocusRing,
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
-use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
+use nova_view::{FullscreenKind, Input, KeyCombo, Screen, ScreenAction, VideoMode};
 
 use super::port_dialogs::{abort_and_refresh, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
@@ -177,7 +180,9 @@ impl AppScreen {
     /// Opens the Preferences dialog over the side shown, on the player's
     /// preferences, listing the Scaling offered (native and Super-xBR
     /// before an offer), its focus ring as the keyboard access port
-    /// answers now ([`prefs_focus_ring`]), first cancelling the side's pointer gesture and
+    /// answers now ([`prefs_focus_ring`]), its keys screen naming keys
+    /// through the key names given and binding none of the menu chords
+    /// and key equivalents, first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     pub(super) fn open_preferences(&mut self) {
@@ -200,6 +205,10 @@ impl AppScreen {
                 dialog
                     .with_scaling(&self.scaling)
                     .with_focus_ring(prefs_focus_ring(access))
+                    .with_bindings(self.bindings.clone())
+                    .with_key_names(Rc::clone(self.bindings.names()))
+                    .with_reserved_combos(self.reserved_combos())
+                    .with_rules(&self.rules)
             })
             .map(|dialog| {
                 if self.launch_prefs_wait() {
@@ -219,22 +228,20 @@ impl AppScreen {
         }
     }
 
-    /// Turns double time on or off on a Caps Lock press, not on its
-    /// repeats nor its release, and tells flight, if built; a flight
-    /// built later starts with it ([`FlightView::with_double_time`]).
+    /// Turns double time on or off on a press of the app's Double Time
+    /// (Caps Lock by default), not on its repeats nor its release, and
+    /// tells flight, if built; a flight built later starts with it
+    /// ([`FlightView::with_double_time`]).
     ///
     /// The original follows Caps Lock's lock state (`_QuickKeyCheck(0x39)`
     /// @0x463c3); ours toggles on each press the platform reports, an
     /// accepted difference. It drifts from the lock when Caps Lock is
     /// pressed while the window is not focused, or is already on at
-    /// launch. On macOS winit 0.30.13 reports no Caps Lock key at all, so
+    /// launch. On macOS winit 0.31.0-beta.4 reports no Caps Lock key at all, so
     /// there double time never comes on.
     pub(super) fn double_time_key(&mut self, input: &Input) {
-        if let Input::Key {
-            key: Key::CapsLock,
-            pressed: true,
-            repeat: false,
-        } = *input
+        if super::routing::is_press(input)
+            && self.keys.means(input) == Some(Command::App(AppCommand::DoubleTime))
         {
             self.double_time = !self.double_time;
             let on = self.double_time;
@@ -270,14 +277,33 @@ impl AppScreen {
         }
     }
 
+    /// Every combo the keys screen binds to nothing: the game's menu
+    /// chords, then the platform's menu bar key equivalents given.
+    fn reserved_combos(&self) -> Vec<KeyCombo> {
+        let mut reserved = super::menu_chord_combos();
+        for &combo in &self.reserved {
+            if !reserved.contains(&combo) {
+                reserved.push(combo);
+            }
+        }
+        reserved
+    }
+
     /// The Preferences dialog's input: each change, and the fullscreen
     /// kind picked as it closes, is kept, to be taken once, and the dialog
-    /// closes once OK is activated.
+    /// closes once OK is activated. The bindings its keys screen's OK
+    /// accepts go into the shared bindings at once, so every screen reads
+    /// them on its next input, and are kept to be taken once, for the app
+    /// to save.
     pub(super) fn preferences_input(&mut self, input: &Input) -> ScreenAction {
         let Some(dialog) = &mut self.preferences else {
             return ScreenAction::None;
         };
         dialog.input(input);
+        if let Some(bindings) = dialog.take_bindings() {
+            self.bindings.set(bindings.clone());
+            self.bindings_change = Some(bindings);
+        }
         let change = dialog.take_change();
         if let Some(kind) = dialog.take_display_choice() {
             self.display_choice = Some(kind);
@@ -361,6 +387,38 @@ impl AppScreen {
             .map(|(_, question)| question as &mut dyn Screen)
     }
 
+    /// Overlay `overlay`'s screen, if it is open and is one: a mission
+    /// dialog's map over flight is flight's, so none. It goes over the
+    /// same rows as the router's list of overlays open.
+    pub(super) fn overlay_screen_mut(&mut self, overlay: Overlay) -> Option<&mut dyn Screen> {
+        match overlay {
+            Overlay::About => self.about.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Preferences => self.preferences.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::PlayerInfo => self.player_info.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Haggle => self.haggle.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Comm => self.comm.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::EscortDialog => self.escort_dialog.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::PlanetComm => self.planet_comm.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::DialogMap => None,
+            Overlay::Missions => self.missions.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Offer => self.offer.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::CaptureNaming => self.capture_naming.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Assignment => self.assignment.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Plunder => self.plunder.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::NewPilot => self.new_pilot.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Christening => self
+                .christening
+                .as_mut()
+                .map(|open| &mut open.dialog as &mut dyn Screen),
+            Overlay::OpenPilot => self.open_pilot.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::LoadNote => self.load_note.as_mut().map(|s| s as &mut dyn Screen),
+            Overlay::Question => self
+                .question
+                .as_mut()
+                .map(|(_, question)| question as &mut dyn Screen),
+        }
+    }
+
     /// The About dialog's input; it closes once Done is activated and its
     /// after-movie, if any, has ended.
     pub(super) fn about_input(&mut self, input: &Input) -> ScreenAction {
@@ -371,9 +429,11 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// Flight's input: an Escape press closes flight's map when it is
-    /// open (unless its Find is, which takes it), and otherwise goes
-    /// back to the side flight was entered from; from the main menu, by
+    /// Flight's input: a press of the map's Back (Escape by default)
+    /// closes flight's map when it is open (unless its Find is, which
+    /// takes it), and with the map shut a press of the Pause key (Escape
+    /// by default, which the original's pause reads) goes back to the
+    /// side flight was entered from; from the main menu, by
     /// [`RuleKey::EscapeToMainScreen`]: by the engine it saves the pilot
     /// and returns to the menu with it held, and by the other reading it
     /// does nothing, as the original's `_PlayGame` is left only by death
@@ -388,19 +448,19 @@ impl AppScreen {
             self.settle_flight_movie();
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key: Key::Escape,
-            pressed,
-            repeat,
-        } = *input
-        {
+        let leaves = if flight.map_open() {
+            super::build::map_back(flight, input)
+        } else {
+            self.flight_keys.means(input) == Some(Command::Pause(PauseCommand::Pause))
+        };
+        if leaves {
             let flight = self.flight.as_mut().expect(ENTERED);
             // Find, while open, takes Escape too, doing nothing with it.
             if flight.map_finding() {
                 flight.input(input);
                 return ScreenAction::None;
             }
-            if pressed && !repeat {
+            if super::routing::is_press(input) {
                 if flight.map_open() {
                     flight.close_map();
                 } else if self.return_to == Side::MainMenu {
@@ -492,7 +552,8 @@ impl AppScreen {
                 self.data.button_style(),
             )
             .with_movies(self.movies.clone())
-            .with_focus_ring(self.dialog_focus_ring()),
+            .with_focus_ring(self.dialog_focus_ring())
+            .with_bindings(self.bindings.clone()),
         )
     }
 
@@ -622,7 +683,8 @@ impl AppScreen {
                 BackgroundSizes::read(&self.data),
             )
             .with_focus_ring(self.dialog_focus_ring())
-            .with_key_held(self.live.is_down(PLAYER_INFO_KEY)),
+            .with_bindings(self.bindings.clone())
+            .with_key_held(self.live.holds(PlayCommand::PlayerInfo, &self.bindings)),
         );
     }
 
@@ -713,6 +775,7 @@ impl AppScreen {
         self.offer = Some(
             OfferDialog::new(layout, prompt, self.data.button_style())
                 .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone())
                 .with_movies(&self.movies)
                 .with_missions_listed(listed),
         );
@@ -866,7 +929,11 @@ impl AppScreen {
                 CommDialog::fallback(view, style, metrics)
             }
         };
-        self.comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.comm = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The comm dialog's input: each option pressed goes through flight,
@@ -926,7 +993,11 @@ impl AppScreen {
                 HaggleDialog::fallback(price, pay_me, style, metrics)
             }
         };
-        self.haggle = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.haggle = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The haggle dialog's input: the choice goes through flight; a price
@@ -1004,7 +1075,11 @@ impl AppScreen {
                 PlunderDialog::fallback(shown, style, metrics)
             }
         };
-        self.plunder = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.plunder = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The plunder dialog's input: each press goes through flight, a
@@ -1063,7 +1138,11 @@ impl AppScreen {
                 AssignmentDialog::fallback(style, metrics)
             }
         };
-        self.assignment = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
+        self.assignment = Some(
+            dialog
+                .with_focus_ring(self.dialog_focus_ring())
+                .with_bindings(self.bindings.clone()),
+        );
     }
 
     /// The assignment dialog's input: the choice goes through flight, and

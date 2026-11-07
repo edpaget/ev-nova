@@ -62,7 +62,7 @@ fn by_the_engine_the_wheel_scrolls_no_dialog_text_and_the_arrows_still_do() {
     let mut screen = offering(Rulebook::default());
     wheel_over_text(&mut screen);
     assert_eq!(text(&screen).offset(), 0.0);
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     assert_eq!(text(&screen).offset(), ARROW_UNITS, "Down still scrolls");
 }
 
@@ -77,7 +77,7 @@ fn by_the_other_reading_the_wheel_scrolls_the_dialog_text_under_it() {
         nova_view::ui::desc::BODY_SIZE,
     );
     assert_eq!(text(&screen).offset(), notch, "a line's pixels");
-    screen.input(&key(Key::Down, true));
+    screen.input(&key(Key::ArrowDown, true));
     assert_eq!(
         text(&screen).offset(),
         notch + ARROW_UNITS,

@@ -34,28 +34,44 @@ use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
-use super::{FlightView, TARGET_KEY};
+use crate::keymap::FlightCommand as F;
+
+use super::FlightView;
 
 impl<C, S: FlightSim> FlightView<C, S> {
+    /// Whether Target Select reads down, with Shift or Option or not
+    /// ([`F::TargetSelect`] and its variants).
+    fn target_reads_down(&self) -> bool {
+        [
+            F::TargetSelect,
+            F::TargetSelectBack,
+            F::TargetEscort,
+            F::TargetEscortBack,
+        ]
+        .into_iter()
+        .any(|command| self.reads_down(command))
+    }
+
     /// The pass's poll of Tab and the button, after the slot block and
     /// before B, as @0x69dea sits between them: with Tab not read down
     /// and the button up, the latch cleared (@0x6a764).
     pub(super) fn target_poll(&mut self) {
-        if !self.reads_down(TARGET_KEY) && !self.cursor.button_down() {
+        if !self.target_reads_down() && !self.cursor.button_down() {
             self.target_latch = false;
         }
     }
 
-    /// A press of Tab: the latch cleared as the release before it clears
-    /// it, unless the button still holds it; then with it clear, Tab's
-    /// pick ([`FlightView::press_target_key`]) and the latch set
+    /// A press of Tab, `pressed` with its Shift and Option: the latch
+    /// cleared as the release before it clears it, unless the button still
+    /// holds it; then with it clear, Tab's pick
+    /// ([`FlightView::pick_target`]) and the latch set
     /// (@0x69f24-0x69f32).
-    pub(super) fn press_target_latched(&mut self) {
+    pub(super) fn press_target_latched(&mut self, pressed: F) {
         if !self.cursor.button_down() {
             self.target_latch = false;
         }
         if !std::mem::replace(&mut self.target_latch, true) {
-            self.press_target_key();
+            self.pick_target(pressed);
         }
     }
 }
@@ -77,7 +93,7 @@ impl<
     /// follows a release, then set (@0x6a01b) before the escort menu, the
     /// floating map and space are tried, in that order.
     pub(super) fn press_button_latched(&mut self, at: Point) {
-        if self.reads_down(TARGET_KEY) {
+        if self.target_reads_down() {
             return;
         }
         self.target_latch = true;

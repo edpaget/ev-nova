@@ -101,7 +101,7 @@ fn the_x_texts_movie_plays_as_the_about_texts_does() {
             &filmed_desc_of("X.", "x.mov", flags),
             Rulebook::default(),
         );
-        screen.input(&key(Key::Char('x'), true));
+        screen.input(&key(Key::KeyX, true));
         screen.keyed_click_ended();
         assert_eq!(screen.showing(), Showing::Note, "{flags:#x}");
         if before {
@@ -109,7 +109,7 @@ fn the_x_texts_movie_plays_as_the_about_texts_does() {
             tick_out(&mut screen);
         }
         assert_eq!(about_words(&screen).as_deref(), Some("X."), "{flags:#x}");
-        screen.input(&key(Key::Char('x'), false));
+        screen.input(&key(Key::KeyX, false));
         screen.input(&key(Key::Enter, true));
         if !before {
             assert_eq!(reeled(&reel), [Call::Start("x.mov".into())]);

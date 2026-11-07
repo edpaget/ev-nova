@@ -571,7 +571,7 @@ fn flights_keys_tapped_under_the_closing_fade_are_not_replayed_to_it() {
     for input in [
         key(JUMP_KEY, true),
         key(JUMP_KEY, false),
-        key(Key::Alt, true),
+        key(Key::AltLeft, true),
         key(Key::Escape, true),
         key(Key::Escape, false),
     ] {
@@ -583,7 +583,7 @@ fn flights_keys_tapped_under_the_closing_fade_are_not_replayed_to_it() {
     assert_eq!(
         view.take_rescue_replay(),
         [
-            key(Key::Alt, true),
+            key(Key::AltLeft, true),
             key(Key::Escape, true),
             key(Key::Escape, false)
         ]

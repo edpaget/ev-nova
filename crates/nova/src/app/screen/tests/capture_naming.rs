@@ -157,7 +157,7 @@ fn escape_does_nothing_in_the_rename() {
 fn use_as_my_ship_by_its_key_types_nothing_into_the_rename() {
     let store = MemoryPilots::new();
     let mut screen = captured(&store);
-    screen.input(&key(Key::Char('m'), true));
+    screen.input(&key(Key::KeyM, true));
     screen.input(&Input::Text('m'));
     assert_eq!(screen.showing(), Showing::CaptureNaming);
     assert!(typed(&screen).starts_with("Trader "), "the M typed nothing");

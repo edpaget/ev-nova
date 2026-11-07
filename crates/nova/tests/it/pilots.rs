@@ -21,6 +21,7 @@ use crate::bracket_art;
 use crate::common::{EntryHarness, Frames};
 use nova::app::screen::{AppScreen, QUIT_DELAY};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::gamepad::Gamepads;
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
 use nova_audio::{
@@ -37,6 +38,7 @@ use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fixture::{one_file, one_file_at};
 use nova_data::{GameData, InterfaceData, Record, SoundId};
@@ -193,6 +195,34 @@ pub(crate) fn intro_game_data() -> Rc<GameData> {
     game_data_of(
         intro_character(),
         vec![(PICT, INTRO_PICT, pict(8, 4, [0, 0, 90]))],
+    )
+}
+
+/// [`game_data`] for the pad alone: its `STR#` 128 names the default
+/// pilot "Ada Lovelace", nicknamed "Ace", whatever the roll, and its
+/// `chär`'s intro picture never times out, so only a press ends it.
+fn pad_game_data() -> Rc<GameData> {
+    let mut character = intro_character();
+    put_i16s(&mut character, 0x28, &[-1, 0, 0, 0]);
+    let names = [
+        "Ada Lovelace",
+        "Ada Lovelace",
+        "Ada Lovelace",
+        "Ace",
+        "Ace",
+        "Ace",
+    ];
+    let mut list = be(&[names.len() as i16]);
+    for name in names {
+        list.push(name.len() as u8);
+        list.extend(name.as_bytes());
+    }
+    game_data_of(
+        character,
+        vec![
+            (PICT, INTRO_PICT, pict(8, 4, [0, 0, 90])),
+            (StrList::TYPE, 128, list),
+        ],
     )
 }
 
@@ -379,6 +409,24 @@ impl Harness {
         Self::built(store, settings, false)
     }
 
+    /// [`Harness::opening`] over [`pad_game_data`], reading the pads
+    /// `pads`.
+    pub(crate) fn opening_with_pads(store: &MemoryPilots, pads: Box<dyn Gamepads>) -> Self {
+        let harness = Self::built_on(pad_game_data(), store, AudioSettings::default(), false);
+        Self {
+            app: harness.app.with_gamepads(pads),
+            ..harness
+        }
+    }
+
+    /// The harness's app with the platform's text entry `entry`.
+    pub(crate) fn with_text_entry(self, entry: Box<dyn nova::text_entry::TextEntry>) -> Self {
+        Self {
+            app: self.app.with_text_entry(entry),
+            ..self
+        }
+    }
+
     /// The app on the main menu as `main` builds it, keeping pilots in
     /// `store` and opening the last pilot at launch, before any frame.
     fn launching(store: &MemoryPilots) -> Self {
@@ -501,6 +549,18 @@ impl Harness {
             audio: handle,
             missing_ok: false,
         }
+    }
+
+    /// Creates a pilot named `name` from the main menu by the keyboard,
+    /// its ship christened with the default, then closes the app, which
+    /// saves it.
+    pub(crate) fn create_and_close(&mut self, name: &str) {
+        let new_pilot = self.menu_button(MenuChoice::NewPilot);
+        self.click(new_pilot);
+        self.type_name(name);
+        self.press(KeyCode::Enter);
+        self.press(KeyCode::Enter);
+        assert_eq!(self.handle(WindowEvent::CloseRequested), Control::Exit);
     }
 
     pub(crate) fn handle(&mut self, event: WindowEvent) -> Control {
@@ -1040,7 +1100,7 @@ fn in_flight_a_plain_q_or_g_does_nothing_and_command_q_exits() {
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.redraw(), Control::Continue);
     game.send(platform::key_event(
-        PhysicalKey::Code(KeyCode::SuperLeft),
+        PhysicalKey::Code(KeyCode::MetaLeft),
         ElementState::Pressed,
         false,
     ));

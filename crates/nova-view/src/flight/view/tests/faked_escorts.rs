@@ -54,9 +54,9 @@ fn press(view: &mut Faked, k: Key) -> bool {
 
 /// Presses `k` with Option held.
 fn option_press(view: &mut Faked, k: Key) {
-    view.held.insert(Key::Alt);
+    view.hold_key(Key::AltLeft);
     press(view, k);
-    view.held.remove(&Key::Alt);
+    view.let_go_key(Key::AltLeft);
 }
 
 /// The interface's sounds `view` raised since they were last taken.
@@ -190,6 +190,11 @@ fn e_opens_the_menu_and_its_keys_pick_the_group_commanded() {
         view.message(),
         Some("New escort orders assigned:  Warships holding position.")
     );
+    press(&mut view, Key::NumpadEnter);
+    assert!(
+        view.escort_menu().is_open(),
+        "the keypad's Enter isn't ackComm's key code"
+    );
     press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open(), "Return closes it");
     press(&mut view, MENU_KEY);
@@ -250,7 +255,7 @@ fn the_menu_fades_over_32_steps_once_timed_out_then_shuts_silently() {
 fn with_e_held_through_the_timeout_the_fades_end_beeps_once() {
     let mut view = escorted();
     press(&mut view, MENU_KEY);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     ui_heard(&mut view);
     menu_tick(&mut view, MENU_TIMEOUT + TICK);
     assert_eq!(ui_heard(&mut view), [], "fading: no beep yet");
@@ -275,7 +280,7 @@ fn return_closes_it_at_once_silent_and_beeps_with_e_held() {
     assert!(!view.escort_menu().is_open(), "at once");
     assert_eq!(ui_heard(&mut view), [], "silent");
     press(&mut view, MENU_KEY);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     ui_heard(&mut view);
     press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
@@ -304,7 +309,7 @@ fn e_latched_across_a_close_beeps_returns_close() {
     press(&mut view, MENU_KEY);
     super::live_keys::dialog_opens(&mut view);
     let _ = super::live_keys::back(&mut view, [MENU_KEY], [], false);
-    assert!(!view.held.contains(&MENU_KEY), "latched, not held");
+    assert!(!view.holds_key(MENU_KEY), "latched, not held");
     ui_heard(&mut view);
     press(&mut view, MENU_CLOSE_KEY);
     assert!(!view.escort_menu().is_open());
@@ -683,7 +688,7 @@ fn f_d_v_and_c_send_their_commands_and_say_what_each_changed() {
             ESCORT_HOLD_KEY,
             ESCORT_RECALL_KEY
         ],
-        ['f', 'd', 'v', 'c'].map(Key::Char)
+        [Key::KeyF, Key::KeyD, Key::KeyV, Key::KeyC]
     );
 }
 
@@ -693,7 +698,7 @@ fn option_c_held_across_a_sites_close_docks_at_the_next_step() {
     // commands' loop reads Option for Return to Hangar (@0x6e207).
     let mut view = escorted();
     super::live_keys::dialog_opens(&mut view);
-    let _ = super::live_keys::back(&mut view, [Key::Alt, ESCORT_RECALL_KEY], [], false);
+    let _ = super::live_keys::back(&mut view, [Key::AltLeft, ESCORT_RECALL_KEY], [], false);
     let before = sent_but_lines(&view).len();
     view.tick(TICK);
     let commands: Vec<FlightCommand> = sent_but_lines(&view)[before..]
@@ -906,12 +911,12 @@ fn the_target_key_walks_back_with_shift_and_through_the_escorts_with_option() {
         (true, false, TargetPick::Previous),
         (true, true, TargetPick::PreviousEscort),
     ] {
-        view.held.clear();
+        view.keys.let_go();
         if shift {
-            view.held.insert(Key::Shift);
+            view.hold_key(Key::ShiftLeft);
         }
         if option {
-            view.held.insert(Key::Alt);
+            view.hold_key(Key::AltLeft);
         }
         let before = sent(&view).len();
         view.press_target_key();
@@ -981,7 +986,9 @@ fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
         .expect("its border");
     let help = commands
         .iter()
-        .position(|command| **command == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
+        .position(|command| {
+            **command == overlay(&default_help(), HELP_AT, OVERLAY_SIZE, Color::DIM)
+        })
         .expect("the help line");
     let player = commands
         .iter()
@@ -1081,7 +1088,7 @@ fn every_clear_of_a_tick_shows_the_menu_in_full_again() {
     // At 2: step 1 drops to 1 and shows it again, steps 2 and 3 drop to
     // 30, and step 3's clear shows it again. Its fade never reaches 0.
     let mut view = faded_to(2);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     steps_clearing(&mut view, &[true, false, true]);
     assert_eq!(view.escort_menu().level(), Some(32));
     assert_eq!(ui_heard(&mut view), [], "it never shut");
@@ -1098,7 +1105,7 @@ fn a_clear_leaves_a_shut_menu_shut() {
 #[test]
 fn a_fade_that_starts_again_and_ends_in_the_same_tick_beeps_with_e_held() {
     let mut view = faded_to(22);
-    view.held.insert(MENU_KEY);
+    view.hold_key(MENU_KEY);
     let mut cleared = vec![false; 34];
     cleared[1] = true;
     steps_clearing(&mut view, &cleared);
@@ -1135,7 +1142,7 @@ fn in_double_time_the_menu_fades_a_level_on_each_pass_and_shuts_16_steps_after_i
         let mut view = escorted();
         press(&mut view, MENU_KEY);
         if held {
-            view.held.insert(MENU_KEY);
+            view.hold_key(MENU_KEY);
         }
         ui_heard(&mut view);
         view.step_stellars(MENU_TIMEOUT + TICK);

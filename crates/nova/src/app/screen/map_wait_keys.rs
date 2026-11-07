@@ -35,12 +35,11 @@
 //! still goes, only so what took the press isn't left holding it: the
 //! router's own Command, a screen's Alt.
 
-use std::collections::HashSet;
-
 use nova_view::flight::FlightView;
+use nova_view::keymap::KeysDown;
 use nova_view::movie::skips_a_movie;
 use nova_view::spaceport::SpaceportView;
-use nova_view::{Input, Key, Showing};
+use nova_view::{Input, Showing};
 
 use super::AppScreen;
 
@@ -103,24 +102,24 @@ impl AppScreen {
         if replay.is_empty() || self.showing() == Showing::Flight {
             return;
         }
-        let mut still_down = HashSet::new();
+        let mut still_down = KeysDown::default();
         for input in &replay {
-            note_down(&mut still_down, input);
+            still_down.follow(input);
         }
         let mut keys = replay.into_iter();
-        let mut down = HashSet::new();
+        let mut down = KeysDown::default();
         while let Some(input) = keys.next() {
             if self.movie_skipped_by(&input) {
                 continue;
             }
             let before = self.flush_mark();
-            note_down(&mut down, &input);
+            down.follow(&input);
             let _ = self.routed_input(&input);
             if self.showing() == Showing::Flight || self.flush_mark().flushed_since(before) {
                 self.let_go_of_replayed(keys, down);
                 if let Some(flight) = &mut self.flight {
-                    for key in still_down {
-                        flight.hold_live_key(key);
+                    for press in still_down.presses() {
+                        flight.hold_live_key(&press);
                     }
                 }
                 return;
@@ -133,7 +132,7 @@ impl AppScreen {
     fn movie_skipped_by(&self, input: &Input) -> bool {
         let playing = self.showing() == Showing::Movie
             || self.spaceport_view().is_some_and(SpaceportView::playing);
-        playing && skips_a_movie(input)
+        playing && skips_a_movie(input, &self.bindings)
     }
 
     /// Past a stop, the queued release of each key in `down`, the presses
@@ -142,31 +141,23 @@ impl AppScreen {
     /// of it. A press with no release queued is still physically down,
     /// replayed or dropped, and its release comes live, once. The router
     /// noted a dropped press's key as it was typed.
-    fn let_go_of_replayed(&mut self, rest: impl Iterator<Item = Input>, mut down: HashSet<Key>) {
+    fn let_go_of_replayed(&mut self, rest: impl Iterator<Item = Input>, mut down: KeysDown) {
         for input in rest {
-            if let Input::Key {
-                key,
-                pressed: false,
-                ..
-            } = input
-                && down.remove(&key)
-                && !self.movie_skipped_by(&input)
-            {
+            if let_go_of(&mut down, &input) && !self.movie_skipped_by(&input) {
                 let _ = self.routed_input(&input);
             }
         }
     }
 }
 
-/// Notes in `down` a key `input` presses or lets go of.
-pub(super) fn note_down(down: &mut HashSet<Key>, input: &Input) {
-    if let Input::Key { key, pressed, .. } = *input {
-        if pressed {
-            down.insert(key);
-        } else {
-            down.remove(&key);
-        }
+/// Whether `input` is the release of a key `down` holds, which it then
+/// lets go of.
+pub(super) fn let_go_of(down: &mut KeysDown, input: &Input) -> bool {
+    let release = matches!(input, Input::Key { pressed: false, .. }) && down.holds(input);
+    if release {
+        down.follow(input);
     }
+    release
 }
 
 #[cfg(test)]
@@ -190,5 +181,25 @@ mod tests {
         assert!(mark(0, 1).flushed_since(mark(0, 0)), "one shown afresh");
         assert!(!mark(0, 0).flushed_since(mark(0, 1)), "the last closed");
         assert!(!mark(0, 2).flushed_since(mark(0, 2)), "unchanged");
+    }
+
+    #[test]
+    fn only_the_release_of_a_key_held_lets_go_of_it() {
+        let key = |key, pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        };
+        let a = nova_view::Key::KeyA;
+        let mut down = KeysDown::default();
+        down.follow(&key(a, true));
+        assert!(!let_go_of(&mut down, &key(a, true)), "a press of it");
+        assert!(
+            !let_go_of(&mut down, &key(nova_view::Key::KeyB, false)),
+            "a release of a key not held"
+        );
+        assert!(down.holds(&key(a, false)));
+        assert!(let_go_of(&mut down, &key(a, false)));
+        assert!(!down.holds(&key(a, false)), "let go of");
     }
 }

@@ -15,15 +15,15 @@
 //! one made with it down waits for its release. The close itself still
 //! acts on its press: only the dialog's disposal and what follows it wait,
 //! so no key acts on a hold or a repeat.
+//!
+//! The waited key is the key that was pressed, compared as a key: a key
+//! wait is no command (rdm:phase/key-bindings/phase-2-command-key-map's
+//! fixed keys). The keys the filters under it read live are the shared
+//! play keys' commands (Galaxy Map, Player Info, Mission Info), read
+//! through the key map the wait is given ([`WaitKeys::set_bindings`]).
 
-use crate::flight::view::MAP_KEY;
-use crate::ui::mission_info::MISSION_INFO_KEY;
-use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::keymap::{AppCommand, Command, CommandReader, SharedBindings, contexts};
 use crate::{Input, Key};
-
-/// The keys the filters read live (`_PortFilter` @0x4f171-0x4f1c5 and its
-/// kin), so one already let go when a wait ends does nothing.
-const LIVE_KEYS: [Key; 3] = [MAP_KEY, PLAYER_INFO_KEY, MISSION_INFO_KEY];
 
 /// The keys typed while a close waits for `waited`'s release, for the
 /// screen under it: the original's queue of key-downs, auto-keys and
@@ -31,31 +31,52 @@ const LIVE_KEYS: [Key; 3] = [MAP_KEY, PLAYER_INFO_KEY, MISSION_INFO_KEY];
 /// that typed it, as the original's key-down carries its character.
 #[derive(Clone, Debug)]
 pub(crate) struct WaitKeys {
-    waited: Key,
+    /// The key waited on, if any is bound.
+    waited: Option<Key>,
     keys: Vec<Input>,
     /// Whether an [`Input::Text`] now would follow, directly or behind
     /// other text, a press or repeat that was queued.
     text_follows: bool,
+    /// The bindings the live keys are read through.
+    bindings: SharedBindings,
 }
 
 impl WaitKeys {
-    /// An empty queue for a wait on `waited`.
-    pub(crate) fn new(waited: Key) -> Self {
+    /// An empty queue for a wait on `waited`, or on no key.
+    pub(crate) fn new(waited: impl Into<Option<Key>>) -> Self {
         Self {
-            waited,
+            waited: waited.into(),
             keys: Vec::new(),
             text_follows: false,
+            bindings: SharedBindings::default(),
         }
+    }
+
+    /// Reads the live keys through `bindings`.
+    pub(crate) fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.bindings = bindings;
+    }
+
+    /// Waits on `waited` from now on, or on no key.
+    pub(crate) fn set_waited(&mut self, waited: Option<Key>) {
+        self.waited = waited;
     }
 
     /// Takes `input` if it is a key the queue keeps, repeats included, in
     /// order. The waited key's own never queues, as it is down throughout,
-    /// and the router ran Caps Lock's double time on its press. A release
+    /// and neither does double time's (Caps Lock by default, read through
+    /// the bindings), as the router ran it on its press. A release
     /// goes in only behind something of its key, a press or a repeat:
     /// otherwise the screen never saw that key. So what is queued says
-    /// whether a key it saw is still down. Text goes in only behind a
-    /// press or repeat that went in, directly or behind other text: the
-    /// character of a key dropped is dropped with it.
+    /// whether a key it saw is still down.
+    ///
+    /// A typed character goes in behind the queued press or repeat that
+    /// typed it, directly or behind other text, as a queued `keyDown` or
+    /// `autoKey` carries its character with its key code. Any other is
+    /// dropped: one typed by a key the queue dropped (the waited key's
+    /// repeat, say) goes with that key, never behind a key queued before
+    /// it that typed nothing, such as Shift, nor behind anything else
+    /// taken between them.
     pub(crate) fn take(&mut self, input: &Input) {
         let follows = std::mem::replace(&mut self.text_follows, false);
         let (key, pressed) = match *input {
@@ -69,7 +90,7 @@ impl WaitKeys {
             Input::Key { key, pressed, .. } => (key, pressed),
             _ => return,
         };
-        if key == self.waited || key == Key::CapsLock {
+        if Some(key) == self.waited || self.is_double_time(input) {
             return;
         }
         if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
@@ -85,33 +106,63 @@ impl WaitKeys {
     }
 
     /// What the wait leaves for the screen under it, in order, the queue
-    /// emptied. The filters read [`MAP_KEY`], [`PLAYER_INFO_KEY`] and
-    /// [`MISSION_INFO_KEY`] live, so one already let go does nothing, and
-    /// goes with its repeats and release, and the text they typed; one
-    /// still down stays.
+    /// emptied. The filters read the shared play keys live, so one already
+    /// let go does nothing, and goes with its repeats, release and the
+    /// characters they typed; one still down stays.
     pub(crate) fn finish(&mut self) -> Vec<Input> {
         self.text_follows = false;
-        let mut keys = std::mem::take(&mut self.keys);
-        for live in LIVE_KEYS.into_iter().filter(|&key| key != self.waited) {
-            let let_go = keys.iter().rposition(|input| is_release_of(input, live));
-            if let Some(let_go) = let_go {
-                let mut dropping = false;
-                keys = keys
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(at, input)| {
-                        dropping = *at <= let_go
-                            && match input {
-                                Input::Text(_) => dropping,
-                                _ => is_key(input, live),
-                            };
-                        !dropping
-                    })
-                    .map(|(_, input)| input)
-                    .collect();
+        let keys = std::mem::take(&mut self.keys);
+        let mut kept = vec![true; keys.len()];
+        for live in self.live_keys(&keys) {
+            if let Some(let_go) = keys.iter().rposition(|input| is_release_of(input, live)) {
+                for (at, input) in keys.iter().enumerate().take(let_go) {
+                    if is_key(input, live) {
+                        kept[at] = false;
+                    }
+                }
+                kept[let_go] = false;
             }
         }
-        keys
+        // A character goes with the key that typed it, just before it.
+        for at in 1..keys.len() {
+            if matches!(keys[at], Input::Text(_)) {
+                kept[at] = kept[at - 1];
+            }
+        }
+        keys.into_iter()
+            .zip(kept)
+            .filter_map(|(input, kept)| kept.then_some(input))
+            .collect()
+    }
+}
+
+impl WaitKeys {
+    /// Whether the key of `input` means the app's double time, which the
+    /// router reads on every screen.
+    fn is_double_time(&self, input: &Input) -> bool {
+        let reader = CommandReader::new(contexts::KEY_WAIT).with_bindings(self.bindings.clone());
+        reader.means(input) == Some(Command::App(AppCommand::DoubleTime))
+    }
+
+    /// The keys `keys` press or repeat as a shared play key, read in
+    /// order through the bindings, the waited key aside.
+    fn live_keys(&self, keys: &[Input]) -> Vec<Key> {
+        let mut reader =
+            CommandReader::new(contexts::KEY_WAIT).with_bindings(self.bindings.clone());
+        let mut live = Vec::new();
+        for input in keys {
+            let command = reader.follow(input);
+            if let Input::Key {
+                key, pressed: true, ..
+            } = *input
+                && command.is_some_and(|command| matches!(command.command, Command::Play(_)))
+                && Some(key) != self.waited
+                && !live.contains(&key)
+            {
+                live.push(key);
+            }
+        }
+        live
     }
 }
 
@@ -129,7 +180,8 @@ fn is_key(input: &Input, key: Key) -> bool {
 /// what was typed meanwhile (see the module docs).
 #[derive(Clone, Debug)]
 pub(crate) struct KeyWait {
-    key: Key,
+    /// The key waited on, if any is bound.
+    key: Option<Key>,
     down: bool,
     waiting: bool,
     queue: WaitKeys,
@@ -137,8 +189,10 @@ pub(crate) struct KeyWait {
 }
 
 impl KeyWait {
-    /// A wait on `key`, which is `down` or up as it starts.
-    pub(crate) fn new(key: Key, down: bool) -> Self {
+    /// A wait on `key`, or on no key, which is `down` or up as it
+    /// starts.
+    pub(crate) fn new(key: impl Into<Option<Key>>, down: bool) -> Self {
+        let key = key.into();
         Self {
             key,
             down,
@@ -148,11 +202,23 @@ impl KeyWait {
         }
     }
 
+    /// Reads the live keys of what it queues through `bindings`
+    /// ([`WaitKeys::set_bindings`]).
+    pub(crate) fn set_bindings(&mut self, bindings: SharedBindings) {
+        self.queue.set_bindings(bindings);
+    }
+
+    /// Waits on `key` from now on, as down or up as the one before.
+    pub(crate) fn set_key(&mut self, key: Option<Key>) {
+        self.key = key;
+        self.queue.set_waited(key);
+    }
+
     /// Follows `key` up and down: a press or a repeat sets it down, a
     /// release lets it go.
     pub(crate) fn note(&mut self, input: &Input) {
         if let Input::Key { key, pressed, .. } = *input
-            && key == self.key
+            && Some(key) == self.key
         {
             self.down = pressed;
         }
@@ -179,7 +245,7 @@ impl KeyWait {
         if !self.waiting {
             return false;
         }
-        if is_release_of(input, self.key) {
+        if self.key.is_some_and(|key| is_release_of(input, key)) {
             self.down = false;
             self.waiting = false;
             self.replay = self.queue.finish();
@@ -207,6 +273,10 @@ impl KeyWait {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const MAP_KEY: crate::Key = crate::Key::KeyM;
+    use crate::keymap::test_keys::MISSION_INFO_KEY;
+    use crate::keymap::test_keys::PLAYER_INFO_KEY;
+    use crate::keymap::{Bindings, KeyCombo, PlayCommand};
     use crate::{MouseButton, Point};
 
     fn press(key: Key) -> Input {
@@ -255,8 +325,8 @@ mod tests {
         left_waiting_for(MAP_KEY, inputs)
     }
 
-    const A: Key = Key::Char('a');
-    const B: Key = Key::Char('b');
+    const A: Key = Key::KeyA;
+    const B: Key = Key::KeyB;
 
     #[test]
     fn it_keeps_keys_and_repeats_in_order() {
@@ -281,7 +351,21 @@ mod tests {
     }
 
     #[test]
-    fn it_takes_no_pointer_input() {
+    fn it_takes_none_of_double_time_s_key_as_the_bindings_have_it() {
+        use crate::keymap::AppCommand;
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(AppCommand::DoubleTime, KeyCombo::key(Key::F13)),
+        ));
+        let keys = [press(Key::F13), release(Key::F13), press(Key::CapsLock)];
+        for input in &keys {
+            queue.take(input);
+        }
+        assert_eq!(queue.finish(), [press(Key::CapsLock)]);
+    }
+
+    #[test]
+    fn it_takes_no_pointer_input_and_no_text_typed_by_no_key_it_kept() {
         let at = Point::new(1.0, 2.0);
         let inputs = [
             Input::PointerMoved(at),
@@ -290,11 +374,88 @@ mod tests {
             click(),
         ];
         assert_eq!(left_by(&inputs), []);
+        assert_eq!(
+            left_by(&[press(A), release(A), Input::Text('a')]),
+            [press(A), release(A)],
+            "after a release"
+        );
+    }
+
+    /// A queued `keyDown` carries its character as well as its key code,
+    /// which the offer's filter reads (`_SingleMissionFilter` @0x98e4a).
+    #[test]
+    fn it_keeps_the_character_a_kept_key_typed_with_it() {
+        let typed = [
+            press(A),
+            Input::Text('a'),
+            repeat(A),
+            Input::Text('a'),
+            release(A),
+        ];
+        assert_eq!(left_by(&typed), typed);
+    }
+
+    #[test]
+    fn a_dropped_key_takes_its_character_with_it() {
+        let p = PLAYER_INFO_KEY;
+        let inputs = [
+            press(A),
+            press(p),
+            Input::Text('p'),
+            release(p),
+            Input::Text('x'),
+        ];
+        assert_eq!(left_by(&inputs), [press(A)]);
+        assert_eq!(
+            left_by(&[press(MAP_KEY), Input::Text('m'), press(B)]),
+            [press(B)],
+            "the waited key's"
+        );
+        assert_eq!(
+            left_by(&[
+                press(PLAYER_INFO_KEY),
+                Input::Text('p'),
+                press(A),
+                release(PLAYER_INFO_KEY),
+            ]),
+            [press(A)],
+            "not the next key's"
+        );
+    }
+
+    /// The waited key's repeat types its character after a key that typed
+    /// none: the character goes with the repeat, never behind that key, as
+    /// `_SingleMissionFilter` takes a letter on `keyDown` alone (@0x98e56).
+    #[test]
+    fn a_dropped_key_takes_its_character_from_behind_a_kept_key() {
+        for waited in [MAP_KEY, PLAYER_INFO_KEY, MISSION_INFO_KEY] {
+            let shift = Key::ShiftLeft;
+            let inputs = [press(shift), repeat(waited), Input::Text('m')];
+            assert_eq!(
+                left_waiting_for(waited, &inputs),
+                [press(shift)],
+                "{waited:?}'s repeat"
+            );
+            let inputs = [press(Key::Escape), press(waited), Input::Text('m')];
+            assert_eq!(
+                left_waiting_for(waited, &inputs),
+                [press(Key::Escape)],
+                "{waited:?}'s press"
+            );
+        }
+        let caps = [press(Key::ArrowUp), press(Key::CapsLock), Input::Text('x')];
+        assert_eq!(left_by(&caps), [press(Key::ArrowUp)], "Caps Lock's");
+        let unheld = [press(Key::ShiftLeft), release(A), Input::Text('a')];
+        assert_eq!(
+            left_by(&unheld),
+            [press(Key::ShiftLeft)],
+            "a release it dropped"
+        );
     }
 
     #[test]
     fn it_keeps_text_behind_its_key_in_order() {
-        let five = Key::Char('5');
+        let five = Key::Digit5;
         let inputs = [
             press(A),
             Input::Text('a'),
@@ -388,6 +549,48 @@ mod tests {
         }
     }
 
+    /// The live keys are the shared play keys as the bindings the wait is
+    /// given read them: Mission Info rebound to O makes O live and I a
+    /// key like any other.
+    #[test]
+    fn a_rebound_play_key_is_live_on_its_new_key_alone() {
+        let o = Key::KeyO;
+        let mut queue = WaitKeys::new(MAP_KEY);
+        queue.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(o)),
+        ));
+        let i = MISSION_INFO_KEY;
+        for input in [press(o), release(o), press(i), release(i), press(A)] {
+            queue.take(&input);
+        }
+        assert_eq!(queue.finish(), [press(i), release(i), press(A)]);
+        let mut wait = KeyWait::new(None, false);
+        wait.set_key(Some(o));
+        wait.note(&press(o));
+        assert!(!wait.close(), "a close waits on the key set");
+        wait.set_bindings(SharedBindings::default());
+        assert!(!wait.input(&release(i)));
+        assert!(wait.input(&release(o)));
+    }
+
+    /// A wait hands the bindings it is given to its queue: with Mission
+    /// Info rebound to O, what it leaves drops a let-go O, not I.
+    #[test]
+    fn a_wait_reads_its_queue_s_live_keys_through_the_bindings_it_is_given() {
+        let o = Key::KeyO;
+        let i = MISSION_INFO_KEY;
+        let mut wait = KeyWait::new(P, true);
+        wait.set_bindings(SharedBindings::new(
+            Bindings::default().rebound(PlayCommand::MissionInfo, KeyCombo::key(o)),
+        ));
+        assert!(!wait.close());
+        for input in [press(o), release(o), press(i), release(i), press(A)] {
+            assert!(!wait.input(&input));
+        }
+        assert!(wait.input(&release(P)));
+        assert_eq!(wait.take_replay(), [press(i), release(i), press(A)]);
+    }
+
     #[test]
     fn it_keeps_a_live_key_still_down() {
         for key in [PLAYER_INFO_KEY, MISSION_INFO_KEY] {
@@ -430,7 +633,8 @@ mod tests {
         let mut queue = WaitKeys::new(MAP_KEY);
         queue.take(&press(A));
         queue.clear();
-        assert_eq!(queue.finish(), []);
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), [], "nor its character after");
     }
 
     #[test]
@@ -438,7 +642,8 @@ mod tests {
         let mut queue = WaitKeys::new(MAP_KEY);
         queue.take(&press(A));
         assert_eq!(queue.finish().len(), 1);
-        assert_eq!(queue.finish(), []);
+        queue.take(&Input::Text('a'));
+        assert_eq!(queue.finish(), [], "a character finished with its key");
     }
 
     const P: Key = PLAYER_INFO_KEY;

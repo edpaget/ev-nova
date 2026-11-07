@@ -377,7 +377,7 @@ fn a_lost_release_clicks_nothing() {
 fn keys_reach_the_map() {
     let (mut harness, _) = Harness::open_map();
     let before = harness.system_at(128);
-    harness.press(Key::Right);
+    harness.press(Key::ArrowRight);
     harness.settle();
     assert_ne!(harness.system_at(128), before, "Right pans the map");
 
@@ -391,7 +391,7 @@ fn keys_reach_the_map() {
             .zoom()
     };
     let before = zoom(&harness);
-    harness.press(Key::Char('='));
+    harness.press(Key::Equal);
     harness.settle();
     assert_ne!(zoom(&harness), before, "= zooms the map");
 }
@@ -426,7 +426,7 @@ fn a_drag_reaches_the_map() {
 #[test]
 fn the_map_keeps_its_view_and_selection_across_a_tab_round_trip() {
     let (mut harness, _) = Harness::open_map();
-    harness.press(Key::Char('-'));
+    harness.press(Key::Minus);
     let alpha = harness.system_at(128);
     harness.click(alpha);
     let map = harness.app.screen().galaxy_map();

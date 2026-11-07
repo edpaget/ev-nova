@@ -1,6 +1,12 @@
 //! A spaceport service's placeholder: the service's name, a line saying
 //! it is not available yet, and a Done button that goes back to the
 //! spaceport. Each service replaces it when it is built.
+//!
+//! With the pad (rdm:phase/key-bindings/phase-9-gamepad-spaceport), Done
+//! is the one target: South presses it as a click does, and East closes
+//! it as Escape does. Until the placeholder is told the pad was the device
+//! used last, the d-pad and South do nothing (`pad_focus`'s "Nothing
+//! hidden acts").
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,10 +18,12 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
+use crate::input::Input;
+use crate::keymap::{Command, CommandInput, CommandReader, SharedBindings, UiCommand, contexts};
 use crate::screen::{Screen, ScreenAction};
 use crate::text::TextMetrics;
 use crate::ui::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+use crate::ui::pad_focus::{FocusState, PadRead, Target, draw_highlight, from_pad};
 
 /// The middle of the screen, across.
 const CENTRE_X: f32 = 512.0;
@@ -47,6 +55,13 @@ pub struct ServiceScreen {
     style: ButtonStyle,
     metrics: Rc<dyn TextMetrics>,
     closed: bool,
+    /// Its keys, as commands ([`contexts::DIALOG`]): Confirm and Back,
+    /// boxed to keep the screens open over the spaceport alike in size.
+    keys: Box<CommandReader>,
+    /// The pad's focus, on Done or nothing.
+    focus: FocusState<()>,
+    /// Whether South's press armed Done.
+    pad_pressed: bool,
 }
 
 impl std::fmt::Debug for ServiceScreen {
@@ -70,7 +85,17 @@ impl ServiceScreen {
             style,
             metrics,
             closed: false,
+            keys: Box::new(CommandReader::new(contexts::DIALOG)),
+            focus: FocusState::default(),
+            pad_pressed: false,
         }
+    }
+
+    /// The placeholder reading its keys through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.keys.set_bindings(bindings);
+        self
     }
 
     /// The service it stands in for.
@@ -79,10 +104,46 @@ impl ServiceScreen {
         self.service
     }
 
+    /// The device the player used last, as the last surroundings it was
+    /// told said; the keyboard before any.
+    #[must_use]
+    pub fn device(&self) -> crate::input::Device {
+        self.focus.device()
+    }
+
     /// Whether Done has been activated.
     #[must_use]
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// Acts on a pad command that is the pad's own: a focus move or
+    /// South. `false` for anything else, which goes as its key's.
+    fn pad_command(&mut self, command: CommandInput) -> bool {
+        match self.focus.read_pad(command) {
+            PadRead::Other => return false,
+            PadRead::Nothing => {}
+            PadRead::Move(mv) => {
+                if std::mem::take(&mut self.pad_pressed) {
+                    self.tracker.cancel_pointer();
+                }
+                self.focus
+                    .move_by_pad(&[Target::at((), DONE_BUTTON)], (), mv);
+            }
+            PadRead::Press => {
+                if self.focus.get().is_some() {
+                    self.tracker.cancel_pointer();
+                    self.tracker.press_keyed(true);
+                    self.pad_pressed = true;
+                }
+            }
+            PadRead::Release => {
+                if std::mem::take(&mut self.pad_pressed) && self.tracker.release_keyed() {
+                    self.closed = true;
+                }
+            }
+        }
+        true
     }
 
     /// `text` centred across the screen with its top at `y`.
@@ -105,13 +166,30 @@ impl Screen for ServiceScreen {
     /// A click on Done, or a Return or Escape press, closes it. It never
     /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        let done = match *input {
-            Input::Key {
-                key: Key::Enter | Key::Escape,
-                pressed: true,
-                repeat: false,
-            } => true,
-            // The tracker ignores every other key.
+        let command = self.keys.follow(input);
+        if let Input::Surroundings(surroundings) = *input {
+            self.focus
+                .surroundings(surroundings.device, Some(()), false);
+            return ScreenAction::None;
+        }
+        if from_pad(input)
+            && let Some(command) = command
+            && self.pad_command(command)
+        {
+            return ScreenAction::None;
+        }
+        let done = match command {
+            Some(command)
+                if command.pressed
+                    && !command.repeat
+                    && matches!(
+                        command.command,
+                        Command::Ui(UiCommand::Confirm | UiCommand::Back)
+                    ) =>
+            {
+                true
+            }
+            // The tracker ignores every key.
             _ => self.tracker.input(&self.done, input),
         };
         self.closed |= done;
@@ -145,19 +223,31 @@ impl Screen for ServiceScreen {
             &self.metrics,
             list,
         );
+        if self.focus.pad_highlight().is_some() {
+            draw_highlight(list, DONE_BUTTON, self.style.up);
+        }
     }
 
     fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
+        self.pad_pressed = false;
+    }
+
+    /// Lets go of the keys its reader holds.
+    fn release_keys(&mut self) {
+        self.keys.let_go();
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::pad_probe;
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
     use crate::text::fixture::MonoMetrics;
 
     fn bar() -> ServiceScreen {
@@ -186,6 +276,104 @@ mod tests {
                 at,
             });
         }
+    }
+
+    struct Probe(ServiceScreen);
+
+    impl crate::ui::pad_focus::every_screen::PadProbe for Probe {
+        fn screen(&mut self) -> &mut dyn Screen {
+            &mut self.0
+        }
+
+        fn controls(&self) -> Vec<(&'static str, Bounds)> {
+            vec![("Done", DONE_BUTTON)]
+        }
+
+        fn outcome(&mut self) -> String {
+            format!("closed {}", self.0.closed())
+        }
+
+        fn default_control(&self) -> Option<&'static str> {
+            Some("Done")
+        }
+    }
+
+    /// The placeholder's row in the pad's every-screen table.
+    pub(crate) fn pad_probe() -> Box<dyn crate::ui::pad_focus::every_screen::PadProbe> {
+        Box::new(Probe(bar()))
+    }
+
+    fn pad(button: crate::input::PadButton, pressed: bool) -> Input {
+        Input::PadButton {
+            button,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    fn tap(screen: &mut ServiceScreen, button: crate::input::PadButton) {
+        screen.input(&pad(button, true));
+        screen.input(&pad(button, false));
+    }
+
+    #[test]
+    fn untold_the_dpad_and_south_do_nothing_but_east_closes() {
+        use crate::input::PadButton;
+        let mut screen = bar();
+        tap(&mut screen, PadButton::DPadUp);
+        tap(&mut screen, PadButton::South);
+        assert!(!screen.closed());
+        assert_eq!(screen.focus.get(), None);
+        tap(&mut screen, PadButton::East);
+        assert!(screen.closed());
+    }
+
+    #[test]
+    fn a_south_release_ends_no_pointer_press_on_done() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = bar();
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: DONE_BUTTON.center(),
+        });
+        screen.input(&pad(PadButton::South, false));
+        assert!(!screen.closed(), "a release whose press the pad never made");
+    }
+
+    #[test]
+    fn a_pointer_press_over_souths_abandons_it() {
+        use crate::input::{ControllerFamily, Device, PadButton, Surroundings};
+        let mut screen = bar();
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        screen.input(&pad(PadButton::South, true));
+        let away = Point::new(10.0, 10.0);
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: away,
+            });
+        }
+        screen.input(&pad(PadButton::South, false));
+        assert!(!screen.closed(), "the pointer took the press over");
+    }
+
+    #[test]
+    fn keyboard_space_still_does_nothing() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let mut screen = bar();
+        screen.input(&Input::Surroundings(Surroundings::of(Device::Gamepad(
+            ControllerFamily::Generic,
+        ))));
+        screen.input(&key(Key::Space, true, false));
+        screen.input(&key(Key::Space, false, false));
+        assert!(!screen.closed());
     }
 
     #[test]
@@ -254,12 +442,47 @@ mod tests {
         );
     }
 
+    /// The placeholder reads its keys through the key map it is given:
+    /// Back rebound to Q closes it on Q and no longer on Escape.
+    #[test]
+    fn a_rebound_back_closes_it_on_its_new_key_alone() {
+        use crate::keymap::{Bindings, KeyCombo, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Back, KeyCombo::key(Key::KeyQ)),
+        );
+        let mut screen = bar().with_bindings(bindings);
+        screen.input(&key(Key::Escape, true, false));
+        assert!(!screen.closed(), "Escape no longer closes it");
+        screen.input(&key(Key::KeyQ, true, false));
+        assert!(screen.closed());
+    }
+
+    /// Letting go of the keys forgets a modifier held: Back on Shift-Q
+    /// no longer closes it on Q once the keys are let go of.
+    #[test]
+    fn releasing_the_keys_forgets_a_modifier_held() {
+        use crate::keymap::{Bindings, KeyCombo, Modifiers, SharedBindings, UiCommand};
+        let bindings = SharedBindings::new(
+            Bindings::default()
+                .rebound(UiCommand::Back, KeyCombo::with(Key::KeyQ, Modifiers::SHIFT)),
+        );
+        let mut screen = bar().with_bindings(bindings.clone());
+        screen.input(&key(Key::ShiftLeft, true, false));
+        screen.release_keys();
+        screen.input(&key(Key::KeyQ, true, false));
+        assert!(!screen.closed(), "Shift was let go of");
+        let mut held = bar().with_bindings(bindings);
+        held.input(&key(Key::ShiftLeft, true, false));
+        held.input(&key(Key::KeyQ, true, false));
+        assert!(held.closed(), "Shift-Q with Shift still held");
+    }
+
     #[test]
     fn a_click_on_done_return_or_escape_closes_it() {
         let mut screen = bar();
         click(&mut screen, DONE_BUTTON.center());
         assert!(screen.closed());
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = bar();
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
@@ -273,7 +496,7 @@ mod tests {
             key(Key::Enter, true, true),
             key(Key::Escape, false, false),
             key(Key::Space, true, false),
-            key(Key::Char('l'), true, false),
+            key(Key::KeyL, true, false),
         ] {
             screen.input(&input);
         }
@@ -326,7 +549,7 @@ mod tests {
     /// Return and Escape are pinned silent like the original's filters.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
-        for k in [Key::Enter, Key::Escape] {
+        for k in [Key::Enter, Key::NumpadEnter, Key::Escape] {
             let mut screen = bar();
             screen.input(&key(k, true, false));
             screen.input(&key(k, false, false));

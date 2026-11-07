@@ -348,7 +348,7 @@ fn the_sabotaged_players_death_descs_are_the_frames() {
 fn the_flight_keys_held_are_the_views() {
     let mut view = faked(in_sol());
     assert!(!view.holds_keys());
-    view.track_held(&key(Key::Up, true));
+    view.track_held(&key(Key::ArrowUp, true));
     assert!(view.holds_keys());
 }
 
@@ -1374,6 +1374,35 @@ fn the_hyperspace_hint_names_m_and_j() {
     let message = SimMessage::Tutorial(nova_sim::TutorialHint::Hyperspace);
     let mut view = relaying(message.clone());
     faked_lasts(&mut view, hint, message.ticks());
+}
+
+#[test]
+fn the_hints_name_the_keys_flight_s_bindings_bind() {
+    use crate::keymap::{Bindings, FlightCommand as Fc, KeyCombo, PlayCommand, SharedBindings};
+    let bindings = SharedBindings::new(
+        Bindings::default()
+            .rebound(Fc::LandDock, KeyCombo::key(Key::KeyT))
+            .rebound(PlayCommand::GalaxyMap, KeyCombo::key(Key::KeyQ))
+            .rebound(Fc::HyperJump, KeyCombo::key(Key::KeyY)),
+    );
+    let hint = SimMessage::Tutorial(nova_sim::TutorialHint::Land {
+        stellar: StellarId(129),
+        station: false,
+    });
+    let mut view = faked(FlightFrame {
+        stellars: vec![record::stellar(StellarId(129))],
+        ..in_sol()
+    });
+    view.set_bindings(bindings);
+    view.sim.queue_event(FlightEvent::Message(hint));
+    view.relay_messages();
+    assert_eq!(view.message(), Some(land_hint(false, "Moon", "T").as_str()));
+    view.sim
+        .queue_event(FlightEvent::Message(SimMessage::Tutorial(
+            nova_sim::TutorialHint::Hyperspace,
+        )));
+    view.relay_messages();
+    assert_eq!(view.message(), Some(hyperspace_hint("Q", "Y").as_str()));
 }
 
 #[test]

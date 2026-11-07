@@ -70,7 +70,7 @@ fn a_new_pilots_course_map_shades_the_start_in_the_federations_colour() {
     let data = Rc::new(data);
     let mut view = test_flight::new(Rc::clone(&data));
     let map_key = Input::Key {
-        key: Key::Char('m'),
+        key: Key::KeyM,
         pressed: true,
         repeat: false,
     };

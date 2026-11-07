@@ -633,3 +633,24 @@ fn the_tutorial_and_the_greeting_read_their_stock_strings() {
     assert_eq!(&strings[54..59], TAKE_OFF_LEADS);
     assert_eq!(strings[59], TAKE_OFF_ON);
 }
+
+/// The tutorial hints' key names (`_HandlePlayer` @0x70b01-0x70b1b,
+/// @0x70c3d-0x70cb2) are `Nova-DF.rsrc`'s `STR#` 129, entry by entry. The
+/// Windows `Nova.rez` is another format, so only the Mac file is read.
+#[test]
+fn the_hints_key_names_are_the_interface_file_s_str_129() {
+    use nova_view::bound_names::STR_129;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let Some(path) = common::interface_file(&dir) else {
+        return;
+    };
+    let ui = nova_data::InterfaceData::open(&path).expect("the interface file opens");
+    let (list, _) = ui
+        .string_list(129)
+        .expect("STR# 129 is there")
+        .expect("STR# 129 decodes");
+    let strings: Vec<&str> = list.record.strings.iter().map(|s| &**s).collect();
+    assert_eq!(strings, STR_129);
+}

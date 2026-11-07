@@ -20,13 +20,14 @@ use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
 use nova_sim::flight_frame::{FlightFrame, Names};
 
-use crate::Key;
+use crate::bound_names::{Spelling, name_command, name_read};
 use crate::flight::escorts::NUMBER_WORDS;
+use crate::input::Device;
+use crate::key_names::NoKeyNames;
+use crate::keymap::{Bindings, Command, CommandReader, FlightCommand, PlayCommand};
 use crate::spaceport::credits::{OF, TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
-
-use super::{JUMP_KEY, LAND_KEY, MAP_KEY};
 
 /// How many ticks each message stays on the message line: the frames its
 /// caller passes `_DisplayComm` (@0x90201), which counts them down once
@@ -366,6 +367,13 @@ pub(super) struct Wording<'a> {
     pub(super) player_ship: &'a str,
     /// The date ([`FlightFrame::long_date`]).
     pub(super) date: &'a str,
+    /// The keys the tutorial's hints name, for the device they read, or
+    /// the default bindings on the keyboard for none.
+    pub(super) keys: Option<&'a CommandReader>,
+    /// [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames)'s
+    /// reading: whether the hints name a key from `STR#` 129 or through
+    /// the layout.
+    pub(super) hint_names: RuleSource,
 }
 
 impl<'a> Wording<'a> {
@@ -375,7 +383,43 @@ impl<'a> Wording<'a> {
             names,
             player_ship: frame.player_ship_name.as_deref().unwrap_or_default(),
             date: &frame.long_date,
+            keys: None,
+            hint_names: RuleSource::Engine,
         }
+    }
+
+    /// This wording, naming the keys `keys` reads, as `hint_names`
+    /// reads [`RuleKey::HintKeyNames`](nova_sim::RuleKey::HintKeyNames).
+    pub(super) const fn keyed(self, keys: &'a CommandReader, hint_names: RuleSource) -> Self {
+        Self {
+            keys: Some(keys),
+            hint_names,
+            ..self
+        }
+    }
+
+    /// How a tutorial hint names the key `command` is bound to, as
+    /// `_HandlePlayer` names it from `STR#` 129 (@0x70b01-0x70b1b,
+    /// @0x70c3d-0x70cb2; [`Spelling::Str129`]): empty for an unbound
+    /// command, as the original's cleared pref reads entry 0, which
+    /// `GetIndString` answers with nothing.
+    fn key_named(self, command: impl Into<Command>) -> String {
+        let command = command.into();
+        let spelling = Spelling::Str129(self.hint_names);
+        self.keys
+            .map_or_else(
+                || {
+                    name_command(
+                        &Bindings::default(),
+                        &NoKeyNames,
+                        command,
+                        Device::Keyboard,
+                        spelling,
+                    )
+                },
+                |keys| name_read(keys, command, spelling),
+            )
+            .unwrap_or_default()
     }
 }
 
@@ -430,8 +474,8 @@ pub(super) fn sim_message_text(
         SimMessage::NoResponse => NO_RESPONSE,
         SimMessage::Tutorial(TutorialHint::Hyperspace) => {
             return Some(hyperspace_hint(
-                &key_label(MAP_KEY).unwrap_or_default(),
-                &key_label(JUMP_KEY).unwrap_or_default(),
+                &words.key_named(PlayCommand::GalaxyMap),
+                &words.key_named(FlightCommand::HyperJump),
             ));
         }
         SimMessage::Tutorial(TutorialHint::FarEnough) => FAR_ENOUGH,
@@ -651,19 +695,6 @@ pub const TAKE_OFF_LEADS: [&str; 5] = [
 /// `STR#` 2002 #60: between the stellar and the date in the greeting.
 pub const TAKE_OFF_ON: &str = "on";
 
-/// How a tutorial hint names `key`, as the original names its keys from
-/// `STR#` 129 (`_HandlePlayer` @0x70b01-0x70b1b, @0x70c3d-0x70cb2): a
-/// letter key uppercased, "L". The hints name only [`LAND_KEY`],
-/// [`MAP_KEY`] and [`JUMP_KEY`], all letters; the other keys are named
-/// once keys can be rebound, so for now they have no name.
-#[must_use]
-pub fn key_label(key: Key) -> Option<String> {
-    match key {
-        Key::Char(letter) => Some(letter.to_uppercase().collect()),
-        _ => None,
-    }
-}
-
 /// What the message line says as the ship takes off past the tutorial
 /// from the stellar named `stellar` on `date`, led by
 /// [`TAKE_OFF_LEADS`]`[lead]`, as `_PlayerLandOnStellar` builds it
@@ -764,7 +795,7 @@ pub(super) fn message_text(
         SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
             *station,
             &named(*stellar),
-            &key_label(LAND_KEY).unwrap_or_default(),
+            &words.key_named(FlightCommand::LandDock),
         )),
         _ => sim_message_text(message, words, millions),
     }

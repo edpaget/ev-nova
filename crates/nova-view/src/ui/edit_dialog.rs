@@ -11,20 +11,34 @@
 //! nothing. What OK and Cancel make of the field is each dialog's own
 //! rule, its [`Confirm`] policy: a refusal beeps (the alert,
 //! [`UiSound::Alert`]) and leaves the dialog open.
+//!
+//! The field always has the focus, so the shell is a text-entry host
+//! ([`entry_keyboard`](super::entry_keyboard)): with the keyboard, the
+//! mouse or touch with a soft keyboard it asks for the system's entry
+//! from its first frame; under a pad it opens asking for nothing, so one
+//! South on OK still takes the offered value, and South on the field
+//! raises the on-screen keyboard; touch without a soft keyboard shows
+//! the on-screen keyboard at once. The field is a pad target
+//! (rdm:phase/key-bindings/phase-17-text-entry-port), which supersedes
+//! phase 9's "text fields are no targets": a click on it, or South,
+//! focuses it again, which starts the system's entry afresh.
 
 use std::rc::Rc;
 use std::time::Duration;
 
 use crate::draw::{DrawList, fill_rect};
-use crate::input::{Input, Key};
+use crate::geometry::Bounds;
+use crate::input::Input;
+use crate::keymap::SharedBindings;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Role, outline};
+use super::entry_keyboard::{self, EntryHost, EntryKeyboard};
 use super::prefs::{BACKDROP, BORDER};
-use super::text_field::TextField;
+use super::text_field::{TextField, is_text_entry};
 
 /// What OK and Cancel make of the field: each dialog's own rule.
 pub trait Confirm: Clone {
@@ -68,6 +82,8 @@ pub struct EditDialog<P: Confirm> {
     /// Whether the next input is dropped if it is typed text.
     flushing: bool,
     sounds: Vec<Sound>,
+    /// The on-screen keyboard, and the ask for the system's entry.
+    keyboard: EntryKeyboard,
 }
 
 impl<P: Confirm> EditDialog<P> {
@@ -109,7 +125,10 @@ impl<P: Confirm> EditDialog<P> {
             .with_default(Some(items.ok))
             .with_cancel(None);
         dialog.set_text(items.prompt, prompt);
+        dialog.set_pad_included(vec![items.field]);
         let field_rect = dialog.item_bounds(items.field).expect("checked above");
+        let mut keyboard = EntryKeyboard::new();
+        keyboard.focus_field();
         Ok(Self {
             dialog,
             field: TextField::with_text(field_rect, usize::MAX, text),
@@ -119,7 +138,15 @@ impl<P: Confirm> EditDialog<P> {
             outcome: None,
             flushing: false,
             sounds: Vec::new(),
+            keyboard,
         })
+    }
+
+    /// The dialog reading its keys (Return for OK) through `bindings`.
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: SharedBindings) -> Self {
+        self.dialog.set_bindings(bindings);
+        self
     }
 
     /// Drops the next input if it is typed text, as the original consumes
@@ -175,23 +202,25 @@ impl<P: Confirm> EditDialog<P> {
 
 impl<P: Confirm> Screen for EditDialog<P> {
     /// Typed characters, Backspace and Space go to the field (Space types
-    /// only a space); after [`flush_typed_key`](Self::flush_typed_key), the
-    /// next typed character is dropped. Everything else goes to the
-    /// dialog: OK (or Return) asks the policy, and Cancel declines. It
-    /// never quits.
+    /// only a space): text entry, which no key map rebinds
+    /// ([`is_text_entry`]). After [`flush_typed_key`](Self::flush_typed_key),
+    /// the next typed character is dropped. Everything else goes to the
+    /// dialog: OK (or Confirm, Return) asks the policy, and Cancel
+    /// declines. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(action) = entry_keyboard::intercept(self, input) {
+            return action;
+        }
+        // The surroundings are no player input: they leave the flush of
+        // the opening key's character for the input that follows.
+        if let Input::Surroundings(_) = input {
+            self.dialog.input(input);
+            return ScreenAction::None;
+        }
         if std::mem::take(&mut self.flushing) && matches!(input, Input::Text(_)) {
             return ScreenAction::None;
         }
-        let typing = matches!(
-            input,
-            Input::Text(_)
-                | Input::Key {
-                    key: Key::Backspace | Key::Space,
-                    ..
-                }
-        );
-        if typing {
+        if is_text_entry(input) {
             self.field.input(input);
             return ScreenAction::None;
         }
@@ -201,6 +230,9 @@ impl<P: Confirm> Screen for EditDialog<P> {
             Some(DialogEvent::Item(item)) if item == self.items.cancel => {
                 self.outcome = Some(self.policy.cancelled());
             }
+            Some(DialogEvent::Item(item)) if item == self.items.field => {
+                self.keyboard.field_pressed(self.dialog.pad_highlight());
+            }
             _ => {}
         }
         ScreenAction::None
@@ -209,23 +241,202 @@ impl<P: Confirm> Screen for EditDialog<P> {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The backdrop and its outline, the dialog, and the field.
+    /// The backdrop and its outline, the dialog, and the field; then the
+    /// on-screen keyboard, or the ask for the system's entry.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
         fill_rect(list, bounds, BACKDROP);
         outline(list, bounds, BORDER);
         self.dialog.draw(list);
         self.field.draw(&*self.metrics, list);
+        entry_keyboard::draw(self, list);
     }
 
     fn cancel_pointer(&mut self) {
+        entry_keyboard::cancel(self);
         self.dialog.cancel_pointer();
+    }
+
+    /// Covered, it asks nothing and draws no keyboard.
+    fn set_covered(&mut self, covered: bool) {
+        entry_keyboard::cover(self, covered);
     }
 
     /// The alert as OK is refused. OK and Cancel are silent under the
     /// pointer, as `_TrackTextButtons` @0x26bb0 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
+    }
+}
+
+impl<P: Confirm> EntryHost for EditDialog<P> {
+    fn keyboard(&self) -> &EntryKeyboard {
+        &self.keyboard
+    }
+
+    fn keyboard_mut(&mut self) -> &mut EntryKeyboard {
+        &mut self.keyboard
+    }
+
+    /// The one field, which always has the focus.
+    fn entry_field(&self) -> Option<&TextField> {
+        Some(&self.field)
+    }
+
+    fn clear_entry_field(&mut self) {
+        self.field.clear();
+    }
+
+    fn dialog_bounds(&self) -> Bounds {
+        self.dialog.bounds()
+    }
+
+    fn pad_target(&self) -> Option<usize> {
+        self.dialog.pad_highlight()
+    }
+}
+
+/// An edit dialog's row in the pad's every-screen table: OK, Cancel and
+/// the field are its targets. The field became one in
+/// rdm:phase/key-bindings/phase-17-text-entry-port, superseding phase
+/// 9's "the field is none": South on it raises the on-screen keyboard,
+/// and a click on it focuses it again.
+#[cfg(test)]
+pub(crate) struct EditProbe<P: Confirm>(pub(crate) EditDialog<P>);
+
+#[cfg(test)]
+impl<P: Confirm> super::pad_focus::every_screen::PadProbe for EditProbe<P> {
+    fn screen(&mut self) -> &mut dyn Screen {
+        &mut self.0
+    }
+
+    fn controls(&self) -> Vec<(&'static str, crate::geometry::Bounds)> {
+        let items = self.0.items;
+        let bounds = |item| self.0.dialog.item_bounds(item).expect("an item");
+        vec![
+            ("OK", bounds(items.ok)),
+            ("Cancel", bounds(items.cancel)),
+            ("field", bounds(items.field)),
+        ]
+    }
+
+    fn outcome(&mut self) -> String {
+        format!("{:?} {}", self.0.take_outcome(), self.0.field().text())
+    }
+
+    fn default_control(&self) -> Option<&'static str> {
+        Some("OK")
+    }
+
+    /// The on-screen keyboard's drawing, which a safe-area change moves
+    /// and touch shows, as it does a touch aid's.
+    fn touch_aids_drawn(&mut self) -> Vec<crate::draw::DrawCommand> {
+        keyboard_drawn(&self.0)
+    }
+}
+
+/// What `host`'s on-screen keyboard draws now, if it shows.
+#[cfg(test)]
+pub(crate) fn keyboard_drawn(host: &impl EntryHost) -> Vec<crate::draw::DrawCommand> {
+    let mut list = DrawList::new();
+    if let Some(layout) = entry_keyboard::shown(host) {
+        host.keyboard().draw(&layout, &mut list);
+    }
+    list.iter().cloned().collect()
+}
+
+/// Driving an edit dialog from pad inputs alone, for each dialog's own
+/// rows of the acceptance criteria.
+#[cfg(test)]
+pub(crate) mod pad_entry {
+    use super::*;
+    use crate::input::{Device, PadButton};
+    use crate::text_entry::EntryAsk;
+    use crate::ui::entry_keyboard::KeyId;
+    use crate::ui::pad_focus::every_screen::{PAD, pad, told};
+
+    /// What `dialog` asks of the system's entry as it opens with the
+    /// keyboard used last: its field, focused once.
+    pub(crate) fn asked_at_open<P: Confirm>(dialog: &EditDialog<P>) -> Option<EntryAsk> {
+        let mut keyed = dialog.clone();
+        keyed.input(&told(Device::Keyboard));
+        let mut list = DrawList::new();
+        keyed.draw(&mut list);
+        list.text_entry()
+    }
+
+    fn tap<P: Confirm>(dialog: &mut EditDialog<P>, button: PadButton) {
+        dialog.input(&pad(button, true));
+        dialog.input(&pad(button, false));
+    }
+
+    /// Types `keys` into `dialog` from pad inputs alone: told the pad (it
+    /// asks for nothing and draws no keyboard), the right shoulder to the
+    /// field, South on it (the keyboard rises), then each key by the d-pad
+    /// and South.
+    pub(crate) fn pad_types<P: Confirm>(dialog: &mut EditDialog<P>, keys: &[KeyId]) {
+        dialog.input(&told(PAD));
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        assert_eq!(list.text_entry(), None, "under the pad it asks nothing");
+        assert!(
+            entry_keyboard::shown(dialog).is_none(),
+            "nor shows the keyboard"
+        );
+        for _ in 0..8 {
+            if dialog.dialog.pad_highlight() == Some(dialog.items.field) {
+                break;
+            }
+            tap(dialog, PadButton::RightShoulder);
+        }
+        assert_eq!(dialog.dialog.pad_highlight(), Some(dialog.items.field));
+        tap(dialog, PadButton::South);
+        assert!(
+            entry_keyboard::shown(dialog).is_some(),
+            "South on the field raises it"
+        );
+        let layout = dialog.keyboard.layout(dialog.dialog.bounds());
+        let from = dialog.keyboard.pad_focus().expect("the pad's focus");
+        for input in layout.pad_presses(from, keys) {
+            dialog.input(&input);
+        }
+    }
+
+    /// Whether `screen` draws the on-screen keyboard now: its panel.
+    fn keyboard_shown(screen: &dyn Screen) -> bool {
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        list.iter().any(|command| {
+            matches!(command, crate::draw::DrawCommand::Line { color, .. }
+                if *color == crate::ui::entry_keyboard::keyboard::PANEL)
+        })
+    }
+
+    /// Asserts that covering `screen`, whose text-entry dialog is open,
+    /// stops its entry: under the keyboard the frame asks for the system's
+    /// entry only uncovered, and under touch the on-screen keyboard is
+    /// drawn only uncovered. `what` names it in the messages.
+    pub(crate) fn covering_stops_its_entry(screen: &mut dyn Screen, what: &str) {
+        let asks = |screen: &dyn Screen| {
+            let mut list = DrawList::new();
+            screen.draw(&mut list);
+            list.text_entry().is_some()
+        };
+        screen.input(&told(Device::Keyboard));
+        assert!(asks(screen), "{what}: asks uncovered");
+        screen.set_covered(true);
+        assert!(!asks(screen), "{what}: asks nothing covered");
+        screen.set_covered(false);
+        assert!(asks(screen), "{what}: asks again uncovered");
+        screen.input(&told(Device::Touch));
+        assert!(keyboard_shown(screen), "{what}: the keyboard under touch");
+        screen.set_covered(true);
+        assert!(!keyboard_shown(screen), "{what}: no keyboard covered");
+        screen.set_covered(false);
+        assert!(
+            keyboard_shown(screen),
+            "{what}: the keyboard again uncovered"
+        );
     }
 }
 
@@ -236,7 +447,8 @@ mod tests {
 
     use super::*;
     use crate::geometry::{Bounds, Point};
-    use crate::input::MouseButton;
+    use crate::input::{Key, MouseButton};
+    use crate::keymap::{Bindings, KeyCombo, UiCommand};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::Placement;
 
@@ -399,6 +611,23 @@ mod tests {
         assert_eq!(*policy.asked.borrow(), ["abc", "d"]);
     }
 
+    /// The dialog reads its keys through the key map it is given: Confirm
+    /// rebound to F6 asks the policy on F6 and no longer on Return, while
+    /// Space still types into the field.
+    #[test]
+    fn a_rebound_confirm_asks_on_its_new_key_alone() {
+        let bindings = SharedBindings::new(
+            Bindings::default().rebound(UiCommand::Confirm, KeyCombo::key(Key::F6)),
+        );
+        let policy = Scripted::answering(&[Some("ok")]);
+        let mut dialog = dialog_with(policy.clone()).with_bindings(bindings);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), None, "Return no longer asks");
+        dialog.input(&key(Key::F6));
+        assert_eq!(dialog.take_outcome(), Some("ok".to_owned()));
+        assert_eq!(*policy.asked.borrow(), ["abc"]);
+    }
+
     #[test]
     fn a_refusal_beeps_once_and_leaves_no_outcome() {
         let policy = Scripted::answering(&[None]);
@@ -448,7 +677,7 @@ mod tests {
     #[test]
     fn typing_space_and_backspace_reach_the_field() {
         let mut dialog = dialog();
-        dialog.input(&key(Key::Char('x')));
+        dialog.input(&key(Key::KeyX));
         dialog.input(&Input::Text('x'));
         dialog.input(&key(Key::Space));
         dialog.input(&Input::Text(' '));
@@ -473,6 +702,18 @@ mod tests {
     }
 
     #[test]
+    fn the_surroundings_leave_the_flush_for_the_next_typed_character() {
+        use crate::input::{ControllerFamily, Device, Surroundings};
+        let pad = Device::Gamepad(ControllerFamily::Generic);
+        let mut dialog = dialog();
+        dialog.flush_typed_key();
+        dialog.input(&Input::Surroundings(Surroundings::of(pad)));
+        dialog.input(&Input::Text('b'));
+        assert_eq!(dialog.field().text(), "abc", "still flushed");
+        assert_eq!(dialog.dialog.device(), pad, "the dialog is told");
+    }
+
+    #[test]
     fn it_draws_a_backdrop_the_dialog_and_the_field() {
         let mut dialog = dialog();
         dialog.tick(Duration::from_secs(1));
@@ -484,7 +725,160 @@ mod tests {
         outline(&mut expected, bounds, BORDER);
         dialog.dialog().draw(&mut expected);
         dialog.field().draw(&MonoMetrics, &mut expected);
+        expected.ask_text_entry(crate::text_entry::EntryAsk {
+            field: dialog.field().rect(),
+            focused: 1,
+        });
         assert_eq!(list, expected);
+    }
+
+    fn asked(dialog: &EditDialog<Scripted>) -> Option<crate::text_entry::EntryAsk> {
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        list.text_entry()
+    }
+
+    fn told(device: crate::input::Device) -> Input {
+        Input::Surroundings(crate::input::Surroundings::of(device))
+    }
+
+    #[test]
+    fn opening_with_the_keyboard_asks_for_entry_at_the_field() {
+        use crate::input::Device;
+        for device in [Device::Keyboard, Device::Mouse] {
+            let mut dialog = dialog();
+            dialog.input(&told(device));
+            assert_eq!(
+                asked(&dialog),
+                Some(crate::text_entry::EntryAsk {
+                    field: rect(110.0, 8.0, 60.0, 16.0),
+                    focused: 1,
+                }),
+                "{device:?}"
+            );
+        }
+        assert_eq!(
+            super::pad_entry::asked_at_open(&dialog()),
+            asked(&dialog()),
+            "untold is the keyboard"
+        );
+    }
+
+    #[test]
+    fn south_on_the_field_raises_the_keyboard_under_the_pad() {
+        use crate::input::PadButton;
+        use crate::ui::pad_focus::every_screen::{PAD, pad};
+        let mut dialog = dialog();
+        dialog.input(&told(PAD));
+        assert_eq!(dialog.dialog().pad_highlight(), Some(ITEMS.ok), "OK first");
+        assert!(super::keyboard_drawn(&dialog).is_empty(), "not at open");
+        assert_eq!(asked(&dialog), None);
+        for pressed in [true, false] {
+            dialog.input(&pad(PadButton::RightShoulder, pressed));
+        }
+        assert_eq!(dialog.dialog().pad_highlight(), Some(ITEMS.field));
+        for pressed in [true, false] {
+            dialog.input(&pad(PadButton::South, pressed));
+        }
+        assert!(!super::keyboard_drawn(&dialog).is_empty(), "raised");
+        assert_eq!(
+            asked(&dialog),
+            None,
+            "the game's keyboard, not the system's"
+        );
+        assert_eq!(dialog.field().text(), "abc", "still selected whole");
+        assert_eq!(dialog.field().selection(), 3);
+    }
+
+    #[test]
+    fn a_tap_on_the_field_asks_afresh() {
+        let mut dialog = dialog();
+        let first = asked(&dialog).expect("asked");
+        click(&mut dialog, ITEMS.field);
+        let again = asked(&dialog).expect("asked");
+        assert_eq!(again.field, first.field);
+        assert_eq!(again.focused, first.focused + 1, "a new focus");
+        let mut touched = self::dialog();
+        crate::touch::testkit::tap(
+            &mut touched,
+            dialog
+                .dialog()
+                .item_bounds(ITEMS.field)
+                .expect("the field")
+                .center(),
+        );
+        assert_eq!(asked(&touched), Some(again));
+    }
+
+    #[test]
+    fn a_click_on_another_item_focuses_no_field() {
+        let mut template = template();
+        template
+            .items
+            .push(item(rect(180.0, 50.0, 16.0, 16.0), true, ItemSpec::User));
+        let mut dialog = EditDialog::laid_out(
+            &template,
+            ITEMS,
+            &[],
+            "Asked:",
+            "abc",
+            Scripted::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let first = asked(&dialog).expect("asked");
+        click(&mut dialog, 5);
+        assert_eq!(asked(&dialog), Some(first), "no new focus");
+        click(&mut dialog, ITEMS.field);
+        assert_eq!(
+            asked(&dialog).map(|ask| ask.focused),
+            Some(first.focused + 1)
+        );
+    }
+
+    #[test]
+    fn covered_it_asks_nothing_and_draws_no_keyboard() {
+        use crate::input::Device;
+        let mut dialog = dialog();
+        dialog.set_covered(true);
+        assert_eq!(asked(&dialog), None);
+        dialog.set_covered(false);
+        assert!(asked(&dialog).is_some(), "uncovered, it asks again");
+        let mut touched = self::dialog();
+        touched.input(&told(Device::Touch));
+        assert!(!super::keyboard_drawn(&touched).is_empty());
+        touched.set_covered(true);
+        assert!(super::keyboard_drawn(&touched).is_empty());
+        let mut list = DrawList::new();
+        touched.draw(&mut list);
+        let mut bare = DrawList::new();
+        self::dialog().draw(&mut bare);
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            bare.iter().collect::<Vec<_>>(),
+            "nothing but the dialog drawn"
+        );
+    }
+
+    #[test]
+    fn the_on_screen_keyboard_types_through_the_field_as_keys_do() {
+        use crate::ui::entry_keyboard::KeyId;
+        let policy = Scripted::answering(&[Some("done")]);
+        let mut dialog = dialog_with(policy.clone());
+        super::pad_entry::pad_types(
+            &mut dialog,
+            &[
+                KeyId::Char('q'),
+                KeyId::Space,
+                KeyId::Char('7'),
+                KeyId::Delete,
+                KeyId::Char('-'),
+                KeyId::Done,
+            ],
+        );
+        assert_eq!(dialog.take_outcome(), Some("done".to_owned()));
+        assert_eq!(*policy.asked.borrow(), ["Q -"]);
     }
 
     #[test]

@@ -21,6 +21,8 @@
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
 //!   game's Charcoal.
+//! - [`gamepad`]: the gamepads the app polls each frame, as a port, and
+//!   what their buttons, sticks and triggers mean for the screens.
 //! - [`load`]: what loading the game data found wrong: the files it
 //!   skipped and the control-bit expressions that do not parse.
 //! - [`pilot_move`]: moving the pilots, once, from where earlier
@@ -33,6 +35,8 @@
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
 //! - [`settings`]: the player's settings, sound and Hyperspace Effects,
 //!   and the one keeper that reads and saves them all.
+//! - [`text_entry`]: the platform's text entry (the IME, a soft
+//!   keyboard) as a port the app starts at a focused field and stops.
 //! - [`startup`]: starting the game: where the `Nova Files` are (the
 //!   argument, `NOVA_DATA`, the remembered directory, the usual places or
 //!   the open panel), and where startup errors and warnings go (stderr,
@@ -57,6 +61,7 @@ pub mod devtools;
 pub mod dialogs;
 pub mod exit;
 pub mod fonts;
+pub mod gamepad;
 pub mod load;
 pub mod movie;
 pub mod pilot_move;
@@ -66,4 +71,5 @@ pub mod ruleset;
 pub mod saves;
 pub mod settings;
 pub mod startup;
+pub mod text_entry;
 pub mod winsparkle;

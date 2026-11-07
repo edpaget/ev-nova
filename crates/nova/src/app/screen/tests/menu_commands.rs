@@ -11,20 +11,20 @@ use nova_view::fade::DEATH_FADE_FOR;
 
 #[test]
 fn quit_and_preferences_are_command_q_and_command_comma_and_about_has_no_chord() {
-    assert_eq!(menu_chord(MenuCommand::Quit), Some(Key::Char('q')));
+    assert_eq!(menu_chord(MenuCommand::Quit), Some(Key::KeyQ));
     assert_eq!(menu_chord(MenuCommand::Preferences), Some(PREFERENCES_KEY));
     assert_eq!(menu_chord(MenuCommand::About), None);
 }
 
 #[test]
 fn a_chords_key_names_its_command() {
-    assert_eq!(chord_command(Key::Char('q')), Some(MenuCommand::Quit));
+    assert_eq!(chord_command(Key::KeyQ), Some(MenuCommand::Quit));
     assert_eq!(
         chord_command(PREFERENCES_KEY),
         Some(MenuCommand::Preferences)
     );
-    assert_eq!(chord_command(Key::Char('i')), None, "About has no chord");
-    assert_eq!(chord_command(Key::Char('p')), None);
+    assert_eq!(chord_command(Key::KeyI), None, "About has no chord");
+    assert_eq!(chord_command(Key::KeyP), None);
 }
 
 /// What a command left: whether the app quits (an input's action or a
@@ -73,10 +73,10 @@ fn by_keys(screen: &mut AppScreen, chord: Key) -> bool {
     feed(
         screen,
         &[
-            key(Key::Command, true),
+            key(Key::MetaLeft, true),
             key(chord, true),
             key(chord, false),
-            key(Key::Command, false),
+            key(Key::MetaLeft, false),
         ],
     )
 }
@@ -88,9 +88,9 @@ fn by_keys(screen: &mut AppScreen, chord: Key) -> bool {
 /// has for F), so it arrives after the command, a second time.
 fn by_equivalent(screen: &mut AppScreen, command: MenuCommand) -> bool {
     let chord = menu_chord(command).expect("a chord");
-    feed(screen, &[key(Key::Command, true)])
+    feed(screen, &[key(Key::MetaLeft, true)])
         || screen.menu_command(command) == ScreenAction::Quit
-        || feed(screen, &[key(chord, false), key(Key::Command, false)])
+        || feed(screen, &[key(chord, false), key(Key::MetaLeft, false)])
 }
 
 /// A state the router can be in, the step that ends any hold it is in,
@@ -196,9 +196,9 @@ fn naming() -> AppScreen {
     let mut screen = landed_shipyard(&MemoryPilots::new());
     click_port_item(&mut screen, 9);
     select_first_ship(&mut screen);
-    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::KeyB, true));
     screen.input(&Input::Text('b'));
-    screen.input(&key(Key::Char('b'), false));
+    screen.input(&key(Key::KeyB, false));
     assert!(
         spaceport(&screen)
             .open_shipyard()
@@ -221,9 +221,15 @@ fn finding() -> AppScreen {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
     for typed in ['m', 'f'] {
-        screen.input(&key(Key::Char(typed), true));
+        screen.input(&key(
+            nova_view::letter_key(typed).expect("a letter key"),
+            true,
+        ));
         screen.input(&Input::Text(typed));
-        screen.input(&key(Key::Char(typed), false));
+        screen.input(&key(
+            nova_view::letter_key(typed).expect("a letter key"),
+            false,
+        ));
     }
     assert!(flight(&screen).map_finding());
     screen
@@ -573,7 +579,7 @@ fn away_the_chords_typed_do_nothing() {
         let mut screen = (state.make)();
         let was_open = screen.preferences().is_some();
         switch_out(&mut screen);
-        assert!(!by_keys(&mut screen, Key::Char('q')), "{}", state.name);
+        assert!(!by_keys(&mut screen, Key::KeyQ), "{}", state.name);
         assert!(!by_keys(&mut screen, PREFERENCES_KEY), "{}", state.name);
         assert_eq!(screen.preferences().is_some(), was_open, "{}", state.name);
         assert!(!screen.take_quit(), "{}", state.name);
@@ -617,11 +623,11 @@ fn an_f_released_after_the_view_menu_took_its_press_changes_nothing() {
         let action = feed(
             &mut screen,
             &[
-                key(Key::Control, true),
-                key(Key::Command, true),
-                key(Key::Char('f'), false),
-                key(Key::Command, false),
-                key(Key::Control, false),
+                key(Key::ControlLeft, true),
+                key(Key::MetaLeft, true),
+                key(Key::KeyF, false),
+                key(Key::MetaLeft, false),
+                key(Key::ControlLeft, false),
             ],
         );
         assert!(!action, "{name}");

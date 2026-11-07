@@ -5,7 +5,8 @@
 //!
 //! Each close still acts on its press. Only the dialog's disposal and
 //! what follows it wait, so no key acts on a hold or a repeat. The router
-//! reads the keys live ([`LiveInput::is_down`](super::live_input::LiveInput::is_down)): the player info
+//! reads the keys live, through its bindings
+//! ([`LiveInput::holds`](super::live_input::LiveInput::holds)): the player info
 //! screen opens over flight held as P is, and the spaceport is told
 //! before each input and tick ([`SpaceportView::set_close_keys`]). An
 //! offer over flight answered with I down stays in front, drawn or
@@ -14,19 +15,19 @@
 //! during the wait is replayed (the `map_wait_keys` module).
 
 use nova_view::Input;
+use nova_view::keymap::PlayCommand;
 use nova_view::spaceport::CloseKeys;
 use nova_view::spaceport::SpaceportView;
-use nova_view::ui::mission_info::MISSION_INFO_KEY;
-use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 use super::AppScreen;
 
 impl AppScreen {
-    /// Tells the spaceport which of the keys a close waits on are down.
+    /// Tells the spaceport which of the keys a close waits on are down:
+    /// those Player Info and Mission Info are bound to.
     pub(super) fn tell_close_keys(&mut self) {
         let keys = CloseKeys {
-            player_info: self.live.is_down(PLAYER_INFO_KEY),
-            mission_info: self.live.is_down(MISSION_INFO_KEY),
+            player_info: self.live.holds(PlayCommand::PlayerInfo, &self.bindings),
+            mission_info: self.live.holds(PlayCommand::MissionInfo, &self.bindings),
         };
         if let Some(spaceport) = &mut self.spaceport {
             spaceport.set_close_keys(keys);
@@ -49,7 +50,7 @@ impl AppScreen {
     /// answering key left, rerouted; with I down, `left` is kept for the
     /// wait's end ([`AppScreen::offer_wait_input`]).
     pub(super) fn dispose_offer(&mut self, left: Vec<Input>) {
-        let held = self.live.is_down(MISSION_INFO_KEY);
+        let held = self.live.holds(PlayCommand::MissionInfo, &self.bindings);
         let Some(offer) = &mut self.offer else {
             return;
         };

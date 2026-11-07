@@ -14,11 +14,15 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 mod apple_events;
 #[cfg(target_os = "macos")]
+mod key_label;
+#[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]
 mod modal;
 #[cfg(target_os = "macos")]
 mod updater;
+#[cfg(target_os = "macos")]
+mod will_terminate;
 
 /// Every test, by name. Each panics on failure.
 #[cfg(target_os = "macos")]
@@ -26,6 +30,14 @@ const TESTS: &[(&str, fn())] = &[
     (
         "apple_events::the_installed_handlers_send_the_games_commands_until_dropped",
         apple_events::the_installed_handlers_send_the_games_commands_until_dropped,
+    ),
+    (
+        "key_label::the_us_layout_names_a_and_semicolon",
+        key_label::the_us_layout_names_a_and_semicolon,
+    ),
+    (
+        "key_label::every_key_code_answers_the_same_twice_and_never_empty",
+        key_label::every_key_code_answers_the_same_twice_and_never_empty,
     ),
     (
         "menu_bar::the_installed_bar_is_the_applications_and_sends_the_games_commands",
@@ -54,6 +66,10 @@ const TESTS: &[(&str, fn())] = &[
     (
         "updater::the_real_framework_makes_a_controller_that_isn_t_started",
         updater::the_real_framework_makes_a_controller_that_isn_t_started,
+    ),
+    (
+        "will_terminate::the_observer_calls_back_on_will_terminate_until_dropped",
+        will_terminate::the_observer_calls_back_on_will_terminate_until_dropped,
     ),
 ];
 

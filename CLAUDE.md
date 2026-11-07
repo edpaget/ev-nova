@@ -101,6 +101,11 @@ of the phase: find it in the binary (`EV Nova.app`, i386 with symbols), record
 the finding and its addresses in the phase body, and branch the later steps on
 the answer. Before disassembling a function, run `rdm search <symbol>
 --project ev-nova`: earlier phases record what they found, with addresses.
+Then query the binary with `mise run disasm -- <fn|callers|callees|find>
+<symbol|address>`: one function, its callers or callees, or a symbol's
+address range, with calls, strings and globals named. It is cached under
+`target/` per binary hash. Don't run `otool -tV` yourself, and never dump
+the whole disassembly into context.
 
 ### When the original and another reading disagree
 

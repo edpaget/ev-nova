@@ -51,7 +51,7 @@ fn flight_in_a_16_by_9_window_fills_it_768_high() {
 fn a_hail_opens_the_comm_dialog_centred_over_widened_flight() {
     let store = MemoryPilots::new();
     let mut game = Game::opened_in(WINDOW, &store, &BOTH, Showing::Flight, idle);
-    for key in [Key::Tab, Key::Tab, Key::Char('y')] {
+    for key in [Key::Tab, Key::Tab, Key::KeyY] {
         game.tap(key);
         game.settle();
     }
@@ -85,11 +85,11 @@ fn a_hail_opens_the_comm_dialog_centred_over_widened_flight() {
 fn landing_in_a_16_by_9_window_shows_the_spaceport_pillarboxed() {
     let store = MemoryPilots::new();
     let mut game = Game::opened_in(WINDOW, &store, &BOTH, Showing::Flight, idle);
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     game.settle_until("the dock approach's clearance", |game| {
         game.session().dock_cleared()
     });
-    game.tap(Key::Char('l'));
+    game.tap(Key::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     let frame = game.frame();
     assert_eq!(frame.logical, LogicalSize { w: 1024, h: 768 });
