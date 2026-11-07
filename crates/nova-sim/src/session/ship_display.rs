@@ -120,7 +120,9 @@
 //! @0x3a783), so every ship's set, lights and ion tint step once there,
 //! through [`PlayerShip::display_frames`] and
 //! [`Space::display_npc_frames`] (`Session::display_slots`), at its site's
-//! gain: the entry's in `Session::enter_game` (@0x1a36c), at the carried
+//! gain: the entry's in `Session::enter_game` (@0x1a36c), a loaded
+//! pilot's escorts' as the first setup places them
+//! (`Session::prepare_entered_escorts`), at the carried
 //! gain by the engine's reading of [`RuleKey::SpeedMultRamp`]; a
 //! take-off's two at 0; a gate's, an arrival's and the first setup's at
 //! the frame's. The `prepare_frames` module says where each runs; the

@@ -33,7 +33,7 @@
 //!
 //! | Site | Here | Ships stepped | Gain |
 //! |---|---|---|---|
-//! | `_EnterGameFromMainScreen` @0x1a36c | `Session::enter_game` | the player | carried, by `RuleKey::SpeedMultRamp`'s engine reading |
+//! | `_EnterGameFromMainScreen` @0x1a36c | `Session::enter_game`; a loaded pilot's escorts as the first setup places them | the player and a loaded pilot's escorts | carried, by `RuleKey::SpeedMultRamp`'s engine reading |
 //! | `_PlayGame` @0x45834 | the first step's [`Session::populate`], or `Session::enter_game` in a system already set up | every ship | the entry's |
 //! | `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole` @0x64743 | [`Session::prepare_at_gate_entry`] | the player; the old ships when the exit is in the system gone in | the frame's |
 //! | `_HandlePlayerDockRequest` @0x6764e, @0x67658 | `populate` and `Session::end_dock_tail`, or a gate exit's two | every ship | 0 at a take-off, else the frame's |
@@ -48,13 +48,27 @@
 //! already there (@0x768c), so a session no entry prepares (the
 //! developer's flight) still draws its ships from the first frame.
 //!
+//! # A loaded pilot's escorts at the entry
+//!
+//! `_LoadPilotData` spawns a loaded pilot's escorts into slots 1 and up
+//! (@0x759af-0x75b91), so the entry's prepare (@0x1a36c) displays them
+//! too, at its gain, after the player's slot. Here they have no NPC until
+//! the first step's setup places them, so that display is owed to it
+//! (`Escorts::entry_display_owed`, set by `Session::enter_game` in a
+//! system not yet set up): as they enter, each placed escort's set, ion
+//! tint and lights step once at the entry's gain, in slot order
+//! ([`Session::prepare_entered_escorts`]), which `_RespawnEscort` then
+//! keeps and the setup's own prepare (@0x45834) steps again. So the
+//! first frame shows each one step on, as the original's does. Their
+//! fades are left: each is placed at rest (fully shown, moving neither
+//! way), which a fade's step (@0x2d088-0x2d164) leaves as it is. The
+//! deferral crosses no boundary: the warm-up frame before the setup
+//! draws no ship (see the `stellar_passes` module).
+//!
 //! **Left out**, filed as rdm:phase/rendering-2/phase-5-left-out-of-rendering-13:
 //! a hidden ship's display (`Cost` -1, `RuleKey::HiddenShips`) skips from
 //! @0x2b7f3 to @0x2cc6b, past the set, tint and lights, which every engine
-//! display still steps; and a loaded pilot's escorts, which
-//! `_LoadPilotData` spawns into slots 1 and up (@0x759af-0x75b91) before
-//! the entry's prepare, have no NPC here until the first step's setup, so
-//! they come in one step behind.
+//! display still steps.
 
 use super::Session;
 use super::player_led::slot_of;
@@ -165,6 +179,32 @@ impl Session {
         self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
         self.space.step_fades_at_gate_entry(exit, here, gain);
     }
+
+    /// The entry's `_PrepareAllSprites` (@0x1a36c) for the escorts a load
+    /// spawned, if it is owed (`Escorts::entry_display_owed`), as the
+    /// fleet is placed: each placed escort's set, tint and lights step
+    /// once at the entry's gain, in slot order, drawing on `chance` (see
+    /// the module docs). Every one enters with no NPC kept, as none
+    /// is in the system before the first setup.
+    pub(super) fn prepare_entered_escorts(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        let Some(gain) = self.space.escorts.entry_display_owed.take() else {
+            return;
+        };
+        let fleet: Vec<ShipRef> = self
+            .space
+            .escorts
+            .fleet
+            .iter()
+            .flatten()
+            .map(|&id| ShipRef::Npc(id))
+            .collect();
+        let slots: Vec<PreparedSlot> = self
+            .prepared_slots()
+            .into_iter()
+            .filter(|prepared| fleet.contains(&prepared.ship))
+            .collect();
+        self.display_slots(&slots, gain, &mut *chance);
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +214,7 @@ mod tests {
     use crate::catalog::GovtId;
     use crate::catalog::{HullRecord, ShipDisplay, ShipExits, ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::cloak::Cloak;
     use crate::combat::ShipRef;
     use crate::combat::armament::Fold;
     use crate::combat::hull::Condition;
@@ -183,12 +224,14 @@ mod tests {
     use crate::combat::ship_lights::ShipLights;
     use crate::flight::Flyer;
     use crate::gate::GateKind;
+    use crate::pilot::Pilot;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::Session;
     use crate::session::display_gain::tests::{
         FADING_IN, HALF, animated_and_lit, moment, stepped, with_animated_npc,
     };
     use crate::session::ship_display::tests::displaying;
+    use crate::session::tests::fleet_escort;
+    use crate::session::{SavedOpening, Session};
     use crate::testkit::{
         FAST, FakePilotCatalog, begin_jump_now, far_129_reachable, fly_out, hull, land_now, ship,
     };
@@ -578,7 +621,12 @@ mod tests {
 
     /// The first escort of `session`'s fleet.
     fn first_escort(session: &Session) -> ShipRef {
-        ShipRef::Npc(session.space.escorts.fleet[0].expect("placed"))
+        ShipRef::Npc(escort_id(session))
+    }
+
+    /// The NPC of the first escort of `session`'s fleet.
+    fn escort_id(session: &Session) -> NpcId {
+        session.space.escorts.fleet[0].expect("placed")
     }
 
     #[test]
@@ -603,6 +651,79 @@ mod tests {
         let expected = before.stepped(&session, 1, HALF, false);
         assert_eq!(timers(frames_of(&session, escort)), timers(expected));
         assert_ne!(timers(expected), timers(before.frames), "a step shows");
+    }
+
+    /// [`lit_player`] with ship type 129 of [`lit_display`]'s class.
+    fn escorted() -> FakePilotCatalog {
+        let mut catalog = lit(lit_player(), &[129]);
+        catalog.ship_records.push(ship(129, FAST));
+        catalog
+    }
+
+    /// A loaded pilot's session of `catalog` by `ramp`'s reading of
+    /// `RuleKey::SpeedMultRamp`, escorted by ship type 129, opened at
+    /// launch and not yet entered.
+    fn loaded_with_escort(catalog: &FakePilotCatalog, ramp: RuleSource) -> Session {
+        let rules = Rulebook::default().with_override(RuleKey::SpeedMultRamp, ramp);
+        let mut pilot = Pilot::new(catalog, "").expect("a pilot");
+        pilot.escorts.push(fleet_escort(129));
+        let mut session = Session::load(catalog, pilot, &rules).expect("loads");
+        session.open_saved(SavedOpening::AtLaunch, &mut NeverFires);
+        session
+    }
+
+    #[test]
+    fn a_loaded_pilots_escorts_step_at_the_entrys_prepare_at_its_gain() {
+        // `_LoadPilotData` spawns a loaded pilot's escorts into slots 1
+        // and up (@0x759af-0x75b91), so `_EnterGameFromMainScreen`'s
+        // `_PrepareAllSprites` (@0x1a36c) steps their set, lights and ion
+        // tint at the entry's gain; the first setup's `_RespawnEscort`
+        // keeps that display, and `_PlayGame`'s (@0x45834) steps it again.
+        let catalog = escorted();
+        for (ramp, entry) in [
+            (RuleSource::Engine, HALF),
+            (RuleSource::Bible, SpeedMult::FULL),
+        ] {
+            let mut placed = loaded_with_escort(&catalog, ramp);
+            // The setup alone: the escort as it is placed.
+            placed.populate_as(&catalog, &mut NeverFires, None);
+            let placed = Before::of(&placed, first_escort(&placed));
+            let mut session = loaded_with_escort(&catalog, ramp);
+            session.enter_game(HALF, &mut NeverFires);
+            // The first step holds the entry's gain; another here shows
+            // the entry's step keeps its own.
+            session.at_gain(SpeedMult::ZERO);
+            session.populate(&catalog, &mut NeverFires);
+            let escort = first_escort(&session);
+            let entered = Before {
+                frames: placed.stepped(&session, 1, entry, false),
+                ..placed
+            };
+            let expected = timers(entered.stepped(&session, 1, SpeedMult::ZERO, false));
+            assert_eq!(timers(frames_of(&session, escort)), expected, "{ramp:?}");
+            assert_ne!(
+                expected,
+                timers(placed.stepped(&session, 1, SpeedMult::ZERO, false)),
+                "{ramp:?}: the entry's step shows"
+            );
+            // Placed with no ionization, as `_RespawnEscort` leaves it
+            // (+0x5c @0x3d543), so the tint's step clears its colour; at
+            // rest, so its fade's step (@0x2d088-0x2d164) leaves it.
+            assert_eq!(tint_of(&session, escort), placed.tint(), "{ramp:?}");
+            let npc = session.space.npc(escort_id(&session)).expect("there");
+            assert_eq!(npc.cloak, stepped(Cloak::default(), false, entry));
+            assert_eq!(npc.cloak, Cloak::default());
+            // A later setup finds the escort in the system, kept, and owes
+            // it no step of the entry's.
+            session.at_gain(HALF);
+            let kept = Before::of(&session, escort);
+            session.populate(&catalog, &mut NeverFires);
+            assert_eq!(
+                timers(frames_of(&session, first_escort(&session))),
+                timers(kept.stepped(&session, 1, HALF, false)),
+                "{ramp:?}: once"
+            );
+        }
     }
 
     #[test]

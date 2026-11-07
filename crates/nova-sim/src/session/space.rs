@@ -248,6 +248,12 @@ pub(super) struct Escorts {
     /// `Session::load`, spent as the fleet is first placed. Never saved:
     /// a load sets it afresh.
     pub(super) loaded_berths_held: bool,
+    /// The gain of game entry's `_PrepareAllSprites` (@0x1a36c), while
+    /// the display step it gives the escorts `_LoadPilotData` spawned is
+    /// owed to the setup that places them (`traffic_due`'s; see the
+    /// `prepare_frames` module): set by `Session::enter_game` in a system
+    /// not yet set up, taken as the escorts enter. Never saved.
+    pub(super) entry_display_owed: Option<crate::SpeedMult>,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
@@ -323,6 +329,7 @@ impl Space {
                 commanded: BTreeSet::new(),
                 skip_bookkeeping: false,
                 loaded_berths_held: false,
+                entry_display_owed: None,
                 quote_clock: persons::QuoteClock::default(),
             },
             voice: crate::voice::VoiceChannel::default(),

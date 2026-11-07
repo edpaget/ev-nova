@@ -125,10 +125,12 @@ impl Session {
     /// its pass, now; @0x45834's ships and the third pass now only with
     /// the ships in place, where the first step's setup
     /// ([`Session::populate`]) otherwise prepares them. Otherwise the whole of the third pass at its gain, every
-    /// stellar's step and the gates', is owed to the first step's setup:
-    /// the warm-up frame before it shows neither the ships nor the
-    /// stellars' change, under the entry's black, so nothing the player
-    /// sees crosses.
+    /// stellar's step and the gates', is owed to the first step's setup,
+    /// and so is @0x1a36c's display of the escorts a load spawned, which
+    /// have no NPC until that setup places them
+    /// ([`Session::prepare_entered_escorts`]): the warm-up frame before
+    /// it shows neither the ships nor the stellars' change, under the
+    /// entry's black, so nothing the player sees crosses.
     pub(super) fn enter_game_passes(&mut self, chance: &mut (impl Chance + ?Sized)) {
         // `_HandleStellarSprites` (@0x1a359).
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
@@ -141,6 +143,7 @@ impl Session {
             #[cfg(test)]
             self.out.stellar_passes.push(pass);
             self.space.entry_gate_pass_owed = Some(pass.gain());
+            self.space.escorts.entry_display_owed = Some(self.speed_mult());
         } else {
             // `_PlayGame`'s (@0x45834), the ships already set up.
             self.prepare_all_sprites(&mut *chance);

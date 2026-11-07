@@ -276,6 +276,10 @@ impl Session {
     /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
+    /// At the first setup after a game entry, the escorts a load spawned
+    /// then take the display the entry's `_PrepareAllSprites` gave them
+    /// (@0x1a36c), at its gain, drawing on `chance`
+    /// ([`Session::prepare_entered_escorts`]).
     pub(super) fn enter_escorts(
         &mut self,
         berths: &[u32],
@@ -379,6 +383,7 @@ impl Session {
         }
         self.space.traffic.reserve(BTreeSet::new());
         self.space.escorts.restock = false;
+        self.prepare_entered_escorts(chance);
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
