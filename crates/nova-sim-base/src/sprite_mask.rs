@@ -1027,6 +1027,61 @@ mod tests {
     }
 
     #[test]
+    fn a_shift_of_16_or_31_reads_the_next_line_start_and_ends_the_row() {
+        use MaskWalk::Original;
+        // A pixel's overlap is 2^16 or 2^31 bytes, kept in i64 (the
+        // original's 16-bit wrap is not built): far past the line's 6.
+        let words = [
+            token(LINE_START, 4),
+            token(SKIP, 6),
+            token(LINE_START, 12),
+            token(PIXELS, 6),
+            0,
+            0,
+            0,
+        ];
+        let wide = Rc::new(sheet(&[&["####"]]));
+        for shift in [16, 31] {
+            let placed = |sheet: &Rc<RleSheet>, at| PlacedMask {
+                sheet: Rc::clone(sheet),
+                frame: 0,
+                rect: MaskRect::placed(at, (sheet.width, sheet.height)),
+            };
+            let clear_then_drawn = Rc::new(of_words(1, 2, shift, &words, &[0]));
+            let first = placed(&clear_then_drawn, (0, 0));
+            assert_eq!(
+                first.touches(&placed(&wide, (0, 0)), Original),
+                Some(false),
+                "shift {shift}: row 0 ends at line 1's start"
+            );
+            assert_eq!(
+                first.touches(&placed(&wide, (0, 1)), Original),
+                Some(true),
+                "shift {shift}"
+            );
+            assert!(touch(&clear_then_drawn, (0, 0), &wide, (0, 1), Original));
+            assert!(!touch(&clear_then_drawn, (0, 0), &wide, (0, 0), Original));
+            // A one-line frame reads the frame end: nothing touches.
+            let one_line = of_words(
+                1,
+                1,
+                shift,
+                &[token(LINE_START, 4), token(SKIP, 6), 0],
+                &[0],
+            );
+            assert!(
+                !touch(&one_line, (0, 0), &wide, (0, 0), Original),
+                "shift {shift}"
+            );
+            assert_eq!(
+                placed(&Rc::new(one_line), (0, 0)).touches(&placed(&wide, (0, 0)), Original),
+                Some(false),
+                "shift {shift}"
+            );
+        }
+    }
+
+    #[test]
     fn a_word_running_past_the_sheets_end_reads_as_a_frame_end() {
         let solid = sheet(&[&["#"]]);
         let mut short = solid.clone();
