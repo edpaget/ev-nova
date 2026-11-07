@@ -93,7 +93,9 @@
 //!
 //! A frame whose box touches the world's edge takes the clipped blit,
 //! which cuts what is drawn to the box (G5, `_BlitPixieRLEClipped`
-//! @0xbde9c-0xbe0b3); that is the view's to do, as it knows the world.
+//! @0xbde9c-0xbe0b3). The view, which knows the world, asks for it:
+//! [`super::decode_rled_clipped`] draws a frame so, by how much of its box
+//! the world cuts at the top and the left.
 
 use super::GraphicsError;
 use super::budget::check_budget;
@@ -108,7 +110,7 @@ use super::sheet::{SheetLayout, SpriteSheet};
 pub(super) const TOKENS: usize = 16;
 
 /// The low 24 bits of a token: its byte count.
-const COUNT_MASK: u32 = 0x00FF_FFFF;
+pub(super) const COUNT_MASK: u32 = 0x00FF_FFFF;
 
 /// The op of a frame end.
 const FRAME_END: u32 = 0;
@@ -117,7 +119,7 @@ const LINE_START: u32 = 1;
 
 /// The native (little-endian) word at `pos` of `mem`, or an
 /// [`GraphicsError::UnexpectedEnd`] there.
-fn word_at(mem: &[u8], pos: usize) -> Result<u32, GraphicsError> {
+pub(super) fn word_at(mem: &[u8], pos: usize) -> Result<u32, GraphicsError> {
     match mem.get(pos..pos + 4) {
         Some(&[a, b, c, d]) => Ok(u32::from_le_bytes([a, b, c, d])),
         _ => Err(GraphicsError::UnexpectedEnd { offset: pos }),
@@ -126,7 +128,7 @@ fn word_at(mem: &[u8], pos: usize) -> Result<u32, GraphicsError> {
 
 /// `pos` rounded up to a multiple of 4: the handle is aligned to 4, so an
 /// offset into it aligns as its address does.
-fn align4(pos: usize) -> usize {
+pub(super) fn align4(pos: usize) -> usize {
     pos.next_multiple_of(4)
 }
 

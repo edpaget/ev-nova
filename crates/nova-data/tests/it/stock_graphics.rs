@@ -149,6 +149,20 @@ fn every_stock_rled_decodes_its_frames_at_the_header_size() {
     });
 }
 
+/// No stock sheet draws otherwise at the world's edge than cut to its
+/// box: `_BlitPixieRLEClipped`'s row skip, run restart and even-byte skip
+/// change no stock frame, so a stock stellar's edge draw stays a crop.
+#[test]
+fn no_stock_rled_has_clip_quirks() {
+    check_all("rlëD", 282, |data, problems| {
+        match decode_rled(data, None) {
+            Err(e) => problems.push(e.to_string()),
+            Ok(sheet) if sheet.clip_quirks() => problems.push("has clip quirks".to_owned()),
+            Ok(_) => {}
+        }
+    });
+}
+
 /// A scan reads what the decode gives, for every stock sheet: its frame
 /// size, frame count, depth and whether it has runs, or the same error.
 #[test]

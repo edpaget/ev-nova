@@ -15,6 +15,7 @@ use super::budget::check_budget;
 use super::color::rgb555;
 use super::image::Image;
 use super::reader::Reader;
+use super::rled_clipped::{clip_quirks, takes_the_blit};
 use super::rled_wide::decode_wide;
 use super::rled8::{EightBitReading, Rled8};
 use super::rled32::ThirtyTwoBitReading;
@@ -138,17 +139,32 @@ pub fn decode_rled_with(
 ) -> Result<SpriteSheet, GraphicsError> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r, data.len())?;
-    let (width, height) = (header.width, header.height);
     let layout = layout.unwrap_or(SheetLayout::DEFAULT);
+    let sheet = decode_plain(data, r.pos(), &header, layout, readings)?;
+    let quirks = takes_the_blit(&header, readings) && clip_quirks(data, &header);
+    Ok(sheet.with_clip_quirks(quirks))
+}
+
+/// The sheet [`decode_rled_with`] decodes, before its
+/// [`SpriteSheet::clip_quirks`]: `data`'s tokens from `start`, under the
+/// checked `header`.
+fn decode_plain(
+    data: &[u8],
+    start: usize,
+    header: &Header,
+    layout: SheetLayout,
+    readings: RledReadings,
+) -> Result<SpriteSheet, GraphicsError> {
+    let (width, height) = (header.width, header.height);
     if header.depth != DEPTH && header.depth != DEPTH_8 {
-        return decode_wide(data, &header, layout, readings.thirty_two_bit)
+        return decode_wide(data, header, layout, readings.thirty_two_bit)
             .map(|sheet| sheet.with_depth(header.depth));
     }
     let reading = readings.eight_bit;
-    let units = Units::of(&header, reading);
+    let units = Units::of(header, reading);
     if header.depth == DEPTH_8 {
         let mut painter = Rled8::new(reading, width, height, header.count);
-        walk(data, r.pos(), &header, units, &mut painter)?;
+        walk(data, start, header, units, &mut painter)?;
         Ok(painter.finish(layout).with_depth(DEPTH_8))
     } else {
         let mut painter = Painter {
@@ -159,7 +175,7 @@ pub fn decode_rled_with(
             solids: Vec::with_capacity(usize::from(header.count)),
             solid: None,
         };
-        walk(data, r.pos(), &header, units, &mut painter)?;
+        walk(data, start, header, units, &mut painter)?;
         let sheet = SpriteSheet::new(width, height, painter.frames, layout);
         Ok(sheet.with_solid(solid_frames(painter.solids, width, height)))
     }

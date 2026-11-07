@@ -23,6 +23,11 @@
 //! original does for a `spïn` with no `rlëD`; its mask has the opposite
 //! polarity.
 //!
+//! [`decode_rled_clipped`] decodes an `rlëD` as the original draws a frame
+//! whose box the world's edge cuts (`_BlitPixieRLEClipped`), and
+//! [`SpriteSheet::clip_quirks`] says whether that can differ from the
+//! frame cut to its box.
+//!
 //! [`rled_words`] reads an `rlëD`'s run-length tokens as words, and
 //! [`sheet_rle_words`] makes the tokens the original makes for a cut
 //! `PICT` sheet: the [`RleWords`] two sprites' pixels touch by.
@@ -147,6 +152,7 @@ mod rle_words;
 mod rled;
 mod rled32;
 mod rled8;
+mod rled_clipped;
 mod rled_wide;
 mod sheet;
 mod system_clut;
@@ -167,6 +173,7 @@ pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{
     RLED, RledInfo, RledReadings, decode_rled, decode_rled_as, decode_rled_with, scan_rled,
 };
+pub use rled_clipped::{ClipCut, decode_rled_clipped};
 pub use rled8::EightBitReading;
 pub use rled32::ThirtyTwoBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

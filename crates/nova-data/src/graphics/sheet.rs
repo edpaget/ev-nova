@@ -55,6 +55,9 @@ pub struct SpriteSheet {
     solid: Option<Vec<Image>>,
     /// The depth the original's draw proc sees (see [`Self::depth`]).
     depth: u16,
+    /// Whether its clipped draw can differ from a crop (see
+    /// [`Self::clip_quirks`]).
+    clip_quirks: bool,
 }
 
 impl SpriteSheet {
@@ -76,6 +79,7 @@ impl SpriteSheet {
             layout,
             solid: None,
             depth: 16,
+            clip_quirks: false,
         }
     }
 
@@ -107,6 +111,27 @@ impl SpriteSheet {
     /// The sheet with `depth` as its header's depth (16 unless set).
     pub(crate) fn with_depth(self, depth: u16) -> Self {
         Self { depth, ..self }
+    }
+
+    /// The sheet with `clip_quirks` as [`Self::clip_quirks`] (false unless
+    /// set).
+    pub(crate) fn with_clip_quirks(self, clip_quirks: bool) -> Self {
+        Self {
+            clip_quirks,
+            ..self
+        }
+    }
+
+    /// Whether a frame whose box touches the world's edge may draw
+    /// otherwise than its image cut to the box, as `_BlitPixieRLEClipped`
+    /// draws it ([`decode_rled_clipped`](super::decode_rled_clipped)): a
+    /// line start whose count lies, a run whose fill shows a restart at
+    /// the cut, or a token ending on an even byte. A conservative test,
+    /// false for every stock sheet, for a `PICT` pair's cut, and for a
+    /// sheet read otherwise than the original draws it.
+    #[must_use]
+    pub fn clip_quirks(&self) -> bool {
+        self.clip_quirks
     }
 
     /// Width of every frame's box: the header's width.

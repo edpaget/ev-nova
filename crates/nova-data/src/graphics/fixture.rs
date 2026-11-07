@@ -1017,6 +1017,13 @@ impl RledFrame {
         self
     }
 
+    /// The bytes of the tokens so far: what a line start before them
+    /// counts.
+    #[must_use]
+    pub fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
+
     /// Raw bytes.
     #[must_use]
     pub fn raw(mut self, bytes: &[u8]) -> Self {
