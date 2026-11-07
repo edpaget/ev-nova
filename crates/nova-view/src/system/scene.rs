@@ -20,13 +20,14 @@ use nova_sim::stellar_frames::{StellarAnimation, StellarFrames};
 use nova_sim::{Chance, DrawnSheet, SpeedMult, Vec2};
 
 use super::catalog::{StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId};
+use crate::box_cut::{BoxCut, SheetEdge};
 use crate::draw::crossed_box;
 use crate::eight_bit_blit::{DrawProcState, EightBitBlit};
 use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
 use crate::outline::{self, StellarStandIn};
-use crate::{Blend, Color, DrawCommand, DrawList, Point, SheetImage};
+use crate::{Blend, Color, DrawCommand, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
 pub const PLACEHOLDER_SIZE: f32 = 64.0;
@@ -176,23 +177,15 @@ impl SceneStellar {
         Some((sheet.frame_width, sheet.frame_height))
     }
 
-    /// Whether the sheet drawn draws past its frame box, as a 32-bit
-    /// `rlëD` does ([`StellarSheet::image_size`]).
-    fn overhangs(&self) -> bool {
-        matches!(
-            self.drawn(),
-            Some(Ok(sheet)) if sheet.image_size != (sheet.frame_width, sheet.frame_height)
-        )
-    }
-
-    /// The image of the sheet drawn, when that sheet can draw otherwise
-    /// at the world's edge than cut to its box
-    /// ([`StellarSheet::clip_quirks`]).
-    fn quirky_image(&self) -> Option<SheetImage> {
-        match self.drawn() {
-            Some(Ok(sheet)) if sheet.clip_quirks => Some(sheet.image),
-            _ => None,
-        }
+    /// The edge facts of the sheet drawn ([`StellarSheet::image_size`],
+    /// [`StellarSheet::clip_quirks`]), if it can be read.
+    fn edge(&self) -> Option<SheetEdge> {
+        let sheet = self.drawn()?.as_ref().ok()?;
+        Some(SheetEdge {
+            frame_size: (sheet.frame_width, sheet.frame_height),
+            image_size: sheet.image_size,
+            clip_quirks: sheet.clip_quirks,
+        })
     }
 
     /// Whether the sheet drawn is an 8-bit `rlëD`
@@ -462,11 +455,13 @@ impl SystemScene {
 /// ([`StellarSheet::clip_quirks`]: a line count that lies, a two-colour
 /// run, a token ending on an even byte) draws, when the world's edge cuts
 /// its box, the clipped blit's frame instead
-/// ([`SheetImage::clipped_frame`], `nova_data::graphics::decode_rled_clipped`),
-/// keyed by how many of the box's rows and pixels the world cuts at the
-/// top and the left (a box cut only at the right or bottom cuts none),
-/// and cut to the box the same way. It is murked, and dispatched by
-/// depth, as the plain frame would be.
+/// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped),
+/// `nova_data::graphics::decode_rled_clipped`), keyed by how many of the
+/// box's rows and pixels the world cuts at the top and the left (a box
+/// cut only at the right or bottom cuts none), and cut to the box the
+/// same way. It is murked, and dispatched by depth, as the plain frame
+/// would be. Every sprite of the sprite world is decided so
+/// ([`crate::box_cut`]).
 pub fn draw_stellars(
     list: &mut DrawList,
     scene: &SystemScene,
@@ -496,31 +491,12 @@ pub fn draw_stellars(
                     Blend::Normal,
                 ));
                 if let Some((tint, colorize, blend)) = look {
-                    let sprite =
-                        |image| DrawCommand::mixed_sprite(image, at, tint, blend, colorize);
-                    let frame_box = Bounds::at(
-                        Point::new(at.x - size.0 / 2.0, at.y - size.1 / 2.0),
-                        size.0,
-                        size.1,
-                    );
-                    let edge = list.world_clip().filter(|world| {
-                        !(world.contains(frame_box.min) && world.contains(frame_box.max))
+                    let cut = stellar.edge().map_or(BoxCut::WHOLE, |edge| {
+                        BoxCut::of(list.world_clip(), at, edge)
                     });
-                    let clipped = edge.and_then(|world| {
-                        let cut = cut_by(world, frame_box, size);
-                        stellar.quirky_image()?.clipped_frame(image.frame, cut)
-                    });
-                    match (edge, clipped) {
-                        (Some(_), Some(clipped)) => {
-                            list.clipped(frame_box, sprite(clipped));
-                        }
-                        (Some(_), None) if stellar.overhangs() => {
-                            list.clipped(frame_box, sprite(image));
-                        }
-                        _ => {
-                            list.push(sprite(image));
-                        }
-                    }
+                    let command =
+                        DrawCommand::mixed_sprite(cut.key(image), at, tint, blend, colorize);
+                    cut.push(list, command);
                 }
                 (at, size)
             }
@@ -556,19 +532,6 @@ pub fn draw_stellars(
     for (name, at) in labels {
         list.text(name, at, NAME_SIZE, None, Color::DIM);
     }
-}
-
-/// How much of `frame_box`, a frame of `size`, the `world` cuts at its
-/// top and its left, as `(top, left)`: each rounded to whole pixels, as
-/// the renderer rounds a clip's edge, and kept within the box.
-fn cut_by(world: Bounds, frame_box: Bounds, (width, height): (f32, f32)) -> (u16, u16) {
-    // Within a box whose sides are a header's u16s.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let side = |cut: f32, side: f32| cut.round().clamp(0.0, side) as u16;
-    (
-        side(world.min.y - frame_box.min.y, height),
-        side(world.min.x - frame_box.min.x, width),
-    )
 }
 
 /// Draws `scene`'s stellars as [`draw_stellars`] does in a world clipped

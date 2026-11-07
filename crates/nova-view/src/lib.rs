@@ -74,6 +74,7 @@
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
 //!   draws with egui only in its `dev-tools` build.
 
+pub mod box_cut;
 pub mod color;
 pub mod colorize;
 pub mod devtools;
