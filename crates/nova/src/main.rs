@@ -412,6 +412,8 @@ fn main() -> ExitCode {
         // The keys the settings file saves, read by every screen built.
         .with_bindings(player_bindings(settings.bindings.clone()))
         .with_pilots(pilots, Rc::clone(&metrics))
+        // The new game's conversations play on the Ink runtime.
+        .with_dialog_loader(nova::dialogs::loader(seed))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
         .with_flight_overlays(overlays)

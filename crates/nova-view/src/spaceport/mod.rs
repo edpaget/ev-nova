@@ -45,11 +45,14 @@
 //!   mission dialog's.
 //! - [`quantity_ask`]: the [`QuantityAsk`](quantity_ask::QuantityAsk),
 //!   the quantity dialog as the exchange and the outfitter host it.
+//! - [`conversation`]: the [`ConversationScreen`], a landed stellar's
+//!   conversation, drawn over the spaceport a page at a time.
 
 pub mod ambient;
 pub mod bar;
 pub mod buttons;
 pub mod catalog;
+pub mod conversation;
 pub mod credits;
 pub mod data;
 pub mod grid;
@@ -77,6 +80,7 @@ pub mod view;
 
 pub use bar::{BarScreen, Hiring};
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
+pub use conversation::{ConversationChoice, ConversationScreen};
 pub use hire::HireScreen;
 pub use missions::{MissionComputerScreen, MissionInfoScreen, OfferNames};
 pub use news::NewsScreen;

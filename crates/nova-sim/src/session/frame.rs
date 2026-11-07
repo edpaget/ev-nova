@@ -23,6 +23,10 @@ impl Session {
     /// explored are written into the strings and the list the frame kept,
     /// not fresh ones.
     pub fn fill_frame(&self, into: &mut FlightFrame) {
+        debug_assert!(
+            self.out.story_outfits.is_empty(),
+            "every entry that plays the storylines makes their outfit changes"
+        );
         let FlightFrame {
             nav_mode,
             system,

@@ -181,6 +181,13 @@ impl DialogRef {
     pub fn stitch(&self) -> Option<&str> {
         dialog_parts(&self.0).expect("checked").2
     }
+
+    /// The knot, or `knot.stitch`, as a story enters it: everything after
+    /// the `#`.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        self.0.split_once('#').expect("checked").1
+    }
 }
 
 /// How harsh a place is, from 1 (mild) to 5 (brutal). See the harshness
@@ -415,6 +422,8 @@ mod tests {
         assert_eq!(r.stitch(), None);
         let s = DialogRef::try_from("dialog/a.ink#knot.stitch".to_string()).unwrap();
         assert_eq!(s.stitch(), Some("stitch"));
+        assert_eq!(r.path(), "crossroads_offer");
+        assert_eq!(s.path(), "knot.stitch");
         assert!(DialogRef::try_from("dialog/a.ink".to_string()).is_err());
         assert!(DialogRef::try_from("a.ink#knot".to_string()).is_err());
         assert!(DialogRef::try_from("dialog/a.txt#knot".to_string()).is_err());

@@ -20,9 +20,15 @@
 //!   Nova's [`NovaBits`]; and running a set expression
 //!   ([`control::execute`]).
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
+//! - [`dialogs`]: each stellar's conversation, its Ink file, its compiled
+//!   story and the knot it enters
+//!   ([`StellarDialogs`](dialogs::StellarDialogs)).
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   builders for the catalog's records and mocks of the [`ControlBits`]
 //!   port, for the tests of this crate and the nova-sim crates above.
+//! - [`storylines`]: the new game's missions, news and jump points, as
+//!   the story layer runs them, with their conversations' stories
+//!   ([`Storylines`](storylines::Storylines)).
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps, and the [`SoundCue`] each one plays
 //!   ([`SimSound::cue`]): its `snd ` and the original's priority.
@@ -48,6 +54,7 @@ pub mod buoy;
 pub mod catalog;
 pub mod control;
 pub mod data;
+pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 #[cfg(test)]
@@ -55,6 +62,7 @@ mod pict_sheet_sites;
 pub mod resource_name;
 pub mod sound;
 mod sound_cue;
+pub mod storylines;
 pub mod strings;
 #[cfg(test)]
 mod test_store;

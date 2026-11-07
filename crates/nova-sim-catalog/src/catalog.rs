@@ -2178,6 +2178,20 @@ pub trait PilotCatalog {
     /// ([`PilotCatalog::listed_stellars`]), owner-first (see the
     /// `nova_sim::gate` module).
     fn gate_sites(&self) -> Vec<GateSite>;
+    /// Each stellar's conversation: the compiled story and the knot a
+    /// landed pilot's conversation enters (see the
+    /// [`dialogs`](crate::dialogs) module). None by default: the stock
+    /// game has no stellar conversations.
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        crate::dialogs::StellarDialogs::default()
+    }
+    /// The new game's missions, news and jump points, with the stories
+    /// their missions' conversations play (see the
+    /// [`storylines`](crate::storylines) module). None by default: the
+    /// stock game has no storylines.
+    fn storylines(&self) -> crate::storylines::Storylines {
+        crate::storylines::Storylines::default()
+    }
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
@@ -2487,6 +2501,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
     fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
         (**self).rle_sheet(sheet)
     }
+
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        (**self).stellar_dialogs()
+    }
+
+    fn storylines(&self) -> crate::storylines::Storylines {
+        (**self).storylines()
+    }
 }
 
 /// A shared catalog is a catalog, so the sim and the views can read the
@@ -2654,6 +2676,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
         (**self).rle_sheet(sheet)
+    }
+
+    fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+        (**self).stellar_dialogs()
+    }
+
+    fn storylines(&self) -> crate::storylines::Storylines {
+        (**self).storylines()
     }
 }
 
@@ -3284,6 +3314,27 @@ mod tests {
                 starts: vec![Some(0)],
             })
         }
+
+        /// Stellar 128 talks, from `greet`.
+        fn stellar_dialogs(&self) -> crate::dialogs::StellarDialogs {
+            crate::dialogs::StellarDialogs::default().with(
+                StellarId(128),
+                "dialog/story.ink",
+                std::sync::Arc::from("{story}"),
+                "greet",
+            )
+        }
+
+        /// One mission, `job`.
+        fn storylines(&self) -> crate::storylines::Storylines {
+            crate::storylines::Storylines {
+                missions: BTreeMap::from([(
+                    "job".to_owned(),
+                    crate::storylines::StoryMission::default(),
+                )]),
+                ..crate::storylines::Storylines::default()
+            }
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -3340,6 +3391,8 @@ mod tests {
                 "{:?}",
                 catalog.landing_site(StellarId(140)).map(|site| site.id)
             ),
+            format!("{:?}", catalog.stellar_dialogs().place(StellarId(128))),
+            format!("{:?}", catalog.storylines().missions.keys()),
         ]
     }
 
@@ -3510,6 +3563,23 @@ mod tests {
             [(SystemId(130), first)],
             "131 lists none and 132 doesn't exist: neither is asked, as the \
              star map isn't read"
+        );
+    }
+
+    #[test]
+    fn borrowed_and_shared_catalogs_forward_the_stellar_conversations() {
+        let talking =
+            r#"Some(DialogAt { file: "dialog/story.ink", compiled: "{story}", knot: "greet" })"#;
+        assert_eq!(reads(One)[46], talking);
+        assert_eq!(
+            reads(&One)[46],
+            talking,
+            "forwarded, not the default's none"
+        );
+        assert_eq!(
+            reads(Rc::new(One))[46],
+            talking,
+            "forwarded, not the default's none"
         );
     }
 

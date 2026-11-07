@@ -22,11 +22,17 @@
 //! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
 //! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
 //! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
+//! | `outfits/` | `oütf` ([`outfits`]) | its `name`, and `Cost` from `price`; massless, doing nothing, with no `Max` and never for sale (`TechLevel` 0x7fff); `mount`, `damage`, `range`, `reload` and `model` aren't read |
 //! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
 //! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
 //! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
 //! | a system's `jump_points` | a gate stand-in ([`looks`]) | a grey ring |
 //! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
+//! | `dialog/<file>.ink.json` | its compiled text on the store ([`dialogs`], [`GameData::dialogs`]) | by the Ink file a ref names (`dialog/<file>.ink`); the `.ink` source isn't read |
+//! | a stellar's `dialog` | its `spöb`'s conversation on the store ([`dialogs`]) | the file and the knot (or `knot.stitch`) a landed pilot's conversation enters |
+//! | `missions/` | a mission on the store ([`missions`], [`GameData::storylines`]) | by its id: its title, `requires`, `offer`, `objective`, `complete` and the four effect blocks, its ids kept as text; a stellar it names as its `spöb`; an outfit an effect grants or removes as its `oütf`; its dialogs as places in the compiled texts |
+//! | `news/` | a news item on the store ([`missions`]) | by its id: its headline, its body trimmed, and its `from` system's `sÿst` |
+//! | a jump point's `owner` and `stability` | its static state on the store ([`missions`]) | by `system/point`: its gate's `spöb`, its owner's id and its stability, which missions' effects overlay in play |
 //!
 //! A jump point is a hypergate with one link, to its partner's gate: the
 //! original comes out at the linked `spöb` itself, so the partner is
@@ -60,6 +66,19 @@
 //! - A start whose ship is no hull, or whose system isn't there, is left
 //!   out.
 //! - A record past its kind's ID range is left out.
+//! - A stellar's `dialog` whose compiled `dialog/<file>.ink.json` is
+//!   missing maps no conversation. One whose knot the story lacks does the
+//!   same once [`NewGame::check_dialogs`] has asked the dialog port
+//!   ([`dialogs::DialogCheck`]), which the game runs as it opens the
+//!   folder.
+//! - A mission naming a stellar, mission, news item, jump point, faction
+//!   or outfit that isn't there is left out, with a problem for each such
+//!   name. So
+//!   is one whose `offer` or `complete` dialog has no compiled file, or,
+//!   once [`NewGame::check_dialogs`] has run, names a knot its story
+//!   lacks. One whose `requires` names a mission left out is left out
+//!   too, with a problem naming it. A news item whose `from` isn't a
+//!   system is left out.
 //! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
 //!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
 //!   box or its disc; an asset whose model file doesn't decode is reported
@@ -79,13 +98,15 @@
 //!   dead points are travelled as stable ones until `play-the-sample`
 //!   phase 1.
 //! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
-//!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
+//!   phase 3. `outfits/` map only as things a pilot can own
+//!   ([`outfits`]): no weapon or system reads them, and no hardpoint is
+//!   fitted, so the hulls are unarmed.
 //!   A livery's `decals` aren't drawn.
 //! - Traffic: the bible authors none, so the civilian `düde` and each
 //!   system's traffic are placeholders ([`fleet`]), as are a hull's
 //!   acceleration, turn rate, fuel and crew and a start's date.
-//! - `storylines/`, `missions/`, `news/`, `characters/`, `dialog/`: they
-//!   belong to `engine-story`.
+//! - `storylines/`, a mission's `storyline`, `act` and an offer's
+//!   `giver`, and `characters/`: nothing in the engine reads them yet.
 //! - `budgets/` and an asset's provenance: tooling. An asset's models are
 //!   read for the stand-ins ([`looks`]), and the export media paths for the
 //!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.
@@ -98,6 +119,7 @@
 //! IDs aren't pinned: adding a data file renumbers what follows it, and a
 //! pilot saved before can load into another place ([`ids`]).
 
+pub mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fleet;
@@ -105,6 +127,8 @@ pub mod gates;
 pub mod ids;
 pub mod looks;
 mod map;
+pub mod missions;
+pub mod outfits;
 pub mod records;
 #[cfg(test)]
 mod tests;
@@ -179,10 +203,15 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     problems.extend(mapping);
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
     let stabilities = gates::stabilities(&galaxy, &ids.gates);
+    let compiled = dialogs::compiled(&galaxy, source, &mut problems);
+    let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
+    let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
-            .with_gate_stabilities(stabilities),
+            .with_gate_stabilities(stabilities)
+            .with_dialogs(dialogs)
+            .with_storylines(storylines),
         ids,
         problems,
         lfs_pointers,

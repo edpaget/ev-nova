@@ -42,6 +42,10 @@ impl AppScreen {
     /// flight, and anything else goes to it ([`FlightView::port_map_input`](nova_view::flight::FlightView::port_map_input),
     /// where M closes it too).
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
+        // An open conversation takes every input in front of the port.
+        if self.conversation_input(input) {
+            return ScreenAction::None;
+        }
         if self.port_map_input(input) {
             return ScreenAction::None;
         }

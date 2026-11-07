@@ -220,6 +220,12 @@
 //! (@0xa335c). With no mission shown (the count @0xa32c1-0xa32ee) it
 //! does nothing, and says nothing.
 //!
+//! A stellar that names a conversation (the new game's) opens it over the
+//! spaceport as the spaceport opens on landing: its lines, then its
+//! choices, a page at a time, until the story ends and the player closes
+//! it. While it is open it takes the spaceport's input, so Escape doesn't
+//! take off mid-conversation (see the `conversation` module).
+//!
 //! Missions are offered at five venues as the original's
 //! `_OfferMissionFromPort` offers them: the spaceport asks once, as it
 //! opens on landing, before anything can open over it; the trade center,
@@ -388,6 +394,7 @@ mod build;
 mod capture_naming;
 mod christening;
 mod close_waits;
+mod conversation;
 mod covered;
 mod defection;
 mod entry;
@@ -612,6 +619,9 @@ pub struct AppScreen {
     about_text: i16,
     /// The spaceport, while the ship is landed.
     spaceport: Option<SpaceportView>,
+    /// The landed stellar's conversation, while it is open over the
+    /// spaceport (see the `conversation` module).
+    conversation: Option<nova_view::spaceport::ConversationScreen>,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
     /// The player's preferences, as last chosen.
@@ -687,6 +697,9 @@ pub struct AppScreen {
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.
     person_rules: Rc<dyn PersonRules>,
+    /// What opens the stellars' compiled conversations in each flight
+    /// ([`AppScreen::with_dialog_loader`]): none until the edge wires one.
+    dialog_loader: Option<crate::dialogs::SharedLoader>,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,

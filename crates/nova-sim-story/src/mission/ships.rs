@@ -11,6 +11,7 @@ use crate::govt::{
     NEVER_FOLLOWS_THROUGH_HYPERGATE,
 };
 use crate::hyperspace::{Places, StarMap};
+use crate::rulebook::RuleSource;
 
 use super::goals::ShipGoal;
 use super::select::GovtCode;
@@ -269,7 +270,7 @@ impl SpecialShips {
     /// ([`ShipStart::timed`], see [`appear_timer`]), else none
     /// (@0xa0ed4-0xa0f09); their
     /// system ([`select_ship_system`] from `facts` over `map` and
-    /// `govts`); their name from their `ShipNameID` and their subtitle
+    /// `govts`, -5 by `links`); their name from their `ShipNameID` and their subtitle
     /// from their `ShipSubtitle`, each string `Rand(count) + 1` of its
     /// `STR#` in `strings`, or empty (@0xa1195-0xa1358). Ships left are
     /// their `ShipCount`, and they have all arrived but for a `ShipStart`
@@ -282,7 +283,7 @@ impl SpecialShips {
         ships: &MissionShip,
         flags: u16,
         facts: &ShipFacts,
-        (map, govts): (&StarMap, &Governments),
+        (map, govts, links): (&StarMap, &Governments, RuleSource),
         strings: &dyn CommCatalog,
         draw_type: &mut dyn FnMut(DudeId, &mut dyn Chance) -> Option<ShipId>,
         chance: &mut dyn Chance,
@@ -297,7 +298,7 @@ impl SpecialShips {
         } else {
             NOT_APPEARING
         };
-        let system = select_ship_system(ships.syst, facts, map, govts, chance);
+        let system = select_ship_system(ships.syst, facts, map, govts, links, chance);
         let name = drawn_string(ships.name_id, strings, chance);
         let subtitle = drawn_string(ships.subtitle, strings, chance);
         Self {
@@ -404,17 +405,25 @@ const FOLLOWS_PLAYER: i16 = -6;
 ///   (not together with it), of the code's kind, drawn
 ///   (`_SelectMissionSystem` @0x9b993). The original redraws `Rand(2048)`
 ///   until it hits one, which comes to one draw over them by ascending ID.
-/// - -5: one of the player's system's Con slots, drawn, each resolved to
-///   the visible system standing for it ([`StarMap::usable_con_slots`]):
-///   a system listed twice is twice as likely, and a slot naming the
-///   player's own system counts (@0x9ba70-0x9bac7).
+/// - -5: by the engine's reading of `links`,
+///   [`mission_ship_links`](crate::RuleKey::MissionShipLinks), one of the
+///   player's system's Con slots, drawn, each resolved to the visible
+///   system standing for it ([`StarMap::usable_con_slots`]): a system
+///   listed twice is twice as likely, and a slot naming the player's own
+///   system counts (@0x9ba70-0x9bac7). These are the raw Con slots
+///   whatever the map's links are. By the other reading, one of the
+///   systems the player's system links to on the map
+///   ([`StarMap::listed_links`]), drawn uniformly: each once, visible,
+///   never the player's own, and under the gate lanes the systems its
+///   lanes reach.
 /// - 32000 and above: the player's system, as `_SelectMissionSystem`
 ///   gives back its second argument for a code it does not read
 ///   (@0x9c012).
 /// - Any other code: nowhere.
 ///
 /// Two deliberate divergences: where the original redraws forever, this
-/// is nowhere, drawing nothing. That is -5 with no usable Con slot
+/// is nowhere, drawing nothing. That is -5 with no usable Con slot (or by
+/// the other reading no link)
 /// (@0x9ba84-0x9bac3), and 15000-19999 when only the government's own
 /// systems qualify, which its counting pass counts but its draw pass
 /// rejects (@0x9bc71-0x9bd02). Copying a hang isn't fidelity.
@@ -423,6 +432,7 @@ pub fn select_ship_system(
     facts: &ShipFacts,
     map: &StarMap,
     govts: &Governments,
+    links: RuleSource,
     chance: &mut dyn Chance,
 ) -> ShipSystem {
     let at =
@@ -432,7 +442,12 @@ pub fn select_ship_system(
         -3 => return at(facts.destination.or(facts.return_to)),
         -4 => return at(facts.return_to),
         FOLLOWS_PLAYER => return ShipSystem::FollowsPlayer,
-        -5 => return drawn(&map.usable_con_slots(facts.player_system), chance),
+        -5 => {
+            return match links {
+                RuleSource::Engine => drawn(&map.usable_con_slots(facts.player_system), chance),
+                RuleSource::Bible => drawn(map.listed_links(facts.player_system), chance),
+            };
+        }
         128..=2175 => return ShipSystem::At(SystemId(code)),
         2176..=9998 => return ShipSystem::Nowhere,
         -2 => Kind::Any,
@@ -467,6 +482,8 @@ fn drawn(systems: &[SystemId], chance: &mut dyn Chance) -> ShipSystem {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::catalog::{GovtRecord, StarSystem};
     use crate::hyperspace::CoLocated;
@@ -575,7 +592,14 @@ mod tests {
     /// bounds asked.
     fn resolved_with(code: i16, facts: &ShipFacts, draws: &[u32]) -> (ShipSystem, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let resolved = select_ship_system(code, facts, &map(), &govts(), &mut chance);
+        let resolved = select_ship_system(
+            code,
+            facts,
+            &map(),
+            &govts(),
+            RuleSource::Engine,
+            &mut chance,
+        );
         (resolved, chance.asked)
     }
 
@@ -675,10 +699,17 @@ mod tests {
         );
     }
 
-    /// What -5 resolves to with the player in 140, drawing `draws`, over
-    /// a map where 140's Con lists `con`: 141 visible, 142 hidden at
-    /// 141's place, 143 hidden alone, 140 the player's own.
+    /// What -5 resolves to by the engine's reading of `mission_ship_links`;
+    /// see [`minus_5_by`].
     fn minus_5_from(con: &[i16], draws: &[u32]) -> (ShipSystem, Vec<u32>) {
+        minus_5_by(RuleSource::Engine, con, draws)
+    }
+
+    /// What -5 resolves to by `links`, `mission_ship_links`' reading, with
+    /// the player in 140, drawing `draws`, over a map where 140's Con
+    /// lists `con`: 141 visible, 142 hidden at 141's place, 143 hidden
+    /// alone, 140 the player's own.
+    fn minus_5_by(links: RuleSource, con: &[i16], draws: &[u32]) -> (ShipSystem, Vec<u32>) {
         let map = StarMap::with_hidden(
             vec![
                 system(140, (0.0, 0.0), con, Some(FED)),
@@ -695,7 +726,7 @@ mod tests {
             ..facts()
         };
         let mut chance = Draws::of(draws);
-        let resolved = select_ship_system(-5, &facts, &map, &govts(), &mut chance);
+        let resolved = select_ship_system(-5, &facts, &map, &govts(), links, &mut chance);
         (resolved, chance.asked)
     }
 
@@ -721,6 +752,78 @@ mod tests {
     }
 
     #[test]
+    fn minus_5_by_the_other_reading_draws_over_the_maps_links_each_once() {
+        let con = [141, 144, 141, 140];
+        let by_links = |draws: &[u32]| minus_5_by(RuleSource::Bible, &con, draws);
+        assert_eq!(by_links(&[0]), (at(141), vec![2]));
+        assert_eq!(
+            by_links(&[1]),
+            (at(144), vec![2]),
+            "141 once, and never 140, the player's own"
+        );
+        // 142 stands as 141 on the map too; 143 has none visible.
+        assert_eq!(
+            minus_5_by(RuleSource::Bible, &[143, 142, 999], &[0]),
+            (at(141), vec![1])
+        );
+        assert_eq!(
+            minus_5_by(RuleSource::Bible, &[143, 999], &[]),
+            (ShipSystem::Nowhere, vec![])
+        );
+    }
+
+    /// What -5 resolves to by `links` with the player in `player`, over a
+    /// map of drift 130, hearth 131 and verge 132 whose links are the gate
+    /// lanes drift to hearth and verge to drift, while drift's Con slot
+    /// names verge alone.
+    fn minus_5_over_lanes(links: RuleSource, player: i16, draws: &[u32]) -> (ShipSystem, Vec<u32>) {
+        use crate::catalog::GateStability::Stable;
+        use crate::gate_lanes::GateLanes;
+        let lanes = GateLanes::fixture(&[(130, 131, Stable), (132, 130, Stable)]);
+        let map = StarMap::with_lanes(
+            vec![
+                system(130, (0.0, 0.0), &[132], None),
+                system(131, (100.0, 0.0), &[], None),
+                system(132, (200.0, 0.0), &[], None),
+            ],
+            &BTreeSet::new(),
+            CoLocated::Lowest,
+            &lanes,
+        );
+        let facts = ShipFacts {
+            player_system: SystemId(player),
+            ..facts()
+        };
+        let mut chance = Draws::of(draws);
+        let resolved = select_ship_system(-5, &facts, &map, &govts(), links, &mut chance);
+        (resolved, chance.asked)
+    }
+
+    #[test]
+    fn minus_5_by_the_other_reading_follows_the_gate_lanes() {
+        assert_eq!(
+            minus_5_over_lanes(RuleSource::Engine, 130, &[0]),
+            (at(132), vec![1]),
+            "the engine reads drift's Con slot"
+        );
+        assert_eq!(
+            minus_5_over_lanes(RuleSource::Bible, 130, &[0]),
+            (at(131), vec![1]),
+            "the other reading takes drift's lane to hearth"
+        );
+        assert_eq!(
+            minus_5_over_lanes(RuleSource::Bible, 131, &[]),
+            (ShipSystem::Nowhere, vec![]),
+            "hearth has no lane out"
+        );
+        assert_eq!(
+            minus_5_over_lanes(RuleSource::Engine, 132, &[]),
+            (ShipSystem::Nowhere, vec![]),
+            "verge has no Con slot"
+        );
+    }
+
+    #[test]
     fn minus_5_with_no_usable_slot_is_nowhere() {
         assert_eq!(
             minus_5_from(&[143, 999], &[]),
@@ -733,7 +836,14 @@ mod tests {
         let map = StarMap::new(vec![system(2176, (0.0, 0.0), &[], None)]);
         for code in [2176, 5000, 9998] {
             let mut chance = Draws::of(&[]);
-            let resolved = select_ship_system(code, &facts(), &map, &govts(), &mut chance);
+            let resolved = select_ship_system(
+                code,
+                &facts(),
+                &map,
+                &govts(),
+                RuleSource::Engine,
+                &mut chance,
+            );
             assert_eq!(resolved, ShipSystem::Nowhere, "{code}");
             assert!(chance.asked.is_empty(), "{code}");
         }
@@ -797,7 +907,14 @@ mod tests {
             ..govt(128)
         }]);
         let mut chance = Draws::of(&[2]);
-        let drawn = select_ship_system(25_000, &facts(), &map(), &govts, &mut chance);
+        let drawn = select_ship_system(
+            25_000,
+            &facts(),
+            &map(),
+            &govts,
+            RuleSource::Engine,
+            &mut chance,
+        );
         assert_eq!(
             (drawn, chance.asked),
             (at(133), vec![4]),
@@ -926,7 +1043,7 @@ mod tests {
             ships,
             flags,
             &facts(),
-            (&map(), &govts()),
+            (&map(), &govts(), RuleSource::Engine),
             &Strings,
             &mut draw,
             &mut chance,

@@ -4,7 +4,8 @@
 //! maps already give), counting up from 128, the first ID Nova gives
 //! data. Each kind has its range: [`GOVT_IDS`] for factions,
 //! [`SYSTEM_IDS`] and [`STELLAR_IDS`] for systems and stellars,
-//! [`SHIP_IDS`] for hulls and [`CHARACTER_IDS`] for starts. A record past
+//! [`SHIP_IDS`] for hulls, [`OUTFIT_IDS`] for outfits and
+//! [`CHARACTER_IDS`] for starts. A record past
 //! its range's end gets no ID, and the caller leaves it out.
 //!
 //! The jump points' gates share [`STELLAR_IDS`] with the stellars. They
@@ -37,6 +38,10 @@ pub const STELLAR_IDS: RangeInclusive<i16> = 128..=2175;
 /// The `shïp` IDs Nova gives data: 128 to 895.
 pub const SHIP_IDS: RangeInclusive<i16> = 128..=895;
 
+/// The `oütf` IDs Nova gives data: 128 to 639, the range the `G` and `D`
+/// set operators act on.
+pub const OUTFIT_IDS: RangeInclusive<i16> = 128..=639;
+
 /// The `chär` IDs the new game's starts take: 128 to 255.
 pub const CHARACTER_IDS: RangeInclusive<i16> = 128..=255;
 
@@ -59,6 +64,8 @@ pub struct IdTable {
     pub ships: BTreeMap<Id, i16>,
     /// Each start's `chär`.
     pub starts: BTreeMap<Id, i16>,
+    /// Each outfit's `oütf`.
+    pub outfits: BTreeMap<Id, i16>,
 }
 
 /// Numbers `ids`, in the order given, from the start of `range`: the
@@ -117,6 +124,7 @@ mod tests {
         assert_eq!(SYSTEM_IDS, 128..=2175);
         assert_eq!(STELLAR_IDS, 128..=2175);
         assert_eq!(SHIP_IDS, 128..=895);
+        assert_eq!(OUTFIT_IDS, 128..=639);
     }
 
     #[test]

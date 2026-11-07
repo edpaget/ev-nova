@@ -74,6 +74,7 @@ impl AppScreen {
             about: None,
             about_text: ABOUT_TEXT,
             spaceport: None,
+            conversation: None,
             sounds: Vec::new(),
             prefs: Prefs::default(),
             launch: LaunchPrefs::of(&Prefs::default()),
@@ -105,6 +106,7 @@ impl AppScreen {
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
+            dialog_loader: None,
             comm: None,
             escort_dialog: None,
             planet_comm: None,
@@ -278,6 +280,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with `loader` opening the stellars' compiled
+    /// conversations in each flight
+    /// (`nova_sim::Session::with_dialog_loader`); none until it is given,
+    /// so a conversation shows that it can't open.
+    #[must_use]
+    pub fn with_dialog_loader(self, loader: Rc<dyn nova_sim::dialog::DialogLoader>) -> Self {
+        Self {
+            dialog_loader: Some(crate::dialogs::SharedLoader(loader)),
+            ..self
+        }
+    }
+
     /// The router with `rules` deciding how persons appear in each flight
     /// (`nova_sim::Session::with_person_rules`); Nova's until others are
     /// given.
@@ -432,6 +446,10 @@ impl AppScreen {
             control_bits: Rc::clone(&self.control_bits),
             person_rules: Rc::clone(&self.person_rules),
             strings: Some(Rc::clone(&self.data) as Rc<dyn CommCatalog>),
+            dialogs: self
+                .dialog_loader
+                .as_ref()
+                .map(|loader| Rc::clone(&loader.0)),
             carry: CarryOver {
                 slot_sprites: Some(self.slot_sprites.clone()),
                 stellar_sprite_pool: Some(self.stellar_sprites.clone()),

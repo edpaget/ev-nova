@@ -220,6 +220,10 @@ pub enum Consumer {
     MissionShips,
     /// Missions (`mïsn`).
     Missions,
+    /// The new game's storylines: its missions' days, deliveries and
+    /// events (`nova_sim::storylines`). Only a session whose data holds
+    /// storylines registers it.
+    Storylines,
     /// Crons (`crön`).
     Crons,
     /// Nebulae (`nëbu`).

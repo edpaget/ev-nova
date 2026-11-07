@@ -10,7 +10,7 @@
 //! each defaulting to the original's reading.
 //!
 //! The stock game pins nothing. The new game pins the other reading of
-//! eight keys, as a jump point's gate is the only way in or out of a
+//! ten keys, as a jump point's gate is the only way in or out of a
 //! system:
 //!
 //! - the three its traffic needs: [`RuleKey::DestinationReach`] (its
@@ -28,7 +28,13 @@
 //! - J's: [`RuleKey::GateAutopilot`] (J with a system selected that a
 //!   jump point here serves engages the gate autopilot, which flies the
 //!   course gate by gate with the player's own controls; J never starts a
-//!   hyperspace jump, as the new game has none).
+//!   hyperspace jump, as the new game has none);
+//! - the two its mission ships need: [`RuleKey::MissionShipLinks`] (a
+//!   mission's ships sent to "a system adjacent" are drawn over the
+//!   gate lanes, not the Con slots) and [`RuleKey::AuxShipLinks`] (a
+//!   mission's auxiliary ships sent next to a system come into the
+//!   systems its gate lanes reach). The new game's own missions spawn no
+//!   such ships yet: the two are pinned for any that will.
 //!
 //! It leaves [`RuleKey::MapPlotting`] at the original's Shift-click, a
 //! hop at a time, so a course is plotted a lane at a time and J flies it.
@@ -69,8 +75,8 @@ const STOCK: Profile = Profile {
 };
 
 /// The new game's profile: its traffic's three gate readings, its map
-/// and courses' four and J's gate autopilot (see the module docs), and
-/// pilots of its own.
+/// and courses' four, J's gate autopilot and its mission ships' two (see
+/// the module docs), and pilots of its own.
 const NEW_GAME: Profile = Profile {
     readings: &[
         (RuleKey::DestinationReach, RuleSource::Bible),
@@ -81,6 +87,8 @@ const NEW_GAME: Profile = Profile {
         (RuleKey::MapLaneStyle, RuleSource::Bible),
         (RuleKey::GateCourse, RuleSource::Bible),
         (RuleKey::GateAutopilot, RuleSource::Bible),
+        (RuleKey::MissionShipLinks, RuleSource::Bible),
+        (RuleKey::AuxShipLinks, RuleSource::Bible),
     ],
     pilots: "New Game Pilots",
 };
@@ -147,7 +155,8 @@ mod tests {
     }
 
     #[test]
-    fn the_new_game_pins_the_other_reading_of_its_eight_gate_lane_map_and_autopilot_keys() {
+    fn the_new_game_pins_the_other_reading_of_its_ten_gate_lane_map_autopilot_and_mission_ship_keys()
+     {
         assert_eq!(
             Ruleset::NewGame.profile().readings,
             [
@@ -159,6 +168,8 @@ mod tests {
                 (RuleKey::MapLaneStyle, RuleSource::Bible),
                 (RuleKey::GateCourse, RuleSource::Bible),
                 (RuleKey::GateAutopilot, RuleSource::Bible),
+                (RuleKey::MissionShipLinks, RuleSource::Bible),
+                (RuleKey::AuxShipLinks, RuleSource::Bible),
             ]
         );
     }

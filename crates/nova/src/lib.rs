@@ -15,6 +15,8 @@
 //!   the startup log written, for each operating system.
 //! - [`developer`]: the developer settings, the port's own flight
 //!   overlays, as the settings file turns them on.
+//! - [`dialogs`]: the new game's conversations, wired to `nova-ink`'s
+//!   Ink runtime: the sessions' dialog loader and the knot check at load.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
@@ -56,6 +58,7 @@ pub mod config;
 pub mod developer;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;
+pub mod dialogs;
 pub mod exit;
 pub mod fonts;
 pub mod gamepad;

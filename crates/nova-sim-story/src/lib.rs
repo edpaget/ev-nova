@@ -9,12 +9,20 @@
 //! each module at its old path (`nova_sim::mission`, `nova_sim::Pilot`,
 //! …), so the rest of the workspace reaches them through it.
 //!
+//! - [`dialog`]: the dialog port, which plays the new game's compiled Ink
+//!   conversations a line at a time ([`Dialog`](dialog::Dialog), opened by
+//!   a [`DialogLoader`](dialog::DialogLoader)); its adapter is `nova-ink`.
+//!   Each Ink file's story state is kept per file
+//!   ([`DialogStates`](dialog::states::DialogStates)).
 //! - [`exchange_events`]: what the commodity exchange says of the `öops`
 //!   price events at the stellar docked at, the disputed
 //!   [`exchange_events::exchange_events`]: the first local event's line
 //!   ([`exchange_events::event_line`]), or every local event's name.
 //! - [`exploration`]: which walks a map outfit runs
 //!   ([`exploration::map_walks`]) and which systems are inhabited.
+//! - [`flags`]: the new game's world flags, named on/off facts
+//!   ([`WorldFlags`](flags::WorldFlags)) that missions set and clear and
+//!   conversations read.
 //! - [`map_walk`]: the exploration walk a map grant, the take-off and a
 //!   jump's re-explore run, as `_AutoSetExploration` runs it
 //!   ([`map_walk::auto_set_exploration`]), over a
@@ -56,6 +64,10 @@
 //!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
 //!   static galaxy, which every reader sees through the
 //!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
+//! - [`storylines`]: the new game's missions: when one is offered or
+//!   happens, what its outcomes and effects set, and how its news
+//!   spreads, over the pilot's story state
+//!   ([`StoryState`](storylines::state::StoryState)).
 //! - [`text_parse`]: the conditional text (`{G "he" "she"}`, `{bnnn …}`,
 //!   `{Pnnn …}`) every loaded text is resolved by, as the original's
 //!   `_ParseTextDescription` ([`text_parse::conditional_text`]).
@@ -90,8 +102,10 @@ use nova_sim_state::{
     cron, date, domination, govt, landing, legal, market, outfit_effects, stats, trade_dialog,
 };
 
+pub mod dialog;
 pub mod exchange_events;
 pub mod exploration;
+pub mod flags;
 pub mod map_walk;
 pub mod mission;
 pub mod nebula;
@@ -100,5 +114,6 @@ pub mod person;
 pub mod pilot;
 pub mod rank;
 pub mod story;
+pub mod storylines;
 pub mod text_parse;
 pub mod text_tags;

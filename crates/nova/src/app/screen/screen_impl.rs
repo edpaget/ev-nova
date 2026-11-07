@@ -276,6 +276,9 @@ impl Screen for AppScreen {
         } else {
             self.shown().draw(list);
         }
+        if self.side == Side::Spaceport {
+            self.draw_conversation(list);
+        }
         self.draw_touch_controls(list);
         if let Some(hint) = router_hint(&self.keys, self.side, self.dialogs.is_some()) {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);

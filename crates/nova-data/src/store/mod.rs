@@ -204,6 +204,7 @@ use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
 mod decoded;
+mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
@@ -216,10 +217,12 @@ mod spin_sprite;
 mod sprite;
 mod stand_in;
 mod stellar_sprite;
+mod storylines;
 #[cfg(test)]
 mod tests;
 mod walk;
 
+pub use self::dialogs::{DialogPlace, Dialogs};
 pub use self::gate_stability::GateStability;
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
@@ -233,6 +236,10 @@ pub use self::sprite::{
 };
 pub use self::stand_in::{Outline, OutlineTriangle, StandIn, StandInOf};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
+pub use self::storylines::{
+    MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt, PointState,
+    Requires, StoryEffects, StoryMission, Storylines,
+};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]
@@ -376,6 +383,12 @@ pub struct GameData {
     /// Each jump point's own stability, by its gate's `spöb`: the new
     /// game's ([`GameData::with_gate_stabilities`]); none in a stock store.
     gate_stabilities: BTreeMap<crate::wire::id::StellarId, GateStability>,
+    /// The compiled conversations and each stellar's: the new game's
+    /// ([`GameData::with_dialogs`]); none in a stock store.
+    dialogs: Dialogs,
+    /// The missions, news and jump points: the new game's
+    /// ([`GameData::with_storylines`]); none in a stock store.
+    storylines: Storylines,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -428,6 +441,8 @@ impl GameData {
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
             gate_stabilities: BTreeMap::new(),
+            dialogs: Dialogs::default(),
+            storylines: Storylines::default(),
         })
     }
 

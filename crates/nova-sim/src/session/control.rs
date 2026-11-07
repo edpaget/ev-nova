@@ -270,6 +270,47 @@ impl Session {
         chance: &mut dyn Chance,
         between: &mut dyn FnMut(&mut Session, &mut dyn Chance),
     ) {
+        // The set-string wrappers' tail into the reset, skipped only for
+        // empty text (`_EvalCurrentMissionBitSetString` @0x99a58, @0x99a85;
+        // `_EvalMissionBitSetString` @0x99dd1, @0x99dea; see the
+        // `precalced` module). The original also resets inside `G`, `D`,
+        // `C`, `E` and `H`, each through `_SystemInfoToShipStats`
+        // (@0x15489, @0x154ef, @0x1566a); the engine resets once, at the
+        // end. No frame is drawn, no dialog opens and nothing is saved
+        // between the two, so the difference crosses no boundary the
+        // player sees.
+        let reset = !expr.is_empty_text();
+        self.apply_set_ops(reset, chance, |session, chance, apply| {
+            let mut step = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
+                apply(op, session, chance);
+                between(session, chance);
+                Ok(())
+            };
+            execute(expr, session, &mut step, chance, &mut BTreeSet::new());
+        });
+    }
+
+    /// Runs `drive`, handing it an `apply` that shows each set operator
+    /// to the session's [`SetOpObserver`] and then applies it
+    /// ([`Session::apply_op`]); then ends as a set expression does:
+    /// resets the precalculated values when `reset`
+    /// ([`Session::reset_precalced`]), and, when the pilot changed, makes
+    /// a save due and marks the galaxy stale. Both a script
+    /// ([`Session::run_set`]) and the storylines' outfit changes
+    /// (`Session::apply_story_outfits`) end here, so the two can't drift
+    /// apart. The story path's save is due already, from the change that
+    /// queued its outfits, so making it due again changes nothing, and
+    /// no parameter chooses it.
+    pub(super) fn apply_set_ops(
+        &mut self,
+        reset: bool,
+        chance: &mut dyn Chance,
+        drive: impl FnOnce(
+            &mut Session,
+            &mut dyn Chance,
+            &mut dyn FnMut(&SetOp, &mut Session, &mut dyn Chance),
+        ),
+    ) {
         let observer = self.setup.op_observer.clone();
         let before = self.pilot.clone();
         let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
@@ -277,19 +318,9 @@ impl Session {
                 observer.0.saw(op, session);
             }
             session.apply_op(op, chance);
-            between(session, chance);
-            Ok(())
         };
-        execute(expr, self, &mut apply, chance, &mut BTreeSet::new());
-        // The set-string wrappers' tail into the reset, skipped only for
-        // empty text (`_EvalCurrentMissionBitSetString` @0x99a58, @0x99a85;
-        // `_EvalMissionBitSetString` @0x99dd1, @0x99dea; see the
-        // `precalced` module). The original also resets inside `G`, `D`,
-        // `C`, `E` and `H`, each through `_SystemInfoToShipStats`
-        // (@0x15489, @0x154ef, @0x1566a); the engine resets once, here.
-        // No frame is drawn, no dialog opens and nothing is saved between
-        // the two, so the difference crosses no boundary the player sees.
-        if !expr.is_empty_text() {
+        drive(self, chance, &mut apply);
+        if reset {
             self.reset_precalced_for(ResetCause::SetExpr);
         }
         if self.pilot != before {

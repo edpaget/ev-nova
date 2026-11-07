@@ -718,6 +718,7 @@ mod between_passes;
 mod board;
 mod build;
 mod cockpit;
+mod conversation;
 mod death;
 mod departure;
 mod dialog_latch;

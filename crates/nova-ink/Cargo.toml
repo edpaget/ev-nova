@@ -1,0 +1,21 @@
+[package]
+name = "nova-ink"
+description = "The dialog port's adapter: compiled Ink stories played by the bladeink runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The dialog port this crate implements (`nova_sim_story::dialog`).
+nova-sim-story.workspace = true
+# The Ink runtime. Only this crate may reach it (`deny.toml`).
+bladeink.workspace = true
+
+[dev-dependencies]
+# The port's contract story and `dialog::fixture::check_contract`.
+nova-sim-story = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

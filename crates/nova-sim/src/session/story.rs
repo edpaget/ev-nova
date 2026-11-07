@@ -214,6 +214,7 @@ impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
             Consumer::Offers
             | Consumer::MissionShips
             | Consumer::Missions
+            | Consumer::Storylines
             | Consumer::Crons
             | Consumer::Plugins
             | Consumer::Fixture => true,
@@ -256,6 +257,19 @@ impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
             },
+            // The new game's missions: a landing's deliveries and a day
+            // gone by (see the `storylines` module).
+            // Its outfit changes made before the arm returns.
+            Consumer::Storylines => {
+                super::storylines::settle(
+                    &self.session.statics,
+                    &mut self.session.port,
+                    &mut self.session.pilot,
+                    &mut self.session.out,
+                    event,
+                );
+                self.session.apply_story_outfits(&mut *self.chance);
+            }
             // Each slot's enter-system hook (see the `mission_ships`
             // module).
             Consumer::MissionShips => {

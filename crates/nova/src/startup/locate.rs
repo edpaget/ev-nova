@@ -17,6 +17,7 @@ use nova_data::store::OpenError;
 
 use crate::cli::Usage;
 use crate::config::Os;
+use crate::dialogs::InkCheck;
 use crate::settings::{GameSettings, SettingsKeeper};
 
 use super::new_game::NewGameOpened;
@@ -72,8 +73,17 @@ impl DataSource for DiskData {
         std::fs::symlink_metadata(dir.join(name)).is_ok()
     }
 
+    /// Opens the new game's folder, then checks each stellar's
+    /// conversation and each mission's offer and completion against the
+    /// Ink runtime ([`InkCheck`]), so a knot the story lacks is reported
+    /// against the stellar's or the mission's file.
     fn open_new_game(&self, dir: &Path) -> NewGameOpened<GameData> {
-        nova_data::new_game::open(dir).into()
+        nova_data::new_game::open(dir)
+            .map(|mut game| {
+                game.check_dialogs(&InkCheck);
+                game
+            })
+            .into()
     }
 }
 
@@ -1256,6 +1266,84 @@ mod tests {
         assert_eq!(loaded.systems, 1);
         assert_eq!(loaded.problems, Vec::<String>::new());
         assert_eq!(loaded.data.files()[0].path, dir.path());
+    }
+
+    /// Copies the folder `from` into `to`, files and folders alike.
+    fn copy_folder(from: &Path, to: &Path) {
+        fs::create_dir_all(to).expect("creates");
+        for entry in fs::read_dir(from).expect("lists") {
+            let entry = entry.expect("an entry");
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a type").is_dir() {
+                copy_folder(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).expect("copies");
+            }
+        }
+    }
+
+    #[test]
+    fn the_new_game_fixture_opens_with_its_conversations_checked_and_no_problems() {
+        let NewGameOpened::Loaded(loaded) =
+            DiskData.open_new_game(&nova_data::new_game::fixture::folder())
+        else {
+            panic!("loads");
+        };
+        assert_eq!(loaded.problems, Vec::<String>::new());
+        let camp = loaded
+            .data
+            .dialogs()
+            .stellars
+            .values()
+            .next()
+            .map(nova_data::DialogPlace::as_ref_text);
+        assert_eq!(loaded.data.dialogs().stellars.len(), 1);
+        assert_eq!(camp.as_deref(), Some("dialog/dock-job.ink#camp_greeting"));
+        assert_eq!(loaded.data.storylines().missions.len(), 4);
+    }
+
+    #[test]
+    fn a_stellar_naming_a_knot_its_story_lacks_is_warned_against_its_file() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        copy_folder(&nova_data::new_game::fixture::folder(), dir.path());
+        let camp = dir.path().join("stellars").join("verge-camp.md");
+        let text = fs::read_to_string(&camp).expect("reads");
+        let named = "dialog/dock-job.ink#camp_greeting";
+        assert!(text.contains(named), "{text}");
+        fs::write(&camp, text.replace(named, "dialog/dock-job.ink#nowhere")).expect("writes");
+        let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(dir.path()) else {
+            panic!("loads");
+        };
+        assert_eq!(
+            loaded.problems,
+            [
+                "stellars/verge-camp.md: dialog dialog/dock-job.ink#nowhere: no knot or stitch `nowhere`"
+            ]
+        );
+        assert!(loaded.data.dialogs().stellars.is_empty());
+    }
+
+    #[test]
+    fn a_mission_naming_a_knot_its_story_lacks_is_warned_against_its_file_and_left_out() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        copy_folder(&nova_data::new_game::fixture::folder(), dir.path());
+        let road = dir.path().join("missions").join("clear-the-road.md");
+        let text = fs::read_to_string(&road).expect("reads");
+        let named = "dialog/dock-job.ink#road_offer";
+        assert!(text.contains(named), "{text}");
+        fs::write(&road, text.replace(named, "dialog/dock-job.ink#nowhere")).expect("writes");
+        let NewGameOpened::Loaded(loaded) = DiskData.open_new_game(dir.path()) else {
+            panic!("loads");
+        };
+        assert_eq!(
+            loaded.problems,
+            [
+                "missions/clear-the-road.md: offer dialog dialog/dock-job.ink#nowhere: no knot or stitch `nowhere`"
+            ]
+        );
+        let missions = &loaded.data.storylines().missions;
+        assert!(!missions.contains_key("clear-the-road"));
+        assert_eq!(missions.len(), 3, "the others stay");
     }
 
     #[test]
