@@ -311,6 +311,8 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
             frames: NonZeroU16::new(layer.sheet.frames().len() as u16)?,
             frame_width: layer.sheet.frame_width(),
             frame_height: layer.sheet.frame_height(),
+            image_size: (layer.sheet.image_width(), layer.sheet.image_height()),
+            clip_quirks: layer.sheet.clip_quirks(),
             solid: layer.sheet.solid_frames().is_some(),
             eight_bit: false,
         })
@@ -325,6 +327,8 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
         rotations: NonZeroU16::new(sprite.sheet.layout().columns()).expect("a column"),
         frame_width: sprite.sheet.frame_width(),
         frame_height: sprite.sheet.frame_height(),
+        image_size: (sprite.sheet.image_width(), sprite.sheet.image_height()),
+        clip_quirks: sprite.sheet.clip_quirks(),
         glow,
         lights,
         weapon,

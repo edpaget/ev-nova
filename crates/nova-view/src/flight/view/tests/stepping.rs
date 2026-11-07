@@ -484,6 +484,7 @@ fn breaking_up_at(ship: ShipRef, width: u32) -> Point {
     let mut catalog = armed(1, &[BLASTER]);
     catalog.sheet = Ok(ShipSheet {
         frame_width: width,
+        image_size: (width, 40),
         ..sheet()
     });
     let mut view = stepping(catalog);

@@ -401,6 +401,11 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: crate::flight::fake_catalog::LAYER_SIDE,
                 frame_height: crate::flight::fake_catalog::LAYER_SIDE,
+                image_size: (
+                    crate::flight::fake_catalog::LAYER_SIDE,
+                    crate::flight::fake_catalog::LAYER_SIDE,
+                ),
+                clip_quirks: false,
                 solid: false,
                 eight_bit: false,
             }
@@ -414,6 +419,8 @@ mod tests {
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 10,
                 frame_height: 10,
+                image_size: (10, 10),
+                clip_quirks: false,
                 glow: Some(layer(1100)),
                 lights: Some(layer(1200)),
                 weapon: Some(layer(1930)),

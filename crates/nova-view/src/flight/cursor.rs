@@ -278,6 +278,8 @@ mod tests {
         EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(4).expect("non-zero"),
         }
@@ -495,6 +497,8 @@ mod tests {
         let two = Some(Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(2).expect("non-zero"),
         }));

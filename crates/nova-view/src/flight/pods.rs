@@ -297,6 +297,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             })),
             ..Looks::default()
         }
@@ -325,6 +327,7 @@ mod tests {
             pod: Some(Ok(EffectSheet {
                 frame_width: 31,
                 frame_height: 29,
+                image_size: (31, 29),
                 ..*looks().pod_sheet().expect("read")
             })),
             ..Looks::default()

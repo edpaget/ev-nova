@@ -64,6 +64,8 @@ impl ShipSprites for GameData {
             rotations,
             frame_width: sheet.info.frame_width,
             frame_height: sheet.info.frame_height,
+            image_size: (sheet.info.image_width, sheet.info.image_height),
+            clip_quirks: sheet.info.clip_quirks,
             glow,
             lights,
             weapon,
@@ -107,8 +109,9 @@ pub(crate) fn view_outline(outline: &nova_data::Outline) -> Outline {
     }
 }
 
-/// A resolved layer's ID, frame count, frame size, whether it holds solid
-/// runs and whether it is 8-bit; `None` for one that failed.
+/// A resolved layer's ID, frame count, frame size, image size, clip
+/// quirks, whether it holds solid runs and whether it is 8-bit; `None` for
+/// one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
     // The scan, like the decoder, rejects a sheet with no frames
@@ -120,6 +123,8 @@ fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<
         frames,
         frame_width: layer.sheet.info.frame_width,
         frame_height: layer.sheet.info.frame_height,
+        image_size: (layer.sheet.info.image_width, layer.sheet.info.image_height),
+        clip_quirks: layer.sheet.info.clip_quirks,
         solid: layer.sheet.info.has_runs,
         eight_bit: layer.sheet.info.depth == 8,
     })
@@ -309,6 +314,8 @@ impl CombatLooks for GameData {
             frames: sheet.rotations,
             frame_width: sheet.frame_width,
             frame_height: sheet.frame_height,
+            image_size: sheet.image_size,
+            clip_quirks: sheet.clip_quirks,
         })
     }
 
@@ -363,6 +370,8 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
         frames,
         frame_width: spin.sheet.frame_width(),
         frame_height: spin.sheet.frame_height(),
+        image_size: (spin.sheet.image_width(), spin.sheet.image_height()),
+        clip_quirks: spin.sheet.clip_quirks(),
     })
 }
 
@@ -522,6 +531,8 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
             frame_height: 2,
+            image_size: (3, 2),
+            clip_quirks: false,
             solid: false,
             eight_bit: false,
         }
@@ -555,6 +566,8 @@ mod tests {
                 rotations: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
                 glow: None,
                 lights: None,
                 weapon: None,
@@ -656,6 +669,79 @@ mod tests {
             (RLED, 1000, sheet(8)),
         ]);
         assert!(!plain.ship_sheet(ShipId(128)).expect("a sheet").eight_bit);
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames at 32 bits, each row of three
+    /// words, so its image draws past its box.
+    fn wide_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).depth(32).count_lines(), |b, _| {
+                b.frame(|f| {
+                    f.line()
+                        .pixels32(&[0x7C00; 3])
+                        .line()
+                        .pixels32(&[0x7C00; 3])
+                })
+            })
+            .build()
+    }
+
+    /// An `rlëD` of `frames` 3 x 2 frames whose first row is a run whose
+    /// word's halves differ: a clip quirk.
+    fn quirky_sheet(frames: u16) -> Vec<u8> {
+        (0..frames)
+            .fold(RledBuilder::new(3, 2).count_lines(), |b, _| {
+                b.frame(|f| {
+                    f.line()
+                        .run(2, 0x7C00, 0x001F)
+                        .pixels(&[0x7C00])
+                        .line()
+                        .pixels(&[0x7C00; 3])
+                })
+            })
+            .build()
+    }
+
+    /// The image size and clip quirks `bytes` decode to.
+    fn decoded_edge(bytes: &[u8]) -> ((u32, u32), bool) {
+        let sheet = nova_data::graphics::decode_rled(bytes, None).expect("decodes");
+        (
+            (sheet.image_width(), sheet.image_height()),
+            sheet.clip_quirks(),
+        )
+    }
+
+    #[test]
+    fn a_ships_hull_and_layers_have_their_decoded_image_size_and_clip_quirks() {
+        let (wide, quirky) = (wide_sheet(8), quirky_sheet(8));
+        let (wide_edge, quirky_edge) = (decoded_edge(&wide), decoded_edge(&quirky));
+        assert_ne!(wide_edge.0, (3, 2), "the wide sheet overhangs");
+        assert!(quirky_edge.1, "the quirky sheet has quirks");
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 1100, 1200)),
+            (RLED, 1000, wide.clone()),
+            (RLED, 1100, quirky.clone()),
+            (RLED, 1200, sheet(8)),
+            (Ship::TYPE, 129, ship()),
+            (ShipAnim::TYPE, 129, layered(1001, 1, 8, 1000, 0)),
+            (RLED, 1001, quirky),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        let edge = |size, quirks| (size, quirks);
+        assert_eq!(edge(found.image_size, found.clip_quirks), wide_edge, "hull");
+        let glow = found.glow.expect("a glow");
+        assert_eq!(edge(glow.image_size, glow.clip_quirks), quirky_edge, "glow");
+        let lights = found.lights.expect("lights");
+        assert_eq!(edge(lights.image_size, lights.clip_quirks), ((3, 2), false));
+        let other = data.ship_sheet(ShipId(129)).expect("a sheet");
+        assert_eq!(
+            edge(other.image_size, other.clip_quirks),
+            quirky_edge,
+            "hull"
+        );
+        let glow = other.glow.expect("a glow");
+        assert_eq!(edge(glow.image_size, glow.clip_quirks), wide_edge, "glow");
     }
 
     #[test]
@@ -1034,6 +1120,8 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: 3,
             frame_height: 2,
+            image_size: (3, 2),
+            clip_quirks: false,
         }
     }
 
@@ -1280,8 +1368,41 @@ mod tests {
                 frames: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
+                image_size: (3, 2),
+                clip_quirks: false,
             })
         );
+    }
+
+    #[test]
+    fn the_escape_pods_sheet_has_its_ships_image_size_and_clip_quirks() {
+        for bytes in [wide_sheet(8), quirky_sheet(8)] {
+            let edge = decoded_edge(&bytes);
+            let data = store(&[
+                (Ship::TYPE, nova_sim::ESCAPE_POD_SHIP.0, ship()),
+                (
+                    ShipAnim::TYPE,
+                    nova_sim::ESCAPE_POD_SHIP.0,
+                    anim(1000, 1, 8),
+                ),
+                (RLED, 1000, bytes),
+            ]);
+            let pod = data.pod_sheet().expect("a sheet");
+            assert_eq!((pod.image_size, pod.clip_quirks), edge);
+        }
+    }
+
+    #[test]
+    fn an_effects_sheet_has_its_decoded_image_size_and_clip_quirks() {
+        let (wide, quirky) = (wide_sheet(8), quirky_sheet(8));
+        let (wide_edge, quirky_edge) = (decoded_edge(&wide), decoded_edge(&quirky));
+        assert_ne!(wide_edge.0, (3, 2), "the wide sheet overhangs");
+        assert!(quirky_edge.1, "the quirky sheet has quirks");
+        for (bytes, edge) in [(wide, wide_edge), (quirky, quirky_edge)] {
+            let data = named_store(&[(Spin::TYPE, 650, None, spin(651)), (RLED, 651, None, bytes)]);
+            let sheet = data.cursor_sheet().expect("a sheet");
+            assert_eq!((sheet.image_size, sheet.clip_quirks), edge);
+        }
     }
 
     #[test]
@@ -1473,6 +1594,8 @@ mod tests {
                 frames: NonZeroU16::new(2).expect("non-zero"),
                 frame_width: 4,
                 frame_height: 4,
+                image_size: (4, 4),
+                clip_quirks: false,
             })
         );
     }

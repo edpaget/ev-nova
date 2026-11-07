@@ -26,6 +26,7 @@ fn npc_of((frame_width, frame_height): (u32, u32)) -> ShipSheet {
     ShipSheet {
         frame_width,
         frame_height,
+        image_size: (frame_width, frame_height),
         ..npc_sheet()
     }
 }
@@ -107,6 +108,7 @@ fn the_players_odd_sized_ship_is_drawn_half_a_pixel_right_of_and_below_the_ancho
     catalog.sheet = Ok(ShipSheet {
         frame_width: 41,
         frame_height: 39,
+        image_size: (41, 39),
         ..sheet()
     });
     let mut view = flying_with(catalog, 0.0);
@@ -145,6 +147,7 @@ fn the_players_box_is_the_rect_its_hull_is_drawn_in() {
     catalog.sheet = Ok(ShipSheet {
         frame_width: 41,
         frame_height: 39,
+        image_size: (41, 39),
         ..sheet()
     });
     let mut view = flying_with(catalog, 0.0);
@@ -253,6 +256,7 @@ fn a_held_alt_layer_stays_at_the_whole_pixel_place_it_was_drawn_at() {
         alt: Some(LayerSheet {
             frame_width: 31,
             frame_height: 29,
+            image_size: (31, 29),
             ..layer(2401, 144)
         }),
         ..npc_sheet()

@@ -1031,6 +1031,8 @@ mod tests {
             sheet: Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
@@ -1152,6 +1154,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             })),
             ..looks()
         }
@@ -2772,6 +2776,8 @@ mod tests {
                 sheet: Ok(EffectSheet {
                     frame_width: size.0,
                     frame_height: size.1,
+                    image_size: (size.0, size.1),
+                    clip_quirks: false,
                     image: crate::SheetImage::Rled(image_id),
                     frames: NonZeroU16::new(2).expect("non-zero"),
                 }),

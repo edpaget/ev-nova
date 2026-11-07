@@ -286,6 +286,8 @@ pub(in crate::flight) fn sheet() -> ShipSheet {
         rotations: NonZeroU16::new(36).expect("non-zero"),
         frame_width: 40,
         frame_height: 40,
+        image_size: (40, 40),
+        clip_quirks: false,
         glow: None,
         lights: None,
         alt: None,
@@ -344,12 +346,16 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
         box_sheet: Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(500),
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -968,6 +974,7 @@ impl ShipSprites for FakeCatalog {
                 image_id: 2002,
                 frame_width: 100,
                 frame_height: 100,
+                image_size: (100, 100),
                 ..sheet()
             }),
             other => panic!("asked for shïp {other}'s sheet"),
@@ -1035,6 +1042,8 @@ impl CombatLooks for FakeCatalog {
             1..=4 => Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -1047,6 +1056,8 @@ impl CombatLooks for FakeCatalog {
         Ok(EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(1800 + i16::from(kind)),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -1063,6 +1074,8 @@ impl CombatLooks for FakeCatalog {
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
         })
     }
 
@@ -1952,6 +1965,8 @@ pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
         frames: NonZeroU16::new(frames).expect("non-zero"),
         frame_width: LAYER_SIDE,
         frame_height: LAYER_SIDE,
+        image_size: (LAYER_SIDE, LAYER_SIDE),
+        clip_quirks: false,
         solid: false,
         eight_bit: false,
     }
@@ -1988,6 +2003,8 @@ pub(in crate::flight) fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet
     EffectSheet {
         frame_width: 0,
         frame_height: 0,
+        image_size: (0, 0),
+        clip_quirks: false,
         image: crate::SheetImage::Rled(image_id),
         frames: Frames::new(frames).expect("non-zero"),
     }

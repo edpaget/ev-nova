@@ -100,6 +100,8 @@ mod tests {
         EffectSheet {
             frame_width: 0,
             frame_height: 0,
+            image_size: (0, 0),
+            clip_quirks: false,
             image: crate::SheetImage::Rled(600),
             frames: NonZeroU16::new(frames).expect("non-zero"),
         }
@@ -137,6 +139,8 @@ mod tests {
                     let sheet = EffectSheet {
                         frame_width: 0,
                         frame_height: 0,
+                        image_size: (0, 0),
+                        clip_quirks: false,
                         image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                         frames: NonZeroU16::new(36).expect("non-zero"),
                     };
