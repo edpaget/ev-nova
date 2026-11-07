@@ -123,3 +123,45 @@ run "profile_once_validated" {
     error_message = "The profile must be a certificateProfiles resource at the GA API version, named by profile_name."
   }
 }
+
+# The variable validations refuse a blank validation ID and an account name
+# Azure would reject, before any plan.
+run "rejects_empty_validation_id" {
+  command = plan
+
+  variables {
+    identity_validation_id = ""
+  }
+
+  expect_failures = [var.identity_validation_id]
+}
+
+run "rejects_blank_validation_id" {
+  command = plan
+
+  variables {
+    identity_validation_id = "  "
+  }
+
+  expect_failures = [var.identity_validation_id]
+}
+
+run "rejects_account_name_starting_with_a_digit" {
+  command = plan
+
+  variables {
+    account_name = "1bad"
+  }
+
+  expect_failures = [var.account_name]
+}
+
+run "rejects_account_name_over_24_characters" {
+  command = plan
+
+  variables {
+    account_name = "abcdefghijklmnopqrstuvwxy"
+  }
+
+  expect_failures = [var.account_name]
+}
