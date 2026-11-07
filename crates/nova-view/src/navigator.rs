@@ -224,6 +224,7 @@ mod tests {
                         frame_height: 8,
                         image_size: (8, 8),
                         eight_bit: false,
+                        clip_quirks: false,
                     }),
                     dead_sprite: None,
                     animation: StellarAnimation::default(),
@@ -242,6 +243,7 @@ mod tests {
                         frame_height: 8,
                         image_size: (8, 8),
                         eight_bit: false,
+                        clip_quirks: false,
                     }),
                     dead_sprite: None,
                     animation: StellarAnimation {
@@ -263,6 +265,7 @@ mod tests {
                     frame_height: 8,
                     image_size: (8, 8),
                     eight_bit: false,
+                    clip_quirks: false,
                 }),
                 problems: Vec::new(),
             }

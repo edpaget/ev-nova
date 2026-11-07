@@ -15,6 +15,8 @@
 
 pub mod camera;
 pub mod catalog;
+#[cfg(test)]
+mod clipped_sheet_tests;
 pub mod data;
 #[cfg(test)]
 mod eight_bit_sheet_tests;

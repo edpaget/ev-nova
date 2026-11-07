@@ -1,5 +1,6 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
-//! sheets, the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
+//! sheets (whole, their solid runs, or as the clipped blit draws them at
+//! the world's edge, [`ImageKind::RledClipped`]), the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
 //! `ppat` pixel patterns and `cicn` colour icons, decoded on request; and,
 //! when it is given one, from the interface file (`Nova-DF.rsrc` or
 //! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
@@ -13,9 +14,9 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 
 use nova_data::graphics::{
-    CICN, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
+    CICN, ClipCut, DeepImage, EightBitReading, Image, PICT, PPAT, PixelDepth, RLED, RledReadings,
     ThirtyTwoBitReading, apply_mask, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
-    decode_rled_with,
+    decode_rled_clipped, decode_rled_with,
 };
 use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
 use nova_view::ImageKind;
@@ -115,6 +116,7 @@ impl<D: Borrow<GameData>> GameImages<D> {
             }),
             ImageKind::Rled
             | ImageKind::RledSolid
+            | ImageKind::RledClipped { .. }
             | ImageKind::Pattern
             | ImageKind::Icon
             | ImageKind::SpinSheet => return None,
@@ -165,6 +167,10 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
         Ok(match kind {
             ImageKind::Rled => rled(id)?.into_frames(),
             ImageKind::RledSolid => rled(id)?.into_solid_frames().ok_or(ImageError::Missing)?,
+            ImageKind::RledClipped { top, left } => {
+                let cut = ClipCut { top, left };
+                decode_rled_clipped(bytes(RLED, id)?, None, self.readings, cut)?.into_frames()
+            }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
             ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
             ImageKind::SpinSheet => self.spin_frames(id)?,
@@ -573,6 +579,48 @@ mod tests {
             as_drawn,
             "the game data alone draws it as the original does"
         );
+    }
+
+    /// A clipped key ([`ImageKind::RledClipped`]) gives the sheet's frames
+    /// as the clipped blit draws them, each its box: under the true-colour
+    /// reading, its frames cut to the box.
+    #[test]
+    fn a_clipped_sprite_is_the_sheet_as_the_clipped_blit_draws_it() {
+        let two_colour = RledBuilder::new(4, 1)
+            .count_lines()
+            .frame(|f| f.line().run(4, 0x7C00, 0x001F))
+            .build();
+        let thirty_two = RledBuilder::new(2, 1)
+            .depth(32)
+            .count_lines()
+            .frame(|f| f.line().run32(1, 0x0000_7C00).pixels32(&[0x0000_03E0]))
+            .build();
+        let data = store(&[(RLED, 200, two_colour), (RLED, 201, thirty_two)]);
+        let clipped = |top, left| ImageKind::RledClipped { top, left };
+        let rgba = |frames: Vec<Image>| -> Vec<(u32, Vec<u8>)> {
+            frames
+                .into_iter()
+                .map(|frame| (frame.width(), frame.into_pixels()))
+                .collect()
+        };
+        let (red, blue, black, clear) =
+            ([255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 0, 255], [0; 4]);
+        // The run restarts at the cut: blue (its low half) at pixel 1.
+        assert_eq!(
+            rgba(data.frames(clipped(0, 1), 200).unwrap()),
+            [(4, [clear, blue, red, blue].concat())]
+        );
+        assert_eq!(
+            rgba(data.frames(clipped(0, 0), 201).unwrap()),
+            [(2, [red, black].concat())]
+        );
+        let true_colour = GameImages::new(&data, EightBitReading::AsDrawn)
+            .with_thirty_two_bit(ThirtyTwoBitReading::TrueColour);
+        assert_eq!(
+            rgba(true_colour.frames(clipped(0, 1), 201).unwrap()),
+            [(2, [clear, [0, 0x03, 0xE0, 255]].concat())]
+        );
+        assert_eq!(data.frames(clipped(0, 1), 202), Err(ImageError::Missing));
     }
 
     /// The game data resolves a sheet by the original's reading, which

@@ -32,6 +32,16 @@ pub enum ImageKind {
     /// a `spïn` drawn from a `PICT` pair, which has no `rlëD` to key it
     /// by (see [`SheetImage`](crate::SheetImage)).
     SpinSheet,
+    /// An `rlëD`'s frames as the original draws a frame whose box the
+    /// world's edge cuts (`_BlitPixieRLEClipped`, see
+    /// `nova_data::graphics::decode_rled_clipped`): each the box's size,
+    /// its `top` rows and `left` pixels, outside the world, clear.
+    RledClipped {
+        /// The box's rows above the world's top edge.
+        top: u16,
+        /// The box's pixels left of the world's left edge.
+        left: u16,
+    },
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -123,6 +133,19 @@ impl ImageKey {
     pub const fn solid_runs(id: i16, frame: u16) -> Self {
         Self {
             kind: ImageKind::RledSolid,
+            id,
+            frame,
+        }
+    }
+}
+
+impl ImageKey {
+    /// Frame `frame` of `rlëD` `id` as the original draws it with the box
+    /// cut by `(top, left)` ([`ImageKind::RledClipped`]).
+    #[must_use]
+    pub const fn clipped_sprite(id: i16, frame: u16, (top, left): (u16, u16)) -> Self {
+        Self {
+            kind: ImageKind::RledClipped { top, left },
             id,
             frame,
         }
@@ -226,5 +249,20 @@ mod tests {
             }
         );
         assert_ne!(key, ImageKey::sprite(1930, 13));
+    }
+
+    #[test]
+    fn a_clipped_sprite_names_its_cut() {
+        let key = ImageKey::clipped_sprite(1930, 13, (2, 5));
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledClipped { top: 2, left: 5 },
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(1930, 13));
+        assert_ne!(key, ImageKey::clipped_sprite(1930, 13, (5, 2)));
     }
 }

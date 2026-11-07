@@ -40,6 +40,18 @@ impl SheetImage {
             Self::Spin(id) => ImageKey::spin_sheet(id, frame),
         }
     }
+
+    /// The image key of frame `frame` as the original draws it with its
+    /// box cut by `(top, left)` ([`ImageKind::RledClipped`]): only an
+    /// `rlëD` has one. A `PICT` pair's cut is a 16-bit RLE with no quirk
+    /// at the edge.
+    #[must_use]
+    pub const fn clipped_frame(self, frame: u16, cut: (u16, u16)) -> Option<ImageKey> {
+        match self {
+            Self::Rled(id) => Some(ImageKey::clipped_sprite(id, frame, cut)),
+            Self::Spin(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,5 +89,14 @@ mod tests {
         );
         assert_eq!(key, ImageKey::spin_sheet(1003, 1));
         assert_ne!(key, ImageKey::sprite(1003, 1));
+    }
+
+    #[test]
+    fn only_an_rled_sheet_has_a_clipped_frame() {
+        assert_eq!(
+            SheetImage::Rled(1930).clipped_frame(3, (1, 2)),
+            Some(ImageKey::clipped_sprite(1930, 3, (1, 2)))
+        );
+        assert_eq!(SheetImage::Spin(1003).clipped_frame(3, (1, 2)), None);
     }
 }

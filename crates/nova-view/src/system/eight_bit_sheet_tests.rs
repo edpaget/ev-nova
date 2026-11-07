@@ -46,6 +46,7 @@ fn sheet(eight_bit: bool) -> StellarSheet {
         frame_height: 2,
         image_size: (2, 2),
         eight_bit,
+        clip_quirks: false,
     }
 }
 

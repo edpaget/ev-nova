@@ -34,6 +34,12 @@ pub struct StellarSheet {
     /// depth-8 branches (@0xbb5a4, @0xbb792; see `eight_bit_blit`). Never
     /// for a `PICT` pair, which the original makes a 16-bit RLE.
     pub eight_bit: bool,
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box (`nova_data::graphics::SpriteSheet::clip_quirks`),
+    /// so the scene draws it through `_BlitPixieRLEClipped`'s port
+    /// ([`ImageKind::RledClipped`](crate::ImageKind::RledClipped)). Never
+    /// for a `PICT` pair, nor for any stock sheet.
+    pub clip_quirks: bool,
 }
 
 /// One stellar object, placed in its system.

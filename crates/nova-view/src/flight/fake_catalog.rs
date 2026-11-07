@@ -772,6 +772,7 @@ pub(in crate::flight) fn stellar(
             frame_height: 20,
             image_size: (20, 20),
             eight_bit: false,
+            clip_quirks: false,
         }),
         dead_sprite: None,
         animation: StellarAnimation {
@@ -803,6 +804,7 @@ pub(in crate::flight) fn dying(
             frame_height: 30,
             image_size: (30, 30),
             eight_bit: false,
+            clip_quirks: false,
         })),
         ..stellar(id, name, at, frames)
     }
@@ -850,6 +852,7 @@ impl SystemCatalog for FakeCatalog {
                 frame_height: width,
                 image_size: (width, width),
                 eight_bit: false,
+                clip_quirks: false,
             };
             for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
                 stellar.sprite = Ok(square(1129, moon.width, moon.frames));
@@ -875,6 +878,7 @@ impl SystemCatalog for FakeCatalog {
                 frame_height: zero,
                 image_size: (zero, zero),
                 eight_bit: false,
+                clip_quirks: false,
             }),
             problems: Vec::new(),
         }

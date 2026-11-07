@@ -139,6 +139,7 @@ fn sheet(image: SheetImage, sheet: &SpriteSheet, frames: usize) -> StellarSheet 
         frame_height: sheet.frame_height(),
         image_size: (sheet.image_width(), sheet.image_height()),
         eight_bit: sheet.depth() == 8,
+        clip_quirks: sheet.clip_quirks(),
     }
 }
 
@@ -278,6 +279,7 @@ mod tests {
             frame_height: size,
             image_size: (size, size),
             eight_bit: false,
+            clip_quirks: false,
         }
     }
 
@@ -709,6 +711,34 @@ mod tests {
             .stellars
             .into_iter()
             .map(|stellar| (stellar.id, stellar.sprite.expect("its sheet").eight_bit))
+            .collect();
+        assert_eq!(sprites, [(StellarId(129), true), (StellarId(128), false)]);
+    }
+
+    /// A sheet whose clipped draw can differ from a crop says so, as the
+    /// decoded sheet does, so the scene can ask for the clipped draw at the
+    /// world's edge; a stock-shaped one does not.
+    #[test]
+    fn a_sheet_with_clip_quirks_says_so() {
+        // A run whose word's halves differ, its line counted.
+        let two_colour = RledBuilder::new(2, 1)
+            .count_lines()
+            .frame(|f| f.line().run(2, 0x7C00, 0x001F))
+            .build();
+        let mut resources = sol();
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1001));
+        resources.push((RLED, 1001, None, two_colour));
+        let data = store(&resources);
+        let decoded = data
+            .stellar_sprite(StellarId(129))
+            .expect("the wormhole's sheet decodes")
+            .sheet;
+        assert!(decoded.clip_quirks());
+        let sprites: Vec<_> = data
+            .system(SystemId(130))
+            .stellars
+            .into_iter()
+            .map(|stellar| (stellar.id, stellar.sprite.expect("its sheet").clip_quirks))
             .collect();
         assert_eq!(sprites, [(StellarId(129), true), (StellarId(128), false)]);
     }

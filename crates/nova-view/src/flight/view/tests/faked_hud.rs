@@ -265,6 +265,7 @@ fn a_blip_is_sized_by_the_type_master_not_the_sheet_drawn() {
                 frame_height: 300,
                 image_size: (300, 300),
                 eight_bit: false,
+                clip_quirks: false,
             }),
             ..stellar(150, "Wide", (320, 0), 1)
         }],
