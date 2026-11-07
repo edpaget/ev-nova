@@ -27,7 +27,11 @@
 //! ([`Session::warp_end_due`]: the arrival comes first) or the hold after
 //! the player's explosion has run out ([`Session::hold_expired`]):
 //!
-//! 1. each ship's state is recorded, which the view draws from;
+//! 1. each ship's state is recorded, which the view draws from; the
+//!    frame's gain is taken; and while the gate autopilot is engaged its
+//!    controls replace the input's (`Session::pilot_controls`, see the
+//!    `gate_pilot` module), once a step, so both passes below fly them,
+//!    as they fly a held key;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
 //!    [`Session::game_work`]), or, on the first step after a comm, escort
 //!    or info dialog's zero, the rest of the frame it opened on, at gain 0
@@ -37,11 +41,14 @@
 //!    ([`Session::answer_strikes`]): the pass answers every hit it lands
 //!    as its phase settles, the beams' and shockwaves' included, as
 //!    `_DamageShip` does (@0x44385, @0x4453d), so only the session's own
-//!    calls are left here, before the frame is drawn. Then the attack
-//!    quotes the pass left, those the frame's line work didn't say (see
-//!    the `comm_calls` module), are said
-//!    (`_ShowPersonHailQuote` @0x89ce1) and `_HandleShip`'s quote roll runs
-//!    (@0x33f0f-0x33fba; [`Session::tick_quotes`]), and the pass's quotes,
+//!    calls are left here, before the frame is drawn. The pass said each
+//!    hit's attack quote as its hit settled, counted the line down at
+//!    `_HandleComm`'s place (@0x4421e) and ran `_HandleShip`'s quote roll
+//!    (@0x33f0f-0x33fba; [`Session::roll_quote_at_turn`]) at each NPC's
+//!    turn of its ship loop (see [`Session::ship_loop`]), so here only
+//!    the attack quotes these answers queue are said
+//!    (`_ShowPersonHailQuote` @0x89ce1;
+//!    [`Session::say_attack_quotes_left`]), and the pass's quotes,
 //!    fight events and ships are reported ([`PassReport`]), with its
 //!    escort-menu block ([`PassReport::escort_menu`], see the
 //!    `class_orders` module): whether an escort flew as its fade counted
@@ -53,9 +60,11 @@
 //!    (`_PlayGame` @0x45d96-0x45e82), then the second pass
 //!    (`_DoPlayGameWork(0)` @0x45f31, [`Session::tick_again`]), the rescue
 //!    asked after it
-//!    ([`Session::rescue_if_due`]), the strikes answered, the quote roll
-//!    on the clock unmoved ([`Session::tick_quotes_again`]), and its own
-//!    report. The lines the second pass raises, the rescue's among them,
+//!    ([`Session::rescue_if_due`]), the strikes answered, the attack
+//!    quotes left said, and its own report. Its ship loop ran the quote
+//!    roll on the clock unmoved, with no countdown, as `_HandleComm` runs
+//!    on the advance pass alone. The lines the second pass raises, the
+//!    rescue's among them,
 //!    are held apart while it runs ([`StepRun::second_pass_lines`]), off
 //!    the step's comm, its quotes, the messages and its last line. The
 //!    original's `_DisplayComm` draws its line into the background and
@@ -178,21 +187,32 @@ impl Session {
 
     /// One step under `input`, handed `collab` (see the module docs).
     fn run_step(&mut self, input: &StepInput, collab: &mut StepCollaborators<'_>) -> StepRun {
-        let catalog = &collab.catalog;
+        let catalog = collab.catalog;
+        // The quote roll's view of the catalog, which both passes hand down
+        // to their ship loops.
+        let quotes: &dyn CommCatalog = catalog;
         let mut run = StepRun {
             before: self.ships_before(),
             ..StepRun::default()
         };
+        let controls = self.pilot_controls(input.controls);
         let rescued = if self.take_opening_rest() {
             // The rest of the frame a dialog opened on, at the gain its
             // zero left (see the `opening_rest` module).
-            self.rest_of_opening_pass(catalog, collab.behaviour, collab.rules, &mut *collab.chance);
+            self.rest_of_opening_pass(
+                &catalog,
+                Some(quotes),
+                collab.behaviour,
+                collab.rules,
+                &mut *collab.chance,
+            );
             false
         } else {
             self.adjust_time();
-            self.game_work(
-                input.controls,
-                catalog,
+            self.game_work_quoting(
+                controls,
+                &catalog,
+                Some(quotes),
                 collab.behaviour,
                 collab.rules,
                 &mut *collab.chance,
@@ -206,7 +226,7 @@ impl Session {
             return run;
         }
         self.answer_strikes(collab.behaviour);
-        self.tick_quotes(catalog, &mut *collab.chance);
+        self.say_attack_quotes_left(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
         if !self.double_time() {
             self.take_step_ends(&mut run);
@@ -216,15 +236,16 @@ impl Session {
         #[cfg(test)]
         self.give_test_command_between_passes(&mut *collab.chance);
         self.out.second_pass = Some(Vec::new());
-        self.tick_again(
-            input.controls,
+        self.tick_again_quoting(
+            controls,
+            Some(quotes),
             collab.behaviour,
             collab.rules,
             &mut *collab.chance,
         );
         #[cfg(test)]
         self.raise_test_second_pass_lines();
-        if self.rescue_if_due(catalog, &mut *collab.chance) {
+        if self.rescue_if_due(&catalog, &mut *collab.chance) {
             run.second_pass_lines = self.close_second_pass();
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
@@ -233,7 +254,7 @@ impl Session {
             return run;
         }
         self.answer_strikes(collab.behaviour);
-        self.tick_quotes_again(catalog, &mut *collab.chance);
+        self.say_attack_quotes_left(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
         run.comm.extend(self.take_comm());
         run.second_pass_lines = self.close_second_pass();
@@ -452,9 +473,10 @@ mod tests {
             if session.warp_end_due() || session.hold_expired() {
                 break;
             }
-            let rescued = session.game_work(
+            let rescued = session.game_work_quoting(
                 input.controls,
                 catalog,
+                Some(catalog),
                 &behaviour,
                 Rules::default(),
                 chance,
@@ -466,13 +488,19 @@ mod tests {
                 break;
             }
             session.answer_strikes(&behaviour);
-            session.tick_quotes(catalog, chance);
+            session.say_attack_quotes_left(catalog, chance);
             passes.push(pass_took(session));
             if session.double_time() {
                 if let Some((group, command)) = session.out.command_between_passes.take() {
                     session.command_escorts(group, command, chance);
                 }
-                session.tick_again(input.controls, &behaviour, Rules::default(), chance);
+                session.tick_again_quoting(
+                    input.controls,
+                    Some(catalog),
+                    &behaviour,
+                    Rules::default(),
+                    chance,
+                );
                 session.raise_test_second_pass_lines();
                 if session.rescue_if_due(catalog, chance) {
                     comm.extend(session.take_comm());
@@ -480,7 +508,7 @@ mod tests {
                     break;
                 }
                 session.answer_strikes(&behaviour);
-                session.tick_quotes_again(catalog, chance);
+                session.say_attack_quotes_left(catalog, chance);
                 passes.push(pass_took(session));
                 comm.extend(session.take_comm());
             }
@@ -646,22 +674,29 @@ mod tests {
             let chance = &mut NeverFires;
             by_hand(&mut hand, &catalog, &input, 0);
             for _ in 0..30 {
-                hand.game_work(
+                hand.game_work_quoting(
                     input.controls,
                     &catalog,
+                    Some(&catalog),
                     &behaviour,
                     Rules::default(),
                     chance,
                 );
                 hand.take_comm();
                 hand.answer_strikes(&behaviour);
-                hand.tick_quotes(&catalog, chance);
+                hand.say_attack_quotes_left(&catalog, chance);
                 expected.push(records(&mut hand));
                 if hand.double_time() {
-                    hand.tick_again(input.controls, &behaviour, Rules::default(), chance);
+                    hand.tick_again_quoting(
+                        input.controls,
+                        Some(&catalog),
+                        &behaviour,
+                        Rules::default(),
+                        chance,
+                    );
                     hand.rescue_if_due(&catalog, chance);
                     hand.answer_strikes(&behaviour);
-                    hand.tick_quotes_again(&catalog, chance);
+                    hand.say_attack_quotes_left(&catalog, chance);
                     expected.push(records(&mut hand));
                 }
             }

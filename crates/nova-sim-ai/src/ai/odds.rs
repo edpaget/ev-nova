@@ -114,6 +114,9 @@ use crate::traffic::npc::Npc;
 /// The least a ship's shield factor counts for (0.25 @0xdd684).
 pub const WEAKEST: f32 = 0.25;
 /// The mass, in tons, a chaser must be over for its chase to be hopeless.
+/// The original compares the signed `Mass` (`cmpw $0x63`/`jle` @0x80f20),
+/// so a negative `Mass` is not heavy, as the clamp's 0
+/// ([`HullSpec::mass`](crate::combat::hull::HullSpec::mass)) isn't.
 pub const HEAVY: f32 = 99.0;
 /// The relative speed, in pixels a tick on either axis, a gap must open
 /// faster than (0.35 @0xdda68).

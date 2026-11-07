@@ -1,12 +1,15 @@
 //! The records the new game's data maps to: one neutral record per type,
-//! which phase 3 reuses, and the small pure conversions the mapping
-//! applies over it.
+//! and the small pure conversions the mapping applies over it.
 
 use nova_galaxy_format::id::Color;
 use nova_galaxy_format::model::{Service, StellarKind};
 
+use crate::records::character::Character;
 use crate::records::desc::Desc;
+use crate::records::dude::Dude;
 use crate::records::govt::Govt;
+use crate::records::ship::Ship;
+use crate::records::ship_anim::ShipAnim;
 use crate::records::stellar::{Stellar, flags};
 use crate::records::system::System;
 use crate::wire::flags::{Flags16, Flags32, Flags64};
@@ -115,6 +118,181 @@ pub fn neutral_stellar() -> Stellar {
         on_regen: MacString::default(),
         special_tech4_8: [-1; 5],
         unknown_0x44e: RawArray::default(),
+    }
+}
+
+/// A `shïp` that does nothing: no stats, weapons, outfits, flags, names,
+/// scripts or price; no crew, government, explosion, escort type, key or
+/// upgrade. Its weapon, outfit, key and upgrade slots are none, and its
+/// `InherentGovt`, `Explode1`, `Explode2` and `EscortType` are -1 (unused).
+#[must_use]
+pub fn neutral_ship() -> Ship {
+    Ship {
+        holds: 0,
+        shield: 0,
+        accel: 0,
+        speed: 0,
+        maneuver: 0,
+        fuel: 0,
+        free_mass: 0,
+        armor: 0,
+        shield_rech: 0,
+        weap_type1_4: [None; 4],
+        weap_count1_4: [0; 4],
+        ammo_load1_4: [0; 4],
+        max_gun: 0,
+        max_tur: 0,
+        tech_level: 0,
+        cost: 0,
+        death_delay: 0,
+        armor_rech: 0,
+        explode1: -1,
+        explode2: -1,
+        disp_weight: 0,
+        mass: 0,
+        length: 0,
+        inherent_ai: 0,
+        crew: 0,
+        strength: 0,
+        inherent_govt: -1,
+        flags: Flags16::default(),
+        pod_count: 0,
+        default_items1_4: [None; 4],
+        item_count1_4: [0; 4],
+        fuel_regen: 0,
+        skill_var: 0,
+        flags2: Flags16::default(),
+        contribute: Flags64::default(),
+        availability: MacString::default(),
+        appear_on: MacString::default(),
+        on_purchase: MacString::default(),
+        deionize: 0,
+        ionize_max: 0,
+        key_carried: None,
+        default_items5_8: [None; 4],
+        item_count5_8: [0; 4],
+        require: Flags64::default(),
+        buy_random: 0,
+        hire_random: 0,
+        unknown_0x38c: RawArray::default(),
+        on_capture: MacString::default(),
+        on_retire: MacString::default(),
+        short_name: MacString::default(),
+        comm_name: MacString::default(),
+        long_name: MacString::default(),
+        movie_file: MacString::default(),
+        weap_type5_8: [None; 4],
+        weap_count5_8: [0; 4],
+        ammo_load5_8: [0; 4],
+        subtitle: MacString::default(),
+        flags3: Flags16::default(),
+        upgrade_to: None,
+        esc_upgrd_cost: 0,
+        esc_sell_value: 0,
+        escort_type: -1,
+        unknown_0x734: RawArray::default(),
+    }
+}
+
+/// A `shän` that draws nothing: no images, sizes, frames, blinking or
+/// weapon positions. The view's sheet lookup fails for it, so its ship
+/// draws as the view's crossed box.
+#[must_use]
+pub fn neutral_ship_anim() -> ShipAnim {
+    ShipAnim {
+        base_image_id: 0,
+        base_mask_id: 0,
+        base_set_count: 0,
+        base_x_size: 0,
+        base_y_size: 0,
+        base_transp: 0,
+        alt_image_id: 0,
+        alt_mask_id: 0,
+        alt_set_count: 0,
+        alt_x_size: 0,
+        alt_y_size: 0,
+        glow_image_id: 0,
+        glow_mask_id: 0,
+        glow_x_size: 0,
+        glow_y_size: 0,
+        light_image_id: 0,
+        light_mask_id: 0,
+        light_x_size: 0,
+        light_y_size: 0,
+        weap_image_id: 0,
+        weap_mask_id: 0,
+        weap_x_size: 0,
+        weap_y_size: 0,
+        flags: Flags16::default(),
+        anim_delay: 0,
+        weap_decay: 0,
+        frames_per: 0,
+        blink_mode: 0,
+        blink_val_a: 0,
+        blink_val_b: 0,
+        blink_val_c: 0,
+        blink_val_d: 0,
+        shield_image_id: 0,
+        shield_mask_id: 0,
+        shield_x_size: 0,
+        shield_y_size: 0,
+        gun_pos_x: [0; 4],
+        gun_pos_y: [0; 4],
+        turret_pos_x: [0; 4],
+        turret_pos_y: [0; 4],
+        guided_pos_x: [0; 4],
+        guided_pos_y: [0; 4],
+        beam_pos_x: [0; 4],
+        beam_pos_y: [0; 4],
+        up_compress_x: 0,
+        up_compress_y: 0,
+        dn_compress_x: 0,
+        dn_compress_y: 0,
+        gun_pos_z: [0; 4],
+        turret_pos_z: [0; 4],
+        guided_pos_z: [0; 4],
+        beam_pos_z: [0; 4],
+        unknown_0xb0: RawArray::default(),
+    }
+}
+
+/// A `düde` that spawns nothing: no ships, AI type, government, booty or
+/// info types.
+#[must_use]
+pub fn neutral_dude() -> Dude {
+    Dude {
+        ai_type: 0,
+        govt: None,
+        booty: Flags16::default(),
+        info_types: Flags16::default(),
+        ship_type: [None; 16],
+        probability: [0; 16],
+        unknown_0x48: RawArray::default(),
+    }
+}
+
+/// A `chär` that starts nowhere in nothing: no cash, ship, systems, legal
+/// records, kills, intro, script, flags, date or date affixes.
+#[must_use]
+pub fn neutral_character() -> Character {
+    Character {
+        cash: 0,
+        ship_type: None,
+        system: [None; 4],
+        govt: [None; 4],
+        status: [0; 4],
+        kills: 0,
+        intro_pict: [None; 4],
+        pict_delay: [0; 4],
+        intro_text_id: None,
+        on_start: MacString::default(),
+        flags: Flags16::default(),
+        unknown_0x134: 0,
+        unknown_0x136: 0,
+        start_year: 0,
+        date_prefix: MacString::default(),
+        date_suffix: MacString::default(),
+        unknown_0x15a: RawArray::default(),
     }
 }
 
@@ -298,6 +476,49 @@ mod tests {
             stellar.explod_type = -1;
         });
         assert_eq!(neutral_stellar(), expected);
+    }
+
+    #[test]
+    fn the_neutral_ship_is_zero_but_its_unused_references() {
+        let expected = zeroed::<Ship>(|ship| {
+            ship.weap_type1_4 = [None; 4];
+            ship.weap_type5_8 = [None; 4];
+            ship.default_items1_4 = [None; 4];
+            ship.default_items5_8 = [None; 4];
+            ship.key_carried = None;
+            ship.upgrade_to = None;
+            ship.inherent_govt = -1;
+            ship.explode1 = -1;
+            ship.explode2 = -1;
+            ship.escort_type = -1;
+        });
+        assert_eq!(neutral_ship(), expected);
+    }
+
+    #[test]
+    fn the_neutral_ship_anim_is_zero() {
+        assert_eq!(neutral_ship_anim(), zeroed::<ShipAnim>(|_| {}));
+    }
+
+    #[test]
+    fn the_neutral_dude_is_zero_but_its_unused_references() {
+        let expected = zeroed::<Dude>(|dude| {
+            dude.govt = None;
+            dude.ship_type = [None; 16];
+        });
+        assert_eq!(neutral_dude(), expected);
+    }
+
+    #[test]
+    fn the_neutral_character_is_zero_but_its_unused_references() {
+        let expected = zeroed::<Character>(|character| {
+            character.ship_type = None;
+            character.system = [None; 4];
+            character.govt = [None; 4];
+            character.intro_pict = [None; 4];
+            character.intro_text_id = None;
+        });
+        assert_eq!(neutral_character(), expected);
     }
 
     #[test]

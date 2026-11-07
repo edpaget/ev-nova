@@ -104,7 +104,15 @@
 //!      -1.0 it is goal 0 (@0x8fda0-0x8fdaa), then sub 0 (@0x8fb09-0x8fb13);
 //!    - goal 0xb (the lead followed a jump of its own lead): with no parent
 //!      the goal's block makes it goal 2, sub 4, target and travel stellar
-//!      -1 (@0x8de7c → @0x8df54).
+//!      -1 (@0x8de7c → @0x8df54-0x8df6c). That block (@0x8de63) runs after
+//!      goal 2's (@0x8dd99-0x8de57), which tested goal 0xb and skipped, so
+//!      the take-over's dispatch flies sub 4 (@0x8585b) at its slot
+//!      ([`Warp::sub_4_past_leave_block`](super::warp_out::Warp::sub_4_past_leave_block)),
+//!      and goal 2's block first reads it on the next: the run-out inside
+//!      1000, or the brake beyond it while moving, starts there. Under its
+//!      own AI wait, where the original keeps the copied goal 0xb until
+//!      the wait ends (@0x8d4b9-0x8d4d2), the engine writes goal 2 at once
+//!      (rdm:phase/npc-ai-2/phase-7-successor-copied-follow-under-wait-and-other-subs).
 //!
 //!    Otherwise the writes end the successor's arrival
 //!    ([`Npc::leaves_arrival`]): a goal over goal 0x15 holds it in its gate
@@ -465,9 +473,13 @@ impl Npc {
         if let Some(lead) = record.filter(|lead| lead.govt.is_some() && lead.govt == self.govt) {
             if lead.follows_leaders_jump() {
                 // Goal 0xb copied, with no parent (@0x8de7c → @0x8df54).
+                // Goal 0xb's block (@0x8de63) runs after goal 2's
+                // (@0x8dd99), so this dispatch flies sub 4 and goal 2's
+                // block first reads it on the next.
                 self.leaves_arrival(world.held_burst);
                 self.goal = Goal::JumpOut;
                 self.warp.goal = Some(WarpGoal::Own);
+                self.warp.sub_4_past_leave_block = true;
                 self.target = None;
                 self.travel = None;
                 self.pursuit = Pursuit::default();
@@ -909,8 +921,10 @@ mod tests {
         lead.target = Some(PLAYER);
         lead.travel = Some(crate::catalog::StellarId(150));
         lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(far)));
-        // The marking pass's take-over: its goal 2 block at its slot then
-        // runs it out inside 1000 (@0x8fb1e).
+        // The marking pass's take-over alone. Goal 0xb's block (@0x8de63,
+        // @0x8df54-0x8df6c) comes after goal 2's, so its slot flies sub 4
+        // and goal 2's block runs it out on the next dispatch
+        // (`successor_jump_tests`).
         succeed(&mut traffic);
         let taker = of(&traffic, 1);
         assert_eq!(taker.leader, None);
@@ -1089,8 +1103,9 @@ mod tests {
 
     #[test]
     fn following_its_leads_jump_it_jumps_on_its_own() {
-        // The take-over, in the marking pass; its goal 2 block at its slot
-        // then runs it out inside 1000 (@0x8fb1e).
+        // The take-over, in the marking pass: the check itself writes goal
+        // 2, sub 4 (@0x8940c-0x8941e), so its goal 2 block at its slot then
+        // runs it out inside 1000 (@0x8fb1e) in the same dispatch.
         let mut traffic = taking_over(FEDS, Goal::Attack(ShipRef::Npc(NpcId(9))));
         let taker = of_mut(&mut traffic, 1);
         taker.goal = Goal::Idle;
@@ -1215,6 +1230,26 @@ mod tests {
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
         assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 12.0 });
         assert_eq!(paused.target, Some(PLAYER));
+    }
+
+    #[test]
+    fn a_follower_held_at_its_gate_that_was_told_to_leave_keeps_leaving() {
+        // `_AIMakeShipLeave`'s floor (@0x7e2b0-0x7e2e7) raises the emerge's
+        // -1.0 (@0x89555) to 0, so the pause (@0x8949d-0x894a6) passes it by.
+        for mode in [
+            Mode::Emerging { ticks_left: 12.0 },
+            Mode::HeldAtGate { ticks_left: 12.0 },
+        ] {
+            let leaving = beside_a_successor(|ship| {
+                ship.mode = mode;
+                ship.takes_leave_write(RuleSource::Engine);
+                ship.goal = Goal::JumpOut;
+                ship.target = None;
+            });
+            assert_eq!(leaving.leader, Some(NpcId(1)), "{mode:?}");
+            assert_eq!(leaving.goal, Goal::JumpOut, "{mode:?}");
+            assert_eq!(leaving.mode, Mode::HeldAtGate { ticks_left: 12.0 });
+        }
     }
 
     #[test]
@@ -1786,8 +1821,9 @@ mod tests {
             let taker = of_mut(&mut traffic, 1);
             taker.mode = mode;
             taker.emerges_from = taker.emerging().then_some(StellarId(310));
-            // The marking pass's take-over alone: the ship's own goal 2
-            // block at its slot runs it out inside 1000 (@0x8fb1e).
+            // The marking pass's take-over alone. Goal 0xb's block
+            // (@0x8de63, @0x8df54-0x8df6c) comes after goal 2's, so its slot
+            // flies sub 4 and goal 2's block reads it on the next dispatch.
             let world = World {
                 held_burst: burst,
                 ..World::new(&[])
@@ -1882,6 +1918,29 @@ mod tests {
                 guard: None
             }
         );
+    }
+
+    #[test]
+    fn a_stellar_attacker_whose_lead_is_lost_keeps_attacking_and_takes_no_pause() {
+        // Goal 0x12 is no jump goal, so the hold zeroes +0x50 at the head of
+        // every dispatch (@0x8d52e), before goal 0x12's block writes its band
+        // sub (@0x8f906-0x8faeb); the check's strict test (@0x8949d-0x894a4)
+        // then writes no goal 0x13: the attacker keeps goal 0x12 under the
+        // successor.
+        let mut attacker = follower(FEDS, 100);
+        attacker.goal = Goal::AttackStellar(StellarId(131));
+        attacker.warp.stage = -1.0;
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300), attacker]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 2).warp.stage, 0.0);
+        assert_eq!(of(&traffic, 2).goal, Goal::AttackStellar(StellarId(131)));
+
+        of_mut(&mut traffic, 0).condition = DISABLED;
+        think(&mut traffic);
+        let attacker = of(&traffic, 2);
+        assert_eq!(attacker.leader, Some(NpcId(1)));
+        assert_eq!(attacker.goal, Goal::AttackStellar(StellarId(131)));
+        assert_eq!(attacker.flown_goal(), Goal::AttackStellar(StellarId(131)));
     }
 
     #[test]

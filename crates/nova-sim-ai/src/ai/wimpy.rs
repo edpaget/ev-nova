@@ -4,21 +4,30 @@
 //! provoked, and once provoked it flees from its attacker (@0x8b1ac), never fighting
 //! back by choice, calling for help on every think it flees
 //! (`_AICallForHelp` @0x8b1f5; see
-//! [`call_for_help`](super::call_for_help)); with the attacker gone it
-//! decides again. In its count wait (goal 0x16) it returns at once
-//! (@0x8b062), provoked or not. Unprovoked, it keeps any goal it holds
-//! but 0, as its idle block runs on goal 0 alone (@0x8b06c): a plunder, a
-//! fight on a ship still here, a mine, a scoop or a stellar attack, a lost
-//! lead's that the succession copied included ([`trader_keep`]). Goal 4's
-//! high level then flies a kept attack in the same frame, as it does every
-//! type's ([`attack_drop`](super::attack_drop)): one on a ship breaking up
-//! ends, and a hopeless chase is fled.
+//! [`call_for_help`](super::call_for_help)). The provoked test reads
+//! +0x70 not -1 whatever its slot holds (@0x8b1ac-0x8b1bb), so an attacker
+//! gone from the system whose freed slot its target still names is fled
+//! and called about on the one think before a slot test clears it
+//! ([`provoked_by_gone`]), and the high level then ends the flight zeroed
+//! (@0x8d4e4-0x8d50d → @0x8e228-0x8e23d). Its leader branch (+0x9a 0,
+//! @0x8b1bd-0x8b1d0) is unreachable for AI type 1. In its count wait
+//! (goal 0x16) it returns at once (@0x8b062), provoked or not.
+//! Unprovoked, or with +0x70 -1, it keeps any goal it holds but 0, as its
+//! idle block runs on goal 0 alone (@0x8b06c): a plunder, a fight on the
+//! ship +0x70 names, a mine, a scoop or a stellar attack, a lost lead's
+//! that the succession copied included ([`trader_keep`]). A flight whose
+//! +0x70 went makes its last call for help, and the high level ends it
+//! zeroed; an attack whose +0x70 went makes no call and ends with its
+//! provocation kept ([`trader_keep::last_think`]); the next think, on goal
+//! 0, decides again. Goal 4's high level flies a kept attack in the same
+//! frame, as it does every type's ([`attack_drop`](super::attack_drop)):
+//! one on a ship breaking up ends, and a hopeless chase is fled.
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by, react,
-    trader_keep, trader_target,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by,
+    provoked_by_gone, react, trader_keep, trader_target,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -36,15 +45,25 @@ pub struct WimpyTrader {
 }
 
 /// What `_WimpyTraderAI` writes, before the high level: its count wait
-/// kept (@0x8b062), a flight from its attacker provoked (@0x8b1ac), and
-/// otherwise a goal it keeps or its idle block's
-/// ([`trader_keep::unprovoked`]).
+/// kept (@0x8b062); on goal 0 its idle block's leave, which clears +0x70
+/// before the provoked test (@0x8b179-0x8b19b, [`trader_keep::idle_first`]);
+/// a flight from its attacker provoked (@0x8b1ac), in its slot or gone
+/// with its slot still named ([`provoked_by_gone`]); and otherwise a goal
+/// it keeps or its idle block's ([`trader_keep::unprovoked`]).
 fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if npc.goal == Goal::CountWait {
         return npc.goal;
     }
+    let business = trader_keep::idle_first(npc, around, chance);
+    if let Some(leave) = business.filter(|&goal| idle_block::leaves(npc, goal)) {
+        return leave;
+    }
     provoked_by(npc, around)
-        .map_or_else(|| trader_keep::unprovoked(npc, around, chance), Goal::Flee)
+        .or_else(|| provoked_by_gone(npc, around).map(|gone| ShipRef::Npc(gone.id)))
+        .map_or_else(
+            || business.unwrap_or_else(|| trader_keep::unprovoked(npc, around, chance)),
+            Goal::Flee,
+        )
 }
 
 impl Behaviour for WimpyTrader {
@@ -52,18 +71,23 @@ impl Behaviour for WimpyTrader {
     /// flees ([`when_fleeing`]), and its idle block's pick written to its
     /// travel stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef), and
     /// its target cleared by the idle block's leave
-    /// ([`trader_target::idle_leave_clears`], @0x8b190). The
+    /// ([`idle_block::leaves`], @0x8b190), with its +0x50 floor and +0xa4
+    /// stamp ([`Decision::leaves`], @0x8b179-0x8b19b); a kept fight whose
+    /// +0x70 went is then ended ([`trader_keep::last_think`]). The
     /// high level, which `NovaAi` runs after it, takes a kept attack
     /// ([`attack_drop`](super::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
-        Decision {
+        let leaves = idle_block::leaves(npc, thought);
+        let decision = Decision {
             goal: thought,
             comm_call: when_fleeing(thought),
             travel: idle_block::pick_write(npc, around, thought),
-            clears_target: trader_target::idle_leave_clears(npc, thought),
+            clears_target: leaves,
+            leaves,
             ..Decision::default()
-        }
+        };
+        trader_keep::last_think(npc, around, decision)
     }
 
     /// Its [`decision`](Self::decision)'s goal.
@@ -162,18 +186,48 @@ mod tests {
         let leaving = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
         assert_eq!(leaving.goal, Goal::JumpOut);
         assert!(leaving.clears_target);
+        assert!(leaving.leaves, "its +0x50 floor and +0xa4 stamp");
         let mut kept = npcs.clone();
         kept[0].goal = Goal::JumpOut;
         let around = crate::ai::fixture::around(&sites, &kept, &govts, (0.0, -100.0), 0);
         let still = WimpyTrader::default().decision(&kept[0], &around, &mut Draws::of(&[]));
         assert_eq!(still.goal, Goal::JumpOut);
         assert!(!still.clears_target, "a kept leave");
+        assert!(!still.leaves, "a kept leave");
         let mut stuck = npcs.clone();
         stuck[0].class_fuel = 99;
         let around = crate::ai::fixture::around(&sites, &stuck, &govts, (0.0, -100.0), 0);
         let stopping = WimpyTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
         assert_eq!(stopping.goal, Goal::Wait);
         assert!(!stopping.clears_target, "the stop");
+        assert!(!stopping.leaves, "the stop");
+    }
+
+    #[test]
+    fn a_provoked_wimpy_trader_on_goal_0_whose_idle_block_leaves_leaves_without_fleeing() {
+        // On goal 0 the idle block runs first (@0x8b06c), and its leave
+        // writes +0x70 -1 (@0x8b179-0x8b19b), so the provoked test finds
+        // none (@0x8b1b6). Its stop writes no +0x70, so the test fires.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let decided = |trader: &Npc| {
+            let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[]))
+        };
+        let leaving = decided(&trader);
+        assert_eq!(leaving.goal, Goal::JumpOut);
+        assert!(leaving.clears_target);
+        assert_eq!(leaving.comm_call, None);
+        assert!(!leaving.forgets_provocation);
+        trader.class_fuel = 99;
+        let fleeing = decided(&trader);
+        assert_eq!(fleeing.goal, Goal::Flee(n(2)), "the stop: @0x8b1ac");
+        assert_eq!(fleeing.comm_call, Some(CommCall::Distress));
     }
 
     #[test]
@@ -301,20 +355,64 @@ mod tests {
     }
 
     #[test]
-    fn once_its_attacker_is_gone_it_decides_again() {
-        let govts = govts(0, 0);
-        let sites = sites();
-        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
-        trader.provoked = 10.0;
-        trader.target = Some(n(2));
-        trader.goal = Goal::Flee(n(2));
-        let npcs = [trader];
-        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
-        let mut chance = Draws::of(&[0]);
-        assert_eq!(
-            WimpyTrader::default().decide(&npcs[0], &around, &mut chance),
-            Goal::Land(StellarId(128))
-        );
+    fn a_wimpy_trader_whose_flights_target_went_calls_for_help_then_decides_again() {
+        // Goal 3 skips the idle block (@0x8b06c) and, with +0x70 -1, the
+        // provoked test (@0x8b1ac), so the think calls for help
+        // (@0x8b1e1-0x8b1f5); the high level then ends the flight: goal 0,
+        // +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d). The next think, on goal 0,
+        // goes about its business.
+        for provoked in [10.0, 0.0] {
+            let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+            trader.provoked = provoked;
+            trader.target = Some(n(2));
+            trader.goal = Goal::Flee(n(2));
+            let gone = [trader.clone()];
+            let mut untargeted = trader.clone();
+            untargeted.target = None;
+            let here = [untargeted, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+            for (npcs, why) in [(&gone[..], "its quarry gone"), (&here[..], "no target")] {
+                let decision = flown_among(npcs);
+                assert_eq!(decision.goal, Goal::Idle, "{provoked} {why}");
+                assert!(decision.clears_target, "{provoked} {why}");
+                assert!(decision.forgets_provocation, "{provoked} {why}");
+                assert_eq!(
+                    decision.comm_call,
+                    Some(CommCall::Distress),
+                    "{provoked} {why}"
+                );
+                let mut next = npcs.to_vec();
+                next[0].goal = decision.goal;
+                next[0].target = None;
+                next[0].provoked = 0.0;
+                assert_eq!(
+                    flown_among(&next).goal,
+                    Goal::Land(StellarId(128)),
+                    "{provoked} {why}: the next think"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_wimpy_traders_kept_attack_whose_target_went_drops_with_no_call_keeping_its_provocation() {
+        // Goal 4 on +0x70 -1 makes no call (@0x8b1e1) and drops to goal 0
+        // with +0x96 kept (@0x8e263 → @0x8e731).
+        for goal in [Goal::Attack(n(2)), Goal::Snipe(n(2))] {
+            let mut npcs = keeping(goal, crate::combat::hull::Condition::Intact);
+            npcs[0].target = None;
+            npcs[0].provoked = 0.0;
+            let decision = flown_among(&npcs);
+            assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+            assert!(decision.clears_target, "{goal:?}");
+            assert!(!decision.forgets_provocation, "{goal:?}");
+            assert_eq!(decision.comm_call, None, "{goal:?}");
+            let gone = flown_among(&npcs[..1]);
+            assert_eq!(
+                (gone.goal, gone.clears_target, gone.forgets_provocation),
+                (Goal::Idle, true, false),
+                "{goal:?}: its quarry gone"
+            );
+        }
     }
 
     #[test]
@@ -484,8 +582,8 @@ mod tests {
         let npcs = keeping(Goal::Attack(n(2)), Condition::Intact);
         assert_eq!(
             flown_among(&npcs[..1]).goal,
-            Goal::Land(StellarId(128)),
-            "a fight on a ship gone idles (@0x8e263 → @0x8e731)"
+            Goal::Idle,
+            "a fight on a ship gone ends (@0x8e263 → @0x8e731)"
         );
     }
 
@@ -581,6 +679,76 @@ mod tests {
             Some(CommCall::Distress),
             "the next think keeps the flight"
         );
+    }
+
+    /// The decision by `behaviour` of a provoked wimpy trader in slot
+    /// `berth` whose target names a pirate in slot 2 gone from the system
+    /// as `freed` says, `provoked` its provocation.
+    fn decided_on_gone_by(
+        behaviour: &dyn Behaviour,
+        freed: crate::traffic::gone::Freed,
+        berth: u32,
+        provoked: f32,
+    ) -> Decision {
+        use crate::traffic::gone::GoneShip;
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.provoked = provoked;
+        trader.target = Some(n(2));
+        trader.goal = Goal::Land(StellarId(128));
+        trader.berth = berth;
+        let mut attacker = ship(2, PIRATES, AiType::Warship, 50.0, 0.0);
+        attacker.berth = 2;
+        let gone = [GoneShip {
+            ship: attacker,
+            freed,
+        }];
+        let npcs = [trader];
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = Surroundings {
+            gone: &gone,
+            ..around(&sites, &npcs, &govts, (0.0, -1000.0), 0)
+        };
+        behaviour.decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn a_provoked_wimpy_trader_flees_a_gone_attacker_its_target_names_calls_for_help_and_the_flight_ends_zeroed()
+     {
+        // The provoked test finds +0x70 not -1 (@0x8b1ac-0x8b1bb) and
+        // writes goal 3 (@0x8b1d8), calling for help (@0x8b1f5); the slot
+        // test makes +0x70 -1 (@0x8d4e4-0x8d50d) and goal 3's block zeroes
+        // (@0x8e228-0x8e23d).
+        use crate::traffic::gone::Freed;
+        for (freed, berth) in [(Freed::InDispatch, 3), (Freed::InShipPass, 1)] {
+            let think = decided_on_gone_by(&WimpyTrader::default(), freed, berth, 10.0);
+            assert_eq!(think.goal, Goal::Flee(n(2)), "{freed:?}: the think's");
+            assert_eq!(think.comm_call, Some(CommCall::Distress), "{freed:?}");
+            let flown = decided_on_gone_by(&crate::ai::NovaAi::default(), freed, berth, 10.0);
+            assert_eq!(flown.goal, Goal::Idle, "{freed:?}");
+            assert!(flown.clears_target, "{freed:?}");
+            assert!(flown.forgets_provocation, "{freed:?}");
+            assert_eq!(flown.comm_call, Some(CommCall::Distress), "{freed:?}");
+        }
+    }
+
+    #[test]
+    fn a_provoked_wimpy_trader_does_not_read_a_gone_attacker_once_a_slot_test_has_cleared_it_or_unprovoked()
+     {
+        use crate::traffic::gone::Freed;
+        for (freed, berth, provoked) in [
+            (Freed::InDispatch, 1, 10.0),
+            (Freed::InShipPass, 3, 10.0),
+            (Freed::InDispatch, 3, 0.0),
+        ] {
+            let decision = decided_on_gone_by(&WimpyTrader::default(), freed, berth, provoked);
+            assert_eq!(
+                decision.goal,
+                Goal::Land(StellarId(128)),
+                "{freed:?} {berth}"
+            );
+            assert_eq!(decision.comm_call, None, "{freed:?} {berth}");
+        }
     }
 
     #[test]

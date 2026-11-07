@@ -47,11 +47,12 @@
 //!   system has a first stellar, at that stellar plus
 //!   [`STATIONARY_DISTANCE`] at angle `Rand(360)`, at rest, then heading
 //!   `Rand(360)` (`_RandomShipSpawn` @0x3c254-0x3c324, @0x3c410). The
-//!   stellar is the first the galaxy overlay shows for the system,
-//!   destroyed or not, as the original reads its first stellar slot with
-//!   no other check. Here that is the first readable `spöb` of its
-//!   `nav_def`s: where slot 0 is empty or unreadable, the original falls
-//!   back to the box and this takes the next stellar. A person never is:
+//!   stellar is the one in slot 0 of the system's `NavDefs`
+//!   (@0x3c274-0x3c27d), shown or not, owned elsewhere or not, destroyed
+//!   or not, as the original reads that slot with no other check
+//!   ([`World::nav_def_0`](super::World::nav_def_0)); where slot 0 is
+//!   empty, or names a `spöb` that didn't load, the ship falls back to the
+//!   box whatever the later slots hold. A person never is:
 //!   `_SpawnPerson` places it through `_GenericRandomShipSpawn`'s box
 //!   alone (@0x3ccf0-0x3cd1a).
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer
@@ -266,9 +267,10 @@ use crate::market::Good;
 use crate::rulebook::RuleSource;
 use crate::traffic::ShipGoal;
 use crate::traffic::emerge::{
-    EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
+    EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, EmergeRules, emerge_stellar,
 };
 use crate::traffic::npc::{AiType, MissionMark};
+use crate::traffic::spawn_ai::SpawnAi;
 use crate::traffic::table::{
     ShipKind, SpawnDude, SpawnPerson, SpawnTable, appearing_ship_types, dude_ship_type, pick,
 };
@@ -374,6 +376,9 @@ pub struct Stellars<'a> {
     pub sites: &'a [LandingSite],
     /// Every government and their relations.
     pub govts: &'a Governments,
+    /// The readings the pick goes by: which gates are in reach, and
+    /// whether every arrival with a usable gate comes out of one.
+    pub rules: EmergeRules,
 }
 
 /// No governments at all.
@@ -384,6 +389,10 @@ impl Stellars<'static> {
     pub const NONE: Self = Self {
         sites: &[],
         govts: &NO_GOVERNMENTS,
+        rules: EmergeRules {
+            reach: RuleSource::Engine,
+            through_gates: RuleSource::Engine,
+        },
     };
 }
 
@@ -397,8 +406,9 @@ pub struct NewShip {
     pub ship: ShipId,
     /// Its government.
     pub govt: Option<GovtId>,
-    /// How it behaves.
-    pub ai_type: AiType,
+    /// How it behaves: the raw AI type word its spawn writes (+0x88),
+    /// read into its [`Npc`](super::Npc) by `Traffic::add`.
+    pub ai_type: SpawnAi,
     /// The index, among the ships added with it, of the lead it escorts.
     pub lead: Option<usize>,
     /// Where it starts.
@@ -454,6 +464,23 @@ pub struct NewShip {
     /// (`_RandomShipSpawn` @0x3c709-0x3c719), and every other spawn holds
     /// its berth's word ([`berth_voices`](super::berth_voices)).
     pub rolls_voice: bool,
+    /// Whether its spawn asks `_ShipCanScoop` (@0x75c7-0x766b) for its
+    /// can-scoop flag (+0xc3), writing the answer to its berth: a `düde`
+    /// ship of the traffic does (`_RandomShipSpawn` @0x3c603), as do a
+    /// person (`_SpawnPerson` @0x40d74) and a fleet's lead
+    /// (`_HyperSpawnFleet` @0x41e2c). Every ship `_GenericRandomShipSpawn`
+    /// (@0x3c89f-0x3cd3a) brings in with no later ask holds its berth's
+    /// flag ([`berth_scoops`](super::berth_scoops)): a mission ship
+    /// (`_MissionDudeSpawn` @0x3cd67), an auxiliary or defence ship
+    /// (`_SpecificDudeSpawn` @0x3d10f) and a fleet's escort (@0x421b0).
+    pub asks_scoop: bool,
+    /// Whether its spawn clears the escort-command mark (+0xc4), writing
+    /// false to its berth: only a `düde` ship of the traffic's does
+    /// (`_RandomShipSpawn` @0x3c6ff). Every other ship,
+    /// `_GenericRandomShipSpawn`'s (@0x3c89f-0x3cd3a), holds its berth's
+    /// mark ([`berth_marks`](super::berth_marks)): a person, a fleet's
+    /// lead and escorts, a mission ship, an auxiliary or defence ship.
+    pub clears_mark: bool,
 }
 
 /// What a caller of [`fleet`] asks of the fleet: `_HyperSpawnFleet`'s
@@ -555,7 +582,7 @@ impl<'a> PersonDraw<'a> {
         Some(NewShip {
             ship: record.ship?,
             govt: record.govt,
-            ai_type: AiType::from_raw(record.ai_type),
+            ai_type: SpawnAi(record.ai_type),
             lead: None,
             state,
             entry: Entry::Placed,
@@ -572,6 +599,8 @@ impl<'a> PersonDraw<'a> {
             quote: None,
             cargo: None,
             rolls_voice: false,
+            asks_scoop: true,
+            clears_mark: false,
         })
     }
 }
@@ -641,6 +670,8 @@ pub fn initial(
                 quote: None,
                 cargo: None,
                 rolls_voice: true,
+                asks_scoop: true,
+                clears_mark: true,
             });
         }
     }
@@ -789,6 +820,8 @@ fn hyper_ship(
             quote: None,
             cargo: None,
             rolls_voice: true,
+            asks_scoop: true,
+            clears_mark: true,
         });
     }
 }
@@ -905,15 +938,11 @@ pub(super) fn specific_dude_ship(
         )?,
     };
     let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
-    let ai_type = if dude.ai_type > 0 {
-        dude.ai_type
-    } else {
-        inherent_ai
-    };
+    let ai_type = SpawnAi::of_dude(dude.ai_type, inherent_ai);
     Some(NewShip {
         ship,
         govt: dude.govt,
-        ai_type: AiType::from_raw(ai_type),
+        ai_type,
         lead: None,
         state: ShipState {
             position: Vec2::new(x, y),
@@ -934,6 +963,8 @@ pub(super) fn specific_dude_ship(
         quote: None,
         cargo: None,
         rolls_voice: false,
+        asks_scoop: false,
+        clears_mark: false,
     })
 }
 
@@ -1137,17 +1168,17 @@ fn dude_ship<'a>(
     table: &'a SpawnTable,
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
-) -> Option<(ShipId, &'a SpawnDude, AiType, &'a ShipKind)> {
+) -> Option<(ShipId, &'a SpawnDude, SpawnAi, &'a ShipKind)> {
     let dude = table.dude_records.get(&pick(&table.dudes, chance)?)?;
     let appearing = appearing_ship_types(dude, |ship| table.appear_on(ship), gate);
     let ship = pick(&appearing, chance)?;
     let kind = table.ships.get(&ship)?;
-    let ai_type = if dude.ai_type > 0 {
-        dude.ai_type
-    } else {
-        kind.inherent_ai
-    };
-    Some((ship, dude, AiType::from_raw(ai_type), kind))
+    Some((
+        ship,
+        dude,
+        SpawnAi::of_dude(dude.ai_type, kind.inherent_ai),
+        kind,
+    ))
 }
 
 /// The `LinkSyst` fleet roll: one of 256 slots, and the fleet there, if
@@ -1213,7 +1244,13 @@ pub fn fleet(
         return;
     }
     let lead = out.len();
-    let (state, entry) = match emerge_stellar(record.govt, stellars.sites, stellars.govts, chance) {
+    let (state, entry) = match emerge_stellar(
+        record.govt,
+        stellars.sites,
+        stellars.govts,
+        stellars.rules,
+        chance,
+    ) {
         Some(site) => emerging(site, chance),
         None => (hyperspace_entry(chance), Entry::JumpingIn),
     };
@@ -1222,7 +1259,7 @@ pub fn fleet(
         govt: record.govt,
         ai_type: call
             .lead_ai
-            .unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
+            .map_or(SpawnAi(kind.inherent_ai), SpawnAi::from),
         lead: None,
         state,
         entry,
@@ -1239,6 +1276,8 @@ pub fn fleet(
         quote: record.quote.filter(|_| call.announced),
         cargo: random_cargo(record.flags, kind, chance),
         rolls_voice: false,
+        asks_scoop: true,
+        clears_mark: false,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -1250,24 +1289,12 @@ pub fn fleet(
             continue;
         };
         for _ in 0..count {
-            let placed = escort_offset(&state, chance);
-            let (placed, escort_entry) = match entry {
-                Entry::Emerging { gate, .. } => (
-                    state,
-                    Entry::Emerging {
-                        ticks_left: EMERGE_TICKS
-                            + crate::traffic::ai_wait::ticks(
-                                ESCORT_EMERGE_EXTRA + chance.below(ESCORT_EMERGE_SPREAD),
-                            ),
-                        gate,
-                    },
-                ),
-                Entry::Placed | Entry::JumpingIn => (placed, entry),
-            };
+            let (placed, escort_entry) = escort_entry(&state, entry, chance);
             out.push(NewShip {
                 ship: escort.ship,
                 govt: record.govt,
-                ai_type: AiType::from_raw(kind.inherent_ai),
+                // Led, it reads 6 (@0x421dc) whatever its class's word.
+                ai_type: AiType::from_raw(kind.inherent_ai).into(),
                 lead: Some(lead),
                 state: placed,
                 entry: escort_entry,
@@ -1284,8 +1311,36 @@ pub fn fleet(
                 quote: None,
                 cargo: random_cargo(record.flags, kind, chance),
                 rolls_voice: false,
+                asks_scoop: false,
+                clears_mark: false,
             });
         }
+    }
+}
+
+/// Where a fleet's escort comes in, and how, beside a lead at `state`
+/// coming in by `entry`: its spread from the lead is drawn either way; out
+/// of the lead's gate it waits there, its emergence drawn a little longer
+/// than the lead's, and otherwise it comes in at the spread, as the lead
+/// does.
+fn escort_entry(
+    state: &ShipState,
+    entry: Entry,
+    chance: &mut (impl Chance + ?Sized),
+) -> (ShipState, Entry) {
+    let placed = escort_offset(state, chance);
+    match entry {
+        Entry::Emerging { gate, .. } => (
+            *state,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS
+                    + crate::traffic::ai_wait::ticks(
+                        ESCORT_EMERGE_EXTRA + chance.below(ESCORT_EMERGE_SPREAD),
+                    ),
+                gate,
+            },
+        ),
+        Entry::Placed | Entry::JumpingIn => (placed, entry),
     }
 }
 
@@ -1353,7 +1408,7 @@ pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
 /// drawn, at rest, facing anywhere (@0x3c254-0x3c324); any other ship
 /// [`in_system`], at its top speed ([`at_speed`]).
 pub fn dude_setup_state(
-    ai_type: AiType,
+    ai_type: SpawnAi,
     kind: &ShipKind,
     first_stellar: Option<Vec2>,
     chance: &mut (impl Chance + ?Sized),
@@ -1421,7 +1476,7 @@ fn arrival(
     stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
 ) -> (ShipState, Entry) {
-    match emerge_stellar(govt, stellars.sites, stellars.govts, chance) {
+    match emerge_stellar(govt, stellars.sites, stellars.govts, stellars.rules, chance) {
         Some(site) => emerging(site, chance),
         None => (jump_in, Entry::JumpingIn),
     }
@@ -1740,7 +1795,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(200),
                 govt: Some(GovtId(130)),
-                ai_type: AiType::BraveTrader,
+                ai_type: AiType::BraveTrader.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -1761,6 +1816,8 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: true,
+                asks_scoop: true,
+                clears_mark: true,
             }]
         );
     }
@@ -1838,6 +1895,72 @@ mod tests {
             &mut Draws::of(&ship_201),
         );
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
+    }
+
+    /// `table` with `düde` 128's `AIType` at `dude_ai` and every ship's
+    /// `InherentAI` at `inherent_ai`.
+    fn data_ai(mut table: SpawnTable, dude_ai: i16, inherent_ai: i16) -> SpawnTable {
+        for dude in table.dude_records.values_mut() {
+            dude.ai_type = dude_ai;
+        }
+        for kind in table.ships.values_mut() {
+            kind.inherent_ai = inherent_ai;
+        }
+        table
+    }
+
+    #[test]
+    fn a_dude_ship_carries_its_raw_ai_word_none_at_0_or_below_an_escorts_above_4() {
+        let ship_201 = [6, 6, 0, 99, 0, 0, 0];
+        let word = |table: &SpawnTable| {
+            initial(
+                table,
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut Draws::of(&ship_201),
+            )[0]
+            .ai_type
+        };
+        for (dude_ai, inherent_ai, expected) in [(0, 0, 0), (-1, -1, -1), (7, 3, 7)] {
+            let ai = word(&data_ai(one_pass(), dude_ai, inherent_ai));
+            assert_eq!(ai, SpawnAi(expected), "düde {dude_ai}, shïp {inherent_ai}");
+        }
+        assert!(word(&data_ai(one_pass(), 0, 0)).no_ai());
+        assert!(word(&data_ai(one_pass(), 7, 3)).escort_ai());
+    }
+
+    #[test]
+    fn a_person_of_ai_type_5_carries_an_escorts_word() {
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .record
+            .ai_type = 5;
+        let (ships, _) = set_up(&table, PersonWorld::NONE, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert!(ships[0].ai_type.escort_ai());
+    }
+
+    #[test]
+    fn a_fleet_lead_of_inherent_ai_0_has_no_ai_and_its_escorts_are_led() {
+        let mut out = Vec::new();
+        fleet(
+            &data_ai(table(), 0, 0),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall::default(),
+            &mut Draws::of(&[]),
+            &mut out,
+        );
+        assert!(out[0].ai_type.no_ai(), "the lead");
+        assert!(
+            out[1..].iter().all(|ship| !ship.ai_type.no_ai()),
+            "led, they read 6 (@0x421dc)"
+        );
     }
 
     #[test]
@@ -1988,7 +2111,7 @@ mod tests {
             (
                 ShipId(201),
                 Some(GovtId(130)),
-                AiType::Warship,
+                AiType::Warship.into(),
                 None,
                 Entry::JumpingIn
             )
@@ -1998,6 +2121,8 @@ mod tests {
             Vec2::new(jump_in_distance(), 0.0)
         ));
         assert!(ship.rolls_voice, "`_RandomShipSpawn` draws it");
+        assert!(ship.asks_scoop, "`_RandomShipSpawn` asks `_ShipCanScoop`");
+        assert!(ship.clears_mark, "`_RandomShipSpawn` clears +0xc4");
     }
 
     #[test]
@@ -2036,13 +2161,18 @@ mod tests {
         assert_eq!(ships.len(), 4);
         assert_eq!(
             (ships[0].ship, ships[0].govt, ships[0].ai_type),
-            (ShipId(201), Some(GovtId(131)), AiType::Warship),
+            (ShipId(201), Some(GovtId(131)), AiType::Warship.into()),
             "the lead's own InherentAI, the fleet's govt"
         );
         for escort in &ships[1..] {
             assert_eq!(
                 (escort.ship, escort.govt, escort.ai_type, escort.lead),
-                (ShipId(202), Some(GovtId(131)), AiType::Interceptor, Some(0))
+                (
+                    ShipId(202),
+                    Some(GovtId(131)),
+                    AiType::Interceptor.into(),
+                    Some(0)
+                )
             );
             assert_eq!(escort.entry, Entry::JumpingIn);
         }
@@ -2323,6 +2453,30 @@ mod tests {
         );
         assert_eq!(out.len(), 3, "its lead and two escorts");
         assert!(out.iter().all(|ship| !ship.rolls_voice));
+    }
+
+    #[test]
+    fn a_fleets_lead_asks_its_scoop_and_its_escorts_dont() {
+        let mut out = Vec::new();
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall::default(),
+            &mut crate::NeverFires,
+            &mut out,
+        );
+        assert_eq!(out.len(), 3, "its lead and two escorts");
+        assert_eq!(
+            out.iter().map(|ship| ship.asks_scoop).collect::<Vec<_>>(),
+            [true, false, false],
+            "`_HyperSpawnFleet` asks for its lead (@0x41e2c), not its escorts (@0x421b0)"
+        );
+        assert!(
+            out.iter().all(|ship| !ship.clears_mark),
+            "`_GenericRandomShipSpawn` keeps +0xc4 (@0x41cf4, @0x421b0)"
+        );
     }
 
     #[test]
@@ -2848,7 +3002,7 @@ mod tests {
         let ship = ships[0];
         assert_eq!(
             (ship.ship, ship.ai_type, ship.aggression),
-            (ShipId(201), AiType::Warship, 3)
+            (ShipId(201), AiType::Warship.into(), 3)
         );
         assert!(
             near(ship.state.position, FIRST_STELLAR + Vec2::new(100.0, 0.0)),
@@ -3147,7 +3301,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(201),
                 govt: Some(GovtId(128)),
-                ai_type: AiType::Warship,
+                ai_type: AiType::Warship.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -3168,6 +3322,8 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: true,
+                clears_mark: false,
             }]
         );
     }
@@ -3743,7 +3899,7 @@ mod tests {
             [NewShip {
                 ship: ShipId(203),
                 govt: Some(GovtId(131)),
-                ai_type: AiType::Interceptor,
+                ai_type: AiType::Interceptor.into(),
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
@@ -3769,6 +3925,8 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: false,
+                clears_mark: false,
             }]
         );
     }
@@ -3846,9 +4004,23 @@ mod tests {
         let ships = mission_ships(&table, &mission_spawn(1, 0), mission_gate(), &mut chance);
         assert_eq!(
             (ships[0].ship, ships[0].ai_type),
-            (ShipId(202), AiType::Interceptor),
+            (ShipId(202), AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
+    }
+
+    #[test]
+    fn a_mission_ship_of_a_dude_and_ship_at_0_has_no_ai() {
+        let mut table = with_mission_dude();
+        table
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        table.ships.get_mut(&ShipId(202)).expect("202").inherent_ai = 0;
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let ships = mission_ships(&table, &mission_spawn(1, 0), mission_gate(), &mut chance);
+        assert!(ships[0].ai_type.no_ai());
     }
 
     #[test]
@@ -4270,10 +4442,17 @@ mod tests {
             assert_eq!(ship.aux, Some(4));
             assert_eq!(
                 (ship.govt, ship.ai_type, ship.booty, ship.info_types),
-                (Some(GovtId(131)), AiType::Interceptor, Some(0x0002), 0x0001),
+                (
+                    Some(GovtId(131)),
+                    AiType::Interceptor.into(),
+                    Some(0x0002),
+                    0x0001
+                ),
                 "the düde's"
             );
             assert!(!ship.derelict);
+            assert!(!ship.asks_scoop, "`_SpecificDudeSpawn` asks none");
+            assert!(!ship.clears_mark, "`_SpecificDudeSpawn` keeps +0xc4");
         }
         assert_eq!((ships[0].aggression, ships[1].aggression), (2, 0));
     }
@@ -4346,7 +4525,7 @@ mod tests {
         );
         assert_eq!(
             (ships[0].ship, ships[0].ai_type),
-            (ShipId(202), AiType::Interceptor),
+            (ShipId(202), AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
     }
@@ -4375,7 +4554,7 @@ mod tests {
             Some(NewShip {
                 ship: ShipId(203),
                 govt: Some(GovtId(131)),
-                ai_type: AiType::Interceptor,
+                ai_type: AiType::Interceptor.into(),
                 lead: None,
                 state: PERSON_AT,
                 entry: Entry::Placed,
@@ -4397,6 +4576,8 @@ mod tests {
                 quote: None,
                 cargo: None,
                 rolls_voice: false,
+                asks_scoop: false,
+                clears_mark: false,
             })
         );
     }
@@ -4448,7 +4629,7 @@ mod tests {
         );
         assert_eq!(
             ship.map(|ship| ship.ai_type),
-            Some(AiType::Interceptor),
+            Some(AiType::Interceptor.into()),
             "ship 202's InherentAI 4"
         );
     }
@@ -4520,6 +4701,7 @@ mod tests {
         Stellars {
             sites,
             govts: &PLAIN,
+            rules: EmergeRules::default(),
         }
     }
 
@@ -4607,6 +4789,7 @@ mod tests {
         let stellars = Stellars {
             sites: &sites,
             govts: &govts,
+            rules: EmergeRules::default(),
         };
         let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 0, 0]);
         let ships = arrivals(&table(), 0, &mut nobody(), stellars, &mut chance);
@@ -4703,6 +4886,44 @@ mod tests {
         );
         assert_eq!(&chance.asked[..2], [2, 360]);
         assert!(out.iter().all(|ship| ship.state == at_gate(200.0)));
+    }
+
+    #[test]
+    fn through_gates_a_fleet_whose_draw_gave_the_edge_comes_out_of_the_gate_escorts_and_all() {
+        // The engine's draw 0 is the planet: the edge. By the other reading
+        // of `ArrivalsThroughGates` the one draw is over the gate alone.
+        let sites = gated(90);
+        let through = Stellars {
+            rules: EmergeRules {
+                reach: RuleSource::Engine,
+                through_gates: RuleSource::Bible,
+            },
+            ..among(&sites)
+        };
+        let mut chance = Draws::of(&[0, 0, 0, 0, 7, 0, 299, 299, 14, 0]);
+        let mut out = Vec::new();
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            through,
+            FleetCall::default(),
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(chance.asked[0], 1, "over the one gate");
+        assert_eq!(out.len(), 3);
+        assert!(
+            out.iter().all(|ship| matches!(
+                ship.entry,
+                Entry::Emerging {
+                    gate: StellarId(129),
+                    ..
+                }
+            )),
+            "{out:?}"
+        );
+        assert!(out.iter().all(|ship| ship.state == at_gate(90.0)));
     }
 
     #[test]
@@ -4844,6 +5065,7 @@ mod tests {
         let at_war = Stellars {
             sites: &hostile,
             govts: &govts,
+            rules: EmergeRules::default(),
         };
         let (dude_ship, draws) = scenarios()[0];
         assert_eq!(

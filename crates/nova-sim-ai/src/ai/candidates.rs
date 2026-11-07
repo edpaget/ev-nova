@@ -10,8 +10,12 @@
 //!   ship's own times its government's `MaxOdds` is dropped.
 //! - **The heaviest** (@0x8ac24-0x8ad07, the hunt's alone): a ship with
 //!   escorts ([`has_escorts`]) takes only the candidates of the largest
-//!   class `Mass` (+0x9ee, [`HullSpec::mass`](crate::combat::hull::HullSpec::mass))
-//!   among those left.
+//!   class `Mass` (+0x9ee, read signed by `movswl`,
+//!   [`HullSpec::signed_mass`](crate::combat::hull::HullSpec::signed_mass))
+//!   among those left, so -5 outweighs -10. The fold starts at -1
+//!   (@0x8aba3) and takes the next candidate's `Mass` whenever the
+//!   heaviest so far is -1 (@0x8ac33-0x8ac74); if it ends at -1, no
+//!   candidate is filtered out (@0x8accc-0x8ad07).
 //! - **The nearest** (@0x8a3c7-0x8a3f8, @0x8acab-0x8ad1f): by
 //!   [`distance`], strictly nearer replacing, so a tie goes to the earlier
 //!   slot, the player's (0) first, then the NPCs in slot order
@@ -80,6 +84,14 @@ pub fn within_odds(
         .collect()
 }
 
+/// The heaviest class `Mass` the hunt's fold starts from, and the value
+/// that reads as "none yet": `_SelectWarshipTarget` sets it to -1
+/// (@0x8aba3), takes each candidate's `Mass` when it is still -1 or the
+/// `Mass` is larger (@0x8ac33-0x8ac74), and filters only when it ended
+/// above -1 (@0x8accc-0x8ad07). A class of `Mass` -1 is so never the
+/// heaviest unless last.
+const NO_HEAVIEST: i32 = -1;
+
 /// The nearest to `npc` of `candidates`, in slot order, among `around`,
 /// only those of the heaviest class among them when `heaviest` (see the
 /// module docs).
@@ -91,17 +103,27 @@ pub fn nearest(
     heaviest: bool,
 ) -> Option<ShipRef> {
     let mass_of = |ship: ShipRef| match ship {
-        ShipRef::Player => around.player.map(|player| player.hull.mass),
-        ShipRef::Npc(id) => around.npc(id).map(|other| other.hull.mass),
+        ShipRef::Player => around
+            .player
+            .map(|player| i32::from(player.hull.signed_mass)),
+        ShipRef::Npc(id) => around
+            .npc(id)
+            .map(|other| i32::from(other.hull.signed_mass)),
     };
     let heaviest = heaviest
         .then(|| {
-            candidates
-                .iter()
-                .filter_map(|&ship| mass_of(ship))
-                .reduce(f32::max)
+            candidates.iter().filter_map(|&ship| mass_of(ship)).fold(
+                NO_HEAVIEST,
+                |heaviest, mass| {
+                    if heaviest == NO_HEAVIEST || mass > heaviest {
+                        mass
+                    } else {
+                        heaviest
+                    }
+                },
+            )
         })
-        .flatten();
+        .filter(|&heaviest| heaviest != NO_HEAVIEST);
     let mut best: Option<(i64, ShipRef)> = None;
     for &ship in candidates {
         let Some(state) = around.state_of(ship) else {
@@ -191,9 +213,9 @@ mod tests {
     #[test]
     fn with_heaviest_only_the_heaviest_class_is_picked() {
         let mut light = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
-        light.hull.mass = 50.0;
+        light.hull.signed_mass = 50;
         let mut heavy = ship(3, PIRATES, AiType::Warship, 900.0, 0.0);
-        heavy.hull.mass = 400.0;
+        heavy.hull.signed_mass = 400;
         let mut heavy_far = heavy.clone();
         heavy_far.id = NpcId(4);
         heavy_far.state.position = Vec2::new(950.0, 0.0);
@@ -214,20 +236,48 @@ mod tests {
 
     #[test]
     fn the_player_is_weighed_by_its_class_mass() {
-        let weighed = |npc_mass: f32| {
+        let weighed = |npc_mass: i16| {
             let mut light = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
-            light.hull.mass = npc_mass;
+            light.hull.signed_mass = npc_mass;
             let npcs = [ship(1, TRADERS, AiType::Warship, 0.0, 0.0), light];
             let govts = govts(0, 0);
             let sites = sites();
             let mut around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
             let mut player = around.player.expect("there");
-            player.hull.mass = 60.0;
+            player.hull.signed_mass = 60;
             around.player = Some(player);
             nearest(&npcs[0], &[P, n(2)], &around, true)
         };
-        assert_eq!(weighed(50.0), Some(P), "the player is heavier");
-        assert_eq!(weighed(60.0), Some(n(2)), "as heavy, and nearer");
+        assert_eq!(weighed(50), Some(P), "the player is heavier");
+        assert_eq!(weighed(60), Some(n(2)), "as heavy, and nearer");
+    }
+
+    /// Two pirates, NPC 2 at 100 and NPC 3 at 900, of class `Mass`
+    /// `near` and `far`, picked among in slot order with the heaviest on.
+    fn heaviest_of(near: i16, far: i16) -> Option<ShipRef> {
+        let mut a = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
+        a.hull.signed_mass = near;
+        let mut b = ship(3, PIRATES, AiType::Warship, 900.0, 0.0);
+        b.hull.signed_mass = far;
+        picked(&[a, b], (0.0, -5000.0), &[n(2), n(3)], true)
+    }
+
+    #[test]
+    fn with_heaviest_a_less_negative_class_outweighs_a_more_negative_one() {
+        assert_eq!(heaviest_of(-10, -5), Some(n(3)), "-5 is the heavier");
+        assert_eq!(heaviest_of(-5, -10), Some(n(2)));
+    }
+
+    #[test]
+    fn a_class_of_mass_minus_one_reads_as_no_heaviest_yet() {
+        // The fold starts at -1 (@0x8aba3) and takes the next candidate's
+        // `Mass` whenever the heaviest so far is -1 (@0x8ac33-0x8ac74), so
+        // a -1 gives way to whatever follows.
+        assert_eq!(heaviest_of(-1, -5), Some(n(3)), "-1 gives way to -5");
+        // Ending at -1, the filter keeps everyone (@0x8accc-0x8ad07): the
+        // nearest wins.
+        assert_eq!(heaviest_of(-5, -1), Some(n(2)), "no heaviest, the nearer");
+        assert_eq!(heaviest_of(-1, -1), Some(n(2)));
     }
 
     #[test]

@@ -677,6 +677,12 @@ mod tests {
         entered.enter_game(SpeedMult::FULL, &mut NeverFires);
         let mut expected = stepped(start, &anim, 2);
         assert_eq!(sprite(&entered, 300), expected, "released: no ship yet");
+        // A ship the frame's arrivals bring out of the gate after the third
+        // pass (`_EnterMoreShips` @0x44237, which the populating frame
+        // runs) holds the step's own alone.
+        let mut arrived = expected;
+        arrived.step(&anim, false, false, &mut NeverFires);
+        arrived.step(&anim, false, true, &mut NeverFires);
         // The third pass, then the step's own.
         for _ in 0..2 {
             expected.step(&anim, false, true, &mut NeverFires);
@@ -696,7 +702,16 @@ mod tests {
                 holding(&session, 300).then(|| sprite(&session, 300))
             })
             .collect();
-        all_held(&came_out, expected, "held by the setup's ship twice");
+        assert!(
+            came_out.contains(&expected),
+            "held by the setup's ship twice"
+        );
+        assert!(
+            came_out
+                .iter()
+                .all(|&after| after == expected || after == arrived),
+            "{came_out:?}"
+        );
     }
 
     #[test]

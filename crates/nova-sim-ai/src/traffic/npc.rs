@@ -47,10 +47,13 @@ pub enum AiType {
 }
 
 impl AiType {
-    /// What a raw AI type other than 1-4 means: a wimpy trader, the most
-    /// harmless, which lands rather than lingers. Stock ships all have an
-    /// `InherentAI` of 1-4; this covers plug-in data that leaves it 0 or
-    /// -1, where the original's behaviour has not been traced.
+    /// What a raw AI type other than 1-4 folds to: a wimpy trader, the most
+    /// harmless, which lands rather than lingers. A spawn no longer folds
+    /// through it: it carries the raw word
+    /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)), 0 or below a ship
+    /// with no AI and above 4 one read as an escort. It stands in for the
+    /// class a ship with no AI never thinks as, and for the other writers
+    /// of a class's `InherentAI` (filed in `npc-ai-2`).
     pub const FALLBACK: Self = Self::WimpyTrader;
 
     /// The AI type `raw` means: 1-4 as the Bible says, anything else
@@ -539,7 +542,10 @@ pub struct Npc {
     /// Whether its ship type carries an asteroid scoop among its default
     /// items, the original's +0xc3 (`_ShipCanScoop` @0x75c7, see
     /// [`ShipKind::can_scoop`](crate::traffic::table::ShipKind)), which
-    /// only the miner's AI reads.
+    /// only the miner's AI reads. A ship whose spawn asks none holds its
+    /// berth's flag instead, by
+    /// [`RuleKey::ReusedSlotScoop`](crate::RuleKey::ReusedSlotScoop) (see
+    /// [`berth_scoops`](crate::traffic::berth_scoops)).
     pub can_scoop: bool,
     /// Its ship type's `Holds` in tons (`shïp` +0x0,
     /// [`ShipKind::holds`](crate::traffic::table::ShipKind)): a scooping
@@ -592,22 +598,33 @@ pub struct Npc {
     /// and its calls for reinforcements read by the engine
     /// ([`cached_odds`](crate::ai::odds::cached_odds)). Never saved.
     pub odds: f32,
-    /// Whether it has no AI: the original's AI type 0 or below (+0x88),
-    /// which only the player's eject hulk has, -1 (`_HandlePlayer`
-    /// @0x6f31f). Its [`ai_type`](Npc::ai_type) stays its class's
-    /// `InherentAI`, as the engine's [`AiType`] has no "none". A ship
-    /// with no AI never thinks (`_AIDispatch`'s gate, `_DoPlayGameWork`
-    /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
-    /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
-    /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
-    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
+    /// Whether it has no AI: the original's AI type 0 or below (+0x88):
+    /// the player's eject hulk, -1 (`_HandlePlayer` @0x6f31f), a spawn
+    /// whose word is 0 or below in plug-in data
+    /// ([`SpawnAi`](crate::traffic::spawn_ai::SpawnAi)), and a former
+    /// escort whose class word is 0 or below, written by `_EscortAI`'s
+    /// lost parent (@0x83c4a, [`Npc::settle_original_ai_type`]). Its
+    /// [`ai_type`](Npc::ai_type) stays its class's `InherentAI`, as the
+    /// engine's [`AiType`] has no "none". A ship with no AI never thinks
+    /// (`_AIDispatch`'s gate, `_DoPlayGameWork` @0x4427e), reads odds 0
+    /// (the odds pass @0x44307-0x4431f), answers no hit (`_DamageShip`
+    /// @0x3b459), and reads as no AI type to the readers that test
+    /// another ship's (`_InterceptorAI` @0x8cd4e, `_BraveTraderAI`
+    /// @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
     /// [`Npc::original_ai_type`] reads it. Never saved.
     pub no_ai: bool,
     /// Whether it keeps the original's AI type 6 after the disabled reset
     /// took it out of its fleet (`_AIDispatch` @0x8feda leaves +0x88 alone)
     /// until its first think once whole (`_EscortAI` @0x8394b-0x8397b,
     /// @0x83c4a), or for its whole stay if it thinks as a miner
-    /// (@0x8ff76-0x8ff8d). See [`Npc::original_ai_type`]. Never saved.
+    /// (@0x8ff76-0x8ff8d). Set too for a spawn whose word in plug-in
+    /// data is above 4
+    /// ([`SpawnAi::escort_ai`](crate::traffic::spawn_ai::SpawnAi::escort_ai),
+    /// set by `Traffic::add`), and kept
+    /// after its first think once whole when its class's `InherentAI` is
+    /// itself above 4 (the lost parent's write @0x83c4a,
+    /// [`Npc::settle_original_ai_type`]). See [`Npc::original_ai_type`].
+    /// Never saved.
     pub kept_escort_ai: bool,
     /// Whether it is a mission escort let go while the player breaks up:
     /// its +0x9a of -1 from its think to the next dispatch, which leads it
@@ -740,10 +757,20 @@ pub struct Npc {
     /// `_AIIssueEscortOrders` sets on each ship it orders (@0x89b71). No
     /// clear follows a capture, as `_AISetup` leaves +0xc4, so a ship
     /// captured from an NPC fleet joins the player's marked (`nova_sim`'s
-    /// `class_orders` module). False on every new NPC, as every spawn
-    /// clears the byte. Here and not beside the commands' marks, as the
-    /// traffic writes it. Never saved.
+    /// `class_orders` module). False on every new NPC; the mark a new
+    /// ship holds from its berth is [`Npc::berth_mark`], and the order
+    /// writes this ship's berth's word too
+    /// ([`berth_marks`](crate::traffic::berth_marks)). Here and not beside
+    /// the commands' marks, as the traffic writes it. Never saved.
     pub ordered_by_lead: bool,
+    /// The escort-command mark (+0xc4) its berth held as it came in, by
+    /// [`RuleKey::ReusedSlotMark`](crate::RuleKey::ReusedSlotMark): set
+    /// by the traffic as it places the ship, false for a placement that
+    /// clears the byte (`_RandomShipSpawn`, `_RespawnEscort`,
+    /// `_LaunchFighter`), the berth's last word for one that keeps it, and
+    /// false for every ship by the other reading
+    /// ([`berth_marks`](crate::traffic::berth_marks)). Never saved.
+    pub berth_mark: bool,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
@@ -809,19 +836,26 @@ pub struct Npc {
     /// never reaches, keeps it, as the original's sub-goal survives a glide
     /// in (`_AIMakeShipJumpIn` @0x82ebb writes the goal, not the sub-goal).
     /// Sight and the cloak think read it, as they run before the frame's
-    /// flight (see `nova_sim_combat::area_cloak`). Never saved.
+    /// flight (see `nova_sim_combat::area_cloak`). Under an AI wait the
+    /// high level writes no sub (@0x8d4b4-0x8d4d2) but for goals 0xa and
+    /// 0xe, so the flight keeps it. Never saved.
     pub close_form: bool,
     /// The order its last flight's high level gave it under goal 0x10
     /// ([`mine_orders::order`](crate::ai::mine_orders::order)): the stored
     /// sub-goal +0xc8ca that `_AIHandleCloaking` reads (@0x834d6,
-    /// @0x835e9-0x835fb), [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop)
-    /// in any other goal. The autopilot's low level writes it where it
+    /// @0x835e9-0x835fb), [`MineOrder::Scoop`](crate::ai::mine_orders::MineOrder::Scoop)
+    /// in goal 0x11 with a box to steer to, and
+    /// [`MineOrder::Stop`](crate::ai::mine_orders::MineOrder::Stop) in any
+    /// other goal. The autopilot's low level writes it where it
     /// writes [`Npc::close_form`], from where the flight starts, so the
     /// think reads last tick's order as the original's does (it runs at
     /// @0x8fcaa, before the high level's write @0x901e5). An NPC held
     /// still, or whose flight a fly half never reaches (a docking's, which
-    /// flies no mining), keeps it; only [`Goal::Mine`](crate::ai::Goal::Mine)
-    /// reads it. Stop at every spawn. Never saved.
+    /// flies no mining), keeps it, and so does one under its AI wait,
+    /// whose low level flies the order kept whatever its goal (the
+    /// autopilot's `kept_sub`). The cloak think reads it under
+    /// [`Goal::Mine`](crate::ai::Goal::Mine). Stop at every spawn. Never
+    /// saved.
     pub mine_order: crate::ai::mine_orders::MineOrder,
     /// Whether its last flight left it in sub 1: the stored +0xc8ca == 1
     /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
@@ -829,12 +863,13 @@ pub struct Npc {
     /// stop's settle doesn't, as it writes sub 0 (@0x85624). Goal 0 flies
     /// sub 0 (@0x8fb09-0x8fb13), so it never sets it. Each flight clears
     /// it, but while a wait runs: the high level writes no sub
-    /// (@0x8d4b9-0x8d4d2), so sub 1 stands, and under an AI wait the low
-    /// level's sub 1 cuts the ship as it moves and settles it below 0.35,
-    /// which ends it ([`leave_flight::stop_under_wait`]). An NPC held
-    /// still keeps it. It starts `false`. Never saved.
-    ///
-    /// [`leave_flight::stop_under_wait`]: crate::traffic::leave_flight
+    /// (@0x8d4b9-0x8d4d2) but for goals 0xa and 0xe, so sub 1 stands, and
+    /// under an AI wait or a mode wait (holding its course, or held or
+    /// waiting at its gate) the low level flies the stop it kept, its word
+    /// and its cuts, and settles it below 0.35, which ends it (the
+    /// autopilot's `kept_sub`). The emerge (@0x8953b) and the disabled
+    /// reset (@0x8ff0a) store sub 0, which clears it. An NPC held still
+    /// keeps it. It starts `false`. Never saved.
     pub stopping: bool,
 }
 
@@ -1247,29 +1282,45 @@ impl Npc {
         self.target.or(self.goal.inspecting())
     }
 
-    /// The ship the threat tests read as the one it fights: its goal's
-    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6),
-    /// idle ([`Goal::Idle`], state 0), leaving ([`Goal::JumpOut`], state
-    /// 2), landing ([`Goal::Land`], state 1) or entering a gate
-    /// ([`Goal::EnterGate`], state 0x14) the target it holds. The
-    /// original's tests read +0x70 and spare only states 5, 7, 9, 0xa,
-    /// 0xb, 0xc, 0xf and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
-    /// `_IsThreatToShip` @0x82024-0x82055, `_ExtendedIsThreatToShip`
-    /// @0x81ace-0x81b03): a trader keeps a hit's target through its stop,
-    /// idle, leave, landing and gate entry (@0x8d803-0x8d80f, @0x3bcf6; see
-    /// [`trader_target`](crate::ai::trader_target::trader_target)), and the
-    /// attack block's ally drop keeps it for any type it idles (@0x8e2d2,
-    /// [`Decision::holds_target`](crate::ai::Decision::holds_target)), so
-    /// such a ship threatens the ally it spared. A pirate's target step
-    /// keeps its target in those goals too. In the other goals that leave
-    /// the quarry none, +0x70 is -1 or the state is one the tests spare.
+    /// The ship the threat tests read as the one it fights, the original's
+    /// +0x70: none in a goal they spare ([`Goal::spares_player_threat`]),
+    /// otherwise its goal's quarry ([`Goal::quarry`]) or else the target it
+    /// holds.
+    ///
+    /// The three tests spare one set, states 5, 7, 9, 0xa, 0xb, 0xc, 0xf
+    /// and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_IsThreatToShip`
+    /// @0x82024-0x82055, `_ExtendedIsThreatToShip` @0x81ace-0x81b03), and
+    /// read +0x70 in every other. A hit of no nominal damage writes it in
+    /// any state (`_DamageShip` @0x3bcf6). The states whose goal names no
+    /// ship hold it so:
+    ///
+    /// - **Idle (0), stopped (6), landing (1), leaving (2), gate entry
+    ///   (0x14):** a trader keeps a hit's target (@0x8d803-0x8d80f; see
+    ///   [`trader_target`](crate::ai::trader_target::trader_target)), the
+    ///   attack block's ally drop keeps it for any type it idles (@0x8e2d2,
+    ///   [`Decision::holds_target`](crate::ai::Decision::holds_target)),
+    ///   and a warship holds it in goal 2 with its warp under way
+    ///   (@0x8bb75-0x8bb7c).
+    /// - **Mining (0x10), scooping (0x11):** the high level writes none
+    ///   (@0x8f832-0x8f903, @0x8faf3-0x8fafd); the miner's think writes -1
+    ///   only on its stop, leaves and disable, and order 0x14's fire clears
+    ///   it (@0x8843a).
+    /// - **The regroup pause (0x13):** no think and no high level run
+    ///   (@0x8fe73-0x8feb5), so +0x70 is kept from before it.
+    /// - **The drift (0xe) and the count wait (0x16):** the high level
+    ///   clears it (@0x8eb85, @0x8d480; see
+    ///   [`plunder::drift`](crate::traffic::plunder::drift) and
+    ///   [`board_wait::lapse`](crate::traffic::board_wait::lapse)), so it
+    ///   holds a hit's target only until the ship's next run.
+    ///   `_IsThreatToPlayer` spares a ship whose wait runs
+    ///   ([`Npc::threatens_player_or_led`]); `_ExtendedIsThreatToShip`
+    ///   doesn't.
     #[must_use]
     pub fn fought(&self) -> Option<ShipRef> {
-        match self.goal {
-            Goal::Wait | Goal::Idle | Goal::JumpOut | Goal::Land(_) | Goal::EnterGate(_) => {
-                self.target
-            }
-            goal => goal.quarry(),
+        if self.goal.spares_player_threat() {
+            None
+        } else {
+            self.goal.quarry().or(self.target)
         }
     }
 
@@ -1306,9 +1357,9 @@ impl Npc {
     /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
     /// active ship in slots 1-63, other than itself, whose leader is
     /// `ship` (@0x81ab2-0x81b59). Here [`Npc::active_not_disabled`]
-    /// stands for the active and disabled tests and [`Npc::fought`] (the quarry of an
-    /// attack, snipe or flight, or a stop's kept target) for the AI states
-    /// and the target. Unlike `_IsThreatToPlayer`, there is
+    /// stands for the active and disabled tests and [`Npc::fought`] (none
+    /// in a spared state, else the goal's quarry or the target it holds)
+    /// for the AI states and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
     /// [`Npc::threatens`] keeps it, since its readers
     /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target);
@@ -1395,8 +1446,10 @@ impl Npc {
     /// coming out of a gate or jumping in has one, and so does a flying
     /// pirate docked or holding after a plunder, or a ship it took into
     /// its fleet), and
-    /// [`Npc::fought`] (the quarry of an attack, snipe or flight, or a
-    /// stop's kept target) for the AI states and the target.
+    /// [`Npc::fought`] (none in a spared state, else the goal's quarry or
+    /// the target it holds) for the AI states and the target. A drifting
+    /// or count-waiting ship holds a hit's target only until its next run
+    /// ([`Npc::fought`]), and this test spares it while its wait runs.
     ///
     /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
     /// that fails this test but targets an active ship the player leads
@@ -1576,9 +1629,11 @@ impl Npc {
 
     /// Whether its flight is its AI wait's ([`Npc::ai_wait`] running, and
     /// not the count wait, which flies its own sub 1): the high level
-    /// writes no sub while +0x4c runs (@0x8d4b9-0x8d4d2), the low level
-    /// still runs on what it kept (@0x901ea-0x901f4), and `_HandleShip`
-    /// skips its turn and thrust (@0x34a54-0x34a72).
+    /// writes no sub while +0x4c runs (@0x8d4b9-0x8d4d2) but for goals 0xa
+    /// and 0xe, the low level still runs on what it kept
+    /// (@0x901ea-0x901f4), its direct writes made at the slot, and
+    /// `_HandleShip` skips its turn and thrust (@0x34a54-0x34a72), flying
+    /// the word left once the wait is out.
     #[must_use]
     pub fn ai_wait_flies(&self) -> bool {
         ai_wait::running(self.ai_wait) && !self.count_wait()
@@ -1629,7 +1684,8 @@ impl Npc {
 
     /// Makes it come out of `gate`, waiting there `ticks_left` ticks
     /// (`_AIMakeShipEmergeFromHyperGate` @0x89518): goal 0x15 and
-    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b), its travel
+    /// sub-goal 0 ([`Mode::Emerging`], @0x89532-0x8953b, so no stop kept,
+    /// [`Npc::stopping`]), its travel
     /// stellar the gate ([`Npc::emerges_from`], @0x8954a), no target
     /// (+0x70 = -1, @0x89544), and its trigger released. A ship with a
     /// fuel tank has visited the gate ([`Npc::visited`], [`Npc::gate_visit`]).
@@ -1650,6 +1706,8 @@ impl Npc {
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
+        // Sub 0 (@0x8953b).
+        self.stopping = false;
         // Its own burst is the one `Mode::LeavingGate` flies, from the
         // emerge's word.
         self.owed_burst = None;
@@ -1778,14 +1836,16 @@ impl Npc {
     /// (@0x8949d-0x894a4): given up ([`Warp::give_up`]), or the emerge's
     /// -1.0 (@0x89555), which a gate wait keeps from the high level's hold
     /// as the engine's stage doesn't
-    /// ([`hold_stage`](crate::traffic::warp_out::hold_stage)).
+    /// ([`hold_stage`](crate::traffic::warp_out::hold_stage)), unless a
+    /// leave write has floored it to 0 ([`Warp::gate_wait_floored`]).
     #[must_use]
     pub fn stage_below_zero(&self) -> bool {
         self.warp.stage < 0.0
-            || matches!(
-                self.mode,
-                Mode::Emerging { .. } | Mode::HeldAtGate { .. } | Mode::LeavingGate { tick: 0 }
-            )
+            || (!self.warp.gate_wait_floored
+                && matches!(
+                    self.mode,
+                    Mode::Emerging { .. } | Mode::HeldAtGate { .. } | Mode::LeavingGate { tick: 0 }
+                ))
     }
 
     /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a

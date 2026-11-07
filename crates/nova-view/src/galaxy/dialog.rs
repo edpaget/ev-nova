@@ -983,6 +983,7 @@ mod tests {
             current: SystemId(128),
             gate_arrows: Vec::new(),
             named: vec![SystemId(128), SystemId(129), SystemId(130)],
+            lanes: Vec::new(),
         }
     }
 

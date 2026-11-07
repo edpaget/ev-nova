@@ -9,7 +9,8 @@
 //! - **Who makes one.** A ship whose [`HullSpec::death_size`] is above
 //!   none: of 100 tons or more (`Mass` above 99, signed, 0x2d92b) and not
 //!   planet-type (`Flags` 0x0400, 0x2d90d). The player's ship makes one
-//!   too: nothing in the loop tests for slot 0.
+//!   too: nothing in the loop tests for slot 0. A negative `Mass` makes
+//!   none, as the clamp's 0 ([`HullSpec::mass`]) makes none.
 //! - **The damage** ([`damage`](fn@damage)) is `trunc(Mass x 0.0375 + 25)`
 //!   ([`DAMAGE_PER_TON`] @0xdd598, [`DAMAGE_BASE`] @0xdd5a0, in doubles,
 //!   `cvttsd2si` 0x2d96f), the same to shields and armour, with no

@@ -447,6 +447,7 @@ mod tests {
             current: SystemId(130),
             gate_arrows: Vec::new(),
             named: Vec::new(),
+            lanes: Vec::new(),
         }
     }
 

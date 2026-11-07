@@ -11,7 +11,7 @@ use crate::fleet::{Livery, ModKit, Outfit, Ship};
 use crate::frontmatter;
 use crate::id::{Id, PointRef};
 use crate::model::{
-    Character, Faction, JumpPoint, Kind, Mission, News, Region, Stellar, Storyline, System,
+    Character, Faction, JumpPoint, Kind, Mission, News, Region, Start, Stellar, Storyline, System,
 };
 use crate::source::Source;
 
@@ -45,6 +45,8 @@ pub struct Galaxy {
     pub news: BTreeMap<Id, Doc<News>>,
     /// `characters/`.
     pub characters: BTreeMap<Id, Doc<Character>>,
+    /// `starts/`.
+    pub starts: BTreeMap<Id, Doc<Start>>,
     /// `ships/`.
     pub ships: BTreeMap<Id, Doc<Ship>>,
     /// `mods/`.
@@ -128,6 +130,7 @@ pub fn load(source: &impl Source) -> (Galaxy, Vec<Problem>) {
         missions: kind::<Mission>(source, p, u),
         news: kind::<News>(source, p, u),
         characters: kind::<Character>(source, p, u),
+        starts: kind::<Start>(source, p, u),
         ships: kind::<Ship>(source, p, u),
         mods: kind::<ModKit>(source, p, u),
         outfits: kind::<Outfit>(source, p, u),
@@ -207,6 +210,32 @@ mod tests {
         assert_eq!(news, ["parcel-delivered"]);
         let paths: Vec<_> = galaxy.news.values().map(|d| d.path.as_str()).collect();
         assert_eq!(paths, ["news/parcel-delivered.md"]);
+    }
+
+    #[test]
+    fn loads_the_starts() {
+        let (galaxy, problems) = load(&fixture::galaxy());
+        assert!(problems.is_empty(), "{problems:?}");
+        let starts: Vec<_> = galaxy.starts.keys().map(Id::as_str).collect();
+        assert_eq!(starts, ["first-flight"]);
+        let start = &galaxy.starts.values().next().unwrap();
+        assert_eq!(start.path, "starts/first-flight.md");
+        assert_eq!(
+            (start.data.system.as_str(), start.data.ship.as_str()),
+            ("alpha", "skiff")
+        );
+    }
+
+    #[test]
+    fn a_start_naming_what_is_not_there_still_loads() {
+        // References are the checker's and the engine's business.
+        let source = fixture::galaxy().with(
+            "starts/lost.md",
+            "---\nname: Lost\nsystem: gamma\nship: barge\ncash: 0\n---\n",
+        );
+        let (galaxy, problems) = load(&source);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(galaxy.starts.len(), 2);
     }
 
     #[test]

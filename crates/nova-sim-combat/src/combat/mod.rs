@@ -2270,13 +2270,15 @@ impl Combat {
     /// - A glow weapon lights the player's weapon glow ([`Combat::glow`]),
     ///   but a fighter bay, whose glow waits on its fighter being put in
     ///   the system, which the session lights ([`Combat::light_glow`]).
-    /// - A `Recoil` above none pushes the player back, opposite its heading,
-    ///   by `Recoil` over its mass up to its class speed, once a call
-    ///   (@0x62ea2-0x62f35, the signed `jle` @0x62eb5), reported as a
-    ///   [`Shove`]; by the other reading of
+    /// - A `Recoil` above none pushes the player along its heading + 180,
+    ///   by `Recoil` over its signed class `Mass` up to its class speed,
+    ///   once a call (@0x62ea2-0x62f35, the signed `jle` @0x62eb5),
+    ///   reported as a [`Shove`]: back for a `Mass` above none, forward
+    ///   and uncapped for a negative one, whichever the reading. By the
+    ///   other reading of
     ///   [`RuleKey::PlayerForwardRecoil`](crate::RuleKey::PlayerForwardRecoil),
-    ///   a negative one but -1 pushes it forward, as an NPC's does
-    ///   ([`ai_fire::recoil`]).
+    ///   a negative `Recoil` but -1 pushes it too, forward for a `Mass`
+    ///   above none, as an NPC's does ([`ai_fire::recoil`]).
     ///
     /// Each call reads the ship as the call before left it, as the
     /// original's does: a recoil moves the later weapons' shots on.
@@ -8875,6 +8877,7 @@ mod tests {
         // Facing right, of mass 50: pushed left 2 a tick.
         let mut ship = Ship::at(1, 0.0, 0.0).armed(kicking).picking(128);
         ship.hull.mass = 50.0;
+        ship.hull.signed_mass = 50;
         let mut combat = Combat::default();
         let mut ships = [ship];
         phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
@@ -8888,6 +8891,7 @@ mod tests {
         // No recoil without one, nor when nothing spawned.
         let mut still = Ship::at(1, 0.0, 0.0).armed(blaster()).picking(128);
         still.hull.mass = 50.0;
+        still.hull.signed_mass = 50;
         let mut combat = Combat::default();
         phase::handle_npcs(&mut combat, &mut [still], &NovaDisable);
         assert_eq!(combat.take_shoves(), []);
@@ -8904,6 +8908,7 @@ mod tests {
                 .picking(130)
                 .targeting(B);
             shooter.hull.mass = 50.0;
+            shooter.hull.signed_mass = 50;
             let mut combat = Combat::default();
             let mut ships = [shooter, Ship::at(2, x, 0.0)];
             phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
@@ -13994,6 +13999,7 @@ mod tests {
         };
         let mut player = player_carrying(together, 2, PRIMARY_HELD);
         player.hull.mass = 50.0;
+        player.hull.signed_mass = 50;
         let mut combat = Combat::default();
         combat.set_player_forward_recoil(forward);
         phase::fire_player(&mut combat, &mut [player], &NovaDisable);
@@ -14024,6 +14030,7 @@ mod tests {
         let mut player = player_carrying(turret, 1, PRIMARY_HELD);
         player.target = None;
         player.hull.mass = 50.0;
+        player.hull.signed_mass = 50;
         let mut combat = Combat::default();
         phase::fire_player(&mut combat, &mut [player], &NovaDisable);
         assert_eq!(combat.take_shoves(), []);
@@ -14064,6 +14071,7 @@ mod tests {
         player.armament =
             Armament::new([(WeaponSpec::new(&later), 1), (WeaponSpec::new(&kicking), 1)]);
         player.hull.mass = 50.0;
+        player.hull.signed_mass = 50;
         player.target = None;
         let mut combat = Combat::default();
         phase::fire_player(&mut combat, &mut [player], &NovaDisable);

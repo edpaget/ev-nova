@@ -1,0 +1,11 @@
+/fixture/EV Nova:
+Indirect symbols for (__IMPORT,__pointers) 20 entries
+address    index name
+0x003b5000 10107 _mach_init_routine
+0x003b5004 10082 _errno
+0x003b5008 LOCAL
+0x003b500c LOCAL
+0x003b504c LOCAL
+Indirect symbols for (__IMPORT,__jump_table) 1 entries
+address    index name
+0x003b63a1 10200 _SysBeep

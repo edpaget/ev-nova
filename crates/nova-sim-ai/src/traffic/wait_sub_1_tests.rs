@@ -150,21 +150,27 @@ fn below_0_35_it_settles_once_by_0_95_and_stores_sub_0() {
 }
 
 #[test]
-fn the_traffic_clears_a_ship_below_0_35_in_a_mode_wait_or_a_count_wait() {
-    // Neither flies the AI wait's flight, so the fly pass ends a stored
-    // sub 1 below 0.35 itself.
+fn the_traffic_settles_a_mode_wait_below_0_35_and_clears_a_count_wait() {
+    // The count wait flies its own sub 1, so the low level's clear ends a
+    // stored sub 1 below 0.35 itself; a mode wait's low level runs the
+    // kept stop, which settles it × 0.95 and stores sub 0 (@0x855e3-0x85624).
     let coasting = Npc {
         ai_wait: 0.0,
         mode: super::npc::Mode::Coasting { ticks_left: 9.0 },
         ..waiting(FAST, Goal::Wait, Vec2::new(0.0, -0.2), 180.0)
     };
     let counting = waiting(FAST, Goal::CountWait, Vec2::new(0.0, -0.2), 180.0);
+    let start = coasting.state;
     for ship in [coasting, counting] {
         let mut traffic = Traffic::with_interval(1);
         traffic.add_npc(ship);
         traffic.fly_tick(&World::new(&[]), &mut Draws::of(&[]));
         let ship = &traffic.npcs()[0];
         assert!(!ship.stopping, "{:?}", ship.mode);
+        if ship.goal == Goal::Wait {
+            let settled = drag_by(start.velocity, 0.95);
+            assert_eq!(ship.state.velocity, settled, "settled");
+        }
     }
 }
 

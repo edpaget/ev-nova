@@ -7,9 +7,12 @@
 //!
 //! - **What shows.** `_HandleShip` skips steering, thrust and fire while
 //!   +0x4c is above 0 (@0x34a54-0x34a72 → @0x3501f), so the fight
-//!   substates' +0x30, +0x34 and +0x68 don't fly, and the next unwaited
-//!   frame's low level rewrites +0x68 and +0x30 before they are used. Four
-//!   writes do show: the +0xc8ca transitions, which choose the first
+//!   substates' +0x30, +0x34 and +0x68 don't fly that pass, and at single
+//!   speed the next unwaited frame's low level rewrites +0x68 and +0x30
+//!   before they are used; double time's second pass flies the word once
+//!   the advance pass's countdown ends the wait. The slot leaves that
+//!   word, the frame's last body flown at the ship +0x70 names (the
+//!   autopilot's `kept_sub`). Four more writes show: the +0xc8ca transitions, which choose the first
 //!   unwaited frame's block (0x10 → 6 by the inertialess exit beyond 165 on
 //!   an axis, @0x864c6-0x86513; 0x11 → 6, @0x86755-0x867b2; 6 → 0x10 or
 //!   0x11, the joust and the rush entry; 7 → 0x11); the swarm branch's
@@ -31,9 +34,9 @@
 //!   any other fight body is its own sub. Sub 0 (the coast) and sub 0x17
 //!   (a gate entry) show nothing: the ship holds still, and the engine
 //!   keeps no frame for them. A ship running out (subs 1, 3 and 4) runs no
-//!   body here; its non-fight subs' direct writes under a wait (sub 1's
-//!   settle, sub 0x14, sub 0xe) are
-//!   rdm:phase/combat-ai-fidelity-cross-roadmap-followups/phase-1-left-out-of-phase-19's.
+//!   body here; the non-fight subs' direct writes under a wait (sub 1's
+//!   settle, sub 0x14's ease and nudge) and sub 0xe's damping are the
+//!   autopilot's at the slot (rdm:phase/npc-ai/phase-6-left-out-of-phase-19).
 //! - **When a fight sub is held.** Every +0x4c writer (`objdump`, every
 //!   `mov ... 0x4c(%reg)`) was checked: the glide end and the count-wait
 //!   entry write sub 0, the dock wait holds sub 0xf (@0x86fea), the

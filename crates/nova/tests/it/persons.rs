@@ -318,7 +318,10 @@ fn game_data() -> Rc<GameData> {
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(ShipAnim::TYPE, 130, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
-        .resource(RLED, 2001, None, &sheet(36, 6))
+        // The Raider and the Yacht are taller than the blaster's 20-pixel
+        // step, so the held fire meets each wherever along its line it
+        // stands, and the kill test holds wherever the persons have drifted.
+        .resource(RLED, 2001, None, &sheet(36, 24))
         .resource(Spin::TYPE, 3000, None, &spin(3000))
         .resource(RLED, 3000, None, &sheet(1, 3))
         .resource(StrList::TYPE, 3000, None, &strings(&comm_strings()))

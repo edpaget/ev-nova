@@ -201,7 +201,7 @@
 //! The player's speed gate is per axis in the original, built by
 //! stellar-fidelity phase 6 (item 2 above).
 
-use nova_data::records::stellar::flags as spob_flags;
+use nova_data::records::stellar::{flags as spob_flags, flags2 as spob_flags2};
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::clearance::{self, CLEARED, DockRequest, REQUESTED_NEAR};
@@ -254,10 +254,12 @@ impl StellarFlags {
     pub const ONLY_WHEN_DESTROYED: u32 = spob_flags::ONLY_WHEN_DESTROYED;
 }
 
-/// The `spöb` `Flags2` bit of a hypergate.
-pub const HYPERGATE: u16 = 0x1000;
-/// The `spöb` `Flags2` bit of a wormhole.
-pub const WORMHOLE: u16 = 0x2000;
+/// The `spöb` `Flags2` bit of a hypergate, as the `spöb` record defines it
+/// ([`nova_data::records::stellar::flags2::HYPERGATE`]).
+pub const HYPERGATE: u16 = spob_flags2::HYPERGATE;
+/// The `spöb` `Flags2` bit of a wormhole, as the `spöb` record defines it
+/// ([`nova_data::records::stellar::flags2::WORMHOLE`]).
+pub const WORMHOLE: u16 = spob_flags2::WORMHOLE;
 
 /// What a stellar a ship can enter leads through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

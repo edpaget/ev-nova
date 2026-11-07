@@ -73,15 +73,20 @@ pub enum MineOrder {
     Chase,
     /// Order 0x14: inside the box, it holds by slot 0 and fires at it.
     Kill,
+    /// Order 0x15: state 17, goal 0x11, steers to the nearest scoopable
+    /// box (@0x8faf3-0x8fafd); with no box its low level stores sub 0
+    /// (@0x88636), which is [`MineOrder::Stop`] here.
+    Scoop,
 }
 
 /// The order as `_AIHandleCloaking` tests the stored sub-goal under goal
 /// 0x10: order 1 a stop, 0x13 the chase the 0x0200 term reads (@0x834d6)
 /// and 0x14 the close the 0x1000 term drops the cloak on (@0x835e9-0x835fb).
+/// It tests no other order, so 0x15 reads as a stop.
 impl From<MineOrder> for crate::cloak::MineOrder {
     fn from(order: MineOrder) -> Self {
         match order {
-            MineOrder::Stop => Self::Stop,
+            MineOrder::Stop | MineOrder::Scoop => Self::Stop,
             MineOrder::Chase => Self::Chase,
             MineOrder::Kill => Self::Close,
         }

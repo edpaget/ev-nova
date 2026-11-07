@@ -724,6 +724,7 @@ mod tests {
                 &start,
                 super::super::ship_loop::Motion::Again,
                 crate::combat::GamePass::Advance { double_time: false },
+                None,
                 crate::combat::Rules::default(),
                 &mut crate::chance::NeverFires,
             );

@@ -25,7 +25,8 @@
 //!
 //! - **The player's fighter** joins the fleet as a carried escort
 //!   ([`Escort::carried`]), of no government, on its formation slot, as
-//!   phase 8's escorts. What it does first follows the rulebook's
+//!   phase 8's escorts, with goal 0 (@0x3d7a3) until its think puts it in
+//!   formation. What it does first follows the rulebook's
 //!   [`RuleKey::FighterLaunch`](crate::RuleKey::FighterLaunch)
 //!   ([`Session::with_rules`]): by the engine it takes the
 //!   order kept for its class, Return to
@@ -264,7 +265,11 @@ impl Session {
             formation: FormationSlot::default(),
             order,
         });
-        npc.goal = Goal::Formation { guard: None };
+        // `_LaunchFighter` writes goal 0 and sub 0 (@0x3d7a3, @0x3d7af):
+        // through its glide's AI wait it holds goal 0, which the high level's
+        // wait gate skips (@0x8d4b4-0x8d4d2), until its think puts it in
+        // formation and ends the wait (`_EscortAI` @0x83eb0).
+        npc.goal = Goal::Idle;
         npc.target = target;
         let escort = Escort {
             ship: npc.ship,
@@ -749,6 +754,7 @@ fn fighter(
         slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
         ordered_by_lead: false,
+        berth_mark: false,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.signed_pod_count,
@@ -1178,6 +1184,7 @@ pub(super) mod tests {
             &start,
             super::super::ship_loop::Motion::Again,
             pass,
+            None,
             Rules::default(),
             &mut NeverFires,
         );
@@ -1233,6 +1240,11 @@ pub(super) mod tests {
             session.player().position + fighter.state.velocity
         );
         assert_eq!(fighter.state.heading, 0.0, "the player's heading");
+        assert_eq!(
+            fighter.goal,
+            Goal::Idle,
+            "goal 0 (@0x3d7a3) through its glide"
+        );
         assert_eq!(
             fighter.state.velocity,
             launch_velocity(Vec2::ZERO, 0.0, 4.0, 6.0),
@@ -3953,6 +3965,7 @@ pub(super) mod tests {
             flags2: HYPERGATE,
             links,
             exit_angle: 90,
+            stability: crate::catalog::GateStability::Stable,
         };
         let mut to = [None; 8];
         to[0] = Some(StellarId(310));
@@ -4225,10 +4238,13 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
+        // The load spawned the Viper at 1, the warship at 2 and the Dart
+        // at 3, so with the fighters gone the warship keeps 2, as the
+        // original's table holds it from the load on.
         assert_eq!(
             session.pilot().escorts(),
-            [at_berth(1, warship(None))],
-            "the berth it will take, the fighters gone"
+            [at_berth(2, warship(None))],
+            "the berth the load spawned it in, the fighters gone"
         );
     }
 

@@ -26,6 +26,14 @@
 //! [`SessionEvent::SystemChanged`](super::SessionEvent::SystemChanged),
 //! from which the view lays the course out again.
 //!
+//! **A gate's exit** (the `entry` module's gate row): a hypergate's or
+//! wormhole's exit restarts the course at the system entered
+//! (@0x63e1d-0x63e3c, @0x64713-0x64731). By [`RuleKey::GateCourse`]'s
+//! other reading, the new game's, a hypergate's exit into the system
+//! standing for the course's first hop drops that hop as an arrival
+//! that made one does, and `Session::enter_hypergate` cues the next once
+//! the nav is off; any other exit, and every wormhole's, restarts.
+//!
 //! **A load** ([`course_on_load`]): by [`RuleKey::LoadedCourse`]'s engine
 //! reading a pilot opened from a save flies with no course, as the
 //! original's open clears `_hyperRoute` and never restores it; by the
@@ -429,5 +437,102 @@ mod tests {
             .expect("enters");
         assert_eq!(session.course(), ids(&[]));
         assert_eq!(session.pilot.course_start(), Some(SystemId(131)));
+    }
+
+    // `RuleKey::GateCourse`.
+
+    use crate::navigation::NavMode;
+    use crate::testkit::{DRIFT, HEARTH, VERGE, laned};
+
+    /// A new pilot over [`laned`] by [`RuleKey::GateLanes`]' other reading
+    /// and `course` for [`RuleKey::GateCourse`], its course `hops` from
+    /// drift, at drift's gate to hearth with its entry awaiting the pick.
+    fn at_drifts_gate(course: RuleSource, hops: &[SystemId]) -> (FakePilotCatalog, Session) {
+        let catalog = laned();
+        let rules = Rulebook::default()
+            .with_override(RuleKey::GateLanes, RuleSource::Bible)
+            .with_override(RuleKey::GateCourse, course);
+        let session = at_gate(&catalog).with_rules(rules);
+        let mut session = session;
+        session.pilot.course = hops.to_vec();
+        session.pilot.course_start = Some(DRIFT);
+        (catalog, session)
+    }
+
+    /// `session` through drift's gate into hearth.
+    fn into_hearth(catalog: &FakePilotCatalog, session: &mut Session) {
+        assert_eq!(session.open_hypergate(catalog), Ok(vec![HEARTH]));
+        assert_eq!(
+            session.enter_hypergate(Some(HEARTH), catalog, &mut NeverFires),
+            Ok(HEARTH)
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_hypergates_exit_along_the_course_drops_the_hop_and_cues_the_next() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Bible, &[HEARTH, VERGE]);
+        into_hearth(&catalog, &mut session);
+        assert_eq!(session.course(), [VERGE]);
+        assert_eq!(session.pilot.course_start(), Some(HEARTH));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(VERGE)));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_cancelled_entry_keeps_the_course_and_cues_nothing() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Bible, &[HEARTH, VERGE]);
+        assert_eq!(session.open_hypergate(&catalog), Ok(vec![HEARTH]));
+        assert!(
+            session
+                .enter_hypergate(None, &catalog, &mut NeverFires)
+                .is_err()
+        );
+        assert_eq!(session.course(), [HEARTH, VERGE]);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
+    fn by_the_engine_a_hypergates_exit_along_the_course_restarts_it() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Engine, &[HEARTH, VERGE]);
+        into_hearth(&catalog, &mut session);
+        assert_eq!(session.course(), []);
+        assert_eq!(session.pilot.course_start(), Some(HEARTH));
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_exit_off_the_course_restarts_it() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Bible, &[VERGE]);
+        into_hearth(&catalog, &mut session);
+        assert_eq!(session.course(), []);
+        assert_eq!(session.pilot.course_start(), Some(HEARTH));
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_exit_at_the_last_hop_leaves_no_course_and_the_nav_off() {
+        let (catalog, mut session) = at_drifts_gate(RuleSource::Bible, &[HEARTH]);
+        into_hearth(&catalog, &mut session);
+        assert_eq!(session.course(), []);
+        assert_eq!(session.pilot.course_start(), None);
+        assert_eq!(session.nav_mode(), NavMode::Off);
+    }
+
+    #[test]
+    fn a_wormholes_exit_restarts_the_course_by_either_reading() {
+        for source in RuleSource::ALL {
+            let holes = wormholes();
+            let mut session = at_wormhole(&holes)
+                .with_rules(Rulebook::default().with_override(RuleKey::GateCourse, source));
+            session.pilot.course = ids(&[131, 132]);
+            session
+                .enter_wormhole(&holes, &mut Scripted::rolling(&[0]))
+                .expect("enters");
+            assert_eq!(session.course(), ids(&[]), "{source:?}");
+            assert_eq!(
+                session.pilot.course_start(),
+                Some(SystemId(131)),
+                "{source:?}"
+            );
+        }
     }
 }

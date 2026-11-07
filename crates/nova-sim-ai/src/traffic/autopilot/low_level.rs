@@ -11,6 +11,7 @@
 
 use super::{ALIGNED, APPROACH_THRUST, Beside, DOGFIGHT_THRUST, FLEE_THRUST, Outcome};
 use super::{FOLLOW_DISTANCE, Readings, SWARM_THRUST, TopSpeeds, hand_off, within_reach};
+use crate::ai::handler_head;
 use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
 use crate::ai::{Goal, fire, fire::Manoeuvre};
@@ -53,14 +54,20 @@ use std::collections::BTreeMap;
 /// a landing's wait on `chance`: the word it leaves `_HandleShip`, and how
 /// its flight ended at the slot, if it did (a landing, a jump begun, a
 /// gate's box reached by a ship the high level's gate block didn't
-/// reach), in which case its step flies nothing that pass. Everything it
+/// reach), in which case its step flies nothing that pass but for a jump
+/// begun, whose sub 4 the traffic runs at the slot and whose warp-out the
+/// step flies. Everything it
 /// reads of `npc`'s handling is read now ([`Npc::flying_handling`]): its
 /// charge as it stands at the slot.
 ///
 /// A ship whose flight is `_HandleShip`'s own (a gate's waits, its glide
-/// and burst, a disabled ship's drift, see [`step()`](super::step())), or
-/// whose AI wait runs (but a count wait), leaves the head's word: its own
-/// whole heading and no thrust ([`SlotWord::none`]).
+/// and burst, a disabled ship's drift, see [`step()`](super::step()))
+/// leaves the head's word: its own whole heading and no thrust
+/// ([`SlotWord::none`]), but one holding its course or at its gate with
+/// sub 1 stored flies the stop it kept, as the low level runs under +0x4c
+/// whatever set it. One whose AI wait runs (but a count wait, and goals
+/// 0xa and 0xe, which fly as unwaited) flies the sub it kept
+/// ([`kept_sub`](super::kept_sub)).
 pub fn low_level(
     npc: &mut Npc,
     sites: &[LandingSite],
@@ -73,10 +80,13 @@ pub fn low_level(
     let handling = npc.flying_handling(speeds.own, flight);
     let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
     // The stop's own flight sets it again. While a wait runs the high level
-    // writes no sub (@0x8d4b9-0x8d4d2), and the low level's settle alone
-    // ends a sub 1 (@0x85624): under an AI wait the wait's stop below runs
-    // that settle itself, so it reads the bit first.
-    if !npc.wait_running() || (!inertialess::moving(npc.state.velocity) && !npc.ai_wait_flies()) {
+    // writes no sub (@0x8d4b9-0x8d4d2) but for goals 0xa and 0xe (@0x8d4c8,
+    // @0x8d4ce), and the low level's settle alone ends a sub 1 (@0x85624):
+    // under an AI wait or a mode wait the kept stop runs that settle
+    // itself (`kept_sub`), so it reads the bit first.
+    let high_level_runs = !handler_head::waits_out(npc, npc.goal);
+    let flies_kept_sub = npc.ai_wait_flies() || super::kept_sub::mode_wait(npc);
+    if high_level_runs || (!inertialess::moving(npc.state.velocity) && !flies_kept_sub) {
         npc.stopping = false;
     }
     let quarry = (other, other_disabled, beside);
@@ -109,21 +119,34 @@ fn decide(
     if pod_flight::is_pod(npc) {
         return Ok(pod_flight::flight(npc));
     }
+    if super::kept_sub::mode_wait(npc)
+        && let Some(flight) = super::kept_sub::kept_stop(npc, handling, inertia)
+    {
+        // The low level runs under +0x4c whatever set it (@0x901ea-0x901f4),
+        // so a mode wait's stored sub 1 is cut and settled
+        // (@0x8536d-0x85633). The high level has cleared the bit when it
+        // runs, so goals 0xa and 0xe never get here with it.
+        return Ok(flight);
+    }
     if !super::step::steered(npc) {
         // The head's word (@0x851f1, @0x8522d).
         return Ok(none(npc));
     }
-    if npc.ai_wait_flies() {
-        // The head's word too. While +0x4c runs, the high level's wait gate
-        // returns before state 1 runs (@0x8d4b9-0x8d4d2), so a landing ship
-        // keeps its goal through the wait and hands a gate off only after
-        // it, and a sub 1 it stored stands, the low level cutting it as
-        // ever, though `_HandleShip` skips its turn and thrust
-        // (@0x34a54-0x34a72).
-        if npc.stopping {
-            leave_flight::stop_under_wait(npc, handling, inertia);
-        }
-        return Ok(none(npc));
+    if npc.ai_wait_flies() && handler_head::waits_out(npc, npc.goal) {
+        // While +0x4c runs, the high level's wait gate returns before state
+        // 1 runs (@0x8d4b9-0x8d4d2), so a landing ship keeps its goal
+        // through the wait and hands a gate off only after it, and the sub
+        // it kept flies, though `_HandleShip` skips its turn and thrust
+        // (@0x34a54-0x34a72). Goals 0xa and 0xe pass the gate (@0x8d4c8,
+        // @0x8d4ce) and fly as unwaited below.
+        let kept = (other, other_disabled, beside);
+        return Ok(super::kept_sub::under_wait(
+            npc,
+            kept,
+            handling,
+            inertia,
+            (readings, weapons),
+        ));
     }
     hand_off(npc, sites);
     Ok(match npc.goal {
@@ -223,7 +246,7 @@ fn decide(
 
 /// The head's flight (see [`SlotWord::none`]): `npc`'s own whole heading
 /// (@0x8522d), no thrust (@0x851f1), +0x34 its slot's top speed.
-fn none(npc: &Npc) -> Flight {
+pub(super) fn none(npc: &Npc) -> Flight {
     Flight::writes(
         Controls::default(),
         trig::whole(npc.state.heading),
@@ -274,7 +297,7 @@ fn pursue(
 /// ([`Frame::speed_cap`](pursuit::Frame::speed_cap)) flies at most at
 /// that speed, a cap of none being none, as `_HandleShip` reads +0x34
 /// (@0x34a8a-0x34aab); a later body's cap (0x10's none, 0x11's) wins.
-fn fight(
+pub(super) fn fight(
     npc: &mut Npc,
     target: &ShipState,
     (body, speed_cap): (Body, Option<f32>),

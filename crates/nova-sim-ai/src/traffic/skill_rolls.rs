@@ -119,7 +119,7 @@ fn ship(govt: Option<GovtId>) -> NewShip {
     NewShip {
         ship: ShipId(200),
         govt,
-        ai_type: AiType::WimpyTrader,
+        ai_type: AiType::WimpyTrader.into(),
         lead: None,
         state: ShipState::default(),
         entry: Entry::Placed,
@@ -136,6 +136,8 @@ fn ship(govt: Option<GovtId>) -> NewShip {
         quote: None,
         cargo: None,
         rolls_voice: false,
+        asks_scoop: false,
+        clears_mark: false,
     }
 }
 

@@ -186,14 +186,17 @@ impl Behaviour for PirateWarship {
         fire::trigger(npc, around, self.fire)
     }
 
-    /// The ship its fight is about; none in its count wait or its drift,
-    /// which `_HighLevelAIHandler` clears every frame (@0x8d480,
-    /// @0x8eb85); and for any
-    /// other goal the target it holds, which its think keeps with a goal it
-    /// keeps (see the module docs).
+    /// The ship its fight is about; none in its drift, which
+    /// `_HighLevelAIHandler` clears (@0x8eb85, as
+    /// [`plunder::drift`](crate::traffic::plunder::drift) does for every
+    /// type); and for any other goal the target it holds, which its think
+    /// keeps with a goal it keeps (see the module docs). Its count wait
+    /// keeps it here too: the handler's head clears it while the wait runs
+    /// (@0x8d480) and keeps it as the wait runs out (@0x8d497-0x8d4a3), for
+    /// every type, in [`board_wait::lapse`](crate::traffic::board_wait::lapse).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::CountWait | Goal::Drift => None,
+            Goal::Drift => None,
             goal => goal.quarry().or(npc.target),
         }
     }
@@ -240,9 +243,13 @@ pub fn think(
         };
         // The idle block tests the fuel of a pirate it does not send to a
         // stellar (@0x8c52d-0x8c5d2): it leaves (state 2) or stops (6).
+        // Its leave writes `_AIMakeShipLeave`'s +0x50 floor and +0xa4 stamp
+        // (@0x8c59b-0x8c5bd) on every think that reaches it.
+        let goal = idle_block::pirate_idle(&idler, around, chance);
         return Decision {
-            goal: idle_block::pirate_idle(&idler, around, chance),
+            goal,
             clears_target: true,
+            leaves: goal == Goal::JumpOut,
             ..Decision::default()
         };
     };
@@ -592,6 +599,17 @@ mod tests {
         }
     }
 
+    /// The idle copy's leave: [`dropped`] to goal 2, with
+    /// `_AIMakeShipLeave`'s +0x50 floor and +0xa4 stamp (@0x8c59b-0x8c5bd),
+    /// written on every think that reaches the copy, a leave already held
+    /// too.
+    fn left() -> Decision {
+        Decision {
+            leaves: true,
+            ..dropped().goal_of(Goal::JumpOut)
+        }
+    }
+
     /// The dry drop: [`dropped`], its travel stellar cleared (@0x8c887) and
     /// its sub 0 (@0x8c878).
     fn dry_dropped() -> Decision {
@@ -908,10 +926,7 @@ mod tests {
             ..holding(Goal::JumpOut, None)
         };
         leaving.reserves.fuel.now = 0.0;
-        assert_eq!(
-            decided(&[leaving.clone()]),
-            dropped().goal_of(Goal::JumpOut)
-        );
+        assert_eq!(decided(&[leaving.clone()]), left());
         leaving.class_fuel = 99;
         assert_eq!(
             decided(&[leaving.clone()]),
@@ -932,7 +947,7 @@ mod tests {
             "a person with none"
         );
         leaving.reserves.fuel.now = 100.0;
-        assert_eq!(decided(&[leaving]), dropped().goal_of(Goal::JumpOut));
+        assert_eq!(decided(&[leaving]), left());
     }
 
     #[test]
@@ -972,7 +987,7 @@ mod tests {
         let mut chance = Draws::of(&[]);
         assert_eq!(
             think(&npcs[0], &seen, TargetRules::default(), &mut chance),
-            dropped().goal_of(Goal::JumpOut),
+            left(),
             "with nothing to fight it leaves: its travel stellar is set (@0x8c472)"
         );
         assert!(chance.asked.is_empty(), "no new pick");
@@ -997,10 +1012,7 @@ mod tests {
     #[test]
     fn a_pirate_bound_for_a_stellar_with_nothing_to_fight_leaves_or_waits_when_it_cannot_jump() {
         let bound = holding(IDLE, None);
-        assert_eq!(
-            alone(bound.clone()),
-            (dropped().goal_of(Goal::JumpOut), vec![])
-        );
+        assert_eq!(alone(bound.clone()), (left(), vec![]));
         let stranded = Npc {
             class_fuel: 99,
             ..bound
@@ -1022,7 +1034,7 @@ mod tests {
             visited: Some(StellarId(128)),
             ..holding(Goal::Idle, None)
         };
-        assert_eq!(alone(visited), (dropped().goal_of(Goal::JumpOut), vec![]));
+        assert_eq!(alone(visited), (left(), vec![]));
     }
 
     #[test]
@@ -1032,10 +1044,7 @@ mod tests {
             travel: Some(StellarId(150)),
             ..holding(Goal::Attack(n(9)), Some(n(9)))
         };
-        assert_eq!(
-            alone(fighting.clone()),
-            (dropped().goal_of(Goal::JumpOut), vec![])
-        );
+        assert_eq!(alone(fighting.clone()), (left(), vec![]));
         let stranded = Npc {
             class_fuel: 99,
             ..fighting.clone()
@@ -1415,7 +1424,13 @@ mod tests {
         assert_eq!(target(Goal::Attack(n(2)), None), Some(n(2)));
         assert_eq!(target(IDLE, Some(n(3))), Some(n(3)), "kept with its goal");
         assert_eq!(target(Goal::Idle, None), None);
-        assert_eq!(target(Goal::CountWait, Some(n(3))), None);
+        assert_eq!(
+            target(Goal::CountWait, Some(n(3))),
+            Some(n(3)),
+            "the head's clear is `board_wait::lapse`'s, and the wait out keeps +0x70 \
+             (@0x8d497-0x8d4a3)"
+        );
+        assert_eq!(target(Goal::Drift, Some(n(3))), None, "@0x8eb85");
     }
 
     #[test]

@@ -120,11 +120,22 @@
 //! The new game's data is a folder in the bible's format
 //! (`nova-galaxy-format`), not resource files. [`new_game`] loads it, maps
 //! its factions, systems and stellars to `gövt`, `sÿst`, `spöb` and `dësc`
-//! records, and puts them in a [`store::GameData`] built from decoded
+//! records, its jump points to hypergate `spöb`s, its hulls to `shïp`s and
+//! `shän`s, a placeholder traffic `düde`, and its starts to `chär`s, and
+//! puts them in a [`store::GameData`] built from decoded
 //! records ([`store::GameData::from_decoded`]), so everything that reads
 //! the stock game's data reads the new game's the same way. See
 //! [`new_game`] for what maps to what, the problems it reports and what
 //! isn't mapped yet.
+//!
+//! The bible has models, not sprites, so each hull, stellar and gate has
+//! a stand-in instead ([`StandIn`]): a model seen from above, a size box,
+//! a disc or a ring, worked out at load ([`new_game::looks`]) and kept on
+//! the store ([`store::GameData::stand_in`]); the stock store holds none.
+//! The models are read and drawn from above by `nova-galaxy-media`, the
+//! crate below this one that alone decodes glTF, which game-bible's
+//! `galaxy` tool can share. The view draws a stand-in where it has no
+//! sprite (`nova_view::outline`).
 //!
 //! # Interface resources
 //!
@@ -183,10 +194,11 @@ pub use expr::{
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
-    FailedFile, GameData, IgnoredEntry, InterfaceData, LayerError, LayerSprite, NoInterfaceFile,
-    OpenError, Origin, ParsedSet, ParsedTest, Provenance, SheetKind, SheetScan, ShipLayer,
-    ShipLayerInfos, ShipLayers, ShipSprite, ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet,
-    SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
+    FailedFile, GameData, GateStability, IgnoredEntry, InterfaceData, LayerError, LayerSprite,
+    NoInterfaceFile, OpenError, Origin, Outline, OutlineTriangle, ParsedSet, ParsedTest,
+    Provenance, SheetKind, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
+    ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet, SpinSpriteError, SpriteError, StandIn,
+    StandInOf, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
     interface_path_candidates, load_interface, open_interface, ship_desc_id, shot_spin_id,
     stellar_spin_id,
 };

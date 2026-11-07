@@ -2996,9 +2996,9 @@ mod tests {
     #[test]
     fn with_escorts_the_heaviest_class_wins_over_a_nearer_lighter_one() {
         let mut light = ship(2, ENEMY, 100.0, 0.0);
-        light.hull.mass = 50.0;
+        light.hull.signed_mass = 50;
         let mut heavy = ship(3, RIVAL, 900.0, 0.0);
-        heavy.hull.mass = 400.0;
+        heavy.hull.signed_mass = 400;
         let mut escort = ship(4, ME, 0.0, 50.0);
         escort.leader = Some(NpcId(1));
         let alone = [me(), light.clone(), heavy.clone()];

@@ -211,6 +211,8 @@ pub fn tractor(target: &Body, firer: &Body, start: Vec2, impact: f32, cap: Speed
     if !pushable(target) {
         return Tractor::Slips;
     }
+    // The firer's `Mass` is read signed, ungated (@0x31238): a negative one
+    // can't hold a target above none, as the clamp's 0 can't.
     if f64::from(firer.mass) >= HOLD_SHARE * f64::from(target.mass) {
         return Tractor::Holds;
     }
@@ -242,7 +244,8 @@ pub fn self_pull(
 }
 
 /// Whether a push can move `body`: a class of some `Mass`, not
-/// planet-type.
+/// planet-type. The original's test is signed (@0x31207), so a negative
+/// `Mass` is as massless as the clamp's 0.
 fn pushable(body: &Body) -> bool {
     body.mass > 0.0 && !body.planet_type
 }

@@ -16,7 +16,13 @@
 //!   visited, the inlined `_AIShipHasFuelForJump` (@0x8b10b-0x8b170,
 //!   [`leave::can_jump`]) sends it out by hyperspace (goal 2,
 //!   @0x8b179-0x8b19b) or makes it stop and wait (state 6, [`Goal::Wait`],
-//!   @0x8b1a3): [`leave_or_wait`].
+//!   @0x8b1a3): [`leave_or_wait`]. The leave is an inlined
+//!   `_AIMakeShipLeave`, its +0x50 floor and +0xa4 stamp built
+//!   ([`leaves`], [`Decision::leaves`](super::Decision::leaves); see
+//!   [`leave_write`](crate::traffic::leave_write)), in each copy:
+//!   `_WimpyTraderAI` @0x8b179-0x8b19b, `_BraveTraderAI` @0x8b5e3-0x8b605,
+//!   `_WarshipAI` @0x8b995-0x8b9b7, the interceptor's patrol
+//!   @0x8d0c5-0x8d0f0 and the pirate's copy @0x8c59b-0x8c5bd.
 //! - **State 6 is sticky** for the traders and the interceptor: their idle
 //!   blocks need state 0, and the interceptor's patrol, inspection and
 //!   search need a goal of 1 or below, or 0x14 (`_InterceptorAI`
@@ -64,6 +70,18 @@
 //!   player's, and `_LoadObjectData` @0x77c42 a system's field at the same
 //!   offset: neither is an NPC's.
 //!
+//! - **The leave's other reading** ([`leave_or_wait`],
+//!   [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)):
+//!   in the new game a gate is the only way out, so wherever the engine
+//!   would jump the ship out it enters a usable gate instead
+//!   ([`destination::usable_gates`], within
+//!   [`Surroundings::destination_reach`]), drawn uniformly, leaving out the
+//!   gate it came out of ([`Npc::visited`]) when another is usable. With
+//!   no usable gate it leaves as the engine has it. A ship that can't jump
+//!   still waits. It reaches every type whose block leaves through
+//!   [`leave_or_wait`]: the traders, the warship, the interceptor's
+//!   patrol, which picks no gate as a destination, and the pirate.
+//!
 //! None of these blocks plays a sound. +0x92 and +0x6c are 16-bit there;
 //! not replicated.
 //!
@@ -74,10 +92,9 @@
 //!   landing's sub-goal itself on every pass (@0x8d9b2-0x8db5a), so the
 //!   engine flies it from the ship's place each tick
 //!   ([`land_flight`](crate::traffic::land_flight)) and keeps no sub-goal.
-//! - The leave's +0x50 clamp and +0xa4 stamp (@0x8b179-0x8b19b and the
-//!   copies): rdm:phase/ship-handling-fidelity/phase-8-warp-out's.
 //! - The warship's second copy (@0x8b9c8-0x8bb03, while its target is still
-//!   -1): the same decision with more draws, so not modelled.
+//!   -1): the same decision with more draws, so not modelled. Its leave
+//!   (@0x8bad9-0x8bafb) would make the same write once it is.
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 
@@ -85,6 +102,7 @@ use crate::ai::travel::{self, TravelWrite};
 use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, trader_keep};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
+use crate::rulebook::RuleSource;
 use crate::traffic::destination;
 use crate::traffic::npc::Npc;
 
@@ -101,14 +119,63 @@ pub fn visited_here(npc: &Npc, around: &Surroundings) -> bool {
 }
 
 /// The idle block's fuel test: [`Goal::JumpOut`] when `npc` can jump
-/// ([`leave::can_jump`]), else [`Goal::Wait`] (state 6, @0x8b1a3).
-#[must_use]
-pub fn leave_or_wait(npc: &Npc, around: &Surroundings) -> Goal {
-    if leave::can_jump(npc, around.jump_fuel) {
-        Goal::JumpOut
-    } else {
-        Goal::Wait
+/// ([`leave::can_jump`]), else [`Goal::Wait`] (state 6, @0x8b1a3). By the
+/// other reading of
+/// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates)
+/// a ship that would jump enters a usable gate instead, drawn on `chance`
+/// (`gate_out`).
+pub fn leave_or_wait(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    if !leave::can_jump(npc, around.jump_fuel) {
+        return Goal::Wait;
     }
+    match around.departures_through_gates {
+        RuleSource::Engine => Goal::JumpOut,
+        RuleSource::Bible => gate_out(npc, around, chance).unwrap_or(Goal::JumpOut),
+    }
+}
+
+/// The gate `npc` leaves through by the other reading of
+/// [`RuleKey::DeparturesThroughGates`](crate::RuleKey::DeparturesThroughGates):
+/// one of the gates among those `around` lists it may use
+/// ([`destination::usable_gates`]), drawn uniformly on `chance`, leaving out
+/// the one it came out of ([`Npc::visited`]) when another is usable. `None`,
+/// drawing nothing, with none.
+fn gate_out(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
+    let usable = destination::usable_gates(
+        npc.govt,
+        around.listed,
+        around.govts,
+        around.destination_reach,
+    );
+    let others: Vec<_> = usable
+        .iter()
+        .copied()
+        .filter(|site| Some(site.id) != npc.visited)
+        .collect();
+    let gates = if others.is_empty() { usable } else { others };
+    if gates.is_empty() {
+        return None;
+    }
+    let draw = chance.below(u32::try_from(gates.len()).unwrap_or(u32::MAX));
+    gates
+        .get(usize::try_from(draw).unwrap_or(usize::MAX))
+        .map(|site| Goal::EnterGate(site.id))
+}
+
+/// Whether a think of `thought` by `npc` is an idle block's leave
+/// ([`leave_or_wait`]'s goal 2), an inlined `_AIMakeShipLeave`: a ship on
+/// goal 0 that thinks goal 2, as the traders', the warship's and the
+/// interceptor's blocks run on state 0 alone (`_WimpyTraderAI` @0x8b06c,
+/// `_BraveTraderAI` @0x8b4d6, `_WarshipAI` @0x8b835, `_InterceptorAI`
+/// @0x8d010). It writes +0x70 -1 (@0x8b190, @0x8b5fa; see
+/// [`trader_target`](super::trader_target)), and the +0x50 floor and
+/// +0xa4 stamp (@0x8b179-0x8b19b, @0x8b5e3-0x8b605, @0x8b995-0x8b9b7,
+/// @0x8d0c5-0x8d0f0; [`Decision::leaves`](super::Decision::leaves)). A
+/// leave the ship already held is kept, writing none, and the block's
+/// landing and stop write none either.
+#[must_use]
+pub fn leaves(npc: &Npc, thought: Goal) -> bool {
+    npc.goal == Goal::Idle && thought == Goal::JumpOut
 }
 
 /// The interceptor's patrol (see the module docs), admitting uninhabited
@@ -126,7 +193,7 @@ pub fn patrol(
         return kept;
     }
     match random_stellar(npc, around, chance, Admit::PlainOnly { uninhabited }) {
-        None => leave_or_wait(npc, around),
+        None => leave_or_wait(npc, around, chance),
         Some(Goal::Land(stellar)) if destroyed(stellar, around) => Goal::Wait,
         Some(goal) => goal,
     }
@@ -142,9 +209,10 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
         return Goal::Follow { lead, guard: None };
     }
     if visited_here(npc, around) || travel::is_set(npc) {
-        return leave_or_wait(npc, around);
+        return leave_or_wait(npc, around, chance);
     }
-    random_stellar(npc, around, chance, Admit::All).unwrap_or_else(|| leave_or_wait(npc, around))
+    random_stellar(npc, around, chance, Admit::All)
+        .unwrap_or_else(|| leave_or_wait(npc, around, chance))
 }
 
 /// How the idle block of the traders and the warship writes `npc`'s travel
@@ -178,9 +246,15 @@ pub fn pick_write(npc: &Npc, around: &Surroundings, thought: Goal) -> TravelWrit
     if matches!(thought, Goal::Land(_) | Goal::EnterGate(_)) {
         return TravelWrite::Keep;
     }
-    destination::candidates(npc.govt, around.listed, around.govts, Admit::All)
-        .first()
-        .map_or(TravelWrite::Clear, |site| TravelWrite::Set(site.id))
+    destination::candidates_within(
+        npc.govt,
+        around.listed,
+        around.govts,
+        Admit::All,
+        around.destination_reach,
+    )
+    .first()
+    .map_or(TravelWrite::Clear, |site| TravelWrite::Set(site.id))
 }
 
 /// Whether `stellar` among those `around` lists is destroyed
@@ -248,6 +322,18 @@ mod tests {
             flags: 0,
             ..planet(128, 0.0, 0.0)
         }]
+    }
+
+    #[test]
+    fn only_a_leave_written_over_goal_0_is_the_blocks_leave() {
+        // +0x70 -1 (@0x8b190, @0x8b5fa) and the +0x50 floor and +0xa4
+        // stamp (@0x8b179-0x8b19b and the copies).
+        let mut npc = ship();
+        assert!(leaves(&npc, Goal::JumpOut));
+        assert!(!leaves(&npc, Goal::Land(StellarId(128))));
+        assert!(!leaves(&npc, Goal::Wait));
+        npc.goal = Goal::JumpOut;
+        assert!(!leaves(&npc, Goal::JumpOut), "a kept leave");
     }
 
     #[test]
@@ -325,6 +411,76 @@ mod tests {
         assert_eq!(pick_write(&npc, &around, flee), TravelWrite::Clear);
     }
 
+    // The other reading of `DestinationReach`: a stellar past 999 on an axis
+    // is out of the engine's reach and within the other's.
+
+    /// `sites` around a ship whose destinations reach as `reach` says.
+    fn reaching(sites: &[LandingSite], reach: RuleSource) -> Surroundings<'_> {
+        Surroundings {
+            destination_reach: reach,
+            ..Surroundings::new(sites, &[])
+        }
+    }
+
+    #[test]
+    fn by_the_other_reach_a_far_planet_is_picked_and_by_the_engines_it_jumps_out() {
+        let sites = [planet(128, 1500.0, 0.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Bible), &mut chance),
+            Goal::Land(StellarId(128))
+        );
+        assert_eq!(chance.asked, [1]);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Engine), &mut chance),
+            Goal::JumpOut
+        );
+        assert!(chance.asked.is_empty(), "out of reach: no pick");
+    }
+
+    #[test]
+    fn by_the_other_reach_a_far_gate_is_entered_and_by_the_engines_it_jumps_out() {
+        let sites = [gate_at(300, 1500.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Bible), &mut chance),
+            Goal::EnterGate(StellarId(300))
+        );
+        assert_eq!(chance.asked, [1]);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            idle(&ship(), &reaching(&sites, RuleSource::Engine), &mut chance),
+            Goal::JumpOut
+        );
+        assert!(chance.asked.is_empty(), "out of reach: no pick");
+    }
+
+    #[test]
+    fn the_pick_writes_a_far_stellar_by_the_other_reach_and_clears_by_the_engines() {
+        // Provoked in state 0, the block writes what its pick found
+        // (@0x8b0ef); a ship that jumps out found nothing.
+        let npc = holding(ship(), Goal::Idle);
+        let flee = Goal::Flee(crate::combat::ShipRef::Player);
+        for far in [planet(128, 1500.0, 0.0), gate_at(300, 1500.0)] {
+            let sites = [far];
+            let bible = reaching(&sites, RuleSource::Bible);
+            assert_eq!(
+                pick_write(&npc, &bible, flee),
+                TravelWrite::Set(far.id),
+                "{far:?}"
+            );
+            let engine = reaching(&sites, RuleSource::Engine);
+            assert_eq!(pick_write(&npc, &engine, flee), TravelWrite::Clear);
+            let thought = idle(&npc, &engine, &mut Draws::of(&[]));
+            assert_eq!(
+                pick_write(&npc, &engine, thought),
+                TravelWrite::Clear,
+                "{far:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_provoked_ship_in_another_state_writes_none() {
         let sites = sites();
@@ -345,6 +501,158 @@ mod tests {
         let mut chance = Draws::of(&[]);
         assert_eq!(idle(&ship, &around, &mut chance), Goal::JumpOut);
         assert!(chance.asked.is_empty(), "no pick");
+    }
+
+    /// The new game's fly-the-sample plan, step 1, check (c), which pins
+    /// gap (c) of its finding 3 (departures): a ship out of a gate has
+    /// visited it (`Npc::gate_visit`, @0x8955e-0x89574), so in a system
+    /// whose nav slots hold only gates its first idle think leaves by
+    /// hyperspace, picking no gate (`leave_or_wait`, @0x8b0a3-0x8b19b).
+    #[test]
+    fn a_ship_out_of_a_gate_in_a_system_of_gates_alone_jumps_out_by_hyperspace() {
+        let gate = |id| LandingSite {
+            flags2: HYPERGATE,
+            ..planet(id, 0.0, 0.0)
+        };
+        let sites = [gate(300), gate(301)];
+        let around = Surroundings::new(&sites, &[]);
+        let emerged = Npc {
+            visited: Npc::gate_visit(StellarId(300), 300.0),
+            ..ship()
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&emerged, &around, &mut chance), Goal::JumpOut);
+        assert!(chance.asked.is_empty(), "no pick, so no gate");
+    }
+
+    // The other reading of `DeparturesThroughGates`.
+
+    /// A landable hypergate `id` at (`x`, 0).
+    fn gate_at(id: i16, x: f32) -> LandingSite {
+        LandingSite {
+            flags2: HYPERGATE,
+            ..planet(id, x, 0.0)
+        }
+    }
+
+    /// `sites` around a ship that leaves through gates.
+    fn through_gates(sites: &[LandingSite]) -> Surroundings<'_> {
+        Surroundings {
+            departures_through_gates: RuleSource::Bible,
+            ..Surroundings::new(sites, &[])
+        }
+    }
+
+    /// `ship` out of gate `gate`.
+    fn out_of(gate: i16) -> Npc {
+        Npc {
+            visited: Npc::gate_visit(StellarId(gate), 300.0),
+            ..ship()
+        }
+    }
+
+    #[test]
+    fn through_gates_a_ship_out_of_one_of_two_gates_leaves_by_the_other() {
+        let sites = [gate_at(300, 0.0), gate_at(301, 100.0)];
+        let around = through_gates(&sites);
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&out_of(300), &around, &mut chance),
+            Goal::EnterGate(StellarId(301))
+        );
+        assert_eq!(chance.asked, [1], "the other gate alone");
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&out_of(301), &around, &mut chance),
+            Goal::EnterGate(StellarId(300))
+        );
+    }
+
+    #[test]
+    fn through_gates_a_ship_out_of_the_only_gate_leaves_by_it() {
+        let sites = [gate_at(300, 0.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&out_of(300), &through_gates(&sites), &mut chance),
+            Goal::EnterGate(StellarId(300))
+        );
+        assert_eq!(chance.asked, [1]);
+    }
+
+    #[test]
+    fn through_gates_the_gate_is_drawn_uniformly_among_the_others() {
+        let sites = [gate_at(300, 0.0), gate_at(301, 100.0), gate_at(302, 200.0)];
+        let around = through_gates(&sites);
+        for (draw, gate) in [(0, 300), (1, 302)] {
+            let mut chance = Draws::of(&[draw]);
+            assert_eq!(
+                idle(&out_of(301), &around, &mut chance),
+                Goal::EnterGate(StellarId(gate))
+            );
+            assert_eq!(chance.asked, [2]);
+        }
+    }
+
+    #[test]
+    fn through_gates_with_no_usable_gate_it_jumps_out_or_waits_as_the_engine() {
+        let far = gate_at(300, 1500.0);
+        let sites = [far];
+        let around = through_gates(&sites);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&out_of(300), &around, &mut chance), Goal::JumpOut);
+        assert_eq!(
+            idle(&stranded(out_of(300)), &around, &mut chance),
+            Goal::Wait
+        );
+        assert!(chance.asked.is_empty());
+        let reaching = Surroundings {
+            destination_reach: RuleSource::Bible,
+            ..around
+        };
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&out_of(300), &reaching, &mut chance),
+            Goal::EnterGate(StellarId(300)),
+            "within the other reach"
+        );
+    }
+
+    #[test]
+    fn through_gates_a_ship_that_cannot_jump_still_waits() {
+        let sites = [gate_at(300, 0.0), gate_at(301, 100.0)];
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            idle(&stranded(out_of(300)), &through_gates(&sites), &mut chance),
+            Goal::Wait
+        );
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn through_gates_an_interceptor_with_no_plain_stellar_takes_a_gate() {
+        let sites = [gate_at(300, 0.0), gate_at(301, 100.0)];
+        let around = through_gates(&sites);
+        let mut chance = Draws::of(&[1]);
+        assert_eq!(
+            patrol(&ship(), &around, &mut chance, true),
+            Goal::EnterGate(StellarId(301))
+        );
+        assert_eq!(chance.asked, [2], "no plain stellar: both gates");
+        let engine = Surroundings::new(&sites, &[]);
+        assert_eq!(
+            patrol(&ship(), &engine, &mut Draws::of(&[]), true),
+            Goal::JumpOut
+        );
+    }
+
+    #[test]
+    fn through_gates_a_pirate_with_nowhere_to_go_takes_a_gate() {
+        let sites = [gate_at(300, 0.0)];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            pirate_idle(&out_of(300), &through_gates(&sites), &mut chance),
+            Goal::EnterGate(StellarId(300))
+        );
     }
 
     #[test]
@@ -391,8 +699,12 @@ mod tests {
             ..planet(128, 0.0, 0.0)
         }];
         let around = Surroundings::new(&unlandable, &[]);
-        assert_eq!(leave_or_wait(&ship(), &around), Goal::JumpOut);
-        assert_eq!(leave_or_wait(&stranded(ship()), &around), Goal::Wait);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(leave_or_wait(&ship(), &around, &mut chance), Goal::JumpOut);
+        assert_eq!(
+            leave_or_wait(&stranded(ship()), &around, &mut chance),
+            Goal::Wait
+        );
         assert_eq!(
             idle(&stranded(ship()), &around, &mut Draws::of(&[])),
             Goal::Wait

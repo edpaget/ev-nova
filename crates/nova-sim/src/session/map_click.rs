@@ -34,6 +34,11 @@
 //!   whose stand-in links to the source is accepted too, as its jumps
 //!   read the link both ways.
 //!
+//! By [`RuleKey::GateLanes`]' other reading the source's "Con slots" are
+//! the systems its gate lanes reach, and its jumps follow the lanes, so a
+//! click selects a lane neighbour and a Shift-click extends the course a
+//! lane at a time.
+//!
 //! The pick is the accepted hit's stand-in (@0x1314b); with none the
 //! press drags (@0x13154), which no visible hit gives.
 //!
@@ -302,10 +307,12 @@ impl Chart {
 
     /// The systems standing for `source`'s first [`CON_SLOTS`] Con slots,
     /// in order: each set, in the catalog and with a visible system at its
-    /// place (`_FindActiveCoLocatedSystem`).
+    /// place (`_FindActiveCoLocatedSystem`). By [`RuleKey::GateLanes`]'
+    /// other reading the slots are the systems its gate lanes reach
+    /// ([`OverlaidGalaxy::link_slots`](crate::story::OverlaidGalaxy::link_slots)).
     fn links(&self, source: SystemId) -> impl Iterator<Item = SystemId> + '_ {
         self.galaxy
-            .con_slots(source)
+            .link_slots(source)
             .iter()
             .take(CON_SLOTS)
             .filter(|&&slot| self.galaxy.exists(slot))

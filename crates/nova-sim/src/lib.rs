@@ -443,11 +443,14 @@ pub use nova_sim_base::fuel;
 pub use nova_sim_combat::fleet;
 pub mod galaxy_map;
 pub use nova_sim_ai::gate;
+pub use nova_sim_ai::gate_lanes;
+pub use nova_sim_ai::gate_pilot;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
 pub mod key_fade;
 pub mod map_borders;
+pub mod map_lanes;
 pub mod map_panel;
 pub mod map_route;
 pub mod map_search;
@@ -542,12 +545,12 @@ pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DescMovie,
     DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
-    GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipDisplay, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarScripts, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
+    GateSite, GateStability, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipDisplay, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarScripts, StockWeapon, StringPatch,
+    SystemId, SystemTraffic, TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};

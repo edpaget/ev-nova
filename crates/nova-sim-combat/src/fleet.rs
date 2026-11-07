@@ -36,7 +36,9 @@ pub struct Escort {
     /// The person (`përs`) this escort is, flying as itself, its name,
     /// ship and loadout its record's (see `nova_sim::person`);
     /// none for any other escort. One whose person no longer has a record
-    /// flies as an ordinary escort of its ship class.
+    /// flies as an ordinary escort of its ship class. Forgotten at each
+    /// respawn of the fleet under
+    /// `nova_sim_base::RuleKey::PersonEscortRespawn`'s engine reading.
     pub person: Option<PersonId>,
     /// What it is marked for at the next shipyard, from the escort dialog
     /// (`nova_sim::escort_dialog`): an upgrade (the original's +0xbf) or a

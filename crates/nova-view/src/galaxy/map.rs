@@ -207,6 +207,13 @@
 //! 3. **Every other link** in the same greys, the mode-3 slot's in
 //!    [`DIM_GREEN`] (@0xe9da-0xebd2).
 //! 4. **The mode-3 link** in [`DIM_GREEN`] (@0xebd8-0xed31).
+//!
+//!    By `RuleKey::MapLaneStyle`'s other reading, the new game's, each
+//!    link of 2 and 3 with a look ([`MapPicture::lanes`]) is drawn in it
+//!    instead of the grey: each way in its gate lane's stability's colour
+//!    and dash, in two halves where the ways differ, and an arrowhead on
+//!    a one-way link ([`lanes`](super::lanes)). The hypergate map's links
+//!    and the selected and mode-3 links keep their colours.
 //! 5. **Each system**: its point's rect inset by −[`SYSTEM_INSET_ZOOMED`]
 //!    at pen 2 when the zoom ≤ 0.5, otherwise −[`SYSTEM_INSET`] at pen 1
 //!    (@0xeeec-0xef68), an oval painted black (@0xef70-0xef85) and framed
@@ -275,6 +282,7 @@ use nova_sim::galaxy_map::GalaxyShown;
 use nova_sim::galaxy_map::{MapDrawing, MapLink, arrow_head};
 use nova_sim::iff::SystemColorCode;
 use nova_sim::map_borders::{BorderPasses, BorderSources, PaintedCell};
+use nova_sim::map_lanes::LaneLook;
 use nova_sim::map_panel::MapPanel;
 use nova_sim::map_search::{self, SearchOutcome};
 
@@ -286,6 +294,7 @@ use super::clip::clip_opaque;
 use super::dialog::{DIALOG_ORIGIN, MapDialog, in_map_item, map_area};
 use super::find::{FindDialog, FindOutcome};
 use super::help::{enter_label, help_line};
+use super::lanes;
 use super::model::GalaxyModel;
 use super::nebulae::{NebulaFrame, PicturePick, draw_nebulae};
 use super::pad::{MapPad, PadStep};
@@ -461,6 +470,10 @@ pub struct MapPicture {
     pub gate_arrows: Vec<SystemId>,
     /// The systems that may be named, by ascending ID.
     pub named: Vec<SystemId>,
+    /// How each current link, then each other link, looks, by
+    /// `RuleKey::MapLaneStyle`'s other reading
+    /// ([`MapDrawing::lanes`]); empty for the original's greys.
+    pub lanes: Vec<LaneLook>,
 }
 
 /// The colour `_ColorCodeSystem` gives `code` (@0xd672-0xd941).
@@ -500,6 +513,7 @@ impl MapPicture {
             current: Some(drawing.current),
             gate_arrows: drawing.gate_arrows.clone(),
             named: drawing.named.clone(),
+            lanes: drawing.lanes.clone(),
         }
     }
 
@@ -538,6 +552,7 @@ impl MapPicture {
             current: None,
             gate_arrows: Vec::new(),
             named: systems.iter().map(|system| system.entry.id).collect(),
+            lanes: Vec::new(),
         }
     }
 }
@@ -1690,13 +1705,7 @@ impl GalaxyMap {
         for &hop in &picture.course {
             segment(list, hop, 2, BRIGHT_GREEN);
         }
-        for &link in &picture.current_links {
-            segment(list, link, 1, grey);
-        }
-        for link in &picture.links {
-            let color = if link.selected { DIM_GREEN } else { grey };
-            segment(list, (link.from, link.to), 1, color);
-        }
+        self.draw_links(list, transform, picture, grey);
         if let Some(link) = picture.mode3_link {
             segment(list, link, 1, DIM_GREEN);
         }
@@ -1758,6 +1767,52 @@ impl GalaxyMap {
             }
         }
         self.draw_names(list, transform, marks);
+    }
+
+    /// Draws `picture`'s links through `transform`, `grey` the map's: the
+    /// current system's, then every other, the mode-3 slot's in
+    /// [`DIM_GREEN`] (@0xe7a8-0xebd2). By `RuleKey::MapLaneStyle`'s other
+    /// reading each link with a look is drawn in it ([`lanes::strokes`]),
+    /// off the hypergate map, whose links keep their grey.
+    fn draw_links(
+        &self,
+        list: &mut DrawList,
+        transform: &Transform,
+        picture: &MapPicture,
+        grey: Color,
+    ) {
+        let pixel = |id: SystemId| self.model.position(id).map(|at| transform.pixel(at));
+        let look = |at: usize, (from, to): (SystemId, SystemId)| {
+            picture
+                .lanes
+                .get(at)
+                .filter(|look| !picture.hypergate && (look.from, look.to) == (from, to))
+        };
+        let line = |list: &mut DrawList, at: Option<usize>, link: (SystemId, SystemId), color| {
+            let (Some(from), Some(to)) = (pixel(link.0), pixel(link.1)) else {
+                return;
+            };
+            match at.and_then(|at| look(at, link)) {
+                Some(look) => {
+                    for stroke in lanes::strokes(look, from, to, grey) {
+                        pen_line(list, stroke.from, stroke.to, 1, stroke.color);
+                    }
+                }
+                None => pen_line(list, from, to, 1, color),
+            }
+        };
+        for (at, &link) in picture.current_links.iter().enumerate() {
+            line(list, Some(at), link, grey);
+        }
+        let others = picture.current_links.len();
+        for (at, link) in picture.links.iter().enumerate() {
+            let (at, color) = if link.selected {
+                (None, DIM_GREEN)
+            } else {
+                (Some(others + at), grey)
+            };
+            line(list, at, (link.from, link.to), color);
+        }
     }
 
     /// Draws the names `marks` may name, through `transform`: every one at
@@ -2793,6 +2848,7 @@ mod tests {
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",
+            DrawCommand::Triangle { .. } => "triangle",
             DrawCommand::OrFill { .. } => "or-fill",
             DrawCommand::Clipped { .. } => "clipped",
             DrawCommand::MovieFrame { .. } => "movie",
@@ -3882,6 +3938,7 @@ mod tests {
             current: SystemId(128),
             gate_arrows: Vec::new(),
             named: vec![SystemId(128), SystemId(129)],
+            lanes: Vec::new(),
         }
     }
 
@@ -3988,6 +4045,124 @@ mod tests {
             2,
             "the hypergate map's grey"
         );
+    }
+
+    /// [`drawing`] with each link's look: the current link's `current`,
+    /// Gamma's to Alpha stable both ways, the selected slot's stable.
+    fn looked(current: LaneLook) -> MapDrawing {
+        use nova_sim::catalog::GateStability::Stable;
+        use nova_sim::map_lanes::Back;
+        let stable = |from, to| LaneLook {
+            from: SystemId(from),
+            to: SystemId(to),
+            out: Some(Stable),
+            back: Back::Way(Some(Stable)),
+        };
+        MapDrawing {
+            lanes: vec![current, stable(130, 128), stable(128, 129)],
+            ..drawing()
+        }
+    }
+
+    /// Alpha's look to Beta: `out`, and `back`.
+    fn alpha_beta(
+        out: Option<nova_sim::catalog::GateStability>,
+        back: nova_sim::map_lanes::Back,
+    ) -> LaneLook {
+        LaneLook {
+            from: SystemId(128),
+            to: SystemId(129),
+            out,
+            back,
+        }
+    }
+
+    #[test]
+    fn a_lane_is_drawn_in_its_stabilitys_colour_and_dash() {
+        use nova_sim::catalog::GateStability::{Dead, Stable, Unstable};
+        use nova_sim::map_lanes::Back;
+        for (stability, color, pieces) in [
+            (Stable, lanes::STABLE, 1),
+            (Unstable, lanes::UNSTABLE, 47),
+            (Dead, lanes::DEAD, 86),
+        ] {
+            let look = alpha_beta(Some(stability), Back::Way(Some(stability)));
+            let list = drawn(&showing(&looked(look)));
+            // Alpha's link to Beta's row alone: Gamma's is stable too.
+            let drawn: Vec<_> = rects(&list, color)
+                .into_iter()
+                .filter(|rect| rect.3 == 155.0)
+                .collect();
+            assert_eq!(drawn.len(), pieces, "{stability:?}: gaps but for stable");
+            assert_eq!(drawn[0].0, 212.0, "{stability:?} from Alpha");
+            assert_eq!(
+                rects(&list, LESS_DARK_GREY),
+                [],
+                "{stability:?}: no grey link"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lane_whose_ways_differ_is_drawn_in_two_halves() {
+        use nova_sim::catalog::GateStability::{Dead, Stable};
+        use nova_sim::map_lanes::Back;
+        let list = drawn(&showing(&looked(alpha_beta(
+            Some(Stable),
+            Back::Way(Some(Dead)),
+        ))));
+        assert_eq!(rects(&list, lanes::STABLE)[0], (212.0, 154.0, 513.0, 155.0));
+        let dead = rects(&list, lanes::DEAD);
+        assert_eq!(
+            dead.first().map(|rect| rect.0),
+            Some(512.0),
+            "from the middle"
+        );
+        let end = dead.last().map_or(0.0, |rect| rect.2);
+        assert!(end > 806.0 && end <= 813.0, "dotted on to Beta: {end}");
+    }
+
+    #[test]
+    fn a_one_way_lane_has_two_head_strokes_at_its_far_end() {
+        use nova_sim::catalog::GateStability::Unstable;
+        use nova_sim::map_lanes::Back;
+        let list = drawn(&showing(&looked(alpha_beta(Some(Unstable), Back::OneWay))));
+        let heads: Vec<_> = lines(&list, lanes::UNSTABLE)
+            .into_iter()
+            .filter(|&(from, to, _)| from.x != to.x && from.y != to.y)
+            .collect();
+        assert_eq!(heads.len(), 2);
+        assert!(heads.iter().all(|&(from, _, _)| from == at(812.5, 154.5)));
+    }
+
+    #[test]
+    fn the_hypergate_map_and_the_selected_and_mode_3_links_keep_their_colours() {
+        use nova_sim::catalog::GateStability::Dead;
+        use nova_sim::map_lanes::Back;
+        let looks = looked(alpha_beta(Some(Dead), Back::Way(Some(Dead))));
+        let list = drawn(&showing(&looks));
+        assert_eq!(
+            rects(&list, DIM_GREEN),
+            [(212.0, 154.0, 813.0, 155.0), (212.0, 154.0, 813.0, 155.0)],
+            "the selected slot, then the mode-3 link, over their looks"
+        );
+        assert_eq!(rects(&list, lanes::STABLE), [(212.0, 154.0, 213.0, 455.0)]);
+        let hypergate = drawn(&showing(&MapDrawing {
+            hypergate: true,
+            ..looks
+        }));
+        assert_eq!(rects(&hypergate, REAL_DARK_GREY).len(), 2);
+        assert_eq!(rects(&hypergate, lanes::DEAD), []);
+        assert_eq!(rects(&hypergate, lanes::STABLE), []);
+    }
+
+    #[test]
+    fn a_picture_with_no_looks_draws_its_links_grey() {
+        let list = drawn(&showing(&drawing()));
+        assert_eq!(rects(&list, LESS_DARK_GREY).len(), 2);
+        for color in [lanes::STABLE, lanes::UNSTABLE, lanes::DEAD] {
+            assert_eq!(lines(&list, color), []);
+        }
     }
 
     #[test]

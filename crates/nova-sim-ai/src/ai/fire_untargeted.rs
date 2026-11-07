@@ -17,7 +17,8 @@
 //!   asteroid;
 //! - 7, a front-quadrant turret, passes only with the ship's target +0x70
 //!   at -1 (@0x8049f-0x804a7), which order 0x14 has just written
-//!   (@0x8843a), so it always passes here;
+//!   (@0x8843a; the traffic writes it too, `traffic::frame_target`), so it
+//!   always passes here;
 //! - every other guidance fails (@0x8049d);
 //! - a planet-type weapon (`Flags2` 0x0400, byte +0x23 bit 0x04) fails
 //!   (@0x804a9);
@@ -102,8 +103,9 @@ pub fn trigger(npc: &Npc) -> Trigger {
 /// with asteroid slot 0 ([`Surroundings::mining_rock`]) inside its
 /// mining box ([`mine_orders::order`]) and facing the heading it wants
 /// within its turn and [`FIRE_SLACK`](mine_orders::FIRE_SLACK)
-/// ([`mine_orders::fires`]) gives [`trigger`]; any other tick of the goal
-/// fires nothing and keeps its pick, as orders 1 and 0x13 run no fire.
+/// ([`mine_orders::fires`], both read by [`fires_at_rock`]) gives
+/// [`trigger`]; any other tick of the goal fires nothing and keeps its
+/// pick, as orders 1 and 0x13 run no fire.
 ///
 /// The heading is read where order 0x14 reads it, after its hold
 /// ([`mine_orders::hold`]) has eased its velocity and nudged its position
@@ -116,11 +118,27 @@ pub fn trigger(npc: &Npc) -> Trigger {
 /// picks before `_HandleShip` moves the ship.
 #[must_use]
 pub fn mining(npc: &Npc, around: &Surroundings) -> Trigger {
+    if fires_at_rock(npc, around) {
+        trigger(npc)
+    } else {
+        Trigger::default()
+    }
+}
+
+/// Whether order 0x14 fires at asteroid slot 0 this frame for `npc`
+/// among `around`: slot 0 ([`Surroundings::mining_rock`]) inside its
+/// mining box ([`mine_orders::order`]), and `npc` facing the heading it
+/// wants within its turn and [`FIRE_SLACK`](mine_orders::FIRE_SLACK)
+/// ([`mine_orders::fires`]), that heading read as [`mining`] reads it.
+/// Order 0x14 then writes +0x70 -1 (@0x8843a) before it calls
+/// `_AIFireGunUntargeted`, so with no weapon too.
+#[must_use]
+pub fn fires_at_rock(npc: &Npc, around: &Surroundings) -> bool {
     let Some(rock) = around.mining_rock.as_ref() else {
-        return Trigger::default();
+        return false;
     };
     if mine_orders::order(npc, Some(rock)) != MineOrder::Kill {
-        return Trigger::default();
+        return false;
     }
     let accel = npc.flying_handling(0.0, around.flight).accel;
     let mut held = npc.state;
@@ -131,11 +149,7 @@ pub fn mining(npc: &Npc, around: &Surroundings) -> Trigger {
     );
     let pick = npc.pick.and_then(|pick| around.weapons.weapon(pick));
     let wanted = mine_orders::kill_heading(&held, rock, pick);
-    if mine_orders::fires(npc.state.heading, wanted, npc.turn_rate()) {
-        trigger(npc)
-    } else {
-        Trigger::default()
-    }
+    mine_orders::fires(npc.state.heading, wanted, npc.turn_rate())
 }
 
 #[cfg(test)]
@@ -476,6 +490,36 @@ mod tests {
         };
         assert_eq!(fired(half).only, id(128), "facing the half hold's lead");
         assert_eq!(fired(full), Trigger::default());
+    }
+
+    /// Whether `npc` fires at slot 0 by [`fires_at_rock`] with `slot0` in
+    /// slot 0.
+    fn at_rock(npc: &Npc, slot0: Option<Asteroid>) -> bool {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            mining_rock: slot0,
+            ..Surroundings::new(&[], &npcs)
+        };
+        fires_at_rock(npc, &around)
+    }
+
+    #[test]
+    fn order_0x14_fires_at_slot_0_inside_the_box_facing_it_armed_or_not() {
+        let facing = mining_at(100.0, 100.0, 314.0);
+        assert!(at_rock(&facing, Some(rock(0.0, 0.0))));
+        let unarmed = Npc {
+            armament: Armament::default(),
+            ..facing.clone()
+        };
+        assert!(
+            at_rock(&unarmed, Some(rock(0.0, 0.0))),
+            "the -1 comes before `_AIFireGunUntargeted` (@0x8843a)"
+        );
+        let away = mining_at(100.0, 100.0, 314.0 + window(&facing) + 1.0);
+        assert!(!at_rock(&away, Some(rock(0.0, 0.0))), "facing away");
+        let chasing = mining_at(121.0, 0.0, 270.0);
+        assert!(!at_rock(&chasing, Some(rock(0.0, 0.0))), "outside the box");
+        assert!(!at_rock(&facing, None), "slot 0 empty");
     }
 
     #[test]

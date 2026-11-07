@@ -107,8 +107,8 @@ pub(super) enum Entry {
     /// [`Session::arrive`]). The system entered is the player's as the
     /// jump and its in-flight moves left it (see the `jump_moves` module).
     Jump { hops: usize, natural_end: bool },
-    /// Out of a hypergate or wormhole.
-    Gate,
+    /// Out of a hypergate (`hypergate`) or a wormhole.
+    Gate { hypergate: bool },
     /// `M` or `N`, landed or in flight.
     ScriptMove { landed: bool },
     /// An `N` out of range in flight, into the system the player is in:
@@ -134,7 +134,7 @@ impl Entry {
     pub(super) fn entrance(self) -> Option<Entrance> {
         match self {
             Self::Jump { .. } => Some(Entrance::Jump),
-            Self::Gate => Some(Entrance::Gate),
+            Self::Gate { .. } => Some(Entrance::Gate),
             Self::ScriptMove { landed } => Some(Entrance::ScriptMove { landed }),
             Self::ScriptStay => Some(Entrance::ScriptMove { landed: false }),
             Self::Relocate => Some(Entrance::Relocate),
@@ -166,6 +166,9 @@ pub(super) struct EntryFacts {
     pub(super) system_changed: bool,
     /// Whether a jump was under way, being prepared or in hyperspace.
     pub(super) jump_pending: bool,
+    /// Whether the system entered stands for the course's first hop: the
+    /// same visible system stands at both places.
+    pub(super) on_course: bool,
 }
 
 /// Where the caller chose to put the ship; [`Session::enter_system`]
@@ -410,7 +413,11 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
     let placed = rules.source_for(RuleKey::AsteroidEntryField) == RuleSource::Bible;
     match how {
         Entry::Jump { hops, .. } => jump(hops, placed),
-        Entry::Gate => gate(),
+        Entry::Gate { hypergate } => gate(
+            hypergate
+                && facts.on_course
+                && rules.source_for(RuleKey::GateCourse) == RuleSource::Bible,
+        ),
         Entry::ScriptMove { landed: true } => script_move_landed(),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
         Entry::ScriptStay => script_move_in_flight(false, facts),
@@ -522,7 +529,18 @@ fn jump(hops: usize, placed: bool) -> Resets {
 /// nav system off itself ([`Session::enter_hypergate`]). The asteroid
 /// field is killed (@0x63f47, @0x645f6), and the explosions pending with
 /// it, as the dock request's tail sets `_killExplods` (@0x66f63).
-fn gate() -> Resets {
+///
+/// A hypergate's exit `along` the course, into the system standing for
+/// its first hop by [`RuleKey::GateCourse`]'s other reading, drops that
+/// hop as a jump's arrival does (`CourseStep::Arrival` with one hop) in
+/// place of the restart; [`Session::enter_hypergate`] then cues the next
+/// hop.
+fn gate(along: bool) -> Resets {
+    let course = if along {
+        CourseStep::Arrival { hops: 1 }
+    } else {
+        CourseStep::Restart
+    };
     Resets::of(
         &[
             Reset::Stellar,
@@ -540,7 +558,7 @@ fn gate() -> Resets {
             Reset::ArrivalSound,
             Reset::Rebuild,
         ],
-        CourseStep::Restart,
+        course,
         NavStep::Deselect,
         TrafficStep::Populate,
     )
@@ -660,7 +678,7 @@ fn relocate() -> Resets {
 pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEvent> {
     match how {
         Entry::Jump { .. }
-        | Entry::Gate
+        | Entry::Gate { .. }
         | Entry::ScriptMove { landed: false }
         | Entry::ScriptStay
         | Entry::Rescue => Some(SessionEvent::SystemChanged),
@@ -679,7 +697,7 @@ pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEven
 /// @0x68de8, @0x690d0). An `M` or `N` move, a developer tools' move and
 /// a walker's landing keep the stars, which wrap back in about the ship.
 pub(super) fn resets_starfield(how: Entry) -> bool {
-    matches!(how, Entry::Jump { .. } | Entry::Gate | Entry::Rescue)
+    matches!(how, Entry::Jump { .. } | Entry::Gate { .. } | Entry::Rescue)
 }
 
 /// No traffic to read: what [`Session::relocate`] enters a system with,
@@ -745,9 +763,15 @@ impl Session {
         let system = self
             .chart
             .show_entry(&mut self.pilot, &self.setup, &mut self.out, asked);
+        let places = self.chart.galaxy.map().places();
         let facts = EntryFacts {
             system_changed: system != left,
             jump_pending: self.mode.jump().is_some(),
+            on_course: self
+                .pilot
+                .course
+                .first()
+                .is_some_and(|&hop| places.stand_in(hop) == places.stand_in(system)),
         };
         let resets = resets(how, &self.setup.rules, facts);
         if resets.has(Reset::Strikes) {
@@ -852,7 +876,7 @@ impl Session {
         // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
         // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
         // module).
-        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate) {
+        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate { .. }) {
             self.run.raise(StoryEvent::Explored { system });
         }
         if resets.has(Reset::Rebuild) {
@@ -1071,32 +1095,9 @@ impl Session {
                 let defences = self.space.traffic.take_defences();
                 self.space.traffic = Traffic::new();
                 self.space.traffic.keep_defences(defences);
-                // A new traffic reads reused slots' picks, headings, exit
-                // cursors and blink timers and search timers by the
-                // rulebook.
-                self.space
-                    .traffic
-                    .set_reused_slot_pick(self.setup.rules.source_for(RuleKey::ReusedSlotPick));
-                self.space.traffic.set_reused_slot_heading(
-                    self.setup.rules.source_for(RuleKey::ReusedSlotHeading),
-                );
-                self.space
-                    .traffic
-                    .set_reused_slot_exits(self.setup.rules.source_for(RuleKey::ReusedSlotExits));
-                self.space.traffic.set_reused_slot_blink_timer(
-                    self.setup.rules.source_for(RuleKey::ReusedSlotBlinkTimer),
-                );
-                self.space.traffic.set_spawn_anim_rolls_first_class(
-                    self.setup
-                        .rules
-                        .source_for(RuleKey::SpawnAnimRollsFirstClass),
-                );
-                self.space
-                    .traffic
-                    .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
-                self.space
-                    .traffic
-                    .set_reused_slot_voice(self.setup.rules.source_for(RuleKey::ReusedSlotVoice));
+                // A new traffic reads its reused-slot and spawn-animation
+                // rules by the rulebook.
+                self.space.read_reused_slot_rules(&self.setup.rules);
                 self.space.traffic.keep_berths(kept);
                 self.space.set_first_class(&self.statics, &self.setup);
                 self.space.traffic_due = true;
@@ -1216,6 +1217,7 @@ mod tests {
         EntryFacts {
             system_changed,
             jump_pending,
+            on_course: false,
         }
     }
 
@@ -1303,11 +1305,53 @@ mod tests {
     }
 
     #[test]
+    fn only_a_hypergates_exit_on_the_course_by_the_other_reading_drops_a_hop() {
+        let along = Rulebook::default().with_override(RuleKey::GateCourse, RuleSource::Bible);
+        let on_course = EntryFacts {
+            on_course: true,
+            ..facts(true, false)
+        };
+        let course = |hypergate, rules: &Rulebook, facts| {
+            resets(Entry::Gate { hypergate }, rules, facts).course
+        };
+        assert_eq!(
+            course(true, &along, on_course),
+            CourseStep::Arrival { hops: 1 }
+        );
+        assert_eq!(
+            course(false, &along, on_course),
+            CourseStep::Restart,
+            "a wormhole"
+        );
+        assert_eq!(
+            course(true, &along, facts(true, false)),
+            CourseStep::Restart,
+            "off the course"
+        );
+        assert_eq!(
+            course(true, &Rulebook::default(), on_course),
+            CourseStep::Restart,
+            "the engine"
+        );
+        let mut row = resets(Entry::Gate { hypergate: true }, &along, on_course);
+        row.course = CourseStep::Restart;
+        assert_eq!(
+            row,
+            resets(
+                Entry::Gate { hypergate: true },
+                &Rulebook::default(),
+                on_course
+            ),
+            "nothing else changes"
+        );
+    }
+
+    #[test]
     fn only_a_jumps_row_reads_asteroid_entry_field() {
         let placed =
             Rulebook::default().with_override(RuleKey::AsteroidEntryField, RuleSource::Bible);
         for how in [
-            Entry::Gate,
+            Entry::Gate { hypergate: true },
             Entry::Relocate,
             Entry::Rescue,
             Entry::ScriptMove { landed: true },
@@ -1342,7 +1386,11 @@ mod tests {
         );
         for changed in [true, false] {
             assert_eq!(
-                resets(Entry::Gate, &Rulebook::default(), facts(changed, false)),
+                resets(
+                    Entry::Gate { hypergate: true },
+                    &Rulebook::default(),
+                    facts(changed, false)
+                ),
                 expected,
                 "{changed}"
             );
@@ -1505,7 +1553,7 @@ mod tests {
                     hops: 1,
                     natural_end: true,
                 },
-                Entry::Gate,
+                Entry::Gate { hypergate: true },
                 Entry::Relocate,
                 Entry::Rescue,
                 Entry::ScriptMove { landed: true },
@@ -1552,7 +1600,7 @@ mod tests {
                 },
                 Entrance::Jump,
             ),
-            (Entry::Gate, Entrance::Gate),
+            (Entry::Gate { hypergate: true }, Entrance::Gate),
             (
                 Entry::ScriptMove { landed: true },
                 Entrance::ScriptMove { landed: true },
@@ -1572,7 +1620,7 @@ mod tests {
     #[test]
     fn every_way_in_but_a_jump_and_an_in_flight_move_leaves_its_enter_system_hook_to_the_entry() {
         for how in [
-            Entry::Gate,
+            Entry::Gate { hypergate: true },
             Entry::ScriptMove { landed: true },
             Entry::Relocate,
             Entry::Rescue,
@@ -1607,7 +1655,7 @@ mod tests {
                     },
                     Some(SystemChanged),
                 ),
-                (Entry::Gate, Some(SystemChanged)),
+                (Entry::Gate { hypergate: true }, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
                 (Entry::ScriptStay, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: true }, None),
@@ -1630,7 +1678,7 @@ mod tests {
                 },
                 true,
             ),
-            (Entry::Gate, true),
+            (Entry::Gate { hypergate: true }, true),
             (Entry::Rescue, true),
             (Entry::ScriptMove { landed: false }, false),
             (Entry::ScriptMove { landed: true }, false),

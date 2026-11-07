@@ -22,6 +22,15 @@
 //! - **No draw without a gate.** When no candidate is a gate, the pick can
 //!   only end in a jump-in, so no draw is asked: a system with no ok gate
 //!   draws exactly as before gates were modelled.
+//! - **The readings** ([`EmergeRules`]). The candidates are those within
+//!   [`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach)'s
+//!   reach ([`destination::within_reach`]). The draw over every candidate
+//!   is the engine's reading of
+//!   [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates).
+//!   By the other reading, the new game's, where a gate is the only way
+//!   in, an arrival with a usable gate ([`destination::usable_gates`])
+//!   always comes out of one, drawn uniformly over them, and with none it
+//!   jumps in from the edge, drawing nothing.
 //! - **Emerging** (`_AIMakeShipEmergeFromHyperGate` @0x89518). The ship is
 //!   placed at the gate's centre, at rest (the callers, @0x42ae4-0x42b0a,
 //!   @0x41f34-0x41f64), heading the gate's `CustSndID` when 0-359 and
@@ -64,8 +73,10 @@
 //!   and sets +0x30 to -1.165 (@0x88136) before every tick of the burst.
 //!   Only a ship with AI type 0 or below, which `_AIDispatch` never runs
 //!   (@0x4427e-0x44286), would keep the -3.0: the engine's
-//!   [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), which only the
-//!   player's eject hulk has, and the hulk never emerges.
+//!   [`Npc::no_ai`](crate::traffic::npc::Npc::no_ai): the player's eject
+//!   hulk, which never emerges, or a spawn of AI type 0 or below from
+//!   plug-in data, for which the engine keeps no -3.0 (filed in
+//!   `npc-ai-2`).
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
 //! - **Holding fire.** A ship coming out of a gate fires nothing while it
@@ -113,6 +124,7 @@ use crate::catalog::{GovtId, LandingSite};
 use crate::chance::Chance;
 use crate::gate::GateKind;
 use crate::govt::Governments;
+use crate::rulebook::RuleSource;
 use crate::traffic::destination::{self, Admit};
 
 /// How many ticks a ship coming out of a gate waits there, hidden and
@@ -142,16 +154,32 @@ pub const EXIT_SLOWING: f32 = crate::traffic::spawn::JUMP_IN_SLOWING;
 /// The opacity [`emerge_level`] counts in: 32nds.
 pub const FULL_LEVEL: u8 = 32;
 
+/// The readings an arrival's gate pick goes by (see the module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EmergeRules {
+    /// How far from the centre a gate may be
+    /// ([`RuleKey::DestinationReach`](crate::RuleKey::DestinationReach)).
+    pub reach: RuleSource,
+    /// Whether every arrival with a usable gate comes out of one
+    /// ([`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates)).
+    pub through_gates: RuleSource,
+}
+
 /// The gate among `sites` a ship of `govt` arriving comes out of, rolled
-/// on `chance`; `None` when it jumps in from hyperspace (see the module
-/// docs). No draw is asked unless a gate is among the candidates.
+/// on `chance` as `rules` read it; `None` when it jumps in from
+/// hyperspace (see the module docs). No draw is asked unless a gate is
+/// among the candidates.
 pub fn emerge_stellar<'s>(
     govt: Option<GovtId>,
     sites: &'s [LandingSite],
     govts: &Governments,
+    rules: EmergeRules,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
-    let candidates = destination::candidates(govt, sites, govts, Admit::All);
+    if rules.through_gates == RuleSource::Bible {
+        return through_a_gate(govt, sites, govts, rules.reach, chance);
+    }
+    let candidates = destination::candidates_within(govt, sites, govts, Admit::All, rules.reach);
     if !candidates
         .iter()
         .any(|site| GateKind::of(site.flags2).is_some())
@@ -163,6 +191,27 @@ pub fn emerge_stellar<'s>(
         .get(usize::try_from(draw).unwrap_or(usize::MAX))
         .copied()
         .filter(|site| GateKind::of(site.flags2).is_some())
+}
+
+/// The other reading of
+/// [`RuleKey::ArrivalsThroughGates`](crate::RuleKey::ArrivalsThroughGates):
+/// one of the gates among `sites` a ship of `govt` may use within `reach`,
+/// drawn uniformly on `chance`; `None`, drawing nothing, with none.
+fn through_a_gate<'s>(
+    govt: Option<GovtId>,
+    sites: &'s [LandingSite],
+    govts: &Governments,
+    reach: RuleSource,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<&'s LandingSite> {
+    let gates = destination::usable_gates(govt, sites, govts, reach);
+    if gates.is_empty() {
+        return None;
+    }
+    let draw = chance.below(u32::try_from(gates.len()).unwrap_or(u32::MAX));
+    gates
+        .get(usize::try_from(draw).unwrap_or(usize::MAX))
+        .copied()
 }
 
 /// How fast a ship leaving a gate moves on tick `tick` (from 0) of its
@@ -273,9 +322,92 @@ mod tests {
         sites: &[LandingSite],
         draws: &[u32],
     ) -> (Option<i16>, Vec<u32>) {
+        picked_by(EmergeRules::default(), govt, sites, draws)
+    }
+
+    /// [`picked`] as `rules` read it.
+    fn picked_by(
+        rules: EmergeRules,
+        govt: Option<GovtId>,
+        sites: &[LandingSite],
+        draws: &[u32],
+    ) -> (Option<i16>, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let pick = emerge_stellar(govt, sites, &govts(), &mut chance);
+        let pick = emerge_stellar(govt, sites, &govts(), rules, &mut chance);
         (pick.map(|site| site.id.0), chance.asked)
+    }
+
+    /// The other reading of `ArrivalsThroughGates`, within the engine's
+    /// reach.
+    const THROUGH_GATES: EmergeRules = EmergeRules {
+        reach: RuleSource::Engine,
+        through_gates: RuleSource::Bible,
+    };
+
+    #[test]
+    fn through_gates_the_draw_that_gave_the_edge_gives_the_gate() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129)];
+        assert_eq!(picked(None, &sites, &[0]), (None, vec![2]), "the engine");
+        assert_eq!(
+            picked_by(THROUGH_GATES, None, &sites, &[0]),
+            (Some(129), vec![1]),
+            "over the one usable gate"
+        );
+    }
+
+    #[test]
+    fn through_gates_each_of_two_gates_is_reached_by_some_draw() {
+        let sites = [
+            planet(128, 0.0, 0.0),
+            hypergate(129),
+            planet(130, 0.0, 0.0),
+            hypergate(131),
+        ];
+        assert_eq!(
+            picked_by(THROUGH_GATES, None, &sites, &[0]),
+            (Some(129), vec![2])
+        );
+        assert_eq!(
+            picked_by(THROUGH_GATES, None, &sites, &[1]),
+            (Some(131), vec![2])
+        );
+    }
+
+    #[test]
+    fn through_gates_with_no_usable_gate_it_comes_from_the_edge_drawing_nothing() {
+        let sites = [planet(128, 0.0, 0.0), wormhole(129)];
+        assert_eq!(picked_by(THROUGH_GATES, None, &sites, &[]), (None, vec![]));
+        let far = LandingSite {
+            position: crate::geometry::Vec2::new(1500.0, 0.0),
+            ..hypergate(130)
+        };
+        assert_eq!(
+            picked_by(THROUGH_GATES, None, &[far], &[]),
+            (None, vec![]),
+            "beyond the engine's reach"
+        );
+        let anywhere = EmergeRules {
+            reach: RuleSource::Bible,
+            ..THROUGH_GATES
+        };
+        assert_eq!(
+            picked_by(anywhere, None, &[far], &[0]),
+            (Some(130), vec![1]),
+            "within the other reach"
+        );
+        assert_eq!(
+            picked_by(
+                EmergeRules {
+                    reach: RuleSource::Bible,
+                    through_gates: RuleSource::Engine
+                },
+                None,
+                &[planet(128, 0.0, 0.0), far],
+                &[1]
+            ),
+            (Some(130), vec![2]),
+            "the other reach alone, the engine's draw"
+        );
     }
 
     #[test]
@@ -284,6 +416,19 @@ mod tests {
         assert_eq!(picked(None, &sites, &[0]), (None, vec![2]), "the planet");
         assert_eq!(picked(None, &sites, &[1]), (Some(129), vec![2]));
         assert_eq!(picked(SHIP, &sites, &[1]), (Some(129), vec![2]));
+    }
+
+    /// The new game's fly-the-sample plan, step 1, check (d), which pins
+    /// gap (b) of its finding 3 (arrivals): with one plain stellar and one
+    /// usable gate, `_PickEmergeStellar`'s one draw over both
+    /// (@0x7f9a-0x7fe9) sends some arrivals in from the edge, by
+    /// hyperspace, and only the rest out of the gate.
+    #[test]
+    fn with_a_planet_and_a_gate_some_arrivals_come_in_from_the_edge() {
+        let sites = [planet(128, 0.0, 0.0), hypergate(129)];
+        let outcomes: Vec<Option<i16>> =
+            (0..2).map(|draw| picked(None, &sites, &[draw]).0).collect();
+        assert_eq!(outcomes, [None, Some(129)], "the edge, then the gate");
     }
 
     #[test]

@@ -290,7 +290,9 @@ impl Session {
         let hulk = self
             .ship
             .hulk(&self.pilot, &self.statics, &self.setup, old, hulk, chance);
-        let hulk = self.space.traffic.add_npc(hulk);
+        // `_GenericRandomShipSpawn` brings the hulk in (@0x6f2f8) asking no
+        // `_ShipCanScoop`: it holds its slot's +0xc3 by the rule.
+        let hulk = self.space.traffic.add_npc_unscooped(hulk);
         if let Some(slot) = self.space.npc(hulk).map(slot_of) {
             self.space.slot_sprites.frames.clone_frames(slot, old.id);
         }
@@ -593,6 +595,7 @@ impl PlayerShip {
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
             ordered_by_lead: false,
+            berth_mark: false,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).
@@ -680,7 +683,7 @@ fn retargeted(goal: Goal, to: ShipRef) -> Goal {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{OutfitId, StockWeapon, WeaponId};
     use crate::chance::NeverFires;
@@ -701,8 +704,8 @@ mod tests {
     use crate::testkit::{Passive, work_with};
     use crate::traffic::npc::MissionMark;
 
-    const POD: i16 = 188;
-    const AUTO: i16 = 187;
+    pub(in crate::session) const POD: i16 = 188;
+    pub(in crate::session) const AUTO: i16 = 187;
     /// An outfit the eject carries over (`Flags` 0x0004).
     const KEPT: i16 = 300;
     /// An outfit the eject drops.
@@ -719,7 +722,7 @@ mod tests {
     /// auto-eject outfits, records of the player's class and of the pod
     /// (30 shield, 40 armour, two of `POD_ITEM` aboard, a blaster
     /// mounted), and an `OnRetire` on the player's class that sets bit 17.
-    fn ejecting(death_delay: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn ejecting(death_delay: i16) -> FakePilotCatalog {
         let mut catalog = deadly_in(death_delay);
         catalog.outfits.extend([
             outfit(POD, &[(MOD_ESCAPE_POD, 0)]),
@@ -764,7 +767,7 @@ mod tests {
     }
 
     /// `catalog`'s session facing its NPC, owning one of each of `outfits`.
-    fn flying(catalog: &FakePilotCatalog, outfits: &[i16]) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog, outfits: &[i16]) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         for &id in outfits {
             session.pilot.outfits.insert(OutfitId(id), 1);
@@ -815,7 +818,7 @@ mod tests {
     /// player dying, before its display sets the timer (@0x43e29; see the
     /// `display_step` module). Gives the breakup tick's sounds, then the
     /// next tick's.
-    fn to_the_first_check(
+    pub(in crate::session) fn to_the_first_check(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         chord: bool,
@@ -871,12 +874,12 @@ mod tests {
     /// an intact player up (see the `player_downed` module).
     const DOWNED: [SimSound; 2] = [SimSound::ShipDowned, SimSound::ShipDowned];
 
-    fn in_the_pod(session: &Session) -> bool {
+    pub(in crate::session) fn in_the_pod(session: &Session) -> bool {
         session.pilot.ship == ESCAPE_POD_SHIP && session.pod.is_some()
     }
 
     /// The NPC the eject left, the last added.
-    fn hulk(session: &Session) -> &Npc {
+    pub(in crate::session) fn hulk(session: &Session) -> &Npc {
         session.npcs().last().expect("a hulk")
     }
 

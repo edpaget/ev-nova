@@ -329,7 +329,7 @@
 //! kept on the pilot with no save due. A person hailed says its comm
 //! quote as the rule set reads [`RuleKey::CommQuote`], and in flight its
 //! hail
-//! quote on its trigger ([`Session::tick_quotes`],
+//! quote on its trigger ([`Session::roll_quote_at_turn`],
 //! [`Session::take_quotes`]). A person's `LinkMission` is resolved as it
 //! spawns, and offered in place of the comm dialog when it is hailed
 //! ([`Session::open_hail`]), or, with `Flags` 0x0200, in place of the
@@ -448,6 +448,8 @@ mod asteroid_seekers;
 mod asteroids;
 mod auto_refuel;
 mod aux_ships;
+#[cfg(test)]
+mod berth_marks;
 mod board_attempt;
 mod board_repair;
 mod brackets;
@@ -502,6 +504,7 @@ mod escort_hits;
 mod escort_land;
 #[cfg(test)]
 mod escort_loss;
+mod escort_person_reset;
 #[cfg(test)]
 mod escort_rounds;
 mod escorts;
@@ -530,6 +533,9 @@ mod game_work;
 mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
+#[cfg(test)]
+mod gate_partner;
+mod gate_pilot;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;
@@ -561,6 +567,8 @@ mod land_on_stellar;
 #[allow(clippy::float_cmp)]
 mod landed_work;
 mod landing_fee;
+#[cfg(test)]
+mod lane_readers;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
@@ -625,6 +633,8 @@ mod plunder_loop;
 mod port;
 mod port_desc;
 mod precalced;
+#[cfg(test)]
+mod quote_roll_order;
 mod radar;
 mod ranks;
 #[cfg(test)]
@@ -655,6 +665,8 @@ mod shipyard_listing;
 mod shot_gain;
 mod shot_slots;
 #[cfg(test)]
+mod slot_scoop;
+#[cfg(test)]
 mod slot_search;
 mod slot_visibility;
 #[cfg(test)]
@@ -666,6 +678,8 @@ mod sprite_load;
 mod sprite_sheets;
 mod stale_sprites;
 mod statics;
+#[cfg(test)]
+mod stationary_slot_zero;
 mod status_cargo;
 mod steering;
 #[cfg(test)]
@@ -821,7 +835,7 @@ use crate::shipyard::{
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Fate, OverlaidGalaxy, StoryEvent, listers_of};
+use crate::story::{Fate, LinkSource, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 #[cfg(test)]
@@ -1272,10 +1286,12 @@ impl Session {
         // Built first, from the star map and the saved overlay alone: the
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
-        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone())
+            .with_gates(&catalog.gate_sites(), &listed);
         galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        galaxy.set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1425,6 +1441,9 @@ impl Session {
         // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
         // see the `class_table` module).
         session.space.seed_class_orders(&session.pilot);
+        // `_LoadPilotData` spawns the escorts and fighters into their
+        // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
+        session.space.hold_loaded_berths(&mut session.pilot);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
@@ -1533,6 +1552,9 @@ impl Session {
         self.chart.galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        self.chart
+            .galaxy
+            .set_link_source(LinkSource::from(rules.source_for(RuleKey::GateLanes)));
         self.space
             .combat
             .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
@@ -2021,13 +2043,17 @@ impl Session {
     /// its colour (`_PrepareAllSprites` @0x3a783, @0x2bf8a). It keeps its
     /// cloak, fade and direction (`_RespawnEscort` writes neither +0x64
     /// nor +0xc8d8) and its afterburner (+0xbd); a loaded pilot's escorts
-    /// roll theirs on `chance`.
+    /// roll theirs on `chance`. By the engine reading of
+    /// [`RuleKey::PersonEscortRespawn`], `_RespawnEscort` (@0x3d531) first
+    /// forgets each escort's person, before the system's people are drawn
+    /// (see the `escort_person_reset` module).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entry: Option<Entry>,
     ) {
+        escort_person_reset::forget_escort_persons(&mut self.pilot, &self.statics, &self.setup);
         // The strikes still unanswered are dropped with the system left:
         // their grudges are held while its NPCs are still in the traffic.
         let left = std::mem::take(&mut self.space.strikes);
@@ -2061,6 +2087,9 @@ impl Session {
             // Every stellar the system lists, shown or not, which a fleet
             // may come out of (see the `npc_destinations` module).
             listed: &self.chart.listed,
+            // Where a stationary warship is placed, shown or not (see the
+            // `stationary_slot_zero` module).
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             // The entry flies no ship (`Traffic::enter_with`), so its
             // gain moves nothing; it reads the frame's all the same.
             speed_mult: self.speed_mult(),
@@ -2070,6 +2099,7 @@ impl Session {
         };
         let last = self.space.last_npc();
         let berths = self.space.fleet_berths(&self.pilot);
+        self.space.release_loaded_berths();
         self.space.traffic.reserve(berths.iter().copied().collect());
         self.space
             .traffic
@@ -2193,6 +2223,7 @@ impl Session {
         let world = World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(self.pilot.system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2224,6 +2255,9 @@ impl Session {
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            destination_reach: self.setup.rules.source_for(RuleKey::DestinationReach),
+            arrivals_through_gates: self.setup.rules.source_for(RuleKey::ArrivalsThroughGates),
+            departures_through_gates: self.setup.rules.source_for(RuleKey::DeparturesThroughGates),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
@@ -2297,6 +2331,7 @@ impl Session {
         World {
             sites: &self.chart.sites,
             listed: &self.chart.listed,
+            nav_def_0: self.statics.nav_def_slot(system, 0),
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2328,6 +2363,9 @@ impl Session {
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
             npc_jump_fuel: self.setup.rules.source_for(RuleKey::NpcJumpFuel),
+            destination_reach: self.setup.rules.source_for(RuleKey::DestinationReach),
+            arrivals_through_gates: self.setup.rules.source_for(RuleKey::ArrivalsThroughGates),
+            departures_through_gates: self.setup.rules.source_for(RuleKey::DeparturesThroughGates),
             odds_cache: self.setup.rules.source_for(RuleKey::OddsCache),
             refuel_cap: self.setup.rules.source_for(RuleKey::RefuelCap),
             cloak_on_reload: self.setup.rules.source_for(RuleKey::CloakOnReload),
@@ -3057,14 +3095,16 @@ impl Session {
     }
 
     /// Whether the ship can jump to the system selected: under
-    /// way once J has been accepted, until the ship arrives; otherwise
-    /// clear when J would be accepted now, and blocked when it would be
-    /// refused. The nav area draws the destination by this.
+    /// way once J has been accepted, until the ship arrives, or while the
+    /// gate autopilot J engaged flies (see the `gate_pilot` module);
+    /// otherwise clear when J would be accepted now or would engage the
+    /// autopilot, and blocked when it would be refused. The nav area draws
+    /// the destination by this.
     #[must_use]
     pub(crate) fn jump_readiness(&self) -> JumpReadiness {
-        if self.mode.jump().is_some() {
+        if self.mode.jump().is_some() || self.gate_pilot_engaged() {
             JumpReadiness::Underway
-        } else if self.check_next_jump().is_ok() {
+        } else if self.gate_pilot_would_engage() || self.check_next_jump().is_ok() {
             JumpReadiness::Clear
         } else {
             JumpReadiness::Blocked
@@ -3839,6 +3879,13 @@ impl Session {
     /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
     /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
     /// for the arrival.
+    ///
+    /// The exit restarts the course at the system entered
+    /// (@0x63e1d-0x63e3c). By [`RuleKey::GateCourse`]'s other reading an
+    /// exit into the system standing for the course's first hop drops
+    /// that hop instead, as a jump's arrival does, and once the nav is off
+    /// cues the next ([`Session::cue_course`]); it applies to a gate taken
+    /// by hand too.
     pub fn enter_hypergate(
         &mut self,
         to: Option<SystemId>,
@@ -3857,6 +3904,14 @@ impl Session {
             system
         });
         self.chart.set_nav(NavMode::Off);
+        if entered.is_ok() && self.setup.rules.source_for(RuleKey::GateCourse) == RuleSource::Bible
+        {
+            // By the other reading an exit along the course kept its next
+            // hop (see the `entry` module's gate row): cue it, as a jump's
+            // arrival does (@0x6c4cd). Any other exit left no course.
+            self.chart.cue_course(&self.pilot, &self.setup);
+        }
+        self.gate_pilot_after_exit(entered.is_ok());
         entered
     }
 
@@ -3916,6 +3971,7 @@ impl Session {
         let here = self
             .take_gate(GateKind::Wormhole)
             .ok_or(GateRefusal::NotAtGate)?;
+        self.ship.gate_pilot = None;
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
         let owner_of = |id| {
@@ -4002,7 +4058,9 @@ impl Session {
             },
         };
         self.enter_system(
-            Entry::Gate,
+            Entry::Gate {
+                hypergate: kind == GateKind::Hypergate,
+            },
             self.pilot.system,
             entered,
             catalog,
@@ -16865,7 +16923,10 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_tick_that_populates_the_system_moves_no_one() {
+    fn the_tick_that_populates_the_system_dispatches_and_flies_every_ship_it_sets_up() {
+        // `_DoPlayGameWork`'s AI loop (@0x44270-0x442ae) dispatches every
+        // ship `_SetupShipsInSystem` set up, and its ship loop (@0x44483)
+        // flies each, that frame: as a frame after a setup outside it.
         let catalog = trafficked(130, 2, 1);
         let mut ticked = Session::start(&catalog).expect("starts");
         work_with(
@@ -16878,13 +16939,25 @@ pub(super) mod tests {
         );
         let mut populated = Session::start(&catalog).expect("starts");
         populated.populate(&catalog, &mut NeverFires);
-        // The pass's ship loop displays them (@0x444ad), rolling their
-        // displays, but moves none.
         let states = |session: &Session| -> Vec<ShipState> {
             session.npcs().iter().map(|npc| npc.state).collect()
         };
-        assert_eq!(states(&ticked), states(&populated));
+        let set_up = states(&populated);
+        work_with(
+            &mut populated,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert_eq!(npc_ids(&ticked), npc_ids(&populated));
+        for id in npc_ids(&ticked) {
+            let word = ticked.space.traffic.word_of(id);
+            assert!(word.is_some(), "{id:?} dispatched");
+        }
+        assert_ne!(states(&ticked), set_up, "flown");
+        assert_eq!(states(&ticked), states(&populated));
     }
 
     #[test]
@@ -28658,6 +28731,7 @@ pub(super) mod tests {
             flags2,
             links: slots,
             exit_angle,
+            stability: crate::catalog::GateStability::Stable,
         }
     }
 
@@ -28744,7 +28818,11 @@ pub(super) mod tests {
             session.open_hypergate(&catalog),
             Err(GateRefusal::NotAtGate)
         );
-        assert_eq!(*catalog.gate_reads.borrow(), 0, "not read at the start");
+        assert_eq!(
+            *catalog.gate_reads.borrow(),
+            1,
+            "read once at the start, for the galaxy's lanes"
+        );
     }
 
     #[test]

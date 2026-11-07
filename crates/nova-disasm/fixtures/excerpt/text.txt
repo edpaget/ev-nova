@@ -1,0 +1,36 @@
+/fixture/EV Nova:
+(__TEXT,__text) section
+_Alpha:
+00003000	pushl	%ebp
+00003001	movl	%esp, %ebp
+00003003	calll	_Beta
+00003008	calll	0x3080
+0000300d	calll	0x3b63a1                        ## symbol stub for: _SysBeep
+00003012	calll	*%eax
+00003014	movl	$0xd8200, (%esp)                ## imm = 0xD8200
+0000301b	movl	$0xd8203, (%esp)                ## imm = 0xD8203
+00003022	movl	$0xd820c, (%esp)                ## imm = 0xD820C
+00003029	movl	$0xd8216, (%esp)                ## imm = 0xD8216
+00003030	movl	0x3b504c, %eax
+00003035	movl	0x3b5004, %eax
+0000303a	ucomiss	0xdd064, %xmm0
+00003041	calll	_Beta
+00003046	calll	0x3b642d                        ## Objc message: _objc_msgSend
+0000304b	popl	%ebp
+0000304c	ret
+_Beta:
+00003050	pushl	%ebp
+00003051	calll	_Gamma
+00003056	jne	0x3060
+00003058	popl	%ebp
+00003059	jmp	_Delta
+00003060	popl	%ebp
+00003061	jmp	0x3b63a1                        ## symbol stub for: _SysBeep
+_Gamma:
+00003080	pushl	%ebp
+00003081	calll	0x3086
+00003086	popl	%eax
+00003087	ret
+_Delta:
+000030a0	pushl	%ebp
+000030a1	ret

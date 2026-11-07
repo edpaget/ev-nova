@@ -1,0 +1,19 @@
+[package]
+name = "nova-disasm"
+description = "Answers questions about EV Nova's disassembly (one function, its callers or callees, a symbol's range) from a cached otool run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Real folders for the cache adapter, CLI and stock tests.
+tempfile.workspace = true
+
+[lints]
+workspace = true

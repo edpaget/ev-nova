@@ -95,6 +95,7 @@ impl<
             ),
             Some(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
+        let outline = sheet_ship.and_then(|ship| super::outline_for(&*catalog, ship, &sheet));
         let bar_government = failure
             .is_none()
             .then_some(BarFor(frame.hud.interface_government));
@@ -138,6 +139,7 @@ impl<
                 map,
                 scene,
                 sheet,
+                outline,
                 sheet_ship,
                 status_bar,
                 bar_government,
@@ -516,6 +518,7 @@ struct Opening {
     map: GalaxyMap,
     scene: Option<crate::system::SystemScene>,
     sheet: Result<crate::flight::ShipSheet, String>,
+    outline: Option<crate::outline::Outline>,
     sheet_ship: Option<nova_sim::ShipId>,
     status_bar: Result<hud::StatusBar, String>,
     bar_government: Option<BarFor>,
@@ -652,6 +655,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             scene: opening.scene,
             kept_frames: KeptFrames::new(),
             sheet: opening.sheet,
+            outline: opening.outline,
             sheet_ship: opening.sheet_ship,
             bar_government: opening.bar_government,
             status_bar: opening.status_bar,
@@ -696,6 +700,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             pending_leads: Vec::new(),
             glow_rolls: HashedRolls::new(1),
             npc_sheets: BTreeMap::new(),
+            npc_outlines: BTreeMap::new(),
             npc_previous: Vec::new(),
             scroll: crate::flight::scroll_offset::ScrollOffset::default(),
             unread_looks: opening.unread_looks,
@@ -776,6 +781,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 map,
                 scene,
                 sheet: Err(NO_FLIGHT.to_owned()),
+                outline: None,
                 sheet_ship: None,
                 status_bar: Err(NO_FLIGHT.to_owned()),
                 bar_government: None,
@@ -814,9 +820,7 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         let govts: Vec<_> = self.frame.npcs().filter_map(|npc| npc.govt).collect();
         self.read_traffic_sheets(traffic);
         for ship in framed {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
+            self.read_npc_sheet(ship);
         }
         for govt in govts {
             self.codes
@@ -849,14 +853,26 @@ impl<C: ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
         self.npc_sheets.contains_key(&ship) && self.cards.contains_key(&ship)
     }
 
+    /// Reads ship type `ship`'s sheet unless it is read already, and with
+    /// it, when the sheet cannot be shown, its outline
+    /// ([`outline_for`](super::outline_for)).
+    fn read_npc_sheet(&mut self, ship: nova_sim::ShipId) {
+        if self.npc_sheets.contains_key(&ship) {
+            return;
+        }
+        let sheet = self.catalog.ship_sheet(ship);
+        if let Some(outline) = super::outline_for(&self.catalog, ship, &sheet) {
+            self.npc_outlines.insert(ship, outline);
+        }
+        self.npc_sheets.insert(ship, sheet);
+    }
+
     /// Reads the sheet of each of `traffic` not read yet, and their target
     /// cards not read yet in one batch ([`CombatLooks::target_cards`]),
     /// none when all are read.
     fn read_traffic_sheets(&mut self, traffic: Vec<nova_sim::ShipId>) {
         for &ship in &traffic {
-            self.npc_sheets
-                .entry(ship)
-                .or_insert_with(|| self.catalog.ship_sheet(ship));
+            self.read_npc_sheet(ship);
         }
         let unread: Vec<_> = traffic
             .into_iter()

@@ -1,6 +1,8 @@
 //! The mapping from a loaded [`Galaxy`] to records, one small function
-//! per kind over the neutral records of [`super::records`]. The module
-//! docs of [`super`] list what maps to what, and each problem.
+//! per kind over the neutral records of [`super::records`]: factions,
+//! systems and stellars here, the jump points' gates in [`super::gates`],
+//! and hulls, traffic and starts in [`super::fleet`]. The module docs of
+//! [`super`] list what maps to what, and each problem.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -9,7 +11,9 @@ use nova_galaxy_format::id::Id;
 use nova_galaxy_format::load::{Doc, Galaxy, Problem};
 use nova_galaxy_format::model::{Faction, Position, Stellar as BibleStellar};
 
-use super::ids::{GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate};
+use super::fleet::{self, TRAFFIC_SHIPS};
+use super::gates;
+use super::ids::{CIVILIAN_DUDE, GOVT_IDS, IdTable, STELLAR_IDS, SYSTEM_IDS, allocate};
 use super::records::{
     clamp_i16, neutral_govt, neutral_stellar, neutral_system, rgb, stellar_flags, text_desc,
 };
@@ -19,10 +23,7 @@ use crate::records::stellar::Stellar;
 use crate::records::system::System;
 use crate::registry::AnyRecord;
 use crate::wire::flags::Flags32;
-use crate::wire::id::{GovtId, StellarId};
-
-/// How many `spöb`s a `sÿst`'s `nav_def` holds.
-const NAV_SLOTS: usize = 16;
+use crate::wire::id::GovtId;
 
 /// What [`map`] made of a galaxy.
 #[derive(Debug)]
@@ -35,8 +36,9 @@ pub struct Mapped {
     pub problems: Vec<Problem>,
 }
 
-/// Maps `galaxy`'s factions, systems and stellars to `gövt`, `sÿst`,
-/// `spöb` and `dësc` records.
+/// Maps `galaxy`'s factions, systems, stellars, jump points, hulls and
+/// starts to `gövt`, `sÿst`, `spöb`, `dësc`, `shïp`, `shän`, `düde` and
+/// `chär` records.
 #[must_use]
 pub fn map(galaxy: &Galaxy) -> Mapped {
     let mut problems = Vec::new();
@@ -58,17 +60,31 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
         })
         .collect();
     let stellars = number(placed, STELLAR_IDS, "spöb", &mut problems);
-    let ids = IdTable {
+    let gates = gates::number(galaxy, &systems, &stellars, &mut problems);
+    let ships = fleet::number_hulls(galaxy, &mut problems);
+    let mut ids = IdTable {
         factions,
         systems,
         stellars,
+        gates,
+        ships,
+        starts: BTreeMap::new(),
     };
+    ids.starts = fleet::number_starts(galaxy, &ids, &mut problems);
+    let traffic = fleet::civilian_traffic(galaxy, &ids.ships);
     let mut records = Vec::new();
     for (id, &nova) in &ids.factions {
         records.push(faction(nova, &galaxy.factions[id]));
     }
     for (id, &nova) in &ids.systems {
-        records.push(system(galaxy, &ids, id, nova, &mut problems));
+        records.push(system(
+            galaxy,
+            &ids,
+            id,
+            nova,
+            traffic.is_some(),
+            &mut problems,
+        ));
     }
     for (id, &nova) in &ids.stellars {
         let doc = &galaxy.stellars[id];
@@ -82,6 +98,28 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
             });
         }
     }
+    for (at, &nova) in &ids.gates {
+        let doc = &galaxy.systems[&at.system()];
+        if let Some(point) = doc.data.jump_points.iter().find(|p| p.id == at.point()) {
+            records.push(gates::gate(
+                galaxy,
+                &ids,
+                &doc.path,
+                point,
+                nova,
+                &mut problems,
+            ));
+        }
+    }
+    for (id, &nova) in &ids.ships {
+        let doc = &galaxy.ships[id];
+        records.push(fleet::ship(nova, doc));
+        records.extend(fleet::ship_anim(nova, doc));
+    }
+    records.extend(traffic);
+    for (id, &nova) in &ids.starts {
+        records.push(fleet::character(&ids, nova, &galaxy.starts[id]));
+    }
     Mapped {
         records,
         ids,
@@ -91,7 +129,7 @@ pub fn map(galaxy: &Galaxy) -> Mapped {
 
 /// Numbers `docs` in id order from the start of `range`, reporting each
 /// past its end, as `what`, against its file.
-fn number<'a, T: 'a>(
+pub(super) fn number<'a, T: 'a>(
     docs: impl IntoIterator<Item = (&'a Id, &'a Doc<T>)>,
     range: RangeInclusive<i16>,
     what: &str,
@@ -111,7 +149,7 @@ fn number<'a, T: 'a>(
 
 /// Whether `galaxy` holds nothing at `dir/id`, so a reference to it is
 /// reported: it neither loaded into `loaded` nor failed to load.
-fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id: &Id) -> bool {
+pub(super) fn absent<T>(galaxy: &Galaxy, loaded: &BTreeMap<Id, T>, dir: &str, id: &Id) -> bool {
     !loaded.contains_key(id) && !galaxy.unreadable.contains(&format!("{dir}/{id}.md"))
 }
 
@@ -130,45 +168,35 @@ fn faction(nova: i16, faction: &Doc<Faction>) -> Entry<AnyRecord> {
     }
 }
 
-/// The `sÿst` of the system `id`.
+/// The `sÿst` of the system `id`: its stellars and gates in `nav_def`
+/// ([`gates::nav_def`]), and, with the civilian `traffic`, it in
+/// `DudeTypes[0]` at 100% with [`TRAFFIC_SHIPS`] ships on average.
 fn system(
     galaxy: &Galaxy,
     ids: &IdTable,
     id: &Id,
     nova: i16,
+    traffic: bool,
     problems: &mut Vec<Problem>,
 ) -> Entry<AnyRecord> {
     let doc = &galaxy.systems[id];
     let (x_pos, y_pos) = position(doc.data.map, "map position", &doc.path, problems);
-    // In ID order: the table iterates in id order, which numbered them.
-    let inside: Vec<(i16, &Id)> = ids
-        .stellars
-        .iter()
-        .filter(|(stellar, _)| galaxy.stellars[*stellar].data.system == *id)
-        .map(|(stellar, &nova)| (nova, stellar))
-        .collect();
-    if inside.len() > NAV_SLOTS {
-        let out: Vec<String> = inside[NAV_SLOTS..]
-            .iter()
-            .map(|(_, stellar)| format!("`{stellar}`"))
-            .collect();
-        problems.push(Problem::new(
-            &doc.path,
-            format!(
-                "it has {} stellars, more than a system's {NAV_SLOTS}; {} have no place in it",
-                inside.len(),
-                out.join(", ")
-            ),
-        ));
-    }
-    let mut nav_def = [None; NAV_SLOTS];
-    for (slot, (nova, _)) in nav_def.iter_mut().zip(&inside) {
-        *slot = Some(StellarId(*nova));
+    let nav_def = gates::nav_def(galaxy, ids, id, &doc.path, problems);
+    let mut dude_types = [-1; 8];
+    let mut prob = [0; 8];
+    let mut avg_ships = 0;
+    if traffic {
+        dude_types[0] = CIVILIAN_DUDE;
+        prob[0] = 100;
+        avg_ships = TRAFFIC_SHIPS;
     }
     let system = System {
         x_pos,
         y_pos,
         nav_def,
+        dude_types,
+        prob,
+        avg_ships,
         govt: govt(
             galaxy,
             ids,
@@ -211,7 +239,7 @@ fn stellar(
 
 /// The `gövt` of `faction`, named in `file`: none for none, and none,
 /// reported, for a faction that isn't in `factions/`.
-fn govt(
+pub(super) fn govt(
     galaxy: &Galaxy,
     ids: &IdTable,
     faction: Option<&Id>,
@@ -233,7 +261,12 @@ fn govt(
 
 /// `at` as a record's position, each number outside `i16` moved to the
 /// nearest and reported, as `what`, against `file`.
-fn position(at: Position, what: &str, file: &str, problems: &mut Vec<Problem>) -> (i16, i16) {
+pub(super) fn position(
+    at: Position,
+    what: &str,
+    file: &str,
+    problems: &mut Vec<Problem>,
+) -> (i16, i16) {
     let (x, x_fits) = clamp_i16(at[0]);
     let (y, y_fits) = clamp_i16(at[1]);
     if !(x_fits && y_fits) {

@@ -27,6 +27,23 @@ exclude_re = [
     # `false` mutant is the code itself; the `true` mutant is caught by
     # `a_screen_claims_no_touch_by_default`.
     "nova-view/src/screen\\.rs:[0-9]+:[0-9]+: replace Screen::claims_touch -> bool with false$",
+    # The leave write's +0x50 floor (`if 0 > +0x50`): `<=` also writes 0.0
+    # over a stage of exactly 0.0 (or -0.0, which compares equal to it), so
+    # the stage reads the same either way.
+    "nova-sim-ai/src/traffic/leave_write\\.rs:[0-9]+:[0-9]+: replace < with <= in Npc::takes_leave_write$",
+    # The gate autopilot's turn keys: an off of exactly 0° is within half a
+    # turn step (`off.abs() <= step / 2.0`), so `off < 0.0` and `off <= 0.0`
+    # are never asked of it. A step can't be negative.
+    "nova-sim-ai/src/gate_pilot\\.rs:[0-9]+:[0-9]+: replace < with <= in turn_toward$",
+    # A face exactly MIN_UP (0.05) up: kept by `<`, dropped by `<=`. A face
+    # whose corners are floats (rationals) has a rational normal, and none is
+    # exactly 0.05 up (x² + z² = 399 y² has no rational solution but 0), so
+    # only rounding could land on it. Faces just above and well below are
+    # pinned (`a_face_just_up_enough_is_kept`, `faces_that_face_sideways_are_dropped`).
+    "nova-galaxy-media/src/outline\\.rs:[0-9]+:[0-9]+: replace < with <= in silhouette$",
+    # A hull's size in pixels is its metres times `PX_PER_METRE`, which is
+    # 1.0 for now: multiplying and dividing by 1.0 give the same pixels.
+    "nova-data/src/new_game/fleet\\.rs:[0-9]+:[0-9]+: replace \\* with / in pixels$",
     # An inertialess plunderer's matched speed floored at none: `<=` also
     # sets a speed of exactly none to 0.0. A 0.0 stays 0.0; only a -0.0,
     # which needs a -0.0 speed already and no gain or acceleration, would
@@ -823,4 +840,7 @@ exclude_re = [
     # is attached.
     "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: replace <impl Gamepads for GilrsGamepads>::poll with \\(\\)$",
     "nova/src/platform/gamepads\\.rs:[0-9]+:[0-9]+: delete ! in <impl Gamepads for GilrsGamepads>::poll$",
+    # The heaviest-class fold's `mass > heaviest`: `>=` also takes a mass
+    # equal to the heaviest so far, which leaves the same value.
+    "nova-sim-ai/src/ai/candidates\\.rs:[0-9]+:[0-9]+: replace > with >= in nearest$",
 ]

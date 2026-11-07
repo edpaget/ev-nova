@@ -10,7 +10,14 @@
 //!
 //! **The provoked branch** (@0x8cbf6-0x8cc31): with +0x96 above 0, +0x70
 //! set and +0x50 at or below 0, every goal but 3, 7, 9 and 0xf becomes 4
-//! on +0x70. The gate then closes for goal 4 (@0x8cc6d-0x8cc7d), so no
+//! on +0x70. With +0x50 above 0 (@0x8cc1f-0x8cc26) the branch is skipped
+//! and the ship runs on as an unprovoked one holding +0x70
+//! ([`provoked_branch_open`]): it keeps its goal and +0x96, holds the
+//! provoker and searches, inspects and patrols nothing (@0x8cc9d-0x8cca1,
+//! @0x8d13f-0x8d14d), its out-of-ammo retreat alone fleeing it outside goal
+//! 2 (@0x8d343-0x8d391); in goal 4 already, +0x70 is the provoker (a hit
+//! rewrites it, `_DamageShip` @0x3bcf6), so the attack follows it. The gate
+//! then closes for goal 4 (@0x8cc6d-0x8cc7d), so no
 //! `_SelectWarshipTarget` runs, and no more does it for an unprovoked
 //! goal 4. Behind the gate the think's tail runs, in this order:
 //!
@@ -54,7 +61,14 @@
 //! out-of-ammo retreat alone still runs, fleeing +0x70
 //! ([`out_of_ammo::after_patrol`]). The provoked write inside that gate
 //! (@0x8ccbe-0x8ccd8) can't be reached: the provoked branch above has
-//! already closed the gate.
+//! already closed the gate. Behind the closed gate (goals 2, 6, 0xa, 0x10
+//! and 0x11, or under its wait) it reaches @0x8d13f too, and holds a
+//! target it kept the same way ([`keeps_behind_gate`]), so a hit for no
+//! damage leaves it holding the attacker, which the threat tests
+//! ([`Npc::fought`](crate::traffic::npc::Npc::fought)) and the warp hold
+//! (@0x8d557-0x8d56b) read. A warship's goals 1, 2 and 0x14 hold +0x70
+//! only with its warp under way ([`warship_hunt`]); otherwise goal 4 is
+//! written on it (@0x8bb56-0x8bba2).
 //!
 //! The answer to the question whether a goal-4 pick of
 //! [`pick_target`](super::target::pick_target) differs from the gate's
@@ -75,8 +89,13 @@
 //!   (@0x8d513-0x8d56b).
 //! - **The provoked branch** (@0x8bb0c-0x8bb44): +0x96 above 0, +0x70 set
 //!   and +0x50 at or below 0 make any goal but 7 or 3 goal 4, with no ally
-//!   or fleet test. Its +0x50 gate is
-//!   rdm:phase/npc-ai/phase-12-hunt-warp-and-wait-gates's.
+//!   or fleet test. With +0x50 above 0 the branch is skipped (@0x8bb20 →
+//!   @0x8bb4f, [`provoked_branch_open`]) and the ship runs the rest of the
+//!   section as an unprovoked one holding +0x70: its goal and +0x96 kept,
+//!   no goal 4 (@0x8bb75-0x8bb7c, @0x8be24-0x8be2b), no search but the
+//!   wait's (@0x8bbab-0x8bbc2), its shield and out-of-ammo retreats outside
+//!   goals 2, 3 and 0xb (@0x8bf19-0x8bf33); in goal 4 already, the attack
+//!   follows +0x70, which a hit made the provoker (`_DamageShip` @0x3bcf6).
 //! - **Goals 1, 0x14 and 2** (@0x8bb56-0x8bba2): +0x70 set gives goal 4
 //!   (@0x8bba2), -1 the search (@0x8bb96), each with +0x50 at or below 0;
 //!   with it above, neither (@0x8bb75-0x8bb7c, @0x8bb8a-0x8bb91), and so
@@ -141,6 +160,18 @@ fn paid_off(npc: &Npc, ship: ShipRef, around: &Surroundings, always_attacks: Rul
     (ship == ShipRef::Player && npc.spared) || releases_blessed(npc, ship, around, always_attacks)
 }
 
+/// Whether the hunters' provoked branch (`_WarshipAI` @0x8bb0c-0x8bb44,
+/// `_InterceptorAI` @0x8cbf6-0x8cc31) can take goal 4 on `npc`'s provoker
+/// by its warp: only with +0x50 at or below 0 (@0x8bb20-0x8bb24,
+/// @0x8cc1f-0x8cc26). With the warp under way the branch is skipped and
+/// the ship runs on as an unprovoked one holding +0x70, but in goal 4
+/// already, whose blocks act on +0x70, which a hit made the provoker
+/// (`_DamageShip` @0x3bcf6): see the module docs.
+#[must_use]
+pub(crate) fn provoked_branch_open(npc: &Npc) -> bool {
+    npc.warp.stage <= 0.0 || npc.goal.attacking().is_some()
+}
+
 /// What an interceptor `npc` does with goal 4 on `ship` among `around`,
 /// retreating as `retreat` says, a blessed player let go as
 /// `always_attacks` says: the think's tail (see the module docs), the
@@ -183,13 +214,16 @@ pub fn interceptor_attack(
 /// What an interceptor `npc`'s think does among `around` before its
 /// search, by `retreat` and `always_attacks`, when it holds no word and
 /// flies no flight it keeps (see the module docs): provoked with a
-/// target, any goal but a flight, an inspection or a help, goal 4 on it
-/// ([`interceptor_attack`]); unprovoked in goal 4, the same on the ship
+/// target and no warp under way (or in goal 4 already,
+/// [`provoked_branch_open`]), any goal but a flight, an inspection or a
+/// help, goal 4 on it ([`interceptor_attack`]); otherwise in goal 4, the same on the ship
 /// it attacks or snipes at; and nothing to fight, searching nothing, idle
 /// with a target it kept ([`searches_nothing`]), holding it while its
 /// slot is active and losing it otherwise (@0x8cca7-0x8ccb8), or behind a
-/// closed gate or under its wait ([`search_shut`]). None leaves it the
-/// hunt's own path: an inspection this think ends.
+/// closed gate or under its wait ([`search_shut`]), there holding a target
+/// it kept on a goal [`keeps_behind_gate`] names while its slot is active,
+/// and losing it otherwise, as the slot test does (@0x8d4e4-0x8d50d). None
+/// leaves it the hunt's own path: an inspection this think ends.
 #[must_use]
 pub fn interceptor_hunt(
     npc: &Npc,
@@ -202,26 +236,53 @@ pub fn interceptor_hunt(
         npc.goal,
         Goal::Flee(_) | Goal::Inspect(_) | Goal::Assist(_) | Goal::CountWait
     );
-    if let Some(ship) = npc.target.filter(|_| npc.provoked > 0.0 && provoked_branch) {
+    if let Some(ship) = npc
+        .target
+        .filter(|_| npc.provoked > 0.0 && provoked_branch && provoked_branch_open(npc))
+    {
         return Some(attack(ship));
     }
     if let Some(ship) = npc.goal.attacking() {
         return Some(attack(ship));
     }
-    if searches_nothing(npc)
-        && let Some(ship) = npc.target
-    {
-        let target = if around.active(ship) {
+    let held = |ship: ShipRef| Hunt {
+        target: if around.active(ship) {
             HuntTarget::Holds(ship)
         } else {
             HuntTarget::Cleared
-        };
-        return Some(Hunt {
-            target,
-            ..Hunt::default()
-        });
+        },
+        ..Hunt::default()
+    };
+    if searches_nothing(npc)
+        && let Some(ship) = npc.target
+    {
+        return Some(held(ship));
     }
-    search_shut(npc, around).then(Hunt::default)
+    if !search_shut(npc, around) {
+        return None;
+    }
+    Some(match npc.target {
+        Some(ship) if keeps_behind_gate(npc.goal) => held(ship),
+        _ => Hunt::default(),
+    })
+}
+
+/// Whether an interceptor in `goal`, behind its closed gate
+/// ([`search_shut`]), keeps the target it holds: its think writes no +0x70
+/// there (finding f of npc-ai phase 7: from @0x8d13f the retreats and the
+/// disabled drop need goal 4, @0x8d161, @0x8d2fd; the out-of-ammo flight
+/// flees it, @0x8d391; the lost-sight drop and the re-pick need goal 7,
+/// @0x8d3ab, @0x8d411), nor does the high level for a leave (2), a stop
+/// (6), a hold (0xa), a mine (0x10) or a scoop (0x11). The drift (0xe) and
+/// the count wait (0x16) are left out, as their high level clears it
+/// (@0x8eb85, @0x8d480); a plunder's and a flight's quarry name the ship
+/// already, and an inspection keeps its own.
+#[must_use]
+pub fn keeps_behind_gate(goal: Goal) -> bool {
+    matches!(
+        goal,
+        Goal::JumpOut | Goal::Wait | Goal::Hold | Goal::Mine | Goal::Scoop
+    )
 }
 
 /// What a warship `npc` does with goal 4 on `ship` among `around`,
@@ -258,8 +319,9 @@ pub fn warship_attack(
 /// flight (see the module docs), in `_WarshipAI`'s order:
 ///
 /// 1. inspecting (goal 7), provoked or not, nothing (@0x8bb2d, @0x8be10);
-/// 2. provoked with a target, goal 4 on it ([`warship_attack`],
-///    @0x8bb0c-0x8bb44);
+/// 2. provoked with a target and no warp under way (or in goal 4 already,
+///    [`provoked_branch_open`]), goal 4 on it ([`warship_attack`],
+///    @0x8bb0c-0x8bb44); with its warp under way, on as an unprovoked one;
 /// 3. unprovoked in goal 4, the same on the ship it attacks or snipes at;
 /// 4. waiting, the wait's search, whatever its warp; following or in
 ///    formation (the other reading of
@@ -293,7 +355,10 @@ pub fn warship_hunt(
     if let Goal::Inspect(_) = npc.goal {
         return Some(Hunt::default());
     }
-    if let Some(ship) = npc.target.filter(|_| npc.provoked > 0.0) {
+    if let Some(ship) = npc
+        .target
+        .filter(|_| npc.provoked > 0.0 && provoked_branch_open(npc))
+    {
         return Some(attack(ship));
     }
     if let Some(ship) = npc.goal.attacking() {
@@ -651,6 +716,11 @@ mod tests {
             warping[0].warp.stage = 10.0;
             let (decision, asked) = warship_decided(&warping, 0);
             assert_eq!(decision.goal, goal, "{goal:?} warping");
+            assert_eq!(
+                decision.last_target(),
+                Some(Some(n(2))),
+                "{goal:?} warping: +0x70 kept"
+            );
             assert!(asked.is_empty(), "{goal:?} warping: no search");
         }
         let mut idle = [warship(Goal::Idle, Some(n(2)), 0.0), neutral];
@@ -860,9 +930,34 @@ mod tests {
         // Any goal but 7 and 3 with +0x70 set and +0x50 at or below 0
         // (@0x8be09-0x8be2d).
         let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
-        for goal in [Goal::Mine, Goal::Scoop, Goal::CountWait] {
+        for goal in [Goal::Mine, Goal::Scoop] {
             let npcs = [warship(goal, Some(n(2)), 0.0), neutral.clone()];
             assert_eq!(by_engine(&npcs).goal, Goal::Attack(n(2)), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_warship_in_its_count_wait_returns_at_once() {
+        // `_WarshipAI` returns on goal 0x16 (@0x8b762 → @0x8c11d), before
+        // its word, its provoked branch and its late goal-4 write.
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for provoked in [0.0, 5.0] {
+            let npcs = [
+                warship(Goal::CountWait, Some(n(2)), provoked),
+                neutral.clone(),
+            ];
+            for flags in [0, crate::govt::ALWAYS_ATTACKS_PLAYER] {
+                let (decision, asked) = warship_decided(&npcs, flags);
+                assert_eq!(
+                    decision,
+                    Decision {
+                        goal: Goal::CountWait,
+                        ..Decision::default()
+                    },
+                    "provoked {provoked}, flags {flags}"
+                );
+                assert!(asked.is_empty());
+            }
         }
     }
 
@@ -885,6 +980,78 @@ mod tests {
             let expected = if flees { Goal::Flee(n(2)) } else { goal };
             assert_eq!(decision.goal, expected, "{goal:?}");
         }
+    }
+
+    #[test]
+    fn a_provoked_warship_whose_warp_is_under_way_keeps_its_goal_holding_its_provoker() {
+        // The provoked branch takes goal 4 only with +0x50 at or below 0
+        // (@0x8bb20-0x8bb24); above it, the ship runs on as an unprovoked
+        // one holding +0x70: no goal 4 for goals 1, 0x14 and 2
+        // (@0x8bb75-0x8bb7c), no late write (@0x8be24-0x8be2b), +0x96 kept.
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for goal in [
+            Goal::JumpOut,
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+            Goal::Hold,
+        ] {
+            let mut provoked = warship(goal, Some(n(2)), 5.0);
+            provoked.warp.stage = 10.0;
+            let (decision, asked) = warship_decided(&[provoked, neutral.clone()], 0);
+            assert_eq!(decision.goal, goal, "{goal:?}");
+            assert_eq!(decision.last_target(), Some(Some(n(2))), "{goal:?}");
+            assert!(!decision.forgets_provocation, "{goal:?}");
+            assert!(asked.is_empty(), "{goal:?}: no search");
+            if goal == Goal::Idle {
+                assert_eq!(decision.travel, TravelWrite::Keep, "no idle block");
+            }
+        }
+        let npcs = [warship(Goal::Idle, Some(n(2)), 5.0), neutral];
+        assert_eq!(by_engine(&npcs).goal, Goal::Attack(n(2)), "no warp");
+    }
+
+    #[test]
+    fn a_provoked_warship_whose_warp_is_under_way_retreats_for_its_shields_but_leaving_does_not() {
+        // Past the skipped provoked branch, the shield retreat still runs
+        // for any goal but 2, 3 and 0xb (@0x8bf19-0x8bf33), fleeing +0x70.
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for (goal, expected) in [
+            (Goal::Hold, Goal::Flee(n(2))),
+            (Goal::JumpOut, Goal::JumpOut),
+        ] {
+            let mut worn = warship(goal, Some(n(2)), 5.0);
+            worn.reserves.shield.now = 4.4;
+            worn.warp.stage = 10.0;
+            let (decision, _) = warship_decided(&[worn, neutral.clone()], WARSHIPS_RETREAT);
+            assert_eq!(decision.goal, expected, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_provoked_waiting_warship_whose_warp_is_under_way_runs_the_waits_search() {
+        // The wait writes +0x70 -1 and searches whatever +0x50
+        // (@0x8bbab-0x8bbc2), the provoked branch skipped: the search takes
+        // the wanted player, not the provoker.
+        let mut waiting = warship(Goal::Wait, Some(n(2)), 5.0);
+        waiting.warp.stage = 10.0;
+        let npcs = [waiting, ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0)];
+        let (decision, _) = warship_decided(&npcs, 0);
+        assert_eq!(decision.goal, Goal::Attack(P));
+    }
+
+    #[test]
+    fn a_provoked_warship_attacking_with_its_warp_under_way_attacks_its_provoker() {
+        // In goal 4 already, its blocks act on +0x70, which a hit rewrote
+        // to the provoker (`_DamageShip` @0x3bcf6), whatever +0x50.
+        let mut attacking = warship(Goal::Attack(n(3)), Some(n(2)), 5.0);
+        attacking.warp.stage = 10.0;
+        let npcs = [
+            attacking,
+            ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0),
+            ship(3, NEUTRAL, AiType::Warship, 0.0, 400.0),
+        ];
+        assert_eq!(by_engine(&npcs).goal, Goal::Attack(n(2)));
     }
 
     #[test]
@@ -1120,6 +1287,82 @@ mod tests {
             assert_eq!(decision.goal, Goal::Attack(n(3)));
         }
 
+        /// A neutral warship (NPC 3) 500 below.
+        fn neutral() -> Npc {
+            ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0)
+        }
+
+        /// [`holding`]'s interceptor holding NPC 3 in `goal`, provoked, its
+        /// warp under way.
+        fn provoked_warping(goal: Goal) -> Npc {
+            let mut provoked = holding(AiType::Interceptor, goal, 3);
+            provoked.provoked = 5.0;
+            provoked.warp.stage = 1.0;
+            provoked
+        }
+
+        #[test]
+        fn a_provoked_interceptor_whose_warp_is_under_way_keeps_its_goal_holding_its_provoker() {
+            // The provoked branch takes goal 4 only with +0x50 at or below 0
+            // (@0x8cc1f-0x8cc26); above it, goals 0, 1 and 0x14 skip the
+            // search for +0x50 (@0x8cc9d-0x8cca1) and every goal reaches
+            // @0x8d14d with +0x70 set (@0x8d13f-0x8d14d), +0x96 kept.
+            for goal in [
+                Goal::JumpOut,
+                Goal::Idle,
+                Goal::Land(StellarId(128)),
+                Goal::EnterGate(StellarId(128)),
+                Goal::Hold,
+            ] {
+                let (decision, asked) = interceptor(&[provoked_warping(goal), neutral()]);
+                assert_eq!(decision.goal, goal, "{goal:?}");
+                assert_eq!(decision.last_target(), Some(Some(n(3))), "{goal:?}");
+                assert!(!decision.forgets_provocation, "{goal:?}");
+                assert_eq!(
+                    asked,
+                    Vec::<u32>::new(),
+                    "{goal:?}: no inspection, no patrol"
+                );
+            }
+            let mut still = provoked_warping(Goal::Idle);
+            still.warp.stage = 0.0;
+            let (decision, _) = interceptor(&[still, neutral()]);
+            assert_eq!(decision.goal, Goal::Attack(n(3)), "no warp");
+        }
+
+        #[test]
+        fn a_provoked_interceptor_out_of_ammunition_whose_warp_is_under_way_flees_its_provoker_but_leaving_does_not()
+         {
+            // The out-of-ammo retreat (@0x8d343-0x8d391) still runs past the
+            // skipped provoked branch, fleeing +0x70, but not in goal 2.
+            for (goal, expected) in [
+                (Goal::Land(StellarId(128)), Goal::Flee(n(3))),
+                (Goal::JumpOut, Goal::JumpOut),
+            ] {
+                let dry = crate::ai::fixture::short_of_ammo(
+                    provoked_warping(goal),
+                    crate::ai::fire::AmmoLeft::OnlyUnlimited,
+                    true,
+                );
+                let (decision, _) = interceptor(&[dry, neutral()]);
+                assert_eq!(decision.goal, expected, "{goal:?}");
+            }
+        }
+
+        #[test]
+        fn a_provoked_interceptor_attacking_with_its_warp_under_way_attacks_its_provoker() {
+            // In goal 4 already, its blocks act on +0x70, which a hit rewrote
+            // to the provoker (`_DamageShip` @0x3bcf6), whatever +0x50.
+            let attacking = provoked_warping(Goal::Attack(n(2)));
+            let npcs = [
+                attacking,
+                ship(2, NEUTRAL, AiType::Warship, 0.0, 400.0),
+                neutral(),
+            ];
+            let (decision, _) = interceptor(&npcs);
+            assert_eq!(decision.goal, Goal::Attack(n(3)));
+        }
+
         #[test]
         fn an_interceptor_provoked_by_a_ship_it_lets_go_ends_idle_with_no_target_or_patrol() {
             // The drop (@0x8d2fd-0x8d33a) jumps past the patrol.
@@ -1175,6 +1418,94 @@ mod tests {
                 let searching = [after(&gone[0], &decision)];
                 assert_eq!(searching[0].target, None);
                 assert_ne!(flown(&searching).goal, Goal::Idle, "{ai_type:?} searches");
+            }
+        }
+    }
+
+    /// The hunters' provoked branch on a gone attacker whose freed slot
+    /// their target still names (`_WarshipAI` @0x8bb0c, `_InterceptorAI`
+    /// @0x8cbf6): both read `Npc::target` as the original reads +0x70, so
+    /// they match it with no read of the gone ship's record.
+    mod gone_slot {
+        use crate::ai::fixture::{PIRATES, POLICE, around, govts, n, ship, sites};
+        use crate::ai::{Behaviour, Decision, Goal, NovaAi, Surroundings};
+        use crate::catalog::StellarId;
+        use crate::govt::INTERCEPTORS_RETREAT;
+        use crate::traffic::gone::{Freed, GoneShip};
+        use crate::traffic::npc::{AiType, Npc};
+        use nova_sim_base::fixture::Draws;
+
+        /// A police hunter of `ai_type` (NPC 1) in slot 3 holding `goal`,
+        /// provoked, its target a pirate (NPC 2) whose slot 2 was freed in
+        /// the AI loop, so the hunter's think still finds it.
+        fn provoked(ai_type: AiType, goal: Goal) -> Npc {
+            let mut hunter = ship(1, POLICE, ai_type, 0.0, 0.0);
+            hunter.goal = goal;
+            hunter.target = Some(n(2));
+            hunter.provoked = 5.0;
+            hunter.berth = 3;
+            hunter
+        }
+
+        /// `hunter`'s decision through Nova's AI, the police of
+        /// `police_flags`.
+        fn flown(hunter: &Npc, police_flags: u16) -> Decision {
+            let mut attacker = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+            attacker.berth = 2;
+            let gone = [GoneShip {
+                ship: attacker,
+                freed: Freed::InDispatch,
+            }];
+            let npcs = [hunter.clone()];
+            let govts = govts(0, police_flags);
+            let sites = sites();
+            let around = Surroundings {
+                gone: &gone,
+                ..around(&sites, &npcs, &govts, (0.0, -1000.0), 0)
+            };
+            NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 8]))
+        }
+
+        #[test]
+        fn a_provoked_warship_whose_target_names_a_gone_slot_drops_it_keeping_its_provocation() {
+            // Goal 4 (@0x8bb0c-0x8bb44), then its own drop finds the slot's
+            // +0xb8 clear: goal 0, +0x70 -1, +0x96 kept (@0x8bc4e-0x8bca9).
+            for goal in [Goal::Idle, Goal::Land(StellarId(128)), Goal::JumpOut] {
+                let decision = flown(&provoked(AiType::Warship, goal), 0);
+                assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+                assert!(decision.clears_target, "{goal:?}");
+                assert!(!decision.forgets_provocation, "{goal:?}");
+                assert_eq!(decision.comm_call, None, "{goal:?}");
+            }
+        }
+
+        #[test]
+        fn a_provoked_interceptor_whose_target_names_a_gone_slot_attacks_it_into_the_slot_test_or_flees_it_zeroed()
+         {
+            // Goal 4 (@0x8cbf6-0x8cc31), which the slot test ends on goal 0
+            // keeping +0x96 (@0x8d4e4-0x8d50d → @0x8e263 → @0x8e731); or a
+            // retreat to goal 3 (@0x8d14d-0x8d2e4, @0x8d343-0x8d391), which
+            // goal 3's block ends zeroed (@0x8e228-0x8e23d).
+            let attacking = flown(&provoked(AiType::Interceptor, Goal::Idle), 0);
+            assert_eq!(attacking.goal, Goal::Idle);
+            assert!(attacking.clears_target);
+            assert!(!attacking.forgets_provocation, "@0x8e731");
+            let mut shaken = provoked(AiType::Interceptor, Goal::Idle);
+            shaken.reserves.shield.now = 1.0;
+            shaken.odds = 5.0;
+            let dry = crate::ai::fixture::short_of_ammo(
+                provoked(AiType::Interceptor, Goal::Idle),
+                crate::ai::fire::AmmoLeft::Dry,
+                true,
+            );
+            for (retreating, police_flags, why) in [
+                (shaken, INTERCEPTORS_RETREAT, "outnumbered"),
+                (dry, 0, "dry"),
+            ] {
+                let decision = flown(&retreating, police_flags);
+                assert_eq!(decision.goal, Goal::Idle, "{why}");
+                assert!(decision.clears_target, "{why}");
+                assert!(decision.forgets_provocation, "{why}: @0x8e228");
             }
         }
     }

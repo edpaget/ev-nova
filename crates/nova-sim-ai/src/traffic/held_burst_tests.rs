@@ -1094,3 +1094,257 @@ fn at_half_gain_a_burst_turns_half_and_moves_half_its_speed() {
     );
     assert_eq!(npc.owed_burst, Some(19.0), "the word's whole growth");
 }
+
+/// A live asteroid at rest at (`x`, `y`), for slot 0.
+fn rock(x: f32, y: f32) -> nova_sim_combat::asteroid::Asteroid {
+    nova_sim_combat::asteroid::Asteroid {
+        position: Vec2::new(x, y),
+        velocity: Vec2::ZERO,
+        frame: 0.0,
+        spin: 0.0,
+        strength: 30,
+        kind: 0,
+    }
+}
+
+/// `npc` made a miner as `mine_flight`'s tests make one: its class turn 2,
+/// a mining box of 120.
+fn as_miner(mut npc: Npc) -> Npc {
+    npc.miner = crate::ai::miner::MINES;
+    npc.hull.class_turn = 2.0;
+    npc
+}
+
+/// [`released`] as a miner.
+fn released_miner(goal: Goal, state: ShipState) -> Npc {
+    as_miner(released(goal, state))
+}
+
+/// The acceleration a miner thrusts by, its flying handling's.
+fn flying_accel(npc: &Npc) -> f32 {
+    npc.flying_handling(TopSpeeds::own_of(npc).own, FlightRules::default())
+        .accel
+}
+
+fn mining_beside(x: f32, y: f32) -> Beside {
+    Beside {
+        rock: Some(rock(x, y)),
+        ..Beside::default()
+    }
+}
+
+fn scooping_beside(x: f32, y: f32) -> Beside {
+    Beside {
+        scoop_box: Some(Vec2::new(x, y)),
+        ..Beside::default()
+    }
+}
+
+#[test]
+fn a_released_miner_chasing_bursts_out_along_its_heading_on_its_first_chase_thrust() {
+    // Order 0x13 writes +0x30 alone (@0x881bc-0x881c4).
+    let mut npc = released_miner(Goal::Mine, at(0.0, 0.0, 0.0, 0.0, 90.0));
+    let accel = flying_accel(&npc);
+    fly_once(
+        &mut npc,
+        None,
+        mining_beside(1000.0, 0.0),
+        Readings::default(),
+        &mut NeverFires,
+    );
+    assert!(
+        close(npc.state.velocity, Vec2::new(30.0, 0.0)),
+        "{:?}",
+        npc.state
+    );
+    assert!(
+        npc.owed_burst
+            .is_some_and(|owed| (owed - (30.0 - accel)).abs() < 1e-3),
+        "{:?}",
+        npc.owed_burst
+    );
+}
+
+#[test]
+fn a_released_miner_chasing_off_its_bearing_keeps_what_it_owes() {
+    let mut npc = released_miner(Goal::Mine, at(0.0, 0.0, 0.0, 0.0, 0.0));
+    fly_once(
+        &mut npc,
+        None,
+        mining_beside(1000.0, 0.0),
+        Readings::default(),
+        &mut NeverFires,
+    );
+    assert_eq!(npc.state.velocity, Vec2::ZERO);
+    assert_eq!(npc.owed_burst, Some(30.0));
+}
+
+#[test]
+fn a_released_scooper_bursts_out_toward_its_box_on_its_first_thrust() {
+    // Order 0x15 writes +0x30 alone (@0x8857b-0x88583).
+    let mut npc = released_miner(Goal::Scoop, at(0.0, 0.0, 0.0, 0.0, 90.0));
+    let accel = flying_accel(&npc);
+    fly_once(
+        &mut npc,
+        None,
+        scooping_beside(1000.0, 0.0),
+        Readings::default(),
+        &mut NeverFires,
+    );
+    assert!(
+        close(npc.state.velocity, Vec2::new(30.0, 0.0)),
+        "{:?}",
+        npc.state
+    );
+    assert!(
+        npc.owed_burst
+            .is_some_and(|owed| (owed - (30.0 - accel)).abs() < 1e-3),
+        "{:?}",
+        npc.owed_burst
+    );
+}
+
+#[test]
+fn a_released_scooper_off_its_bearing_brakes_and_keeps_what_it_owes() {
+    let mut npc = released_miner(Goal::Scoop, at(0.0, 0.0, 2.0, -2.0, 250.0));
+    let mut plain = npc.clone();
+    plain.owed_burst = None;
+    let step = crate::ai::mine_orders::scoop_brake_step(
+        flying_accel(&npc),
+        crate::speed_mult::SpeedMult::FULL,
+    );
+    for ship in [&mut npc, &mut plain] {
+        fly_once(
+            ship,
+            None,
+            scooping_beside(1000.0, 0.0),
+            Readings::default(),
+            &mut NeverFires,
+        );
+    }
+    assert_eq!(npc.state.velocity, Vec2::new(2.0 - step, -2.0 + step));
+    assert_eq!(npc.state, plain.state, "no burst");
+    assert_eq!(npc.owed_burst, Some(30.0));
+}
+
+#[test]
+fn a_released_miner_holding_by_slot_0_keeps_what_it_owes() {
+    // Order 0x14 writes neither word.
+    let mut npc = released_miner(Goal::Mine, at(50.0, 100.0, 3.0, -0.5, 0.0));
+    let mut plain = npc.clone();
+    plain.owed_burst = None;
+    for ship in [&mut npc, &mut plain] {
+        fly_once(
+            ship,
+            None,
+            mining_beside(0.0, 0.0),
+            Readings::default(),
+            &mut NeverFires,
+        );
+    }
+    assert_eq!(npc.state, plain.state, "the hold, no burst");
+    assert_eq!(npc.owed_burst, Some(30.0));
+}
+
+#[test]
+fn a_miner_owing_nothing_mines_as_before() {
+    let bible = Readings {
+        held_burst: RuleSource::Bible,
+        ..Readings::default()
+    };
+    for (goal, beside, start) in [
+        (
+            Goal::Mine,
+            mining_beside(1000.0, 0.0),
+            at(0.0, 0.0, 0.0, 0.0, 90.0),
+        ),
+        (
+            Goal::Mine,
+            mining_beside(0.0, 0.0),
+            at(50.0, 100.0, 3.0, -0.5, 0.0),
+        ),
+        (
+            Goal::Scoop,
+            scooping_beside(1000.0, 0.0),
+            at(0.0, 0.0, 0.0, 0.0, 90.0),
+        ),
+    ] {
+        let mut npc = as_miner(held(goal, start, 1));
+        fly_once(&mut npc, None, beside, bible, &mut NeverFires);
+        assert_eq!(npc.owed_burst, None, "{goal:?}");
+        let mut plain = as_miner(held(goal, npc.state, 1));
+        plain.mode = Mode::Flying;
+        fly_once(&mut npc, None, beside, bible, &mut NeverFires);
+        fly_once(&mut plain, None, beside, bible, &mut NeverFires);
+        assert_eq!(npc.state, plain.state, "{goal:?}");
+        assert_eq!(npc.owed_burst, None, "{goal:?}");
+    }
+    let mut chasing = as_miner(held(Goal::Mine, at(0.0, 0.0, 0.0, 0.0, 90.0), 1));
+    let accel = flying_accel(&chasing);
+    for _ in 0..2 {
+        fly_once(
+            &mut chasing,
+            None,
+            mining_beside(1000.0, 0.0),
+            bible,
+            &mut NeverFires,
+        );
+    }
+    assert!(
+        close(chasing.state.velocity, Vec2::new(accel, 0.0)),
+        "{:?}",
+        chasing.state
+    );
+}
+
+#[test]
+fn a_held_miner_bursts_out_on_its_chase_and_stops_jumping_with_sub_0_at_its_cap() {
+    // Slot 0 dead ahead, farther than the whole burst and its box.
+    let slot0 = rock(20_000.0, 0.0);
+    let mut miner = as_miner(held(Goal::Mine, at(0.0, 0.0, 0.0, 0.0, 90.0), 1));
+    miner.mine_order = crate::ai::mine_orders::MineOrder::Chase;
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![miner];
+    let world = World {
+        player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
+        mining_rock: Some(slot0),
+        held_burst: RuleSource::Engine,
+        ..World::new(&[])
+    };
+    let tick = |traffic: &mut Traffic| {
+        traffic.fly_tick(&world, &mut NeverFires);
+        traffic.npcs[0].clone()
+    };
+    let released = tick(&mut traffic);
+    assert_eq!(
+        (released.mode, released.owed_burst),
+        (Mode::Flying, Some(30.0))
+    );
+    let accel = flying_accel(&released);
+    let cap = released.stats.handling.max_speed;
+    let mut speed = 30.0;
+    let mut bursts = 0;
+    loop {
+        let ship = tick(&mut traffic);
+        bursts += 1;
+        assert!(
+            (ship.state.velocity.length() - speed).abs() < 1e-3,
+            "burst {bursts}: {:?} at {speed}",
+            ship.state.velocity
+        );
+        let next: f32 = speed - accel;
+        if next <= cap {
+            // `_AIMakeShipStopJumping` (@0x82e77-0x82eba): goal and
+            // sub-goal 0, then Rand(30) + 30: 29 + 30.
+            assert_eq!(ship.goal, Goal::Idle);
+            assert_eq!(ship.owed_burst, None);
+            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 });
+            assert_eq!(ship.mine_order, crate::ai::mine_orders::MineOrder::Stop);
+            assert!(!ship.stopping);
+            break;
+        }
+        assert_eq!(ship.goal, Goal::Mine, "burst {bursts}");
+        speed = next;
+        assert!(bursts < 500, "never ended");
+    }
+}

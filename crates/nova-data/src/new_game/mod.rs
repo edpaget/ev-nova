@@ -16,12 +16,32 @@
 //! | Bible | Record | Fields |
 //! |---|---|---|
 //! | `factions/` | `gövt` | `color` and `ship_color` from `color`, as `00RRGGBB` |
-//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, in ID order; no `con` links |
+//! | `systems/` | `sÿst` | `x_pos`/`y_pos` from `map`; `govt` from `government`; `nav_def` its stellars, then its gates, each in ID order; the civilian traffic; no `con` links |
 //! | `stellars/` | `spöb` | `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` from `services` and `kind` ([`records::stellar_flags`]); no `hyper_link`s |
 //! | a stellar's body | `dësc` | the body, trimmed, at its `spöb`'s ID: the engine reads a stellar's landing text from the `dësc` with its `spöb`'s ID; an empty body has none |
+//! | a system's `jump_points` | hypergate `spöb` ([`gates`]) | numbered after the last stellar; `x_pos`/`y_pos` from `position`; `govt` from `owner`; `flags` `CAN_LAND`; `flags2` the hypergate bit; `hyper_link[0]` the partner point's gate; named for the partner's system; a random exit heading |
+//! | `ships/` hulls | `shïp` and `shän` ([`fleet`]) | `speed`, `shields`, `hull` and `cargo` as `Speed`, `Shield`, `Armor` and `Holds`; placeholder acceleration, turn rate, fuel and crew; the `shän` only `BaseXSize`/`BaseYSize` from `size` |
+//! | (placeholder) | `düde` 128 ([`fleet`]) | "Civilian traffic": every civilian hull at even odds, wimpy traders of no government |
+//! | `starts/` | `chär` ([`fleet`]) | its hull, its system in `system[0]`, its cash, and a placeholder date |
+//! | a hull's `model`, `livery` and `size` | a ship stand-in ([`looks`]) | its model seen from above, painted by its livery, in pixels at [`fleet::PX_PER_METRE`]; else its size box in its livery's primary, or bare |
+//! | a stellar's `visual` | a stellar stand-in ([`looks`]) | a station's or outpost's model seen from above; else a disc in its look's first colour, its owner's, or bare grey |
+//! | a system's `jump_points` | a gate stand-in ([`looks`]) | a grey ring |
+//! | a jump point's `stability` | its gate's stability on the store ([`gates::stabilities`]) | the point's own; a jump between two points works as well as the worse of its ends, which the galaxy map's lanes read (`nova_sim::gate_lanes`) |
+//!
+//! A jump point is a hypergate with one link, to its partner's gate: the
+//! original comes out at the linked `spöb` itself, so the partner is
+//! reached even when two points of a system lead to one neighbour, and a
+//! one-way point's gate reaches its partner though the partner links
+//! elsewhere ([`gates`]). The new game's ruleset lets the traffic use the
+//! gates as its only way in and out (`nova::ruleset`).
 //!
 //! The body is kept as written: Markdown isn't rendered, and its line
 //! breaks stay line breaks.
+//!
+//! The bible has models, not sprites, so nothing names a sprite: each hull,
+//! stellar and gate draws as its stand-in, kept on the store
+//! ([`GameData::stand_in`]) and read from the media through the same
+//! [`Source`].
 //!
 //! # Problems
 //!
@@ -32,9 +52,18 @@
 //! - A `government` or `owner` naming no faction maps to no government.
 //! - A stellar whose `system` names no system is left out.
 //! - A map or system position outside `i16` is moved to the nearest.
-//! - A system with more than 16 stellars keeps the first 16 in `nav_def`;
-//!   the rest have records but no place in it.
+//! - A system with more than 16 stellars and gates keeps every gate in
+//!   `nav_def` and the first stellars that fit beside them; the rest have
+//!   records but no place in it, all named in one problem.
+//! - A jump point whose `to` names no jump point maps to a gate with no
+//!   link, which refuses its entry.
+//! - A start whose ship is no hull, or whose system isn't there, is left
+//!   out.
 //! - A record past its kind's ID range is left out.
+//! - A hull's `livery` that isn't in `liveries/` draws bare; a hull's
+//!   `model` or a stellar's `visual` that isn't in `assets/` draws as its
+//!   box or its disc; an asset whose model file doesn't decode is reported
+//!   once, against the asset ([`looks`]).
 //!
 //! A reference to a file that failed to load, or to a record left out for
 //! its ID, isn't reported again; a stellar in such a system is left out
@@ -45,25 +74,36 @@
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - `jump_points`: phase 3 maps each to a hypergate `spöb` with one link,
-//!   in the system's `nav_def` (sharing its 16 slots with the stellars),
-//!   and adds the arrival `Rulebook` key. Gate IDs follow the stellars', so
-//!   no stellar is renumbered ([`ids`]).
-//! - `ships/`, `mods/`, `outfits/`, `liveries/`: they need the flat-outline
-//!   look and the NPC fleets of phase 3, and `play-the-sample`'s mod kits.
+//! - A jump point's `stability` in travel: the store keeps it
+//!   ([`GameData::gate_stability`]) and the map draws it, but unstable and
+//!   dead points are travelled as stable ones until `play-the-sample`
+//!   phase 1.
+//! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
+//!   phase 3. `outfits/` aren't mapped either, so the hulls are unarmed.
+//!   A livery's `decals` aren't drawn.
+//! - Traffic: the bible authors none, so the civilian `düde` and each
+//!   system's traffic are placeholders ([`fleet`]), as are a hull's
+//!   acceleration, turn rate, fuel and crew and a start's date.
 //! - `storylines/`, `missions/`, `news/`, `characters/`, `dialog/`: they
 //!   belong to `engine-story`.
-//! - `assets/`, `budgets/`: tooling (art budgets and provenance). Only the
-//!   export media paths are read, for the LFS report
-//!   ([`NewGame::lfs_pointers`]).
-//! - A stellar's `visual` and a faction's `kind`: Nova has nothing like
-//!   them yet (the planet shader and 3D come with `engine-3d`).
-//! - A start `chär`: the bible names no start system or ship yet, so New
-//!   Pilot has nowhere to fly from. Phase 3 needs one.
+//! - `budgets/` and an asset's provenance: tooling. An asset's models are
+//!   read for the stand-ins ([`looks`]), and the export media paths for the
+//!   LFS report ([`NewGame::lfs_pointers`]); its textures aren't drawn.
+//! - A stellar's generated look beyond its first colour, and a faction's
+//!   `kind`: Nova has nothing like them yet (the planet shader and 3D come
+//!   with `engine-3d`).
 //! - Commodity prices: a trade centre's price levels (the upper `Flags`
 //!   bits) stay unset, so it trades nothing until the bible prices goods.
+//!
+//! IDs aren't pinned: adding a data file renumbers what follows it, and a
+//! pilot saved before can load into another place ([`ids`]).
 
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
+pub mod fleet;
+pub mod gates;
 pub mod ids;
+pub mod looks;
 mod map;
 pub mod records;
 #[cfg(test)]
@@ -92,8 +132,10 @@ pub struct NewGame {
     /// each against its file. The data holds what loaded.
     pub problems: Vec<Problem>,
     /// The export media the asset manifest names that are Git LFS
-    /// pointers, not the files: the checkout hasn't fetched them. Nothing
-    /// reads media yet, so they don't stop anything.
+    /// pointers, not the files: the checkout hasn't fetched them. A model
+    /// that is a pointer draws as its hull's size box or its stellar's
+    /// disc, so they don't stop anything, and they aren't reported again
+    /// among the problems.
     pub lfs_pointers: Vec<String>,
 }
 
@@ -121,7 +163,8 @@ pub fn open(dir: &Path) -> Result<NewGame, ListError> {
 }
 
 /// Loads the new game's data from `source`, read from the folder `dir`:
-/// the format's loader, the LFS check over its media, then the mapping.
+/// the format's loader, the LFS check over its media, the mapping, then
+/// the stand-ins ([`looks`]), whose models are read from `source` too.
 pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     let (galaxy, mut problems) = nova_galaxy_format::load::load(source);
     let lfs_pointers = lfs_pointers(&galaxy, source)
@@ -134,8 +177,12 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
         problems: mapping,
     } = map(&galaxy);
     problems.extend(mapping);
+    let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
+    let stabilities = gates::stabilities(&galaxy, &ids.gates);
     NewGame {
-        data: GameData::from_decoded(dir.to_path_buf(), records),
+        data: GameData::from_decoded(dir.to_path_buf(), records)
+            .with_stand_ins(stand_ins)
+            .with_gate_stabilities(stabilities),
         ids,
         problems,
         lfs_pointers,

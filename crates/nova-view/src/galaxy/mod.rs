@@ -33,6 +33,8 @@
 //!   opens it.
 //! - [`help`]: the viewer's help line and Enter label, naming the keys
 //!   the map reads.
+//! - [`lanes`]: the in-flight maps' gate lanes, each way of a link in its
+//!   stability's look, by `RuleKey::MapLaneStyle`'s other reading.
 
 pub mod borders;
 pub mod buttons;
@@ -44,6 +46,7 @@ pub mod data;
 pub mod dialog;
 pub mod find;
 pub mod help;
+pub mod lanes;
 pub mod map;
 pub mod model;
 pub mod nebulae;
