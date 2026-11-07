@@ -661,8 +661,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn uncut_a_sheet_without_quirks_draws_its_box_as_the_plain_decode() {
+    /// Cuts that reach the row skip, the left trim, a run's restart and a
+    /// token ending at the clip's left, and ones past the box.
+    const CUTS: [(u16, u16); 10] = [
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+        (1, 2),
+        (2, 3),
+        (2, 0),
+        (0, 9),
+        (9, 0),
+    ];
+
+    /// The cuts at which `bytes`' clipped draw is not its plain decode
+    /// cropped.
+    fn cuts_drawn_otherwise(bytes: &[u8]) -> Vec<(u16, u16)> {
+        let plain = plain(bytes);
+        CUTS.into_iter()
+            .filter(|&(top, left)| {
+                let at = cut(top, left);
+                let (drawn, crop) = (clipped(bytes, at), cropped(&plain, at));
+                frames(&drawn) != frames(&crop) || solids(&drawn) != solids(&crop)
+            })
+            .collect()
+    }
+
+    /// Unflagged sheets: a 16, an 8 and a 32-bit one, and a stock-shaped one.
+    fn sheets_without_quirks() -> Vec<Vec<u8>> {
         let sixteen = sheet(3, 2, 16)
             .frame(|f| {
                 f.line()
@@ -690,7 +718,43 @@ mod tests {
                     .run32(1, 0x7FFF_7FFF)
             })
             .build();
-        for bytes in [sixteen, eight, thirty_two] {
+        vec![sixteen, eight, thirty_two, stock_shaped()]
+    }
+
+    fn stock_shaped() -> Vec<u8> {
+        sheet(3, 2, 16)
+            .frame(|f| {
+                f.line()
+                    .pixels(&[RED])
+                    .run(2, WHITE, WHITE)
+                    .line()
+                    .skip(1)
+                    .pixels(&[BLUE, GREEN])
+            })
+            .build()
+    }
+
+    /// Flagged sheets, one per kind of quirk, each drawn otherwise than a
+    /// crop at some cut.
+    fn sheets_with_quirks() -> Vec<Vec<u8>> {
+        vec![
+            row_0_counts_over_row_1(16, |f, i| f.pixels(&[[RED, GREEN, BLUE][i]; 2])),
+            two_colour_run_16(),
+            sheet(4, 1, 8)
+                .frame(|f| f.line().skip8(1).run8(7, [1, 2, 3, 4]))
+                .build(),
+            sheet(2, 1, 8)
+                .frame(|f| f.line().pixels8(&[1, 2, 3]).pixels8(&[4]))
+                .build(),
+            sheet(2, 1, 8)
+                .frame(|f| f.line().run8(1, [5; 4]).pixels8(&[6, 7, 8]))
+                .build(),
+        ]
+    }
+
+    #[test]
+    fn uncut_a_sheet_without_quirks_draws_its_box_as_the_plain_decode() {
+        for bytes in sheets_without_quirks() {
             let plain = plain(&bytes);
             assert!(!plain.clip_quirks());
             let clipped = clipped(&bytes, cut(0, 0));
@@ -701,18 +765,30 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_without_quirks_draws_as_its_plain_decode_cropped_at_every_cut() {
+        for bytes in sheets_without_quirks() {
+            assert!(!plain(&bytes).clip_quirks());
+            assert_eq!(cuts_drawn_otherwise(&bytes), []);
+        }
+    }
+
+    #[test]
+    fn every_sheet_drawn_otherwise_than_a_crop_at_some_cut_is_flagged() {
+        // A flag that under-flags any of these leaves a sheet drawn as a
+        // crop though its clipped draw differs.
+        for (i, bytes) in sheets_with_quirks().iter().enumerate() {
+            let otherwise = cuts_drawn_otherwise(bytes);
+            assert!(!otherwise.is_empty(), "sheet {i} draws as a crop");
+            assert!(
+                plain(bytes).clip_quirks(),
+                "sheet {i} differs at {otherwise:?} but is not flagged"
+            );
+        }
+    }
+
+    #[test]
     fn a_stock_shaped_sheet_has_no_clip_quirks() {
-        let bytes = sheet(3, 2, 16)
-            .frame(|f| {
-                f.line()
-                    .pixels(&[RED])
-                    .run(2, WHITE, WHITE)
-                    .line()
-                    .skip(1)
-                    .pixels(&[BLUE, GREEN])
-            })
-            .build();
-        assert!(!plain(&bytes).clip_quirks());
+        assert!(!plain(&stock_shaped()).clip_quirks());
     }
 
     #[test]
