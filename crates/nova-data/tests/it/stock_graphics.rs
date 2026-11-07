@@ -14,8 +14,8 @@ use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{
-    Image, RledInfo, decode_cicn, decode_pict, decode_ppat, decode_rled, rled_words, scan_pict,
-    scan_rled,
+    Image, PixelDepth, RledInfo, decode_cicn, decode_pict, decode_pict_deep, decode_ppat,
+    decode_rled, rled_words, scan_pict, scan_rled,
 };
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -106,6 +106,24 @@ fn every_stock_pict_scans_as_it_decodes() {
             problems.push(format!("scanned {scanned:?}, decoded {decoded:?}"));
         }
     });
+}
+
+/// Every stock picture is stored at 16 or 32 bits, none indexed, so
+/// QuickDraw shrinks each on 5-bit or 8-bit channels.
+#[test]
+fn every_stock_pict_is_16_or_32_bit() {
+    let (mut sixteen, mut thirty_two) = (0, 0);
+    check_all("PICT", 671, |data, problems| match decode_pict_deep(data) {
+        Err(e) => problems.push(e.to_string()),
+        Ok(deep) => match deep.depth() {
+            PixelDepth::Direct16 => sixteen += 1,
+            PixelDepth::Direct32 => thirty_two += 1,
+            other @ PixelDepth::Indexed { .. } => problems.push(format!("stored as {other:?}")),
+        },
+    });
+    if nova_data().is_some() {
+        assert_eq!((sixteen, thirty_two), (598, 73));
+    }
 }
 
 #[test]

@@ -11,6 +11,12 @@
 //! | `ppat` | [`decode_ppat`] | one opaque image |
 //! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`], [`decode_rled_with`] | a [`SpriteSheet`] of equal-sized frames |
 //!
+//! [`decode_pict_deep`] decodes a `PICT` as [`decode_pict`] does and keeps
+//! the depth its pixels were stored at, a [`PixelDepth`] on a
+//! [`DeepImage`], with an indexed picture's colour-table indices. QuickDraw
+//! merges a shrunk picture's pixels by that depth, and [`widen_five`] is
+//! the 16-bit decode's rule for widening a 5-bit channel.
+//!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
 //! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
 //! decoded sprites picture and its mask into a [`SpriteSheet`], as the
@@ -125,6 +131,7 @@
 
 mod budget;
 mod color;
+mod deep_image;
 mod error;
 mod icon;
 mod image;
@@ -148,12 +155,13 @@ mod system_clut;
 pub mod fixture;
 
 pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
+pub use deep_image::{DeepImage, PixelDepth, widen_five};
 pub use error::GraphicsError;
 pub use icon::{CICN, decode_cicn};
 pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
-pub use pict::{PICT, PictFrame, decode_pict, pict_frame, scan_pict};
+pub use pict::{PICT, PictFrame, decode_pict, decode_pict_deep, pict_frame, scan_pict};
 pub use pict_sheet::{SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
 pub use rled::{

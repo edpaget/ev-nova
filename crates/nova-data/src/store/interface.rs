@@ -20,7 +20,7 @@ use nova_rsrc::{ForkReader, LoadError, ResType, ResourceFile, StdForkReader};
 
 use crate::decode::{Entry, Record, decode};
 use crate::error::{DecodeError, DecodeWarning};
-use crate::graphics::{GraphicsError, Image, PICT, decode_pict};
+use crate::graphics::{DeepImage, GraphicsError, Image, PICT, decode_pict_deep};
 use crate::records::dialog::Dlog;
 use crate::records::dialog_items::Ditl;
 use crate::wire::id::{DitlId, PictId};
@@ -132,8 +132,16 @@ impl InterfaceData {
     /// `PICT` `id`, decoded; `None` if the file has none.
     #[must_use]
     pub fn picture(&self, id: PictId) -> Option<Result<Image, GraphicsError>> {
+        self.picture_deep(id)
+            .map(|deep| deep.map(DeepImage::into_image))
+    }
+
+    /// `PICT` `id`, decoded with the depth it was stored at
+    /// ([`decode_pict_deep`]); `None` if the file has none.
+    #[must_use]
+    pub fn picture_deep(&self, id: PictId) -> Option<Result<DeepImage, GraphicsError>> {
         let res = self.resources.get(PICT, id.0)?;
-        Some(decode_pict(res.data()))
+        Some(decode_pict_deep(res.data()))
     }
 
     fn decode<T: Record>(&self, id: i16) -> Option<DecodeResult<T>> {
@@ -279,6 +287,26 @@ mod tests {
     fn a_bad_picture_is_a_graphics_error() {
         let ui = load(fork(&[(PICT, 130, vec![0; 4])]));
         assert!(ui.picture(PictId(130)).expect("present").is_err());
+    }
+
+    #[test]
+    fn a_deep_picture_carries_its_depth_and_the_pictures_colours() {
+        use crate::graphics::PixelDepth;
+        use crate::graphics::fixture::DirectBits;
+        let sixteen = PictBuilder::new([0, 0, 1, 2])
+            .direct_bits(&DirectBits::rgb555([0, 0, 1, 2], &[0x7C00, 0x001F]))
+            .end()
+            .build();
+        let ui = load(fork(&[(PICT, 131, sixteen), (PICT, 130, vec![0; 4])]));
+        let deep = ui
+            .picture_deep(PictId(131))
+            .expect("present")
+            .expect("decodes");
+        assert_eq!(deep.depth(), &PixelDepth::Direct16);
+        let picture = ui.picture(PictId(131)).expect("present").expect("decodes");
+        assert_eq!(deep.into_image(), picture);
+        assert!(ui.picture_deep(PictId(130)).expect("present").is_err());
+        assert!(ui.picture_deep(PictId(132)).is_none());
     }
 
     #[test]

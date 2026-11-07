@@ -18,6 +18,7 @@ use nova_rsrc::ResType;
 use super::GraphicsError;
 use super::budget::check_budget;
 use super::color::{ColorTable, indices, rgb555};
+use super::deep_image::{DeepImage, PixelDepth};
 use super::image::Image;
 use super::packbits::unpack;
 use super::pixmap::{PixMap, PixelMap, QdRect};
@@ -78,6 +79,49 @@ const VERSION_2_WORD: u16 = 0x02FF;
 /// ```
 pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
     walk(data, Image::transparent)
+}
+
+/// Decodes a `PICT` as [`decode_pict`] does, with the depth its pixels
+/// were stored at, which decides how QuickDraw merges them when it
+/// shrinks the picture.
+///
+/// The depth is the last pixel opcode's, as `AmbrosiaTools`'
+/// `__PICT_HandleBits` remakes its image at each opcode's depth
+/// (0x55967-0x55a22): [`PixelDepth::Direct16`] for a 16-bit
+/// `DirectBits`, [`PixelDepth::Direct32`] for a 32-bit one and for a
+/// picture with no pixel opcode, and [`PixelDepth::Indexed`] for a
+/// `BitMap` or an indexed `PixMap`, with each pixel's raw value as its
+/// index (0 where no opcode drew, or where a direct opcode drew). Every
+/// stock picture has one pixel opcode, 16-bit or 32-bit.
+///
+/// # Example
+///
+/// ```
+/// use nova_data::graphics::{PixelDepth, decode_pict, decode_pict_deep};
+///
+/// // A 1x1 picture of one 16-bit pixel, as in `decode_pict`'s example.
+/// let pict: Vec<u8> = [
+///     &[0, 0, 0, 0, 0, 0, 0, 1, 0, 1][..],
+///     &[0x00, 0x11, 0x02, 0xFF],
+///     &[0x00, 0x9A, 0, 0, 0, 0xFF],
+///     &[0x80, 0x02, 0, 0, 0, 0, 0, 1, 0, 1],
+///     &[0, 0, 0, 3, 0, 0, 0, 0],
+///     &[0; 8],
+///     &[0, 16, 0, 16, 0, 3, 0, 5],
+///     &[0; 12],
+///     &[0, 0, 0, 0, 0, 1, 0, 1],
+///     &[0, 0, 0, 0, 0, 1, 0, 1],
+///     &[0, 0],
+///     &[0x7C, 0x00],
+///     &[0x00, 0xFF],
+/// ]
+/// .concat();
+/// let deep = decode_pict_deep(&pict).expect("decodes");
+/// assert_eq!(deep.depth(), &PixelDepth::Direct16);
+/// assert_eq!(deep.into_image(), decode_pict(&pict).expect("decodes"));
+/// ```
+pub fn decode_pict_deep(data: &[u8]) -> Result<DeepImage, GraphicsError> {
+    walk(data, DeepCanvas::new).map(DeepCanvas::finish)
 }
 
 /// Reads a `PICT`'s size without decoding a pixel. It walks the same
@@ -172,31 +216,108 @@ trait Sink {
     fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError>;
 }
 
-/// [`decode_pict`]'s canvas: each row's pixels inside the mask are drawn.
-impl Sink for Image {
-    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError> {
+impl Row<'_> {
+    /// Where the row's pixels land: for each pixel of the source rectangle
+    /// inside the mask, its (`x`, `y`) on the canvas and its position in
+    /// the row.
+    fn placements(&self) -> impl Iterator<Item = (u32, u32, usize)> + '_ {
         let Row {
-            format,
-            bytes,
-            width,
             left,
             y,
             src,
             dst,
             mask,
             frame,
-        } = *row;
-        let pixels = format.pixels(bytes, width)?;
+            ..
+        } = *self;
         let dst_y = y - i32::from(src.top) + i32::from(dst.top);
-        for x in i32::from(src.left)..i32::from(src.right) {
+        (i32::from(src.left)..i32::from(src.right)).filter_map(move |x| {
             let dst_x = x - i32::from(src.left) + i32::from(dst.left);
             if mask.is_some_and(|m| !m.contains(dst_x, dst_y)) {
-                continue;
+                return None;
             }
-            if let Some(&pixel) = pixels.get((x - i32::from(left)) as usize) {
-                let canvas_x = dst_x - i32::from(frame.left);
-                let canvas_y = dst_y - i32::from(frame.top);
-                self.put(canvas_x as u32, canvas_y as u32, pixel);
+            let canvas_x = dst_x - i32::from(frame.left);
+            let canvas_y = dst_y - i32::from(frame.top);
+            Some((
+                canvas_x as u32,
+                canvas_y as u32,
+                (x - i32::from(left)) as usize,
+            ))
+        })
+    }
+}
+
+/// [`decode_pict`]'s canvas: each row's pixels inside the mask are drawn.
+impl Sink for Image {
+    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError> {
+        let pixels = row.format.pixels(row.bytes, row.width)?;
+        for (x, y, at) in row.placements() {
+            if let Some(&pixel) = pixels.get(at) {
+                self.put(x, y, pixel);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// [`decode_pict_deep`]'s canvas: the colours as [`decode_pict`] draws
+/// them, each drawn pixel's colour-table index (0 for a direct opcode's),
+/// and the depth of the last opcode drawn.
+struct DeepCanvas {
+    image: Image,
+    indices: Vec<u8>,
+    /// The last opcode's depth; [`StoredAs::Direct32`] before any.
+    stored: StoredAs,
+}
+
+/// How the last pixel opcode stored its pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoredAs {
+    Direct16,
+    Direct32,
+    Indexed,
+}
+
+impl DeepCanvas {
+    fn new(width: u32, height: u32) -> Self {
+        Self {
+            image: Image::transparent(width, height),
+            indices: vec![0; width as usize * height as usize],
+            stored: StoredAs::Direct32,
+        }
+    }
+
+    fn finish(self) -> DeepImage {
+        let depth = match self.stored {
+            StoredAs::Direct16 => PixelDepth::Direct16,
+            StoredAs::Direct32 => PixelDepth::Direct32,
+            StoredAs::Indexed => PixelDepth::Indexed {
+                indices: self.indices,
+            },
+        };
+        DeepImage::new(self.image, depth).expect("one index per canvas pixel")
+    }
+}
+
+impl Sink for DeepCanvas {
+    fn row(&mut self, row: &Row<'_>) -> Result<(), GraphicsError> {
+        self.image.row(row)?;
+        let (stored, values) = match *row.format {
+            RowFormat::Rgb555 => (StoredAs::Direct16, None),
+            RowFormat::PlanarRgb | RowFormat::ChunkyXrgb => (StoredAs::Direct32, None),
+            RowFormat::Indexed { bits, .. } => (
+                StoredAs::Indexed,
+                indices(row.bytes, bits, row.width as usize),
+            ),
+        };
+        self.stored = stored;
+        let width = self.image.width() as usize;
+        for (x, y, at) in row.placements() {
+            let value = values.as_ref().map_or(Some(0), |v| v.get(at).copied());
+            if let (Some(value), Some(slot)) =
+                (value, self.indices.get_mut(y as usize * width + x as usize))
+            {
+                *slot = value;
             }
         }
         Ok(())
@@ -647,6 +768,11 @@ mod tests {
     /// decodes through it, so every fixture pins the agreement.
     fn decoded(data: &[u8]) -> Result<Image, GraphicsError> {
         let decode = decode_pict(data);
+        assert_eq!(
+            decode_pict_deep(data).map(DeepImage::into_image),
+            decode,
+            "the deep decode's colours are the decode's"
+        );
         assert_eq!(
             scan_pict(data),
             decode
@@ -2118,5 +2244,122 @@ mod tests {
             .build();
         assert!(pict.len() < 1024);
         crate::sweep::assert_never_panics(&pict, decoded);
+    }
+
+    /// The depth [`decode_pict_deep`] reports for `pict`.
+    fn depth(pict: &[u8]) -> PixelDepth {
+        decode_pict_deep(pict).expect("decodes").depth().clone()
+    }
+
+    #[test]
+    fn a_16_bit_picture_is_direct_16() {
+        let pict = PictBuilder::new([0, 0, 1, 3])
+            .direct_bits(&DirectBits::rgb555([0, 0, 1, 3], &[RED, GREEN, BLUE]))
+            .end()
+            .build();
+        assert_eq!(depth(&pict), PixelDepth::Direct16);
+    }
+
+    #[test]
+    fn a_32_bit_picture_packed_or_chunky_is_direct_32() {
+        let packed = PictBuilder::new([0, 0, 2, 3])
+            .direct_bits(&DirectBits::rgb888([0, 0, 2, 3], &SIX_888))
+            .end()
+            .build();
+        // One pixel a row: rowBytes 4, too short to pack, so chunky xRGB.
+        let chunky = PictBuilder::new([0, 0, 1, 1])
+            .direct_bits(&DirectBits::rgb888([0, 0, 1, 1], &SIX_888[..1]))
+            .end()
+            .build();
+        assert_eq!(depth(&packed), PixelDepth::Direct32);
+        assert_eq!(depth(&chunky), PixelDepth::Direct32);
+    }
+
+    #[test]
+    fn indexed_pictures_carry_their_pixel_values_as_indices() {
+        let eight = IndexedBits::new([0, 0, 2, 2], 8, &sparse_ctab(), &[0, 1, 3, 255]);
+        let four = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[3, 0, 1]);
+        for (bits, indices) in [(eight, vec![0, 1, 3, 255]), (four, vec![3, 0, 1])] {
+            let [top, left, bottom, right] = bits.bounds;
+            let pict = PictBuilder::new([top, left, bottom, right])
+                .packbits_rect(&bits)
+                .end()
+                .build();
+            assert_eq!(depth(&pict), PixelDepth::Indexed { indices });
+        }
+    }
+
+    #[test]
+    fn a_bitmap_is_indexed_one_for_black_and_zero_for_white() {
+        let bits = BitMap::from_art([0, 0, 2, 3], &["#.#", "##."]);
+        let pict = PictBuilder::v1([0, 0, 2, 3]).bits_rect(&bits).end().build();
+        assert_eq!(
+            depth(&pict),
+            PixelDepth::Indexed {
+                indices: vec![1, 0, 1, 1, 1, 0]
+            }
+        );
+    }
+
+    #[test]
+    fn an_indexed_copy_through_a_mask_leaves_index_0_outside_it() {
+        let bits = IndexedBits::new([0, 0, 2, 2], 8, &sparse_ctab(), &[3, 3, 3, 3]);
+        let pict = PictBuilder::new([0, 0, 2, 2])
+            .packbits_rgn(&bits, &rect_region([0, 1, 2, 2]))
+            .end()
+            .build();
+        assert_eq!(
+            depth(&pict),
+            PixelDepth::Indexed {
+                indices: vec![0, 3, 0, 3]
+            }
+        );
+    }
+
+    #[test]
+    fn the_last_pixel_opcode_decides_the_depth() {
+        let indexed = IndexedBits::new([1, 0, 2, 2], 8, &sparse_ctab(), &[1, 255]);
+        let direct = DirectBits::rgb555([0, 0, 1, 2], &[RED, GREEN]);
+        let direct_last = PictBuilder::new([0, 0, 2, 2])
+            .packbits_rect(&indexed)
+            .direct_bits(&direct)
+            .end()
+            .build();
+        let indexed_last = PictBuilder::new([0, 0, 2, 2])
+            .direct_bits(&direct)
+            .packbits_rect(&indexed)
+            .end()
+            .build();
+        assert_eq!(depth(&direct_last), PixelDepth::Direct16);
+        // A direct opcode's pixels hold index 0.
+        assert_eq!(
+            depth(&indexed_last),
+            PixelDepth::Indexed {
+                indices: vec![0, 0, 1, 255]
+            }
+        );
+        let thirty_two_last = PictBuilder::new([0, 0, 2, 2])
+            .direct_bits(&direct)
+            .direct_bits(&DirectBits::rgb888([1, 0, 2, 2], &SIX_888[..2]))
+            .end()
+            .build();
+        assert_eq!(depth(&thirty_two_last), PixelDepth::Direct32);
+    }
+
+    #[test]
+    fn a_picture_with_no_pixel_opcode_is_direct_32() {
+        let pict = PictBuilder::new([0, 0, 2, 3]).end().build();
+        assert_eq!(depth(&pict), PixelDepth::Direct32);
+    }
+
+    #[test]
+    fn a_deep_decode_fails_as_the_decode_does() {
+        let mut bits = IndexedBits::new([0, 0, 1, 3], 8, &sparse_ctab(), &[0, 2, 1]);
+        bits.mode = 1;
+        let pict = PictBuilder::new([0, 0, 1, 3])
+            .packbits_rect(&bits)
+            .end()
+            .build();
+        assert!(decoded(&pict).is_err());
     }
 }
