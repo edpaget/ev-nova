@@ -2435,7 +2435,10 @@
 //!     module docs). The draw proc asserts on a depth of 7 or less
 //!     (@0xbb612), which keeps `UnsupportedDepth`, so such a sheet falls
 //!     back to graphic type 0. The rulebook's `thirty_two_bit_sheet` key
-//!     reads a 32-bit sheet as true colour instead.
+//!     reads a 32-bit sheet as true colour instead. Since rendering phase
+//!     19 a sheet of any depth the decoder reads also touches by its
+//!     swapped tokens, shifted by `(depth >> 4) & 31`
+//!     (`nova_sim_base::sprite_mask`).
 //!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
 //!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
 //!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`

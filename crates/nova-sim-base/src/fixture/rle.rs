@@ -8,7 +8,8 @@
 //! op-2 pixel token with its data (white, padded to a word), `'.'` an
 //! op-3 skip and `'r'` an op-4 run with its fill word. A trailing skip is
 //! dropped, as `_BlitPixieRLEParsePixels` drops it, and each frame ends
-//! with a 0 word.
+//! with a 0 word. The sheet holds its words as bytes, each little-endian,
+//! as the swap leaves them in memory ([`RleSheet::bytes`]).
 
 use crate::sprite_mask::{FRAME_END, LINE_START, PIXELS, RUN, RleSheet, SKIP};
 
@@ -39,6 +40,37 @@ pub fn sheet8(frames: &[&[&str]]) -> RleSheet {
     build(frames, 1, STOCK_FILL, 0, width)
 }
 
+/// A sheet `width` x `height` at `shift` of the words `words`, each
+/// stored little-endian, its frames starting at the words `starts`.
+#[must_use]
+pub fn of_words(width: u32, height: u32, shift: u8, words: &[u32], starts: &[usize]) -> RleSheet {
+    RleSheet {
+        width,
+        height,
+        shift,
+        bytes: le_bytes(words),
+        starts: starts.iter().map(|&word| 4 * word).collect(),
+    }
+}
+
+/// `words` as the bytes of memory, each word little-endian.
+#[must_use]
+pub fn le_bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// `sheet`'s bytes read back as whole little-endian words.
+#[must_use]
+pub fn words_of(sheet: &RleSheet) -> Vec<u32> {
+    sheet
+        .bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect()
+}
+
 /// A token: `op` in the top byte, `count` below.
 #[must_use]
 pub fn token(op: u8, count: u32) -> u32 {
@@ -62,7 +94,7 @@ fn build(frames: &[&[&str]], unit: u32, fill: u32, shift: u8, width: u32) -> Rle
     let mut words = Vec::new();
     let mut starts = Vec::new();
     for rows in frames {
-        starts.push(Some(words.len()));
+        starts.push(words.len());
         for row in *rows {
             let line = line_tokens(row, unit, fill);
             let bytes = u32::try_from(4 * line.len()).expect("a small fixture");
@@ -72,13 +104,8 @@ fn build(frames: &[&[&str]], unit: u32, fill: u32, shift: u8, width: u32) -> Rle
         words.push(token(FRAME_END, 0));
     }
     let height = frames.iter().map(|rows| rows.len()).max().unwrap_or(0);
-    RleSheet {
-        width,
-        height: u32::try_from(height).expect("a small fixture"),
-        shift,
-        words,
-        starts,
-    }
+    let height = u32::try_from(height).expect("a small fixture");
+    of_words(width, height, shift, &words, &starts)
 }
 
 /// The tokens of one row (see the module docs).
@@ -116,9 +143,9 @@ mod tests {
     fn a_row_is_a_line_start_and_a_token_per_run_with_no_trailing_skip() {
         let sheet = sheet(&[&[".##r.", "#"]]);
         assert_eq!((sheet.width, sheet.height, sheet.shift), (5, 2, 1));
-        assert_eq!(sheet.starts, [Some(0)]);
+        assert_eq!(sheet.starts, [0]);
         assert_eq!(
-            sheet.words,
+            words_of(&sheet),
             [
                 token(1, 20),
                 token(3, 2),
@@ -137,12 +164,16 @@ mod tests {
     #[test]
     fn frames_follow_each_other_and_an_8_bit_sheet_counts_bytes() {
         let two = with_fill(&[&["#"], &["r"]], 0x0102_0304);
-        assert_eq!(two.starts, [Some(0), Some(4)]);
-        assert_eq!(&two.words[4..], [token(1, 8), token(4, 2), 0x0102_0304, 0]);
+        assert_eq!(two.starts, [0, 16], "byte offsets");
+        assert_eq!(
+            &words_of(&two)[4..],
+            [token(1, 8), token(4, 2), 0x0102_0304, 0]
+        );
+        assert_eq!(two.bytes[16..20], [8, 0, 0, 1], "little-endian");
         let eight = sheet8(&[&["..###"]]);
         assert_eq!((eight.width, eight.shift), (3, 0));
         assert_eq!(
-            eight.words,
+            words_of(&eight),
             [token(1, 12), token(3, 2), token(2, 3), STOCK_FILL, 0]
         );
     }

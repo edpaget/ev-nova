@@ -3306,8 +3306,8 @@ mod tests {
                 width: 5,
                 height: 6,
                 shift: 1,
-                words: vec![0],
-                starts: vec![Some(0)],
+                bytes: vec![0; 4],
+                starts: vec![0],
             })
         }
     }

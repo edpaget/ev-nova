@@ -28,7 +28,8 @@
 //! [`SpriteSheet::clip_quirks`] says whether that can differ from the
 //! frame cut to its box.
 //!
-//! [`rled_words`] reads an `rlëD`'s run-length tokens as words, and
+//! [`rled_words`] reads an `rlëD`'s run-length tokens as the bytes of
+//! memory, and
 //! [`sheet_rle_words`] makes the tokens the original makes for a cut
 //! `PICT` sheet: the [`RleWords`] two sprites' pixels touch by.
 //!

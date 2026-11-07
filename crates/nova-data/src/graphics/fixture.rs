@@ -842,7 +842,8 @@ impl RledBuilder {
     /// sheets have: the bytes of the tokens up to the next line start or
     /// the frame's end. (By default the count is left 0, which the
     /// decoders of depths 8 and 16 ignore, but `_SWLockSprite`'s walk,
-    /// which finds the frames of every other depth, steps by.)
+    /// which finds the frames of every other depth and those
+    /// [`rled_words`](super::rled_words) reads at every depth, steps by.)
     #[must_use]
     pub fn count_lines(mut self) -> Self {
         self.count_lines = true;

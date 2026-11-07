@@ -196,20 +196,18 @@ fn every_stock_rleds_words_start_each_frame_and_count_each_lines_bytes() {
             Ok(words) => words,
             Err(e) => return problems.push(e.to_string()),
         };
-        if words.starts.iter().any(Option::is_none) {
-            return problems.push(format!("starts {:?}", words.starts));
-        }
-        for (frame, &start) in words.starts.iter().flatten().enumerate() {
+        for (frame, &start) in words.starts.iter().enumerate() {
             let mut at = start;
             let mut line: Option<(usize, u32)> = None;
             loop {
-                let Some(&word) = words.words.get(at) else {
+                let Some(&[a, b, c, d]) = words.bytes.get(at..at + 4) else {
                     return problems.push(format!("frame {frame} runs out"));
                 };
+                let word = u32::from_le_bytes([a, b, c, d]);
                 let (op, count) = (word >> 24, word & 0x00FF_FFFF);
                 if op <= 1 {
                     if let Some((from, counted)) = line {
-                        let bytes = 4 * (at - from - 1) as u32;
+                        let bytes = (at - from - 4) as u32;
                         if bytes != counted {
                             return problems.push(format!(
                                 "frame {frame}: a line of {bytes} bytes counts {counted}"
@@ -222,9 +220,9 @@ fn every_stock_rleds_words_start_each_frame_and_count_each_lines_bytes() {
                     line = Some((at, count));
                 }
                 at += match op {
-                    1 | 3 => 1,
-                    2 => 1 + count.div_ceil(4) as usize,
-                    4 => 2,
+                    1 | 3 => 4,
+                    2 => 4 + (count as usize).next_multiple_of(4),
+                    4 => 8,
                     _ => return problems.push(format!("frame {frame}: op {op}")),
                 };
             }

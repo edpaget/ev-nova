@@ -178,8 +178,9 @@ impl GameData {
     /// touch by, from the sheet [`GameData::spin_sheet`] resolves: an
     /// `rlëD`'s own ([`rled_words`]), or those the original makes of its
     /// cut `PICT` pair at 16 bits ([`sheet_rle_words`]). It fails where
-    /// that does, but for an `rlëD`'s tokens, which it does not check. The
-    /// sheet is read on every call and not cached.
+    /// that does, but for an `rlëD`'s tokens, which it checks only as
+    /// [`rled_words`] does. The sheet is read on every call and not
+    /// cached.
     pub fn spin_words(&self, spin_id: i16) -> Result<RleWords, SpinSpriteError> {
         let spin = self
             .get::<Spin>(spin_id)
@@ -309,9 +310,10 @@ mod tests {
         [((i << 3) | (i >> 2)) as u8, 66, 132, 255]
     }
 
-    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`.
+    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`, its
+    /// lines counted.
     fn sheet(frames: u16, color: u16) -> Vec<u8> {
-        let mut builder = RledBuilder::new(2, 1);
+        let mut builder = RledBuilder::new(2, 1).count_lines();
         for _ in 0..frames {
             builder = builder.frame(|f| f.line().pixels(&[color, color]));
         }

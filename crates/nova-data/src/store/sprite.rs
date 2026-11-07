@@ -269,7 +269,8 @@ impl GameData {
 
     /// What [`GameData::ship_sprite`] resolves, with the sheet read only as
     /// its run-length tokens ([`rled_words`]), which its pixels touch by.
-    /// It fails where that does, but for tokens it does not check.
+    /// It fails where that does, but for tokens, which it checks only as
+    /// [`rled_words`] does.
     pub fn ship_sprite_words(&self, ship: ShipId) -> Result<ShipSpriteWords<'_>, SpriteError> {
         self.resolve_sprite(ship, |data, _| rled_words(data))
     }
@@ -342,9 +343,10 @@ mod tests {
             .frames_per(frames_per)
     }
 
-    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`.
+    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`, its
+    /// lines counted.
     fn sheet(frames: u16, color: u16) -> Vec<u8> {
-        let mut builder = RledBuilder::new(2, 1);
+        let mut builder = RledBuilder::new(2, 1).count_lines();
         for _ in 0..frames {
             builder = builder.frame(|f| f.line().pixels(&[color, color]));
         }
