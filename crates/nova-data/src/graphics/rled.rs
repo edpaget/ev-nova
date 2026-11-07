@@ -56,6 +56,17 @@ pub struct RledInfo {
     /// The header's depth, as the decoded sheet's [`SpriteSheet::depth`]:
     /// 16, 8, 32 or another the original draws.
     pub depth: u16,
+    /// Each frame's image's width in pixels, as the decoded sheet's
+    /// [`SpriteSheet::image_width`]: the frame's, unless the sheet draws
+    /// past its box, as a 32-bit sheet does.
+    pub image_width: u32,
+    /// Each frame's image's height in pixels
+    /// ([`SpriteSheet::image_height`]).
+    pub image_height: u32,
+    /// Whether a frame the world's edge cuts can draw otherwise than its
+    /// image cut to its box, as the decoded sheet's
+    /// [`SpriteSheet::clip_quirks`].
+    pub clip_quirks: bool,
 }
 
 /// Decodes an `rlëD` to its frames, arranged by `layout` (or
@@ -181,8 +192,9 @@ fn decode_plain(
     }
 }
 
-/// Reads an `rlëD`'s frame size, frame count and whether it has runs,
-/// without decoding a pixel.
+/// Reads an `rlëD`'s frame size, frame count, whether it has runs, its
+/// image size and its clip quirks, without decoding a pixel of a 16 or
+/// 8-bit sheet.
 ///
 /// It walks the same tokens as [`decode_rled`], so it fails exactly where
 /// and as that does, and succeeds with what the decoded sheet would hold.
@@ -203,6 +215,9 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
             frames: header.count,
             has_runs: sheet.solid_frames().is_some(),
             depth: header.depth,
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: scanned_quirks(data, &header),
         });
     }
     let units = Units::of(&header, EightBitReading::AsDrawn);
@@ -214,7 +229,17 @@ pub fn scan_rled(data: &[u8]) -> Result<RledInfo, GraphicsError> {
         frames: header.count,
         has_runs: scanner.has_runs,
         depth: header.depth,
+        image_width: header.width,
+        image_height: header.height,
+        clip_quirks: scanned_quirks(data, &header),
     })
+}
+
+/// The [`SpriteSheet::clip_quirks`] of the sheet `data`, whose checked
+/// header is `header`, as [`decode_rled`] reads it: the walk
+/// [`decode_rled_with`] takes, under the default readings.
+fn scanned_quirks(data: &[u8], header: &Header) -> bool {
+    takes_the_blit(header, RledReadings::default()) && clip_quirks(data, header)
 }
 
 /// An `rlëD`'s checked header.
@@ -1053,6 +1078,9 @@ mod tests {
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
             depth: sheet.depth(),
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: sheet.clip_quirks(),
         }
     }
 
@@ -1068,6 +1096,9 @@ mod tests {
             frames: 2,
             has_runs: true,
             depth: 16,
+            image_width: 3,
+            image_height: 2,
+            clip_quirks: false,
         };
         assert_eq!(scan_rled(&bytes), Ok(expected));
         assert_eq!(decode(&bytes).map(|sheet| info_of(&sheet)), Ok(expected));
@@ -1088,8 +1119,66 @@ mod tests {
                 frames: 3,
                 has_runs: false,
                 depth: 16,
+                image_width: 4,
+                image_height: 1,
+                clip_quirks: false,
             })
         );
+    }
+
+    /// A 32-bit sheet whose image overhangs its box, a 16-bit sheet whose
+    /// two-colour run is a clip quirk, and a plain 16-bit sheet.
+    fn sheets_of_each_edge() -> [(&'static str, Vec<u8>); 3] {
+        [
+            (
+                "overhanging",
+                RledBuilder::new(1, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[0x0000_7C00]))
+                    .build(),
+            ),
+            (
+                "quirky",
+                RledBuilder::new(4, 1)
+                    .count_lines()
+                    .frame(|f| f.line().run(4, RED, BLUE))
+                    .build(),
+            ),
+            (
+                "plain",
+                RledBuilder::new(2, 1)
+                    .count_lines()
+                    .frame(|f| f.line().pixels(&[RED, GREEN]))
+                    .build(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_scan_reads_the_image_size_and_clip_quirks_as_the_decode_has_them() {
+        let [overhanging, quirky, plain] = sheets_of_each_edge();
+        for (name, bytes) in [&overhanging, &quirky, &plain] {
+            assert_eq!(
+                scan_rled(bytes),
+                decode(bytes).map(|sheet| info_of(&sheet)),
+                "{name}"
+            );
+        }
+        let overhanging = scan_rled(&overhanging.1).unwrap();
+        assert_ne!(
+            (overhanging.image_width, overhanging.image_height),
+            (overhanging.frame_width, overhanging.frame_height),
+            "the 32-bit sheet overhangs"
+        );
+        assert!(!overhanging.clip_quirks);
+        assert!(
+            scan_rled(&quirky.1).unwrap().clip_quirks,
+            "a two-colour run"
+        );
+        let plain = scan_rled(&plain.1).unwrap();
+        assert_eq!((plain.image_width, plain.image_height), (2, 1));
+        assert!(!plain.clip_quirks);
     }
 
     /// Every way a sheet can be broken fails the scan as it fails the

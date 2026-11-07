@@ -174,6 +174,9 @@ fn every_stock_rled_scans_as_it_decodes() {
             frames: sheet.frames().len() as u16,
             has_runs: sheet.solid_frames().is_some(),
             depth: sheet.depth(),
+            image_width: sheet.image_width(),
+            image_height: sheet.image_height(),
+            clip_quirks: sheet.clip_quirks(),
         });
         let scanned = scan_rled(data);
         if scanned != decoded {
