@@ -945,6 +945,34 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_open_settles_makes_a_save_due_though_the_scene_it_shows_does_not() {
+        // `bulk` is bound for the dock with no completion and nothing else
+        // is offered: only the landing's drop-off changes the pilot, and
+        // the stellar's own conversation makes no save due of its own.
+        let bulk = StoryMission {
+            objective: Some(deliver(4, DOCK)),
+            ..StoryMission::default()
+        };
+        let catalog = talking(&[("bulk", bulk)]);
+        let mut session = flying(&catalog);
+        let room = free(&session);
+        session.pilot.story.missions.insert(
+            "bulk".to_owned(),
+            MissionState::Active {
+                cargo: 4,
+                met: false,
+            },
+        );
+        assert_eq!(free(&session), room - 4);
+        land_unsettled(&mut session);
+        session.out.save_due = false;
+        assert_eq!(lines(&converse(&mut session, Converse::Open)), ["Hello."]);
+        assert_eq!(state(&session, "bulk"), Some(MissionState::Done));
+        assert_eq!(free(&session), room, "dropped off");
+        assert!(session.out.save_due, "the landing's drop-off");
+    }
+
+    #[test]
     fn a_first_page_accept_counts_the_cargo_its_offer_loads() {
         // The eager offer's `on_offer` sets `loading`, which fires `load`:
         // an event that fills the hold but for 5 tons, short of the job's
