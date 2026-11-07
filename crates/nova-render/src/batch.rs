@@ -4196,6 +4196,33 @@ mod tests {
     }
 
     #[test]
+    fn a_clipped_sprite_too_big_for_a_page_once_enlarged_is_drawn_as_decoded() {
+        // 4097 texels wide: doubled, 8194, past the page's side.
+        let native = solid(4097, 1, [7, 7, 7, 255]);
+        let images = FakeImages::default().with(clipped(1).kind, 300, vec![native.clone()]);
+        let mut renderer = doubling(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(&drawing_sprites(&[clipped(1)]), &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        let frame = gpu.submits().last().copied().cloned().expect("a frame");
+        assert_eq!(
+            taken_uploads(&mut gpu),
+            [
+                GpuCall::CreatePage {
+                    page: TRANSIENT,
+                    size: 4097
+                },
+                GpuCall::upload(TRANSIENT, rect(0, 0, 4097, 1), &native),
+            ]
+        );
+        let Batch::Sprites { page, quads, .. } = &frame.batches[0] else {
+            panic!("a sprite batch")
+        };
+        assert_eq!(*page, TRANSIENT);
+        assert_eq!((quads[0].dest.w, quads[0].dest.h), (4097.0, 1.0));
+    }
+
+    #[test]
     fn a_failing_clipped_sprite_is_reported_once() {
         let missing = ImageKey::clipped_sprite(301, 0, (0, 1));
         let out_of_range = ImageKey::clipped_sprite(300, 1, (0, 1));
