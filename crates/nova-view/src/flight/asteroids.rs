@@ -15,9 +15,15 @@
 //! - An asteroid is murked at its position, seen from the player's ship
 //!   ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x36422-0x36446,
 //!   rdm:phase/play-feel-4/phase-17-murk-other-sprites).
+//! - An asteroid is a sprite of the sprite world, drawn through
+//!   `_BlitPixieRLETranslucentDrawProc` (@0xbb3fc-0xbba11): where the
+//!   world's edge cuts its box, an overhanging sheet is cut to the box and
+//!   one with clip quirks draws the clipped blit's frame
+//!   ([`BoxCut`], @0xbb56d-0xbb579, @0xbb770-0xbb789).
 
 use super::catalog::Looks;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
+use crate::box_cut::BoxCut;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
@@ -43,8 +49,9 @@ pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
                 let image = sheet.image.frame(frame);
-                let colorize = Some(shown.colorize);
-                list.mixed_sprite(image, shown.at, Color::WHITE, Blend::Normal, colorize);
+                let cut = BoxCut::of(list.world_clip(), shown.at, sheet.edge());
+                let look = (Color::WHITE, Blend::Normal, Some(shown.colorize));
+                cut.mixed_sprite(list, image, shown.at, look);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -58,7 +65,9 @@ mod tests {
 
     use super::*;
     use crate::ImageKey;
+    use crate::box_cut::{box_of, drawn_cuts};
     use crate::flight::catalog::EffectSheet;
+    use crate::geometry::Bounds;
 
     /// A stock system's murk colour.
     const COLOUR: u16 = 0x1081;
@@ -154,5 +163,65 @@ mod tests {
             );
             assert_eq!(list, expected, "{kind}");
         }
+    }
+
+    /// What a type-0 asteroid of a 10 x 8 sheet `rlëD` 1800, edged by
+    /// `edge`, draws at `centre` in a 100-square world.
+    fn cut_at(
+        edge: impl Fn(EffectSheet) -> EffectSheet,
+        centre: Point,
+    ) -> Vec<(ImageKey, Option<Bounds>)> {
+        let sheet = EffectSheet {
+            frame_width: 10,
+            frame_height: 8,
+            image_size: (10, 8),
+            ..sheet(1800, 36)
+        };
+        let looks = Looks {
+            asteroids: BTreeMap::from([(0, Ok(edge(sheet)))]),
+            ..Looks::default()
+        };
+        let asteroid = AsteroidShown {
+            at: centre,
+            ..shown(0.0, 3, 0)
+        };
+        let world = Bounds::at(at(0.0, 0.0), 100.0, 100.0);
+        let mut list = DrawList::new();
+        list.world_in(world, |list| draw_asteroids(list, &[asteroid], &looks));
+        drawn_cuts(&list)
+    }
+
+    #[test]
+    fn an_overhanging_asteroid_straddling_the_worlds_edge_is_cut_to_its_box() {
+        let overhanging = |sheet| EffectSheet {
+            image_size: (14, 12),
+            ..sheet
+        };
+        let top = at(50.0, 1.0);
+        assert_eq!(
+            cut_at(overhanging, top),
+            [(ImageKey::sprite(1800, 3), Some(box_of(top, (10.0, 8.0))))]
+        );
+        assert_eq!(
+            cut_at(overhanging, at(50.0, 50.0)),
+            [(ImageKey::sprite(1800, 3), None)],
+            "wholly inside, drawn whole"
+        );
+    }
+
+    #[test]
+    fn a_quirky_asteroid_cut_at_the_top_draws_its_clipped_frame() {
+        let quirky = |sheet| EffectSheet {
+            clip_quirks: true,
+            ..sheet
+        };
+        let top = at(50.0, 1.0);
+        assert_eq!(
+            cut_at(quirky, top),
+            [(
+                ImageKey::clipped_sprite(1800, 3, (3, 0)),
+                Some(box_of(top, (10.0, 8.0)))
+            )]
+        );
     }
 }
