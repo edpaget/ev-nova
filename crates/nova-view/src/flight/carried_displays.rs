@@ -247,6 +247,17 @@ mod tests {
     }
 
     #[test]
+    fn a_flash_shown_at_none_is_not_carried() {
+        let (mut flashes, mut glows) = lit(OLD);
+        let mut held = HeldDisplays::default();
+        held.hold(&mut flashes, &mut glows);
+        // Shown at 32, then 1, then at none, as its timer reaches 0.
+        let gains = vec![SpeedMult::new(31.0), SpeedMult::FULL, SpeedMult::FULL];
+        let (flashes, _) = carried(&mut held, &[carry_of(OLD, NEW, gains)]);
+        assert!(flashes.is_empty());
+    }
+
+    #[test]
     fn a_new_ship_not_in_the_frame_takes_nothing() {
         let (mut flashes, mut glows) = lit(OLD);
         let mut held = HeldDisplays::default();

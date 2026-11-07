@@ -344,6 +344,7 @@ mod tests {
         use crate::session::escorts::tests::{fleeted, flying, tick};
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
+        session.take_carried_displays();
         session.prepare_all_sprites(&mut NeverFires);
         tick(&mut session, &catalog);
         let from = escort_id(&session);
