@@ -2440,10 +2440,17 @@
 //!     swapped tokens, shifted by `(depth >> 4) & 31`
 //!     (`nova_sim_base::sprite_mask`).
 //!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
-//!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
-//!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`
-//!     now decodes as drawn through the shared decoder, matching the plain
-//!     blit.)
+//!     (@0x226af-0x23e3e) calls the same cutter for `shän` images (base
+//!     @0x2298b, alt @0x22d09, glow @0x22fe3, lights @0x232b2, weapon
+//!     @0x23609, shield @0x238b7). Read since rendering phase 20: each of
+//!     the six with no `rlëD` is cut from its own pair by its own `XSize`
+//!     and `YSize` into exactly `FramesPer` × its sets' frames, and the
+//!     shield into any whole grid; a broken `rlëD` does not fall back
+//!     (`nova_data`'s `ship_pict` module docs). A class whose image ID
+//!     matches an earlier class's still resolves its own, where the
+//!     original clones the earlier sprite (`_SWCloneSprite`; rendering-2
+//!     phase 10). (An 8-bit ship `rlëD` now decodes as drawn through the
+//!     shared decoder, matching the plain blit.)
 //!   - Main-screen `spïn`s 600 to 610 from a `PICT` pair: `_LoadSprites`
 //!     reads them the same way (@0x206b0); the main screen reads their
 //!     `rlëD` only.

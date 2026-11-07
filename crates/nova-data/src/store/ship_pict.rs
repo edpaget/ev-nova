@@ -43,7 +43,7 @@
 //! same image takes that class's sprite (`_SWCloneSprite`, base
 //! @0x227d6-0x22851, matched by the table at `_gPause`+0xa), ignoring its
 //! own mask, size and count. The engine resolves each `shän` on its own
-//! (rdm `rendering-2`).
+//! (rdm `rendering-2/phase-10-shared-ship-image-clone`).
 
 use std::fmt;
 
