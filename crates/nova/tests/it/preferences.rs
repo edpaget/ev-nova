@@ -1067,6 +1067,7 @@ fn on_macos_a_saved_exclusive_mode_opens_native_fullscreen_and_the_picker_offers
 const NATIVE: Upscaler = Upscaler::Native;
 const SHARP: Upscaler = Upscaler::SharpBilinear;
 const METAL_FX: Upscaler = Upscaler::MetalFxSpatial;
+const FSR1: Upscaler = Upscaler::Fsr1;
 
 /// Flight's world in a texture of the 1024 x 768 window's logical size.
 const TEXTURE: WorldSpace = WorldSpace::Texture { size: (1024, 768) };
@@ -1140,7 +1141,7 @@ fn the_preferences_draw_the_interface_files_arrow_pictures() {
 
 #[test]
 fn the_scaling_list_is_native_the_probes_scalers_then_super_xbr() {
-    use Scaling::{MetalFxSpatial, Native, SharpBilinear, SuperXbr};
+    use Scaling::{Fsr1, MetalFxSpatial, Native, SharpBilinear, SuperXbr};
     let store = seeded();
     let (mut native_only, _) = Harness::launched_probing(&store, &[NATIVE]);
     native_only.command_comma();
@@ -1170,6 +1171,12 @@ fn the_scaling_list_is_native_the_probes_scalers_then_super_xbr() {
     assert_eq!(
         all.dialog().scaling().entries(),
         [Native, SharpBilinear, MetalFxSpatial, SuperXbr]
+    );
+    let (mut every, _) = Harness::launched_probing(&store, &[SHARP, FSR1, METAL_FX]);
+    every.command_comma();
+    assert_eq!(
+        every.dialog().scaling().entries(),
+        [Native, SharpBilinear, Fsr1, MetalFxSpatial, SuperXbr]
     );
 }
 
@@ -1354,6 +1361,26 @@ fn an_upscaler_picked_is_saved_and_still_draws_after_a_restart() {
         Scaling::SharpBilinear
     );
     assert_eq!(restarted.dialog().prefs().scaling, Scaling::SharpBilinear);
+}
+
+#[test]
+fn fsr1_picked_is_saved_and_still_draws_after_a_restart() {
+    let store = seeded();
+    let (mut harness, _) = Harness::launched_probing(&store, &[SHARP, FSR1]);
+    harness.step_scaling(2);
+    harness.press(Key::Enter);
+    assert_eq!(saved(&store)["frame_upscaler"], "fsr1");
+
+    let (mut restarted, warnings) = Harness::launched_probing(&store, &[SHARP, FSR1]);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(
+        restarted.frame().world_space,
+        TEXTURE,
+        "from the first frame"
+    );
+    restarted.command_comma();
+    assert_eq!(restarted.dialog().scaling().selected(), Scaling::Fsr1);
+    assert_eq!(restarted.dialog().prefs().scaling, Scaling::Fsr1);
 }
 
 #[test]

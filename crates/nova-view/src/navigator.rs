@@ -202,7 +202,9 @@ mod tests {
     use super::*;
     use crate::galaxy::map::ENTER_BUTTON;
     use crate::galaxy::{Galaxy, SystemEntry, SystemId};
-    use crate::system::{AnimationData, StellarContents, StellarId, StellarSheet, SystemContents};
+    use crate::system::{
+        StellarAnimation, StellarContents, StellarId, StellarSheet, SystemContents,
+    };
     use crate::{Key, MouseButton, Point};
 
     /// Alpha (128) at (0, 0) and Beta (129) at (600, 0) on the map; inside,
@@ -244,9 +246,12 @@ mod tests {
                         frames: NonZeroU16::MIN,
                         frame_width: 8,
                         frame_height: 8,
+                        image_size: (8, 8),
+                        eight_bit: false,
+                        clip_quirks: false,
                     }),
                     dead_sprite: None,
-                    animation: AnimationData::default(),
+                    animation: StellarAnimation::default(),
                     stand_in: None,
                 }]
             } else {
@@ -260,9 +265,12 @@ mod tests {
                         frames: NonZeroU16::new(4).expect("non-zero"),
                         frame_width: 8,
                         frame_height: 8,
+                        image_size: (8, 8),
+                        eight_bit: false,
+                        clip_quirks: false,
                     }),
                     dead_sprite: None,
-                    animation: AnimationData {
+                    animation: StellarAnimation {
                         delay: 1,
                         frame0_bias: 0,
                         flags2: nova_sim::gate_sprite::RANDOM,
@@ -279,6 +287,9 @@ mod tests {
                     frames: NonZeroU16::MIN,
                     frame_width: 8,
                     frame_height: 8,
+                    image_size: (8, 8),
+                    eight_bit: false,
+                    clip_quirks: false,
                 }),
                 problems: Vec::new(),
             }

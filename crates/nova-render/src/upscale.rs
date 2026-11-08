@@ -66,12 +66,15 @@ pub enum WorldResolution {
 pub fn resolution_of(upscaler: Upscaler) -> WorldResolution {
     match upscaler {
         Upscaler::Native => WorldResolution::Native,
-        Upscaler::SharpBilinear | Upscaler::MetalFxSpatial => WorldResolution::Logical,
+        Upscaler::SharpBilinear | Upscaler::Fsr1 | Upscaler::MetalFxSpatial => {
+            WorldResolution::Logical
+        }
     }
 }
 
 /// What a GPU device can draw the world with beyond what every device
-/// can (native and sharp-bilinear), found once when its adapter is made.
+/// can (native, sharp-bilinear and FSR 1's two plain fragment passes),
+/// found once when its adapter is made.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Abilities {
     /// MetalFX's spatial scaler runs on it: a macOS build, the Metal
@@ -80,10 +83,11 @@ pub struct Abilities {
 }
 
 /// The upscalers a device with `abilities` offers, in the order to list
-/// them: native and sharp-bilinear always, then MetalFX when it can.
+/// them: the portable ones always (native, sharp-bilinear and FSR 1),
+/// then MetalFX, the platform one, last when it can.
 #[must_use]
 pub fn offered(abilities: Abilities) -> Vec<Upscaler> {
-    let mut upscalers = vec![Upscaler::Native, Upscaler::SharpBilinear];
+    let mut upscalers = vec![Upscaler::Native, Upscaler::SharpBilinear, Upscaler::Fsr1];
     if abilities.metal_fx_spatial {
         upscalers.push(Upscaler::MetalFxSpatial);
     }
@@ -92,7 +96,8 @@ pub fn offered(abilities: Abilities) -> Vec<Upscaler> {
 
 /// The upscaler that draws `choice` on a device with `abilities`: MetalFX
 /// on a device without it is drawn with sharp-bilinear, the nearest it
-/// has; every other choice as it is. MetalFX is never offered there
+/// has; every other choice (FSR 1 among them, which every device runs)
+/// as it is. MetalFX is never offered there
 /// ([`offered`]), so only a direct
 /// [`Gpu::set_upscaler`](crate::Gpu::set_upscaler) can ask for it.
 #[must_use]
@@ -171,6 +176,7 @@ mod tests {
             resolution_of(Upscaler::SharpBilinear),
             WorldResolution::Logical
         );
+        assert_eq!(resolution_of(Upscaler::Fsr1), WorldResolution::Logical);
         assert_eq!(
             resolution_of(Upscaler::MetalFxSpatial),
             WorldResolution::Logical
@@ -185,21 +191,22 @@ mod tests {
     };
 
     #[test]
-    fn every_device_offers_native_and_sharp_bilinear() {
+    fn every_device_offers_native_sharp_bilinear_and_fsr1() {
         assert_eq!(
             offered(WITHOUT),
-            [Upscaler::Native, Upscaler::SharpBilinear]
+            [Upscaler::Native, Upscaler::SharpBilinear, Upscaler::Fsr1]
         );
         assert_eq!(Abilities::default(), WITHOUT);
     }
 
     #[test]
-    fn a_device_with_metal_fx_offers_it_after_sharp_bilinear() {
+    fn a_device_with_metal_fx_offers_it_last_after_the_portable_ones() {
         assert_eq!(
             offered(WITH_METAL_FX),
             [
                 Upscaler::Native,
                 Upscaler::SharpBilinear,
+                Upscaler::Fsr1,
                 Upscaler::MetalFxSpatial
             ]
         );
@@ -236,7 +243,7 @@ mod tests {
     #[test]
     fn every_other_choice_is_drawn_as_chosen() {
         for abilities in [WITHOUT, WITH_METAL_FX] {
-            for choice in [Upscaler::Native, Upscaler::SharpBilinear] {
+            for choice in [Upscaler::Native, Upscaler::SharpBilinear, Upscaler::Fsr1] {
                 assert_eq!(effective(choice, abilities), choice);
             }
         }

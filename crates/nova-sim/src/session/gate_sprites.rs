@@ -4,11 +4,13 @@
 //! `_DoPlayGameWork` calls `_HandleShip` (@0x44483), then
 //! `_HandleShipDisplay` (@0x444ad), then `_HandleStellarSprites`
 //! (@0x444d2), so each gate steps after the ships have moved, reading them
-//! as this frame left them: at the end of the pass's ship loop
-//! ([`Session::ship_loop`]), before the frame is drawn. It steps whenever the ship is not docked, while a
-//! jump plays too, as the original's stellars animate then. Outside the
-//! play frame each `_PrepareAllSprites`, and game entry, runs the same walk
-//! at its own gain and holds (see the `stellar_passes` module).
+//! as this pass left them: at the pass's sprite tick, after the ship loop
+//! and before the stellar guns, on both passes of double time (see the
+//! `stellar_frames` module), before the frame is drawn. It steps whenever
+//! the ship is not docked, while a jump plays too, as the original's
+//! stellars animate then. Outside the play frame each
+//! `_PrepareAllSprites`, and game entry, runs the same walk at its own
+//! gain and holds (see the `stellar_passes` module).
 //!
 //! The gates are those of the stellars shown. A gate keeps its sprite
 //! across systems, as the original keeps a gate's frame, next frame and
@@ -37,8 +39,12 @@ use crate::gate::HYPERGATE;
 use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
 
 impl Session {
-    /// The frame hypergate `gate` draws, or `None` for a stellar shown
-    /// that is not a hypergate, or one not shown.
+    /// The frame hypergate `gate`'s gate branch shows, or `None` for a
+    /// stellar shown that is not a hypergate, or one not shown. The frame
+    /// its slot draws is [`Session::stellar_frame`]'s.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn gate_frame(&self, gate: StellarId) -> Option<u16> {
         let site = self.chart.gate_site(gate)?;
@@ -66,39 +72,24 @@ impl Session {
         })
     }
 
-    /// Keeps a sprite for each hypergate shown ([`Space::keep_gate_sprites`]).
-    pub(super) fn keep_gate_sprites(&mut self) {
-        let gates = self
-            .chart
-            .sites
-            .iter()
-            .filter(|site| is_hypergate(site))
-            .map(|site| site.id);
-        self.space.keep_gate_sprites(gates);
-    }
-
-    /// One tick of every hypergate shown, held open by the NPCs as they
-    /// are now or by the player's dock request ([`held_open`]), read after
-    /// this pass's approach ran in `player_move`, as `_HandleStellarSprites`
-    /// runs after `_HandlePlayer`; its random picks drawn on `chance`. A ship
-    /// heading in holds it within [`approach_reach`] of the width of the
-    /// its slot ([`Space::slot_sprite_size`], [`NO_SPRITE_SIDE`] with no
-    /// frame), grown by
-    /// whether it was open before this step.
-    pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.step_gates_by(self.time.gain(), GateHolds::AsTheyStand, chance);
-    }
-
-    /// One pass of every hypergate shown at `gain`, held as `holds`
-    /// says: the walk the play frame and each stellar pass share (see
-    /// [`Session::step_gate_sprites`] and the `stellar_passes` module).
+    /// One pass of every hypergate shown at `gain`, held as `holds` says,
+    /// its random picks drawn on `chance`: the gates' part of the walk the
+    /// sprite tick and each stellar pass share (see the `stellar_frames`
+    /// and `stellar_passes` modules). Held as they stand, the NPCs are
+    /// read as they are now, after this pass's approach ran in
+    /// `player_move`, as `_HandleStellarSprites` runs after
+    /// `_HandlePlayer`, and so is the player's dock request
+    /// ([`held_open`]). A ship heading in holds it within
+    /// [`approach_reach`] of the width of its slot
+    /// ([`Space::slot_sprite_size`], [`NO_SPRITE_SIDE`] with no frame),
+    /// grown by whether it was open before this step. Each gate shown must
+    /// be kept ([`Session::keep_stellar_frames`]).
     pub(super) fn step_gates_by(
         &mut self,
         gain: SpeedMult,
         holds: GateHolds,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.keep_gate_sprites();
         let (dock, npcs) = match holds {
             GateHolds::AsTheyStand => (self.port.dock, self.space.traffic.npcs()),
             GateHolds::Entered(stellar) => (
@@ -387,6 +378,9 @@ mod tests {
                     Fallback::Unreadable,
                     RuleSource::Engine,
                 );
+                // Shown so too: the sprite tick's clone (@0x2e7be), which
+                // now runs before the gate steps, finds no frame to bring.
+                session.chart.sites = unreadable;
             }
             heading_in(&mut session, still, GATE_AT.x + out);
             tick(&mut session, &catalog);
@@ -424,6 +418,44 @@ mod tests {
         assert!(!opens(150.0), "a 32-pixel slot, not 100: beyond 64");
         assert!(opens(63.0), "within 64");
         assert!(!opens(64.0));
+    }
+
+    #[test]
+    fn a_gate_whose_slot_freezes_holds_the_frame_its_gate_showed_before_the_pass() {
+        use crate::clearance::{CLEARED, DockRequest};
+        // Hypergate 300's `Type` counts no frames; its `DeadType`, of 6
+        // frames, does: `Y`, a frame, `U`, a frame freezes the slot on it.
+        let mut catalog = gated();
+        let gate = &mut catalog.sites[0].1[1];
+        gate.type_counts_frames = false;
+        gate.dead_graphic = Some(9);
+        gate.dead_frame_size = Some((100, 100));
+        gate.animation.dead_frames = 6;
+        gate.animation.dead_sheet_frames = 6;
+        let mut session = flying(&catalog);
+        session.port.dock = Some(DockRequest {
+            stellar: StellarId(300),
+            permission: CLEARED,
+        });
+        for _ in 0..2 {
+            tick(&mut session, &catalog);
+        }
+        let before = session.gate_frame(StellarId(300)).expect("a gate");
+        assert!((1..6).contains(&before), "{before}");
+        let sites = session.chart.sites.clone();
+        let rebuilt = &mut session.space.rebuilt;
+        rebuilt.frame(&sites, |id| id == StellarId(300), RuleSource::Engine);
+        rebuilt.frame(&sites, |_| false, RuleSource::Engine);
+        assert!(session.frame_frozen(StellarId(300)));
+        for _ in 0..3 {
+            tick(&mut session, &catalog);
+            assert_eq!(session.stellar_frame(StellarId(300)), before, "held");
+        }
+        assert_ne!(
+            session.gate_frame(StellarId(300)),
+            Some(before),
+            "its gate stepped on"
+        );
     }
 
     #[test]
@@ -549,15 +581,15 @@ mod tests {
         let mut session = flying(&catalog);
         emerging(&mut session, 1000);
         tick(&mut session, &catalog);
-        session.keep_gate_sprites();
+        session.keep_stellar_frames();
         assert_eq!(session.gate_frame(StellarId(300)), Some(1), "kept");
         let left = gate_300(&session);
         let shown = session.chart.sites.clone();
         session.chart.sites.retain(|site| site.id != StellarId(300));
-        session.keep_gate_sprites();
+        session.keep_stellar_frames();
         assert_eq!(gate_300(&session), left, "kept while not shown");
         session.chart.sites = shown;
-        session.keep_gate_sprites();
+        session.keep_stellar_frames();
         assert_eq!(gate_300(&session), left, "shown again");
         assert_eq!(session.gate_frame(StellarId(300)), Some(1), "where it was");
     }
@@ -571,7 +603,7 @@ mod tests {
         let left = gate_300(&session);
         session.chart.sites.retain(|site| site.id != StellarId(300));
         for _ in 0..5 {
-            session.step_gate_sprites(&mut NeverFires);
+            session.stellar_sprite_tick(&mut NeverFires);
         }
         assert_eq!(gate_300(&session), left);
     }
@@ -616,6 +648,29 @@ mod tests {
         tick(&mut session, &catalog);
         assert_eq!(session.npcs()[0].mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(session.gate_frame(StellarId(300)), Some(1));
+    }
+
+    #[test]
+    fn a_gate_steps_on_double_times_second_pass_too() {
+        // `_HandleStellarSprites` (@0x444d2) comes after the second pass's
+        // skip lands (@0x44026-0x4402a to @0x44350).
+        let catalog = gated();
+        let mut session = flying(&catalog);
+        emerging(&mut session, 1000);
+        let site = *session.chart.gate_site(StellarId(300)).expect("a gate");
+        let anim = GateAnimation::of(&site);
+        let mut expected = session.space.gate_sprites[&StellarId(300)];
+        tick(&mut session, &catalog);
+        expected.step(&anim, false, true, &mut NeverFires);
+        assert_eq!(session.space.gate_sprites[&StellarId(300)], expected);
+        session.tick_again(
+            Controls::default(),
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+        expected.step(&anim, false, true, &mut NeverFires);
+        assert_eq!(session.space.gate_sprites[&StellarId(300)], expected);
     }
 
     #[test]

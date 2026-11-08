@@ -1767,11 +1767,12 @@
 //!   `SessionEvent::StellarsRebuilt` even with the dead set unchanged: a
 //!   stellar with no `DeadType` still destroyed at a second rebuild point
 //!   goes from `Type` to `TypeZero`.
-//! - **The frame state** is the view's: each `SceneStellar` holds its
-//!   current frame, next frame, timer and the frame shown
-//!   (`system::animation::Frames` in nova-view), stepped once a tick of
-//!   1/30 s, as the original's sprite tick steps the stellar every play
-//!   frame. The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
+//! - **The frame state** was the view's, and is the session's since
+//!   rendering phase 11: each stellar's record holds its current frame,
+//!   next frame, timer and the frame shown
+//!   (`nova_sim::stellar_frames::StellarFrames`), stepped once a pass, as
+//!   the original's sprite tick steps the stellar in every game-work
+//!   pass (the session's `stellar_frames` module). The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
 //!   `Frame0Bias` while the current frame is 0 and the bias is above 1,
 //!   the current frame takes the next, the next becomes the one after it
 //!   modulo the counted sheet's frame count, and the sheet drawn shows the
@@ -2425,17 +2426,31 @@
 //!     `_meetsMinimumRequirements` fails (@0xccac1-0xccaca); the engine
 //!     models the 16-bit world every supported machine runs.
 //!   - An `rlëD` of depth 32, or of any depth other than 8 or 16, loads
-//!     (@0xa9a28-0xa9ac7). At 32 bits `_BlitPixieRLESwap` swaps each pixel
-//!     (@0xbe46e) and `_BlitPixieRLE`'s byte copy draws it at twice its
-//!     width, past its frame box; other depths misparse in the swap
-//!     (@0xbe3f0-0xbe401), and the draw proc asserts on a depth of 7 or
-//!     less (@0xbb612). The engine keeps `UnsupportedDepth`, so such a
-//!     sheet falls back to graphic type 0.
+//!     (@0xa9a28-0xa9ac7). Read since rendering phase 1: at 32 bits
+//!     `_BlitPixieRLESwap` swaps each pixel (@0xbe46e) and
+//!     `_BlitPixieRLE`'s byte copy draws it at twice its width, past its
+//!     frame box, cut to the box when the box touches the world's edge;
+//!     other depths misparse in the swap (@0xbe3f0-0xbe401), and both
+//!     decode byte for byte as drawn (`nova_data::graphics`'s `rled_wide`
+//!     module docs). The draw proc asserts on a depth of 7 or less
+//!     (@0xbb612), which keeps `UnsupportedDepth`, so such a sheet falls
+//!     back to graphic type 0. The rulebook's `thirty_two_bit_sheet` key
+//!     reads a 32-bit sheet as true colour instead. Since rendering phase
+//!     19 a sheet of any depth the decoder reads also touches by its
+//!     swapped tokens, shifted by `(depth >> 4) & 31`
+//!     (`nova_sim_base::sprite_mask`).
 //!   - Ship sprites from a `PICT` pair: `_LoadExtendedShipSprites`
-//!     (@0x2298b-0x23917) calls the same cutter for `shän` images, and the
-//!     engine's ship sprites still read `rlëD`s only. (An 8-bit ship `rlëD`
-//!     now decodes as drawn through the shared decoder, matching the plain
-//!     blit.)
+//!     (@0x226af-0x23e3e) calls the same cutter for `shän` images (base
+//!     @0x2298b, alt @0x22d09, glow @0x22fe3, lights @0x232b2, weapon
+//!     @0x23609, shield @0x238b7). Read since rendering phase 20: each of
+//!     the six with no `rlëD` is cut from its own pair by its own `XSize`
+//!     and `YSize` into exactly `FramesPer` × its sets' frames, and the
+//!     shield into any whole grid; a broken `rlëD` does not fall back
+//!     (`nova_data`'s `ship_pict` module docs). A class whose image ID
+//!     matches an earlier class's still resolves its own, where the
+//!     original clones the earlier sprite (`_SWCloneSprite`; rendering-2
+//!     phase 10). (An 8-bit ship `rlëD` now decodes as drawn through the
+//!     shared decoder, matching the plain blit.)
 //!   - Main-screen `spïn`s 600 to 610 from a `PICT` pair: `_LoadSprites`
 //!     reads them the same way (@0x206b0); the main screen reads their
 //!     `rlëD` only.
@@ -2444,9 +2459,11 @@
 //!     `_BlitPixieRLETranslucentClipped8`, `_BlitPixieRLEAddOver8` and
 //!     `_BlitPixieRLEAddOverClipped8` (@0xbb7ed-0xbb890, @0xbb8b6-0xbb9ec),
 //!     where levels 0x20 and up that are not the plain add-over case draw
-//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). A stellar reaches them
-//!     only when murk gives it translucency (+0xa8 > 0), which the engine
-//!     does not model yet; a ship reaches them under cloak or fade.
+//!     nothing (@0xbb80a-0xbb83a, @0xbb8d7-0xbb907). Built since rendering
+//!     phase 2 for the stellars and ships (`nova_view`'s `eight_bit_blit`
+//!     module docs): the translucent and add-over routines crash the
+//!     original's 16-bit world, so those cases draw as a 16-bit sheet's.
+//!     The other sprites are rendering-2 phase 1.
 //!
 //! ## Built by stellar-fidelity phase 5
 //!
@@ -2817,9 +2834,18 @@
 //!     was not locked" (@0x33304): diagnostics with no effect on play.
 //!   - Shots and deadly stellars against a frozen slot, the nav target
 //!     brackets and the hail dialog's picture sized by the slot, and the
-//!     scene's problems for an uncounted `spïn` (the original reports
-//!     nothing; none is added):
-//!     rdm:phase/rendering/phase-3-uncounted-slot-readers.
+//!     scene's problems for an uncounted `spïn`: built by rendering phase 3
+//!     (rdm:phase/rendering/phase-3-uncounted-slot-readers). A shot's and
+//!     a deadly stellar's disc are centred where the slot's rect is
+//!     (`nova_sim`'s `Space::slot_centre`); the brackets and the hail
+//!     picture read the slot's size (`nova_view`'s `SceneStellar::slot_size`,
+//!     32 square frozen or frameless); and the original reports nothing for
+//!     an uncounted `spïn`, so no scene problem is added. Still left out:
+//!     the faults on a frameless slot (`_SWRLECollision` through a null
+//!     +0x50 from @0x372a8 and @0x39d97, `_BlitPixieRLEDrawProc` @0xbb16d
+//!     from the hail picture @0x90ddf), where the engine hits, kills and
+//!     draws nothing; and the hail picture's read past the slot table when
+//!     the hailed stellar holds no slot (@0x90cff-0x90dc2).
 //!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
 //!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
 //!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates
@@ -2955,9 +2981,10 @@
 //!
 //! A stellar's frames advance by the whole of `_HandleStellarSprites`'
 //! sequential branch (@0x2ec4b-0x2ee35): `Flags2` 0x0001 and 0x0002, and
-//! an `AnimDelay` of 0 or less. The view builds it
-//! (`nova_view::system::animation`'s `Frames`), as the frame a non-gate
-//! stellar shows is drawn state the session never reads.
+//! an `AnimDelay` of 0 or less. The view built it, as drawn state the
+//! session never read; rendering phase 11 moved it into the sim
+//! (`nova_sim::stellar_frames`), as the deadly-stellar touch reads the
+//! frame shown.
 //!
 //! - **The gate.** A stellar animates when its counted frames are above 1,
 //!   its destroyed state is the one 0x0080 names, and it is not a
@@ -3072,17 +3099,14 @@
 //! outlives the system it is shown in, as the original keeps it on the
 //! `spöb` record (+0x476, +0x478, +0x490), not on the sprite slot.
 //!
-//! - **Ordinary stellars, in the view.** The flight keeps each stellar's
-//!   frames as its scene is let go, on a jump, a move or a rebuild that
-//!   changes the stellars shown (`nova_view::system::KeptFrames`), and the
-//!   next scene to show it resumes them on the sheet it now draws: the
-//!   current frame modulo that sheet's count, or frame 0 on graphic type
-//!   0's (`SystemScene::resume`, as the rebuild sets the slot @0x33096,
-//!   @0x332d0). A stellar not shown stands still. One the flight has never
-//!   shown starts at current 0, next 1, timer 0. The frame a non-gate
-//!   stellar shows is drawn state the session never reads, and the state
-//!   is not saved, so the view owns it: it settles as the scene is laid
-//!   out, before the first frame drawn there.
+//! - **Ordinary stellars, in the session** (the view's until rendering
+//!   phase 11). The session keeps each stellar's frames, shown or not
+//!   (`Space`'s stellar frames; the `nova_sim` `stellar_frames` module),
+//!   and a stellar shown again resumes them on the sheet it now draws:
+//!   the current frame modulo that sheet's count, or frame 0 on graphic
+//!   type 0's, as the rebuild sets the slot (@0x33096, @0x332d0). A
+//!   stellar not shown stands still. One the flight has never shown
+//!   starts at current 0, next 1, timer 0. The state is not saved.
 //! - **Hypergates, in the session.** A gate keeps its sprite (the same
 //!   three fields) in `Space`'s gate sprites while it is not shown, and
 //!   stands still there; it starts closed only the first time a flight
@@ -3467,14 +3491,12 @@
 //!   2 × `AnimDelay` - 1 ticks. Each raises
 //!   `nova_sim::SessionEvent::StellarFramesReset`; a refused hypergate
 //!   resets nothing.
-//! - **The view** (`nova_view`'s flight view) takes the event in the
-//!   catch-up after the take-off or the exit, once the scene is laid out,
-//!   between the entry's stellar pass and the rest, and resets the frames
-//!   of every stellar shown (`SystemScene::take_off_reset`) and kept
-//!   (`KeptFrames::reset`), the scene just left among them, as the
-//!   original zeroes every `spöb` whether a slot shows it or not, frame 0
-//!   shown. A stellar first shown after it starts at current 0, next 0,
-//!   timer 0.
+//! - **Every other stellar** (the view's until rendering phase 11, the
+//!   session's since): the session resets the frames of every stellar it
+//!   keeps, shown or not, between the entry's stellar pass and the rest,
+//!   as the original zeroes every `spöb` whether a slot shows it or not,
+//!   frame 0 shown (the `nova_sim` `takeoff_frames` module). A stellar
+//!   first shown after it starts at current 0, next 0, timer 0.
 //! - **Readings.** No key: the Bible says nothing, and the engine had no
 //!   other reading. No sound.
 //! - **Left out**: the 16-bit decrement of an empty slot's count (0xffff
@@ -3543,7 +3565,8 @@
 //! ## Built by play-feel-7 phase 3
 //!
 //! Each `_PrepareAllSprites` runs a `_HandleStellarSprites` pass on the
-//! gates and the view's stellars: at gain 0 after a landing, which zeroes
+//! gates and every other stellar (the session's since rendering phase
+//! 11): at gain 0 after a landing, which zeroes
 //! `_gSpeedMult` (@0x6375e-0x63769), and at full gain elsewhere, a gate's
 //! entry adding one on the exit system's stellars before this reset. See
 //! `nova_sim::Session::enter_game` and the session's `stellar_passes`

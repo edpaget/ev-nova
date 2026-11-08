@@ -78,10 +78,12 @@
 //!   draws with egui only in its `dev-tools` build.
 
 pub mod bound_names;
+pub mod box_cut;
 pub mod color;
 pub mod colorize;
 pub mod devtools;
 pub mod draw;
+pub mod eight_bit_blit;
 pub mod fade;
 pub mod flight;
 pub mod font;

@@ -13,9 +13,9 @@ use nova_sim::flight_frame::{FlightEvent, PassReport};
 use nova_sim::{SessionEvent, SimSound};
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
-/// ([`FlightView::step_stellars`]): the message line counts it.
+/// ([`FlightView::advance_clock`]): the message line counts it.
 pub(super) fn faked_tick(view: &mut Faked) {
-    view.step_stellars(TICK);
+    view.advance_clock(TICK);
 }
 
 /// Asserts `view`'s message line says `text` now, for `n` ticks in all,

@@ -1,6 +1,7 @@
 //! Resolving a stellar object to its sprite sheet.
 
-use super::spin_sprite::{SheetKind, SpinSpriteError, mask_label};
+use super::pict_pair::SheetKind;
+use super::spin_sprite::{SpinSpriteError, mask_label};
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{GraphicsError, SpriteSheet};
@@ -23,6 +24,33 @@ pub const fn stellar_spin_id(graphic_type: i16) -> Option<i16> {
     }
 }
 
+/// How many frames a stellar's master sprite animates over: its `spïn`'s
+/// tiles (`xTiles` x `yTiles`) when `0 < tiles < decoded`, else the
+/// `decoded` count.
+///
+/// `_LoadMasterStellarSprite` asks `_SWCreateSpriteFromRLEResource` (call
+/// @0x1ec30) for `tiles` frames, and that builds min(tiles, header) frames
+/// when `tiles` is positive (@0xa9a28-0xa9a41) at either depth. The loader
+/// then writes `tiles` into the master's frame count (+0x54, @0x1ed8c-
+/// 0x1ed97, a 32-bit product) after either the `rlëD` or the `PICT` path,
+/// and `_SWSetCurrentFrameIndex` wraps the index by that count
+/// (@0xa90dc-0xa90e7). When `tiles` exceeds the frames built, the original
+/// reads past its frame table (@0xa90f7), a memory-layout accident not
+/// copied here: the decoded count stands. A count of no tiles is
+/// `nova_sim::Session::counts_no_frames`' concern, not this one's.
+///
+/// `_LoadSprites` loads the starfield's master, `spïn` 700, the same way:
+/// `xTiles*yTiles` to `_SWCreateSpriteFromRLEResource` (@0x210a4-0x210d2)
+/// on the `rlëD` path, and written to +0x54 (@0x21218-0x21225) on the
+/// `PICT` path.
+#[must_use]
+pub fn master_frame_count(tiles: i32, decoded: usize) -> usize {
+    match usize::try_from(tiles) {
+        Ok(tiles) if tiles > 0 && tiles < decoded => tiles,
+        _ => decoded,
+    }
+}
+
 /// A stellar's sprite sheet and the files each step came from.
 #[derive(Debug)]
 pub struct StellarSprite<'a> {
@@ -36,12 +64,23 @@ pub struct StellarSprite<'a> {
     /// The decoded sheet, laid out with the `spïn`'s `xTiles` as its
     /// columns.
     pub sheet: SpriteSheet,
+    /// The `spïn`'s `xTiles` x `yTiles`, multiplied in 32 bits (the
+    /// original's overwrite @0x1ed94): see [`master_frame_count`].
+    pub tiles: i32,
     /// The file the `spöb` came from.
     pub stellar: &'a SourceFile,
     /// The file the `spïn` came from.
     pub spin: &'a SourceFile,
     /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub sheet_source: &'a SourceFile,
+}
+
+impl StellarSprite<'_> {
+    /// How many frames the stellar animates over ([`master_frame_count`]).
+    #[must_use]
+    pub fn frame_count(&self) -> usize {
+        master_frame_count(self.tiles, self.sheet.frames().len())
+    }
 }
 
 /// Why a stellar's sprite could not be resolved: one variant per missing
@@ -195,6 +234,7 @@ impl GameData {
             image_id: spin.image_id,
             kind: spin.kind,
             sheet: spin.sheet,
+            tiles: spin.tiles,
             stellar: source,
             spin: spin.spin,
             sheet_source: spin.sheet_source,
@@ -278,6 +318,53 @@ mod tests {
             forks = forks.file(format!("/p/{name}"), bytes.clone());
         }
         GameData::load(&tree, &forks, Path::new("/d"), Some(Path::new("/p"))).expect("opens")
+    }
+
+    #[test]
+    fn the_master_counts_its_tiles_only_below_the_decoded_frames() {
+        assert_eq!(master_frame_count(2, 4), 2);
+        assert_eq!(master_frame_count(4, 4), 4);
+        assert_eq!(master_frame_count(6, 4), 4);
+        assert_eq!(master_frame_count(0, 4), 4);
+        assert_eq!(master_frame_count(-3, 4), 4);
+        assert_eq!(master_frame_count(1, 4), 1);
+    }
+
+    #[test]
+    fn a_stellar_with_fewer_tiles_than_frames_counts_its_tiles() {
+        let few = fork(&[
+            (Spin::TYPE, 1003, spin(2000, 2, 1, 2, 1)),
+            (RLED, 2000, sheet(4, 0x7C00)),
+        ]);
+        let data = store(&[("Few", few)]);
+        let sprite = data.stellar_sprite(StellarId(128)).expect("resolves");
+        assert_eq!(sprite.tiles, 2);
+        assert_eq!(sprite.frame_count(), 2);
+        assert_eq!(sprite.sheet.frames().len(), 4);
+        let spin = data.spin_sheet(1003).expect("resolves");
+        assert_eq!(
+            (spin.tiles, spin.stellar_frame_count(), spin.frame_count()),
+            (2, 2, 4)
+        );
+    }
+
+    #[test]
+    fn a_stellar_with_more_tiles_than_frames_keeps_the_decoded_count() {
+        let many = fork(&[
+            (Spin::TYPE, 1003, spin(2000, 2, 1, 3, 2)),
+            (RLED, 2000, sheet(4, 0x7C00)),
+        ]);
+        let data = store(&[("Many", many)]);
+        let sprite = data.stellar_sprite(StellarId(128)).expect("resolves");
+        assert_eq!((sprite.tiles, sprite.frame_count()), (6, 4));
+    }
+
+    #[test]
+    fn tiles_multiply_in_32_bits() {
+        let wide = fork(&[(Spin::TYPE, 1003, spin(2000, 2, 1, 300, 300))]);
+        let data = store(&[("Wide", wide)]);
+        let sprite = data.stellar_sprite(StellarId(128)).expect("resolves");
+        assert_eq!(sprite.tiles, 90_000);
     }
 
     #[test]
@@ -607,16 +694,16 @@ mod tests {
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 2000, deep)]))]);
         let err = data.stellar_sprite(StellarId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             StellarSpriteError::Graphics {
                 image_id: 2000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 2000: unsupported rlëD depth 1");
     }
 }

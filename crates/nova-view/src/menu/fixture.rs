@@ -10,7 +10,7 @@
 //! -3 (-2.5 truncated toward zero). [`main_screen_art`] is that art as the game
 //! data's port reads it.
 
-use nova_data::graphics::fixture::{PictBuilder, RledBuilder};
+use nova_data::graphics::fixture::{PictBuilder, RledBuilder, rgb888_pict};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::colors::Colors;
 use nova_data::records::spin::Spin;
@@ -75,13 +75,17 @@ pub fn main_screen_resources() -> Vec<(ResType, i16, Vec<u8>)> {
         (PICT, BACKGROUND_PICT, picture(BACKGROUND_SIZE)),
     ];
     for (spin, sprite) in BUTTON_SPINS.into_iter().zip(BUTTON_SPRITES) {
-        resources.push((Spin::TYPE, spin, spin_record(sprite, BUTTON_SIZE, (1, 2))));
+        resources.push((
+            Spin::TYPE,
+            spin,
+            spin_record(sprite, 0, BUTTON_SIZE, (1, 2)),
+        ));
         resources.push((RLED, sprite, button_sheet()));
     }
     resources.push((
         Spin::TYPE,
         LOGO_SPIN,
-        spin_record(LOGO_PICT, LOGO_FRAME, (1, LOGO_FRAMES)),
+        spin_record(LOGO_PICT, 0, LOGO_FRAME, (1, LOGO_FRAMES)),
     ));
     resources.push((
         PICT,
@@ -91,15 +95,86 @@ pub fn main_screen_resources() -> Vec<(ResType, i16, Vec<u8>)> {
     resources.push((
         Spin::TYPE,
         ROLLOVER_SPIN,
-        spin_record(ROLLOVER_SPRITE, ROLLOVER_SIZE, (1, ROLLOVER_FRAMES)),
+        spin_record(ROLLOVER_SPRITE, 0, ROLLOVER_SIZE, (1, ROLLOVER_FRAMES)),
     ));
     resources.push((RLED, ROLLOVER_SPRITE, rollover_sheet()));
     for ((spin, id), frames) in SLIDE_SPINS.into_iter().zip(SLIDE_PICTS).zip(SLIDE_FRAMES) {
-        resources.push((Spin::TYPE, spin, spin_record(id, SLIDE_FRAME, (1, frames))));
+        resources.push((
+            Spin::TYPE,
+            spin,
+            spin_record(id, 0, SLIDE_FRAME, (1, frames)),
+        ));
         resources.push((PICT, id, picture((SLIDE_FRAME.0, SLIDE_FRAME.1 * frames))));
     }
     resources
 }
+
+/// [`main_screen_resources`] with button or rollover `spïn` `spin`'s
+/// `rlëD` dropped and the `spïn` naming a `PICT` pair instead, as
+/// `_LoadSprites` cuts when there is no `rlëD` (@0x20eff, @0x21395): its
+/// sprites `PICT` the old `SpritesID`, its mask `PICT` that plus 100, the
+/// same frame size, and its frames laid out across. A button's frame 0
+/// mask is clear where its `rlëD`'s frame 0 is ([`CLEAR_CORNER`]); every
+/// other frame's mask is white, showing the frame throughout.
+///
+/// # Panics
+///
+/// If `spin` is not a button's or the rollover's.
+#[must_use]
+pub fn pict_pair_resources(spin: i16) -> Vec<(ResType, i16, Vec<u8>)> {
+    let (sprites, size, frames) = if spin == ROLLOVER_SPIN {
+        (ROLLOVER_SPRITE, ROLLOVER_SIZE, ROLLOVER_FRAMES)
+    } else {
+        let index = BUTTON_SPINS
+            .iter()
+            .position(|&button| button == spin)
+            .expect("a button's or the rollover's spïn");
+        (BUTTON_SPRITES[index], BUTTON_SIZE, 2)
+    };
+    let mask = sprites + 100;
+    let (width, height) = (usize::from(size.0), usize::from(size.1));
+    let across = usize::from(frames) * width;
+    let shown = |x: usize, y: usize| spin == ROLLOVER_SPIN || x >= width || BUTTON_FRAME_0[y][x];
+    let mask_pixels: Vec<[u8; 3]> = (0..height)
+        .flat_map(|y| (0..across).map(move |x| (x, y)))
+        .map(|(x, y)| if shown(x, y) { [0xFF; 3] } else { [0; 3] })
+        .collect();
+    let wide = |n: usize| i16::try_from(n).expect("small");
+    let mut resources: Vec<_> = main_screen_resources()
+        .into_iter()
+        .filter(|&(ty, id, _)| (ty, id) != (RLED, sprites))
+        .map(|(ty, id, bytes)| {
+            if (ty, id) == (Spin::TYPE, spin) {
+                (ty, id, spin_record(sprites, mask, size, (frames, 1)))
+            } else {
+                (ty, id, bytes)
+            }
+        })
+        .collect();
+    resources.push((
+        PICT,
+        sprites,
+        rgb888_pict(
+            wide(across),
+            wide(height),
+            &vec![[0x80, 0x40, 0x20]; across * height],
+        ),
+    ));
+    resources.push((
+        PICT,
+        mask,
+        rgb888_pict(wide(across), wide(height), &mask_pixels),
+    ));
+    resources
+}
+
+/// Which pixels of a button's frame 0 are opaque, by row: all but the
+/// corners, as [`button_sheet`] draws it.
+const BUTTON_FRAME_0: [[bool; 4]; 3] = [
+    [false, true, true, false],
+    [true, true, true, true],
+    [false, true, true, false],
+];
 
 /// The fixture's art, read from game data holding
 /// [`main_screen_resources`] alone.
@@ -159,14 +234,14 @@ fn colors() -> Vec<u8> {
     bytes
 }
 
-/// A `spïn` naming `sprites`, frames of `size`, laid out `tiles`
-/// (across, down).
-fn spin_record(sprites: i16, size: (u16, u16), tiles: (u16, u16)) -> Vec<u8> {
+/// A `spïn` naming `sprites` and `masks`, frames of `size`, laid out
+/// `tiles` (across, down). The `rlëD` fixtures name mask 0, which the
+/// main screen never reads.
+fn spin_record(sprites: i16, masks: i16, size: (u16, u16), tiles: (u16, u16)) -> Vec<u8> {
     let wide = |n: u16| i16::try_from(n).expect("small");
-    // No masks `PICT`: the main screen reads none.
     [
         sprites,
-        0,
+        masks,
         wide(size.0),
         wide(size.1),
         wide(tiles.0),
@@ -215,4 +290,24 @@ fn rollover_sheet() -> Vec<u8> {
             })
         })
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pict_pairs_mask_is_its_sprites_plus_100() {
+        for (spin, sprites) in [
+            (BUTTON_SPINS[0], BUTTON_SPRITES[0]),
+            (ROLLOVER_SPIN, ROLLOVER_SPRITE),
+        ] {
+            let picts: Vec<i16> = pict_pair_resources(spin)
+                .into_iter()
+                .filter(|&(ty, id, _)| ty == PICT && (id == sprites || id == sprites + 100))
+                .map(|(_, id, _)| id)
+                .collect();
+            assert_eq!(picts, [sprites, sprites + 100], "spïn {spin}");
+        }
+    }
 }

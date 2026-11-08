@@ -205,8 +205,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The stellars of the scene laid out, as flight draws them, each
-    /// clipped to the play area as the sprite world is: what the closing's
-    /// `_SWUpdateSpriteWorld` (@0x6c0d) draws of the sprites
+    /// clipped to the play area as the sprite world is, a sheet that draws
+    /// past its box cut to the box at the play area's edge as the world's
+    /// draw proc cuts it ([`scene::draw_stellars_clipped_to`]): what the
+    /// closing's `_SWUpdateSpriteWorld` (@0x6c0d) draws of the sprites
     /// `_HandleStellarSystemVisibility` showed (@0x32e54-0x3306b). Not
     /// world, as the repaint's space area is overlay.
     fn repaint_stellars(&self) -> DrawList {
@@ -214,11 +216,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(scene) = &self.scene else {
             return list;
         };
-        let mut stellars = DrawList::new();
-        scene::draw_stellars(&mut stellars, scene, &self.camera(), Some(self.seen_murk()));
-        for command in &stellars {
-            list.clipped(self.play_rect(), command.clone());
-        }
+        let (camera, murk) = (self.camera(), Some(self.seen_murk()));
+        scene::draw_stellars_clipped_to(&mut list, scene, &camera, murk, self.play_rect());
         list
     }
 
@@ -226,8 +225,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// in `background` (see the module docs): the message while one
     /// shows, its box erased in `background` and its background OR-ed in
     /// as flight draws them ([`FlightView::draw_floaters`]), then the
-    /// escort menu with `rows`. Not world: the repaint's space area is
-    /// no sprite world.
+    /// escort menu: by [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence)'s
+    /// engine reading the image it last drew, as the rescue path
+    /// (`_HandlePlayer` @0x68e04-0x692ce) redraws it nowhere; by the
+    /// other, `rows` ([`FlightView::menu_rows`]). Not world: the repaint's
+    /// space area is no sprite world.
     fn repaint_floaters(&self, background: Color, rows: &[ClassRow; 4]) -> DrawList {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let mut list = DrawList::new();
@@ -236,8 +238,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hud::or_message_background(&mut list, self.view, background);
             hud::draw_message_text(&mut list, message, self.view, metrics);
         }
-        self.escort_menu
-            .draw(&mut list, rows, self.escort_colors, metrics, &self.keys);
+        self.escort_menu.draw(
+            &mut list,
+            self.menu_rows(rows),
+            self.escort_colors,
+            metrics,
+            &self.keys,
+        );
         list
     }
 

@@ -252,7 +252,7 @@ mod tests {
     use crate::draw::crossed_box;
     use crate::system::camera::{CAMERA_MARGIN, VIEW_CENTER};
     use crate::system::catalog::{
-        AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
+        StellarAnimation, StellarContents, StellarId, StellarSheet, SystemContents,
     };
     use crate::system::scene::PLACEHOLDER;
     use crate::{DrawCommand, Font, MouseButton};
@@ -352,6 +352,9 @@ mod tests {
             frames: NonZeroU16::new(frames).expect("non-zero"),
             frame_width: size,
             frame_height: size,
+            image_size: (size, size),
+            eight_bit: false,
+            clip_quirks: false,
         }
     }
 
@@ -369,7 +372,7 @@ mod tests {
             y,
             sprite,
             dead_sprite: None,
-            animation: AnimationData {
+            animation: StellarAnimation {
                 delay,
                 frame0_bias: 0,
                 flags2: 0,
@@ -869,8 +872,27 @@ mod tests {
 
     // Animation.
 
+    /// The Wormhole's frame shown after `ticks` whole ticks, by the sim's
+    /// rule stepped alongside: the oracle the view's stepping is held to.
+    fn wormhole_after(ticks: usize) -> u16 {
+        let catalog = catalog();
+        let wormhole = &catalog.0[0].stellars[2];
+        let count = NonZeroU16::new(4).expect("non-zero");
+        let mut frames = nova_sim::stellar_frames::StellarFrames::new();
+        for _ in 0..ticks {
+            frames.step(
+                wormhole.animation,
+                false,
+                count,
+                count,
+                &mut nova_sim::NeverFires,
+            );
+        }
+        frames.shown()
+    }
+
     #[test]
-    fn an_animated_stellar_follows_its_animation_and_a_static_one_stays_put() {
+    fn an_animated_stellar_steps_a_tick_at_a_time_by_the_sims_rule_and_a_static_one_stays_put() {
         let mut view = sol();
         let tick = Duration::from_secs(1) / 30;
         let mut shown = Vec::new();
@@ -883,11 +905,13 @@ mod tests {
             shown.push(keys[2].0.frame);
             view.tick(tick);
         }
-        assert_eq!(shown, [0, 0, 1, 1, 2, 2, 3, 3, 0, 0]);
+        let oracle: Vec<u16> = (0..10).map(wormhole_after).collect();
+        assert_eq!(shown, oracle);
+        assert!(oracle.iter().any(|&frame| frame != 0), "it animates");
     }
 
-    /// At 60 fps each frame is half a tick: the halves add up, so the
-    /// Wormhole, a frame every 2 ticks, steps every 4 frames.
+    /// At 60 fps each frame is half a tick: the halves add up to the
+    /// whole ticks the Wormhole steps by.
     #[test]
     fn half_tick_frames_add_up_to_the_animations_ticks() {
         let tick = Duration::from_secs(1) / 30;
@@ -899,6 +923,7 @@ mod tests {
             shown.push(view.frame(2).expect("a sheet"));
             view.tick(*half);
         }
-        assert_eq!(shown, [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]);
+        let oracle: Vec<u16> = (0..12).map(|halves| wormhole_after(halves / 2)).collect();
+        assert_eq!(shown, oracle);
     }
 }

@@ -3,8 +3,9 @@
 //! A [`Frame`] is everything the GPU needs to draw one frame, already
 //! decided by the core: the letterboxed viewport, the draw list as
 //! batches in strict draw order, which of them are the world layer
-//! ([`DrawLayer`]), where that layer is drawn ([`WorldSpace`]) and
-//! what it may draw into ([`Frame::world_clip`], flight's play area).
+//! ([`DrawLayer`]), where that layer is drawn ([`WorldSpace`]), where
+//! its tail starts ([`Frame::world_tail`]) and what it may draw into
+//! ([`Frame::world_clip`], flight's play area).
 //! Positions are logical; the adapter only projects the logical space
 //! onto the viewport rectangle.
 
@@ -167,7 +168,11 @@ pub enum WorldSpace {
     /// it at one texel a unit, for an upscaler to enlarge onto the
     /// viewport (each axis by its own scale in a widened view, and a
     /// shrink in a window smaller than the logical space), with the
-    /// overlay drawn over it.
+    /// overlay drawn over it. The world's tail ([`Frame::world_tail`]) is
+    /// not drawn into the texture: it draws into the target over the
+    /// enlarged world and the overlay before it, in the frame's order, its
+    /// world batches projected onto the viewport as [`WorldSpace::Target`]
+    /// projects them ([`Frame::space_of`]).
     Texture {
         /// The texture's width and height in texels: the logical size.
         size: (u32, u32),
@@ -197,6 +202,14 @@ pub struct Frame {
     /// at the status bar's column. The overlay is never clipped by it.
     /// [`Frame::world_scissor`] gives it in the world layer's pixels.
     pub world_clip: Option<Rect>,
+    /// The index of the first batch of the world's tail, if it has one
+    /// (`nova_view::DrawList::start_world_tail`): flight's floaters and
+    /// particles. Every batch from it on draws into the target, in the
+    /// frame's order ([`Frame::space_of`]), whatever the world's space, so
+    /// under a frame upscaler the floaters' text stays under the particles.
+    /// `Some(batches.len())` is an empty tail; `None` is none, every world
+    /// batch drawn in [`Frame::world_space`].
+    pub world_tail: Option<usize>,
 }
 
 impl Frame {
@@ -233,7 +246,17 @@ impl Frame {
     /// [`DrawCommand::Clipped`]: nova_view::DrawCommand::Clipped
     #[must_use]
     pub fn world_scissor(&self) -> PixelRect {
-        let onto = self.world_pixels();
+        self.world_scissor_in(self.world_space)
+    }
+
+    /// The pixels of `space` the world may touch, as
+    /// [`Frame::world_scissor`] gives them for [`Frame::world_space`]: in
+    /// target pixels for [`WorldSpace::Target`], which is where a world
+    /// batch of the tail ([`Frame::world_tail`]) draws whatever the
+    /// world's space, and in texels for [`WorldSpace::Texture`].
+    #[must_use]
+    pub fn world_scissor_in(&self, space: WorldSpace) -> PixelRect {
+        let onto = self.space_pixels(space);
         let Some(clip) = self.world_clip else {
             return onto;
         };
@@ -256,37 +279,45 @@ impl Frame {
         }
     }
 
-    /// The pixels `layer`'s logical space fills: the viewport, in target
-    /// pixels, but for a world drawn into a texture, which fills it whole.
-    fn layer_pixels(&self, layer: DrawLayer) -> PixelRect {
-        match (layer, self.world_space) {
-            (DrawLayer::World, WorldSpace::Texture { size: (w, h) }) => {
-                PixelRect { x: 0, y: 0, w, h }
-            }
-            _ => self.viewport,
+    /// Where the batch at `index` draws: a world batch before the world's
+    /// tail ([`Frame::world_tail`]), every one with no tail, in
+    /// [`Frame::world_space`]; every other batch, every overlay batch and a
+    /// world batch in the tail, in the target ([`WorldSpace::Target`]).
+    #[must_use]
+    pub fn space_of(&self, index: usize) -> WorldSpace {
+        let in_head = self.world_tail.is_none_or(|tail| index < tail);
+        if in_head && self.layer(index) == DrawLayer::World {
+            self.world_space
+        } else {
+            WorldSpace::Target
         }
     }
 
-    /// The pixels the world layer's logical space fills.
-    fn world_pixels(&self) -> PixelRect {
-        self.layer_pixels(DrawLayer::World)
+    /// The pixels the logical space fills in `space`: the viewport, in
+    /// target pixels, or the whole texture, in texels.
+    fn space_pixels(&self, space: WorldSpace) -> PixelRect {
+        match space {
+            WorldSpace::Texture { size: (w, h) } => PixelRect { x: 0, y: 0, w, h },
+            WorldSpace::Target => self.viewport,
+        }
     }
 
-    /// The pixels `quads` drawn in `layer` can touch, in that layer's
+    /// The pixels `quads` drawn in `space` can touch, in that space's
     /// pixels: the union of their rectangles projected onto the pixels
-    /// the layer's logical space fills, widened to whole pixels (a
-    /// superset of the pixels whose centres they cover) and clipped to
-    /// those pixels, outside which nothing is drawn. `None` when that is
-    /// empty, as it is with no quads.
+    /// the logical space fills there, widened to whole pixels (a superset
+    /// of the pixels whose centres they cover) and clipped to those
+    /// pixels, outside which nothing is drawn. `None` when that is empty,
+    /// as it is with no quads.
     ///
-    /// The overlay fills the viewport, in target pixels. The world fills
-    /// it too when it is drawn into the target ([`WorldSpace::Target`]);
-    /// drawn into a texture ([`WorldSpace::Texture`]), it fills the whole
-    /// texture, in texels. An overlay quad over the world reads the world
-    /// once it is enlarged into the target.
+    /// In the target ([`WorldSpace::Target`]) the logical space fills the
+    /// viewport, in target pixels; in a texture ([`WorldSpace::Texture`])
+    /// it fills the whole texture, in texels. A batch's space is
+    /// [`Frame::space_of`]'s: an overlay quad over the world, or a world
+    /// quad of the tail, reads the world once it is enlarged into the
+    /// target.
     #[must_use]
-    pub fn pixels_covered(&self, layer: DrawLayer, quads: &[QuadInstance]) -> Option<PixelRect> {
-        let onto = self.layer_pixels(layer);
+    pub fn pixels_covered(&self, space: WorldSpace, quads: &[QuadInstance]) -> Option<PixelRect> {
+        let onto = self.space_pixels(space);
         let (vx, vy) = (onto.x as f32, onto.y as f32);
         let sx = onto.w as f32 / self.logical.w as f32;
         let sy = onto.h as f32 / self.logical.h as f32;
@@ -350,6 +381,7 @@ mod tests {
             batches: Vec::new(),
             world: Vec::new(),
             world_clip: None,
+            world_tail: None,
         }
     }
 
@@ -363,13 +395,14 @@ mod tests {
 
     const OVERLAY: DrawLayer = DrawLayer::Overlay;
     const WORLD: DrawLayer = DrawLayer::World;
+    const TARGET: WorldSpace = WorldSpace::Target;
 
     #[test]
     fn a_quad_covers_its_rectangle_projected_onto_the_viewport() {
         let frame = letterboxed();
         let one = quad(4.0, 4.0, 4.0, 4.0);
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[one]),
+            frame.pixels_covered(TARGET, &[one]),
             Some(rect(8, 16, 8, 8))
         );
     }
@@ -379,8 +412,8 @@ mod tests {
         let frame = letterboxed();
         let (a, b) = (quad(4.0, 4.0, 4.0, 4.0), quad(20.0, 10.0, 2.0, 2.0));
         let union = Some(rect(8, 16, 36, 16));
-        assert_eq!(frame.pixels_covered(OVERLAY, &[a, b]), union);
-        assert_eq!(frame.pixels_covered(OVERLAY, &[b, a]), union);
+        assert_eq!(frame.pixels_covered(TARGET, &[a, b]), union);
+        assert_eq!(frame.pixels_covered(TARGET, &[b, a]), union);
     }
 
     #[test]
@@ -388,7 +421,7 @@ mod tests {
         let frame = letterboxed();
         let part = quad(4.25, 4.0, 1.0, 1.0);
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[part]),
+            frame.pixels_covered(TARGET, &[part]),
             Some(rect(8, 16, 3, 2))
         );
     }
@@ -399,11 +432,11 @@ mod tests {
         let top_left = quad(-2.0, -2.0, 4.0, 4.0);
         let bottom_right = quad(30.0, 22.0, 4.0, 4.0);
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[top_left]),
+            frame.pixels_covered(TARGET, &[top_left]),
             Some(rect(0, 8, 4, 4))
         );
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[bottom_right]),
+            frame.pixels_covered(TARGET, &[bottom_right]),
             Some(rect(60, 52, 4, 4))
         );
     }
@@ -411,7 +444,7 @@ mod tests {
     #[test]
     fn quads_off_the_viewport_or_none_at_all_cover_nothing() {
         let frame = letterboxed();
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(OVERLAY, quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(TARGET, quads);
         assert_eq!(covered(&[quad(40.0, 4.0, 4.0, 4.0)]), None);
         assert_eq!(covered(&[quad(4.0, 30.0, 4.0, 4.0)]), None);
         // Touching the viewport's right or bottom edge from outside.
@@ -429,7 +462,7 @@ mod tests {
         };
         let one = quad(4.0, 4.0, 4.0, 4.0);
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[one]),
+            frame.pixels_covered(TARGET, &[one]),
             Some(rect(16, 8, 8, 8))
         );
     }
@@ -438,10 +471,13 @@ mod tests {
     fn a_world_drawn_into_the_target_covers_what_the_overlay_does() {
         let frame = letterboxed();
         let one = quad(4.0, 4.0, 4.0, 4.0);
-        assert_eq!(frame.pixels_covered(WORLD, &[one]), Some(rect(8, 16, 8, 8)));
+        assert_eq!(
+            frame.pixels_covered(frame.world_space, &[one]),
+            Some(rect(8, 16, 8, 8))
+        );
         let part = quad(4.25, 4.0, 1.0, 1.0);
         assert_eq!(
-            frame.pixels_covered(WORLD, &[part]),
+            frame.pixels_covered(frame.world_space, &[part]),
             Some(rect(8, 16, 3, 2))
         );
     }
@@ -451,15 +487,21 @@ mod tests {
         let frame = textured();
         let one = quad(4.0, 4.0, 4.0, 4.0);
         // One texel a logical unit.
-        assert_eq!(frame.pixels_covered(WORLD, &[one]), Some(rect(4, 4, 4, 4)));
+        assert_eq!(
+            frame.pixels_covered(frame.world_space, &[one]),
+            Some(rect(4, 4, 4, 4))
+        );
         // Twice that, down the letterbox's bar, in the target.
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[one]),
+            frame.pixels_covered(TARGET, &[one]),
             Some(rect(8, 16, 8, 8))
         );
         // (4, 4)-(5.25, 5): every texel it touches.
         let part = quad(4.25, 4.0, 1.0, 1.0);
-        assert_eq!(frame.pixels_covered(WORLD, &[part]), Some(rect(4, 4, 2, 1)));
+        assert_eq!(
+            frame.pixels_covered(frame.world_space, &[part]),
+            Some(rect(4, 4, 2, 1))
+        );
     }
 
     #[test]
@@ -470,9 +512,12 @@ mod tests {
         // target: what the overlay's OR quad over it reads.
         let frame = textured();
         let one = quad(4.0, 4.0, 4.0, 4.0);
-        assert_eq!(frame.pixels_covered(WORLD, &[one]), Some(rect(4, 4, 4, 4)));
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[one]),
+            frame.pixels_covered(frame.world_space, &[one]),
+            Some(rect(4, 4, 4, 4))
+        );
+        assert_eq!(
+            frame.pixels_covered(TARGET, &[one]),
             Some(rect(8, 16, 8, 8))
         );
     }
@@ -483,19 +528,19 @@ mod tests {
         let top_left = quad(-2.0, -2.0, 4.0, 4.0);
         let bottom_right = quad(30.0, 22.0, 4.0, 4.0);
         assert_eq!(
-            frame.pixels_covered(WORLD, &[top_left]),
+            frame.pixels_covered(frame.world_space, &[top_left]),
             Some(rect(0, 0, 2, 2))
         );
         assert_eq!(
-            frame.pixels_covered(WORLD, &[bottom_right]),
+            frame.pixels_covered(frame.world_space, &[bottom_right]),
             Some(rect(30, 22, 2, 2))
         );
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[bottom_right]),
+            frame.pixels_covered(TARGET, &[bottom_right]),
             Some(rect(60, 52, 4, 4)),
             "the overlay's, to the viewport"
         );
-        let covered = |quads: &[QuadInstance]| frame.pixels_covered(WORLD, quads);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(frame.world_space, quads);
         assert_eq!(covered(&[quad(32.0, 4.0, 4.0, 4.0)]), None);
         assert_eq!(covered(&[quad(4.0, 24.0, 4.0, 4.0)]), None);
         assert_eq!(covered(&[quad(-8.0, 4.0, 4.0, 4.0)]), None);
@@ -514,13 +559,13 @@ mod tests {
         };
         let one = quad(100.0, 100.0, 10.0, 10.0);
         assert_eq!(
-            frame.pixels_covered(WORLD, &[one]),
+            frame.pixels_covered(frame.world_space, &[one]),
             Some(rect(100, 100, 10, 10))
         );
         // Across, 100 and 110 x 1920 / 1365 are 140.66 and 154.73; down,
         // x 1080 / 768, 140.63 and 154.69: 140 to 155 both ways.
         assert_eq!(
-            frame.pixels_covered(OVERLAY, &[one]),
+            frame.pixels_covered(TARGET, &[one]),
             Some(rect(140, 140, 15, 15))
         );
     }
@@ -588,6 +633,99 @@ mod tests {
                 assert!(scissor.w == 0 || scissor.h == 0, "{scissor:?}");
             }
         }
+    }
+
+    /// A solid batch, a dot at (`n`, `n`).
+    fn solid(n: f32) -> Batch {
+        Batch::Solid(vec![SolidQuad {
+            corners: [Point::new(n, n); 4],
+            color: [1.0; 4],
+        }])
+    }
+
+    /// `frame` with four batches, world, overlay, world, overlay, its
+    /// world's tail starting at `tail`.
+    fn tailed(frame: &Frame, tail: Option<usize>) -> Frame {
+        Frame {
+            batches: (0..4).map(|n| solid(n as f32)).collect(),
+            world: vec![0, 2],
+            world_tail: tail,
+            ..*frame
+        }
+    }
+
+    /// Where each of `frame`'s batches draws, in order.
+    fn spaces(frame: &Frame) -> Vec<WorldSpace> {
+        (0..frame.batches.len())
+            .map(|at| frame.space_of(at))
+            .collect()
+    }
+
+    #[test]
+    fn under_a_texture_world_a_world_batch_before_the_tail_is_in_the_texture_and_one_in_it_in_the_target()
+     {
+        let frame = tailed(&textured(), Some(2));
+        assert_eq!(frame.space_of(0), frame.world_space);
+        assert_eq!(frame.space_of(2), TARGET);
+        // The tail starting at a world batch's index puts it in the tail.
+        let at_one = tailed(&textured(), Some(1));
+        assert_eq!(at_one.space_of(0), at_one.world_space);
+        assert_eq!(at_one.space_of(2), TARGET);
+        let after = tailed(&textured(), Some(3));
+        assert_eq!(after.space_of(2), after.world_space);
+    }
+
+    #[test]
+    fn an_overlay_batch_is_in_the_target_on_either_side_of_the_tail() {
+        let frame = tailed(&textured(), Some(2));
+        assert_eq!(frame.space_of(1), TARGET);
+        assert_eq!(frame.space_of(3), TARGET);
+    }
+
+    #[test]
+    fn a_target_world_puts_every_batch_in_the_target_whatever_its_tail() {
+        for tail in [None, Some(0), Some(2), Some(4)] {
+            assert_eq!(
+                spaces(&tailed(&letterboxed(), tail)),
+                [TARGET; 4],
+                "{tail:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_tail_every_world_batch_is_in_the_world_space() {
+        let frame = tailed(&textured(), None);
+        let texture = frame.world_space;
+        assert_eq!(spaces(&frame), [texture, TARGET, texture, TARGET]);
+        // A tail past the last batch leaves them all in the head.
+        assert_eq!(spaces(&tailed(&textured(), Some(4))), spaces(&frame));
+    }
+
+    #[test]
+    fn pixels_covered_in_the_target_projects_onto_the_viewport_under_a_texture_world() {
+        let frame = textured();
+        let one = quad(4.0, 4.0, 4.0, 4.0);
+        assert_eq!(
+            frame.pixels_covered(frame.world_space, &[one]),
+            Some(rect(4, 4, 4, 4))
+        );
+        assert_eq!(
+            frame.pixels_covered(TARGET, &[one]),
+            Some(rect(8, 16, 8, 8))
+        );
+    }
+
+    #[test]
+    fn world_scissor_in_the_target_projects_the_clip_onto_the_viewport_under_a_texture_world() {
+        let frame = clipped(textured(), 2.0, 3.0, 10.0, 5.0);
+        assert_eq!(frame.world_scissor_in(TARGET), rect(4, 14, 20, 10));
+        assert_eq!(
+            frame.world_scissor_in(frame.world_space),
+            frame.world_scissor()
+        );
+        assert_eq!(frame.world_scissor(), rect(2, 3, 10, 5));
+        assert_eq!(textured().world_scissor_in(TARGET), rect(0, 8, 64, 48));
     }
 
     #[test]

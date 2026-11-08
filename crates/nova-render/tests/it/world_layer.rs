@@ -5,8 +5,10 @@
 //! between two overlays. The marked world is clipped
 //! ([`DrawList::world_in`]) short of an overlay column, as flight's is
 //! short of the status bar, and a clip no world command crosses changes no
-//! pixel. A world that crosses the clip is cut at its edge, in either
-//! world space. Needs a GPU adapter; skips, passing, without one.
+//! pixel. A world whose tail is started (`DrawList::start_world_tail`)
+//! draws natively as unmarked too. A world that crosses the clip is cut at
+//! its edge, in either world space, its tail too, which an upscaler draws
+//! into the target. Needs a GPU adapter; skips, passing, without one.
 
 use nova_render::fonts::FontFaces;
 use nova_render::recording::RecordingGpu;
@@ -156,6 +158,58 @@ fn a_native_world_between_overlays_draws_the_unlayered_frames_pixels() {
     assert_drawn_alike(between_overlays);
 }
 
+/// The world's tail's commands, flight's floaters and particles in
+/// small: a line like the one before the tail, an OR fill, a dot and a
+/// text run.
+fn tail(list: &mut DrawList) {
+    list.line(
+        at(2.0, 20.0),
+        at(8.0, 20.0),
+        2.0,
+        Color::rgba(0, 0, 255, 255),
+    )
+    .or_fill(
+        Bounds {
+            min: at(4.0, 18.0),
+            max: at(12.0, 22.0),
+        },
+        Color::rgba(128, 0, 0, 255),
+    )
+    .dot(at(14.0, 20.0), 2.0, Color::rgba(255, 255, 0, 255))
+    .text("C", at(16.0, 16.0), 6.0, None, Color::WHITE);
+}
+
+/// A world whose tail starts between two same-coloured lines, then the
+/// overlay; marked, the world clipped and its tail started, if `marked`.
+fn with_a_tail(marked: bool) -> DrawList {
+    let head = |list: &mut DrawList| {
+        list.line(
+            at(2.0, 14.0),
+            at(8.0, 14.0),
+            2.0,
+            Color::rgba(0, 0, 255, 255),
+        );
+    };
+    let mut list = DrawList::new();
+    if marked {
+        list.world_in(short_of_the_column(), |list| {
+            head(list);
+            list.start_world_tail();
+            tail(list);
+        });
+    } else {
+        head(&mut list);
+        tail(&mut list);
+    }
+    overlay(&mut list);
+    list
+}
+
+#[test]
+fn a_native_world_with_a_tail_draws_the_unlayered_frames_pixels() {
+    assert_drawn_alike(with_a_tail);
+}
+
 #[test]
 fn the_marked_scenes_frames_have_both_layers_and_the_unmarked_only_overlay() {
     for scene in [world_first, between_overlays] {
@@ -244,4 +298,35 @@ fn a_clipped_world_is_cut_at_the_clips_edge() {
         return;
     };
     assert_cut(&pixels, (32, 24), ((0, 0), 1), EDGE as u32 + 1);
+}
+
+/// [`crossing`] with its world's tail started at its dot: the dot and the
+/// sprite are in the tail, the line before it.
+fn crossing_with_a_tail() -> DrawList {
+    let mut list = DrawList::new();
+    let clip = Bounds {
+        min: at(0.0, 0.0),
+        max: at(EDGE, 24.0),
+    };
+    list.world_in(clip, |list| {
+        list.line(at(16.0, 4.0), at(30.0, 4.0), 2.0, Color::WHITE)
+            .start_world_tail()
+            .dot(at(EDGE, 12.0), 4.0, Color::WHITE)
+            .sprite(ImageKey::sprite(2, 0), at(EDGE, 20.0), Color::WHITE);
+    });
+    list
+}
+
+#[test]
+fn under_sharp_bilinear_a_clipped_worlds_tail_is_cut_at_the_clips_edge() {
+    // At 2x letterboxed (content (0, 8)-(64, 56)): the tail drawn in the
+    // target is cut at the edge's column, and the head enlarged from the
+    // texture too, as sharp bilinear at a whole 2x is the nearest texel.
+    let viewport = Viewport::new(LOGICAL, (64, 64), 2.0);
+    let Some(pixels) =
+        flight_frame::drawn(&crossing_with_a_tail(), &viewport, Upscaler::SharpBilinear)
+    else {
+        return;
+    };
+    assert_cut(&pixels, (64, 64), ((0, 8), 2), EDGE as u32 * 2);
 }

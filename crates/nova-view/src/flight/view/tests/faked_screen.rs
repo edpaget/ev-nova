@@ -793,19 +793,6 @@ fn the_arrival_fade_plays_on_and_shows_over_the_map() {
     assert_eq!(fade(&drawn(&view)), None);
 }
 
-#[test]
-fn the_stellars_go_on_animating_while_the_jump_plays() {
-    let mut view = in_flight();
-    jump_now(&mut view);
-    let moon = |view: &Faked| sprites(&drawn(view))[1].0.frame;
-    let before = moon(&view);
-    view.tick(TICK);
-    assert_eq!(moon(&view), (before + 1) % 4, "a frame a tick");
-    view.tick(TICK * 2);
-    assert_eq!(moon(&view), (before + 3) % 4);
-    assert!(view.jump_effect().is_some());
-}
-
 // Double time and the pointer.
 
 /// Whether the last step was given the double-time key on.
@@ -1556,67 +1543,4 @@ fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
         [128, 129],
         "129's read once"
     );
-}
-
-/// The Moon's frame shown.
-fn moon_shown(view: &Faked) -> u16 {
-    sprites(&drawn(view))[1].0.frame
-}
-
-/// The Moon's animation state as `view` keeps it while Sol is not shown.
-fn moon_kept(view: &Faked) -> Option<u16> {
-    view.kept_frames
-        .get(StellarId(129))
-        .map(|frames| frames.shown())
-}
-
-/// `view`'s flight arriving back in Sol from Alpha Centauri, its warp
-/// ended and the system entered told.
-fn back_in_sol(view: &mut Faked) {
-    view.sim.set_frame(FlightFrame {
-        warp_end_due: true,
-        system: SystemId(131),
-        stellars: vec![record::stellar(StellarId(140))],
-        ..under_way(true)
-    });
-    view.refresh_frame();
-    view.sim.queue_answer_telling(
-        Answer::Arrived {
-            system: SystemId(130),
-            combat: Vec::new(),
-        },
-        sol(),
-        vec![FlightEvent::Session(SessionEvent::SystemChanged)],
-    );
-}
-
-#[test]
-fn a_real_jump_away_and_back_resumes_the_frame_shown_on_leaving() {
-    let mut view = in_flight();
-    jump_now(&mut view);
-    for _ in 0..5 {
-        view.tick(TICK);
-    }
-    let last = moon_shown(&view);
-    warp_ends(&mut view);
-    view.tick(TICK);
-    // The tick the jump ends in steps the stellars before the flight
-    // arrives (`step_stellars` runs before the steps): one frame on from
-    // the last drawn in Sol.
-    let left = moon_kept(&view).expect("kept as Sol was let go");
-    assert_eq!(left, (last + 1) % 4);
-    view.tick(crate::flight::jump::FADE_IN_FOR);
-    view.tick(TICK);
-    lit(&mut view, 0.0);
-    for _ in 0..3 {
-        view.tick(TICK);
-    }
-    assert_eq!(moon_kept(&view), Some(left), "still while away");
-    back_in_sol(&mut view);
-    view.tick(TICK);
-    // Sol is laid out on the tick the jump ends, after that tick's step:
-    // the frame drawn on arrival is the one it was left on.
-    assert_eq!(moon_shown(&view), left, "resumed on arrival");
-    view.tick(TICK);
-    assert_eq!(moon_shown(&view), (left + 1) % 4, "and on from there");
 }

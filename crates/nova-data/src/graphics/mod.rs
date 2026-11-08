@@ -9,7 +9,13 @@
 //! | `PICT` ([`PICT`]) | [`decode_pict`] | one image the size of `picFrame` |
 //! | `cicn` | [`decode_cicn`] | one image, the mask as alpha |
 //! | `ppat` | [`decode_ppat`] | one opaque image |
-//! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`] | a [`SpriteSheet`] of equal-sized frames |
+//! | `rlëD` ([`RLED`]) | [`decode_rled`], [`decode_rled_as`], [`decode_rled_with`] | a [`SpriteSheet`] of equal-sized frames |
+//!
+//! [`decode_pict_deep`] decodes a `PICT` as [`decode_pict`] does and keeps
+//! the depth its pixels were stored at, a [`PixelDepth`] on a
+//! [`DeepImage`], with an indexed picture's colour-table indices. QuickDraw
+//! merges a shrunk picture's pixels by that depth, and [`widen_five`] is
+//! the 16-bit decode's rule for widening a 5-bit channel.
 //!
 //! [`apply_mask`] gives a decoded picture its alpha from a second picture,
 //! its mask, as Nova masks its button caps. [`cut_pict_sheet`] cuts a
@@ -17,7 +23,13 @@
 //! original does for a `spïn` with no `rlëD`; its mask has the opposite
 //! polarity.
 //!
-//! [`rled_words`] reads an `rlëD`'s run-length tokens as words, and
+//! [`decode_rled_clipped`] decodes an `rlëD` as the original draws a frame
+//! whose box the world's edge cuts (`_BlitPixieRLEClipped`), and
+//! [`SpriteSheet::clip_quirks`] says whether that can differ from the
+//! frame cut to its box.
+//!
+//! [`rled_words`] reads an `rlëD`'s run-length tokens as the bytes of
+//! memory, and
 //! [`sheet_rle_words`] makes the tokens the original makes for a cut
 //! `PICT` sheet: the [`RleWords`] two sprites' pixels touch by.
 //!
@@ -68,8 +80,13 @@
 //! - 282 `rlëD`s, all 16-bit, using tokens 0 to 4. Plug-ins may also hold
 //!   8-bit sheets, which decode as the original's 16-bit world draws them
 //!   ([`EightBitReading::AsDrawn`]), or through the Mac's standard palette
-//!   ([`EightBitReading::SystemPalette`]); other depths are
-//!   [`GraphicsError::UnsupportedDepth`].
+//!   ([`EightBitReading::SystemPalette`]); 32-bit sheets, which decode as
+//!   the 16-bit world draws them, twice their width
+//!   ([`ThirtyTwoBitReading::AsDrawn`]), or as true colour
+//!   ([`ThirtyTwoBitReading::TrueColour`]); and sheets of any other depth
+//!   above 7, which decode as drawn. A depth of 7 or less, or of 0x8000
+//!   and up, is [`GraphicsError::UnsupportedDepth`]: the original quits on
+//!   it.
 //! - 29 `cicn`s (2, 4 and 8-bit) and 10 `ppat`s (8-bit, 64x64), all
 //!   indexed through sparse colour tables looked up by `value`.
 //!
@@ -120,6 +137,7 @@
 
 mod budget;
 mod color;
+mod deep_image;
 mod error;
 mod icon;
 mod image;
@@ -133,7 +151,10 @@ mod reader;
 mod region;
 mod rle_words;
 mod rled;
+mod rled32;
 mod rled8;
+mod rled_clipped;
+mod rled_wide;
 mod sheet;
 mod system_clut;
 
@@ -141,14 +162,19 @@ mod system_clut;
 pub mod fixture;
 
 pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
+pub use deep_image::{DeepImage, PixelDepth, widen_five};
 pub use error::GraphicsError;
 pub use icon::{CICN, decode_cicn};
 pub use image::Image;
 pub use mask::apply_mask;
 pub use pattern::{PPAT, decode_ppat};
-pub use pict::{PICT, PictFrame, decode_pict, pict_frame};
-pub use pict_sheet::{SheetMask, cut_pict_sheet};
+pub use pict::{PICT, PictFrame, decode_pict, decode_pict_deep, pict_frame, scan_pict};
+pub use pict_sheet::{FrameLimit, SheetMask, cut_pict_sheet};
 pub use rle_words::{RleWords, rled_words, sheet_rle_words};
-pub use rled::{RLED, RledInfo, decode_rled, decode_rled_as, scan_rled};
+pub use rled::{
+    RLED, RledInfo, RledReadings, decode_rled, decode_rled_as, decode_rled_with, scan_rled,
+};
+pub use rled_clipped::{ClipCut, decode_rled_clipped};
 pub use rled8::EightBitReading;
+pub use rled32::ThirtyTwoBitReading;
 pub use sheet::{SheetLayout, SpriteSheet};

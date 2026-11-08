@@ -362,6 +362,34 @@ impl DrawCommand {
 }
 
 impl DrawCommand {
+    /// `image` at `center` at `tint`, combined by `blend`: a
+    /// [`DrawCommand::Colorized`] when `colorize` mixes, otherwise a plain
+    /// [`DrawCommand::Sprite`] ([`DrawList::mixed_sprite`]'s command).
+    #[must_use]
+    pub fn mixed_sprite(
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Option<Colorize>,
+    ) -> Self {
+        match colorize.filter(|colorize| colorize.mixes()) {
+            Some(colorize) => Self::Colorized {
+                image,
+                center,
+                tint,
+                blend,
+                colorize,
+            },
+            None => Self::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            },
+        }
+    }
+
     /// Whether it draws text: a [`DrawCommand::Text`], clipped or not.
     fn is_text(&self) -> bool {
         match self {
@@ -388,8 +416,12 @@ impl DrawCommand {
 ///
 /// A renderer may draw the world at the logical resolution and enlarge it
 /// (a frame upscaler), drawing the overlay over it at the window's own.
-/// Drawn at the window's own resolution, the layers change nothing: the
-/// commands are drawn in the list's order, whatever their layers.
+/// The world's tail ([`DrawList::start_world_tail`]) is the exception: such
+/// a renderer draws every command from the tail on at the window's own
+/// resolution, after the enlarged world and the overlay before the tail,
+/// in the list's order, whatever their layers. Drawn at the window's own
+/// resolution, the layers and the tail change nothing: the commands are
+/// drawn in the list's order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DrawLayer {
     /// The sprite world, under the overlay.
@@ -410,6 +442,10 @@ pub struct DrawList {
     /// One clip serves the whole list: only flight draws a world, and it
     /// draws one, clipped to its play area.
     world_clip: Option<Bounds>,
+    /// The index of the first command of the world's tail, if it has one
+    /// ([`DrawList::start_world_tail`]). One tail serves the whole list, as
+    /// one clip does.
+    world_tail: Option<usize>,
     /// What the frame asks of the platform's text entry, if a focused
     /// field asks ([`DrawList::ask_text_entry`]).
     text_entry: Option<EntryAsk>,
@@ -433,7 +469,11 @@ impl DrawList {
     /// [`DrawLayer::World`], except text, which stays in the overlay. Text
     /// is drawn at the window's own resolution, so a world drawn at the
     /// logical resolution never holds it, even text drawn among the world's
-    /// sprites (flight's message line, a placeholder's reason).
+    /// sprites (flight's floaters' text, the message line's included, and a
+    /// placeholder's reason). Flight starts the world's tail
+    /// ([`DrawList::start_world_tail`]) at its floaters, so their text keeps
+    /// its place among the world's commands under a renderer that enlarges
+    /// the world.
     pub fn world(&mut self, draw: impl FnOnce(&mut Self)) -> &mut Self {
         let start = self.commands.len();
         draw(self);
@@ -458,6 +498,28 @@ impl DrawList {
     #[must_use]
     pub fn world_clip(&self) -> Option<Bounds> {
         self.world_clip
+    }
+
+    /// Starts the world's tail at the next command appended: every command
+    /// from here on is in the tail, whatever its layer. The last call wins.
+    ///
+    /// Flight starts it at its floaters, which the original draws after
+    /// every sprite layer and the over-ship beams and before the particles
+    /// (`_PostDrawCallback`, 0x38c80). A renderer that enlarges the world
+    /// draws the world before the tail at the logical resolution and the
+    /// tail at the window's own, in the list's order, so the floaters' text
+    /// stays under the particles. Drawn at the window's own resolution, the
+    /// tail changes nothing.
+    pub fn start_world_tail(&mut self) -> &mut Self {
+        self.world_tail = Some(self.commands.len());
+        self
+    }
+
+    /// The index of the first command of the world's tail, if it has one
+    /// ([`DrawList::start_world_tail`]).
+    #[must_use]
+    pub fn world_tail(&self) -> Option<usize> {
+        self.world_tail
     }
 
     /// Asks the platform for text entry at a focused field: a readout
@@ -577,15 +639,9 @@ impl DrawList {
         blend: Blend,
         colorize: Option<Colorize>,
     ) -> &mut Self {
-        match colorize.filter(|colorize| colorize.mixes()) {
-            Some(colorize) => self.colorized_sprite(image, center, tint, blend, colorize),
-            None => self.push(DrawCommand::Sprite {
-                image,
-                center,
-                tint,
-                blend,
-            }),
-        }
+        self.push(DrawCommand::mixed_sprite(
+            image, center, tint, blend, colorize,
+        ))
     }
 
     /// Appends a [`DrawCommand::Picture`].
@@ -643,8 +699,12 @@ impl DrawList {
     /// further on. A frame drawn for Nova's 1024x768 is drawn centred in a
     /// widened view so. Each keeps its layer. `other`'s world clip, moved
     /// by `by`, replaces this list's if `other` has one, and so does its
-    /// text-entry ask, moved by `by` too.
+    /// world tail, moved past this list's commands, and its text-entry ask,
+    /// moved by `by` too.
     pub fn extend_translated(&mut self, other: &Self, by: Point) -> &mut Self {
+        if let Some(tail) = other.world_tail {
+            self.world_tail = Some(self.commands.len() + tail);
+        }
         self.commands
             .extend(other.iter().map(|command| command.translated(by)));
         self.layers.extend(&other.layers);
@@ -802,8 +862,9 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 ///
 /// Where this deviates from the original:
 ///
-/// - **The 8-bit depth is not modelled**: its alpha-table blits were not
-///   traced.
+/// - **An 8-bit sheet** takes the draw proc's depth-8 branches instead,
+///   which draw a layer only at level 32 uncolorized, the add-over
+///   ([`eight_bit_blit`](crate::eight_bit_blit)).
 ///
 /// A cloaking ship's layers take no bias either: `_HandleShipDisplay`
 /// leaves +0xb0 alone below a full fade and caps each channel factor at
@@ -1836,6 +1897,61 @@ mod tests {
         list.world_in(play_area(), |_| {});
         list.extend_translated(&other, at(170.0, -5.0));
         assert_eq!(list.world_clip(), Some(play_area()));
+    }
+
+    #[test]
+    fn a_list_has_no_world_tail_until_one_is_started() {
+        assert_eq!(DrawList::new().world_tail(), None);
+    }
+
+    #[test]
+    fn the_world_tail_starts_at_the_next_command() {
+        let mut list = DrawList::new();
+        list.world(|list| {
+            list.dot(at(0.0, 0.0), 1.0, Color::WHITE)
+                .text("message", at(0.0, 0.0), 10.0, None, Color::WHITE)
+                .start_world_tail()
+                .dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        });
+        assert_eq!(list.world_tail(), Some(2));
+        assert_eq!(
+            layers(&list),
+            [DrawLayer::World, DrawLayer::Overlay, DrawLayer::World]
+        );
+    }
+
+    #[test]
+    fn the_last_world_tail_started_wins() {
+        let mut list = DrawList::new();
+        list.start_world_tail()
+            .dot(at(0.0, 0.0), 1.0, Color::WHITE)
+            .start_world_tail();
+        assert_eq!(list.world_tail(), Some(1));
+    }
+
+    #[test]
+    fn extending_carries_the_others_world_tail_past_the_commands_before_it() {
+        let mut other = DrawList::new();
+        other
+            .dot(at(0.0, 0.0), 1.0, Color::WHITE)
+            .start_world_tail()
+            .dot(at(1.0, 0.0), 1.0, Color::WHITE);
+        let mut list = DrawList::new();
+        for x in 0..3 {
+            list.dot(at(x as f32, 5.0), 1.0, Color::WHITE);
+        }
+        list.extend_translated(&other, at(170.0, -5.0));
+        assert_eq!(list.world_tail(), Some(4));
+    }
+
+    #[test]
+    fn extending_by_a_list_with_no_tail_keeps_its_own() {
+        let mut other = DrawList::new();
+        other.dot(at(0.0, 0.0), 1.0, Color::WHITE);
+        let mut list = DrawList::new();
+        list.dot(at(0.0, 0.0), 1.0, Color::WHITE).start_world_tail();
+        list.extend_translated(&other, at(170.0, -5.0));
+        assert_eq!(list.world_tail(), Some(1));
     }
 
     #[test]

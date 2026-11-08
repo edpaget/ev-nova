@@ -69,14 +69,16 @@ fn a_stellar_whose_dead_type_is_a_pict_pair_has_its_frame_size() {
                 site.dead_frame_size,
                 site.animation.type_frames,
                 site.animation.dead_frames,
+                site.animation.type_sheet_frames,
+                site.animation.dead_sheet_frames,
             )
         })
         .collect();
     assert_eq!(
         looks,
         [
-            (129, Some((6, 6)), Some(3), Some((4, 4)), 1, 2),
-            (131, Some((4, 4)), None, None, 2, 0),
+            (129, Some((6, 6)), Some(3), Some((4, 4)), 1, 2, 1, 2),
+            (131, Some((4, 4)), None, None, 2, 0, 2, 0),
         ]
     );
 }

@@ -8,7 +8,11 @@ mod common;
 
 mod enlarged_atlas;
 mod flight_frame;
+mod floater_text;
 mod frame_cost;
+mod fsr1;
+mod fsr1_reference;
+mod message_line;
 mod metal_fx;
 mod prefs_labels;
 mod sharp_bilinear;

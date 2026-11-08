@@ -631,9 +631,13 @@
 //! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
 //! slot, a new message replacing the old and its time, in the rect
 //! `_InitSprites` sets up ([`hud::message_box`](super::hud::message_box)), wrapped, in the system
-//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). It is drawn over the
-//! starfield and under everything else, as the original draws it on the
-//! sprite world's background. Each message stays for as many ticks of
+//! font at 12 pt in white ([`hud::draw_message_text`](super::hud::draw_message_text)). Its box is erased
+//! over the starfield, under every sprite, as `_DisplayComm` erases it and
+//! draws the text into the sprite world's background frame
+//! (@0x90294-0x902f5). Its text is drawn with the floaters, over the
+//! sprites and under the particles, as `_FloaterDrawCallback` blits the
+//! background frame's `_commRect` over the work frame each frame
+//! (@0x38b52-0x38b90). Each message stays for as many ticks of
 //! flight as its original caller asks ([`MESSAGE_TICKS`] and the
 //! constants after it, [`SimMessage::ticks`], [`CommNote::ticks`](nova_sim::CommNote::ticks),
 //! [`PersonQuote::ticks`](nova_sim::PersonQuote::ticks)). The dialogs drawn over
@@ -656,16 +660,35 @@
 //! ([`DrawList::world`](crate::DrawList::world),
 //! [`DrawLayer`](crate::DrawLayer)): the stars, the
 //! stellars, asteroids and boxes, the beams, the ships with their glow and
-//! lights, the shots, the effects and the smoke, everything the original
-//! draws into its sprite world. The brackets, the alerts, the floating
-//! map, the escort menu, the title and help, the status bar, the cursor,
-//! the fades and the course map are overlay, and so is every text: the
-//! message line and a placeholder's reason too, though they are drawn
-//! among the world's commands. Drawn at the window's resolution the
-//! layers change nothing, as each command is drawn in the list's order.
-//! Under a frame upscaler, which draws the world first and the overlay
-//! over it, the message line would show over the ships, where the
-//! original has it under them.
+//! lights, the shots, the effects and the smoke, the brackets, the cursor
+//! and the alerts, the message line's box, the floating map and the escort
+//! menu, everything the original draws into its sprite world. The title
+//! and help, the status bar, the fades and the course map are overlay, and
+//! so is every text: the message line, the floaters' names and orders and
+//! a placeholder's reason too, though they are drawn among the world's
+//! commands. Drawn at the window's resolution the layers change nothing,
+//! as each command is drawn in the list's order.
+//!
+//! The world's tail ([`DrawList::start_world_tail`](crate::DrawList::start_world_tail))
+//! starts at the floaters, which the original draws after every sprite
+//! layer and the over-ship beams and before the particles
+//! (`_PostDrawCallback`, 0x38c80). Under a frame upscaler, which draws the
+//! world at the logical resolution and enlarges it, the world before the
+//! tail is enlarged and the overlay drawn before the tail goes over it;
+//! the tail (the floaters, their text and the particles) then draws at the
+//! window's resolution over that, in the list's order. So the message
+//! line's box stays in the world under the sprites, its text draws over
+//! the ships and the over-ship beams and under the particles, as in the
+//! original, and so do the floating map's and the escort menu's. The
+//! floaters' boxes and lines and the particles' dots are drawn at the
+//! window's resolution there, not enlarged with the world: at an integer
+//! scale under sharp bilinear that is the same picture, and at other
+//! scales or under the smoothing upscalers they stay crisp.
+//!
+//! A placeholder's reason is overlay before the tail: it draws over the
+//! world before the floaters, and under the floaters and the particles. It
+//! draws over the world on purpose: it is the engine's own diagnostic,
+//! with no counterpart in the original, and is there to be read.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -690,7 +713,7 @@ use super::catalog::{Looks, ShipSheet, ShipSprites, TargetCard};
 use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{EscortMenu, EscortMenuColors};
-use super::flash::ShieldFlash;
+use super::flash::{FlashLook, ShieldFlash};
 use super::floating::FloatingMap;
 use super::hud::{NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::JumpEffect;
@@ -708,7 +731,6 @@ use crate::keymap::{Command, CommandReader};
 use crate::outline::{self, Outline};
 use crate::system::camera::{Anchor, Camera};
 use crate::system::catalog::SystemCatalog;
-use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Input, Point, SoundPrefs, UiSound};
@@ -1129,13 +1151,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     names: Rc<Names>,
     /// The session's system, laid out; `None` when the session failed.
     scene: Option<SystemScene>,
-    /// Each stellar's animation state as the scene that last showed it
-    /// left it: the original's per-`spöb` current frame, next frame and
-    /// timer (+0x476, +0x478, +0x490), kept per flight so a stellar shown
-    /// again resumes where it stood ([`KeptFrames`], stellar-fidelity
-    /// phase 12). A load or a new pilot is a new flight, so every stellar
-    /// starts afresh then.
-    kept_frames: KeptFrames,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
     /// What the player's ship draws in place of `sheet` when it cannot be
@@ -1171,6 +1186,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// more the next step holds its gain (`StepInput::held`; see
     /// `nova_sim::speed_mult`).
     since_step: Duration,
+    /// The gain the last pass ran at
+    /// ([`nova_sim::flight_frame::PassReport::speed_mult`]): the share of its
+    /// velocity each shot, box and asteroid last moved by
+    /// (`flight::moved`), which the draws between passes back them off
+    /// by. The engine's own interpolation, with no counterpart in the
+    /// original.
+    moved_at: SpeedMult,
     /// Flight's reader of its commands ([`FLIGHT`](crate::keymap::contexts::FLIGHT)), over the
     /// keys flight has seen go down and not up: what it holds is what
     /// flight reads held ([`FlightView::held`]), less the latched
@@ -1481,6 +1503,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     held_alts: RefCell<crate::flight::held_alt::HeldAlts>,
     /// Each ship's weapon glow while it is lit ([`WeaponGlows`]).
     glows: WeaponGlows,
+    /// The NPCs' flashes and glows let go of at the last change of system
+    /// or landing, held for the escorts the fleet keeps
+    /// ([`HeldDisplays`](crate::flight::carried_displays::HeldDisplays)).
+    held_displays: crate::flight::carried_displays::HeldDisplays,
     /// What the view keeps of the shots in flight, drawn on the effects'
     /// chance ([`ShotLooks`](shots::ShotLooks)).
     shot_looks: shots::ShotLooks,
@@ -1632,11 +1658,6 @@ struct Redrawn {
     rebuilt: bool,
     /// The stars were scattered afresh.
     stars: bool,
-    /// A take-off or a gate's exit reset every stellar's frames: those
-    /// shown and those kept were zeroed once the scene was laid out, among
-    /// the stellar passes ([`FlightView::reset_stellar_frames`],
-    /// [`FlightView::replay_stellar_passes`]).
-    frames_reset: bool,
 }
 
 /// How the flight holds stellar `id` as `frame` records it
@@ -1644,53 +1665,37 @@ struct Redrawn {
 /// its galaxy holds it, with the sheet the session says it draws
 /// (`nova_sim::Session::drawn_sheet`: its `DeadType` sheet, graphic type
 /// 0's or its `Type` sheet, story-runtime phases 7 and 9, stellar-fidelity
-/// phase 1), which the click box reads too, and animating over the frame
-/// count the session says (`nova_sim::Session::counted_sheet`,
-/// stellar-fidelity phase 1), or over none
-/// (`nova_sim::Session::counts_no_frames`), its frame frozen when the
+/// phase 1), which the click box reads too, its frame frozen when the
 /// session says (`nova_sim::Session::frame_frozen`, stellar-fidelity phase
-/// 8). A stellar the frame doesn't record, one its system doesn't list,
-/// looks whole, on its `Type` sheet, never frozen, as the session holds a
-/// stellar it doesn't show.
+/// 8), and on the frame of that sheet the session reports its slot shows
+/// (`nova_sim::Session::stellar_frame`, rendering phase 11). A stellar the
+/// frame doesn't record, one its system doesn't list, looks whole, on its
+/// `Type` sheet's frame 0, never frozen, as the session holds a stellar
+/// it doesn't show.
 fn look(frame: &FlightFrame, id: StellarId) -> StellarLook {
     frame.stellar(id).map_or(
         StellarLook {
             destroyed: false,
             drawn: nova_sim::DrawnSheet::Type,
-            counted: nova_sim::DrawnSheet::Type,
             frozen: false,
-            counts_none: false,
+            frame: Some(0),
         },
         |stellar| StellarLook {
             destroyed: stellar.destroyed,
             drawn: stellar.drawn,
-            counted: stellar.counted,
             frozen: stellar.frozen,
-            counts_none: stellar.counts_none,
+            frame: Some(stellar.frame),
         },
     )
 }
 
-/// Draws each stellar of `scene` as `frame` holds it ([`look`]), as the
-/// original's per-frame sprite tick swaps its sheet.
-fn show_destroyed(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_destroyed(|id| look(frame, id));
-}
-
-/// Marks each stellar of `scene` frozen as `frame` holds it
-/// ([`FrameStellar::frozen`](nova_sim::flight_frame::FrameStellar::frozen)):
-/// after the steps of each tick, as a flight frame freezes or thaws a slot
-/// with no event (stellar-fidelity phase 8).
-fn show_frozen_frames(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_frozen(|id| look(frame, id).frozen);
-}
-
-/// Draws each hypergate of `scene` on the frame `frame` gives it
-/// ([`FrameStellar::gate_frame`](nova_sim::flight_frame::FrameStellar::gate_frame)),
-/// opening while an NPC comes out of it: after each tick of the traffic,
-/// and as the system is laid out.
-fn show_gate_frames(scene: &mut SystemScene, frame: &FlightFrame) {
-    scene.set_gate_frames(|id| frame.stellar(id).and_then(|stellar| stellar.gate_frame));
+/// Draws each stellar of `scene` as `frame` holds it ([`look`]): its
+/// look and the frame its session reports. The view keeps no animation
+/// of its own in a flight, so whatever frame it reads them from (the kept
+/// frame, or a double-time hold), the looks and the frames come from the
+/// same one.
+fn show_stellars(scene: &mut SystemScene, frame: &FlightFrame) {
+    scene.set_looks(|id| look(frame, id));
 }
 
 /// The system `frame`'s player is in, read from `catalog`, with only the
@@ -1702,13 +1707,11 @@ fn shown_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene
     SystemScene::load_shown(catalog, frame.system, &shown)
 }
 
-/// The scene a flight opens on: the stellars `frame` shows, each
-/// destroyed one as it looks destroyed and each hypergate on the frame
-/// the session stepped it to.
+/// The scene a flight opens on: the stellars `frame` shows, each as it
+/// looks and on the frame the session reports ([`show_stellars`]).
 fn opening_scene(catalog: &impl SystemCatalog, frame: &FlightFrame) -> SystemScene {
     let mut scene = shown_scene(catalog, frame);
-    show_destroyed(&mut scene, frame);
-    show_gate_frames(&mut scene, frame);
+    show_stellars(&mut scene, frame);
     scene
 }
 
@@ -1880,6 +1883,30 @@ fn show_combat(
     glows
 }
 
+/// What `ship`'s display among a pass's `ships` holds its shield flash by
+/// ([`FlashLook`]): its shield, its class's own loaded `Shield` (class
+/// +0x5c @0x2c8aa, [`FrameShip::class_shield`]) and whether its class's
+/// sheet among `sheets` has a shield layer; `None` for a ship no longer
+/// in the system.
+fn flash_look(
+    ships: &[FrameShip],
+    (player, sheets): Sheets<'_>,
+    ship: ShipRef,
+) -> Option<FlashLook> {
+    let shown = ships.iter().find(|shown| shown.ship == ship)?;
+    let sheet = match ship {
+        ShipRef::Player => player.as_ref().ok(),
+        ShipRef::Npc(_) => sheets
+            .get(&shown.class)
+            .and_then(|sheet| sheet.as_ref().ok()),
+    };
+    Some(FlashLook {
+        shield: shown.shield.now,
+        base: shown.class_shield.unwrap_or(shown.shield.max),
+        has_layer: sheet.is_some_and(|sheet| sheet.shield.is_some()),
+    })
+}
+
 /// How fast `ship`'s weapon glow falls a frame, out of 32
 /// ([`ShipSheet::weapon_decay`]): its class's, from `player`'s sheet or,
 /// for an NPC among a pass's `ships`, the NPCs' `sheets`, none for a sheet
@@ -1919,18 +1946,10 @@ fn step_flashes(
     gain: SpeedMult,
 ) {
     flashes.retain(|&ship, flash| {
-        let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
+        let Some(look) = flash_look(ships, (player, sheets), ship) else {
             return false;
         };
-        let sheet = match ship {
-            ShipRef::Player => player.as_ref().ok(),
-            ShipRef::Npc(_) => sheets
-                .get(&shown.class)
-                .and_then(|sheet| sheet.as_ref().ok()),
-        };
-        let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
-        let base = shown.class_shield.unwrap_or(shown.shield.max);
-        flash.step(shown.shield.now, base, has_layer, gain);
+        flash.step(look.shield, look.base, look.has_layer, gain);
         flash.shown() > 0.0
     });
 }

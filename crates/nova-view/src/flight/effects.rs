@@ -41,9 +41,10 @@
 //!     (`_GetSpriteXSize`/`_GetSpriteYSize` @0x26d4-0x2731), each
 //!     [`EffectSheet`](super::catalog::EffectSheet)'s frame width and
 //!     height; their 32-pixel fallback can't happen for a shown explosion.
-//!   - Left out: the 8-bit blits
-//!     (@0xbb5a9-0xbb88b), as the engine draws at 16 bits only
-//!     (rdm:phase/rendering/phase-2-translucent-8-bit-sheets).
+//!   - Left out: an 8-bit sheet's blits (@0xbb5a9-0xbb88b), which the
+//!     stellars and ships take ([`eight_bit_blit`](crate::eight_bit_blit))
+//!     and an explosion does not yet
+//!     (rdm:phase/rendering-2/phase-1-eight-bit-blit-other-sprites).
 //!     The frozen flag `*0x3b523c`'s gates on the delay countdown
 //!     (@0x2f629) and the frame step (@0x2f7eb) under `_PlayGame`'s and
 //!     `_EnterGameFromMainScreen`'s frozen game-work pass, as the engine
@@ -204,6 +205,7 @@ use super::particle::Fixed;
 use super::pods::{EscapePods, Pod, carry_point};
 use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
+use crate::box_cut::BoxCut;
 use crate::draw::lights_tint;
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
@@ -864,7 +866,10 @@ impl Effects {
     /// ships. Each is added at full ([`EXPLOSION_LEVEL`], `Blend::Or`) and
     /// murked as the player sees them, `seen` (see the module docs;
     /// `_HandleExplods`
-    /// @0x2f78b-0x2f7e2).
+    /// @0x2f78b-0x2f7e2). Where the world's edge cuts an explosion's box,
+    /// an overhanging sheet is cut to the box and one with clip quirks
+    /// draws the clipped blit's frame, as `_BlitPixieRLETranslucentDrawProc`
+    /// draws it (@0xbb3fc-0xbba11, [`BoxCut`]).
     pub fn draw_explosions(
         &self,
         list: &mut DrawList,
@@ -880,14 +885,10 @@ impl Effects {
             if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
                 let frame = sheet.image.frame(explosion.frame as u16);
                 let at = Vec2::new(explosion.at.x, explosion.at.y);
-                let size = (sheet.frame_width, sheet.frame_height);
-                list.mixed_sprite(
-                    frame,
-                    camera.sprite_centre(explosion.at, size),
-                    lights_tint(EXPLOSION_LEVEL),
-                    Blend::Or,
-                    Some(seen.at(at)),
-                );
+                let centre = camera.sprite_centre(explosion.at, sheet.size());
+                let cut = BoxCut::of(list.world_clip(), centre, sheet.edge());
+                let look = (lights_tint(EXPLOSION_LEVEL), Blend::Or, Some(seen.at(at)));
+                cut.mixed_sprite(list, frame, centre, look);
             }
         }
     }
@@ -1030,6 +1031,8 @@ mod tests {
             sheet: Ok(EffectSheet {
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
                 image: crate::SheetImage::Rled(image_id),
                 frames: NonZeroU16::new(frames).expect("non-zero"),
             }),
@@ -1151,6 +1154,8 @@ mod tests {
                 frames: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 0,
                 frame_height: 0,
+                image_size: (0, 0),
+                clip_quirks: false,
             })),
             ..looks()
         }
@@ -2771,6 +2776,8 @@ mod tests {
                 sheet: Ok(EffectSheet {
                     frame_width: size.0,
                     frame_height: size.1,
+                    image_size: (size.0, size.1),
+                    clip_quirks: false,
                     image: crate::SheetImage::Rled(image_id),
                     frames: NonZeroU16::new(2).expect("non-zero"),
                 }),
@@ -3314,6 +3321,86 @@ mod tests {
                 frame: 0.0,
                 delay: 0.0,
             }]
+        );
+    }
+
+    /// What a 7 x 5 explosion of `rlëD` 403, its sheet edged by `edge`,
+    /// draws from (519, 378) in a world whose left edge is at `left`.
+    fn explosion_cut(
+        edge: impl Fn(EffectSheet) -> EffectSheet,
+        left: f32,
+    ) -> Vec<(ImageKey, Option<crate::geometry::Bounds>)> {
+        let sheet = EffectSheet {
+            frame_width: 7,
+            frame_height: 5,
+            image_size: (7, 5),
+            clip_quirks: false,
+            image: crate::SheetImage::Rled(403),
+            frames: NonZeroU16::new(2).expect("non-zero"),
+        };
+        let mut edged = looks();
+        edged.booms.insert(
+            BoomId(131),
+            Ok(BoomLook {
+                sheet: Ok(edge(sheet)),
+                advance: 1.0,
+                sound: None,
+            }),
+        );
+        let mut effects = Effects::default();
+        effects.explode(
+            blast(131, false),
+            at(PLAYER.x + 10.7, PLAYER.y - 4.6),
+            0.0,
+            &scene(),
+            &edged,
+            &mut Script::default(),
+        );
+        let world = crate::geometry::Bounds {
+            min: at(left, 0.0),
+            max: at(1024.0, 768.0),
+        };
+        let mut list = DrawList::new();
+        list.world_in(world, |list| {
+            effects.draw_explosions(list, &Camera::centred_on(PLAYER), &edged, CLEAR);
+        });
+        crate::box_cut::drawn_cuts(&list)
+    }
+
+    /// The 7 x 5 explosion's box, top left (519, 378).
+    fn explosion_box() -> crate::geometry::Bounds {
+        crate::geometry::Bounds::at(at(519.0, 378.0), 7.0, 5.0)
+    }
+
+    #[test]
+    fn an_overhanging_explosion_straddling_the_worlds_edge_is_cut_to_its_box() {
+        let overhanging = |sheet| EffectSheet {
+            image_size: (11, 5),
+            ..sheet
+        };
+        assert_eq!(
+            explosion_cut(overhanging, 520.0),
+            [(ImageKey::sprite(403, 0), Some(explosion_box()))]
+        );
+        assert_eq!(
+            explosion_cut(overhanging, 0.0),
+            [(ImageKey::sprite(403, 0), None)],
+            "wholly inside, drawn whole"
+        );
+    }
+
+    #[test]
+    fn a_quirky_explosion_cut_at_the_left_draws_its_clipped_frame() {
+        let quirky = |sheet| EffectSheet {
+            clip_quirks: true,
+            ..sheet
+        };
+        assert_eq!(
+            explosion_cut(quirky, 520.0),
+            [(
+                ImageKey::clipped_sprite(403, 0, (0, 1)),
+                Some(explosion_box())
+            )]
         );
     }
 }

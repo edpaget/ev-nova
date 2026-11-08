@@ -45,7 +45,9 @@ pub trait DescriptionGraphics {
 /// the player info's background.
 pub trait PictureSizes {
     /// `PICT` `id`'s width and height; none when it is missing or does
-    /// not decode.
+    /// not decode. The game data's answer scans the picture
+    /// (`nova_data::graphics::scan_pict`), which fails where decoding it
+    /// would, without building its pixels.
     fn picture_size(&self, id: i16) -> Option<(u32, u32)>;
 }
 

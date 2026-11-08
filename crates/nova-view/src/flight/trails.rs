@@ -201,6 +201,8 @@ mod tests {
                 frames: NonZeroU16::MIN,
                 frame_width: width,
                 frame_height: width,
+                image_size: (width, width),
+                clip_quirks: false,
             })),
             particles: 2,
             part_vel: 300,

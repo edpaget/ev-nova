@@ -74,10 +74,13 @@
 //! Left out of the hypergate branch, with the reason:
 //!
 //! - **The sequential branch** (@0x2ec4b-0x2ee05), every other stellar's:
-//!   the view's stellar animation.
+//!   [`stellar_frames`](crate::stellar_frames), which the session steps
+//!   at the same sprite tick (`nova_sim::Session`'s `stellar_frames`
+//!   module).
 //! - **Sprite-slot plumbing** (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a):
-//!   visibility, master loading, cloning, murk and location, which the
-//!   view's stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is
+//!   visibility and master loading, which the view's stellar drawing
+//!   does, and the clone and the placement, which the session's sprite
+//!   tick runs; `_HandleSpriteMurkiness` (@0x2eea4) is
 //!   `nova_view::flight::murk`'s, a gate's sprite murked as every
 //!   stellar's (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
@@ -95,9 +98,9 @@ pub const RANDOM: u16 = 0x0002;
 pub const ONLY_WHEN_DESTROYED: u16 = 0x0080;
 
 /// One `_HandleStellarSprites` the flight ran outside a play frame, under a
-/// `_PrepareAllSprites` or at game entry: the session steps its gates by
-/// it, and the view replays it on the stellars of the scene it shows, in
-/// the order raised, before the next frame is drawn.
+/// `_PrepareAllSprites` or at game entry: the session steps every stellar
+/// shown by it, its gates and every other stellar's frames
+/// ([`stellar_frames`](crate::stellar_frames)).
 ///
 /// It runs at the gain `_gSpeedMult` holds when it runs: a take-off's at
 /// 0.0, as `_PlayerLandOnStellar` zeroes it (@0x6375e-0x63769); an
@@ -170,6 +173,7 @@ impl GateAnimation {
             open_frame,
             type_frames,
             dead_frames,
+            ..
         } = site.animation;
         Self {
             delay,
@@ -518,6 +522,7 @@ mod tests {
                 open_frame: 9,
                 type_frames: 42,
                 dead_frames: 8,
+                ..SiteAnimation::default()
             },
             ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
         };

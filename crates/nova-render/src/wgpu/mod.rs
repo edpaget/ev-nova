@@ -16,7 +16,8 @@
 //! ([`Blend::OrCrossfade`](nova_view::Blend::OrCrossfade)) and a
 //! translucent OR batch
 //! ([`Blend::OrTranslucent`](nova_view::Blend::OrTranslucent)) read a backdrop
-//! copy of the rectangle the core says it covers, in its layer's pixels
+//! copy of the rectangle the core says it covers, in the pixels of the
+//! canvas it draws into
 //! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
 //! before it.
 //!
@@ -32,14 +33,20 @@
 //! enlarges it onto the viewport ([`Upscale::enlarge`]), and the whole
 //! overlay is drawn over it, in the frame's order: an overlay drawn before
 //! the world in the frame lands over it, unlike natively (the renderer's
-//! layout says why). On macOS, MetalFX's spatial scaler
+//! layout says why). The world's tail
+//! ([`Frame::world_tail`](crate::Frame::world_tail)) is drawn last, into
+//! the scene in the frame's order, world and overlay alike, as natively.
+//! [`Fsr1`] draws the world into a texture as sharp-bilinear does, then
+//! enlarges it in two passes in the frame's encoder: EASU into a texture
+//! the viewport's size, then RCAS onto the viewport. On macOS, MetalFX's spatial scaler
 //! (`metal_fx::MetalFxSpatial`, through the `nova_metalfx` crate's safe
 //! API) draws the world into a texture as sharp-bilinear does, scales it
 //! in a command buffer of its own, and copies the result onto the
 //! viewport; a size pair MetalFX won't take is drawn with sharp-bilinear
 //! and logged once ([`Gpu::take_warnings`](crate::Gpu::take_warnings)).
 //! Both GPU adapters are the [`UpscalerProbe`](crate::UpscalerProbe) for
-//! their device: every wgpu device can use native and sharp-bilinear, and
+//! their device: every wgpu device can use native, sharp-bilinear and
+//! FSR 1, and
 //! a macOS device on Metal with a GPU MetalFX supports can use MetalFX too
 //! ([`offered`](crate::upscale::offered)). MetalFX needs macOS 13, which
 //! the build's minimum is.
@@ -72,6 +79,7 @@
 mod data;
 mod fonts;
 mod frame_commands;
+mod fsr1;
 mod hinted_text;
 mod layout;
 #[cfg(target_os = "macos")]
@@ -84,6 +92,7 @@ mod sharp_bilinear;
 mod surface;
 mod upscale;
 
+pub use fsr1::Fsr1;
 pub use metrics::GlyphonMetrics;
 pub use offscreen::{OffscreenGpu, ReadError};
 pub use overlay::{MAX_TEXTURE_SIDE, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay};

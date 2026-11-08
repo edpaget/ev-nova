@@ -125,15 +125,17 @@ fn a_destroyed_stellar_whose_dead_type_is_a_pict_pair_draws_it() {
             frames: NonZeroU16::new(2).expect("non-zero"),
             frame_width: 4,
             frame_height: 4,
+            image_size: (4, 4),
+            eight_bit: false,
+            clip_quirks: false,
         }))
     );
     let mut scene = SystemScene::load(&data, SystemId(131));
     assert_eq!(scene.problems(), [] as [String; 0]);
     assert_eq!(drawn(&scene), (vec![ImageKey::sprite(1001, 0)], false));
-    scene.set_destroyed(|_| StellarLook {
+    scene.set_looks(|_| StellarLook {
         destroyed: true,
         drawn: DrawnSheet::Dead,
-        counted: DrawnSheet::Dead,
         ..StellarLook::default()
     });
     let (sprites, placeholder) = drawn(&scene);
@@ -165,16 +167,23 @@ fn graphic_type_0_of_a_pict_pair_keys_its_sheet_by_the_spin() {
             frames: NonZeroU16::new(2).expect("non-zero"),
             frame_width: 4,
             frame_height: 4,
+            image_size: (4, 4),
+            eight_bit: false,
+            clip_quirks: false,
         })
     );
 }
 
 #[test]
 fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
+    // 256 x 256 tiles, as many as the frames, so the store's count is the
+    // decoded one.
+    let mut tiled = spin(2001, 2001, 1, 256);
+    put_i16s(&mut tiled, 0x0A, &[256]);
     let data = store(&[
         (System::TYPE, 131, system(&[140])),
         (Stellar::TYPE, 140, stellar(1, -1)),
-        (Spin::TYPE, 1001, spin(2001, 2001, 1, 256)),
+        (Spin::TYPE, 1001, tiled),
         (PICT, 2001, rgb888_pict(256, 256, &vec![[0; 3]; 256 * 256])),
     ]);
     let contents = data.system(SystemId(131));
@@ -185,6 +194,9 @@ fn a_pict_pair_of_more_frames_than_a_u16_holds_counts_the_most_it_can() {
             frames: NonZeroU16::MAX,
             frame_width: 1,
             frame_height: 1,
+            image_size: (1, 1),
+            eight_bit: false,
+            clip_quirks: false,
         })
     );
 }

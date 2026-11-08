@@ -237,6 +237,81 @@ fn the_floating_map_and_the_escort_menu_are_world_and_their_text_overlay() {
     assert_world_then_overlay(&list);
 }
 
+/// Whether `command` is one of the explosion's debris particles.
+fn is_debris(command: &DrawCommand) -> bool {
+    matches!(command, DrawCommand::Dot { color, .. } if *color == DEBRIS_COLOR)
+}
+
+/// The indices of the commands in `list` that are `wanted`, in order.
+fn indices_of(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> Vec<usize> {
+    list.iter()
+        .enumerate()
+        .filter(|(_, command)| wanted(command))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+#[test]
+fn flights_world_tail_starts_at_the_floaters_and_the_particles_follow_it() {
+    let mut view = faked_mid_fight();
+    super::faked_world::saying(&mut view, TOO_CLOSE, 250);
+    let list = super::faked_world::world_list_with(&mut view, &super::faked_world::targeting(1));
+    let tail = list.world_tail().expect("a world tail");
+    let message_box = first(&list, |command| {
+        *command == fill_command(hud::message_box(VIEW_SIZE), Color::BLACK)
+    });
+    assert!(message_box < tail, "the message's box before the tail");
+    for id in [2000, 2001, 3500, 651] {
+        let drawn = indices_of(&list, sprite_of(id));
+        assert!(!drawn.is_empty(), "sprite {id} drawn");
+        assert!(drawn.iter().all(|&at| at < tail), "sprite {id}: {drawn:?}");
+    }
+    let brackets = indices_of(&list, icon_in(10000..=10023));
+    assert!(!brackets.is_empty(), "the brackets drawn");
+    assert!(brackets.iter().all(|&at| at < tail), "{brackets:?}");
+    let message = first(&list, |command| *command == message_drawn(TOO_CLOSE));
+    assert!(tail <= message, "the message's text in the tail");
+    let debris = indices_of(&list, is_debris);
+    assert!(!debris.is_empty(), "the debris drawn");
+    assert!(debris.iter().all(|&at| message < at), "{debris:?}");
+    assert_world_then_overlay(&list);
+}
+
+#[test]
+fn the_floating_map_and_the_escort_menu_follow_the_world_tail() {
+    let mut view =
+        super::faked_world::world(catalog(), in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    let mut hud = nova_sim::flight_frame::FrameHud::default();
+    hud.escort_rows[0].present = true;
+    view.escort_menu.toggle(view.elapsed, &hud.escort_rows);
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    let list = super::faked_world::world_list_with(&mut view, &hud);
+    let tail = list.world_tail().expect("a world tail");
+    let border = floating_border(&list);
+    assert!(!border.is_empty(), "the floating map is up");
+    for line in &border {
+        let drawn = indices_of(&list, |command| command == line);
+        assert!(drawn.iter().all(|&at| tail <= at), "{line:?} at {drawn:?}");
+    }
+    assert!(
+        tail <= first(&list, escort_menu_top),
+        "the escort menu's top"
+    );
+    let title = first(
+        &list,
+        |command| matches!(unclipped(command), DrawCommand::Text { text, .. } if text == "Escort Commands"),
+    );
+    assert!(tail <= title, "the escort menu's title");
+}
+
+#[test]
+fn with_no_floater_up_the_world_tail_starts_at_the_particles() {
+    let view = faked_mid_fight();
+    let list = super::faked_world::world_list(&view);
+    assert_eq!(list.world_tail(), Some(first(&list, is_debris)));
+}
+
 #[test]
 fn a_fights_scene_and_its_target_layer_are_the_world_and_its_hud_and_every_text_overlay() {
     // The whole screen, its HUD and title over the world.
@@ -323,4 +398,31 @@ fn the_stars_are_world_through_a_jump_and_the_jumps_fade_overlay() {
     assert_eq!(layers[at], DrawLayer::Overlay);
     assert!(world_end(&list) > 0);
     assert_world_then_overlay(&list);
+}
+
+#[test]
+fn a_pict_pair_star_sheet_draws_the_stars_from_spin_700() {
+    let mut catalog = catalog();
+    catalog.star_sheet = Ok(StarSheet {
+        image: crate::SheetImage::Spin(700),
+        ..star_sheet()
+    });
+    let mut view =
+        super::faked_world::world(catalog, in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]));
+    view.reset_stars();
+    let list = super::faked_world::world_list(&view);
+    let stars = list
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                DrawCommand::Sprite {
+                    image,
+                    blend: Blend::Or,
+                    ..
+                } if image.kind == crate::ImageKind::SpinSheet && image.id == 700
+            )
+        })
+        .count();
+    assert!(stars > 0, "no stars drawn from spïn 700");
 }

@@ -34,14 +34,30 @@ impl SheetLayout {
 
 /// A decoded sprite sheet: equal-sized frames in resource order, plus the
 /// layout to arrange them in.
+///
+/// Each frame has a box, the header's width x height: what is clicked, and
+/// what touches and placement are measured by. Its image is usually the
+/// box, but a sheet the original draws past its box (an `rlëD` of depth 32,
+/// say; see `rled_wide`) has larger images, with the box at
+/// [`box_origin`](Self::box_origin) and the image padded so the box sits
+/// at its centre: a view that centres the image on the box's centre draws
+/// it where the original does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpriteSheet {
     frame_width: u32,
     frame_height: u32,
+    image_width: u32,
+    image_height: u32,
+    box_origin: (u32, u32),
     frames: Vec<Image>,
     layout: SheetLayout,
     /// The frames' solid runs alone, when any frame has one.
     solid: Option<Vec<Image>>,
+    /// The depth the original's draw proc sees (see [`Self::depth`]).
+    depth: u16,
+    /// Whether its clipped draw can differ from a crop (see
+    /// [`Self::clip_quirks`]).
+    clip_quirks: bool,
 }
 
 impl SpriteSheet {
@@ -56,9 +72,33 @@ impl SpriteSheet {
         Self {
             frame_width,
             frame_height,
+            image_width: frame_width,
+            image_height: frame_height,
+            box_origin: (0, 0),
             frames,
             layout,
             solid: None,
+            depth: 16,
+            clip_quirks: false,
+        }
+    }
+
+    /// A sheet whose frames' boxes are `frame_size` but whose images are
+    /// `image_size`, each box at `box_origin` in its image. Callers
+    /// guarantee at least one frame, each of `image_size`, and a box that
+    /// fits inside it.
+    pub(crate) fn overhanging(
+        frame_size: (u32, u32),
+        image_size: (u32, u32),
+        box_origin: (u32, u32),
+        frames: Vec<Image>,
+        layout: SheetLayout,
+    ) -> Self {
+        Self {
+            image_width: image_size.0,
+            image_height: image_size.1,
+            box_origin,
+            ..Self::new(frame_size.0, frame_size.1, frames, layout)
         }
     }
 
@@ -68,16 +108,63 @@ impl SpriteSheet {
         Self { solid, ..self }
     }
 
-    /// Width of every frame.
+    /// The sheet with `depth` as its header's depth (16 unless set).
+    pub(crate) fn with_depth(self, depth: u16) -> Self {
+        Self { depth, ..self }
+    }
+
+    /// The sheet with `clip_quirks` as [`Self::clip_quirks`] (false unless
+    /// set).
+    pub(crate) fn with_clip_quirks(self, clip_quirks: bool) -> Self {
+        Self {
+            clip_quirks,
+            ..self
+        }
+    }
+
+    /// Whether a frame whose box touches the world's edge may draw
+    /// otherwise than its image cut to the box, as `_BlitPixieRLEClipped`
+    /// draws it ([`decode_rled_clipped`](super::decode_rled_clipped)): a
+    /// line start whose count lies, a run whose fill shows a restart at
+    /// the cut, or a token ending on an even byte. A conservative test,
+    /// false for every stock sheet, for a `PICT` pair's cut, and for a
+    /// sheet read otherwise than the original draws it.
+    #[must_use]
+    pub fn clip_quirks(&self) -> bool {
+        self.clip_quirks
+    }
+
+    /// Width of every frame's box: the header's width.
     #[must_use]
     pub fn frame_width(&self) -> u32 {
         self.frame_width
     }
 
-    /// Height of every frame.
+    /// Height of every frame's box: the header's height.
     #[must_use]
     pub fn frame_height(&self) -> u32 {
         self.frame_height
+    }
+
+    /// Width of every frame's image: its box's, unless the sheet draws
+    /// past its box.
+    #[must_use]
+    pub fn image_width(&self) -> u32 {
+        self.image_width
+    }
+
+    /// Height of every frame's image: its box's, unless the sheet draws
+    /// past its box.
+    #[must_use]
+    pub fn image_height(&self) -> u32 {
+        self.image_height
+    }
+
+    /// Where each frame's box's top-left corner lies in its image: (0, 0)
+    /// unless the sheet draws past its box.
+    #[must_use]
+    pub fn box_origin(&self) -> (u32, u32) {
+        self.box_origin
     }
 
     /// The frames, in resource order.
@@ -108,6 +195,15 @@ impl SpriteSheet {
         self.solid
     }
 
+    /// The depth of the frames the original's draw proc sees, which it
+    /// branches on (+0x20, @0xbb5a4, @0xbb792): an `rlëD`'s header depth
+    /// (16, 8, 32 or another), under either reading, and 16 for a `PICT`
+    /// pair's cut, which `_ConvertSpriteToRLE` makes a 16-bit RLE.
+    #[must_use]
+    pub fn depth(&self) -> u16 {
+        self.depth
+    }
+
     /// The layout the sheet was decoded with.
     #[must_use]
     pub fn layout(&self) -> SheetLayout {
@@ -127,8 +223,9 @@ impl SpriteSheet {
         (self.frames.len() as u32).div_ceil(self.columns())
     }
 
-    /// One image of every frame, placed row by row, left to right;
-    /// trailing cells of the last row stay transparent.
+    /// One image of every frame, placed row by row, left to right, a cell
+    /// the size of a frame's image; trailing cells of the last row stay
+    /// transparent.
     ///
     /// Clamping the columns to the frame count keeps the composed image
     /// under twice the frames' own pixels, which the decoder has already
@@ -137,10 +234,10 @@ impl SpriteSheet {
     pub fn compose(&self) -> Image {
         let columns = self.columns();
         let mut sheet =
-            Image::transparent(columns * self.frame_width, self.rows() * self.frame_height);
+            Image::transparent(columns * self.image_width, self.rows() * self.image_height);
         for (i, frame) in (0..).zip(&self.frames) {
-            let x = i % columns * self.frame_width;
-            let y = i / columns * self.frame_height;
+            let x = i % columns * self.image_width;
+            let y = i / columns * self.image_height;
             sheet.blit(frame, x, y);
         }
         sheet
@@ -212,6 +309,46 @@ mod tests {
         let composed = sheet(5, 3).compose();
         assert_eq!((composed.width(), composed.height()), (6, 2));
         assert_eq!(cells(&composed), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 0, 0]);
+    }
+
+    #[test]
+    fn a_plain_sheets_images_are_its_box() {
+        let plain = sheet(2, 2);
+        assert_eq!((plain.image_width(), plain.image_height()), (2, 1));
+        assert_eq!(plain.box_origin(), (0, 0));
+    }
+
+    /// Two 6x1 images, each filled with its own index plus one, around a
+    /// 2x1 box at (2, 0).
+    fn overhanging(columns: u16) -> SpriteSheet {
+        let frames = (1..=2)
+            .map(|i| Image::from_rgba(6, 1, vec![i; 24]).unwrap())
+            .collect();
+        SpriteSheet::overhanging(
+            (2, 1),
+            (6, 1),
+            (2, 0),
+            frames,
+            SheetLayout::new(columns).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_sheet_keeps_its_box_while_its_images_are_wider() {
+        let wide = overhanging(2);
+        assert_eq!((wide.frame_width(), wide.frame_height()), (2, 1));
+        assert_eq!((wide.image_width(), wide.image_height()), (6, 1));
+        assert_eq!(wide.box_origin(), (2, 0));
+        assert_eq!(wide.frames().len(), 2);
+    }
+
+    #[test]
+    fn compose_lays_cells_out_by_the_image_size() {
+        let composed = overhanging(2).compose();
+        assert_eq!((composed.width(), composed.height()), (12, 1));
+        assert_eq!(cells(&composed), [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
+        let composed = overhanging(1).compose();
+        assert_eq!((composed.width(), composed.height()), (6, 2));
     }
 
     #[test]

@@ -26,8 +26,9 @@
 //! (@0x2d088-0x2d164) and, dying, takes the dying direction
 //! (@0x2d169-0x2d17e); a ship failing that test skips to @0x2ded6, past
 //! the step. No sound. It runs from `_EnterGameFromMainScreen` @0x1a36c
-//! and `_PlayGame`'s entry @0x45834 ([`Session::load`] and the first
-//! populate, [`Session::populate`]), `_PlayerEnterHypergate` @0x63e91
+//! and `_PlayGame`'s entry @0x45834 (`Session::enter_game` and the first
+//! populate, [`Session::populate`]; [`Session::load`] only lays the slots
+//! out, `Session::prepare_slots`), `_PlayerEnterHypergate` @0x63e91
 //! and `_PlayerEnterWormhole` @0x64743 (a gate entry, once the player's
 //! system is the exit's, @0x639fd and @0x642a7, and before the old ships
 //! are deleted, @0x67096, and the exit's setup, so the old ships pass the
@@ -51,7 +52,9 @@
 //! record is never carried into another session: every entry into flight
 //! runs `_PrepareAllSprites` again.
 //!
-//! **The fade.** Each [`Session::prepare_all_sprites`] steps the player's
+//! **The frames and the fade.** Each [`Session::prepare_all_sprites`]
+//! steps every ship's set, lights and ion tint once, slot by slot (see the
+//! `prepare_frames` module), then the player's
 //! cloak fade (slot 0) and then every NPC's once (`Traffic::step_fades`),
 //! at the frame's gain (`Session::speed_mult`), so before the first frame
 //! a take-off and a gate exit step it twice (`Session::lift_off`, and
@@ -98,11 +101,13 @@
 //! rdm:phase/combat-and-flight/phase-2-left-out-of-weapons-fidelity-47.
 
 use super::player_led::slot_of;
+use super::prepare_frames::PreparedSlot;
 use super::{Session, Setup, Space};
+use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::geometry::Vec2;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::ship_layer::{ShipLayer, Slot, disabled};
+use crate::ship_layer::{ShipLayer, Slot};
 
 /// Where a ship's hover and click box is ([`Session::hover_place`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,52 +182,58 @@ impl Session {
     /// leads it, else the ships' one, and is displayed from now; a hidden
     /// ship's slot keeps its place and displays nothing; a slot with no
     /// ship displays nothing. Each shown slot clones its type's frames
-    /// (`Session::lay_out_ships`). The player's cloak fade steps first, as
+    /// (`Session::lay_out_ships`). Every ship's set, ion tint and lights
+    /// step once at the frame's gain, slot by slot, read as its slot's
+    /// `_IsDisabled`, drawing on `chance` (`Session::display_slots`): a
+    /// slot's lights write its berth's blink timer, so they run in slot
+    /// order. The player's cloak fade steps first, as
     /// slot 0's display steps it, then every NPC's once
     /// (`Traffic::step_fades`), as each slot's display steps it
     /// (@0x2d088-0x2d17e): the step reads only its own ship, so one pass
     /// over the traffic is the slot loop's. See the module docs for where
     /// it runs.
-    pub(crate) fn prepare_all_sprites(&mut self) {
-        let mut slots = vec![(
-            ShipRef::Player,
-            Slot::Player,
-            // The player defends no stellar.
-            disabled(self.player_condition(), false),
-            false,
-        )];
-        let mut npcs: Vec<_> = self
-            .npcs()
-            .iter()
-            .map(|npc| {
-                let held =
-                    disabled(npc.condition, npc.defends.is_some()) || self.held_disabled(npc);
-                (
-                    ShipRef::Npc(npc.id),
-                    slot_of(npc),
-                    held,
-                    npc.escorts_player(),
-                )
-            })
-            .collect();
-        npcs.sort_by_key(|&(_, slot, _, _)| slot);
-        slots.extend(npcs);
-        self.space.slot_shown.clear();
-        self.space.slot_placed.clear();
-        for (ship, slot, disabled, led) in slots {
-            let shown = !self.is_hidden(ship);
-            self.note_display(ship, slot, shown);
-            if shown {
-                self.space
-                    .slot_sprites
-                    .layers
-                    .put(slot, ShipLayer::of(disabled, led));
-            }
-        }
+    pub(crate) fn prepare_all_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        let slots = self.prepared_slots();
+        self.put_prepared(&slots);
         let gain = self.speed_mult();
+        self.display_slots(&slots, gain, &mut *chance);
         self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
         self.space.traffic.step_fades(gain);
         self.lay_out_ships();
+    }
+
+    /// `_PrepareAllSprites`' ship part with no display step: each slot put
+    /// in its layer, shown or hidden, and its frames cloned, as a session
+    /// is built ([`Session::load`]). The steps wait for the entry's own
+    /// prepare (`Session::enter_game`, @0x1a36c), at its gain; a session
+    /// no entry prepares (the developer's flight) still draws its ships
+    /// from the first frame. Running it again changes nothing
+    /// (`_PutSpriteInLayer` keeps a slot already in its layer, @0x768c).
+    pub(super) fn prepare_slots(&mut self) {
+        let slots = self.prepared_slots();
+        self.put_prepared(&slots);
+        self.lay_out_ships();
+    }
+
+    /// The gain-free part of `_PrepareAllSprites`' ship part: each slot of
+    /// `slots` shown puts itself in its layer, the disabled one when its
+    /// `_IsDisabled` holds, else the escorts' one when the player leads
+    /// it, else the ships' one, and is displayed from now; a hidden
+    /// ship's slot keeps its place and displays nothing; a slot with no
+    /// ship displays nothing.
+    fn put_prepared(&mut self, slots: &[PreparedSlot]) {
+        self.space.slot_shown.clear();
+        self.space.slot_placed.clear();
+        for prepared in slots {
+            let shown = !self.is_hidden(prepared.ship);
+            self.note_display(prepared.ship, prepared.slot, shown);
+            if shown {
+                self.space.slot_sprites.layers.put(
+                    prepared.slot,
+                    ShipLayer::of(prepared.disabled, prepared.led),
+                );
+            }
+        }
     }
 }
 
@@ -328,6 +339,7 @@ mod tests {
     use crate::session::mission_ships::tests::{
         accepted, jump_to, shipping, ships_catalog, take_off,
     };
+    use crate::ship_layer::disabled;
     use crate::testkit::FakePilotCatalog;
     use crate::testkit::work;
     use crate::traffic::npc::NpcId;
@@ -512,7 +524,7 @@ mod tests {
             .slot_sprites
             .layers
             .put(slot_of(&session.npcs()[0]), ShipLayer::Ships);
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         assert!(
             session
                 .draw_layers()
@@ -545,7 +557,7 @@ mod tests {
             .slot_sprites
             .layers
             .put(slot, ShipLayer::Disabled);
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         let layers = session.draw_layers();
         assert!(
             layers.contains(&(ShipRef::Npc(id), ShipLayer::Ships)),
@@ -580,7 +592,7 @@ mod tests {
         let a = session.npcs()[0].clone();
         let at = session.player().position + crate::geometry::Vec2::new(100.7, -20.3);
         session.space.npc_mut(a.id).expect("there").state.position = at;
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         let far = session.player().position + crate::geometry::Vec2::new(500.0, 0.0);
         let b = crate::fixture::refill(&mut session, a.id, far).expect("refilled");
         assert!(session.space.npc(a.id).is_none(), "A gone");
@@ -654,7 +666,7 @@ mod tests {
             fade: 4.0,
             direction: 1,
         };
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         let player = Cloak {
             fade: 4.75,
             direction: 1,
@@ -664,7 +676,7 @@ mod tests {
             ticks_left: 0,
             starting: true,
         };
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         assert_eq!(
             session.player_cloak(),
             Cloak {
@@ -726,7 +738,7 @@ mod tests {
                 };
             }
         }
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         for (&id, &(cloak, dying)) in ids.iter().zip(&cloaks) {
             let mut stepped = cloak;
             stepped.display_step(false, dying, crate::SpeedMult::FULL);

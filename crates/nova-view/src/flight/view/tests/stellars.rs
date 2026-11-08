@@ -336,7 +336,6 @@ fn each_event_asks_for_its_own_redraw() {
             galaxy: false,
             rebuilt: true,
             stars: true,
-            frames_reset: true,
         }
     );
     assert_eq!(view.catch_up_then(|_, _| {}), Redrawn::default(), "taken");
@@ -346,44 +345,6 @@ fn each_event_asks_for_its_own_redraw() {
 // phase 12): a take-off, a real jump, a docked move and a load. What a
 // frame draws of a stellar's record is `stellar_looks.rs`'s, on
 // FakeFlight.
-
-/// The Moon's frame shown.
-fn moon_frame<S: FlightSim>(view: &FlightView<FakeCatalog, S>) -> u16 {
-    sprites(&drawn(view))[1].0.frame
-}
-
-#[test]
-fn a_load_shows_every_stellar_from_frame_0() {
-    // Whatever the flight held: the view's stellars start at frame 0 as
-    // it is read, and go on a frame a tick.
-    let opened = || {
-        let mut fake = FakeFlight::new();
-        fake.set_frame(sol());
-        let opening = fake.opening();
-        FlightView::over(
-            Rc::new(catalog()),
-            fake,
-            opening,
-            &Rulebook::default(),
-            SharedChance::default(),
-        )
-    };
-    let mut flown = opened();
-    flown.tick(TICK);
-    flown.tick(TICK);
-    assert_eq!(moon_frame(&flown), 2);
-    let mut loaded = opened();
-    assert_eq!(moon_frame(&loaded), 0, "loaded");
-    loaded.tick(TICK);
-    assert_eq!(moon_frame(&loaded), 1, "loaded, then on");
-    // A new pilot's flight is begun, then ticked once past the land hint.
-    let mut new = opened();
-    new.begin(|_| true);
-    new.tick(TICK);
-    assert_eq!(moon_frame(&new), 1, "a new pilot's, one tick in");
-    new.tick(TICK);
-    assert_eq!(moon_frame(&new), 2, "a new pilot's, then on");
-}
 
 #[test]
 fn a_desk_move_redraws_with_no_extra_call() {

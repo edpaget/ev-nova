@@ -1,31 +1,32 @@
-//! A stellar's animation: which frame of its sheet shows, stepped tick by
-//! tick, as the original's sprite tick steps it every play frame
-//! (`_HandleStellarSprites` @0x2e77b-0x2ee35, stellar-fidelity phase 1),
-//! and at each pass outside one, under a `_PrepareAllSprites` or at game
-//! entry ([`Frames::step_by`], at the gain the pass says:
-//! `nova_sim::gate_sprite::StellarPass`).
+//! A stellar's animation by the sequential branch of the original's
+//! sprite tick: which frame of its sheet shows, stepped pass by pass, as
+//! `_HandleStellarSprites` (@0x2e77b-0x2ee35, stellar-fidelity phase 1)
+//! steps it in every game-work pass (@0x444d2), the double-time second
+//! pass's included, and in each pass outside one, under a
+//! `_PrepareAllSprites` or at game entry ([`StellarFrames::step_by`], at
+//! the gain the pass reads). The session keeps each stellar's
+//! [`StellarFrames`] and steps it (`nova_sim::Session`'s
+//! `stellar_frames` module); the system viewer, which runs no session,
+//! steps its own.
 //!
 //! A stellar animates when the frame count it animates over (its
 //! counted sheet's) is above 1, it is not a hypergate, and its destroyed
 //! state is the one its flags name: a stellar marked to animate only when
 //! destroyed (`Flags2` 0x0080) animates only while destroyed, and any
-//! other only while not (@0x2e784-0x2e7bb, @0x2e802). Nothing is
-//! destroyed in a viewer. A stellar that does not animate shows frame 0
-//! (@0x2ee20), its timer and frames frozen. A hypergate (`Flags2` 0x1000,
-//! @0x2e832) takes its own branch, which its session steps
-//! (`nova_sim::gate_sprite`, system-traffic-fidelity phase 7): it draws
-//! that frame (`SceneStellar::gate_frame`), and frame 0 where no session
-//! runs, as a released, closed gate shows.
+//! other only while not (@0x2e784-0x2e7bb, @0x2e802). A stellar that does
+//! not animate shows frame 0 (@0x2ee20), its timer and frames frozen. A
+//! hypergate (`Flags2` 0x1000, @0x2e832) takes its own branch
+//! ([`gate_sprite`](crate::gate_sprite), system-traffic-fidelity phase 7).
 //!
-//! Each tick an animating stellar's timer gains the frame's gain (the
+//! Each pass an animating stellar's timer gains the pass's gain (the
 //! original's `_gSpeedMult`, @0x2e810-0x2e825: 1.0 a frame at 30 frames
 //! a second, less on the frames that ramp up after a landing or a dialog;
-//! see `nova_sim::speed_mult`). Once it reaches `AnimDelay`, or `AnimDelay` x
-//! `Frame0Bias` while the current frame is 0 and the bias is above 1
-//! (@0x2ec4b-0x2ec83), the timer starts again and the frames advance. A
-//! threshold of 0 or less is met every tick: an `AnimDelay` of 0 or less
-//! advances every tick, as nothing in the original gates on it. The
-//! product is kept wide where the original's 16-bit `imul` wraps.
+//! see `nova_sim_base::speed_mult`). Once it reaches `AnimDelay`, or
+//! `AnimDelay` x `Frame0Bias` while the current frame is 0 and the bias
+//! is above 1 (@0x2ec4b-0x2ec83), the timer starts again and the frames
+//! advance. A threshold of 0 or less is met every pass: an `AnimDelay` of
+//! 0 or less advances every pass, as nothing in the original gates on
+//! it. The product is kept wide where the original's 16-bit `imul` wraps.
 //!
 //! How the frames advance (@0x2ec9b-0x2edf4):
 //!
@@ -46,21 +47,53 @@
 //! the sheet drawn keeps the frame it shows; a swap to another sheet
 //! keeps it while it is in range, and shows frame 0 otherwise
 //! (`_SWCloneFramesFromMaster` @0xac504-0xac532). A frozen slot steps its
-//! frames and draws its random picks, while the frame shown stays.
+//! frames and draws its random picks, while the frame shown stays, as
+//! every `_SWSetCurrentFrameIndex` refuses a slot whose frames count none
+//! (@0x2ee20-0x2ee30, @0xa90e7-0xa90ee).
+//!
+//! The function plays no sound (see the [`gate_sprite`](crate::gate_sprite)
+//! module docs).
 
 use std::num::NonZeroU16;
 
-use nova_sim::gate::HYPERGATE;
-use nova_sim::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED, RANDOM};
-use nova_sim::{Chance, SpeedMult};
+use nova_sim_base::SpeedMult;
 
-use super::catalog::AnimationData;
+use crate::catalog::LandingSite;
+use crate::chance::Chance;
+use crate::gate::HYPERGATE;
+use crate::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED, RANDOM};
+
+/// A stellar's animation fields, raw from its `spöb`: what the
+/// sequential branch reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StellarAnimation {
+    /// `AnimDelay`: how many 1/30 s passes each frame shows for.
+    pub delay: i16,
+    /// `Frame0Bias`: how many times longer frame 0 shows for.
+    pub frame0_bias: i16,
+    /// `Flags2`, raw: its animation bits ([`ALTERNATE`], [`RANDOM`],
+    /// [`ONLY_WHEN_DESTROYED`]) and its hypergate bit ([`HYPERGATE`]) are
+    /// read.
+    pub flags2: u16,
+}
+
+impl StellarAnimation {
+    /// `site`'s.
+    #[must_use]
+    pub fn of(site: &LandingSite) -> Self {
+        Self {
+            delay: site.animation.delay,
+            frame0_bias: site.animation.frame0_bias,
+            flags2: site.flags2,
+        }
+    }
+}
 
 /// Whether a stellar with these fields, `destroyed` or not, animates over
 /// `counted` frames by the sequential branch: never a hypergate, whose
 /// frames its session steps.
 #[must_use]
-pub fn is_animated(data: AnimationData, destroyed: bool, counted: NonZeroU16) -> bool {
+pub fn is_animated(data: StellarAnimation, destroyed: bool, counted: NonZeroU16) -> bool {
     counted.get() > 1
         && data.flags2 & HYPERGATE == 0
         && (data.flags2 & ONLY_WHEN_DESTROYED != 0) == destroyed
@@ -69,7 +102,7 @@ pub fn is_animated(data: AnimationData, destroyed: bool, counted: NonZeroU16) ->
 /// A stellar's animation state: its current and next frame, its timer,
 /// and the frame its sheet drawn shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Frames {
+pub struct StellarFrames {
     /// The current frame, in the counted sheet's frames.
     current: u16,
     /// The frame after it.
@@ -84,19 +117,19 @@ pub struct Frames {
     shown: u16,
 }
 
-impl Default for Frames {
+impl Default for StellarFrames {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Frames {
+impl StellarFrames {
     /// A stellar's state the first time a flight shows it: frame 0
     /// current and shown, frame 1 next, the timer at 0, as a newly made
     /// sprite slot sets it (`_HandleStellarSystemVisibility`
     /// @0x331e2-0x331fb; `_InitObjects` @0x1c8c5-0x1c8d1 sets the frame
     /// and timer at launch). A stellar shown again resumes the state it
-    /// was left in (`KeptFrames`, stellar-fidelity phase 12).
+    /// was left in (stellar-fidelity phase 12).
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -114,7 +147,7 @@ impl Frames {
     }
 
     /// Shows `frame` of the sheet drawn: the frame a hypergate's session
-    /// gave it, kept as its slot freezes (`SystemScene::set_frozen`).
+    /// gave it, kept as its slot freezes (`nova_sim::Session`'s settle of the looks).
     pub fn hold(&mut self, frame: u16) {
         self.shown = frame;
     }
@@ -132,7 +165,7 @@ impl Frames {
     /// random next frame (`Flags2` 0x0002) drawn on `chance`.
     pub fn step(
         &mut self,
-        data: AnimationData,
+        data: StellarAnimation,
         destroyed: bool,
         counted: NonZeroU16,
         drawn: NonZeroU16,
@@ -141,7 +174,7 @@ impl Frames {
         self.step_by(SpeedMult::FULL, data, destroyed, counted, drawn, chance);
     }
 
-    /// One pass at `gain`, as [`Frames::step`] runs one at full gain: the
+    /// One pass at `gain`, as [`StellarFrames::step`] runs one at full gain: the
     /// timer takes the gain, in doubles narrowed to a float (`_gSpeedMult`,
     /// @0x2e810-0x2e825), and the
     /// threshold is tested whatever it is, so at gain 0 a delay of 0, or a
@@ -149,7 +182,7 @@ impl Frames {
     pub fn step_by(
         &mut self,
         gain: SpeedMult,
-        data: AnimationData,
+        data: StellarAnimation,
         destroyed: bool,
         counted: NonZeroU16,
         drawn: NonZeroU16,
@@ -163,15 +196,15 @@ impl Frames {
     }
 
     /// One tick for a stellar whose sprite slot shows a frame frozen
-    /// (`Session::frame_frozen`, stellar-fidelity phase 8): its current
-    /// and next frames and its timer step as [`Frames::step`] steps them,
+    /// (`nova_sim::Session::frame_frozen`, stellar-fidelity phase 8): its current
+    /// and next frames and its timer step as [`StellarFrames::step`] steps them,
     /// random draws included, but the frame shown stays, whether it
     /// animates or not, as every `_SWSetCurrentFrameIndex` the sprite tick
     /// calls refuses a slot whose frames count none (@0x2ee20-0x2ee30,
     /// @0xa90e7-0xa90ee).
     pub fn step_frozen(
         &mut self,
-        data: AnimationData,
+        data: StellarAnimation,
         destroyed: bool,
         counted: NonZeroU16,
         chance: &mut dyn Chance,
@@ -180,12 +213,12 @@ impl Frames {
     }
 
     /// One pass at `gain` for a stellar whose sprite slot shows a frame
-    /// frozen, as [`Frames::step_frozen`] runs one at full gain (see
-    /// [`Frames::step_by`]).
+    /// frozen, as [`StellarFrames::step_frozen`] runs one at full gain (see
+    /// [`StellarFrames::step_by`]).
     pub fn step_frozen_by(
         &mut self,
         gain: SpeedMult,
-        data: AnimationData,
+        data: StellarAnimation,
         destroyed: bool,
         counted: NonZeroU16,
         chance: &mut dyn Chance,
@@ -199,7 +232,7 @@ impl Frames {
     fn advance(
         &mut self,
         gain: SpeedMult,
-        data: AnimationData,
+        data: StellarAnimation,
         destroyed: bool,
         counted: NonZeroU16,
         chance: &mut dyn Chance,
@@ -268,7 +301,7 @@ impl Frames {
     /// The take-off's reset (`_HandlePlayerDockRequest` @0x675ce-0x675fa,
     /// play-feel-4 phase 14): the current and next frames to 0, the timer
     /// kept, then shown as the rebuild that follows shows it (@0x67653,
-    /// [`Frames::reshow`]): frame 0, the current frame 0 modulo any sheet,
+    /// [`StellarFrames::reshow`]): frame 0, the current frame 0 modulo any sheet,
     /// and graphic type 0's frame 0 alike.
     pub fn take_off_reset(&mut self) {
         self.current = 0;
@@ -306,17 +339,15 @@ impl Frames {
 mod tests {
     use std::collections::VecDeque;
 
-    use nova_sim::NeverFires;
-
     use super::*;
-    use crate::flight::SharedChance;
+    use crate::chance::NeverFires;
 
     fn count(n: u16) -> NonZeroU16 {
         NonZeroU16::new(n).expect("non-zero")
     }
 
-    fn data(delay: i16, frame0_bias: i16) -> AnimationData {
-        AnimationData {
+    fn data(delay: i16, frame0_bias: i16) -> StellarAnimation {
+        StellarAnimation {
             delay,
             frame0_bias,
             flags2: 0,
@@ -325,8 +356,8 @@ mod tests {
 
     /// The frame shown after 0, 1, ... `len - 1` ticks of a whole stellar
     /// with `data`, counting `counted` frames and drawing `drawn`.
-    fn shown_over(data: AnimationData, counted: u16, drawn: u16, len: usize) -> Vec<u16> {
-        let mut frames = Frames::new();
+    fn shown_over(data: StellarAnimation, counted: u16, drawn: u16, len: usize) -> Vec<u16> {
+        let mut frames = StellarFrames::new();
         let mut shown = Vec::new();
         for _ in 0..len {
             shown.push(frames.shown());
@@ -337,7 +368,7 @@ mod tests {
 
     /// The frame shown after 0, 1, ... `len - 1` ticks of a whole stellar
     /// with `data` over a sheet of `frames`.
-    fn plain(data: AnimationData, frames: u16, len: usize) -> Vec<u16> {
+    fn plain(data: StellarAnimation, frames: u16, len: usize) -> Vec<u16> {
         shown_over(data, frames, frames, len)
     }
 
@@ -372,8 +403,8 @@ mod tests {
     }
 
     /// `data`, alternating with frame 0 (`Flags2` 0x0001).
-    fn alt(delay: i16, frame0_bias: i16) -> AnimationData {
-        AnimationData {
+    fn alt(delay: i16, frame0_bias: i16) -> StellarAnimation {
+        StellarAnimation {
             flags2: ALTERNATE,
             ..data(delay, frame0_bias)
         }
@@ -392,7 +423,7 @@ mod tests {
 
     #[test]
     fn alternate_leaves_next_alone_on_its_way_to_0() {
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         let mut states = Vec::new();
         for _ in 0..7 {
             frames.step(alt(1, 0), false, count(4), count(4), &mut NeverFires);
@@ -406,9 +437,9 @@ mod tests {
 
     /// Whether a stellar with `data`, `destroyed` or not, over `frames`
     /// frames, stays on frame 0 for 100 ticks, and is not animated.
-    fn stays_on_frame_0(data: AnimationData, destroyed: bool, frames: u16) {
+    fn stays_on_frame_0(data: StellarAnimation, destroyed: bool, frames: u16) {
         assert!(!is_animated(data, destroyed, count(frames)), "{data:?}");
-        let mut state = Frames::new();
+        let mut state = StellarFrames::new();
         for _ in 0..100 {
             state.step(
                 data,
@@ -461,13 +492,13 @@ mod tests {
     /// on `chance`: `len - 1` steps, so a script holds only the draws the
     /// frames shown need.
     fn drawn_over(
-        data: AnimationData,
+        data: StellarAnimation,
         counted: u16,
         drawn: u16,
         len: usize,
         chance: &mut dyn Chance,
     ) -> Vec<u16> {
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         let mut shown = vec![frames.shown()];
         for _ in 1..len {
             frames.step(data, false, count(counted), count(drawn), chance);
@@ -477,8 +508,8 @@ mod tests {
     }
 
     /// `data` with `flags2`.
-    fn flagged(flags2: u16, delay: i16, frame0_bias: i16) -> AnimationData {
-        AnimationData {
+    fn flagged(flags2: u16, delay: i16, frame0_bias: i16) -> StellarAnimation {
+        StellarAnimation {
             flags2,
             ..data(delay, frame0_bias)
         }
@@ -498,7 +529,7 @@ mod tests {
         assert_eq!(chance.asked, [4, 4], "frame 4 of 3, then 0");
         // Every frame but the current can be picked.
         for (draw, next) in [(0, 0), (1, 2), (2, 3), (3, 4)] {
-            let mut frames = Frames::new();
+            let mut frames = StellarFrames::new();
             let mut chance = Draws::new(&[draw]);
             frames.step(random, false, count(5), count(5), &mut chance);
             assert_eq!((frames.current, frames.next), (1, next), "{draw}");
@@ -518,9 +549,9 @@ mod tests {
         assert_eq!(chance.asked, [2, 2, 2]);
         // From frame 0 itself, every frame but 0 can be picked.
         for (draw, next) in [(0, 1), (1, 2), (2, 3)] {
-            let mut frames = Frames {
+            let mut frames = StellarFrames {
                 next: 0,
-                ..Frames::new()
+                ..StellarFrames::new()
             };
             let mut chance = Draws::new(&[draw]);
             frames.step(both, false, count(4), count(4), &mut chance);
@@ -549,15 +580,67 @@ mod tests {
     }
 
     #[test]
-    fn a_random_stellar_steps_on_the_default_chance() {
-        // The default draws the last outcome: the last frame allowed.
-        let mut chance = SharedChance::default();
+    fn a_random_stellar_steps_on_a_source_that_never_fires() {
+        // It draws the last outcome: the last frame allowed.
+        let mut chance = NeverFires;
         let random = flagged(RANDOM, 1, 0);
         assert_eq!(drawn_over(random, 4, 4, 6, &mut chance), [0, 1, 3, 2, 3, 2]);
         let both = flagged(ALTERNATE | RANDOM, 1, 0);
         assert_eq!(
             drawn_over(both, 4, 4, 8, &mut chance),
             [0, 1, 0, 3, 0, 2, 0, 3]
+        );
+    }
+
+    #[test]
+    fn a_random_pick_asks_over_the_frames_allowed_and_never_takes_one_refused() {
+        // Every draw a 4-frame random stellar can take: `below(3)`, never
+        // the frame just made current.
+        let random = flagged(RANDOM, 1, 0);
+        for draw in 0..3 {
+            let mut frames = StellarFrames::new();
+            let mut chance = Draws::new(&[draw]);
+            frames.step(random, false, count(4), count(4), &mut chance);
+            assert_eq!(chance.asked, [3], "{draw}");
+            assert_ne!(frames.next, frames.current, "{draw}");
+            assert!(frames.next < 4, "{draw}");
+        }
+        // Under 0x0001 as well: `below(2)`, never frame 0 nor the current.
+        let both = flagged(ALTERNATE | RANDOM, 1, 0);
+        for draw in 0..2 {
+            let mut frames = StellarFrames::new();
+            let mut chance = Draws::new(&[draw]);
+            frames.step(both, false, count(4), count(4), &mut chance);
+            assert_eq!(chance.asked, [2], "{draw}");
+            assert_ne!(frames.next, 0, "{draw}");
+            assert_ne!(frames.next, frames.current, "{draw}");
+        }
+        // Two frames under both: nothing allowed, no draw, next kept.
+        let mut frames = StellarFrames::new();
+        let mut chance = Draws::none();
+        frames.step(both, false, count(2), count(2), &mut chance);
+        assert!(chance.asked.is_empty());
+        assert_eq!((frames.current, frames.next), (1, 1));
+    }
+
+    #[test]
+    fn a_sites_animation_is_its_delay_bias_and_flags2() {
+        let site = LandingSite {
+            flags2: RANDOM | ALTERNATE,
+            animation: crate::catalog::SiteAnimation {
+                delay: 3,
+                frame0_bias: -2,
+                ..crate::catalog::SiteAnimation::default()
+            },
+            ..nova_sim_catalog::fixture::planet(128, 0.0, 0.0)
+        };
+        assert_eq!(
+            StellarAnimation::of(&site),
+            StellarAnimation {
+                delay: 3,
+                frame0_bias: -2,
+                flags2: RANDOM | ALTERNATE,
+            }
         );
     }
 
@@ -583,7 +666,7 @@ mod tests {
     #[test]
     fn a_frozen_random_stellar_draws_while_its_frame_shown_stays() {
         let random = flagged(RANDOM, 1, 0);
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         let mut chance = Draws::new(&[1, 0]);
         frames.step_frozen(random, false, count(4), &mut chance);
         assert_eq!((frames.current, frames.next, frames.shown()), (1, 2, 0));
@@ -598,16 +681,16 @@ mod tests {
             stays_on_frame_0(flagged(flags2, 1, 0), false, 1);
             stays_on_frame_0(flagged(flags2 | ONLY_WHEN_DESTROYED, 1, 0), false, 4);
             stays_on_frame_0(flagged(flags2 | HYPERGATE, 1, 0), false, 4);
-            let mut frames = Frames::new();
+            let mut frames = StellarFrames::new();
             frames.step_frozen(flagged(flags2, 1, 0), false, count(1), &mut Draws::none());
-            assert_eq!(frames, Frames::new());
+            assert_eq!(frames, StellarFrames::new());
         }
     }
 
     /// A delay of 2, animating only when destroyed or not as
     /// `only_when_destroyed` says.
-    fn live(only_when_destroyed: bool) -> AnimationData {
-        AnimationData {
+    fn live(only_when_destroyed: bool) -> StellarAnimation {
+        StellarAnimation {
             flags2: if only_when_destroyed {
                 ONLY_WHEN_DESTROYED
             } else {
@@ -626,8 +709,8 @@ mod tests {
 
     /// A hypergate (`Flags2` 0x1000 with 0x0200, as every stock gate's)
     /// with an `AnimDelay` of `delay`.
-    fn gate(delay: i16) -> AnimationData {
-        AnimationData {
+    fn gate(delay: i16) -> StellarAnimation {
+        StellarAnimation {
             flags2: HYPERGATE | 0x0200,
             ..data(delay, 0)
         }
@@ -649,7 +732,7 @@ mod tests {
         for delay in [0, 2, -1] {
             stays_on_frame_0(gate(delay), false, 42);
             stays_on_frame_0(
-                AnimationData {
+                StellarAnimation {
                     flags2: HYPERGATE,
                     ..data(delay, 0)
                 },
@@ -665,7 +748,7 @@ mod tests {
         stays_on_frame_0(live(false), true, 32);
         stays_on_frame_0(live(true), false, 32);
         assert!(is_animated(live(true), true, count(32)), "destroyed");
-        let mut dead = Frames::new();
+        let mut dead = StellarFrames::new();
         let mut shown = Vec::new();
         for _ in 0..5 {
             shown.push(dead.shown());
@@ -675,11 +758,11 @@ mod tests {
         // One frame stays on frame 0 whatever the state; no delay
         // animates every tick.
         stays_on_frame_0(live(true), true, 1);
-        let no_delay = AnimationData {
+        let no_delay = StellarAnimation {
             delay: 0,
             ..live(true)
         };
-        let mut dead = Frames::new();
+        let mut dead = StellarFrames::new();
         let mut shown = Vec::new();
         for _ in 0..5 {
             shown.push(dead.shown());
@@ -695,15 +778,15 @@ mod tests {
         let most = count(u16::MAX);
         assert!(is_animated(slow, false, most));
         let first = f64::from(i16::MAX).powi(2);
-        let mut frames = Frames {
+        let mut frames = StellarFrames {
             timer: first - 2.0,
-            ..Frames::new()
+            ..StellarFrames::new()
         };
         frames.step(slow, false, most, most, &mut NeverFires);
         assert_eq!(frames.shown(), 0, "a tick short");
         frames.step(slow, false, most, most, &mut NeverFires);
         assert_eq!(frames.shown(), 1);
-        let mut last = Frames {
+        let mut last = StellarFrames {
             next: u16::MAX - 1,
             timer: f64::from(i16::MAX) - 1.0,
             ..frames
@@ -715,7 +798,7 @@ mod tests {
     #[test]
     fn a_stellar_that_stops_animating_shows_frame_0_and_resumes_from_its_own_frame() {
         let (whole, four) = (data(2, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         for _ in 0..5 {
             frames.step(whole, false, four, four, &mut NeverFires);
         }
@@ -735,7 +818,7 @@ mod tests {
     #[test]
     fn a_swap_keeps_the_frame_shown_in_range_and_shows_frame_0_otherwise() {
         let (every_tick, four) = (data(1, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         frames.step(every_tick, false, four, four, &mut NeverFires);
         frames.step(every_tick, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 2);
@@ -767,7 +850,7 @@ mod tests {
     #[test]
     fn a_rebuild_point_shows_the_current_frame_or_0_for_graphic_type_0() {
         let (every_tick, eight) = (data(1, 0), count(8));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         for _ in 0..5 {
             frames.step(every_tick, false, eight, eight, &mut NeverFires);
         }
@@ -782,7 +865,7 @@ mod tests {
     #[test]
     fn a_frozen_stellar_keeps_the_frame_shown_while_its_current_and_next_advance() {
         let (every_tick, four) = (data(1, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         frames.step(every_tick, false, four, four, &mut NeverFires);
         frames.step(every_tick, false, four, four, &mut NeverFires);
         assert_eq!(frames.shown(), 2);
@@ -806,7 +889,7 @@ mod tests {
     #[test]
     fn a_take_off_reset_zeroes_the_frames_keeps_the_timer_and_shows_frame_0() {
         let (every_2, four) = (data(2, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         for _ in 0..5 {
             frames.step(every_2, false, four, four, &mut NeverFires);
         }
@@ -832,15 +915,15 @@ mod tests {
     #[test]
     fn at_gain_0_the_timer_stands_and_the_frames_stay() {
         let (every_2, four) = (data(2, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         frames.step_by(SpeedMult::ZERO, every_2, false, four, four, &mut NeverFires);
-        assert_eq!(frames, Frames::new());
+        assert_eq!(frames, StellarFrames::new());
     }
 
     #[test]
     fn at_gain_0_a_delay_of_0_still_advances() {
         let (no_delay, four) = (data(0, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         frames.step_by(
             SpeedMult::ZERO,
             no_delay,
@@ -855,9 +938,9 @@ mod tests {
     #[test]
     fn at_gain_0_a_timer_past_the_threshold_fires() {
         let (every_2, four) = (data(2, 0), count(4));
-        let mut frames = Frames {
+        let mut frames = StellarFrames {
             timer: 3.0,
-            ..Frames::new()
+            ..StellarFrames::new()
         };
         frames.step_by(SpeedMult::ZERO, every_2, false, four, four, &mut NeverFires);
         assert_eq!((frames.current, frames.timer), (1, 0.0));
@@ -866,9 +949,9 @@ mod tests {
     #[test]
     fn at_gain_0_a_frozen_stellar_tests_its_threshold_with_its_frame_kept() {
         let (every_2, four) = (data(2, 0), count(4));
-        let mut frames = Frames {
+        let mut frames = StellarFrames {
             timer: 2.0,
-            ..Frames::new()
+            ..StellarFrames::new()
         };
         frames.step_frozen_by(SpeedMult::ZERO, every_2, false, four, &mut NeverFires);
         assert_eq!((frames.current, frames.timer, frames.shown()), (1, 0.0, 0));
@@ -881,7 +964,7 @@ mod tests {
     fn a_timer_takes_a_fractional_gain() {
         // AnimDelay 1: a quarter a pass reaches it on the fourth.
         let (every_1, four) = (data(1, 0), count(4));
-        let mut frames = Frames::new();
+        let mut frames = StellarFrames::new();
         let shown: Vec<u16> = (0..5)
             .map(|_| {
                 frames.step_by(
@@ -905,7 +988,7 @@ mod tests {
         let four = count(4);
         for (delay, steps) in [(1, [true; 6]), (2, [false, true, false, true, false, true])] {
             let every = data(delay, 0);
-            let mut frames = Frames::new();
+            let mut frames = StellarFrames::new();
             let advanced = steps.map(|_| {
                 let before = frames.shown();
                 frames.step_by(
@@ -925,7 +1008,7 @@ mod tests {
     #[test]
     fn gain_1_is_a_step() {
         let (every_2, four) = (data(2, 0), count(4));
-        let (mut by, mut plain) = (Frames::new(), Frames::new());
+        let (mut by, mut plain) = (StellarFrames::new(), StellarFrames::new());
         for tick in 0..9 {
             by.step_by(SpeedMult::FULL, every_2, false, four, four, &mut NeverFires);
             plain.step(every_2, false, four, four, &mut NeverFires);
@@ -935,7 +1018,7 @@ mod tests {
 
     #[test]
     fn a_stellar_first_shown_after_a_reset_has_next_0_and_its_timer_0() {
-        let afresh = Frames::after_reset();
+        let afresh = StellarFrames::after_reset();
         assert_eq!(
             (afresh.current, afresh.next, afresh.timer, afresh.shown()),
             (0, 0, 0.0, 0)

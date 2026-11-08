@@ -32,6 +32,33 @@ pub enum ImageKind {
     /// a `spïn` drawn from a `PICT` pair, which has no `rlëD` to key it
     /// by (see [`SheetImage`](crate::SheetImage)).
     SpinSheet,
+    /// The frames `GameData::ship_image` resolves `shïp` `id`'s `image`
+    /// to, used for a ship image drawn from a `PICT` pair, which has no
+    /// `rlëD` to key it by (see [`SheetImage`](crate::SheetImage)).
+    ShipSheet {
+        /// Which of the ship's images.
+        image: nova_data::ShipImage,
+    },
+    /// An `rlëD`'s frames as the original draws a frame whose box the
+    /// world's edge cuts (`_BlitPixieRLEClipped`, see
+    /// `nova_data::graphics::decode_rled_clipped`): each the box's size,
+    /// its `top` rows and `left` pixels, outside the world, clear.
+    RledClipped {
+        /// The box's rows above the world's top edge.
+        top: u16,
+        /// The box's pixels left of the world's left edge.
+        left: u16,
+    },
+    /// An `rlëD`'s solid runs alone ([`ImageKind::RledSolid`]) as the
+    /// clipped blit draws them at a cut ([`ImageKind::RledClipped`]): the
+    /// clipped draw's runs, drawn plainly over its frame, as the original's
+    /// clipped blits fill a run raw too.
+    RledClippedSolid {
+        /// The box's rows above the world's top edge.
+        top: u16,
+        /// The box's pixels left of the world's left edge.
+        left: u16,
+    },
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -117,12 +144,48 @@ impl ImageKey {
         }
     }
 
+    /// Frame `frame` of the sheet `shïp` `ship`'s `image` resolves to
+    /// ([`ImageKind::ShipSheet`]).
+    #[must_use]
+    pub const fn ship_sheet(ship: i16, image: nova_data::ShipImage, frame: u16) -> Self {
+        Self {
+            kind: ImageKind::ShipSheet { image },
+            id: ship,
+            frame,
+        }
+    }
+
     /// Frame `frame` of `rlëD` `id`'s solid runs alone
     /// ([`ImageKind::RledSolid`]).
     #[must_use]
     pub const fn solid_runs(id: i16, frame: u16) -> Self {
         Self {
             kind: ImageKind::RledSolid,
+            id,
+            frame,
+        }
+    }
+}
+
+impl ImageKey {
+    /// Frame `frame` of `rlëD` `id` as the original draws it with the box
+    /// cut by `(top, left)` ([`ImageKind::RledClipped`]).
+    #[must_use]
+    pub const fn clipped_sprite(id: i16, frame: u16, (top, left): (u16, u16)) -> Self {
+        Self {
+            kind: ImageKind::RledClipped { top, left },
+            id,
+            frame,
+        }
+    }
+
+    /// Frame `frame` of `rlëD` `id`'s solid runs as the original draws
+    /// them with the box cut by `(top, left)`
+    /// ([`ImageKind::RledClippedSolid`]).
+    #[must_use]
+    pub const fn clipped_solid_runs(id: i16, frame: u16, (top, left): (u16, u16)) -> Self {
+        Self {
+            kind: ImageKind::RledClippedSolid { top, left },
             id,
             frame,
         }
@@ -215,6 +278,26 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_sheet_is_keyed_by_its_ship_and_image() {
+        use nova_data::ShipImage;
+        let key = ImageKey::ship_sheet(128, ShipImage::Glow, 3);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::ShipSheet {
+                    image: ShipImage::Glow
+                },
+                id: 128,
+                frame: 3
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(128, 3));
+        assert_ne!(key, ImageKey::spin_sheet(128, 3));
+        assert_ne!(key, ImageKey::ship_sheet(128, ShipImage::Lights, 3));
+        assert_ne!(key, ImageKey::ship_sheet(129, ShipImage::Glow, 3));
+    }
+
+    #[test]
     fn a_sprites_solid_runs_are_their_own_image() {
         let key = ImageKey::solid_runs(1930, 13);
         assert_eq!(
@@ -226,5 +309,36 @@ mod tests {
             }
         );
         assert_ne!(key, ImageKey::sprite(1930, 13));
+    }
+
+    #[test]
+    fn a_clipped_sprite_names_its_cut() {
+        let key = ImageKey::clipped_sprite(1930, 13, (2, 5));
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledClipped { top: 2, left: 5 },
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::sprite(1930, 13));
+        assert_ne!(key, ImageKey::clipped_sprite(1930, 13, (5, 2)));
+    }
+
+    #[test]
+    fn a_clipped_sprites_solid_runs_name_their_cut() {
+        let key = ImageKey::clipped_solid_runs(1930, 13, (2, 5));
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::RledClippedSolid { top: 2, left: 5 },
+                id: 1930,
+                frame: 13
+            }
+        );
+        assert_ne!(key, ImageKey::solid_runs(1930, 13));
+        assert_ne!(key, ImageKey::clipped_sprite(1930, 13, (2, 5)));
+        assert_ne!(key, ImageKey::clipped_solid_runs(1930, 13, (5, 2)));
     }
 }

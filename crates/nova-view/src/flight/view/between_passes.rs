@@ -79,6 +79,18 @@
 //! `PlaySound` and `_FadeWhiteIn` (@0x68404) start at once, so the jump's
 //! effect reads the kept frame.
 //!
+//! **Its escort-menu block runs as the hold goes.** The second pass's
+//! `_HandlePlayer` fades the escort menu a level and may redraw it
+//! (`nova_sim::flight_frame::PassReport::escort_menu`); the frame between
+//! the passes shows the menu after the first pass, and the second pass's
+//! block runs, at the time the hold was taken, as the hold is let go or
+//! dropped ([`FlightView::run_held_escort_menu`]), before the next
+//! report's passes. It runs on a drop too, as it is the flight's state,
+//! not an effect. It leaves a redraw a press between the frames owes (a
+//! command, a group selected) to the next report's passes: the flight ran
+//! the held pass before the press, so its rows don't carry what the press
+//! changed.
+//!
 //! **A held pass is heard on its own frame.** Its combat sounds are made as
 //! the hold is taken ([`FlightView::hear_held_pass`]), because the
 //! original's `PlaySound` comes straight after the draw (`_HandleShot`
@@ -89,6 +101,8 @@
 //! the rest of its effects (see the `effects` module's "Heard, then
 //! shown"). A hold dropped unreplayed drops its breakups, and its sounds
 //! have played, as the original's have.
+
+use std::time::Duration;
 
 use nova_sim::flight_frame::{FlightFrame, PassReport, RaisedLine, StepRun};
 
@@ -109,12 +123,17 @@ pub(super) struct BetweenPasses {
     /// The second pass's breakups, once its sounds are heard
     /// ([`FlightView::hear_held_pass`]), to set off as the hold goes.
     heard: Option<Breakups>,
+    /// The flight's time as the hold was taken, which the second pass's
+    /// escort-menu block runs at as the hold goes
+    /// ([`FlightView::run_held_escort_menu`]).
+    at: Duration,
 }
 
 impl BetweenPasses {
-    /// What `run` holds for the frame after it, taken out of its report:
-    /// the frame between its passes, when it has one, and its second pass.
-    pub(super) fn taken_from(run: &mut StepRun) -> Option<Self> {
+    /// What `run` holds for the frame after it, taken out of its report
+    /// at the flight's time `at`: the frame between its passes, when it
+    /// has one, and its second pass.
+    pub(super) fn taken_from(run: &mut StepRun, at: Duration) -> Option<Self> {
         let frame = run.between_passes.take()?;
         let second = if run.passes.len() > 1 {
             run.passes.pop()
@@ -125,6 +144,7 @@ impl BetweenPasses {
             frame,
             second,
             heard: None,
+            at,
         })
     }
 }
@@ -188,14 +208,37 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 self.carry_wrap(&wrap);
             }
             self.step_effects(&pass, None, anchor, held.heard);
+            self.run_held_escort_menu(held.at, pass.escort_menu);
         }
     }
 
     /// Drops the hold unreplayed, where the ship is seated afresh, its
-    /// lines relayed first (see the module docs).
+    /// lines relayed first (see the module docs). Its second pass's
+    /// escort-menu block still runs, as it is the flight's state, not an
+    /// effect ([`FlightView::run_held_escort_menu`]).
     pub(super) fn drop_between_passes(&mut self) {
         self.relay_held_lines();
-        self.between_passes = None;
+        if let Some(held) = self.between_passes.take()
+            && let Some(pass) = held.second
+        {
+            self.run_held_escort_menu(held.at, pass.escort_menu);
+        }
+    }
+
+    /// Runs the escort-menu block of a held second pass, `menu`, at `at`,
+    /// the time the hold was taken (see the module docs): its fade's drop
+    /// and its redraws ([`EscortMenu::run_held_pass`](crate::flight::escorts::EscortMenu::run_held_pass)),
+    /// before the next report's passes, beeping as the fade's end beeps.
+    /// A redraw a press owes is left for the next report's passes, as the
+    /// held pass's rows predate the press.
+    fn run_held_escort_menu(
+        &mut self,
+        at: Duration,
+        menu: Option<nova_sim::flight_frame::EscortMenuPass>,
+    ) {
+        if self.escort_menu.run_held_pass(at, menu) {
+            self.shut_escort_menu_by_key();
+        }
     }
 
     /// Words the lines `lines` a second pass held, against the kept frame

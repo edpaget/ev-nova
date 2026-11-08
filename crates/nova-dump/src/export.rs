@@ -591,7 +591,7 @@ mod tests {
             (PICT, 129, None, pict()),
             (CICN, 200, None, vec![1, 2]),
             (PPAT, 300, None, vec![]),
-            (RLED, 1000, None, RledBuilder::new(1, 1).depth(32).build()),
+            (RLED, 1000, None, RledBuilder::new(1, 1).depth(1).build()),
             (SND, 500, Some("cut"), bad_snd.clone()),
             (SND, 501, None, snd()),
         ]);
@@ -657,7 +657,7 @@ mod tests {
                     RLED,
                     1000,
                     None,
-                    "unsupported rlëD depth 32".to_owned(),
+                    "unsupported rlëD depth 1".to_owned(),
                     None,
                     16
                 ),

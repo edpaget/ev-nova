@@ -2,11 +2,13 @@
 
 use std::fmt;
 
+use super::pict_pair::{PICT_SHEET_DEPTH, SheetKind};
+use super::ship_pict::{ImageFault, ShipImage};
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{
-    GraphicsError, RLED, RleWords, RledInfo, SheetLayout, SpriteSheet, decode_rled, rled_words,
-    scan_rled,
+    GraphicsError, RleWords, RledInfo, SheetLayout, SpriteSheet, decode_rled, rled_words,
+    scan_rled, sheet_rle_words,
 };
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -19,15 +21,18 @@ use crate::wire::id::ShipId;
 /// [`GameData::ship_sprite_info`].
 #[derive(Debug)]
 pub struct ShipSprite<'a, S = SpriteSheet> {
-    /// The base image's `rlëD` ID (the `shän`'s `BaseImageID`).
+    /// The base image's ID (the `shän`'s `BaseImageID`): its `rlëD`, or
+    /// its sprites `PICT` ([`SheetKind`] says which).
     pub image_id: i16,
+    /// What the sheet was read from.
+    pub kind: SheetKind,
     /// The sheet, laid out with the `shän`'s frames per rotation.
     pub sheet: S,
     /// The file the `shïp` came from.
     pub ship: &'a SourceFile,
     /// The file the `shän` came from.
     pub anim: &'a SourceFile,
-    /// The file the `rlëD` came from.
+    /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub sheet_source: &'a SourceFile,
 }
 
@@ -43,20 +48,38 @@ pub enum SpriteError {
     /// The `shïp` or `shän` failed to decode.
     #[error(transparent)]
     Decode(DecodeError),
-    /// The `shän`'s base image has no `rlëD` (a `PICT` base image is not
-    /// supported by this lookup).
-    #[error("shïp {ship}: no rlëD {image_id} for its base image")]
+    /// The `shän`'s base image has neither an `rlëD` nor a sprites `PICT`.
+    #[error("shïp {ship}: no rlëD or PICT {image_id} for its base image")]
     NoSheet {
         /// The ship's ID.
         ship: i16,
         /// The `shän`'s base image ID.
         image_id: i16,
     },
+    /// The base image is a sprites `PICT` with no mask `PICT` of its
+    /// `BaseMaskID`.
+    #[error("shïp {ship}: no mask PICT {mask_id} for its base image")]
+    NoMask {
+        /// The ship's ID.
+        ship: i16,
+        /// The `shän`'s `BaseMaskID`.
+        mask_id: i16,
+    },
     /// The `rlëD` failed to decode.
     #[error("rlëD {image_id}: {source}")]
     Graphics {
         /// The `rlëD`'s ID.
         image_id: i16,
+        /// What went wrong.
+        source: GraphicsError,
+    },
+    /// The base image's sprites or mask `PICT` failed to decode, or the
+    /// pair could not be cut into its frames (reported against the
+    /// sprites).
+    #[error("PICT {pict_id}: {source}")]
+    Picture {
+        /// The `PICT`'s ID.
+        pict_id: i16,
         /// What went wrong.
         source: GraphicsError,
     },
@@ -109,13 +132,74 @@ pub struct SheetScan {
     pub layout: SheetLayout,
 }
 
-impl SheetScan {
-    /// Scans `data` as [`decode_rled`] would decode it with `layout`.
-    fn read(data: &[u8], layout: Option<SheetLayout>) -> Result<Self, GraphicsError> {
+/// How a ship's sheet is read: decoded ([`SpriteSheet`]), scanned
+/// ([`SheetScan`]) or as its tokens ([`RleWords`]), from an `rlëD`'s bytes
+/// or from the sheet a `PICT` pair cuts. Every reader shares one fallback
+/// from the `rlëD` to the pair, so they fail alike.
+pub(super) trait ReadSheet: Sized {
+    /// Reads an `rlëD`'s `data`, laid out by `layout`.
+    fn from_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<Self, GraphicsError>;
+
+    /// Reads the sheet a `PICT` pair cuts: a pair has no bytes to scan, so
+    /// it is cut first.
+    fn from_sheet(sheet: SpriteSheet) -> Self;
+}
+
+impl ReadSheet for SpriteSheet {
+    fn from_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<Self, GraphicsError> {
+        decode_rled(data, layout)
+    }
+
+    fn from_sheet(sheet: SpriteSheet) -> Self {
+        sheet
+    }
+}
+
+/// Scans `data` as [`decode_rled`] would decode it with `layout`; a cut
+/// sheet is read from its frames, which a scan of it would find.
+impl ReadSheet for SheetScan {
+    fn from_rled(data: &[u8], layout: Option<SheetLayout>) -> Result<Self, GraphicsError> {
         Ok(Self {
             info: scan_rled(data)?,
             layout: layout.unwrap_or(SheetLayout::DEFAULT),
         })
+    }
+
+    fn from_sheet(sheet: SpriteSheet) -> Self {
+        Self::of(&sheet)
+    }
+}
+
+/// An `rlëD`'s own tokens ([`rled_words`]), which ignore the layout; a
+/// cut sheet's are those the original makes of it at 16 bits
+/// ([`sheet_rle_words`]).
+impl ReadSheet for RleWords {
+    fn from_rled(data: &[u8], _: Option<SheetLayout>) -> Result<Self, GraphicsError> {
+        rled_words(data)
+    }
+
+    fn from_sheet(sheet: SpriteSheet) -> Self {
+        sheet_rle_words(&sheet, PICT_SHEET_DEPTH)
+    }
+}
+
+impl SheetScan {
+    /// What a scan of decoded `sheet` reads.
+    #[must_use]
+    pub fn of(sheet: &SpriteSheet) -> Self {
+        Self {
+            info: RledInfo {
+                frame_width: sheet.frame_width(),
+                frame_height: sheet.frame_height(),
+                frames: u16::try_from(sheet.frames().len()).unwrap_or(u16::MAX),
+                has_runs: sheet.solid_frames().is_some(),
+                depth: sheet.depth(),
+                image_width: sheet.image_width(),
+                image_height: sheet.image_height(),
+                clip_quirks: sheet.clip_quirks(),
+            },
+            layout: sheet.layout(),
+        }
     }
 }
 
@@ -123,20 +207,24 @@ impl SheetScan {
 /// [`ShipSprite`].
 #[derive(Debug)]
 pub struct LayerSprite<'a, S = SpriteSheet> {
-    /// The layer's `rlëD` ID.
+    /// The layer's image ID: its `rlëD`, or its sprites `PICT`
+    /// ([`SheetKind`] says which).
     pub image_id: i16,
+    /// What the sheet was read from.
+    pub kind: SheetKind,
     /// The sheet, laid out like the base (the `shän`'s frames per
     /// rotation as columns).
     pub sheet: S,
-    /// The file the `rlëD` came from.
+    /// The file the `rlëD`, or the sprites `PICT`, came from.
     pub source: &'a SourceFile,
 }
 
 /// Why one of a ship's layers could not be resolved.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LayerError {
-    /// The `shän` names a layer image with no `rlëD`.
-    #[error("shïp {ship}: no rlëD {image_id} for its {layer} image")]
+    /// The `shän` names a layer image with neither an `rlëD` nor a
+    /// sprites `PICT`.
+    #[error("shïp {ship}: no rlëD or PICT {image_id} for its {layer} image")]
     NoSheet {
         /// The ship's ID.
         ship: i16,
@@ -145,6 +233,16 @@ pub enum LayerError {
         /// The layer's image ID.
         image_id: i16,
     },
+    /// The layer is a sprites `PICT` with no mask `PICT` of its mask ID.
+    #[error("shïp {ship}: no mask PICT {mask_id} for its {layer} image")]
+    NoMask {
+        /// The ship's ID.
+        ship: i16,
+        /// Which layer.
+        layer: ShipLayer,
+        /// The layer's mask ID.
+        mask_id: i16,
+    },
     /// The layer's `rlëD` failed to decode.
     #[error("{layer} rlëD {image_id}: {source}")]
     Graphics {
@@ -152,6 +250,17 @@ pub enum LayerError {
         layer: ShipLayer,
         /// The `rlëD`'s ID.
         image_id: i16,
+        /// What went wrong.
+        source: GraphicsError,
+    },
+    /// The layer's sprites or mask `PICT` failed to decode, or the pair
+    /// could not be cut into its frames (reported against the sprites).
+    #[error("{layer} PICT {pict_id}: {source}")]
+    Picture {
+        /// Which layer.
+        layer: ShipLayer,
+        /// The `PICT`'s ID.
+        pict_id: i16,
         /// What went wrong.
         source: GraphicsError,
     },
@@ -181,123 +290,140 @@ pub struct ShipLayers<'a, S = SpriteSheet> {
 /// metadata without their pixels.
 pub type ShipLayerInfos<'a> = ShipLayers<'a, SheetScan>;
 
-/// Reads one `rlëD` as a sheet `S`, given the `shän`'s layout.
-type ReadSheet<S> = fn(&[u8], Option<SheetLayout>) -> Result<S, GraphicsError>;
-
 impl GameData {
     /// Resolves `ship`'s glow, lights, weapon, alt and shield layers through its `shän` (as
     /// [`GameData::ship_sprite`] does), each decoded with the base's
-    /// layout: the Bible gives one `FramesPer` for every layer.
+    /// layout: the Bible gives one `FramesPer` for every layer. Each layer
+    /// reads its `rlëD`, or with none its own `PICT` pair, as the base
+    /// does.
     ///
     /// A missing or undecodable `shïp` or `shän` is a [`SpriteError`]; a
     /// layer's own failure is that layer's [`LayerError`]. The sheets are
     /// decoded on every call and not cached.
     pub fn ship_layers(&self, ship: ShipId) -> Result<ShipLayers<'_>, SpriteError> {
-        self.resolve_layers(ship, decode_rled)
+        self.resolve_layers(ship)
     }
 
     /// What [`GameData::ship_layers`] resolves, with each sheet only
     /// scanned: its frame size, frame count, runs and layout, but no
-    /// pixels. It fails exactly where and as that does.
+    /// pixels. It fails exactly where and as that does. A `PICT` pair
+    /// cannot be scanned without cutting it, so a pair layer is cut.
     pub fn ship_layer_infos(&self, ship: ShipId) -> Result<ShipLayerInfos<'_>, SpriteError> {
-        self.resolve_layers(ship, SheetScan::read)
+        self.resolve_layers(ship)
     }
 
-    fn resolve_layers<S>(
-        &self,
-        ship: ShipId,
-        read: ReadSheet<S>,
-    ) -> Result<ShipLayers<'_, S>, SpriteError> {
+    fn resolve_layers<S: ReadSheet>(&self, ship: ShipId) -> Result<ShipLayers<'_, S>, SpriteError> {
         let (_, anim) = self.ship_and_anim(ship)?;
-        let layer = |layer, image_id: i16| {
-            (image_id > 0).then(|| self.layer_sprite(ship.0, layer, image_id, anim.record, read))
+        let layer = |layer: ShipLayer| {
+            ShipImage::from(layer)
+                .defined(anim.record)
+                .then(|| self.layer_sprite(ship.0, layer, anim.record))
         };
         Ok(ShipLayers {
-            glow: layer(ShipLayer::Glow, anim.record.glow_image_id),
-            lights: layer(ShipLayer::Lights, anim.record.light_image_id),
-            weapon: layer(ShipLayer::Weapon, anim.record.weap_image_id),
-            alt: (anim.record.alt_set_count > 0)
-                .then(|| layer(ShipLayer::Alt, anim.record.alt_image_id))
-                .flatten(),
-            shield: layer(ShipLayer::Shield, anim.record.shield_image_id),
+            glow: layer(ShipLayer::Glow),
+            lights: layer(ShipLayer::Lights),
+            weapon: layer(ShipLayer::Weapon),
+            alt: layer(ShipLayer::Alt),
+            shield: layer(ShipLayer::Shield),
         })
     }
 
-    fn layer_sprite<S>(
+    pub(super) fn layer_sprite<S: ReadSheet>(
         &self,
         ship: i16,
         layer: ShipLayer,
-        image_id: i16,
         anim: &ShipAnim,
-        read: ReadSheet<S>,
     ) -> Result<LayerSprite<'_, S>, LayerError> {
-        let found = self.resource(RLED, image_id).ok_or(LayerError::NoSheet {
-            ship,
-            layer,
-            image_id,
-        })?;
-        let sheet = read(found.resource.data(), anim.sheet_layout()).map_err(|source| {
-            LayerError::Graphics {
-                layer,
-                image_id,
-                source,
-            }
-        })?;
+        let image = ShipImage::from(layer);
+        let image_id = image.fields(anim).image_id;
+        let read = self
+            .read_ship_image(anim, image)
+            .map_err(|fault| match fault {
+                ImageFault::NoSheet => LayerError::NoSheet {
+                    ship,
+                    layer,
+                    image_id,
+                },
+                ImageFault::NoMask { mask_id } => LayerError::NoMask {
+                    ship,
+                    layer,
+                    mask_id,
+                },
+                ImageFault::Graphics(source) => LayerError::Graphics {
+                    layer,
+                    image_id,
+                    source,
+                },
+                ImageFault::Picture { pict_id, source } => LayerError::Picture {
+                    layer,
+                    pict_id,
+                    source,
+                },
+            })?;
         Ok(LayerSprite {
             image_id,
-            sheet,
-            source: found.source,
+            kind: read.kind,
+            sheet: read.sheet,
+            source: read.source,
         })
     }
 
     /// Resolves `ship` to its base sprite sheet: the `shïp` must exist and
-    /// decode; its `shän` shares its ID (as the Bible says); the `rlëD` is
+    /// decode; its `shän` shares its ID (as the Bible says); the sheet is
     /// the `shän`'s base image, decoded with the `shän`'s layout (its frames
-    /// per rotation as columns).
+    /// per rotation as columns). That is its `rlëD`, or with none its
+    /// `PICT` pair cut into frames (see the `ship_pict` module): a broken
+    /// `rlëD` is an error, with no fall back to the pair.
     ///
     /// The sheet is decoded on every call and not cached.
     pub fn ship_sprite(&self, ship: ShipId) -> Result<ShipSprite<'_>, SpriteError> {
-        self.resolve_sprite(ship, decode_rled)
+        self.resolve_sprite(ship)
     }
 
     /// What [`GameData::ship_sprite`] resolves, with the sheet only
     /// scanned: its frame size, frame count, runs and layout, but no
-    /// pixels. It fails exactly where and as that does.
+    /// pixels. It fails exactly where and as that does. A `PICT` pair
+    /// cannot be scanned without cutting it, so a pair is cut.
     pub fn ship_sprite_info(&self, ship: ShipId) -> Result<ShipSpriteInfo<'_>, SpriteError> {
-        self.resolve_sprite(ship, SheetScan::read)
+        self.resolve_sprite(ship)
     }
 
     /// What [`GameData::ship_sprite`] resolves, with the sheet read only as
-    /// its run-length tokens ([`rled_words`]), which its pixels touch by.
-    /// It fails where that does, but for tokens it does not check.
+    /// its run-length tokens, which its pixels touch by: an `rlëD`'s own
+    /// ([`rled_words`]), or those the original makes of its cut `PICT`
+    /// pair at 16 bits ([`sheet_rle_words`]). It fails where that does,
+    /// but for an `rlëD`'s tokens, which it checks only as [`rled_words`]
+    /// does.
     pub fn ship_sprite_words(&self, ship: ShipId) -> Result<ShipSpriteWords<'_>, SpriteError> {
-        self.resolve_sprite(ship, |data, _| rled_words(data))
+        self.resolve_sprite(ship)
     }
 
-    fn resolve_sprite<S>(
-        &self,
-        ship: ShipId,
-        read: ReadSheet<S>,
-    ) -> Result<ShipSprite<'_, S>, SpriteError> {
+    fn resolve_sprite<S: ReadSheet>(&self, ship: ShipId) -> Result<ShipSprite<'_, S>, SpriteError> {
         let id = ship.0;
         let (ship, anim) = self.ship_and_anim(ship)?;
         let image_id = anim.record.base_image_id;
-        let found = self
-            .resource(RLED, image_id)
-            .ok_or(SpriteError::NoSheet { ship: id, image_id })?;
-        let sheet = read(found.resource.data(), anim.record.sheet_layout())
-            .map_err(|source| SpriteError::Graphics { image_id, source })?;
+        let read =
+            self.read_ship_image(anim.record, ShipImage::Base)
+                .map_err(|fault| match fault {
+                    ImageFault::NoSheet => SpriteError::NoSheet { ship: id, image_id },
+                    ImageFault::NoMask { mask_id } => SpriteError::NoMask { ship: id, mask_id },
+                    ImageFault::Graphics(source) => SpriteError::Graphics { image_id, source },
+                    ImageFault::Picture { pict_id, source } => {
+                        SpriteError::Picture { pict_id, source }
+                    }
+                })?;
         Ok(ShipSprite {
             image_id,
-            sheet,
+            kind: read.kind,
+            sheet: read.sheet,
             ship: ship.source,
             anim: anim.source,
-            sheet_source: found.source,
+            sheet_source: read.source,
         })
     }
 
     /// The `shïp` and its `shän` (same ID), both decoded.
-    fn ship_and_anim(
+    pub(super) fn ship_and_anim(
         &self,
         ship: ShipId,
     ) -> Result<(StoreEntry<'_, Ship>, StoreEntry<'_, ShipAnim>), SpriteError> {
@@ -324,6 +450,7 @@ mod tests {
 
     use super::*;
     use crate::decode::Record;
+    use crate::graphics::RLED;
     use crate::graphics::fixture::RledBuilder;
     use crate::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use crate::store::fixture::FakeTree;
@@ -342,9 +469,10 @@ mod tests {
             .frames_per(frames_per)
     }
 
-    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`.
+    /// An `rlëD` of `frames` 2x1 frames whose pixels are `color`, its
+    /// lines counted.
     fn sheet(frames: u16, color: u16) -> Vec<u8> {
-        let mut builder = RledBuilder::new(2, 1);
+        let mut builder = RledBuilder::new(2, 1).count_lines();
         for _ in 0..frames {
             builder = builder.frame(|f| f.line().pixels(&[color, color]));
         }
@@ -422,6 +550,30 @@ mod tests {
     }
 
     #[test]
+    fn a_base_pict_pairs_sheet_source_is_the_sprites_picts_file() {
+        use crate::graphics::PICT;
+        use crate::graphics::fixture::rgb888_pict;
+        let white = rgb888_pict(2, 1, &[[0xFF; 3]; 2]);
+        let anim = anim_builder(2000, 1, 1)
+            .base_mask_id(2100)
+            .base_x_size(2)
+            .base_y_size(1)
+            .build();
+        let pair = fork(&[
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, rgb888_pict(2, 1, &[[0; 3]; 2])),
+        ]);
+        let mask = fork(&[(PICT, 2100, white)]);
+        let data = store(&[("Pair", pair), ("Pair Mask", mask)]);
+        let sprite = data.ship_sprite(ShipId(128)).expect("resolves");
+        assert_eq!(sprite.kind, SheetKind::PictPair { mask_id: 2100 });
+        assert_eq!(sprite.sheet_source.path, Path::new("/p/Pair"));
+        assert_eq!(sprite.ship.path, Path::new("/d/ships"));
+        assert_eq!(sprite.anim.path, Path::new("/p/Pair"));
+        assert_eq!(sprite.sheet.frames()[0].pixel(0, 0), Some([0, 0, 0, 255]));
+    }
+
+    #[test]
     fn a_ship_or_shan_that_fails_to_decode_is_a_decode_error() {
         let short_ship = fork(&[(Ship::TYPE, 128, ship()[1..].to_vec())]);
         let data = store(&[("Broken", short_ship)]);
@@ -453,22 +605,25 @@ mod tests {
                 image_id: 1001
             }
         );
-        assert_eq!(err.to_string(), "shïp 128: no rlëD 1001 for its base image");
+        assert_eq!(
+            err.to_string(),
+            "shïp 128: no rlëD or PICT 1001 for its base image"
+        );
     }
 
     #[test]
     fn a_corrupt_sheet_is_a_graphics_error() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
         let err = data.ship_sprite(ShipId(128)).expect_err("32-bit");
         assert_eq!(
             err,
             SpriteError::Graphics {
                 image_id: 1000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "rlëD 1000: unsupported rlëD depth 1");
     }
 
     /// A plug-in, `Layers`, giving ship 128 a `shän` with glow image `glow`
@@ -590,7 +745,10 @@ mod tests {
                 image_id: 1100
             }
         );
-        assert_eq!(err.to_string(), "shïp 128: no rlëD 1100 for its glow image");
+        assert_eq!(
+            err.to_string(),
+            "shïp 128: no rlëD or PICT 1100 for its glow image"
+        );
         assert!(layers.lights.expect("defined").is_ok());
 
         let data = store(&[layered(1100, 1200, &[(1100, sheet(4, 0x03E0))])]);
@@ -598,14 +756,14 @@ mod tests {
         let err = layers.lights.expect("defined").expect_err("no rlëD 1200");
         assert_eq!(
             err.to_string(),
-            "shïp 128: no rlëD 1200 for its lights image"
+            "shïp 128: no rlëD or PICT 1200 for its lights image"
         );
         assert!(layers.glow.expect("defined").is_ok());
     }
 
     #[test]
     fn a_corrupt_layer_sheet_is_a_graphics_error_for_that_layer_only() {
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[layered(
             1100,
             1200,
@@ -618,10 +776,10 @@ mod tests {
             LayerError::Graphics {
                 layer: ShipLayer::Glow,
                 image_id: 1100,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
-        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 32");
+        assert_eq!(err.to_string(), "glow rlëD 1100: unsupported rlëD depth 1");
         assert_eq!(
             layers.lights.expect("defined").expect("resolves").image_id,
             1200
@@ -657,21 +815,14 @@ mod tests {
 
     /// What a scan should read from a decoded sheet.
     fn info_of(sheet: &SpriteSheet) -> SheetScan {
-        SheetScan {
-            info: RledInfo {
-                frame_width: sheet.frame_width(),
-                frame_height: sheet.frame_height(),
-                frames: sheet.frames().len() as u16,
-                has_runs: sheet.solid_frames().is_some(),
-            },
-            layout: sheet.layout(),
-        }
+        SheetScan::of(sheet)
     }
 
     /// `ship_sprite_info` gives what `ship_sprite` decodes, minus pixels.
     fn assert_sprite_infos_agree(data: &GameData, ship: ShipId) {
         let decoded = data.ship_sprite(ship).map(|s| ShipSprite {
             image_id: s.image_id,
+            kind: s.kind,
             sheet: info_of(&s.sheet),
             ship: s.ship,
             anim: s.anim,
@@ -693,6 +844,7 @@ mod tests {
             layer.map(|l| {
                 l.map(|l| LayerSprite {
                     image_id: l.image_id,
+                    kind: l.kind,
                     sheet: info_of(&l.sheet),
                     source: l.source,
                 })
@@ -797,13 +949,13 @@ mod tests {
             data.ship_sprite_words(ShipId(129)).expect_err("absent"),
             SpriteError::NoShip(129)
         );
-        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let deep = RledBuilder::new(2, 1).depth(1).build();
         let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
         assert_eq!(
             data.ship_sprite_words(ShipId(128)).expect_err("32-bit"),
             SpriteError::Graphics {
                 image_id: 1000,
-                source: GraphicsError::UnsupportedDepth { depth: 32 },
+                source: GraphicsError::UnsupportedDepth { depth: 1 },
             }
         );
     }

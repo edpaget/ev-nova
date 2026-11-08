@@ -35,10 +35,12 @@
 //! 256-colour table, at full width. A run fills its bytes with its word's
 //! first byte in the file.
 //!
-//! The rulebook's `eight_bit_sheet` key chooses between them. The full
-//! address record, with what was left out (an 8-bit sheet drawn
-//! translucent, the legacy 8-bit world), is in `nova_sim_story`'s
-//! "Checked for stellar-fidelity phase 4".
+//! The rulebook's `eight_bit_sheet` key chooses between them. Either way
+//! the sheet reports depth 8 ([`SpriteSheet::depth`](super::SpriteSheet::depth)),
+//! so a view can draw it translucent as the draw proc's depth-8 branches
+//! do (`nova_view`'s `eight_bit_blit`, rendering phase 2). The full
+//! address record, with what was left out (the legacy 8-bit world), is in
+//! `nova_sim_story`'s "Checked for stellar-fidelity phase 4".
 
 use super::color::rgb555;
 use super::image::Image;
@@ -141,7 +143,7 @@ impl Rled8 {
 /// 2-byte one: the run's last byte when `i % 4` is 2, which is the low
 /// byte again. (Tails start on a multiple of 4, so every other tail byte
 /// already has `i % 4` equal to `i % 2`.)
-fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
+pub(super) fn mem_set_byte(word: u32, n: u32, i: u32) -> u8 {
     let le = word.to_le_bytes();
     let one_byte_tail = i % 4 == 2 && i + 1 == n;
     let k = if one_byte_tail { 0 } else { i % 4 };

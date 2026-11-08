@@ -430,7 +430,7 @@ fn with_either_mask_missing_or_unreadable_the_disc_decides() {
     let hole = placed(&["#"], (0, 0));
     let mut unread = ring();
     let mut gone = (*unread.sheet).clone();
-    gone.starts[0] = None;
+    gone.starts.clear();
     unread.sheet = std::rc::Rc::new(gone);
     for (stellar, ship) in [
         (Some(ring()), None),

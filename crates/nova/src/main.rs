@@ -182,7 +182,7 @@ use nova::platform::{
     Dialogs, Runner, event_loop, loop_channel, menu_key_equivalents, system_key_names,
     system_keyboard_access,
 };
-use nova::rulebook::eight_bit_reading;
+use nova::rulebook::{eight_bit_reading, thirty_two_bit_reading};
 use nova::ruleset::Ruleset;
 use nova::saves::FilePilots;
 use nova::startup::{
@@ -429,10 +429,11 @@ fn main() -> ExitCode {
     let audio = open_audio(&data, &dir, &rulebook, &mut report);
     let report = Rc::new(RefCell::new(report));
     // The simulation's diagnostics are the running game's, not startup's.
-    // The game's images, 8-bit sheets read as the rulebook says, and the
-    // interface file's pictures.
+    // The game's images, 8-bit and 32-bit sheets read as the rulebook
+    // says, and the interface file's pictures.
     let images = interface.into_iter().fold(
-        GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook)),
+        GameImages::new(Rc::clone(&data), eight_bit_reading(&rulebook))
+            .with_thirty_two_bit(thirty_two_bit_reading(&rulebook)),
         GameImages::with_interface,
     );
     let runner = with_gamepads(Runner::new(images, screen, fonts), &report)

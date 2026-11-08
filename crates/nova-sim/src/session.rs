@@ -485,6 +485,7 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod disabled_mission_escorts;
+mod display_carry;
 mod display_gain;
 mod display_step;
 mod dock_tail;
@@ -635,6 +636,7 @@ mod plunder_loop;
 mod port;
 mod port_desc;
 mod precalced;
+mod prepare_frames;
 #[cfg(test)]
 mod quote_roll_order;
 mod radar;
@@ -687,6 +689,7 @@ mod steering;
 #[cfg(test)]
 mod stellar_attackers;
 mod stellar_defence;
+mod stellar_frames;
 mod stellar_guns;
 mod stellar_passes;
 mod stellar_picks;
@@ -710,6 +713,7 @@ mod tractor_hold;
 mod trade_dialog;
 mod trip_days;
 mod tutorial;
+mod uncounted_slots;
 #[cfg(test)]
 mod vacated_berths;
 mod voices;
@@ -1397,6 +1401,7 @@ impl Session {
                 .collect(),
             fallback_frame: catalog.fallback_frame_size(),
             fallback_counts: catalog.fallback_counts_frames(),
+            fallback_frames: catalog.fallback_frame_count(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
             missions,
             crons,
@@ -1496,16 +1501,11 @@ impl Session {
         session
             .space
             .set_first_class(&session.statics, &session.setup);
-        // `_PrepareAllSprites`' display of the player's lights before the
-        // first frame (see the `ship_display` module), at the session's
-        // gain at construction, full: the original's entry prepares at
-        // the gain the last game left (`_EnterGameFromMainScreen`
-        // @0x1a36c), filed as rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames.
-        session
-            .ship
-            .prepare_player_lights(&session.setup, crate::SpeedMult::FULL);
-        // `_EnterGameFromMainScreen` (@0x1a36c).
-        session.prepare_all_sprites();
+        // Each slot put in its layer, shown or hidden, its frames cloned,
+        // with no display step: `_EnterGameFromMainScreen`'s
+        // `_PrepareAllSprites` (@0x1a36c) steps them at the entry's gain,
+        // in `Session::enter_game` (see the `prepare_frames` module).
+        session.prepare_slots();
         Ok(session)
     }
 
@@ -2020,8 +2020,8 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.populate_as(catalog, chance, None);
-        self.prepare_all_sprites();
+        self.populate_as(catalog, &mut *chance, None);
+        self.prepare_all_sprites(chance);
     }
 
     /// Fills the system as [`Session::populate`] does, the active
@@ -2171,16 +2171,14 @@ impl Session {
 
     /// The end of a traffic tick, drawing on `chance`: the reinforcement
     /// clock's tick, held while work is queued on the line (it runs as the
-    /// work settles, [`Session::settle_line_queue`]), the gates' sprites
-    /// unless landed, and a target lost let go.
+    /// work settles, [`Session::settle_line_queue`]), and a target lost
+    /// let go. The gates' sprites step later in the pass, at the sprite
+    /// tick (see the `stellar_frames` module).
     fn traffic_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         if self.space.traffic.holds_line_work() {
             self.space.reinforcements_held = true;
         } else {
             self.tick_reinforcements(chance);
-        }
-        if self.mode.landed().is_none() {
-            self.step_gate_sprites(chance);
         }
         self.let_go_of_gone_target();
     }
@@ -3480,7 +3478,7 @@ impl Session {
         // the setup (@0x6c51f; see the `precalced` module).
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
@@ -4021,14 +4019,12 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
-        // @0x64743: before the old ships go, so before the escorts' cloaks
-        // are carried, at the frame's gain, which no gate entry zeroes.
-        // The player's slot always passes the display's system test
-        // (@0x2b7d8-0x2b7e0), so its fade steps first, whatever the exit.
-        let gain = self.speed_mult();
-        self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
-        self.space
-            .step_fades_at_gate_entry(system, self.pilot.system, gain);
+        // @0x64743: before the old ships go, so before the escorts'
+        // displays and cloaks are carried, at the frame's gain, which no
+        // gate entry zeroes. The player's slot always passes the
+        // display's system test (@0x2b7d8-0x2b7e0), whatever the exit (see
+        // the `prepare_frames` module).
+        self.prepare_at_gate_entry(system, &mut *chance);
         // Its stellar pass reads the old ships and the request where the
         // exit is in the system gone in; otherwise it follows the system's
         // entry, below, and they reach none of its gates.
@@ -4085,9 +4081,9 @@ impl Session {
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
         // NPC's fade steps twice, and every gate.
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
-        self.prepare_all_sprites();
+        self.prepare_all_sprites(&mut *chance);
         self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).

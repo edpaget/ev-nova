@@ -13,15 +13,15 @@ fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
         trafficked(&[130], 1, 129, 3),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(90.0)]),
     );
-    // A tick in, the Moon a frame on.
-    view.step_stellars(TICK);
+    // A tick in, the Moon on the frame its record reports.
+    view.advance_clock(TICK);
     let list = world_list(&view);
     let frame = rotation_frame(90.0, NonZeroU16::new(72).expect("non-zero"));
     assert_eq!(
         sprites(&list),
         [
             (ImageKey::sprite(1128, 0), at(415.0, -216.0)),
-            (ImageKey::sprite(1129, 1), at(715.0, 184.0)),
+            (ImageKey::sprite(1129, 0), at(715.0, 184.0)),
             (ImageKey::sprite(2001, frame), at(515.0, 284.0)),
             (ImageKey::sprite(2101, frame), at(515.0, 284.0)),
             (ImageKey::sprite(2201, frame), at(515.0, 284.0)),
@@ -413,7 +413,7 @@ fn a_hypergate_is_drawn_on_the_frame_its_record_gives_and_an_npc_entering_it_fad
     let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]);
     let mut gate = record::stellar(StellarId(141));
-    gate.gate_frame = Some(0);
+    gate.frame = 0;
     frame.stellars.push(gate);
     let mut view = world(busy, frame);
     assert_eq!(gate_frames(&world_list(&view)), [0], "closed at first");
@@ -421,12 +421,12 @@ fn a_hypergate_is_drawn_on_the_frame_its_record_gives_and_an_npc_entering_it_fad
     let mut tints = Vec::new();
     for (open, ticks_left) in [(1, 15.0), (2, 8.0), (3, 1.0)] {
         let mut frame = view.frame.clone();
-        frame.stellars[2].gate_frame = Some(open);
+        frame.stellars[2].frame = open;
         frame.ships[1].gate = GateFade::Entering { ticks_left };
         view.sim.set_frame(frame);
         view.step_frame(1, view.anchor());
         if let Some(scene) = &mut view.scene {
-            super::super::show_gate_frames(scene, &view.frame);
+            super::super::show_stellars(scene, &view.frame);
         }
         let list = world_list(&view);
         shown.extend(gate_frames(&list));

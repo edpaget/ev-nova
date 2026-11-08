@@ -3,7 +3,7 @@
 //! the button style and picture sizes from the game data ([`GameData`]).
 //! Thin mappings; the decisions are the core's.
 
-use nova_data::graphics::{PICT, decode_pict};
+use nova_data::graphics::{PICT, scan_pict};
 use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
@@ -134,10 +134,11 @@ impl DescriptionGraphics for GameData {
     }
 }
 
+/// Sizes a picture by scanning its `PICT` ([`scan_pict`]), which fails
+/// exactly where decoding it would, without building its pixels.
 impl PictureSizes for GameData {
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-        let picture = decode_pict(self.resource(PICT, id)?.resource.data()).ok()?;
-        Some((picture.width(), picture.height()))
+        scan_pict(self.resource(PICT, id)?.resource.data()).ok()
     }
 }
 
@@ -537,5 +538,29 @@ mod tests {
         assert_eq!(data.picture_size(8518), Some((300, 30)));
         assert_eq!(data.picture_size(8519), None, "undecodable");
         assert_eq!(data.picture_size(8520), None, "missing");
+    }
+
+    /// The picture is read, not just found: one whose indexed pixel is
+    /// missing from its colour table doesn't decode, so it has no size.
+    #[test]
+    fn a_picture_whose_pixel_is_missing_from_its_table_has_no_size() {
+        use nova_data::graphics::fixture::{Ctab, IndexedBits, PictBuilder};
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0, 0, 0])],
+        };
+        let bounds = [0, 0, 1, 2];
+        let picture = |indices: &[u8]| {
+            PictBuilder::new(bounds)
+                .packbits_rect(&IndexedBits::new(bounds, 8, &ctab, indices))
+                .end()
+                .build()
+        };
+        let data = game(&[
+            (PICT, 8518, picture(&[0, 0])),
+            (PICT, 8519, picture(&[0, 1])),
+        ]);
+        assert_eq!(data.picture_size(8518), Some((2, 1)));
+        assert_eq!(data.picture_size(8519), None, "value 1 isn't in the table");
     }
 }

@@ -538,6 +538,12 @@ impl Game {
         self.key(key, false);
     }
 
+    /// Draws the frames from now on with `upscaler`, as the app sets it on
+    /// its Gpu when the player picks it.
+    pub(crate) fn upscale_with(&mut self, upscaler: nova_render::Upscaler) {
+        nova_render::Gpu::set_upscaler(&mut self.gpu, upscaler);
+    }
+
     /// A click at `at` on the classic main menu: its point in the window.
     fn click_menu(&mut self, at: nova_view::Point) {
         let (rect, scale) = self.app.viewport().content().expect("a content rect");

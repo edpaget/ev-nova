@@ -98,6 +98,9 @@ pub struct FakePilotCatalog {
     pub fallback_frame: Option<(u32, u32)>,
     /// Whether graphic type 0's `spïn` counts frames: true, by default.
     pub fallback_counts: bool,
+    /// How many frames graphic type 0's sheet animates over: 1, by
+    /// default, as the trait's own default.
+    pub fallback_frames: u16,
     /// Every `mïsn`: none, by default.
     pub missions: Vec<MissionRecord>,
     /// What the screens show of each `mïsn`: none, by default.
@@ -254,6 +257,7 @@ pub fn catalog() -> FakePilotCatalog {
         scripts: Vec::new(),
         fallback_frame: Some((100, 100)),
         fallback_counts: true,
+        fallback_frames: 1,
         missions: Vec::new(),
         mission_texts: Vec::new(),
         place_names: PlaceNames::default(),
@@ -423,6 +427,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn fallback_counts_frames(&self) -> bool {
         self.fallback_counts
+    }
+
+    fn fallback_frame_count(&self) -> u16 {
+        self.fallback_frames
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -966,6 +974,12 @@ mod tests {
             ..catalog()
         };
         assert!(!uncounted.fallback_counts_frames());
+        assert_eq!(fake.fallback_frame_count(), 1);
+        let three = FakePilotCatalog {
+            fallback_frames: 3,
+            ..catalog()
+        };
+        assert_eq!(three.fallback_frame_count(), 3);
     }
 
     #[test]

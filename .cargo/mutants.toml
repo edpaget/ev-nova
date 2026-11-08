@@ -849,4 +849,23 @@ exclude_re = [
     # The heaviest-class fold's `mass > heaviest`: `>=` also takes a mass
     # equal to the heaviest so far, which leaves the same value.
     "nova-sim-ai/src/ai/candidates\\.rs:[0-9]+:[0-9]+: replace > with >= in nearest$",
+    # A wide `rlëD`'s canvas grows a row only when it is shorter than the
+    # write's end: `<=` also resizes a row already that long, to its own
+    # length, which changes nothing.
+    "nova-data/src/graphics/rled_wide\\.rs:[0-9]+:[0-9]+: replace < with <= in Canvas<'_>::write$",
+    # The true-colour arm's guard: read as drawn, a row is cut into chunks
+    # of two bytes, so its four-byte pattern never matches a chunk anyway.
+    "nova-data/src/graphics/rled_wide\\.rs:[0-9]+:[0-9]+: replace match guard true_colour with true in Canvas<'_>::pixels$",
+    # A master's frames are its tiles when fewer than the frames decoded:
+    # at tiles equal to the frames decoded, both arms give that count.
+    "nova-data/src/store/stellar_sprite\\.rs:[0-9]+:[0-9]+: replace < with <= in master_frame_count$",
+    # A stellar is drawn at translucency 0 with its murk level as the bias
+    # (`draw_stellars`). There the depth-8 dispatch draws plainly only at a
+    # bias of 0, where the 16-bit look's colorize, of level 0, mixes
+    # nothing either, and as a 16-bit sheet otherwise, so 8-bit or not
+    # draws the same command.
+    "nova-view/src/system/scene\\.rs:[0-9]+:[0-9]+: replace SceneStellar::eight_bit -> bool with (true|false)$",
+    # FSR 1's EASU texture usage, `RENDER_ATTACHMENT | TEXTURE_BINDING`:
+    # the two flags share no bit, so `^` makes the same usage.
+    "nova-render/src/wgpu/fsr1\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Fsr1::upsampled$",
 ]

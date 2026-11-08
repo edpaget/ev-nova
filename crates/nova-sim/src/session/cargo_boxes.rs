@@ -675,11 +675,11 @@ mod tests {
             .map(|frame| square(20, |_, _| frame == drawn))
             .collect();
         let mut words = frames[0].clone();
-        words.words.clear();
+        words.bytes.clear();
         words.starts.clear();
         for frame in &frames {
-            words.starts.push(Some(words.words.len()));
-            words.words.extend(&frame.words);
+            words.starts.push(words.bytes.len());
+            words.bytes.extend(&frame.bytes);
         }
         words
     }

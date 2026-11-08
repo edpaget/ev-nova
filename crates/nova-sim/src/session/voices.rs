@@ -1306,7 +1306,7 @@ pub(super) mod tests {
         let npc = session.space.npc_mut(e).expect("there");
         npc.state.position = e_at;
         npc.condition = crate::combat::hull::Condition::Disabled;
-        session.prepare_all_sprites();
+        session.prepare_all_sprites(&mut crate::chance::NeverFires);
         let step = Vec2::new(10.0, 0.0);
         let shots = session.space.combat.shots_mut();
         let (first, second) = shots.split_at_mut(1);

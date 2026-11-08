@@ -2,15 +2,20 @@
 //! data: [`PilotCatalog::rle_sheet`](crate::catalog::PilotCatalog::rle_sheet)'s
 //! adapter.
 //!
-//! A ship's base sheet is its `shän`'s `rlëD` (`GameData::ship_sprite_words`;
-//! a `PICT` base image isn't read, so its touch falls back to discs). A
+//! A ship's base sheet is its `shän`'s base image, an `rlëD` or a cut
+//! `PICT` pair (`GameData::ship_sprite_words`). A
 //! stellar graphic's is `spïn` 1000 + its type's, an `rlëD` or a cut
 //! `PICT` pair (`GameData::spin_words`), as is a shot's, `spïn` 3000 + its
 //! weapon's `Graphic` (none below 0), an asteroid kind's, `spïn` 800 +
 //! the kind, and a box graphic's, `spïn` 500 + the graphic. Every stock
 //! sheet of these reads (`nova-sim`'s `stock_contact_masks`). The shift
 //! is the sheet's depth shifted right by 4, as `_SWCreateFrame` sets
-//! +0x5e (@0xad5f3-0xad611).
+//! +0x5e (@0xad607-0xad611), of which `_BlitPixieRLECollisionProc`'s
+//! `shll %cl` takes the low 5 bits (@0xbbab2-0xbbae9): `(depth >> 4) &
+//! 31`, 0 at 8 bits, 1 at 16 and 24, 2 at 32, 3 at 48, 31 at 0x7FFF, and
+//! 0 again at 512. A 32-bit sheet touches by its own pixels at its box's
+//! size; a sheet of a depth whose shift doesn't match its pixels' bytes
+//! touches as the original's walk reads it (`nova_sim_base::sprite_mask`).
 //! Each call reads the sheet afresh: the session asks once per sheet and
 //! keeps it.
 
@@ -39,16 +44,18 @@ pub(super) fn rle_sheet(data: &GameData, sheet: MaskSheet) -> Option<RleSheet> {
     Some(of_words(words))
 }
 
-/// `words` as the collision reads them.
+/// `words` as the collision reads them, shifted by `(depth >> 4) & 31`:
+/// `_BlitPixieRLECollisionProc`'s `shll %cl` takes only its count's low 5
+/// bits (@0xbbab2-0xbbae9).
 fn of_words(words: RleWords) -> RleSheet {
-    // 16 >> 4 and 8 >> 4 fit a byte.
+    // Masked to 5 bits, it fits a byte.
     #[allow(clippy::cast_possible_truncation)]
-    let shift = (words.depth >> 4) as u8;
+    let shift = ((words.depth >> 4) & 31) as u8;
     RleSheet {
         width: words.frame_width,
         height: words.frame_height,
         shift,
-        words: words.words,
+        bytes: words.bytes,
         starts: words.starts,
     }
 }
@@ -62,6 +69,7 @@ mod tests {
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
+    use nova_sim_base::fixture::rle::words_of;
 
     use super::*;
     use crate::catalog::{PilotCatalog, ShipId};
@@ -75,6 +83,8 @@ mod tests {
     const PICT_SHOT: MaskSheet = MaskSheet::Shot(6);
     const ASTEROID: MaskSheet = MaskSheet::Asteroid(2);
     const CARGO_BOX: MaskSheet = MaskSheet::CargoBox(1);
+    const DEEP_TYPE: MaskSheet = MaskSheet::Stellar(8);
+    const WRAPPING_SHOT: MaskSheet = MaskSheet::Shot(9);
 
     /// A `spïn` naming sprites `sprites` and masks `masks`, frames
     /// `width` x `height`, `x_tiles` across.
@@ -90,7 +100,8 @@ mod tests {
 
     /// Ship 128 (base image 1000, a 2x1 sheet of one frame), graphic type
     /// 3 (an 8-bit `rlëD` of two 3x1 frames) and graphic type 4 (a `PICT`
-    /// pair cut into two 2x1 frames, `#.` and `.#`).
+    /// pair cut into two 2x1 frames, `#.` and `.#`), graphic type 8 (a
+    /// 24-bit `rlëD`) and shot graphic 9 (an `rlëD` 0x7FFF deep).
     fn data() -> GameData {
         let white = [0xFF; 3];
         let black = [0; 3];
@@ -132,15 +143,103 @@ mod tests {
             (Spin::TYPE, 3006, spin(2004, 2104, 2, 1, 2)),
             (Spin::TYPE, 802, spin(2005, -1, 1, 2, 1)),
             (Spin::TYPE, 501, spin(2003, -1, 3, 1, 2)),
+            (Spin::TYPE, 1008, spin(2008, -1, 2, 1, 1)),
+            (RLED, 2008, deep(24)),
+            (Spin::TYPE, 3009, spin(2009, -1, 2, 1, 1)),
+            (RLED, 2009, deep(0x7FFF)),
         ])
+    }
+
+    /// A 2x1 `rlëD` at `depth`, its one line a skip of 3 bytes and a run
+    /// of 3.
+    fn deep(depth: u16) -> Vec<u8> {
+        RledBuilder::new(2, 1)
+            .depth(depth)
+            .count_lines()
+            .frame(|f| f.line().skip8(3).run8(3, [0xA1, 0xB2, 0xC3, 0xD4]))
+            .build()
+    }
+
+    /// The sheet `of_words` makes of a 1x1 sheet at `depth`.
+    fn at_depth(depth: u16) -> RleSheet {
+        of_words(RleWords {
+            frame_width: 1,
+            frame_height: 1,
+            depth,
+            bytes: vec![0; 4],
+            starts: vec![0],
+        })
+    }
+
+    #[test]
+    fn the_shift_is_the_depth_shifted_right_by_4_as_shll_takes_it() {
+        for (depth, shift) in [
+            (8, 0),
+            (16, 1),
+            (32, 2),
+            (24, 1),
+            (48, 3),
+            (256, 16),
+            (512, 0),
+            (528, 1),
+            (0x7FFF, 31),
+        ] {
+            assert_eq!(at_depth(depth).shift, shift, "{depth}");
+        }
+    }
+
+    #[test]
+    fn a_24_bit_stellar_sheet_touches_by_its_tokens_at_a_shift_of_1() {
+        let rle = data().rle_sheet(DEEP_TYPE).expect("reads");
+        assert_eq!((rle.width, rle.height, rle.shift), (2, 1, 1));
+        assert_eq!(
+            words_of(&rle),
+            [0x0100_000C, 0x0300_0003, 0x0400_0003, 0xA1B2_C3D4, 0]
+        );
+        assert_eq!(rle.starts, [0]);
+    }
+
+    #[test]
+    fn a_sheet_0x7fff_deep_takes_a_shift_of_31() {
+        let rle = data().rle_sheet(WRAPPING_SHOT).expect("reads");
+        assert_eq!(rle.shift, 31);
+        assert_eq!(rle.starts, [0]);
     }
 
     #[test]
     fn a_ships_base_sheet_is_its_rleds_tokens_at_a_shift_of_1() {
         let rle = data().rle_sheet(SHIP).expect("reads");
         assert_eq!((rle.width, rle.height, rle.shift), (2, 1, 1));
-        assert_eq!(rle.words, [0x0100_0008, 0x0200_0004, 0x7C00_7C00, 0]);
-        assert_eq!(rle.starts, [Some(0)]);
+        assert_eq!(words_of(&rle), [0x0100_0008, 0x0200_0004, 0x7C00_7C00, 0]);
+        assert_eq!(rle.starts, [0]);
+    }
+
+    #[test]
+    fn a_ships_pict_pair_base_touches_by_its_cut_tokens() {
+        // Ship 129's base is the pair graphic type 4 cuts, in the same
+        // 2x1 frames: its `shän` loads 2 frames of one set.
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2004)
+            .base_mask_id(2104)
+            .base_x_size(2)
+            .base_y_size(1)
+            .base_set_count(1)
+            .frames_per(2)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 129, vec![0; Ship::SIZE.expect("fixed")]),
+            (ShipAnim::TYPE, 129, anim),
+            (PICT, 2004, rgb888_pict(4, 1, &[[0x80; 3]; 4])),
+            (
+                PICT,
+                2104,
+                rgb888_pict(4, 1, &[[0xFF; 3], [0; 3], [0; 3], [0xFF; 3]]),
+            ),
+        ]);
+        let ship = data
+            .rle_sheet(MaskSheet::Ship(ShipId(129)))
+            .expect("a PICT pair");
+        assert_eq!(Some(ship), self::data().rle_sheet(PICT_TYPE));
     }
 
     #[test]
@@ -148,12 +247,12 @@ mod tests {
         let data = data();
         let eight = data.rle_sheet(RLED_TYPE).expect("an rlëD");
         assert_eq!((eight.width, eight.height, eight.shift), (3, 1, 0));
-        assert_eq!(eight.starts, [Some(0), Some(4)]);
-        assert_eq!(eight.words[4..], [0x0100_0004, 0x0300_0003, 0]);
+        assert_eq!(eight.starts, [0, 16], "byte offsets");
+        assert_eq!(words_of(&eight)[4..], [0x0100_0004, 0x0300_0003, 0]);
         let cut = data.rle_sheet(PICT_TYPE).expect("a PICT pair");
         assert_eq!((cut.width, cut.height, cut.shift), (2, 1, 1));
         assert_eq!(
-            cut.words,
+            words_of(&cut),
             [
                 0x0100_0008,
                 0x0200_0002,
@@ -166,7 +265,27 @@ mod tests {
                 0
             ]
         );
-        assert_eq!(cut.starts, [Some(0), Some(4)]);
+        assert_eq!(cut.starts, [0, 16]);
+    }
+
+    #[test]
+    fn a_32_bit_stellar_sheet_touches_at_a_shift_of_2_by_its_box() {
+        let data = store(&[
+            (Spin::TYPE, 1007, spin(2007, -1, 2, 1, 1)),
+            (
+                RLED,
+                2007,
+                RledBuilder::new(2, 1)
+                    .depth(32)
+                    .count_lines()
+                    .frame(|f| f.line().pixels32(&[1, 2]))
+                    .build(),
+            ),
+        ]);
+        let rle = data.rle_sheet(MaskSheet::Stellar(7)).expect("reads");
+        assert_eq!((rle.width, rle.height, rle.shift), (2, 1, 2));
+        assert_eq!(words_of(&rle), [0x0100_000C, 0x0200_0008, 1, 2, 0]);
+        assert_eq!(rle.starts, [0]);
     }
 
     #[test]
@@ -174,7 +293,7 @@ mod tests {
         let data = data();
         let rled = data.rle_sheet(RLED_SHOT).expect("an rlëD");
         assert_eq!((rled.width, rled.height, rled.shift), (1, 2, 1));
-        assert_eq!(rled.words[..2], [0x0100_0004, 0x0300_0002]);
+        assert_eq!(words_of(&rled)[..2], [0x0100_0004, 0x0300_0002]);
         let cut = data.rle_sheet(PICT_SHOT).expect("a PICT pair");
         assert_eq!(cut, data.rle_sheet(PICT_TYPE).expect("the same pair"));
     }
@@ -211,7 +330,15 @@ mod tests {
             MaskSheet::CargoBox(u16::MAX),
         ];
         let held = [
-            SHIP, RLED_TYPE, PICT_TYPE, RLED_SHOT, PICT_SHOT, ASTEROID, CARGO_BOX,
+            SHIP,
+            RLED_TYPE,
+            PICT_TYPE,
+            RLED_SHOT,
+            PICT_SHOT,
+            ASTEROID,
+            CARGO_BOX,
+            DEEP_TYPE,
+            WRAPPING_SHOT,
         ];
         assert_eq!(check_contract(&data(), &held, &missing), Ok(()));
     }

@@ -221,6 +221,16 @@ pub struct SiteAnimation {
     /// Its `DeadType`'s, likewise, when [`dead_graphic`](LandingSite::dead_graphic)
     /// is `Some`; 0 otherwise.
     pub dead_frames: u16,
+    /// How many frames its `Type` sheet animates over, the master count
+    /// the rebuild copies from its slot (@0x331c6): the `spïn`'s tiles
+    /// when above 0 and fewer than the sheet's decoded frames, else the
+    /// decoded frames (`nova_data::store::master_frame_count`,
+    /// `_LoadMasterStellarSprite` @0x1ed8c-0x1ed97). 0 when the sheet
+    /// does not read, and at most 65535.
+    pub type_sheet_frames: u16,
+    /// Its `DeadType` sheet's, likewise; 0 when it has none or it does
+    /// not read.
+    pub dead_sheet_frames: u16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -2214,6 +2224,14 @@ pub trait PilotCatalog {
     fn fallback_counts_frames(&self) -> bool {
         true
     }
+    /// How many frames graphic type 0's sheet (`spïn` 1000) animates
+    /// over, its master count as
+    /// [`SiteAnimation::type_sheet_frames`] counts a `Type` sheet's: what
+    /// a slot the rebuild fills with it draws over. 1 unless overridden,
+    /// and 1 when the sheet does not read, as a slot shows one frame.
+    fn fallback_frame_count(&self) -> u16 {
+        1
+    }
     /// Every `mïsn` that can be read, by ascending ID.
     fn missions(&self) -> Vec<MissionRecord>;
     /// What the screens show of every `mïsn` that can be read, by
@@ -2426,6 +2444,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).fallback_counts_frames()
     }
 
+    fn fallback_frame_count(&self) -> u16 {
+        (**self).fallback_frame_count()
+    }
+
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
     }
@@ -2600,6 +2622,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn fallback_counts_frames(&self) -> bool {
         (**self).fallback_counts_frames()
+    }
+
+    fn fallback_frame_count(&self) -> u16 {
+        (**self).fallback_frame_count()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -3310,8 +3336,8 @@ mod tests {
                 width: 5,
                 height: 6,
                 shift: 1,
-                words: vec![0],
-                starts: vec![Some(0)],
+                bytes: vec![0; 4],
+                starts: vec![0],
             })
         }
 
