@@ -17,13 +17,16 @@
 //! `ship_display` module).
 //!
 //! **The stellars** ([`Session::contact_sprites`]'s `stellars`). Each
-//! destroyable stellar shown whose sheet was read, as its slot last
-//! showed it: the sheet it draws (`Type`, `DeadType` or graphic type 0's,
-//! as the deadly stellars map it), the frame its slot shows, its place and
-//! the sizes its slot is placed by, for the proximity pass's
-//! `_SWRLECollision(shot, stellar)` (@0x372a8, see
-//! `nova_sim::combat::stellar`). The collision passes come before this
-//! pass's sprite tick, so the frame is the one the last pass's left.
+//! destroyable listed stellar holding a sprite whose sheet was read, as
+//! its slot last showed it ([`Session::shot_stellar_sprites`], see the
+//! `shot_stellars` module): the sheet it draws (`Type`, `DeadType` or
+//! graphic type 0's, as the deadly stellars map it), the frame its slot
+//! shows, its place and the sizes its slot is placed by, for the
+//! proximity pass's `_SWRLECollision(shot, stellar)` (@0x372a8, see
+//! `nova_sim::combat::stellar`). A hidden stellar is lent its last slot's
+//! sprite under its own ID: its owner's now, or the ghost fixed on
+//! screen. The collision passes come before this pass's sprite tick, so
+//! the frame is the one the last pass's left.
 //!
 //! **The scoop** ([`Session::scoop_masks`]). `_ShipCollisionHandler`'s
 //! scoop branch (@0x370ab-0x371ac) runs in the collision passes, after
@@ -39,16 +42,11 @@
 
 use super::Session;
 use crate::combat::ShipRef;
-use std::rc::Rc;
-
-use super::deadly_masks::drawn_mask_sheet;
-use crate::catalog::StellarId;
-use crate::combat::contact::{ContactSprites, ShipSprite, ShotContact, SpriteAt, StellarSprite};
+use crate::combat::contact::{ContactSprites, ShipSprite, ShotContact};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleKey;
 use crate::sprite_mask::{MaskWalk, PlacedMask};
-use crate::story::wreck;
 
 /// The masks a scoop tests by, from the player standing at a place: its
 /// own, and each NPC's in NPC order, none where a sheet wasn't read.
@@ -90,40 +88,6 @@ impl Session {
         own.into_iter().chain(npcs).collect()
     }
 
-    /// Each destroyable stellar shown whose sheet was read, as its slot
-    /// last showed it (see the module docs): the stellars
-    /// [`Session::stellar_targets`] lends, each by the sheet its slot draws
-    /// ([`Space::slot_layout`](super::Space::slot_layout)), the frame its
-    /// slot shows ([`Session::stellar_frame`]), its place and the sizes its
-    /// slot is laid out by. The collision passes run before this pass's
-    /// sprite tick, so the frame is the one the last pass's left, as the
-    /// original's sprite still shows it at `_CheckShotProximities`
-    /// (@0x44015, `_HandleStellarSprites` @0x444d2 after it).
-    fn stellar_sprites(&self) -> Vec<(StellarId, StellarSprite)> {
-        let (statics, setup) = (&self.statics, &self.setup);
-        self.chart
-            .sites
-            .iter()
-            .filter(|site| !site.destroyed)
-            .filter(|site| statics.lives.get(&site.id).is_some_and(wreck::destroyable))
-            .filter_map(|site| {
-                let layout = self.space.slot_layout(statics, setup, site, Vec2::ZERO)?;
-                let sheet = self
-                    .space
-                    .sprite_masks
-                    .sheet(drawn_mask_sheet(site, layout.sheet)?)?;
-                let sprite = StellarSprite {
-                    sheet: Rc::clone(sheet),
-                    frame: self.stellar_frame(site.id),
-                    at: SpriteAt::Place(site.position),
-                    size: layout.size,
-                    placed_as: layout.placed_as,
-                };
-                Some((site.id, sprite))
-            })
-            .collect()
-    }
-
     /// What the contact passes touch by (see the module docs).
     pub(super) fn contact_sprites(&self) -> ContactSprites {
         let masks = &self.space.sprite_masks;
@@ -131,7 +95,7 @@ impl Session {
             ships: self.ship_sprites(),
             shots: masks.shot_sheets(),
             asteroids: masks.asteroid_sheets(),
-            stellars: self.stellar_sprites(),
+            stellars: self.shot_stellar_sprites(),
             speed_mult: self.time.gain().get(),
             walk: self.mask_walk(),
             reading: ShotContact::from(self.setup.rules.source_for(RuleKey::ShotContact)),
@@ -173,14 +137,17 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use nova_sim_base::fixture::rle::sheet;
 
+    use std::rc::Rc;
+
     use super::*;
-    use crate::catalog::{MaskSheet, ShipId};
+    use crate::catalog::{MaskSheet, ShipId, StellarId};
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::combat::armament::Trigger;
+    use crate::combat::contact::{SpriteAt, StellarSprite};
     use crate::flight::{Controls, Turn};
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
@@ -188,7 +155,7 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, Passive, work};
 
     /// The rows of a frame `side` square, drawn where `drawn` says.
-    fn square(side: u32, drawn: impl Fn(u32, u32) -> bool) -> RleSheet {
+    pub(in crate::session) fn square(side: u32, drawn: impl Fn(u32, u32) -> bool) -> RleSheet {
         let rows: Vec<String> = (0..side)
             .map(|y| {
                 (0..side)
@@ -208,7 +175,7 @@ mod tests {
 
     /// [`armed`]'s catalog, the NPC 40 square, drawn only in its left
     /// quarter, and the blaster's shot 2 square.
-    fn left_quartered() -> FakePilotCatalog {
+    pub(in crate::session) fn left_quartered() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.rle_sheets = vec![
             (NPC_SHIP, square(40, |x, _| x < 10)),
@@ -219,7 +186,11 @@ mod tests {
 
     /// `catalog`'s session with the player at rest at the centre, facing
     /// up at its NPC 100 above at `npc_x`, its trigger held, by `rules`.
-    fn shooting(catalog: &FakePilotCatalog, npc_x: f32, rules: Rulebook) -> Session {
+    pub(in crate::session) fn shooting(
+        catalog: &FakePilotCatalog,
+        npc_x: f32,
+        rules: Rulebook,
+    ) -> Session {
         let mut session = facing_an_npc(catalog, 180).with_rules(rules);
         session.ship.player.position = Vec2::ZERO;
         session.ship.player.velocity = Vec2::ZERO;
@@ -553,7 +524,7 @@ mod tests {
 
     /// `catalog` with 128 of `Strength` 100 and the player's (and the
     /// NPC's) blaster planet-type.
-    fn planet_typed(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    pub(in crate::session) fn planet_typed(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
         for weapon in &mut catalog.weapons {
             weapon.flags2 |= PLANET_TYPE;
         }

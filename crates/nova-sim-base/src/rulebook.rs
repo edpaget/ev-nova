@@ -300,7 +300,7 @@
 //! | [`DisabledAltHeld`](RuleKey::DisabledAltHeld) | `disabled_alt_held` | a disabled ship of `shän` `Flags` 0x0020 keeps its alt layer shown at the frame, tint and screen place it was last drawn at, the place staying put on screen as the view moves, until it is repaired, fades out fully or leaves, as `_HandleShipDisplay` skips the alt block without hiding the sprite (@0x2b6b7-0x2b705, @0x2c97d-0x2cb11, @0x2cecb-0x2cf5a; see `nova_sim::combat::ship_frames`); no stock `shän` of 0x0020 has an alt image | its alt layer is hidden while it is disabled (phase 10's reading) |
 //! | [`ReusedSlotBlinkTimer`](RuleKey::ReusedSlotBlinkTimer) | `reused_slot_blink_timer` | a ship brought into a ship-table slot blinks its running lights on the blink timer the slot's last ship left, as nothing but the lights block writes +0xc8ec (its only accesses @0x2c328-0x2c55b; see `nova_sim_ai::traffic::berth_blink`) | every new ship's blink timer starts at 0, a fresh slot's\* |
 //! | [`SpawnAnimRollsFirstClass`](RuleKey::SpawnAnimRollsFirstClass) | `spawn_anim_rolls_first_class` | a ship spawned by `_GenericRandomShipSpawn` for a fleet, a person, an aux ship, the nag ship, a capture or a hired escort rolls its anim set `Rand(BaseSets)` and animation timer `Rand(AnimDelay)` on the first `shïp`'s, ID 128's, as the spawn writes the class +0x76 = 0 before its rolls (@0x3c929, @0x3cc56-0x3ccc2); only a mission's ship and a fighter roll again on their own (@0x3d03c-0x3d091, @0x3da72-0x3dad9; see `nova_sim_ai::traffic::ship_display`) | on its own class's `BaseSets` and `AnimDelay`\* |
-//! | [`StaleStellarSprite`](RuleKey::StaleStellarSprite) | `stale_stellar_sprite` | a deadly stellar hidden since it was last shown still kills by the sprite slot it last took, as nothing but `_HandleStellarSystemVisibility` writes its sprite pointer (spöb +0, @0x32fc8) and `_HandleDeadlyStellars` tests any listed stellar holding one (@0x39d1d): the slot's owner now, at that stellar's place and frame, or, unowned, graphic type 0's frame at the slot's last screen place, which follows the player (see [`deadly_stellar`](crate::deadly_stellar) and `nova_sim::story::sprite_pool`) | a hidden stellar kills nothing\* |
+//! | [`StaleStellarSprite`](RuleKey::StaleStellarSprite) | `stale_stellar_sprite` | a deadly stellar hidden since it was last shown still kills by the sprite slot it last took, as nothing but `_HandleStellarSystemVisibility` writes its sprite pointer (spöb +0, @0x32fc8) and `_HandleDeadlyStellars` tests any listed stellar holding one (@0x39d1d): the slot's owner now, at that stellar's place and frame, or, unowned, graphic type 0's frame at the slot's last screen place, which follows the player (see [`deadly_stellar`](crate::deadly_stellar) and `nova_sim::story::sprite_pool`); a destroyable one hidden so is struck by a planet-type shot by that slot sprite too, as `_CheckShotProximities` tests it (@0x37288-0x372a8), its damage off the hidden stellar (@0x372b5-0x372eb) | a hidden stellar kills nothing and no shot strikes it\* |
 //! | [`RleCollisionWalk`](RuleKey::RleCollisionWalk) | `rle_collision_walk` | two sprites touch as `_BlitPixieRLECollision` walks their run-length tokens (@0xc0c8d-0xc0ebe): a solid run (op 4) is passed with no width and its fill word read as a token, so a run never touches and later tokens on its line are read the run's length to the left; on a tie the second sprite steps first, so the first's drawn pixel at x − 1 touches the second's at x; and an 8-bit sheet's byte counts are read as pixels (see [`sprite_mask`](crate::sprite_mask)) | drawn pixels touch only where both sprites draw the same pixel, runs included\* |
 //! | [`ShotContact`](RuleKey::ShotContact) | `shot_contact` | a shot touches a ship or an asteroid by the two sprites' rects where the last pass placed them, strictly overlapping (`_SWCollideSpriteLayer` @0xacc30-0xacc81), then a ship by `_SWRadiusCollision` when the speed multiplier is 2.0 or more or the ship is 32 wide or less and otherwise, an asteroid always, by `_SWRLECollision` over their pixel masks, the hit at the shot's position, so a shot faster than its target's extent can pass through it (`_ShipCollisionHandler` @0x3700f-0x3704a, `_AsteroidCollisionHandler` @0x36a0e; see `nova_sim::combat::contact`); and a planet-type shot touches a destroyable stellar by `_SWRLECollision(shot, stellar)` over their masks, the shot first, with no rect pre-test, the hit at the shot's position (`_CheckShotProximities` @0x372a8; see `nova_sim::combat::stellar`), the stellar's disc where either mask can't be read | the shot's swept path from its last place against the ship's 0.33-width disc, the asteroid's radius or the stellar's disc, hitting where it entered it\* |
 //! | [`SpeedMultRamp`](RuleKey::SpeedMultRamp) | `speed_mult_ramp` | the frames after a landing's tail (`_PlayerLandOnStellar` @0x6375e), the info dialogs (`_HandlePlayer` @0x70357, @0x704e8), the escort, comm and planet comm dialogs' closes (@0x95693, @0x9690e, @0x97af2) and a game entry after one that ended landed run at the ramp from 0.0: held, then (3 × old + 1) / 4 a frame (`_HandleTimeAdjustment` @0x33332-0x3349b; see [`speed_mult`](crate::speed_mult)), and the frame a dialog opens on runs its rest, from `_HandlePlayer`'s key block on, at 0.0 as the first step after the dialog's zero (see `nova_sim`'s `opening_rest` module) | every frame at full gain, whole\* |
@@ -3959,15 +3959,20 @@ rule_keys! {
     /// class's. The Bible says nothing of it (see
     /// `nova_sim_ai::traffic::ship_display`).
     SpawnAnimRollsFirstClass => "spawn_anim_rolls_first_class",
-    /// Whether a hidden deadly stellar still kills by the sprite slot it
-    /// last took. By the engine, as only `_HandleStellarSystemVisibility`
-    /// writes a stellar's sprite pointer (spöb +0, @0x32fc8) and nothing
-    /// clears it, while `_HandleDeadlyStellars` tests every listed stellar
-    /// holding one (@0x39d1d), it kills by that slot's sprite: its owner's
-    /// now, or graphic type 0's frame at the slot's last screen place when
-    /// no stellar owns it. By the other reading a hidden stellar kills
-    /// nothing, as a plug-in author would expect. The Bible says nothing of
-    /// it (see [`deadly_stellar`](crate::deadly_stellar)).
+    /// Whether a hidden stellar still kills, if deadly, and is struck, if
+    /// destroyable, by the sprite slot it last took. By the engine, as only
+    /// `_HandleStellarSystemVisibility` writes a stellar's sprite pointer
+    /// (spöb +0, @0x32fc8) and nothing clears it, while
+    /// `_HandleDeadlyStellars` (@0x39d1d) and `_CheckShotProximities`'
+    /// stellar branch (@0x37288-0x372a8) test every listed stellar holding
+    /// one, it kills and a planet-type shot strikes it by that slot's
+    /// sprite: its owner's now, or graphic type 0's frame at the slot's last
+    /// screen place when no stellar owns it, the shot's damage coming off
+    /// the hidden stellar (@0x372b5-0x372eb). By the other reading a hidden
+    /// stellar kills nothing and no shot strikes it, as a plug-in author
+    /// would expect. The Bible says nothing of it (see
+    /// [`deadly_stellar`](crate::deadly_stellar) and the session's
+    /// `shot_stellars` module).
     StaleStellarSprite => "stale_stellar_sprite",
     /// Which NPCs need a jump's fuel in the tank to jump out (see
     /// `nova_sim::ai::leave`). By the engine, as `_AIShipHasFuelForJump`

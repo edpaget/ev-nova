@@ -673,6 +673,7 @@ mod ship_paint;
 mod shipyard_listing;
 mod shot_gain;
 mod shot_slots;
+mod shot_stellars;
 #[cfg(test)]
 mod slot_scoop;
 #[cfg(test)]

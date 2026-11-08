@@ -205,7 +205,7 @@ impl Chart {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use crate::deadly_stellar::DEADLY_STELLAR;
@@ -240,7 +240,11 @@ mod tests {
 
     /// Two rebuild points: `first` shown at the first, `then` at the
     /// second, from the player's place.
-    fn shown_then(session: &mut Session, first: &[LandingSite], then: &[LandingSite]) {
+    pub(in crate::session) fn shown_then(
+        session: &mut Session,
+        first: &[LandingSite],
+        then: &[LandingSite],
+    ) {
         session.chart.sites = first.to_vec();
         session.rebuild_sprite_pool();
         session.chart.sites = then.to_vec();

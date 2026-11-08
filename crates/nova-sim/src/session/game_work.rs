@@ -910,8 +910,9 @@ impl Session {
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
-    /// `chance` ([`Combat::test_hits_in_turn`]), among the stellars shown
-    /// that shots can hit and the asteroid field, lent whole, the shots
+    /// `chance` ([`Combat::test_hits_in_turn`]), among the listed stellars
+    /// shots can hit, each by the sprite it holds, a hidden one too (see
+    /// the `shot_stellars` module), and the asteroid field, lent whole, the shots
     /// touching by the masks the session holds (see the `contact_masks`
     /// module), each direct hit settled and answered before the next
     /// lands, as `_DamageShip`'s reaction block runs in `_HandleShipHit`
@@ -927,7 +928,7 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let mut stellars = self.stellar_targets();
+        let mut stellars = self.shot_stellar_targets();
         let sprites = self.contact_sprites();
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
         let mut asteroids = std::mem::take(&mut self.space.asteroids);

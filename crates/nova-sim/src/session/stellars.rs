@@ -407,45 +407,69 @@ impl Session {
         self.space.destroying.remove(&stellar);
     }
 
-    /// The stellars shown that shots can hit this tick: each whole one of
-    /// `Strength` above 0 drawing a sheet that can be read, as big as the
-    /// disc of that sheet's frame ([`frame_radius`], which for a `Type`
-    /// sheet is [`landing_radius`](crate::landing::landing_radius)), with
-    /// its current strength. A whole
-    /// stellar with no `Type` sheet is hit by the frame its sprite slot
-    /// holds (`_CheckShotProximities` @0x37288-0x372a8 collides with the
-    /// slot's sprite), by [`RuleKey::TypeSheetFallback`]'s engine reading.
-    /// The disc is centred where the slot's rect is
-    /// ([`Space::slot_centre`]): a frame frozen sits from the centre less
-    /// 16, as `_CheckShotProximities` reads the slot's rect (@0x372a8; see
-    /// the `uncounted_slots` module). The disc is the fallback: where the
-    /// session lends the stellar's sprite and the shot's (the
-    /// `contact_masks` module), the proximity pass tests their masks
-    /// (`nova_sim::combat::stellar`).
+    /// The stellars shown that shots can hit this tick, for the beams:
+    /// each whole one of `Strength` above 0 drawing a sheet that can be
+    /// read, as big as the disc of that sheet's frame ([`frame_radius`],
+    /// which for a `Type` sheet is
+    /// [`landing_radius`](crate::landing::landing_radius)), with its
+    /// current strength. A whole stellar with no `Type` sheet is hit by
+    /// the frame its sprite slot holds (`_CheckShotProximities`
+    /// @0x37288-0x372a8 collides with the slot's sprite), by
+    /// [`RuleKey::TypeSheetFallback`]'s engine reading. The disc is
+    /// centred where the slot's rect is ([`Space::slot_centre`]): a frame
+    /// frozen sits from the centre less 16, as `_CheckShotProximities`
+    /// reads the slot's rect (@0x372a8; see the `uncounted_slots` module).
+    /// The proximity pass walks the listed stellars instead, a hidden one
+    /// by the sprite it holds (see the `shot_stellars` module), and there
+    /// the disc is the fallback: where the session lends the stellar's
+    /// sprite and the shot's (the `contact_masks` module), it tests their
+    /// masks (`nova_sim::combat::stellar`).
     pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
         self.chart
             .sites
             .iter()
             .filter(|site| !site.destroyed)
-            .filter_map(|site| {
-                let frame = self
-                    .space
-                    .drawn_frame_size(&self.statics, &self.setup, site)?;
-                let position = self.space.slot_centre(&self.statics, &self.setup, site)?;
-                let life = self.statics.lives.get(&site.id)?;
-                wreck::destroyable(life).then(|| StellarTarget {
-                    stellar: site.id,
-                    position,
-                    radius: frame_radius(frame),
-                    strength: self
-                        .space
-                        .strength
-                        .get(&site.id)
-                        .copied()
-                        .unwrap_or_else(|| wreck::full_strength(life)),
-                })
-            })
+            .filter_map(|site| self.target_drawn_as(site, site))
             .collect()
+    }
+
+    /// `walked`, a listed stellar, as a shot can hit it drawn as `drawn`,
+    /// one of the stellars shown (itself, or its last slot's owner now):
+    /// the disc of `drawn`'s frame where its slot's rect is (see
+    /// [`Session::stellar_targets`]), with `walked`'s strength; none when
+    /// `drawn` draws no frame or `walked` can't be destroyed.
+    pub(super) fn target_drawn_as(
+        &self,
+        walked: &LandingSite,
+        drawn: &LandingSite,
+    ) -> Option<StellarTarget> {
+        let frame = self
+            .space
+            .drawn_frame_size(&self.statics, &self.setup, drawn)?;
+        let position = self.space.slot_centre(&self.statics, &self.setup, drawn)?;
+        self.stellar_target(walked.id, position, frame_radius(frame))
+    }
+
+    /// `stellar` as a shot can hit it, a disc of `radius` at `position`,
+    /// at its current strength; none when it can't be destroyed.
+    pub(super) fn stellar_target(
+        &self,
+        stellar: StellarId,
+        position: Vec2,
+        radius: f32,
+    ) -> Option<StellarTarget> {
+        let life = self.statics.lives.get(&stellar)?;
+        wreck::destroyable(life).then(|| StellarTarget {
+            stellar,
+            position,
+            radius,
+            strength: self
+                .space
+                .strength
+                .get(&stellar)
+                .copied()
+                .unwrap_or_else(|| wreck::full_strength(life)),
+        })
     }
 
     /// Keeps the strength each of `stellars` is left with after the
@@ -476,9 +500,10 @@ impl Session {
         }
     }
 
-    /// Destroys the shown `stellar` a shot of `by` took below 0, as
+    /// Destroys the listed `stellar`, shown or hidden (see the
+    /// `shot_stellars` module), a shot of `by` took below 0, as
     /// `_CheckShotProximities` does (@0x37409-0x3751f): its explosion at
-    /// its centre, destroyed with the countdown `Y` gives it, then its
+    /// its centre, its own place and not its sprite's (@0x3742e), destroyed with the countdown `Y` gives it, then its
     /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
     /// again whatever the script did. The player, and no other ship, is
     /// convicted, and only by a shot whose source is its ship (`by` none
@@ -497,6 +522,7 @@ impl Session {
             self.chart
                 .sites
                 .iter()
+                .chain(&self.chart.listed)
                 .find(|site| site.id == stellar)
                 .copied(),
         ) else {
@@ -933,7 +959,7 @@ pub(in crate::session) mod tests {
     }
 
     /// `stellar`'s countdown, while it is destroyed.
-    fn destroyed(session: &Session, stellar: i16) -> Option<Countdown> {
+    pub(in crate::session) fn destroyed(session: &Session, stellar: i16) -> Option<Countdown> {
         session
             .galaxy()
             .overlay()
@@ -1259,7 +1285,7 @@ pub(in crate::session) mod tests {
         }))
     }
 
-    fn bit(n: u16) -> Bit {
+    pub(in crate::session) fn bit(n: u16) -> Bit {
         Bit::new(n).expect("a bit")
     }
 
@@ -1738,7 +1764,7 @@ pub(in crate::session) mod tests {
     }
 
     /// The explosions among `events` of `bööm` `kind`, where each was.
-    fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
+    pub(in crate::session) fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
         sized_booms(events, kind)
             .into_iter()
             .map(|(at, _)| at)
@@ -1747,7 +1773,7 @@ pub(in crate::session) mod tests {
 
     /// The explosions among `events` of `bööm` `kind`, where each was and
     /// its size: a `Y`'s, heard already, of size 0.
-    fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
+    pub(in crate::session) fn sized_booms(events: &[CombatEvent], kind: i16) -> Vec<(Vec2, f32)> {
         events
             .iter()
             .filter_map(|event| match *event {
@@ -1844,8 +1870,8 @@ pub(in crate::session) mod tests {
     /// records each crime it is asked about with the victim's
     /// government, and each system a walk starts from.
     #[derive(Debug, Default)]
-    struct Fine {
-        seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+    pub(in crate::session) struct Fine {
+        pub(in crate::session) seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
         from: std::cell::RefCell<Vec<SystemId>>,
     }
 
