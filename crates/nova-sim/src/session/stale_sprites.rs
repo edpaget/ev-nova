@@ -38,8 +38,10 @@
 //!   `_SWRLECollision` there and crash; the engine kills nothing (record
 //!   only).
 //!
-//! Those are [`RuleKey::StaleStellarSprite`]'s engine reading. By the
-//! other reading a hidden stellar kills nothing. Each sprite touches by
+//! Those are [`RuleKey::StaleStellarSprite`]'s engine reading
+//! ([`Session::held_sprite`]). By the other reading a hidden stellar kills
+//! nothing. The same held sprite is what a planet-type shot strikes a
+//! destroyable stellar by (see the `shot_stellars` module). Each sprite touches by
 //! its placed mask, its sheet's run-length tokens (see the `deadly_masks`
 //! module, rdm:phase/play-feel-8/phase-1-sprite-pixel-masks), and by its
 //! disc, half the larger side of its frame across and centred on its
@@ -90,32 +92,37 @@ impl Session {
     /// The sprite each listed deadly stellar holding one kills by, in slot
     /// order, by [`RuleKey::StaleStellarSprite`] (see the module docs).
     pub(super) fn deadly_sprites(&self) -> Vec<DeadlySprite> {
-        let stale = self.setup.rules.source_for(RuleKey::StaleStellarSprite) == RuleSource::Engine;
         self.chart
             .listed
             .iter()
             .filter(|site| is_deadly(site.flags2))
-            .filter_map(|listed| {
-                let shown = self.chart.shown_site(listed);
-                let sprite = match shown {
-                    Some(_) => SlotSprite::Own,
-                    None if stale => self.space.stellar_sprites.sprite_of(listed.id, false),
-                    None => SlotSprite::None,
-                };
-                match sprite {
-                    SlotSprite::Own => self.drawn_sprite(shown?),
-                    SlotSprite::Owner(owner) => {
-                        let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
-                        self.drawn_sprite(owner)
-                    }
-                    SlotSprite::Ghost { top_left } => Some(DeadlySprite {
-                        disc: self.ship.ghost_disc(&self.statics, top_left)?,
-                        mask: self.space.ghost_mask(&self.statics, top_left),
-                    }),
-                    SlotSprite::None => None,
+            .filter_map(|listed| match self.held_sprite(listed) {
+                SlotSprite::Own => self.drawn_sprite(self.chart.shown_site(listed)?),
+                SlotSprite::Owner(owner) => {
+                    let owner = self.chart.sites.iter().find(|site| site.id == owner)?;
+                    self.drawn_sprite(owner)
                 }
+                SlotSprite::Ghost { top_left } => Some(DeadlySprite {
+                    disc: self.ship.ghost_disc(&self.statics, top_left)?,
+                    mask: self.space.ghost_mask(&self.statics, top_left),
+                }),
+                SlotSprite::None => None,
             })
             .collect()
+    }
+
+    /// The sprite `listed`, one of the system's listed stellars, holds, by
+    /// [`RuleKey::StaleStellarSprite`] (see the module docs): its own while
+    /// it is shown; else, by the engine reading, its last slot's, and none
+    /// by the other.
+    pub(super) fn held_sprite(&self, listed: &LandingSite) -> SlotSprite {
+        if self.chart.shown_site(listed).is_some() {
+            return SlotSprite::Own;
+        }
+        match self.setup.rules.source_for(RuleKey::StaleStellarSprite) {
+            RuleSource::Engine => self.space.stellar_sprites.sprite_of(listed.id, false),
+            RuleSource::Bible => SlotSprite::None,
+        }
     }
 
     /// `site`'s sprite, one of the stellars shown, as it is drawn: its disc
@@ -191,7 +198,7 @@ impl Space {
 
 impl Chart {
     /// `listed` among the stellars shown, as they hold it now.
-    fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
+    pub(super) fn shown_site(&self, listed: &LandingSite) -> Option<&LandingSite> {
         self.sites.iter().find(|site| site.id == listed.id)
     }
 }
