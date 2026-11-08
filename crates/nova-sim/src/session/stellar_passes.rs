@@ -801,6 +801,17 @@ mod tests {
             came_out.contains(&by_the_setup),
             "held by the setup's ship at all five"
         );
+        // The sweep brings a ship out in each priming pass too, so a tick
+        // run before that pass's arrivals (which would turn a first-pass
+        // arrival into a second-pass hold) shows here.
+        assert!(
+            came_out.contains(&in_the_first),
+            "held from priming pass 1's own tick on: {came_out:?}"
+        );
+        assert!(
+            came_out.contains(&in_the_second),
+            "held from priming pass 2's own tick on: {came_out:?}"
+        );
         assert!(
             came_out
                 .iter()
