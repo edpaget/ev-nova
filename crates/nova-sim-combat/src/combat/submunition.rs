@@ -81,7 +81,7 @@
 //! [`Submunitions`]: super::weapon::Submunitions
 
 use super::ShipRef;
-use super::projectile::{Shot, ShotLayer, Source};
+use super::projectile::{Shot, ShotLayer, Source, slot_among};
 use super::sides::Sides;
 use super::weapon::{Guidance, WeaponSpec};
 use crate::chance::Chance;
@@ -188,12 +188,7 @@ pub fn aim(parent: &Shot, shot: Shot, n: u32, sides: &Sides, chance: &mut dyn Ch
     let aimed_slot = if target == given {
         shot.aimed_slot
     } else {
-        target.and_then(|ship| {
-            targets
-                .iter()
-                .find(|found| found.ship == ship)
-                .map(|found| found.slot)
-        })
+        target.and_then(|ship| slot_among(targets, ship))
     };
     Shot {
         target,

@@ -67,7 +67,7 @@
 //!   rdm:phase/combat-and-flight-2/phase-1-stale-aim-at-an-empty-ship-slot.
 
 use super::locked_slot::{holder, slot_number};
-use super::projectile::{Jam, Shot, Target};
+use super::projectile::{Jam, Shot, Target, active_among};
 use super::weapon::Guidance;
 use super::{Combat, Fighter};
 use crate::rulebook::RuleSource;
@@ -111,11 +111,9 @@ pub fn follow(shot: &mut Shot, targets: &[Target]) {
     {
         return;
     }
-    let gone = shot.aimed_at.is_none_or(|ship| {
-        !targets
-            .iter()
-            .any(|target| target.ship == ship && target.condition.active())
-    });
+    let gone = shot
+        .aimed_at
+        .is_none_or(|ship| active_among(targets, ship).is_none());
     if !gone {
         return;
     }

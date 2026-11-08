@@ -243,6 +243,31 @@ impl Target {
     }
 }
 
+/// The ship slot `ship` holds among `targets`, if it is in the fight,
+/// active or not: the slot a shot aimed at it holds
+/// ([`Shot::aimed_slot`], its +0x2a). Every reading of a ship's slot
+/// among the fight's targets goes through this.
+#[must_use]
+pub fn slot_among(targets: &[Target], ship: ShipRef) -> Option<Slot> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship)
+        .map(|target| target.slot)
+}
+
+/// `ship` among `targets` while it is active
+/// ([`Condition::active`](super::hull::Condition::active)): not
+/// destroyed, landed, jumped or taken out, breaking up included. A shot
+/// whose ship this finds none for has lost it: its slot is followed
+/// ([`refilled_slot::follow`](super::refilled_slot::follow)), or the shot
+/// is lost (`Shot::lose_a_gone_ship`), by this one test.
+#[must_use]
+pub fn active_among(targets: &[Target], ship: ShipRef) -> Option<&Target> {
+    targets
+        .iter()
+        .find(|target| target.ship == ship && target.condition.active())
+}
+
 /// The width `_GetSpriteXSize` gives a sprite of no frames (@0x26fc).
 pub const NO_SHEET_WIDTH: f32 = 32.0;
 
@@ -1014,9 +1039,7 @@ impl Shot {
             return;
         }
         let gone = match self.aimed_at {
-            Some(ship) => !targets
-                .iter()
-                .any(|target| target.ship == ship && target.condition.active()),
+            Some(ship) => active_among(targets, ship).is_none(),
             None => self.aimed_slot.is_some(),
         };
         if gone {
@@ -1054,11 +1077,7 @@ impl Shot {
         }
         let seeks = self.jam == Jam::Clear;
         let targets = guide.targets;
-        let target = self.target.and_then(|ship| {
-            targets
-                .iter()
-                .find(|target| target.ship == ship && target.condition.active())
-        });
+        let target = self.target.and_then(|ship| active_among(targets, ship));
         let delay = f64::from(HOMING_DELAY) * guide.speed_mult.get();
         if let Some(target) = target.filter(|_| self.age() > delay) {
             let wanted = trig::intercept_angle(self.position, target.position);

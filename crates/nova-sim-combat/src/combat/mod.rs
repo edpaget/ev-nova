@@ -2048,7 +2048,7 @@ impl Combat {
                 id: self.next_id(),
                 target: launch.target,
                 aimed_at,
-                aimed_slot: aimed_at.and_then(|ship| slot_of(targets, ship)),
+                aimed_slot: aimed_at.and_then(|ship| projectile::slot_among(targets, ship)),
                 source: Source::Ship(ties),
                 miss_roll: rolls.then(|| chance.below(muzzle.miss_class) + 1),
                 // Every ship's, the player's (slot 0) too (@0x3f0a9-0x3f143).
@@ -3457,15 +3457,6 @@ fn position_of(targets: &[Target], ship: ShipRef) -> Option<Vec2> {
         .iter()
         .find(|target| target.ship == ship)
         .map(|target| target.position)
-}
-
-/// The ship slot `ship` holds among `targets`, if it is in the fight: the
-/// slot a shot aimed at it holds ([`Shot::aimed_slot`]).
-fn slot_of(targets: &[Target], ship: ShipRef) -> Option<Slot> {
-    targets
-        .iter()
-        .find(|target| target.ship == ship)
-        .map(|target| target.slot)
 }
 
 /// The shield and armour `reserves` hold, together: what a hit takes is

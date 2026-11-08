@@ -149,7 +149,7 @@ use super::hull::Condition;
 use super::hull::ESCAPE_POD_SHIP;
 use super::locked_slot::{self, LockedSlot};
 use super::planet_type::{self, BeamPlanetFlag};
-use super::projectile::{Jam, Shot, Source, Target};
+use super::projectile::{Jam, Shot, Source, Target, slot_among};
 use super::weapon::Guidance;
 use crate::catalog::{GovtId, StellarId};
 use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
@@ -426,9 +426,7 @@ impl Sides<'_> {
     fn slot_of(&self, ship: ShipRef) -> Option<i64> {
         match ship {
             ShipRef::Player => Some(0),
-            ShipRef::Npc(_) => self
-                .find(ship)
-                .map(|found| locked_slot::slot_number(found.slot)),
+            ShipRef::Npc(_) => slot_among(self.targets, ship).map(locked_slot::slot_number),
         }
     }
 

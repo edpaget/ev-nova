@@ -48,7 +48,7 @@
 //!   (rdm:phase/combat-and-flight-2/phase-1-stale-aim-at-an-empty-ship-slot).
 
 use super::ShipRef;
-use super::projectile::{Jam, Shot, Target};
+use super::projectile::{Jam, Shot, Target, slot_among};
 use crate::rulebook::RuleSource;
 use crate::ship_layer::Slot;
 
@@ -134,11 +134,7 @@ impl Given {
         match self {
             Self::EmptySlot(slot) => Some(slot),
             Self::Ship(None) => None,
-            Self::Ship(Some(ship)) => targets
-                .iter()
-                .find(|target| target.ship == ship)
-                .map(|target| target.slot)
-                .or(parent.aimed_slot),
+            Self::Ship(Some(ship)) => slot_among(targets, ship).or(parent.aimed_slot),
         }
     }
 }
