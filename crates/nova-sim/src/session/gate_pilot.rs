@@ -322,9 +322,9 @@ mod tests {
     use crate::hyperspace::{JumpReadiness, JumpRefusal};
     use crate::rulebook::Rulebook;
     use crate::sound::SimSound;
-    use crate::testkit::{DRIFT, HEARTH, VERGE, laned};
+    use crate::testkit::{DRIFT, HEARTH, VERGE, laned_stable};
 
-    /// A new pilot over [`laned`], in drift over gate 300, the links the
+    /// A new pilot over [`laned_stable`], in drift over gate 300, the links the
     /// gate lanes, by `autopilot` for [`RuleKey::GateAutopilot`] and the
     /// other reading of [`RuleKey::GateCourse`].
     fn laned_by(autopilot: RuleSource) -> Session {
@@ -332,7 +332,7 @@ mod tests {
             .with_override(RuleKey::GateLanes, RuleSource::Bible)
             .with_override(RuleKey::GateCourse, RuleSource::Bible)
             .with_override(RuleKey::GateAutopilot, autopilot);
-        Session::start_ruled(&laned(), &rules).expect("starts")
+        Session::start_ruled(&laned_stable(), &rules).expect("starts")
     }
 
     /// [`laned_by`] the gate autopilot's other reading.
@@ -428,7 +428,7 @@ mod tests {
     fn step(session: &mut Session, double: bool) {
         use crate::flight_frame::{StepInput, StepReport};
         use crate::session::StepCollaborators;
-        let catalog = laned();
+        let catalog = laned_stable();
         let behaviour = crate::ai::NovaAi::default();
         let mut chance = crate::chance::NeverFires;
         let mut collab = StepCollaborators {
@@ -718,7 +718,7 @@ mod tests {
             .with_override(RuleKey::GateLanes, RuleSource::Bible)
             .with_override(RuleKey::GateCourse, course)
             .with_override(RuleKey::GateAutopilot, RuleSource::Bible);
-        let mut session = Session::start_ruled(&laned(), &rules).expect("starts");
+        let mut session = Session::start_ruled(&laned_stable(), &rules).expect("starts");
         session.pilot.course = hops.to_vec();
         session.pilot.course_start = Some(DRIFT);
         session.cue_course();
@@ -737,12 +737,12 @@ mod tests {
         crate::session::apply::tests::apply(session, FlightCommand::Land)
     }
 
-    /// Runs `command` on `session` with [`laned`] shared.
+    /// Runs `command` on `session` with [`laned_stable`] shared.
     fn apply_laned(session: &mut Session, command: FlightCommand) -> Answer {
         session.apply(
             command,
             &mut crate::session::apply::ApplyCollaborators {
-                catalog: Some(&laned()),
+                catalog: Some(&laned_stable()),
                 chance: &mut crate::chance::NeverFires,
                 law: &crate::legal::NovaLaw::default(),
                 boarding_rule: &crate::board::NovaBoarding::default(),

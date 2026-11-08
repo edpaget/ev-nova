@@ -4,8 +4,9 @@
 //! A news item breaks on the day a mission's effects release it (kept in
 //! [`StoryState::news`]) in its `from` system, and travels on ships: it
 //! reaches a system [`NEWS_DAYS_PER_LANE`] days for each lane between them,
-//! over the shortest way. A dead lane carries nothing, and a one-way lane
-//! carries news only its own way. Nothing is stored per system: what a
+//! over the shortest way. A closed lane, unstable or dead, carries
+//! nothing, as no ship crosses it, and a one-way lane carries news only
+//! its own way. Nothing is stored per system: what a
 //! system has heard is worked out from the release days and the lanes
 //! whenever it is asked ([`heard`]).
 //!
@@ -20,7 +21,7 @@ use std::collections::{BTreeMap, VecDeque};
 use nova_sim_catalog::storylines::Storylines;
 
 use super::state::StoryState;
-use crate::catalog::{GateStability, SystemId};
+use crate::catalog::SystemId;
 use crate::gate_lanes::GateLanes;
 
 /// The days news takes to cross one gate lane: engine tuning, as the
@@ -43,8 +44,8 @@ pub struct HeardNews {
 }
 
 /// How many lanes news from `from` crosses to reach each system it
-/// reaches, `from` itself at 0: a breadth-first walk over `lanes`, never
-/// over a dead lane.
+/// reaches, `from` itself at 0: a breadth-first walk over `lanes`' open
+/// lanes ([`GateLanes::listed`]), as no ship crosses a closed one.
 #[must_use]
 pub fn arrivals(lanes: &GateLanes, from: SystemId) -> BTreeMap<SystemId, u32> {
     let mut reached = BTreeMap::from([(from, 0)]);
@@ -52,7 +53,7 @@ pub fn arrivals(lanes: &GateLanes, from: SystemId) -> BTreeMap<SystemId, u32> {
     while let Some(at) = queue.pop_front() {
         let crossed = reached[&at] + 1;
         for &to in lanes.listed(at) {
-            if lanes.stability(at, to) == Some(GateStability::Dead) || reached.contains_key(&to) {
+            if reached.contains_key(&to) {
                 continue;
             }
             reached.insert(to, crossed);
@@ -96,20 +97,21 @@ mod tests {
     use nova_sim_catalog::storylines::NewsItem;
 
     use super::*;
+    use crate::catalog::GateStability;
 
     const HEARTH: i16 = 1;
     const VERGE: i16 = 2;
     const DRIFT: i16 = 3;
     const FAR: i16 = 4;
 
-    /// The new-game fixture's lanes: Hearth and Verge both ways, Hearth
-    /// and Drift both ways, Verge to Drift dead, Drift to Verge unstable
-    /// (its back door), and Far reached by nothing.
+    /// Lanes shaped like the new-game fixture's: Hearth and Verge both
+    /// ways, Hearth and Drift both ways, Verge to Drift dead, Drift to
+    /// Verge unstable (its back door), and Far reached by nothing.
     fn lanes() -> GateLanes {
         use GateStability::{Dead, Stable, Unstable};
         GateLanes::fixture(&[
             (HEARTH, VERGE, Stable),
-            (VERGE, HEARTH, Unstable),
+            (VERGE, HEARTH, Stable),
             (HEARTH, DRIFT, Stable),
             (DRIFT, HEARTH, Stable),
             (VERGE, DRIFT, Dead),
@@ -205,8 +207,26 @@ mod tests {
     }
 
     #[test]
-    fn a_one_way_lane_carries_one_way() {
+    fn an_unstable_lane_carries_nothing() {
+        assert_eq!(
+            arrivals(&lanes(), SystemId(DRIFT)),
+            BTreeMap::from([
+                (SystemId(DRIFT), 0),
+                (SystemId(HEARTH), 1),
+                (SystemId(VERGE), 2),
+            ]),
+            "round by hearth, not by the back door"
+        );
         let lanes = GateLanes::fixture(&[(DRIFT, VERGE, GateStability::Unstable)]);
+        assert_eq!(
+            arrivals(&lanes, SystemId(DRIFT)),
+            BTreeMap::from([(SystemId(DRIFT), 0)])
+        );
+    }
+
+    #[test]
+    fn a_one_way_lane_carries_one_way() {
+        let lanes = GateLanes::fixture(&[(DRIFT, VERGE, GateStability::Stable)]);
         assert_eq!(
             arrivals(&lanes, SystemId(DRIFT)),
             BTreeMap::from([(SystemId(DRIFT), 0), (SystemId(VERGE), 1)])

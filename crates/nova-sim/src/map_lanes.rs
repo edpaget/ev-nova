@@ -15,9 +15,19 @@
 //!
 //! - the way out, `from` → `to`: the lane's stability, or `None` where no
 //!   gate serves that way (a Con link, drawn grey);
-//! - the way back, `to` → `from` ([`Back`]): the same, or
-//!   [`Back::OneWay`] when the far system doesn't list the link back
-//!   (its links on the map, [`StarMap::listed_links`](crate::StarMap::listed_links)).
+//! - the way back, `to` → `from` ([`Back`]): the same, where the far
+//!   system lists the link back (its links on the map,
+//!   [`StarMap::listed_links`](crate::StarMap::listed_links)) or its lane
+//!   back is closed, else [`Back::OneWay`]. So a lane whose way back is
+//!   closed reads that way's stability, not one-way.
+//!
+//! A closed lane ([`GateLanes::closed`](crate::gate_lanes::GateLanes::closed)),
+//! its gates all unstable or dead, is no link: no reader takes it, so the
+//! three link sets leave it out. The drawing keeps it, in its look, apart
+//! from the links ([`MapDrawing::closed_lanes`]): each from the current
+//! system or a visible, explored and known one, as the links are drawn
+//! from, each pair once and none drawn as a link either way, and none on
+//! the hypergate map.
 //!
 //! The view draws a link whose two ways look the same as one line in that
 //! look, one whose ways differ in two halves, the half nearer each system
@@ -27,6 +37,7 @@
 //! Making one plays no sound and draws nothing random.
 //!
 //! [`MapDrawing::lanes`]: crate::galaxy_map::MapDrawing::lanes
+//! [`MapDrawing::closed_lanes`]: crate::galaxy_map::MapDrawing::closed_lanes
 
 use crate::catalog::{GateStability, SystemId};
 use crate::story::OverlaidGalaxy;
@@ -60,7 +71,8 @@ pub struct LaneLook {
 #[must_use]
 pub fn lane_look(galaxy: &OverlaidGalaxy, from: SystemId, to: SystemId) -> LaneLook {
     let lanes = galaxy.lanes();
-    let back = if galaxy.map().listed_links(to).contains(&from) {
+    let back = if galaxy.map().listed_links(to).contains(&from) || lanes.closed(to).contains(&from)
+    {
         Back::Way(lanes.stability(to, from))
     } else {
         Back::OneWay
@@ -169,6 +181,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stable_way_out_whose_way_back_is_closed_reads_the_way_backs_stability() {
+        // 1 → 5 by gate 105, stable at both ends; 5 → 1 by gate 501, dead.
+        let systems = vec![star(1, (0.0, 0.0), &[]), star(5, (40.0, 0.0), &[])];
+        let sites = [
+            gate(105, &[502], Stable),
+            gate(502, &[], Stable),
+            gate(501, &[106], Dead),
+            gate(106, &[], Stable),
+        ];
+        let mut listed: Vec<ListedStellar> = Vec::new();
+        nova_sim_catalog::fixture::list_also(
+            &mut listed,
+            sites
+                .iter()
+                .map(|site| (SystemId(site.id.0 / 100), site.id)),
+        );
+        let mut galaxy =
+            OverlaidGalaxy::new(systems, GalaxyOverlay::default()).with_gates(&sites, &listed);
+        galaxy.set_link_source(LinkSource::Gates);
+        let look = look(&galaxy, 1, 5);
+        assert_eq!(look.out, Some(Stable));
+        assert_eq!(look.back, Back::Way(Some(Dead)), "not one-way");
+    }
+
+    #[test]
     fn a_con_link_no_gate_serves_is_grey_and_one_way_when_listed_by_one_end() {
         let galaxy = galaxy(LinkSource::Con);
         let look = look(&galaxy, 4, 1);
@@ -223,16 +260,88 @@ mod tests {
         for source in [LinkSource::Con, LinkSource::Gates] {
             let engine = drawn(source, RuleSource::Engine);
             assert_eq!(engine.lanes, [], "{source:?}");
+            assert_eq!(engine.closed_lanes, [], "{source:?}");
             let other = drawn(source, RuleSource::Bible);
             assert_eq!(
                 MapDrawing {
                     lanes: Vec::new(),
+                    closed_lanes: Vec::new(),
                     ..other
                 },
                 engine,
                 "{source:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_closed_lane_is_drawn_in_its_look_but_is_no_link() {
+        let drawing = drawn(LinkSource::Gates, RuleSource::Bible);
+        let pair = (SystemId(1), SystemId(3));
+        assert!(!drawing.current_links.contains(&pair));
+        assert!(
+            !drawing
+                .links
+                .iter()
+                .any(|link| [(link.from, link.to), (link.to, link.from)].contains(&pair))
+        );
+        assert_eq!(
+            drawing.closed_lanes,
+            [LaneLook {
+                from: SystemId(1),
+                to: SystemId(3),
+                out: Some(Unstable),
+                back: Back::Way(Some(Dead)),
+            }],
+            "drift–verge once, from the current system"
+        );
+    }
+
+    #[test]
+    fn a_closed_lane_from_an_unknown_system_is_not_drawn() {
+        let galaxy = galaxy(LinkSource::Gates);
+        let seen: BTreeSet<SystemId> = [2].map(SystemId).into();
+        let state = MapState {
+            galaxy: &galaxy,
+            explored: &seen,
+            known: &seen,
+            current: SystemId(2),
+            course_start: None,
+            course: &[],
+            hyper_slot: None,
+            hypergate: None,
+            missions: &[],
+            green: None,
+            multi_arrows: true,
+            pairing: RuleSource::Bible,
+            lane_style: RuleSource::Bible,
+        };
+        let drawing = draw_map(&state, |_| SystemColorCode::Uninhabited);
+        assert_eq!(drawing.closed_lanes, [], "neither drift nor verge known");
+    }
+
+    #[test]
+    fn a_closed_lane_is_never_on_the_hypergate_map() {
+        let galaxy = galaxy(LinkSource::Gates);
+        let seen: BTreeSet<SystemId> = [1, 3].map(SystemId).into();
+        let offered = [SystemId(2)];
+        let state = MapState {
+            galaxy: &galaxy,
+            explored: &seen,
+            known: &seen,
+            current: SystemId(1),
+            course_start: None,
+            course: &[],
+            hyper_slot: None,
+            hypergate: Some(&offered),
+            missions: &[],
+            green: None,
+            multi_arrows: true,
+            pairing: RuleSource::Bible,
+            lane_style: RuleSource::Bible,
+        };
+        let drawing = draw_map(&state, |_| SystemColorCode::Uninhabited);
+        assert_eq!(drawing.closed_lanes, []);
     }
 
     #[test]

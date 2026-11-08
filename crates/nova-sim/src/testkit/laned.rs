@@ -44,9 +44,20 @@ const GATES: [Gate; 9] = [
 /// The stabilities are the fixture's: the drift↔hearth pair stable, one
 /// hearth→verge gate's far end (verge's 320) unstable, the drift↔verge
 /// pair dead and the back door unstable. So drift→verge is unstable (the
-/// back door beats the dead pair), verge→drift dead, and hearth↔verge
-/// stable both ways (by 312↔321).
+/// back door beats the dead pair) and verge→drift dead, both closed, and
+/// hearth↔verge stable both ways (by 312↔321), open. [`laned_stable`]
+/// has every gate stable, for the tests whose subject isn't stability.
 pub(crate) fn laned() -> FakePilotCatalog {
+    laned_stable()
+        .with_gate_stability(320, GateStability::Unstable)
+        .with_gate_stability(301, GateStability::Dead)
+        .with_gate_stability(322, GateStability::Dead)
+        .with_gate_stability(302, GateStability::Unstable)
+}
+
+/// [`laned`] with every gate stable: every lane open, drift↔verge both
+/// ways by the pair 301↔322 and drift→verge by the back door too.
+pub(crate) fn laned_stable() -> FakePilotCatalog {
     let site = |id: i16, (x, y): (f32, f32)| LandingSite {
         flags2: HYPERGATE,
         ..planet(id, x, y)
@@ -87,8 +98,4 @@ pub(crate) fn laned() -> FakePilotCatalog {
         gates,
         ..catalog()
     }
-    .with_gate_stability(320, GateStability::Unstable)
-    .with_gate_stability(301, GateStability::Dead)
-    .with_gate_stability(322, GateStability::Dead)
-    .with_gate_stability(302, GateStability::Unstable)
 }

@@ -496,7 +496,15 @@ impl OverlaidGalaxy {
             let listers = listers_of(&self.listed, gate);
             owner_on(&places, overlay, listers).or_else(|| found_on(&places, listers))
         };
-        self.lanes = GateLanes::new(&self.gates, system_of, &places);
+        let stability_of = |gate: StellarId| {
+            self.gates
+                .iter()
+                .find(|site| site.id == gate)
+                .map_or_else(crate::catalog::GateStability::default, |site| {
+                    site.stability
+                })
+        };
+        self.lanes = GateLanes::new(&self.gates, system_of, stability_of, &places);
         self.map = match self.link_source {
             LinkSource::Con => StarMap::with_hidden(overlaid, &hidden, self.colocated),
             LinkSource::Gates => {

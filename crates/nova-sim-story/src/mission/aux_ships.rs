@@ -658,9 +658,9 @@ mod tests {
     /// lanes drift to hearth and verge to drift, while drift's Con slot
     /// names verge alone.
     fn allows_over_lanes(links: RuleSource, code: i16, player: i16) -> bool {
-        use crate::catalog::GateStability::Dead;
+        use crate::catalog::GateStability::Stable;
         use crate::gate_lanes::GateLanes;
-        let lanes = GateLanes::fixture(&[(130, 131, Dead), (132, 130, Dead)]);
+        let lanes = GateLanes::fixture(&[(130, 131, Stable), (132, 130, Stable)]);
         let map = StarMap::with_lanes(
             vec![
                 system(130, (0.0, 0.0), &[132], None),
@@ -684,7 +684,7 @@ mod tests {
         );
         assert!(
             allows_over_lanes(other, 5002, 131),
-            "drift's lane reaches hearth, dead or not"
+            "drift's lane reaches hearth"
         );
         assert!(
             !allows_over_lanes(other, 5002, 132),

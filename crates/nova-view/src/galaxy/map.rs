@@ -3939,6 +3939,7 @@ mod tests {
             gate_arrows: Vec::new(),
             named: vec![SystemId(128), SystemId(129)],
             lanes: Vec::new(),
+            closed_lanes: Vec::new(),
         }
     }
 

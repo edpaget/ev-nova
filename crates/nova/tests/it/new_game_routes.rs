@@ -325,9 +325,11 @@ fn the_map_draws_each_lane_per_direction_in_its_stabilitys_look() {
     assert_eq!(look(drift, verge), (Some(Unstable), Back::Way(Some(Dead))));
     assert_eq!(look(verge, drift), (Some(Dead), Back::Way(Some(Unstable))));
     let drawing = session.map_drawing(None, &[], MapMarks::NONE);
-    let mut drawn = drawing.current_links.clone();
-    drawn.sort_unstable();
-    assert_eq!(drawn, [(drift, hearth), (drift, verge)]);
+    assert_eq!(
+        drawing.current_links,
+        [(drift, hearth)],
+        "drift–verge is closed both ways"
+    );
     for (at, &(from, to)) in drawing.current_links.iter().enumerate() {
         assert_eq!(
             drawing.lanes[at],
@@ -335,6 +337,11 @@ fn the_map_draws_each_lane_per_direction_in_its_stabilitys_look() {
             "{to:?}"
         );
     }
+    assert_eq!(
+        drawing.closed_lanes,
+        [look_between(&session, drift, verge)],
+        "drawn in its look beside the links"
+    );
 }
 
 #[test]

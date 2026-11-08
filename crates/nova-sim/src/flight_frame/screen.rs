@@ -448,6 +448,7 @@ mod tests {
             gate_arrows: Vec::new(),
             named: Vec::new(),
             lanes: Vec::new(),
+            closed_lanes: Vec::new(),
         }
     }
 
