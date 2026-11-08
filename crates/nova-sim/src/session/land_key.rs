@@ -14,8 +14,9 @@
 //! selection go, a stellar destroyed) is picked again while L stays down.
 //!
 //! [`Session::land_key_pass`] is that pick, in the player's part of each
-//! pass, right before the dock approach (@0x6a97a), both of double time's
-//! passes. The pod returns before it (`Session::player_move`, @0x68ddd).
+//! pass, right before the dock approach (@0x6a97a) and so before the
+//! ship's move (@0x6d4b0-0x6d4eb): it reads the ship where the last frame
+//! left it, on both of double time's passes. The pod returns before it (`Session::player_move`, @0x68ddd).
 //! The pick is [`land_key_pick`], the press's own.
 
 use super::{Chart, Session};
@@ -103,6 +104,21 @@ mod tests {
         assert_eq!(session.take_messages(), [], "silent");
         assert_eq!(session.take_sounds(), [], "silent");
         assert_eq!(session.dock_request(), None, "no request");
+    }
+
+    #[test]
+    fn the_pick_reads_the_ship_before_its_move() {
+        // `_FindNearestStellar` (@0x6a901) before the position step
+        // (@0x6d4b0): 128 (30, -40) and 129 (2000, 0) are equally near at
+        // x ~ 1014.6; the ship starts on 128's side and moves past.
+        let catalog = crate::testkit::catalog();
+        let mut session = flying(&catalog, NavMode::Stellar(None));
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session.ship.player.position = crate::geometry::Vec2::new(1012.0, 0.0);
+        session.ship.player.velocity = crate::geometry::Vec2::new(5.0, 0.0);
+        held_pass(&mut session, &catalog);
+        assert!(session.ship.player.position.x > 1015.0, "moved past");
+        assert_eq!(session.nav_mode(), NavMode::Stellar(Some(StellarId(128))));
     }
 
     #[test]

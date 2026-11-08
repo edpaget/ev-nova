@@ -10,7 +10,9 @@
 //!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
 //!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
 //!    fighters (@0x62c61) settled, and its regeneration (@0x6cf86), before
-//!    it moves ([`Session::player_fires`]).
+//!    it moves ([`Session::player_fires`]); then L's pick and the dock
+//!    approach (@0x6a8c5-0x6a97a), on the ship where the last frame left
+//!    it (see the `land_key` and `clearance` modules).
 //! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
 //!    or the escape pod's flight; the rescue, which ends the pass
 //!    (@0x68ddd); then the player's display step: its death timer's tick

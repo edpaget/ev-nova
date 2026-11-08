@@ -1779,8 +1779,9 @@ impl Session {
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
     /// flight while its countdown runs, in place of the controls, the
     /// jump, the fuel and the dock approach (see the `eject` module's
-    /// `pod_tick`), else the ship's motion ([`Session::move_player`]) and
-    /// the dock approach (see the `clearance` module). A destroyed player
+    /// `pod_tick`), else L's pick (see the `land_key` module) and the dock
+    /// approach (see the `clearance` module), then the ship's motion
+    /// ([`Session::move_player`]). A destroyed player
     /// never flies the pod, whatever its countdown holds: `_HandlePlayer`
     /// tests the active byte (@0x68700) before the pod block (@0x68d1d),
     /// so a destroyed player beside a word a stray beam stepped takes the
@@ -1791,15 +1792,17 @@ impl Session {
             self.pod_tick();
             return;
         }
-        self.move_player(controls, pass);
-        // After the ship moves, though `_HandlePlayer` runs the approach
-        // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
-        // the `clearance` module reads as the move, is
-        // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
-        // hud-fidelity-followups' dock approach phase). L's pick
-        // (@0x6a8c5) runs before it.
+        // `_HandlePlayer` runs L's pick and the dock approach
+        // (@0x6a8c5-0x6a97a) before its position step (@0x6d4b0-0x6d4eb),
+        // so both read the ship where the last frame left it. The trigger,
+        // reloads, recoil and regeneration (`player_fires`,
+        // @0x6ab55-0x6d093) run before this here, where the original runs
+        // them after the approach: that only reorders one tick's sounds
+        // and writes nothing the pick or the approach reads, so it crosses
+        // no boundary the player sees.
         self.land_key_pass();
         self.dock_approach();
+        self.move_player(controls, pass);
     }
 
     /// The ship's motion in [`Session::player_move`] on `pass`: by its
