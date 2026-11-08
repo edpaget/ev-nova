@@ -24,7 +24,13 @@ use std::collections::BTreeMap;
 
 pub use nova_galaxy_format::model::Outcome;
 
-use super::{DialogPlace, GameData, GateStability};
+/// How well jumps through a jump point work: the format's own
+/// `stability`, ordered stable, then unstable, then dead. A jump between
+/// two points works as well as the worse of its two ends
+/// (`nova_galaxy_format::model::jump_stability`).
+pub use nova_galaxy_format::model::Stability as GateStability;
+
+use super::{DialogPlace, GameData};
 use crate::wire::id::{GovtId, OutfitId, StellarId, SystemId};
 
 /// The new game's missions, news and jump points, each by its id.

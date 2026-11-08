@@ -136,12 +136,9 @@ fn every_gate_keeps_its_points_stability() {
     for (system, doc) in &galaxy.systems {
         for point in &doc.data.jump_points {
             let at = PointRef::new(system, &point.id);
-            let spob = StellarId(game.ids.gates[&at]);
-            assert_eq!(
-                game.data.gate_stability(spob),
-                Some(point.stability),
-                "{at}"
-            );
+            let kept = &game.data.storylines().points[&at.to_string()];
+            assert_eq!(kept.gate, StellarId(game.ids.gates[&at]), "{at}");
+            assert_eq!(kept.stability, point.stability, "{at}");
         }
     }
 }
@@ -162,11 +159,7 @@ fn each_linked_pair_of_gates_jumps_as_well_as_the_points_do() {
     for (system, doc) in &galaxy.systems {
         for point in &doc.data.jump_points {
             let at = PointRef::new(system, &point.id);
-            let stored = |of: &PointRef| {
-                game.data
-                    .gate_stability(StellarId(game.ids.gates[of]))
-                    .expect("stored")
-            };
+            let stored = |of: &PointRef| game.data.storylines().points[&of.to_string()].stability;
             assert_eq!(
                 stored(&at).worse(stored(&point.to)),
                 jump_stability(point, point_of(&point.to)),

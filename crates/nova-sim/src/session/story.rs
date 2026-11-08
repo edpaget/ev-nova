@@ -268,7 +268,7 @@ impl<C: SettlingCatalog + ?Sized> Stage for SessionStage<'_, C> {
                     &mut self.session.out,
                     event,
                 );
-                self.session.apply_story_outfits(&mut *self.chance);
+                self.session.settle_storylines(&mut *self.chance);
             }
             // Each slot's enter-system hook (see the `mission_ships`
             // module).

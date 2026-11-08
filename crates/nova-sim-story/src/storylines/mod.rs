@@ -16,8 +16,9 @@
 //! point stands as the data writes it until an effect changes it: play's
 //! changes are an overlay ([`StoryState::points`](state::StoryState::points)),
 //! read field by field over the data's ([`StoryState::point`](state::StoryState::point)).
-//! Travel doesn't read it yet; `play-the-sample` phase 1 repoints gates,
-//! lanes, the map and traffic to it.
+//! Travel reads it through each point's gate ([`gate_points`]): the
+//! galaxy's lanes, its gates' availability and governments, so the
+//! planner, the map, the traffic and the land key, follow it.
 //!
 //! The story state is keyed by the data's ids as text, never by Nova IDs,
 //! which renumber as data files are added. It holds the day of the game,
@@ -36,6 +37,8 @@
 //!   the scenes a landed visit shows ([`Play`](lifecycle::Play)), and the
 //!   outcome an offer's conversation reaches
 //!   ([`outcome_of`](lifecycle::outcome_of)).
+//! - [`gate_points`]: each jump point's gate as travel reads it, its
+//!   stability and its owner's government.
 //! - [`news`]: how a released news item spreads over the gate lanes, a
 //!   lane a day, and what a system has heard ([`news::heard`]).
 //!
@@ -43,6 +46,7 @@
 //! day passed; `not_before_day: n` holds from day `n`.
 
 pub mod effects;
+pub mod gate_points;
 pub mod lifecycle;
 pub mod news;
 pub mod requires;

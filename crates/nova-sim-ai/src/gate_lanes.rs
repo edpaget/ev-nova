@@ -271,7 +271,6 @@ mod tests {
             flags2: HYPERGATE,
             links: slots,
             exit_angle: -1,
-            stability: GateStability::Stable,
         };
         (site, stability)
     }

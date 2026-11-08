@@ -539,6 +539,7 @@ mod gate_follow;
 #[cfg(test)]
 mod gate_partner;
 mod gate_pilot;
+mod gate_points;
 mod gate_sprites;
 #[cfg(test)]
 mod grant_explorations;
@@ -1295,6 +1296,13 @@ impl Session {
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone())
             .with_gates(&catalog.gate_sites(), &listed);
+        // The jump points as the pilot left them, before any site is read
+        // (see the `gate_points` module).
+        let storylines = catalog.storylines();
+        galaxy.set_gate_points(crate::storylines::gate_points::gate_points(
+            &storylines,
+            &pilot.story,
+        ));
         galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
@@ -1424,7 +1432,7 @@ impl Session {
                 .filter_map(|id| catalog.landing_site(id))
                 .collect(),
             stellar_dialogs: catalog.stellar_dialogs(),
-            storylines: catalog.storylines(),
+            storylines,
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -3784,7 +3792,10 @@ impl Session {
     /// and the first of `here`'s links that leads there
     /// ([`hypergate_exit`]). [`GateRefusal::NoLinks`] for a hypergate
     /// without links ([`has_links`]), [`GateRefusal::Cancelled`] for no
-    /// pick or a pick no link leads to (@0x6392c). The one rule both
+    /// pick or a pick no link leads to (@0x6392c). Only an open link
+    /// leads anywhere ([`OverlaidGalaxy::open_links`]), so a hypergate
+    /// with links but none open answers [`GateRefusal::Cancelled`] (see
+    /// the `gate_points` module). The one rule both
     /// [`Session::enter_hypergate`] and [`Session::gate_entry_desc`] read.
     pub(crate) fn hypergate_route(
         &self,
@@ -3796,6 +3807,8 @@ impl Session {
         if !has_links(&links) {
             return Err(GateRefusal::NoLinks);
         }
+        // Only an open link is taken (see the `gate_points` module).
+        let links = self.chart.galaxy.open_links(here, links);
         let system_of = |id| {
             self.chart
                 .galaxy
@@ -3819,8 +3832,9 @@ impl Session {
     /// Decides whether the hypergate whose entry is pending opens the
     /// hypergate map, read from `catalog`'s gate sites. A hypergate with
     /// links ([`has_links`], as `_StellarNumHyperLinks` counts them) offers
-    /// the systems its links lead to, each as the visible system standing
-    /// for it on the overlaid map ([`gate::hypergate_offers`]), for
+    /// the systems its open links lead to ([`OverlaidGalaxy::open_links`]),
+    /// each as the visible system standing for it on the overlaid map
+    /// ([`gate::hypergate_offers`]), for
     /// the player to choose among, and the entry awaits
     /// [`Session::enter_hypergate`]: even when none leads anywhere, the
     /// map opens with nothing to pick, and closing it cancels. One without
@@ -3844,7 +3858,7 @@ impl Session {
                     .system_of(id, self.statics.listers(id), self.pilot.system)
             };
             Ok(gate::hypergate_offers(
-                &links,
+                &self.chart.galaxy.open_links(here, links),
                 &sites,
                 system_of,
                 self.chart.galaxy.map(),
@@ -28735,7 +28749,6 @@ pub(super) mod tests {
             flags2,
             links: slots,
             exit_angle,
-            stability: crate::catalog::GateStability::Stable,
         }
     }
 

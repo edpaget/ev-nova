@@ -214,7 +214,6 @@ mod dialogs;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
-mod gate_stability;
 mod interface;
 pub mod order;
 mod pict_pair;
@@ -231,7 +230,6 @@ mod tests;
 mod walk;
 
 pub use self::dialogs::{DialogPlace, Dialogs};
-pub use self::gate_stability::GateStability;
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
@@ -249,8 +247,8 @@ pub use self::stellar_sprite::{
     StellarSprite, StellarSpriteError, master_frame_count, stellar_spin_id,
 };
 pub use self::storylines::{
-    MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt, PointState,
-    Requires, StoryEffects, StoryMission, Storylines,
+    GateStability, MissionCompletion, MissionObjective, MissionOffer, NewsItem, Outcome, PointAt,
+    PointState, Requires, StoryEffects, StoryMission, Storylines,
 };
 
 /// Why the store could not be opened at all.
@@ -392,9 +390,6 @@ pub struct GameData {
     /// What each ship or stellar with no sprite draws instead: the new
     /// game's ([`GameData::with_stand_ins`]); none in a stock store.
     stand_ins: BTreeMap<StandInOf, StandIn>,
-    /// Each jump point's own stability, by its gate's `spöb`: the new
-    /// game's ([`GameData::with_gate_stabilities`]); none in a stock store.
-    gate_stabilities: BTreeMap<crate::wire::id::StellarId, GateStability>,
     /// The compiled conversations and each stellar's: the new game's
     /// ([`GameData::with_dialogs`]); none in a stock store.
     dialogs: Dialogs,
@@ -452,7 +447,6 @@ impl GameData {
             tests: Mutex::default(),
             sets: Mutex::default(),
             stand_ins: BTreeMap::new(),
-            gate_stabilities: BTreeMap::new(),
             dialogs: Dialogs::default(),
             storylines: Storylines::default(),
         })

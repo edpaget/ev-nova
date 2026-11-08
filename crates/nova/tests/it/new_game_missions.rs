@@ -270,8 +270,56 @@ fn the_side_road_closes_on_day_3_and_its_news_spreads() {
     assert_eq!(play.heard("drift"), []);
     play.pass(1);
     assert_eq!(play.heard("hearth"), news(1));
-    assert_eq!(play.heard("verge"), news(0));
     assert_eq!(play.heard("drift"), news(0));
+    // The other road into verge is unstable at verge's end, so closed: no
+    // ship, and no news, crosses to verge once the side road is dead.
+    assert_eq!(play.heard("verge"), []);
+    play.pass(5);
+    assert_eq!(play.heard("verge"), []);
+}
+
+/// The side road's gate in hearth, over which the pilot flies.
+fn over_the_side_road(pilot: &mut Pilot, game: &NewGame) {
+    pilot.stellar = Some(StellarId(nova_of(&game.ids.gates, "hearth/side-road")));
+}
+
+#[test]
+fn the_side_road_s_gate_clears_until_day_3_and_is_denied_after() {
+    let game = fixture();
+    let side_road = StellarId(nova_of(&game.ids.gates, "hearth/side-road"));
+    let mut play = Play::new("hearth", |pilot| over_the_side_road(pilot, &game));
+    let (hearth, verge) = (play.system("hearth"), play.system("verge"));
+    play.pass(2);
+    assert!(play.session.land().is_ok(), "cleared on day 2");
+    assert_eq!(
+        play.session.galaxy().lanes().gates(hearth, verge),
+        [side_road]
+    );
+    play.pass(1);
+    assert!(
+        matches!(
+            play.session.land(),
+            Err(nova_sim::LandingRefusal::Denied { stellar, .. }) if stellar == side_road
+        ),
+        "denied on day 3, its request granted or not"
+    );
+    assert_eq!(play.session.galaxy().lanes().gates(hearth, verge), []);
+    let drawing = play
+        .session
+        .map_drawing(None, &[], nova_sim::galaxy_map::MapMarks::NONE);
+    assert!(
+        !drawing.current_links.contains(&(hearth, verge)),
+        "{:?}",
+        drawing.current_links
+    );
+    assert_eq!(
+        drawing
+            .closed_lanes
+            .iter()
+            .map(|look| (look.from, look.to))
+            .collect::<Vec<_>>(),
+        [(hearth, verge)]
+    );
 }
 
 /// The toll is offered once the side road is dead, the dock job done and

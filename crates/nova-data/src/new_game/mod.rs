@@ -93,10 +93,6 @@
 //! - `regions/` and `harshness`, and a system's `hazards`: Nova has no
 //!   region record, and hazards belong to a later hazards phase (nebulae,
 //!   murk, interference). They stay readable on the loaded `Galaxy`.
-//! - A jump point's `stability` in travel: the store keeps it
-//!   ([`GameData::gate_stability`]) and the map draws it, but unstable and
-//!   dead points are travelled as stable ones until `play-the-sample`
-//!   phase 1.
 //! - Ship variants (a `base` or `mods`) and `mods/`: `play-the-sample`
 //!   phase 3. `outfits/` map only as things a pilot can own
 //!   ([`outfits`]): no weapon or system reads them, and no hardpoint is
@@ -202,14 +198,12 @@ pub fn load(source: &impl Source, dir: &Path) -> NewGame {
     } = map(&galaxy);
     problems.extend(mapping);
     let stand_ins = looks::stand_ins(&galaxy, &ids, source, &mut problems);
-    let stabilities = gates::stabilities(&galaxy, &ids.gates);
     let compiled = dialogs::compiled(&galaxy, source, &mut problems);
     let dialogs = dialogs::read(&galaxy, &ids, &compiled, &mut problems);
     let storylines = missions::map(&galaxy, &ids, &compiled, &mut problems);
     NewGame {
         data: GameData::from_decoded(dir.to_path_buf(), records)
             .with_stand_ins(stand_ins)
-            .with_gate_stabilities(stabilities)
             .with_dialogs(dialogs)
             .with_storylines(storylines),
         ids,

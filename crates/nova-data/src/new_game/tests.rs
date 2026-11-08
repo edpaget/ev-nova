@@ -1062,16 +1062,13 @@ fn the_storylines_map_each_faction_to_its_govt() {
 #[test]
 fn each_gate_keeps_its_own_point_s_stability() {
     let game = loaded(&with_a_drop());
-    let gate_of = |p: &str| StellarId(game.ids.gates[&point(p)]);
-    assert_eq!(
-        game.data.gate_stability(gate_of("gamma/drop")),
-        Some(crate::GateStability::Unstable)
-    );
-    assert_eq!(
-        game.data.gate_stability(gate_of("alpha/to-beta")),
-        Some(crate::GateStability::Stable)
-    );
-    assert_eq!(game.data.gate_stability(StellarId(128)), None, "a stellar");
+    let kept = |p: &str| {
+        let at = &game.data.storylines().points[p];
+        assert_eq!(at.gate, StellarId(game.ids.gates[&point(p)]), "{p}");
+        at.stability
+    };
+    assert_eq!(kept("gamma/drop"), crate::GateStability::Unstable);
+    assert_eq!(kept("alpha/to-beta"), crate::GateStability::Stable);
 }
 
 #[test]
@@ -1090,10 +1087,8 @@ fn the_fixture_s_gates_keep_their_points_stabilities() {
         ("verge/side-road", Stable),
         ("verge/drift-road", Dead),
     ] {
-        assert_eq!(
-            game.data.gate_stability(gate_of(gate)),
-            Some(stability),
-            "{gate}"
-        );
+        let at = &game.data.storylines().points[gate];
+        assert_eq!(at.gate, gate_of(gate), "{gate}");
+        assert_eq!(at.stability, stability, "{gate}");
     }
 }

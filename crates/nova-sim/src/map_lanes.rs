@@ -92,24 +92,59 @@ mod tests {
     use crate::gate::HYPERGATE;
     use crate::geometry::Vec2;
     use crate::story::{GalaxyOverlay, LinkSource};
+    use crate::storylines::gate_points::GatePoint;
     use crate::testkit::star;
     use GateStability::{Dead, Stable, Unstable};
 
-    /// Gate `id`, in the system its ID's hundreds give, linking `to`, at
-    /// `stability`.
-    fn gate(id: i16, to: &[i16], stability: GateStability) -> GateSite {
+    /// Gate `id`, in the system its ID's hundreds give, linking `to`, its
+    /// jump point at `stability`.
+    fn gate(id: i16, to: &[i16], stability: GateStability) -> (GateSite, GateStability) {
         let mut links = [None; 8];
         for (slot, &link) in links.iter_mut().zip(to) {
             *slot = Some(StellarId(link));
         }
-        GateSite {
+        let site = GateSite {
             id: StellarId(id),
             position: Vec2::ZERO,
             flags2: HYPERGATE,
             links,
             exit_angle: -1,
-            stability,
-        }
+        };
+        (site, stability)
+    }
+
+    /// `systems` with `gates` among them, each listed by the system its
+    /// ID's hundreds give, each gate's point at its stability, its links
+    /// by `source`.
+    fn gated(
+        systems: Vec<crate::catalog::StarSystem>,
+        gates: &[(GateSite, GateStability)],
+        source: LinkSource,
+    ) -> OverlaidGalaxy {
+        let sites: Vec<GateSite> = gates.iter().map(|&(site, _)| site).collect();
+        let mut listed: Vec<ListedStellar> = Vec::new();
+        nova_sim_catalog::fixture::list_also(
+            &mut listed,
+            sites
+                .iter()
+                .map(|site| (SystemId(site.id.0 / 100), site.id)),
+        );
+        let mut galaxy =
+            OverlaidGalaxy::new(systems, GalaxyOverlay::default()).with_gates(&sites, &listed);
+        galaxy.set_gate_points(
+            gates
+                .iter()
+                .map(|&(site, stability)| {
+                    let point = GatePoint {
+                        stability,
+                        govt: None,
+                    };
+                    (site.id, point)
+                })
+                .collect(),
+        );
+        galaxy.set_link_source(source);
+        galaxy
     }
 
     /// Systems 1-4, 4 listing 1 by Con, with the nova-data fixture's
@@ -135,17 +170,7 @@ mod tests {
             gate(303, &[102], Dead),
             gate(401, &[], Stable),
         ];
-        let mut listed: Vec<ListedStellar> = Vec::new();
-        nova_sim_catalog::fixture::list_also(
-            &mut listed,
-            sites
-                .iter()
-                .map(|site| (SystemId(site.id.0 / 100), site.id)),
-        );
-        let mut galaxy =
-            OverlaidGalaxy::new(systems, GalaxyOverlay::default()).with_gates(&sites, &listed);
-        galaxy.set_link_source(source);
-        galaxy
+        gated(systems, &sites, source)
     }
 
     fn look(galaxy: &OverlaidGalaxy, from: i16, to: i16) -> LaneLook {
@@ -190,16 +215,7 @@ mod tests {
             gate(501, &[106], Dead),
             gate(106, &[], Stable),
         ];
-        let mut listed: Vec<ListedStellar> = Vec::new();
-        nova_sim_catalog::fixture::list_also(
-            &mut listed,
-            sites
-                .iter()
-                .map(|site| (SystemId(site.id.0 / 100), site.id)),
-        );
-        let mut galaxy =
-            OverlaidGalaxy::new(systems, GalaxyOverlay::default()).with_gates(&sites, &listed);
-        galaxy.set_link_source(LinkSource::Gates);
+        let galaxy = gated(systems, &sites, LinkSource::Gates);
         let look = look(&galaxy, 1, 5);
         assert_eq!(look.out, Some(Stable));
         assert_eq!(look.back, Back::Way(Some(Dead)), "not one-way");

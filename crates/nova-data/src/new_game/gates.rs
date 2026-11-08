@@ -8,11 +8,12 @@
 //! (@0x63a7f-0x63aa6), whether or not it links back, so one link to the
 //! partner's gate arrives at the partner, a one-way point included.
 //!
-//! A `spöb` has no word for a point's `stability`, so each gate's is kept
-//! on the store beside it ([`stabilities`],
-//! [`GameData::gate_stability`](crate::GameData::gate_stability)), where
-//! the galaxy map reads it. Travel doesn't read it yet: unstable and dead
-//! points are travelled as stable ones until `play-the-sample` phase 1.
+//! A `spöb` has no word for a point's `stability` or its owner as a
+//! faction: the storylines keep each point's, with its gate
+//! ([`PointAt`](crate::PointAt), mapped in `missions`), and play
+//! overlays them. Travel reads each gate's from there
+//! (`nova_sim_story::storylines::gate_points`). The gate's own `govt` is
+//! its point's static owner's.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +27,6 @@ use super::records::neutral_stellar;
 use crate::decode::Entry;
 use crate::records::stellar::{Stellar, flags, flags2};
 use crate::registry::AnyRecord;
-use crate::store::GateStability;
 use crate::wire::flags::{Flags16, Flags32};
 use crate::wire::id::StellarId;
 
@@ -181,28 +181,6 @@ pub fn nav_def(
         *slot = stellar;
     }
     nav_def
-}
-
-/// Each numbered gate's own point stability, by its `spöb`: what
-/// [`GameData::with_gate_stabilities`](crate::GameData::with_gate_stabilities)
-/// keeps. A point left out for its ID has no gate and no entry.
-#[must_use]
-pub fn stabilities(
-    galaxy: &Galaxy,
-    gates: &BTreeMap<PointRef, i16>,
-) -> BTreeMap<StellarId, GateStability> {
-    gates
-        .iter()
-        .filter_map(|(point, &nova)| {
-            let system = galaxy.systems.get(&point.system())?;
-            let found = system
-                .data
-                .jump_points
-                .iter()
-                .find(|jump| PointRef::new(&point.system(), &jump.id) == *point)?;
-            Some((StellarId(nova), found.stability))
-        })
-        .collect()
 }
 
 /// `count` `what`s, in words: "1 stellar", "2 stellars".

@@ -60,7 +60,7 @@ impl Session {
             ),
             Converse::Close => return done_if(self.port.close_conversation()),
         };
-        self.apply_story_outfits(chance);
+        self.settle_storylines(chance);
         page.map_or(Answer::Refused, Answer::Conversation)
     }
 }
