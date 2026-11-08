@@ -47,6 +47,7 @@ mod new_game;
 mod new_game_conversation;
 mod new_game_looks;
 mod new_game_missions;
+mod new_game_play;
 mod new_game_routes;
 mod new_game_travel;
 mod news;
