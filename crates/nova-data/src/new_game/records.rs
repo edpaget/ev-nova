@@ -344,9 +344,11 @@ pub fn neutral_outfit() -> Outfit {
 
 /// A `wëap` that does nothing: no reload, life, damage, speed, flags,
 /// particles, beam, submunitions or ammunition limit; unguided
-/// (`Guidance` -1), using no ammunition (`AmmoType` -1), drawing no
-/// graphic (`Graphic` -1, so no `spïn` sheet is found and the view draws
-/// its shot as the placeholder box), silent (`Sound` -1), exploding into
+/// (`Guidance` -1), using no ammunition (`AmmoType` -1), drawn with
+/// `Graphic` 0, whose `spïn` (3000) the new game's data never holds, so
+/// the view draws its shot as the placeholder box (a `Graphic` read above
+/// 255 unsigned, a negative one among them, spawns no shot at all:
+/// `nova_sim::combat::weapon`), silent (`Sound` -1), exploding into
 /// nothing (`ExplodType` -1) and leaving from the ship's centre
 /// (`ExitType` -1).
 #[must_use]
@@ -359,7 +361,7 @@ pub fn neutral_weapon() -> Weapon {
         guidance: -1,
         speed: 0,
         ammo_type: -1,
-        graphic: -1,
+        graphic: 0,
         inaccuracy: 0,
         sound: -1,
         impact: 0,
@@ -621,7 +623,6 @@ mod tests {
         let expected = zeroed::<Weapon>(|weapon| {
             weapon.guidance = -1;
             weapon.ammo_type = -1;
-            weapon.graphic = -1;
             weapon.sound = -1;
             weapon.explod_type = -1;
             weapon.exit_type = -1;

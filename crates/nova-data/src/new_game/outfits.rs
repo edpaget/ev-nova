@@ -26,8 +26,9 @@
 //! - `Guidance` is -1, unguided, for a fixed gun or a launcher, and 4,
 //!   turreted and unguided, for a turret; `ExitType` 0, 1 or 2 by the
 //!   mount ([`exit_type`]), so a shot leaves from its kind of exit point;
-//! - it uses no ammunition, draws no graphic (the view's placeholder
-//!   box), plays no sound and explodes into nothing.
+//! - it uses no ammunition, draws as the view's placeholder box (its
+//!   `Graphic` 0 names a `spïn` the new game never holds), plays no sound
+//!   and explodes into nothing.
 //!
 //! A launcher's homing and ammunition and a bay's fighters aren't mapped:
 //! a `bay` outfit, like one doing no damage, stays an `oütf` that does
@@ -320,7 +321,14 @@ mod tests {
             exit_type: 1,
             ..neutral_weapon()
         };
-        assert_eq!(weapon, expected, "unguided from a turret, drawing nothing");
+        assert_eq!(
+            weapon, expected,
+            "turreted, from a turret, drawn as the box"
+        );
+        assert_eq!(
+            weapon.graphic, 0,
+            "a shot spawns only for a graphic of 0-255"
+        );
         assert_eq!(SHOT_SPEED, 1000);
         let (_, outfit) = named(&game, 128);
         assert_eq!((outfit.mod_type, outfit.mod_val), (MOD_WEAPON, 128));
