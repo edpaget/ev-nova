@@ -51,17 +51,25 @@
 //!    refuses the first press as well as the landing one. The charge
 //!    ([`pay_fee`]) is the `nova_sim::Session`'s, on landing and on
 //!    entering a hypergate or wormhole (@0x66db9-0x66df5).
-//! 4. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
+//! 4. **A closed gate**: a hypergate the galaxy overlay stamps
+//!    [`gate_closed`](crate::catalog::LandingSite::gate_closed), its jump
+//!    points all unstable or dead in the new game, refuses with
+//!    [`LandingRefusal::Denied`] and drops the request, as a rank-barred
+//!    gate does at 7, so it is said and sounded as that is. The original
+//!    has no such gate. It comes after the fee and before the uninhabited
+//!    stellar and the attempt, so it refuses a request already granted
+//!    too, as a point can close after the clearance.
+//! 5. **Uninhabited** (@0x66b51-0x66bcd): the request becomes the
 //!    stellar's at [`CLEARED`], "No response." is said
-//!    ([`DockSaid::NoResponse`]), and the press goes on to 5, so it lands
+//!    ([`DockSaid::NoResponse`]), and the press goes on to 6, so it lands
 //!    in the same press when it can.
-//! 5. **The attempt** (@0x66bd2-0x67800): when the request is the
+//! 6. **The attempt** (@0x66bd2-0x67800): when the request is the
 //!    stellar's, it lands if [`check_landing`] allows, and the request
 //!    ends. Otherwise the refusal keeps the request and the target, and
 //!    the player tries again (the manual: "If you're too far away, or if
 //!    you're moving too fast ... your ship's computer will beep at you and
 //!    you can try again").
-//! 6. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
+//! 7. **The request** (@0x6788f-0x67c4b, @0x67ea3-0x67ef9): otherwise
 //!    traffic control is asked ([`cleared`]), the old counter granting it
 //!    ([`Standing::granted`]). Cleared, the request becomes the stellar's,
 //!    at [`REQUESTED_NEAR`] in silence within
@@ -702,6 +710,18 @@ pub fn land_or_select(
             dock: None,
             said: None,
             outcome: Err(LandingRefusal::CannotPayFee { stellar, station }),
+        };
+    }
+    if site.gate_closed {
+        return DockPress {
+            selected,
+            dock: None,
+            said: None,
+            outcome: Err(LandingRefusal::Denied {
+                stellar,
+                station,
+                min_status: site.min_status,
+            }),
         };
     }
     let (mut dock, mut said) = (dock, None);
@@ -3503,5 +3523,87 @@ mod tests {
         // `_ShipIsCloaked` @0x66a8e jumps to the shared tail 0x67e67,
         // which plays `_beepSnd[3]` (@0x67e8f).
         assert!(LandingRefusal::Cloaked.beeps());
+    }
+
+    // A closed gate (the new game's: its jump points all unstable or
+    // dead) is refused as a rank-barred one.
+
+    /// A hypergate at the centre whose links are all closed.
+    fn closed_gate() -> LandingSite {
+        LandingSite {
+            gate_closed: true,
+            min_status: 3,
+            ..hypergate(130, 0.0, 0.0)
+        }
+    }
+
+    fn gate_denied() -> Result<LandOutcome, LandingRefusal> {
+        Err(LandingRefusal::Denied {
+            stellar: StellarId(130),
+            station: false,
+            min_status: 3,
+        })
+    }
+
+    #[test]
+    fn a_closed_gate_is_denied_on_the_first_press_and_the_request_dropped() {
+        let gate = closed_gate();
+        let press = pay(&gate, RICH, request(129, 0), |_| true);
+        assert_eq!(
+            press,
+            DockPress {
+                selected: None,
+                dock: None,
+                said: None,
+                outcome: gate_denied(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_gate_is_denied_though_its_request_was_granted() {
+        let gate = closed_gate();
+        for permission in [0, CLEARED] {
+            let press = pay(&gate, RICH, request(130, permission), |_| true);
+            assert_eq!(press.outcome, gate_denied(), "{permission}");
+            assert_eq!(press.dock, None, "{permission}");
+        }
+    }
+
+    #[test]
+    fn a_closed_gate_is_denied_before_no_response() {
+        let gate = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..closed_gate()
+        };
+        let press = pay(&gate, RICH, None, |_| true);
+        assert_eq!(press.outcome, gate_denied());
+        assert_eq!(press.said, None);
+        assert_eq!(press.dock, None);
+    }
+
+    #[test]
+    fn an_open_gate_is_requested_and_entered_as_before() {
+        let gate = hypergate(130, 0.0, 0.0);
+        assert_eq!(
+            pay(&gate, RICH, None, |_| true).outcome,
+            requested(130, false)
+        );
+        assert_eq!(
+            pay(&gate, RICH, request(130, CLEARED), |_| true).outcome,
+            landed(130)
+        );
+    }
+
+    #[test]
+    fn the_fee_refuses_a_closed_gate_first() {
+        let gate = charging(100, closed_gate());
+        assert_eq!(
+            pay(&gate, 99, None, |_| true).outcome,
+            Err(LandingRefusal::CannotPayFee {
+                stellar: StellarId(130),
+                station: false,
+            })
+        );
     }
 }
