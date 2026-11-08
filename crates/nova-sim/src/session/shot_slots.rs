@@ -39,7 +39,7 @@ impl Space {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::super::tests::{FIRE, armed, facing_an_npc};
+    use super::super::tests::{FIRE, armed, facing_an_npc, fire_of};
     use super::super::*;
     use crate::catalog::WeaponRecord;
 
@@ -140,7 +140,7 @@ mod tests {
             let rules = Rulebook::default().with_override(RuleKey::SubmunitionSourceSlot, source);
             let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let berth = npc.berth;
             work(&mut session, &catalog, Controls::default());

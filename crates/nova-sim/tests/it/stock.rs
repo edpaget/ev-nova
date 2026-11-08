@@ -2469,11 +2469,7 @@ fn defended_by(
     boat.target = Some(ShipRef::Player);
     boat.armament = Armament::new([(missile, 1)]);
     boat.rounds.set(missile.id, 10);
-    boat.trigger = Trigger {
-        primary: !missile.secondary(),
-        secondary: missile.secondary().then_some(missile.id),
-        ..Trigger::default()
-    };
+    boat.trigger = picking(&missile);
     let mut ships = vec![player, boat];
     ships.extend(others);
     let mut combat = Combat::default();
@@ -2619,11 +2615,7 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
     launcher.target = Some(ShipRef::Player);
     launcher.armament = Armament::new([(torpedo, 1)]);
     launcher.rounds.set(torpedo.id, 10);
-    launcher.trigger = Trigger {
-        primary: !torpedo.secondary(),
-        secondary: torpedo.secondary().then_some(torpedo.id),
-        ..Trigger::default()
-    };
+    launcher.trigger = picking(&torpedo);
     let (mut combat, mut ships, _) = defended_by(&data, &arsenal, (133, 134), vec![launcher]);
     // The Quad fires before the missiles first move. Three moves bring
     // the torpedo, 13 pixels a move, to -61 and the Quad's shot, 20 a
@@ -3561,6 +3553,7 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
         let mut attacker = Combatant {
             id: QUARRY,
             target: Some(ShipRef::Player),
+            trigger: picking(&ir),
             ..shooter(&ir)
         };
         attacker.state = ShipState {
@@ -6622,8 +6615,16 @@ impl nova_sim::Chance for Rolling {
     }
 }
 
+/// An NPC's pick of `weapon` alone, the only fire its trigger makes.
+fn picking(weapon: &WeaponSpec) -> Trigger {
+    Trigger {
+        only: Some(weapon.id),
+        ..Trigger::default()
+    }
+}
+
 /// NPC 1, a ship of stock class `ship` at the centre, at rest, facing
-/// right, targeting NPC 0, firing one of `weapon` with all the rounds,
+/// right, targeting NPC 0, picking one of `weapon` with all the rounds,
 /// fuel and armour it could want.
 fn npc_shooter(data: &GameData, arsenal: &Arsenal, ship: ShipId, weapon: &WeaponSpec) -> Combatant {
     let Kind {
@@ -6642,6 +6643,7 @@ fn npc_shooter(data: &GameData, arsenal: &Arsenal, ship: ShipId, weapon: &Weapon
         class_speed,
         top_speed,
         rounds,
+        trigger: picking(weapon),
         ..shooter(weapon)
     }
 }
@@ -6789,6 +6791,7 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
         let mut attacker = Combatant {
             id: QUARRY,
             target: Some(defender.id),
+            trigger: picking(&ir),
             ..shooter(&ir)
         };
         attacker.state = ShipState {
@@ -7119,6 +7122,7 @@ fn a_stock_raven_rocket_leaves_an_npc_at_its_speed_and_the_player_at_its_ships()
         ship.state.velocity = v;
         if id == ShipRef::Player {
             ship.rounds.set(WeaponId(10), 100_000);
+            ship.trigger = shooter(&raven).trigger;
         }
         let mut ships = [ship];
         let mut combat = Combat::default();

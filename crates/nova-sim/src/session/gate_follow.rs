@@ -566,7 +566,7 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let firing = Trigger {
-            primary: true,
+            only: Some(crate::catalog::WeaponId(128)),
             ..Trigger::default()
         };
         for npc in session.space.traffic.npcs_mut() {

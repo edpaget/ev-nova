@@ -17511,15 +17511,27 @@ pub(super) mod tests {
             .with_override(RuleKey::NpcLanding, RuleSource::Bible);
     }
 
+    /// A held fire of the [`blaster`]: the player's primary key, which
+    /// its trigger reads ([`Session::hold_trigger`]), and an NPC's pick
+    /// (`only`, never read for the player).
     pub(super) const FIRE: Trigger = Trigger {
         primary: true,
         secondary: None,
-        only: None,
+        only: Some(WeaponId(128)),
         bays: false,
         bays_after: false,
         point_defence: false,
         keep: None,
     };
+
+    /// [`FIRE`] as `npc` holds it: its pick its first weapon, whatever it
+    /// carries (none when it carries none).
+    pub(super) fn fire_of(npc: &Npc) -> Trigger {
+        Trigger {
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..FIRE
+        }
+    }
 
     /// The fight's events about NPC 0, other than its firing.
     fn about_the_npc(events: &[CombatEvent]) -> Vec<CombatEvent> {
@@ -17552,7 +17564,7 @@ pub(super) mod tests {
             },
             order: None,
         });
-        escort.trigger = FIRE;
+        escort.trigger = fire_of(escort);
         escort.target = Some(ShipRef::Player);
         session.hold_trigger(FIRE);
         session.chart.target = Some(NpcId(0));
@@ -17591,7 +17603,7 @@ pub(super) mod tests {
             },
             order: None,
         });
-        escort.trigger = FIRE;
+        escort.trigger = fire_of(escort);
         escort.target = Some(ShipRef::Player);
         session.lead_out_of_gate(StellarId(310), Vec2::new(0.0, -100.0), &mut NeverFires);
         assert!(session.npcs()[0].emerging());
@@ -18073,7 +18085,7 @@ pub(super) mod tests {
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation,
         });
-        ship.trigger = FIRE;
+        ship.trigger = fire_of(ship);
         ship.target = Some(ShipRef::Player);
         session.hold_trigger(FIRE);
         session.chart.target = Some(NpcId(0));
@@ -18184,8 +18196,8 @@ pub(super) mod tests {
             Goal::Idle
         }
 
-        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
-            FIRE
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            fire_of(npc)
         }
     }
 
@@ -18747,7 +18759,7 @@ pub(super) mod tests {
                 session.pilot.outfits.insert(OutfitId(240), owned);
             }
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let heading = missile_after(
                 &mut session,
@@ -18779,7 +18791,7 @@ pub(super) mod tests {
             let mut session = beside_an_npc(&catalog, AiType::Warship);
             assert_eq!(session.pilot.ship, ShipId(128));
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = FIRE;
+            npc.trigger = fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let heading = missile_after(
                 &mut session,
@@ -20927,7 +20939,10 @@ pub(super) mod tests {
                 crate::combat::weapon::WeaponSpec::new(&weapon),
                 1,
             )]);
-            ship.trigger = FIRE;
+            ship.trigger = Trigger {
+                only: Some(weapon.id),
+                ..FIRE
+            };
             ship.target = Some(ShipRef::Player);
         }
         session
@@ -21423,7 +21438,8 @@ pub(super) mod tests {
         pirate.govt = None;
         pirate.state.position.x += 100.0;
         let pirate = session.space.traffic.add_npc(pirate);
-        session.space.traffic.npcs_mut()[0].trigger = FIRE;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.trigger = fire_of(npc);
         for _ in 0..12 {
             work(&mut session, &catalog, Controls::default());
         }
@@ -21450,7 +21466,7 @@ pub(super) mod tests {
             let shooter = &mut session.space.traffic.npcs_mut()[0];
             shooter.booty = None;
             shooter.leader = Some(lead);
-            shooter.trigger = FIRE;
+            shooter.trigger = fire_of(shooter);
             shooter.target = Some(ShipRef::Player);
             for _ in 0..12 {
                 work(&mut session, &catalog, Controls::default());
@@ -23943,7 +23959,8 @@ pub(super) mod tests {
         }
     }
 
-    /// Every NPC idles, targets the player and holds its trigger.
+    /// Every NPC idles, targets the player and picks its first weapon
+    /// ([`fire_of`]) each time it thinks.
     #[derive(Debug)]
     pub(super) struct Attacking;
 
@@ -23952,8 +23969,8 @@ pub(super) mod tests {
             Goal::Idle
         }
 
-        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
-            FIRE
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            fire_of(npc)
         }
 
         fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

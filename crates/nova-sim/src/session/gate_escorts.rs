@@ -227,7 +227,7 @@ pub(in crate::session) mod tests {
             let npc = session.space.npc_mut(id).expect("here");
             npc.target = Some(crate::combat::ShipRef::Player);
             npc.trigger = Trigger {
-                primary: true,
+                only: Some(crate::catalog::WeaponId(128)),
                 ..Trigger::default()
             };
         }

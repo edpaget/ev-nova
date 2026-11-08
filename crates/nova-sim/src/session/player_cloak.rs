@@ -475,7 +475,7 @@ mod tests {
             let mut session = owning(&catalog);
             session.ship.cloak.cloak = FULL;
             let npc = &mut session.space.traffic.npcs_mut()[0];
-            npc.trigger = crate::session::tests::FIRE;
+            npc.trigger = crate::session::tests::fire_of(npc);
             npc.target = Some(ShipRef::Player);
             let full = session.reserves();
             let mut sounds = Vec::new();

@@ -1175,7 +1175,8 @@ impl nova_sim::PointDefenceRule for Unalarmed {
     }
 }
 
-/// Every NPC idles, targets the player and holds its trigger.
+/// Every NPC idles, targets the player and picks its first weapon each
+/// time it thinks.
 #[derive(Debug)]
 struct Attacking;
 
@@ -1189,15 +1190,11 @@ impl Behaviour for Attacking {
         Goal::Idle
     }
 
-    fn trigger(&self, _npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+    fn trigger(&self, npc: &nova_sim::Npc, _around: &nova_sim::Surroundings) -> nova_sim::Trigger {
+        // Its pick, its first weapon.
         nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..nova_sim::Trigger::default()
         }
     }
 

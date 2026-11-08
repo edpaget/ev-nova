@@ -3,7 +3,7 @@ use nova_view::flight::rescue_screen::RESCUE_FADE_FOR;
 
 // Death.
 
-/// Every NPC idles and holds its trigger.
+/// Every NPC idles and picks its first weapon each time it thinks.
 #[derive(Debug)]
 struct Firing;
 
@@ -12,15 +12,11 @@ impl Behaviour for Firing {
         Goal::Idle
     }
 
-    fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> nova_sim::Trigger {
+    fn trigger(&self, npc: &Npc, _around: &Surroundings) -> nova_sim::Trigger {
+        // Its pick, its first weapon.
         nova_sim::Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
+            only: npc.armament.mounts().first().map(|mount| mount.spec.id),
+            ..nova_sim::Trigger::default()
         }
     }
 }

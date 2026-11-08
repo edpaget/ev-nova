@@ -123,7 +123,7 @@ fn an_npcs_point_defence_fires_on_the_fight_its_dose_lands_and_its_fire_is_held(
     missile_in_flight(&mut combat, &mut ships);
     combat.take_events();
     ships[0].trigger = Trigger {
-        primary: true,
+        only: Some(held_gun().id),
         ..QUIET
     };
     bolt_landing_on(&mut combat, Vec2::ZERO);

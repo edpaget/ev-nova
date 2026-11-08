@@ -449,9 +449,8 @@ mod tests {
     #[test]
     fn a_real_beams_hold_lapses_15_ticks_after_its_last_touch() {
         let catalog = armed();
+        // NPC 0 picks its tractor beam.
         let mut session = knocking(&catalog, (None, 100.0), (Some(tractor_beam()), 200.0));
-        session.space.traffic.npcs_mut()[0].trigger = Trigger::default();
-        session.space.traffic.npcs_mut()[0].trigger.primary = true;
         let mut last_touch = None;
         let mut lapsed = None;
         for tick in 0..60 {

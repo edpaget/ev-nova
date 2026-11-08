@@ -21,7 +21,7 @@ pub(crate) use laned::{DRIFT, HEARTH, VERGE, laned};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings};
 use crate::catalog::{
     PilotCatalog, ShipId, StellarId, StellarLife, StellarMark, SystemId, SystemVisibility,
-    TrafficCatalog,
+    TrafficCatalog, WeaponId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::Trigger;
@@ -195,6 +195,31 @@ impl Behaviour for Passive {
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         npc.target
+    }
+}
+
+/// Every NPC keeps its goal, its target and its trigger, as [`Passive`],
+/// but picks this weapon again each time it thinks (`Trigger::only`): the
+/// traffic of a pass whose test needs an NPC to fire whenever it can, as
+/// the fight clears an NPC's fired pick
+/// ([`after_firing`](crate::ai::fire::after_firing)).
+#[derive(Debug)]
+pub(crate) struct Picking(pub(crate) WeaponId);
+
+impl Behaviour for Picking {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        Passive.decide(npc, around, chance)
+    }
+
+    fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+        Trigger {
+            only: Some(self.0),
+            ..npc.trigger
+        }
+    }
+
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        Passive.target(npc, around)
     }
 }
 
