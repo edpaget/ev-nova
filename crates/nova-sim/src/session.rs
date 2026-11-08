@@ -1462,6 +1462,12 @@ impl Session {
         // `_LoadPilotData` spawns the escorts and fighters into their
         // slots at once (@0x759af-0x75b91; see the `loaded_berths` module).
         session.space.hold_loaded_berths(&mut session.pilot);
+        // The jump points are the galaxy's already; a saved news item with
+        // no reach is frozen over the lanes now (see the `gate_points`
+        // module).
+        session
+            .chart
+            .sync_points(&session.statics, &mut session.pilot, &mut session.out);
         session.run.register_offer_roll();
         session.run.register_storylines(&session.statics);
         session.run.register_nebulae(&session.statics);

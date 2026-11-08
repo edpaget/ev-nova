@@ -300,17 +300,14 @@ impl Session {
         });
     }
 
-    /// The news `system` has heard by today, over the galaxy's lanes, by
-    /// the day each broke and then by id, each with how many days ago it
-    /// was heard (see the `storylines` module). None in the stock game.
+    /// The news `system` has heard by today, over each item's reach,
+    /// frozen over the galaxy's lanes at its release (see the
+    /// `gate_points` module), by the day each broke and then by id, each
+    /// with how many days ago it was heard (see the `storylines` module).
+    /// None in the stock game.
     #[must_use]
     pub fn heard_news(&self, system: SystemId) -> Vec<HeardNews> {
-        news::heard(
-            &self.statics.storylines,
-            &self.pilot.story,
-            self.chart.galaxy.lanes(),
-            system,
-        )
+        news::heard(&self.statics.storylines, &self.pilot.story, system)
     }
 }
 

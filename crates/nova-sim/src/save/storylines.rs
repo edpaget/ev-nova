@@ -13,7 +13,9 @@
 //!     {"id": "side-road-closes", "state": "done"}
 //!   ],
 //!   "points": [{"point": "hearth/side-road", "stability": "dead"}],
-//!   "news": [{"id": "side-road-closes", "released": 3}]
+//!   "news": [{"id": "side-road-closes", "released": 3, "reach": [
+//!     {"system": 129, "lanes": 0}, {"system": 130, "lanes": 1}
+//!   ]}]
 //! }
 //! ```
 //!
@@ -21,11 +23,16 @@
 //! whether it is `met`), `done` or `declined`. A point keeps only the
 //! fields play changed: its `owner`, a faction's id, and its `stability`,
 //! as the data writes one. A state or stability the engine doesn't know
-//! makes the save unusable. A stock pilot's story is empty.
+//! makes the save unusable. A news item keeps its `reach`, frozen at its
+//! release: the lanes it crosses to each system it reaches, by system ID,
+//! ascending. A save made before reaches were kept has none, and the load
+//! freezes each then (see the session's `gate_points` module). A stock
+//! pilot's story is empty.
 
 use serde::{Deserialize, Serialize};
 
 use super::SaveError;
+use crate::catalog::SystemId;
 use crate::storylines::state::{MissionState, PointChange, StoryState};
 use nova_sim_catalog::storylines::PointStability;
 
@@ -59,11 +66,20 @@ struct SavedPointChange {
     stability: Option<String>,
 }
 
-/// One news item's release.
+/// One news item's release, and its reach once frozen.
 #[derive(Serialize, Deserialize)]
 struct SavedNews {
     id: String,
     released: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    reach: Vec<SavedReach>,
+}
+
+/// How many lanes a news item crosses to reach one system.
+#[derive(Serialize, Deserialize)]
+struct SavedReach {
+    system: i16,
+    lanes: u32,
 }
 
 /// `story` as a save keeps it.
@@ -103,6 +119,16 @@ pub(super) fn saved_story(story: &StoryState) -> SavedStory {
             .map(|(id, &released)| SavedNews {
                 id: id.clone(),
                 released,
+                reach: story
+                    .reach
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .map(|(system, &lanes)| SavedReach {
+                        system: system.0,
+                        lanes,
+                    })
+                    .collect(),
             })
             .collect(),
     }
@@ -156,6 +182,19 @@ pub(super) fn story_of(saved: SavedStory) -> Result<StoryState, SaveError> {
             ))
         })
         .collect::<Result<_, SaveError>>()?;
+    let reach = saved
+        .news
+        .iter()
+        .filter(|saved| !saved.reach.is_empty())
+        .map(|saved| {
+            let reach = saved
+                .reach
+                .iter()
+                .map(|reach| (SystemId(reach.system), reach.lanes))
+                .collect();
+            (saved.id.clone(), reach)
+        })
+        .collect();
     Ok(StoryState {
         day: saved.day,
         missions,
@@ -165,6 +204,7 @@ pub(super) fn story_of(saved: SavedStory) -> Result<StoryState, SaveError> {
             .into_iter()
             .map(|saved| (saved.id, saved.released))
             .collect(),
+        reach,
     })
 }
 
@@ -260,6 +300,53 @@ mod tests {
                 ]
             })
         );
+    }
+
+    /// [`storied`] with `closed` frozen to reach 130 at once and 131 a
+    /// lane on.
+    fn reached() -> Pilot {
+        let mut pilot = storied();
+        pilot.story.reach.insert(
+            "closed".to_owned(),
+            std::collections::BTreeMap::from([
+                (crate::catalog::SystemId(131), 1),
+                (crate::catalog::SystemId(130), 0),
+            ]),
+        );
+        pilot
+    }
+
+    #[test]
+    fn a_news_items_reach_survives_a_round_trip() {
+        let pilot = reached();
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn a_reach_is_saved_by_ascending_system_on_its_item_alone() {
+        let value = json(&encode(&reached()));
+        assert_eq!(
+            value["story"]["news"],
+            serde_json::json!([
+                {"id": "closed", "released": 3, "reach": [
+                    {"system": 130, "lanes": 0},
+                    {"system": 131, "lanes": 1}
+                ]},
+                {"id": "plate", "released": 7}
+            ])
+        );
+    }
+
+    #[test]
+    fn a_news_item_saved_without_a_reach_loads_with_none() {
+        let mut value = json(&encode(&reached()));
+        value["story"]["news"][0]
+            .as_object_mut()
+            .expect("an object")
+            .remove("reach");
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert!(pilot.story.reach.is_empty());
+        assert_eq!(pilot.story.news, reached().story.news);
     }
 
     #[test]

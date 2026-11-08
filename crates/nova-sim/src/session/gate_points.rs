@@ -9,7 +9,12 @@
 //! `galaxy_points` module), and [`Chart::sync_points`] hands them over:
 //! on a change it rebuilds the lanes and the map, restamps the sites the
 //! chart holds and tells [`SessionEvent::GalaxyChanged`]; with no change
-//! it does nothing and tells nothing.
+//! it does nothing and tells nothing. Either way it then freezes the
+//! reach of each news item released since, over the lanes as they now
+//! are ([`news::freeze`]): a news item released in the effect block that
+//! closes a road never crosses it, and a system that has heard an item
+//! keeps it when a lane closes later. A saved item with no reach, from a
+//! save made before reaches were kept, is frozen at the load.
 //!
 //! **When.** At the load, before the first frame, so a saved pilot's
 //! lanes and gates follow its saved points; and wherever the storylines
@@ -35,25 +40,28 @@ use crate::chance::Chance;
 use crate::pilot::Pilot;
 use crate::session::events::SessionEvent;
 use crate::storylines::gate_points::gate_points;
+use crate::storylines::news;
 
 impl Chart {
     /// Hands the galaxy `pilot`'s jump points over `statics`' storylines
     /// and says whether that changed anything: on a change the sites are
-    /// restamped and [`SessionEvent::GalaxyChanged`] told on `out` (see
-    /// the module docs).
+    /// restamped and [`SessionEvent::GalaxyChanged`] told on `out`. Then,
+    /// over the lanes as they now are, it freezes the reach of each news
+    /// item released with none ([`news::freeze`]; see the module docs).
     pub(super) fn sync_points(
         &mut self,
         statics: &Statics,
-        pilot: &Pilot,
+        pilot: &mut Pilot,
         out: &mut Outbox,
     ) -> bool {
         let points = gate_points(&statics.storylines, &pilot.story);
-        if !self.galaxy.set_gate_points(points) {
-            return false;
+        let changed = self.galaxy.set_gate_points(points);
+        if changed {
+            self.stamp_sites();
+            out.emit(SessionEvent::GalaxyChanged);
         }
-        self.stamp_sites();
-        out.emit(SessionEvent::GalaxyChanged);
-        true
+        news::freeze(&statics.storylines, &mut pilot.story, self.galaxy.lanes());
+        changed
     }
 }
 
@@ -63,7 +71,7 @@ impl Session {
     /// queued ([`Session::apply_story_outfits`]), drawing on `chance`.
     pub(super) fn settle_storylines(&mut self, chance: &mut dyn Chance) {
         self.chart
-            .sync_points(&self.statics, &self.pilot, &mut self.out);
+            .sync_points(&self.statics, &mut self.pilot, &mut self.out);
         self.apply_story_outfits(chance);
     }
 }
@@ -119,7 +127,7 @@ mod tests {
     fn sync(session: &mut Session) -> bool {
         session
             .chart
-            .sync_points(&session.statics, &session.pilot, &mut session.out)
+            .sync_points(&session.statics, &mut session.pilot, &mut session.out)
     }
 
     fn site(session: &Session, id: StellarId) -> crate::catalog::LandingSite {
@@ -194,6 +202,46 @@ mod tests {
         assert!(
             !session.take_events().contains(&SessionEvent::GalaxyChanged),
             "a load tells nothing"
+        );
+    }
+
+    /// [`laned_stable`] with the news item `word`, breaking in drift.
+    fn with_news() -> FakePilotCatalog {
+        let mut catalog = laned_stable();
+        catalog.storylines.news.insert(
+            "word".to_owned(),
+            nova_sim_catalog::storylines::NewsItem {
+                headline: "Word".to_owned(),
+                text: "It spreads.".to_owned(),
+                from: DRIFT,
+            },
+        );
+        catalog
+    }
+
+    #[test]
+    fn news_released_with_a_closing_is_frozen_after_it() {
+        let mut session = started(&with_news());
+        set(&mut session, "hearth/drift-road", PointStability::Dead);
+        session.pilot.story.news.insert("word".to_owned(), 0);
+        session.settle_storylines(&mut crate::chance::NeverFires);
+        assert_eq!(
+            session.pilot.story.reach["word"],
+            std::collections::BTreeMap::from([(DRIFT, 0), (VERGE, 1), (HEARTH, 2)]),
+            "round by verge, not the road just closed"
+        );
+        assert_eq!(session.heard_news(HEARTH), [], "two lanes off");
+    }
+
+    #[test]
+    fn a_load_freezes_a_saved_item_with_no_reach() {
+        let catalog = with_news();
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "").expect("a pilot");
+        pilot.story.news.insert("word".to_owned(), 0);
+        let session = Session::load(&catalog, pilot, &rules()).expect("loads");
+        assert_eq!(
+            session.pilot.story.reach["word"],
+            std::collections::BTreeMap::from([(DRIFT, 0), (HEARTH, 1), (VERGE, 1)])
         );
     }
 
