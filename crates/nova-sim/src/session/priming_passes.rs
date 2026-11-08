@@ -503,28 +503,84 @@ mod tests {
         assert_eq!(alerts, 1, "the first pass's, the second on the same frame");
     }
 
+    /// System 131, which [`escorting`]'s failure hides.
+    const HIDDEN: crate::catalog::SystemId = crate::catalog::SystemId(131);
+
+    /// A hideable session in flight with mission 140 of escort goal 1
+    /// accepted, its two ships here, whose `OnFailure` sets [`HIDDEN`]'s
+    /// hiding bit: the first of its ships destroyed fails it at once
+    /// (see the `mission_ships` module).
+    fn escorting() -> (FakePilotCatalog, Session) {
+        use crate::session::mission_ships::tests::{goal_catalog, in_flight};
+        let mut catalog = goal_catalog(1, 0);
+        let hiding = crate::testkit::hiding_bit(HIDDEN.0).get();
+        catalog.missions[0].on_failure = crate::control::Script::parse(&format!("b{hiding}"));
+        crate::testkit::hideable(&mut catalog);
+        let session = in_flight(&catalog);
+        assert!(!session.space.traffic_due, "set up at the take-off");
+        (catalog, session)
+    }
+
+    /// Whether `session`'s pilot has [`HIDDEN`]'s hiding bit set.
+    fn hiding_set(session: &Session) -> bool {
+        session.pilot.bits.get(crate::testkit::hiding_bit(HIDDEN.0))
+    }
+
     #[test]
     fn entry_refreshes_the_galaxy_between_its_priming_passes() {
         // `_PlayGame`'s `_PropagateMissionBitEffects` (@0x457e9) reads the
-        // bits as the first pass left them.
-        let mut catalog = trafficked(130, 2, 1);
-        crate::testkit::hideable(&mut catalog);
-        let pilot = Pilot::new(&catalog, "").expect("starts");
-        let mut session = Session::fly(&catalog, pilot).expect("flies");
-        session.begin(&catalog, &mut NeverFires);
-        session
-            .pilot
-            .bits_mut()
-            .set(crate::testkit::hiding_bit(132));
-        assert!(session.galaxy().visible(crate::catalog::SystemId(132)));
+        // bits as the first pass left them: the pass takes a mission ship
+        // destroyed out, failing its mission, whose `OnFailure` sets a
+        // hiding bit.
+        let (catalog, mut session) = escorting();
+        session.space.traffic.npcs_mut()[0].condition = crate::combat::hull::Condition::Destroyed;
+        assert!(!hiding_set(&session));
+        assert!(session.galaxy().visible(HIDDEN));
         enter(
             &mut session,
             &catalog,
             SpeedMult::FULL,
-            &NovaAi::default(),
+            &crate::testkit::Passive,
             &mut NeverFires,
         );
-        assert!(!session.galaxy().visible(crate::catalog::SystemId(132)));
+        assert!(hiding_set(&session), "the first pass failed it");
+        assert!(!session.galaxy().visible(HIDDEN), "refreshed after it");
+    }
+
+    #[test]
+    fn a_bit_the_second_priming_pass_sets_waits_for_a_later_refresh() {
+        // The refresh comes before the second pass (@0x457e9-0x457f3), and
+        // nothing after it refreshes the galaxy before the first frame.
+        use crate::combat::hull::Condition;
+        let (catalog, set_up) = escorting();
+        // Mission ship 0 breaking up, `ticks_left` on its death timer,
+        // entered.
+        let entered = |ticks_left| {
+            let mut session = set_up.clone();
+            session.space.traffic.npcs_mut()[0].condition = Condition::Dying {
+                ticks_left,
+                starting: false,
+            };
+            enter(
+                &mut session,
+                &catalog,
+                SpeedMult::FULL,
+                &crate::testkit::Passive,
+                &mut NeverFires,
+            );
+            session
+        };
+        // Only a pass takes a ship destroyed out, so the longest timer
+        // whose breakup still fails the mission at entry is the one that
+        // runs out in its last pass, the second.
+        let last = (1..=60)
+            .filter(|&ticks_left| hiding_set(&entered(ticks_left)))
+            .max()
+            .expect("a breakup that ends within entry");
+        assert!(!hiding_set(&entered(last + 1)), "one that outlasts it");
+        let session = entered(last);
+        assert!(hiding_set(&session), "the second pass failed it");
+        assert!(session.galaxy().visible(HIDDEN), "not refreshed since");
     }
 
     #[test]
