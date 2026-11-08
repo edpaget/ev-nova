@@ -312,6 +312,15 @@ mod tests {
     #[test]
     fn at_full_gain_entry_leaves_the_ships_where_two_whole_passes_leave_them() {
         let (catalog, mut session) = begun();
+        // The player drifting under a box that holds it, so each pass's
+        // move shows (a run's first box clamps it to rest).
+        session.ship.player.velocity = crate::geometry::Vec2::new(1.5, -0.5);
+        let top = session.top_speed();
+        session
+            .ship
+            .player_max_vel
+            .bleed(top, session.handling().accel);
+        let before = session.ship.player;
         let mut twin = session.clone();
         enter(
             &mut session,
@@ -337,6 +346,83 @@ mod tests {
         let by_hand: Vec<_> = twin.npcs().iter().map(|npc| npc.state).collect();
         assert_eq!(entered, by_hand);
         assert_ne!(entered, set_up, "they flew");
+        // The player too: `_HandlePlayer` moves it in each pass.
+        assert_eq!(session.ship.player, twin.ship.player);
+        assert_ne!(session.ship.player.position, before.position, "it drifted");
+    }
+
+    #[test]
+    fn a_new_pilots_entry_shows_the_land_hint_from_its_first_priming_pass() {
+        // `_HandlePlayer`'s hint block (@0x7093d) reads no `_ignoreKeys`,
+        // and the passes run on the frame counter as it stands, a new
+        // pilot's 0, a multiple of 60: the first pass shows the hint,
+        // before the first frame, and the second, at -2, shows none.
+        use crate::message::SimMessage;
+        use crate::sound::SimSound;
+        use crate::tutorial::TutorialHint;
+        let (catalog, mut session) = begun();
+        session.take_messages();
+        session.take_sounds();
+        enter(
+            &mut session,
+            &catalog,
+            SpeedMult::FULL,
+            &NovaAi::default(),
+            &mut NeverFires,
+        );
+        let hints: Vec<_> = session
+            .take_messages()
+            .into_iter()
+            .filter(|message| matches!(message, SimMessage::Tutorial(_)))
+            .collect();
+        assert!(
+            matches!(
+                hints.as_slice(),
+                [SimMessage::Tutorial(TutorialHint::Land { .. })]
+            ),
+            "{hints:?}"
+        );
+        let beeps = session
+            .take_sounds()
+            .into_iter()
+            .filter(|&sound| sound == SimSound::TutorialHint)
+            .count();
+        assert_eq!(beeps, 1);
+        assert_eq!(session.tutorial().flag(), -2);
+    }
+
+    #[test]
+    fn a_new_pilots_entry_off_a_hint_frame_shows_no_hint() {
+        // The frame counter doesn't move between the passes, so on a frame
+        // that is no multiple of 60 neither pass checks.
+        let (catalog, mut session) = begun();
+        session.space.frame = 1;
+        enter(
+            &mut session,
+            &catalog,
+            SpeedMult::FULL,
+            &NovaAi::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.tutorial(), crate::tutorial::Tutorial::NEW_PILOT);
+    }
+
+    #[test]
+    fn entry_writes_the_pilots_whole_class_order_table_as_its_passes_leave_it() {
+        // Each pass's bookkeeping writes all four entries (@0x6e43f, see
+        // the `class_table` module): a new pilot's -1s, never commanded,
+        // read 0 once the ships set up at entry let it run.
+        use crate::fleet::OrderWord;
+        let (catalog, mut session) = begun();
+        assert_eq!(session.pilot.class_orders, [OrderWord::NONE; 4]);
+        enter(
+            &mut session,
+            &catalog,
+            SpeedMult::FULL,
+            &NovaAi::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.pilot.class_orders, [OrderWord(0); 4]);
     }
 
     #[test]
