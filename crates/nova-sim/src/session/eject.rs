@@ -2387,6 +2387,44 @@ pub(super) mod tests {
         }
     }
 
+    /// The pod's `shïp` defaults land after the whole fold, top-up
+    /// included (@0x6f8c0-0x6f8fc, after @0x6f8bb): a default naming the
+    /// stock blaster's own outfit adds to the stock's 1, where adding it
+    /// before `hold_to_stock` or `fit_stock` would leave the top-up nothing
+    /// to do.
+    #[test]
+    fn the_pods_default_of_its_stock_weapons_outfit_adds_to_the_stock_by_both_readings() {
+        let mut catalog = ejecting_armed();
+        for record in &mut catalog.ship_records {
+            if record.id == ESCAPE_POD_SHIP {
+                record.defaults.push((OutfitId(250), 1));
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::EjectPersistentWeapons, source);
+            let mut session = flying(&catalog, &[POD, KEPT]).with_rules(rules);
+            session.ship.condition = Condition::Disabled;
+            assert_eq!(eject_check(&mut session, true), EJECTED, "{source:?}");
+            assert!(in_the_pod(&session), "{source:?}");
+            assert_eq!(
+                session.pilot.outfits.get(&OutfitId(250)),
+                Some(&2),
+                "{source:?}: the stock's 1 plus the default's 1"
+            );
+            let blasters: u32 = session
+                .ship
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == WeaponId(128))
+                .map(|mount| mount.count)
+                .sum();
+            assert_eq!(blasters, 2, "{source:?}: the mounts carry both");
+        }
+    }
+
     /// `ejecting(100)`'s session ejected into the pod, disabled, heading
     /// `heading` at rest.
     fn in_a_pod(catalog: &FakePilotCatalog, heading: f32) -> Session {
