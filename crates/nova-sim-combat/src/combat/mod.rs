@@ -3722,6 +3722,7 @@ mod tests {
     mod shot_gain;
     mod shot_slots;
     mod shot_visits;
+    mod speed_cap_sites;
     mod spin_starts;
     mod stellar_guns;
     mod stellar_hazards;
