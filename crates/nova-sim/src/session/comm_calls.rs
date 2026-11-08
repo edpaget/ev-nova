@@ -2015,6 +2015,7 @@ mod tests {
             .turn_with_quote(quoting, crate::person::GateView::default());
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Calling::default(),
             Rules::default(),
             &mut NeverFires,

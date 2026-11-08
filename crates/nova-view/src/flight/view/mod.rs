@@ -1311,6 +1311,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What was pressed under the rescue, until the router takes it
     /// ([`FlightView::take_rescue_replay`]).
     rescue_replay: Vec<crate::Input>,
+    /// The rest of the rescue's pass and what came after it in its step,
+    /// shown once the rescue's screen is over (see the `rescue` module).
+    rescue_rest: Option<rescue::RescueRest>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router
@@ -1416,10 +1419,6 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// then leaves the held lines to stand over it (see the
     /// `between_passes` module).
     writing_in_frame: bool,
-    /// Whether the warp's end waited for a double-time frame between its
-    /// passes to go ([`FlightView::arrival_frame`]): its arrival then runs
-    /// the tick's steps in the new system.
-    arrival_waited: bool,
     /// The fade to black after the player's death, once begun
     /// ([`FlightView::begin_fade`]).
     death_fade: Option<ScreenFade>,
@@ -1739,7 +1738,6 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         kept.jump_under_way == fresh.jump_under_way,
     );
     check("warping", kept.warping == fresh.warping);
-    check("warp_end_due", kept.warp_end_due == fresh.warp_end_due);
     check("fate", kept.fate == fresh.fate);
     check("hold_expired", kept.hold_expired == fresh.hold_expired);
     check("leave_due", kept.leave_due == fresh.leave_due);

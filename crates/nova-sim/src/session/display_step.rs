@@ -34,12 +34,14 @@
 //!
 //!    A pass the pod's frames return on (`jne 0x71113` @0x68ddd, the
 //!    pod countdown above 0 at the pass's head on a player that isn't
-//!    destroyed, `PlayerHead::in_pod`) runs none of steps 1 to 3: a
+//!    destroyed, `PlayerHead::returned`) runs none of steps 1 to 3: a
 //!    breakup beside a running pod word, which a stray beam fired intact
 //!    can leave (see the `stray_words` module), stalls with no klaxon, and
 //!    the pod rescues the pilot. The eject's own pass sets the countdown
-//!    after the test and runs them all. Steps 4 to 6 run pod or not, as
-//!    `_HandleShipDisplay` runs for slot 0.
+//!    after the test and runs them all. The rest of a pass the rescue or
+//!    the arrival settled in (`jmp 0x71113` @0x692ce, @0x6c625; see the
+//!    `settled_in_pass` module) runs none of them either. Steps 4 to 6
+//!    run pod or not, as `_HandleShipDisplay` runs for slot 0.
 //! 4. The player's display step, at the frame's gain
 //!    (`Session::speed_mult`, see the `display_gain` module): its cloak's
 //!    fade steps (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or
@@ -105,7 +107,7 @@ impl Session {
         // The pod's frames return (@0x68ddd) before all of these. A timer
         // the display set still ends its starting frame: the display finds
         // it above 0 and puffs (@0x2dd01).
-        if head.in_pod {
+        if head.returned {
             self.ship.condition.settle_start();
             return;
         }
@@ -138,7 +140,7 @@ impl Session {
         head: PlayerHead,
         chance: &mut dyn Chance,
     ) {
-        if !head.in_pod {
+        if !head.returned {
             self.player_cloak_tick(head.disabled);
         }
         self.ship

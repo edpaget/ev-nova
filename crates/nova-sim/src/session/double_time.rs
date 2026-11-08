@@ -140,7 +140,7 @@
 use super::game_work::{PassCatalogs, PassStart};
 use super::{PlayerShip, Session};
 use crate::ai::Behaviour;
-use crate::catalog::CommCatalog;
+use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::flight::Controls;
@@ -190,12 +190,12 @@ impl Session {
     /// ([`Session::game_work`]) while [`Session::double_time`] is on.
     /// Landed, it does nothing, as the advance pass stands still; it runs
     /// through a jump, as the world does (see the `warp_stage` module).
-    /// The escape pod's countdown running out on it stops it, the rescue
-    /// then due ([`Session::rescue_if_due`], which its caller asks after
-    /// this pass as after the advance pass). Its caller then answers
-    /// what the session left ([`Session::answer_strikes`]) and says the
-    /// attack quotes left after the pass
-    /// (`Session::say_attack_quotes_left`).
+    /// The jump's arrival or the escape pod's rescue settles in it, read
+    /// from `catalog`, as on the advance pass, and the rest of the pass
+    /// runs among the new system, its masks loaded (see the
+    /// `settled_in_pass` module). Its caller then answers what the
+    /// session left ([`Session::answer_strikes`]) and says the attack
+    /// quotes left after the pass (`Session::say_attack_quotes_left`).
     ///
     /// It runs no hail quote roll; a frame's steps roll it at each NPC's
     /// turn of the ship loop ([`Session::step`],
@@ -204,11 +204,12 @@ impl Session {
     pub fn tick_again(
         &mut self,
         controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.tick_again_quoting(controls, None, behaviour, rules, chance);
+        self.tick_again_quoting(controls, catalog, None, behaviour, rules, chance);
     }
 
     /// [`Session::tick_again`], `_HandleShip`'s hail quote roll run at each
@@ -218,6 +219,7 @@ impl Session {
     pub(crate) fn tick_again_quoting(
         &mut self,
         controls: Controls,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
         quotes: Option<&dyn CommCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
@@ -233,16 +235,24 @@ impl Session {
         // (@0x683a4-0x68424; see the `warp_stage` module).
         self.ship.gamma_tick(self.mode.jump());
         self.before_move(self.space.pass_frame, pass);
-        let start = PassStart::of(self);
+        let mut start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass, start.player_head());
-        if self.ship.fate.rescue_due {
-            return;
-        }
+        // The arrival or the rescue, settled in the pass (see the
+        // `settled_in_pass` module): the first pass loaded the old
+        // system's masks, so the new system's are loaded, and the deadly
+        // stellars' are asked of `catalog`.
+        let sheets: Option<&dyn PilotCatalog> =
+            if self.settle_exit(&mut start, catalog, chance).is_some() {
+                self.load_sprite_masks(catalog);
+                Some(catalog)
+            } else {
+                None
+            };
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
         let catalogs = PassCatalogs {
             ai: None,
-            sheets: None,
+            sheets,
             quotes,
             priming: false,
         };
@@ -312,7 +322,13 @@ mod tests {
 
     fn again(session: &mut Session, controls: Controls) {
         let behaviour = crate::ai::NovaAi::default();
-        session.tick_again(controls, &behaviour, Rules::default(), &mut NeverFires);
+        session.tick_again(
+            controls,
+            &crate::testkit::catalog(),
+            &behaviour,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// [`catalog`] with a double-time warp-up, `snd ` 129, of 44100 frames
@@ -901,6 +917,7 @@ mod tests {
         let behaviour = crate::ai::NovaAi::default();
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &behaviour,
             Rules::default(),
             &mut chance,
@@ -1059,6 +1076,7 @@ mod tests {
         };
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Defending(true),
             Rules::default(),
             &mut NeverFires,

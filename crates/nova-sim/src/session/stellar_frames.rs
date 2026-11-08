@@ -478,6 +478,7 @@ mod tests {
             assert_eq!(session.stellar_frame(ANIMATED), oracle.shown(), "{pass}");
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &Passive,
                 Rules::default(),
                 &mut NeverFires,

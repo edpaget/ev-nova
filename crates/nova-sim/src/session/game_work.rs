@@ -14,8 +14,11 @@
 //!    approach (@0x6a8c5-0x6a97a), on the ship where the last frame left
 //!    it (see the `land_key` and `clearance` modules).
 //! 2. The move, the turn, thrust and position step (@0x6c770-0x6d4eb),
-//!    or the escape pod's flight; the rescue, which ends the pass
-//!    (@0x68ddd); then the player's display step: its death timer's tick
+//!    or the escape pod's flight; the fighters' warning on a new jump
+//!    (@0x6b3de); the exit, the jump's arrival (@0x6c625) or the pod's
+//!    rescue (@0x692ce), settled in the pass, the rest of which then
+//!    runs among the new system (see the `settled_in_pass` module); then
+//!    the player's display step: its death timer's tick
 //!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it, then steps its frame, sets, lights and ion tint (see
@@ -156,6 +159,7 @@
 use std::collections::BTreeSet;
 
 use super::hit_turns::Turns;
+use super::settled_in_pass::Exit;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
@@ -240,16 +244,23 @@ pub(super) struct PlayerHead {
     /// the escort menu's block and the class-order bookkeeping (see the
     /// `class_orders` module).
     pub(super) dead: bool,
-    /// Whether the escape pod's frames run and return on this pass: the
-    /// pod countdown +0xc908 above 0 as the pod block tests it (@0x68d1d),
-    /// before its flight takes the pass's tick off (@0x68dc1), on a player
-    /// that isn't destroyed, since a destroyed one takes the dead branch
-    /// first (@0x68700). Its return (`jne 0x71113` @0x68ddd) skips the rest
-    /// of `_HandlePlayer`: the death timer's tick, the escort menu's block,
-    /// the klaxon, the eject, the self-destruct and the cloak key (see the
-    /// `display_step` module). It is false on the eject's own pass, whose
-    /// countdown is set after the test.
-    pub(super) in_pod: bool,
+    /// Whether `_HandlePlayer` left by its epilogue (@0x71113) before its
+    /// death timer on this pass: the pod's frames (`jne 0x71113`
+    /// @0x68ddd), the rescue (`jmp 0x71113` @0x692ce) or the arrival
+    /// (`jmp 0x71113` @0x6c625). That skips the rest of `_HandlePlayer`:
+    /// the death timer's tick, the escort menu's block, the klaxon, the
+    /// eject, the self-destruct and the cloak key (see the `display_step`
+    /// module).
+    ///
+    /// The pass's head sets it for the pod: the pod countdown +0xc908
+    /// above 0 as the pod block tests it (@0x68d1d), before its flight
+    /// takes the pass's tick off (@0x68dc1), on a player that isn't
+    /// destroyed, since a destroyed one takes the dead branch first
+    /// (@0x68700). It is false on the eject's own pass, whose countdown is
+    /// set after the test. An exit settled in the pass sets it as the pass
+    /// is read again (`PassStart::after_exit`, see the `settled_in_pass`
+    /// module).
+    pub(super) returned: bool,
 }
 
 impl PlayerHead {
@@ -261,7 +272,7 @@ impl PlayerHead {
             dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
             disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
             dead,
-            in_pod: pod.is_some() && !dead,
+            returned: pod.is_some() && !dead,
         }
     }
 }
@@ -272,6 +283,21 @@ impl PassStart {
         Self {
             npcs: session.space.npcs_before(),
             player: PlayerHead::of(session.ship.condition, session.pod),
+            stood: session.ship.player.position,
+        }
+    }
+
+    /// The pass as it goes on after an exit `_HandlePlayer` settled in it
+    /// (see the `settled_in_pass` module), `session` in the new system:
+    /// every NPC and where the player stands read afresh, and the head's
+    /// flags kept, with the epilogue's mark set ([`PlayerHead::returned`]).
+    pub(super) fn after_exit(&self, session: &Session) -> Self {
+        Self {
+            npcs: session.space.npcs_before(),
+            player: PlayerHead {
+                returned: true,
+                ..self.player
+            },
             stood: session.ship.player.position,
         }
     }
@@ -295,8 +321,9 @@ impl Session {
     /// in `_DoPlayGameWork(1)`'s order (see the module docs), the traffic
     /// drawn from `catalog` and deciding as `behaviour` says, the fight by
     /// `rules`, drawing on `chance`. Whether the escape pod's rescue
-    /// settled on it, which ends the pass there (`_HandlePlayer` @0x68ddd;
-    /// see [`Session::rescue_if_due`]).
+    /// settled on it (`_HandlePlayer` @0x68ddd-0x692ce): the rest of the
+    /// pass then runs among the new system, as it does after the jump's
+    /// arrival (see the `settled_in_pass` module).
     ///
     /// Landed, it runs its landed work instead (`Session::landed_work`),
     /// as the fight and the traffic stand still then, the rescue among it.
@@ -355,7 +382,9 @@ impl Session {
     /// pass, see the `priming_passes` module), the traffic drawn from
     /// `catalog`, run as `run` says, the NPCs deciding as `behaviour`
     /// says, the fight by `rules`, drawing on `chance`. Whether the escape
-    /// pod's rescue settled on it.
+    /// pod's rescue settled on it, the rest of the pass run among the new
+    /// system all the same, as after the arrival (see the
+    /// `settled_in_pass` module).
     #[allow(clippy::too_many_arguments)] // the pass's collaborators, and its frame
     pub(super) fn advance_pass(
         &mut self,
@@ -372,17 +401,18 @@ impl Session {
         };
         self.before_move(frame, pass);
         self.ship.fate.player_exploded_this_tick = false;
-        let start = PassStart::of(self);
+        let mut start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass, start.player_head());
-        // The sheets the pass's contacts read, before the scoop, the first
-        // (see the `sprite_sheets` module).
-        self.load_sprite_masks(catalog);
-        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
+        // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565),
+        // before the warp's end (@0x6bbb8).
         self.warn_fighters_left_behind(chance);
-        if self.rescue_if_due(catalog, chance) {
-            return true;
-        }
+        // The arrival or the rescue, settled in the pass (see the
+        // `settled_in_pass` module).
+        let exit = self.settle_exit(&mut start, catalog, chance);
+        // The sheets the pass's contacts read, before the scoop, the first
+        // (see the `sprite_sheets` module): the new system's after an exit.
+        self.load_sprite_masks(catalog);
         let catalogs = PassCatalogs {
             ai: Some(catalog),
             sheets: Some(catalog),
@@ -390,7 +420,7 @@ impl Session {
             priming: run.priming,
         };
         self.pass_after_move(&start, pass, catalogs, behaviour, rules, chance);
-        false
+        exit == Some(Exit::Rescue)
     }
 
     /// A pass of the game's work while landed, the traffic drawn from
@@ -418,7 +448,10 @@ impl Session {
         let mut source = &mut *chance;
         let chance: &mut dyn Chance = &mut source;
         self.ship.warp.gate = None;
-        if self.rescue_if_due(catalog, chance) {
+        if self.ship.fate.rescue_due {
+            // No rest of a pass runs landed.
+            let mut start = PassStart::of(self);
+            self.settle_exit(&mut start, catalog, chance);
             return true;
         }
         self.warn_fighters_left_behind(chance);
@@ -1065,11 +1098,11 @@ mod tests {
             starting: false,
         };
         for condition in [Condition::Intact, Condition::Disabled, dying] {
-            assert!(PlayerHead::of(condition, Some(2)).in_pod, "{condition:?}");
-            assert!(!PlayerHead::of(condition, None).in_pod, "{condition:?}");
+            assert!(PlayerHead::of(condition, Some(2)).returned, "{condition:?}");
+            assert!(!PlayerHead::of(condition, None).returned, "{condition:?}");
         }
         // The dead branch comes first (@0x68700).
-        assert!(!PlayerHead::of(Condition::Destroyed, Some(2)).in_pod);
+        assert!(!PlayerHead::of(Condition::Destroyed, Some(2)).returned);
         assert!(PlayerHead::of(Condition::Destroyed, Some(2)).dead);
     }
 

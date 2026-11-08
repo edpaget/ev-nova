@@ -1656,6 +1656,7 @@ pub(super) mod tests {
         run(&mut session, "P300");
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::Rules::default(),
             &mut NeverFires,

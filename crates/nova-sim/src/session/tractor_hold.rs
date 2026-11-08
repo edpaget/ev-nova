@@ -262,6 +262,7 @@ mod tests {
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

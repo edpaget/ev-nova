@@ -53,7 +53,8 @@
 //!     Under the arrival's `_PrepareAllSprites` (@0x6c59c) the gate is
 //!     built by its absence: the view steps the arrival's explosions once,
 //!     for the arrival pass's own `_HandleExplods` (@0x444e1), and not for
-//!     the frozen one (`FlightView::show_arrival_explosions`).
+//!     the frozen one (`FlightView::step_arrival_explosions` for a jump's,
+//!     `FlightView::show_arrival_explosions` for a gate's).
 //! - Under the original's caps
 //!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
 //!   reading, [`Scene::caps`]; by default nothing is capped) at most

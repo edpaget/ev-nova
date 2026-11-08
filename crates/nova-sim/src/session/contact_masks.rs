@@ -299,6 +299,7 @@ pub(super) mod tests {
         });
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,

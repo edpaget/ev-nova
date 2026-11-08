@@ -452,6 +452,7 @@ mod tests {
         assert_ne!(session.ship.condition, Condition::Destroyed, "the dot");
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,
@@ -615,6 +616,7 @@ mod tests {
         assert_eq!(session.stellar_frame(deadly.id), 0);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Passive,
             Rules::default(),
             &mut NeverFires,
@@ -773,6 +775,7 @@ mod tests {
         let again = |session: &mut Session| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &Passive,
                 Rules::default(),
                 &mut NeverFires,

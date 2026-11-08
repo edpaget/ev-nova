@@ -6,7 +6,7 @@
 //! session does as it starts, steps and begins is nova-sim's, named in
 //! the commits that moved them.
 
-use super::faked_screen::{in_flight, sent_since, warp_ends};
+use super::faked_screen::{in_flight, warp_ends};
 use super::faked_travel::jump_now;
 use super::*;
 use nova_sim::SessionEvent;
@@ -374,7 +374,6 @@ fn an_arrival_after_beginning_is_laid_out_as_any_other() {
     jump_now(&mut view);
     warp_ends(&mut view);
     view.tick(TICK);
-    assert!(sent_since(&view, 0).contains(&FlightCommand::Arrive));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
 }
 

@@ -233,15 +233,6 @@ pub(super) struct Escorts {
     /// written to its berth too (see
     /// [`berth_marks`](crate::traffic::berth_marks)). Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
-    /// Whether the next class-order bookkeeping is skipped, once: set by a
-    /// jump's arrival under the engine's readings of
-    /// [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders)
-    /// and [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders),
-    /// which keeps the orders through the arrival's pass as `_HandlePlayer`
-    /// returns on the arrival frame (@0x6c625) before the bookkeeping
-    /// (@0x6e2e8); taken by the first bookkeeping after it, and cleared by
-    /// every other entry (see the `class_orders` module). Never saved.
-    pub(super) skip_bookkeeping: bool,
     /// Whether the records not placed yet hold the berths a pilot load
     /// packed them into (see the `loaded_berths` module), as
     /// `_LoadPilotData` spawns each into its slot at once, so one leaving
@@ -327,7 +318,6 @@ impl Space {
                 restock: false,
                 class_orders: [None; 4],
                 commanded: BTreeSet::new(),
-                skip_bookkeeping: false,
                 loaded_berths_held: false,
                 carry: super::display_carry::DisplayCarry::default(),
                 quote_clock: persons::QuoteClock::default(),

@@ -665,6 +665,7 @@ mod secondary_select;
 mod self_destruct;
 mod self_repair;
 mod session_setup;
+mod settled_in_pass;
 mod setup;
 mod ship_change;
 mod ship_display;
@@ -1910,7 +1911,12 @@ impl Session {
                     warp: if again { warp } else { warp.saturating_add(1) },
                 });
                 let bearing = self.chart.jump_aim(&self.pilot, to);
-                self.fly_warp_stage(bearing, controls);
+                // The natural end returns before the ionization, the burn
+                // and the fuel's regeneration (`jmp 0x71113` @0x6c625; see
+                // the `settled_in_pass` module).
+                if self.fly_warp_stage(bearing, controls) {
+                    return;
+                }
                 self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
                 // `_HandlePlayer` regenerates and clamps the fuel through
@@ -3058,7 +3064,8 @@ impl Session {
     /// `Session::move_player`), and the warp-up sounds here when the ship needs
     /// no braking. Through the warp stage the ship moves off toward the
     /// bearing and the world runs on (see the `warp_stage` module) until
-    /// the warp ends ([`Session::warp_end_due`]); the scans are held past
+    /// the warp ends and the jump arrives in that pass (see the
+    /// `settled_in_pass` module); the scans are held past
     /// the warp's lead-in (`Session::in_warp_lead_in`).
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
@@ -11678,6 +11685,7 @@ pub(super) mod tests {
         let again = |session: &mut Session| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

@@ -87,31 +87,29 @@
 //! the kept order as the bookkeeping will leave it, so nothing crosses a
 //! drawn frame.
 //!
-//! **A jump's arrival.** `_HandlePlayer` returns on the arrival frame
+//! **A jump's arrival.** `_HandlePlayer` returns on the arrival's pass
 //! (@0x6c625), after `_SetupShipsInSystem` and before the fade and the
 //! bookkeeping, and the rest of that pass runs in the new system, every
-//! ship's think included. So by the engine readings of
+//! ship's think included. The engine settles the arrival in its pass the
+//! same way, and the rest of that pass runs none of `_HandlePlayer`'s
+//! tail (see the `settled_in_pass` module), so it runs no bookkeeping. By
+//! the engine readings of
 //! [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders) and
 //! [`RuleKey::ArrivalOrders`](crate::rulebook::RuleKey::ArrivalOrders) the
 //! arrival resets no order as the escorts enter (see the `escorts`
-//! module): it has the next bookkeeping skipped, once
-//! ([`Escorts::skip_bookkeeping`](super::space::Escorts)), the pilot's copy
-//! of the table included. A mission escort set up in the new system thinks
+//! module), and the pilot's copy of the table stands too. On an
+//! advance-pass arrival, a mission escort set up in the new system thinks
 //! once under its class's kept order (`_EscortAI` @0x83afb), holding or
 //! taking a target; the hired escorts and fighters glide in past their
-//! think (`_AIDispatch` @0x8fcf5) and never act on it. The pass after
-//! clears every class that keeps an order, as every escort respawned is
-//! unmarked (`_RespawnEscort` @0x3d546), unless a mission escort set up
-//! there holds its berth's mark. Every other entry clears the
-//! skip. By `ArrivalOrders`' other reading, the port's earlier one, the
-//! arrival resets the orders as the escorts enter, before any think.
-//!
-//! The engine arrives between passes, so the skipped bookkeeping and the
-//! think under the kept order come on the first pass after the arrival,
-//! one pass later than the original's arrival pass
-//! (rdm:phase/combat-and-flight/phase-13-second-pass-and-arrival-left-outs,
-//! item 2). The skip is taken by the first bookkeeping after the entry, so
-//! it stays right once that phase runs the arrival inside a pass.
+//! think (`_AIDispatch` @0x8fcf5) and never act on it. The next pass's
+//! bookkeeping clears every class that keeps an order, as every escort
+//! respawned is unmarked (`_RespawnEscort` @0x3d546), unless a mission
+//! escort set up there holds its berth's mark. After an arrival on double
+//! time's second pass, which runs no AI, the next frame's bookkeeping
+//! clears the orders before any think, in the original and here. Built
+//! by rdm:phase/combat-and-flight/phase-18-warp-end-pass-runs-the-old-system.
+//! By `ArrivalOrders`' other reading, the port's earlier one, the arrival
+//! resets the orders as the escorts enter, before any think.
 //!
 //! **The berth's mark** (rdm:phase/npc-ai/phase-16-berth-keeps-command-mark).
 //! The engine keeps each berth's last +0xc4 beside the traffic's other
@@ -210,11 +208,6 @@ impl Space {
     /// shows the escorts' own orders either way.
     pub(super) fn settle_class_orders(&mut self, pilot: &mut Pilot, statics: &Statics) -> bool {
         if self.traffic_due {
-            return false;
-        }
-        // The arrival frame's return (@0x6c625) skips the whole block, the
-        // pilot's copy of the table included.
-        if std::mem::take(&mut self.escorts.skip_bookkeeping) {
             return false;
         }
         let mut cleared = Vec::new();
@@ -334,10 +327,13 @@ impl Space {
 mod tests {
     use std::collections::BTreeSet;
 
+    use crate::catalog::SystemId;
     use crate::chance::NeverFires;
+    use crate::combat::Rules;
     use crate::escort::{EscortClass, EscortCommand, EscortGroup, EscortOrder};
     use crate::flight::Controls;
     use crate::flight_frame::EscortMenuPass;
+    use crate::geometry::Vec2;
     use crate::pilot::Escort;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
@@ -852,6 +848,7 @@ mod tests {
         command(&mut session, WARSHIPS, EscortCommand::Dock);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::testkit::Passive,
             crate::combat::Rules::default(),
             &mut NeverFires,
@@ -1045,11 +1042,11 @@ mod tests {
     // @0x6e2e8).
 
     /// Mission 140's two escorts (set up in every system, `ShipSyst` -6)
-    /// and a hired escort flying in 130, all given Hold, then a jump to 131 arrived, its pass still to run, the
-    /// rules `rules`.
-    fn arrived_holding(rules: Rulebook) -> (FakePilotCatalog, Session) {
+    /// and a hired escort flying in 130, all given Hold, then a jump to
+    /// 131 begun, the rules `rules`, in double time when `double`.
+    fn jumping_holding(rules: Rulebook, double: bool) -> (FakePilotCatalog, Session) {
         use crate::session::mission_escorts::tests::{escorting, flying_with_escorts};
-        use crate::session::mission_ships::tests::{jump_to, ships_catalog};
+        use crate::session::mission_ships::tests::ships_catalog;
         let catalog = ships_catalog(escorting(-6, 0));
         let (mut session, _) = flying_with_escorts(&catalog);
         session.setup.rules = rules;
@@ -1057,12 +1054,34 @@ mod tests {
             .space
             .traffic
             .set_reused_slot_mark(rules.source_for(RuleKey::ReusedSlotMark));
+        // The stock warp-ups' lengths: in double time the fallback ends a
+        // frame's advance pass and the arrival comes on its second.
+        session.statics_mut().warp_sounds = [364, 252];
         command(&mut session, EscortGroup::All, EscortCommand::Hold);
-        jump_to(&mut session, &catalog, 131);
-        // The passes on the way out reported theirs, as each pass's
-        // report takes it.
-        session.out.escort_menu = None;
+        session.ship.player.position = Vec2::ZERO;
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session, &catalog);
+        session.set_double_time_key(double);
+        crate::testkit::begin_jump_now(&mut session, &catalog).expect("jumps");
         (catalog, session)
+    }
+
+    /// [`jumping_holding`]'s session by `rules`, its passes run to the
+    /// one its warp ends on, which arrives in 131 (`jmp 0x71113` @0x6c625)
+    /// and runs its rest among the new system; that pass's escort-menu
+    /// block left for the test, each earlier pass's taken as its report
+    /// takes it.
+    fn arrived_holding(rules: Rulebook) -> (FakePilotCatalog, Session) {
+        let (catalog, mut session) = jumping_holding(rules, false);
+        for _ in 0..1000 {
+            session.out.escort_menu = None;
+            crate::session::mission_ships::tests::tick(&mut session, &catalog);
+            if session.jumping().is_none() {
+                assert_eq!(session.system(), SystemId(131));
+                return (catalog, session);
+            }
+        }
+        panic!("the warp never ended");
     }
 
     /// The rules with `RuleKey::ArrivalOrders` by `source`.
@@ -1123,23 +1142,54 @@ mod tests {
         let hold = Some(EscortOrder::Hold);
         assert!(mission_escorts(&session).iter().all(|npc| npc.berth_mark));
         assert!(!hired_npc(&session).berth_mark);
-        assert!(!pass(&mut session, &catalog), "its bookkeeping skipped");
+        assert_eq!(
+            session.out.escort_menu, None,
+            "the arrival's pass: no block"
+        );
         assert!(!pass(&mut session, &catalog), "the next pass keeps it");
         assert_eq!(every_order(&session), [hold; 5]);
     }
 
+    /// The rules by the other reading of `ReusedSlotMark`, so the mission
+    /// escorts set up again come in unmarked (see the `berth_marks`
+    /// module).
+    fn unmarked() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::ReusedSlotMark, RuleSource::Bible)
+    }
+
     #[test]
-    fn by_the_engine_a_jumps_arrival_keeps_the_orders_through_its_pass_and_the_next_clears_them() {
-        // By the other reading of `ReusedSlotMark`, so the mission escorts
-        // set up again come in unmarked (see the `berth_marks` module).
-        let rules = Rulebook::default().with_override(RuleKey::ReusedSlotMark, RuleSource::Bible);
-        let (catalog, mut session) = arrived_holding(rules);
+    fn the_arrivals_pass_runs_no_bookkeeping_and_the_next_clears_the_kept_orders() {
+        let (catalog, mut session) = arrived_holding(unmarked());
         let hold = Some(EscortOrder::Hold);
-        assert_eq!(every_order(&session), [hold; 5], "through the arrival");
+        assert_eq!(
+            every_order(&session),
+            [hold; 5],
+            "through the arrival's pass"
+        );
         assert_eq!(mission_escorts(&session).len(), 2);
         assert!(marked(&session).is_empty(), "every ship placed unmarked");
-        assert!(!pass(&mut session, &catalog), "its bookkeeping skipped");
-        assert_eq!(every_order(&session), [hold; 5]);
+        assert_eq!(
+            session.out.escort_menu, None,
+            "the arrival's pass: no block"
+        );
+        assert!(pass(&mut session, &catalog), "the next pass clears it");
+        assert_eq!(every_order(&session), [None; 5]);
+        pass(&mut session, &catalog);
+        for npc in mission_escorts(&session) {
+            assert!(
+                matches!(npc.goal, crate::ai::Goal::Formation { .. }),
+                "{:?}",
+                npc.goal
+            );
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_set_up_by_the_arrival_thinks_under_its_kept_order_on_the_arrivals_pass() {
+        // `_EscortAI` reads the class's kept order (@0x83afb) on the
+        // arrival's pass, which runs the AI among the new system; the
+        // hired escort glides in past its think (`_AIDispatch` @0x8fcf5).
+        let (catalog, mut session) = arrived_holding(unmarked());
         for npc in mission_escorts(&session) {
             assert_eq!(npc.goal, crate::ai::Goal::Wait, "a think under Hold");
         }
@@ -1151,13 +1201,49 @@ mod tests {
         };
         assert!(gliding(&session), "the hired escort glides past its think");
         assert!(pass(&mut session, &catalog), "the next pass clears it");
-        assert_eq!(every_order(&session), [None; 5]);
         assert!(gliding(&session), "it never thought under Hold");
-        pass(&mut session, &catalog);
+    }
+
+    #[test]
+    fn a_second_pass_arrival_has_the_next_frames_bookkeeping_clear_the_orders_before_any_think() {
+        // The second pass runs no AI (@0x4402a), and the next frame's
+        // `_HandlePlayer` clears the orders (@0x6e3bb-0x6e452) before its
+        // `_AIDispatch` (@0x4429d).
+        let (catalog, mut session) = jumping_holding(unmarked(), true);
+        let again = |session: &mut Session| {
+            session.tick_again(
+                Controls::default(),
+                &catalog,
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+        };
+        let mut frames = 0;
+        loop {
+            crate::session::mission_ships::tests::tick(&mut session, &catalog);
+            assert!(session.jumping().is_some(), "no arrival on an advance pass");
+            session.out.escort_menu = None;
+            again(&mut session);
+            if session.jumping().is_none() {
+                break;
+            }
+            frames += 1;
+            assert!(frames < 1000, "the warp never ended");
+        }
+        assert_eq!(session.system(), SystemId(131));
+        let hold = Some(EscortOrder::Hold);
+        assert_eq!(every_order(&session), [hold; 5], "through the arrival");
+        assert_eq!(
+            session.out.escort_menu, None,
+            "the arrival's pass: no block"
+        );
+        assert!(pass(&mut session, &catalog), "the next frame clears it");
+        assert_eq!(every_order(&session), [None; 5]);
         for npc in mission_escorts(&session) {
             assert!(
                 matches!(npc.goal, crate::ai::Goal::Formation { .. }),
-                "{:?}",
+                "never under Hold: {:?}",
                 npc.goal
             );
         }
@@ -1191,17 +1277,6 @@ mod tests {
             assert!(!pass(&mut session, &catalog));
             assert_eq!(every_order(&session), [hold; 5], "{source:?}");
         }
-    }
-
-    #[test]
-    fn the_skipped_bookkeeping_is_one_entrys_only() {
-        // A jump arrived, then a take-off's entry before any pass: its
-        // bookkeeping runs on its first pass.
-        let (catalog, mut session) = arrived_holding(Rulebook::default());
-        session.populate(&catalog, &mut NeverFires);
-        let class = hired_npc(&session).class;
-        command(&mut session, EscortGroup::Class(class), EscortCommand::Dock);
-        assert!(pass(&mut session, &catalog), "not skipped");
     }
 
     #[test]

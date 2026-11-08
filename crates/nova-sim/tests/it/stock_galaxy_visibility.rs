@@ -320,14 +320,15 @@ fn jump(session: &mut Session, data: &GameData) -> Option<SystemId> {
         crate::passes::work(session, data, thrust);
     }
     session.begin_jump().expect("jumps");
+    let from = session.system();
     for _ in 0..10_000 {
-        if session.warp_end_due() {
+        if session.jumping().is_none() && session.preparing_jump().is_none() {
             break;
         }
         crate::passes::work(session, data, nova_sim::Controls::default());
     }
-    assert!(session.warp_end_due(), "the warp ends");
-    session.arrive(data, &mut NeverFires)
+    // The warp ends and arrives in its pass.
+    (session.system() != from).then(|| session.system())
 }
 
 #[test]

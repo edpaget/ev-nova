@@ -359,6 +359,7 @@ pub(super) mod tests {
         work(&mut session, &catalog);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

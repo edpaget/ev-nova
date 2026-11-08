@@ -1056,11 +1056,11 @@ fn a_command_sent_under_a_refused_gate_is_refused_unsent() {
     assert_eq!(view.send_gated(FlightCommand::Jump), Answer::Refused);
     assert_eq!(sent(&view), [], "nothing sent");
     assert_eq!(
-        view.send_gated(FlightCommand::Arrive),
+        view.send_gated(FlightCommand::TakeOff),
         Answer::Jumped(SystemId(131)),
         "a command no key gates is sent"
     );
-    assert_eq!(sent(&view), [FlightCommand::Arrive]);
+    assert_eq!(sent(&view), [FlightCommand::TakeOff]);
 }
 
 // The request's, the greeting's and the take-off's lines over the

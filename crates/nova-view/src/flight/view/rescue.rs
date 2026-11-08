@@ -4,7 +4,9 @@
 //!
 //! - **Start.** The frame's steps that end in the rescue
 //!   ([`StepRun::rescued`](nova_sim::flight_frame::StepRun::rescued)) are
-//!   run as any others, their lines said, and the screen begins over the
+//!   run as any others up to the rescue's pass, their lines said, the
+//!   fight's events that pass raised before it heard as the original's
+//!   `PlaySound` comes before the fade, and the screen begins over the
 //!   frame the pod showed last, drawn as their tick began
 //!   ([`FlightView::pod_frame`]): its scene and HUD, the cursor sprite
 //!   included, with what the repaint under the texts reads of the pod. A
@@ -55,6 +57,16 @@
 //!   over: each tick moves the screen on and ends there, as
 //!   `FlightView::death_frame` ends a dead flight's. The screen is drawn
 //!   in place of the scene.
+//! - **The rest of the pass.** The rescue leaves `_HandlePlayer` by `jmp
+//!   0x71113` (@0x692ce), so the rest of its pass, and after an
+//!   advance-pass rescue in double time the frame between and the second
+//!   pass, ran among the new system after `_FadeScreenIn` ([`RescueRest`]).
+//!   They wait with the screen: once it is over, the passes' effects
+//!   replay in the new scene laid out at the black, the lines raised after
+//!   the rescue ([`StepRun::rescue_lines`](nova_sim::flight_frame::StepRun::rescue_lines))
+//!   show on the slot the rescue emptied, and an advance-pass rescue's
+//!   frame between is held with its second pass, so flight's first frame
+//!   is it. Only a second-pass rescue fades over its frame between.
 //! - **Held outputs.** The rescue's `dësc` is given once the black is
 //!   over ([`FlightView::take_rescue_desc`]), and the texts it queued
 //!   once the second fade is over ([`FlightView::take_mission_texts`]).
@@ -115,6 +127,25 @@ pub(super) struct PodFrame {
     radar: RadarScene,
     /// The escort menu's class rows.
     rows: [ClassRow; 4],
+}
+
+/// What a rescue's step ran after the rescue, held with its screen and
+/// shown once it is over (`FlightView::show_rescue_rest`): `_HandlePlayer`
+/// leaves by `jmp 0x71113` (@0x692ce), so the rest of the pass, and in
+/// double time the frame between and the second pass, run among the new
+/// system after `_FadeScreenIn`.
+#[derive(Clone, Debug, Default)]
+pub(super) struct RescueRest {
+    /// The passes from the rescue's on, the rest of its pass among them,
+    /// replayed after the screen.
+    pub(super) passes: Vec<nova_sim::flight_frame::PassReport>,
+    /// An advance-pass rescue's frame between double time's passes, in
+    /// the new system, with its second pass: flight's first frame after
+    /// the screen.
+    pub(super) between: Option<super::between_passes::BetweenPasses>,
+    /// The lines raised after the rescue
+    /// ([`StepRun::rescue_lines`](nova_sim::flight_frame::StepRun::rescue_lines)).
+    pub(super) lines: Vec<nova_sim::flight_frame::RaisedLine>,
 }
 
 /// The repaint under a first text queued after `_ResetPlayer`, taken once
@@ -436,6 +467,36 @@ impl<C, S: FlightSim> FlightView<C, S> {
 }
 
 impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
+    /// Shows what the rescue's step ran after the rescue, once its screen
+    /// is over and flight steps again (see the module docs): the rest of
+    /// its pass, and a second pass after it, replayed in the new scene
+    /// laid out at the black; then the lines raised after the rescue,
+    /// worded and relayed on the slot the rescue emptied; then, for an
+    /// advance-pass rescue in double time, its frame between the passes
+    /// held with its second pass, heard now, so flight's first frame is it
+    /// and the next step lets it go.
+    fn show_rescue_rest(&mut self) {
+        let Some(rest) = self.rescue_rest.take() else {
+            return;
+        };
+        let anchor = self.anchor();
+        for pass in &rest.passes {
+            if let Some(wrap) = pass.wrap {
+                self.carry_wrap(&wrap);
+            }
+            self.step_effects(pass, None, anchor, None);
+        }
+        for line in rest.lines {
+            if let Some((text, ticks)) = self.said_of(line) {
+                self.relay(text, ticks);
+            }
+        }
+        if let Some(mut held) = rest.between {
+            self.hear_held_pass(&mut held);
+            self.between_passes = Some(held);
+        }
+    }
+
     /// A tick's rescue, as `Screen::tick` runs it before anything else of
     /// flight: the screen moves on by `dt`, the view laid out as its
     /// black begins, the bar redrawn as its closing does, and dropped once
@@ -472,7 +533,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                     }
                 }
                 RescueStage::Closing => self.redraw_status(),
-                RescueStage::Done => self.rescue = None,
+                RescueStage::Done => {
+                    self.rescue = None;
+                    self.show_rescue_rest();
+                }
                 _ => {}
             }
         }

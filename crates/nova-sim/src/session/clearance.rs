@@ -496,6 +496,7 @@ mod tests {
         assert!(before <= 2000.0 - 250.0, "still out of reach: {before}");
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -687,6 +688,7 @@ mod tests {
         assert_eq!(session.dock_request(), request(128, CLEARED));
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -705,6 +707,7 @@ mod tests {
             );
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

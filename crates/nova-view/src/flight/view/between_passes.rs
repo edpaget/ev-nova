@@ -53,9 +53,9 @@
 //! @0x45bcd-0x45d57, between the first pass and the draw), the keys kept
 //! through a jump, read on the pass that collapses it, and an arrival's
 //! line, raised inside its pass's `_HandlePlayer` (@0x6bbb8-0x6c625).
-//! An arrival on the second pass runs the tick's steps in the new system,
-//! and their release relays the held lines over its line, as the rest of
-//! the original's pass raises them after the arrival.
+//! An arrival on the second pass holds its line among them, and its
+//! layout says it first and relays the rest after it, as the rest of the
+//! original's pass raises them after the arrival.
 //!
 //! **The smoothing.** A double-time frame's target is the first pass's
 //! state, reached at alpha 1, but its alpha spans two passes, as the
@@ -65,19 +65,25 @@
 //! press changes the mode the ship is drawn up to a pass off for a few
 //! milliseconds; the original's own switch moves the picture on that frame.
 //!
-//! **The arrival waits for the frame** ([`FlightView::holding_between_passes`]):
-//! a jump's fallback end on a second pass draws the frame with the warp-ups
-//! halted and the warp-out playing (`_HandlePlayer` @0x6c62a-0x6c706,
-//! @0x6bbb8-0x6bbd9), and the arrival comes on the next step, which stops
-//! before it runs. That arrival runs the tick's steps the stop left unrun
-//! in the new system, so the new system's first frame is after its first
-//! pass there, as the original's frame 98 is (@0x45bc8), held between its
-//! passes in double time. An end on the first pass waits for nothing: the original
-//! settles it inside that pass, before the draw, so the frame held already
-//! says so and the ship arrives in the same tick, its layout dropping the
-//! hold. A second pass's sounds and white fade do not wait, as
-//! `PlaySound` and `_FadeWhiteIn` (@0x68404) start at once, so the jump's
-//! effect reads the kept frame.
+//! **The arrival waits for the frame** ([`BetweenPasses`]'s arrival). A
+//! jump's warp ended on the second pass settles its arrival inside that
+//! pass (`nova_sim::flight_frame::StepRun::arrival`), after the original
+//! drew frame 97 between the passes (@0x45dff-0x45e82). So the frame
+//! between shows the old system, and the hold carries the arrival. Its
+//! frame is presented at the tick's end ([`FlightView::present_held_arrival`]);
+//! the first catch-up after that, at the next tick's top or a press after
+//! the draw, lays the new system out (`FlightView::arrive_held`), replays
+//! the second pass in the new scene, its sounds heard already, and relays
+//! the held lines after the arrival's line. Until then the catch-up leaves
+//! the flight's events where they are. So the white of an arrival without
+//! the fades shows on the next frame presented, as the original's white
+//! follows frame 97's flush, and the frame after shows the new system
+//! (`_RefreshSAT` @0x6c605). An arrival on the first pass lays out where
+//! the steps' replay reaches it ([`FlightView::arrive_in_step`]), and its
+//! frame between shows the new system. A second pass's sounds and white
+//! fade do not wait, as `PlaySound` and `_FadeWhiteIn` (@0x68404) start
+//! at once: the fight's events before the arrival are heard as the hold
+//! is taken, in the system left, and drawn nowhere.
 //!
 //! **Its escort-menu block runs as the hold goes.** The second pass's
 //! `_HandlePlayer` fades the escort menu a level and may redraw it
@@ -104,7 +110,7 @@
 
 use std::time::Duration;
 
-use nova_sim::flight_frame::{FlightFrame, PassReport, RaisedLine, StepRun};
+use nova_sim::flight_frame::{FlightFrame, PassExit, PassReport, RaisedLine, StepRun};
 
 use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
@@ -127,6 +133,13 @@ pub(super) struct BetweenPasses {
     /// escort-menu block runs at as the hold goes
     /// ([`FlightView::run_held_escort_menu`]).
     at: Duration,
+    /// The jump's arrival the second pass settled, laid out at the first
+    /// catch-up after the frame between is presented
+    /// (`FlightView::arrive_held`; see the module docs).
+    arrival: Option<PassExit>,
+    /// Whether the frame between has been presented
+    /// ([`FlightView::present_held_arrival`]).
+    presented: bool,
 }
 
 impl BetweenPasses {
@@ -140,12 +153,38 @@ impl BetweenPasses {
         } else {
             None
         };
+        let arrival = run
+            .arrival
+            .clone()
+            .filter(|exit| second.is_some() && exit.pass == 1);
         Some(Self {
             frame,
             second,
             heard: None,
             at,
+            arrival,
+            presented: false,
         })
+    }
+
+    /// Takes the second pass out of the hold: a rescue's on it, which
+    /// waits with the rescue's screen (see the `rescue` module).
+    pub(super) fn take_second(&mut self) -> Option<PassReport> {
+        self.second.take()
+    }
+
+    /// Takes the arrival the second pass settled, once the frame between
+    /// has been presented; `None` without one or while it waits for its
+    /// frame.
+    pub(super) fn take_presented_arrival(&mut self) -> Option<PassExit> {
+        let presented = self.presented;
+        self.arrival.take_if(|_| presented)
+    }
+
+    /// The second pass, its breakups as they were heard, and the time the
+    /// hold was taken: what replays it.
+    pub(super) fn into_second(self) -> (Option<PassReport>, Option<Breakups>, Duration) {
+        (self.second, self.heard, self.at)
     }
 }
 
@@ -175,9 +214,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
         drawn(self.between_passes.as_ref(), &self.frame)
     }
 
-    /// Whether a double-time frame is drawn between its passes: an arrival
-    /// that frame doesn't show yet waits for it to go (see the module
-    /// docs).
+    /// Whether the hold carries the jump's arrival its second pass
+    /// settled, laid out at the frame after (see the module docs).
+    pub(super) fn holds_arrival(&self) -> bool {
+        self.between_passes
+            .as_ref()
+            .is_some_and(|held| held.arrival.is_some())
+    }
+
+    /// Whether the hold carries an arrival whose frame between is not yet
+    /// presented: the catch-up leaves the flight's events for it.
+    pub(super) fn arrival_waits_for_its_frame(&self) -> bool {
+        self.between_passes
+            .as_ref()
+            .is_some_and(|held| held.arrival.is_some() && !held.presented)
+    }
+
+    /// Marks the frame between as presented, as `Screen::tick` does at its
+    /// end ([`FlightView::present_jump_effect`]): an arrival its second
+    /// pass settled is laid out at the next catch-up.
+    pub(super) fn present_held_arrival(&mut self) {
+        if let Some(held) = &mut self.between_passes {
+            held.presented = true;
+        }
+    }
+
+    /// Whether a double-time frame is drawn between its passes (see the
+    /// module docs).
     pub(super) fn holding_between_passes(&self) -> bool {
         self.between_passes.is_some() && shows_hold(&self.frame)
     }
@@ -231,7 +294,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// before the next report's passes, beeping as the fade's end beeps.
     /// A redraw a press owes is left for the next report's passes, as the
     /// held pass's rows predate the press.
-    fn run_held_escort_menu(
+    pub(super) fn run_held_escort_menu(
         &mut self,
         at: Duration,
         menu: Option<nova_sim::flight_frame::EscortMenuPass>,
@@ -280,6 +343,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// breakups on the hold for the release to set off (see the module
     /// docs). Each sound is heard from where the pass left the player.
     pub(super) fn hear_held_pass(&mut self, held: &mut BetweenPasses) {
+        if let Some(arrival) = &held.arrival {
+            // The fight before the arrival, in the system it left.
+            let scene = self.presentation.scene(held.frame.player().position);
+            for event in &arrival.before {
+                self.effects.hear_event(event, &scene, &self.looks);
+            }
+        }
         let Some(pass) = &held.second else {
             return;
         };

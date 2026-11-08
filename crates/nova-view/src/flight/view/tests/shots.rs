@@ -710,15 +710,15 @@ fn landing_and_arriving_free_the_smoke() {
     assert_eq!(view.shot_looks.smoke().puffs(), [], "landed");
 
     let mut view = smoked();
-    view.sim.queue_answer(Answer::Arrived {
-        system: SystemId(131),
-        combat: Vec::new(),
-    });
+    view.sim.queue_report(super::faked_travel::arrival_report(
+        0,
+        nova_sim::flight_frame::ShipPlace::default(),
+    ));
     view.sim.frame_mut().system = SystemId(131);
     view.sim
         .queue_event(nova_sim::flight_frame::FlightEvent::Session(
             nova_sim::SessionEvent::SystemChanged,
         ));
-    view.arrive();
+    view.run_steps(1, None);
     assert_eq!(view.shot_looks.smoke().puffs(), [], "arrived");
 }

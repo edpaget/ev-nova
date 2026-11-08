@@ -365,11 +365,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// right after the frame's steps. The fade's end beeps as Return's
     /// close does ([`FlightView::shut_escort_menu_by_key`]).
     ///
-    /// A step the session didn't run (stopped for the warp's end or the
-    /// hold's expiry) has no pass and drops nothing, as the original's
-    /// arrival returns before the fade (@0x6c625) and shuts the menu
-    /// anyway (@0x6c50e). The steps `FlightView::arrival_frame` runs after
-    /// a waited arrival come after this, on a menu the arrival has shut.
+    /// A step the session didn't run (stopped for the hold's expiry) has
+    /// no pass and drops nothing. The pass a jump's arrival settled in
+    /// reports no block, as the original's arrival returns before the
+    /// fade (@0x6c625), and the arrival shuts the menu anyway (@0x6c50e).
     pub(super) fn update_escort_menu(&mut self) {
         let passes = self
             .step_report

@@ -35,7 +35,6 @@ impl Session {
             landed,
             jump_under_way,
             warping,
-            warp_end_due,
             fate,
             hold_expired,
             leave_due,
@@ -79,7 +78,6 @@ impl Session {
         *landed = self.mode.landed();
         *jump_under_way = self.mode.jump().is_some();
         *warping = super::jumping(self.mode.jump()).is_some();
-        *warp_end_due = self.ship.warp_end_due(self.mode.jump());
         *fate = self.ship.player_fate(self.player_end, self.pod);
         *hold_expired = self.ship.hold_expired(self.player_end);
         *leave_due = self.run.leave_due(self.mode.landed());
@@ -274,7 +272,6 @@ pub(super) mod tests {
             landed: Some(StellarId(999)),
             jump_under_way: true,
             warping: true,
-            warp_end_due: true,
             fate: crate::player_fate::PlayerFate::GameOver,
             hold_expired: true,
             leave_due: true,
@@ -528,11 +525,11 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fill_writes_whether_the_jump_itself_has_begun_and_its_warp_has_ended() {
+    fn a_fill_writes_whether_the_jump_itself_has_begun() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         let frame = filled(&session);
-        assert_eq!((frame.warping, frame.warp_end_due), (false, false));
+        assert!(!frame.warping);
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session, &catalog);
         session.begin_jump().expect("accepted");
@@ -540,17 +537,15 @@ pub(super) mod tests {
         assert!(frame.jump_under_way);
         assert!(!frame.warping, "the pre-jump stage isn't the warp");
         begin_jump_now(&mut session, &catalog).expect("jumps");
-        let frame = filled(&session);
-        assert_eq!((frame.warping, frame.warp_end_due), (true, false));
+        assert!(filled(&session).warping);
         for _ in 0..1000 {
-            if session.warp_end_due() {
+            crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+            if session.jumping().is_none() {
                 break;
             }
-            crate::testkit::work(&mut session, &catalog, crate::flight::Controls::default());
+            assert!(filled(&session).warping);
         }
-        assert!(session.warp_end_due(), "the warp ended");
-        let frame = filled(&session);
-        assert_eq!((frame.warping, frame.warp_end_due), (true, true));
+        assert!(!filled(&session).warping, "arrived in the warp's last pass");
     }
 
     #[test]

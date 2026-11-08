@@ -287,6 +287,7 @@ mod tests {
         session.take_sounds();
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,

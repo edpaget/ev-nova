@@ -424,6 +424,7 @@ mod tests {
     fn again(session: &mut Session) {
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Keep,
             Rules::default(),
             &mut NeverFires,

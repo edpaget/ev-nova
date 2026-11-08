@@ -122,6 +122,7 @@ mod tests {
         let behaviour = crate::ai::NovaAi::default();
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &behaviour,
             Rules::default(),
             &mut NeverFires,

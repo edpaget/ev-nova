@@ -13,9 +13,9 @@
 //! 2. [`JumpPhase::FadeOut`], for [`FADE_OUT_FOR`]: the scene fades to
 //!    white ([`FADE_COLOR`]), from the first tick it is lit
 //!    ([`JumpEffect::light`]), then [`JumpPhase::White`] holds it white.
-//! 3. The ship arrives when the session says the warp has ended
-//!    (`Session::warp_end_due`), whether or not the fade has finished
-//!    ([`JumpEffect::arrive`]).
+//! 3. The ship arrives in the pass the session's warp ends in, as its
+//!    step reports (`StepRun::arrival`), whether or not the fade has
+//!    finished ([`JumpEffect::arrive`]).
 //! 4. [`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]: the new system fades in
 //!    from white.
 //!

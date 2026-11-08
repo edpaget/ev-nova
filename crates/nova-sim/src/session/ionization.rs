@@ -334,6 +334,7 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,
@@ -872,6 +873,7 @@ mod tests {
             }
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 rules(),
                 &mut crate::chance::NeverFires,
@@ -913,6 +915,7 @@ mod tests {
         // hold reads the 0.5, so the gun is held.
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             crate::combat::Rules::default(),
             &mut crate::chance::NeverFires,

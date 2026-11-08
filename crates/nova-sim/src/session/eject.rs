@@ -1661,6 +1661,7 @@ pub(super) mod tests {
         };
         session.tick_again(
             crate::flight::Controls::default(),
+            &crate::testkit::catalog(),
             &Firing,
             Rules::default(),
             &mut NeverFires,

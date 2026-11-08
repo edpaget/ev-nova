@@ -7,10 +7,10 @@
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::projectile::ShotId;
-use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
+use nova_sim::flight_frame::{PassExit, ShipPlace};
 use nova_sim::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
 use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 
@@ -757,8 +757,7 @@ fn a_held_pass_dropped_by_a_layout_was_heard() {
         1,
         "heard on its frame"
     );
-    super::faked_screen::warp_ends(&mut view);
-    view.arrive();
+    lays_out_alpha(&mut view);
     frame(&mut view, stopped());
     assert_eq!(view.effects.explosions().len(), 0, "never shown");
     assert_eq!(
@@ -769,6 +768,15 @@ fn a_held_pass_dropped_by_a_layout_was_heard() {
 }
 
 // A double-time frame, drawn between its passes.
+
+/// Lays `view` out afresh in Alpha Centauri, as the flight tells it has
+/// entered the system ([`FlightView::catch_up`]).
+fn lays_out_alpha(view: &mut Faked) {
+    view.sim.set_frame(in_alpha());
+    view.sim
+        .queue_event(FlightEvent::Session(nova_sim::SessionEvent::SystemChanged));
+    view.catch_up();
+}
 
 /// A frame whose stepping stopped before its first step.
 fn stopped() -> StepReport {
@@ -853,8 +861,7 @@ fn a_single_time_step_draws_the_frame_as_it_stands() {
 #[test]
 fn a_layout_a_placing_a_takeover_a_landing_and_the_holds_expiry_drop_it() {
     let (mut view, ..) = held();
-    super::faked_screen::warp_ends(&mut view);
-    view.arrive();
+    lays_out_alpha(&mut view);
     assert_eq!(view.drawn(), &in_alpha(), "laid out afresh");
 
     let (mut view, _, now) = held();
@@ -1621,7 +1628,7 @@ fn the_inbox_comm_and_quotes_go_with_the_first_step_and_pass_that_ran() {
     let mut view = stepping(catalog());
     view.inbox.receive(held.clone());
     let rescued = StepRun {
-        rescued: Some(ShipPlace::default()),
+        rescued: Some(PassExit::default()),
         ..step(vec![])
     };
     frame(
@@ -1789,8 +1796,11 @@ fn a_rescue_keeps_the_ship_where_it_put_it_and_says_so() {
         ..ShipPlace::default()
     };
     let run = StepRun {
-        rescued: Some(there),
-        ..step(vec![])
+        rescued: Some(PassExit {
+            place: there,
+            ..PassExit::default()
+        }),
+        ..step(vec![fight(vec![])])
     };
     let rescued = frame(
         &mut view,

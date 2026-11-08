@@ -889,6 +889,7 @@ pub(in crate::session) mod tests {
         assert_eq!(session.ship.fit.armament.fold().since_fire, 2);
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &crate::ai::NovaAi::default(),
             Rules::default(),
             &mut NeverFires,
@@ -1408,6 +1409,7 @@ pub(in crate::session) mod tests {
             let before = (session.npcs().len(), set(&session));
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &crate::ai::NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,

@@ -95,8 +95,8 @@ fn a_puff_ages_at_its_passs_gain() {
 }
 
 #[test]
-fn an_arrivals_pending_explosions_advance_at_the_arrival_passs_gain() {
-    use super::faked_travel::{at_the_warps_end, jump_now};
+fn the_arrival_passs_explosion_shows_in_the_new_scene_and_steps_once_at_its_gain() {
+    use super::faked_travel::{arrival_report, arrived_in_alpha, jump_now, now_shows};
     let boom = nova_sim::catalog::Explosion::decode(0).expect("type 0");
     let event = CombatEvent::ExplodedHeard {
         at: Vec2::ZERO,
@@ -107,9 +107,16 @@ fn an_arrivals_pending_explosions_advance_at_the_arrival_passs_gain() {
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]),
     );
     jump_now(&mut view);
-    at_the_warps_end(&mut view, vec![event]);
-    view.sim.frame_mut().speed_mult = HALF;
-    view.arrival_frame(0);
+    now_shows(&mut view, super::frames::under_way(true));
+    // The arrival's days raised a `Y` (@0x43e19), reported with the rest
+    // of its pass, which runs at half gain.
+    let mut report = arrival_report(0, nova_sim::flight_frame::ShipPlace::default());
+    report.steps[0].passes[0].combat = vec![event];
+    report.steps[0].passes[0].speed_mult = HALF;
+    view.sim.queue_report(report);
+    arrived_in_alpha(&mut view);
+    view.run_steps(1, None);
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
     let arrived = |gain| {
         let scene = view.presentation.scene(Vec2::ZERO);
         let mut effects = Effects::default();

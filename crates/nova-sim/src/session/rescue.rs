@@ -220,8 +220,10 @@ impl<C: PilotCatalog + ?Sized> EscapeMap for SearchMap<'_, C> {
 impl Session {
     /// Rescues the player from the escape pod once its countdown has run
     /// out, reading `catalog` and drawing on `chance` (see the module
-    /// docs); whether it did. The flight view asks after each tick and
-    /// stops stepping when it did, so the dësc opens before the next.
+    /// docs); whether it did. A pass settles it after the player's move,
+    /// and the rest of the pass runs among the new system (see the
+    /// `settled_in_pass` module); its step ends the stepping, so the dësc
+    /// opens before the next.
     pub(crate) fn rescue_if_due(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),

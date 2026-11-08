@@ -2310,6 +2310,7 @@ pub(super) mod tests {
         (1..=600).any(|_| {
             session.tick_again(
                 Controls::default(),
+                &crate::testkit::catalog(),
                 &NovaAi::default(),
                 Rules::default(),
                 &mut NeverFires,
@@ -2997,6 +2998,7 @@ pub(super) mod tests {
         );
         session.tick_again(
             Controls::default(),
+            &crate::testkit::catalog(),
             &Launching,
             Rules::default(),
             &mut NeverFires,

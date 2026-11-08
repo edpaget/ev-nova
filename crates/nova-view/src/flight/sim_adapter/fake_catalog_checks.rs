@@ -175,23 +175,24 @@ fn jump_to_alpha(flight: &mut SessionFlight<FakeCatalog>) {
     assert!(frame.jump_under_way && !frame.warping, "preparing");
     contract(flight, "preparing");
     let mut warped = false;
+    let mut arrived = false;
     for _ in 0..3000 {
         let frame = frame_of(flight);
         if frame.warping && !warped {
             warped = true;
             contract(flight, "warping");
         }
-        if frame.warp_end_due {
+        // The pass the warp ends arrives in it, and its step says so.
+        if step(flight, &StepInput::default())
+            .steps
+            .iter()
+            .any(|run| run.arrival.is_some())
+        {
+            arrived = true;
             break;
         }
-        step(flight, &StepInput::default());
     }
-    assert!(warped && frame_of(flight).warp_end_due, "the warp ended");
-    contract(flight, "the warp's end due");
-    assert!(matches!(
-        flight.apply(FlightCommand::Arrive),
-        Answer::Arrived { system, .. } if system == alpha
-    ));
+    assert!(warped && arrived, "the warp ended");
     assert_eq!(frame_of(flight).system, alpha, "arrived");
     contract(flight, "arrived");
 }

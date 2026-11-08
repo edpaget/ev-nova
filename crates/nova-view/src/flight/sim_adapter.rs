@@ -675,7 +675,6 @@ mod tests {
         for command in [
             FlightCommand::Jump,
             FlightCommand::Land,
-            FlightCommand::Arrive,
             FlightCommand::TakeOff,
             FlightCommand::LeaveIfDue,
             FlightCommand::LandEscorts,

@@ -192,6 +192,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
     where
         C: SystemCatalog + ShipSprites + CombatLooks + StatusBars,
     {
+        // An arrival double time's held second pass settled waits for its
+        // frame between, then lays out first (see the `between_passes`
+        // module).
+        if self.arrival_waits_for_its_frame() {
+            return Redrawn::default();
+        }
+        if self.arrive_held() {
+            return Redrawn {
+                system: true,
+                ..Redrawn::default()
+            };
+        }
         self.catch_up_then(|view, redrawn| {
             view.redraw_scene_then(redrawn, Self::follow_bar, Self::redraw_status);
         })

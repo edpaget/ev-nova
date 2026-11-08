@@ -1208,7 +1208,13 @@ mod tests {
 
     /// Runs double time's second pass on `session` under `controls`.
     fn again(session: &mut Session, controls: Controls) {
-        session.tick_again(controls, &Passive, Rules::default(), &mut NeverFires);
+        session.tick_again(
+            controls,
+            &crate::testkit::catalog(),
+            &Passive,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// [`scooper`] holding nothing in double time, its sheets read in
