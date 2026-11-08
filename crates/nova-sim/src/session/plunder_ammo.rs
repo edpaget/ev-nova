@@ -40,7 +40,6 @@
 
 use super::Session;
 use crate::catalog::{OutfitId, WeaponId};
-use crate::rulebook::RuleKey;
 
 impl Session {
     /// The outfit a boarding's Ammo press takes the rounds of weapon
@@ -49,9 +48,9 @@ impl Session {
     pub(super) fn ammo_outfit(&self, slot: WeaponId) -> Option<OutfitId> {
         crate::board::ammo_outfit(
             &self.statics.outfits,
-            &self.statics.ammo_outfits,
+            self.statics.named_ammo_outfits(),
             slot,
-            self.setup.rules.source_for(RuleKey::OutfitWeaponMods),
+            self.setup.outfit_weapon_mods(),
         )
     }
 
@@ -108,7 +107,7 @@ mod tests {
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::tests::{
-        ROCKET, ROCKETS_OFFERED, ammo_aboard, ammo_boarding, ammo_session, take,
+        ROCKET, ROCKETS_OFFERED, ammo_aboard, ammo_boarding, ammo_boarding_by, ammo_session, take,
     };
     use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, outfit};
@@ -239,6 +238,20 @@ mod tests {
                 },
                 "{outfit}"
             );
+        }
+    }
+
+    #[test]
+    fn the_dialog_names_later_slot_rounds_whatever_the_key() {
+        // `_PlunderDialogUpdate` scans every slot (@0x92c59-0x92c81).
+        let catalog = named_in_a_later_slot();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::OutfitWeaponMods, source);
+            let (_, opened) = ammo_boarding_by(&catalog, rules);
+            let Ok(Boarding::Opened(view)) = opened else {
+                panic!("{opened:?}");
+            };
+            assert_eq!(view.ammo, Some(ROCKETS_OFFERED), "{source:?}");
         }
     }
 

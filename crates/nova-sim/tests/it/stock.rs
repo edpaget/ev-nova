@@ -946,7 +946,11 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
     };
     assert_eq!(
-        nova_sim::combat::armament::Arsenal::read(&data).stock_outfits(ShipId(262), &outfits),
+        nova_sim::combat::armament::Arsenal::read(&data).stock_outfits(
+            ShipId(262),
+            &outfits,
+            RuleSource::Engine
+        ),
         ids(&[(151, 1), (152, 30), (154, 2)])
     );
     let pilot = Pilot::new(&data, "Striker").expect("the stock first chär starts");
@@ -4908,6 +4912,35 @@ fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
     }
 }
 
+/// No stock `oütf` names a weapon or ammunition outside its first mod, so
+/// the two readings of `RuleKey::OutfitWeaponMods` agree on the stock
+/// data: the same ammunition outfits, and the same stock holders for every
+/// ship class.
+#[test]
+fn stock_outfit_weapon_mods_readings_agree() {
+    use nova_sim::PilotCatalog;
+    use nova_sim::combat::armament::Arsenal;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfits = data.outfits();
+    let ammo = Arsenal::ammo_outfits(&outfits, RuleSource::Engine);
+    assert!(!ammo.is_empty(), "the stock data has ammunition");
+    assert_eq!(ammo, Arsenal::ammo_outfits(&outfits, RuleSource::Bible));
+    let arsenal = Arsenal::read(&data);
+    let ships = data.ships();
+    assert!(!ships.is_empty());
+    for record in &ships {
+        assert_eq!(
+            arsenal.stock_fits(record.id, &outfits, RuleSource::Engine),
+            arsenal.stock_fits(record.id, &outfits, RuleSource::Bible),
+            "ship {}",
+            record.id.0
+        );
+    }
+}
+
 /// The stock fighter bays: the Viper Bay (149) carries the Fed Viper
 /// (144), four a bay, its rounds the Viper outfit (158); the Fed Carrier
 /// (143) starts with 4 Vipers and 2 Anacondas aboard; a Viper docks
@@ -4937,7 +4970,10 @@ fn stock_fighter_bays_launch_their_fighters_as_the_extracted_rules_say() {
     let (_, rounds) = arsenal.npc(ShipId(143));
     assert_eq!(rounds.slot(WeaponId(149)), 4, "the Fed Carrier's Vipers");
     assert_eq!(rounds.slot(WeaponId(150)), 2, "and Anacondas");
-    assert!(Arsenal::ammo_outfits(&outfits).contains(&(WeaponId(149), OutfitId(158))));
+    assert!(
+        Arsenal::ammo_outfits(&outfits, RuleSource::Engine)
+            .contains(&(WeaponId(149), OutfitId(158)))
+    );
     let vipers = outfits
         .iter()
         .find(|record| record.id == OutfitId(158))

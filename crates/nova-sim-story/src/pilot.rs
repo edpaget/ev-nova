@@ -116,6 +116,7 @@ use crate::market::{ActiveEvent, Good, Trader};
 use crate::mission::ActiveMissions;
 use crate::outfit_effects::Rgb15;
 use crate::reserves::Reserves;
+use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
 use crate::storylines::state::StoryState;
@@ -294,6 +295,24 @@ impl Pilot {
         catalog: &(impl PilotCatalog + CombatCatalog),
         name: &str,
     ) -> Result<Self, StartError> {
+        Self::new_reading(catalog, name, RuleSource::Engine)
+    }
+
+    /// A new pilot named `name`, read from `catalog`'s first `chär`, its
+    /// ship's stock weapons and rounds held by the outfits that name them
+    /// in the mods `mods` says
+    /// ([`RuleKey::OutfitWeaponMods`](crate::RuleKey::OutfitWeaponMods)):
+    /// by the engine the first alone (`_LoadObjectData` @0x7aab8,
+    /// @0x7ac29), and by the other reading any of the four.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pilot::new`].
+    pub fn new_reading(
+        catalog: &(impl PilotCatalog + CombatCatalog),
+        name: &str,
+        mods: RuleSource,
+    ) -> Result<Self, StartError> {
         let character = catalog.first_character()?;
         let ship = character.ship.ok_or(StartError::NoShip)?;
         let fields = catalog
@@ -306,7 +325,7 @@ impl Pilot {
             .find(|&id| catalog.system_exists(id))
             .ok_or(StartError::NoStartingSystem(character.systems))?;
         let records = catalog.outfits();
-        let stock = Arsenal::read(catalog).stock_outfits(ship, &records);
+        let stock = Arsenal::read(catalog).stock_outfits(ship, &records, mods);
         let outfits = merged(&stock, &default_outfits(catalog, ship));
         let stats = ShipStats::new(fields, &outfit_mods(&outfits, &records));
         Ok(Self {
@@ -1014,6 +1033,49 @@ mod tests {
             "the stock weapons, then the default items on top"
         );
         assert!(!pilot.stock_weapons_pending);
+    }
+
+    #[test]
+    fn a_new_pilots_stock_weapon_goes_to_its_first_mod_holder_by_the_engine() {
+        use crate::catalog::{HullRecord, OutfitId, StockWeapon, WeaponId};
+        use crate::combat::armament::MOD_WEAPON;
+        use nova_sim_catalog::fixture::{hull, outfit, weapon};
+        let catalog = FakePilotCatalog {
+            weapons: vec![weapon(150)],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(150),
+                    count: 2,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![
+                outfit(200, &[(4, 1), (MOD_WEAPON, 150)]),
+                outfit(205, &[(MOD_WEAPON, 150)]),
+            ],
+            ..catalog()
+        };
+        let owned = |mods| {
+            Pilot::new_reading(&catalog, "", mods)
+                .expect("starts")
+                .outfits()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(owned(RuleSource::Engine), [(OutfitId(205), 2)]);
+        assert_eq!(
+            owned(RuleSource::Bible),
+            [(OutfitId(200), 2)],
+            "the lowest ID, whatever the slot"
+        );
+        assert_eq!(
+            Pilot::new(&catalog, "")
+                .expect("starts")
+                .outfits()
+                .collect::<Vec<_>>(),
+            owned(RuleSource::Engine),
+            "a new pilot reads the engine's"
+        );
     }
 
     #[test]

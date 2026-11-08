@@ -729,7 +729,7 @@ impl Session {
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &self.statics.ammo_outfits,
+            sources: self.statics.ammo_outfits(self.setup.outfit_weapon_mods()),
         };
         let mut fighters = vec![Fighter {
             ship: ShipRef::Player,

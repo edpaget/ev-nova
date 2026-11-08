@@ -608,6 +608,7 @@ mod npc_kinds;
 mod opening_rest;
 mod operator_moves;
 mod outbox;
+mod outfit_weapon_mods;
 mod outfits;
 mod owners_unset;
 #[cfg(test)]
@@ -1152,7 +1153,8 @@ impl Session {
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
         rules: &Rulebook,
     ) -> Result<Self, StartError> {
-        let mut session = Self::load(catalog, Pilot::new(catalog, "")?, rules)?;
+        let mods = rules.source_for(RuleKey::OutfitWeaponMods);
+        let mut session = Self::load(catalog, Pilot::new_reading(catalog, "", mods)?, rules)?;
         // A new pilot's ship folds as `_ResetPlayer` leaves it
         // (@0x1d55a-0x1d565; see the `ship_display` module).
         session.ship.reset_fold();
@@ -1368,7 +1370,8 @@ impl Session {
         let defaults = pilot::default_outfits(catalog, ship);
         let outfits = catalog.outfits();
         let arsenal = Arsenal::read(catalog);
-        let stock = arsenal.stock_outfits(ship, &outfits);
+        let stock =
+            arsenal.stock_outfits(ship, &outfits, rules.source_for(RuleKey::OutfitWeaponMods));
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
         // A saved escort of no class spawns none (see `loaded_berths`).
@@ -1379,7 +1382,8 @@ impl Session {
             .map(|life| (life.id, life))
             .collect();
         let statics = Statics {
-            ammo_outfits: Arsenal::ammo_outfits(&outfits),
+            ammo_first_mod: Arsenal::ammo_outfits(&outfits, RuleSource::Engine),
+            ammo_any_mod: Arsenal::ammo_outfits_any_slot(&outfits),
             outfits,
             ships,
             warp_sounds: [catalog.warp_sound(), catalog.warp_sound_double_time()]
@@ -1652,7 +1656,18 @@ impl Session {
             .set_ion_lockout(rules.source_for(RuleKey::IonFireLockout));
         self.space.read_reused_slot_rules(&rules);
         self.chart.read_rescue_rule(&rules);
+        let remount =
+            rules.source_for(RuleKey::OutfitWeaponMods) != self.setup.outfit_weapon_mods();
         self.setup.rules = rules;
+        // The armament is mounted by `RuleKey::OutfitWeaponMods`, as the
+        // rounds are read by it: a new reading mounts it again, as the
+        // refit does, its fold kept whole, so the two never read the mods
+        // differently (see the `outfit_weapon_mods` module).
+        if remount {
+            let fold = self.ship.fit.armament.fold();
+            self.ship.mount(&self.pilot, &self.statics, &self.setup);
+            self.ship.fit.armament = std::mem::take(&mut self.ship.fit.armament).with_fold(fold);
+        }
         self
     }
 
@@ -2104,7 +2119,7 @@ impl Session {
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
         let (missions, set_up) =
             self.setup_mission_ships(&table, entry.and_then(Entry::hook_pending), chance);
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let world = World {
             govts: &self.statics.govts,
             persons: PersonWorld {
@@ -2252,7 +2267,7 @@ impl Session {
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
         self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
-        let facts = self.ship.facts(&self.pilot, &self.statics);
+        let facts = self.ship.facts(&self.pilot, &self.statics, &self.setup);
         let targeted = self.space.combat.targeted_damage();
         let type_widths = self.gate_type_widths();
         let world = World {
@@ -2520,7 +2535,8 @@ impl Session {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn secondary_line_count(&self) -> Option<u32> {
-        self.ship.secondary_line_count(&self.pilot, &self.statics)
+        self.ship
+            .secondary_line_count(&self.pilot, &self.statics, &self.setup)
     }
 
     /// Notes the heading each ship is drawn at as the fight's tick ends,
@@ -5123,7 +5139,11 @@ impl Session {
         let old_mass = self.ship.fit.fields.mass;
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
-        let fits = self.statics.arsenal.stock_fits(ship, &self.statics.outfits);
+        let fits = self.statics.arsenal.stock_fits(
+            ship,
+            &self.statics.outfits,
+            self.setup.outfit_weapon_mods(),
+        );
         // The carry reads the outfit counts as `OnRetire` leaves them, the
         // stock still held in the weapon array left out, so a persistent
         // outfit held there is cleared with the array (@0x5edba-0x5ee19;
@@ -5606,7 +5626,7 @@ impl Session {
                         // Any slot, as `_PlunderDialogUpdate` names them
                         // (@0x92be2-0x92ccf).
                         named: crate::combat::armament::lowest_ammo_outfit(
-                            &self.statics.ammo_outfits,
+                            self.statics.named_ammo_outfits(),
                             slot,
                         ),
                     })
@@ -6381,14 +6401,7 @@ impl PlayerShip {
     ) {
         let hold = reserves == ReservePolicy::Hold;
         self.fit.hull = setup.hull(statics, pilot.ship);
-        // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
-        // set (+0xc8fc): the new armament carries the old's (a change of
-        // class resets the fold set after, in `become_class`).
-        self.fit.armament = statics
-            .arsenal
-            .player(&pilot.outfits, &statics.outfits)
-            .with_exit_cursors(*self.fit.armament.exit_cursors())
-            .with_fold_set(self.fit.armament.fold_set());
+        self.mount(pilot, statics, setup);
         let stats = self.current_stats(pilot, statics);
         let reserves = &mut pilot.reserves;
         for (gauge, max, hold) in [
@@ -6474,6 +6487,21 @@ impl PlayerShip {
         self.secondary
     }
 
+    /// Mounts `pilot`'s weapon outfits as its armament, each read from the
+    /// mods [`RuleKey::OutfitWeaponMods`] says
+    /// ([`Arsenal::player`](crate::combat::armament::Arsenal::player)): the
+    /// refit's, and [`Session::with_rules`]'s. No refit writes the exit
+    /// cursors (+0xc8fe-+0xc905) or the fold set (+0xc8fc): the new
+    /// armament carries the old's (a change of class resets the fold set
+    /// after, in `become_class`).
+    fn mount(&mut self, pilot: &Pilot, statics: &Statics, setup: &Setup) {
+        self.fit.armament = statics
+            .arsenal
+            .player(&pilot.outfits, &statics.outfits, setup.outfit_weapon_mods())
+            .with_exit_cursors(*self.fit.armament.exit_cursors())
+            .with_fold_set(self.fit.armament.fold_set());
+    }
+
     /// The count the status bar's secondary weapon line shows after the
     /// selected secondary's name, if any: the rounds of the weapon its
     /// [`line_count`](crate::combat::weapon::line_count) names, as
@@ -6481,11 +6509,11 @@ impl PlayerShip {
     /// it; none when that names none, nothing is selected, or the
     /// session has no record of the weapon.
     #[must_use]
-    fn secondary_line_count(&self, pilot: &Pilot, statics: &Statics) -> Option<u32> {
+    fn secondary_line_count(&self, pilot: &Pilot, statics: &Statics, setup: &Setup) -> Option<u32> {
         let counted = statics.arsenal.weapon(self.secondary?)?.line_count?;
         Some(outfit_rounds(
             &pilot.outfits,
-            &statics.ammo_outfits,
+            statics.ammo_outfits(setup.outfit_weapon_mods()),
             counted,
         ))
     }
@@ -26425,7 +26453,15 @@ pub(super) mod tests {
     pub(super) fn ammo_boarding(
         catalog: &FakePilotCatalog,
     ) -> (Session, Result<Boarding, BoardRefusal>) {
-        let mut session = alongside(catalog);
+        ammo_boarding_by(catalog, Rulebook::default())
+    }
+
+    /// [`ammo_boarding`] with the session reading `rules` as it boards.
+    pub(super) fn ammo_boarding_by(
+        catalog: &FakePilotCatalog,
+        rules: Rulebook,
+    ) -> (Session, Result<Boarding, BoardRefusal>) {
+        let mut session = alongside(catalog).with_rules(rules);
         let opened = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),

@@ -42,7 +42,12 @@
 //! ([`RuleKey::ShipChangeDefaultWeapons`](crate::RuleKey::ShipChangeDefaultWeapons);
 //! by its other reading the defaults' first mods are added to the arrays
 //! too). An outfit naming a weapon only in a later mod is no holder and
-//! is left alone, and so is one whose first mod names a weapon outside
+//! is left alone, as the engine's reading of
+//! [`RuleKey::OutfitWeaponMods`](crate::RuleKey::OutfitWeaponMods) has
+//! it; the fold reads the first mod under both readings, as the key's
+//! other reading reaches only the arrays' builders and the stock holders
+//! ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)).
+//! So is one whose first mod names a weapon outside
 //! the arrays, `wëap` 128 to 383 ([`FOLDED_WEAPONS`]): pass 1 and pass 3
 //! skip it (@0xcb6f-0xcb78, @0xcbb0-0xcbb9), so a default item naming
 //! `wëap` 384 or above, or a negative ID, keeps its count.

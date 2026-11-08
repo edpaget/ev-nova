@@ -340,7 +340,7 @@ pub struct AmmoOffer {
 /// first `ModType` (+0x4) and `ModVal` (+0xc) alone (@0x93cdc-0x93d08); by
 /// the other reading the outfit the dialog names them by, the lowest-ID
 /// one with such a mod in any slot, looked up among `ammo_outfits`
-/// ([`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits))
+/// ([`Arsenal::ammo_outfits_any_slot`](crate::combat::armament::Arsenal::ammo_outfits_any_slot))
 /// by [`lowest_ammo_outfit`], as [`HeldRounds::named`] is. `None` when
 /// none matches: the press then beeps and takes nothing
 /// (@0x93d0a-0x93d2f).
@@ -1841,7 +1841,7 @@ mod tests {
         let find = |records: &[OutfitRecord], source| {
             ammo_outfit(
                 records,
-                &Arsenal::ammo_outfits(records),
+                &Arsenal::ammo_outfits_any_slot(records),
                 WeaponId(140),
                 source,
             )

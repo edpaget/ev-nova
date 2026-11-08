@@ -112,8 +112,13 @@ impl Session {
     /// on the next pass: for the tests, as no production code calls it.
     #[cfg(test)]
     pub(crate) fn select_secondary(&mut self, backwards: bool) {
-        self.ship
-            .select_secondary(&mut self.pilot, &self.statics, &mut self.out, backwards);
+        self.ship.select_secondary(
+            &mut self.pilot,
+            &self.statics,
+            &self.setup,
+            &mut self.out,
+            backwards,
+        );
     }
 
     /// The pass's secondary block, unless the player is destroyed or in
@@ -167,13 +172,14 @@ impl PlayerShip {
         &mut self,
         pilot: &mut Pilot,
         statics: &Statics,
+        setup: &Setup,
         out: &mut Outbox,
         backwards: bool,
     ) {
         let fuel = pilot.reserves.fuel;
         let rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &statics.ammo_outfits,
+            sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
         };
         let shooter = self.shooter();
         let armament = &self.fit.armament;
@@ -236,7 +242,7 @@ impl PlayerShip {
             let fuel = pilot.reserves.fuel;
             let rounds = OutfitRounds {
                 owned: &mut pilot.outfits,
-                sources: &statics.ammo_outfits,
+                sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
             };
             if empty_lets_go(&mount.spec, source)
                 && !self
@@ -248,7 +254,7 @@ impl PlayerShip {
             }
         }
         if let Some(backwards) = self.weapon_keys.select_press.take() {
-            self.select_secondary(pilot, statics, out, backwards);
+            self.select_secondary(pilot, statics, setup, out, backwards);
         }
         if self.weapon_keys.safety_held && self.secondary.is_some() {
             self.secondary = None;

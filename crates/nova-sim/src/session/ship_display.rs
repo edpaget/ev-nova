@@ -404,7 +404,7 @@ impl PlayerShip {
         let spec = self.fit.hull.frames;
         let rounds = OutfitRounds {
             owned: &mut pilot.outfits,
-            sources: &statics.ammo_outfits,
+            sources: statics.ammo_outfits(setup.outfit_weapon_mods()),
         };
         let moment = Moment {
             disabled,

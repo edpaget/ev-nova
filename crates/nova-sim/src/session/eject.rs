@@ -263,8 +263,8 @@ impl Session {
     /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
     /// aboard.
     fn escape_ship(&self) -> Option<ShipId> {
-        let rounds =
-            |weapon| outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, weapon);
+        let sources = self.statics.ammo_outfits(self.setup.outfit_weapon_mods());
+        let rounds = |weapon| outfit_rounds(&self.pilot.outfits, sources, weapon);
         escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)
     }
 
@@ -470,16 +470,17 @@ impl Session {
             None,
             &self.statics.outfits,
         );
+        let mods = self.setup.outfit_weapon_mods();
         let fits = self
             .statics
             .arsenal
-            .stock_fits(record.id, &self.statics.outfits);
+            .stock_fits(record.id, &self.statics.outfits, mods);
         if self.setup.rules.source_for(RuleKey::EjectPersistentWeapons) == RuleSource::Engine {
             hold_to_stock(&mut outfits, &fits, &self.statics.outfits);
         }
         // The hold's first pass and this top-up are the whole fold: the
         // fit's outfit is the lowest-ID holder of its weapon.
-        fit_stock(&mut outfits, &fits, &self.statics.outfits);
+        fit_stock(&mut outfits, &fits, &self.statics.outfits, mods);
         for (&id, &count) in defaults {
             let owned = outfits.entry(id).or_default();
             *owned = owned.saturating_add(count);
@@ -2385,6 +2386,40 @@ pub(super) mod tests {
                 "{source:?}: the defaults land after the hold"
             );
             assert!(mounts.contains(&WeaponId(POD_WEAPON)), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_pods_stock_goes_to_its_first_mod_holder_by_the_engine() {
+        // Outfit 249 names the pod's stock blaster in its second mod
+        // alone, below 250 (`_LoadObjectData` @0x7aab8).
+        let mut catalog = ejecting_armed();
+        catalog.outfits.push(outfit(
+            249,
+            &[(-1, 0), (crate::combat::armament::MOD_WEAPON, 128)],
+        ));
+        for (source, holder) in [(RuleSource::Engine, 250), (RuleSource::Bible, 249)] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::OutfitWeaponMods, source);
+            let mut session = flying(&catalog, &[POD, KEPT]).with_rules(rules);
+            session.ship.condition = Condition::Disabled;
+            assert_eq!(eject_check(&mut session, true), EJECTED, "{source:?}");
+            assert!(in_the_pod(&session), "{source:?}");
+            assert_eq!(
+                session.pilot.outfits.get(&OutfitId(holder)),
+                Some(&1),
+                "{source:?}"
+            );
+            assert!(
+                session
+                    .ship
+                    .fit
+                    .armament
+                    .mounts()
+                    .iter()
+                    .any(|mount| mount.spec.id == WeaponId(128)),
+                "{source:?}: the blaster mounts either way"
+            );
         }
     }
 
