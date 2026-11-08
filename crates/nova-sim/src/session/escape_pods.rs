@@ -13,9 +13,17 @@
 //! (@0x44513). The session steps the pods with the boxes, after the scoop
 //! and before the ship loop (`Session::scoop_after_display`), and a pod
 //! the ship loop spawns takes that pass's step at once
-//! ([`EscapePods::spawn`](crate::escape_pod::EscapePods::spawn)). Nothing
-//! between reads a pod, so each pass ends with every pod where the
-//! original's frame draws it.
+//! ([`EscapePods::spawn`](crate::escape_pod::EscapePods::spawn)). Stepping
+//! early changes what the spawns read: which slots are free. The original
+//! frees a slot only once its life is below 0 at a spawn, and a pod falls
+//! below 0 in the step after the spawns, so the session's step frees only
+//! the pods already below 0 before it
+//! ([`EscapePods::step`](crate::escape_pod::EscapePods::step)): one that
+//! falls below 0 holds its slot, hidden, through the pass's spawns, under
+//! the caps too, and the next pass's step frees it. So each pass ends with
+//! every pod in the slot, place and visibility the original's frame draws
+//! it with, and the next pass's scoop meets a pod just fallen below 0
+//! still hidden in its slot, as the original's collision does.
 //!
 //! **What a spawn reads** ([`PodSpawn`]): the pass's gain, whether the
 //! pool is capped at `_podData`'s 32 (`RuleKey::CombatCaps`' engine
@@ -71,7 +79,8 @@ impl Space {
     }
 
     /// Steps the pods a pass at the frame's `gain`, as `_DoPlayGameWork`
-    /// runs `_HandleEscapePods` (@0x44513) every flight pass.
+    /// runs `_HandleEscapePods` (@0x44513) every flight pass, freeing
+    /// only the pods already below 0 (see the module docs).
     pub(super) fn pods_tick(&mut self, gain: SpeedMult) {
         self.pods.step(gain);
     }
@@ -99,16 +108,21 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::SystemId;
     use crate::chance::NeverFires;
+    use crate::combat::CombatEvent;
+    use crate::combat::hull::Condition;
+    use crate::escape_pod::{EscapePods, MAX_PODS};
     use crate::flight::Controls;
     use crate::flight_frame::FlightFrame;
     use crate::gate::{GateRefusal, WORMHOLE};
     use crate::rulebook::Rulebook;
     use crate::session::tests::{at_wormhole, gate_site, wormholes};
+    use crate::stats::ShipStats;
     use crate::testkit::{FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, work};
+    use crate::traffic::npc::Npc;
 
     fn flying(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
@@ -123,6 +137,92 @@ mod tests {
         session
             .space
             .spawn_pod(at, Vec2::ZERO, spawn, &mut NeverFires);
+    }
+
+    /// An NPC at `at` that ejects a crew pod on the next pass: its death
+    /// timer 51, which the pass takes to 50, half its `DeathDelay` of 100
+    /// (see the `npc_escape` module).
+    pub(in crate::session) fn ejecting(at: Vec2) -> Npc {
+        let mut npc = crate::testkit::npc(0, ShipStats::default());
+        npc.condition = Condition::Dying {
+            ticks_left: 51,
+            starting: false,
+        };
+        npc.hull.death_delay = 100;
+        npc.hull.signed_death_delay = 100;
+        npc.hull.pod_count = 2;
+        npc.pods_left = 2;
+        npc.reserves.armor.now = 0.0;
+        npc.state.position = at;
+        npc
+    }
+
+    /// `count` shown pods at rest far off, slot 0's life 0.5, so a pass
+    /// at full gain takes it below 0, the others' 100.
+    fn first_dying(count: usize) -> EscapePods {
+        let pods: Vec<Pod> = (0..count)
+            .map(|slot| Pod {
+                position: Vec2::new(-2000.0, 0.0),
+                velocity: Vec2::ZERO,
+                life: if slot == 0 { 0.5 } else { 100.0 },
+                frame: 0,
+                shown: true,
+            })
+            .collect();
+        EscapePods::adrift(&pods)
+    }
+
+    fn ejected(session: &mut Session) -> bool {
+        session
+            .take_combat_events()
+            .iter()
+            .any(|event| matches!(event, CombatEvent::PodEjected { .. }))
+    }
+
+    #[test]
+    fn a_pod_whose_life_falls_below_0_in_a_pass_holds_its_slot_through_that_passs_spawns() {
+        // `_SpawnEscapePod` (@0x44483) runs before `_HandleEscapePods`
+        // (@0x44513), and frees a slot only once its life is below 0
+        // (@0x45564-0x456bf): slot 0, at 0.5, is still held.
+        let catalog = catalog();
+        let mut session = flying(&catalog);
+        session.space.pods = first_dying(2);
+        session
+            .space
+            .traffic
+            .add_npc(ejecting(Vec2::new(300.0, 0.0)));
+        session.take_combat_events();
+        work(&mut session, &catalog, Controls::default());
+        assert!(ejected(&mut session));
+        let pods = session.escape_pods();
+        assert_eq!(pods.len(), 3, "the new pod in slot 2: {pods:?}");
+        assert!(pods[0].life < 0.0 && !pods[0].shown, "slot 0 hidden");
+        assert_eq!(pods[1].life, 99.0);
+        assert!(pods[2].shown && pods[2].position.x > 0.0, "the new pod");
+        // The next pass frees slot 0.
+        let new = pods[2];
+        work(&mut session, &catalog, Controls::default());
+        let lives: Vec<f32> = session.escape_pods().iter().map(|pod| pod.life).collect();
+        assert_eq!(lives, [98.0, new.life - 1.0]);
+    }
+
+    #[test]
+    fn under_the_caps_a_pod_ejected_as_the_33rd_dies_is_not_kept() {
+        let catalog = catalog();
+        let mut session = flying(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::CombatCaps, RuleSource::Engine));
+        session.space.pods = first_dying(MAX_PODS);
+        session
+            .space
+            .traffic
+            .add_npc(ejecting(Vec2::new(300.0, 0.0)));
+        session.take_combat_events();
+        work(&mut session, &catalog, Controls::default());
+        assert!(ejected(&mut session));
+        let pods = session.escape_pods();
+        assert_eq!(pods.len(), MAX_PODS);
+        assert!(pods[0].life < 0.0 && !pods[0].shown, "slot 0 still held");
+        assert!(pods.iter().all(|pod| pod.position.x < 0.0), "none new");
     }
 
     #[test]

@@ -28,9 +28,20 @@
 //!   frame's gain and the gain comes off its life (`_gSpeedMult` @0x39e92,
 //!   @0x39ebe, @0x39fcc), each in doubles. At a life of 0 or less (or a NaN
 //!   one) the step hides it (`ucomiss 0, life` / `jbe`,
-//!   @0x3a02d-0x3a046), and nothing shows it again; its slot is free once
-//!   the life is below 0 (`ucomiss 0, life` / `jb` @0x39e67-0x39e6f, a NaN
-//!   life freed too). A spawn's first step takes the spawning pass's gain.
+//!   @0x3a02d-0x3a046), and nothing shows it again. Its slot is free once
+//!   the life is below 0: `_SpawnEscapePod` takes it (`ucomiss life, 0` /
+//!   `jbe` @0x45564-0x45568), and until then `_HandleEscapePods` only
+//!   hides it again (`ucomiss 0, life` / `jb` @0x39e67-0x39e6f to
+//!   @0x3a039). The engine frees a NaN life too, which the original's
+//!   spawn would skip (`jbe` on unordered); no life reaches NaN, as each
+//!   starts whole and loses a finite gain. The
+//!   original's frame spawns (`_HandleShip` @0x44483) before it steps
+//!   (@0x44513), so a pod that falls below 0 is drawn hidden that frame
+//!   and its slot is free from the next frame's spawns. The engine steps
+//!   before its pass's spawns, so the step frees the pods already below 0
+//!   first, then steps the rest: a pod that falls below 0 stays, hidden,
+//!   through the spawns after the step, and the next pass's step frees it.
+//!   A spawn's first step takes the spawning pass's gain.
 //! - **The scoop** hides a pod a scooping ship takes for box slot 0
 //!   (`_SWSetSpriteVisible(pod, 0)` @0x3712e, [`EscapePods::hide`]). Its
 //!   life runs on, so it holds its slot until its life is below 0.
@@ -172,14 +183,18 @@ impl EscapePods {
         }
     }
 
-    /// Steps every pod at the frame's `gain`, then frees those whose life
-    /// is below 0 (`ucomiss 0, life` / `jb` @0x39e67-0x39e6f: a NaN life
-    /// is freed too).
+    /// Frees the pods whose life is already below 0 (a NaN one too), then
+    /// steps the rest at the frame's `gain`. A pod this step takes below 0
+    /// stays, hidden, until the next step frees it, so it holds its slot
+    /// through the spawns that come after the step in the engine's pass,
+    /// as the original's `_SpawnEscapePod` (@0x44483) runs before
+    /// `_HandleEscapePods` (@0x44513) and frees only a life below 0
+    /// (@0x45564-0x456bf). See the module docs.
     pub fn step(&mut self, gain: SpeedMult) {
-        self.pods.retain_mut(|pod| {
+        self.pods.retain_mut(|pod| pod.life >= 0.0);
+        for pod in self.pods.iter_mut() {
             pod.step(gain);
-            pod.life >= 0.0
-        });
+        }
     }
 
     /// Hides the pod at `index` of [`EscapePods::pods`], as the scoop
@@ -282,7 +297,9 @@ mod tests {
         assert_eq!(pods.pods()[0].life, 0.0);
         assert!(!pods.pods()[0].shown, "hidden at 0");
         pods.step(SpeedMult::new(0.5));
-        assert!(pods.pods().is_empty(), "freed below 0");
+        assert_eq!(pods.pods()[0].life, -0.5, "held by the step it falls in");
+        pods.step(SpeedMult::new(0.5));
+        assert!(pods.pods().is_empty(), "freed below 0 by the next");
     }
 
     #[test]
@@ -442,7 +459,22 @@ mod tests {
         );
         assert_eq!(pods.pods().len(), MAX_PODS, "no slot free at 0");
         pods.step(SpeedMult::FULL);
-        assert!(pods.pods().is_empty(), "all free below 0");
+        assert!(pods.pods().iter().all(|pod| pod.life == -1.0 && !pod.shown));
+        pods.spawn(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            SpeedMult::FULL,
+            true,
+            frames(),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            pods.pods().len(),
+            MAX_PODS,
+            "held through the spawns after the step that takes them below 0"
+        );
+        pods.step(SpeedMult::FULL);
+        assert!(pods.pods().is_empty(), "all free below 0 at the next step");
     }
 
     #[test]
@@ -460,7 +492,8 @@ mod tests {
         let mut pods = EscapePods::default();
         spawn(&mut pods, 10.0, 0);
         spawn(&mut pods, 20.0, 99);
-        for _ in 0..150 {
+        // The 150th step takes the first to -1; the 151st frees it.
+        for _ in 0..151 {
             pods.step(SpeedMult::FULL);
         }
         let xs = |pods: &EscapePods| -> Vec<f32> {
