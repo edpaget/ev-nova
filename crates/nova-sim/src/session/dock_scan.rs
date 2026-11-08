@@ -424,6 +424,53 @@ mod tests {
     }
 
     #[test]
+    fn a_turret_given_with_a_kit_fires_at_the_target_from_the_kit_s_bed() {
+        use crate::catalog::{WeaponId, WeaponRecord};
+        use crate::combat::ShipRef;
+        use crate::combat::armament::MOD_WEAPON;
+        use crate::flight::Controls;
+        use crate::testkit::work;
+        use nova_sim_catalog::fixture::weapon;
+
+        let driver = WeaponRecord {
+            reload: 15,
+            count: 60,
+            speed: 1000,
+            mass_dmg: 12,
+            energy_dmg: 12,
+            guidance: 4,
+            exit_type: 1,
+            ..weapon(133)
+        };
+        let mut catalog = super::super::tests::arming(driver, super::super::tests::blaster(), 0);
+        catalog.hulls[0].weapons.clear();
+        catalog.outfits = vec![
+            OutfitRecord {
+                flags: 0x0002,
+                ..outfit(129, &[(MOD_WEAPON, 133)])
+            },
+            outfit(131, &[]),
+        ];
+        catalog.fittings = policed().fittings;
+        let mut session = super::super::tests::with_an_npc_at(&catalog, 750, 850, 0);
+        session.run_set(
+            &crate::SetExpr::parse("G129 G131").expect("parses"),
+            &mut crate::chance::NeverFires,
+        );
+        session.select_target(crate::TargetPick::Nearest);
+        session.hold_fire(true, false);
+        let centre = session.player().position;
+        work(&mut session, &catalog, Controls::default());
+        let shot = session
+            .shots()
+            .iter()
+            .find(|shot| shot.firer == ShipRef::Player && shot.weapon.id == WeaponId(133))
+            .expect("the turret fired");
+        let from = shot.moved_from.unwrap_or(shot.position) - centre;
+        assert!((from.length() - 2.0).abs() < 1e-3, "the gun bed: {from:?}");
+    }
+
+    #[test]
     fn a_class_s_own_spots_come_before_its_kits() {
         let mut catalog = policed();
         let nose = Spot {
