@@ -2,7 +2,7 @@
 //! 24): the frame, the fade, the murk, the trails, the weapon glow
 //! and the lightning. On [`FakeFlight`]: each frame's shots and beams are
 //! scripted, and each pass the view steps its shot looks after is
-//! reported; what the session does to a shot (its age, its slot's spin
+//! reported; what the session does to a shot (its age, its spin
 //! timer, its life) is nova-sim's, named where a test leans on it.
 
 use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepRun};

@@ -661,10 +661,9 @@ pub struct Shot {
     /// [`Combat`](super::Combat) gives it as it puts it in flight: the
     /// shots in flight are kept in slot order.
     pub slot: usize,
-    /// Its spin timer, the original's +0x1c, a float: it starts on its
-    /// slot's leftover, as `_SpawnShot` never writes it
-    /// ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)), which
-    /// [`Combat`](super::Combat) gives it as it puts it in flight, and
+    /// Its spin timer, the original's +0x1c, a float: it starts at 0, as
+    /// `_SpawnShot` writes it (@0x3e9c2) and
+    /// [`Combat`](super::Combat) seats it as it puts it in flight, and
     /// gains the frame's gain at each visit of a spinning shot
     /// ([`spin_timer::pass`](super::spin_timer::pass)).
     pub spin_timer: f32,
