@@ -354,6 +354,10 @@
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
 //!   cargo kept and the default items fitted.
+//! - [`slot_pool`]: the original's first-free tables, a new item taking
+//!   the lowest free slot and each walked in slot order
+//!   ([`SlotPool`](slot_pool::SlotPool)): the cargo boxes and escape pods
+//!   here, the view's explosions and smoke.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps, and the [`SoundCue`] each one plays
 //!   ([`SimSound::cue`]): its `snd ` and the original's priority.
@@ -516,6 +520,7 @@ pub mod save;
 pub mod saves;
 pub use nova_sim_ai::scan;
 pub use nova_sim_ai::scoop;
+pub use nova_sim_ai::slot_pool;
 pub use nova_sim_combat::self_repair;
 pub mod session;
 pub use nova_sim_catalog::sound;

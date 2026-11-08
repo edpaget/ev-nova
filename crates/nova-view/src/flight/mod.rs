@@ -45,8 +45,6 @@
 //! - [`sim_port`]: the [`FlightSim`] port, what the flight view needs of
 //!   the flight it shows: a frame, a step, the player's commands and the
 //!   events to drain.
-//! - `slot_pool`: the original's fixed sprite tables, a new item taking
-//!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
@@ -95,7 +93,6 @@ pub mod ship_layers;
 pub mod shot_fade;
 pub mod sim_adapter;
 pub mod sim_port;
-pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
 pub mod sprite;

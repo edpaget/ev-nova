@@ -1,30 +1,34 @@
 //! The original's fixed tables whose entries take the first free slot:
-//! `_boxData`, the cargo boxes ([`cargo_box`](crate::cargo_box)), and
-//! `_podData`, the escape pods ([`escape_pod`](crate::escape_pod)).
+//! `_boxData`, the cargo boxes ([`cargo_box`](crate::cargo_box)),
+//! `_podData`, the escape pods ([`escape_pod`](crate::escape_pod)), and
+//! `_explodData` and `_smokeData`, the explosions and the smoke, which
+//! only the view simulates (`nova_view::flight::effects` and
+//! `nova_view::flight::smoke`, through `nova_sim::slot_pool`).
 //!
 //! # The original
 //!
 //! A new box takes the first slot whose life is below 0 (`_SpawnBox`
 //! @0x3dd94, `_SpawnScoopableBox` @0x3e3f8), and so does a new pod
-//! (`_SpawnEscapePod` @0x45564). `_InitSprites` adds each table's sprites
-//! to `_boxLayer` once, in slot order (the boxes @0x1fb89-0x1fc6b, then
-//! the pods @0x1fc71-0x1fd57), and nothing moves them after, so each is
-//! drawn, and collided, in slot order: a new one in a freed low slot comes
-//! before an older one in a higher slot.
+//! (`_SpawnEscapePod` @0x45564), a new explosion (`_SpawnExplod`
+//! @0x3f5ef) and a new puff of smoke (`_SpawnSmoke` @0x3f957).
+//! `_InitSprites` adds each table's sprites to its layer once, in slot
+//! order (the boxes @0x1fb89-0x1fc6b, then the pods @0x1fc71-0x1fd57, to
+//! `_boxLayer`; `_explodData` @0x1f962; `_smokeData` @0x1fe8f), and
+//! nothing moves them after (no `_PutSpriteInLayer` on them, no
+//! `_SWSortSpriteLayer`), so each is drawn, and a box or pod collided, in
+//! slot order: a new one in a freed low slot comes before an older one in
+//! a higher slot, and draws under it.
 //!
 //! # The engine
 //!
 //! A [`SlotPool`] keeps its items in slot order, each with its slot
 //! ([`SlotPool::insert`] takes the lowest free one), and lends them as a
-//! slice in that order ([`SlotPool::as_slice`]). Under a cap an item with
-//! no free slot below the cap is dropped. Without one the pool grows past
-//! the table's size, still first-free: slot n is first used only while
-//! slots 0..n are all taken, which is the order the original's layer would
-//! show for a larger table, as `ShotSlots::first_free` extends the shot
-//! table.
-//!
-//! The view keeps its own pool for the explosions and the smoke
-//! (`nova_view::flight::slot_pool`), which only it simulates.
+//! slice in that order ([`SlotPool::as_slice`]). Under a cap
+//! (`RuleKey::CombatCaps`' engine reading) an item with no free slot below
+//! the cap is dropped. Without one the pool grows past the table's size,
+//! still first-free: slot n is first used only while slots 0..n are all
+//! taken, which is the order the original's layer would show for a larger
+//! table, as `ShotSlots::first_free` extends the shot table.
 
 /// Items kept in slot order, a new one taking the first free slot (see
 /// the module docs).

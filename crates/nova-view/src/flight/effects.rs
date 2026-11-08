@@ -197,12 +197,12 @@ use std::collections::BTreeMap;
 use nova_sim::combat::ParticleBurst;
 use nova_sim::combat::weapon::Explosion as Blast;
 use nova_sim::player_wrap::PlayerWrap;
+use nova_sim::slot_pool::SlotPool;
 use nova_sim::{Chance, CombatEvent, ShipRef, SpeedMult, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::murk::SeenMurk;
 use super::particle::Fixed;
-use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
 use crate::draw::lights_tint;
 use crate::sound::CombatSound;
