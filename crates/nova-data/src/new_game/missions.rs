@@ -38,7 +38,7 @@ use crate::store::{
     MissionCompletion, MissionObjective, MissionOffer, NewsItem, PointAt, PointState, Requires,
     StoryEffects, StoryMission, Storylines,
 };
-use crate::wire::id::{OutfitId, StellarId, SystemId};
+use crate::wire::id::{GovtId, OutfitId, StellarId, SystemId};
 
 /// Maps `galaxy`'s missions, news and jump points, with `ids`' Nova IDs and
 /// `compiled`'s stories, reporting what is left out to `problems`.
@@ -93,10 +93,16 @@ pub fn map(
         }
     }
     drop_dependents(&mut missions, problems);
+    let factions = ids
+        .factions
+        .iter()
+        .map(|(id, &nova)| (id.to_string(), GovtId(nova)))
+        .collect();
     Storylines {
         missions,
         news,
         points,
+        factions,
     }
 }
 

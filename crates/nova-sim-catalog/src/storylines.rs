@@ -144,6 +144,7 @@ mod tests {
                     stability: PointStability::Dead,
                 },
             )]),
+            factions: BTreeMap::new(),
         }
     }
 

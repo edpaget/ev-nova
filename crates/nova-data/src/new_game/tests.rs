@@ -1034,6 +1034,32 @@ fn a_start_in_a_ship_or_system_that_failed_to_load_is_left_out_unreported() {
 }
 
 #[test]
+fn the_storylines_map_each_faction_to_its_govt() {
+    let game = open(&super::fixture::folder()).expect("the fixture lists");
+    let factions: Vec<(String, GovtId)> = game
+        .data
+        .storylines()
+        .factions
+        .iter()
+        .map(|(id, &govt)| (id.clone(), govt))
+        .collect();
+    let expected: Vec<(String, GovtId)> = game
+        .ids
+        .factions
+        .iter()
+        .map(|(id, &nova)| (id.to_string(), GovtId(nova)))
+        .collect();
+    assert_eq!(factions, expected);
+    assert_eq!(
+        factions
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["guild", "warden"]
+    );
+}
+
+#[test]
 fn each_gate_keeps_its_own_point_s_stability() {
     let game = loaded(&with_a_drop());
     let gate_of = |p: &str| StellarId(game.ids.gates[&point(p)]);

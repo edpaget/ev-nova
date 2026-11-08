@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 pub use nova_galaxy_format::model::Outcome;
 
 use super::{DialogPlace, GameData, GateStability};
-use crate::wire::id::{OutfitId, StellarId, SystemId};
+use crate::wire::id::{GovtId, OutfitId, StellarId, SystemId};
 
 /// The new game's missions, news and jump points, each by its id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,6 +36,9 @@ pub struct Storylines {
     pub news: BTreeMap<String, NewsItem>,
     /// Every jump point, by `system/point`, with its static state.
     pub points: BTreeMap<String, PointAt>,
+    /// Each faction's `gövt`, by its id: what a jump point's owner, as
+    /// text, is in travel.
+    pub factions: BTreeMap<String, GovtId>,
 }
 
 /// A mission: offered at a stellar once its `requires` hold, or, with no
@@ -220,6 +223,7 @@ mod tests {
                     stability: GateStability::Stable,
                 },
             )]),
+            factions: BTreeMap::from([("guild".to_owned(), GovtId(128))]),
         }
     }
 
