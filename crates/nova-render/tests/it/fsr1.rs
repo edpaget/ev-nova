@@ -276,3 +276,54 @@ fn one_gpu_draws_fsr1_at_another_viewport_size_then_logical_size_then_natively()
         );
     }
 }
+
+/// A world whose last unit of each logical size is lit: a yellow
+/// stripe down its right edge and a magenta one along its bottom, so a
+/// texture left at an older, smaller size shows at the edges.
+fn edged(list: &mut DrawList) {
+    for logical in [LogicalSize { w: 16, h: 12 }, LOGICAL] {
+        let (w, h) = (logical.w as f32, logical.h as f32);
+        let right = Bounds {
+            min: at(w - 1.0, 0.0),
+            max: at(w, h),
+        };
+        let bottom = Bounds {
+            min: at(0.0, h - 1.0),
+            max: at(w - 1.0, h),
+        };
+        fill(list, right, Color::rgba(255, 255, 0, 255));
+        fill(list, bottom, Color::rgba(255, 0, 255, 255));
+    }
+}
+
+#[test]
+fn one_gpu_draws_fsr1_onto_a_larger_world_then_a_larger_viewport() {
+    // Each step grows: the world canvas (16x12 to 32x24), then the
+    // viewport (60x45 to 64x48). A world bind group or an EASU texture
+    // kept from the step before reads short of the new edges and copies
+    // its own edge outwards, which the one-unit stripes tell apart.
+    let Some(mut gpu) = gpu_with(64, 48, &FontFaces::bundled()) else {
+        return;
+    };
+    let marked = as_world(edged);
+    let frames = [
+        fitted(LogicalSize { w: 16, h: 12 }, (60, 45)),
+        fitted(LOGICAL, (60, 45)),
+        fitted(LOGICAL, (64, 48)),
+    ];
+    gpu.set_upscaler(Upscaler::Fsr1);
+    let mut renderer = Renderer::new(Sprites);
+    for viewport in &frames {
+        renderer.render(&marked, viewport, &mut gpu);
+        let reused = gpu.read_pixels().expect("read back");
+        let fresh = drawn_into((64, 48), &marked, viewport, Upscaler::Fsr1);
+        let (most, at) = largest_difference(&reused, &fresh, 64);
+        assert_eq!(
+            most,
+            0,
+            "{:?} in {:?}: {at:?}",
+            viewport.logical(),
+            viewport.window_px()
+        );
+    }
+}

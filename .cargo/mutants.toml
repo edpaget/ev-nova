@@ -795,4 +795,7 @@ exclude_re = [
     # nothing either, and as a 16-bit sheet otherwise, so 8-bit or not
     # draws the same command.
     "nova-view/src/system/scene\\.rs:[0-9]+:[0-9]+: replace SceneStellar::eight_bit -> bool with (true|false)$",
+    # FSR 1's EASU texture usage, `RENDER_ATTACHMENT | TEXTURE_BINDING`:
+    # the two flags share no bit, so `^` makes the same usage.
+    "nova-render/src/wgpu/fsr1\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Fsr1::upsampled$",
 ]
