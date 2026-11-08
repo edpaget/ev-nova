@@ -338,6 +338,31 @@ mod tests {
     }
 
     #[test]
+    fn a_sub_munition_holds_its_given_slot_or_that_of_the_ship_its_seek_found() {
+        // Its +0x2a: the slot it was given (@0x3f328), unless its seek
+        // found another ship (@0x3f3cf).
+        let plain = parent(0, 1, 0, 0, 0);
+        let [shot] = release(&plain, &sub(0), (None, false))[..] else {
+            panic!("one sub-munition");
+        };
+        let given = Shot {
+            aimed_slot: Some(Slot::Berth(5)),
+            ..shot
+        };
+        let aimed = aim(&plain, given, 0, &among(&[]), &mut Draws::of(&[]));
+        assert_eq!(aimed.aimed_slot, Some(Slot::Berth(5)));
+        let near = Target {
+            slot: Slot::Berth(4),
+            ..ship(NEAR, 100.0, 100.0)
+        };
+        let found = seated(Vec2::new(100.0, 50.0), (None, Jam::Clear), None, &[near]);
+        assert_eq!(
+            (found.target, found.aimed_slot),
+            (Some(NEAR), Some(Slot::Berth(4)))
+        );
+    }
+
+    #[test]
     fn a_released_sub_munition_waits_unaimed_at_the_given_target() {
         // `_SpawnShot(…, 1)` gives it the target it is given (@0x3f328);
         // the seek comes after its slot (@0x3f3cf).

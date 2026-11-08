@@ -162,3 +162,15 @@ fn by_the_other_reading_a_refilled_slots_shot_is_lost() {
     let shot = flying(&combat, id).expect("in flight");
     assert_eq!((shot.aimed_at, shot.jam), (None, Jam::Lost));
 }
+
+#[test]
+fn a_ship_fired_shot_holds_its_targets_slot() {
+    let combat = launched_by(
+        Ship::at(1, 0.0, 0.0).targeting(C),
+        blaster(),
+        vec![Ship::at(3, 0.0, -300.0)],
+    );
+    assert_eq!(combat.shots()[0].aimed_slot, Some(BERTH));
+    let combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), Vec::new());
+    assert_eq!(combat.shots()[0].aimed_slot, None, "no target");
+}
