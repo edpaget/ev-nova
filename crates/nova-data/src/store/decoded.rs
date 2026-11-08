@@ -64,6 +64,7 @@ impl GameData {
             stand_ins: BTreeMap::new(),
             dialogs: super::Dialogs::default(),
             storylines: super::Storylines::default(),
+            fittings: super::Fittings::default(),
         }
     }
 }

@@ -211,6 +211,7 @@ use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
 mod decoded;
 mod dialogs;
+mod fittings;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod fs;
@@ -230,6 +231,7 @@ mod tests;
 mod walk;
 
 pub use self::dialogs::{DialogPlace, Dialogs};
+pub use self::fittings::{Fittings, Kit, Spot, SpotKind};
 pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
@@ -396,6 +398,10 @@ pub struct GameData {
     /// The missions, news and jump points: the new game's
     /// ([`GameData::with_storylines`]); none in a stock store.
     storylines: Storylines,
+    /// Each ship class's and mod kit's hardpoints and each kit's
+    /// attention: the new game's ([`GameData::with_fittings`]); none in a
+    /// stock store.
+    fittings: Fittings,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
@@ -449,6 +455,7 @@ impl GameData {
             stand_ins: BTreeMap::new(),
             dialogs: Dialogs::default(),
             storylines: Storylines::default(),
+            fittings: Fittings::default(),
         })
     }
 

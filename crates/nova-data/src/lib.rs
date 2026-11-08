@@ -194,15 +194,15 @@ pub use expr::{
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
-    DialogPlace, Dialogs, FailedFile, GameData, GateStability, IgnoredEntry, InterfaceData,
-    LayerError, LayerSprite, MissionCompletion, MissionObjective, MissionOffer, NewsItem,
-    NoInterfaceFile, OpenError, Origin, Outcome, Outline, OutlineTriangle, ParsedSet, ParsedTest,
-    PointAt, PointState, Provenance, Requires, SheetKind, SheetScan, ShipImage, ShipImageError,
-    ShipImageFields, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite, ShipSpriteInfo,
-    ShipSpriteWords, SourceFile, SpinSheet, SpinSpriteError, SpriteError, StandIn, StandInOf,
-    StellarSprite, StellarSpriteError, StoreEntry, StoreResource, StoryEffects, StoryMission,
-    Storylines, interface_path_candidates, load_interface, open_interface, ship_desc_id,
-    shot_spin_id, stellar_spin_id,
+    DialogPlace, Dialogs, FailedFile, Fittings, GameData, GateStability, IgnoredEntry,
+    InterfaceData, Kit, LayerError, LayerSprite, MissionCompletion, MissionObjective, MissionOffer,
+    NewsItem, NoInterfaceFile, OpenError, Origin, Outcome, Outline, OutlineTriangle, ParsedSet,
+    ParsedTest, PointAt, PointState, Provenance, Requires, SheetKind, SheetScan, ShipImage,
+    ShipImageError, ShipImageFields, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
+    ShipSpriteInfo, ShipSpriteWords, SourceFile, SpinSheet, SpinSpriteError, Spot, SpotKind,
+    SpriteError, StandIn, StandInOf, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
+    StoryEffects, StoryMission, Storylines, interface_path_candidates, load_interface,
+    open_interface, ship_desc_id, shot_spin_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};
