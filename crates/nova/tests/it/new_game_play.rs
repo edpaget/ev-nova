@@ -12,12 +12,14 @@ use nova::startup::{DataSource, DiskData, NewGameOpened};
 use nova_data::GameData;
 use nova_data::new_game::{self, NewGame};
 use nova_sim::flight_frame::{Answer, Converse, FlightCommand};
+use nova_sim::gate::GateKind;
 use nova_sim::storylines::state::MissionState;
 use nova_sim::{
-    ApplyCollaborators, HailOptions, NovaBoarding, NovaLaw, Pilot, Session, StellarId, SystemId,
+    ApplyCollaborators, HailOptions, LandPress, NovaBoarding, NovaLaw, Pilot, Session, StellarId,
+    SystemId,
 };
 
-use crate::new_game_travel::{new_game_rules, nova_of, pilot_for};
+use crate::new_game_travel::{gates, new_game_rules, nova_of, pass as travel_pass, pilot_for};
 
 /// The new-game folder `folder` as the app opens it, its knots checked,
 /// with no problems, and its ids.
@@ -67,6 +69,59 @@ impl Play {
 
     pub(crate) fn system(&self, id: &str) -> SystemId {
         SystemId(nova_of(&self.game.ids.systems, id))
+    }
+
+    /// The gate of the jump point `id` (`system/point`).
+    pub(crate) fn gate(&self, id: &str) -> StellarId {
+        StellarId(nova_of(&self.game.ids.gates, id))
+    }
+
+    /// Goes through the jump point `id`'s gate (`system/point`) as the
+    /// player does: taken off if landed, put over the gate, L pressed (the
+    /// request cleared), a pass of the game's work (the approach), L again
+    /// (the entry), the one system the hypergate map offers picked and
+    /// entered. The system the ship comes out in.
+    pub(crate) fn go_through(&mut self, id: &str) -> SystemId {
+        if self.session.landed().is_some() {
+            self.take_off();
+        }
+        let stellar = self.gate(id);
+        let gate = gates(&self.game)
+            .into_iter()
+            .find(|gate| gate.stellar == stellar)
+            .expect("a gate");
+        assert_eq!(
+            self.session.pilot().system,
+            gate.system,
+            "{id}: in its system"
+        );
+        nova_sim::fixture::put_player_at(&mut self.session, gate.at);
+        assert!(self.session.land().is_ok(), "{id}: cleared");
+        travel_pass(
+            &mut self.session,
+            &self.data,
+            &new_game_rules(),
+            &mut self.chance,
+        );
+        assert_eq!(
+            self.session.land(),
+            Ok(LandPress::AtGate {
+                stellar,
+                kind: GateKind::Hypergate,
+            }),
+            "{id}"
+        );
+        let to = gate.partner.1;
+        assert_eq!(
+            self.session.open_hypergate(&self.data),
+            Ok(vec![to]),
+            "{id}"
+        );
+        let entered = self
+            .session
+            .enter_hypergate(Some(to), &self.data, &mut self.chance);
+        assert_eq!(entered, Ok(to), "{id}");
+        to
     }
 
     /// Lands at the stellar `id`, in the system the pilot is in, and

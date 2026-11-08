@@ -59,6 +59,7 @@ mod pilot_move;
 mod pilots;
 mod preferences;
 mod recharge;
+mod sample_missions;
 mod sample_routes;
 mod sample_travel;
 mod ship_browser;
