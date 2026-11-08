@@ -227,7 +227,10 @@ pub fn turn_change(handling: i32) -> i16 {
 
 /// `value` held within `i16`.
 fn word(value: i64) -> i16 {
-    i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
+    // Held within `i16` first, so the cast can't truncate.
+    #[allow(clippy::cast_possible_truncation)]
+    let value = value.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+    value
 }
 
 /// The `ModType`/`ModVal` pairs `kit` needs, in slot order, each with the
