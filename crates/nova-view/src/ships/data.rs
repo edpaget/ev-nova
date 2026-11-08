@@ -221,6 +221,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pict_pair_glow_and_lights_are_keyed_by_their_own_image_with_their_own_cuts() {
+        use nova_data::graphics::PICT;
+        use nova_data::graphics::fixture::rgb888_pict;
+        // Two sets of two; each layer a pair of its own, cut to the
+        // base's 4 frames (a 3 x 1 glow, 1 x 1 lights), so only its key
+        // says which slot it fills.
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(3)
+            .base_y_size(1)
+            .base_set_count(2)
+            .frames_per(2)
+            .glow_image_id(2002)
+            .glow_mask_id(2002)
+            .glow_x_size(3)
+            .glow_y_size(1)
+            .light_image_id(2003)
+            .light_mask_id(2003)
+            .light_x_size(1)
+            .light_y_size(1)
+            .build();
+        let data = store(&[
+            (Ship::TYPE, 128, None, ship(STATS, "")),
+            (ShipAnim::TYPE, 128, None, anim),
+            (PICT, 2000, None, rgb888_pict(6, 2, &[[0; 3]; 12])),
+            (PICT, 2002, None, rgb888_pict(6, 2, &[[0; 3]; 12])),
+            (PICT, 2003, None, rgb888_pict(2, 2, &[[0; 3]; 4])),
+        ]);
+        let entry = data.ship(ShipId(128));
+        let pair = |image, frames| {
+            Some(Ok(SheetInfo {
+                image: crate::SheetImage::Ship { ship: 128, image },
+                frames: NonZeroU16::new(frames).expect("non-zero"),
+            }))
+        };
+        assert_eq!(entry.glow, pair(ShipImage::Glow, 4), "glow");
+        assert_eq!(entry.lights, pair(ShipImage::Lights, 4), "lights");
+    }
+
     fn info(image_id: i16, frames: u16) -> SheetInfo {
         SheetInfo {
             image: crate::SheetImage::Rled(image_id),

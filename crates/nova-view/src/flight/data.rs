@@ -826,6 +826,84 @@ mod tests {
     }
 
     #[test]
+    fn each_pict_pair_layer_is_keyed_by_its_own_image_with_its_own_cut() {
+        use nova_data::graphics::fixture::rgb888_pict;
+        // Each layer a pair of its own frame size, and alt and shield of
+        // their own frame count, so no two slots could swap unseen.
+        /// A layer: its image, `PICT`, frame size, sheet size and frames.
+        type Slot = (ShipImage, i16, (u8, u8), (u8, u8), u16);
+        let slots: [Slot; 5] = [
+            (ShipImage::Glow, 2002, (3, 1), (6, 2), 4),
+            (ShipImage::Lights, 2003, (1, 1), (2, 2), 4),
+            (ShipImage::Weapon, 2004, (2, 2), (4, 4), 4),
+            (ShipImage::Alt, 2001, (1, 2), (2, 2), 2),
+            (ShipImage::Shield, 2005, (1, 3), (3, 3), 3),
+        ];
+        let anim = ShipAnimBuilder::new()
+            .base_image_id(2000)
+            .base_mask_id(2000)
+            .base_x_size(2)
+            .base_y_size(1)
+            .base_set_count(2)
+            .frames_per(2)
+            .glow_image_id(2002)
+            .glow_mask_id(2002)
+            .glow_x_size(3)
+            .glow_y_size(1)
+            .light_image_id(2003)
+            .light_mask_id(2003)
+            .light_x_size(1)
+            .light_y_size(1)
+            .weap_image_id(2004)
+            .weap_mask_id(2004)
+            .weap_x_size(2)
+            .weap_y_size(2)
+            .alt_image_id(2001)
+            .alt_mask_id(2001)
+            .alt_x_size(1)
+            .alt_y_size(2)
+            .alt_set_count(1)
+            .shield_image_id(2005)
+            .shield_mask_id(2005)
+            .shield_x_size(1)
+            .shield_y_size(3)
+            .build();
+        let mut resources = vec![
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, anim),
+            (PICT, 2000, rgb888_pict(4, 2, &[[0; 3]; 8])),
+        ];
+        for (_, id, _, (w, h), _) in slots {
+            let pixels = vec![[0; 3]; usize::from(w) * usize::from(h)];
+            resources.push((PICT, id, rgb888_pict(w.into(), h.into(), &pixels)));
+        }
+        let found = store(&resources).ship_sheet(ShipId(128)).expect("a sheet");
+        let layers = [
+            found.glow,
+            found.lights,
+            found.weapon,
+            found.alt,
+            found.shield,
+        ];
+        for (layer, (image, _, (w, h), size, frames)) in layers.into_iter().zip(slots) {
+            assert_eq!(
+                layer,
+                Some(LayerSheet {
+                    image: SheetImage::Ship { ship: 128, image },
+                    frames: NonZeroU16::new(frames).expect("non-zero"),
+                    frame_width: w.into(),
+                    frame_height: h.into(),
+                    image_size: (w.into(), h.into()),
+                    clip_quirks: false,
+                    solid: false,
+                    eight_bit: false,
+                }),
+                "{image:?}, sheet {size:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_ships_sheet_carries_its_glow_and_lights_layers() {
         // The glow has as many frames as the base; the lights one set of
         // rotations under the two-set base.
