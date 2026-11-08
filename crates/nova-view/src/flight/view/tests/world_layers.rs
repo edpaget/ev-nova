@@ -6,7 +6,7 @@
 
 use nova_sim::catalog::Explosion;
 use nova_sim::combat::ParticleBurst;
-use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
+use nova_sim::flight_frame::{FrameBox, FrameShip, PassReport, StepReport, StepRun};
 
 use super::combat::{line_in, podding};
 use super::faked_hud::barred;
@@ -174,6 +174,28 @@ fn an_escape_pod_is_drawn_over_the_cargo_boxes() {
     // The 64 boxes of `_boxData`, then the 32 pods of `_podData`
     // (`_InitSprites` @0x1fb89-0x1fd57).
     assert!(cargo_box < pod, "{cargo_box} {pod}");
+}
+
+#[test]
+fn a_fading_box_is_drawn_at_its_frames_fade() {
+    let frame = FlightFrame {
+        cargo_boxes: vec![FrameBox {
+            fade: 16,
+            ..box_at(Vec2::new(-20.0, 20.0))
+        }],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    let view = world(trading(), frame);
+    let list = world_list(&view);
+    let tints: Vec<Color> = list
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 500 => Some(*tint),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tints, vec![crate::flight::boxes::fade_tint(16)]);
+    assert_ne!(tints[0], Color::WHITE);
 }
 
 #[test]
