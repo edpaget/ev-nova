@@ -43,7 +43,7 @@ use std::rc::Rc;
 
 use super::deadly_masks::drawn_mask_sheet;
 use crate::catalog::StellarId;
-use crate::combat::contact::{ContactSprites, ShipSprite, ShotContact, StellarSprite};
+use crate::combat::contact::{ContactSprites, ShipSprite, ShotContact, SpriteAt, StellarSprite};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleKey;
@@ -115,7 +115,7 @@ impl Session {
                 let sprite = StellarSprite {
                     sheet: Rc::clone(sheet),
                     frame: self.stellar_frame(site.id),
-                    at: site.position,
+                    at: SpriteAt::Place(site.position),
                     size: layout.size,
                     placed_as: layout.placed_as,
                 };
@@ -604,7 +604,7 @@ mod tests {
         let read = session.space.sprite_masks.sheet(TYPE_3).expect("read");
         assert!(Rc::ptr_eq(&sprite.sheet, read));
         assert_eq!(sprite.frame, frame);
-        assert_eq!(sprite.at, site.position);
+        assert_eq!(sprite.at, SpriteAt::Place(site.position));
         assert_eq!((sprite.size, sprite.placed_as), ((40, 40), (40, 40)));
     }
 

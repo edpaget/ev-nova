@@ -24,7 +24,11 @@
 //! The wrap never carries a stellar, so on its pass the stellar's sprite
 //! is met where it stood, as an asteroid's is (`Combat::rock_sprite`, see
 //! [`wrap_carry`](super::wrap_carry)); the disc, the fallback, reads world
-//! places.
+//! places. A hidden stellar's sprite is its last slot's: its owner's now,
+//! around that owner's place, or, the slot unowned, graphic type 0's frame
+//! fixed on screen ([`SpriteAt::Screen`]), its top left from where the
+//! player was seen, since `_HandleStellarSprites` moves only owned slots
+//! and the wrap carries none; it is laid out there with no shift.
 //! The session lends the frame its last sprite tick left
 //! ([`StellarSprite`]).
 //!
@@ -42,7 +46,7 @@
 //! no sound.
 
 use super::Combat;
-use super::contact::{ContactSprites, ShotContact, StellarSprite};
+use super::contact::{ContactSprites, ShotContact, SpriteAt, StellarSprite};
 use super::projectile::Shot;
 use super::stellar::{self, StellarTarget};
 use crate::catalog::StellarId;
@@ -52,8 +56,8 @@ use crate::sprite_place::Placement;
 
 impl ContactSprites {
     /// The mask of the stellar `id` lent, laid out about `offset` of its
-    /// place, its sprite's offset from the player (see the module docs);
-    /// none when it isn't lent.
+    /// place, its sprite's offset from the player, or at its rect fixed on
+    /// screen (see the module docs); none when it isn't lent.
     pub(super) fn stellar(
         &self,
         id: StellarId,
@@ -67,7 +71,10 @@ impl ContactSprites {
             size,
             placed_as,
         } = sprite;
-        let top_left = Placement::Standard.top_left(offset(*at), *placed_as);
+        let top_left = match *at {
+            SpriteAt::Place(place) => Placement::Standard.top_left(offset(place), *placed_as),
+            SpriteAt::Screen { top_left } => top_left,
+        };
         Some(PlacedMask {
             sheet: sheet.clone(),
             frame: *frame,
@@ -135,7 +142,7 @@ mod tests {
         let sprite = StellarSprite {
             sheet: Rc::clone(sheet),
             frame: 1,
-            at: Vec2::new(100.0, 50.0),
+            at: SpriteAt::Place(Vec2::new(100.0, 50.0)),
             size,
             placed_as,
         };
@@ -164,6 +171,31 @@ mod tests {
             .stellar(StellarId(128), |at| at - Vec2::new(10.0, 10.0))
             .expect("lent");
         assert_eq!(mask.rect, MaskRect::placed((74, 24), (40, 30)));
+    }
+
+    #[test]
+    fn a_screen_fixed_sprite_is_laid_out_at_its_top_left_whatever_the_camera() {
+        let drawn = two();
+        let sprite = StellarSprite {
+            at: SpriteAt::Screen {
+                top_left: (-50, -200),
+            },
+            size: (100, 100),
+            placed_as: (100, 100),
+            ..lent(&drawn, (40, 40), (40, 40)).stellars[0].1.clone()
+        };
+        let sprites = ContactSprites {
+            stellars: vec![(StellarId(128), sprite)],
+            ..ContactSprites::default()
+        };
+        for camera in [Vec2::ZERO, Vec2::new(-300.0, 700.0)] {
+            let mask = sprites
+                .stellar(StellarId(128), |at| at - camera)
+                .expect("lent");
+            assert_eq!(mask.rect, MaskRect::placed((-50, -200), (100, 100)));
+            assert!(Rc::ptr_eq(&mask.sheet, &drawn));
+            assert_eq!(mask.frame, 1);
+        }
     }
 
     #[test]

@@ -49,7 +49,8 @@
 //! **A stellar** (`_CheckShotProximities`' stellar branch, @0x372a8, the
 //! shot first, the stellar second) is laid out in the proximity pass, by
 //! [`stellar_contact`](super::stellar_contact), from the sprite the
-//! session lends ([`StellarSprite`]).
+//! session lends ([`StellarSprite`]), around a place or fixed on screen
+//! ([`SpriteAt`]).
 //!
 //! **The hit's place.** `_HandleShipHit` and `_HandleAsteroidHit` explode
 //! where the shot is (@0x36aa9, @0x3667d), so a contact lands at the
@@ -143,10 +144,32 @@ pub struct ShipSprite {
     pub frame: u16,
 }
 
+/// Where a stellar's sprite stands for the proximity pass (see the
+/// [`stellar_contact`](super::stellar_contact) module).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteAt {
+    /// Around a place in the world, which its slot's owner is at: the slot
+    /// is placed there each pass (`_HandleStellarSprites`
+    /// @0x2eeab-0x2ef1a), and the wrap never carries it.
+    Place(Vec2),
+    /// Fixed on screen, its rect's top left from where the player was
+    /// seen: an unowned slot, which `_HandleStellarSprites` no longer
+    /// moves (it moves only owned slots, @0x2eeab-0x2ef1a), so it stays
+    /// at its last screen place, and which the wrap carries no more than
+    /// any stellar (`_WrapPlayerPosition` carries shots only,
+    /// @0x68010-0x68091).
+    Screen {
+        /// Its rect's top left, from where the player was seen.
+        top_left: (i32, i32),
+    },
+}
+
 /// A stellar's sprite as its slot last showed it, for the proximity pass
 /// to lay out (see the [`stellar_contact`](super::stellar_contact)
-/// module): the sheet and frame its slot draws, where the stellar is, and
-/// the sizes its slot was placed by.
+/// module): the sheet and frame its slot draws, where it stands, and
+/// the sizes its slot was placed by. A hidden stellar is lent the sprite
+/// its last slot holds now, under its own ID: its slot's owner's, or the
+/// screen-fixed ghost of an unowned slot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StellarSprite {
     /// The sheet its slot draws: its `Type`'s, its `DeadType`'s once
@@ -154,8 +177,9 @@ pub struct StellarSprite {
     pub sheet: Rc<RleSheet>,
     /// The frame its slot shows (`nova_sim::Session::stellar_frame`).
     pub frame: u16,
-    /// Where the stellar is: its place, not its slot's centre.
-    pub at: Vec2,
+    /// Where it stands: a place, not its slot's centre, or a rect fixed
+    /// on screen.
+    pub at: SpriteAt,
     /// The size of the frame drawn.
     pub size: (u32, u32),
     /// The size its slot is placed by: the frame's, or 32 square for a

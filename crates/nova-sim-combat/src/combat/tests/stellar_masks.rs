@@ -9,7 +9,7 @@ use std::rc::Rc;
 use super::collision_walk::fly;
 use super::*;
 use crate::catalog::StellarId;
-use crate::combat::contact::{ContactSprites, ShotContact, StellarSprite};
+use crate::combat::contact::{ContactSprites, ShotContact, SpriteAt, StellarSprite};
 use crate::combat::stellar::{StellarStrike, StellarTarget};
 use crate::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
 use crate::sprite_mask::{MaskWalk, RleSheet};
@@ -53,7 +53,7 @@ fn sprite(sheet: Rc<RleSheet>, frame: u16, at: Vec2) -> StellarSprite {
     StellarSprite {
         sheet,
         frame,
-        at,
+        at: SpriteAt::Place(at),
         size,
         placed_as: size,
     }
@@ -326,6 +326,62 @@ fn on_a_wraps_pass_a_stellar_is_met_by_its_mask_where_its_sprite_stood() {
     };
     assert_eq!(struck(before), 1, "where the two sprites stood");
     assert_eq!(struck(before + shift), 0, "not in the world");
+}
+
+#[test]
+fn on_a_wraps_pass_a_screen_fixed_stellar_sprite_is_met_where_it_stood_on_screen() {
+    // The player stood past the edge and the wrap carried it, and the
+    // shot 100 left of it, by the shift: the shot is seen 100 left of the
+    // player still. A screen-fixed sprite there is met; one placed in the
+    // world where that screen place now is, which the wrap never carries,
+    // is not.
+    let stood = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+    let shift = Vec2::new(-WRAP_SHIFT, 0.0);
+    let before = Vec2::new(stood.x - 100.0, 0.0);
+    let struck = |at: SpriteAt| {
+        let mut combat = Combat::default();
+        fly(
+            &mut combat,
+            (gun(), A, ShotLayer::Shots),
+            (before, before),
+            None,
+        );
+        combat.player_stood = Some(stood);
+        combat.carry(&PlayerWrap::of(stood).expect("past the edge"), Vec::new());
+        let solid = StellarSprite {
+            at,
+            ..sprite(square(4, |_, _| true), 0, Vec2::ZERO)
+        };
+        let sprites = lending(
+            Some(square(2, |_, _| true)),
+            vec![(STELLAR, solid)],
+            ShotContact::Placed,
+        );
+        let mut player = [Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(0, stood.x + shift.x, stood.y)
+        }];
+        let mut stellars = [StellarTarget {
+            radius: 2.0,
+            ..target(STELLAR, Vec2::new(0.0, 5000.0), 100)
+        }];
+        passes_among(&mut combat, &mut player, &mut stellars, &sprites)
+            .strikes
+            .len()
+    };
+    assert_eq!(
+        struck(SpriteAt::Screen {
+            top_left: (-102, -2)
+        }),
+        1,
+        "where it stood on screen"
+    );
+    assert_eq!(
+        struck(SpriteAt::Place(before + shift)),
+        0,
+        "a place in the world is met a delta on"
+    );
 }
 
 #[test]
