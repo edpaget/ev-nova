@@ -16,7 +16,11 @@
 //!
 //! By [`RuleKey::GateLanes`]' other reading each reads the gate lanes
 //! instead (see the `story` module's `galaxy_links`), and J never jumps:
-//! each test of that reading stands beside the engine's.
+//! each test of that reading stands beside the engine's. The planner,
+//! Hyper Select, the Tab cycle, the clicks and the cue also follow a lane
+//! closed in play, after the session was built ([`closed_to_hearth`]):
+//! they read the lanes as the storylines' settle leaves them, not as
+//! they were when the session started.
 //!
 //! Two mission pickers read the raw Con slots under either reading of
 //! [`RuleKey::GateLanes`], so over [`laned_stable`] they find nothing by the
@@ -41,9 +45,11 @@ use crate::mission::ships::ShipSystem;
 use crate::navigation::NavMode;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
+use crate::storylines::state::PointChange;
 use crate::testkit::{
     DRIFT, FakePilotCatalog, HEARTH, VERGE, land_now, laned, laned_stable, planet,
 };
+use nova_sim_catalog::storylines::PointStability;
 
 /// A new pilot over [`laned_stable`], in drift, by the original's readings.
 fn started() -> Session {
@@ -290,6 +296,69 @@ fn by_the_lanes_j_toward_a_lane_neighbour_refuses_silently_with_no_pre_jump() {
     );
     assert_eq!(session.mode.jump(), None, "no pre-jump");
     assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(VERGE)), "kept");
+}
+
+/// [`laned_session`] with the road drift↔hearth closed in play, after the
+/// session was built: `hearth/drift-road` dead and the storylines settled
+/// ([`Session::settle_storylines`]). Drift's one open lane is then to
+/// verge, and hearth lies round by verge. A reader that kept the lanes
+/// from before the settle would still reach hearth from drift.
+fn closed_to_hearth() -> Session {
+    let mut session = laned_session();
+    session.pilot.story.points.insert(
+        "hearth/drift-road".to_owned(),
+        PointChange {
+            owner: None,
+            stability: Some(PointStability::Dead),
+        },
+    );
+    session.settle_storylines(&mut NeverFires);
+    session
+}
+
+#[test]
+fn by_the_lanes_the_planner_routes_round_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    assert_eq!(session.plot_course(HEARTH), Ok(&[VERGE, HEARTH][..]));
+}
+
+#[test]
+fn by_the_lanes_hyper_select_and_the_tab_cycle_skip_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    let selected: Vec<_> = (0..3).map(|_| session.select_next_system()).collect();
+    assert_eq!(selected, [Some(VERGE); 3]);
+    let mut session = closed_to_hearth();
+    let cycled: Vec<_> = (0..3)
+        .map(|_| {
+            assert!(session.cycle_map_selection());
+            session.nav_mode()
+        })
+        .collect();
+    assert_eq!(cycled, [NavMode::Hyperspace(Some(VERGE)); 3]);
+}
+
+/// Hearth stays known after its lane closes, so the map takes a click on
+/// it, but as a known system the current one no longer links.
+#[test]
+fn by_the_lanes_a_click_or_shift_click_over_a_lane_closed_in_play_selects_nothing() {
+    let mut session = closed_to_hearth();
+    assert!(session.is_known(HEARTH), "known from the start");
+    session.chart.set_nav(NavMode::Hyperspace(Some(VERGE)));
+    let clicked = session.map_click(&press(&[HEARTH], false)).expect("known");
+    assert_eq!(clicked.selected, Some(HEARTH));
+    assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "let go");
+    let clicked = session.map_click(&press(&[HEARTH], true)).expect("known");
+    assert_eq!(clicked.selected, None, "nothing appended");
+    assert_eq!(session.course(), []);
+}
+
+#[test]
+fn by_the_lanes_the_cue_selects_no_hop_over_a_lane_closed_in_play() {
+    let mut session = closed_to_hearth();
+    session.pilot.course = vec![HEARTH, VERGE];
+    session.pilot.course_start = Some(DRIFT);
+    session.cue_course();
+    assert_eq!(session.nav_mode(), NavMode::Off);
 }
 
 #[test]
