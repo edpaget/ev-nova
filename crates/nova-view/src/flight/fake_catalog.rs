@@ -1626,6 +1626,7 @@ pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::Hul
             .collect(),
         size: None,
         height: None,
+        frame: None,
         strength: 0,
         key_carried: None,
         cost: 0,

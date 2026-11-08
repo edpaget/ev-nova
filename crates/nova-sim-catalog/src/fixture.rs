@@ -285,6 +285,7 @@ pub fn hull(id: i16) -> HullRecord {
         weapons: Vec::new(),
         size: None,
         height: None,
+        frame: None,
         strength: 0,
         key_carried: None,
         cost: 0,
