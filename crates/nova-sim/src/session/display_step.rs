@@ -102,8 +102,11 @@ impl Session {
     /// the pass, drawing on `chance`: `_HandlePlayer` up to its key block
     /// (see the module docs, steps 1 to 3).
     pub(super) fn player_display_head(&mut self, head: PlayerHead, chance: &mut dyn Chance) {
-        // The pod's frames return (@0x68ddd) before all of these.
+        // The pod's frames return (@0x68ddd) before all of these. A timer
+        // the display set still ends its starting frame: the display finds
+        // it above 0 and puffs (@0x2dd01).
         if head.in_pod {
+            self.ship.condition.settle_start();
             return;
         }
         self.ship.condition.count_down();

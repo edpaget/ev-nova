@@ -448,6 +448,32 @@ pub(super) mod tests {
                     "{death_delay}: no klaxon in the pod: {seen:?}"
                 );
             }
+            if death_delay == 1 {
+                // The display sets the timer once (@0x2d80d-0x2d855); on
+                // later frames it is above 0, so `_HandleShipDisplay`
+                // takes its puff branch (@0x2dd01): the starting frame
+                // ends though the pod skips the timer's tick.
+                let set = Condition::Dying {
+                    ticks_left: 3,
+                    starting: true,
+                };
+                let at = seen
+                    .iter()
+                    .position(|(condition, _)| *condition == set)
+                    .unwrap_or_else(|| panic!("the display sets the timer: {seen:?}"));
+                let later = &seen[at + 1..];
+                assert!(!later.is_empty(), "passes after the set: {seen:?}");
+                for (condition, _) in later {
+                    assert_eq!(
+                        *condition,
+                        Condition::Dying {
+                            ticks_left: 3,
+                            starting: false,
+                        },
+                        "past its starting frame, its timer stalled: {seen:?}"
+                    );
+                }
+            }
             assert_eq!(session.player_end, None, "{death_delay}");
             assert!(rescued, "{death_delay}: {seen:?}");
             assert!(session.take_rescue_desc().is_some(), "{death_delay}");

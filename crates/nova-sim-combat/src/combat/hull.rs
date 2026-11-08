@@ -508,7 +508,8 @@ pub enum Condition {
         /// Whether the timer is unset, or this pass's display step set it:
         /// the original's "dying, timer not yet set" frame, on which
         /// `_HandleShipDisplay` sets it and does nothing else. The ship's
-        /// next death-timer tick clears it; under [`Breakup::Stalls`] the
+        /// next death-timer tick clears it, or, on a step that skips the
+        /// tick, [`Condition::settle_start`]; under [`Breakup::Stalls`] the
         /// display sets it again every time it finds the timer run down.
         /// The eject reads it, as `_HandlePlayer` (@0x6f248-0x6f286) runs
         /// before `_HandleShipDisplay` sets the timer, and so does the
@@ -552,6 +553,27 @@ impl Condition {
         {
             *self = Self::Dying {
                 ticks_left: ticks_left - 1,
+                starting: false,
+            };
+        }
+    }
+
+    /// The end of a set timer's starting frame on a step that skips the
+    /// death timer's tick, the player's pod frames (`_HandlePlayer`
+    /// returns @0x68ddd before its tick @0x6d7e6): a timer above 0 keeps
+    /// its ticks, and the display step's set (`starting`) is past, as
+    /// `_HandleShipDisplay` sets the timer only while it is at 0.0 or
+    /// below (@0x2d80d-0x2d855) and otherwise reaches its puff branch
+    /// (@0x2dd01). Anything else is left as it is.
+    pub fn settle_start(&mut self) {
+        if let Self::Dying {
+            ticks_left,
+            starting: true,
+        } = *self
+            && ticks_left > 0
+        {
+            *self = Self::Dying {
+                ticks_left,
                 starting: false,
             };
         }
@@ -1627,6 +1649,29 @@ mod tests {
         assert_eq!(ticked(dying(0, false)), dying(0, false));
         for kept in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
             assert_eq!(ticked(kept), kept);
+        }
+    }
+
+    #[test]
+    fn settling_the_start_ends_a_set_timers_starting_frame_without_a_tick() {
+        // `_HandleShipDisplay` sets the timer only while it is at 0.0 or
+        // below (@0x2d80d-0x2d855); a timer above 0 takes the puff branch
+        // (@0x2dd01) on the next frame, ticked or not.
+        let dying = |ticks_left, starting| Condition::Dying {
+            ticks_left,
+            starting,
+        };
+        let settled = |mut condition: Condition| {
+            condition.settle_start();
+            condition
+        };
+        assert_eq!(settled(dying(3, true)), dying(3, false), "set: settled");
+        assert_eq!(settled(dying(1, true)), dying(1, false));
+        assert_eq!(settled(dying(3, false)), dying(3, false));
+        assert_eq!(settled(dying(0, true)), dying(0, true), "unset: kept");
+        assert_eq!(settled(dying(0, false)), dying(0, false));
+        for kept in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
+            assert_eq!(settled(kept), kept);
         }
     }
 }
