@@ -1,6 +1,7 @@
 //! The new game's folder adapter (`new_game::open`) over real folders:
 //! the checked-in fixture (`tests/fixtures/new-game/`, published as
-//! `new_game::fixture::folder`), and temporary
+//! `new_game::fixture::folder`), the sample's cut
+//! (`tests/fixtures/sample/`, `new_game::fixture::sample_folder`), and temporary
 //! folders for a root that can't be listed and for media that are Git LFS
 //! pointers.
 
@@ -416,6 +417,70 @@ fn the_ids_map_back_to_the_bible_s() {
             ("hearth".to_owned(), 129),
             ("verge".to_owned(), 130)
         ]
+    );
+}
+
+#[test]
+fn the_sample_folder_is_the_crates_own() {
+    assert_eq!(
+        new_game::fixture::sample_folder(),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("sample")
+    );
+}
+
+#[test]
+fn the_sample_folder_loads_without_problems() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let problems: Vec<_> = game.problems.iter().map(ToString::to_string).collect();
+    assert_eq!(problems, Vec::<String>::new());
+    assert_eq!(game.lfs_pointers, Vec::<String>::new());
+}
+
+#[test]
+fn the_sample_maps_four_missions_one_news_item_and_six_jump_points() {
+    let game = new_game::open(&new_game::fixture::sample_folder()).expect("lists");
+    let storylines = game.data.storylines();
+    let keys = |ids: Vec<&String>| ids.into_iter().cloned().collect::<Vec<_>>();
+    assert_eq!(
+        keys(storylines.missions.keys().collect()),
+        [
+            "supply-run",
+            "take-the-point",
+            "the-crossroads-offer",
+            "the-first-failure"
+        ]
+    );
+    assert_eq!(
+        keys(storylines.news.keys().collect()),
+        ["luyten-road-fails"]
+    );
+    assert_eq!(
+        keys(storylines.points.keys().collect()),
+        [
+            "brightwater/luyten-road",
+            "brightwater/marrow-gate",
+            "luyten-crossing/association-road",
+            "luyten-crossing/marrow-road",
+            "marrow/far-gate",
+            "marrow/luyten-road"
+        ]
+    );
+    let failure = &storylines.missions["the-first-failure"];
+    assert_eq!(failure.offer, None, "an event");
+    assert_eq!(failure.requires.not_before_day, Some(60));
+    assert_eq!(
+        storylines.missions["take-the-point"].objective,
+        Some(nova_data::MissionObjective::TakePoint {
+            point: "marrow/far-gate".to_owned(),
+            held_by: "harrow-band".to_owned(),
+        })
+    );
+    assert_eq!(
+        storylines.news["luyten-road-fails"].from,
+        SystemId(game.ids.systems[&id("luyten-crossing")])
     );
 }
 

@@ -1,5 +1,8 @@
-//! The checked-in new-game folder (`tests/fixtures/new-game/`), for other
-//! crates' tests to load without retyping its path.
+//! The checked-in new-game folders (`tests/fixtures/new-game/`, and the
+//! sample's cut, `tests/fixtures/sample/`), for other crates' tests to load
+//! without retyping their paths.
+//!
+//! # `folder()`
 //!
 //! It holds the factions `guild` and `warden`; the systems `drift`, of
 //! jump points alone, `hearth`, the guild's, and `verge`, ungoverned;
@@ -42,4 +45,52 @@ pub fn folder() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("new-game")
+}
+
+/// The sample fixture folder's path: a three-system cut of game-bible's
+/// sample galaxy, holding its "Holding the point" storyline and its first
+/// failure, copied in so no test reads game-bible.
+///
+/// It holds the factions `commonwealth`, `association`, `harrow-band` and
+/// `marrow-commons`; the regions `commonwealth-rim` and
+/// `association-border`; the systems `luyten-crossing` (the
+/// commonwealth's), `brightwater` (the association's) and `marrow`, with
+/// the sample's jump points between them alone: the Luyten road
+/// (`luyten-crossing/association-road` to `brightwater/luyten-road`), the
+/// Marrow road (`luyten-crossing/marrow-road` to `marrow/luyten-road`) and
+/// the far gate (`marrow/far-gate` to `brightwater/marrow-gate`), every
+/// one stable, the roads to the sample's other systems left out; the
+/// stellars `luyten-exchange` and `marrow-yard`, each with a bar, trade
+/// and fuel; the character `sector-organizer`, the missions' giver; the
+/// hull `light-freighter`, on a placeholder model; the start
+/// `first-flight`, in it, at `luyten-crossing` (the sample starts at
+/// Ninefold, which the cut leaves out); and the storylines
+/// `holding-the-point` and `the-first-failure`, with the sample's four
+/// missions and one news item:
+///
+/// - `supply-run`: offered at `luyten-exchange` (`supply_run_offer`),
+///   twelve tons to `marrow-yard`, completed there (`supply_run_done`),
+///   setting `met_organizer`;
+/// - `the-first-failure`: an event from day 60 that makes both ends of the
+///   Luyten road unstable and releases `luyten-road-fails`, from
+///   `luyten-crossing`;
+/// - `the-crossroads-offer`: offered at `marrow-yard` (`crossroads_offer`)
+///   once the Luyten road is unstable, its `on_offer` giving the far gate
+///   to `harrow-band`, with no objective;
+/// - `take-the-point`: offered at `marrow-yard`
+///   (`take_the_point_briefing`) once the crossroads is done, a
+///   `take_point` objective on the far gate, completed at `marrow-yard`
+///   (`take_the_point_done`), giving the far gate to `marrow-commons`.
+///
+/// Their conversations are one file, `dialog/holding-the-point.ink`, with
+/// its compiled `holding-the-point.ink.json` beside it, whose header gives
+/// the `inklecate` command that compiles it again. The crossroads offer
+/// reads the world flag `met_organizer` and the read count of
+/// `supply_run_done`'s labelled `monists` choice.
+#[must_use]
+pub fn sample_folder() -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sample")
 }
