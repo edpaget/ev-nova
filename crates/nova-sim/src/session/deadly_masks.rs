@@ -127,7 +127,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use nova_sim_base::fixture::rle::sheet;
 
     use super::*;
@@ -143,7 +143,7 @@ mod tests {
     use crate::testkit::{FakePilotCatalog, Passive, planet, work};
 
     /// A stellar's frames' side.
-    const SIDE: u32 = 40;
+    pub(in crate::session) const SIDE: u32 = 40;
 
     /// The rows of a frame `side` square, `drawn` at each pixel it says,
     /// as `'#'`, or as `run` where `run` is set.
@@ -176,12 +176,12 @@ mod tests {
     }
 
     /// A ring [`SIDE`] square, drawn as pixels.
-    fn ringed() -> RleSheet {
+    pub(in crate::session) fn ringed() -> RleSheet {
         sheet_of(&[square(SIDE, ring, false)])
     }
 
     /// A frame `side` square, every pixel drawn.
-    fn solid(side: u32) -> RleSheet {
+    pub(in crate::session) fn solid(side: u32) -> RleSheet {
         sheet_of(&[square(side, |_, _| true, false)])
     }
 

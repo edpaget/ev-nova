@@ -428,3 +428,84 @@ fn the_fight_events_before_the_arrival_are_heard_not_reported() {
         "the arrival's days' `Y`, reported with its pass"
     );
 }
+
+/// [`armed`]'s catalog holding the player's class 128's sheet, a
+/// 10-pixel square, and, if `ring`, a ring as graphic type 3, with a
+/// deadly stellar of type 3 in 131 centred on `at`: the player there sits
+/// in the ring's hole, which its mask misses and its disc meets (see the
+/// `deadly_masks` module).
+fn deadly_at(at: Vec2, ring: bool) -> FakePilotCatalog {
+    use crate::catalog::{LandingSite, MaskSheet, ShipId};
+    use crate::deadly_stellar::DEADLY_STELLAR;
+    use crate::session::deadly_masks::tests::{SIDE, ringed, solid};
+    let mut catalog = armed();
+    catalog.rle_sheets = vec![(MaskSheet::Ship(ShipId(128)), solid(10))];
+    if ring {
+        catalog.rle_sheets.push((MaskSheet::Stellar(3), ringed()));
+    }
+    let site = LandingSite {
+        flags2: DEADLY_STELLAR,
+        graphic: 3,
+        frame_size: Some((SIDE, SIDE)),
+        ..crate::testkit::planet(140, at.x, at.y)
+    };
+    catalog.sites.retain(|(system, _)| *system != SystemId(131));
+    catalog.sites.push((SystemId(131), vec![site]));
+    catalog
+}
+
+/// Whether the player, a pass short of the warp's end on `deadly_at`'s
+/// catalog, lives through the arrival's pass, run by `pass`, where the
+/// arrival puts it: on the ring's hole, by the new system's masks.
+///
+/// The system left asks for no stellar sheet, so the ring's is read only
+/// if the pass asks again after its exit: by the load after it, or by the
+/// beams' phase's own ask, which its `sheets` gives it. Either one
+/// suffices, since the arrival's pass holds nothing else of the new
+/// system's for the scoop or the collision passes to touch (no box, no
+/// shot); these tests fail when the pass asks by neither.
+fn lives_the_arrival(ring: bool, pass: impl Fn(&mut Session, &FakePilotCatalog)) -> bool {
+    use crate::combat::hull::Condition;
+    // Where the arrival puts it, with no deadly stellar there.
+    let mut probe = a_pass_short_of_the_end(&armed());
+    pass(&mut probe, &armed());
+    assert_eq!(probe.system(), SystemId(131));
+    let at = probe.ship.player.position;
+    let catalog = deadly_at(at, ring);
+    let mut session = a_pass_short_of_the_end(&catalog);
+    let asked = catalog.rle_sheets_asked.borrow().clone();
+    assert!(
+        !asked
+            .iter()
+            .any(|sheet| matches!(sheet, crate::catalog::MaskSheet::Stellar(_))),
+        "130 lists no deadly stellar, so no stellar sheet was asked: {asked:?}"
+    );
+    pass(&mut session, &catalog);
+    assert_eq!(session.system(), SystemId(131), "the arrival's pass");
+    assert_eq!(session.ship.player.position, at);
+    session.ship.condition != Condition::Destroyed
+}
+
+#[test]
+fn an_advance_pass_arrival_touches_the_new_systems_deadly_stellar_by_its_masks() {
+    let first = |session: &mut Session, catalog: &FakePilotCatalog| {
+        advance(session, catalog);
+    };
+    assert!(lives_the_arrival(true, first), "in the hole by its mask");
+    assert!(!lives_the_arrival(false, first), "by the discs, it dies");
+}
+
+#[test]
+fn a_second_pass_arrival_touches_the_new_systems_deadly_stellar_by_its_masks() {
+    let again = |session: &mut Session, catalog: &FakePilotCatalog| {
+        session.tick_again(
+            Controls::default(),
+            catalog,
+            &NovaAi::default(),
+            Rules::default(),
+            &mut NeverFires,
+        );
+    };
+    assert!(lives_the_arrival(true, again), "in the hole by its mask");
+    assert!(!lives_the_arrival(false, again), "by the discs, it dies");
+}
