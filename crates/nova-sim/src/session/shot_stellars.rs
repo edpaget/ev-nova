@@ -296,6 +296,27 @@ mod tests {
     }
 
     #[test]
+    fn the_ghosts_disc_is_graphic_type_0s_frame_from_the_slots_top_left_from_the_player_now() {
+        // Placed 100 square at (0, -150) from the player at the centre:
+        // its top left (-50, -200). Graphic type 0 a 300 x 40 frame: its
+        // centre (100, -180) from the player, now at (2000, 0), half its
+        // larger side 150.
+        let (mut session, _) = ghost_of(0.0, Rulebook::default());
+        session.statics_mut().fallback_frame = Some((300, 40));
+        assert_eq!(
+            session.shot_stellar_targets(),
+            [StellarTarget {
+                stellar: H,
+                position: Vec2::new(2100.0, -180.0),
+                radius: 150.0,
+                strength: 100,
+            }]
+        );
+        session.statics_mut().fallback_frame = None;
+        assert_eq!(session.shot_stellar_targets(), [], "no frame to be");
+    }
+
+    #[test]
     fn a_hidden_stellars_sprite_falls_back_to_its_owners_disc_where_no_mask_is_read() {
         let catalog = catalog(false, &[life(H.0, 2)]);
         let mut session = h_then_s(&catalog, Rulebook::default(), FAR, Vec2::new(0.0, -100.0));
