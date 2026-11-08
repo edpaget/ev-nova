@@ -130,6 +130,29 @@ run "profile_once_validated" {
   }
 }
 
+# This run pins the deployed configuration: with no override, the committed
+# default must be the completed validation, so the next apply keeps the live
+# profile and CI's signer role instead of destroying them.
+run "committed_default_keeps_the_live_profile" {
+  command = plan
+
+  assert {
+    condition = (
+      length(azapi_resource.certificate_profile) == 1 &&
+      length(azurerm_role_assignment.profile_signer) == 1
+    )
+    error_message = "The committed default must plan the live profile and its signer role."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.certificate_profile[0].body.properties.identityValidationId != null &&
+      azapi_resource.certificate_profile[0].body.properties.identityValidationId == var.identity_validation_id
+    )
+    error_message = "The live profile must use the committed default validation ID."
+  }
+}
+
 # The variable validations refuse a blank validation ID and an account name
 # Azure would reject, before any plan.
 run "rejects_empty_validation_id" {
