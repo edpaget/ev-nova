@@ -666,6 +666,30 @@ fn a_held_arrival_lays_out_on_a_tick_with_no_step() {
 }
 
 #[test]
+fn a_catch_up_before_the_held_frame_is_presented_leaves_the_arrival_and_its_events_waiting() {
+    // Frame 97 is drawn between the passes before the arrival's
+    // `_RefreshSAT` (@0x6c605): nothing lays the new system out first.
+    let mut view = warping();
+    let mut report = arrival_report(1, ShipPlace::default());
+    report.steps[0].between_passes = Some(Box::new(under_way(true)));
+    queue_arrival(&mut view, report);
+    view.run_steps(1, None);
+    assert!(view.holds_arrival(), "held, its frame not yet presented");
+    view.catch_up();
+    assert!(view.holds_arrival(), "still held");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    assert_eq!(view.drawn(), &under_way(true), "the frame between drawn");
+    view.present_jump_effect();
+    view.catch_up();
+    assert!(!view.holds_arrival());
+    assert_eq!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "the events left waiting lay it out"
+    );
+}
+
+#[test]
 fn a_press_after_the_held_frame_is_drawn_lays_the_arrival_out_first() {
     let mut view = held_arrival(under_way(true));
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));

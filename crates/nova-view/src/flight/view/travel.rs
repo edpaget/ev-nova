@@ -198,11 +198,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if self.arrival_waits_for_its_frame() {
             return Redrawn::default();
         }
+        // Its layout's own catch-up redraws what the arrival changed.
         if self.arrive_held() {
-            return Redrawn {
-                system: true,
-                ..Redrawn::default()
-            };
+            return Redrawn::default();
         }
         self.catch_up_then(|view, redrawn| {
             view.redraw_scene_then(redrawn, Self::follow_bar, Self::redraw_status);

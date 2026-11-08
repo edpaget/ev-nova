@@ -422,15 +422,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             .steps
             .last_mut()
             .and_then(|run| BetweenPasses::taken_from(run, self.elapsed));
-        let last = report.steps.len().saturating_sub(1);
         let mut rescued = false;
-        for (index, run) in report.steps.iter_mut().enumerate() {
+        for run in &mut report.steps {
             self.keep_before(run);
-            // A held second pass's arrival waits for the frame after.
-            let arrival = run
-                .arrival
-                .clone()
-                .filter(|exit| index != last || exit.pass < run.passes.len());
+            // A held second pass's arrival is on the hold, its pass taken
+            // out of the run, and waits for the frame after.
+            let arrival = run.arrival.clone();
             let comm = arrival.as_ref().map_or(0, |exit| exit.comm);
             notes.extend(run.comm.iter().take(comm).cloned());
             let rescue_at = run.rescued.as_ref().map(|exit| exit.pass);
