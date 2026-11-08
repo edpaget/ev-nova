@@ -4,9 +4,10 @@
 //! Firing is the original's (`_FirePlayerWeapon`, `_WeaponBurstInterval`
 //! and `_SpawnShot` in the `EV Nova` executable):
 //!
-//! - The [`Trigger`] picks the weapons: the primary trigger every weapon
-//!   that is not a secondary, and the secondary trigger the one secondary
-//!   selected.
+//! - The player's [`Trigger`] picks the weapons: the primary trigger
+//!   every weapon that is not a secondary, and the secondary trigger the
+//!   one secondary selected. An NPC's fight reads neither: it fires only
+//!   its pick ([`Trigger::only`]), its bays and its point defence.
 //! - The player fires each weapon its trigger picks as `_HandlePlayer`
 //!   calls `_FirePlayerWeapon` on it ([`Armament::player_picks`],
 //!   [`Armament::fire_player`]): the primaries by ascending weapon ID, a
@@ -15,20 +16,23 @@
 //!   spending, its burst counting one a call, and an exclusive weapon
 //!   (`Flags3` 0x0020) holding the others by its shot's reload, before its
 //!   burst.
-//! - On an NPC's primary or secondary trigger ([`Armament::fire`]), a ship
-//!   carrying n of a weapon fires one shot
-//!   once its reload timer has run out, and sets the timer to `Reload / n`
-//!   ticks; a timer counts down the frame's gain a frame (`_HandleShip`
-//!   @0x338b3, [`Armament::reload_holding`]; a full frame's countdown is
-//!   [`Armament::reload`]), so `Reload` 0 fires every tick.
+//! - A weapon fires once its reload timer has run out, and a call that
+//!   fired sets the timer as [`ai_fire::reload`] says: its whole `Reload`
+//!   when its copies fire together, else `Reload` over the copies carried
+//!   for each copy that spawned; a timer
+//!   counts down the frame's gain a frame (`_HandleShip` @0x338b3,
+//!   `_HandlePlayer` @0x6ae25, [`Armament::reload_holding`]; a full
+//!   frame's countdown is [`Armament::reload`]), so `Reload` 0 fires every
+//!   tick.
 //! - An NPC fires its pick ([`Trigger::only`]) as `_FireAIShipWeapon`
-//!   does instead ([`Armament::fire_pick`], [`ai_fire`]): its copies
+//!   does ([`Armament::fire_pick`], [`ai_fire`]): its copies
 //!   together under `Flags` 0x0040, each spending whether or not it
 //!   spawns, its burst counting one a call, an exclusive weapon
 //!   (`Flags3` 0x0020) holding the others, and the last gun it fired
 //!   kept ([`Armament::last_gun`]).
-//! - With a `BurstCount`, each copy fires that many shots (`BurstCount` x
-//!   n in all) before the timer is set to `BurstReload` instead.
+//! - With a `BurstCount`, a burst counts one a call, and past its
+//!   interval (`BurstCount`, times n unless its copies fire together) the
+//!   timer is set to `BurstReload` instead.
 //! - A shot spends its ammo ([`Ammo`]): a round, or its fuel, and does
 //!   not fire without it. Rounds are kept one slot for each weapon index,
 //!   as the original keeps them (ship +0xd0 + i·0xc8), and [`slot`] says
@@ -53,16 +57,17 @@
 //!   (`_AILaunchFighter`).
 //! - Its guidance aims it ([`aim`](super::aim)): a weapon that does not
 //!   fire (a turret with no target, or one in a blind spot or out of its
-//!   arc, and point defence on the trigger) spends nothing and does not
-//!   reload.
+//!   arc, and point defence on the player's trigger) spends nothing and
+//!   does not reload.
 //! - It leaves up to its `Inaccuracy` off its aim either way: the draw
 //!   `below(2n) - n`, never asked of a weapon that is accurate.
 //! - Nothing fires unless the ship is [`Condition::Intact`].
 //! - A weapon of a guidance the simulation does not fly (99 without a
 //!   ship to carry, anything undocumented) does not fire; firing one is
 //!   reported once ([`SimDiagnostic::UnimplementedGuidance`]).
-//! - A fighter bay ([`Guidance::FighterBay`]) fires on the secondary
-//!   trigger, never on the primary, or as an NPC's pick. An NPC attacking
+//! - A fighter bay ([`Guidance::FighterBay`]) fires on the player's
+//!   secondary trigger, or on its primary when it is not a secondary
+//!   ([`Armament::player_picks`]), or as an NPC's pick. An NPC attacking
 //!   launches as `_AILaunchFighter` does ([`Armament::launch_bay`],
 //!   @0x81372, on [`Trigger::bays`] and [`Trigger::bays_after`], which
 //!   the fight reads in its NPCs' point-defence phase): only the bay of
@@ -229,14 +234,18 @@ fn add(array: &mut BTreeMap<WeaponId, i64>, weapon: WeaponId, count: i64) {
 }
 
 /// The fire command a ship holds: the player's keys, or an NPC's
-/// `nova_sim::ai::Behaviour`.
+/// `nova_sim::ai::Behaviour`. The player's trigger reads `primary` and
+/// `secondary` alone; an NPC's fight reads its pick (`only`), its bay
+/// calls and its point defence, never `primary` or `secondary`.
 // Each flag is its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Trigger {
-    /// The primary trigger: every weapon that is not a secondary.
+    /// The player's primary trigger: every weapon that is not a secondary
+    /// ([`Armament::player_picks`]). An NPC's fight ignores it.
     pub primary: bool,
-    /// The secondary trigger, on this secondary weapon.
+    /// The player's secondary trigger, on this secondary weapon. An NPC's
+    /// fight ignores it.
     pub secondary: Option<WeaponId>,
     /// This weapon alone, primary or secondary, whatever the triggers
     /// say: an NPC's pick. The player's trigger never sets it.
@@ -255,36 +264,14 @@ pub struct Trigger {
     pub bays_after: bool,
     /// This tick the ship's point defence runs: the player's every tick,
     /// an NPC's when its AI asks for a turret (`_AIFireTurret` @0x80b0d).
-    /// [`Trigger::fires`] ignores it.
     pub point_defence: bool,
     /// The weapon an NPC holds as its pick after its AI's passes this tick
     /// (the original's +0x72), fired or not; none when the passes left it
-    /// none or didn't run. [`Trigger::fires`] ignores it: the flag is
-    /// [`Trigger::only`].
+    /// none or didn't run. The fight fires [`Trigger::only`], never this.
     pub keep: Option<WeaponId>,
 }
 
 impl Trigger {
-    /// Whether it fires `weapon`: a fighter bay as the secondary on the
-    /// secondary trigger, or as `only`, never on the primary nor for
-    /// `bays` or `bays_after`, which [`Armament::launch_bay`] answers;
-    /// otherwise `only` that weapon when set, or the secondary on the
-    /// secondary trigger and the rest on the primary.
-    #[must_use]
-    pub fn fires(self, weapon: &WeaponSpec) -> bool {
-        if weapon.is_bay() {
-            return self.only == Some(weapon.id) || self.secondary == Some(weapon.id);
-        }
-        if let Some(only) = self.only {
-            return weapon.id == only;
-        }
-        if weapon.secondary() {
-            self.secondary == Some(weapon.id)
-        } else {
-            self.primary
-        }
-    }
-
     /// Whether it launches the fighter bays at all: `bays` or
     /// `bays_after`.
     #[must_use]
@@ -596,23 +583,6 @@ impl Mount {
         }
     }
 
-    /// Fires a shot on a trigger: counts it in the burst, pays for it from
-    /// `rounds` and `fuel` when it spends, the ship an `npc` or the player,
-    /// and sets the reload (see the module docs).
-    fn discharge(&mut self, rounds: &mut dyn Rounds, fuel: &mut Gauge, npc: bool) {
-        if self.spec.burst_count > 0 {
-            self.burst += 1;
-        }
-        if self.spends() {
-            self.pay(rounds, fuel, npc, false);
-        }
-        self.reload = self.spec.reload / self.count as f32;
-        if self.spec.burst_count > 0 && self.burst >= self.spec.burst_count * self.count {
-            self.burst = 0;
-            self.reload = self.spec.burst_reload;
-        }
-    }
-
     /// Fires a point-defence shot or beam, as `_HandleShipPointDefense`'s
     /// tail does (@0x39931-0x39bb3): adds `Reload / count` to its timer,
     /// whatever is left of
@@ -642,15 +612,6 @@ impl Mount {
                     self.pay(rounds, fuel, npc, true);
                 }
             }
-        }
-    }
-
-    /// Whether this shot, the burst's `burst`th, spends ammo.
-    fn spends(&self) -> bool {
-        if self.spec.ammo_at_burst_end() {
-            self.spec.burst_count > 0 && self.burst.is_multiple_of(self.spec.burst_count)
-        } else {
-            true
         }
     }
 }
@@ -812,67 +773,6 @@ impl Armament {
         })
     }
 
-    /// Fires every weapon `trigger` picks that is ready, that `shooter`
-    /// has the ammunition for ([`Armament::has_ammo`]) and that `aim`
-    /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
-    /// inaccuracy drawn on `chance`, and gives what it launched; what it
-    /// reports goes to `reports` (see the module docs): an NPC trigger on
-    /// the primary or secondary, which no AI sets since an escort's
-    /// formation fire became `_AIFireTurret`'s pick (rdm
-    /// escort-fleet-fidelity phase 1); the player fires through
-    /// [`Armament::fire_player`], an NPC's pick through
-    /// [`Armament::fire_pick`] and its bay launch through
-    /// [`Armament::launch_bay`].
-    // Each is a separate borrow the fight holds: the ship's command, its
-    // condition, who it is, its stores, the dice, the reports and its aim.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fire(
-        &mut self,
-        trigger: Trigger,
-        condition: Condition,
-        shooter: Shooter,
-        rounds: &mut dyn Rounds,
-        fuel: &mut Gauge,
-        chance: &mut dyn Chance,
-        reports: &mut Reports,
-        aim: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
-    ) -> Vec<Launch> {
-        let mut launches = Vec::new();
-        if condition != Condition::Intact {
-            return launches;
-        }
-        for index in 0..self.mounts.len() {
-            let mount = &self.mounts[index];
-            if !trigger.fires(&mount.spec) || mount.reload > 0.0 {
-                continue;
-            }
-            let paid = self.has_ammo(mount, rounds, *fuel, shooter);
-            let mount = &mut self.mounts[index];
-            if let Guidance::Other(guidance) = mount.spec.guidance {
-                reports.report(SimDiagnostic::UnimplementedGuidance {
-                    weapon: mount.spec.id,
-                    guidance,
-                });
-                continue;
-            }
-            let Some(aimed) = aim(&mount.spec) else {
-                continue;
-            };
-            if !paid {
-                continue;
-            }
-            let inaccuracy = inaccuracy(mount.spec.inaccuracy, chance);
-            mount.discharge(rounds, fuel, shooter.npc);
-            launches.push(Launch {
-                weapon: mount.spec,
-                pointing: aimed.pointing,
-                inaccuracy,
-                target: aimed.target,
-            });
-        }
-        launches
-    }
-
     /// Fires `pick`, an NPC's pick, on a ship in `condition`, as
     /// `_FireAIShipWeapon` does (@0x8873d-0x89269), paying from `rounds`
     /// and `fuel`, each copy's inaccuracy drawn on `chance`. None when
@@ -1020,8 +920,7 @@ impl Armament {
     ///    nothing, whatever its base sets (@0x62837-0x62864). Then nothing
     ///    fires unless it carries `weapon`, `weapon` has reloaded
     ///    (@0x6287b) and its guidance is
-    ///    one the simulation flies (else it is reported, as
-    ///    [`Armament::fire`] does).
+    ///    one the simulation flies (else it is reported).
     /// 2. It fires [`ai_fire::copies`] copies (`_WeaponMaxSimultShots`
     ///    @0x628a0). Each copy `shooter` has the ammunition for
     ///    ([`Armament::has_ammo`], @0x628dc) is attempted as `spawn` says,
@@ -2062,18 +1961,17 @@ mod tests {
             }
         }
 
-        /// One tick: fire on `trigger`, then reload.
+        /// One tick of the player's `trigger`: each weapon it picks
+        /// ([`Armament::player_picks`]) fired as `_FirePlayerWeapon` fires
+        /// it ([`Armament::fire_player`]), then the reload; what it
+        /// launched.
         fn tick(&mut self, armament: &mut Armament, trigger: Trigger) -> Vec<Launch> {
-            let launches = armament.fire(
-                trigger,
-                Condition::Intact,
-                self.shooter,
-                &mut self.rounds,
-                &mut self.fuel,
-                &mut NeverFires,
-                &mut self.reports,
-                &mut ahead,
-            );
+            let mut launches = Vec::new();
+            for weapon in armament.player_picks(trigger) {
+                if let Some(volley) = self.player(armament, weapon.0, &mut ahead) {
+                    launches.extend(volley.launches);
+                }
+            }
             armament.reload();
             launches
         }
@@ -2311,82 +2209,6 @@ mod tests {
         assert_eq!(supplies.rounds.slot(WeaponId(140)), 9, "only its own");
     }
 
-    #[test]
-    fn the_triggers_pick_the_primaries_or_one_secondary() {
-        let secondary = |id| WeaponRecord {
-            flags: 0x0002,
-            ..blaster(id, 0)
-        };
-        let mut armament = Armament::new(
-            [
-                blaster(128, 0),
-                secondary(138),
-                secondary(140),
-                blaster(129, 0),
-            ]
-            .iter()
-            .map(|record| (WeaponSpec::new(record), 1)),
-        );
-        let fired = |armament: &mut Armament, trigger| -> Vec<i16> {
-            Supplies::none()
-                .tick(armament, trigger)
-                .iter()
-                .map(|launch| launch.weapon.id.0)
-                .collect()
-        };
-        assert_eq!(fired(&mut armament, PRIMARY), [128, 129]);
-        let second = Trigger {
-            primary: false,
-            secondary: Some(WeaponId(140)),
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        };
-        assert_eq!(fired(&mut armament, second), [140]);
-        let both = Trigger {
-            primary: true,
-            secondary: Some(WeaponId(138)),
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        };
-        assert_eq!(fired(&mut armament, both), [128, 138, 129]);
-        let primary_as_secondary = Trigger {
-            primary: false,
-            secondary: Some(WeaponId(128)),
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        };
-        assert_eq!(
-            fired(&mut armament, primary_as_secondary),
-            Vec::<i16>::new()
-        );
-        assert_eq!(fired(&mut armament, Trigger::default()), Vec::<i16>::new());
-        for (only, alone) in [(140, 140), (129, 129)] {
-            let trigger = Trigger {
-                only: Some(WeaponId(only)),
-                ..both
-            };
-            assert_eq!(
-                fired(&mut armament, trigger),
-                [alone],
-                "that weapon alone, primary or secondary"
-            );
-        }
-        let missing = Trigger {
-            only: Some(WeaponId(999)),
-            ..both
-        };
-        assert_eq!(fired(&mut armament, missing), Vec::<i16>::new());
-    }
-
     /// Every weapon fires at 100 degrees, at NPC 7.
     #[allow(clippy::unnecessary_wraps)]
     fn at_seven(_spec: &WeaponSpec) -> Option<Aim> {
@@ -2404,8 +2226,27 @@ mod tests {
         for (draw, heading) in [(0, 91.0), (9, 100.0), (17, 108.0)] {
             let mut armament = mounted(wild, 1);
             let mut chance = Draws::of(&[draw]);
-            let launches = armament.fire(
-                PRIMARY,
+            let launches = armament
+                .fire_player(
+                    WeaponId(128),
+                    Condition::Intact,
+                    Shooter::PLAYER,
+                    &mut LauncherRounds::default(),
+                    &mut Gauge::default(),
+                    &mut chance,
+                    &mut Reports::default(),
+                    &mut at_seven,
+                )
+                .map_or_else(Vec::new, |volley| volley.launches);
+            assert_eq!(leaves(&launches[0]), heading, "{draw}");
+            assert_eq!(launches[0].target, Some(SEVEN), "{draw}");
+            assert_eq!(chance.asked, [18]);
+        }
+        let mut accurate = mounted(blaster(128, 0), 1);
+        let mut chance = Draws::of(&[]);
+        let launches = accurate
+            .fire_player(
+                WeaponId(128),
                 Condition::Intact,
                 Shooter::PLAYER,
                 &mut LauncherRounds::default(),
@@ -2413,36 +2254,23 @@ mod tests {
                 &mut chance,
                 &mut Reports::default(),
                 &mut at_seven,
-            );
-            assert_eq!(leaves(&launches[0]), heading, "{draw}");
-            assert_eq!(launches[0].target, Some(SEVEN), "{draw}");
-            assert_eq!(chance.asked, [18]);
-        }
-        let mut accurate = mounted(blaster(128, 0), 1);
-        let mut chance = Draws::of(&[]);
-        let launches = accurate.fire(
-            PRIMARY,
-            Condition::Intact,
-            Shooter::PLAYER,
-            &mut LauncherRounds::default(),
-            &mut Gauge::default(),
-            &mut chance,
-            &mut Reports::default(),
-            &mut at_seven,
-        );
+            )
+            .map_or_else(Vec::new, |volley| volley.launches);
         assert_eq!(leaves(&launches[0]), 100.0);
         assert!(chance.asked.is_empty(), "never asked");
         let mut wrapping = mounted(wild, 1);
-        let launches = wrapping.fire(
-            PRIMARY,
-            Condition::Intact,
-            Shooter::PLAYER,
-            &mut LauncherRounds::default(),
-            &mut Gauge::default(),
-            &mut Draws::of(&[0]),
-            &mut Reports::default(),
-            &mut ahead,
-        );
+        let launches = wrapping
+            .fire_player(
+                WeaponId(128),
+                Condition::Intact,
+                Shooter::PLAYER,
+                &mut LauncherRounds::default(),
+                &mut Gauge::default(),
+                &mut Draws::of(&[0]),
+                &mut Reports::default(),
+                &mut ahead,
+            )
+            .map_or_else(Vec::new, |volley| volley.launches);
         assert_eq!(leaves(&launches[0]), 351.0, "wrapped");
     }
 
@@ -2452,16 +2280,18 @@ mod tests {
             inaccuracy: 9,
             ..blaster(128, 0)
         };
-        let launches = mounted(wild, 1).fire(
-            PRIMARY,
-            Condition::Intact,
-            Shooter::PLAYER,
-            &mut LauncherRounds::default(),
-            &mut Gauge::default(),
-            &mut Draws::of(&[2]),
-            &mut Reports::default(),
-            &mut at_seven,
-        );
+        let launches = mounted(wild, 1)
+            .fire_player(
+                WeaponId(128),
+                Condition::Intact,
+                Shooter::PLAYER,
+                &mut LauncherRounds::default(),
+                &mut Gauge::default(),
+                &mut Draws::of(&[2]),
+                &mut Reports::default(),
+                &mut at_seven,
+            )
+            .map_or_else(Vec::new, |volley| volley.launches);
         assert_eq!((launches[0].inaccuracy, leaves(&launches[0])), (-7.0, 93.0));
         let volley = mounted(wild, 1)
             .fire_pick(
@@ -2863,58 +2693,37 @@ mod tests {
             asked.push(spec.id);
             None
         };
-        let launches = armament.fire(
-            PRIMARY,
-            Condition::Intact,
-            Shooter::PLAYER,
-            &mut rounds,
-            &mut Gauge::default(),
-            &mut NeverFires,
-            &mut reports,
-            &mut unaimed,
-        );
+        let launches = armament
+            .fire_player(
+                WeaponId(139),
+                Condition::Intact,
+                Shooter::PLAYER,
+                &mut rounds,
+                &mut Gauge::default(),
+                &mut NeverFires,
+                &mut reports,
+                &mut unaimed,
+            )
+            .map_or_else(Vec::new, |volley| volley.launches);
         assert_eq!(launches, []);
         assert_eq!(asked, [WeaponId(139)]);
         assert_eq!(armament.mounts()[0].reload, 0.0, "no reload");
         assert_eq!(rounds.slot(WeaponId(138)), 3, "no round spent");
-        let launches = armament.fire(
-            PRIMARY,
-            Condition::Intact,
-            Shooter::PLAYER,
-            &mut rounds,
-            &mut Gauge::default(),
-            &mut NeverFires,
-            &mut reports,
-            &mut at_seven,
-        );
+        let launches = armament
+            .fire_player(
+                WeaponId(139),
+                Condition::Intact,
+                Shooter::PLAYER,
+                &mut rounds,
+                &mut Gauge::default(),
+                &mut NeverFires,
+                &mut reports,
+                &mut at_seven,
+            )
+            .map_or_else(Vec::new, |volley| volley.launches);
         assert_eq!(launches.len(), 1, "fired the next tick, aimed");
         assert_eq!(rounds.slot(WeaponId(138)), 2);
         assert_eq!(armament.mounts()[0].reload, 10.0);
-    }
-
-    #[test]
-    fn nothing_fires_unless_the_ship_is_intact() {
-        for condition in [
-            Condition::Disabled,
-            Condition::Dying {
-                ticks_left: 5,
-                starting: false,
-            },
-            Condition::Destroyed,
-        ] {
-            let mut armament = mounted(blaster(128, 0), 1);
-            let launches = armament.fire(
-                PRIMARY,
-                condition,
-                Shooter::PLAYER,
-                &mut LauncherRounds::default(),
-                &mut Gauge::default(),
-                &mut NeverFires,
-                &mut Reports::default(),
-                &mut ahead,
-            );
-            assert_eq!(launches, [], "{condition:?}");
-        }
     }
 
     #[test]
@@ -3949,25 +3758,27 @@ mod tests {
             let mut armament = mounted(defence(133, guidance, 0, 0), 1);
             let mut supplies = Supplies::none();
             let mut asked = Vec::new();
-            let launches = armament.fire(
-                PRIMARY,
-                Condition::Intact,
-                supplies.shooter,
-                &mut supplies.rounds,
-                &mut supplies.fuel,
-                &mut NeverFires,
-                &mut supplies.reports,
-                &mut |spec: &WeaponSpec| {
-                    asked.push(spec.id);
-                    super::super::aim::aim(
-                        spec,
-                        &ShipState::default(),
-                        &HullSpec::default(),
-                        None,
-                        RuleSource::Engine,
-                    )
-                },
-            );
+            let launches = armament
+                .fire_player(
+                    WeaponId(133),
+                    Condition::Intact,
+                    supplies.shooter,
+                    &mut supplies.rounds,
+                    &mut supplies.fuel,
+                    &mut NeverFires,
+                    &mut supplies.reports,
+                    &mut |spec: &WeaponSpec| {
+                        asked.push(spec.id);
+                        super::super::aim::aim(
+                            spec,
+                            &ShipState::default(),
+                            &HullSpec::default(),
+                            None,
+                            RuleSource::Engine,
+                        )
+                    },
+                )
+                .map_or_else(Vec::new, |volley| volley.launches);
             assert_eq!(launches, [], "{guidance}");
             assert_eq!(armament.mounts()[0].reload, 0.0, "{guidance}");
         }
@@ -4161,13 +3972,18 @@ mod tests {
             !has(&launcher, Shooter::PLAYER, &[(161, 1)]),
             "the player's are its ammunition's"
         );
-        let mut supplies = Supplies::none();
-        supplies.shooter = NPC;
-        supplies.rounds = slots(&[(161, 1), (155, 3)]);
-        assert_eq!(launched(&supplies.tick(&mut launcher, PRIMARY)), [161]);
+        // An NPC's pick spends its own slot.
+        let mut supplies = npc_supplies(slots(&[(161, 1), (155, 3)]), 0.0);
+        let volley = supplies.pick(&mut launcher, 161, RuleSource::Engine, &mut ahead);
+        assert_eq!(
+            volley.map(|volley| launched(&volley.launches)),
+            Some(vec![161])
+        );
         assert_eq!(supplies.rounds, slots(&[(161, 0), (155, 3)]));
         launcher.mounts[0].reload = 0.0;
-        assert!(supplies.tick(&mut launcher, PRIMARY).is_empty(), "spent");
+        let spent = supplies.pick(&mut launcher, 161, RuleSource::Engine, &mut ahead);
+        assert!(spent.is_none(), "spent");
+        // The player's trigger, its ammunition's.
         supplies.shooter = Shooter::PLAYER;
         assert_eq!(launched(&supplies.tick(&mut launcher, PRIMARY)), [161]);
         assert_eq!(supplies.rounds, slots(&[(161, 0), (155, 2)]));
@@ -4231,7 +4047,11 @@ mod tests {
             1,
         );
         supplies.rounds = slots(&[(162, 1)]);
-        assert_eq!(launched(&supplies.tick(&mut gun, PRIMARY)), [162]);
+        let volley = supplies.pick(&mut gun, 162, RuleSource::Engine, &mut ahead);
+        assert_eq!(
+            volley.map(|volley| launched(&volley.launches)),
+            Some(vec![162])
+        );
         assert_eq!(
             supplies.rounds,
             slots(&[(162, 1)]),
@@ -4310,16 +4130,13 @@ mod tests {
             assert!(!has(&[(149, 0), (133, 4)]), "not 128 + 5's: {shooter:?}");
             assert!(!has(&[(149, -1)]), "{shooter:?}");
         }
+        // The player's trigger, which picks a bay that is not a
+        // secondary on the primary.
         let mut odd_bay = odd_bay;
         let mut supplies = Supplies::none();
-        supplies.shooter = NPC;
         supplies.rounds = slots(&[(149, 1)]);
-        let only = Trigger {
-            only: Some(WeaponId(149)),
-            ..Trigger::default()
-        };
         assert!(
-            supplies.tick(&mut odd_bay, only).is_empty(),
+            supplies.tick(&mut odd_bay, PRIMARY).is_empty(),
             "it flies nothing"
         );
         assert_eq!(
@@ -5423,44 +5240,6 @@ mod tests {
             flags: 0x0002,
             ..blaster(id, reload)
         }
-    }
-
-    #[test]
-    fn a_bay_fires_on_the_secondary_trigger_or_picked_never_on_the_primary_nor_with_bays() {
-        let viper = WeaponSpec::new(&bay(149, 144, 60));
-        let unflagged = WeaponSpec::new(&WeaponRecord {
-            flags: 0,
-            ..bay(150, 145, 60)
-        });
-        for spec in [viper, unflagged] {
-            assert!(!PRIMARY.fires(&spec), "{:?}", spec.id);
-            let secondary = Trigger {
-                secondary: Some(spec.id),
-                ..Trigger::default()
-            };
-            assert!(secondary.fires(&spec));
-            let bays = Trigger {
-                bays: true,
-                bays_after: true,
-                ..Trigger::default()
-            };
-            assert!(
-                !bays.fires(&spec),
-                "fires ignores bays, which launch_bay reads"
-            );
-            assert!(!Trigger::default().fires(&spec));
-            let only = Trigger {
-                only: Some(spec.id),
-                ..Trigger::default()
-            };
-            assert!(only.fires(&spec), "picked alone");
-        }
-        let blaster = WeaponSpec::new(&blaster(128, 0));
-        let bays = Trigger {
-            bays: true,
-            ..Trigger::default()
-        };
-        assert!(!bays.fires(&blaster));
     }
 
     #[test]

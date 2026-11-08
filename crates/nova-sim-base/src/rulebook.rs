@@ -3233,9 +3233,8 @@ rule_keys! {
     /// the weapon's or the ship's blind-spot flags (@0x62aeb-0x62c38),
     /// though it tests them for 3 and 4 (@0x629fe, @0x62a94). By the other
     /// reading, the Bible's "Turreted weapon has a blind spot", a blind
-    /// spot holds a 7 or 8 as it holds a 3 or 4. An NPC's primary
-    /// trigger, which no AI sets now, tests them under both; an NPC's
-    /// pick, an escort's formation fire among them, is tested as
+    /// spot holds a 7 or 8 as it holds a 3 or 4. An NPC's pick, an
+    /// escort's formation fire among them, is tested as
     /// `_AIFireTurret` picks it (@0x80d0b) and tests none under both as
     /// `_FireAIShipWeapon` fires it.
     QuadrantTurretBlindSpots => "quadrant_turret_blind_spots",

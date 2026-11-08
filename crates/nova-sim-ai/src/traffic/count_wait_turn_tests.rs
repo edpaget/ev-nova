@@ -36,7 +36,7 @@ fn n(id: u32) -> ShipRef {
 
 /// A pirate stand-in: it keeps whatever goal it holds (as
 /// `_PirateWarshipAI` returns on goal 0x16, @0x8c2ee, and keeps attacking
-/// the player), always pulls its primary trigger, and targets its goal's
+/// the player), always picks its gun, and targets its goal's
 /// quarry. It answers a strike on itself as its victim, and the player's
 /// strike on another ship as a Good Samaritan.
 #[derive(Debug)]

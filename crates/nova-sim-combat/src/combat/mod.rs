@@ -2194,27 +2194,23 @@ impl Combat {
     }
 
     /// `fighter` fires what its trigger holds, aimed at its target among
-    /// `targets`: the player's trigger and an NPC's primary or secondary
-    /// while that can be hit ([`ai_dispatch::standing`]), an NPC's pick
+    /// `targets`: the player's trigger while that target can be hit
+    /// ([`ai_dispatch::standing`]), an NPC's pick ([`Trigger::only`])
     /// while its slot is active, breaking up included
     /// ([`ai_dispatch::active`]). The player as step 1 fires it
     /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
     /// (@0x34ffd, [`Combat::handle_npcs`]).
-    /// An NPC fires a primary or secondary trigger through
-    /// [`Armament::fire`], its quadrant turrets testing their blind spots
-    /// as the original's AI picks them (`_AIFireTurret` @0x80d0b), each
-    /// weapon sounding at [`AI_FIRE_PRIORITY`] (no AI sets one now: an
-    /// escort's formation fire is `_AIFireTurret`'s pick, rdm
-    /// escort-fleet-fidelity phase 1), then fires its pick
-    /// ([`Trigger::only`]) as `_FireAIShipWeapon` does
-    /// ([`Armament::fire_pick`], [`ai_fire`]), its first copy sounding at
-    /// [`AI_FIRE_PRIORITY`], lighting its glow; a recoil sets its
+    /// An NPC fires its pick alone, as `_FireAIShipWeapon` does
+    /// ([`Armament::fire_pick`], [`ai_fire`]), never its trigger's
+    /// `primary` or `secondary`, the player's keys: its first copy sounds
+    /// at [`AI_FIRE_PRIORITY`] and lights its glow; a recoil sets its
     /// velocity, reported as a [`Shove`]. An escort's formation pick goes
-    /// this way too, glow and recoil alike. A shot of `AmmoType` [`SELF_DESTRUCT`] that spawns
-    /// destroys its firer ([`self_destruct`]).
+    /// this way too, glow and recoil alike. A shot of `AmmoType`
+    /// [`SELF_DESTRUCT`] that spawns destroys its firer
+    /// ([`self_destruct`]).
     fn fire_one(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
-        let target = ai_dispatch::standing(fighter.target, targets);
         if fighter.ship == ShipRef::Player {
+            let target = ai_dispatch::standing(fighter.target, targets);
             self.pull_player_trigger(fighter, target, targets, chance);
             return;
         }
@@ -14145,15 +14141,6 @@ mod tests {
             blind_front_shots(player, PRIMARY_HELD, RuleSource::Bible),
             0
         );
-        // An NPC's primary trigger (`Armament::fire`); its pick is tested
-        // for blind spots as its AI picks it (`_AIFireTurret` @0x80d0b).
-        for reading in RuleSource::ALL {
-            assert_eq!(
-                blind_front_shots(A, PRIMARY_HELD, reading),
-                0,
-                "an NPC's primary trigger: {reading:?}"
-            );
-        }
         // A full turret holds fire in its blind spot under both readings.
         for reading in RuleSource::ALL {
             let blind = WeaponRecord {
